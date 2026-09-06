@@ -4,6 +4,7 @@ import type { PaycheckScenario } from './paycheckScenario'
 import {
   applySeedFor,
   decodePaycheck,
+  LIMIT_ESPP_423,
   encodePaycheck,
   isEmptyPaycheck,
   labelForPaycheck,
@@ -25,6 +26,10 @@ const profile: PaycheckProfileOut = {
   dental_vision_per_check: '12.50',
   hsa_per_check: '100.00',
   hsa_coverage: 'self',
+  match_rate_1: '1.000000000',
+  match_band_1: '6000.00',
+  match_rate_2: '0.500000000',
+  match_band_2: '11000.00',
   notes: null,
 }
 
@@ -47,6 +52,17 @@ describe('paycheck scenario codec', () => {
       'trad_401k_pct:0.15',
     ])
     expect(decodePaycheck(encodePaycheck(scenario))).toEqual(scenario)
+  })
+
+  it('carries the match knobs with their own fences — rates to 2, bands only non-negative', () => {
+    expect(decodePaycheck(['match_rate_1:1.5', 'match_band_1:6000', 'match_rate_2:2.5', 'match_band_2:-1'])).toEqual({
+      match_rate_1: '1.5',
+      match_band_1: '6000',
+    })
+    expect(toOverrides({ match_rate_1: '1', match_band_1: '6000' })).toEqual({ match_rate_1: '1', match_band_1: '6000' })
+    // A rate prints as a percent like every other rate here; a band is money. KNOBS is
+    // alphabetical, so the band is the first of the two changed knobs.
+    expect(labelForPaycheck({ match_rate_1: '1', match_band_1: '6000' })).toBe('Match band 1 $6,000.00 · Match 1 100%')
   })
 
   it('drops garbage and out-of-range values, keeps the last of a duplicate key', () => {
@@ -119,7 +135,7 @@ describe('paycheck scenario codec', () => {
       limit_espp_423: '25000.00',
     }
     const presets = paycheckPresets(
-      { salary: '100000.00', periods: 24, coverage: 'self', esppPct: '0.110000000', limitFor: (key) => limits[key] ?? null },
+      { salary: '100000.00', periods: 24, coverage: 'self', esppPct: '0.110000000', limitFor: (key) => limits[key] ?? null, softLimitFor: () => null },
       apply,
     )
     expect(presets.map((p) => [p.id, p.disabled ?? false])).toEqual([
@@ -138,7 +154,7 @@ describe('paycheck scenario codec', () => {
     expect(apply).toHaveBeenLastCalledWith({ espp_pct: '0' })
 
     const family = paycheckPresets(
-      { salary: '100000.00', periods: 24, coverage: 'family', esppPct: '0', limitFor: (key) => limits[key] ?? null },
+      { salary: '100000.00', periods: 24, coverage: 'family', esppPct: '0', limitFor: (key) => limits[key] ?? null, softLimitFor: () => null },
       apply,
     )
     expect(family[1].disabled).toBe(true)
@@ -147,7 +163,7 @@ describe('paycheck scenario codec', () => {
     expect(family[3].title).toBe('ESPP is already 0%')
 
     const none = paycheckPresets(
-      { salary: '100000.00', periods: 24, coverage: 'none', esppPct: '0.1', limitFor: () => null },
+      { salary: '100000.00', periods: 24, coverage: 'none', esppPct: '0.1', limitFor: () => null, softLimitFor: () => null },
       apply,
     )
     expect(none[0].title).toBe("Enter this year's 401(k) limit in Settings › Limits")
@@ -157,12 +173,33 @@ describe('paycheck scenario codec', () => {
     )
   })
 
+  it('sizes Max ESPP from the PRACTICAL cap when the row carries one', () => {
+    const apply = vi.fn()
+    // 21,250 is the most contribution dollars the §423 cap buys at the plan discount. Sizing
+    // from the statutory 25,000 would build a scenario the very strip beside it grades
+    // "over" — a chip that walks straight into the warning it exists to avoid.
+    const presets = paycheckPresets(
+      {
+        salary: '250000.00',
+        periods: 24,
+        coverage: 'none',
+        esppPct: '0.11',
+        limitFor: (key) => (key === LIMIT_ESPP_423 ? '25000.00' : null),
+        softLimitFor: (key) => (key === LIMIT_ESPP_423 ? '21250.00' : null),
+      },
+      apply,
+    )
+    presets[2].apply()
+    // 21250 / 250000 = 0.085, well inside the 15 % track — the §423 figure would have been 0.1.
+    expect(apply).toHaveBeenLastCalledWith({ espp_pct: '0.085' })
+  })
+
   it('caps a preset at the knob’s own track, not just at the server bound', () => {
     const apply = vi.fn()
     // 24500 / 20000 = 1.225: past the server's 1 AND past the slider's 50 %. The chip has
     // to land on the track it moves, or the thumb sits off the end and the box refuses it.
     const presets = paycheckPresets(
-      { salary: '20000', periods: 1, coverage: 'self', esppPct: '0.2', limitFor: () => '24500' },
+      { salary: '20000', periods: 1, coverage: 'self', esppPct: '0.2', limitFor: () => '24500', softLimitFor: () => null },
       apply,
     )
     presets[0].apply()
@@ -189,6 +226,10 @@ describe('paycheck scenario codec', () => {
       dental_vision_per_check: '12.50',
       hsa_per_check: '250',
       hsa_coverage: 'family',
+      match_rate_1: '100',
+      match_band_1: '6000.00',
+      match_rate_2: '50',
+      match_band_2: '11000.00',
       notes: '',
     })
   })

@@ -215,6 +215,9 @@ function modelerResponse(over: Partial<EsppModelerOut> = {}): EsppModelerOut {
     subscription_price: null,
     purchase_fmv: '171.00000',
     carry_forward: '0.00',
+    // 10, not the plan's usual 15: a hint that printed a hardcoded 15 would then be visibly
+    // wrong rather than accidentally right.
+    discount_pct: '0.100000',
     available_years: [2024, 2025],
     warnings: [],
     periods: [storedRow, derivedRow],
@@ -359,6 +362,17 @@ describe('EsppPage — lots', () => {
     expect(screen.getByText('Qualifying in 13 days')).toBeTruthy()
     expect(screen.getByText('Sold (qualified)')).toBeTruthy()
     expect(screen.getByText('Sold (unqualified)')).toBeTruthy()
+  })
+
+  it('points the lots hint at the plan discount rather than a hardcoded 85%', async () => {
+    renderPage()
+    // The discount is a Settings figure the server prices with; a page that hardcoded the
+    // complement of 15 would quietly lie for anyone on another plan.
+    const hint = await screen.findByText(/Leave the purchase price blank/)
+    expect(hint.textContent).toContain(
+      'the lower of subscription price and purchase FMV, less the plan discount (Settings → Plan assumptions)',
+    )
+    expect(hint.textContent).not.toContain('85%')
   })
 
   it('links every UNSOLD lot into the what-if card, and never a sold one', async () => {
@@ -902,6 +916,17 @@ describe('EsppPage — modeler', () => {
     // Scoped to the card: the page-top strip's delta is the same "$6,082.87 left" string
     // (2026-08-31 audit) — deliberately, since both draw the one payload.
     expect(within(modelerCard()).getByText('$6,082.87 left')).toBeTruthy()
+  })
+
+  it('names the discount the modeler priced with, never a hardcoded 15%', async () => {
+    renderPage()
+    // The meter, not the heading: it only paints once the modeler payload has landed, which
+    // is what puts the SERVER's discount in the sentence.
+    await screen.findByRole('meter')
+    fireEvent.click(screen.getByRole('button', { name: /^About What each period/ }))
+    const text = screen.getByRole('tooltip').textContent ?? ''
+    expect(text).toContain('a 10% discount on the lower of it and the FMV')
+    expect(text).not.toContain('15%')
   })
 
   it('does not seed the knob boxes from the modeler echo', async () => {

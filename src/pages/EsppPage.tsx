@@ -313,8 +313,9 @@ function LotsPanel({
         </p>
       )}
       <p className="drill-hint">
-        Leave the purchase price blank and the server derives it — 85% of the lower of
-        subscription price and purchase FMV. Sold date and sold price travel together:
+        Leave the purchase price blank and the server derives it from the lower of
+        subscription price and purchase FMV, less the plan discount (Settings → Plan
+        assumptions). Sold date and sold price travel together:
         set both to realize a lot, clear both to un-sell it. A sold lot is measured
         against its sale price; every other row against the quote above.
       </p>
@@ -959,11 +960,23 @@ function ModelerCard({
 
   const working = busy || saving
 
+  // The SERVER's discount, echoed with the chain it priced (spec §1.5) — the page never
+  // re-derives it, and before the first echo the sentence stays generic rather than guessing.
+  // `data.discount_pct == null` as well as `data === null`: a warm snapshot written before
+  // this batch is a legal payload to paint from, and shiftPoint(undefined) would put
+  // "a NaN% discount" on the card rather than falling back to the generic clause.
+  const discountWords =
+    data === null || data.discount_pct == null
+      ? 'the plan discount'
+      : `a ${Number(shiftPoint(data.discount_pct, 2))}% discount`
+
   return (
     <section className="card" data-entry-scope="">
       <h2 className="eyebrow">
         Purchase modeler{data === null ? '' : ` — ${data.year}`}
-        <InfoHint text="What each period buys: your entered base and contribution % chained against the $25k IRS limit, priced at each period's offering subscription price and a 15% discount on the lower of it and the FMV." />
+        <InfoHint
+          text={`What each period buys: your entered base and contribution % chained against the $25k IRS limit, priced at each period's offering subscription price and ${discountWords} on the lower of it and the FMV.`}
+        />
       </h2>
       {data !== null && data.available_years.length > 1 && (
         // The app's segmented control (panels.css .segmented / button.active).

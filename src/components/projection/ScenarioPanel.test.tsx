@@ -206,8 +206,9 @@ describe('ScenarioPanel', () => {
       contribution_breakdown: {
         cash: '1200.00',
         payroll: '2800.00',
-        total: '4000.00',
-        by_person: [{ person_id: 1, name: 'Edward', monthly: '2400.00' }],
+        employer: '500.00',
+        total: '4500.00',
+        by_person: [{ person_id: 1, name: 'Edward', monthly: '2400.00', employer_monthly: '500.00' }],
       },
     }))
     mount()
@@ -218,7 +219,7 @@ describe('ScenarioPanel', () => {
     )
     expect(
       screen.getByText(
-        'derived: $1,200.00 cash savings + $2,800.00 payroll deductions (Edward $2,400.00)',
+        'derived: $1,200.00 cash savings + $2,800.00 payroll deductions + $500.00 employer match = $4,500.00 (Edward $2,400.00 + $500.00 match)',
       ),
     ).toBeTruthy()
   })

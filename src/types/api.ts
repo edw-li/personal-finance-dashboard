@@ -1158,6 +1158,8 @@ export interface EsppModelerOut {
   subscription_price: string | null
   purchase_fmv: string
   carry_forward: string
+  /** The plan discount these purchase prices were computed with (spec §1.5), a fraction. */
+  discount_pct: string
   // Server-owned year-chip list (stored ∪ offering-covered ∪ {now, now+1}), sorted.
   available_years: number[]
   warnings: string[]
@@ -1191,7 +1193,16 @@ export interface PaycheckProfileOut {
   dental_vision_per_check: string
   hsa_per_check: string
   hsa_coverage: HsaCoverage
+  // The employer 401(k) match policy, per person and effective-dated (spec §2.1). Rates are
+  // 9dp fractions ("1.000000000" = a full match); bands are dollars of elective deferral.
+  // Zero bands mean "no match". NOT NULL server-side, server_default '0'.
+  match_rate_1: string
+  match_band_1: string
+  match_rate_2: string
+  match_band_2: string
   notes: string | null
+  /** In force today (spec §2.3), the server's one rule. Absent on a pre-batch snapshot. */
+  in_force?: boolean
 }
 
 export interface PaycheckProfileCreate {
@@ -1210,6 +1221,13 @@ export interface PaycheckProfileCreate {
   dental_vision_per_check?: string
   hsa_per_check?: string
   hsa_coverage?: HsaCoverage
+  // The employer 401(k) match policy, per person and effective-dated (spec §2.1). Rates are
+  // 9dp fractions ("1.000000000" = a full match); bands are dollars of elective deferral.
+  // Zero bands mean "no match". NOT NULL server-side, server_default '0'.
+  match_rate_1?: string
+  match_band_1?: string
+  match_rate_2?: string
+  match_band_2?: string
   notes?: string | null
 }
 
@@ -1235,6 +1253,9 @@ export interface PaycheckBreakdownOut {
   espp: string
   net_pay: string
   monthly_net: string
+  /** This check's employer match — NOT a waterfall line: it is not part of the pay the
+   *  eleven lines add up to (spec §2.3). */
+  employer_match: string
   warnings: string[]
   pace: PaceItem[]
 }
@@ -1257,6 +1278,10 @@ export interface PaycheckPreviewOverrides {
   dental_vision_per_check?: string
   hsa_per_check?: string
   hsa_coverage?: HsaCoverage
+  match_rate_1?: string
+  match_band_1?: string
+  match_rate_2?: string
+  match_band_2?: string
 }
 
 export interface PaycheckPreviewIn {
@@ -1636,6 +1661,7 @@ export interface PayrollSavingOut {
   person_id: number
   name: string
   monthly: string
+  employer_monthly: string
 }
 
 /** How a DERIVED monthly contribution was built (2026-09-03): cash savings — the trailing
@@ -1644,6 +1670,7 @@ export interface PayrollSavingOut {
 export interface ContributionBreakdownOut {
   cash: string
   payroll: string
+  employer: string
   total: string
   by_person: PayrollSavingOut[]
 }
@@ -1983,9 +2010,24 @@ export interface LimitsUpdate {
   values: Record<string, string | null>
 }
 
+/** One half of the ESPP purchase-year window (spec §1.3). `amount` is the server's figure;
+ *  `source` says whether the user typed it or the paydays implied it. */
+export interface PaceHalf {
+  label: string
+  start: string
+  end: string
+  amount: string
+  source: 'entered' | 'estimated'
+  /** How an ESTIMATED half was reached. Null on an entered one — a figure the user typed
+   *  was not approximated from anything, so it has no basis to name. */
+  basis: 'paydays' | 'months' | null
+}
+
 // One contribution line annualized from the profile in force, against the year's entered
 // cap. `limit`/`ratio` are null together when nothing has been entered for that key —
 // the strip then links to Settings rather than drawing a fabricated 100 %.
+// The 2026-09-06 fields are OPTIONAL, not required-nullable: a warm snapshot written before
+// that batch is a legal payload for this page to paint from.
 export interface PaceItem {
   key: string
   label: string
@@ -1993,6 +2035,20 @@ export interface PaceItem {
   limit: string | null
   ratio: string | null // 4dp fraction, e.g. "0.9500" — the tone was judged on THIS value
   tone: 'ok' | 'warn' | 'over'
+  /** What `annualized` holds: a full-year projection, or the purchase-year window's total. */
+  measure?: 'annualized' | 'window'
+  /** ESPP only: the most contribution dollars the §423 cap buys at the plan discount. */
+  soft_limit?: string | null
+  soft_ratio?: string | null // 4dp — the tone and the printed percentage follow THIS one
+  window_label?: string | null
+  halves?: PaceHalf[] | null
+  backfilled_from?: string | null
+  projected_full_year?: string | null
+  projected_excess?: string | null
+  /** ESPP only: the percentage the projection used, a 9dp fraction ("0.120000000"). */
+  current_rate?: string | null
+  /** 415(c) only: the employer match already inside `annualized` (spec §2.3). */
+  employer_match?: string | null
 }
 
 // --- assistant (2026-09-01 spec §3–§5) ---

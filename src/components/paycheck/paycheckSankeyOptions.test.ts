@@ -21,6 +21,10 @@ const profile: PaycheckProfileOut = {
   dental_vision_per_check: '12.50',
   hsa_per_check: '100.00',
   hsa_coverage: 'self',
+  match_rate_1: '1.000000000',
+  match_band_1: '6000.00',
+  match_rate_2: '0.500000000',
+  match_band_2: '11000.00',
   notes: null,
 }
 
@@ -39,6 +43,7 @@ function breakdown(over: Partial<PaycheckBreakdownOut> = {}): PaycheckBreakdownO
     espp: '865.93',
     net_pay: '3384.16',
     monthly_net: '6768.33',
+    employer_match: '479.17',
     warnings: [],
     // The sankey reads none of it — the pace strip is a sibling card, not a flow node.
     pace: [],

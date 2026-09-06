@@ -24,6 +24,10 @@ export const KNOBS = [
   'espp_pct',
   'hsa_coverage',
   'hsa_per_check',
+  'match_band_1',
+  'match_band_2',
+  'match_rate_1',
+  'match_rate_2',
   'pay_periods_per_year',
   'roth_401k_pct',
   'trad_401k_pct',
@@ -59,6 +63,9 @@ export const KNOB_MAX = {
   espp_pct: ESPP_MAX_PCT,
   withholding_pct: '0.6',
   hsa_per_check: '500',
+  // A full doubling is the slider's end — the same [0, 2] the column is fenced at.
+  match_rate_1: '2',
+  match_rate_2: '2',
 } as const
 
 /** Whether the URL (or a box) may carry `value` for `key`. THE fence: the codec drops
@@ -71,6 +78,12 @@ export function acceptKnob(key: PaycheckKnob, value: string): boolean {
     return /^\d{1,3}$/.test(value) && Number(value) >= MIN_PAY_PERIODS && Number(value) <= MAX_PAY_PERIODS
   }
   if (!isWireDecimal(value)) return false
+  // The match's own fences: a rate may double the deferral (the server's [0, 2]); a band is
+  // dollars, so nothing caps it here — the column's 422 is the backstop.
+  if (key === 'match_rate_1' || key === 'match_rate_2') {
+    return compareDecimals(value, '0') >= 0 && compareDecimals(value, '2') <= 0
+  }
+  if (key === 'match_band_1' || key === 'match_band_2') return compareDecimals(value, '0') >= 0
   if (key === 'annual_salary') return compareDecimals(value, '0') > 0
   if (key === 'hsa_per_check') return compareDecimals(value, '0') >= 0
   return compareDecimals(value, '0') >= 0 && compareDecimals(value, '1') <= 0 // the five pcts
@@ -123,6 +136,10 @@ const SHORT: Record<PaycheckKnob, string> = {
   annual_salary: 'Salary',
   pay_periods_per_year: 'periods',
   hsa_coverage: 'HSA',
+  match_rate_1: 'Match 1',
+  match_band_1: 'Match band 1',
+  match_rate_2: 'Match 2',
+  match_band_2: 'Match band 2',
 }
 
 /** "401(k) 15% · HSA $250.00" — the first two changed knobs, in canonical order (spec §8.5). */
@@ -134,6 +151,7 @@ export function labelForPaycheck(scenario: PaycheckScenario): string {
     if ((PCT_KNOBS as readonly string[]).includes(key)) parts.push(`${SHORT[key]} ${shiftPoint(value, 2)}%`)
     else if (key === 'pay_periods_per_year') parts.push(`${value} periods`)
     else if (key === 'hsa_coverage') parts.push(`HSA ${value}`)
+    else if (key === 'match_rate_1' || key === 'match_rate_2') parts.push(`${SHORT[key]} ${shiftPoint(value, 2)}%`)
     else parts.push(`${SHORT[key]} ${formatCurrency(value)}`)
     if (parts.length === 2) break
   }
@@ -148,6 +166,10 @@ export interface PresetContext {
   esppPct: string
   /** A limit from the pace rows already in the payload; null when nothing is entered. */
   limitFor: (key: string) => string | null
+  /** The PRACTICAL cap off the same row (spec §1.7) — today only the ESPP row carries one.
+   *  Required rather than optional so no panel can quietly size a chip from the statutory
+   *  cap and walk into the "over" the practical one exists to prevent. */
+  softLimitFor: (key: string) => string | null
 }
 
 const LIMITS_HINT = 'in Settings › Limits'
@@ -161,6 +183,7 @@ export function paycheckPresets(
   const elective = ctx.limitFor(LIMIT_401K_ELECTIVE)
   const hsaLimit = ctx.coverage === 'none' ? null : ctx.limitFor(HSA_LIMIT_KEY[ctx.coverage])
   const espp = ctx.limitFor(LIMIT_ESPP_423)
+  const softEspp = ctx.softLimitFor(LIMIT_ESPP_423)
   // Two ceilings, both real: the knob's own track and the server's [0, 1]. A limit larger
   // than the salary (a part-year hire, a partner's smaller base) would otherwise ask for a
   // percentage the slider cannot show and the box would refuse — the chip must land ON the
@@ -206,9 +229,14 @@ export function paycheckPresets(
           : undefined,
       apply: () => {
         if (espp === null) return
-        // The lesser of the §423 ceiling and the limit ÷ salary — the same clamp as the
+        // The PRACTICAL cap where the row has one: the §423 limit buys fewer contribution
+        // dollars than itself at a plan discount, so sizing from 25,000 would build the very
+        // scenario the pace strip beside this chip grades "over". The statutory figure is the
+        // fallback, for a row (or a warm pre-batch snapshot) that carries no practical cap.
+        const cap = softEspp ?? espp
+        // The lesser of the §423 ceiling and the cap ÷ salary — the same clamp as the
         // other two chips, since the ESPP track's max IS the ceiling.
-        apply({ espp_pct: clamp(fraction(espp), KNOB_MAX.espp_pct) })
+        apply({ espp_pct: clamp(fraction(cap), KNOB_MAX.espp_pct) })
       },
     },
     {
@@ -236,6 +264,10 @@ export interface ApplySeed {
   dental_vision_per_check: string
   hsa_per_check: string
   hsa_coverage: HsaCoverage
+  match_rate_1: string
+  match_band_1: string
+  match_rate_2: string
+  match_band_2: string
   notes: string
 }
 
@@ -257,6 +289,10 @@ export function applySeedFor(
     dental_vision_per_check: profile.dental_vision_per_check,
     hsa_per_check: scenario.hsa_per_check ?? profile.hsa_per_check,
     hsa_coverage: (scenario.hsa_coverage as HsaCoverage | undefined) ?? profile.hsa_coverage,
+    match_rate_1: shiftPoint(scenario.match_rate_1 ?? profile.match_rate_1, 2),
+    match_band_1: scenario.match_band_1 ?? profile.match_band_1,
+    match_rate_2: shiftPoint(scenario.match_rate_2 ?? profile.match_rate_2, 2),
+    match_band_2: scenario.match_band_2 ?? profile.match_band_2,
     notes: '',
   }
 }

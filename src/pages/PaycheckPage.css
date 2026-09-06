@@ -186,3 +186,27 @@
   text-align: left;
   font-family: inherit;
 }
+
+/* The employer match is one POLICY, so its four boxes get one rule around them rather than
+   sitting loose among the per-check figures — and the sentence under them spans the whole
+   fieldset, because it reads all four back in the order they apply. */
+.paycheck-form .paycheck-match {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.6rem;
+  align-items: end;
+  margin: 0;
+  padding: 0.5rem 0.75rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.paycheck-form .paycheck-match legend {
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.paycheck-match-words { grid-column: 1 / -1; margin: 0; font-size: 0.75rem; color: var(--muted); }

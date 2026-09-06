@@ -180,13 +180,17 @@ export default function TryItPanel({
   // The scenario's own salary/periods/coverage size the presets; limits come from the pace
   // rows already in the payload — the scenario's first (its coverage may differ), then the
   // check's own. null → the chip is disabled with a sentence naming what to enter.
-  const limitFor = (key: string): string | null => {
+  const paceRow = (key: string) => {
     for (const rows of [result?.pace.scenario, result?.pace.baseline, breakdown.pace]) {
       const row = rows?.find((r) => r.key === key)
-      if (row !== undefined && row.limit !== null) return row.limit
+      if (row !== undefined && row.limit !== null) return row
     }
     return null
   }
+  const limitFor = (key: string): string | null => paceRow(key)?.limit ?? null
+  // The practical cap off the SAME row the limit came from, so a chip can never mix one
+  // row's statutory cap with another's practical one.
+  const softLimitFor = (key: string): string | null => paceRow(key)?.soft_limit ?? null
   const coverage = (scenario.hsa_coverage as HsaCoverage | undefined) ?? profile.hsa_coverage
   const presets = paycheckPresets(
     {
@@ -195,6 +199,7 @@ export default function TryItPanel({
       coverage,
       esppPct: scenario.espp_pct ?? profile.espp_pct,
       limitFor,
+      softLimitFor,
     },
     (patch) => sandbox.set(patch, { immediate: true }),
   )
@@ -336,6 +341,18 @@ export default function TryItPanel({
         }
         onCommit={knob('pay_periods_per_year')}
       />
+      {/* Behind a disclosure because the match is a POLICY that changes once a year, not a
+          knob to drag — but it is the one input the 415(c) row cannot be reasoned about
+          without, so it is here rather than only on the profile form. */}
+      <details className="sandbox-disclosure">
+        <summary>Employer match</summary>
+        <div className="sandbox-disclosure-grid">
+          <SliderBox id="tryit-match-rate-1" label="First match rate" kind="percent" value={scenario.match_rate_1 ?? ''} actual={profile.match_rate_1} min="0" max={KNOB_MAX.match_rate_1} step="0.05" onChange={knob('match_rate_1')} />
+          <BoxKnob id="tryit-match-band-1" label="First match band" kind="money" value={scenario.match_band_1 ?? ''} actual={profile.match_band_1} validate={(text) => (acceptKnob('match_band_1', text) ? null : 'First match band must be a plain amount, like 6000')} onCommit={knob('match_band_1')} />
+          <SliderBox id="tryit-match-rate-2" label="Second match rate" kind="percent" value={scenario.match_rate_2 ?? ''} actual={profile.match_rate_2} min="0" max={KNOB_MAX.match_rate_2} step="0.05" onChange={knob('match_rate_2')} />
+          <BoxKnob id="tryit-match-band-2" label="Second match band" kind="money" value={scenario.match_band_2 ?? ''} actual={profile.match_band_2} validate={(text) => (acceptKnob('match_band_2', text) ? null : 'Second match band must be a plain amount, like 11000')} onCommit={knob('match_band_2')} />
+        </div>
+      </details>
       <p className="drill-hint">
         Dental &amp; vision flows through unchanged. Percentages are of gross;{' '}
         <Link to="/taxes">the Taxes withholding card</Link> says what a rate change does to the
