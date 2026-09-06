@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_db
+from app.limit_keys import LIMIT_401K_ELECTIVE
 from app.models import ContributionLimit, PaycheckProfile, Person
 from app.schemas.paycheck import (
     BreakdownOut,
@@ -42,7 +43,7 @@ from app.schemas.paycheck import (
     ProfileOverrides,
     ProfileUpdate,
 )
-from app.services.limit_check import paycheck_pace
+from app.services.limit_check import employer_match, paycheck_pace
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     _quantize_bounded,
@@ -632,9 +633,20 @@ async def get_breakdown(
         PaceItemOut.model_validate(item)
         for item in paycheck_pace(profile, limits, profile.hsa_coverage)
     ]
+    # Per check from the ANNUAL policy, not the other way round: the bands are annual
+    # dollars, so the year is the only place the tiers can be applied honestly.
+    elective_annual = (profile.trad_401k_pct + profile.roth_401k_pct) * profile.annual_salary
+    match_per_check = half_up2(
+        employer_match(profile, elective_annual, limits.get(LIMIT_401K_ELECTIVE))
+        / Decimal(profile.pay_periods_per_year)
+    )
     await _mark_in_force(db, [profile], today)
     return BreakdownOut(
-        profile=ProfileOut.model_validate(profile), warnings=warnings, pace=pace, **lines
+        profile=ProfileOut.model_validate(profile),
+        warnings=warnings,
+        pace=pace,
+        employer_match=match_per_check,
+        **lines,
     )
 
 

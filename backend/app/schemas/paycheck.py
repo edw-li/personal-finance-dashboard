@@ -173,6 +173,9 @@ class BreakdownOut(BaseModel):
     espp: Decimal
     net_pay: Decimal
     monthly_net: Decimal
+    # The employer's 401(k) match for ONE check — never a waterfall line, because it is not
+    # part of this pay; the page prints it as a muted note under the waterfall (spec §2.3).
+    employer_match: Decimal
     warnings: list[str]
     # The contribution-pace rows for THIS profile against the current year's entered
     # limits. Empty only if the profile somehow yields no rows at all — the two 401(k)

@@ -1286,3 +1286,36 @@ async def test_profiles_list_marks_the_one_in_force(auth_client, me):
     assert rows[old.json()["id"]] is False
     assert rows[later.json()["id"]] is False
     assert (await auth_client.get(BREAKDOWN)).json()["profile"]["in_force"] is True
+
+
+async def test_breakdown_reports_the_employer_match_per_check(auth_client, db, me):
+    from app.models import ContributionLimit
+
+    db.add(
+        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+    )
+    await db.commit()
+    await auth_client.post(
+        PROFILES,
+        json={
+            "effective_date": "2026-05-01",
+            "annual_salary": "188930",
+            "pay_periods_per_year": 24,
+            "trad_401k_pct": "0.13",
+            **MATCH,
+        },
+    )
+    # 11,500 a year over 24 checks. Not a waterfall line: it never touches this pay.
+    assert (await auth_client.get(BREAKDOWN)).json()["employer_match"] == "479.17"
+
+
+async def test_breakdown_employer_match_is_zero_without_a_policy(auth_client, me):
+    await auth_client.post(
+        PROFILES,
+        json={
+            "effective_date": "2026-06-01",
+            "annual_salary": "100000",
+            "trad_401k_pct": "0.1",
+        },
+    )
+    assert (await auth_client.get(BREAKDOWN)).json()["employer_match"] == "0.00"
