@@ -116,7 +116,7 @@ export default function ActivityCard() {
   }
 
   return (
-    <section className="card span-6" id="activity" role="region" aria-label="Activity">
+    <section className="card span-12" id="activity" role="region" aria-label="Activity">
       <h2 className="eyebrow">
         Activity
         <InfoHint text="Every money-bearing change — month saves and deletes, account, category and budget edits, imports, restores, snapshots — newest first. Undo replays one change in reverse while nothing later touched the same rows; imports and restores are summaries and are undone by restoring a snapshot instead." />

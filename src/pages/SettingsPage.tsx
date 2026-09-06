@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { changePassword } from '../api/auth'
 import { ApiError } from '../api/client'
 import { importXlsx } from '../api/importer'
-import { fetchAppSettings, putAppSettings } from '../api/settings'
+import { fetchAppSettings } from '../api/settings'
 import InfoHint from '../components/InfoHint'
 import AccountsCard from '../components/settings/AccountsCard'
 import ActivityCard from '../components/settings/ActivityCard'
@@ -16,33 +16,19 @@ import HealthCard from '../components/settings/HealthCard'
 import HouseholdCard from '../components/settings/HouseholdCard'
 import ImportReportView from '../components/settings/ImportReportView'
 import LimitsCard from '../components/settings/LimitsCard'
+import PlanAssumptionsCard from '../components/settings/PlanAssumptionsCard'
+import PriceRefreshCard from '../components/settings/PriceRefreshCard'
 import RestoreCard from '../components/settings/RestoreCard'
+import SettingsRail from '../components/settings/SettingsRail'
 import SystemCard from '../components/settings/SystemCard'
 import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
-import type { AppSettingsOut, ImportReport, PersonOut } from '../types/api'
-import { isPlainDecimal, shiftPoint } from '../utils/percent'
+import type { ImportReport, PersonOut } from '../types/api'
 import '../components/panels.css'
 // The settings family sheet, not only the component's: this page renders .settings-note
 // itself, under half its controls.
 import '../components/settings/settings.css'
 import './SettingsPage.css'
-
-// The boxes a payload seeds, as pure string math at MODULE scope: the load chain and the
-// PUT echo both apply it, and a component-scope helper would make `load` reactive — the
-// mount effect would then owe it a dependency (react-hooks/exhaustive-deps), and the only
-// ways to pay that are the useCallback this component is too setter-heavy for (Plan 3's
-// memoization wall) or a dependency that re-runs the fetch on every render.
-function boxesFor(s: AppSettingsOut) {
-  return {
-    // Display percent: "0.045000" -> "4.5". Number() only trims the stored quantizer's
-    // trailing zeros; the box round-trips through shiftPoint on save, so no float ever
-    // reaches the wire.
-    swr: String(Number(shiftPoint(s.swr_pct, 2))),
-    ticker: s.espp_ticker ?? '',
-    cron: s.price_refresh_cron,
-  }
-}
 
 export default function SettingsPage() {
   // Load state (the house recipe: plain function, inline chain, seqRef).
@@ -51,13 +37,6 @@ export default function SettingsPage() {
   // read as "these are your settings" and offer to save them (PortfolioPage's rule).
   const [loadedOnce, setLoadedOnce] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // App-settings form state (strings as displayed).
-  const [swrPctBox, setSwrPctBox] = useState('') // PERCENT text, e.g. "4.5"
-  const [tickerBox, setTickerBox] = useState('')
-  const [cronBox, setCronBox] = useState('')
-  const [formError, setFormError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [savedNote, setSavedNote] = useState(false)
   // Password form state — three boxes that never survive a successful submit.
   const [currentPw, setCurrentPw] = useState('')
   const [newPw, setNewPw] = useState('')
@@ -82,12 +61,11 @@ export default function SettingsPage() {
   const load = () => {
     const seq = ++seqRef.current
     fetchAppSettings()
-      .then((s) => {
+      .then(() => {
         if (seq !== seqRef.current) return
-        const boxes = boxesFor(s)
-        setSwrPctBox(boxes.swr)
-        setTickerBox(boxes.ticker)
-        setCronBox(boxes.cron)
+        // The page reads /settings for ONE reason now: it is the gate. A GET that failed means
+        // the API is unreachable, and cards that could only fail are not worth offering. The
+        // three boxes moved to PlanAssumptionsCard, which reads it for itself.
         setError(null)
         setLoadedOnce(true)
       })
@@ -130,7 +108,10 @@ export default function SettingsPage() {
     // Optional-call, like HoldingDetailPanel: jsdom has no scrollIntoView.
     const land = () => el.scrollIntoView?.({ block: 'start' })
     land()
-    el.classList.add('is-highlighted')
+    // Section bands take the scroll and NOT the ring (spec §3.2): they are not cards, and an
+    // outline round a heading rings nothing the reader asked for. The two `classList.remove`
+    // calls below stay unconditional — taking off a class that was never added is a no-op.
+    if (!hash.startsWith('#sec-')) el.classList.add('is-highlighted')
     // Landing once is not enough. Every card on this page owns its own fetch and GROWS as it
     // arrives, so the cards ABOVE the anchor push it down after the jump has happened: the
     // browser smoke measured #calendar going from 585px to 1898px — a full viewport below the
@@ -157,67 +138,6 @@ export default function SettingsPage() {
       el.classList.remove('is-highlighted')
     }
   }, [hash, loading])
-
-  // Every settings keystroke retires both sentences under the form: they describe the
-  // values that WERE in the boxes.
-  const editSetting = (setBox: (value: string) => void) => (value: string) => {
-    setBox(value)
-    setSavedNote(false)
-    setFormError(null)
-  }
-
-  const save = () => {
-    if (!isPlainDecimal(swrPctBox)) {
-      // BEFORE Number(): shiftPoint hands "1e-3" back untouched and Decimal("1e-3") is a
-      // perfectly legal 0.001 server-side, so the box would silently store a rate 100x
-      // off with no 422 anywhere on the round trip (src/utils/percent.ts).
-      setFormError('Enter a plain decimal (no exponents).')
-      return
-    }
-    const n = Number(swrPctBox)
-    if (!Number.isFinite(n) || n < 0 || n > 100) {
-      // Worded in the BOX's vocabulary. The server says "must be a fraction between 0 and
-      // 1", which is the stored value's — quoted here it would call a 4.5 too big.
-      setFormError('Must be between 0 and 100.')
-      return
-    }
-    // Explicitly null, never undefined: JSON.stringify drops an undefined value, and
-    // espp_ticker defaults to None server-side — so "clear the ticker" and "I forgot to
-    // send it" would arrive as the same request. The non-empty value travels AS TYPED
-    // (the server strips and uppercases; a client that pre-empted it would be a second
-    // opinion about the same string).
-    const ticker = tickerBox.trim() === '' ? null : tickerBox
-    setSaving(true)
-    setFormError(null)
-    setSavedNote(false)
-    // No seq guard on this chain, unlike the load: the button is the form's only submit
-    // door and it is disabled while `saving`, so a second PUT cannot start behind the
-    // first one (TaxesPage's `creating`).
-    putAppSettings({
-      swr_pct: shiftPoint(swrPctBox, -2),
-      espp_ticker: ticker,
-      price_refresh_cron: cronBox,
-    })
-      .then((saved) => {
-        // Re-seeded from the RESPONSE, not from what was typed: the server answers with
-        // what it stored (quantized rate, uppercased ticker, stripped cron), and boxes
-        // left holding the typed text would read as unsaved work against values that are
-        // already in the database.
-        const boxes = boxesFor(saved)
-        setSwrPctBox(boxes.swr)
-        setTickerBox(boxes.ticker)
-        setCronBox(boxes.cron)
-        setFormError(null)
-        setSavedNote(true)
-      })
-      .catch((err: unknown) => {
-        // Verbatim: the 422s here are the router's own sentences, and the ticker one is
-        // NOT field-prefixed — there is nothing to map it onto a single box with, so the
-        // slot is form-level.
-        setFormError(err instanceof ApiError ? err.message : 'Could not save settings.')
-      })
-      .finally(() => setSaving(false))
-  }
 
   const editPassword = (setBox: (value: string) => void) => (value: string) => {
     setBox(value)
@@ -309,6 +229,7 @@ export default function SettingsPage() {
     <div className="page settings-page">
       <PageFrame
         title="Settings"
+        scopeRow={<SettingsRail sectionsReady={loadedOnce} />}
         resource={{
           // Ready as soon as the first load SETTLES, either way: the Appearance card below
           // owns no request, so a settings GET that failed must not blank the page.
@@ -319,13 +240,16 @@ export default function SettingsPage() {
           busy: loading && loadedOnce,
           retry: retryLoad,
         }}
-        // The page's own shape: the full-width import card over the two half-width forms.
+        // The page's own shape: the Household section's three cards over the Planning
+        // section's pair (spec §3.6).
         skeleton={{
           tiles: 0,
           cards: [
-            { span: 12, height: 200 },
-            { span: 6, height: 260 },
-            { span: 6, height: 260 },
+            { span: 6, height: 220 },
+            { span: 6, height: 220 },
+            { span: 12, height: 260 },
+            { span: 6, height: 240 },
+            { span: 6, height: 240 },
           ],
         }}
       >
@@ -340,10 +264,97 @@ export default function SettingsPage() {
         <div className="card-grid">
           {loadedOnce && (
             <>
-              {/* Full width: a diff of nine sheets is a table, not a form field. It shares
-                  the two forms' `loadedOnce` gate on purpose — a settings GET that failed
-                  means the API is unreachable, and an upload card that could only fail is
-                  not worth offering. */}
+              <h2 className="settings-section" id="sec-household">Household</h2>
+              {/* people is lifted out of HouseholdCard so the Accounts owner select is never a
+                  render behind the roster: a partner added above is selectable below without
+                  a reload. Unchanged relay, new seat. */}
+              <HouseholdCard onPeopleChange={setPeople} />
+              <CategoriesCard />
+              <AccountsCard people={people} />
+
+              <h2 className="settings-section" id="sec-planning">Planning</h2>
+              <LimitsCard />
+              <PlanAssumptionsCard />
+            </>
+          )}
+
+          {/* Account: the pair about this browser and this login. The BAND is ungated with the
+              card under it — Appearance owns no fetch, so theme, density and the palette's
+              #appearance jump still work when the API is unreachable, which is one of the
+              moments a reader most wants the light theme back. */}
+          <h2 className="settings-section" id="sec-account">Account</h2>
+          <AppearanceCard />
+
+          {loadedOnce && (
+            <>
+              <section className="card span-6" id="password">
+                <h2 className="eyebrow">
+                  Password
+                  <InfoHint text="Changes your login password and signs out every other device; this one stays signed in." />
+                </h2>
+                <form
+                  className="settings-form"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    submitPassword()
+                  }}
+                >
+                  <label>
+                    Current password
+                    <input
+                      className="field-input"
+                      type="password"
+                      autoComplete="current-password"
+                      value={currentPw}
+                      onChange={(e) => editPassword(setCurrentPw)(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    New password
+                    <input
+                      className="field-input"
+                      type="password"
+                      autoComplete="new-password"
+                      value={newPw}
+                      onChange={(e) => editPassword(setNewPw)(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Confirm new password
+                    <input
+                      className="field-input"
+                      type="password"
+                      autoComplete="new-password"
+                      value={confirmPw}
+                      onChange={(e) => editPassword(setConfirmPw)(e.target.value)}
+                    />
+                  </label>
+                  <div className="settings-actions">
+                    <button type="submit" className="button button-primary" disabled={pwBusy}>
+                      {pwBusy ? 'Changing…' : 'Change password'}
+                    </button>
+                  </div>
+                  <FeedBanner error={pwError} />
+                  {pwChanged && (
+                    <p className="settings-note" role="status">
+                      Password changed.
+                    </p>
+                  )}
+                  {/* What the change costs and what it does not: the server bumps token_version,
+                      which kills every token issued before it — including this tab's, which is
+                      why the response hands back a fresh one for changePassword to store. */}
+                  <p className="settings-note">
+                    Other devices are signed out; this one stays signed in.
+                  </p>
+                </form>
+              </section>
+
+              <h2 className="settings-section" id="sec-integrations">Integrations</h2>
+              <PriceRefreshCard />
+              <AssistantCard />
+              <CalendarFeedCard />
+
+              <h2 className="settings-section" id="sec-data">Data</h2>
               <section className="card span-12" id="import">
                 <h2 className="eyebrow">
                   Import workbook
@@ -408,185 +419,11 @@ export default function SettingsPage() {
                   </p>
                 )}
               </section>
-
-              {/* Data-out beside data-in (2026-08-31 audit): the snapshot download and backup
-                  trail live on this card, so it sits with the import rather than closing the
-                  page as pure status. Own fetch/error (SystemCard), same loadedOnce gate as
-                  everything here: a settings GET that failed means the API is unreachable. */}
-              <SystemCard />
-
-              {/* Backups & snapshots, then Restore (2026-09-03 data-lifecycle spec §7–§8): the
-                  stored nightly files beside the marker that describes the host's dump, and the
-                  way back from either. Own fetches, the page's loadedOnce gate. */}
               <BackupsCard />
               <RestoreCard />
-              {/* Data health, then Activity (2026-09-03 data-lifecycle spec §9, §11): what is
-                  wrong with the data and what changed it — beside the backup cards, ahead of
-                  the forms. Own fetches, the page's loadedOnce gate. */}
               <HealthCard />
+              <SystemCard />
               <ActivityCard />
-
-              <section className="card span-6" id="app-settings">
-                <h2 className="eyebrow">
-                  App settings
-                  <InfoHint text="The withdrawal rate feeds the 4% line and FI target; the ESPP ticker prices lots; the cron schedules price refreshes (applied on save)." />
-                </h2>
-                <form
-                  className="settings-form"
-                  onSubmit={(e) => {
-                    e.preventDefault()
-                    save()
-                  }}
-                >
-                  {/* All three boxes go read-only for the in-flight window, because the
-                      PUT response RE-SEEDS them: text typed while saving would be overwritten
-                      by the echo of the older values, next to a fresh "Saved" — which is
-                      exactly the claim this page's every-keystroke-retires-the-note rule
-                      exists to prevent. */}
-                  <label>
-                    Withdrawal rate (% / year)
-                    <input
-                      className="field-input"
-                      inputMode="decimal"
-                      value={swrPctBox}
-                      disabled={saving}
-                      onChange={(e) => editSetting(setSwrPctBox)(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    ESPP ticker
-                    <input
-                      className="field-input"
-                      value={tickerBox}
-                      disabled={saving}
-                      onChange={(e) => editSetting(setTickerBox)(e.target.value)}
-                    />
-                  </label>
-                  <p className="settings-note">
-                    Blank = ESPP page shows &apos;no ticker configured&apos;.
-                  </p>
-                  <label>
-                    Price refresh cron
-                    {/* .field-input is already monospaced (the page sheet only un-right-aligns
-                        it), which is what a cron expression wants. */}
-                    <input
-                      className="field-input"
-                      value={cronBox}
-                      disabled={saving}
-                      onChange={(e) => editSetting(setCronBox)(e.target.value)}
-                    />
-                  </label>
-                  <p className="settings-note">
-                    5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applied
-                    to the live schedule on save. Must not fire more often than hourly. The Monday
-                    run also records the weekly performance point — keep Mondays covered.
-                  </p>
-                  <div className="settings-actions">
-                    <button type="submit" className="button button-primary" disabled={saving}>
-                      {saving ? 'Saving…' : 'Save settings'}
-                    </button>
-                  </div>
-                  <FeedBanner error={formError} />
-                  {savedNote && (
-                    <p className="settings-note" role="status">
-                      Saved — the schedule is applied immediately.
-                    </p>
-                  )}
-                </form>
-              </section>
-
-              <section className="card span-6" id="password">
-                <h2 className="eyebrow">
-                  Password
-                  <InfoHint text="Changes your login password and signs out every other device; this one stays signed in." />
-                </h2>
-                <form
-                  className="settings-form"
-                  onSubmit={(e) => {
-                    e.preventDefault()
-                    submitPassword()
-                  }}
-                >
-                  <label>
-                    Current password
-                    <input
-                      className="field-input"
-                      type="password"
-                      autoComplete="current-password"
-                      value={currentPw}
-                      onChange={(e) => editPassword(setCurrentPw)(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    New password
-                    <input
-                      className="field-input"
-                      type="password"
-                      autoComplete="new-password"
-                      value={newPw}
-                      onChange={(e) => editPassword(setNewPw)(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Confirm new password
-                    <input
-                      className="field-input"
-                      type="password"
-                      autoComplete="new-password"
-                      value={confirmPw}
-                      onChange={(e) => editPassword(setConfirmPw)(e.target.value)}
-                    />
-                  </label>
-                  <div className="settings-actions">
-                    <button type="submit" className="button button-primary" disabled={pwBusy}>
-                      {pwBusy ? 'Changing…' : 'Change password'}
-                    </button>
-                  </div>
-                  <FeedBanner error={pwError} />
-                  {pwChanged && (
-                    <p className="settings-note" role="status">
-                      Password changed.
-                    </p>
-                  )}
-                  {/* What the change costs and what it does not: the server bumps token_version,
-                      which kills every token issued before it — including this tab's, which is
-                      why the response hands back a fresh one for changePassword to store. */}
-                  <p className="settings-note">
-                    Other devices are signed out; this one stays signed in.
-                  </p>
-                </form>
-              </section>
-            </>
-          )}
-
-          {/* Theme and density (2026-09-03 shell spec §11). Sits above the management cards
-              because it is browser-local and instant — the one card here that owns no fetch
-              and no error state of its own, which is why it is the one card OUTSIDE the
-              `loadedOnce` gates on either side of it: when the API is unreachable the theme
-              switch (and the palette's #appearance jump) still has to work. */}
-          <AppearanceCard />
-
-          {loadedOnce && (
-            <>
-              {/* The three management cards (2026-08-26 spec §6). Each owns its own fetch
-                  and error state (SystemCard's posture) and shares the forms' `loadedOnce`
-                  gate: a settings GET that failed means the API is unreachable, and cards
-                  that could only fail are not worth offering. */}
-              <HouseholdCard onPeopleChange={setPeople} />
-              <CategoriesCard />
-              <AccountsCard people={people} />
-
-              {/* Contribution limits (2026-08-27 spec §5): its own fetch and error state, the
-                  same loadedOnce gate as the cards above it. */}
-              <LimitsCard />
-
-              {/* Calendar feed links + the monthly-update reminder day (2026-09-03 calendar
-                  spec §11–§12): its own fetch and error state, the same loadedOnce gate. */}
-              <CalendarFeedCard />
-
-              {/* Assistant key + default model (2026-09-01 spec §10): its own fetch and error
-                  state, the same loadedOnce gate as the cards above it. */}
-              <AssistantCard />
             </>
           )}
         </div>

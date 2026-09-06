@@ -128,7 +128,7 @@ export default function CalendarFeedCard() {
   }
 
   return (
-    <section className="card span-6" id="calendar" role="region" aria-label="Calendar feed">
+    <section className="card span-12" id="calendar" role="region" aria-label="Calendar feed">
       <h2 className="eyebrow">
         Calendar feed
         <InfoHint text="Subscribe your phone or desktop calendar to the dashboard's events — vests, paydays, deadlines, your own reminders — with amounts. The link is the credential: anyone holding it can read the feed." />

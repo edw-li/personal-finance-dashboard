@@ -490,3 +490,13 @@
 .card-grid > .settings-section:first-child {
   margin-top: 0;
 }
+
+/* One line per person, read as sentences rather than as a table (spec §3.3). */
+.plan-match-list {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}

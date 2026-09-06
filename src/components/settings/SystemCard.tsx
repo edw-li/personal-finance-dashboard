@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { fetchCoverage } from '../../api/coverage'
 import { fetchSystemStatus } from '../../api/system'
-import type { BackupRun, CoverageOut, RefreshRun, SystemStatus } from '../../types/api'
+import type { BackupRun, CoverageOut, SystemStatus } from '../../types/api'
 import { formatBytes, formatDateTime } from '../../utils/format'
 import { backupAge } from '../../utils/staleness'
 import { freshnessClauses } from '../overview/freshness'
@@ -13,16 +13,6 @@ import './settings.css'
 
 // Module scope like SettingsPage's boxesFor: pure derivations off the payload, so the
 // component's load chain stays a plain function with no reactive dependencies.
-
-function refreshLine(status: SystemStatus): string {
-  const last = status.prices.last
-  if (last === null) return 'No refresh recorded yet'
-  const failedCount = Object.keys(last.failed).length
-  // PortfolioPage's refresh-status-line vocabulary — same stored run, same sentence.
-  return `${formatDateTime(last.at)} (${last.trigger}) · ${last.updated} updated${
-    failedCount > 0 ? ` · ${failedCount} failed` : ''
-  }`
-}
 
 // The marker's words (2026-09-03 data-lifecycle spec §8): stamp · size · encrypted · verified,
 // or "· not verified — <reason>" in the overdue tone. size_bytes (the verify-phase script)
@@ -68,19 +58,6 @@ function backupRunsLine(runs: BackupRun[]): string {
     .join(' · ')
 }
 
-function refreshRunsLine(runs: RefreshRun[]): string {
-  if (runs.length === 0) return '—'
-  return runs
-    .slice(0, 5)
-    .map(
-      (run) =>
-        `${formatDateTime(run.at)} ${run.updated} updated${
-          run.failed_count > 0 ? `, ${run.failed_count} failed` : ''
-        }`,
-    )
-    .join(' · ')
-}
-
 function SystemFacts({ status, coverage }: { status: SystemStatus; coverage: CoverageOut }) {
   const backup = backupLine(status)
   return (
@@ -102,24 +79,6 @@ function SystemFacts({ status, coverage }: { status: SystemStatus; coverage: Cov
             </Fragment>
           ))}
         </dd>
-      </div>
-      <div className="system-fact">
-        <dt>Last price refresh</dt>
-        <dd>{refreshLine(status)}</dd>
-      </div>
-      <div className="system-fact">
-        <dt>Next scheduled run</dt>
-        <dd>
-          {status.prices.next_run_at ? formatDateTime(status.prices.next_run_at) : 'Not scheduled'}
-        </dd>
-      </div>
-      <div className="system-fact">
-        <dt>Scheduler</dt>
-        <dd>{status.prices.scheduler_running ? 'Running' : 'Not running'}</dd>
-      </div>
-      <div className="system-fact">
-        <dt>Recent refreshes</dt>
-        <dd>{refreshRunsLine(status.refresh_runs ?? [])}</dd>
       </div>
       <div className="system-fact">
         <dt>Last backup</dt>
@@ -149,11 +108,11 @@ function SystemFacts({ status, coverage }: { status: SystemStatus; coverage: Cov
 
 /**
  * The Settings System card (2026-08-25 spec §3): read-only operational facts — which month
- * each hand-entered feed reaches (2026-09-04 honest-numbers spec §3), the last
- * refresh run and its schedule, the nightly-backup marker with its verify verdict,
- * database size and migration
- * head. Its own fetch and error state (the Up-next posture): a status hiccup must not
- * dent the settings forms, nor the reverse.
+ * each hand-entered feed reaches (2026-09-04 honest-numbers spec §3), the nightly-backup
+ * marker with its verify verdict, database size and migration head. The four scheduler facts
+ * moved to the Price refresh card (2026-09-06 spec §3.3), beside the cron that makes them.
+ * Its own fetch and error state (the Up-next posture): a status hiccup must not dent the
+ * settings forms, nor the reverse.
  */
 export default function SystemCard() {
   const [snapshot, setSnapshot] = useState<{
@@ -190,10 +149,10 @@ export default function SystemCard() {
   }, [])
 
   return (
-    <section className="card span-12" id="system">
+    <section className="card span-6" id="system">
       <h2 className="eyebrow">
         System
-        <InfoHint text="Operational status: which month each hand-entered feed reaches, the last price refresh and its schedule, the nightly backup marker recorded by the backup script — with whether last night's dump restored — and the database's size and migration head. Snapshots and downloads live on the Backups card." />
+        <InfoHint text="Operational status: which month each hand-entered feed reaches, the nightly backup marker recorded by the backup script — with whether last night's dump restored — and the database's size and migration head. The refresh schedule lives on the Price refresh card; snapshots and downloads on Backups." />
       </h2>
       <FeedBanner
         error={error}
