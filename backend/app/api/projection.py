@@ -45,8 +45,9 @@ from app.api.deps import get_current_user
 # force" rule AND the divide-by-zero fence on a stored cadence. The Paycheck page, the
 # Taxes page and this drop must never disagree about which profile is current, and a
 # second copy of either rule here could only drift.
-from app.api.paycheck import MIN_PAY_PERIODS, PAY_PERIODS_MESSAGE, _default_profile
+from app.api.paycheck import MIN_PAY_PERIODS, PAY_PERIODS_MESSAGE, _default_profile, _limits_for
 from app.database import get_db
+from app.limit_keys import LIMIT_401K_ELECTIVE
 from app.models import NetWorthSnapshot
 from app.schemas.projection import (
     ContributionBreakdownOut,
@@ -55,10 +56,11 @@ from app.schemas.projection import (
     ProjectionOut,
     RetirementOut,
 )
+from app.services.limit_check import employer_match
 from app.services.money import quantize_money, quantize_pct
 from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
 from app.services.net_worth_calc import get_swr_pct, investable_base
-from app.services.paycheck_calc import breakdown, half_up2
+from app.services.paycheck_calc import MONTHS_PER_YEAR, breakdown, half_up2
 from app.services.people import load_people
 from app.services.projection import CENT, first_reaching, project
 from app.services.savings import load_month_savings, matched_months, payroll_monthly
@@ -127,9 +129,19 @@ def _months_from(start: date, count: int) -> list[date]:
     return [date((base + i) // 12, (base + i) % 12 + 1, 1) for i in range(count + 1)]
 
 
+def employer_monthly(profile, limits: dict[str, Decimal]) -> Decimal:
+    """One profile's employer 401(k) match, per month, in cents. The bands are ANNUAL dollars
+    of elective deferrals, so the year is the only place the tiers can be applied honestly —
+    divide afterwards, never before."""
+    elective = (profile.trad_401k_pct + profile.roth_401k_pct) * profile.annual_salary
+    return half_up2(
+        employer_match(profile, elective, limits.get(LIMIT_401K_ELECTIVE)) / MONTHS_PER_YEAR
+    )
+
+
 async def _payroll_savings(
     db: AsyncSession, today: date
-) -> tuple[Decimal, list[PayrollSavingOut], list[str]]:
+) -> tuple[Decimal, Decimal, list[PayrollSavingOut], list[str]]:
     """Every earner's monthly payroll savings from the profile in force today, summed.
 
     Best-effort by design: a person with no profile contributes nothing and says nothing
@@ -138,8 +150,10 @@ async def _payroll_savings(
     veto the projection. Rows are cents (half_up2) so the echo sums exactly.
     """
     total = ZERO
+    employer_total = ZERO
     rows: list[PayrollSavingOut] = []
     warnings: list[str] = []
+    limits = await _limits_for(db, today.year)
     for person in await load_people(db):
         profile = await _default_profile(db, person.id, today)
         if profile is None:
@@ -151,11 +165,20 @@ async def _payroll_savings(
             )
             continue
         monthly = half_up2(payroll_monthly(profile))
-        if monthly <= ZERO:
+        employer = employer_monthly(profile, limits)
+        if monthly <= ZERO and employer <= ZERO:
             continue
-        rows.append(PayrollSavingOut(person_id=person.id, name=person.name, monthly=monthly))
+        rows.append(
+            PayrollSavingOut(
+                person_id=person.id,
+                name=person.name,
+                monthly=monthly,
+                employer_monthly=employer,
+            )
+        )
         total += monthly
-    return total, rows, warnings
+        employer_total += employer
+    return total, employer_total, rows, warnings
 
 
 async def _resolve_retirements(
@@ -176,6 +199,7 @@ async def _resolve_retirements(
     engine UNCONVERTED — see the Fisher note at the call.
     """
     people = {person.id: person for person in await load_people(db)}
+    limits = await _limits_for(db, today.year)
     rows: list[RetirementOut] = []
     seen: set[int] = set()
     for item in raw:
@@ -229,6 +253,9 @@ async def _resolve_retirements(
         # contribution added for this person, so a retirement removes exactly what the
         # profile put in. Non-negative by construction (pcts and riders are fenced ≥ 0).
         drop += half_up2(payroll_monthly(profile))
+        # The employer's leg stops with the job too — the same figure `_payroll_savings`
+        # added for this person, so a retirement removes exactly what the profile put in.
+        drop += employer_monthly(profile, limits)
         rows.append(
             RetirementOut(person_id=person_id, name=person.name, month=month, monthly_drop=drop)
         )
@@ -302,7 +329,7 @@ async def projection(
 
     contribution_breakdown: ContributionBreakdownOut | None = None
     if monthly_contribution is None:
-        payroll, by_person, payroll_warnings = await _payroll_savings(db, today)
+        payroll, employer, by_person, payroll_warnings = await _payroll_savings(db, today)
         warnings.extend(payroll_warnings)
         if not window:
             cash_part = ZERO
@@ -321,9 +348,15 @@ async def projection(
             cash_part = (total_cash / len(window)).quantize(CENT, rounding=ROUND_HALF_UP)
         # Both halves are cents already, so the sum needs no second rounding; quantize
         # anyway so a Decimal('0') cash part still echoes as "0.00".
-        monthly_contribution = (cash_part + payroll).quantize(CENT, rounding=ROUND_HALF_UP)
+        monthly_contribution = (cash_part + payroll + employer).quantize(
+            CENT, rounding=ROUND_HALF_UP
+        )
         contribution_breakdown = ContributionBreakdownOut(
-            cash=cash_part, payroll=payroll, total=monthly_contribution, by_person=by_person
+            cash=cash_part,
+            payroll=payroll,
+            employer=employer,
+            total=monthly_contribution,
+            by_person=by_person,
         )
     else:
         monthly_contribution = quantize_money(

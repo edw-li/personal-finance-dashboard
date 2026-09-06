@@ -26,19 +26,25 @@ class PayrollSavingOut(BaseModel):
     person_id: int
     name: str
     monthly: Decimal
+    # The EMPLOYER's 401(k) match for the same profile, per month (2026-09-06 spec §2.3) —
+    # a separate leg because it is not the person's own deduction and never touches net pay.
+    employer_monthly: Decimal
 
 
 class ContributionBreakdownOut(BaseModel):
     """How a DERIVED `monthly_contribution` was built (2026-09-03).
 
     `cash` is the trailing mean of (net pay − spend) — the pre-2026-09 derivation on its own,
-    which silently excluded every dollar that never reaches net pay. `payroll` is the sum of
-    `by_person`. Null on the wire when the knob was supplied: a typed number is the user's,
-    whole, and there is no derivation to explain.
+    which silently excluded every dollar that never reaches net pay. `payroll` and `employer`
+    are the sums of `by_person`'s two columns. Null on the wire when the knob was supplied: a
+    typed number is the user's, whole, and there is no derivation to explain.
     """
 
     cash: Decimal
     payroll: Decimal
+    # Σ of `by_person`'s `employer_monthly`; kept apart from `payroll` on purpose — the
+    # Spending page's savings rate stays employee-only (services/savings.py untouched).
+    employer: Decimal
     total: Decimal
     by_person: list[PayrollSavingOut]
 
