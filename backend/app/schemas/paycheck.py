@@ -41,6 +41,13 @@ class ProfileIn(BaseModel):
     # 'none' | 'self' | 'family'; the default matches the column's server_default, so an
     # old client that never sends it stores exactly what the migration backfilled.
     hsa_coverage: str = "self"
+    # The employer 401(k) match policy (spec §2.1). The defaults match the columns'
+    # server_default, so an old client that never sends them stores exactly what the
+    # migration backfilled — no match at all.
+    match_rate_1: Decimal = Decimal("0")
+    match_band_1: Decimal = Decimal("0")
+    match_rate_2: Decimal = Decimal("0")
+    match_band_2: Decimal = Decimal("0")
     notes: str | None = None
 
 
@@ -60,6 +67,10 @@ class ProfileUpdate(BaseModel):
     dental_vision_per_check: Decimal | None = None
     hsa_per_check: Decimal | None = None
     hsa_coverage: str | None = None
+    match_rate_1: Decimal | None = None
+    match_band_1: Decimal | None = None
+    match_rate_2: Decimal | None = None
+    match_band_2: Decimal | None = None
     notes: str | None = None
 
 
@@ -81,6 +92,14 @@ class ProfileOut(BaseModel):
     dental_vision_per_check: Decimal
     hsa_per_check: Decimal
     hsa_coverage: str
+    match_rate_1: Pct9
+    match_band_1: Decimal
+    match_rate_2: Pct9
+    match_band_2: Decimal
+    # Is THIS the row `_default_profile` would pick for its owner today (spec §2.3)? The
+    # Settings summary and the Paycheck page must never disagree about whose policy is live,
+    # so the server answers once instead of both clients re-deriving it.
+    in_force: bool
     notes: str | None
 
 
@@ -152,6 +171,10 @@ class ProfileOverrides(BaseModel):
     dental_vision_per_check: Decimal | None = None
     hsa_per_check: Decimal | None = None
     hsa_coverage: str | None = None
+    match_rate_1: Decimal | None = None
+    match_band_1: Decimal | None = None
+    match_rate_2: Decimal | None = None
+    match_band_2: Decimal | None = None
 
 
 class PreviewIn(BaseModel):
