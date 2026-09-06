@@ -1319,3 +1319,35 @@ async def test_breakdown_employer_match_is_zero_without_a_policy(auth_client, me
         },
     )
     assert (await auth_client.get(BREAKDOWN)).json()["employer_match"] == "0.00"
+
+
+async def test_breakdown_espp_row_grades_the_purchase_year(auth_client, db, me):
+    from app.models import AppSetting, ContributionLimit
+
+    db.add(ContributionLimit(year=date.today().year, key="limit_espp_423", value=D("25000.00")))
+    await db.commit()
+    await auth_client.post(
+        PROFILES,
+        json={
+            "effective_date": "2020-01-01",
+            "annual_salary": "188930",
+            "pay_periods_per_year": 24,
+            "espp_pct": "0.11",
+        },
+    )
+    rows = {r["key"]: r for r in (await auth_client.get(BREAKDOWN)).json()["pace"]}
+    assert rows["limit_espp_423"]["measure"] == "window"
+    assert rows["limit_espp_423"]["soft_limit"] == "21250.00"  # 25,000 x (1 - 0.15)
+    assert len(rows["limit_espp_423"]["halves"]) == 2
+    assert rows["limit_espp_423"]["window_label"].endswith("purchases")
+    assert rows["limit_espp_423"]["projected_full_year"] == "20782.30"  # 11 % of 188,930
+    assert rows["limit_espp_423"]["current_rate"] == "0.110000000"
+    # Every other row keeps the annualized shape and none of the ESPP extras.
+    assert rows["limit_401k_elective"]["measure"] == "annualized"
+    assert rows["limit_401k_elective"]["soft_limit"] is None
+    assert rows["limit_401k_elective"]["halves"] is None
+
+    db.add(AppSetting(key="espp_discount_pct", value={"value": "0.10"}))
+    await db.commit()
+    again = {r["key"]: r for r in (await auth_client.get(BREAKDOWN)).json()["pace"]}
+    assert again["limit_espp_423"]["soft_limit"] == "22500.00"  # 25,000 x (1 - 0.10)

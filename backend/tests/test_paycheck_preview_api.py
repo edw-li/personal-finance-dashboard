@@ -127,6 +127,14 @@ async def test_preview_selects_the_base_exactly_as_the_breakdown_does(auth_clien
     assert resp.json()["detail"] == "person not found"
 
 
+def _without_history(rows: list[dict]) -> list[dict]:
+    """The pace rows minus the one field that reads the person's stored TIMELINE rather
+    than the profile in hand. The ESPP row prices past paydays from whichever profile was
+    in force on each, so creating a twin row changes what history says — every FIGURE the
+    two doors compute is still compared here, field for field."""
+    return [{key: value for key, value in row.items() if key != "backfilled_from"} for row in rows]
+
+
 async def test_preview_scenario_equals_a_real_profile_with_those_values(auth_client, me):
     """Parity with the real compute: the scenario half equals GET /breakdown of a profile
     CREATED with the overridden values, then deleted — one arithmetic, two doors."""
@@ -139,7 +147,15 @@ async def test_preview_scenario_equals_a_real_profile_with_those_values(auth_cli
     for key in WATERFALL:
         assert body["per_check"]["scenario"][key] == shown[key]
     assert body["monthly"]["scenario"]["net_pay"] == shown["monthly_net"]
-    assert body["pace"]["scenario"] == shown["pace"]
+    assert _without_history(body["pace"]["scenario"]) == _without_history(shown["pace"])
+    # ...and the ONE field the twin cannot reproduce is the one it created: back-dating a
+    # profile to 2019 gives this person a timeline that reaches behind the ESPP window,
+    # which the preview (whose earliest profile is 2026-01-01) had to borrow forwards.
+    espp = {row["key"]: row for row in shown["pace"]}["limit_espp_423"]
+    assert espp["backfilled_from"] is None
+    assert {row["key"]: row for row in body["pace"]["scenario"]}["limit_espp_423"][
+        "backfilled_from"
+    ] == "2026-01-01"
     assert (await auth_client.delete(f"{PROFILES}/{twin['id']}")).status_code == 204
     # The preview modelled nothing into the database: the same request answers the same.
     assert (await preview(auth_client, overrides=overrides)) == body
@@ -314,3 +330,20 @@ async def test_preview_monthly_matches_the_breakdowns_operation_order(auth_clien
     assert body["monthly"]["baseline"]["net_pay"] == shown["monthly_net"]
     assert body["monthly"]["scenario"]["net_pay"] == shown["monthly_net"]
     assert body["monthly"]["delta"]["net_pay"] == "0.00"
+
+
+async def test_preview_espp_row_moves_with_the_rate_override(auth_client, db, me):
+    db.add(ContributionLimit(year=date.today().year, key="limit_espp_423", value=D("25000.00")))
+    await db.commit()
+    await auth_client.post(PROFILES, json=profile_payload(effective_date="2020-01-01"))
+    body = (await auth_client.post(PREVIEW, json={"overrides": {"espp_pct": "0.2"}})).json()
+    before = {row["key"]: row for row in body["pace"]["baseline"]}["limit_espp_423"]
+    after = {row["key"]: row for row in body["pace"]["scenario"]}["limit_espp_423"]
+    # Only paydays from TODAY onward are repriced, so the window rises without doubling —
+    # and once this year's August purchase is behind us there is nothing left to reprice.
+    # Never lower, either way; the "it moves" half is pinned date-free in test_espp_pace.py.
+    assert D(after["annualized"]) >= D(before["annualized"])
+    assert after["projected_full_year"] == "37786.00"  # 20 % of 188,930
+    assert before["projected_full_year"] == "20782.30"  # 11 %, the stored profile
+    assert after["current_rate"] == "0.200000000"
+    assert before["soft_limit"] == after["soft_limit"] == "21250.00"

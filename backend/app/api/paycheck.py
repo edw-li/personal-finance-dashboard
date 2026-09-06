@@ -25,10 +25,11 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.app_settings import read_espp_discount
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.limit_keys import LIMIT_401K_ELECTIVE
-from app.models import ContributionLimit, PaycheckProfile, Person
+from app.limit_keys import LIMIT_401K_ELECTIVE, LIMIT_ESPP_423
+from app.models import ContributionLimit, EsppPeriod, PaycheckProfile, Person
 from app.schemas.paycheck import (
     BreakdownOut,
     ChangedField,
@@ -43,7 +44,9 @@ from app.schemas.paycheck import (
     ProfileOverrides,
     ProfileUpdate,
 )
-from app.services.limit_check import employer_match, paycheck_pace
+from app.services.espp_calc import StoredPeriod, plan_year_rows
+from app.services.espp_pace import espp_pace_item
+from app.services.limit_check import PaceItem, employer_match, paycheck_pace
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     _quantize_bounded,
@@ -614,6 +617,68 @@ def _text(value) -> str:
     return format(value, "f") if isinstance(value, Decimal) else str(value)
 
 
+async def _espp_pace_rows(
+    db: AsyncSession,
+    profile,
+    person_id: int,
+    scenario,
+    limits: dict[str, Decimal],
+    today: date,
+) -> list[PaceItem]:
+    """`paycheck_pace`'s rows with the ESPP one replaced by the PURCHASE-year row (§1.6).
+
+    The windows are planned exactly as the calendar generator plans them —
+    `plan_year_rows(Y, stored, [], None, None)`, pricing inputs deliberately empty — so the
+    strip and the calendar can never disagree about which halves exist. `person_id` is a
+    parameter because a `ScenarioProfile` has no owner. SELECTs only: this runs inside the
+    preview, which writes nothing (tests/test_sandbox_purity.py).
+    """
+    items = paycheck_pace(profile, limits, profile.hsa_coverage)
+    stored = list(
+        (
+            await db.execute(select(EsppPeriod).order_by(EsppPeriod.period_end, EsppPeriod.id))
+        ).scalars()
+    )
+    rows, _warnings = plan_year_rows(
+        today.year,
+        [
+            StoredPeriod(
+                id=row.id,
+                label=row.label,
+                period_start=row.period_start,
+                period_end=row.period_end,
+                semi_annual_base=row.semi_annual_base,
+                additional_payments=row.additional_payments,
+                contribution_pct=row.contribution_pct,
+            )
+            for row in stored
+        ],
+        [],
+        None,
+        None,
+    )
+    profiles = list(
+        (
+            await db.execute(
+                select(PaycheckProfile)
+                .where(PaycheckProfile.person_id == person_id)
+                .order_by(PaycheckProfile.effective_date)
+            )
+        ).scalars()
+    )
+    espp = espp_pace_item(
+        rows=rows,
+        profiles=profiles,
+        scenario_from_today=scenario,
+        limit=limits.get(LIMIT_ESPP_423),
+        discount=await read_espp_discount(db),
+        today=today,
+    )
+    # limit_check already emits ESPP last, so appending keeps the display order intact.
+    kept = [item for item in items if item.key != LIMIT_ESPP_423]
+    return kept if espp is None else [*kept, espp]
+
+
 @router.get("/breakdown", response_model=BreakdownOut)
 async def get_breakdown(
     profile_id: IdQuery = None,
@@ -631,7 +696,7 @@ async def get_breakdown(
     limits = await _limits_for(db, today.year)
     pace = [
         PaceItemOut.model_validate(item)
-        for item in paycheck_pace(profile, limits, profile.hsa_coverage)
+        for item in await _espp_pace_rows(db, profile, profile.person_id, profile, limits, today)
     ]
     # Per check from the ANNUAL policy, not the other way round: the bands are annual
     # dollars, so the year is the only place the tiers can be applied honestly.
@@ -669,11 +734,11 @@ async def preview(body: PreviewIn, db: AsyncSession = Depends(get_db)) -> Previe
     pace = PreviewPace(
         baseline=[
             PaceItemOut.model_validate(item)
-            for item in paycheck_pace(base, limits, base.hsa_coverage)
+            for item in await _espp_pace_rows(db, base, base.person_id, base, limits, today)
         ],
         scenario=[
             PaceItemOut.model_validate(item)
-            for item in paycheck_pace(scenario, limits, scenario.hsa_coverage)
+            for item in await _espp_pace_rows(db, scenario, base.person_id, scenario, limits, today)
         ],
     )
     changed = [
