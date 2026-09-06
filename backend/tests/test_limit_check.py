@@ -18,7 +18,7 @@ from app.limit_keys import (
     LIMIT_HSA_FAMILY,
     LIMIT_HSA_SELF,
 )
-from app.services.limit_check import paycheck_pace
+from app.services.limit_check import employer_match, paycheck_pace
 
 
 @dataclass
@@ -32,6 +32,10 @@ class FakeProfile:
     withholding_pct: Decimal = Decimal("0.300000000")
     dental_vision_per_check: Decimal = Decimal("0")
     hsa_per_check: Decimal = Decimal("0")
+    match_rate_1: Decimal = Decimal("0")
+    match_band_1: Decimal = Decimal("0")
+    match_rate_2: Decimal = Decimal("0")
+    match_band_2: Decimal = Decimal("0")
 
 
 def by_key(items):
@@ -211,3 +215,69 @@ def test_an_all_zero_profile_still_reports_the_two_401k_rows():
     assert items[0].annualized == Decimal("0.00")
     assert items[0].ratio == Decimal("0.0000")
     assert items[0].tone == "ok"
+
+
+POLICY = {
+    "match_rate_1": Decimal("1"),
+    "match_band_1": Decimal("6000.00"),
+    "match_rate_2": Decimal("0.5"),
+    "match_band_2": Decimal("11000.00"),
+}
+
+
+def test_employer_match_golden():
+    # 100 % of the first 6,000 + 50 % of the next 11,000 = 6,000 + 5,500.
+    assert employer_match(FakeProfile(**POLICY), Decimal("24500.00"), None) == Decimal("11500.00")
+    # Deferrals past the end of the second band earn nothing more...
+    assert employer_match(FakeProfile(**POLICY), Decimal("50000.00"), None) == Decimal("11500.00")
+    # ...and inside the first band the match simply follows the money.
+    assert employer_match(FakeProfile(**POLICY), Decimal("2500.00"), None) == Decimal("2500.00")
+    assert employer_match(FakeProfile(), Decimal("24500.00"), None) == Decimal("0")
+
+
+def test_employer_match_caps_the_elective_at_the_402g_limit():
+    """Payroll stops deferrals at the limit and the match follows actual contributions —
+    13 % of 188,930 is 24,560.90, but only 24,500 of it is ever deferred."""
+    p = FakeProfile(annual_salary=Decimal("188930.00"), trad_401k_pct=Decimal("0.13"), **POLICY)
+    elective = p.trad_401k_pct * p.annual_salary
+    assert employer_match(p, elective, Decimal("24500.00")) == Decimal("11500.00")
+
+
+def test_total_additions_includes_the_match_and_renames_the_row():
+    profile = FakeProfile(
+        annual_salary=Decimal("188930.00"),
+        trad_401k_pct=Decimal("0.13"),
+        after_tax_401k_pct=Decimal("0.03"),
+        **POLICY,
+    )
+    limits = {LIMIT_401K_ELECTIVE: Decimal("24500.00"), LIMIT_415C_TOTAL: Decimal("72000.00")}
+    row = by_key(paycheck_pace(profile, limits, "none"))[LIMIT_415C_TOTAL]
+    assert row.annualized == Decimal("41667.90")  # 24,500 capped + 5,667.90 + 11,500
+    assert row.employer_match == Decimal("11500.00")
+    assert row.ratio == Decimal("0.5787")
+    assert row.tone == "ok"
+    assert row.label == "415(c) total additions (incl. employer match)"
+
+
+def test_no_policy_keeps_todays_caveat_and_a_null_match():
+    row = by_key(paycheck_pace(FakeProfile(), {}, "none"))[LIMIT_415C_TOTAL]
+    assert row.label == "415(c) total additions (excludes employer match)"
+    assert row.employer_match is None
+
+
+def test_a_policy_that_earns_nothing_this_year_still_renames_the_row():
+    """Bands are the POLICY; the match is this year's pace. Somebody deferring nothing has
+    the first and not the second — the label says one, `employer_match` the other."""
+    row = by_key(paycheck_pace(FakeProfile(trad_401k_pct=Decimal("0"), **POLICY), {}, "none"))[
+        LIMIT_415C_TOTAL
+    ]
+    assert row.label == "415(c) total additions (incl. employer match)"
+    assert row.employer_match is None
+
+
+def test_every_row_carries_the_default_measure_and_no_espp_extras():
+    for item in paycheck_pace(FakeProfile(espp_pct=Decimal("0.11")), {}, "none"):
+        assert item.measure == "annualized"
+        assert item.soft_limit is None and item.soft_ratio is None
+        assert item.halves is None and item.window_label is None
+        assert item.current_rate is None

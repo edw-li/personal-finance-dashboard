@@ -103,6 +103,19 @@ class ProfileOut(BaseModel):
     notes: str | None
 
 
+class PaceHalfOut(BaseModel):
+    """One purchase-year window on the ESPP row (2026-09-06 spec §1.6)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    label: str
+    start: date
+    end: date
+    amount: Decimal
+    source: str  # 'entered' | 'estimated'
+    basis: str | None  # 'paydays' | 'months'; null on an entered half
+
+
 class PaceItemOut(BaseModel):
     """One contribution line annualized from the profile in force, against the cap the
     user entered for the current year (2026-08-27 spec §4.5).
@@ -121,6 +134,23 @@ class PaceItemOut(BaseModel):
     limit: Decimal | None
     ratio: Decimal | None
     tone: str
+    # 'annualized' | 'window' — what `annualized` holds: a year at this rate, or the ESPP
+    # row's purchase-year window total (spec §1.6).
+    measure: str
+    # The practical cap, `limit x (1 - discount)`, and the ratio the TONE was judged on —
+    # ESPP only, so the verdict can never disagree with the tick beside it.
+    soft_limit: Decimal | None
+    soft_ratio: Decimal | None
+    window_label: str | None
+    halves: list[PaceHalfOut] | None
+    backfilled_from: date | None
+    projected_full_year: Decimal | None
+    projected_excess: Decimal | None
+    # The ESPP percentage the projection used, so the note line can print "At your current
+    # 12%" without re-deriving it from the profile.
+    current_rate: Decimal | None
+    # 415(c) only, and only when it is > 0.
+    employer_match: Decimal | None
 
 
 class BreakdownOut(BaseModel):
