@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # link, the comp router owns the employer close history and the on-or-before lookup the vest
 # calendar reads, and the paycheck router owns THE divide-by-zero rule for a stored profile.
 # Every one of them is one concept with one owner — a second copy here could only drift.
+from app.api.app_settings import read_espp_discount
 from app.api.comp import _close_on_or_before, _employer_bars
 from app.api.deps import get_current_user
 from app.api.espp import _espp_quote
@@ -1467,6 +1468,9 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
         # and capital gain into the scenario (branch review I1's ESPP half).
         seen_lots: set[int] = set()
         _ticker, quote_price, _quoted_at = await _espp_quote(db)
+        # One read for the whole request: the plan discount is a single plan-wide rate, and
+        # every leg's qualified ordinary cap must be priced against the same one.
+        espp_discount = await read_espp_discount(db)
         for leg in body.espp_sales:
             if leg.lot_id in seen_lots:
                 raise HTTPException(
@@ -1500,6 +1504,7 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
                     purchase_price=lot.purchase_price,
                     sale_price=sale_price,
                     today=today,
+                    discount=espp_discount,
                 )
             )
 

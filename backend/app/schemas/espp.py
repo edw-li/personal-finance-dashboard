@@ -189,6 +189,9 @@ class ModelerOut(BaseModel):
     subscription_price: Decimal | None
     purchase_fmv: Decimal
     carry_forward: Decimal
+    # The plan discount these purchase prices were computed with (2026-09-06 spec §1.5), so
+    # the page prints the figure it was priced with instead of a hardcoded 15 %.
+    discount_pct: Decimal
     # Server-owned year-chip list: stored period years ∪ offering-covered purchase years
     # ∪ {current, current + 1}, sorted (the frontend has no other source once
     # fetchPeriods is gone).

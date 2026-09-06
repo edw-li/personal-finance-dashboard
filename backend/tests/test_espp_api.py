@@ -1063,3 +1063,22 @@ async def test_espp_endpoints_require_auth(client):
     assert (await client.patch(f"{OFFERINGS}/1", json={"notes": "x"})).status_code == 401
     assert (await client.delete(f"{OFFERINGS}/1")).status_code == 401
     assert (await client.get(MODELER)).status_code == 401
+
+
+async def test_espp_prices_follow_the_discount_setting(auth_client, db):
+    from app.models import AppSetting
+
+    db.add(AppSetting(key="espp_discount_pct", value={"value": "0.10"}))
+    await db.commit()
+    created = await create_lot(auth_client)  # lot_payload's defaults: sub 48.509, fmv 79.112
+    assert created["purchase_price"] == "43.65810"  # 0.90 x 48.509, 5 dp, no ceil
+    body = (
+        await auth_client.get(
+            MODELER,
+            params={"subscription_price": "170.79", "purchase_fmv": "171", "year": "2026"},
+        )
+    ).json()
+    # The echo is the READER's verbatim value (get_swr_pct's posture) — a PUT would have
+    # stored "0.100000"; a hand-written envelope stays exactly as it was written.
+    assert body["discount_pct"] == "0.10"
+    assert body["periods"][0]["purchase_price"] == "153.72"  # CEIL2(0.90 x 170.79)

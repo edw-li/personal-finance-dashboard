@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.app_settings import read_espp_discount
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.models import AppSetting, EsppLot, EsppOffering, EsppPeriod, LatestPrice, Security
@@ -42,7 +43,6 @@ from app.schemas.espp import (
     PeriodUpdate,
 )
 from app.services.espp_calc import (
-    DISCOUNT,
     OfferingInfo,
     StoredPeriod,
     lot_metrics,
@@ -171,6 +171,7 @@ def _validated_lot(
     purchase_price: Decimal | None,
     sold_date: date | None,
     sold_price: Decimal | None,
+    discount: Decimal,
 ) -> dict:
     """One lot's stored columns, validated as a WHOLE row (Plan 4 house law) so a PATCH
     can hand over the merged values and get the same cross-field rules as a POST.
@@ -187,10 +188,10 @@ def _validated_lot(
     subscription = _positive_price(subscription_price, "subscription_price")
     fmv = _positive_price(purchase_fmv, "purchase_fmv")
     if purchase_price is None:
-        # The lots-table shape: 0.85 x the lower price at 5dp, with NO ceil — the
-        # modeler's ROUNDUP applies to the what-if purchase, not to a stored lot.
+        # The lots-table shape: (1 - discount) x the lower price at 5dp, with NO ceil —
+        # the modeler's ROUNDUP applies to the what-if purchase, not to a stored lot.
         # Both operands are already positive at 5dp, so this can never round to 0.
-        price = _quantize5(DISCOUNT * min(subscription, fmv), "purchase_price")
+        price = _quantize5((Decimal("1") - discount) * min(subscription, fmv), "purchase_price")
     else:
         price = _positive_price(purchase_price, "purchase_price")
     # A half-filled disposition is the one shape the computed columns cannot read.
@@ -276,6 +277,7 @@ async def create_lot(body: LotIn, db: AsyncSession = Depends(get_db)) -> LotOut:
         purchase_price=body.purchase_price,
         sold_date=body.sold_date,
         sold_price=body.sold_price,
+        discount=await read_espp_discount(db),
     )
     # purchase_date is the natural key. Plain check-then-409: two concurrent creates of
     # the same date would race into an IntegrityError, an accepted house class for a
@@ -313,6 +315,7 @@ async def update_lot(lot_id: IdPath, body: LotUpdate, db: AsyncSession = Depends
         # halves are cleared together (_validated_lot rejects the half-filled row).
         sold_date=provided.get("sold_date", lot.sold_date),
         sold_price=provided.get("sold_price", lot.sold_price),
+        discount=await read_espp_discount(db),
     )
     if fields["purchase_date"] != lot.purchase_date:
         await _require_free_purchase_date(db, fields["purchase_date"])
@@ -532,6 +535,7 @@ async def modeler(
         (await db.execute(select(EsppOffering).order_by(EsppOffering.offering_start))).scalars()
     )
     today = date.today()
+    discount = await read_espp_discount(db)
     target_year = year if year is not None else today.year
     ticker, latest_price, quoted_at = await _espp_quote(db)
     if latest_price is not None and latest_price <= 0:
@@ -597,7 +601,7 @@ async def modeler(
             ),
         )
 
-    result = run_modeler(rows, purchase_fmv=fmv, carry_forward=carry)
+    result = run_modeler(rows, purchase_fmv=fmv, carry_forward=carry, discount=discount)
 
     # Year chips (spec §5.2): stored years ∪ offering-covered purchase years ∪ now/next.
     years = {row.period_end.year for row in stored} | {today.year, today.year + 1}
@@ -635,6 +639,7 @@ async def modeler(
         subscription_price=sub_override,
         purchase_fmv=result.purchase_fmv,
         carry_forward=result.carry_forward,
+        discount_pct=discount,
         available_years=sorted(years),
         warnings=warnings,
         periods=[
