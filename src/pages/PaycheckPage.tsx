@@ -128,6 +128,13 @@ function BreakdownPanel({ data, still }: { data: PaycheckBreakdownOut; still: bo
           </div>
         ))}
       </dl>
+      {/* NOT a waterfall line: the match never passes through this check, so listing it
+          would make the eleven lines add up to something that is not the pay. */}
+      {Number(data.employer_match) !== 0 && (
+        <p className="drill-hint">
+          Employer match +{formatCurrency(data.employer_match)} per check, not part of your pay.
+        </p>
+      )}
     </section>
   )
 }

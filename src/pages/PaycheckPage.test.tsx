@@ -336,6 +336,18 @@ describe('PaycheckPage — the waterfall', () => {
     expect(vi.mocked(fetchBreakdown).mock.calls[0][0]).toBeUndefined()
   })
 
+  it('names the employer match under the waterfall, outside the pay it adds up', async () => {
+    vi.mocked(fetchBreakdown).mockResolvedValue(breakdownOf(profile2026, { employer_match: '479.17' }))
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    expect(await screen.findByText('Employer match +$479.17 per check, not part of your pay.')).toBeTruthy()
+    cleanup()
+    // No policy, no line — "+$0.00" would be a deduction-shaped nothing.
+    vi.mocked(fetchBreakdown).mockResolvedValue(breakdownOf(profile2026, { employer_match: '0.00' }))
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    expect(screen.queryByText(/Employer match/)).toBeNull()
+  })
+
   it('marks the net-pay line as the one that counts', async () => {
     render(<PaycheckPage />, { wrapper: MemoryRouter })
     await screen.findByText('$3,384.16')
