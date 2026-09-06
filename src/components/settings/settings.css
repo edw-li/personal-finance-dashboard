@@ -467,3 +467,26 @@
 .accounts-link-note.is-unlinked {
   color: var(--warn);
 }
+
+/* --- section bands and the chip rail (2026-09-06 spec §3.1–§3.2) --- */
+
+/* A band across the whole grid, NOT a .card: it takes no entrance animation and no arrival
+   ring, and the reveal timeline has nothing to catch on it. It carries its own span rather
+   than wearing .span-12, which is card vocabulary. */
+.card-grid > .settings-section {
+  grid-column: 1 / -1;
+  margin: 0.75rem 0 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  /* A chip scrolls a band to the top of the scrollport, which the sticky scope row covers.
+     PageFrame MEASURES that row into --sticky-inset on .page-frame-body and these bands
+     inherit it, so the band lands below the row instead of under it. */
+  scroll-margin-top: calc(var(--sticky-inset, 0px) + 0.75rem);
+}
+
+.card-grid > .settings-section:first-child {
+  margin-top: 0;
+}
