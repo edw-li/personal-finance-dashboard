@@ -185,3 +185,23 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+/* A knob group behind a <details>: for inputs that are a POLICY rather than a dial to drag,
+   so the panel's main grid stays the things a reader came to move. The element keeps its
+   default display (grid on the <details> itself breaks the closed state in some engines),
+   so the grid lives on the child. */
+.sandbox-disclosure { grid-column: 1 / -1; }
+.sandbox-disclosure > summary {
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.sandbox-disclosure-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.9rem 1.25rem;
+  margin-top: 0.75rem;
+}

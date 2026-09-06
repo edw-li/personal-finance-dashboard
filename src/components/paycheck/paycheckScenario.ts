@@ -24,6 +24,10 @@ export const KNOBS = [
   'espp_pct',
   'hsa_coverage',
   'hsa_per_check',
+  'match_band_1',
+  'match_band_2',
+  'match_rate_1',
+  'match_rate_2',
   'pay_periods_per_year',
   'roth_401k_pct',
   'trad_401k_pct',
@@ -59,6 +63,9 @@ export const KNOB_MAX = {
   espp_pct: ESPP_MAX_PCT,
   withholding_pct: '0.6',
   hsa_per_check: '500',
+  // A full doubling is the slider's end — the same [0, 2] the column is fenced at.
+  match_rate_1: '2',
+  match_rate_2: '2',
 } as const
 
 /** Whether the URL (or a box) may carry `value` for `key`. THE fence: the codec drops
@@ -71,6 +78,12 @@ export function acceptKnob(key: PaycheckKnob, value: string): boolean {
     return /^\d{1,3}$/.test(value) && Number(value) >= MIN_PAY_PERIODS && Number(value) <= MAX_PAY_PERIODS
   }
   if (!isWireDecimal(value)) return false
+  // The match's own fences: a rate may double the deferral (the server's [0, 2]); a band is
+  // dollars, so nothing caps it here — the column's 422 is the backstop.
+  if (key === 'match_rate_1' || key === 'match_rate_2') {
+    return compareDecimals(value, '0') >= 0 && compareDecimals(value, '2') <= 0
+  }
+  if (key === 'match_band_1' || key === 'match_band_2') return compareDecimals(value, '0') >= 0
   if (key === 'annual_salary') return compareDecimals(value, '0') > 0
   if (key === 'hsa_per_check') return compareDecimals(value, '0') >= 0
   return compareDecimals(value, '0') >= 0 && compareDecimals(value, '1') <= 0 // the five pcts
@@ -123,6 +136,10 @@ const SHORT: Record<PaycheckKnob, string> = {
   annual_salary: 'Salary',
   pay_periods_per_year: 'periods',
   hsa_coverage: 'HSA',
+  match_rate_1: 'Match 1',
+  match_band_1: 'Match band 1',
+  match_rate_2: 'Match 2',
+  match_band_2: 'Match band 2',
 }
 
 /** "401(k) 15% · HSA $250.00" — the first two changed knobs, in canonical order (spec §8.5). */
@@ -134,6 +151,7 @@ export function labelForPaycheck(scenario: PaycheckScenario): string {
     if ((PCT_KNOBS as readonly string[]).includes(key)) parts.push(`${SHORT[key]} ${shiftPoint(value, 2)}%`)
     else if (key === 'pay_periods_per_year') parts.push(`${value} periods`)
     else if (key === 'hsa_coverage') parts.push(`HSA ${value}`)
+    else if (key === 'match_rate_1' || key === 'match_rate_2') parts.push(`${SHORT[key]} ${shiftPoint(value, 2)}%`)
     else parts.push(`${SHORT[key]} ${formatCurrency(value)}`)
     if (parts.length === 2) break
   }
@@ -261,10 +279,10 @@ export function applySeedFor(
     dental_vision_per_check: profile.dental_vision_per_check,
     hsa_per_check: scenario.hsa_per_check ?? profile.hsa_per_check,
     hsa_coverage: (scenario.hsa_coverage as HsaCoverage | undefined) ?? profile.hsa_coverage,
-    match_rate_1: shiftPoint(profile.match_rate_1, 2),
-    match_band_1: profile.match_band_1,
-    match_rate_2: shiftPoint(profile.match_rate_2, 2),
-    match_band_2: profile.match_band_2,
+    match_rate_1: shiftPoint(scenario.match_rate_1 ?? profile.match_rate_1, 2),
+    match_band_1: scenario.match_band_1 ?? profile.match_band_1,
+    match_rate_2: shiftPoint(scenario.match_rate_2 ?? profile.match_rate_2, 2),
+    match_band_2: scenario.match_band_2 ?? profile.match_band_2,
     notes: '',
   }
 }

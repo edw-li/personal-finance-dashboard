@@ -304,4 +304,17 @@ describe('TryItPanel', () => {
     fireEvent.blur(salary)
     expect(url()).toBe('/paycheck?whatif=annual_salary%3A200000&whatif=hsa_coverage%3Afamily')
   })
+
+  it('offers the match policy as knobs, under its own disclosure', async () => {
+    mount()
+    fireEvent.click(toggle())
+    await waitFor(() => expect(previewPaycheck).toHaveBeenCalledTimes(1))
+    expect(screen.getByText('Employer match')).toBeTruthy()
+    const band = screen.getByLabelText('First match band') as HTMLInputElement
+    fireEvent.focus(band)
+    fireEvent.change(band, { target: { value: '8000' } })
+    fireEvent.blur(band)
+    // The knob reaches the server through the URL, like every other one on this panel.
+    expect(url()).toBe('/paycheck?whatif=match_band_1%3A8000')
+  })
 })

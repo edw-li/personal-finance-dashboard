@@ -53,6 +53,17 @@ describe('paycheck scenario codec', () => {
     expect(decodePaycheck(encodePaycheck(scenario))).toEqual(scenario)
   })
 
+  it('carries the match knobs with their own fences — rates to 2, bands only non-negative', () => {
+    expect(decodePaycheck(['match_rate_1:1.5', 'match_band_1:6000', 'match_rate_2:2.5', 'match_band_2:-1'])).toEqual({
+      match_rate_1: '1.5',
+      match_band_1: '6000',
+    })
+    expect(toOverrides({ match_rate_1: '1', match_band_1: '6000' })).toEqual({ match_rate_1: '1', match_band_1: '6000' })
+    // A rate prints as a percent like every other rate here; a band is money. KNOBS is
+    // alphabetical, so the band is the first of the two changed knobs.
+    expect(labelForPaycheck({ match_rate_1: '1', match_band_1: '6000' })).toBe('Match band 1 $6,000.00 · Match 1 100%')
+  })
+
   it('drops garbage and out-of-range values, keeps the last of a duplicate key', () => {
     expect(
       decodePaycheck(['NVDA', 'bonus_pct:0.1', 'trad_401k_pct:13', 'espp_pct:-0.1', 'hsa_coverage:spouse', 'pay_periods_per_year:0', 'annual_salary:0', 'trad_401k_pct:0.1', 'trad_401k_pct:0.2']),
