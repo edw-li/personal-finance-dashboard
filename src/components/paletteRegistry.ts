@@ -46,12 +46,19 @@ export const SETTINGS_SECTIONS: { id: string; label: string; keywords: string[] 
   {
     id: 'system',
     label: 'System status',
-    keywords: ['backup', 'scheduler', 'refresh', 'database', 'alembic', 'export', 'snapshot'],
+    // No 'scheduler' or 'refresh': the Price refresh card owns those words now (2026-09-06
+    // spec §3.3), and two destinations answering to one term is how the palette gets vague.
+    keywords: ['backup', 'database', 'alembic', 'export', 'snapshot'],
   },
   {
-    id: 'app-settings',
-    label: 'App settings',
-    keywords: ['withdrawal rate', 'swr', 'espp ticker', 'cron'],
+    id: 'plan-assumptions',
+    label: 'Plan assumptions',
+    keywords: ['withdrawal rate', 'swr', 'espp ticker', 'espp discount', 'employer match'],
+  },
+  {
+    id: 'price-refresh',
+    label: 'Price refresh',
+    keywords: ['cron', 'schedule', 'refresh prices', 'scheduler'],
   },
   { id: 'password', label: 'Change password', keywords: ['security', 'sign out everywhere'] },
   { id: 'household', label: 'Household', keywords: ['partner', 'spouse', 'marriage', 'people'] },

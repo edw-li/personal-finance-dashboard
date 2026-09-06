@@ -81,30 +81,11 @@ it('renders the healthy rows verbatim', async () => {
   const backup = backupOut(10)
   vi.mocked(fetchSystemStatus).mockResolvedValue(systemOut({ backup }))
   render(<SystemCard />)
-  // The refresh line wears PortfolioPage's refresh-status-line vocabulary — the two
-  // surfaces describe the same stored run and must read the same.
-  await screen.findByText(`${formatDateTime(LAST_RUN.at)} (scheduled) · 36 updated`)
-  expect(screen.getByText(formatDateTime('2026-08-25T20:10:00+00:00'))).toBeDefined()
-  expect(screen.getByText('Running')).toBeDefined()
-  const stamp = screen.getByText(`${formatDateTime(backup.last_success_at)} · 1.2M`)
+  const stamp = await screen.findByText(`${formatDateTime(backup.last_success_at)} · 1.2M`)
   expect(stamp.className).toBe('')
   expect(screen.getByText('117.7 MB')).toBeDefined()
   expect(screen.getByText('e7c5a9f4b2d8')).toBeDefined()
   expect(screen.getByText('prod')).toBeDefined()
-})
-
-it('appends the failed count to the refresh line only when nonzero', async () => {
-  vi.mocked(fetchSystemStatus).mockResolvedValue(
-    systemOut({
-      prices: {
-        last: { ...LAST_RUN, failed: { ZI: 'delisted' } },
-        next_run_at: null,
-        scheduler_running: true,
-      },
-    }),
-  )
-  render(<SystemCard />)
-  await screen.findByText(`${formatDateTime(LAST_RUN.at)} (scheduled) · 36 updated · 1 failed`)
 })
 
 it('tones the backup amber past 48 hours, wording unchanged', async () => {
@@ -135,13 +116,11 @@ it('renders the quiet states: no run, no schedule, no backup, no alembic table',
     }),
   )
   render(<SystemCard />)
-  await screen.findByText('No refresh recorded yet')
-  expect(screen.getByText('Not scheduled')).toBeDefined()
-  expect(screen.getByText('Not running')).toBeDefined()
-  expect(screen.getByText('No backup recorded')).toBeDefined()
+  await screen.findByText('No backup recorded')
   expect(screen.getByText('1.0 KB')).toBeDefined()
-  // Alembic head plus the two empty run trails all render the dash.
-  expect(screen.getAllByText('—')).toHaveLength(3)
+  // Alembic head plus the empty backup trail render the dash; the refresh trail moved to
+  // the Price refresh card (2026-09-06 spec §3.3).
+  expect(screen.getAllByText('—')).toHaveLength(2)
   expect(screen.getByText('dev')).toBeDefined()
 })
 
@@ -151,20 +130,16 @@ it('shows the load failure verbatim and retries into the rows', async () => {
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toContain('status unavailable')
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-  await screen.findByText('Running')
+  await screen.findByText('117.7 MB')
   expect(screen.queryByRole('alert')).toBeNull()
 })
 
-it('renders the last-5 run trails compactly', async () => {
+it('renders the last-5 backup trail compactly', async () => {
   vi.mocked(fetchSystemStatus).mockResolvedValue(
     systemOut({
       backup_runs: [
         { at: '2026-08-30T03:00:00+00:00', ok: true, object: 'backups/finance.sql.gz.gpg' },
         { at: '2026-08-29T03:00:00+00:00', ok: false, error: 'pg_dump: connection refused' },
-      ],
-      refresh_runs: [
-        { at: '2026-08-30T20:10:00+00:00', trigger: 'scheduled', updated: 36, failed_count: 2 },
-        { at: '2026-08-29T20:10:00+00:00', trigger: 'manual', updated: 40, failed_count: 0 },
       ],
     }),
   )
@@ -173,12 +148,6 @@ it('renders the last-5 run trails compactly', async () => {
     `${formatDateTime('2026-08-30T03:00:00+00:00')} ok · ` +
       `${formatDateTime('2026-08-29T03:00:00+00:00')} failed`,
   )
-  expect(
-    screen.getByText(
-      `${formatDateTime('2026-08-30T20:10:00+00:00')} 36 updated, 2 failed · ` +
-        `${formatDateTime('2026-08-29T20:10:00+00:00')} 40 updated`,
-    ),
-  ).toBeDefined()
 })
 
 // The verify phase (2026-09-03 data-lifecycle spec §8): "Last backup" now means "the dump
@@ -257,9 +226,21 @@ it('banners a failed coverage read like a failed status read, and Retry refetche
   render(<SystemCard />)
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toContain('coverage unavailable')
-  expect(screen.queryByText('Running')).toBeNull()
+  expect(screen.queryByText('117.7 MB')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
   await screen.findByText('Balances through Sep 2026')
-  expect(screen.getByText('Running')).toBeDefined()
+  expect(screen.getByText('117.7 MB')).toBeDefined()
   expect(screen.queryByRole('alert')).toBeNull()
+})
+
+it('leaves the scheduler facts to the Price refresh card (2026-09-06 spec §3.3)', async () => {
+  render(<SystemCard />)
+  await screen.findByText('Data through')
+  for (const label of ['Last price refresh', 'Next scheduled run', 'Scheduler', 'Recent refreshes']) {
+    expect(screen.queryByText(label)).toBeNull()
+  }
+  // The six that stay.
+  for (const label of ['Data through', 'Last backup', 'Recent backups', 'Database size', 'Alembic head', 'Environment']) {
+    expect(screen.getByText(label)).toBeTruthy()
+  }
 })

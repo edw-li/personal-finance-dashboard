@@ -97,6 +97,20 @@
   }
 }
 
+/* Six facts down a half-width card is a long thin list; two columns fill it (spec §3.3), and
+   the label track has to give inside the narrower column. */
+@media (min-width: 721px) {
+  .system-facts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem 1.5rem;
+  }
+
+  .system-facts .system-fact {
+    grid-template-columns: minmax(110px, 40%) 1fr;
+  }
+}
+
 /* --- household / accounts / categories cards (2026-08-26 spec §6) --- */
 
 /* The field stack the management cards share. A deliberate near-twin of SettingsPage.css's
@@ -106,8 +120,16 @@
 .settings-card-form {
   display: grid;
   gap: 0.75rem;
-  max-width: 420px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   margin-bottom: 0.9rem;
+}
+
+.settings-card-form > :not(label) {
+  grid-column: 1 / -1;
+}
+
+.settings-card-form label {
+  max-width: 320px;
 }
 
 .accounts-form {
@@ -262,6 +284,12 @@
 .settings-page .card {
   outline: 2px solid transparent;
   outline-offset: 2px;
+  /* The same inset the section bands carry (below): the chip rail rides PageFrame's sticky
+     scope row, which paints over the top of the scrollport, so an anchored card scrolled to
+     `block: 'start'` would land UNDER it — /settings#backups from the Overview strip,
+     #restore from the ?restore= hand-off, #limits from the palette. PageFrame MEASURES the
+     row into --sticky-inset on .page-frame-body and these cards inherit it. */
+  scroll-margin-top: calc(var(--sticky-inset, 0px) + 0.75rem);
 }
 
 .settings-page .card.is-highlighted {
@@ -427,6 +455,13 @@
   text-align: left;
 }
 
+/* The form sheets cap a field at 320px so a control never becomes a canvas. This one is the
+   exception: the value is a credential the reader has to get out of the page in one piece,
+   and a third of a URL is worse than none. */
+.feed-fresh label {
+  max-width: none;
+}
+
 .feed-fresh {
   padding: 0.6rem 0.75rem;
   border: 1px solid var(--accent);
@@ -466,4 +501,72 @@
    too, because colour is never the only channel. */
 .accounts-link-note.is-unlinked {
   color: var(--warn);
+}
+
+/* --- section bands and the chip rail (2026-09-06 spec §3.1–§3.2) --- */
+
+/* A band across the whole grid, NOT a .card: it takes no entrance animation and no arrival
+   ring, and the reveal timeline has nothing to catch on it. It carries its own span rather
+   than wearing .span-12, which is card vocabulary. */
+.card-grid > .settings-section {
+  grid-column: 1 / -1;
+  margin: 0.75rem 0 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  /* A chip scrolls a band to the top of the scrollport, which the sticky scope row covers.
+     PageFrame MEASURES that row into --sticky-inset on .page-frame-body and these bands
+     inherit it, so the band lands below the row instead of under it. */
+  scroll-margin-top: calc(var(--sticky-inset, 0px) + 0.75rem);
+}
+
+.card-grid > .settings-section:first-child {
+  margin-top: 0;
+}
+
+/* One line per person, read as sentences rather than as a table (spec §3.3). */
+.plan-match-list {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/* Appearance's four controls, two by two (spec §3.3): a single column left half the card
+   empty beside them. */
+.settings-fields {
+  display: grid;
+  gap: 0.9rem 1.25rem;
+}
+
+.settings-fields > .settings-field {
+  margin-bottom: 0;
+}
+
+/* The Calendar feed card is span-12 now: its two forms sit side by side above the table. */
+.feed-forms {
+  display: grid;
+  gap: 0.75rem 1.25rem;
+  align-items: start;
+}
+
+/* The activity feed is unbounded — a busy month made this card taller than the rest of the
+   page put together. .settings-scroll caps it at 420px and Load more rides INSIDE, so the
+   reader never leaves the list to extend it. */
+.settings-scroll .activity-list {
+  margin-bottom: 0.5rem;
+}
+
+@media (min-width: 721px) {
+  .settings-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .feed-forms {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }

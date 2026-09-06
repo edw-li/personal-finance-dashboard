@@ -17,6 +17,9 @@ describe('AppearanceCard', () => {
       </ThemeProvider>,
     )
     expect(screen.getByRole('region', { name: 'Appearance' })).toBeTruthy()
+    // Four fields in a two-by-two grid (spec §3.3), not a 420px column with half a card of
+    // air beside it.
+    expect(document.querySelector('.settings-fields')?.querySelectorAll('.settings-field')).toHaveLength(4)
     expect(screen.getByRole('button', { name: 'Dark' }).getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: 'Light' }))
     expect(document.documentElement.dataset.theme).toBe('light')

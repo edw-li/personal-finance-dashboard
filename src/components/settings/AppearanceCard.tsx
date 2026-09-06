@@ -42,55 +42,59 @@ export default function AppearanceCard() {
         Appearance
         <InfoHint text="Theme, density and your landing page. They paint from this browser first and follow your account once signed in — a second browser picks them up at its next sign-in. System follows your operating system's light or dark setting live. Chart patterns add textures to stacked bars and pies so segments read apart without colour." />
       </h2>
-      <div className="settings-field">
-        <span className="eyebrow">Theme</span>
-        <Segmented
-          variant="toggle"
-          ariaLabel="Theme"
-          options={THEMES}
-          value={theme}
-          onChange={setTheme}
-        />
-      </div>
-      <div className="settings-field">
-        <span className="eyebrow">Density</span>
-        <Segmented
-          variant="toggle"
-          ariaLabel="Density"
-          options={DENSITIES}
-          value={density}
-          onChange={setDensity}
-        />
-      </div>
-      <div className="settings-field">
-        <span className="eyebrow">Chart patterns</span>
-        <Segmented
-          variant="toggle"
-          ariaLabel="Chart patterns"
-          options={DECALS}
-          value={decals ? 'on' : 'off'}
-          onChange={(next) => setChartDecals(next === 'on')}
-        />
-      </div>
-      <div className="settings-field">
-        <label className="eyebrow" htmlFor="landing-page">
-          Landing page
-        </label>
-        <select
-          id="landing-page"
-          className="field-input"
-          value={landing}
-          onChange={(e) => {
-            setLanding(e.target.value)
-            setLocal('landing_page', e.target.value)
-          }}
-        >
-          {NAV_ITEMS.map((item) => (
-            <option key={item.to} value={item.to}>
-              {item.label}
-            </option>
-          ))}
-        </select>
+      {/* Two by two on a wide card (2026-09-06 spec §3.3): four controls down a single
+          column left half the card empty beside them. */}
+      <div className="settings-fields">
+        <div className="settings-field">
+          <span className="eyebrow">Theme</span>
+          <Segmented
+            variant="toggle"
+            ariaLabel="Theme"
+            options={THEMES}
+            value={theme}
+            onChange={setTheme}
+          />
+        </div>
+        <div className="settings-field">
+          <span className="eyebrow">Density</span>
+          <Segmented
+            variant="toggle"
+            ariaLabel="Density"
+            options={DENSITIES}
+            value={density}
+            onChange={setDensity}
+          />
+        </div>
+        <div className="settings-field">
+          <span className="eyebrow">Chart patterns</span>
+          <Segmented
+            variant="toggle"
+            ariaLabel="Chart patterns"
+            options={DECALS}
+            value={decals ? 'on' : 'off'}
+            onChange={(next) => setChartDecals(next === 'on')}
+          />
+        </div>
+        <div className="settings-field">
+          <label className="eyebrow" htmlFor="landing-page">
+            Landing page
+          </label>
+          <select
+            id="landing-page"
+            className="field-input"
+            value={landing}
+            onChange={(e) => {
+              setLanding(e.target.value)
+              setLocal('landing_page', e.target.value)
+            }}
+          >
+            {NAV_ITEMS.map((item) => (
+              <option key={item.to} value={item.to}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       <p className="settings-note">
         {synced

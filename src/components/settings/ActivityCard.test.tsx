@@ -64,6 +64,24 @@ describe('ActivityCard', () => {
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull()
   })
 
+  it('caps the feed with a scroll region that carries Load more inside it', async () => {
+    // The cursor is set HERE rather than in the file's beforeEach: the suite's first test
+    // pins that Load more is absent without one, and a page-wide default would break it.
+    vi.mocked(fetchActivity).mockResolvedValue(
+      page([SAVE, RESTORE_RUN, IMPORT_RUN, SUMMARY], '2026-09-01T00:00:00+00:00'),
+    )
+    mount()
+    await screen.findByRole('region', { name: 'Activity' })
+    const scroll = document.querySelector('.settings-scroll')
+    // The container first: `null?.querySelector()` is undefined, which a bare not.toBeNull()
+    // would happily accept from a card that grew no scroll region at all.
+    expect(scroll).not.toBeNull()
+    expect(scroll?.querySelector('.activity-list')).not.toBeNull()
+    // Inside, not under: a Load more that sits below a 420px scroll box is a button the reader
+    // has to leave the list to reach.
+    expect(scroll?.querySelector('button')).not.toBeNull()
+  })
+
   it('Undo arms on the first click and fires on the second, then toasts and refetches', async () => {
     mount()
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))

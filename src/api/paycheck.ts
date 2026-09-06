@@ -4,13 +4,14 @@ import type {
   PaycheckPreviewIn,
   PaycheckPreviewOut,
   PaycheckProfileCreate,
+  PaycheckProfileListItem,
   PaycheckProfileOut,
   PaycheckProfileUpdate,
 } from '../types/api'
 
 // Newest effective_date first — the page opens on the profile in force.
-export function fetchProfiles(): Promise<PaycheckProfileOut[]> {
-  return api<PaycheckProfileOut[]>('/paycheck/profiles')
+export function fetchProfiles(): Promise<PaycheckProfileListItem[]> {
+  return api<PaycheckProfileListItem[]>('/paycheck/profiles')
 }
 
 // effective_date is the natural key: a duplicate is a 409.

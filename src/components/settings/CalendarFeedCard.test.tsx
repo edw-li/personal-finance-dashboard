@@ -18,6 +18,7 @@ const SETTINGS = {
   espp_ticker: 'NVDA',
   price_refresh_cron: '10 13 * * mon-fri',
   calendar_update_due_day: 1,
+  espp_discount_pct: '0.150000',
 }
 
 function mount() {
@@ -89,42 +90,33 @@ describe('CalendarFeedCard', () => {
     await waitFor(() => expect(fetchFeedTokens).toHaveBeenCalledTimes(2))
   })
 
-  it('saves the due day with the other settings carried verbatim', async () => {
+  it('stands the token form and the reminder-day form side by side', async () => {
+    mount()
+    await screen.findByLabelText('Monthly update reminder day')
+    // The card is span-12 now: the two forms pair, the token table runs full width below them.
+    expect(document.querySelector('.feed-forms')?.querySelectorAll('form')).toHaveLength(2)
+  })
+
+  it('saves the due day and says so', async () => {
     vi.mocked(putAppSettings).mockResolvedValue({ ...SETTINGS, calendar_update_due_day: 5 })
     mount()
     const box = (await screen.findByLabelText('Monthly update reminder day')) as HTMLInputElement
     expect(box.value).toBe('1')
     fireEvent.change(box, { target: { value: '5' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save reminder day' }))
-    await waitFor(() =>
-      expect(putAppSettings).toHaveBeenCalledWith({
-        swr_pct: '0.040000',
-        espp_ticker: 'NVDA',
-        price_refresh_cron: '10 13 * * mon-fri',
-        calendar_update_due_day: 5,
-      }),
-    )
+    await waitFor(() => expect(putAppSettings).toHaveBeenCalledWith({ calendar_update_due_day: 5 }))
     expect(await screen.findByText('Saved.')).toBeTruthy()
   })
 
-  it('re-reads the settings before the full-form PUT, so a change made elsewhere survives', async () => {
+  it('sends the day alone, so nothing this card cannot see is re-written', async () => {
     mount()
     const box = (await screen.findByLabelText('Monthly update reminder day')) as HTMLInputElement
-    // The App settings card on this same page saved a new withdrawal rate AFTER this card
-    // mounted. The card's own copy is stale; the PUT must carry the current one.
-    const moved = { ...SETTINGS, swr_pct: '0.035000' }
-    vi.mocked(fetchAppSettings).mockResolvedValue(moved)
-    vi.mocked(putAppSettings).mockResolvedValue({ ...moved, calendar_update_due_day: 5 })
     fireEvent.change(box, { target: { value: '5' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save reminder day' }))
-    await waitFor(() =>
-      expect(putAppSettings).toHaveBeenCalledWith({
-        swr_pct: '0.035000', // NOT the '0.040000' this card mounted with
-        espp_ticker: 'NVDA',
-        price_refresh_cron: '10 13 * * mon-fri',
-        calendar_update_due_day: 5,
-      }),
-    )
+    await waitFor(() => expect(putAppSettings).toHaveBeenCalledTimes(1))
+    // One read at mount, and none at save time: the partial PUT retired the re-read dance.
+    expect(fetchAppSettings).toHaveBeenCalledTimes(1)
+    expect(Object.keys(vi.mocked(putAppSettings).mock.calls[0][0])).toEqual(['calendar_update_due_day'])
   })
 
   it('refuses a day outside 1–28 without calling the API', async () => {

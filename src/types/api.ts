@@ -1205,6 +1205,13 @@ export interface PaycheckProfileOut {
   in_force?: boolean
 }
 
+/** `GET /paycheck/profiles` items (spec §2.3). The server stamps `in_force` on every ProfileOut
+ *  route, but the LIST is where it is meaningful per person, so this type narrows the base's
+ *  optional flag to required for the consumers that pick "the profile in force". */
+export interface PaycheckProfileListItem extends PaycheckProfileOut {
+  in_force: boolean
+}
+
 export interface PaycheckProfileCreate {
   effective_date: string
   annual_salary: string
@@ -1762,13 +1769,18 @@ export interface AppSettingsOut {
   price_refresh_cron: string
   /** Day of month (1–28) the monthly-update reminder lands on (2026-09-03 calendar spec §12). */
   calendar_update_due_day: number
+  /** The plan's ESPP purchase discount as a plain-notation FRACTION ("0.15"), like swr_pct
+   *  (2026-09-06 spec §1.5). 0.15 is the §423 ceiling and the server's fallback. */
+  espp_discount_pct: string
 }
 
-// PUT is full-form for the three original settings; the due day is optional (omitted =
-// keep the stored value) because two Settings cards write this endpoint.
-export type AppSettingsUpdate = Omit<AppSettingsOut, 'calendar_update_due_day'> & {
-  calendar_update_due_day?: number
-}
+// PUT is PARTIAL (spec §3.5): the server reads it with exclude_unset, so an ABSENT key leaves
+// the stored value and only a key that is actually sent is written. Three cards therefore
+// write this endpoint while each sends nothing but its own fields — a card must never send
+// null for a field it does not show, which would clear it. An explicit null for espp_ticker
+// is the one deliberate exception: it is how the ticker is cleared, and it survives
+// JSON.stringify where an undefined would be dropped and read as "keep".
+export type AppSettingsUpdate = Partial<AppSettingsOut>
 
 // --- overview: money flow ---
 // GET /overview/money-flow?year= (2026-08-25 spec §5) — one server-composed, reconciled

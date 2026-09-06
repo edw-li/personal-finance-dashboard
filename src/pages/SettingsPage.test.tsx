@@ -39,6 +39,13 @@ vi.mock('../api/coverage', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/coverage')>()),
   fetchCoverage: vi.fn(),
 }))
+// PlanAssumptionsCard reads the paycheck profiles for its employer-match summary
+// (2026-09-06 spec §3.3); unmocked it would make a real network call from every test here
+// and banner the failure instead of rendering the card the order suite looks for.
+vi.mock('../api/paycheck', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/paycheck')>()),
+  fetchProfiles: vi.fn(),
+}))
 // The three management cards each own a fetch of their own; unmocked, they would make real
 // network calls from every test in this file.
 vi.mock('../api/household', async (importOriginal) => ({
@@ -119,6 +126,7 @@ import { importXlsx } from '../api/importer'
 import { fetchActivity, fetchHealth } from '../api/lifecycle'
 import { fetchLimits } from '../api/limits'
 import { fetchAccounts } from '../api/netWorth'
+import { fetchProfiles } from '../api/paycheck'
 import { fetchPortfolioAccounts } from '../api/portfolio'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
 import { fetchCategories } from '../api/spending'
@@ -144,6 +152,7 @@ const SETTINGS: AppSettingsOut = {
   espp_ticker: 'NVDA',
   price_refresh_cron: '10 13 * * mon-fri',
   calendar_update_due_day: 1,
+  espp_discount_pct: '0.150000',
 }
 
 // Quiet system payload — the card's rendering details are pinned in SystemCard.test.tsx;
@@ -155,29 +164,18 @@ const SYSTEM: SystemStatus = {
   environment: 'dev',
 }
 
-// Static copy, pinned verbatim: it is the only place the day-NAMES trap is stated — and
-// since the hot-reload landed, the note must NOT resurrect the old restart ritual.
-const CRON_HINT =
-  '5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applied to the ' +
-  'live schedule on save. Must not fire more often than hourly. The Monday run also ' +
-  'records the weekly performance point — keep Mondays covered.'
-const SAVED_NOTE = 'Saved — the schedule is applied immediately.'
-
-const swrBox = () => screen.getByLabelText('Withdrawal rate (% / year)') as HTMLInputElement
-const tickerBox = () => screen.getByLabelText('ESPP ticker') as HTMLInputElement
-const cronBox = () => screen.getByLabelText('Price refresh cron') as HTMLInputElement
 const currentPwBox = () => screen.getByLabelText('Current password') as HTMLInputElement
 const newPwBox = () => screen.getByLabelText('New password') as HTMLInputElement
 const confirmPwBox = () => screen.getByLabelText('Confirm new password') as HTMLInputElement
-// Named by a prefix that survives the busy label swap ('Save settings' -> 'Saving…',
+// Named by a prefix that survives the busy label swap ('Save assumptions' -> 'Saving…',
 // 'Change password' -> 'Changing…'), so the in-flight tests can still find the button.
 // The password one is ANCHORED at both ends: the card's ⓘ hint is a button whose aria-label
 // ("Changes your login password…") is a name too, and a bare /^chang/i now matches both.
 // Anchored at BOTH ends, like pwButton and dryButton: the management cards below render
-// "Save marriage date", "Save name", "Save account" and "Save category", and a bare
-// /^sav/i now matches all of them.
+// "Save marriage date", "Save name", "Save account", "Save category" and "Save schedule",
+// and a bare /^sav/i now matches all of them.
 const saveButton = () =>
-  screen.getByRole('button', { name: /^sav(e settings|ing…)$/i }) as HTMLButtonElement
+  screen.getByRole('button', { name: /^sav(e assumptions|ing…)$/i }) as HTMLButtonElement
 const pwButton = () =>
   screen.getByRole('button', { name: /^chang(e password|ing…)$/i }) as HTMLButtonElement
 const type = (box: HTMLInputElement, value: string) =>
@@ -275,8 +273,11 @@ const CHECKING: AccountOut = {
 // jsdom has no ResizeObserver (EChart.test.tsx carries the same note); the anchored arrival
 // watches the page while the cards above it are still growing. The instances are kept so a
 // test can fire one and see what the page does about it.
-type ObserverRecord = { fire: () => void; disconnected: boolean }
+type ObserverRecord = { fire: () => void; disconnected: boolean; targets: Element[] }
 const resizeObservers: ObserverRecord[] = []
+/** The page's arrival chase, told apart from PageFrame's --sticky-inset observer by WHAT it
+ *  watches rather than by the order the two effects happen to run in. */
+const bodyObserver = () => resizeObservers.find((o) => o.targets.includes(document.body))
 
 beforeEach(() => {
   resizeObservers.length = 0
@@ -285,10 +286,12 @@ beforeEach(() => {
     class {
       private readonly record: ObserverRecord
       constructor(callback: () => void) {
-        this.record = { fire: callback, disconnected: false }
+        this.record = { fire: callback, disconnected: false, targets: [] }
         resizeObservers.push(this.record)
       }
-      observe() {}
+      observe(target: Element) {
+        this.record.targets.push(target)
+      }
       unobserve() {}
       disconnect() {
         this.record.disconnected = true
@@ -305,6 +308,9 @@ beforeEach(() => {
   // a link or a banner to any of this file's queries.
   vi.mocked(fetchSnapshots).mockResolvedValue([])
   vi.mocked(fetchHousehold).mockResolvedValue({ people: [ME], marriage_date: null })
+  // No profile: the Plan assumptions card settles into "no paycheck profile yet" without
+  // adding a row, a link or a banner to any of this file's queries.
+  vi.mocked(fetchProfiles).mockResolvedValue([])
   vi.mocked(fetchAccounts).mockResolvedValue([CHECKING])
   vi.mocked(fetchPortfolioAccounts).mockResolvedValue([])
   vi.mocked(fetchCategories).mockResolvedValue([])
@@ -336,165 +342,20 @@ const renderPage = () =>
     </MemoryRouter>,
   )
 
-describe('SettingsPage — app settings', () => {
-  it('seeds the boxes from the stored settings, percent-shifted for display', async () => {
+// What is LEFT of the old app-settings describe: the page's own lifecycle. The three boxes
+// and their PUT moved to PlanAssumptionsCard (2026-09-06 spec §3.3) and are pinned there;
+// this page reads /settings for one reason only — it is the gate the cards mount behind.
+describe('SettingsPage — lifecycle', () => {
+  it('reads /settings once per card that owns one of its fields', async () => {
     renderPage()
-    await screen.findByLabelText('Withdrawal rate (% / year)')
-
-    // The column stores a fraction; the box speaks percent. Number() trims the stored
-    // quantizer's trailing zeros ("0.045000" -> 4.5), and the box round-trips through
-    // shiftPoint on the way back, so nothing is a float on the wire.
-    expect(swrBox().value).toBe('4.5')
-    expect(tickerBox().value).toBe('NVDA')
-    expect(cronBox().value).toBe('10 13 * * mon-fri')
-    expect(screen.getByText(CRON_HINT)).toBeTruthy()
-    // The other consequence-bearing hint: an empty box is a real setting (the ESPP page
-    // then says so), not a box the user forgot to fill in.
-    expect(screen.getByText("Blank = ESPP page shows 'no ticker configured'.")).toBeTruthy()
-    // TWICE, not once: the Calendar-feed card owns the monthly-update due day, which lives
-    // in this same settings row (2026-09-03 calendar spec §12), so it reads /settings for
-    // itself the way every other card here reads its own endpoint. `waitFor`, not a bare
-    // expect: the card mounts in the `loadedOnce` commit that also paints the box above,
-    // and findBy resolves off the DOM mutation — the new subtree's passive effect (and so
-    // its fetch) can land a microtask later. A bare expect failed about one run in three.
-    await waitFor(() => expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(2))
-    // The balance-suggestions mapping card was removed end to end (spec §5.2 amendment):
-    // this page no longer reads accounts or the allocation, and offers no mapping control.
+    await screen.findByRole('region', { name: 'Plan assumptions' })
+    // The page's own gate, then Plan assumptions, Price refresh and Calendar feed reading
+    // for themselves — the price of three cards saving independently under the partial PUT.
+    // `waitFor`, not a bare expect: a card mounts in the `loadedOnce` commit and its passive
+    // effect (and so its fetch) can land a microtask later.
+    await waitFor(() => expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(4))
+    // The balance-suggestions mapping card was removed end to end (spec §5.2 amendment).
     expect(screen.queryByText(/Balance suggestions/)).toBeNull()
-  })
-
-  it('PUTs the full form with the rate shifted back, and notes the hot-applied schedule', async () => {
-    renderPage()
-    await screen.findByLabelText('ESPP ticker')
-
-    type(swrBox(), '3.75')
-    // As TYPED: the server owns normalization (it uppercases), and a client that
-    // pre-empted it would be a second opinion about the same string.
-    type(tickerBox(), 'msft')
-    type(cronBox(), '30 14 * * mon-fri')
-    fireEvent.click(saveButton())
-
-    await waitFor(() => expect(vi.mocked(putAppSettings)).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(putAppSettings).mock.calls[0][0]).toEqual({
-      swr_pct: '0.0375',
-      espp_ticker: 'msft',
-      price_refresh_cron: '30 14 * * mon-fri',
-    })
-    expect(await screen.findByText(SAVED_NOTE)).toBeTruthy()
-
-    // The sentence is about the settings that WERE saved — the next keystroke moves on.
-    type(cronBox(), '30 15 * * mon-fri')
-    expect(screen.queryByText(SAVED_NOTE)).toBeNull()
-  })
-
-  it('sends espp_ticker: null EXPLICITLY when the ticker box is emptied', async () => {
-    renderPage()
-    await screen.findByLabelText('ESPP ticker')
-
-    type(tickerBox(), '   ')
-    fireEvent.click(saveButton())
-
-    await waitFor(() => expect(vi.mocked(putAppSettings)).toHaveBeenCalledTimes(1))
-    const body = vi.mocked(putAppSettings).mock.calls[0][0]
-    // The key must SURVIVE JSON.stringify: an `undefined` value is dropped from the JSON
-    // altogether, and `espp_ticker` defaults to None server-side — so "clear the ticker"
-    // and "I forgot to send it" would arrive as the same request. Null says it on purpose.
-    expect(Object.keys(body)).toContain('espp_ticker')
-    expect(body.espp_ticker).toBeNull()
-    expect(JSON.parse(JSON.stringify(body)).espp_ticker).toBeNull()
-    // The untouched rate rides along, and the load→save round trip must not move it:
-    // "0.045000" seeded the box as "4.5" and shiftPoint hands the same value back.
-    expect(body.swr_pct).toBe('0.045')
-  })
-
-  it('re-saves the inclusive top of the range: 100 % goes back as the fraction 1', async () => {
-    vi.mocked(fetchAppSettings).mockResolvedValue({ ...SETTINGS, swr_pct: '1.000000' })
-    renderPage()
-    await screen.findByLabelText('Withdrawal rate (% / year)')
-
-    // The stored fraction 1 IS 100 %, and the client gate is `n > 100` — inclusive. A row
-    // already holding it must be re-savable untouched, or the form would refuse to echo a
-    // value the database is currently serving.
-    expect(swrBox().value).toBe('100')
-    fireEvent.click(saveButton())
-
-    await waitFor(() => expect(vi.mocked(putAppSettings)).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(putAppSettings).mock.calls[0][0].swr_pct).toBe('1')
-  })
-
-  it('re-seeds the boxes from the PUT RESPONSE, not from what was typed', async () => {
-    vi.mocked(putAppSettings).mockResolvedValue({
-      swr_pct: '0.037500',
-      espp_ticker: 'MSFT',
-      price_refresh_cron: '30 14 * * mon-fri',
-      calendar_update_due_day: 1,
-    })
-    renderPage()
-    await screen.findByLabelText('ESPP ticker')
-
-    type(swrBox(), '3.7500')
-    type(tickerBox(), 'msft')
-    type(cronBox(), '30 14 * * mon-fri')
-    fireEvent.click(saveButton())
-
-    await waitFor(() => expect(vi.mocked(putAppSettings)).toHaveBeenCalledTimes(1))
-    // The server echoes what it STORED (quantized rate, uppercased ticker). Keeping the
-    // typed text would leave the form reading as unsaved work against values that are
-    // already in the database.
-    await waitFor(() => expect(swrBox().value).toBe('3.75'))
-    expect(tickerBox().value).toBe('MSFT')
-    expect(cronBox().value).toBe('30 14 * * mon-fri')
-  })
-
-  it('refuses exponent text in the rate box, client-side', async () => {
-    renderPage()
-    await screen.findByLabelText('Withdrawal rate (% / year)')
-
-    // Exponent AND out of range (1e3 is 1000): the two gates disagree about this one box,
-    // so the message names which ran FIRST. Only plain-decimal-before-Number() is correct —
-    // swapped, the answer would be 'Must be between 0 and 100.'
-    type(swrBox(), '1e3')
-    fireEvent.click(saveButton())
-
-    // No 422 is behind this gate for the values that matter: shiftPoint hands "1e-3" back
-    // untouched and Decimal("1e-3") is a perfectly legal 0.001, so a box that said a
-    // thousandth of a percent would be stored as a tenth of one (src/utils/percent.ts).
-    expect(await screen.findByText('Enter a plain decimal (no exponents).')).toBeTruthy()
-    expect(vi.mocked(putAppSettings)).not.toHaveBeenCalled()
-
-    // Plain notation is converted, not refused — this gate is about the TEXT, not the size.
-    type(swrBox(), '0.001')
-    fireEvent.click(saveButton())
-    await waitFor(() => expect(vi.mocked(putAppSettings)).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(putAppSettings).mock.calls[0][0].swr_pct).toBe('0.00001')
-  })
-
-  it('refuses a rate outside 0–100 without spending a request', async () => {
-    renderPage()
-    await screen.findByLabelText('Withdrawal rate (% / year)')
-
-    type(swrBox(), '150')
-    fireEvent.click(saveButton())
-
-    // The box is labelled in PERCENT, so it says 100 — not the server's "between 0 and 1",
-    // which is the stored fraction's vocabulary and would read as the opposite advice.
-    expect(await screen.findByText('Must be between 0 and 100.')).toBeTruthy()
-    expect(vi.mocked(putAppSettings)).not.toHaveBeenCalled()
-  })
-
-  it('renders a PUT rejection verbatim in the form-level error slot', async () => {
-    const detail = 'ticker must be 1-20 characters of A-Z, 0-9, dot or dash, starting alphanumeric'
-    vi.mocked(putAppSettings).mockRejectedValue(new ApiError(detail, 422))
-    renderPage()
-    await screen.findByLabelText('ESPP ticker')
-
-    type(tickerBox(), '$$$')
-    fireEvent.click(saveButton())
-
-    // Form-level on purpose: the ticker 422 is NOT field-prefixed (the cron and swr ones
-    // are), so there is nothing reliable to map a message onto a box with.
-    expect(await screen.findByText(detail)).toBeTruthy()
-    expect(screen.queryByText(SAVED_NOTE)).toBeNull()
   })
 
   it('ghosts the page through the frame while the FIRST load is in flight', async () => {
@@ -506,11 +367,13 @@ describe('SettingsPage — app settings', () => {
     // paragraph is the skeleton's visually-hidden status line over three ghost cards.
     expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeTruthy()
     expect(screen.getByText('Loading…')).toBeTruthy()
-    expect(document.querySelectorAll('.page-skeleton .card')).toHaveLength(3)
-    expect(screen.queryByLabelText('ESPP ticker')).toBeNull()
+    // Five ghosts, the section-1 shape: Household 6 · Categories 6 · Accounts 12 ·
+    // Limits 6 · Plan assumptions 6 (spec §3.6).
+    expect(document.querySelectorAll('.page-skeleton .card')).toHaveLength(5)
+    expect(screen.queryByRole('region', { name: 'Plan assumptions' })).toBeNull()
 
     gate.resolve(SETTINGS)
-    expect(await screen.findByLabelText('ESPP ticker')).toBeTruthy()
+    expect(await screen.findByRole('region', { name: 'Plan assumptions' })).toBeTruthy()
     expect(document.querySelector('.page-skeleton')).toBeNull()
   })
 
@@ -539,9 +402,9 @@ describe('SettingsPage — app settings', () => {
     // The frame is ready (the Appearance card needs no network), so the failure arrives as
     // a plain banner above the grid — nothing is on screen for it to be stale over.
     expect(await screen.findByText('settings unavailable')).toBeTruthy()
-    // A FIRST load that failed knows nothing about the stored settings, and a form seeded
+    // A FIRST load that failed knows nothing about the stored settings, and a card seeded
     // with blanks would offer to save them (PortfolioPage's null-holdings rule).
-    expect(screen.queryByLabelText('ESPP ticker')).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Plan assumptions' })).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry loading settings' }))
     // The retry takes the error with it, so the frame drops back to its skeleton: a banner
@@ -550,11 +413,10 @@ describe('SettingsPage — app settings', () => {
     expect(screen.queryByRole('alert')).toBeNull()
 
     second.resolve(SETTINGS)
-    expect(await screen.findByLabelText('ESPP ticker')).toBeTruthy()
-    // The page's failure, the page's retry, then the Calendar-feed card's own read once
-    // `loadedOnce` finally let the cards mount.
-    expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(3)
-    expect(swrBox().value).toBe('4.5')
+    expect(await screen.findByRole('region', { name: 'Plan assumptions' })).toBeTruthy()
+    // The page's failure, the page's retry, then Plan assumptions', Price refresh's and the
+    // Calendar-feed card's own reads once `loadedOnce` finally lets the cards mount.
+    await waitFor(() => expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(5))
     expect(screen.queryByRole('alert')).toBeNull()
   })
 })
@@ -615,7 +477,9 @@ describe('SettingsPage — password', () => {
     vi.mocked(putAppSettings).mockReturnValue(put.promise)
     vi.mocked(changePassword).mockReturnValue(change.promise)
     renderPage()
-    await screen.findByLabelText('Current password')
+    // The Plan assumptions card owns a load of its own, so its Save button lands a beat after
+    // the password boxes the page renders synchronously behind `loadedOnce`.
+    await screen.findByLabelText('Withdrawal rate (% / year)')
 
     fireEvent.click(saveButton())
     await waitFor(() => expect(saveButton().disabled).toBe(true))
@@ -914,6 +778,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(applyButton().disabled).toBe(true)
     expect(fileBox().disabled).toBe(true)
     // Three cards, three flags — an import must not lock the two forms above it.
+    await screen.findByLabelText('Withdrawal rate (% / year)')
     expect(saveButton().disabled).toBe(false)
     expect(pwButton().disabled).toBe(false)
 
@@ -928,31 +793,13 @@ describe('SettingsPage — xlsx import', () => {
 describe('SettingsPage — system card', () => {
   it('mounts the System card alongside the forms', async () => {
     renderPage()
-    await screen.findByText('No refresh recorded yet')
-    expect(screen.getByText('No backup recorded')).toBeDefined()
-  })
-
-  it('pairs data-out with data-in: System follows Import and precedes the forms (2026-08-31 audit)', async () => {
-    renderPage()
-    await screen.findByText('No refresh recorded yet')
-    const importH = screen.getByRole('heading', { name: /Import workbook/ })
-    const system = screen.getByRole('heading', { name: /System/ })
-    const appSettings = screen.getByRole('heading', { name: /App settings/ })
-    expectInDocumentOrder(importH, system, appSettings)
+    // A row the card still OWNS: the four scheduler facts moved to the Price refresh card
+    // (2026-09-06 spec §3.3), which renders on this same page.
+    expect(await screen.findByText('No backup recorded')).toBeDefined()
   })
 })
 
 describe('SettingsPage — backups and restore cards', () => {
-  it('mounts Backups & snapshots then Restore directly after the System card', async () => {
-    renderPage()
-    const backups = await screen.findByRole('region', { name: 'Backups & snapshots' })
-    const restore = screen.getByRole('region', { name: 'Restore' })
-    const system = screen.getByRole('heading', { name: /^System/ }).closest('section')
-    expect(system?.nextElementSibling).toBe(backups)
-    expect(backups.nextElementSibling).toBe(restore)
-    await waitFor(() => expect(vi.mocked(fetchSnapshots)).toHaveBeenCalledTimes(2))
-  })
-
   it('offers neither card when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
@@ -990,18 +837,6 @@ describe('SettingsPage — backups and restore cards', () => {
 })
 
 describe('SettingsPage — appearance card', () => {
-  it('mounts the Appearance card directly after the Password card', async () => {
-    renderPage()
-
-    const appearance = await screen.findByRole('region', { name: 'Appearance' })
-    // DIRECTLY after, not merely somewhere below: appearance closes the pair of cards about
-    // this browser and this login, ahead of the management cards that own fetches of their
-    // own. Nothing gates it: it sits BETWEEN the page's two loadedOnce blocks, in that seat.
-    const password = screen.getByRole('heading', { name: /^Password/ }).closest('section')
-    expect(password).not.toBeNull()
-    expect(password?.nextElementSibling).toBe(appearance)
-  })
-
   it('keeps the Appearance card when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
@@ -1021,9 +856,12 @@ describe('SettingsPage — household, accounts and categories cards', () => {
   it('mounts the three management cards and feeds the roster its people', async () => {
     renderPage()
 
-    expect(await screen.findByText('Household')).toBeTruthy()
-    expect(screen.getByText('Accounts')).toBeTruthy()
-    expect(screen.getByText('Spending categories')).toBeTruthy()
+    // By id, never by name: the rail chip, the section band and the card heading all read
+    // "Household" now (2026-09-06 spec §3.1–§3.2), so a text query finds three elements —
+    // and, worse, resolves against the chip before the cards are even mounted.
+    await waitFor(() => expect(document.getElementById('household')).not.toBeNull())
+    expect(document.getElementById('accounts')).not.toBeNull()
+    expect(document.getElementById('categories')).not.toBeNull()
 
     // The people list is LIFTED out of the Household card so the Accounts owner select is
     // never a render behind it: a partner added above is selectable below without a reload.
@@ -1044,10 +882,11 @@ describe('SettingsPage — household, accounts and categories cards', () => {
 
     expect(await screen.findByText('settings unavailable')).toBeTruthy()
     // They share the import card's `loadedOnce` gate: a settings GET that failed means the
-    // API is unreachable, and three cards that could only fail are not worth offering.
-    expect(screen.queryByText('Household')).toBeNull()
-    expect(screen.queryByText('Accounts')).toBeNull()
-    expect(screen.queryByText('Spending categories')).toBeNull()
+    // API is unreachable, and three cards that could only fail are not worth offering. By id:
+    // the rail chip that says "Household" rides the scope row whatever the API answered.
+    expect(document.getElementById('household')).toBeNull()
+    expect(document.getElementById('accounts')).toBeNull()
+    expect(document.getElementById('categories')).toBeNull()
     expect(vi.mocked(fetchHousehold)).not.toHaveBeenCalled()
   })
 })
@@ -1074,23 +913,76 @@ describe('SettingsPage — assistant card', () => {
 })
 
 describe('SettingsPage — health and activity cards', () => {
-  it('mounts Data health then Activity directly before the App settings card', async () => {
-    renderPage()
-    const health = await screen.findByRole('region', { name: 'Data health' })
-    const activity = screen.getByRole('region', { name: 'Activity' })
-    const appSettings = document.getElementById('app-settings')
-    expect(health.nextElementSibling).toBe(activity)
-    expect(activity.nextElementSibling).toBe(appSettings)
-    await waitFor(() => expect(vi.mocked(fetchHealth)).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(fetchActivity)).toHaveBeenCalledTimes(1)
-  })
-
   it('offers neither card when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
     expect(await screen.findByText('settings unavailable')).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Data health' })).toBeNull()
     expect(vi.mocked(fetchHealth)).not.toHaveBeenCalled()
+  })
+})
+
+describe('SettingsPage — section order (2026-09-06 spec §3.1)', () => {
+  // Resolved by id, never by accessible name: the band headings and the card headings collide
+  // on "Household", "Accounts", "Restore", "System" and "Activity".
+  const el = (id: string) => document.getElementById(id) as HTMLElement
+
+  it('lays the five sections out in order, each with its cards', async () => {
+    renderPage()
+    await screen.findByRole('region', { name: 'Plan assumptions' })
+    expectInDocumentOrder(
+      el('sec-household'), el('household'), el('categories'), el('accounts'),
+      el('sec-planning'), el('limits'), el('plan-assumptions'),
+      el('sec-account'), el('appearance'), el('password'),
+      el('sec-integrations'), el('price-refresh'), el('assistant'), el('calendar'),
+      el('sec-data'), el('import'), el('backups'), el('restore'), el('health'),
+      el('system'), el('activity'),
+    )
+  })
+
+  it('makes each band a span of the grid, not a card', async () => {
+    renderPage()
+    await screen.findByRole('region', { name: 'Plan assumptions' })
+    for (const id of ['sec-household', 'sec-planning', 'sec-account', 'sec-integrations', 'sec-data']) {
+      expect(el(id).tagName).toBe('H2')
+      // Not a .card: the arrival ring and the entrance stagger are both card-scoped, and a
+      // heading must take neither.
+      expect(el(id).classList.contains('card')).toBe(false)
+      expect(el(id).classList.contains('settings-section')).toBe(true)
+    }
+  })
+
+  it('mounts the rail in the sticky scope row', async () => {
+    renderPage()
+    await screen.findByRole('region', { name: 'Plan assumptions' })
+    const row = document.querySelector('.page-frame-scope') as HTMLElement
+    expect(row).not.toBeNull()
+    expect(within(row).getByRole('group', { name: 'Settings sections' })).toBeTruthy()
+  })
+
+  it('keeps the Account band and Appearance outside the loadedOnce gates', async () => {
+    vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
+    renderPage()
+
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    // Appearance owns no fetch, so theme, density and the palette's #appearance jump keep
+    // working when the API is unreachable — and its band comes with it.
+    expect(document.getElementById('appearance')).not.toBeNull()
+    expect(document.getElementById('sec-account')).not.toBeNull()
+    // The other four bands are gated with their cards: a heading over cards that are not
+    // coming would promise what the API cannot give.
+    expect(document.getElementById('sec-data')).toBeNull()
+    expect(document.getElementById('sec-household')).toBeNull()
+    // And the rail says so: the lit chip is the only section actually on the page, not the
+    // first one in the list.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Account' }).getAttribute('aria-pressed')).toBe(
+        'true',
+      ),
+    )
+    expect(screen.getByRole('button', { name: 'Household' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    )
   })
 })
 
@@ -1134,6 +1026,30 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     }
   })
 
+  it('scrolls to a section band without ringing it', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+      writable: true,
+    })
+    try {
+      render(
+        <MemoryRouter initialEntries={['/settings#sec-planning']}>
+          <SettingsPage />
+        </MemoryRouter>,
+      )
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalled())
+      // A band is not a card: an outline round a bare heading rings nothing the reader asked
+      // for (spec §3.2). Card hashes keep today's ring — the tests above still pin that.
+      expect(document.getElementById('sec-planning')?.classList.contains('is-highlighted')).toBe(
+        false,
+      )
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    }
+  })
+
   it('takes the page back to the card while the cards above it are still growing', async () => {
     const scrollIntoView = vi.fn()
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
@@ -1153,13 +1069,20 @@ describe('SettingsPage — anchored arrival from the palette', () => {
         ),
       )
       const landed = scrollIntoView.mock.calls.length
-      expect(resizeObservers).toHaveLength(1)
+      // TWO observers now: PageFrame measures the sticky scope row into --sticky-inset with
+      // one of its own (2026-09-06 spec §3.2 put the rail in that row). The chase is picked by
+      // WHAT it watches — the whole body — because construction order is an accident of which
+      // effect runs first, and this test is about the page's arrival, not about that.
+      expect(resizeObservers).toHaveLength(2)
+      const chase = bodyObserver()
+      expect(chase).toBeDefined()
+      if (chase === undefined) throw new Error('the arrival chase never observed the body')
 
       // Every card here fetches its own data and grows as it lands, so the addressed card
       // slides DOWN after the jump: measured in the browser smoke, #calendar went from 585px
       // to 1898px — a full viewport below the fold — 400 ms after arriving, leaving the
       // arrival looking at whatever card ended up there instead.
-      act(() => resizeObservers[0].fire())
+      act(() => chase.fire())
       expect(scrollIntoView.mock.calls.length).toBeGreaterThan(landed)
 
       // It lets go with the ring: a layout shift minutes later must never yank the page back.
@@ -1170,7 +1093,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
           ),
         { timeout: 2500 },
       )
-      expect(resizeObservers[0].disconnected).toBe(true)
+      expect(chase.disconnected).toBe(true)
     } finally {
       Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
     }
