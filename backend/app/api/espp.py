@@ -712,5 +712,8 @@ async def modeler(
             out_of_pocket_cost=result.totals.out_of_pocket_cost,
             fmv_of_shares=result.totals.fmv_of_shares,
             remaining_25k=result.totals.remaining_25k,
+            total_shares=Decimal(result.totals.total_shares),
+            total_contribution=result.totals.total_contribution,
+            total_refund=result.totals.total_refund,
         ),
     )

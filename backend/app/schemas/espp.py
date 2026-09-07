@@ -218,6 +218,11 @@ class ModelerTotalsOut(BaseModel):
     out_of_pocket_cost: Decimal
     fmv_of_shares: Decimal
     remaining_25k: Decimal  # 25000 - total_25k_value, for the gauge
+    # 2026-09-07 spec §3.3: the meter's labels and tiles, so the client sums nothing. Share
+    # counts are Decimals on this wire, like the periods' — the module's one numeric type.
+    total_shares: Decimal
+    total_contribution: Decimal
+    total_refund: Decimal
 
 
 class ModelerOut(BaseModel):

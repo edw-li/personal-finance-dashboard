@@ -608,6 +608,10 @@ async def test_a_zero_contribution_pct_crosses_the_wire_in_plain_notation(auth_c
         "out_of_pocket_cost": "0.00",
         "fmv_of_shares": "0.00",
         "remaining_25k": "25000.00",
+        # A 0 % year still SUMS — the meter's three new totals are zeros, never absent.
+        "total_shares": "0",
+        "total_contribution": "0.00",
+        "total_refund": "0.00",
     }
 
 
@@ -796,6 +800,9 @@ async def test_modeler_golden_chain_over_the_two_real_periods(auth_client, price
         "out_of_pocket_cost": "21196.28",
         "fmv_of_shares": "24966.00",  # 146 shares x the last column's FMV
         "remaining_25k": "64.66",
+        "total_shares": "146",
+        "total_contribution": "21731.15",
+        "total_refund": "534.87",
     }
 
 

@@ -342,6 +342,10 @@ class ModelerTotals:
     out_of_pocket_cost: Decimal
     fmv_of_shares: Decimal
     remaining_25k: Decimal
+    # 2026-09-07 spec §3.3 — the chain meter's labels and tiles, exposed so no client sums.
+    total_shares: int
+    total_contribution: Decimal
+    total_refund: Decimal
 
 
 @dataclass(frozen=True)
@@ -431,6 +435,9 @@ def run_modeler(
             # that stays a no-op while one purchase_fmv knob drives the whole year.
             fmv_of_shares=half_up2(Decimal(total_shares) * purchase_fmv),
             remaining_25k=half_up2(ANNUAL_LIMIT - total_value),
+            total_shares=total_shares,
+            total_contribution=half_up2(sum((row.contribution for row in results), ZERO)),
+            total_refund=half_up2(sum((row.refund for row in results), ZERO)),
         ),
     )
 

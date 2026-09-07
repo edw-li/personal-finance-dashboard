@@ -179,6 +179,10 @@ def test_two_period_golden_chain_pins_every_intermediate():
     assert result.totals.out_of_pocket_cost == D("21196.28")
     assert result.totals.fmv_of_shares == D("24966.00")  # (78 + 68) x 171.00
     assert result.totals.remaining_25k == D("64.66")
+    # 2026-09-07 spec §3.3: the meter's labels never sum on the client.
+    assert result.totals.total_shares == 146  # 78 + 68
+    assert result.totals.total_contribution == D("21731.15")  # 11340.00 + 10391.15
+    assert result.totals.total_refund == D("534.87")  # only the capped August period refunds
 
 
 def test_single_period_chain_and_the_carry_forward_seed():
