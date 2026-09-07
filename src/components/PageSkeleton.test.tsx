@@ -3,7 +3,7 @@ import path from 'node:path'
 import { render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup } from '@testing-library/react'
-import PageSkeleton, { SkeletonCard, SkeletonTileRow } from './PageSkeleton'
+import PageSkeleton, { GhostTile, SkeletonCard, SkeletonTileRow } from './PageSkeleton'
 
 afterEach(cleanup)
 
@@ -95,5 +95,12 @@ describe('ghost parity (motion spec §7)', () => {
     expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(360, { controls: true, zoomable: true }))')
     expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(255, { controls: true }))')
     expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(280, { zoomable: true, footer: true }))')
+  })
+
+  it('exports the one ghost tile so a page can ghost a single slot of a mixed row', () => {
+    render(<GhostTile />)
+    const tile = document.querySelector('.stat-tile.skeleton-tile')
+    expect(tile).not.toBeNull()
+    expect(tile?.querySelectorAll('.skeleton').length).toBe(3) // label, value, delta
   })
 })

@@ -49,8 +49,10 @@ export default function PageSkeleton({
 
 /* The real tile carries a delta line: a two-block ghost measured 76 against its 115, so every
    KPI row dropped 39px when the data landed (2026-09-05 audit). One definition, so the row
-   PageSkeleton draws and the row a page reserves on its own can never drift apart. */
-function GhostTile() {
+   PageSkeleton draws and the row a page reserves on its own can never drift apart.
+   Exported (2026-09-07): the ESPP strip paints four tiles from one feed and one from another,
+   so it ghosts the slots of whichever feed is still in flight with this very tile. */
+export function GhostTile() {
   return (
     <div className="stat-tile skeleton-tile">
       <div className="skeleton skeleton-label" />
