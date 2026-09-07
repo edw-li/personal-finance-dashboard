@@ -26,6 +26,7 @@ from app.services.espp_calc import (
     last_weekday_of,
     lot_metrics,
     plan_year_rows,
+    position_totals,
     price5,
     running_avg_paid,
 )
@@ -593,6 +594,87 @@ def test_running_avg_paid_never_divides_by_zero_shares():
 
 def test_price5_collapses_signed_zeros():
     assert str(price5(D("-0.000001"))) == "0.00000"
+
+
+def test_position_totals_sums_held_and_sold_lots_apart():
+    today = date(2026, 8, 16)
+    price = D("174.1800")
+    a = lot(shares="260.0000", purchase_date=date(2024, 2, 29))
+    b = lot(
+        shares="100.0000",
+        purchase_price="127.50000",
+        purchase_date=date(2024, 8, 30),
+        sold_date=date(2026, 3, 1),
+        sold_price="120.00000",
+    )
+    c = lot(shares="241.0000", purchase_date=date(2025, 2, 28))
+    totals = position_totals([(row, lot_metrics(row, price, today)) for row in (a, b, c)])
+    held, sold = totals["held"], totals["sold"]
+    assert held["lots"] == 2
+    assert held["shares"] == D("501.0000")
+    assert held["cost_basis"] == D("20657.56")  # 10720.49 + 9937.07
+    assert held["fmv_value"] == D("39635.11")  # 20569.12 + 19065.99
+    assert held["market_value"] == D("87264.18")  # 45286.80 + 41977.38
+    assert held["gain_amount"] == D("66606.62")
+    # gain / cost — a MONEY ratio (the per-lot gain_pct is the sheet's PRICE ratio; the two
+    # agree here only because both lots were bought at one price).
+    assert held["gain_pct"] == D("3.224322")
+    assert held["bargain_element"] == D("18977.55")
+    assert held["lookback_component"] == D("15332.10")  # 7956.78 + 7375.32
+    assert held["discount_component"] == D("3645.45")
+    assert held["appreciation"] == D("47629.07")  # 24717.68 + 22911.39
+    assert held["avg_paid"] == D("41.23265")  # 20657.56 / 501
+    assert sold == {
+        "lots": 1,
+        "shares": D("100.0000"),
+        "cost_basis": D("12750.00"),
+        "proceeds": D("12000.00"),
+        "gain_amount": D("-750.00"),
+    }
+
+
+def test_position_totals_null_the_quote_fields_when_a_held_lot_is_unpriced():
+    today = date(2026, 8, 16)
+    rows = [lot(), lot(purchase_date=date(2025, 2, 28))]
+    totals = position_totals([(row, lot_metrics(row, None, today)) for row in rows])
+    held = totals["held"]
+    assert held["lots"] == 2
+    assert held["cost_basis"] == D("21440.98")  # purchase-day facts always sum
+    assert held["bargain_element"] == D("19697.26")
+    assert (held["market_value"], held["gain_amount"], held["gain_pct"], held["appreciation"]) == (
+        None,
+        None,
+        None,
+        None,
+    )
+    assert held["avg_paid"] == D("41.23265")
+
+
+def test_position_totals_skip_the_money_of_a_sold_row_missing_its_price():
+    today = date(2026, 8, 16)
+    # Stored shape the API rejects: sold_date without sold_price (lot_metrics reads it as
+    # sold-but-unpriced). It counts as a sold lot and contributes to no money field.
+    half = lot(sold_date=date(2026, 3, 1), sold_price=None)
+    totals = position_totals([(half, lot_metrics(half, D("174.1800"), today))])
+    assert totals["sold"] == {
+        "lots": 1,
+        "shares": D("260.0000"),
+        "cost_basis": D("0.00"),
+        "proceeds": D("0.00"),
+        "gain_amount": D("0.00"),
+    }
+    assert totals["held"]["lots"] == 0
+    assert totals["held"]["avg_paid"] is None
+    assert totals["held"]["gain_pct"] is None
+
+
+def test_position_totals_are_all_zeros_never_absent_when_empty():
+    totals = position_totals([])
+    assert str(totals["held"]["shares"]) == "0.0000"  # column scale, so the wire says 0.0000
+    assert str(totals["held"]["cost_basis"]) == "0.00"
+    assert totals["held"]["market_value"] == D("0.00")  # zeros, not None: nothing is unpriced
+    assert totals["held"]["gain_pct"] is None
+    assert str(totals["sold"]["proceeds"]) == "0.00"
 
 
 # --- the purchase calendar and the year planner ---

@@ -82,6 +82,81 @@ def running_avg_paid(lots) -> list[Decimal | None]:
     return averages
 
 
+# Accumulators start AT column scale so an empty block still serializes "0.0000" / "0.00"
+# rather than a bare "0" (Pct9's lesson: the wire text is the Decimal's own str()).
+SHARES_ZERO = Decimal("0.0000")
+MONEY_ZERO = Decimal("0.00")
+HELD_SUMMED = (
+    "cost_basis",
+    "fmv_value",
+    "bargain_element",
+    "lookback_component",
+    "discount_component",
+)
+
+
+def position_totals(rows) -> dict[str, dict]:
+    """The lots envelope's totals block (2026-09-07 spec §3.2): held and sold lots summed
+    apart, from the (lot, lot_metrics(lot, …)) pairs the router already built.
+
+    Held: the quote-dependent fields (market_value, gain_amount, gain_pct, appreciation) go
+    None as soon as ONE held lot is unpriced — a partial sum would be a smaller number
+    pretending to be the position — while the purchase-day facts always sum. gain_pct is
+    gain / cost, a MONEY ratio; the per-lot gain_pct is the sheet's PRICE ratio, and the two
+    agree only while every lot was bought at one price (the schema docstring says so too).
+    Sold: a row with a sold_date but no price counts in `lots` and `shares` and in no money
+    field, so proceeds and gain stay over one and the same priced subset. No re-rounding:
+    every operand is already at cents; `+ ZERO` only collapses a signed zero.
+    """
+    held: dict = {
+        "lots": 0,
+        "shares": SHARES_ZERO,
+        "market_value": MONEY_ZERO,
+        "gain_amount": MONEY_ZERO,
+        "appreciation": MONEY_ZERO,
+    }
+    held.update({key: MONEY_ZERO for key in HELD_SUMMED})
+    sold: dict = {
+        "lots": 0,
+        "shares": SHARES_ZERO,
+        "cost_basis": MONEY_ZERO,
+        "proceeds": MONEY_ZERO,
+        "gain_amount": MONEY_ZERO,
+    }
+    unpriced_held = False
+    for lot, metrics in rows:
+        if metrics["is_sold"]:
+            sold["lots"] += 1
+            sold["shares"] += lot.shares
+            if metrics["market_value"] is not None:
+                sold["cost_basis"] += metrics["cost_basis"]
+                sold["proceeds"] += metrics["market_value"]
+                sold["gain_amount"] += metrics["gain_amount"]
+            continue
+        held["lots"] += 1
+        held["shares"] += lot.shares
+        for key in HELD_SUMMED:
+            held[key] += metrics[key]
+        if metrics["market_value"] is None:
+            unpriced_held = True
+        else:
+            held["market_value"] += metrics["market_value"]
+            held["gain_amount"] += metrics["gain_amount"]
+            held["appreciation"] += metrics["appreciation"]
+    if unpriced_held:
+        held["market_value"] = held["gain_amount"] = held["appreciation"] = held["gain_pct"] = None
+    else:
+        held["gain_pct"] = (
+            None if held["cost_basis"] == 0 else _pct6(held["gain_amount"] / held["cost_basis"])
+        )
+    held["avg_paid"] = None if held["shares"] == 0 else price5(held["cost_basis"] / held["shares"])
+    for block in (held, sold):
+        for key, value in block.items():
+            if isinstance(value, Decimal):
+                block[key] = value + ZERO
+    return {"held": held, "sold": sold}
+
+
 @dataclass(frozen=True)
 class StoredPeriod:
     """One `espp_periods` row, as the router hands it over (already at column scale) — the
