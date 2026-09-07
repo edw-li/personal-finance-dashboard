@@ -20,9 +20,9 @@ import { fetchPriceHistory } from '../api/prices'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
-import { SkeletonTileRow } from '../components/PageSkeleton'
 import StatTile from '../components/StatTile'
 import LimitChainMeter from '../components/espp/LimitChainMeter'
+import PositionStrip from '../components/espp/PositionStrip'
 import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import { FEED_SKELETON } from '../components/skeletonMetrics'
@@ -1406,38 +1406,16 @@ export default function EsppPage() {
     <div className="page espp-page">
       <PageFrame title="ESPP" resource={{ status: 'ready' }}>
         <FeedBanner error={loadBanner} retry={retryFailedLoads} />
-        {/* The modeler's $25k figure at the page top (2026-08-31 audit: the gauge sat below
-            the fold). The MODELER's chain — its year and knobs — so it can never disagree
-            with the card below; absent until that feed answers, exactly like the card. */}
-        {/* …and its BOX is reserved while that feed is in flight: a strip that appears out of
-            nothing moved every card below it down 118px on each cold load (2026-09-05 lane V
-            smoke, `cls/espp` 0.06 of the page's 0.10). */}
-        {modeler === null && modelerBusy && (
-          <SkeletonTileRow lone label="Loading the $25k headline…" />
-        )}
-        {modeler !== null && (
-          <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
-            {/* kpi-row-lone: the lone tile must not stretch the full grid width; the modeler
-                card's own two-tile kpi-row below keeps its natural width. */}
-            <div className="kpi-row kpi-row-lone">
-              <StatTile
-                label={`$25k limit used — ${modeler.year}`}
-                value={formatCurrency(modeler.totals.total_25k_value)}
-                delta={`${formatCurrency(modeler.totals.remaining_25k)} left`}
-                tone="neutral"
-                hint="The Purchase modeler's chained total against the IRS §423 ceiling, at its current year and knobs — the gauge in that card draws the same figure long."
-              />
-            </div>
-            {/* The card's own dirty note, echoed beside the headline it disclaims — the tile
-                and the gauge must never disagree silently (2026-08-31 review round). */}
-            {modelerDirty && (
-              <p className="hint">
-                Unsaved period edits below — this figure is stale until you save &amp;
-                recalculate.
-              </p>
-            )}
-          </div>
-        )}
+        {/* The headline strip (2026-09-07 spec §4): four position tiles from the lots feed and
+            the modeler's $25k tile, one row, each feed ghosting its own slots until it answers
+            so the box below never moves (the 2026-09-05 CLS fix, widened to five tiles). */}
+        <PositionStrip
+          lots={lots}
+          lotsBusy={lotsBusy}
+          modeler={modeler}
+          modelerBusy={modelerBusy}
+          modelerDirty={modelerDirty}
+        />
 
         {/* NOT keyed, and a sibling of the two cards below: a modeler or offerings refetch
             re-renders this panel with the same payload, so a half-typed row survives. */}

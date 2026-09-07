@@ -344,20 +344,27 @@ describe('EsppPage — frame', () => {
     expect(document.querySelector('.page-frame-header')).toBeTruthy()
   })
 
-  it('reserves the $25k headline strip while the modeler is in flight', async () => {
-    // The strip used to appear out of nothing when that feed answered, moving every card
-    // below it down 118px on a cold load (2026-09-05 lane V smoke, cls/espp).
-    let land: (value: EsppModelerOut) => void = () => {}
-    vi.mocked(fetchModeler).mockReturnValue(new Promise<EsppModelerOut>((resolve) => { land = resolve }))
+  it('reserves a five-tile headline row while both feeds are in flight, then fills it per feed', async () => {
+    let landLots: (value: EsppLotsResponse) => void = () => {}
+    let landModeler: (value: EsppModelerOut) => void = () => {}
+    vi.mocked(fetchLots).mockReturnValue(new Promise<EsppLotsResponse>((resolve) => { landLots = resolve }))
+    vi.mocked(fetchModeler).mockReturnValue(new Promise<EsppModelerOut>((resolve) => { landModeler = resolve }))
     renderPage()
 
-    expect(await screen.findByText('Loading the $25k headline…')).toBeTruthy()
-    expect(document.querySelectorAll('.kpi-row-lone .stat-tile.skeleton-tile').length).toBe(1)
+    expect(await screen.findByText('Loading the ESPP headline…')).toBeTruthy()
+    expect(document.querySelectorAll('.kpi-row .stat-tile.skeleton-tile').length).toBe(5)
+    expect(document.querySelector('.kpi-row-lone')).toBeNull()
 
-    await act(async () => { land(modelerResponse()) })
-    await waitFor(() => expect(document.querySelector('.skeleton-tile')).toBeNull())
-    // …and exactly one lone row is left standing where the ghost stood.
-    expect(document.querySelectorAll('.kpi-row-lone').length).toBe(1)
+    // The lots land first: four real tiles, the $25k slot still a ghost — same row, same box.
+    // 'Unrealized gain', not 'Market value': that one also heads a column of the lots table.
+    await act(async () => { landLots(lotsResponse()) })
+    await screen.findByText('Unrealized gain')
+    expect(document.querySelectorAll('.kpi-row .stat-tile.skeleton-tile').length).toBe(1)
+
+    await act(async () => { landModeler(modelerResponse()) })
+    await screen.findByText(/\$25k limit used — 2024/)
+    expect(document.querySelector('.skeleton-tile')).toBeNull()
+    expect(document.querySelectorAll('.kpi-row')[0].querySelectorAll('.stat-tile').length).toBe(5)
   })
 })
 
@@ -370,9 +377,10 @@ describe('EsppPage — lots', () => {
     expect(screen.getByText('$44,540.60')).toBeTruthy()
     expect(screen.getByText('$33,820.11')).toBeTruthy()
     // Both unsold lots were bought at the same 85% price, so they share a gain % — the
-    // realized rows carry their own. THREE, not two, since 2026-09-07: the held totals row
-    // closes the table with the same ratio (65,168.75 / 20,657.56 rounds to the same 1dp).
-    expect(screen.getAllByText('+315.5%')).toHaveLength(3)
+    // realized rows carry their own. FOUR, not two, since 2026-09-07: the held totals row and
+    // the strip's Unrealized gain delta print the same ratio (65,168.75 / 20,657.56 rounds to
+    // the same 1dp), which is exactly the agreement the strip exists to show.
+    expect(screen.getAllByText('+315.5%')).toHaveLength(4)
     expect(screen.getByText('+166.8%')).toBeTruthy()
     // Date-only rendering of the quote instant (Plan 4 note: the UI compares dates only,
     // and this line does not even do that — it just says when).
@@ -939,6 +947,12 @@ describe('EsppPage — modeler', () => {
     const strip = within(tile.closest('.stat-tile') as HTMLElement)
     expect(strip.getByText('$18,917.13')).toBeTruthy()
     expect(strip.getByText('$6,082.87 left')).toBeTruthy()
+
+    // …and the four position tiles stand beside it, from the lots feed's totals block.
+    const row = tile.closest('.kpi-row') as HTMLElement
+    expect(row.querySelectorAll('.stat-tile').length).toBe(5)
+    expect(within(row).getByText('Market value').closest('.stat-tile')?.textContent).toContain('$85,826.31')
+    expect(within(row).getByText('Unrealized gain').closest('.stat-tile')?.textContent).toContain('+315.5%')
   })
 
   it('renders the chain, the provenance line and the $25k gauge', async () => {
