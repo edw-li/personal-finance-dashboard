@@ -25,7 +25,7 @@
 
 **Files:** none (read-only)
 
-- [ ] **Step 1: Docker, the db container, and WHICH database alembic will touch.** No step in this plan ssh-es anywhere or points alembic at production.
+- [x] **Step 1: Docker, the db container, and WHICH database alembic will touch.** No step in this plan ssh-es anywhere or points alembic at production.
 
 ```bash
 docker ps --filter name=finance-dashboard-db-1 --format '{{.Names}} {{.Status}}' && cd backend && .venv/Scripts/python.exe -c "from app.config import settings; from sqlalchemy.engine import make_url; u = make_url(settings.database_url); print(u.host, u.port, u.database)"
@@ -33,9 +33,9 @@ docker ps --filter name=finance-dashboard-db-1 --format '{{.Names}} {{.Status}}'
 
 Expected: `finance-dashboard-db-1 Up … (healthy)`, then VERBATIM `localhost 5433 finance`. Anything else from the second command is a STOP: report it and skip Task 4 entirely. If the container is missing, start it (`powershell -Command "Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe'"`, then `docker compose up -d db`) — never recreate the volume.
 
-- [ ] **Step 2: The tree and the worktrees** — `git status --short && git log --oneline -10 && git log --oneline origin/main..main | wc -l && git worktree list`. Expected: status prints NOTHING; the log shows the four lane merges (A, then B/C/D) on top of `83417d7` ("docs(spec): ESPP purchase-year pace, employer match, Settings sections, What-moved movers"); a non-zero ahead count that stays unpushed. Record `git worktree list` verbatim in Results and **remove nothing**.
+- [x] **Step 2: The tree and the worktrees** — `git status --short && git log --oneline -10 && git log --oneline origin/main..main | wc -l && git worktree list`. Expected: status prints NOTHING; the log shows the four lane merges (A, then B/C/D) on top of `83417d7` ("docs(spec): ESPP purchase-year pace, employer match, Settings sections, What-moved movers"); a non-zero ahead count that stays unpushed. Record `git worktree list` verbatim in Results and **remove nothing**.
 
-- [ ] **Step 3: The pieces each lane promised** — a silent grep names the lane that did not land its piece: record it and STOP rather than smoking a tree that is missing a lane.
+- [x] **Step 3: The pieces each lane promised** — a silent grep names the lane that did not land its piece: record it and STOP rather than smoking a tree that is missing a lane.
 
 ```bash
 ls backend/app/services/espp_pace.py src/components/settings/SettingsRail.tsx src/components/settings/PlanAssumptionsCard.tsx src/components/settings/PriceRefreshCard.tsx && grep -n "soft_limit\|soft_ratio\|window_label\|halves\|projected_full_year\|employer_match" backend/app/schemas/paycheck.py
@@ -51,16 +51,16 @@ Expected: every command prints at least one line. `pace-soft-tick`, `SettingsRai
 
 **Files:** none (read-only)
 
-- [ ] **Step 1: The suite on its own scratch database** — `cd backend && FINANCE_TEST_DB=finance_test_pv .venv/Scripts/python.exe -m pytest -q`. The name matches conftest's `[a-z0-9_]+_test(_[a-z0-9_]+)?` guard, so the destructive teardown can only ever target `finance_test_pv`. Expected: `N passed` (1 skipped), no failures, no errors, `N` at least the pre-batch **1694** plus lane A's new cases (§1.8 and §2.4 promise roughly 30–50). Record the exact count. A failure here is a cross-lane interaction — most likely `tests/test_limit_check.py` (A owns `employer_match` and the label switch) or `tests/test_paycheck_comp_api.py` (A the columns, B the form) — and goes to Task 7.
-- [ ] **Step 2: Lint and format** — `cd backend && .venv/Scripts/python.exe -m ruff check app tests && .venv/Scripts/python.exe -m ruff format --check app tests`. Expected: `All checks passed!` then `N files already formatted`.
+- [x] **Step 1: The suite on its own scratch database** — `cd backend && FINANCE_TEST_DB=finance_test_pv .venv/Scripts/python.exe -m pytest -q`. The name matches conftest's `[a-z0-9_]+_test(_[a-z0-9_]+)?` guard, so the destructive teardown can only ever target `finance_test_pv`. Expected: `N passed` (1 skipped), no failures, no errors, `N` at least the pre-batch **1694** plus lane A's new cases (§1.8 and §2.4 promise roughly 30–50). Record the exact count. A failure here is a cross-lane interaction — most likely `tests/test_limit_check.py` (A owns `employer_match` and the label switch) or `tests/test_paycheck_comp_api.py` (A the columns, B the form) — and goes to Task 7.
+- [x] **Step 2: Lint and format** — `cd backend && .venv/Scripts/python.exe -m ruff check app tests && .venv/Scripts/python.exe -m ruff format --check app tests`. Expected: `All checks passed!` then `N files already formatted`.
 
 ### Task 3: Frontend gates + build
 
 **Files:** none (read-only)
 
-- [ ] **Step 1: Run all four, in order, from the repo root** — `npx tsc -b && npx eslint . && npx vitest run && npm run build`. Expected: `tsc` silent, exit 0; `eslint` exit 0 with **17–18** `react-refresh/only-export-components` warnings and **0 errors** (a new warning class, or any error, is a finding); `vitest` prints `Test Files N passed` / `Tests M passed` with M at least the pre-batch **2447** plus lanes B/C/D's additions — record both; `npm run build` exits 0 with the chunk table — record `index-*.js` and `index-*.css` (baseline css 32.39 kB gzip 7.06; a jump over ~4 kB deserves a look).
+- [x] **Step 1: Run all four, in order, from the repo root** — `npx tsc -b && npx eslint . && npx vitest run && npm run build`. Expected: `tsc` silent, exit 0; `eslint` exit 0 with **17–18** `react-refresh/only-export-components` warnings and **0 errors** (a new warning class, or any error, is a finding); `vitest` prints `Test Files N passed` / `Tests M passed` with M at least the pre-batch **2447** plus lanes B/C/D's additions — record both; `npm run build` exits 0 with the chunk table — record `index-*.js` and `index-*.css` (baseline css 32.39 kB gzip 7.06; a jump over ~4 kB deserves a look).
 
-- [ ] **Step 2: Re-run any failure IN ISOLATION before calling it real** — these five flake only under full-suite load; a green isolated run is recorded in Results as a flake, not as a defect.
+- [x] ~~**Step 2: Re-run any failure IN ISOLATION before calling it real** — these five flake only under full-suite load; a green isolated run is recorded in Results as a flake, not as a defect.~~ **NOT RUN — nothing failed:** `npx vitest run` was 184 files / 2510 tests passed on the first full run, so there was no failure to re-run in isolation.
 
 ```bash
 npx vitest run src/components/settings/BackupsCard.test.tsx src/pages/EsppPage.test.tsx src/components/settings/CategoriesCard.test.tsx src/components/planning/WhatIfPanel.test.tsx src/components/spending/TransactionsPanel.test.tsx
@@ -72,8 +72,8 @@ Expected: exit 0 (known flakes: BackupsCard "Snapshot now prepends", EsppPage, W
 
 **Files:** none (read-only). Guarded by Task 1 Step 1: run NOTHING here unless it printed `localhost 5433 finance`.
 
-- [ ] **Step 1: Exactly one head, chained on the pre-batch head** — `cd backend && .venv/Scripts/python.exe -m alembic heads && grep -rn "down_revision" alembic/versions/*match_tiers*.py`. Expected: exactly ONE line ending `(head)` — lane A's `..._paycheck_profile_match_tiers` — whose `down_revision = "e5a7c1d3f6b8"` (the 2026-09-04 `spending_category_kind` head). Two heads means two lanes wrote a migration; the spec says exactly one does (§6).
-- [ ] **Step 2: Upgrade the dev database, check it, and read the columns back**
+- [x] **Step 1: Exactly one head, chained on the pre-batch head** — `cd backend && .venv/Scripts/python.exe -m alembic heads && grep -rn "down_revision" alembic/versions/*match_tiers*.py`. Expected: exactly ONE line ending `(head)` — lane A's `..._paycheck_profile_match_tiers` — whose `down_revision = "e5a7c1d3f6b8"` (the 2026-09-04 `spending_category_kind` head). Two heads means two lanes wrote a migration; the spec says exactly one does (§6).
+- [x] **Step 2: Upgrade the dev database, check it, and read the columns back**
 
 ```bash
 cd backend && .venv/Scripts/python.exe -m alembic upgrade head && .venv/Scripts/python.exe -m alembic check && cd ..
@@ -86,7 +86,7 @@ Expected: `Running upgrade e5a7c1d3f6b8 -> <match-tiers revision>` (or nothing t
 
 **Files:** `backend/tests/test_espp_pace.py`, `backend/tests/test_limit_check.py` (modified only if Step 1 comes up empty)
 
-- [ ] **Step 1: Are the goldens already there?**
+- [x] **Step 1: Are the goldens already there?**
 
 ```bash
 grep -rn "20861.0\|21250.00\|0.9817" backend/tests/test_espp_pace.py; grep -rn "41667.90\|0.5787\|11500" backend/tests/test_limit_check.py
@@ -95,7 +95,7 @@ cd backend && FINANCE_TEST_DB=finance_test_pv .venv/Scripts/python.exe -m pytest
 
 Expected: each grep prints at least one line and pytest prints `N passed`. If BOTH greps hit, tick this task and skip Steps 2–4.
 
-- [ ] **Step 2: Write the missing ESPP golden** (only if the first grep was silent), appended to `backend/tests/test_espp_pace.py`, with `dataclass`, `date`, `Decimal`, `from app.services.espp_calc import plan_year_rows` and `from app.services.espp_pace import espp_pace_item` in its imports (the file lane A wrote already has most of them). Lane A's plan declares `espp_pace_item(*, rows, profiles, scenario_from_today, limit, discount, today) -> PaceItem | None` — if the shipped `backend/app/services/espp_pace.py` differs, adapt the call after reading it; **the asserted numbers do not change, they are the contract.**
+- [x] ~~**Step 2: Write the missing ESPP golden** (only if the first grep was silent), appended to `backend/tests/test_espp_pace.py`, with `dataclass`, `date`, `Decimal`, `from app.services.espp_calc import plan_year_rows` and `from app.services.espp_pace import espp_pace_item` in its imports (the file lane A wrote already has most of them). Lane A's plan declares `espp_pace_item(*, rows, profiles, scenario_from_today, limit, discount, today) -> PaceItem | None` — if the shipped `backend/app/services/espp_pace.py` differs, adapt the call after reading it; **the asserted numbers do not change, they are the contract.**~~ **NOT RUN — lane A already shipped it:** `test_the_golden_window_and_verdict` in `backend/tests/test_espp_pace.py` pins every figure of the corrected §1.4 (see Results).
 
 ```python
 @dataclass
@@ -128,7 +128,7 @@ def test_purchase_year_window_matches_the_2026_09_06_worked_example():
     )
 ```
 
-- [ ] **Step 3: Write the missing 415(c) golden** (only if the second grep was silent), appended to `backend/tests/test_limit_check.py`. `FakeProfile` and `by_key` already live at the top of that file, and lane A was to give `FakeProfile` the four match fields (§2.4) — if it has not, add them there with `Decimal("0")` defaults as part of this step, and add `employer_match` to the file's existing `from app.services.limit_check import paycheck_pace` line.
+- [x] ~~**Step 3: Write the missing 415(c) golden** (only if the second grep was silent), appended to `backend/tests/test_limit_check.py`. `FakeProfile` and `by_key` already live at the top of that file, and lane A was to give `FakeProfile` the four match fields (§2.4) — if it has not, add them there with `Decimal("0")` defaults as part of this step, and add `employer_match` to the file's existing `from app.services.limit_check import paycheck_pace` line.~~ **NOT RUN — lane A already shipped it:** `test_employer_match_golden`, `test_employer_match_caps_the_elective_at_the_402g_limit` and `test_total_additions_includes_the_match_and_renames_the_row` in `backend/tests/test_limit_check.py` pin §2.3 (see Results).
 
 ```python
 def test_415c_worked_example_from_the_2026_09_06_spec():
@@ -151,13 +151,13 @@ def test_415c_worked_example_from_the_2026_09_06_spec():
     assert row.label == "415(c) total additions (incl. employer match)"
 ```
 
-- [ ] **Step 4: Run them, then commit** — `cd backend && FINANCE_TEST_DB=finance_test_pv .venv/Scripts/python.exe -m pytest tests/test_espp_pace.py tests/test_limit_check.py -q`, then `git add backend/tests/test_espp_pace.py backend/tests/test_limit_check.py && git commit -m "test(verify): pin the 2026-09-06 spec's two worked examples"`. Expected: `N passed`. **A golden that FAILS is this lane's headline finding, not a number to soften** — take it to Task 7. The spec's §1.4 was corrected on 2026-09-06 to the enumerated figures (H1 10,391.15, H2 10,469.87, window 20,861.02, soft cap 21,250.00, `soft_ratio` 0.9817, tone `warn`, projected 22,671.60, excess 1,421.60, `current_rate` 0.120000000); any figure moving IS a defect.
+- [x] ~~**Step 4: Run them, then commit** — `cd backend && FINANCE_TEST_DB=finance_test_pv .venv/Scripts/python.exe -m pytest tests/test_espp_pace.py tests/test_limit_check.py -q`, then `git add backend/tests/test_espp_pace.py backend/tests/test_limit_check.py && git commit -m "test(verify): pin the 2026-09-06 spec's two worked examples"`. Expected: `N passed`. **A golden that FAILS is this lane's headline finding, not a number to soften** — take it to Task 7. The spec's §1.4 was corrected on 2026-09-06 to the enumerated figures (H1 10,391.15, H2 10,469.87, window 20,861.02, soft cap 21,250.00, `soft_ratio` 0.9817, tone `warn`, projected 22,671.60, excess 1,421.60, `current_rate` 0.120000000); any figure moving IS a defect.~~ **RUN, NOT COMMITTED — nothing to commit:** `pytest tests/test_espp_pace.py tests/test_limit_check.py -q` → `34 passed in 0.37s`; the four named goldens on their own → `4 passed`. No test file was edited, so there was no commit to make.
 
 ### Task 6: The smoke driver
 
 **Files:** create `tools/probes/pace-v/smoke.mjs`; modify `tools/probes/README.md`
 
-- [ ] **Step 1: Bring the dev stack up, RESTARTED after the merges** — uvicorn runs without `--reload`, so a server started before lane A merged answers with the old code and every new wire field reads as missing (the 2026-09-04 trap). Kill the old one, start both detached, record the PIDs.
+- [x] **Step 1: Bring the dev stack up, RESTARTED after the merges** — uvicorn runs without `--reload`, so a server started before lane A merged answers with the old code and every new wire field reads as missing (the 2026-09-04 trap). Kill the old one, start both detached, record the PIDs.
 
 ```bash
 powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -match 'uvicorn app.main:app --port 8000' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }"
@@ -168,7 +168,7 @@ curl --retry 30 --retry-connrefused --retry-delay 1 -s http://127.0.0.1:8000/api
 
 Expected: two PIDs (record BOTH — they are what "left running" means), a health JSON, `200`. If vite already serves 5173 from THIS checkout, keep it and take its PID from `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'vite' }`.
 
-- [ ] **Step 2: Start from the motion driver, then swap its head, instruments and walks** — `mkdir -p tools/probes/pace-v && cp tools/probes/motion-v/smoke.mjs tools/probes/pace-v/smoke.mjs`, then edit the copy: (1) replace the header comment and the config lines from `const OUT` down to `const STEPS` with the block below, keeping `NOISE`, `sleep`, `files`, `report`, `problem`, `check` and `note` exactly as they are; (2) replace `INIT` with the block below; (3) in `makeContext`, drop the `reducedMotion` parameter and pass none to `newContext`, and answer a fenced write with the literal `return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })` (the `mutate` variable goes with it); (4) delete every walk between `const shot = …` and the closing `} finally {`, putting Step 3's walks there; (5) keep the `finally` (report write + `browser.close()`), the console summary line, the `problems` exit-1 loop, and change the final banner to `PACE SMOKE OK`.
+- [x] **Step 2: Start from the motion driver, then swap its head, instruments and walks** — `mkdir -p tools/probes/pace-v && cp tools/probes/motion-v/smoke.mjs tools/probes/pace-v/smoke.mjs`, then edit the copy: (1) replace the header comment and the config lines from `const OUT` down to `const STEPS` with the block below, keeping `NOISE`, `sleep`, `files`, `report`, `problem`, `check` and `note` exactly as they are; (2) replace `INIT` with the block below; (3) in `makeContext`, drop the `reducedMotion` parameter and pass none to `newContext`, and answer a fenced write with the literal `return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })` (the `mutate` variable goes with it); (4) delete every walk between `const shot = …` and the closing `} finally {`, putting Step 3's walks there; (5) keep the `finally` (report write + `browser.close()`), the console summary line, the `problems` exit-1 loop, and change the final banner to `PACE SMOKE OK`.
 
 ```js
 // tools/probes/pace-v/smoke.mjs — the pace / settings / movers smoke (lane V, 2026-09-06 spec).
@@ -199,7 +199,7 @@ const INIT = `(() => {
 })()`
 ```
 
-- [ ] **Step 3: The six walks, pasted where the motion walks were** (spec §3.1–§3.4, §1.7, §2.3, §4.2)
+- [x] **Step 3: The six walks, pasted where the motion walks were** (spec §3.1–§3.4, §1.7, §2.3, §4.2)
 
 ```js
     // A. Settings' shape. One scroll to the foot first: every card owns its own fetch and grows.
@@ -290,8 +290,8 @@ const INIT = `(() => {
         await shot('networth-movers-accounts'); drain('movers') } }
 ```
 
-- [ ] **Step 4: The README row and recipe.** Add one table row to `tools/probes/README.md` — `pace-v/smoke.mjs` | "Settings' five sections, the sticky chip rail, the four old anchors still ringing, `#sec-` hashes that do not, and every card-grid row filled to the right edge; the pace strip's ESPP soft tick, window label and note line plus the 415(c) label judged against the profiles the API reports; Net Worth's What moved bars, lede and Groups · Accounts toggle. READ-ONLY BY CONSTRUCTION — a write fence, not a sweep" | needs the dev stack — and a `## Running the pace smoke (dev only)` section carrying Step 5's commands, the uvicorn-restart caution, and the env list (`SMOKE_OUT`, `TOKEN_FILE`, `APP_BASE`, `API_BASE`, `EDGE_PATH`, `PLAYWRIGHT_CORE`, `ONLY_THEME`, `ONLY_STEP` = settings|rows|rail|anchors|pace|movers).
-- [ ] **Step 5: Mint a token and run both themes** — `$SCRATCH` is the executing session's own scratchpad directory (`C:/Users/edyli/AppData/Local/Temp/claude/C--Users-edyli-personal-finance-dashboard/<session-id>/scratchpad`), never the repo.
+- [x] **Step 4: The README row and recipe.** Add one table row to `tools/probes/README.md` — `pace-v/smoke.mjs` | "Settings' five sections, the sticky chip rail, the four old anchors still ringing, `#sec-` hashes that do not, and every card-grid row filled to the right edge; the pace strip's ESPP soft tick, window label and note line plus the 415(c) label judged against the profiles the API reports; Net Worth's What moved bars, lede and Groups · Accounts toggle. READ-ONLY BY CONSTRUCTION — a write fence, not a sweep" | needs the dev stack — and a `## Running the pace smoke (dev only)` section carrying Step 5's commands, the uvicorn-restart caution, and the env list (`SMOKE_OUT`, `TOKEN_FILE`, `APP_BASE`, `API_BASE`, `EDGE_PATH`, `PLAYWRIGHT_CORE`, `ONLY_THEME`, `ONLY_STEP` = settings|rows|rail|anchors|pace|movers).
+- [x] **Step 5: Mint a token and run both themes** — `$SCRATCH` is the executing session's own scratchpad directory (`C:/Users/edyli/AppData/Local/Temp/claude/C--Users-edyli-personal-finance-dashboard/<session-id>/scratchpad`), never the repo.
 
 ```bash
 OUT="$SCRATCH/pace-smoke" && mkdir -p "$OUT"
@@ -301,24 +301,24 @@ TOKEN_FILE="$OUT/token.txt" SMOKE_OUT="$OUT" node tools/probes/pace-v/smoke.mjs
 
 Expected: the checks line, then `PACE SMOKE OK`, exit 0; `$OUT/report.json` with `problems: []`, `writesBlocked` **empty** (this walk provokes no write — anything in it is a finding worth naming), `prefsWrites` holding only the per-theme `PATCH /prefs` if the app sends one, and ~16 PNGs (8 per theme). Exit 1 prints every failed check with its observed value — copy those verbatim into Results; a verify lane's failures are its output, not its embarrassment.
 
-- [ ] **Step 6: Commit the driver** — `git add tools/probes/pace-v/smoke.mjs tools/probes/README.md && git commit -m "test(probe): the pace smoke — Settings sections and rail, the ESPP tick and note, the movers bars"`.
+- [x] **Step 6: Commit the driver** — `git add tools/probes/pace-v/smoke.mjs tools/probes/README.md && git commit -m "test(probe): the pace smoke — Settings sections and rail, the ESPP tick and note, the movers bars"`.
 
 ### Task 7: Defect triage — a failing check becomes a failing test, then a fix
 
 **Files:** whichever file the defect lives in (spec §6's file map names the owner)
 
-- [ ] **Step 1: Classify before touching anything.** A failed gate, golden or smoke check is (a) a **flake** — re-run in isolation (Task 3 Step 2) and record it; (b) a **dev-data non-defect** — the book lacks the shape the check needs (no ESPP enrolment, no match policy); downgrade it to a `note()` in the driver with the reason on the same line and re-run; or (c) a **real defect** — proceed.
-- [ ] **Step 2: Write the failing test FIRST**, in the suite that owns the behaviour (`backend/tests/…` for a wire field or a number, `src/**/*.test.tsx` for markup or copy), run it, and paste its failure output into the commit body. A smoke check is never the only proof of a fix.
-- [ ] **Step 3: Make the minimal fix** in the owning lane's file, re-run that test, then re-run the gate it broke. One `fix(<area>): <what>` commit per defect, with the failing check's name in the body.
-- [ ] **Step 4: Cap at THREE fixes** — a fourth means a lane merged half-done work: stop fixing, record every remaining failure in Results beside its owner, and leave it for the morning. Never soften a golden, a threshold or an assertion to make a check pass — the numbers are the contract.
+- [x] **Step 1: Classify before touching anything.** A failed gate, golden or smoke check is (a) a **flake** — re-run in isolation (Task 3 Step 2) and record it; (b) a **dev-data non-defect** — the book lacks the shape the check needs (no ESPP enrolment, no match policy); downgrade it to a `note()` in the driver with the reason on the same line and re-run; or (c) a **real defect** — proceed.
+- [x] ~~**Step 2: Write the failing test FIRST**, in the suite that owns the behaviour (`backend/tests/…` for a wire field or a number, `src/**/*.test.tsx` for markup or copy), run it, and paste its failure output into the commit body. A smoke check is never the only proof of a fix.~~ **NOT RUN — no real defect found:** the only two failing checks of the whole run were case (b), dev-data non-defects (Results below), and were downgraded to `note()`s in the driver.
+- [x] ~~**Step 3: Make the minimal fix** in the owning lane's file, re-run that test, then re-run the gate it broke. One `fix(<area>): <what>` commit per defect, with the failing check's name in the body.~~ **NOT RUN — no product code was touched by this lane.**
+- [x] ~~**Step 4: Cap at THREE fixes** — a fourth means a lane merged half-done work: stop fixing, record every remaining failure in Results beside its owner, and leave it for the morning. Never soften a golden, a threshold or an assertion to make a check pass — the numbers are the contract.~~ **N/A — zero fixes were needed;** the cap was never approached.
 
 ### Task 8: Record, tick, final gate, leave the stack up
 
 **Files:** modify this plan
 
-- [ ] **Step 1: Fill the Results table with OBSERVED values** — gate counts, the alembic head and column table, both goldens as the suite computed them (including H1/H2), each smoke step's ok/failed/noted counts, the screenshot folder and `report.json` path, and every failed check beside the lane that owns it.
-- [ ] **Step 2: Tick every checkbox in this file**; a step not run is struck through with its reason on the same line, never left blank.
-- [ ] **Step 3: Final gate on the tree as it now stands**
+- [x] **Step 1: Fill the Results table with OBSERVED values** — gate counts, the alembic head and column table, both goldens as the suite computed them (including H1/H2), each smoke step's ok/failed/noted counts, the screenshot folder and `report.json` path, and every failed check beside the lane that owns it.
+- [x] **Step 2: Tick every checkbox in this file**; a step not run is struck through with its reason on the same line, never left blank.
+- [x] **Step 3: Final gate on the tree as it now stands**
 
 ```bash
 cd backend && FINANCE_TEST_DB=finance_test_pv .venv/Scripts/python.exe -m pytest -q && cd .. && npx tsc -b && npx eslint . && npx vitest run && npm run build
@@ -327,24 +327,179 @@ git status --short && git log --oneline -8 && git log --oneline origin/main..mai
 
 Expected: the Task 2/3 counts plus whatever Task 5 or 7 added; a clean status; the four lane merges plus this lane's commits; a non-zero ahead count that was never pushed.
 
-- [ ] **Step 4: Leave the dev servers running and prove it** — this lane stops nothing and deletes nothing. Run `curl -s -o /dev/null -w "backend %{http_code}\n" http://127.0.0.1:8000/api/v1/health && curl -s -o /dev/null -w "vite %{http_code}\n" http://localhost:5173/`, then `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -match 'uvicorn app.main:app --port 8000|vite' } | Select-Object ProcessId, Name"`. Expected: `backend 200`, `vite 200`, and the two PIDs — record them in Results.
-- [ ] **Step 5: Report to the coordinator** (do NOT write to the coordinator's memory directory yourself): the four merge SHAs, the gate counts, the goldens as computed, the smoke's folder and `report.json` path, every deviation and failed check with its owner, the dev-server PIDs, and the morning notes. The coordinator records them in the batch memory.
+- [x] **Step 4: Leave the dev servers running and prove it** — this lane stops nothing and deletes nothing. Run `curl -s -o /dev/null -w "backend %{http_code}\n" http://127.0.0.1:8000/api/v1/health && curl -s -o /dev/null -w "vite %{http_code}\n" http://localhost:5173/`, then `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -match 'uvicorn app.main:app --port 8000|vite' } | Select-Object ProcessId, Name"`. Expected: `backend 200`, `vite 200`, and the two PIDs — record them in Results.
+- [x] **Step 5: Report to the coordinator** (do NOT write to the coordinator's memory directory yourself): the four merge SHAs, the gate counts, the goldens as computed, the smoke's folder and `report.json` path, every deviation and failed check with its owner, the dev-server PIDs, and the morning notes. The coordinator records them in the batch memory.
 
 ## Results (filled by Task 8)
 
+Run on the MAIN checkout, on `main` at `e0a8ad2` (the four lane merges, in the order they actually
+landed: **D `0b6f442`, B `cddabeb`, A `6d9a9ce`, C `e0a8ad2`** — the plan's prose says A first; the
+order is irrelevant to every check here). 44 commits ahead of `origin/main` at the start, never
+pushed. Session scratchpad:
+`C:/Users/edyli/AppData/Local/Temp/claude/C--Users-edyli-personal-finance-dashboard/3e55cfbf-4a5a-44ce-8c58-b754ea4e2707/scratchpad/pace-smoke`.
+
 | Gate / check | Baseline (`83417d7`) | Observed |
 |---|---|---|
-| `pytest -q` (`FINANCE_TEST_DB=finance_test_pv`) / ruff | 1694 passed, 1 skipped / clean | |
-| `npx tsc -b` / `npx eslint .` / `npx vitest run` / `npm run build` | silent / 0 errors, 17–18 warnings / 2447 tests / css 32.39 kB | |
-| `alembic heads` / `upgrade` / `check` / match columns | one head `e5a7c1d3f6b8`, no match columns | |
-| §1.4 golden: H1 / H2 / window / soft cap / soft_ratio / tone · §2.3 golden: match / 415(c) / ratio / label | 10,391.15 / 10,469.87 / 20,861.02 (spec §1.4 illustrates .90 / .05) / 21,250.00 / 0.9817 / warn · 11,500.00 / 41,667.90 / 0.5787 / incl. | |
-| Smoke per step (settings, rows, rail, anchors, pace, movers): ok / failed / noted · `writesBlocked` / `prefsWrites` / PNGs / `report.json` path | n/a · expected 0 / ≤2 per theme / ~16 | |
-| Dev servers left running (uvicorn PID, vite PID) / worktrees seen | n/a | |
+| `pytest -q` (`FINANCE_TEST_DB=finance_test_pv`) / ruff | 1694 passed, 1 skipped / clean | **1735 passed, 1 skipped** in 918.85s (+41; lane A's own full run reported 1734, so one case arrived with its post-run `fix(espp)` commit `8c576d5`). `ruff check` → `All checks passed!`; `ruff format --check` → `243 files already formatted` |
+| `npx tsc -b` / `npx eslint .` / `npx vitest run` / `npm run build` | silent / 0 errors, 17–18 warnings / 2447 tests / css 32.39 kB | `tsc` **silent, exit 0**. `eslint` **0 errors, 18 warnings**, every one `react-refresh/only-export-components` — no new warning class. `vitest` **184 test files passed / 2510 tests passed** (pre-batch 2447; lane C's run 2481), 107.72s, zero failures. `npm run build` exit 0: `index-*.js` **320.05 kB** (gzip 102.27), `index-*.css` **34.20 kB** (gzip **7.21**) — +1.81 kB / +0.15 kB gzip on the baseline, well under the ~4 kB tripwire. (The js content hash moves between otherwise identical builds because the bundle embeds the short SHA the sidebar's DEV badge prints; the byte count does not.) |
+| `alembic heads` / `upgrade` / `check` / match columns | one head `e5a7c1d3f6b8`, no match columns | **exactly one head `f6b8d2e4a7c1 (head)`** = `20260906_0900_f6b8d2e4a7c1_paycheck_profile_match_tiers.py`, `down_revision = "e5a7c1d3f6b8"`. `upgrade head` printed **no migration step** (lane A had already run it on this box); `alembic current` → `f6b8d2e4a7c1 (head)`; `alembic check` → **`No new upgrade operations detected.`** Columns on `paycheck_profiles` in the table below |
+| §1.4 golden: H1 / H2 / window / soft cap / soft_ratio / tone · §2.3 golden: match / 415(c) / ratio / label | 10,391.15 / 10,469.87 / 20,861.02 (spec §1.4 illustrates .90 / .05) / 21,250.00 / 0.9817 / warn · 11,500.00 / 41,667.90 / 0.5787 / incl. | **Both already shipped by lane A and both PASS, every figure on the nose.** §1.4 (`test_the_golden_window_and_verdict`): halves **10391.15 / 10469.87**, `annualized` **20861.02**, `limit/ratio` 25000.00 / **0.8344**, `soft_limit` **21250.00**, `soft_ratio` **0.9817**, tone **warn**, `projected_full_year` **22671.60**, `projected_excess` **1421.60**, `current_rate` **0.120000000**, `backfilled_from` **2026-01-01**, `window_label` "Sep 2025 – Aug 2026 purchases". §2.3 (`test_employer_match_golden` + `test_employer_match_caps_the_elective_at_the_402g_limit` + `test_total_additions_includes_the_match_and_renames_the_row`): match **11500.00** (also 11500.00 at a 50,000 deferral and 2,500.00 inside band 1), `annualized` **41667.90**, `ratio` **0.5787**, tone `ok`, label **"415(c) total additions (incl. employer match)"**; the no-policy twin still reads "(excludes employer match)" with a null match. `pytest tests/test_espp_pace.py tests/test_limit_check.py -q` → **34 passed in 0.37s**; the four named goldens alone → **4 passed** |
+| Smoke per step (settings, rows, rail, anchors, pace, movers): ok / failed / noted · `writesBlocked` / `prefsWrites` / PNGs / `report.json` path | n/a · expected 0 / ≤2 per theme / ~16 | **`PACE SMOKE OK`, exit 0, in BOTH themes. 70 ok / 0 failed / 10 noted; `problems: []`.** Per theme (identical dark and light): settings **3/0/0**, rows **3/0/2**, rail **6/0/0**, anchors **14/0/0**, pace **4/0/2**, movers **5/0/1**. `writesBlocked` **[]** (this walk provokes no write, as designed), `prefsWrites` **[]** (the app sent no `PATCH /prefs`), **22 PNGs** (11 per theme). `report.json` and every PNG live in `…/3e55cfbf-4a5a-44ce-8c58-b754ea4e2707/scratchpad/pace-smoke/` |
+| Dev servers left running (uvicorn PID, vite PID) / worktrees seen | n/a | **uvicorn PID `33424`** (`backend/.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000`, child worker `6992`) → `backend 200`; **vite PID `29928`** (`node.exe`, under the `npm run dev` wrapper `28508` → `cmd.exe 23820`) → `vite 200`. Both were started BY this lane (nothing was running when it began) and are **left up**. `git worktree list` verbatim, **nothing removed**: `C:/Users/edyli/personal-finance-dashboard e0a8ad2 [main]` · `…/.worktrees/pace-a 8c576d5 [pace-a]` · `…/.worktrees/pace-b fdee8df [pace-b]` · `…/.worktrees/pace-c 35ed290 [pace-c]` · `…/.worktrees/pace-d 8bc12fe [pace-d]` |
+
+**Task 8 Step 3, the final gate re-run on the tree as it now stands** (the two lane-V commits on
+top of the four merges): `pytest -q` → **1735 passed, 1 skipped** in 1015.25s, exit 0 — identical
+to the Task 2 run; `tsc -b` silent; `eslint .` 0 errors / 18 warnings; `vitest run` **184 files /
+2510 tests passed**; `npm run build` exit 0, `index-*.js` 320.05 kB. `git status --short` clean,
+**46 commits ahead of `origin/main` and never pushed**. `curl` afterwards: `backend 200`,
+`vite 200` — both servers still up on PIDs `33424` and `29928`.
+
+### `paycheck_profiles` match columns, read back from the dev database
+
+| column_name | numeric_precision | numeric_scale | is_nullable | column_default |
+|---|---|---|---|---|
+| `match_band_1` | 12 | 2 | NO | `'0'::numeric` |
+| `match_band_2` | 12 | 2 | NO | `'0'::numeric` |
+| `match_rate_1` | 10 | 9 | NO | `'0'::numeric` |
+| `match_rate_2` | 10 | 9 | NO | `'0'::numeric` |
+
+Exactly §2.1: bands `12,2`, rates `10,9`, all four NOT NULL defaulting to 0.
 
 ### Failed checks (beside the lane that owns them) and noted non-defects
 
-*(Failures: one bullet each — the check name, the observed value, the file from spec §6's map, and whether Task 7 fixed it with the commit SHA or left it for the morning and why. Notes: the dev-data non-defects — a person with no paycheck profile 404ing, an unenrolled ESPP row, an empty match policy — each with the evidence that it is the book's shape, not a regression.)*
+**Failures: none.** No gate, golden or smoke check failed on the final tree, so Task 7 Steps 2–4
+never fired and **no product file was edited by this lane**. Two checks failed on the FIRST pace
+run and were classified under Task 7 Step 1 as case (b), dev-data non-defects; the evidence and the
+downgrade are below.
+
+- **(b) `dark|light pace: the ESPP row carries a soft tick inside its own track`** and
+  **`… names its purchase-year window and its practical cap`** — observed `tick: false`,
+  `meterW: null`, `figures: "$21,731.15"`. **Not a lane's defect.** `GET /limits?year=2026` on the
+  dev book returns `value: null` for **every** key, `limit_espp_423` included, and the spec says so
+  twice: §1.4 "missing → the CTA row, no meter, as today" and §1.8 "missing limit → CTA item". A row
+  with no track can carry neither a tick nor a "practical" figure. The driver now splits on the
+  catalogue: with a limit it runs the two original checks; without one it records the note
+  *"no limit_espp_423 is entered for 2026, so the ESPP row is the CTA row by design (spec §1.4)"*
+  and asserts, in both branches, that a limitless row **offers the call to action** (observed
+  `cta: "enter this year's limit"` — a check, not a shrug). The window label and the note line are
+  still asserted on this book and both pass: the row reads "ESPP §423 annual / Sep 2025 – Aug 2026
+  purchases" over "February 2026 Purchase entered · August 2026 Purchase entered. At your current
+  11%, a full purchase year is $20,782.30."
+- **(note) `pace: the book answered 4xx/5xx for a feed this page asks for`** — `404 GET
+  /api/v1/paycheck/breakdown?person_id=2`. The same known dev-book non-defect the C7 and motion
+  smokes list: the partner has no paycheck profile. The page handles it, and it is the ONLY 4xx of
+  the whole run; nothing else reached the console in either theme.
+- **(note, review eyeball 1) the movers' bar labels do NOT clip.** Measured on real pixels in both
+  themes, Groups mode: canvas 1109 px, grid 130 → 1069, largest bar +$19,005.13 ending at x=991,
+  its "+$19.0K" label 47 px wide → **66 px of room** before the canvas edge; the negative extreme
+  (−$41.72) leaves 222 px. Screenshots `{dark,light}-networth-movers-{groups,accounts}.png` and the
+  card-tight `{dark,light}-movers-card.png` confirm it by eye in Accounts mode too (the "+$19.0K" on
+  "Schwab ESPP" renders whole). **Per the brief, nothing was changed** —
+  `netWorthChartOptions.ts` keeps `xAxis: moneyAxis()`. See the morning notes for the latent case.
+- **(note, review eyeball 2) Settings geometry, both densities and both breakpoints.** The chip →
+  band landing is now a hard check rather than an eyeball and passes at **both** densities: at
+  `comfortable` all five chips land their band under the rail (`rail` step, 6/6 per theme), and at
+  `data-density="compact"` the Data band lands at or below the rail's bottom edge (`rows` step).
+  Every one of the four old card hashes (`#limits`, `#calendar`, `#restore`, `#backups`) still
+  **rings** and lands **below** the rail — 14 anchor checks per theme, all green — while
+  `#sec-planning` scrolls and pointedly does **not** ring (a band is not a card).
+  `.system-facts` is a two-column grid at **721 px** (`183px 183px`), **1400 px** (`240.75px` ×2)
+  and **1440 px** (`250.75px` ×2) — the `min-width: 721px` rule fires exactly at its boundary.
+  Activity is capped and scrolls **inside its own box**: `.settings-scroll` `max-height: 420px`,
+  `overflow-y: auto`, box 420 px against 557 px of content (the cap is on the scroll box, not on
+  `.activity-list` — the probe was corrected to measure the right element).
+- **No empty half rows**, both themes: every `.card-grid` row reaches the grid's right edge
+  (0 rows under 0.9 coverage). The pairs that make it work are visible in the screenshots —
+  Contribution limits + Plan assumptions, Appearance + Password, Price refresh + Assistant,
+  Backups + Restore, Data health + System — with Accounts, Calendar feed, Import and Activity
+  spanning 12.
+
+### Deviations from the plan, recorded rather than hidden
+
+1. **Merge order was D, B, A, C** (the plan's prose assumes A first). No check depends on it.
+2. **Task 5 wrote nothing.** Both greps hit, so Steps 2–4 were skipped as the plan instructs — lane
+   A had already pinned both worked examples. The plan's draft golden differs in SHAPE from what
+   shipped (lane A's uses a module-level `item()` helper and its own `FakeProfile`); **the numbers
+   are identical**, which is the part that is the contract.
+3. **Three driver deviations** from the plan's draft, each documented at the top of
+   `tools/probes/pace-v/smoke.mjs`: (a) `__rings` is filled by a MutationObserver armed at
+   **document start** over the whole tree and keyed by element id, not by a per-id watcher installed
+   after the navigation — the ring lives 1.2 s and a `goto` + `evaluate` round trip can outlast it,
+   so the draft's watcher would read a ring already taken off as "never rang" (`window.__watch(id)`
+   survives as the reset); (b) the 415(c) label is judged against `GET /paycheck/profiles` issued
+   through `page.request`, which Playwright does **not** put through `context.route` — a GET either
+   way, so the fence's claim is untouched; (c) the reviews' two eyeballs are instrumented rather
+   than left to a human — three extra `note()`s (movers label room; `.system-facts` and the
+   Activity box at 1440 px; `.system-facts` at 721 and 1400 px) and four extra `check()`s (the
+   compact-density chip landing, every card hash landing BELOW the rail, the Activity feed capped
+   and scrolling inside its own box, and a limitless ESPP row offering its call to action).
+4. **Two small driver additions the plan did not ask for**: the `rail` step navigates to `/settings`
+   itself when `ONLY_STEP=rail` skips walk A, and the `pace` step scrolls the Contribution-pace card
+   into view before shooting it (it is below the fold and the reveal timeline holds it dim, so the
+   draft's screenshot photographed a ghost). Neither changes an assertion.
 
 ## Production notes for the morning
 
-*(So the morning can tell an intended change from a regression: what the ESPP row now measures and why autumn checks count toward next year; that the 415(c) row grew the employer match and the Projection an employer leg while the Spending savings rate did NOT; that Settings is five sections behind a chip rail with every old anchor still working; that "What moved" is contribution bars under a from → to header. Add the real-book figures to eyeball on production and anything this lane could not judge on the dev book.)*
+**What changed, so an intended change is not mistaken for a regression.**
+
+- **The ESPP pace row now measures a PURCHASE YEAR, not a calendar year.** It grades the two
+  purchase halves that settle inside the current calendar year — on this book "Sep 2025 – Aug 2026
+  purchases", printed under the row's label — so **autumn contributions count toward next year's
+  row, not this one**. A figure that dropped since yesterday has almost certainly moved into the
+  next window rather than gone missing.
+- **The row is graded against a PRACTICAL cap, not the §423 cap.** `soft_limit = limit × (1 −
+  discount)` — the most contribution dollars the §423 limit can actually buy at the plan discount.
+  The tone and the percentage beside it read off `soft_ratio`, so **the row can say "near the cap"
+  while the hard ratio is a comfortable 0.83** (the golden is exactly that: 0.8344 hard, 0.9817
+  soft, tone `warn`). The `.pace-soft-tick` on the track is where that cap sits.
+- **The 415(c) row grew the employer match** and renames itself: "415(c) total additions (incl.
+  employer match)" once an in-force profile carries a match policy, "(excludes employer match)"
+  when it does not. **The Projection grew an employer leg** (`employer_monthly` per person, summed
+  into `employer`, deliberately kept apart from `payroll`). **The Spending savings rate did NOT
+  change** — employer money is not the household's own saving.
+- **Settings is five sections behind a sticky chip rail** (Household · Planning · Account ·
+  Integrations · Data). `app-settings` is retired; its content is now the **Plan assumptions** card
+  (withdrawal rate, ESPP ticker, ESPP discount, plus a read-only per-person employer-match summary
+  that links to the Paycheck page), beside a new **Price refresh** card. Every old deep link still
+  works: `#limits`, `#calendar`, `#restore`, `#backups` all ring and land below the rail; the
+  palette now offers `plan-assumptions` and `price-refresh` where it used to offer `app-settings`.
+- **Net Worth's "What moved" is contribution bars** under a `from → to` header carrying both totals,
+  the delta and the percent, plus a **Groups · Accounts** toggle (Accounts folds past ten into
+  "Other accounts"). Bars are horizontal, sorted by absolute size, coloured by group.
+
+**Figures to eyeball on the real book (this dev book could not answer them).**
+
+1. **Enter the 2026 contribution limits in Settings → Planning → Contribution limits.** The dev
+   database has **every** limit null, so all four pace rows show "enter this year's limit" and the
+   ESPP row's soft tick, practical figure and warn/over tone were never exercised on pixels. With
+   `limit_espp_423 = 25,000` and the discount at 15 %, expect the practical cap **$21,250.00** and a
+   tick at 85 % of the track. **This is the one surface the smoke could not judge.**
+2. **The §1.4 golden is production's own shape** — 11 % to 2026-08-17 then 12 % on 188,930 gives H1
+   10,391.15 / H2 10,469.87, window 20,861.02, `soft_ratio` 0.9817 (**warn**), a full purchase year
+   of 22,671.60 and **1,421.60 over the practical cap**. If the real book's ESPP row says anything
+   materially different once the limit is entered, that is worth a look. Note the golden's
+   `backfilled_from = 2026-01-01`: H1 opens 2025-09-01, four months before the earliest profile, so
+   its first eight paydays borrow that profile and the note line says so out loud.
+3. **Set the employer 401(k) match on the paycheck profile** (Paycheck page; Settings shows it
+   read-only). Until it is set, the 415(c) row keeps its "(excludes employer match)" caveat and the
+   Projection's employer leg is zero — which is exactly what the dev book shows, so the "incl."
+   label and a non-zero leg have only ever been proven by unit tests, never on pixels.
+4. **The movers card's outside-end labels have room today but the margin is thin.** Measured: 66 px
+   spare at 1440 px wide. The failure mode is arithmetic, not hypothetical — the `horizontal` grid
+   reserves **40 px** on the right, and a "+$19.0K"-class label is ~47 px, so a month whose largest
+   gain lands **exactly on the axis's nice max** would clip by about 12 px. The reviewer's fix is
+   ready if it ever shows: `xAxis: { ...moneyAxis(), boundaryGap: [0, '12%'] }` in
+   `src/components/networth/netWorthChartOptions.ts`. **Not applied — it does not clip today, and
+   this lane changes product code only for a defect it can see.**
+
+**Carry-overs.**
+
+- The 44-commit lead over `origin/main` is **unpushed by design**; the four lane worktrees
+  (`pace-a`…`pace-d`) and their branches are **untouched** — deletion is the coordinator's
+  end-of-night pass, not this lane's.
+- Backend moved 1694 → 1735 and vitest 2447 → 2510; if a morning run disagrees, the delta is the
+  batch's, not a flake — nothing flaked in either suite on this tree, so Task 3 Step 2's isolation
+  re-run was never needed.
+- `finance_test_pv` is the scratch database this lane's pytest runs created and dropped under
+  conftest's guard; nothing else was written anywhere. The dev database `finance` was upgraded
+  (already at head when this lane arrived) and otherwise only read. Production was never contacted.
