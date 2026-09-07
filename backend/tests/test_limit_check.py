@@ -19,6 +19,7 @@ from app.limit_keys import (
     LIMIT_HSA_SELF,
 )
 from app.services.limit_check import employer_hsa, employer_match, paycheck_pace
+from app.services.pace_walk import Walked
 
 
 @dataclass
@@ -350,3 +351,93 @@ def test_no_employer_policy_keeps_todays_hsa_label_and_a_null_deposit():
     assert row.annualized == Decimal("3600.00")
     assert row.label == "HSA — self-only"
     assert row.employer_hsa is None
+
+
+# Edward's 2026 walked to 2026-09-07 (test_pace_walk's golden), as `paycheck_pace` receives it.
+WALKED = Walked(
+    so_far={
+        "elective": Decimal("16373.93"),
+        "after_tax": Decimal("3778.60"),
+        "hsa_employee": Decimal("1600.00"),
+        "espp": Decimal("13933.59"),
+    },
+    projected={
+        "elective": Decimal("24560.90"),
+        "after_tax": Decimal("5667.90"),
+        "hsa_employee": Decimal("2400.00"),
+        "espp": Decimal("21490.79"),
+    },
+    basis="paydays",
+    backfilled_from=None,
+    first_payday_passed=True,
+)
+
+
+def test_a_walked_elective_row_reads_so_far_against_the_projection():
+    """The 2026-08-27 annualization said "a year at this rate", which reads as a lie in
+    September. The walk answers both halves of the question at once."""
+    items = by_key(
+        paycheck_pace(FakeProfile(), {LIMIT_401K_ELECTIVE: Decimal("24500.00")}, "none", WALKED)
+    )
+    row = items[LIMIT_401K_ELECTIVE]
+    assert row.so_far == Decimal("16373.93")
+    assert row.annualized == Decimal("24560.90")
+    # The verdict stays on the PROJECTION: the strip's question is "will this election hit
+    # the cap", not "has it yet".
+    assert row.ratio == Decimal("1.0025")
+    assert row.tone == "over"
+
+
+def test_a_walked_total_additions_row_matches_the_match_at_each_figure():
+    profile = FakeProfile(**POLICY)
+    limits = {LIMIT_401K_ELECTIVE: Decimal("24500.00"), LIMIT_415C_TOTAL: Decimal("72000.00")}
+    row = by_key(paycheck_pace(profile, limits, "none", WALKED))[LIMIT_415C_TOTAL]
+    # 24,500 capped + 5,667.90 after-tax + the full 11,500 match.
+    assert row.annualized == Decimal("41667.90")
+    # So far: 16,373.93 deferred + 3,778.60 after-tax + 6,000 + 50 % of the next 10,373.93.
+    assert row.so_far == Decimal("31339.50")
+    # The FIGURE beside the label is the year's match, not the part of it already earned —
+    # it qualifies the projection the meter is judged on.
+    assert row.employer_match == Decimal("11500.00")
+    assert row.label == "415(c) total additions (incl. employer match)"
+
+
+def test_a_walked_hsa_row_counts_the_january_deposit_once_it_has_landed():
+    """The row that started this: 2,400 of 4,400 in September looked like a shortfall. It is
+    two thirds of a year of deferrals — and the employer's January 2,000 is already in."""
+    profile = FakeProfile(hsa_per_check=Decimal("100.00"), **EMPLOYER_HSA)
+    row = by_key(paycheck_pace(profile, {LIMIT_HSA_SELF: Decimal("4400.00")}, "self", WALKED))[
+        LIMIT_HSA_SELF
+    ]
+    assert row.so_far == Decimal("3600.00")
+    assert row.annualized == Decimal("4400.00")
+    assert row.ratio == Decimal("1.0000")
+    assert row.tone == "warn"
+    assert row.employer_hsa == Decimal("2000.00")
+    assert row.label == "HSA — self-only (incl. employer)"
+
+
+def test_the_deposit_waits_for_the_years_first_payday():
+    """Read on January 2nd, nothing has been deposited yet — the projection still counts it."""
+    early = Walked(
+        so_far=dict.fromkeys(WALKED.so_far, Decimal("0.00")),
+        projected=WALKED.projected,
+        basis="paydays",
+        backfilled_from=None,
+        first_payday_passed=False,
+    )
+    profile = FakeProfile(hsa_per_check=Decimal("100.00"), **EMPLOYER_HSA)
+    row = by_key(paycheck_pace(profile, {LIMIT_HSA_SELF: Decimal("4400.00")}, "self", early))[
+        LIMIT_HSA_SELF
+    ]
+    assert row.so_far == Decimal("0.00")
+    assert row.annualized == Decimal("4400.00")
+
+
+def test_an_unwalked_row_answers_exactly_as_it_did_before_the_walk():
+    """The pure callers hand over no walk, and their figure is still "a year at this rate" —
+    with no past to point at, so_far is null rather than a fabricated zero."""
+    profile = FakeProfile(hsa_per_check=Decimal("100.00"), **EMPLOYER_HSA)
+    items = paycheck_pace(profile, {LIMIT_HSA_SELF: Decimal("4400.00")}, "self")
+    assert [item.so_far for item in items] == [None, None, None]
+    assert by_key(items)[LIMIT_HSA_SELF].annualized == Decimal("4400.00")

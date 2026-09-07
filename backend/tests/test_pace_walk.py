@@ -108,3 +108,11 @@ def test_first_payday_is_the_business_day_on_or_before_january_15():
     # Any other cadence has no payday calendar at all: the 15th is the probe date the month
     # basis uses, so it is the day the first month's money is credited to.
     assert first_payday(2022, 26) == date(2022, 1, 15)
+
+
+def test_the_walk_says_whether_the_years_first_payday_has_gone_by():
+    """The employer's HSA deposit rides that check (spec §2.6), and `paycheck_pace` is pure —
+    it has no clock of its own, so the walk answers this where `today` is already in hand."""
+    assert year().first_payday_passed is True
+    # Read on January 2nd, the 15th has not come: nothing has been deposited yet.
+    assert year(today=date(2026, 1, 2)).first_payday_passed is False

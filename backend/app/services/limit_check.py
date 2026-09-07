@@ -30,6 +30,7 @@ from app.limit_keys import (
     LIMIT_ESPP_423,
     LIMIT_LABELS,
 )
+from app.services.pace_walk import Walked
 from app.services.paycheck_calc import half_up2
 
 ZERO = Decimal("0")
@@ -108,8 +109,12 @@ def _item(
     limits: dict[str, Decimal],
     employer_match: Decimal | None = None,
     employer_hsa: Decimal | None = None,
+    so_far: Decimal | None = None,
 ) -> PaceItem:
     money = half_up2(annualized)
+    # Quantized HERE and only here, beside the projection it sits under, so the two figures
+    # in one row were rounded by one rule.
+    walked_so_far = None if so_far is None else half_up2(so_far)
     limit = limits.get(key)
     if limit is None:
         return PaceItem(
@@ -121,6 +126,7 @@ def _item(
             tone="ok",
             employer_match=employer_match,
             employer_hsa=employer_hsa,
+            so_far=walked_so_far,
         )
     ratio = (money / limit).quantize(RATIO_QUANTUM, rounding=ROUND_HALF_UP)
     if ratio > OVER_ABOVE:
@@ -138,6 +144,7 @@ def _item(
         tone=tone,
         employer_match=employer_match,
         employer_hsa=employer_hsa,
+        so_far=walked_so_far,
     )
 
 
@@ -175,16 +182,36 @@ def employer_hsa(profile, hsa_coverage: str) -> Decimal:
     )
 
 
-def paycheck_pace(profile, limits: dict[str, Decimal], hsa_coverage: str) -> list[PaceItem]:
+def _total_additions_so_far(profile, walked: Walked, elective_cap: Decimal | None) -> Decimal:
+    """415(c) so far: the capped elective already deferred, plus after-tax, plus the match
+    those deferrals have already earned — the match follows contributions actually made, so
+    it is re-earned on the so-far figure rather than prorated out of the year's."""
+    elective = walked.so_far["elective"]
+    capped = elective if elective_cap is None else min(elective, elective_cap)
+    earned = half_up2(employer_match(profile, elective, elective_cap))
+    return capped + walked.so_far["after_tax"] + earned
+
+
+def paycheck_pace(
+    profile, limits: dict[str, Decimal], hsa_coverage: str, walked: Walked | None = None
+) -> list[PaceItem]:
     """The rows the Paycheck page's pace strip renders, in display order.
 
     Two rows are unconditional — a zero deferral is information ("you are putting in
     nothing"), and both 401(k) caps apply to everyone with a paycheck. The other two are
     OPT-IN and disappear when the opt-in is absent, because a 0-of-25,000 meter is noise.
+
+    With a `walked` window (spec §2.6) every figure is the payday walk's: `annualized` is the
+    PROJECTED year end and `so_far` is what is already behind today. Without one — the pure
+    callers — the rows are exactly what they were before the walk existed: "a year at this
+    rate", with a null `so_far`, because a rate has no past to point at.
     """
     salary = profile.annual_salary
     elective_pct = profile.trad_401k_pct + profile.roth_401k_pct
-    elective = elective_pct * salary
+    elective = elective_pct * salary if walked is None else walked.projected["elective"]
+    after_tax = (
+        profile.after_tax_401k_pct * salary if walked is None else walked.projected["after_tax"]
+    )
     # The 415(c) leg uses the CAPPED elective, because that is what actually lands in the
     # plan; the elective row above keeps the uncapped pace, because going over IS its news.
     elective_cap = limits.get(LIMIT_401K_ELECTIVE)
@@ -194,16 +221,26 @@ def paycheck_pace(profile, limits: dict[str, Decimal], hsa_coverage: str) -> lis
     match = half_up2(employer_match(profile, elective, elective_cap))
     has_policy = profile.match_band_1 > ZERO or profile.match_band_2 > ZERO
     items = [
-        _item(LIMIT_401K_ELECTIVE, LIMIT_LABELS[LIMIT_401K_ELECTIVE], elective, limits),
+        _item(
+            LIMIT_401K_ELECTIVE,
+            LIMIT_LABELS[LIMIT_401K_ELECTIVE],
+            elective,
+            limits,
+            so_far=None if walked is None else walked.so_far["elective"],
+        ),
         _item(
             LIMIT_415C_TOTAL,
             LIMIT_LABELS[LIMIT_415C_TOTAL]
             + (TOTAL_ADDITIONS_MATCH if has_policy else TOTAL_ADDITIONS_CAVEAT),
-            capped_elective + profile.after_tax_401k_pct * salary + match,
+            capped_elective + after_tax + match,
             limits,
             # Null unless there is something to say: a policy that earns nothing this year
-            # renames the row (it exists) and shows no figure (it paid nothing).
+            # renames the row (it exists) and shows no figure (it paid nothing). It is the
+            # PROJECTED match either way — it qualifies the figure the meter is judged on.
             employer_match=match if match > ZERO else None,
+            so_far=(
+                None if walked is None else _total_additions_so_far(profile, walked, elective_cap)
+            ),
         ),
     ]
     # 'none' is not a zero-dollar HSA — it is "no HDHP", so NEITHER cap applies. An
@@ -216,22 +253,37 @@ def paycheck_pace(profile, limits: dict[str, Decimal], hsa_coverage: str) -> lis
         # suffix is exactly the addend behind the total and the two can never disagree by
         # a cent.
         deposit = half_up2(employer_hsa(profile, hsa_coverage))
+        # Per-check DOLLARS times the profile's own cadence — never a hardcoded 24
+        # (paycheck_calc's rule) — or, walked, the paydays the year actually has.
+        employee = (
+            profile.hsa_per_check * Decimal(profile.pay_periods_per_year)
+            if walked is None
+            else walked.projected["hsa_employee"]
+        )
         items.append(
             _item(
                 hsa_key,
                 # The employer's deposit counts against the SAME cap, so a row that leaves
                 # it out could never reach 100 % — the label owns that news, like 415(c)'s.
                 LIMIT_LABELS[hsa_key] + (HSA_INCL_EMPLOYER if deposit > ZERO else ""),
-                # Per-check DOLLARS times the profile's own cadence — never a hardcoded
-                # 24 (paycheck_calc's rule) — plus the year's employer deposit.
-                profile.hsa_per_check * Decimal(profile.pay_periods_per_year) + deposit,
+                employee + deposit,
                 limits,
                 # Null unless there is something to say: no policy renders exactly the row
                 # it rendered before there was one.
                 employer_hsa=deposit if deposit > ZERO else None,
+                # The deposit lands in ONE January check, so it joins the so-far figure the
+                # moment that check has been cut and not a day before (spec §2.6).
+                so_far=(
+                    None
+                    if walked is None
+                    else walked.so_far["hsa_employee"]
+                    + (deposit if walked.first_payday_passed else ZERO)
+                ),
             )
         )
     # espp_pct 0 is "not enrolled", which is a different statement from "enrolled at 0 %".
+    # No `so_far` here even when walked: the router replaces this row with the PURCHASE-year
+    # one (espp_pace), whose window is not this calendar year and which walks its own.
     if profile.espp_pct > ZERO:
         items.append(
             _item(LIMIT_ESPP_423, LIMIT_LABELS[LIMIT_ESPP_423], profile.espp_pct * salary, limits)

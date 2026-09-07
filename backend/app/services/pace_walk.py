@@ -46,6 +46,10 @@ class Walked:
     projected: dict[str, Decimal]
     basis: str
     backfilled_from: date | None
+    # Has the YEAR's first payday gone by? The employer's HSA deposit rides that check
+    # (spec §2.6) and `limit_check.paycheck_pace` is pure — it has no clock of its own, so
+    # the walk answers it here, where `today` and the cadence are both already in hand.
+    first_payday_passed: bool
 
 
 def first_payday(year: int, pay_periods: int) -> date:
@@ -143,6 +147,8 @@ def walk(profiles: list, scenario, today: date, start: date, end: date) -> Walke
             if day < today:
                 so_far[name] += value
 
+    # The cadence pricing the window's opening is the one the year's first check rides.
+    opener = first_payday(start.year, priced_by(start).pay_periods_per_year)
     for year, month in months(start, end):
         mid = date(year, month, 15)
         # Clamped so a window that opens after the 15th still probes a date inside it. This
@@ -168,4 +174,5 @@ def walk(profiles: list, scenario, today: date, start: date, end: date) -> Walke
         projected={name: half_up2(value) for name, value in projected.items()},
         basis="months" if by_month else "paydays",
         backfilled_from=backfilled,
+        first_payday_passed=opener < today,
     )
