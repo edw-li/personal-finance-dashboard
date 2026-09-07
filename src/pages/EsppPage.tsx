@@ -22,6 +22,7 @@ import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import { SkeletonTileRow } from '../components/PageSkeleton'
 import StatTile from '../components/StatTile'
+import LimitChainMeter from '../components/espp/LimitChainMeter'
 import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import { FEED_SKELETON } from '../components/skeletonMetrics'
@@ -43,12 +44,6 @@ import { shiftPoint } from '../utils/percent'
 import '../components/panels.css'
 import '../components/espp/espp.css'
 import './EsppPage.css'
-
-// The IRS §423 ceiling the chain is modeled against (backend espp_calc: unused_25k starts
-// here). Nothing on the page is DERIVED from it: it feeds the gauge's denominator (the
-// fill width) and the meter's aria-valuemax/aria-label/aria-valuetext, and that is all —
-// "remaining" is the server's own number.
-const LIMIT_25K = 25000
 
 function message(err: unknown, fallback: string): string {
   // 404/409/422 details are the server's own sentences — rendered verbatim (house note).
@@ -1101,52 +1096,29 @@ function ModelerCard({
               {warning}
             </p>
           ))}
-          <div className="gauge">
-            {/* A meter, not a progressbar: this is a filled quantity within a known range,
-                not the progress of a task. The value is the server's total; only the WIDTH
-                divides, and it is clamped so an over-limit total cannot overflow the bar. */}
-            <div
-              className="gauge-track"
-              role="meter"
-              aria-label={`${formatCurrency(LIMIT_25K)} limit used in ${data.year}`}
-              aria-valuenow={Number(data.totals.total_25k_value)}
-              aria-valuemin={0}
-              aria-valuemax={LIMIT_25K}
-              aria-valuetext={`${formatCurrency(data.totals.total_25k_value)} of ${formatCurrency(
-                LIMIT_25K,
-              )}`}
-            >
-              <div
-                className="gauge-fill"
-                style={{
-                  width: `${Math.max(
-                    0,
-                    Math.min(100, (Number(data.totals.total_25k_value) / LIMIT_25K) * 100),
-                  ).toFixed(2)}%`,
-                }}
-              />
-            </div>
-            <div className="gauge-labels">
-              <span>{`${formatCurrency(data.totals.total_25k_value)} used`}</span>
-              {/* The SERVER's remainder — never 25000 minus the total re-derived here. */}
-              <span>{`${formatCurrency(data.totals.remaining_25k)} left`}</span>
-            </div>
-          </div>
+          <LimitChainMeter data={data} />
           <div className="kpi-row">
-            <div className="stat-tile">
-              <div className="stat-label">
-                Out of pocket
-                <InfoHint text="Your contributions after the carry-forward — what the purchase actually costs you." />
-              </div>
-              <div className="stat-value">{formatCurrency(data.totals.out_of_pocket_cost)}</div>
-            </div>
-            <div className="stat-tile">
-              <div className="stat-label">
-                FMV of shares
-                <InfoHint text="The purchased shares valued at the period&apos;s fair market value." />
-              </div>
-              <div className="stat-value">{formatCurrency(data.totals.fmv_of_shares)}</div>
-            </div>
+            <StatTile
+              label="Out of pocket"
+              value={formatCurrency(data.totals.out_of_pocket_cost)}
+              hint="Your contributions after the carry-forward — what the purchase actually costs you."
+            />
+            <StatTile
+              label="Shares bought"
+              // '—' on a pre-batch snapshot (formatShares renders the dash for undefined).
+              value={formatShares(data.totals.total_shares)}
+              hint="Every share the chain buys this year, both periods together."
+            />
+            <StatTile
+              label="FMV of shares"
+              value={formatCurrency(data.totals.fmv_of_shares)}
+              hint="The purchased shares valued at the period's fair market value."
+            />
+            <StatTile
+              label="Refunded"
+              value={formatCurrency(data.totals.total_refund)}
+              hint="Cash the cap sent back — nothing carries when a purchase is capped."
+            />
           </div>
           <div className="espp-scroll">
             <table className="data-table">

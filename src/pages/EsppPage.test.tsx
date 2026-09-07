@@ -955,30 +955,35 @@ describe('EsppPage — modeler', () => {
     // Per-period chain (server values), and the derived row's own badge.
     expect(screen.getByText('$8,370.22')).toBeTruthy()
     expect(screen.getByText('$9,847.00')).toBeTruthy()
-    expect(screen.getByText('$681.28')).toBeTruthy()
+    // Scoped to its own row since 2026-09-07: the card's Refunded tile prints the same string.
+    expect(within(rowFor('Mar–Aug 2024')).getByText('$681.28')).toBeTruthy()
     expect(screen.getByText('$9,070.13')).toBeTruthy()
     expect(screen.getByText('derived')).toBeTruthy()
     // Only the second period breaches the limit.
     expect(screen.getAllByText('Over limit')).toHaveLength(1)
 
-    // The gauge: 18917.13 / 25000 = 75.67%, and "remaining" is the SERVER's number.
-    const meter = screen.getByRole('meter')
-    expect(meter.getAttribute('aria-valuenow')).toBe('18917.13')
-    expect(meter.getAttribute('aria-valuemin')).toBe('0')
-    expect(meter.getAttribute('aria-valuemax')).toBe('25000')
-    const fill = meter.querySelector('.gauge-fill') as HTMLElement
-    expect(fill.style.width).toBe('75.67%')
-    expect(screen.getByText('$18,917.13 used')).toBeTruthy()
-    // Scoped to the card: the page-top strip's delta is the same "$6,082.87 left" string
-    // (2026-08-31 audit) — deliberately, since both draw the one payload.
-    expect(within(modelerCard()).getByText('$6,082.87 left')).toBeTruthy()
+    // The chain meter replaces the gauge (2026-09-07 spec §7): the limit row keeps the
+    // gauge's aria contract, and the card's two-tile row becomes four tiles.
+    const [limit, cash] = within(modelerCard()).getAllByRole('meter')
+    expect(limit.getAttribute('aria-valuenow')).toBe('18917.13')
+    expect(limit.getAttribute('aria-valuemin')).toBe('0')
+    expect(limit.getAttribute('aria-valuemax')).toBe('25000')
+    expect(cash.getAttribute('aria-valuenow')).toBe('16812')
+    expect(screen.getByText('$18,917.13 used · $6,082.87 left')).toBeTruthy()
+    expect(document.querySelector('.gauge')).toBeNull()
+    // Scoped to the card's TILE row: "Refunded" also names a chip in the meter's legend.
+    const card = within(modelerCard().querySelector('.kpi-row') as HTMLElement)
+    expect(card.getByText('Out of pocket').closest('.stat-tile')?.textContent).toContain('$16,130.72')
+    expect(card.getByText('Shares bought').closest('.stat-tile')?.textContent).toContain('390')
+    expect(card.getByText('FMV of shares').closest('.stat-tile')?.textContent).toContain('$19,200.00')
+    expect(card.getByText('Refunded').closest('.stat-tile')?.textContent).toContain('$681.28')
   })
 
   it('names the discount the modeler priced with, never a hardcoded 15%', async () => {
     renderPage()
     // The meter, not the heading: it only paints once the modeler payload has landed, which
     // is what puts the SERVER's discount in the sentence.
-    await screen.findByRole('meter')
+    await screen.findAllByRole('meter')
     fireEvent.click(screen.getByRole('button', { name: /^About What each period/ }))
     const text = screen.getByRole('tooltip').textContent ?? ''
     expect(text).toContain('a 10% discount on the lower of it and the FMV')
@@ -992,7 +997,7 @@ describe('EsppPage — modeler', () => {
       modelerResponse({ subscription_price: '48.50900', carry_forward: '125.00' }),
     )
     renderPage()
-    await screen.findByRole('meter')
+    await screen.findAllByRole('meter')
     const card = modelerCard()
 
     expect((within(card).getByLabelText('Subscription price') as HTMLInputElement).value).toBe('')
@@ -1002,7 +1007,7 @@ describe('EsppPage — modeler', () => {
 
   it('shows per-row subscription provenance', async () => {
     renderPage()
-    await screen.findByRole('meter')
+    await screen.findAllByRole('meter')
     const row = rowFor('1H24')
 
     // The 5dp price the row was chained at, verbatim, and which offering set it.
@@ -1082,7 +1087,7 @@ describe('EsppPage — modeler', () => {
 
   it('leaves an untouched table alone and just re-runs the chain', async () => {
     renderPage()
-    await screen.findByRole('meter')
+    await screen.findAllByRole('meter')
 
     fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
@@ -1092,7 +1097,7 @@ describe('EsppPage — modeler', () => {
 
   it('recalculates with the typed knobs, omitting the blank ones', async () => {
     renderPage()
-    await screen.findByRole('meter')
+    await screen.findAllByRole('meter')
 
     fireEvent.change(within(modelerCard()).getByLabelText('Carry-forward'), {
       target: { value: '25' },
@@ -1113,7 +1118,7 @@ describe('EsppPage — modeler', () => {
 
   it('year chips call the modeler with the picked year', async () => {
     renderPage()
-    await screen.findByRole('meter')
+    await screen.findAllByRole('meter')
 
     fireEvent.click(screen.getByRole('button', { name: '2025' }))
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
@@ -1127,7 +1132,7 @@ describe('EsppPage — modeler', () => {
 
   it('reset deletes a stored row after confirm and re-runs', async () => {
     renderPage()
-    await screen.findByRole('meter')
+    await screen.findAllByRole('meter')
 
     confirmSpy.mockReturnValue(false)
     fireEvent.click(screen.getByRole('button', { name: 'Reset 1H24 to derived values' }))
@@ -1215,7 +1220,7 @@ describe('EsppPage — modeler', () => {
 
   it('names an overridden subscription price in the provenance, year and row', async () => {
     renderPage()
-    await screen.findByRole('meter')
+    await screen.findAllByRole('meter')
     // The NEXT run is the overridden one: a knob price wins for every period, so the server
     // answers with no covering offering on any row.
     vi.mocked(fetchModeler).mockResolvedValueOnce(
@@ -1267,7 +1272,7 @@ describe('EsppPage — modeler', () => {
     expect(warning.className).toContain('espp-warning')
     // Advisory, not a failure: no banner, and the chain is on screen.
     expect(screen.queryByRole('alert')).toBeNull()
-    expect(screen.getByRole('meter')).toBeTruthy()
+    expect(screen.getAllByRole('meter')[0]).toBeTruthy()
     expect(
       screen.getByText(
         'subscription mixed — offerings where they cover, latest quote elsewhere · FMV from the latest quote (as of Aug 15, 2026)',
@@ -1283,7 +1288,7 @@ describe('EsppPage — modeler', () => {
       .mockReturnValueOnce(slow.promise) // the 2025 chip
       .mockReturnValueOnce(fast.promise) // the 2024 chip
     renderPage()
-    await screen.findByText('$18,917.13 used')
+    await screen.findByText(/\$18,917\.13 used/)
 
     // The primary is disabled while a run is in flight; the year chips are not, so they
     // are what puts two runs on the wire at once.
@@ -1293,15 +1298,15 @@ describe('EsppPage — modeler', () => {
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(3))
 
     fast.resolve(totalsUsing('22222.22'))
-    expect(await screen.findByText('$22,222.22 used')).toBeTruthy()
+    expect(await screen.findByText(/\$22,222\.22 used/)).toBeTruthy()
 
     await act(async () => {
       slow.resolve(totalsUsing('11111.11'))
     })
     // The older run answers LAST and must not roll the gauge back to the year it was asked
     // about — the seq ref, not the network, decides which chain is on screen.
-    expect(screen.queryByText('$11,111.11 used')).toBeNull()
-    expect(screen.getByText('$22,222.22 used')).toBeTruthy()
+    expect(screen.queryByText(/\$11,111\.11 used/)).toBeNull()
+    expect(screen.getByText(/\$22,222\.22 used/)).toBeTruthy()
   })
 
   it('drops a model failure that a newer run has already outlived', async () => {
@@ -1311,12 +1316,12 @@ describe('EsppPage — modeler', () => {
       .mockReturnValueOnce(stale.promise) // the 2025 chip
       .mockResolvedValueOnce(totalsUsing('22222.22')) // the 2024 chip
     renderPage()
-    await screen.findByText('$18,917.13 used')
+    await screen.findByText(/\$18,917\.13 used/)
 
     fireEvent.click(screen.getByRole('button', { name: '2025' }))
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
     fireEvent.click(screen.getByRole('button', { name: '2024' }))
-    expect(await screen.findByText('$22,222.22 used')).toBeTruthy()
+    expect(await screen.findByText(/\$22,222\.22 used/)).toBeTruthy()
 
     await act(async () => {
       stale.reject(new ApiError('model unavailable', 500))
@@ -1325,8 +1330,8 @@ describe('EsppPage — modeler', () => {
     // fresh chain stays and no banner appears for a question nobody is still asking.
     expect(screen.queryByText('model unavailable')).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull()
-    expect(screen.getByRole('meter')).toBeTruthy()
-    expect(screen.getByText('$22,222.22 used')).toBeTruthy()
+    expect(screen.getAllByRole('meter')[0]).toBeTruthy()
+    expect(screen.getByText(/\$22,222\.22 used/)).toBeTruthy()
   })
 
   it('keeps the lots table (and the knobs) when the modeler 422s', async () => {
@@ -1345,12 +1350,12 @@ describe('EsppPage — modeler', () => {
     expect(screen.getByText('$10,720.49')).toBeTruthy()
     // The knobs stay on screen: typing prices into them IS the way out of this 422.
     expect(screen.getByRole('button', { name: 'Save & recalculate' })).toBeTruthy()
-    expect(screen.queryByRole('meter')).toBeNull()
+    expect(screen.queryAllByRole('meter')).toHaveLength(0)
   })
 
   it('does not remount the lots panel when the modeler reloads', async () => {
     renderPage()
-    await screen.findByRole('meter')
+    await screen.findAllByRole('meter')
 
     type('Notes', 'half-typed lot')
     fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
@@ -1379,7 +1384,7 @@ describe('EsppPage — snapshot cache (2026-08-27 spec §1)', () => {
     renderPage()
     // The offering row and the modeler's chain are both up before either request answers.
     expect(screen.getByText('Sep 1, 2023')).toBeTruthy()
-    expect(screen.getByText('$18,917.13 used')).toBeTruthy()
+    expect(screen.getByText(/\$18,917\.13 used/)).toBeTruthy()
     // The mount run asks for the default (no params) and caches under the default key.
     expect(vi.mocked(fetchModeler)).toHaveBeenCalledWith({})
   })
@@ -1402,13 +1407,13 @@ describe('EsppPage — snapshot cache (2026-08-27 spec §1)', () => {
 
   it('never caches a parameterized modeler run under the default key', async () => {
     renderPage()
-    await screen.findByText('$18,917.13 used')
+    await screen.findByText(/\$18,917\.13 used/)
     const cachedDefault = getSnapshot<EsppModelerOut>('espp:modeler:default')
     expect(cachedDefault).toEqual(modelerResponse())
     // A year chip is a parameterized run: it lands on screen but never in the cache.
     vi.mocked(fetchModeler).mockResolvedValue(totalsUsing('22222.22'))
     fireEvent.click(screen.getByRole('button', { name: '2025' }))
-    expect(await screen.findByText('$22,222.22 used')).toBeTruthy()
+    expect(await screen.findByText(/\$22,222\.22 used/)).toBeTruthy()
     expect(getSnapshot<EsppModelerOut>('espp:modeler:default')).toEqual(cachedDefault)
   })
 })
