@@ -14,6 +14,9 @@ from app.schemas.spending import (
     AmountEntry,
     BudgetHistoryEntry,
     BudgetPut,
+    BudgetSeedIn,
+    BudgetSeedOut,
+    BudgetSkip,
     BudgetSuggestion,
     BudgetSuggestionsOut,
     CategoryCreate,
@@ -28,7 +31,7 @@ from app.schemas.spending import (
     YearlyOut,
     YearRollup,
 )
-from app.services.budgets import load_suggestions, resolve_budgets
+from app.services.budgets import MIN_SEED_MONTHS, load_suggestions, resolve_budgets
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
@@ -282,6 +285,63 @@ async def budget_suggestions(db: AsyncSession = Depends(get_db)) -> BudgetSugges
     return BudgetSuggestionsOut(
         window=_window_out(window),
         suggestions=[BudgetSuggestion.model_validate(s) for s in suggestions],
+    )
+
+
+SEED_NEEDS_HISTORY = (
+    "needs at least three complete months of spending before a budget can be suggested"
+)
+
+
+@router.post("/budgets/seed", response_model=BudgetSeedOut)
+async def seed_budgets(
+    body: BudgetSeedIn,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> BudgetSeedOut:
+    """The one-click seed (spec §2): every suggestion with a seed becomes the category's
+    budget row at `effective_month` — inserted, or updated in place when a row already sits on
+    that month — in ONE change batch, so the Activity card's undo reverts it as a unit. A
+    category whose budget already RESOLVES to the seed for that month is skipped as
+    `unchanged` rather than given a redundant history step. History before the month is
+    never touched: that is what effective-dated rows are for."""
+    require_first_of_month(body.effective_month)
+    window, suggestions = await load_suggestions(db, product_today())
+    if len(window) < MIN_SEED_MONTHS:
+        raise HTTPException(status_code=422, detail=SEED_NEEDS_HISTORY)
+    budget_rows = list((await db.execute(select(CategoryBudget))).scalars().all())
+    resolved = resolve_budgets(budget_rows, [body.effective_month])
+    at_month = {r.category_id: r for r in budget_rows if r.effective_month == body.effective_month}
+    written: list[AmountEntry] = []
+    skipped: list[BudgetSkip] = []
+    for s in suggestions:
+        if s.seed is None:
+            skipped.append(BudgetSkip(category_id=s.category_id, reason=s.skip_reason or "dormant"))
+            continue
+        if resolved.get(s.category_id, [None])[0] == s.seed:
+            skipped.append(BudgetSkip(category_id=s.category_id, reason="unchanged"))
+            continue
+        existing = at_month.get(s.category_id)
+        if existing is None:
+            row = CategoryBudget(
+                category_id=s.category_id, effective_month=body.effective_month, amount=s.seed
+            )
+            db.add(row)
+            await db.flush()
+            batch.record_insert(row, month=body.effective_month)
+        else:
+            before = row_image(existing)
+            existing.amount = s.seed
+            batch.record_update(existing, before, month=body.effective_month)
+        written.append(AmountEntry(category_id=s.category_id, amount=s.seed))
+    batch.label = f"Seeded {len(written)} budgets from averages, from {body.effective_month:%b %Y}"
+    batch_id = await batch.commit()
+    return BudgetSeedOut(
+        effective_month=body.effective_month,
+        window=_window_out(window),
+        written=written,
+        skipped=skipped,
+        batch_id=batch_id,
     )
 
 

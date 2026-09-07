@@ -213,11 +213,15 @@ async def living_budget_total(db: AsyncSession, month: date) -> Decimal | None:
         .scalars()
         .all()
     )
-    rows = [
-        row
-        for row in (await db.execute(select(CategoryBudget))).scalars()
-        if row.category_id in living_ids
-    ]
+    if not living_ids:
+        return None
+    # The projection calls this once PER REQUEST, so the kind filter belongs in SQL: no
+    # reason to drag every archived category's budget history across the wire to drop it here.
+    rows = list(
+        (await db.execute(select(CategoryBudget).where(CategoryBudget.category_id.in_(living_ids))))
+        .scalars()
+        .all()
+    )
     amounts = [
         values[0] for values in resolve_budgets(rows, [month]).values() if values[0] is not None
     ]
