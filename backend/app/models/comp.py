@@ -75,6 +75,20 @@ class PaycheckProfile(Base):
     match_band_1: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
     match_rate_2: Mapped[Decimal] = mapped_column(Numeric(10, 9), default=0, server_default="0")
     match_band_2: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
+    # Employer HSA policy, per person and effective-dated with the rest of the row (2026-09-07
+    # spec): a flat annual deposit for the employee's own coverage plus a fixed amount per
+    # ADDITIONAL covered individual (`hsa_dependents`, 0 for self-only). Annual, not per
+    # check, because the money lands in one January deposit — the pace strip only needs the
+    # year's total. Zero means "no employer deposit", the only honest default for a row
+    # nobody was asked about. server_defaults repeated from the migration (hsa_coverage's
+    # rule) so `alembic check` stays clean.
+    hsa_employer_annual: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), default=0, server_default="0"
+    )
+    hsa_employer_per_dependent: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), default=0, server_default="0"
+    )
+    hsa_dependents: Mapped[int] = mapped_column(default=0, server_default="0")
     notes: Mapped[str | None] = mapped_column(Text)
 
 
