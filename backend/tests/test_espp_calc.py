@@ -88,6 +88,7 @@ def lot(
     qualifying_date: date = date(2025, 9, 1),
     sold_date: date | None = None,
     sold_price: str | None = None,
+    purchase_fmv: str = "79.11200",
 ) -> EsppLot:
     """A transient (never-flushed) ORM row at COLUMN scale: shares Numeric(12,4),
     prices Numeric(14,5). No session is involved — lot_metrics only reads attributes."""
@@ -97,7 +98,7 @@ def lot(
         qualifying_date=qualifying_date,
         shares=D(shares),
         subscription_price=D("48.50900"),
-        purchase_fmv=D("79.11200"),
+        purchase_fmv=D(purchase_fmv),
         purchase_price=D(purchase_price),
         sold_date=sold_date,
         sold_price=None if sold_price is None else D(sold_price),
@@ -520,6 +521,55 @@ def test_lot_metrics_treats_a_sold_row_missing_its_price_as_unpriced():
     assert metrics["gain_amount"] is None
     assert metrics["gain_pct"] is None
     assert metrics["days_until_qualified"] is None
+
+
+# --- the anatomy (2026-09-07 spec §3.1) ---
+
+
+def test_lot_metrics_splits_value_into_paid_bargain_and_appreciation():
+    metrics = lot_metrics(lot(), current_price=D("174.1800"), today=date(2026, 8, 16))
+    assert metrics["fmv_value"] == D("20569.12")  # 260 x 79.112
+    assert metrics["bargain_element"] == D("9848.63")  # fmv_value - cost_basis
+    assert metrics["lookback_component"] == D("7956.78")  # 260 x (79.112 - 48.509)
+    assert metrics["discount_component"] == D("1891.85")  # 260 x (48.509 - 41.23265)
+    assert metrics["appreciation"] == D("24717.68")  # market_value - fmv_value
+
+
+def test_lot_metrics_appreciation_is_realized_for_a_sold_lot_and_null_when_unpriced():
+    sold = lot_metrics(
+        lot(sold_date=date(2026, 3, 1), sold_price="120.00000"),
+        current_price=D("174.1800"),
+        today=date(2026, 8, 16),
+    )
+    assert sold["appreciation"] == D("10630.88")  # 31200.00 - 20569.12, at the SALE price
+    unpriced = lot_metrics(lot(), current_price=None, today=date(2026, 8, 16))
+    assert unpriced["appreciation"] is None
+    assert unpriced["bargain_element"] == D("9848.63")  # purchase-day facts need no quote
+
+
+def test_lot_metrics_appreciation_goes_negative_below_the_purchase_fmv():
+    metrics = lot_metrics(lot(), current_price=D("70.0000"), today=date(2026, 8, 16))
+    assert metrics["appreciation"] == D("-2369.12")  # 18200.00 - 20569.12
+
+
+def test_lot_metrics_discount_component_goes_negative_for_an_over_typed_purchase_price():
+    metrics = lot_metrics(
+        lot(purchase_price="60.00000"), current_price=D("174.1800"), today=date(2026, 8, 16)
+    )
+    assert metrics["bargain_element"] == D("4969.12")  # 20569.12 - 15600.00
+    assert metrics["lookback_component"] == D("7956.78")  # FMV vs subscription — unchanged
+    assert metrics["discount_component"] == D("-2987.66")  # the whole over-payment lands here
+
+
+def test_lot_metrics_lookback_is_zero_when_fmv_sat_below_the_subscription():
+    metrics = lot_metrics(
+        lot(purchase_fmv="40.00000", purchase_price="34.00000"),
+        current_price=D("174.1800"),
+        today=date(2026, 8, 16),
+    )
+    assert metrics["fmv_value"] == D("10400.00")
+    assert metrics["lookback_component"] == D("0.00")
+    assert metrics["discount_component"] == D("1560.00")  # the whole bargain is the discount
 
 
 # --- the purchase calendar and the year planner ---

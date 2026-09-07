@@ -346,6 +346,10 @@ def lot_metrics(lot, current_price: Decimal | None, today: date) -> dict:
         the stored sale price is IGNORED and the row is priced off the live quote.
       - purchase_price == 0: only gain_pct goes null (its divisor); cost_basis,
         market_value and gain_amount all still compute.
+
+    The five anatomy keys (fmv_value, bargain_element, lookback_component,
+    discount_component, appreciation) are the lot's value on purchase day and its split —
+    only `appreciation` needs a price, so only it can be None.
     """
     is_sold = lot.sold_date is not None
     price = lot.sold_price if is_sold else current_price
@@ -361,6 +365,18 @@ def lot_metrics(lot, current_price: Decimal | None, today: date) -> dict:
             # The sheet's r16 shape: a PRICE ratio, not market_value/cost_basis.
             gain_pct = _pct6((price - lot.purchase_price) / lot.purchase_price)
 
+    # The anatomy (2026-09-07 spec §3.1). The bargain element is the lot's value on purchase
+    # day less what it cost — the plan discount PLUS the lookback (FMV above the subscription
+    # price). It is split from the two stored prices, never from the discount setting: an
+    # over-typed purchase_price then shows up honestly as a NEGATIVE discount component
+    # rather than as a lie about the lookback.
+    fmv_value = half_up2(lot.shares * lot.purchase_fmv)
+    bargain_element = (fmv_value - cost_basis) + ZERO
+    lookback_component = half_up2(lot.shares * max(lot.purchase_fmv - lot.subscription_price, ZERO))
+    discount_component = (bargain_element - lookback_component) + ZERO
+    # Realized for a sold lot (market_value is at the sale price), None while unpriced.
+    appreciation = None if market_value is None else (market_value - fmv_value) + ZERO
+
     # A disposition is judged on the SALE date; an unsold lot is judged on today.
     reference_date = lot.sold_date if is_sold else today
     return {
@@ -368,6 +384,11 @@ def lot_metrics(lot, current_price: Decimal | None, today: date) -> dict:
         "market_value": market_value,
         "gain_amount": gain_amount,
         "gain_pct": gain_pct,
+        "fmv_value": fmv_value,
+        "bargain_element": bargain_element,
+        "lookback_component": lookback_component,
+        "discount_component": discount_component,
+        "appreciation": appreciation,
         "qualified": reference_date >= lot.qualifying_date,
         "days_until_qualified": (None if is_sold else max(0, (lot.qualifying_date - today).days)),
         "is_sold": is_sold,
