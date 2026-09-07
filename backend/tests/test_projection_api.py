@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app.models import (
     Account,
     AccountBalance,
+    CategoryBudget,
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
@@ -1025,3 +1026,49 @@ async def test_projection_retirement_also_drops_the_employer_match(auth_client, 
     # Both sides stay symmetric: the leg the profile added is the leg retiring removes —
     # take-home 1,800 + payroll 200 + employer 150.
     assert body["retirements"][0]["monthly_drop"] == "2150.00"
+
+
+async def test_projection_echoes_the_budgets_annual_spend(auth_client, db):
+    this_month = await _seed_book(db)
+    # No budgets: the echo is null and the knobs card shows no preset.
+    first = (await auth_client.get("/api/v1/projection")).json()
+    assert first["budget_annual_spend"] is None and first["budget_month"] is None
+    rent = (
+        await db.execute(select(SpendingCategory).where(SpendingCategory.slug == "rent"))
+    ).scalar_one()
+    fun = SpendingCategory(name="Fun", slug="fun", sort_order=2)
+    tax = SpendingCategory(name="Taxes", slug="taxes", sort_order=3, kind="tax")
+    old = SpendingCategory(name="Old", slug="old", sort_order=4, is_active=False)
+    db.add_all([fun, tax, old])
+    await db.flush()
+    db.add_all(
+        [
+            CategoryBudget(
+                category_id=rent.id,
+                effective_month=month_add(this_month, -3),
+                amount=Decimal("2000.00"),
+            ),
+            CategoryBudget(
+                category_id=fun.id, effective_month=this_month, amount=Decimal("300.00")
+            ),
+            # A row dated NEXT month is not yet in force; a tax kind and an archived category are
+            # never modeled spend.
+            CategoryBudget(
+                category_id=fun.id,
+                effective_month=month_add(this_month, 1),
+                amount=Decimal("999.00"),
+            ),
+            CategoryBudget(
+                category_id=tax.id, effective_month=this_month, amount=Decimal("5000.00")
+            ),
+            CategoryBudget(
+                category_id=old.id, effective_month=this_month, amount=Decimal("400.00")
+            ),
+        ]
+    )
+    await db.commit()
+    body = (await auth_client.get("/api/v1/projection")).json()
+    assert body["budget_annual_spend"] == "27600.00"  # (2000 + 300) x 12
+    assert body["budget_month"] == this_month.isoformat()
+    # The DERIVED knob is untouched — the echo is a preset for the card, not a new default.
+    assert body["annual_spend"] == "60000.00"

@@ -5,10 +5,26 @@ import BudgetPanel from './BudgetPanel'
 vi.mock('../../api/spending', () => ({
   putCategoryBudget: vi.fn(),
   deleteCategoryBudget: vi.fn(),
+  fetchBudgetSuggestions: vi.fn(),
+  seedBudgets: vi.fn(),
 }))
+vi.mock('../../api/lifecycle', () => ({ undoBatch: vi.fn() }))
+const toast = { success: vi.fn(), info: vi.fn(), error: vi.fn() }
+vi.mock('../ToastProvider', () => ({ useToast: () => toast }))
 
-import { deleteCategoryBudget, putCategoryBudget } from '../../api/spending'
-import type { SpendingMatrix } from '../../types/api'
+import { undoBatch } from '../../api/lifecycle'
+import {
+  deleteCategoryBudget,
+  fetchBudgetSuggestions,
+  putCategoryBudget,
+  seedBudgets,
+} from '../../api/spending'
+import type {
+  BudgetSeedOut,
+  BudgetSuggestion,
+  BudgetSuggestionsOut,
+  SpendingMatrix,
+} from '../../types/api'
 
 const matrix: SpendingMatrix = {
   months: ['2026-01-01', '2026-02-01'],
@@ -29,6 +45,54 @@ const matrix: SpendingMatrix = {
   total_budget: ['400.00', '400.00'],
 }
 
+// The same book with nothing budgeted: the card's empty state.
+const blank: SpendingMatrix = {
+  ...matrix,
+  series: matrix.series.map((s) => ({ ...s, budgets: s.budgets.map(() => null) })),
+  total_budget: [null, null],
+}
+
+const suggestions: BudgetSuggestionsOut = {
+  window: { from: '2025-02-01', to: '2026-01-01', months: 12 },
+  suggestions: [
+    {
+      category_id: 1,
+      profile: 'variable',
+      months: 12,
+      mean: '412.35',
+      median: '390.00',
+      latest: '450.00',
+      latest_month: '2026-01-01',
+      cv: '0.2100',
+      seed: '413.00',
+      skip_reason: null,
+    },
+    {
+      category_id: 2,
+      profile: 'fixed',
+      months: 12,
+      mean: '1995.00',
+      median: '2000.00',
+      latest: '2000.00',
+      latest_month: '2026-01-01',
+      cv: '0.0100',
+      seed: '2000.00',
+      skip_reason: null,
+    },
+  ],
+}
+
+const seeded: BudgetSeedOut = {
+  effective_month: '2026-01-01',
+  window: suggestions.window,
+  written: [
+    { category_id: 1, amount: '413.00' },
+    { category_id: 2, amount: '2000.00' },
+  ],
+  skipped: [{ category_id: 3, reason: 'dormant' }],
+  batch_id: 'b-1',
+}
+
 const onBudgetsChanged = vi.fn()
 
 beforeEach(() => {
@@ -37,6 +101,9 @@ beforeEach(() => {
     { effective_month: '2026-09-01', amount: null },
   ])
   vi.mocked(deleteCategoryBudget).mockResolvedValue(undefined)
+  vi.mocked(fetchBudgetSuggestions).mockResolvedValue(suggestions)
+  vi.mocked(seedBudgets).mockResolvedValue(seeded)
+  vi.mocked(undoBatch).mockResolvedValue({} as never)
 })
 
 afterEach(() => {
@@ -146,4 +213,128 @@ it('rejects a negative amount client-side without calling the API', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Save Food budget' }))
   expect(putCategoryBudget).not.toHaveBeenCalled()
   expect(screen.getByRole('alert').textContent).toMatch(/non-negative/)
+})
+
+// --- seeded from averages (2026-09-07 spec §3) ---
+
+it('offers Start from my averages in the empty state, seeds the FOCUSED month, refetches and toasts with Undo', async () => {
+  render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  const button = (await screen.findByRole('button', {
+    name: 'Start from my averages',
+  })) as HTMLButtonElement
+  await waitFor(() => expect(button.disabled).toBe(false))
+  const hint = screen.getByText(/Writes a budget for 2 living categories/).textContent ?? ''
+  expect(hint).toMatch(/effective from Jan 2026/)
+  expect(hint).toMatch(/Feb 2025–Jan 2026/)
+  fireEvent.click(button)
+  await waitFor(() => expect(seedBudgets).toHaveBeenCalledWith('2026-01-01'))
+  await waitFor(() => expect(onBudgetsChanged).toHaveBeenCalledTimes(1))
+  expect(toast.success).toHaveBeenCalledWith(
+    'Seeded 2 budgets from averages, from Jan 2026',
+    expect.objectContaining({ action: expect.objectContaining({ label: 'Undo' }) }),
+  )
+  expect(screen.getByText('skipped 1 — 1 never spent')).toBeDefined()
+  // Undo replays the batch, clears the status line and refetches.
+  const options = vi.mocked(toast.success).mock.calls[0][1] as { action: { onAction: () => void } }
+  options.action.onAction()
+  await waitFor(() => expect(undoBatch).toHaveBeenCalledWith('b-1'))
+  await waitFor(() => expect(onBudgetsChanged).toHaveBeenCalledTimes(2))
+  expect(screen.queryByText('skipped 1 — 1 never spent')).toBeNull()
+})
+
+it('a seed that changed nothing offers no Undo', async () => {
+  vi.mocked(seedBudgets).mockResolvedValue({ ...seeded, written: [], batch_id: null })
+  render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Start from my averages' }))
+  await waitFor(() =>
+    expect(toast.success).toHaveBeenCalledWith(
+      'Seeded 0 budgets from averages, from Jan 2026',
+      undefined,
+    ),
+  )
+})
+
+it('disables the seed with the reason under three complete months', async () => {
+  vi.mocked(fetchBudgetSuggestions).mockResolvedValue({
+    ...suggestions,
+    window: { from: '2025-12-01', to: '2026-01-01', months: 2 },
+  })
+  render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  await screen.findByText(/needs at least three complete months of spending \(2 so far\)/)
+  const button = screen.getByRole('button', { name: 'Start from my averages' }) as HTMLButtonElement
+  expect(button.disabled).toBe(true)
+})
+
+it('degrades when the suggestions cannot load: seed disabled with the reason, editor intact, no chips', async () => {
+  vi.mocked(fetchBudgetSuggestions).mockRejectedValue(new Error('boom'))
+  render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  await screen.findByText(/couldn't load the suggestions/)
+  expect(
+    (screen.getByRole('button', { name: 'Start from my averages' }) as HTMLButtonElement).disabled,
+  ).toBe(true)
+  expect(screen.getByLabelText('Food budget amount')).toBeDefined()
+  expect(screen.queryByRole('button', { name: /^Use Food/ })).toBeNull()
+})
+
+it('the editor shows suggestion chips and a chip fills the amount box; the cue names the shape', async () => {
+  renderPanel(0)
+  fireEvent.click(await screen.findByRole('button', { name: 'Use Food median $390.00' }))
+  expect((screen.getByLabelText('Food budget amount') as HTMLInputElement).value).toBe('$390.00')
+  fireEvent.click(screen.getByRole('button', { name: 'Use Food suggested $413.00' }))
+  expect((screen.getByLabelText('Food budget amount') as HTMLInputElement).value).toBe('$413.00')
+  expect(screen.getByRole('button', { name: 'Use Rent last month $2,000.00' })).toBeDefined()
+  expect(screen.getByText(/^Steady — within 10% every month/)).toBeDefined()
+})
+
+it('re-seeding asks first, counting the budgets it rewrites, and only POSTs on Confirm', async () => {
+  renderPanel(0) // Food budgeted at 400 (seed 413 → a rewrite); Rent unbudgeted (seed 2000 → new)
+  fireEvent.click(await screen.findByRole('button', { name: 'Re-seed from averages' }))
+  expect(seedBudgets).not.toHaveBeenCalled()
+  expect(screen.getByText(/Rewrites 1 existing budget and sets 1 new one from Jan 2026\./)).toBeDefined()
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.queryByText(/Rewrites 1 existing/)).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Re-seed from averages' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+  await waitFor(() => expect(seedBudgets).toHaveBeenCalledWith('2026-01-01'))
+  // The question is answered: the confirm line goes away with the POST, not with the response.
+  await waitFor(() => expect(screen.queryByText(/Rewrites 1 existing/)).toBeNull())
+})
+
+it('a failed seed lands in the banner and refetches nothing', async () => {
+  vi.mocked(seedBudgets).mockRejectedValue(new Error('down'))
+  render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Start from my averages' }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/Failed to seed the budgets/)
+  expect(onBudgetsChanged).not.toHaveBeenCalled()
+})
+
+it('hides Re-seed when every seed already stands', async () => {
+  // Both seeds equal the resolved budgets -> the server would skip both as unchanged, so
+  // there is nothing left to re-seed and the card does not offer it.
+  const settled: SpendingMatrix = {
+    ...matrix,
+    series: [
+      { category_id: 1, values: ['300.00', '450.00'], budgets: ['413.00', '413.00'] },
+      { category_id: 2, values: ['2000.00', '2000.00'], budgets: ['2000.00', '2000.00'] },
+      { category_id: 3, values: [null, null], budgets: [null, null] },
+    ],
+    total_budget: ['2413.00', '2413.00'],
+  }
+  render(<BudgetPanel matrix={settled} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  await screen.findByRole('button', { name: 'Use Food median $390.00' }) // suggestions arrived
+  expect(screen.queryByRole('button', { name: 'Re-seed from averages' })).toBeNull()
+})
+
+it('says Nothing to seed when every category is dormant', async () => {
+  vi.mocked(fetchBudgetSuggestions).mockResolvedValue({
+    ...suggestions,
+    suggestions: suggestions.suggestions.map(
+      (s): BudgetSuggestion => ({ ...s, seed: null, profile: 'dormant', skip_reason: 'dormant' }),
+    ),
+  })
+  render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  await screen.findByText(/Nothing to seed — every category is dormant/)
+  expect(
+    (screen.getByRole('button', { name: 'Start from my averages' }) as HTMLButtonElement).disabled,
+  ).toBe(true)
 })

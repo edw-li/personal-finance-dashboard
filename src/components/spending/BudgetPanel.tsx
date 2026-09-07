@@ -1,13 +1,28 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
-import { deleteCategoryBudget, putCategoryBudget } from '../../api/spending'
-import type { CategoryBudgetEntry, CategoryOut, SpendingMatrix } from '../../types/api'
+import { undoBatch } from '../../api/lifecycle'
+import {
+  deleteCategoryBudget,
+  fetchBudgetSuggestions,
+  putCategoryBudget,
+  seedBudgets,
+} from '../../api/spending'
+import type {
+  BudgetSuggestionsOut,
+  CategoryBudgetEntry,
+  CategoryOut,
+  SpendingMatrix,
+} from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatMonth } from '../../utils/format'
 import { budgetProgress } from '../../utils/spending'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
+import { windowWords } from '../overview/ytd'
 import { FeedBanner } from '../shell/Feed'
+import { useToast } from '../ToastProvider'
+import BudgetSuggestions from './BudgetSuggestions'
+import { MIN_SEED_MONTHS, seedCounts, skipSummary } from './budgetSeed'
 import '../panels.css'
 import './budgets.css'
 
@@ -25,6 +40,12 @@ function failMessage(err: unknown, fallback: string): string {
  * month, unbudgeted actives collapsed below, and the app's first budget-management
  * surface — an inline effective-dated editor whose PUT response is the history it renders.
  * Plain HTML/CSS in the StatTile family, no ECharts.
+ *
+ * 2026-09-07 (budget-seed spec §3): the empty state's one action — "Start from my averages"
+ * writes every seedable living category's typical spend as a dated row from the focused
+ * month, one change batch, one Undo — a confirm-first re-seed once budgets exist, and a
+ * suggestion line in every editor. The figures come from GET /spending/budgets/suggestions,
+ * fetched once; if that fails the meters and the editor are untouched and the seed says why.
  */
 export default function BudgetPanel({
   matrix,
@@ -35,12 +56,36 @@ export default function BudgetPanel({
   monthIndex: number
   onBudgetsChanged: () => void
 }) {
+  const toast = useToast()
   const [editors, setEditors] = useState<Record<number, EditorState>>({})
   // Histories arrive ONLY as PUT responses (spec §3 — no history GET exists), so the
   // expandable list appears per category once this session has saved it.
   const [histories, setHistories] = useState<Record<number, CategoryBudgetEntry[]>>({})
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [suggestions, setSuggestions] = useState<BudgetSuggestionsOut | null>(null)
+  const [suggestionsFailed, setSuggestionsFailed] = useState(false)
+  // The last seed's skip detail; cleared by its Undo, replaced by the next seed.
+  const [seedStatus, setSeedStatus] = useState<string | null>(null)
+  const [confirmReseed, setConfirmReseed] = useState(false)
+  // The house manages focus explicitly in its drawers; this is the card's first
+  // confirm-first control, so it owes the same courtesy — Cancel hands focus back to
+  // the button that asked, instead of dropping it on <body>.
+  const reseedRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchBudgetSuggestions()
+      .then((out) => {
+        if (!cancelled) setSuggestions(out)
+      })
+      .catch(() => {
+        if (!cancelled) setSuggestionsFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const month = matrix.months[monthIndex]
   // A5 (2026-08-31 tier-1): default to the FOCUSED month — the month the meters read.
@@ -48,6 +93,7 @@ export default function BudgetPanel({
   // visibly do nothing (the meters were reading a month the budget hadn't reached).
   // months entries are YYYY-MM-01 (or YYYY-MM in old fixtures); the input wants YYYY-MM.
   const defaultEffectiveFrom = month.slice(0, 7)
+  const effectiveMonth = `${defaultEffectiveFrom}-01`
 
   const seriesById = new Map(matrix.series.map((s) => [s.category_id, s]))
   const rows = matrix.categories
@@ -63,6 +109,65 @@ export default function BudgetPanel({
   )
   const unbudgeted = rows.filter((row) => row.progress === null)
   const overCount = budgeted.filter((row) => row.progress.over).length
+
+  const suggestionById = new Map((suggestions?.suggestions ?? []).map((s) => [s.category_id, s]))
+  const seedWindow = suggestions?.window ?? null
+  const counts =
+    suggestions === null ? null : seedCounts(matrix, monthIndex, suggestions.suggestions)
+  const canSeed =
+    counts !== null &&
+    seedWindow !== null &&
+    seedWindow.months >= MIN_SEED_MONTHS &&
+    counts.writes > 0
+
+  // The seed button's caption: what it would write, or why it cannot yet (spec §3.1).
+  const seedHint = (): string => {
+    if (suggestionsFailed) return "Not yet — couldn't load the suggestions."
+    if (suggestions === null || counts === null) return 'Loading suggestions…'
+    if (seedWindow === null || seedWindow.months < MIN_SEED_MONTHS) {
+      return `Not yet — needs at least three complete months of spending (${seedWindow?.months ?? 0} so far).`
+    }
+    if (counts.writes === 0) {
+      return 'Nothing to seed — every category is dormant, sparse, not living spend or already at its average.'
+    }
+    return `Writes a budget for ${counts.writes} living ${counts.writes === 1 ? 'category' : 'categories'} with three or more complete months, effective from ${formatMonth(month)}: the mean of ${windowWords(seedWindow)}, or the latest month for steady costs like rent. Everything stays editable; one Undo reverts it all.`
+  }
+
+  const seed = () => {
+    setBusy(true)
+    setError(null)
+    setConfirmReseed(false)
+    seedBudgets(effectiveMonth)
+      .then((out) => {
+        setSeedStatus(skipSummary(out.skipped))
+        onBudgetsChanged()
+        const n = out.written.length
+        const done = `Seeded ${n} ${n === 1 ? 'budget' : 'budgets'} from averages, from ${formatMonth(month)}`
+        const batchId = out.batch_id
+        // The wizard's contract: a null batch means nothing changed, so there is no Undo.
+        toast.success(
+          done,
+          batchId === null
+            ? undefined
+            : {
+                action: {
+                  label: 'Undo',
+                  onAction: () => {
+                    undoBatch(batchId)
+                      .then(() => {
+                        setSeedStatus(null)
+                        toast.success(`Undone — the ${formatMonth(month)} seed is gone.`)
+                        onBudgetsChanged()
+                      })
+                      .catch((err: unknown) => toast.error(failMessage(err, 'Undo failed')))
+                  },
+                },
+              },
+        )
+      })
+      .catch((err: unknown) => setError(failMessage(err, 'Failed to seed the budgets')))
+      .finally(() => setBusy(false))
+  }
 
   const save = (category: CategoryOut, editor: EditorState) => {
     const trimmed = editor.amount.trim()
@@ -97,15 +202,15 @@ export default function BudgetPanel({
       .finally(() => setBusy(false))
   }
 
-  const removeRow = (category: CategoryOut, effectiveMonth: string) => {
+  const removeRow = (category: CategoryOut, effectiveMonthIso: string) => {
     setBusy(true)
     setError(null)
-    deleteCategoryBudget(category.id, effectiveMonth)
+    deleteCategoryBudget(category.id, effectiveMonthIso)
       .then(() => {
         setHistories((cur) => ({
           ...cur,
           [category.id]: (cur[category.id] ?? []).filter(
-            (h) => h.effective_month !== effectiveMonth,
+            (h) => h.effective_month !== effectiveMonthIso,
           ),
         }))
         onBudgetsChanged()
@@ -122,6 +227,7 @@ export default function BudgetPanel({
     const setEditor = (patch: Partial<EditorState>) =>
       setEditors((cur) => ({ ...cur, [category.id]: { ...editor, ...patch } }))
     const history = histories[category.id]
+    const suggestion = suggestionById.get(category.id)
     return (
       <details className="budget-editor">
         <summary>Set budget</summary>
@@ -161,6 +267,14 @@ export default function BudgetPanel({
             Defaults to {formatMonth(month)} — the month the meters read. Dating it in the
             past re-writes what that era&apos;s budget was.
           </p>
+          {suggestion !== undefined && (
+            <BudgetSuggestions
+              categoryName={category.name}
+              kind={category.kind}
+              suggestion={suggestion}
+              onPick={(amount) => setEditor({ amount })}
+            />
+          )}
         </div>
         {history !== undefined && (
           <ul className="budget-history">
@@ -188,18 +302,64 @@ export default function BudgetPanel({
     )
   }
 
+  const newCount = counts === null ? 0 : counts.writes - counts.rewrites
+
   return (
     <section className="card span-12">
       <h2 className="eyebrow">
         Budgets — {formatMonth(month)}
-        <InfoHint text="Each budgeted category's spend against its budget for the focused month. Budgets are effective-dated: a change applies from its month forward and never rewrites history. With no transaction feed there is no mid-month pacing — meters describe completed months and the live wizard entry." />
+        <InfoHint text="Each budgeted category's spend against its budget for the focused month. Budgets are effective-dated: a change applies from its month forward and never rewrites history. With no transaction feed there is no mid-month pacing — meters describe completed months and the live wizard entry. Start from my averages writes every living category's typical spend as an editable budget; the editor's chips offer the same figures one at a time." />
       </h2>
       <FeedBanner error={error} />
+      {seedStatus !== null && (
+        <p className="drill-hint budget-seed-status" role="status">
+          {seedStatus}
+        </p>
+      )}
       {budgeted.length > 0 ? (
         <>
-          <p className="drill-hint" role="status">
-            {`${overCount} of ${budgeted.length} budgeted categories over in ${formatMonth(month)}`}
-          </p>
+          <div className="budget-summary-row">
+            <p className="drill-hint" role="status">
+              {`${overCount} of ${budgeted.length} budgeted categories over in ${formatMonth(month)}`}
+            </p>
+            {canSeed && !confirmReseed && (
+              <button
+                ref={reseedRef}
+                type="button"
+                className="button"
+                disabled={busy}
+                onClick={() => setConfirmReseed(true)}
+              >
+                Re-seed from averages
+              </button>
+            )}
+          </div>
+          {confirmReseed && counts !== null && (
+            <p className="drill-hint budget-reseed-confirm">
+              {/* The live region is the SENTENCE only: a role="status" wrapping the buttons
+                  re-announces "Confirm Cancel" with every re-render of the count. */}
+              <span role="status">
+                {`Rewrites ${counts.rewrites} existing ${counts.rewrites === 1 ? 'budget' : 'budgets'} and sets ${newCount} new ${newCount === 1 ? 'one' : 'ones'} from ${formatMonth(month)}.`}
+              </span>
+              {/* autoFocus: the confirm IS the answer to the click that opened this line, so
+                  focus follows the question rather than staying on a button that just left. */}
+              <button type="button" className="button" autoFocus disabled={busy} onClick={seed}>
+                Confirm
+              </button>
+              <button
+                type="button"
+                className="button"
+                onClick={() => {
+                  setConfirmReseed(false)
+                  // The Re-seed button remounts with that state change, so the ref points at
+                  // the NEW node by the time the frame runs.
+                  requestAnimationFrame(() => reseedRef.current?.focus())
+                }}
+              >
+                Cancel
+              </button>
+            </p>
+          )}
           <div className="budget-rows">
             {budgeted.map(({ category, budget, progress }) => (
               <div className="budget-row" key={category.id}>
@@ -230,9 +390,23 @@ export default function BudgetPanel({
           </div>
         </>
       ) : (
-        <p className="empty-note">
-          No budgets yet — set one below and the meters appear from that month on.
-        </p>
+        <div className="budget-seed">
+          <p className="empty-note">No budgets yet.</p>
+          <button
+            type="button"
+            className="button button-primary"
+            // Disabled says THAT it cannot run; only the hint says why, so the button has to
+            // name it — a disabled control is otherwise mute to a screen reader.
+            aria-describedby="budget-seed-hint"
+            disabled={busy || !canSeed}
+            onClick={seed}
+          >
+            Start from my averages
+          </button>
+          <p className="drill-hint budget-seed-hint" id="budget-seed-hint">
+            {seedHint()}
+          </p>
+        </div>
       )}
       {unbudgeted.length > 0 && (
         <details className="budget-unbudgeted">

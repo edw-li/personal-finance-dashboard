@@ -1,5 +1,8 @@
 # Budgets seeded from averages — design (2026-09-07)
 
+**Status:** implemented 2026-09-07/08 (branch `budget-seed-from-averages`, merged to local main).
+Amendments from the lane reviews are folded in below and listed in §8.
+
 Budgets shipped on 2026-08-24 as effective-dated targets with meters, wizard subtext and chart
 reference lines — and production still held **zero** budget rows at the 2026-09-06 census. The
 card's first-run state is nineteen collapsed "Set budget" disclosures, each wanting an amount, a
@@ -46,7 +49,8 @@ projection hook cannot drift:
   `coverage.net_pay_without_spending` (a take-home-only month has nothing to average). Empty
   months (all-$0 rows, no take-home) are not entered, so they never dilute a mean — the
   2026-09-04 Sep-2026 lesson, applied.
-- `summarize(amounts)` over a category's **non-null** amounts inside the window (`n`):
+- `suggest(category_id, kind, series)` (the draft's `summarize` and the profile step, folded into one
+  function) computes, over a category's **non-null** `(month, amount)` pairs inside the window (`n`):
   `mean` (exact for rounding; echoed at cents HALF_UP), `median` (cents), `latest` + `latest_month`
   (the last window month that carries a row for this category), `cv` = sample standard deviation
   ÷ mean as a 4-dp ratio (None unless `n >= 2` and `mean > 0`). A window month with **no row**
@@ -72,14 +76,15 @@ projection hook cannot drift:
 
 ## 2. API (`api/spending.py`)
 
-- **`GET /spending/budgets/suggestions`** → `BudgetSuggestionsOut { window_from, window_to,
-  months, suggestions: [BudgetSuggestion] }` with `BudgetSuggestion { category_id, profile, months,
-  mean, median, latest, latest_month, cv, seed, skip_reason }` (`skip_reason ∈ kind | dormant |
-  sparse | null`). `window_*` are None and `months = 0` when nothing is entered. Read-only; no
-  batch.
+- **`GET /spending/budgets/suggestions`** → `BudgetSuggestionsOut { window, suggestions:
+  [BudgetSuggestion] }` where `window` reuses the projection's `DerivedWindowOut` echo — spelled
+  `{ from, to, months }` on the wire, null when nothing is entered (amended: the first draft spelled
+  it flat as `window_from, window_to, months`) — and `BudgetSuggestion { category_id, profile,
+  months, mean, median, latest, latest_month, cv, seed, skip_reason }` (`skip_reason ∈ kind |
+  dormant | sparse | null`). Read-only; no batch.
 - **`POST /spending/budgets/seed`** body `{ effective_month: date }` →
-  `BudgetSeedOut { effective_month, window_from, window_to, months, written: [AmountEntry],
-  skipped: [{ category_id, reason }], batch_id }`.
+  `BudgetSeedOut { effective_month, window, written: [AmountEntry], skipped: [{ category_id,
+  reason }], batch_id }` (`window` as above).
   - Validation: `require_first_of_month`; **422** when the window has fewer than
     `MIN_SEED_MONTHS` months ("needs at least three complete months of spending").
   - For every suggestion with a non-null `seed`: if the budget already **resolved** for
@@ -111,8 +116,9 @@ is disabled with the reason when `months < 3`. The nineteen disclosures stay bel
 read), then calls `onBudgetsChanged()` so the meters, the movers column and the chart steps
 redraw from the refetched matrix, and raises the shell toast — `Seeded 13 budgets from averages,
 from Jul 2026` — with an **Undo** action that calls `undoBatch(batch_id)` and refetches (the
-wizard's pattern; no action when `batch_id` is null). A status line under the summary keeps the
-skip detail until the next seed: "skipped 6 — 3 never spent, 3 not living spend".
+wizard's pattern; no action when `batch_id` is null). A status line **above** the summary row —
+so it also shows in the empty state, where there is no summary — keeps the skip detail until the
+next seed or that seed's Undo: "skipped 6 — 3 never spent, 3 not living spend".
 
 **3.3 Re-seed (budgets exist).** A plain `button` **Re-seed from averages** sits right-aligned
 in the summary row. First click shows an inline confirm line — "Rewrites {k} existing budgets and
@@ -149,7 +155,8 @@ family at the editor's font size, the suggested value in INK. Nothing here is a 
   validate (the `bands` posture). The projection's own derivation of `annual_spend` is unchanged.
 - `ScenarioPanel.tsx`: under the `annual_spend` knob's "derived over …" line, when
   `baseline.budget_annual_spend` is non-null, a `button` **Use my budgets · $61,752/yr** calls
-  `knob('annual_spend')(value, true)`. When the knob already holds that value the button reads
+  `knob('annual_spend')(value, true)`. When the knob already holds that value — compared as
+  decimals, so a typed `61752` equals the echo's `61752.00` (amended) — the button reads
   "using your budgets" and is disabled. Hint text: "12 × the living-category budgets resolved for
   {budget_month}." The knob remains a knob — Reset to derived clears it as before.
 
@@ -207,3 +214,18 @@ that seeds.
   as its motivation.
 - `2026-09-02-fresh-eyes-dashboard-audit.md` Spending idea #4 and pass-2 item #5: the bootstrap
   half is delivered here; the total-budget meter, variance bars and group budgets remain open.
+
+**Amendments from the lane reviews (2026-09-07/08):**
+- §2: the window is a nested `window: DerivedWindowOut | null` (`from`/`to`/`months` on the wire),
+  reusing the projection's echo, not the flat `window_from, window_to, months` of the first draft.
+- §1: `summarize` and the profile step are one function, `suggest`; `seed_window` returns `[]` for a
+  non-positive `limit` (the `-0 == 0` slice trap).
+- §3.2: the skip-detail status line sits above the summary row so the empty state shows it too.
+- §4: "in use" is decimal equality (`compareDecimals`), not string equality.
+- §6 verification: the read-only probe (`tools/probes/budget-seed/smoke.mjs`) judges the card by
+  the panel's own rule — Re-seed appears only when a seed would WRITE (a book seeded moments ago has
+  nothing left to write, so the budgeted face is proved on a clean book with ONE hand-set budget that differs), and the
+  change-log route census (`tests/test_changelog_pin.py`) lists `seed_budgets` as a LOGGED write path.
+- Known asterisk (not changed): the projection's echo follows the router's `date.today()` clock while
+  the budget routes follow `product_today()`; at a month turnover in the UTC container the preset's
+  `budget_month` can run one month ahead of the Budget card's window for a few hours.

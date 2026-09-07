@@ -125,3 +125,75 @@
     gap: 0.3rem;
   }
 }
+
+/* 2026-09-07 seed (budget-seed spec §3): the empty state's one action, the re-seed row and
+   the editor's suggestion chips. Text tokens and the .button family only — nothing here is
+   a chart, and no colour carries a meaning the words do not. */
+.budget-seed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.budget-seed .empty-note {
+  margin: 0;
+}
+
+.budget-seed-hint,
+.budget-seed-status {
+  margin: 0;
+  max-width: 64ch;
+}
+
+.budget-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.budget-summary-row .drill-hint {
+  margin: 0;
+}
+
+.budget-reseed-confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.budget-suggest {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.budget-suggest-none {
+  font-style: italic;
+}
+
+/* Qualified with .button so the chip's size and outline beat the plain .button rule at
+   equal specificity no matter which order the bundler emits the two stylesheets in — these
+   chips ARE .buttons, and a source-order tie would render them full size. */
+.button.budget-chip {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.button.budget-chip.is-suggested {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.budget-suggest-cue {
+  flex-basis: 100%;
+  margin: 0;
+}

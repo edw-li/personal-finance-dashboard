@@ -6,7 +6,12 @@ import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
 
-vi.mock('../api/spending', () => ({ fetchMatrix: vi.fn(), fetchYearly: vi.fn() }))
+vi.mock('../api/spending', () => ({
+  fetchMatrix: vi.fn(),
+  fetchYearly: vi.fn(),
+  fetchBudgetSuggestions: vi.fn(),
+  seedBudgets: vi.fn(),
+}))
 // The scope row's month ribbon reads /coverage for its two-tone chips (Plan 1b).
 vi.mock('../api/coverage', () => ({ fetchCoverage: vi.fn() }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what each
@@ -86,7 +91,7 @@ vi.mock('../components/EChart', async () => {
   }
 })
 import { fetchCoverage } from '../api/coverage'
-import { fetchMatrix, fetchYearly } from '../api/spending'
+import { fetchBudgetSuggestions, fetchMatrix, fetchYearly } from '../api/spending'
 
 // --- fixtures ---------------------------------------------------------------------------
 // Wire shapes of GET /spending/matrix and /spending/yearly — Decimal strings.
@@ -190,6 +195,9 @@ beforeEach(() => {
   localStorage.clear()
   vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture())
   vi.mocked(fetchYearly).mockResolvedValue(YEARLY)
+  // The Budget card fetches its suggestions on mount; an empty answer keeps the page tests
+  // about the page.
+  vi.mocked(fetchBudgetSuggestions).mockResolvedValue({ window: null, suggestions: [] })
   vi.mocked(fetchCoverage).mockResolvedValue({
     balances: [],
     spending: ['2026-06-01', '2026-07-01'],
@@ -398,7 +406,9 @@ describe('SpendingPage — snapshot cache (2026-08-27 spec §1)', () => {
     // Content only the matrix can produce, up on the very first paint.
     expect(screen.getByText('Where Jul 2026 went')).toBeTruthy()
     expect(screen.getAllByTestId('echart').length).toBeGreaterThan(0)
-    expect(screen.queryByText(/Loading/)).toBeNull()
+    // The PAGE's skeleton, exactly ('Loading…'): the Budget card's suggestions GET is not
+    // snapshot-cached, so its own hint legitimately says "Loading suggestions…" on this paint.
+    expect(screen.queryByText('Loading…')).toBeNull()
     // …and the revalidation went out anyway.
     expect(vi.mocked(fetchMatrix)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(fetchYearly)).toHaveBeenCalledTimes(1)

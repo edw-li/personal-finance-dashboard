@@ -2,9 +2,13 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import ANY
 
+from sqlalchemy import delete, select, update
+
 from app.models import (
     Account,
     AccountBalance,
+    CategoryBudget,
+    ChangeLog,
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
@@ -12,6 +16,7 @@ from app.models import (
     Person,
     SpendingCategory,
 )
+from app.services.budgets import living_budget_total
 
 
 async def test_spending_requires_auth(client):
@@ -760,3 +765,340 @@ async def test_yearly_payroll_savings_is_the_sum_of_the_matrix_months(auth_clien
     months_sum = sum(Decimal(v) for v in matrix["payroll_savings"])
     assert Decimal(year["payroll_savings"]) == months_sum == Decimal("13352.79")
     assert Decimal(year["total_savings"]) == Decimal("28352.79")  # 15,000 cash + 13,352.79
+
+
+# --- budgets seeded from averages (2026-09-07 spec §1–§2) ---
+
+
+def _month(year: int, month: int) -> date:
+    return date(year, month, 1)
+
+
+async def _seed_budget_history(db) -> dict[str, int]:
+    """Fourteen entered months (Jul 2025 – Aug 2026) plus the CURRENT month (Sep 2026, rent
+    only — the routes' clock is pinned to 2026-09-07) across six categories: Rent (fixed;
+    steps up in Apr 2026), Food (variable), Travel (episodic), Kids (dormant), Streaming
+    (sparse — its first row is Jul 2026, so earlier months are ABSENT, not zero), Taxes (kind
+    tax). The window is the last twelve complete months: Sep 2025 – Aug 2026, so Jul/Aug 2025
+    and the partial September never reach a mean. Every figure asserted was computed with the
+    spec's arithmetic before the plan was written."""
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    food = SpendingCategory(name="Food", slug="food", sort_order=2)
+    travel = SpendingCategory(name="Travel", slug="travel", sort_order=3)
+    kids = SpendingCategory(name="Kids", slug="kids", sort_order=4)
+    streaming = SpendingCategory(name="Streaming", slug="streaming", sort_order=5)
+    taxes = SpendingCategory(name="Taxes", slug="taxes", sort_order=6, kind="tax")
+    db.add_all([rent, food, travel, kids, streaming, taxes])
+    await db.flush()
+    months = [_month(2025, 7 + i) for i in range(6)] + [_month(2026, i) for i in range(1, 9)]
+    food_amounts = [
+        "700.00",
+        "800.00",
+        "900.00",
+        "1100.00",
+        "1000.00",
+        "1250.50",
+        "850.00",
+        "1000.25",
+        "1120.00",
+        "980.00",
+        "1010.00",
+        "1300.00",
+        "940.00",
+        "1049.25",
+    ]
+    travel_amounts = [
+        "0.00",
+        "0.00",
+        "0.00",
+        "0.00",
+        "0.00",
+        "1525.63",
+        "0.00",
+        "0.00",
+        "0.00",
+        "0.00",
+        "810.20",
+        "0.00",
+        "0.00",
+        "0.00",
+    ]
+    for i, month in enumerate(months):
+        rent_amount = "2072.80" if month >= _month(2026, 4) else "2030.00"
+        db.add_all(
+            [
+                MonthlySpending(month=month, category_id=rent.id, amount=Decimal(rent_amount)),
+                MonthlySpending(month=month, category_id=food.id, amount=Decimal(food_amounts[i])),
+                MonthlySpending(
+                    month=month, category_id=travel.id, amount=Decimal(travel_amounts[i])
+                ),
+                MonthlySpending(month=month, category_id=kids.id, amount=Decimal("0.00")),
+                MonthlySpending(
+                    month=month,
+                    category_id=taxes.id,
+                    amount=Decimal("5044.00" if month == _month(2026, 4) else "0.00"),
+                ),
+                MonthlyCashflow(month=month, net_pay=Decimal("9000.00")),
+            ]
+        )
+        if month >= _month(2026, 7):
+            db.add(MonthlySpending(month=month, category_id=streaming.id, amount=Decimal("15.99")))
+    # The current month, seven days old: rent paid, nothing else — entered, never in the window.
+    db.add(MonthlySpending(month=_month(2026, 9), category_id=rent.id, amount=Decimal("2030.00")))
+    await db.commit()
+    return {
+        "rent": rent.id,
+        "food": food.id,
+        "travel": travel.id,
+        "kids": kids.id,
+        "streaming": streaming.id,
+        "taxes": taxes.id,
+    }
+
+
+def _pin_today(monkeypatch, today: date) -> None:
+    monkeypatch.setattr("app.api.spending.product_today", lambda: today)
+
+
+async def test_budget_suggestions_window_and_profiles(auth_client, db, monkeypatch):
+    ids = await _seed_budget_history(db)
+    _pin_today(monkeypatch, date(2026, 9, 7))
+    resp = await auth_client.get("/api/v1/spending/budgets/suggestions")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["window"] == {"from": "2025-09-01", "to": "2026-08-01", "months": 12}
+    assert [s["category_id"] for s in body["suggestions"]] == [
+        ids["rent"],
+        ids["food"],
+        ids["travel"],
+        ids["kids"],
+        ids["streaming"],
+        ids["taxes"],
+    ]
+    by_id = {s["category_id"]: s for s in body["suggestions"]}
+    assert by_id[ids["rent"]] == {
+        "category_id": ids["rent"],
+        "profile": "fixed",
+        "months": 12,
+        "mean": "2047.83",
+        "median": "2030.00",
+        "latest": "2072.80",
+        "latest_month": "2026-08-01",
+        "cv": "0.0108",
+        "seed": "2073.00",
+        "skip_reason": None,
+    }
+    assert (by_id[ids["food"]]["profile"], by_id[ids["food"]]["seed"]) == ("variable", "1042.00")
+    assert (by_id[ids["travel"]]["profile"], by_id[ids["travel"]]["seed"]) == ("episodic", "195.00")
+    kids = by_id[ids["kids"]]
+    assert (kids["profile"], kids["mean"], kids["seed"], kids["skip_reason"]) == (
+        "dormant",
+        "0.00",
+        None,
+        "dormant",
+    )
+    streaming = by_id[ids["streaming"]]
+    assert (
+        streaming["profile"],
+        streaming["months"],
+        streaming["mean"],
+        streaming["skip_reason"],
+    ) == (
+        "sparse",
+        2,
+        "15.99",
+        "sparse",
+    )
+    taxes = by_id[ids["taxes"]]
+    assert (taxes["profile"], taxes["mean"], taxes["seed"], taxes["skip_reason"]) == (
+        "episodic",
+        "420.33",
+        None,
+        "kind",
+    )
+
+
+async def test_budget_suggestions_with_nothing_entered(auth_client, db):
+    db.add(SpendingCategory(name="Food", slug="food", sort_order=1))
+    await db.commit()
+    body = (await auth_client.get("/api/v1/spending/budgets/suggestions")).json()
+    assert body["window"] is None
+    assert body["suggestions"] == [
+        {
+            "category_id": ANY,
+            "profile": "dormant",
+            "months": 0,
+            "mean": None,
+            "median": None,
+            "latest": None,
+            "latest_month": None,
+            "cv": None,
+            "seed": None,
+            "skip_reason": "dormant",
+        }
+    ]
+
+
+async def test_budget_suggestions_list_only_active_categories(auth_client, db):
+    food = SpendingCategory(name="Food", slug="food", sort_order=1)
+    db.add_all([food, SpendingCategory(name="Old", slug="old", sort_order=2, is_active=False)])
+    await db.commit()
+    food_id = food.id
+    body = (await auth_client.get("/api/v1/spending/budgets/suggestions")).json()
+    assert len(body["suggestions"]) == 1
+    # Named, not just counted: the ONE row through is the active category, not the archived one.
+    assert body["suggestions"][0]["category_id"] == food_id
+
+
+async def test_budget_suggestions_skip_an_empty_gap_month(auth_client, db, monkeypatch):
+    """An interior month with all-$0 rows and no take-home is EMPTY, not entered (coverage's
+    rule): the window steps over it and its zeros never reach a mean. Without the in-window
+    filter the bounded query would hand Rent thirteen months and a lower average."""
+    ids = await _seed_budget_history(db)
+    await db.execute(delete(MonthlyCashflow).where(MonthlyCashflow.month == _month(2026, 2)))
+    await db.execute(
+        update(MonthlySpending)
+        .where(MonthlySpending.month == _month(2026, 2))
+        .values(amount=Decimal("0.00"))
+    )
+    await db.commit()
+    _pin_today(monkeypatch, date(2026, 9, 7))
+    body = (await auth_client.get("/api/v1/spending/budgets/suggestions")).json()
+    # Twelve complete entered months ending Aug 2026 now reach back to Aug 2025, skipping Feb.
+    assert body["window"] == {"from": "2025-08-01", "to": "2026-08-01", "months": 12}
+    by_id = {s["category_id"]: s for s in body["suggestions"]}
+    rent = by_id[ids["rent"]]
+    # Aug 2025 (2030) takes Feb 2026's (2030) place: same twelve values, same mean.
+    assert (rent["months"], rent["mean"], rent["seed"]) == (12, "2047.83", "2073.00")
+    food = by_id[ids["food"]]
+    # 800 + 900 + 1100 + 1000 + 1250.50 + 850 + 1120 + 980 + 1010 + 1300 + 940 + 1049.25 = 12299.75
+    assert (food["months"], food["mean"], food["seed"]) == (12, "1024.98", "1025.00")
+
+
+async def test_budget_seed_writes_one_batch_and_the_matrix_reads_it(auth_client, db, monkeypatch):
+    ids = await _seed_budget_history(db)
+    _pin_today(monkeypatch, date(2026, 9, 7))
+    # A hand-set Food budget from Jan 2026: the seed must leave January alone and write a NEW
+    # dated row. A Travel row AT the effective month: the seed updates it in place.
+    await auth_client.put(
+        f"/api/v1/spending/categories/{ids['food']}/budget",
+        json={"amount": "900.00", "effective_month": "2026-01-01"},
+    )
+    await auth_client.put(
+        f"/api/v1/spending/categories/{ids['travel']}/budget",
+        json={"amount": "50.00", "effective_month": "2026-08-01"},
+    )
+    resp = await auth_client.post(
+        "/api/v1/spending/budgets/seed", json={"effective_month": "2026-08-01"}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["effective_month"] == "2026-08-01"
+    assert body["window"] == {"from": "2025-09-01", "to": "2026-08-01", "months": 12}
+    assert body["written"] == [
+        {"category_id": ids["rent"], "amount": "2073.00"},
+        {"category_id": ids["food"], "amount": "1042.00"},
+        {"category_id": ids["travel"], "amount": "195.00"},
+    ]
+    assert body["skipped"] == [
+        {"category_id": ids["kids"], "reason": "dormant"},
+        {"category_id": ids["streaming"], "reason": "sparse"},
+        {"category_id": ids["taxes"], "reason": "kind"},
+    ]
+    assert body["batch_id"] is not None
+    # ONE batch: Rent inserted, Food's new dated row inserted, Travel's August row updated —
+    # one label, one month stamp, so the Activity card undoes them together.
+    logged = (
+        (
+            await db.execute(
+                select(ChangeLog)
+                .where(ChangeLog.batch_id == body["batch_id"])
+                .order_by(ChangeLog.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [(r.op, r.table_name, r.month) for r in logged] == [
+        ("insert", "category_budgets", date(2026, 8, 1)),
+        ("insert", "category_budgets", date(2026, 8, 1)),
+        ("update", "category_budgets", date(2026, 8, 1)),
+    ]
+    assert {r.label for r in logged} == {"Seeded 3 budgets from averages, from Aug 2026"}
+    assert logged[2].before["amount"] == "50.00" and logged[2].after["amount"] == "195.00"
+    # History before the effective month is untouched: Food reads 900 Jan–Jul, 1042 from Aug on.
+    matrix = (await auth_client.get("/api/v1/spending/matrix")).json()
+    months = matrix["months"]
+    food = next(s for s in matrix["series"] if s["category_id"] == ids["food"])
+    assert food["budgets"][months.index("2025-12-01")] is None
+    assert food["budgets"][months.index("2026-01-01")] == "900.00"
+    assert food["budgets"][months.index("2026-07-01")] == "900.00"
+    assert food["budgets"][months.index("2026-08-01")] == "1042.00"
+    assert food["budgets"][months.index("2026-09-01")] == "1042.00"
+    # Seeding again changes nothing: every seedable category is `unchanged`, no batch.
+    again = await auth_client.post(
+        "/api/v1/spending/budgets/seed", json={"effective_month": "2026-08-01"}
+    )
+    assert again.status_code == 200
+    assert again.json()["written"] == []
+    assert again.json()["batch_id"] is None
+    assert again.json()["skipped"] == [
+        {"category_id": ids["rent"], "reason": "unchanged"},
+        {"category_id": ids["food"], "reason": "unchanged"},
+        {"category_id": ids["travel"], "reason": "unchanged"},
+        {"category_id": ids["kids"], "reason": "dormant"},
+        {"category_id": ids["streaming"], "reason": "sparse"},
+        {"category_id": ids["taxes"], "reason": "kind"},
+    ]
+
+
+async def test_budget_seed_validation(auth_client, db, monkeypatch):
+    await _seed_budget_history(db)
+    _pin_today(monkeypatch, date(2026, 9, 7))
+    mid_month = await auth_client.post(
+        "/api/v1/spending/budgets/seed", json={"effective_month": "2026-08-15"}
+    )
+    assert mid_month.status_code == 422
+    # With the clock at Sep 2025 only Jul and Aug 2025 are complete: two months is not history.
+    _pin_today(monkeypatch, date(2025, 9, 7))
+    short = await auth_client.post(
+        "/api/v1/spending/budgets/seed", json={"effective_month": "2025-08-01"}
+    )
+    assert short.status_code == 422
+    assert "three complete months" in short.json()["detail"]
+    assert (await db.execute(select(CategoryBudget))).scalars().all() == []
+
+
+async def test_living_budget_total_counts_only_active_living_budgets(db):
+    """The projection's preset input (spec §4): a tax target, an archived category's stale
+    budget and a not-yet-in-force row are not modeled spend; with no living category at all
+    the answer is None, not 0.00."""
+    tax = SpendingCategory(name="Taxes", slug="taxes", sort_order=1, kind="tax")
+    db.add(tax)
+    await db.flush()
+    db.add(
+        CategoryBudget(
+            category_id=tax.id, effective_month=date(2026, 8, 1), amount=Decimal("5000.00")
+        )
+    )
+    await db.commit()
+    assert await living_budget_total(db, date(2026, 9, 1)) is None
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=2)
+    old = SpendingCategory(name="Old", slug="old", sort_order=3, is_active=False)
+    db.add_all([rent, old])
+    await db.flush()
+    db.add_all(
+        [
+            CategoryBudget(
+                category_id=rent.id, effective_month=date(2026, 6, 1), amount=Decimal("2000.00")
+            ),
+            CategoryBudget(
+                category_id=rent.id, effective_month=date(2026, 10, 1), amount=Decimal("9999.00")
+            ),
+            CategoryBudget(
+                category_id=old.id, effective_month=date(2026, 1, 1), amount=Decimal("400.00")
+            ),
+        ]
+    )
+    await db.commit()
+    assert await living_budget_total(db, date(2026, 9, 1)) == Decimal("2000.00")

@@ -112,3 +112,8 @@ class ProjectionOut(BaseModel):
     # The window the derivation used (2026-09-04). Null when nothing was derived, so an
     # older stored payload still validates.
     derived_window: DerivedWindowOut | None = None
+    # 2026-09-07 budget-seed spec §4: twelve times the ACTIVE living categories' budgets
+    # resolved for `start_month` — the knobs card's "Use my budgets" preset. None without
+    # budgets; nullable-with-default so a stored older payload still validates.
+    budget_annual_spend: Decimal | None = None
+    budget_month: date | None = None

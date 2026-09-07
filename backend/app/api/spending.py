@@ -9,10 +9,16 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
 from app.models import CategoryBudget, MonthlyCashflow, MonthlySpending, SpendingCategory
+from app.schemas.projection import DerivedWindowOut
 from app.schemas.spending import (
     AmountEntry,
     BudgetHistoryEntry,
     BudgetPut,
+    BudgetSeedIn,
+    BudgetSeedOut,
+    BudgetSkip,
+    BudgetSuggestion,
+    BudgetSuggestionsOut,
     CategoryCreate,
     CategoryOut,
     CategorySeries,
@@ -25,6 +31,7 @@ from app.schemas.spending import (
     YearlyOut,
     YearRollup,
 )
+from app.services.budgets import MIN_SEED_MONTHS, load_suggestions, resolve_budgets
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
@@ -39,6 +46,7 @@ from app.services.savings import (
     load_payroll_by_month,
     rollup,
 )
+from app.services.scheduler import product_today
 from app.services.spending_guard import EMPTY_MONTH_REFUSAL, records_something
 
 router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(get_current_user)])
@@ -261,6 +269,85 @@ async def delete_category_budget(
     return Response(status_code=204, headers=batch_header(batch.id if batch.rows else None))
 
 
+def _window_out(window: list[date]) -> DerivedWindowOut | None:
+    return (
+        DerivedWindowOut(from_month=window[0], to_month=window[-1], months=len(window))
+        if window
+        else None
+    )
+
+
+@router.get("/budgets/suggestions", response_model=BudgetSuggestionsOut)
+async def budget_suggestions(db: AsyncSession = Depends(get_db)) -> BudgetSuggestionsOut:
+    """The Budget card's figures (spec §2): read-only, no batch. `product_today`, never
+    date.today(): the window's "current month" must agree with the rest of the ritual's clock."""
+    window, suggestions = await load_suggestions(db, product_today())
+    return BudgetSuggestionsOut(
+        window=_window_out(window),
+        suggestions=[BudgetSuggestion.model_validate(s) for s in suggestions],
+    )
+
+
+# spec §2 wording; the number is MIN_SEED_MONTHS (3) — pinned by test_budgets_service.py
+SEED_NEEDS_HISTORY = (
+    "needs at least three complete months of spending before a budget can be suggested"
+)
+
+
+@router.post("/budgets/seed", response_model=BudgetSeedOut)
+async def seed_budgets(
+    body: BudgetSeedIn,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> BudgetSeedOut:
+    """The one-click seed (spec §2): every suggestion with a seed becomes the category's
+    budget row at `effective_month` — inserted, or updated in place when a row already sits on
+    that month — in ONE change batch, so the Activity card's undo reverts it as a unit. A
+    category whose budget already RESOLVES to the seed for that month is skipped as
+    `unchanged` rather than given a redundant history step. History before the month is
+    never touched: that is what effective-dated rows are for."""
+    require_first_of_month(body.effective_month)
+    window, suggestions = await load_suggestions(db, product_today())
+    if len(window) < MIN_SEED_MONTHS:
+        raise HTTPException(status_code=422, detail=SEED_NEEDS_HISTORY)
+    budget_rows = list((await db.execute(select(CategoryBudget))).scalars().all())
+    resolved = resolve_budgets(budget_rows, [body.effective_month])
+    at_month = {r.category_id: r for r in budget_rows if r.effective_month == body.effective_month}
+    written: list[AmountEntry] = []
+    skipped: list[BudgetSkip] = []
+    for s in suggestions:
+        if s.seed is None:
+            # `suggest` never returns a seedless suggestion without a reason (spec §2), so the
+            # `or` only narrows the type for the checker — it is not a live fallback.
+            skipped.append(BudgetSkip(category_id=s.category_id, reason=s.skip_reason or "dormant"))
+            continue
+        if resolved.get(s.category_id, [None])[0] == s.seed:
+            skipped.append(BudgetSkip(category_id=s.category_id, reason="unchanged"))
+            continue
+        existing = at_month.get(s.category_id)
+        if existing is None:
+            row = CategoryBudget(
+                category_id=s.category_id, effective_month=body.effective_month, amount=s.seed
+            )
+            db.add(row)
+            await db.flush()
+            batch.record_insert(row, month=body.effective_month)
+        else:
+            before = row_image(existing)
+            existing.amount = s.seed
+            batch.record_update(existing, before, month=body.effective_month)
+        written.append(AmountEntry(category_id=s.category_id, amount=s.seed))
+    batch.label = f"Seeded {len(written)} budgets from averages, from {body.effective_month:%b %Y}"
+    batch_id = await batch.commit()
+    return BudgetSeedOut(
+        effective_month=body.effective_month,
+        window=_window_out(window),
+        written=written,
+        skipped=skipped,
+        batch_id=batch_id,
+    )
+
+
 def _kind_split(
     spend_rows: list[MonthlySpending], categories: list[SpendingCategory]
 ) -> dict[date, dict[str, Decimal]]:
@@ -279,30 +366,6 @@ def _kind_split(
         kind = kind_by_category.get(row.category_id, LIVING)
         bucket[kind] = bucket.get(kind, Decimal("0.00")) + row.amount
     return by_kind
-
-
-def _resolve_budgets(
-    rows: list[CategoryBudget], months: list[date]
-) -> dict[int, list[Decimal | None]]:
-    """Per category, the resolved budget for each month: the amount of the row with the
-    greatest effective_month <= month (spec §2). `months` must be ascending (the matrix's
-    order); one sorted walk per category, zero extra queries — the table is tiny."""
-    by_category: dict[int, list[CategoryBudget]] = {}
-    for row in rows:
-        by_category.setdefault(row.category_id, []).append(row)
-    resolved: dict[int, list[Decimal | None]] = {}
-    for category_id, history in by_category.items():
-        history.sort(key=lambda r: r.effective_month)
-        values: list[Decimal | None] = []
-        pointer = 0
-        current: Decimal | None = None
-        for month in months:
-            while pointer < len(history) and history[pointer].effective_month <= month:
-                current = history[pointer].amount
-                pointer += 1
-            values.append(current)
-        resolved[category_id] = values
-    return resolved
 
 
 @router.get("/matrix", response_model=MatrixOut)
@@ -361,7 +424,7 @@ async def matrix(
         None if base is None else quantize_money(base * swr / 12, "four_pct_rule") for base in bases
     ]
     budget_rows = list((await db.execute(select(CategoryBudget))).scalars().all())
-    budgets_by_category = _resolve_budgets(budget_rows, months)
+    budgets_by_category = resolve_budgets(budget_rows, months)
     # Shared read-only default for unbudgeted categories; pydantic validation copies it.
     no_budgets: list[Decimal | None] = [None] * len(months)
     total_budget: list[Decimal | None] = []
@@ -471,7 +534,7 @@ async def get_month(month: date, db: AsyncSession = Depends(get_db)) -> Spending
     )
     cashflow = await db.get(MonthlyCashflow, month)
     budget_rows = list((await db.execute(select(CategoryBudget))).scalars().all())
-    resolved = _resolve_budgets(budget_rows, [month])
+    resolved = resolve_budgets(budget_rows, [month])
     budgets = [
         AmountEntry(category_id=category_id, amount=values[0])
         for category_id, values in sorted(resolved.items())
