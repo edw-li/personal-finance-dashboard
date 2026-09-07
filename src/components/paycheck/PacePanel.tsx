@@ -36,11 +36,15 @@ const AT_THE_CAP = 'at the cap'
  */
 function paceNote(item: PaceItem): string | null {
   const halves = item.halves ?? null
-  if (halves === null || halves.length === 0) return null
-  const parts = halves.map((half) => `${half.label} ${half.source}`)
+  const parts = (halves ?? []).map((half) => `${half.label} ${half.source}`)
   if (item.backfilled_from != null) {
     parts.push(`before ${formatDate(item.backfilled_from)} assumes your earliest profile`)
   }
+  if (parts.length === 0) return null
+  // A WALKED row has no halves and only ever has this one clause to make: the paydays before
+  // the person's earliest profile were priced from it, and the figure above says so out loud
+  // rather than passing as observed (spec §2.6, the ESPP row's rule for every row).
+  if (halves === null || halves.length === 0) return `${parts.join(' · ')}.`
   // One clause for the whole window: the basis is the profile's cadence, and saying it twice
   // would read as two different approximations.
   if (halves.some((half) => half.basis === 'months')) parts.push('estimated by month')
@@ -77,7 +81,7 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
     <section className="card" role="region" aria-label="Contribution pace">
       <h2 className="eyebrow">
         Contribution pace
-        <InfoHint text="Each contribution line annualized from the paycheck profile in force, against the caps you entered in Settings. So far is estimated from your profile timeline payday by payday — the app has no per-paycheck ledger; the projection runs the rest of the year at today's percentages. Employer HSA deposits and the 401(k) match count once they are entered on your paycheck profile. The ESPP row grades the purchases that fall in this calendar year, so autumn checks count toward next year. Its cap is the most contribution dollars the §423 limit can buy at your plan discount; the exact chained figures live on the ESPP page." />
+        <InfoHint text="Each contribution line walked payday by payday through the paycheck profile in force, against the caps you entered in Settings. So far is estimated from your profile timeline payday by payday — the app has no per-paycheck ledger; the projection runs the rest of the year at today's percentages. Employer HSA deposits and the 401(k) match count once they are entered on your paycheck profile. The ESPP row grades the purchases that fall in this calendar year, so autumn checks count toward next year. Its cap is the most contribution dollars the §423 limit can buy at your plan discount; the exact chained figures live on the ESPP page." />
       </h2>
       <p className="drill-hint">
         So far this year, and where the year lands at today&apos;s percentages. Change a percentage
@@ -96,6 +100,8 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
           const cap = softLimit !== null ? `${formatCurrency(softLimit)} practical` : formatCurrency(item.limit)
           const behind = soFar === null ? '' : `${formatCurrency(soFar)} so far`
           const figures = `${behind === '' ? '' : `${behind} · `}${projected} / ${cap}`
+          // No cap entered: the same two figures, with nothing to measure them against yet.
+          const uncapped = behind === '' ? formatCurrency(item.annualized) : `${behind} · ${projected}`
           const valueText =
             (behind === '' ? '' : `${behind}; `) +
             (softLimit !== null
@@ -123,7 +129,7 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
               {item.limit === null || item.ratio === null ? (
                 <>
                   <span className="pace-figures">
-                    {formatCurrency(item.annualized)}
+                    {uncapped}
                     {employerSuffix}
                   </span>
                   <span className="pace-cta">
@@ -135,7 +141,7 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
                   <div
                     className="pace-meter"
                     role="meter"
-                    aria-label={`${item.label} ${item.measure === 'window' ? 'window total' : 'annualized'} vs limit`}
+                    aria-label={`${item.label} ${item.measure === 'window' ? 'window total' : 'projected'} vs limit`}
                     aria-valuemin={0}
                     aria-valuemax={100}
                     // Clamped like the fill: a valuenow of 108 against a valuemax of 100 is an

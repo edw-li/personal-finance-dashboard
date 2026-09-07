@@ -921,11 +921,24 @@ describe('PaycheckPage — the profile form', () => {
     expect(field('Per additional covered individual').value).toBe('$500.00')
     // A count, not money: the box shows what was stored, unformatted.
     expect(field('Additional individuals covered').value).toBe('0')
+    // Nobody else is covered, so the per-head clause is not a sentence to print.
+    expect(screen.getByText('$2,000.00 a year for your coverage')).toBeTruthy()
+    // The count only pays out under family coverage, and the box says so.
+    expect(screen.getByText('Counts only with family coverage.')).toBeTruthy()
+  })
+
+  it('prints the per-head clause only when it is worth something', async () => {
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    type('Additional individuals covered', '2')
     expect(
       screen.getByText(
-        '$2,000.00 a year for your coverage, plus $500.00 for each of 0 additional individuals',
+        '$2,000.00 a year for your coverage, plus $500.00 for each of 2 additional individuals',
       ),
     ).toBeTruthy()
+    // A per-head amount of zero pays nothing for those two, so the clause goes.
+    type('Per additional covered individual', '0')
+    expect(screen.getByText('$2,000.00 a year for your coverage')).toBeTruthy()
   })
 
   it('says a household with no employer HSA deposit has none, rather than printing zeros', async () => {

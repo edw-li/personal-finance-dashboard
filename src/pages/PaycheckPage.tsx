@@ -280,7 +280,11 @@ function employerHsaWords(form: ProfileFormState): string {
   if (annual <= 0 && perHead <= 0) return 'No employer HSA contribution entered.'
   const typed = Number(form.hsa_dependents.trim() || '0')
   const covered = Number.isFinite(typed) ? Math.trunc(typed) : 0
-  return `${formatCurrency(String(annual))} a year for your coverage, plus ${formatCurrency(String(perHead))} for each of ${covered} additional individual${covered === 1 ? '' : 's'}`
+  const own = `${formatCurrency(String(annual))} a year for your coverage`
+  // Nobody else covered, or nothing paid per head: the clause would describe money that does
+  // not exist (matchWords' rule for a band nobody funds).
+  if (perHead <= 0 || covered === 0) return own
+  return `${own}, plus ${formatCurrency(String(perHead))} for each of ${covered} additional individual${covered === 1 ? '' : 's'}`
 }
 
 // The tier's own vocabulary, not the column's: the stored value is 'self', the box says
@@ -725,22 +729,32 @@ function ProfilesPanel({
             it applies. Same class — one fieldset shape for both policies. */}
         <fieldset className="paycheck-match">
           <legend>Employer HSA contribution</legend>
-          {EMPLOYER_HSA_FIELDS.map(({ field, label, money }) => (
-            <label key={field}>
-              {label}
-              {money ? (
+          {EMPLOYER_HSA_FIELDS.map(({ field, label, money }) =>
+            money ? (
+              <label key={field}>
+                {label}
                 <AmountInput value={form[field]} onValueChange={set(field)} />
-              ) : (
-                /* A count gets a plain box: a currency mask would print "$2.00" people. */
-                <input
-                  className="field-input"
-                  inputMode="numeric"
-                  value={form[field]}
-                  onChange={(e) => set(field)(e.target.value)}
-                />
-              )}
-            </label>
-          ))}
+              </label>
+            ) : (
+              // The note sits OUTSIDE the label: a label's text is its accessible name, and
+              // a caveat swallowed into it would rename the box.
+              <div className="paycheck-count-field" key={field}>
+                <label>
+                  {label}
+                  {/* A count gets a plain box: a currency mask would print "$2.00" people. */}
+                  <input
+                    className="field-input"
+                    inputMode="numeric"
+                    value={form[field]}
+                    onChange={(e) => set(field)(e.target.value)}
+                  />
+                </label>
+                {/* Self-only coverage covers nobody else, so the per-head amount is only ever
+                    earned under family coverage (spec §2.5). */}
+                <span className="paycheck-field-note">Counts only with family coverage.</span>
+              </div>
+            ),
+          )}
           <p className="paycheck-match-words">{employerHsaWords(form)}</p>
         </fieldset>
         <label className="span-2">

@@ -259,6 +259,10 @@ it('sends the reader to the profile for the employer money, and to the ESPP page
   renderPanel([OK])
   const text = hintText(/^About Each contribution line/)
   expect(text).toContain(
+    'Each contribution line walked payday by payday through the paycheck profile in force',
+  )
+  expect(text).not.toContain('annualized from the paycheck profile')
+  expect(text).toContain(
     'Employer HSA deposits and the 401(k) match count once they are entered on your paycheck profile',
   )
   // The so-far figure is walked from the profile timeline, and the hint says so rather than
@@ -329,4 +333,31 @@ it('says "at the cap" when the judged ratio is exactly the cap', () => {
   // The ESPP row is judged on its SOFT ratio, so that is the one the word follows.
   renderPanel([{ ...ESPP, ratio: '0.8344', soft_ratio: '1.0000' }])
   expect(screen.getByText('at the cap')).toBeTruthy()
+})
+
+
+it('says which paydays borrowed a profile on a walked row too, not just the ESPP one', () => {
+  // A new hire's January paydays are priced from a profile that did not exist yet, and the
+  // row that carries the figure carries the caveat — halves or no halves.
+  renderPanel([{ ...OK, so_far: '8000.00', backfilled_from: '2026-03-01' }])
+  expect(screen.getByText('before Mar 1, 2026 assumes your earliest profile.')).toBeTruthy()
+  cleanup()
+  renderPanel([OK])
+  expect(screen.queryByText(/assumes your earliest profile/)).toBeNull()
+})
+
+it('labels both figures on a row that has no cap entered yet', () => {
+  renderPanel([{ ...MISSING, so_far: '10666.67' }])
+  expect(screen.getByText('$10,666.67 so far · $16,000.00 projected')).toBeTruthy()
+  cleanup()
+  // Unwalked, the call to action still shows the one figure it always did.
+  renderPanel([MISSING])
+  expect(screen.getByText('$16,000.00')).toBeTruthy()
+})
+
+it('calls a full-year meter a projection and leaves the ESPP window alone', () => {
+  renderPanel([OK, ESPP])
+  const meters = screen.getAllByRole('meter')
+  expect(meters[0].getAttribute('aria-label')).toBe('401(k) elective deferral projected vs limit')
+  expect(meters[1].getAttribute('aria-label')).toBe('ESPP §423 annual window total vs limit')
 })
