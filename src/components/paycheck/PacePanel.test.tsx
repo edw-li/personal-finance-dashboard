@@ -68,7 +68,7 @@ it('draws one meter per item with the figures in its label', () => {
 
   const meters = screen.getAllByRole('meter')
   expect(meters).toHaveLength(3)
-  expect(meters[0].getAttribute('aria-valuetext')).toBe('$10,000.00 of $24,500.00')
+  expect(meters[0].getAttribute('aria-valuetext')).toBe('$10,000.00 projected of $24,500.00')
   expect(meters[0].getAttribute('aria-valuenow')).toBe('41')
 })
 
@@ -94,7 +94,7 @@ it('clamps the fill at the track end and still reports the true percentage', () 
   // valuenow is clamped to valuemax for the same reason the fill is: an out-of-range meter
   // is undefined to assistive tech. The true over-ness survives in valuetext and in print.
   expect(meter.getAttribute('aria-valuenow')).toBe('100')
-  expect(meter.getAttribute('aria-valuetext')).toBe('$27,000.00 of $25,000.00')
+  expect(meter.getAttribute('aria-valuetext')).toBe('$27,000.00 projected of $25,000.00')
   expect(screen.getByText('108.00%')).toBeTruthy()
 })
 
@@ -115,8 +115,8 @@ it('renders a call to action instead of a meter when the limit is missing', () =
   expect(screen.queryByRole('meter')).toBeNull()
   const link = screen.getByRole('link', { name: "enter this year's limit" })
   expect(link.getAttribute('href')).toBe('/settings')
-  // The annualized figure is still real and still shown — only the verdict is withheld.
-  expect(screen.getByText('$16,000.00')).toBeTruthy()
+  // The projection is still real and still shown — only the verdict is withheld.
+  expect(screen.getByText('$16.0K projected')).toBeTruthy()
 })
 
 it('says which figure is behind today and which is ahead of it', () => {
@@ -124,7 +124,7 @@ it('says which figure is behind today and which is ahead of it', () => {
   const card = within(screen.getByRole('region', { name: 'Contribution pace' }))
   expect(
     card.getByText(
-      "So far this year, and where the year lands at today's percentages. Change a percentage and the projection moves; so far does not.",
+      "So far this year, and where the year lands at today's percentages. Change a percentage and the projection moves; so far does not. Hover or focus a bar for the exact figures.",
     ),
   ).toBeTruthy()
 })
@@ -142,7 +142,7 @@ it('grades the ESPP row against the PRACTICAL cap, not the §423 one', () => {
   expect(meter.getAttribute('aria-valuetext')).toBe(
     '$20,861.02 of $21,250.00 practical cap; §423 cap $25,000.00',
   )
-  expect(screen.getByText('$20,861.02 / $21,250.00 practical')).toBeTruthy()
+  expect(screen.getByText('$20.9K / $21.3K practical')).toBeTruthy()
   // The printed percentage is soft_ratio's, so it cannot contradict the tone beside it.
   expect(screen.getByText('98.17%')).toBeTruthy()
   expect(screen.getByText('near the cap')).toBeTruthy()
@@ -213,23 +213,14 @@ it('names the backfill and the per-month approximation, and stops projecting at 
   ).toBeTruthy()
 })
 
-it('prints the employer match inside the 415(c) figure, under whichever label the server sent', () => {
+it('keeps the match out of the static cell and under the label the server sent', () => {
   renderPanel([{ ...MISSING, label: '415(c) total additions (incl. employer match)', employer_match: '11500.00' }])
-  expect(screen.getByText(/incl\. \$11,500\.00 match/)).toBeTruthy()
+  // The figure is compact; the money inside it is a hover away, never a second column.
+  expect(screen.queryByText(/incl\. \$11,500\.00/)).toBeNull()
   expect(screen.getByText(/incl\. employer match/)).toBeTruthy()
   cleanup()
-  // No policy, no suffix — never "incl. $0.00" — and the server's other label prints too.
   renderPanel([MISSING])
-  expect(screen.queryByText(/incl\./)).toBeNull()
   expect(screen.getByText(/excludes employer match/)).toBeTruthy()
-})
-
-it('hangs the match suffix off the METER row too, not just the call-to-action one', () => {
-  renderPanel([{ ...OK, employer_match: '11500.00' }])
-  // Beside the figures, inside the same cell: a component of the number, not a second
-  // verdict — and the figures themselves still read as they always did.
-  expect(screen.getByText('incl. $11,500.00 match')).toBeTruthy()
-  expect(screen.getByText('$10,000.00 / $24,500.00')).toBeTruthy()
 })
 
 it('hangs the employer HSA deposit off the HSA row, the way the match hangs off 415(c)', () => {
@@ -245,14 +236,18 @@ it('hangs the employer HSA deposit off the HSA row, the way the match hangs off 
       employer_hsa: '2000.00',
     },
   ])
-  // The deposit is what carries 2,400 of deferral to a full 4,400 cap, so the figure has to
-  // say where the rest came from.
-  expect(screen.getByText('incl. $2,000.00 employer')).toBeTruthy()
-  expect(screen.getByText('$4,400.00 / $4,400.00')).toBeTruthy()
+  // The deposit is what carries 2,400 of deferral to a full 4,400 cap. The cell stays
+  // compact; the sentence that says so rides aria-valuetext and the hover tip.
+  expect(screen.getByText('$4.4K / $4.4K')).toBeTruthy()
+  expect(screen.getByRole('meter').getAttribute('aria-valuetext')).toBe(
+    '$4,400.00 projected of $4,400.00, incl. $2,000.00 employer',
+  )
   cleanup()
-  // No policy, no suffix — never "incl. $0.00".
+  // No policy, no clause — never "incl. $0.00".
   renderPanel([WARN])
-  expect(screen.queryByText(/incl\./)).toBeNull()
+  expect(screen.getByRole('meter').getAttribute('aria-valuetext')).toBe(
+    '$4,200.00 projected of $4,400.00',
+  )
 })
 
 it('sends the reader to the profile for the employer money, and to the ESPP page for the chained figures', () => {
@@ -299,15 +294,15 @@ it('draws the year in two segments: what is already in, and where it lands', () 
   // One tone, two weights: the run past "so far" is a projection, not a second verdict.
   expect(sofar.className).toBe('pace-fill-sofar is-warn')
   expect(projected.className).toBe('pace-fill is-warn is-projected')
-  expect(screen.getByText('$3,600.00 so far · $4,400.00 projected / $4,400.00')).toBeTruthy()
-  expect(meter.getAttribute('aria-valuetext')).toBe('$3,600.00 so far; $4,400.00 of $4,400.00')
+  expect(screen.getByText('$4.4K / $4.4K')).toBeTruthy()
+  expect(meter.getAttribute('aria-valuetext')).toBe(
+    '$3,600.00 so far; $4,400.00 projected of $4,400.00',
+  )
 })
 
 it('keeps the practical cap in both of the ESPP row figures', () => {
   renderPanel([{ ...ESPP, so_far: '10391.15' }])
-  expect(
-    screen.getByText('$10,391.15 so far · $20,861.02 projected / $21,250.00 practical'),
-  ).toBeTruthy()
+  expect(screen.getByText('$20.9K / $21.3K practical')).toBeTruthy()
   expect(screen.getByRole('meter').getAttribute('aria-valuetext')).toBe(
     '$10,391.15 so far; $20,861.02 of $21,250.00 practical cap; §423 cap $25,000.00',
   )
@@ -318,8 +313,8 @@ it('falls back to one figure when the server sent no walk', () => {
   const meter = screen.getByRole('meter')
   expect(meter.querySelector('.pace-fill-sofar')).toBeNull()
   expect((meter.querySelector('.pace-fill') as HTMLElement).className).toBe('pace-fill is-ok')
-  expect(screen.getByText('$10,000.00 / $24,500.00')).toBeTruthy()
-  expect(meter.getAttribute('aria-valuetext')).toBe('$10,000.00 of $24,500.00')
+  expect(screen.getByText('$10.0K / $24.5K')).toBeTruthy()
+  expect(meter.getAttribute('aria-valuetext')).toBe('$10,000.00 projected of $24,500.00')
 })
 
 it('says "at the cap" when the judged ratio is exactly the cap', () => {
@@ -348,11 +343,11 @@ it('says which paydays borrowed a profile on a walked row too, not just the ESPP
 
 it('labels both figures on a row that has no cap entered yet', () => {
   renderPanel([{ ...MISSING, so_far: '10666.67' }])
-  expect(screen.getByText('$10,666.67 so far · $16,000.00 projected')).toBeTruthy()
+  expect(screen.getByText('$16.0K projected')).toBeTruthy()
   cleanup()
-  // Unwalked, the call to action still shows the one figure it always did.
+  // Unwalked, the call to action shows the same one figure.
   renderPanel([MISSING])
-  expect(screen.getByText('$16,000.00')).toBeTruthy()
+  expect(screen.getByText('$16.0K projected')).toBeTruthy()
 })
 
 it('calls a full-year meter a projection and leaves the ESPP window alone', () => {
@@ -360,4 +355,105 @@ it('calls a full-year meter a projection and leaves the ESPP window alone', () =
   const meters = screen.getAllByRole('meter')
   expect(meters[0].getAttribute('aria-label')).toBe('401(k) elective deferral projected vs limit')
   expect(meters[1].getAttribute('aria-label')).toBe('ESPP §423 annual window total vs limit')
+})
+
+
+// The row that squeezed the bars: "$31,339.50 so far · $41,667.90 projected / $72,000.00
+// incl. $11,500.00 match" in one cell.
+const TOTAL: PaceItem = {
+  key: 'limit_415c_total',
+  label: '415(c) total additions (incl. employer match)',
+  so_far: '31339.50',
+  annualized: '41667.90',
+  limit: '72000.00',
+  ratio: '0.5787',
+  tone: 'ok',
+  employer_match: '11500.00',
+}
+
+const tipText = () => screen.getByRole('tooltip').textContent
+
+it('keeps the standing figures compact, and says everything in aria-valuetext', () => {
+  renderPanel([TOTAL])
+  const cell = screen.getByText('$41.7K / $72.0K')
+  expect(cell.textContent).not.toContain('so far')
+  expect(cell.textContent).not.toContain('incl.')
+  // Nothing readable became hover-only: the meter's own sentence carries all of it.
+  expect(screen.getByRole('meter').getAttribute('aria-valuetext')).toBe(
+    '$31,339.50 so far; $41,667.90 projected of $72,000.00, incl. $11,500.00 employer match',
+  )
+  // ...and the verdict cell is untouched.
+  expect(screen.getByText('57.87%')).toBeTruthy()
+  expect(screen.getByText('on pace')).toBeTruthy()
+})
+
+// mouseOver/mouseOut, NOT mouseEnter/mouseLeave: React synthesizes onMouseEnter from the
+// bubbling pair, so a dispatched `mouseenter` reaches no handler (ToastProvider.test.tsx's
+// note). A real pointer fires mouseover on the segment and it bubbles to the meter.
+it('tells the segments apart on hover, and clears the tip on the way out', () => {
+  renderPanel([TOTAL])
+  const meter = screen.getByRole('meter')
+  expect(screen.queryByRole('tooltip')).toBeNull()
+
+  fireEvent.mouseOver(meter.querySelector('.pace-fill-sofar') as HTMLElement)
+  expect(tipText()).toBe('So far $31,339.50')
+
+  fireEvent.mouseOver(meter.querySelector('.pace-fill') as HTMLElement)
+  expect(tipText()).toBe('Projected $41,667.90 · incl. $11,500.00 employer match')
+
+  // The bare track is the projection's own ground: same tip, no dead zone between segments.
+  fireEvent.mouseOver(meter)
+  expect(tipText()).toBe('Projected $41,667.90 · incl. $11,500.00 employer match')
+
+  fireEvent.mouseOut(meter)
+  expect(screen.queryByRole('tooltip')).toBeNull()
+})
+
+it('names the employer deposit and the ESPP window in the projected tip', () => {
+  renderPanel([{ ...WALKED, employer_hsa: '2000.00' }])
+  fireEvent.mouseOver(screen.getByRole('meter').querySelector('.pace-fill') as HTMLElement)
+  expect(tipText()).toBe('Projected $4,400.00 · incl. $2,000.00 employer')
+  cleanup()
+  renderPanel([{ ...ESPP, so_far: '10391.15' }])
+  fireEvent.mouseOver(screen.getByRole('meter').querySelector('.pace-fill') as HTMLElement)
+  expect(tipText()).toBe('Projected $20,861.02 · Sep 2025 – Aug 2026 purchases')
+})
+
+it('explains the two ticks it draws', () => {
+  renderPanel([ESPP])
+  fireEvent.mouseOver(screen.getByRole('meter').querySelector('.pace-soft-tick') as HTMLElement)
+  expect(tipText()).toBe('Practical cap $21,250.00 of the $25,000.00 §423 cap')
+  cleanup()
+  renderPanel([OVER])
+  fireEvent.mouseOver(
+    screen.getByRole('meter').querySelector('.pace-overflow-tick') as HTMLElement,
+  )
+  // 27,000 against a 25,000 cap — display arithmetic of two server figures, nothing derived.
+  expect(tipText()).toBe('Over the cap by $2,000.00')
+})
+
+it('shows every line at once on focus, and puts it away on Escape or blur', () => {
+  renderPanel([TOTAL])
+  const meter = screen.getByRole('meter')
+  expect(meter.getAttribute('tabindex')).toBe('0')
+
+  fireEvent.focus(meter)
+  const lines = tipText() ?? ''
+  expect(lines).toContain('So far $31,339.50')
+  expect(lines).toContain('Projected $41,667.90 · incl. $11,500.00 employer match')
+  expect(lines).toContain('Cap $72,000.00')
+
+  fireEvent.keyDown(meter, { key: 'Escape' })
+  expect(screen.queryByRole('tooltip')).toBeNull()
+
+  fireEvent.focus(meter)
+  expect(screen.getByRole('tooltip')).toBeTruthy()
+  fireEvent.blur(meter)
+  expect(screen.queryByRole('tooltip')).toBeNull()
+})
+
+it('reads the practical cap on the ESPP row when focused', () => {
+  renderPanel([{ ...ESPP, so_far: '10391.15' }])
+  fireEvent.focus(screen.getByRole('meter'))
+  expect(tipText()).toContain('Practical cap $21,250.00 of the $25,000.00 §423 cap')
 })
