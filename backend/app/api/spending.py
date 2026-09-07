@@ -25,6 +25,7 @@ from app.schemas.spending import (
     YearlyOut,
     YearRollup,
 )
+from app.services.budgets import resolve_budgets
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
@@ -281,30 +282,6 @@ def _kind_split(
     return by_kind
 
 
-def _resolve_budgets(
-    rows: list[CategoryBudget], months: list[date]
-) -> dict[int, list[Decimal | None]]:
-    """Per category, the resolved budget for each month: the amount of the row with the
-    greatest effective_month <= month (spec §2). `months` must be ascending (the matrix's
-    order); one sorted walk per category, zero extra queries — the table is tiny."""
-    by_category: dict[int, list[CategoryBudget]] = {}
-    for row in rows:
-        by_category.setdefault(row.category_id, []).append(row)
-    resolved: dict[int, list[Decimal | None]] = {}
-    for category_id, history in by_category.items():
-        history.sort(key=lambda r: r.effective_month)
-        values: list[Decimal | None] = []
-        pointer = 0
-        current: Decimal | None = None
-        for month in months:
-            while pointer < len(history) and history[pointer].effective_month <= month:
-                current = history[pointer].amount
-                pointer += 1
-            values.append(current)
-        resolved[category_id] = values
-    return resolved
-
-
 @router.get("/matrix", response_model=MatrixOut)
 async def matrix(
     start: date | None = None,
@@ -361,7 +338,7 @@ async def matrix(
         None if base is None else quantize_money(base * swr / 12, "four_pct_rule") for base in bases
     ]
     budget_rows = list((await db.execute(select(CategoryBudget))).scalars().all())
-    budgets_by_category = _resolve_budgets(budget_rows, months)
+    budgets_by_category = resolve_budgets(budget_rows, months)
     # Shared read-only default for unbudgeted categories; pydantic validation copies it.
     no_budgets: list[Decimal | None] = [None] * len(months)
     total_budget: list[Decimal | None] = []
@@ -471,7 +448,7 @@ async def get_month(month: date, db: AsyncSession = Depends(get_db)) -> Spending
     )
     cashflow = await db.get(MonthlyCashflow, month)
     budget_rows = list((await db.execute(select(CategoryBudget))).scalars().all())
-    resolved = _resolve_budgets(budget_rows, [month])
+    resolved = resolve_budgets(budget_rows, [month])
     budgets = [
         AmountEntry(category_id=category_id, amount=values[0])
         for category_id, values in sorted(resolved.items())
