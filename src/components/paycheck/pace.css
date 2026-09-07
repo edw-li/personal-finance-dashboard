@@ -28,8 +28,11 @@
   background: var(--surface-2);
 }
 
+/* Both runs are absolutely placed: the projected one starts at the so-far one's end (its
+   `left` is that boundary), so the track reads as two neighbouring segments. */
 .pace-fill {
-  position: relative;
+  position: absolute;
+  top: 0;
   height: 100%;
   border-radius: 2px;
 }
@@ -161,10 +164,10 @@
 .pace-match { color: var(--muted); font-size: 0.72rem; }
 
 /* Hover targets, not hunting targets: the track is 4px tall and a tick is 2px wide, so every
-   hoverable part wears a transparent 14px band (the ticks a little wider) through a ::before.
+   DRAWN part wears a transparent 14px band (the ticks a little wider) through a ::before. The
+   empty track gets none: it describes nothing, so it must not answer a hover.
    The pseudo-element is part of its own box for hit-testing, so `event.target` still names
    the segment the pointer is over. */
-.pace-meter::before,
 .pace-fill::before,
 .pace-fill-sofar::before,
 .pace-soft-tick::before,
@@ -212,4 +215,33 @@
 .pace-meter:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
+}
+
+/* The part under the pointer swells and brightens. The tip says WHAT it is; this says WHICH
+   it is — the same redundancy the tone colour and the verdict word keep for each other. */
+.pace-fill.is-hot,
+.pace-fill-sofar.is-hot {
+  transform: scaleY(1.9);
+  transform-origin: center;
+  filter: brightness(1.15);
+}
+
+/* The ticks keep the offset that centres them on their position (the soft tick's -1px). */
+.pace-soft-tick.is-hot {
+  transform: translateX(-1px) scaleY(1.3);
+}
+
+.pace-overflow-tick.is-hot {
+  transform: scaleY(1.3);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pace-fill,
+  .pace-fill-sofar,
+  .pace-soft-tick,
+  .pace-overflow-tick {
+    transition:
+      transform var(--t-fast) ease,
+      filter var(--t-fast) ease;
+  }
 }
