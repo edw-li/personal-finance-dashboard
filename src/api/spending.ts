@@ -1,5 +1,7 @@
 import { api, apiWithHeaders } from './client'
 import type {
+  BudgetSeedOut,
+  BudgetSuggestionsOut,
   CategoryBudgetEntry,
   CategoryCreate,
   CategoryOut,
@@ -73,6 +75,21 @@ export function putCategoryBudget(
 export function deleteCategoryBudget(categoryId: number, effectiveMonth: string): Promise<void> {
   return api<void>(`/spending/categories/${categoryId}/budget/${effectiveMonth}`, {
     method: 'DELETE',
+  })
+}
+
+// The Budget card's suggestion figures (spec §2): one GET, read-only.
+export function fetchBudgetSuggestions(): Promise<BudgetSuggestionsOut> {
+  return api<BudgetSuggestionsOut>('/spending/budgets/suggestions')
+}
+
+// The one-click seed (spec §2): every seedable category's suggestion becomes a dated budget
+// row from `effectiveMonth` (YYYY-MM-01) in ONE change batch — the response's batch_id is
+// the Undo.
+export function seedBudgets(effectiveMonth: string): Promise<BudgetSeedOut> {
+  return api<BudgetSeedOut>('/spending/budgets/seed', {
+    method: 'POST',
+    body: JSON.stringify({ effective_month: effectiveMonth }),
   })
 }
 

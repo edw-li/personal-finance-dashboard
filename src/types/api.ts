@@ -241,6 +241,43 @@ export interface CategoryBudgetEntry {
   amount: string | null
 }
 
+// --- budgets seeded from averages (2026-09-07 spec §2) ---
+
+export type BudgetProfile = 'dormant' | 'sparse' | 'fixed' | 'episodic' | 'variable'
+export type BudgetSkipReason = 'kind' | 'dormant' | 'sparse'
+
+/** One category's window figures and the seed the one-click action would write. Figures are
+ *  null when there is nothing to compute (no rows in the window); `seed` is null with a
+ *  `skip_reason` for a non-living kind, a dormant category or fewer than three months. */
+export interface BudgetSuggestion {
+  category_id: number
+  profile: BudgetProfile
+  months: number
+  mean: string | null
+  median: string | null
+  latest: string | null
+  latest_month: string | null
+  cv: string | null
+  seed: string | null
+  skip_reason: BudgetSkipReason | null
+}
+
+export interface BudgetSuggestionsOut {
+  /** The projection's window echo, reused; null when nothing is entered yet. */
+  window: DerivedWindowOut | null
+  suggestions: BudgetSuggestion[]
+}
+
+export interface BudgetSeedOut {
+  effective_month: string
+  window: DerivedWindowOut | null
+  written: AmountEntry[]
+  /** `unchanged`: the budget already resolved to the seed that month — nothing written. */
+  skipped: { category_id: number; reason: BudgetSkipReason | 'unchanged' }[]
+  /** The change batch; null when nothing changed (then there is no Undo to offer). */
+  batch_id: string | null
+}
+
 export interface SpendingUpsertResult {
   month: string
   created: number
@@ -1802,6 +1839,11 @@ export interface ProjectionOut {
    *  nothing could be derived; absent from a backend older than 2026-09-04 — readers take it
    *  as `?? null`, the `bands` posture. */
   derived_window?: DerivedWindowOut | null
+  /** 12 × the active living categories' budgets resolved for `start_month` (2026-09-07
+   *  budget-seed spec §4) — the knobs card's "Use my budgets" preset. Null without budgets;
+   *  absent from an older backend, read as `?? null`. */
+  budget_annual_spend?: string | null
+  budget_month?: string | null
 }
 
 // --- import (mirrors backend/app/importer/report.py) ---
