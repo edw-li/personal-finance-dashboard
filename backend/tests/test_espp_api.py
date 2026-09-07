@@ -175,6 +175,100 @@ async def test_lots_envelope_degrades_at_every_break_in_the_soft_link(auth_clien
     assert (await auth_client.get(LOTS)).json()["espp_ticker"] is None
 
 
+async def test_lots_envelope_carries_the_anatomy_and_the_position_totals(
+    auth_client, priced_ticker
+):
+    await create_lot(auth_client)  # 2024-02-29, 260 sh at 41.23265
+    await create_lot(
+        auth_client,
+        purchase_date="2025-08-29",
+        qualifying_date="2026-08-29",
+        shares="100",
+        subscription_price="150",
+        purchase_fmv="200",
+    )
+    body = (await auth_client.get(LOTS)).json()
+    first, second = body["lots"]
+    assert (first["fmv_value"], first["bargain_element"]) == ("20569.12", "9848.63")
+    assert (first["lookback_component"], first["discount_component"]) == ("7956.78", "1891.85")
+    assert first["appreciation"] == "24717.68"
+    assert first["avg_paid_to_date"] == "41.23265"
+    assert second["purchase_price"] == "127.50000"  # 0.85 x 150, the lower price
+    assert second["appreciation"] == "-2582.00"  # 17418.00 - 20000.00: under its FMV
+    assert second["avg_paid_to_date"] == "65.19581"  # (10720.49 + 12750.00) / 360
+    assert body["totals"]["held"] == {
+        "lots": 2,
+        "shares": "360.0000",
+        "cost_basis": "23470.49",
+        "fmv_value": "40569.12",
+        "market_value": "62704.80",
+        "gain_amount": "39234.31",
+        "gain_pct": "1.671644",  # 39234.31 / 23470.49 — the money ratio
+        "bargain_element": "17098.63",
+        "lookback_component": "12956.78",
+        "discount_component": "4141.85",
+        "appreciation": "22135.68",
+        "avg_paid": "65.19581",
+    }
+    assert body["totals"]["sold"] == {
+        "lots": 0,
+        "shares": "0.0000",
+        "cost_basis": "0.00",
+        "proceeds": "0.00",
+        "gain_amount": "0.00",
+    }
+
+
+async def test_lots_totals_null_the_quote_fields_when_unpriced_and_sum_sold_lots_apart(
+    auth_client,
+):
+    await create_lot(auth_client)
+    await create_lot(
+        auth_client,
+        purchase_date="2024-08-30",
+        qualifying_date="2025-09-01",
+        shares="255",
+        sold_date="2026-03-01",
+        sold_price="120",
+    )
+    body = (await auth_client.get(LOTS)).json()  # no espp_ticker at all
+    held = body["totals"]["held"]
+    assert (held["lots"], held["shares"], held["cost_basis"]) == (1, "260.0000", "10720.49")
+    assert held["bargain_element"] == "9848.63"  # purchase-day facts survive a missing quote
+    assert (held["market_value"], held["gain_amount"], held["gain_pct"], held["appreciation"]) == (
+        None,
+        None,
+        None,
+        None,
+    )
+    assert held["avg_paid"] == "41.23265"
+    assert body["totals"]["sold"] == {
+        "lots": 1,
+        "shares": "255.0000",
+        "cost_basis": "10514.33",
+        "proceeds": "30600.00",
+        "gain_amount": "20085.67",
+    }
+
+
+async def test_write_verbs_answer_with_the_running_average(auth_client):
+    await create_lot(auth_client)
+    created = await create_lot(
+        auth_client,
+        purchase_date="2025-08-29",
+        qualifying_date="2026-08-29",
+        shares="100",
+        subscription_price="150",
+        purchase_fmv="200",
+    )
+    assert created["avg_paid_to_date"] == "65.19581"
+    assert created["fmv_value"] == "20000.00"
+    patched = await auth_client.patch(f"{LOTS}/{created['id']}", json={"shares": "50"})
+    assert patched.status_code == 200, patched.text
+    # (10720.49 + 6375.00) / 310 at 5 dp — the PATCH re-reads the chain it just changed.
+    assert patched.json()["avg_paid_to_date"] == "55.14674"
+
+
 async def test_espp_ticker_setting_is_normalized_before_the_lookup(auth_client, db):
     # A hand-typed setting: padded and lowercase. portfolio.py's _normalize_ticker posture
     # (strip + upper) is the only reason it finds the securities row at all.
@@ -211,6 +305,32 @@ async def test_lots_list_is_empty_before_anything_is_stored(auth_client):
         "current_price": None,
         "quoted_at": None,
         "lots": [],
+        # All zeros, never absent (2026-09-07 spec §3.2), and at COLUMN scale so the strip's
+        # tiles read "0.0000"/"0.00" rather than a bare "0". avg_paid and gain_pct are the
+        # two divisions, so they are the only nulls on an empty book.
+        "totals": {
+            "held": {
+                "lots": 0,
+                "shares": "0.0000",
+                "cost_basis": "0.00",
+                "fmv_value": "0.00",
+                "market_value": "0.00",
+                "gain_amount": "0.00",
+                "gain_pct": None,
+                "bargain_element": "0.00",
+                "lookback_component": "0.00",
+                "discount_component": "0.00",
+                "appreciation": "0.00",
+                "avg_paid": None,
+            },
+            "sold": {
+                "lots": 0,
+                "shares": "0.0000",
+                "cost_basis": "0.00",
+                "proceeds": "0.00",
+                "gain_amount": "0.00",
+            },
+        },
     }
 
 

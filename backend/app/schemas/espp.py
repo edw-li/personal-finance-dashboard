@@ -72,6 +72,51 @@ class LotOut(BaseModel):
     qualified: bool
     days_until_qualified: int | None
     is_sold: bool
+    # --- the anatomy (2026-09-07 spec §3.1): the lot's value on purchase day and its split.
+    # Only `appreciation` needs a price, so only it can be null.
+    fmv_value: Decimal
+    bargain_element: Decimal
+    lookback_component: Decimal
+    discount_component: Decimal
+    appreciation: Decimal | None
+    # Average price paid per share over every lot bought up to and including this one, 5 dp —
+    # the price chart's stepped rule (espp_calc.running_avg_paid). Null only for a stored
+    # zero-share chain, which the API forbids.
+    avg_paid_to_date: Decimal | None
+
+
+class HeldTotalsOut(BaseModel):
+    """The unsold lots summed. The four quote-dependent fields are null as soon as one held
+    lot is unpriced; the purchase-day facts always sum. gain_pct is gain / cost — a MONEY
+    ratio, unlike LotOut.gain_pct, which is the sheet's price ratio."""
+
+    lots: int
+    shares: Decimal
+    cost_basis: Decimal
+    fmv_value: Decimal
+    market_value: Decimal | None
+    gain_amount: Decimal | None
+    gain_pct: Decimal | None
+    bargain_element: Decimal
+    lookback_component: Decimal
+    discount_component: Decimal
+    appreciation: Decimal | None
+    avg_paid: Decimal | None
+
+
+class SoldTotalsOut(BaseModel):
+    """Lots carrying a sale. A sold row missing its price counts in lots and shares only."""
+
+    lots: int
+    shares: Decimal
+    cost_basis: Decimal
+    proceeds: Decimal
+    gain_amount: Decimal
+
+
+class LotTotalsOut(BaseModel):
+    held: HeldTotalsOut
+    sold: SoldTotalsOut
 
 
 class LotsOut(BaseModel):
@@ -80,6 +125,7 @@ class LotsOut(BaseModel):
     current_price: Decimal | None
     quoted_at: datetime | None
     lots: list[LotOut]
+    totals: LotTotalsOut
 
 
 class OfferingIn(BaseModel):
