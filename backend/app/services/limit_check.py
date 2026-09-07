@@ -95,6 +95,10 @@ class PaceItem:
     current_rate: Decimal | None = None  # ESPP: the espp_pct the projection used (9 dp fraction)
     employer_match: Decimal | None = None  # 415(c) only, and only when it is > 0
     employer_hsa: Decimal | None = None  # HSA only, and only when it is > 0
+    # What is already behind today, against `annualized`'s projected year end (spec §2.6).
+    # None on a row nobody walked — the pure callers, whose figure is still "a year at this
+    # rate" and has no past to point at.
+    so_far: Decimal | None = None
 
 
 def _item(

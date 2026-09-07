@@ -26,6 +26,12 @@ class FakeProfile:
     annual_salary: Decimal = D("188930.00")
     pay_periods_per_year: int = 24
     espp_pct: Decimal = D("0.110000000")
+    # The walk behind this row prices a WHOLE payday now (spec §2.6), so the stand-in carries
+    # the other three contribution columns too. Zero here: this file is about the ESPP leg.
+    trad_401k_pct: Decimal = D("0")
+    roth_401k_pct: Decimal = D("0")
+    after_tax_401k_pct: Decimal = D("0")
+    hsa_per_check: Decimal = D("0")
 
 
 EDWARD = [
@@ -186,3 +192,32 @@ def test_a_window_that_opens_after_the_earliest_profile_borrows_nothing():
     )
     assert row.halves[0].source == "estimated"  # the February purchase has not happened yet
     assert row.backfilled_from is None
+
+
+def test_the_window_says_how_much_of_it_is_already_behind_today():
+    """`so_far` is the ESPP row's half of §2.6's two figures: the window's paydays before
+    today. The whole 2026 window is behind 2026-09-06, so there it IS the window."""
+    assert item().so_far == item().annualized == D("20861.02")
+    # Nine of H1's twelve paydays are behind 2026-01-20 (Sep 2025 through Jan 15) and H2 has
+    # not opened: 9 x 11 % of 188,930 / 24.
+    assert item(today=date(2026, 1, 20)).so_far == D("7793.36")
+
+
+def test_an_entered_half_counts_wholly_toward_so_far():
+    """The purchase happened and the user typed the contribution, so all of it is behind us —
+    an estimate of the same half would be second-guessing their own number."""
+    stored = [
+        StoredPeriod(
+            id=1,
+            label="Sep 2025–Feb 2026",
+            period_start=date(2025, 9, 1),
+            period_end=date(2026, 2, 27),
+            semi_annual_base=D("90000.00"),
+            additional_payments=D("0.00"),
+            contribution_pct=D("0.100000000"),
+        )
+    ]
+    row = item(rows=rows_for(2026, stored), today=date(2026, 6, 1))
+    assert row.halves[0].source == "entered"
+    # 9,000 entered + six Mar-through-May paydays at 11 %.
+    assert row.so_far == D("14195.58")
