@@ -1066,3 +1066,40 @@ async def test_budget_seed_validation(auth_client, db, monkeypatch):
     assert short.status_code == 422
     assert "three complete months" in short.json()["detail"]
     assert (await db.execute(select(CategoryBudget))).scalars().all() == []
+
+
+async def test_living_budget_total_counts_only_active_living_budgets(db):
+    """The projection's preset input (spec §4): a tax target, an archived category's stale
+    budget and a not-yet-in-force row are not modeled spend; with no living category at all
+    the answer is None, not 0.00."""
+    from app.services.budgets import living_budget_total
+
+    tax = SpendingCategory(name="Taxes", slug="taxes", sort_order=1, kind="tax")
+    db.add(tax)
+    await db.flush()
+    db.add(
+        CategoryBudget(
+            category_id=tax.id, effective_month=date(2026, 8, 1), amount=Decimal("5000.00")
+        )
+    )
+    await db.commit()
+    assert await living_budget_total(db, date(2026, 9, 1)) is None
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=2)
+    old = SpendingCategory(name="Old", slug="old", sort_order=3, is_active=False)
+    db.add_all([rent, old])
+    await db.flush()
+    db.add_all(
+        [
+            CategoryBudget(
+                category_id=rent.id, effective_month=date(2026, 6, 1), amount=Decimal("2000.00")
+            ),
+            CategoryBudget(
+                category_id=rent.id, effective_month=date(2026, 10, 1), amount=Decimal("9999.00")
+            ),
+            CategoryBudget(
+                category_id=old.id, effective_month=date(2026, 1, 1), amount=Decimal("400.00")
+            ),
+        ]
+    )
+    await db.commit()
+    assert await living_budget_total(db, date(2026, 9, 1)) == Decimal("2000.00")

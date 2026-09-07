@@ -56,6 +56,7 @@ from app.schemas.projection import (
     ProjectionOut,
     RetirementOut,
 )
+from app.services.budgets import living_budget_total
 from app.services.limit_check import employer_match
 from app.services.money import quantize_money, quantize_pct
 from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
@@ -508,6 +509,11 @@ async def projection(
             fi_month_p50 = None if p50 is None else months[min(p50, month_count)]
             fi_month_p90 = None if p90 is None else months[min(p90, month_count)]
 
+    # The budgets' own annual figure rides beside the derived one (spec §4): a preset the
+    # card can offer, never a replacement for what the data derived.
+    budget_total = await living_budget_total(db, start_month)
+    budget_annual_spend = None if budget_total is None else budget_total * 12
+
     return ProjectionOut(
         starting_balance=starting,
         base_month=base_month,
@@ -536,4 +542,6 @@ async def projection(
         fi_month_p90=fi_month_p90,
         retirements=retirements,
         derived_window=derived_window,
+        budget_annual_spend=budget_annual_spend,
+        budget_month=None if budget_annual_spend is None else start_month,
     )

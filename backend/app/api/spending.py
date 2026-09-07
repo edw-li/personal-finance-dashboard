@@ -288,6 +288,7 @@ async def budget_suggestions(db: AsyncSession = Depends(get_db)) -> BudgetSugges
     )
 
 
+# spec §2 wording; the number is MIN_SEED_MONTHS (3) — pinned by test_budgets_service.py
 SEED_NEEDS_HISTORY = (
     "needs at least three complete months of spending before a budget can be suggested"
 )
@@ -316,6 +317,8 @@ async def seed_budgets(
     skipped: list[BudgetSkip] = []
     for s in suggestions:
         if s.seed is None:
+            # `suggest` never returns a seedless suggestion without a reason (spec §2), so the
+            # `or` only narrows the type for the checker — it is not a live fallback.
             skipped.append(BudgetSkip(category_id=s.category_id, reason=s.skip_reason or "dormant"))
             continue
         if resolved.get(s.category_id, [None])[0] == s.seed:
