@@ -6,7 +6,7 @@ import { formatPct } from '../../utils/format'
 import { todayIso } from '../../utils/months'
 import { PRICE_SPANS, extentKnown, priceWindowSummary, reachableSpans } from '../portfolio/priceChartOptions'
 import type { SpanDays } from '../portfolio/priceChartOptions'
-import { esppPriceCsv, esppPriceOption, lotsBeforeHistory, sliceWindow } from './esppChartOptions'
+import { esppPriceCsv, esppPriceOption, lotsOutsideHistory, sliceWindow } from './esppChartOptions'
 import '../panels.css'
 
 // The page fetches this many days once (the offerings chip's series); the chips slice it.
@@ -49,7 +49,25 @@ export default function EsppPriceCard({
   // (so the stored history really begins at its first bar) AND this window still reaches that bar.
   const sinceInception =
     extentKnown(all, FETCHED_DAYS, today) && window.length > 0 && window[0].d === all[0].d
-  const predating = lotsBeforeHistory(all, lots)
+  // Both sides, one sentence: a lot the window cannot reach has no marker on the chart either
+  // (barAt refuses it), and a reader who counts four lots and three diamonds deserves to be told
+  // why. The single-side wording repeats the noun rather than leaving "it" with no antecedent.
+  const outside = lotsOutsideHistory(all, lots)
+  const missing = outside.before + outside.after
+  const beforeClause =
+    outside.before === 0 ? '' : `${outside.before} ${outside.before === 1 ? 'lot predates' : 'lots predate'}`
+  // The trailing clause drops the noun the leading one already established ("...and 2 postdate it").
+  const afterVerb = outside.after === 1 ? 'postdates' : 'postdate'
+  const reach =
+    missing === 0
+      ? null
+      : `${
+          beforeClause !== '' && outside.after > 0
+            ? `${beforeClause} the stored history and ${outside.after} ${afterVerb} it`
+            : beforeClause !== ''
+              ? `${beforeClause} the stored history`
+              : `${outside.after} ${outside.after === 1 ? 'lot' : 'lots'} ${afterVerb} the stored history`
+        } — the next price refresh reaches ${missing === 1 ? 'it' : 'them'}.`
   const name = ticker ?? 'the employer'
 
   return (
@@ -80,7 +98,7 @@ export default function EsppPriceCard({
         />
       }
       footer={
-        summary === null && predating === 0 ? undefined : (
+        summary === null && reach === null ? undefined : (
           <>
             {summary !== null && (
               <p className="drill-hint">
@@ -88,13 +106,7 @@ export default function EsppPriceCard({
                 {sinceInception ? `history since ${summary.since}` : `window from ${summary.since}`}
               </p>
             )}
-            {predating > 0 && (
-              <p className="drill-hint">
-                {`${predating} ${predating === 1 ? 'lot predates' : 'lots predate'} the stored history — the employer backfill ${
-                  predating === 1 ? 'reaches it' : 'reaches them'
-                } on the next price refresh.`}
-              </p>
-            )}
+            {reach !== null && <p className="drill-hint">{reach}</p>}
           </>
         )
       }

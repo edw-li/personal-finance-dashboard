@@ -204,7 +204,17 @@ function dollarsOption(
 ): EChartsOption {
   const paid = lots.map((l) => Number(l.cost_basis))
   const bargain = lots.map((l) => Math.max(Number(l.bargain_element), 0))
-  const appreciation = lots.map((l) => (l.appreciation === null ? 0 : Math.max(Number(l.appreciation), 0)))
+  // Measured from where the drawn column already STANDS, not from the FMV: an over-typed purchase
+  // price makes bargain_element negative (spec §5.3's edge), the clamped segment draws nothing, and
+  // the server's own appreciation would then push the top past the value by exactly the
+  // overpayment. max(fmv_value, cost_basis) keeps the solid top equal to market_value either way,
+  // and equals the server's figure whenever the bargain is positive. The tooltip still prints the
+  // signed wire figures.
+  const appreciation = lots.map((l) =>
+    l.market_value === null || l.appreciation === null
+      ? 0
+      : cents(Math.max(Number(l.market_value) - Math.max(Number(l.fmv_value), Number(l.cost_basis)), 0)),
+  )
   const underwater = lots.map((l) => l.appreciation !== null && Number(l.appreciation) < 0)
   const lossBase = lots.map((l, i) => (underwater[i] ? Number(l.market_value) : 0))
   const loss = lots.map((l, i) => (underwater[i] ? cents(Number(l.fmv_value) - Number(l.market_value)) : 0))
@@ -263,7 +273,11 @@ function perShareOption(
         : Number(currentPrice),
   )
   const bargain = lots.map((_, i) => cents(Math.max(fmv[i] - paid[i], 0)))
-  const appreciation = lots.map((_, i) => (price[i] === null ? 0 : cents(Math.max((price[i] as number) - fmv[i], 0))))
+  // From max(fmv, paid), the dollars view's reasoning per share: paid ABOVE the FMV draws no
+  // bargain segment, so measuring from the FMV would top the ladder out above the price.
+  const appreciation = lots.map((_, i) =>
+    price[i] === null ? 0 : cents(Math.max((price[i] as number) - Math.max(fmv[i], paid[i]), 0)),
+  )
   const underwater = lots.map((_, i) => price[i] !== null && (price[i] as number) < fmv[i])
   const lossBase = lots.map((_, i) => (underwater[i] ? (price[i] as number) : 0))
   const loss = lots.map((_, i) => (underwater[i] ? cents(fmv[i] - (price[i] as number)) : 0))
@@ -297,7 +311,11 @@ function perShareOption(
   const names = [PAID, BARGAIN, APPRECIATION, ...(hasLoss ? [LOSS] : []), PRICE_DOT, SUBSCRIPTION, ...(priced ? [QUOTE_RULE] : [])]
   return {
     grid: grid(),
-    legend: { ...legendFor(names.length, selected), data: names },
+    // SCROLL below the grammar's eight-entry threshold — the one view that departs from legendFor.
+    // Seven entries, four of them long ('Below purchase FMV', 'Subscription price', 'Current
+    // quote'), outrun a span-6 card at ~600-760px; a plain legend then wraps to a second line and
+    // lands on the plot, because grid.top is a fixed 40. A scroll legend never wraps.
+    legend: { ...legendFor(names.length, selected), type: 'scroll' as const, data: names },
     tooltip: axisTooltip({
       unit: 'money',
       pointer: 'shadow',
@@ -383,9 +401,12 @@ export interface PurchaseMarker extends ChartEventPoint {
   itemStyle?: { color: string; borderColor: string; borderWidth: number }
 }
 
-/** Index of the last bar on or before `iso`, or -1 when the history starts later. ISO strings
- *  compare as dates (format.ts's never-`new Date(iso)` rule). */
-function barOnOrBefore(dates: string[], iso: string): number {
+/** The bar a dated event rides: the last one on or before `iso`. -1 when the event falls OUTSIDE
+ *  the stored window on EITHER side — before the first bar there is nothing to ride, and after the
+ *  last one snapping back would draw a later lot at an old close. ISO strings compare as dates
+ *  (format.ts's never-`new Date(iso)` rule). */
+function barAt(dates: string[], iso: string): number {
+  if (dates.length === 0 || iso < dates[0] || iso > dates[dates.length - 1]) return -1
   let index = -1
   for (let i = 0; i < dates.length && dates[i] <= iso; i++) index = i
   return index
@@ -458,7 +479,7 @@ export function esppPriceOption({ points, offerings, lots }: EsppPriceInput): EC
   const purchases: PurchaseMarker[] = []
   const sales: ChartEventPoint[] = []
   for (const l of chain) {
-    const bought = barOnOrBefore(dates, l.purchase_date)
+    const bought = barAt(dates, l.purchase_date)
     if (bought >= 0) {
       purchases.push({
         value: [labels[bought], closes[bought]],
@@ -476,7 +497,7 @@ export function esppPriceOption({ points, offerings, lots }: EsppPriceInput): EC
       })
     }
     if (l.is_sold && l.sold_date !== null) {
-      const sold = barOnOrBefore(dates, l.sold_date)
+      const sold = barAt(dates, l.sold_date)
       if (sold >= 0) {
         sales.push({
           value: [labels[sold], closes[sold]],
@@ -498,10 +519,23 @@ export function esppPriceOption({ points, offerings, lots }: EsppPriceInput): EC
   // The end text is the SHORT name, not '{a}': grid('endLabel') reserves 84px on the right, and
   // 'Subscription price' / 'Avg paid to date' run past that at 11px — the 2026-09-07 probe's first
   // shoot clipped both to "Subscription p" and "Avg paid to da".
-  const step = (name: string, endText: string, data: (number | null)[]) => ({
+  const step = (name: string, endText: string, data: (number | null)[], extra: object = {}) => ({
     ...referenceLine(name, data, { step: 'end' }),
-    endLabel: { show: true, formatter: endText, color: MUTED, fontSize: 11 },
+    endLabel: { show: true, formatter: endText, color: MUTED, fontSize: 11, ...extra },
   })
+  // Both rules end at the same x, and a few dollars apart their labels overlap. Rank them by where
+  // they ACTUALLY end — a dearer late purchase lifts the average paid above a later, lower
+  // subscription price, so "the subscription is the lower line" is not a rule — and push the higher
+  // one's label up off its own line ('bottom' = the label's bottom edge sits on the point), the
+  // lower one's down. With only one rule drawn there is nothing to collide with, so it keeps
+  // echarts' centred default.
+  const lastValue = (data: (number | null)[]): number => {
+    for (let i = data.length - 1; i >= 0; i--) if (data[i] !== null) return data[i] as number
+    return 0
+  }
+  const bothRules = hasSub && hasAvg
+  const part = (higher: boolean) => (bothRules ? { verticalAlign: higher ? 'bottom' : 'top' } : {})
+  const subOnTop = lastValue(subscription) >= lastValue(avgPaid)
   const names = [
     CLOSE,
     ...(hasSub ? [SUBSCRIPTION] : []),
@@ -536,8 +570,8 @@ export function esppPriceOption({ points, offerings, lots }: EsppPriceInput): EC
     series: [
       ...washes,
       { ...LINE, name: CLOSE, color: PALETTE[0], data: closes },
-      ...(hasSub ? [step(SUBSCRIPTION, 'Subscription', subscription)] : []),
-      ...(hasAvg ? [step(AVG_PAID, 'Avg paid', avgPaid)] : []),
+      ...(hasSub ? [step(SUBSCRIPTION, 'Subscription', subscription, part(subOnTop))] : []),
+      ...(hasAvg ? [step(AVG_PAID, 'Avg paid', avgPaid, part(!subOnTop))] : []),
       ...(purchases.length > 0 ? [marker(PURCHASES, PALETTE[1], 10, purchases)] : []),
       ...(sales.length > 0 ? [marker(SALES, MUTED, 9, sales)] : []),
     ],
@@ -551,11 +585,20 @@ export function sliceWindow(points: PricePoint[], days: number, todayIso: string
   return points.filter((p) => p.d >= since)
 }
 
-/** How many lots were bought before the stored history begins — the footer's honesty line. */
-export function lotsBeforeHistory(points: PricePoint[], lots: EsppLotOut[]): number {
-  if (points.length === 0) return 0
+/** How many lots the stored history cannot reach, on each side — the footer's honesty line. A lot
+ *  bought AFTER the last bar has no marker either (barAt refuses it), so both counts are things
+ *  the chart is silent about until the next refresh extends the series. */
+export function lotsOutsideHistory(
+  points: PricePoint[],
+  lots: EsppLotOut[],
+): { before: number; after: number } {
+  if (points.length === 0) return { before: 0, after: 0 }
   const first = points[0].d
-  return lots.filter((l) => l.purchase_date < first).length
+  const last = points[points.length - 1].d
+  return {
+    before: lots.filter((l) => l.purchase_date < first).length,
+    after: lots.filter((l) => l.purchase_date > last).length,
+  }
 }
 
 /** The window as a table (F12): one row per bar, the two rules, and the day's purchase or sale. */
@@ -565,10 +608,10 @@ export function esppPriceCsv(points: PricePoint[], offerings: EsppOfferingOut[],
   const bought = new Map<number, string>()
   const sold = new Map<number, string>()
   for (const l of chain) {
-    const b = barOnOrBefore(dates, l.purchase_date)
+    const b = barAt(dates, l.purchase_date)
     if (b >= 0) bought.set(b, l.shares)
     if (l.is_sold && l.sold_date !== null) {
-      const s = barOnOrBefore(dates, l.sold_date)
+      const s = barAt(dates, l.sold_date)
       if (s >= 0) sold.set(s, l.shares)
     }
   }

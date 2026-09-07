@@ -51,9 +51,22 @@ describe('EsppPriceCard', () => {
     expect(screen.getByText(/\+61\.3% over this window · history since Feb 27, 2024/)).toBeTruthy()
   })
 
-  it('counts the lots the stored history predates', () => {
+  it('counts the lots the stored history cannot reach, on both sides and in one sentence', () => {
+    // The four shared lots straddle this five-bar window: two were bought after its last bar.
     render(<EsppPriceCard ticker="NVDA" bars={bars} offerings={[septOffering]} lots={[esppLot({ purchase_date: '2023-12-01' }), ...anatomyLots]} />)
-    expect(screen.getByText('1 lot predates the stored history — the employer backfill reaches it on the next price refresh.')).toBeTruthy()
+    expect(
+      screen.getByText('1 lot predates the stored history and 2 postdate it — the next price refresh reaches them.'),
+    ).toBeTruthy()
+  })
+
+  it('names one side alone without a dangling pronoun', () => {
+    render(<EsppPriceCard ticker="NVDA" bars={bars} offerings={[septOffering]} lots={[anatomyLots[3]]} />)
+    expect(screen.getByText('1 lot postdates the stored history — the next price refresh reaches it.')).toBeTruthy()
+  })
+
+  it('says nothing about reach when every lot is inside the window', () => {
+    render(<EsppPriceCard ticker="NVDA" bars={bars} offerings={[septOffering]} lots={[esppLot()]} />)
+    expect(screen.queryByText(/the stored history/)).toBeNull()
   })
 
   it('defaults to All over a long history and slices the series when a chip is pressed', () => {

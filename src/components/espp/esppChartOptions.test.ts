@@ -7,7 +7,7 @@ import { tooltipRows } from '../../testing/tooltipRows'
 import { anatomyLots, bars, esppLot, esppLotsResponse, septOffering } from '../../testing/esppFixtures'
 import {
   APPRECIATION, AVG_PAID, BARGAIN, CLOSE, LOSS, PAID, PRICE_DOT, PURCHASES, QUOTE_RULE, SALES, SUBSCRIPTION,
-  esppPriceCsv, esppPriceOption, hasAnatomy, lotAnatomyCsv, lotAnatomyOption, lotLabels, lotsBeforeHistory,
+  esppPriceCsv, esppPriceOption, hasAnatomy, lotAnatomyCsv, lotAnatomyOption, lotLabels, lotsOutsideHistory,
   sliceWindow, sortLots,
 } from './esppChartOptions'
 
@@ -164,6 +164,29 @@ describe('lotAnatomyOption — Dollars', () => {
     ])
   })
 
+  it('measures appreciation from whatever the column already stands on, so an over-typed purchase price still tops out at the value', () => {
+    // A purchase price ABOVE the FMV makes bargain_element negative (spec §5.3's edge). The
+    // clamped bargain draws nothing, so measuring appreciation from the FMV would push the top
+    // past the value by exactly the overpayment; from max(FMV, paid) it lands on the value.
+    const overpaid = esppLotsResponse({
+      lots: [
+        esppLot({
+          purchase_price: '85.00000', cost_basis: '22100.00', fmv_value: '20569.12',
+          bargain_element: '-1530.88', lookback_component: '7956.78', discount_component: '-9487.66',
+          market_value: '44540.60', appreciation: '23971.48',
+        }),
+      ],
+    })
+    const option = read(lotAnatomyOption(overpaid, { view: 'dollars' }))
+    expect(byName(option, PAID).data).toEqual([22100])
+    expect(byName(option, BARGAIN).data).toEqual([0])
+    expect(byName(option, APPRECIATION).data).toEqual([22440.6]) // 44540.60 - 22100.00 = the value
+    const perShare = read(lotAnatomyOption(overpaid, { view: 'per-share' }))
+    expect(perShare.series.find((s) => s.name === 'ladder-base')!.data).toEqual([85])
+    expect(byName(perShare, BARGAIN).data).toEqual([0])
+    expect(byName(perShare, APPRECIATION).data).toEqual([86.31]) // 171.31 - 85 = the quote
+  })
+
   it('says sold and qualifying in the foot as the row does', () => {
     const option = read(lotAnatomyOption(esppLotsResponse(), { view: 'dollars' }))
     const foot = (index: number) =>
@@ -222,6 +245,15 @@ describe('lotAnatomyOption — Per share', () => {
     expect(option.legend.data).toEqual([PAID, BARGAIN, APPRECIATION, LOSS, PRICE_DOT, SUBSCRIPTION, QUOTE_RULE])
   })
 
+  it('scrolls its legend where the other two charts do not', () => {
+    // Seven names, four of them long, outrun a span-6 card (~600-760px): a PLAIN legend wraps to
+    // a second line and lands on the plot, because grid.top is a fixed 40. Scrolling below the
+    // grammar's eight-entry threshold is the one place this view departs from legendFor.
+    expect(read(lotAnatomyOption(esppLotsResponse(), { view: 'per-share' })).legend.type).toBe('scroll')
+    expect(read(lotAnatomyOption(esppLotsResponse(), { view: 'dollars' })).legend.type).toBe('plain')
+    expect(read(esppPriceOption({ points: bars, offerings: [septOffering], lots: [esppLot()] })).legend.type).toBe('plain')
+  })
+
   it('drops the Price dots and the quote rule when unpriced', () => {
     const unpriced = esppLotsResponse({
       current_price: null,
@@ -272,6 +304,20 @@ describe('lotAnatomyCsv', () => {
     expect(table.rows[1][1]).toBe('sold')
     expect(table.rows[1][6]).toBe('120.00000')
   })
+
+  it('leaves the quote-dependent columns blank on an unpriced lot rather than printing a zero', () => {
+    const table = lotAnatomyCsv(
+      esppLotsResponse({
+        current_price: null,
+        quoted_at: null,
+        lots: [esppLot({ market_value: null, gain_amount: null, gain_pct: null, appreciation: null })],
+      }),
+    )
+    expect(table.rows[0]).toEqual([
+      '2024-02-29', 'held', '260.0000', '41.23265', '79.11200', '48.50900', '',
+      '10720.49', '1891.85', '7956.78', '9848.63', '', '',
+    ])
+  })
 })
 
 describe('esppPriceOption', () => {
@@ -297,8 +343,11 @@ describe('esppPriceOption', () => {
     expect(byName(option, SUBSCRIPTION)).toMatchObject({ color: MUTED, z: 9, lineStyle: { type: 'dashed', width: 2 } })
     expect(sub.step).toBe('end')
     // The SHORT name, not '{a}': grid('endLabel') reserves 84px and the series name overruns it
-    // (the 2026-09-07 probe clipped "Subscription p").
-    expect(sub.endLabel).toEqual({ show: true, formatter: 'Subscription', color: MUTED, fontSize: 11 })
+    // (the 2026-09-07 probe clipped "Subscription p"). It ends ABOVE the average paid here, so its
+    // label is pushed up off its own line and the average's down.
+    expect(sub.endLabel).toEqual({
+      show: true, formatter: 'Subscription', color: MUTED, fontSize: 11, verticalAlign: 'bottom',
+    })
     expect(byName(option, SUBSCRIPTION).data).toEqual([48.509, 48.509, 48.509, 48.509, 48.509])
     // Null before the first purchase; the running average from the lot itself afterwards.
     expect(byName(option, AVG_PAID).data).toEqual([null, 41.23265, 41.23265, 41.23265, 41.23265])
@@ -338,6 +387,51 @@ describe('esppPriceOption', () => {
     expect(option.legend.data).toEqual([CLOSE, AVG_PAID])
   })
 
+  it('steps the subscription rule at a second offering and leaves it null before the first', () => {
+    const option = read(
+      esppPriceOption({
+        points: bars,
+        offerings: [
+          { id: 1, offering_start: '2024-02-28', subscription_price: '48.50900', notes: null },
+          { id: 2, offering_start: '2024-08-30', subscription_price: '95.00000', notes: null },
+        ],
+        lots,
+      }),
+    )
+    expect(byName(option, SUBSCRIPTION).data).toEqual([null, 48.509, 48.509, 95, 95])
+  })
+
+  it('steps the average paid at each purchase, and parts the two end labels by where they END', () => {
+    // A second, dearer lot lifts the running average ABOVE the subscription rule — the ordering
+    // the naive "subscription is always the lower line" assumption would get backwards.
+    const chain = [
+      esppLot(),
+      esppLot({ id: 2, purchase_date: '2024-08-30', shares: '100.0000', purchase_price: '127.50000', avg_paid_to_date: '65.19581' }),
+    ]
+    const option = read(esppPriceOption({ points: bars, offerings: [septOffering], lots: chain }))
+    expect(byName(option, AVG_PAID).data).toEqual([null, 41.23265, 41.23265, 65.19581, 65.19581])
+    const endLabel = (name: string) =>
+      (byName(option, name) as unknown as { endLabel: { verticalAlign: string } }).endLabel.verticalAlign
+    expect(endLabel(AVG_PAID)).toBe('bottom') // the higher rule's label sits above its line
+    expect(endLabel(SUBSCRIPTION)).toBe('top')
+  })
+
+  it('washes red where a close sits under the average paid', () => {
+    const option = read(esppPriceOption({ points: bars, offerings: [], lots: [esppLot({ avg_paid_to_date: '80.00000' })] }))
+    expect(option.series.find((s) => s.name === 'Below avg paid')!.data).toEqual([null, 0.89, 0, 0, 0])
+    expect(option.series.find((s) => s.name === 'wash-below-base')!.data).toEqual([null, 79.112, 80, 80, 80])
+    expect(option.series.find((s) => s.name === 'Above avg paid')!.data).toEqual([null, 0, 0, 39.37, 41])
+  })
+
+  it('skips a purchase or a sale dated AFTER the last bar rather than snapping it back', () => {
+    // Snapping forward-dated events onto the newest bar would draw a later lot at an old close.
+    const later = esppLot({ id: 8, purchase_date: '2025-06-30', sold_date: '2025-07-31', sold_price: '200.00000', is_sold: true })
+    const option = read(esppPriceOption({ points: bars, offerings: [septOffering], lots: [esppLot(), later] }))
+    expect((byName(option, PURCHASES).data as unknown[]).length).toBe(1)
+    expect(option.series.some((s) => s.name === SALES)).toBe(false)
+    expect(option.legend.data).toEqual([CLOSE, SUBSCRIPTION, AVG_PAID, PURCHASES])
+  })
+
   it('tooltips Close first, the two rules as references, and the markers as lines', () => {
     const option = read(esppPriceOption({ points: bars, offerings: [septOffering], lots }))
     expect(isGrammarTooltip(option.tooltip.formatter)).toBe(true)
@@ -359,15 +453,22 @@ describe('esppPriceOption', () => {
   })
 })
 
-describe('sliceWindow / lotsBeforeHistory / esppPriceCsv', () => {
+describe('sliceWindow / lotsOutsideHistory / esppPriceCsv', () => {
   it('slices the fetched series to the chip window, anchored on today', () => {
     expect(sliceWindow(bars, 365, '2024-09-04').map((p) => p.d)).toEqual(['2024-02-27', '2024-02-29', '2024-03-01', '2024-08-30', '2024-09-03'])
     expect(sliceWindow(bars, 30, '2024-09-04').map((p) => p.d)).toEqual(['2024-08-30', '2024-09-03'])
     expect(sliceWindow([], 30, '2024-09-04')).toEqual([])
   })
-  it('counts the lots the stored history cannot reach', () => {
-    expect(lotsBeforeHistory(bars, [esppLot({ purchase_date: '2023-12-01' }), esppLot()])).toBe(1)
-    expect(lotsBeforeHistory([], [esppLot()])).toBe(0)
+  it('counts the lots the stored history cannot reach, on BOTH sides', () => {
+    expect(
+      lotsOutsideHistory(bars, [
+        esppLot({ purchase_date: '2023-12-01' }),
+        esppLot(),
+        esppLot({ id: 5, purchase_date: '2025-02-28' }),
+        esppLot({ id: 6, purchase_date: '2025-08-29' }),
+      ]),
+    ).toEqual({ before: 1, after: 2 })
+    expect(lotsOutsideHistory([], [esppLot()])).toEqual({ before: 0, after: 0 })
   })
   it('prints one row per bar with the rules and the day’s purchase or sale shares', () => {
     const lots = [esppLot(), esppLot({ id: 2, purchase_date: '2024-08-30', shares: '255.0000', sold_date: '2024-09-03', sold_price: '120.00000', is_sold: true })]
@@ -376,5 +477,11 @@ describe('sliceWindow / lotsBeforeHistory / esppPriceCsv', () => {
     expect(table.rows[0]).toEqual(['2024-02-27', '75.0000', '48.50900', '', '', ''])
     expect(table.rows[1]).toEqual(['2024-02-29', '79.1120', '48.50900', '41.23265', '260.0000', ''])
     expect(table.rows[4]).toEqual(['2024-09-03', '121.0000', '48.50900', '41.23265', '', '255.0000'])
+  })
+  it('leaves a forward-dated purchase or sale out of the table too', () => {
+    const later = esppLot({ id: 8, purchase_date: '2025-06-30', sold_date: '2025-07-31', sold_price: '200.00000', is_sold: true })
+    const table = esppPriceCsv(bars, [septOffering], [esppLot(), later])
+    expect(table.rows.map((r) => r[4])).toEqual(['', '260.0000', '', '', ''])
+    expect(table.rows.map((r) => r[5])).toEqual(['', '', '', '', ''])
   })
 })

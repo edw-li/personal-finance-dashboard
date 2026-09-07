@@ -1267,6 +1267,8 @@ export default function EsppPage() {
     window.clearTimeout(highlightHold.current)
     highlightHold.current = window.setTimeout(() => setHighlightLotId(null), 2000)
   }
+  // A click within 2s of leaving the page would otherwise setState on an unmounted tree.
+  useEffect(() => () => window.clearTimeout(highlightHold.current), [])
 
   // Three INDEPENDENT loads: a modeler 422 must not blank the lots table, so each carries
   // its own sequence guard, its own banner and its own busy flag.

@@ -1,6 +1,6 @@
 <!doctype html>
 <!-- ESPP visuals probe (2026-09-07 spec §9): the forms this batch adds, rendered by REAL echarts —
-     (A) the per-share view over the FOUR shared fixture lots: two stacks on one column
+     (A) the per-share view (scroll legend, 600px = a real span-6 canvas) over the FOUR shared fixture lots: two stacks on one column
      (barGap -100%), hollow sold items, scatters over bars on a category axis, a dashed quote rule;
      (B) the price chart: two stepped references with endLabels, a wash with nulls before the first
      purchase, diamond/triangle markers with a hollow item. Every literal below is what
@@ -11,7 +11,8 @@
 <style>
   body { background: #171a21; color: #e6e9ef; font: 14px system-ui; margin: 24px; }
   .title { margin: 0 0 6px 2px; font-size: 13px; letter-spacing: .08em; color: #8b93a3; }
-  .chart { width: 680px; height: 300px; margin-bottom: 28px; }
+  /* 600px = the real span-6 canvas at a 1440px page; the legend must fit THIS, not a wide box. */
+  .chart { width: 600px; height: 300px; margin-bottom: 28px; }
   .row { display: flex; gap: 24px; }
 </style></head><body>
 <p class="title">A — PER SHARE: ladder stack + loss stack overlaid (barGap -100%), hollow sold columns (Aug 2024, Feb 2025), Paid/Price dots (hollow on sold), filled subscription diamonds, dashed quote rule. LOOK FOR: the two stacks share ONE column; the red overlay sits over Feb 2025's and Aug 2025's bar tops; the doubled hairline where hollow segments meet</p>
@@ -20,7 +21,9 @@
 <script src="../../../node_modules/echarts/dist/echarts.js"></script>
 <script>
 const SURFACE = '#171a21', INK = '#e6e9ef', MUTED = '#8b93a3', BLUE = '#3987e5', ORANGE = '#d95926', GREEN = '#199e70', RED = '#e05252', POSITIVE = '#3fb968'
-const draw = (id, option) => echarts.init(document.getElementById(id), null, { renderer: 'canvas' }).setOption(option)
+// animation off: FORM is under judgment here, and a screenshot must never catch a half-drawn
+// entrance frame (the stagger and the 450ms cubicOut are the motion spec's business, not this).
+const draw = (id, option) => echarts.init(document.getElementById(id), null, { renderer: 'canvas' }).setOption({ animation: false, ...option })
 const hollow = (value, color) => ({ value, itemStyle: { color: 'transparent', borderColor: color, borderWidth: 1.5 } })
 const hollowDot = (value, color) => ({ value, itemStyle: { color: SURFACE, borderColor: color, borderWidth: 1.5 } })
 const marks = { itemStyle: { borderColor: SURFACE, borderWidth: 1 }, emphasis: { focus: 'series', itemStyle: { borderColor: INK } } }
@@ -28,7 +31,7 @@ const labels = ['Feb 2024', 'Aug 2024 (sold)', 'Feb 2025 (sold)', 'Aug 2025']
 // The cap label rides the TOP-MOST stack member (Appreciation), exactly as lotAnatomyOption does.
 const soldCap = { label: { show: true, position: 'top', color: MUTED, fontSize: 11, formatter: (p) => (p.dataIndex === 1 || p.dataIndex === 2 ? 'Sold' : '') } }
 draw('a', {
-  grid: { left: 70, right: 24, top: 40, bottom: 28 }, legend: { top: 0, data: ['Paid', 'Bargain element', 'Appreciation', 'Below purchase FMV', 'Price', 'Subscription price', 'Current quote'] },
+  grid: { left: 70, right: 24, top: 40, bottom: 28 }, legend: { top: 0, type: 'scroll', pageIconColor: MUTED, pageTextStyle: { color: MUTED }, data: ['Paid', 'Bargain element', 'Appreciation', 'Below purchase FMV', 'Price', 'Subscription price', 'Current quote'] },
   xAxis: { type: 'category', data: labels, axisLabel: { interval: 0 } }, yAxis: { type: 'value' },
   series: [
     { name: 'ladder-base', type: 'bar', stack: 'ladder', silent: true, color: 'transparent', barMaxWidth: 10, data: [41.23265, 41.23265, 41.23265, 41.23265] },
@@ -48,7 +51,7 @@ const avg = [null, 41.23265, 41.23265, 41.23265, 41.23265]
 const wash = (name, stack, color, data) => ({ name, type: 'line', stack, symbol: 'none', lineStyle: { width: 0 }, color, emphasis: { disabled: true }, tooltip: { show: false }, silent: true, connectNulls: false, ...(color === 'transparent' ? {} : { areaStyle: { opacity: 0.12 } }), data })
 // The end labels are the SHORT names the builder passes: 'Subscription price' and 'Avg paid to
 // date' are ~95px at 11px, and grid('endLabel') only reserves 84 — the first shoot clipped both.
-const step = (name, endText, data) => ({ name, type: 'line', symbol: 'none', step: 'end', lineStyle: { width: 2, type: 'dashed' }, color: MUTED, z: 9, connectNulls: false, endLabel: { show: true, formatter: endText, color: MUTED, fontSize: 11 }, data })
+const step = (name, endText, verticalAlign, data) => ({ name, type: 'line', symbol: 'none', step: 'end', lineStyle: { width: 2, type: 'dashed' }, color: MUTED, z: 9, connectNulls: false, endLabel: { show: true, formatter: endText, color: MUTED, fontSize: 11, verticalAlign }, data })
 draw('b', {
   grid: { left: 70, right: 84, top: 40, bottom: 28 }, legend: { top: 0, data: ['Close', 'Subscription price', 'Avg paid to date', 'Purchases', 'Sales'] },
   xAxis: { type: 'category', boundaryGap: false, data: days, axisLabel: { interval: 0 } }, yAxis: { type: 'value', scale: true },
@@ -56,8 +59,8 @@ draw('b', {
     wash('wash-above-base', 'above-paid', 'transparent', avg),
     wash('Above avg paid', 'above-paid', POSITIVE, closes.map((c, i) => (avg[i] === null ? null : Math.max(c - avg[i], 0)))),
     { name: 'Close', type: 'line', symbol: 'none', color: BLUE, lineStyle: { width: 2 }, data: closes },
-    step('Subscription price', 'Subscription', [48.509, 48.509, 48.509, 48.509, 48.509]),
-    step('Avg paid to date', 'Avg paid', avg),
+    step('Subscription price', 'Subscription', 'bottom', [48.509, 48.509, 48.509, 48.509, 48.509]),
+    step('Avg paid to date', 'Avg paid', 'top', avg),
     { name: 'Purchases', type: 'scatter', color: ORANGE, symbolSize: 10, z: 11, itemStyle: { borderColor: INK, borderWidth: 1 }, data: [{ value: ['Feb 29, 2024', 79.112], symbol: 'diamond' }, { value: ['Aug 30, 2024', 119.37], symbol: 'diamond', itemStyle: { color: SURFACE, borderColor: ORANGE, borderWidth: 1.5 } }] },
     { name: 'Sales', type: 'scatter', color: MUTED, symbolSize: 9, z: 11, itemStyle: { borderColor: INK, borderWidth: 1 }, data: [{ value: ['Sep 3, 2024', 121], symbol: 'triangle', symbolRotate: 180 }] },
   ],
