@@ -78,23 +78,33 @@ export default function LotAnatomyCard({
         if (id !== null) onSelectLot?.(id)
       }}
       footer={
+        // The fragment stays mounted while the card is not ready, so the caption row keeps its
+        // reserved height (panels.css --m-caption-row) — but it says NOTHING: a skeleton must not
+        // assert the quote its lots were priced at, and on a pre-batch payload that sentence would
+        // also double the Lots card's own line word for word.
         <>
-          {/* The quote line the Lots card prints, plus the outline's text backup. The date is
-              rendered, not judged (the table's own note). */}
-          <p className="drill-hint">
-            {data.espp_ticker === null
-              ? 'No ESPP ticker configured — set the espp_ticker setting to price these lots.'
-              : data.current_price === null
-                ? `${data.espp_ticker} — no live quote; unsold lots are unpriced.`
-                : `${data.espp_ticker} · ${formatCurrency(data.current_price)} · as of ${formatDate(data.quoted_at)}`}
-            {soldAny && ' · Hollow = sold'}
-          </p>
-          {held !== undefined && Number(held.bargain_element) > 0 && (
-            <p className="drill-hint">
-              {`Of the ${formatCurrency(held.bargain_element)} bargain element across your held lots, ${formatCurrency(
-                held.discount_component,
-              )} was the plan discount and ${formatCurrency(held.lookback_component)} the lookback.`}
-            </p>
+          {ready && (
+            <>
+              {/* The quote line the Lots card prints, plus the outline's text backup. The date is
+                  rendered, not judged (the table's own note). */}
+              <p className="drill-hint">
+                {data.espp_ticker === null
+                  ? 'No ESPP ticker configured — set the espp_ticker setting to price these lots.'
+                  : data.current_price === null
+                    ? `${data.espp_ticker} — no live quote; unsold lots are unpriced.`
+                    : `${data.espp_ticker} · ${formatCurrency(data.current_price)} · as of ${formatDate(
+                        data.quoted_at,
+                      )}`}
+                {soldAny && ' · Hollow = sold'}
+              </p>
+              {held !== undefined && Number(held.bargain_element) > 0 && (
+                <p className="drill-hint">
+                  {`Of the ${formatCurrency(held.bargain_element)} bargain element across your held lots, ${formatCurrency(
+                    held.discount_component,
+                  )} was the plan discount and ${formatCurrency(held.lookback_component)} the lookback.`}
+                </p>
+              )}
+            </>
           )}
         </>
       }

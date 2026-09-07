@@ -1,0 +1,9 @@
+/* Chart-to-table hover (2026-09-07 spec §5.6): the hovered or clicked lot's row lights up without
+   stealing the editing tint (.is-editing is the surface-2 wash). */
+.espp-page tr.is-highlighted td {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.espp-page tr.is-highlighted td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}

@@ -22,6 +22,8 @@ import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import { SkeletonTileRow } from '../components/PageSkeleton'
 import StatTile from '../components/StatTile'
+import EsppPriceCard from '../components/espp/EsppPriceCard'
+import LotAnatomyCard from '../components/espp/LotAnatomyCard'
 import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import { FEED_SKELETON } from '../components/skeletonMetrics'
@@ -41,6 +43,7 @@ import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../utils/format'
 import { shiftPoint } from '../utils/percent'
 import '../components/panels.css'
+import '../components/espp/charts.css'
 import './EsppPage.css'
 
 // The IRS §423 ceiling the chain is modeled against (backend espp_calc: unused_25k starts
@@ -110,12 +113,15 @@ function coveringOffering(offerings: EsppOfferingOut[], isoDate: string): EsppOf
 function LotsPanel({
   data,
   offerings,
+  highlightId,
   onChanged,
 }: {
   data: EsppLotsResponse
   // The prefill source for a new lot's subscription price and qualifying date; empty
   // until the offerings feed answers (a prefill nobody has data for simply does not run).
   offerings: EsppOfferingOut[]
+  // The lot the anatomy chart is pointing at (spec §5.6), or null.
+  highlightId: number | null
   onChanged: () => void
 }) {
   const [form, setForm] = useState<LotFormState>(EMPTY_LOT)
@@ -447,7 +453,16 @@ function LotsPanel({
             </thead>
             <tbody>
               {data.lots.map((lot) => (
-                <tr key={lot.id} className={lot.id === editingId ? 'is-editing' : undefined}>
+                <tr
+                  key={lot.id}
+                  // The chart cards address rows by id (spec §5.6) — the scroll target and the ring.
+                  id={`lot-row-${lot.id}`}
+                  className={
+                    [lot.id === editingId ? 'is-editing' : '', lot.id === highlightId ? 'is-highlighted' : '']
+                      .filter(Boolean)
+                      .join(' ') || undefined
+                  }
+                >
                   <td>{formatDate(lot.purchase_date)}</td>
                   <td className="num">{formatShares(lot.shares)}</td>
                   <td className="num">{formatCurrency(lot.subscription_price)}</td>
@@ -1222,8 +1237,10 @@ export default function EsppPage() {
   )
   const [offeringsError, setOfferingsError] = useState<string | null>(null)
   const [offeringsBusy, setOfferingsBusy] = useState(true)
-  // Employer closes for the "use close" chip — best-effort: a miss just hides the chip.
-  const [bars, setBars] = useState<PricePoint[]>([])
+  // Employer closes for the "use close" chip and the price card — best-effort: a miss just hides
+  // the chip. null = the fetch has not answered (the price card holds its skeleton); [] = nothing
+  // to draw or no ticker.
+  const [bars, setBars] = useState<PricePoint[] | null>(null)
 
   const [modeler, setModeler] = useState<EsppModelerOut | null>(
     () => getSnapshot<EsppModelerOut>('espp:modeler:default') ?? null,
@@ -1240,6 +1257,16 @@ export default function EsppPage() {
   const [knobs, setKnobs] = useState<Knobs>({ subscription: '', fmv: '', carry: '' })
   // null = the server's default (the current calendar year).
   const [year, setYear] = useState<number | null>(null)
+  // The chart-to-table ring (spec §5.6): the hovered lot's id, or the clicked one held for 2s.
+  const [highlightLotId, setHighlightLotId] = useState<number | null>(null)
+  const highlightHold = useRef<number | undefined>(undefined)
+  const selectLot = (id: number) => {
+    setHighlightLotId(id)
+    // jsdom has no scrollIntoView; the optional call keeps the tests honest about that.
+    document.getElementById(`lot-row-${id}`)?.scrollIntoView?.({ block: 'nearest' })
+    window.clearTimeout(highlightHold.current)
+    highlightHold.current = window.setTimeout(() => setHighlightLotId(null), 2000)
+  }
 
   // Three INDEPENDENT loads: a modeler 422 must not blank the lots table, so each carries
   // its own sequence guard, its own banner and its own busy flag.
@@ -1256,11 +1283,16 @@ export default function EsppPage() {
         if (seq !== lotsSeq.current) return
         // Lazy, once: the chip's bars need the employer ticker, which this payload names.
         // BEFORE the equality skip — the bars are uncached and must arm on any resolution.
-        if (!barsFetched.current && data.espp_ticker !== null) {
-          barsFetched.current = true
-          fetchPriceHistory(data.espp_ticker, 3650)
-            .then((history) => setBars(history.points))
-            .catch(() => setBars([]))
+        if (!barsFetched.current) {
+          if (data.espp_ticker === null) {
+            // No ticker, no fetch — and the price card must not wait forever for one.
+            setBars((current) => current ?? [])
+          } else {
+            barsFetched.current = true
+            fetchPriceHistory(data.espp_ticker, 3650)
+              .then((history) => setBars(history.points))
+              .catch(() => setBars([]))
+          }
         }
         const previous = getSnapshot<EsppLotsResponse>('espp:lots')
         setSnapshot('espp:lots', data)
@@ -1427,6 +1459,22 @@ export default function EsppPage() {
           </div>
         )}
 
+        {/* The two chart cards (2026-09-07 spec §5–§6), side by side under the headline strip;
+            the grid's own rule stacks them under 1000px. The lots payload is the anatomy card's
+            whole input, so it renders as soon as the lots do and holds a skeleton on a warm
+            pre-batch snapshot; the price card waits on the bars the offerings chip already fetches. */}
+        {lots !== null && (
+          <div className="card-grid">
+            <LotAnatomyCard data={lots} onHoverLot={setHighlightLotId} onSelectLot={selectLot} />
+            <EsppPriceCard
+              ticker={lots.espp_ticker}
+              bars={bars}
+              offerings={offerings ?? []}
+              lots={lots.lots}
+            />
+          </div>
+        )}
+
         {/* NOT keyed, and a sibling of the two cards below: a modeler or offerings refetch
             re-renders this panel with the same payload, so a half-typed row survives. */}
         <Feed
@@ -1435,7 +1483,14 @@ export default function EsppPage() {
           staleNoun="the table"
           skeleton={{ height: FEED_SKELETON.esppLots, label: 'Loading lots…' }}
         >
-          {(data) => <LotsPanel data={data} offerings={offerings ?? []} onChanged={reloadLots} />}
+          {(data) => (
+            <LotsPanel
+              data={data}
+              offerings={offerings ?? []}
+              highlightId={highlightLotId}
+              onChanged={reloadLots}
+            />
+          )}
         </Feed>
 
         <Feed
@@ -1444,7 +1499,7 @@ export default function EsppPage() {
           staleNoun="the table"
           skeleton={{ height: FEED_SKELETON.esppOfferings, label: 'Loading offerings…' }}
         >
-          {(rows) => <OfferingsPanel offerings={rows} bars={bars} onChanged={onOfferingsChanged} />}
+          {(rows) => <OfferingsPanel offerings={rows} bars={bars ?? []} onChanged={onOfferingsChanged} />}
         </Feed>
 
         <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
