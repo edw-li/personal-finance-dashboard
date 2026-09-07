@@ -119,10 +119,14 @@ it('renders a call to action instead of a meter when the limit is missing', () =
   expect(screen.getByText('$16,000.00')).toBeTruthy()
 })
 
-it('says the figures are a projection, not a year-to-date total', () => {
+it('says which figure is behind today and which is ahead of it', () => {
   renderPanel([OK])
   const card = within(screen.getByRole('region', { name: 'Contribution pace' }))
-  expect(card.getByText(/at this rate/i)).toBeTruthy()
+  expect(
+    card.getByText(
+      "So far this year, and where the year lands at today's percentages. Change a percentage and the projection moves; so far does not.",
+    ),
+  ).toBeTruthy()
 })
 
 it('renders nothing at all when there are no items', () => {
@@ -257,7 +261,72 @@ it('sends the reader to the profile for the employer money, and to the ESPP page
   expect(text).toContain(
     'Employer HSA deposits and the 401(k) match count once they are entered on your paycheck profile',
   )
+  // The so-far figure is walked from the profile timeline, and the hint says so rather than
+  // letting it pass as a ledger this app does not have.
+  expect(text).toContain(
+    "So far is estimated from your profile timeline payday by payday — the app has no per-paycheck ledger; the projection runs the rest of the year at today's percentages.",
+  )
+  expect(text).not.toContain('not a year-to-date total')
   // The old sentence said the HSA deposit was unmodelled. It is on the profile now.
   expect(text).not.toContain('not modeled')
   expect(text).toContain('autumn checks count toward next year')
+})
+
+
+// The row that started §2.6: 16 of 24 HSA paydays plus the employer's January deposit, on a
+// year that lands exactly on the cap.
+const WALKED: PaceItem = {
+  key: 'limit_hsa_self',
+  label: 'HSA — self-only (incl. employer)',
+  annualized: '4400.00',
+  so_far: '3600.00',
+  limit: '4400.00',
+  ratio: '1.0000',
+  tone: 'warn',
+}
+
+it('draws the year in two segments: what is already in, and where it lands', () => {
+  renderPanel([WALKED])
+  const meter = screen.getByRole('meter')
+  const sofar = meter.querySelector('.pace-fill-sofar') as HTMLElement
+  const projected = meter.querySelector('.pace-fill') as HTMLElement
+  expect(sofar.style.width).toBe('81.82%') // 3,600 of 4,400
+  expect(projected.style.width).toBe('100%')
+  // One tone, two weights: the run past "so far" is a projection, not a second verdict.
+  expect(sofar.className).toBe('pace-fill-sofar is-warn')
+  expect(projected.className).toBe('pace-fill is-warn is-projected')
+  expect(screen.getByText('$3,600.00 so far · $4,400.00 projected / $4,400.00')).toBeTruthy()
+  expect(meter.getAttribute('aria-valuetext')).toBe('$3,600.00 so far; $4,400.00 of $4,400.00')
+})
+
+it('keeps the practical cap in both of the ESPP row figures', () => {
+  renderPanel([{ ...ESPP, so_far: '10391.15' }])
+  expect(
+    screen.getByText('$10,391.15 so far · $20,861.02 projected / $21,250.00 practical'),
+  ).toBeTruthy()
+  expect(screen.getByRole('meter').getAttribute('aria-valuetext')).toBe(
+    '$10,391.15 so far; $20,861.02 of $21,250.00 practical cap; §423 cap $25,000.00',
+  )
+})
+
+it('falls back to one figure when the server sent no walk', () => {
+  renderPanel([OK])
+  const meter = screen.getByRole('meter')
+  expect(meter.querySelector('.pace-fill-sofar')).toBeNull()
+  expect((meter.querySelector('.pace-fill') as HTMLElement).className).toBe('pace-fill is-ok')
+  expect(screen.getByText('$10,000.00 / $24,500.00')).toBeTruthy()
+  expect(meter.getAttribute('aria-valuetext')).toBe('$10,000.00 of $24,500.00')
+})
+
+it('says "at the cap" when the judged ratio is exactly the cap', () => {
+  renderPanel([WALKED])
+  expect(screen.getByText('at the cap')).toBeTruthy()
+  expect(screen.queryByText('near the cap')).toBeNull()
+  cleanup()
+  renderPanel([WARN]) // 0.9545: close, not there
+  expect(screen.getByText('near the cap')).toBeTruthy()
+  cleanup()
+  // The ESPP row is judged on its SOFT ratio, so that is the one the word follows.
+  renderPanel([{ ...ESPP, ratio: '0.8344', soft_ratio: '1.0000' }])
+  expect(screen.getByText('at the cap')).toBeTruthy()
 })

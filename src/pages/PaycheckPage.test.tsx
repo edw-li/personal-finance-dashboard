@@ -1495,6 +1495,8 @@ it('renders the pace strip under the waterfall', async () => {
           key: 'limit_401k_elective',
           label: '401(k) elective deferral',
           annualized: '24560.90',
+          // 16 of 24 paydays behind today (spec §2.6's own worked example).
+          so_far: '16373.93',
           limit: '24500.00',
           ratio: '1.0025',
           tone: 'over',

@@ -33,15 +33,34 @@
   border-radius: 2px;
 }
 
-.pace-fill.is-ok {
+/* The year in two segments (spec §2.6): the projection runs the whole way DIMMED and the
+   solid segment over it is the money already in. Same hue, so the pair reads as one meter
+   with a boundary rather than two verdicts — and the dimming is the only difference, which
+   keeps the tone's meaning (and its CVD-safe position cues) intact. */
+.pace-fill-sofar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: 2px;
+}
+
+.pace-fill.is-projected {
+  opacity: 0.45;
+}
+
+.pace-fill.is-ok,
+.pace-fill-sofar.is-ok {
   background: var(--accent);
 }
 
-.pace-fill.is-warn {
+.pace-fill.is-warn,
+.pace-fill-sofar.is-warn {
   background: var(--warn);
 }
 
-.pace-fill.is-over {
+.pace-fill.is-over,
+.pace-fill-sofar.is-over {
   background: var(--negative);
 }
 
