@@ -18,7 +18,7 @@ from app.limit_keys import (
     LIMIT_HSA_FAMILY,
     LIMIT_HSA_SELF,
 )
-from app.services.limit_check import employer_match, paycheck_pace
+from app.services.limit_check import employer_hsa, employer_match, paycheck_pace
 
 
 @dataclass
@@ -36,6 +36,9 @@ class FakeProfile:
     match_band_1: Decimal = Decimal("0")
     match_rate_2: Decimal = Decimal("0")
     match_band_2: Decimal = Decimal("0")
+    hsa_employer_annual: Decimal = Decimal("0")
+    hsa_employer_per_dependent: Decimal = Decimal("0")
+    hsa_dependents: int = 0
 
 
 def by_key(items):
@@ -281,3 +284,69 @@ def test_every_row_carries_the_default_measure_and_no_espp_extras():
         assert item.soft_limit is None and item.soft_ratio is None
         assert item.halves is None and item.window_label is None
         assert item.current_rate is None
+
+
+# The user's real policy: 2,000 a year for self-only coverage, deposited in January, plus
+# 500 for each additional covered individual.
+EMPLOYER_HSA = {
+    "hsa_employer_annual": Decimal("2000.00"),
+    "hsa_employer_per_dependent": Decimal("500.00"),
+}
+
+
+def test_employer_hsa_golden():
+    # Self-only: the flat deposit, with no additional individual to add for.
+    assert employer_hsa(FakeProfile(**EMPLOYER_HSA), "self") == Decimal("2000.00")
+    # A family of three: the employee plus two more heads at 500 each.
+    profile = FakeProfile(hsa_dependents=2, **EMPLOYER_HSA)
+    assert employer_hsa(profile, "family") == Decimal("3000.00")
+    # No HDHP is no deposit — the policy is real, the coverage is not.
+    assert employer_hsa(profile, "none") == Decimal("0")
+    # A hand-edited coverage string degrades to silence, exactly as the row does.
+    assert employer_hsa(profile, "hdhp") == Decimal("0")
+    assert employer_hsa(FakeProfile(), "self") == Decimal("0")
+
+
+def test_hsa_row_adds_the_employer_deposit_and_names_it():
+    """100 x 24 of the user's own money reaches 2,400 of a 4,400 cap; the employer's 2,000
+    January deposit is what actually fills it."""
+    profile = FakeProfile(hsa_per_check=Decimal("100.00"), **EMPLOYER_HSA)
+    row = by_key(paycheck_pace(profile, {LIMIT_HSA_SELF: Decimal("4400.00")}, "self"))[
+        LIMIT_HSA_SELF
+    ]
+    assert row.annualized == Decimal("4400.00")
+    assert row.ratio == Decimal("1.0000")
+    assert row.tone == "warn"
+    assert row.label == "HSA — self-only (incl. employer)"
+    assert row.employer_hsa == Decimal("2000.00")
+
+
+def test_hsa_row_adds_a_per_head_deposit_for_each_additional_individual():
+    profile = FakeProfile(hsa_per_check=Decimal("100.00"), hsa_dependents=2, **EMPLOYER_HSA)
+    row = by_key(paycheck_pace(profile, {LIMIT_HSA_FAMILY: Decimal("8750.00")}, "family"))[
+        LIMIT_HSA_FAMILY
+    ]
+    # 2,400 deferred + (2,000 + 500 x 2) deposited.
+    assert row.annualized == Decimal("5400.00")
+    assert row.employer_hsa == Decimal("3000.00")
+    assert row.ratio == Decimal("0.6171")
+    assert row.tone == "ok"
+
+
+def test_a_policy_without_coverage_still_emits_no_hsa_row():
+    """'none' is "no HDHP": neither cap applies, so there is nothing for the deposit to
+    count against either."""
+    profile = FakeProfile(hsa_per_check=Decimal("150.00"), **EMPLOYER_HSA)
+    items = by_key(paycheck_pace(profile, {LIMIT_HSA_SELF: Decimal("4400.00")}, "none"))
+    assert LIMIT_HSA_SELF not in items
+    assert LIMIT_HSA_FAMILY not in items
+
+
+def test_no_employer_policy_keeps_todays_hsa_label_and_a_null_deposit():
+    profile = FakeProfile(hsa_per_check=Decimal("150.00"))
+    row = by_key(paycheck_pace(profile, {LIMIT_HSA_SELF: Decimal("4400.00")}, "self"))[
+        LIMIT_HSA_SELF
+    ]
+    assert row.annualized == Decimal("3600.00")
+    assert row.label == "HSA — self-only"
+    assert row.employer_hsa is None

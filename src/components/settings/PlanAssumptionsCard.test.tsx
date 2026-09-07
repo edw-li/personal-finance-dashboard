@@ -26,6 +26,7 @@ const PROFILE = {
   notes: null, in_force: true,
   match_rate_1: '1.000000000', match_band_1: '6000.00',
   match_rate_2: '0.500000000', match_band_2: '11000.00',
+  hsa_employer_annual: '2000.00', hsa_employer_per_dependent: '500.00', hsa_dependents: 0,
 }
 const ME = { id: 1, name: 'Me', is_primary: true }
 

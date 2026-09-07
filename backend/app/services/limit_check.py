@@ -43,6 +43,10 @@ TOTAL_ADDITIONS_CAVEAT = " (excludes employer match)"
 # Its opposite, once a policy IS on the profile (2026-09-06 spec §2.1). The caveat rides the
 # LABEL either way, so neither sentence can ever be separated from the meter it qualifies.
 TOTAL_ADDITIONS_MATCH = " (incl. employer match)"
+# The HSA row's own version, once an employer policy is on the profile (2026-09-07 spec).
+# Short, because the figure rides the row beside it: the meter says the cap includes money
+# the user never sees on a payslip, and the panel prints how much.
+HSA_INCL_EMPLOYER = " (incl. employer)"
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,7 @@ class PaceItem:
     projected_excess: Decimal | None = None
     current_rate: Decimal | None = None  # ESPP: the espp_pct the projection used (9 dp fraction)
     employer_match: Decimal | None = None  # 415(c) only, and only when it is > 0
+    employer_hsa: Decimal | None = None  # HSA only, and only when it is > 0
 
 
 def _item(
@@ -98,6 +103,7 @@ def _item(
     annualized: Decimal,
     limits: dict[str, Decimal],
     employer_match: Decimal | None = None,
+    employer_hsa: Decimal | None = None,
 ) -> PaceItem:
     money = half_up2(annualized)
     limit = limits.get(key)
@@ -110,6 +116,7 @@ def _item(
             ratio=None,
             tone="ok",
             employer_match=employer_match,
+            employer_hsa=employer_hsa,
         )
     ratio = (money / limit).quantize(RATIO_QUANTUM, rounding=ROUND_HALF_UP)
     if ratio > OVER_ABOVE:
@@ -126,6 +133,7 @@ def _item(
         ratio=ratio,
         tone=tone,
         employer_match=employer_match,
+        employer_hsa=employer_hsa,
     )
 
 
@@ -141,6 +149,26 @@ def employer_match(profile, elective_annual: Decimal, limit: Decimal | None) -> 
     first = min(capped, profile.match_band_1)
     second = min(max(capped - profile.match_band_1, ZERO), profile.match_band_2)
     return profile.match_rate_1 * first + profile.match_rate_2 * second
+
+
+def employer_hsa(profile, hsa_coverage: str) -> Decimal:
+    """A year of employer HSA deposits under this profile's policy.
+
+    A flat annual figure for the employee's own coverage plus a per-head add-on for each
+    ADDITIONAL covered individual — the shape of the real policy this was built for (2,000
+    a year self-only, deposited in January, plus 500 per extra individual). It is annual,
+    not per check, because the deposit lands as a lump: the pace strip only ever needs the
+    year's total.
+
+    Zero when coverage is 'none' or unrecognized — no HDHP is no HSA, so the policy is
+    money that never arrives, and `paycheck_pace` drops the row for exactly the same
+    reason. Full precision: the caller owns the rounding.
+    """
+    if hsa_coverage not in HSA_LIMIT_KEY_BY_COVERAGE:
+        return ZERO
+    return profile.hsa_employer_annual + profile.hsa_employer_per_dependent * Decimal(
+        profile.hsa_dependents
+    )
 
 
 def paycheck_pace(profile, limits: dict[str, Decimal], hsa_coverage: str) -> list[PaceItem]:
@@ -180,15 +208,23 @@ def paycheck_pace(profile, limits: dict[str, Decimal], hsa_coverage: str) -> lis
     # differ by roughly 2x.
     hsa_key = HSA_LIMIT_KEY_BY_COVERAGE.get(hsa_coverage)
     if hsa_key is not None:
+        # Quantized BEFORE it joins the sum (the match's rule), so the "incl. X employer"
+        # suffix is exactly the addend behind the total and the two can never disagree by
+        # a cent.
+        deposit = half_up2(employer_hsa(profile, hsa_coverage))
         items.append(
             _item(
                 hsa_key,
-                LIMIT_LABELS[hsa_key],
+                # The employer's deposit counts against the SAME cap, so a row that leaves
+                # it out could never reach 100 % — the label owns that news, like 415(c)'s.
+                LIMIT_LABELS[hsa_key] + (HSA_INCL_EMPLOYER if deposit > ZERO else ""),
                 # Per-check DOLLARS times the profile's own cadence — never a hardcoded
-                # 24 (paycheck_calc's rule). Employer HSA contributions count against the
-                # same cap and are not on the profile; the strip's hint says so.
-                profile.hsa_per_check * Decimal(profile.pay_periods_per_year),
+                # 24 (paycheck_calc's rule) — plus the year's employer deposit.
+                profile.hsa_per_check * Decimal(profile.pay_periods_per_year) + deposit,
                 limits,
+                # Null unless there is something to say: no policy renders exactly the row
+                # it rendered before there was one.
+                employer_hsa=deposit if deposit > ZERO else None,
             )
         )
     # espp_pct 0 is "not enrolled", which is a different statement from "enrolled at 0 %".

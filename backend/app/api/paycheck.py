@@ -108,6 +108,17 @@ NEGATIVE_NET_WARNING = "net pay is negative"
 # whole vocabulary, so it never needs reading alongside the code (comp.py's GRANT_KINDS).
 HSA_COVERAGES = ("none", "self", "family")
 HSA_COVERAGE_MESSAGE = "hsa_coverage must be 'none', 'self' or 'family'"
+# The employer's HSA deposit: an annual figure for the employee's own coverage plus a
+# per-head add-on for each ADDITIONAL covered individual (2026-09-07 spec). The two money
+# fields wear the per-check columns' own Numeric(8,2) bound, so `_non_negative_per_check`
+# validates them WORD FOR WORD — one rule, one sentence, for every Numeric(8,2) on the row.
+EMPLOYER_HSA_MONEY_FIELDS = ("hsa_employer_annual", "hsa_employer_per_dependent")
+EMPLOYER_HSA_FIELDS = (*EMPLOYER_HSA_MONEY_FIELDS, "hsa_dependents")
+# A typo fence, not an opinion about family size: 20 is far past any real HSA roster, and a
+# 25 typed into the count is the mistake worth catching. The message names the whole range
+# (PAY_PERIODS_MESSAGE's shape), so it never needs reading alongside the code.
+MAX_HSA_DEPENDENTS = 20
+HSA_DEPENDENTS_MESSAGE = f"hsa_dependents must be between 0 and {MAX_HSA_DEPENDENTS}"
 # A stored profile must have an owner (person_id is NOT NULL), and only a database whose
 # roster was never seeded has nobody to default to.
 NO_PRIMARY_PERSON_MESSAGE = "household has no primary person"
@@ -122,6 +133,7 @@ SCENARIO_FIELDS = (
     "hsa_per_check",
     "hsa_coverage",
     *MATCH_FIELDS,
+    *EMPLOYER_HSA_FIELDS,
 )
 FIELD_LABELS = {
     "annual_salary": "Annual salary",
@@ -138,6 +150,9 @@ FIELD_LABELS = {
     "match_band_1": "Match band 1",
     "match_rate_2": "Match rate (second band)",
     "match_band_2": "Match band 2",
+    "hsa_employer_annual": "Employer HSA (annual)",
+    "hsa_employer_per_dependent": "Employer HSA per dependent",
+    "hsa_dependents": "Covered dependents",
 }
 
 
@@ -192,6 +207,14 @@ def _validated_coverage(value: str) -> str:
     return value
 
 
+def _validated_dependents(value: int) -> int:
+    """How many people BEYOND the employee the employer's HSA deposit covers — a small
+    count, not money, so it gets the pay-periods treatment rather than a quantizer."""
+    if not 0 <= value <= MAX_HSA_DEPENDENTS:
+        raise HTTPException(status_code=422, detail=HSA_DEPENDENTS_MESSAGE)
+    return value
+
+
 def _validated_profile(
     effective_date: date,
     annual_salary: Decimal,
@@ -199,6 +222,9 @@ def _validated_profile(
     dental_vision_per_check: Decimal,
     hsa_per_check: Decimal,
     hsa_coverage: str,
+    hsa_employer_annual: Decimal,
+    hsa_employer_per_dependent: Decimal,
+    hsa_dependents: int,
     pcts: dict[str, Decimal],
     match: dict[str, Decimal],
 ) -> dict:
@@ -219,6 +245,11 @@ def _validated_profile(
         ),
         "hsa_per_check": _non_negative_per_check(hsa_per_check, "hsa_per_check"),
         "hsa_coverage": _validated_coverage(hsa_coverage),
+        "hsa_employer_annual": _non_negative_per_check(hsa_employer_annual, "hsa_employer_annual"),
+        "hsa_employer_per_dependent": _non_negative_per_check(
+            hsa_employer_per_dependent, "hsa_employer_per_dependent"
+        ),
+        "hsa_dependents": _validated_dependents(hsa_dependents),
         **{name: _validated_pct(pcts[name], name) for name in PCT_FIELDS},
         **{name: _validated_match_rate(match[name], name) for name in MATCH_RATE_FIELDS},
         **{name: _validated_band(match[name], name) for name in MATCH_BAND_FIELDS},
@@ -321,6 +352,9 @@ async def create_profile(body: ProfileIn, db: AsyncSession = Depends(get_db)) ->
         dental_vision_per_check=body.dental_vision_per_check,
         hsa_per_check=body.hsa_per_check,
         hsa_coverage=body.hsa_coverage,
+        hsa_employer_annual=body.hsa_employer_annual,
+        hsa_employer_per_dependent=body.hsa_employer_per_dependent,
+        hsa_dependents=body.hsa_dependents,
         pcts={name: getattr(body, name) for name in PCT_FIELDS},
         match={name: getattr(body, name) for name in MATCH_FIELDS},
     )
@@ -352,6 +386,11 @@ async def update_profile(
         ),
         hsa_per_check=_merged(provided, "hsa_per_check", profile.hsa_per_check),
         hsa_coverage=_merged(provided, "hsa_coverage", profile.hsa_coverage),
+        hsa_employer_annual=_merged(provided, "hsa_employer_annual", profile.hsa_employer_annual),
+        hsa_employer_per_dependent=_merged(
+            provided, "hsa_employer_per_dependent", profile.hsa_employer_per_dependent
+        ),
+        hsa_dependents=_merged(provided, "hsa_dependents", profile.hsa_dependents),
         pcts={name: _merged(provided, name, getattr(profile, name)) for name in PCT_FIELDS},
         match={name: _merged(provided, name, getattr(profile, name)) for name in MATCH_FIELDS},
     )
@@ -508,6 +547,9 @@ class ScenarioProfile:
     match_band_1: Decimal
     match_rate_2: Decimal
     match_band_2: Decimal
+    hsa_employer_annual: Decimal
+    hsa_employer_per_dependent: Decimal
+    hsa_dependents: int
 
 
 def _scenario_profile(base: PaycheckProfile, overrides: ProfileOverrides) -> ScenarioProfile:
@@ -562,6 +604,19 @@ def _scenario_profile(base: PaycheckProfile, overrides: ProfileOverrides) -> Sce
             base.hsa_coverage
             if overrides.hsa_coverage is None
             else _validated_coverage(overrides.hsa_coverage)
+        ),
+        **{
+            name: (
+                getattr(base, name)
+                if getattr(overrides, name) is None
+                else _non_negative_per_check(getattr(overrides, name), name)
+            )
+            for name in EMPLOYER_HSA_MONEY_FIELDS
+        },
+        hsa_dependents=(
+            base.hsa_dependents
+            if overrides.hsa_dependents is None
+            else _validated_dependents(overrides.hsa_dependents)
         ),
         **pcts,
         **match,

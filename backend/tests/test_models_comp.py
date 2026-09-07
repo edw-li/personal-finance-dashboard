@@ -241,3 +241,39 @@ async def test_paycheck_profile_match_columns_round_trip(db):
     assert (bare.match_rate_2, bare.match_band_2) == (Decimal("0"), Decimal("0"))
     assert policy.match_rate_2 == Decimal("0.5")  # Numeric(10,9) keeps a half-rate exactly
     assert (policy.match_rate_1, policy.match_band_2) == (Decimal("1"), Decimal("11000.00"))
+
+
+async def test_paycheck_profile_employer_hsa_columns_round_trip(db):
+    me = Person(name="HSA", is_primary=True)
+    db.add(me)
+    await db.flush()
+    db.add(
+        PaycheckProfile(
+            person_id=me.id, effective_date=date(2026, 1, 1), annual_salary=Decimal("100000")
+        )
+    )
+    db.add(
+        PaycheckProfile(
+            person_id=me.id,
+            effective_date=date(2026, 2, 1),
+            annual_salary=Decimal("188930"),
+            hsa_employer_annual=Decimal("2000.00"),
+            hsa_employer_per_dependent=Decimal("500.00"),
+            hsa_dependents=2,
+        )
+    )
+    await db.commit()
+    bare, policy = (
+        await db.execute(
+            select(PaycheckProfile)
+            .where(PaycheckProfile.person_id == me.id)
+            .order_by(PaycheckProfile.effective_date)
+        )
+    ).scalars()
+    # No employer deposit is the only honest backfill for a row nobody was asked about.
+    assert bare.hsa_employer_annual == Decimal("0.00")
+    assert bare.hsa_employer_per_dependent == Decimal("0.00")
+    assert bare.hsa_dependents == 0
+    assert policy.hsa_employer_annual == Decimal("2000.00")
+    assert policy.hsa_employer_per_dependent == Decimal("500.00")
+    assert policy.hsa_dependents == 2  # additional individuals covered, 0 for self-only

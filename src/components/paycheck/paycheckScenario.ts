@@ -268,6 +268,12 @@ export interface ApplySeed {
   match_band_1: string
   match_rate_2: string
   match_band_2: string
+  // No knob moves the employer HSA policy (the sandbox models a CHECK, and the deposit is a
+  // once-a-year lump), so these three ride the seed straight off the profile — an Apply that
+  // never touched them saves them back unchanged rather than blanking a stored policy.
+  hsa_employer_annual: string
+  hsa_employer_per_dependent: string
+  hsa_dependents: string
   notes: string
 }
 
@@ -293,6 +299,9 @@ export function applySeedFor(
     match_band_1: scenario.match_band_1 ?? profile.match_band_1,
     match_rate_2: shiftPoint(scenario.match_rate_2 ?? profile.match_rate_2, 2),
     match_band_2: scenario.match_band_2 ?? profile.match_band_2,
+    hsa_employer_annual: profile.hsa_employer_annual,
+    hsa_employer_per_dependent: profile.hsa_employer_per_dependent,
+    hsa_dependents: String(profile.hsa_dependents),
     notes: '',
   }
 }

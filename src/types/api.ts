@@ -1200,6 +1200,13 @@ export interface PaycheckProfileOut {
   match_band_1: string
   match_rate_2: string
   match_band_2: string
+  // The employer HSA policy, per person and effective-dated (2026-09-07 spec): a flat annual
+  // deposit for the employee's own coverage plus a per-head add-on for each ADDITIONAL
+  // covered individual. Money strings; zero means "no employer deposit". NOT NULL
+  // server-side, server_default '0'.
+  hsa_employer_annual: string
+  hsa_employer_per_dependent: string
+  hsa_dependents: number
   notes: string | null
   /** In force today (spec §2.3), the server's one rule. Absent on a pre-batch snapshot. */
   in_force?: boolean
@@ -1235,6 +1242,13 @@ export interface PaycheckProfileCreate {
   match_band_1?: string
   match_rate_2?: string
   match_band_2?: string
+  // The employer HSA policy, per person and effective-dated (2026-09-07 spec): a flat annual
+  // deposit for the employee's own coverage plus a per-head add-on for each ADDITIONAL
+  // covered individual. Money strings; zero means "no employer deposit". NOT NULL
+  // server-side, server_default '0'.
+  hsa_employer_annual?: string
+  hsa_employer_per_dependent?: string
+  hsa_dependents?: number
   notes?: string | null
 }
 
@@ -1289,6 +1303,9 @@ export interface PaycheckPreviewOverrides {
   match_band_1?: string
   match_rate_2?: string
   match_band_2?: string
+  hsa_employer_annual?: string
+  hsa_employer_per_dependent?: string
+  hsa_dependents?: number
 }
 
 export interface PaycheckPreviewIn {
@@ -2061,6 +2078,8 @@ export interface PaceItem {
   current_rate?: string | null
   /** 415(c) only: the employer match already inside `annualized` (spec §2.3). */
   employer_match?: string | null
+  /** HSA only: the year's employer deposit already inside `annualized` (2026-09-07 spec). */
+  employer_hsa?: string | null
 }
 
 // --- assistant (2026-09-01 spec §3–§5) ---

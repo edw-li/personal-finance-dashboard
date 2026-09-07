@@ -228,10 +228,36 @@ it('hangs the match suffix off the METER row too, not just the call-to-action on
   expect(screen.getByText('$10,000.00 / $24,500.00')).toBeTruthy()
 })
 
-it('sends the reader to the profile for the match, and to the ESPP page for the chained figures', () => {
+it('hangs the employer HSA deposit off the HSA row, the way the match hangs off 415(c)', () => {
+  renderPanel([
+    {
+      ...OK,
+      key: 'limit_hsa_self',
+      label: 'HSA — self-only (incl. employer)',
+      annualized: '4400.00',
+      limit: '4400.00',
+      ratio: '1.0000',
+      tone: 'warn',
+      employer_hsa: '2000.00',
+    },
+  ])
+  // The deposit is what carries 2,400 of deferral to a full 4,400 cap, so the figure has to
+  // say where the rest came from.
+  expect(screen.getByText('incl. $2,000.00 employer')).toBeTruthy()
+  expect(screen.getByText('$4,400.00 / $4,400.00')).toBeTruthy()
+  cleanup()
+  // No policy, no suffix — never "incl. $0.00".
+  renderPanel([WARN])
+  expect(screen.queryByText(/incl\./)).toBeNull()
+})
+
+it('sends the reader to the profile for the employer money, and to the ESPP page for the chained figures', () => {
   renderPanel([OK])
   const text = hintText(/^About Each contribution line/)
-  expect(text).toContain('set your 401(k) match on your paycheck profile')
-  expect(text).not.toContain('Employer 401(k) match and employer HSA contributions')
+  expect(text).toContain(
+    'Employer HSA deposits and the 401(k) match count once they are entered on your paycheck profile',
+  )
+  // The old sentence said the HSA deposit was unmodelled. It is on the profile now.
+  expect(text).not.toContain('not modeled')
   expect(text).toContain('autumn checks count toward next year')
 })
