@@ -236,4 +236,23 @@ describe('ScenarioPanel', () => {
     expect(screen.getByText(/seed-stable/)).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/settings')
   })
+
+  it('offers Use my budgets under the annual-spend knob only when the echo carries it, sets the knob, then reads as in use', async () => {
+    preview.mockImplementation(async () => ({ ...echo, budget_annual_spend: '61752.00', budget_month: '2026-09-01' }))
+    mount()
+    const button = await screen.findByRole('button', { name: 'Use my budgets · $61,752.00/yr' })
+    expect(screen.getByText(/12 × the living-category budgets resolved for Sep 2026/)).toBeDefined()
+    fireEvent.click(button)
+    await waitFor(() => expect(url()).toContain('61752'))
+    const inUse = screen.getByRole('button', { name: 'using your budgets' }) as HTMLButtonElement
+    expect(inUse.disabled).toBe(true)
+  })
+
+  it('hides the budgets preset when the echo has none', async () => {
+    mount()
+    // BOTH windowed knobs print the window, so this wait is a findAll — it only has to prove
+    // the derived run landed before the preset's absence is asserted.
+    await screen.findAllByText(/derived over/)
+    expect(screen.queryByRole('button', { name: /Use my budgets|using your budgets/ })).toBeNull()
+  })
 })

@@ -7,7 +7,7 @@ import SliderBox from '../../sandbox/SliderBox'
 import { SEP, type Sandbox } from '../../sandbox/useSandbox'
 import type { PersonOut, ProjectionOut } from '../../types/api'
 import { windowWords } from '../overview/ytd'
-import { formatCurrency } from '../../utils/format'
+import { formatCurrency, formatMonth } from '../../utils/format'
 import { FeedBanner } from '../shell/Feed'
 import {
   COMPARE_ROWS,
@@ -39,7 +39,7 @@ const HINTS: Partial<Record<ProjectionKnob, string>> = {
   monthly_contribution:
     'Derived from the months that have BOTH spending and net pay entered: (net pay − living spend − tax paid) plus every earner\'s payroll deductions — 401(k), ESPP and HSA — and their employer 401(k) match. RSU vests are not included; raise it to model them.',
   annual_spend:
-    'Derived from living spend over that same window, × 12. Tax payments and transfers to your own accounts are not living spend, so neither is in this figure.',
+    'Derived from living spend over that same window, × 12. Tax payments and transfers to your own accounts are not living spend, so neither is in this figure. When budgets exist, "Use my budgets" sets this to twelve times the living-category budgets in force this month.',
   swr: 'Derived from Settings. The FI target is annual spend ÷ this rate.',
   volatility: 'Turns the fan on; 0 turns it off.',
   inflation: 'Converts the chart to today\'s dollars; 0 reads nominal dollars.',
@@ -176,9 +176,15 @@ export default function ScenarioPanel({
         // last 12 that were entered AND paid. The window comes from the BASELINE echo, so it
         // keeps describing the derivation even while a typed knob overrides the value.
         const derivedWindow = baseline?.derived_window ?? null
+        // 2026-09-07 budget-seed spec §4: the budgets' own annual figure as a preset beside
+        // the derived one. Absent from an older backend and null without budgets, so the
+        // button exists only when the echo carries a number.
+        const budgetAnnual = key === 'annual_spend' ? (baseline?.budget_annual_spend ?? null) : null
+        const budgetMonth = baseline?.budget_month ?? null
+        const showsBudgets = budgetAnnual !== null
         const windowed = key === 'monthly_contribution' || key === 'annual_spend'
         const showsBreakdown = key === 'monthly_contribution' && breakdown !== null
-        if (!showsBreakdown && !(windowed && derivedWindow !== null)) return slider
+        if (!showsBreakdown && !(windowed && derivedWindow !== null) && !showsBudgets) return slider
         return (
           <div key={key} className="slider-box">
             {slider}
@@ -204,6 +210,22 @@ export default function ScenarioPanel({
               <span className="projection-derived">
                 derived over {windowWords(derivedWindow)} ({derivedWindow.months}{' '}
                 {derivedWindow.months === 1 ? 'month' : 'months'})
+              </span>
+            )}
+            {budgetAnnual !== null && (
+              <span className="projection-derived">
+                <button
+                  type="button"
+                  className="button"
+                  disabled={scenario.knobs.annual_spend === budgetAnnual}
+                  onClick={() => knob('annual_spend')(budgetAnnual, true)}
+                >
+                  {scenario.knobs.annual_spend === budgetAnnual
+                    ? 'using your budgets'
+                    : `Use my budgets · ${formatCurrency(budgetAnnual)}/yr`}
+                </button>
+                {budgetMonth !== null &&
+                  ` 12 × the living-category budgets resolved for ${formatMonth(budgetMonth)}.`}
               </span>
             )}
           </div>
