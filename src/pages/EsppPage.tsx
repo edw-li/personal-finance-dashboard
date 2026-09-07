@@ -41,6 +41,7 @@ import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../utils/format'
 import { shiftPoint } from '../utils/percent'
 import '../components/panels.css'
+import '../components/espp/espp.css'
 import './EsppPage.css'
 
 // The IRS §423 ceiling the chain is modeled against (backend espp_calc: unused_25k starts
@@ -508,6 +509,45 @@ function LotsPanel({
                 </tr>
               ))}
             </tbody>
+            {/* The server's totals (2026-09-07 spec §4.3), never summed here. Absent on a
+                pre-batch snapshot, so the footer simply waits for the mount's fetch. */}
+            {data.totals !== undefined && (
+              <tfoot>
+                <tr className="espp-totals">
+                  <td>Held</td>
+                  <td className="num">{formatShares(data.totals.held.shares)}</td>
+                  <td />
+                  <td />
+                  <td />
+                  <td className="num">{formatCurrency(data.totals.held.cost_basis)}</td>
+                  <td />
+                  <td className="num">{formatCurrency(data.totals.held.market_value)}</td>
+                  <td className="num">{formatCurrency(data.totals.held.gain_amount)}</td>
+                  <td className="num">{formatPct(data.totals.held.gain_pct)}</td>
+                  <td className="disposition">{`${data.totals.held.lots} held`}</td>
+                  <td />
+                  <td />
+                </tr>
+                {data.totals.sold.lots > 0 && (
+                  <tr className="espp-totals">
+                    <td>Sold</td>
+                    <td className="num">{formatShares(data.totals.sold.shares)}</td>
+                    <td />
+                    <td />
+                    <td />
+                    <td className="num">{formatCurrency(data.totals.sold.cost_basis)}</td>
+                    <td />
+                    {/* Market value's column: for a sold lot that IS its proceeds. */}
+                    <td className="num">{formatCurrency(data.totals.sold.proceeds)}</td>
+                    <td className="num">{formatCurrency(data.totals.sold.gain_amount)}</td>
+                    <td />
+                    <td className="disposition">{`${data.totals.sold.lots} sold`}</td>
+                    <td />
+                    <td />
+                  </tr>
+                )}
+              </tfoot>
+            )}
           </table>
         </div>
       )}

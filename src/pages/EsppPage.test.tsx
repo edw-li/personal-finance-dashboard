@@ -130,6 +130,17 @@ function lotsResponse(over: Partial<EsppLotsResponse> = {}): EsppLotsResponse {
     current_price: '171.3100',
     quoted_at: '2026-08-15T20:00:00Z',
     lots: [qualifiedLot, soldQualifiedLot, soldUnqualifiedLot, countdownLot],
+    // The server's own sums over those four rows (2026-09-07 spec §3.2): the two unsold lots
+    // in `held`, the two realized ones in `sold`. Nothing here is re-derived on the client.
+    totals: {
+      held: {
+        lots: 2, shares: '501.0000', cost_basis: '20657.56', fmv_value: '62546.50',
+        market_value: '85826.31', gain_amount: '65168.75', gain_pct: '3.154717',
+        bargain_element: '41888.94', lookback_component: '38243.49', discount_component: '3645.45',
+        appreciation: '23279.81', avg_paid: '41.23265',
+      },
+      sold: { lots: 2, shares: '529.0000', cost_basis: '21812.08', proceeds: '60740.00', gain_amount: '38927.92' },
+    },
     ...over,
   }
 }
@@ -226,6 +237,11 @@ function modelerResponse(over: Partial<EsppModelerOut> = {}): EsppModelerOut {
       out_of_pocket_cost: '16130.72',
       fmv_of_shares: '19200.00',
       remaining_25k: '6082.87',
+      // The chain's own sums (spec §3.3): 203 + 187 shares, 8400.00 + 8412.00 contributed,
+      // and the derived row's refund.
+      total_shares: '390',
+      total_contribution: '16812.00',
+      total_refund: '681.28',
     },
     ...over,
   }
@@ -239,6 +255,9 @@ function totalsUsing(used: string): EsppModelerOut {
       out_of_pocket_cost: '16130.72',
       fmv_of_shares: '19200.00',
       remaining_25k: '6082.87',
+      total_shares: '390',
+      total_contribution: '16812.00',
+      total_refund: '681.28',
     },
   })
 }
@@ -351,8 +370,9 @@ describe('EsppPage — lots', () => {
     expect(screen.getByText('$44,540.60')).toBeTruthy()
     expect(screen.getByText('$33,820.11')).toBeTruthy()
     // Both unsold lots were bought at the same 85% price, so they share a gain % — the
-    // realized rows carry their own.
-    expect(screen.getAllByText('+315.5%')).toHaveLength(2)
+    // realized rows carry their own. THREE, not two, since 2026-09-07: the held totals row
+    // closes the table with the same ratio (65,168.75 / 20,657.56 rounds to the same 1dp).
+    expect(screen.getAllByText('+315.5%')).toHaveLength(3)
     expect(screen.getByText('+166.8%')).toBeTruthy()
     // Date-only rendering of the quote instant (Plan 4 note: the UI compares dates only,
     // and this line does not even do that — it just says when).
@@ -705,6 +725,42 @@ describe('EsppPage — lots', () => {
 
     expect(field('Subscription').value).toBe('')
     expect(field('Qualifying date').value).toBe('')
+  })
+
+  it('closes the table with the server totals — one row for held lots, one for sold', async () => {
+    renderPage()
+    await screen.findByText('$10,720.49')
+    const rows = document.querySelectorAll('tfoot tr.espp-totals')
+    expect(rows.length).toBe(2)
+    const held = rows[0].textContent ?? ''
+    expect(held).toContain('Held')
+    expect(held).toContain('501')
+    expect(held).toContain('$20,657.56')
+    expect(held).toContain('$85,826.31')
+    expect(held).toContain('$65,168.75')
+    expect(held).toContain('+315.5%')
+    expect(held).toContain('2 held')
+    const sold = rows[1].textContent ?? ''
+    expect(sold).toContain('Sold')
+    expect(sold).toContain('529')
+    expect(sold).toContain('$60,740.00')
+    expect(sold).toContain('$38,927.92')
+    expect(sold).toContain('2 sold')
+  })
+
+  it('prints no sold row when nothing has been sold', async () => {
+    vi.mocked(fetchLots).mockResolvedValue(
+      lotsResponse({
+        lots: [qualifiedLot],
+        totals: {
+          held: lotsResponse().totals!.held,
+          sold: { lots: 0, shares: '0.0000', cost_basis: '0.00', proceeds: '0.00', gain_amount: '0.00' },
+        },
+      }),
+    )
+    renderPage()
+    await screen.findByText('$10,720.49')
+    expect(document.querySelectorAll('tfoot tr.espp-totals').length).toBe(1)
   })
 })
 
