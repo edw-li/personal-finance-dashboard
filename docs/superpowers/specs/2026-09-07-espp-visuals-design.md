@@ -26,6 +26,8 @@ refactor-design.md` §9's "this feature has no charts" no longer holds.
 | Colors for the three lot components | Slots 2, 3, 1 of the fixed palette — orange for Paid, green for Bargain element, blue for Appreciation. Validated with the dataviz palette script in both themes (§8.2); violet and pink alternatives failed the adjacency floors. |
 | Where the new figures come from | The server. Per-lot components, position totals, running average paid and modeler totals are added to the existing payloads; the page composes and never re-derives (chart grammar §7, global rule 9). |
 | Dashed, hatched, status colors | Unchanged meanings: dashed = reference or event; hatching stays the vesting chart's "priced at today's quote"; POSITIVE/NEGATIVE appear only as the price chart's above/below wash and the anatomy chart's loss overlay, both polarity. |
+| Sold lots | Drawn **hollow** — outlined in their own component colors over the card surface, dots hollow too — on both anatomy views and on the price chart's purchase markers. The user asked for sold lots to look different (2026-09-07 review); hollow is the one free channel, since hatch and fade mean "estimate" on Comp and gray means the folded tail. The `Sold` cap label and axis suffix stay as the text backup. |
+| Meter scale | Both rows of the $25k chain meter on one shared dollar scale — confirmed by the user at review. |
 
 Standing decisions this design respects: the modeler's period contributions stay hand-entered
 (2026-08-23 §1); knobs stay blank-means-server-default (§6.2); the app ships no IRS values; one
@@ -217,7 +219,8 @@ figure is `totals.*`; the skeleton height `FEED_SKELETON.esppLots` grows by one 
 The footer's two sentences: the quote line the Lots card already prints (`NVDA · $230.36 · as of
 Sep 4, 2026`), and, when `totals.held.bargain_element` is positive, "Of the {bargain} bargain
 element across your held lots, {discount} was the plan discount and {lookback} the lookback." —
-the ten-to-one fact, from `totals`, never summed here.
+the ten-to-one fact, from `totals`, never summed here. When `totals.sold.lots > 0` the quote line
+gains a third clause, `Hollow = sold` — the vesting footer's `Hatched = at today's quote` idiom.
 
 ### 5.2 Shared shape
 
@@ -232,8 +235,14 @@ the ten-to-one fact, from `totals`, never summed here.
   the hovered column): `260 sh · paid $41.23 · FMV $79.11 · subscription $48.51`, `bargain:
   $7,494.64 discount + $77,216.77 lookback` (from the lot's own components), and `Sold Mar 12,
   2026 at $x` or `Qualifies in 300 days` from the disposition fields.
-- Sold lots keep full color; the column carries a `capLabel` reading `Sold` and the axis label
-  gains ` (sold)`. No fade and no hatch: fade and hatch already mean "estimate" on the Comp page.
+- Sold lots are drawn **hollow**: each segment's data item overrides `itemStyle` to a
+  `'transparent'` fill (a color the conformance rule admits) with a 1.5 px border in its own
+  component color — `PALETTE[1]`, `[2]`, `[0]` — so the column keeps its composition but reads as
+  emptied, which is what happened to the shares. The column also carries a `capLabel` reading
+  `Sold` and the axis label gains ` (sold)`, so the distinction never rests on the outline alone.
+  No fade and no hatch: both already mean "estimate" on the Comp page, and gray is the folded
+  tail. With `Appearance › Chart patterns` on, the aria decal paints fills only, so a hollow
+  column stays hollow. The probe eyeballs the doubled hairline where two outlined segments meet.
 - Legend: `legendFor(count, selected)`, picks mirrored into page state (§9 of the grammar).
 - Colors: Paid `PALETTE[1]`, Bargain element `PALETTE[2]`, Appreciation `PALETTE[0]`; loss
   overlay `NEGATIVE`; markers as below. Fixed by component, never by lot — lots pass eight by 2028.
@@ -274,9 +283,12 @@ spread after it (a dumbbell's bar is thin; the surface hairline stays):
 Two scatter series ride the ends (`symbolSize: 9`, `itemStyle.borderColor: INK`): **Paid**, a
 `PALETTE[1]` circle at `purchase_price` — the same name and hue as the Dollars view's base
 segment, so the legend entry survives the toggle — and **Price**, a `PALETTE[0]` circle at `price`
-(absent for unpriced lots). A third scatter, **Subscription price**, is a hollow diamond (`SURFACE`
-fill, `MUTED` border) at `subscription_price`; where FMV sat above it, the gap between the diamond
-and the color change is the lookback, drawn. A `referenceLine('Current quote', …)` runs across
+(absent for unpriced lots). On a sold lot the range bar and both dots go hollow (§5.2: `SURFACE`
+fill on the dots, a 1.5 px border in the dot's own color), and its Price dot sits at the sale price
+rather than on the quote line. A third scatter, **Subscription price**, is a `MUTED` diamond with
+an `INK` border at `subscription_price` — the annotation-marker grammar, filled, so hollow stays
+reserved for sold; where FMV sat above it, the gap between the diamond and the color change is the
+lookback, drawn. A `referenceLine('Current quote', …)` runs across
 every category at `current_price` — every unsold column's blue dot sits on it, which is the view's
 point: the spread is your entry prices, the line is where they all are today.
 
@@ -332,8 +344,10 @@ reading — the holding chart's own rule), `timeZoom(dates, 'all')`.
   rather than a constant; nothing drawn before the first purchase.
 - **Purchases** — scatter, one point per lot snapped to the last bar on or before
   `purchase_date` (skipped, and counted for the footer, when no bar exists), plotted at that bar's
-  close, `PALETTE[1]` diamond, `symbolSize: 10`, `INK` border, `z: 11`. Annotation lines through
-  the tooltip's `annotations` hook: `Feb 29, 2024 · 260 sh · paid $41.23 · FMV $79.11`.
+  close, `PALETTE[1]` diamond, `symbolSize: 10`, `INK` border, `z: 11`; a lot since sold draws
+  hollow (`SURFACE` fill, `PALETTE[1]` border) — the page's one meaning for hollow. Annotation
+  lines through the tooltip's `annotations` hook: `Feb 29, 2024 · 260 sh · paid $41.23 · FMV
+  $79.11`, with ` · sold Mar 12, 2026` appended on a sold lot.
 - **Sales** — scatter of sold lots at `sold_date`, the events grammar's sell glyph (a `MUTED`
   triangle rotated 180°), lines `Sold Mar 12, 2026 · 260 sh at $x`.
 
@@ -443,7 +457,8 @@ existing self-extinguish and watermark tests stay green.
 
 **Frontend.** `esppChartOptions.test.ts`: dollars segments sum to `market_value`; the loss overlay
 appears only for negative appreciation and stacks over the same column; sold columns carry the
-cap label; unpriced lots draw two segments; per-share bases equal the paid price, dots and
+cap label and the hollow item style, and so do a sold lot's per-share dots and its purchase marker
+on the price chart; unpriced lots draw two segments; per-share bases equal the paid price, dots and
 subscription diamonds land on their prices, the current-quote reference spans every category;
 stable ids across views; label collision rule; price builder — subscription steps null before the
 first offering and switch at a second offering's start, average-paid steps null before the first
@@ -486,7 +501,8 @@ forms, the modeler chain, or stored data; mobile.
 3. Backend is additive: six per-lot component fields, a `totals` block, three modeler totals, and
    the employer backfill floor extended to the earliest lot or offering. No migration.
 4. Colors: Paid orange, Bargain green, Appreciation blue — slots 2, 3, 1, validated both themes;
-   `NEGATIVE` only for the below-FMV overlay and the price wash.
+   `NEGATIVE` only for the below-FMV overlay and the price wash. Sold lots draw hollow on every
+   ESPP chart; hatch, fade and gray keep their existing meanings.
 5. Every chart through `ChartCard` with aria, CSV, fixture; the meter is HTML in the pace meter's
    grammar; a real-canvas probe of the per-share form precedes merge.
 6. Three plans: backend first, then strip/meter and charts in parallel, then verify.
