@@ -105,8 +105,10 @@ def position_totals(rows) -> dict[str, dict]:
     gain / cost, a MONEY ratio; the per-lot gain_pct is the sheet's PRICE ratio, and the two
     agree only while every lot was bought at one price (the schema docstring says so too).
     Sold: a row with a sold_date but no price counts in `lots` and `shares` and in no money
-    field, so proceeds and gain stay over one and the same priced subset. No re-rounding:
-    every operand is already at cents; `+ ZERO` only collapses a signed zero.
+    field, so proceeds and gain stay over one and the same priced subset. The SUMS are never
+    re-rounded — every operand arrives at cents already, and the closing `+ ZERO` pass only
+    collapses signed zeros; the two ratios (gain_pct at 6 dp, avg_paid at 5 dp) are the only
+    quantizes in this function.
     """
     held: dict = {
         "lots": 0,

@@ -252,7 +252,7 @@ async def test_lots_totals_null_the_quote_fields_when_unpriced_and_sum_sold_lots
 
 
 async def test_write_verbs_answer_with_the_running_average(auth_client):
-    await create_lot(auth_client)
+    first = await create_lot(auth_client)
     created = await create_lot(
         auth_client,
         purchase_date="2025-08-29",
@@ -267,6 +267,20 @@ async def test_write_verbs_answer_with_the_running_average(auth_client):
     assert patched.status_code == 200, patched.text
     # (10720.49 + 6375.00) / 310 at 5 dp — the PATCH re-reads the chain it just changed.
     assert patched.json()["avg_paid_to_date"] == "55.14674"
+
+    # A moved purchase_date RE-SLOTS the lot before the answer is composed
+    # (_running_average_for's docstring claim): this one now HEADS the chain, so its average
+    # is its own 6375.00 / 50 alone, and the 2024 lot it jumped inherits the blend.
+    moved = await auth_client.patch(f"{LOTS}/{created['id']}", json={"purchase_date": "2023-08-31"})
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["avg_paid_to_date"] == "127.50000"
+    lots = (await auth_client.get(LOTS)).json()["lots"]
+    assert [row["avg_paid_to_date"] for row in lots] == ["127.50000", "55.14674"]
+    # ... and the displaced lot answers with the very figure the list shows it, even for a
+    # PATCH that changes nothing but its notes: both read the one ordered chain.
+    untouched = await auth_client.patch(f"{LOTS}/{first['id']}", json={"notes": "no-op"})
+    assert untouched.status_code == 200, untouched.text
+    assert untouched.json()["avg_paid_to_date"] == "55.14674"
 
 
 async def test_espp_ticker_setting_is_normalized_before_the_lookup(auth_client, db):

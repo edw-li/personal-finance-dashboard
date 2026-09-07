@@ -125,6 +125,9 @@ class LotsOut(BaseModel):
     current_price: Decimal | None
     quoted_at: datetime | None
     lots: list[LotOut]
+    # Always present. Both blocks are all zeros at column scale on an empty book, and the two
+    # ratios (`gain_pct`, `avg_paid`) are null there — a division by nothing has no honest
+    # figure (spec §3.2).
     totals: LotTotalsOut
 
 
