@@ -296,7 +296,9 @@ describe('esppPriceOption', () => {
     const sub = byName(option, SUBSCRIPTION) as unknown as { step: string; endLabel: { show: boolean; formatter: string } }
     expect(byName(option, SUBSCRIPTION)).toMatchObject({ color: MUTED, z: 9, lineStyle: { type: 'dashed', width: 2 } })
     expect(sub.step).toBe('end')
-    expect(sub.endLabel).toEqual({ show: true, formatter: '{a}', color: MUTED, fontSize: 11 })
+    // The SHORT name, not '{a}': grid('endLabel') reserves 84px and the series name overruns it
+    // (the 2026-09-07 probe clipped "Subscription p").
+    expect(sub.endLabel).toEqual({ show: true, formatter: 'Subscription', color: MUTED, fontSize: 11 })
     expect(byName(option, SUBSCRIPTION).data).toEqual([48.509, 48.509, 48.509, 48.509, 48.509])
     // Null before the first purchase; the running average from the lot itself afterwards.
     expect(byName(option, AVG_PAID).data).toEqual([null, 41.23265, 41.23265, 41.23265, 41.23265])

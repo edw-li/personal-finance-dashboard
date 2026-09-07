@@ -495,9 +495,12 @@ export function esppPriceOption({ points, offerings, lots }: EsppPriceInput): EC
     }
   }
   // Two dashed MUTED references look alike, so each names itself at its end (grid 'endLabel').
-  const step = (name: string, data: (number | null)[]) => ({
+  // The end text is the SHORT name, not '{a}': grid('endLabel') reserves 84px on the right, and
+  // 'Subscription price' / 'Avg paid to date' run past that at 11px — the 2026-09-07 probe's first
+  // shoot clipped both to "Subscription p" and "Avg paid to da".
+  const step = (name: string, endText: string, data: (number | null)[]) => ({
     ...referenceLine(name, data, { step: 'end' }),
-    endLabel: { show: true, formatter: '{a}', color: MUTED, fontSize: 11 },
+    endLabel: { show: true, formatter: endText, color: MUTED, fontSize: 11 },
   })
   const names = [
     CLOSE,
@@ -533,8 +536,8 @@ export function esppPriceOption({ points, offerings, lots }: EsppPriceInput): EC
     series: [
       ...washes,
       { ...LINE, name: CLOSE, color: PALETTE[0], data: closes },
-      ...(hasSub ? [step(SUBSCRIPTION, subscription)] : []),
-      ...(hasAvg ? [step(AVG_PAID, avgPaid)] : []),
+      ...(hasSub ? [step(SUBSCRIPTION, 'Subscription', subscription)] : []),
+      ...(hasAvg ? [step(AVG_PAID, 'Avg paid', avgPaid)] : []),
       ...(purchases.length > 0 ? [marker(PURCHASES, PALETTE[1], 10, purchases)] : []),
       ...(sales.length > 0 ? [marker(SALES, MUTED, 9, sales)] : []),
     ],
