@@ -15,6 +15,7 @@ gitignored `scratchpad/`, never next to these tracked scripts.
 | `honest-v/smoke.mjs` | The honest-numbers program end to end in both themes: the wizard's per-step saves (a balances-only save must fire NO spending PUT), the deliberate `$0` door and the repair banner it produces, read-only derived parent rows, Overview's coverage footer and its two new attention items, Spending's savings card and kind columns, the Projection window echo, the money-flow pending-take-home node and the Settings kind picker. The only smoke that WRITES — always to the scratch month `2019-01`, swept before each theme and again in a `finally` | needs the dev stack — see below |
 | `motion-v/smoke.mjs` | The twelve motion claims of the 2026-09-05 spec §10, in both themes: chart entrances measured as PAINT DELTAS (≥300ms, where the audit found 1–2 frames), `#main` non-empty on every frame of all 13 nav clicks, CLS per page, the nav indicator's ~200ms slide, an InfoHint parked under the STUCK scope row, `--reveal` at the bottom edge, mid-page and at the STUCK scope row's underside (which is the top edge the view() timelines are inset to), plus a scroll back UP that follows one card from the moment it clears the row to full brightness at 45% shown, the two viewport-edge scrims read at three scroll positions (top 0/bottom 1 at rest, 1/1 mid-page, 1/0 at the end) with a hit test 8px inside each band and an A/B proving they cost the flow nothing, a below-fold chart that waits to be seen and then draws once, the Spending drill morphing without a dispose, a theme swap that does not replay the entrance, reduced-motion emulation, and the error grammar on a stubbed 500. READ-ONLY BY CONSTRUCTION — a write fence, not a sweep | needs the dev stack — see below |
 | `pace-v/smoke.mjs` | Settings' five sections, the sticky chip rail, the four old anchors still ringing, `#sec-` hashes that do not, and every card-grid row filled to the right edge; the pace strip's ESPP soft tick, window label and note line plus the 415(c) label judged against the profiles the API reports; Net Worth's What moved bars, lede and Groups · Accounts toggle. READ-ONLY BY CONSTRUCTION — a write fence, not a sweep | needs the dev stack — see below |
+| `espp-v/smoke.mjs` | The ESPP page after the 2026-09-07 visuals in both themes: the five-tile strip (no lone row, no ghost standing), its figures against `GET /espp/lots`'s own totals block, the two chart cards painted at span-6 filling one grid row, the `Dollars · Per share` toggle swapping the live instance's series, the two-row chain meter where the gauge stood, the totals rows, CLS < 0.1 and a clean console. READ-ONLY BY CONSTRUCTION — a write fence, not a sweep | needs the dev stack — see below |
 | `espp-3/` | Static `probe.html` for the 2026-09-07 ESPP visuals: the per-share lot view (two stacks on one column via `barGap: '-100%'`, hollow sold items, scatters over bars on a category axis) and the price chart's stepped references with end labels | `node tools/probes/espp-3/shoot.mjs` — no server needed |
 
 ## Running the C7 / sandbox smokes against the dev servers (dev only)
@@ -148,6 +149,30 @@ the reveal's `translateY(±4px)` is inside `getBoundingClientRect`, so one compu
 7px off and leaves no card straddling the edge at all. A bare "Failed to load resource" console
 line is recorded as a NOTE with its URL (the dev book's `/paycheck/breakdown?person_id=2` 404
 is the same known non-defect the C7 smoke lists); anything else in the console still fails.
+
+## Running the ESPP smoke (dev only)
+
+Same stack pattern as the calendar recipe (a lane pair on 8010/5174 beside the shared servers),
+same dev seed token. Start the lane's uvicorn from the MERGED main — it runs without `--reload`,
+so a server started before the backend lane merged answers without the `totals` block and the
+per-lot anatomy fields, and the strip reads as four em dashes.
+
+```bash
+OUT=scratchpad/espp-smoke && mkdir -p "$OUT"
+curl -s http://127.0.0.1:8010/api/v1/auth/login -H 'content-type: application/json'   -d '{"email":"admin@example.com","password":"changeme123"}'   | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).access_token))" > "$OUT/token.txt"
+TOKEN_FILE=$OUT/token.txt SMOKE_OUT=$OUT APP_BASE=http://localhost:5174 API_BASE=http://127.0.0.1:8010 node tools/probes/espp-v/smoke.mjs
+```
+
+Prints `ESPP SMOKE OK`, or exits 1 listing every problem. Env: `SMOKE_OUT`, `TOKEN_FILE`,
+`APP_BASE`, `API_BASE`, `EDGE_PATH`, `PLAYWRIGHT_CORE`, `ONLY_THEME`.
+
+Two things the driver has to do that the others do not. **`vite.config.ts` pins its dev proxy to
+`127.0.0.1:8000`**, the shared backend — so the fence re-aims every same-origin `/api` read at
+`API_BASE` and fulfills it from the handler; without that the page reads whatever build has been
+running on 8000 all day. And **CLS is attributed**: the shell's route-hold cross-fade
+(`.xfade`/`.xfade-veil`/`.loading-dim`/`.loading-fallback`) intermittently collapses its held block
+at ~0.5 s and books ~0.13 on this page and on ones this batch never touched, so the check counts
+only shifts with a source outside that overlay (`__clsPage`) and reports the total beside it.
 
 ## Running the pace smoke (dev only)
 
