@@ -575,7 +575,7 @@ export default function NetWorthPage() {
           {data !== null && viewedIndex >= 1 && (
             <ChartCard
               title={`What moved — ${formatMonth(months[viewedIndex])}`}
-              hint="How each account group — or account — moved net worth from the prior snapshot to this one, largest first. Groups that did not move are left out."
+              hint="How each account group — or account — moved net worth from the prior snapshot to this one, largest first. Every bar grows from zero by the size of the move; a loss is drawn outlined, a gain solid, and the label carries the sign. Groups that did not move are left out."
               // The aria follows the TOGGLE: a sentence saying "group" over a chart of
               // accounts is the one reading a screen-reader user cannot check.
               ariaLabel={`Horizontal bar chart of how each ${moversBy === 'account' ? 'account' : 'account group'} moved net worth from the prior month to this one`}

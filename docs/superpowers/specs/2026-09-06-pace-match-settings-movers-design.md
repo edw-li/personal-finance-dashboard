@@ -343,11 +343,16 @@ tooltip clause and the CSV cell go blank instead (review decision 2026-09-06).
 ### 4.2 Form
 
 - Horizontal bars, `grid('horizontal')`, category y-axis inverted so the largest mover is on
-  top, `moneyAxis()` value x-axis (includes zero; bars grow from it in both directions), one
-  series "Change", per-bar `itemStyle.color` = the mover's group colour, `barMaxWidth` 24, a
-  1 px surface border. Direct labels: the signed compact amount at the bar's outer end
-  (`position: 'right'` for gains, `'left'` for losses). Tooltip: `itemTooltip` value-first,
-  label the mover, sub "{share}% of the change" (plus " · {group}" in Accounts mode).
+  top, `moneyAxis()` value x-axis from zero with 12% headroom past the largest bar
+  (`boundaryGap: [0, '12%']`), one series "Change", `barMaxWidth` 24, a 1 px surface border.
+  **Bars are magnitudes from one baseline** (amended 2026-09-07 after the diverging layout
+  pushed a loss's label into the category gutter and spent a quarter of the plot on slivers):
+  every bar grows right by `|delta|`; a gain is solid in the mover's group colour, a loss is
+  hollow — a transparent fill with a 1.5 px border in the group colour — and the direct label
+  carries the sign. Direct labels: the signed compact amount at every bar's right end.
+  Tooltip: `itemTooltip` value-first with the signed delta, label the mover, sub "{share}% of
+  the change" (plus " · {group}" in Accounts mode). The hint says "a loss is drawn outlined, a
+  gain solid, and the label carries the sign".
 - Height: `clamp(200, 60 + 28 × rows, 420)`.
 - **Header strip**: `ChartCard` gains an optional `lede?: ReactNode` rendered between the header
   row and the plot. Content: "{prev month} {prev NW} → {month} {NW} · {signed delta} ·

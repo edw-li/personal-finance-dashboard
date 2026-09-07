@@ -457,14 +457,23 @@ export function netWorthMoversOption(ts: NetWorthTimeseries, index: number, mode
         return { value: mover.delta, label: mover.label, sub: sub === '' ? undefined : sub }
       },
     }),
-    xAxis: moneyAxis(),
+    // 12 % of headroom past the largest bar, so its cap label never clips at the grid's 40 px
+    // right margin when the bar lands on the axis's nice maximum.
+    xAxis: { ...moneyAxis(), boundaryGap: [0, '12%'] as [number, string] },
     yAxis: { type: 'category' as const, data: movers.map((m) => m.label), inverse: true, axisLabel: { width: 118, overflow: 'truncate' as const } },
     series: [
       { type: 'bar' as const, name: 'Change', ...BAR_MARKS, barMaxWidth: 24,
-        // capLabel carries show/colour/size/formatter; each item overrides only the POSITION,
-        // so the amount sits at the bar's outer end instead of over the axis (spec §4.2).
+        // capLabel carries show/colour/size/formatter; the signed amount sits at every bar's outer
+        // (right) end. Bars are MAGNITUDES from one baseline (spec §4.2, 2026-09-07): a diverging
+        // axis spent a quarter of the plot on two slivers and pushed a loss's label into the
+        // category gutter. The sign rides the label and the fill — a loss is HOLLOW, the entity's
+        // colour as a border round a transparent fill, so no second hue is spent on polarity.
         label: capLabel((p) => signedCompact(movers[p.dataIndex]?.delta ?? 0)),
-        data: movers.map((m) => ({ value: m.delta, itemStyle: { color: m.color }, label: { position: m.delta > 0 ? ('right' as const) : ('left' as const) } })) },
+        data: movers.map((m) => ({
+          value: Math.abs(m.delta),
+          itemStyle: m.delta < 0 ? { color: 'transparent', borderColor: m.color, borderWidth: 1.5 } : { color: m.color },
+          label: { position: 'right' as const },
+        })) },
     ],
   }
 }

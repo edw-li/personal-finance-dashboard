@@ -335,7 +335,7 @@ const MOVED = ts({
 })
 type MoversRead = { yAxis: { data: string[]; inverse: boolean }; tooltip: { formatter: (p: unknown) => string }
   series: { name: string; barMaxWidth: number; label: { formatter: (p: { dataIndex: number }) => string }
-    data: { value: number; itemStyle: { color: string }; label: { position: string } }[] }[] }
+    data: { value: number; itemStyle: { color: string; borderColor?: string }; label: { position: string } }[] }[] }
 const movers = (option: unknown) => option as MoversRead
 
 describe('netWorthMoversOption — Groups', () => {
@@ -346,9 +346,13 @@ describe('netWorthMoversOption — Groups', () => {
     expect(option.yAxis.inverse).toBe(true) // the largest mover on TOP
     const [bars] = option.series
     expect([bars.name, bars.barMaxWidth]).toEqual(['Change', 24])
-    expect(bars.data.map((d) => d.value)).toEqual([100, -40, 30, 10])
-    expect(bars.data.map((d) => d.itemStyle.color)).toEqual([GROUP_COLORS.taxable, GROUP_COLORS.liability, GROUP_COLORS.cash, GROUP_COLORS.pre_tax])
-    expect(bars.data.map((d) => d.label.position)).toEqual(['right', 'left', 'right', 'right'])
+    // MAGNITUDES from one baseline (2026-09-07): a loss grows right like a gain and is drawn HOLLOW —
+    // the entity's colour as a border round a transparent fill — so the sign never sends a bar
+    // left into the category-label gutter, and the signed cap label still says which way it went.
+    expect(bars.data.map((d) => d.value)).toEqual([100, 40, 30, 10])
+    expect(bars.data.map((d) => d.itemStyle.color)).toEqual([GROUP_COLORS.taxable, 'transparent', GROUP_COLORS.cash, GROUP_COLORS.pre_tax])
+    expect(bars.data[1].itemStyle.borderColor).toBe(GROUP_COLORS.liability)
+    expect(bars.data.map((d) => d.label.position)).toEqual(['right', 'right', 'right', 'right'])
     expect([0, 1].map((i) => bars.label.formatter({ dataIndex: i }))).toEqual(['+$100', '-$40'])
   })
   it('tells each bar its share of the move, and refuses the months it cannot compare', () => {
