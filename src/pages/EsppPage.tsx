@@ -1047,7 +1047,8 @@ function ModelerCard({
       <p className="drill-hint">
         Leave the knobs blank and the model uses your offerings for each period&apos;s
         subscription price and the latest quote for the FMV — type a value to override the
-        whole year. Base, additional and contribution % are saved per period.
+        whole year. Base, additional and contribution % are saved per period. Hover or focus a
+        meter bar below for each period&apos;s figures.
       </p>
       <form
         className="espp-form espp-knobs"

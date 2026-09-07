@@ -108,7 +108,88 @@
   background: var(--muted);
   box-shadow: 0 0 0 1px var(--surface);
   transform: translateX(-1px);
+}
+
+/* ── Hover and focus (the pace meter's grammar, PacePanel/pace.css) ────────────────────── */
+
+/* The segments answer the pointer; the EMPTY part of their container does not, so the pointer
+   falls through to the track underneath — whose hover says what remains. */
+.chain-segments {
   pointer-events: none;
+}
+
+.chain-seg {
+  pointer-events: auto;
+}
+
+/* Hover targets, not hunting targets: the tick is 2px wide, so it wears a transparent band
+   through a ::before that is part of its own box for hit-testing. */
+.chain-tick::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  bottom: -5px;
+  left: -4px;
+  right: -4px;
+}
+
+/* The detail the figures cell does not carry: one small card above the bar, pointing at the
+   part under the pointer (or every part's headline at once on focus). `pointer-events: none`
+   so it can never eat the hover that summoned it. Its own rule, not an import of pace.css —
+   an ESPP component must not depend on a paycheck stylesheet. */
+.chain-tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 18%);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  color: var(--text);
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+/* The focus ring belongs on the whole bar: the tip it opens sits above it. */
+.chain-bar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 999px;
+}
+
+/* The part under the pointer brightens. The tip says WHAT it is; this says WHICH — the same
+   redundancy the legend chips keep with the tones. Brightness rather than a vertical swell:
+   the segments sit inside the clipped pill, so a scaleY would be cut off. */
+.chain-seg.is-hot,
+.chain-track.is-hot {
+  filter: brightness(1.2);
+}
+
+.chain-seg.is-period-b.is-hot {
+  opacity: 0.8;
+}
+
+.chain-tick.is-hot {
+  transform: translateX(-1px) scaleY(1.3);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chain-seg,
+  .chain-track,
+  .chain-tick {
+    transition:
+      filter var(--t-fast) ease,
+      opacity var(--t-fast) ease,
+      transform var(--t-fast) ease;
+  }
 }
 
 .chain-figures {

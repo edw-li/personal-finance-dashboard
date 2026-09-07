@@ -1,5 +1,7 @@
-import type { EsppModelerOut } from '../../types/api'
-import { formatCurrency } from '../../utils/format'
+import { useState } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
+import type { EsppModelerOut, EsppModelerPeriod } from '../../types/api'
+import { formatCurrency, formatShares } from '../../utils/format'
 import '../panels.css'
 import './espp.css'
 
@@ -16,6 +18,164 @@ function pct(value: number, scale: number): string {
 /** Periods alternate two steps of one hue: ordered, not identified. */
 const tone = (index: number) => (index % 2 === 0 ? 'is-period-a' : 'is-period-b')
 
+/** One drawn thing on a bar — its geometry and the lines a hover over it says. The first
+ *  line is the headline the focus tip repeats for every part at once. */
+interface Part {
+  key: string
+  className: string
+  width?: string
+  left?: string
+  lines: string[]
+}
+
+/** What the tip is saying, where along the bar it points, and which part it belongs to. */
+type Tip = { lines: string[]; left: number; hot: string | null }
+
+// Kept off the bar's ends (the pace meter's rule): a tip centred on x=0 hangs into the label
+// beside it.
+const tipLeft = (value: number) => Math.min(Math.max(value, 2), 98)
+
+/**
+ * One meter row's bar: its parts, the hover tip and the swell — the pace meter's grammar
+ * (PacePanel, 2026-09-07). ONE bubbling handler on the bar reads which part the pointer is over
+ * through `data-part` (`closest`, because the tick's hit band is a ::before and a browser may
+ * report either); focus has no part to be over, so it says every part's headline at once from
+ * the middle and lights nothing; Escape and blur put it away. The bar keeps `aria-valuetext`,
+ * so nothing readable is hover-only.
+ */
+function MeterBar({
+  ariaLabel,
+  valueMax,
+  valueNow,
+  valueText,
+  parts,
+  track,
+  tick,
+}: {
+  ariaLabel: string
+  valueMax: number
+  valueNow: number
+  valueText: string
+  parts: Part[]
+  /** The row's track, when it has one — hovering its EMPTY stretch says what remains. */
+  track?: Part
+  tick?: Part
+}) {
+  const [tip, setTip] = useState<Tip | null>(null)
+  const everything = [...parts, ...(track ? [track] : []), ...(tick ? [tick] : [])]
+
+  const partAt = (target: Element): Part | null => {
+    const key = target.closest('[data-part]')?.getAttribute('data-part') ?? null
+    return key === null ? null : (everything.find((part) => part.key === key) ?? null)
+  }
+
+  // At the POINTER, not at the part's midpoint: a tip that opens half a bar away from the
+  // cursor reads as a label for something else. A bar jsdom never measured has no pointer
+  // position to speak of, so the tip centres rather than dividing by zero.
+  const pointerLeft = (event: ReactMouseEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    if (rect.width <= 0) return 50
+    return tipLeft(((event.clientX - rect.left) / rect.width) * 100)
+  }
+
+  const show = (event: ReactMouseEvent<HTMLDivElement>) => {
+    const part = partAt(event.target as Element)
+    setTip(part === null ? null : { lines: part.lines, left: pointerLeft(event), hot: part.key })
+  }
+
+  const hide = (event: ReactMouseEvent<HTMLDivElement>) => {
+    // Moving BETWEEN the bar's own parts fires mouseout as well; only a real exit hides.
+    const to = event.relatedTarget as Node | null
+    if (to === null || !event.currentTarget.contains(to)) setTip(null)
+  }
+
+  const focusLines = [...parts.map((part) => part.lines[0]), ...(track ? [track.lines[0]] : [])]
+  const hot = (part: Part) => (tip?.hot === part.key ? ' is-hot' : '')
+
+  return (
+    <div
+      className="chain-bar"
+      role="meter"
+      // Focusable, because the tips carry each period's figures and a pointer is not the only
+      // way to ask for them.
+      tabIndex={0}
+      aria-label={ariaLabel}
+      aria-valuemin={0}
+      aria-valuemax={valueMax}
+      aria-valuenow={valueNow}
+      aria-valuetext={valueText}
+      // mouseOver/mouseOut, not the enter/leave pair: these bubble, so ONE handler on the bar
+      // can read which part the pointer is over (ToastProvider's note).
+      onMouseOver={show}
+      onMouseMove={show}
+      onMouseOut={hide}
+      onFocus={() => setTip({ lines: focusLines, left: 50, hot: null })}
+      onBlur={() => setTip(null)}
+      onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (event.key === 'Escape') setTip(null)
+      }}
+    >
+      {track && (
+        <div
+          className={`${track.className}${hot(track)}`}
+          data-part={track.key}
+          style={{ width: track.width }}
+        />
+      )}
+      <div className="chain-segments">
+        {parts.map((part) => (
+          <div
+            key={part.key}
+            className={`${part.className}${hot(part)}`}
+            data-part={part.key}
+            style={{ width: part.width }}
+          />
+        ))}
+      </div>
+      {tick && (
+        <span
+          className={`${tick.className}${hot(tick)}`}
+          data-part={tick.key}
+          style={{ left: tick.left }}
+          aria-hidden="true"
+        />
+      )}
+      {tip !== null && (
+        <div className="chain-tip" role="tooltip" style={{ left: `${tip.left.toFixed(2)}%` }}>
+          {tip.lines.map((line) => (
+            <span key={line}>{line}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** The limit row's lines for one period: what it used, how, and where the cap stood. */
+function limitLines(p: EsppModelerPeriod): string[] {
+  return [
+    `${p.label} — ${formatCurrency(p.value_25k)} of the limit`,
+    `${formatShares(p.shares)} sh × ${formatCurrency(p.subscription_price)} subscription price`,
+    p.over_limit
+      ? `Cap reached — capped at ${formatShares(p.max_shares_25k)} sh; ${formatCurrency(p.unused_25k)} of limit was left at the start`
+      : `${formatCurrency(p.unused_25k)} of limit was left at the start`,
+  ]
+}
+
+/** The cash row's lines for one period: what the money bought and where the rest went. */
+function cashLines(p: EsppModelerPeriod): string[] {
+  const lines = [
+    `${p.label} — ${formatCurrency(p.cost)} bought ${formatShares(p.shares)} sh at ${formatCurrency(p.purchase_price)}`,
+    `Contribution ${formatCurrency(p.contribution)}${
+      p.available === p.contribution ? '' : ` · ${formatCurrency(p.available)} available with the carry-in`
+    }`,
+  ]
+  if (Number(p.carry_forward_out) > 0)
+    lines.push(`${formatCurrency(p.carry_forward_out)} carries into the next period`)
+  if (Number(p.refund) > 0) lines.push(`${formatCurrency(p.refund)} refunded — cap reached`)
+  return lines
+}
+
 /**
  * The $25k chain as two meter rows on ONE dollar scale (2026-09-07 spec §7): the limit counts
  * shares at the subscription price while the cash buys them at the discounted price, and only a
@@ -31,43 +191,83 @@ export default function LimitChainMeter({ data }: { data: EsppModelerOut }) {
     totals.total_contribution === undefined ? null : Number(totals.total_contribution)
   const refund = totals.total_refund === undefined ? 0 : Number(totals.total_refund)
   const carryIn = Number(data.carry_forward)
-  const carryOut = periods.length === 0 ? 0 : Number(periods[periods.length - 1].carry_forward_out)
+  const last = periods.length === 0 ? null : periods[periods.length - 1]
+  const carryOut = last === null ? 0 : Number(last.carry_forward_out)
   // The chain can never exceed the limit by construction (each period is capped at
   // max_shares_25k), so the scale only ever grows past $25k on the cash side.
   const scale = Math.max(LIMIT_25K, contribution === null ? 0 : contribution + carryIn)
   const capped = periods.filter((p) => p.over_limit)
+  const refunded = periods.filter((p) => Number(p.refund) > 0)
 
   const cashClauses = [`${formatCurrency(totals.total_contribution)} contributed`]
   if (refund > 0) cashClauses.push(`${formatCurrency(totals.total_refund)} refunded`)
-  if (carryOut > 0)
-    cashClauses.push(`${formatCurrency(periods[periods.length - 1].carry_forward_out)} carries forward`)
+  if (carryOut > 0 && last !== null)
+    cashClauses.push(`${formatCurrency(last.carry_forward_out)} carries forward`)
+
+  const limitParts: Part[] = periods.map((p, i) => ({
+    key: `limit-${i}`,
+    className: `chain-seg ${tone(i)}`,
+    width: pct(Number(p.value_25k), scale),
+    lines: limitLines(p),
+  }))
+  const cashParts: Part[] = [
+    ...(carryIn > 0
+      ? [
+          {
+            key: 'carry',
+            className: 'chain-seg is-carry',
+            width: pct(carryIn, scale),
+            lines: [`Carried in ${formatCurrency(data.carry_forward)} — last year's unspent cash`],
+          },
+        ]
+      : []),
+    ...periods.map((p, i) => ({
+      key: `cash-${i}`,
+      className: `chain-seg ${tone(i)}`,
+      width: pct(Number(p.cost), scale),
+      lines: cashLines(p),
+    })),
+    ...(refund > 0
+      ? [
+          {
+            key: 'refund',
+            className: 'chain-seg is-refund',
+            width: pct(refund, scale),
+            lines: [
+              `Refunded ${formatCurrency(totals.total_refund)} — cash the cap sent back`,
+              // Per period only when more than one refunded: one line would repeat the headline.
+              ...(refunded.length > 1
+                ? refunded.map((p) => `${p.label}: ${formatCurrency(p.refund)}`)
+                : []),
+            ],
+          },
+        ]
+      : []),
+  ]
 
   return (
     <div className="chain-meter">
       <div className="chain-row">
         <span className="chain-name">Limit used, at the subscription price</span>
-        <div
-          className="chain-bar"
-          role="meter"
-          aria-label={`${formatCurrency(LIMIT_25K)} limit used in ${data.year}`}
-          aria-valuemin={0}
-          aria-valuemax={LIMIT_25K}
-          aria-valuenow={Number(totals.total_25k_value)}
-          aria-valuetext={`${formatCurrency(totals.total_25k_value)} of ${formatCurrency(LIMIT_25K)} used`}
-        >
-          <div className="chain-track" style={{ width: pct(LIMIT_25K, scale) }} />
-          <div className="chain-segments">
-            {periods.map((p, i) => (
-              <div
-                key={p.label}
-                className={`chain-seg ${tone(i)}`}
-                style={{ width: pct(Number(p.value_25k), scale) }}
-                title={`${p.label}: ${formatCurrency(p.value_25k)} at the subscription price`}
-              />
-            ))}
-          </div>
-          <span className="chain-tick" style={{ left: pct(LIMIT_25K, scale) }} aria-hidden="true" />
-        </div>
+        <MeterBar
+          ariaLabel={`${formatCurrency(LIMIT_25K)} limit used in ${data.year}`}
+          valueMax={LIMIT_25K}
+          valueNow={Number(totals.total_25k_value)}
+          valueText={`${formatCurrency(totals.total_25k_value)} of ${formatCurrency(LIMIT_25K)} used`}
+          parts={limitParts}
+          track={{
+            key: 'remaining',
+            className: 'chain-track',
+            width: pct(LIMIT_25K, scale),
+            lines: [`Remaining ${formatCurrency(totals.remaining_25k)} of the ${formatCurrency(LIMIT_25K)} limit`],
+          }}
+          tick={{
+            key: 'tick',
+            className: 'chain-tick',
+            left: pct(LIMIT_25K, scale),
+            lines: [`The ${formatCurrency(LIMIT_25K)} §423 limit — shares counted at the subscription price`],
+          }}
+        />
         <span className="chain-figures">
           {`${formatCurrency(totals.total_25k_value)} used · ${formatCurrency(totals.remaining_25k)} left`}
         </span>
@@ -75,42 +275,15 @@ export default function LimitChainMeter({ data }: { data: EsppModelerOut }) {
       {contribution !== null && (
         <div className="chain-row">
           <span className="chain-name">Your contributions</span>
-          <div
-            className="chain-bar"
-            role="meter"
-            aria-label={`contributions in ${data.year}`}
-            aria-valuemin={0}
-            aria-valuemax={scale}
-            aria-valuenow={contribution}
-            aria-valuetext={`${formatCurrency(totals.total_contribution)} contributed; ${formatCurrency(
+          <MeterBar
+            ariaLabel={`contributions in ${data.year}`}
+            valueMax={scale}
+            valueNow={contribution}
+            valueText={`${formatCurrency(totals.total_contribution)} contributed; ${formatCurrency(
               totals.out_of_pocket_cost,
             )} bought shares; ${formatCurrency(totals.total_refund)} refunded`}
-          >
-            <div className="chain-segments">
-              {carryIn > 0 && (
-                <div
-                  className="chain-seg is-carry"
-                  style={{ width: pct(carryIn, scale) }}
-                  title={`carried in: ${formatCurrency(data.carry_forward)}`}
-                />
-              )}
-              {periods.map((p, i) => (
-                <div
-                  key={p.label}
-                  className={`chain-seg ${tone(i)}`}
-                  style={{ width: pct(Number(p.cost), scale) }}
-                  title={`${p.label}: ${formatCurrency(p.cost)} bought shares`}
-                />
-              ))}
-              {refund > 0 && (
-                <div
-                  className="chain-seg is-refund"
-                  style={{ width: pct(refund, scale) }}
-                  title={`refunded: ${formatCurrency(totals.total_refund)}`}
-                />
-              )}
-            </div>
-          </div>
+            parts={cashParts}
+          />
           <span className="chain-figures">{cashClauses.join(' · ')}</span>
         </div>
       )}
