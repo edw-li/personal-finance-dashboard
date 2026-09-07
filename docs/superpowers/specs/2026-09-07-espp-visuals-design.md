@@ -143,8 +143,8 @@ and the bargain fields always sum. `gain_pct` is `gain_amount / cost_basis` at 6
 `gain_pct`, which is the sheet's price ratio; the schema docstring records the difference.
 `avg_paid` is held cost ÷ held shares at 5 dp, null with no held lots. `sold` sums the lots that
 carry a `sold_date` and a `sold_price`; a half-filled sold row (date without price) counts in
-`lots` and `shares` and contributes nothing to the money fields. Both blocks are all zeros, not
-absent, when empty.
+`lots` and `shares` and contributes nothing to the money fields. Both blocks are all zeros at column scale, not absent, when empty — except the two ratios,
+`gain_pct` and `avg_paid`, which are null there: a division by nothing has no honest figure.
 
 ### 3.3 `ModelerTotalsOut` — three more totals
 
@@ -180,8 +180,8 @@ against cost. Realized gains from sold lots are in the lots table's totals row."
 "Unsold ESPP shares across every lot." The fifth tile keeps its hint and its dirty note.
 
 With no ticker or no quote, the first and third tiles render `—` with the existing quote-line
-sentence as their delta ("no live quote"), never a zero. Count-up on a fresh first paint follows
-the Comp strip's gating (`countUp` only when the frame is not `fromCache`).
+sentence as their delta ("no live quote"), never a zero. The tiles do not count up: neither the Comp strip nor the existing `$25k` tile does, and the
+strip matches them (an earlier draft cited a count-up gating that does not exist).
 
 ### 4.2 Why five, always
 
@@ -254,7 +254,10 @@ gains a third clause, `Hollow = sold` — the vesting footer's `Hatched = at tod
 
 1. **Paid** = `cost_basis`.
 2. **Bargain element** = `max(bargain_element, 0)`.
-3. **Appreciation** = `max(appreciation ?? 0, 0)`.
+3. **Appreciation** = `max(market_value − max(fmv_value, cost_basis), 0)` — measured from the
+   higher of the FMV value and the cost, so the column top equals the value even when an
+   over-typed purchase price makes the bargain element negative (that segment then draws zero
+   and the tooltip carries the signed figure).
 
 The column top equals `market_value` whenever appreciation is non-negative. When
 `appreciation < 0` (the lot is below its purchase FMV) a second stack `loss` overlays the same
@@ -276,7 +279,8 @@ spread after it (a dumbbell's bar is thin; the surface hairline stays):
 
 0. A transparent, silent base = `purchase_price` (excluded from legend and tooltip).
 1. **Bargain element** = `max(purchase_fmv − purchase_price, 0)`.
-2. **Appreciation** = `max(price − purchase_fmv, 0)` where `price` = `sold_price` or the quote.
+2. **Appreciation** = `max(price − max(purchase_fmv, purchase_price), 0)` where `price` =
+   `sold_price` or the quote — from the higher of the FMV and the paid price, as in §5.3.
 3. Loss overlay as in §5.3, per share: base = `price`, **Below purchase FMV** = `purchase_fmv −
    price` when negative appreciation.
 
@@ -295,7 +299,9 @@ point: the spread is your entry prices, the line is where they all are today.
 Tooltip: groups are the two per-share components with `totalLabel: 'Gain per share'`;
 `references: ['Paid', 'Price', 'Subscription price', 'Current quote']`; the same annotation lines
 as the Dollars view. The `Paid` and `Price` scatters carry their values in the references rows and
-are excluded from the group sort.
+are excluded from the group sort. This view's legend carries seven entries, four of them long,
+which outrun a half-width card — so it is a `scroll` legend below the grammar's eight-entry
+threshold; the Dollars view and the price chart keep plain legends.
 
 ### 5.5 CSV twin
 
@@ -336,14 +342,17 @@ reading — the holding chart's own rule), `timeZoom(dates, 'all')`.
 - **Close** — `LINE`, `PALETTE[0]`.
 - **Subscription price** — `referenceLine(name, data, { step: 'end' })`: for each bar date the
   covering offering's price (greatest `offering_start ≤ date`), null before the first offering.
-  `endLabel` on, showing the name.
+  `endLabel` on, reading `Subscription` — the full name outruns the 84 px gutter.
 - **Avg paid to date** — the same shape over `avg_paid_to_date`: for each bar date the value of
-  the latest lot with `purchase_date ≤ date`, null before the first lot. `endLabel` on.
+  the latest lot with `purchase_date ≤ date`, null before the first lot. `endLabel` on, reading
+  `Avg paid`. Of the two rules, the one ending higher takes `verticalAlign: 'bottom'` and the
+  other `'top'`, so the end labels never collide.
 - **Wash** — the holding chart's two transparent-base stacks (`Above avg paid` in `POSITIVE`,
   `Below avg paid` in `NEGATIVE`, 0.12 opacity, out of the legend), against the stepped average
   rather than a constant; nothing drawn before the first purchase.
-- **Purchases** — scatter, one point per lot snapped to the last bar on or before
-  `purchase_date` (skipped, and counted for the footer, when no bar exists), plotted at that bar's
+- **Purchases** — scatter, one point per lot at the last bar on or before `purchase_date`,
+  skipped and counted for the footer when the purchase falls before the first stored bar or
+  after the last (a later lot drawn at an old close would lie), plotted at that bar's
   close, `PALETTE[1]` diamond, `symbolSize: 10`, `INK` border, `z: 11`; a lot since sold draws
   hollow (`SURFACE` fill, `PALETTE[1]` border) — the page's one meaning for hollow. Annotation
   lines through the tooltip's `annotations` hook: `Feb 29, 2024 · 260 sh · paid $41.23 · FMV
@@ -363,8 +372,9 @@ chart B's line ends at the last stored bar. The two can differ by a day; each ca
 ### 6.4 Footer
 
 `priceWindowSummary` as on the holding chart — "+41.2 % over this window · history since Aug 11,
-2025" when the extent is known — plus, when any lot's purchase predates the first bar: "2 lots
-predate the stored history — the employer backfill reaches them on the next price refresh."
+2025" when the extent is known — plus, when any lot falls outside the stored bars: "2 lots predate the stored history and 1
+postdates it — the next price refresh reaches them." (either half alone when the other count
+is zero).
 
 ### 6.5 CSV twin
 
@@ -506,3 +516,29 @@ forms, the modeler chain, or stored data; mobile.
 5. Every chart through `ChartCard` with aria, CSV, fixture; the meter is HTML in the pace meter's
    grammar; a real-canvas probe of the per-share form precedes merge.
 6. Three plans: backend first, then strip/meter and charts in parallel, then verify.
+
+## 12. Amendments from the lane reviews (2026-09-07 night)
+
+Recorded here so the spec matches what shipped; each came out of a review round and is pinned
+by a test.
+
+- **Strip**: no count-up (§4.1); a feed that failed with nothing cached renders its slots as
+  `—` tiles rather than ghosts pulsing forever — ghosts mean "in flight" only; the dirty note
+  wears `drill-hint`; `GhostTile` is `aria-hidden` and exported; `--m-stat-tile` is declared on
+  `.loading-fallback` as well as `.page-skeleton`, so a ghost row is 115 px from first paint.
+- **Meter**: a `Carried in` legend chip when a carry-forward leads the cash row; the segments
+  row is the clipped pill, not the segments; the carry-forward text is the server string.
+- **Component CSS**: `.espp-warning` lives in `src/components/espp/espp.css` (the page imports
+  it); the chart cards' row highlight lives in `charts.css`.
+- **Lot anatomy**: appreciation measured from the higher of FMV and paid (§5.3, §5.4); the
+  per-share legend scrolls (§5.4); the footer is suppressed while the payload lacks the anatomy
+  (a pre-batch snapshot), so the Lots card's quote line is never printed twice.
+- **Price chart**: end labels read `Subscription` / `Avg paid` and part by rank (§6.2); markers
+  dated outside the stored bars are skipped and counted (§6.2, §6.4); "history since" is
+  earned only when the whole fetched series reveals its extent and the window starts at its
+  first bar — a chip slice cannot answer inception on its own.
+- **Probe**: `animation: false` on both panels and a 600 px canvas, the real span-6 width.
+- **Verify**: the dev vite proxy pins `/api` to the shared backend on 8000, so the smoke re-aims
+  same-origin API reads at the lane's backend; the page's own CLS is 0 in both themes, and the
+  ~0.13 the shell's route-hold cross-fade books intermittently is page-independent and carried
+  to the motion owner.
