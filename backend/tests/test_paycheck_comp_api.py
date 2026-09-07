@@ -896,7 +896,8 @@ async def test_a_primary_only_database_answers_exactly_as_it_did_before_people(a
     assert {row["person_id"] for row in listed} == {me.id}
     assert {row["hsa_coverage"] for row in listed} == {"self"}
     # Additive ONLY: the row is the old row plus `person_id`, `hsa_coverage`, the four
-    # employer-match columns and the derived `in_force` — nothing was ever taken away.
+    # employer-match columns, the three employer-HSA columns and the derived `in_force` —
+    # nothing was ever taken away.
     assert set(listed[0]) == {
         "id",
         "person_id",
@@ -915,6 +916,9 @@ async def test_a_primary_only_database_answers_exactly_as_it_did_before_people(a
         "match_band_1",
         "match_rate_2",
         "match_band_2",
+        "hsa_employer_annual",
+        "hsa_employer_per_dependent",
+        "hsa_dependents",
         "in_force",
         "notes",
     }
@@ -1264,6 +1268,65 @@ async def test_patch_validates_the_match_as_a_whole_row(auth_client, me):
     good = await auth_client.patch(f"{PROFILES}/{pid}", json={"match_band_2": "12000"})
     assert good.json()["match_band_2"] == "12000.00"
     assert good.json()["match_rate_1"] == "1.000000000"  # untouched by the merge
+
+
+EMPLOYER_HSA = {
+    "hsa_employer_annual": "2000",
+    "hsa_employer_per_dependent": "500",
+    "hsa_dependents": 2,
+}
+
+
+async def test_profile_round_trips_the_employer_hsa_policy(auth_client, me):
+    created = await auth_client.post(
+        PROFILES,
+        json={"effective_date": "2026-05-01", "annual_salary": "188930", **EMPLOYER_HSA},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["hsa_employer_annual"] == "2000.00"
+    assert created.json()["hsa_employer_per_dependent"] == "500.00"
+    assert created.json()["hsa_dependents"] == 2
+    bare = await auth_client.post(
+        PROFILES, json={"effective_date": "2026-06-01", "annual_salary": "100000"}
+    )
+    # An old client that never sends them stores exactly what the migration backfilled.
+    assert bare.json()["hsa_employer_annual"] == "0.00"
+    assert bare.json()["hsa_employer_per_dependent"] == "0.00"
+    assert bare.json()["hsa_dependents"] == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("hsa_employer_annual", "-1", "hsa_employer_annual must be >= 0"),
+        # -0.001 quantizes to -0.00, which compares == 0: the RAW value is checked too.
+        ("hsa_employer_per_dependent", "-0.001", "hsa_employer_per_dependent must be >= 0"),
+        ("hsa_dependents", 21, "hsa_dependents must be between 0 and 20"),
+        ("hsa_dependents", -1, "hsa_dependents must be between 0 and 20"),
+    ],
+)
+async def test_profile_refuses_a_bad_employer_hsa_policy(auth_client, me, field, value, message):
+    resp = await auth_client.post(
+        PROFILES,
+        json={"effective_date": "2026-07-01", "annual_salary": "100000", field: value},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == message
+
+
+async def test_patch_validates_the_employer_hsa_as_a_whole_row(auth_client, me):
+    created = await auth_client.post(
+        PROFILES,
+        json={"effective_date": "2026-08-01", "annual_salary": "100000", **EMPLOYER_HSA},
+    )
+    pid = created.json()["id"]
+    bad = await auth_client.patch(f"{PROFILES}/{pid}", json={"hsa_dependents": 25})
+    assert bad.status_code == 422
+    assert bad.json()["detail"] == "hsa_dependents must be between 0 and 20"
+    good = await auth_client.patch(f"{PROFILES}/{pid}", json={"hsa_employer_annual": "2400"})
+    assert good.json()["hsa_employer_annual"] == "2400.00"
+    assert good.json()["hsa_dependents"] == 2  # untouched by the merge
+    assert good.json()["hsa_employer_per_dependent"] == "500.00"
 
 
 async def test_profiles_list_marks_the_one_in_force(auth_client, me):

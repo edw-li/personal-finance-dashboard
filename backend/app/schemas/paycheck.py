@@ -48,6 +48,12 @@ class ProfileIn(BaseModel):
     match_band_1: Decimal = Decimal("0")
     match_rate_2: Decimal = Decimal("0")
     match_band_2: Decimal = Decimal("0")
+    # The employer HSA policy (2026-09-07 spec): an annual deposit for the employee's own
+    # coverage plus a per-head add-on for each ADDITIONAL covered individual. Same rule as
+    # the match defaults — an old client that never sends them stores no employer deposit.
+    hsa_employer_annual: Decimal = Decimal("0")
+    hsa_employer_per_dependent: Decimal = Decimal("0")
+    hsa_dependents: int = 0
     notes: str | None = None
 
 
@@ -71,6 +77,9 @@ class ProfileUpdate(BaseModel):
     match_band_1: Decimal | None = None
     match_rate_2: Decimal | None = None
     match_band_2: Decimal | None = None
+    hsa_employer_annual: Decimal | None = None
+    hsa_employer_per_dependent: Decimal | None = None
+    hsa_dependents: int | None = None
     notes: str | None = None
 
 
@@ -96,6 +105,9 @@ class ProfileOut(BaseModel):
     match_band_1: Decimal
     match_rate_2: Pct9
     match_band_2: Decimal
+    hsa_employer_annual: Decimal
+    hsa_employer_per_dependent: Decimal
+    hsa_dependents: int
     # Is THIS the row `_default_profile` would pick for its owner today (spec §2.3)? The
     # Settings summary and the Paycheck page must never disagree about whose policy is live,
     # so the server answers once instead of both clients re-deriving it.
@@ -208,6 +220,9 @@ class ProfileOverrides(BaseModel):
     match_band_1: Decimal | None = None
     match_rate_2: Decimal | None = None
     match_band_2: Decimal | None = None
+    hsa_employer_annual: Decimal | None = None
+    hsa_employer_per_dependent: Decimal | None = None
+    hsa_dependents: int | None = None
 
 
 class PreviewIn(BaseModel):
