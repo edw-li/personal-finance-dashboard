@@ -19,7 +19,12 @@ import {
   putCategoryBudget,
   seedBudgets,
 } from '../../api/spending'
-import type { BudgetSeedOut, BudgetSuggestionsOut, SpendingMatrix } from '../../types/api'
+import type {
+  BudgetSeedOut,
+  BudgetSuggestion,
+  BudgetSuggestionsOut,
+  SpendingMatrix,
+} from '../../types/api'
 
 const matrix: SpendingMatrix = {
   months: ['2026-01-01', '2026-02-01'],
@@ -291,6 +296,8 @@ it('re-seeding asks first, counting the budgets it rewrites, and only POSTs on C
   fireEvent.click(screen.getByRole('button', { name: 'Re-seed from averages' }))
   fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
   await waitFor(() => expect(seedBudgets).toHaveBeenCalledWith('2026-01-01'))
+  // The question is answered: the confirm line goes away with the POST, not with the response.
+  await waitFor(() => expect(screen.queryByText(/Rewrites 1 existing/)).toBeNull())
 })
 
 it('a failed seed lands in the banner and refetches nothing', async () => {
@@ -299,4 +306,37 @@ it('a failed seed lands in the banner and refetches nothing', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Start from my averages' }))
   expect((await screen.findByRole('alert')).textContent).toMatch(/Failed to seed the budgets/)
   expect(onBudgetsChanged).not.toHaveBeenCalled()
+})
+
+it('says when there is nothing to seed and hides the re-seed affordance', async () => {
+  // Both seeds equal the resolved budgets -> the server would skip both as unchanged.
+  const settled: SpendingMatrix = {
+    ...matrix,
+    series: [
+      { category_id: 1, values: ['300.00', '450.00'], budgets: ['413.00', '413.00'] },
+      { category_id: 2, values: ['2000.00', '2000.00'], budgets: ['2000.00', '2000.00'] },
+      { category_id: 3, values: [null, null], budgets: [null, null] },
+    ],
+    total_budget: ['2413.00', '2413.00'],
+  }
+  render(<BudgetPanel matrix={settled} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  await screen.findByRole('button', { name: 'Use Food median $390.00' }) // suggestions arrived
+  expect(screen.queryByRole('button', { name: 'Re-seed from averages' })).toBeNull()
+  const blankSettled: SpendingMatrix = {
+    ...settled,
+    series: settled.series.map((s) => ({ ...s, budgets: [null, null] })),
+    total_budget: [null, null],
+  }
+  cleanup()
+  vi.mocked(fetchBudgetSuggestions).mockResolvedValue({
+    ...suggestions,
+    suggestions: suggestions.suggestions.map(
+      (s): BudgetSuggestion => ({ ...s, seed: null, profile: 'dormant', skip_reason: 'dormant' }),
+    ),
+  })
+  render(<BudgetPanel matrix={blankSettled} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  await screen.findByText(/Nothing to seed — every category is dormant/)
+  expect(
+    (screen.getByRole('button', { name: 'Start from my averages' }) as HTMLButtonElement).disabled,
+  ).toBe(true)
 })

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { undoBatch } from '../../api/lifecycle'
 import {
@@ -68,6 +68,10 @@ export default function BudgetPanel({
   // The last seed's skip detail; cleared by its Undo, replaced by the next seed.
   const [seedStatus, setSeedStatus] = useState<string | null>(null)
   const [confirmReseed, setConfirmReseed] = useState(false)
+  // The house manages focus explicitly in its drawers; this is the card's first
+  // confirm-first control, so it owes the same courtesy — Cancel hands focus back to
+  // the button that asked, instead of dropping it on <body>.
+  const reseedRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -320,6 +324,7 @@ export default function BudgetPanel({
             </p>
             {canSeed && !confirmReseed && (
               <button
+                ref={reseedRef}
                 type="button"
                 className="button"
                 disabled={busy}
@@ -330,12 +335,27 @@ export default function BudgetPanel({
             )}
           </div>
           {confirmReseed && counts !== null && (
-            <p className="drill-hint budget-reseed-confirm" role="status">
-              {`Rewrites ${counts.rewrites} existing ${counts.rewrites === 1 ? 'budget' : 'budgets'} and sets ${newCount} new ${newCount === 1 ? 'one' : 'ones'} from ${formatMonth(month)}.`}
-              <button type="button" className="button" disabled={busy} onClick={seed}>
+            <p className="drill-hint budget-reseed-confirm">
+              {/* The live region is the SENTENCE only: a role="status" wrapping the buttons
+                  re-announces "Confirm Cancel" with every re-render of the count. */}
+              <span role="status">
+                {`Rewrites ${counts.rewrites} existing ${counts.rewrites === 1 ? 'budget' : 'budgets'} and sets ${newCount} new ${newCount === 1 ? 'one' : 'ones'} from ${formatMonth(month)}.`}
+              </span>
+              {/* autoFocus: the confirm IS the answer to the click that opened this line, so
+                  focus follows the question rather than staying on a button that just left. */}
+              <button type="button" className="button" autoFocus disabled={busy} onClick={seed}>
                 Confirm
               </button>
-              <button type="button" className="button" onClick={() => setConfirmReseed(false)}>
+              <button
+                type="button"
+                className="button"
+                onClick={() => {
+                  setConfirmReseed(false)
+                  // The Re-seed button remounts with that state change, so the ref points at
+                  // the NEW node by the time the frame runs.
+                  requestAnimationFrame(() => reseedRef.current?.focus())
+                }}
+              >
                 Cancel
               </button>
             </p>
@@ -375,12 +395,17 @@ export default function BudgetPanel({
           <button
             type="button"
             className="button button-primary"
+            // Disabled says THAT it cannot run; only the hint says why, so the button has to
+            // name it — a disabled control is otherwise mute to a screen reader.
+            aria-describedby="budget-seed-hint"
             disabled={busy || !canSeed}
             onClick={seed}
           >
             Start from my averages
           </button>
-          <p className="drill-hint budget-seed-hint">{seedHint()}</p>
+          <p className="drill-hint budget-seed-hint" id="budget-seed-hint">
+            {seedHint()}
+          </p>
         </div>
       )}
       {unbudgeted.length > 0 && (

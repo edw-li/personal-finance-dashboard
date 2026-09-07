@@ -179,13 +179,16 @@
   font-style: italic;
 }
 
-.budget-chip {
+/* Qualified with .button so the chip's size and outline beat the plain .button rule at
+   equal specificity no matter which order the bundler emits the two stylesheets in — these
+   chips ARE .buttons, and a source-order tie would render them full size. */
+.button.budget-chip {
   font-size: 0.72rem;
   padding: 0.15rem 0.5rem;
   font-variant-numeric: tabular-nums;
 }
 
-.budget-chip.is-suggested {
+.button.budget-chip.is-suggested {
   border-color: var(--accent);
   color: var(--text);
 }
