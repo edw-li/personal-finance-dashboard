@@ -1033,6 +1033,17 @@ export interface EsppLotOut {
   qualified: boolean
   days_until_qualified: number | null
   is_sold: boolean
+  // --- the anatomy (2026-09-07 spec §3.1). OPTIONAL on this side: a warm snapshot written
+  // before this batch is a legal payload to paint from, and the strip and the lot chart treat
+  // their absence as "not loaded yet" until the mount's own fetch lands.
+  fmv_value?: string
+  bargain_element?: string
+  lookback_component?: string
+  discount_component?: string
+  appreciation?: string | null
+  // Average paid per share over every lot bought up to and including this one, 5dp — the
+  // price chart's stepped rule, never a tax basis. Null only for a stored zero-share chain.
+  avg_paid_to_date?: string | null
 }
 
 export interface EsppLotCreate {
@@ -1056,6 +1067,37 @@ export interface EsppLotCreate {
 // The sold pair and notes are nullable columns, where null really clears.
 export type EsppLotUpdate = Partial<EsppLotCreate>
 
+// The position totals (2026-09-07 spec §3.2): held and sold lots summed apart by the server.
+// The held block's four quote-dependent fields are null as soon as one held lot is unpriced;
+// gain_pct here is gain / cost (a money ratio), unlike EsppLotOut.gain_pct (a price ratio).
+export interface EsppHeldTotals {
+  lots: number
+  shares: string
+  cost_basis: string
+  fmv_value: string
+  market_value: string | null
+  gain_amount: string | null
+  gain_pct: string | null
+  bargain_element: string
+  lookback_component: string
+  discount_component: string
+  appreciation: string | null
+  avg_paid: string | null
+}
+
+export interface EsppSoldTotals {
+  lots: number
+  shares: string
+  cost_basis: string
+  proceeds: string
+  gain_amount: string
+}
+
+export interface EsppLotTotals {
+  held: EsppHeldTotals
+  sold: EsppSoldTotals
+}
+
 export interface EsppLotsResponse {
   // The quote the whole table was priced against. current_price/quoted_at are null at
   // every break in the soft link; espp_ticker itself is null only when the SETTING is
@@ -1064,6 +1106,9 @@ export interface EsppLotsResponse {
   current_price: string | null
   quoted_at: string | null
   lots: EsppLotOut[]
+  // OPTIONAL: absent on a warm snapshot from before this batch (the strip ghosts until the
+  // mount's fetch lands).
+  totals?: EsppLotTotals
 }
 
 export interface EsppOfferingOut {
@@ -1141,6 +1186,11 @@ export interface EsppModelerTotals {
   out_of_pocket_cost: string
   fmv_of_shares: string
   remaining_25k: string // 25000 - total_25k_value, for the gauge
+  // 2026-09-07 spec §3.3 — the chain meter's labels and tiles. OPTIONAL: absent on a warm
+  // snapshot from before this batch; the meter draws its contributions row only when present.
+  total_shares?: string
+  total_contribution?: string
+  total_refund?: string
 }
 
 export interface EsppModelerOut {
