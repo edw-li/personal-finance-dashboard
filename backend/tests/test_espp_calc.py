@@ -26,6 +26,8 @@ from app.services.espp_calc import (
     last_weekday_of,
     lot_metrics,
     plan_year_rows,
+    price5,
+    running_avg_paid,
 )
 from app.services.espp_calc import (
     run_modeler as _run_modeler,
@@ -570,6 +572,27 @@ def test_lot_metrics_lookback_is_zero_when_fmv_sat_below_the_subscription():
     assert metrics["fmv_value"] == D("10400.00")
     assert metrics["lookback_component"] == D("0.00")
     assert metrics["discount_component"] == D("1560.00")  # the whole bargain is the discount
+
+
+def test_running_avg_paid_walks_the_lots_in_chain_order():
+    lots = [
+        lot(shares="260.0000", purchase_price="41.23265", purchase_date=date(2024, 2, 29)),
+        lot(shares="100.0000", purchase_price="127.50000", purchase_date=date(2024, 8, 30)),
+        lot(shares="241.0000", purchase_price="41.23265", purchase_date=date(2025, 2, 28)),
+    ]
+    # Cumulative cost over cumulative shares at the lot price scale (5 dp):
+    # 10720.49 / 260, 23470.49 / 360, 33407.56 / 601.
+    assert running_avg_paid(lots) == [D("41.23265"), D("65.19581"), D("55.58662")]
+
+
+def test_running_avg_paid_never_divides_by_zero_shares():
+    # The API forbids a zero-share lot; a hand-edited row must still read (a GET never 500s).
+    assert running_avg_paid([lot(shares="0.0000")]) == [None]
+    assert running_avg_paid([]) == []
+
+
+def test_price5_collapses_signed_zeros():
+    assert str(price5(D("-0.000001"))) == "0.00000"
 
 
 # --- the purchase calendar and the year planner ---

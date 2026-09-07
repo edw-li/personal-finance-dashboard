@@ -51,6 +51,37 @@ def _pct6(value: Decimal) -> Decimal:
     return value.quantize(PCT_QUANTUM, rounding=ROUND_HALF_UP) + ZERO
 
 
+# The espp lot price family — Numeric(14,5), the one place in the app that is not 4dp.
+PRICE5_QUANTUM = Decimal("0.00001")
+
+
+def price5(value: Decimal) -> Decimal:
+    """HALF_UP at the lot price scale, signed zero collapsed (the module's wire rule)."""
+    return value.quantize(PRICE5_QUANTUM, rounding=ROUND_HALF_UP) + ZERO
+
+
+def running_avg_paid(lots) -> list[Decimal | None]:
+    """Average price paid per share TO DATE, one figure per lot, over `lots` in chain order
+    ((purchase_date, id) — the router's own ordering; 2026-09-07 spec §3.1).
+
+    Sold lots stay in the walk: this is what the purchases cost on average as they happened —
+    the price chart's stepped rule — never a tax basis, and the wire name says "paid". None
+    only where the cumulative share count is zero, which the API forbids but a hand-edited
+    row could store: a GET must never divide by it. Each lot's cost is half_up2(shares x
+    price), the same cents `lot_metrics` reports as cost_basis, so the two never drift.
+    """
+    cumulative_cost = ZERO
+    cumulative_shares = ZERO
+    averages: list[Decimal | None] = []
+    for lot in lots:
+        cumulative_cost += half_up2(lot.shares * lot.purchase_price)
+        cumulative_shares += lot.shares
+        averages.append(
+            None if cumulative_shares == 0 else price5(cumulative_cost / cumulative_shares)
+        )
+    return averages
+
+
 @dataclass(frozen=True)
 class StoredPeriod:
     """One `espp_periods` row, as the router hands it over (already at column scale) — the
