@@ -233,6 +233,11 @@ describe('paycheck scenario codec', () => {
       match_band_1: '6000.00',
       match_rate_2: '50',
       match_band_2: '11000.00',
+      // No knob moves the employer HSA policy — the seed carries the profile's own, so an
+      // Apply that never touched it saves it back unchanged.
+      hsa_employer_annual: '2000.00',
+      hsa_employer_per_dependent: '500.00',
+      hsa_dependents: '0',
       notes: '',
     })
   })
