@@ -14,8 +14,26 @@ import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import EsppPage from './EsppPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
 
-// Every request is stubbed; there is no chart on this page (the 25k gauge is a div), so
-// no EChart mock is needed.
+// Every request is stubbed. echarts needs a real canvas and is NEVER rendered in jsdom (house
+// law): since the 2026-09-07 visuals this page mounts two ChartCards, and two live echarts
+// instances per render made this file's waitFors flake under a full parallel run. What those
+// charts draw is pinned in src/components/espp/*.test.* and src/pages/EsppPage.charts.test.tsx.
+vi.mock('../components/EChart', async () => {
+  const { createElement } = await import('react')
+  return {
+    default: ({ option, ariaLabel }: {
+      option: { xAxis?: { data?: unknown[] } }
+      ariaLabel?: string
+    }) =>
+      createElement('div', {
+        'data-testid': 'echart',
+        // The house sentence each ChartCard mount carries (F11) — what getByLabelText finds.
+        'aria-label': ariaLabel,
+        // '|', not ',': formatDate emits "Feb 27, 2024", so a comma join could not be split back.
+        'data-categories': (option.xAxis?.data ?? []).join('|'),
+      }),
+  }
+})
 vi.mock('../api/espp', () => ({
   fetchLots: vi.fn(),
   createLot: vi.fn(),
