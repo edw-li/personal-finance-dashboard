@@ -548,7 +548,8 @@
    first paint by 39px a row (motion spec §7). One variable per row, read by the REAL row and by
    the empty twin the skeleton leaves in its place — parity by construction, not two numbers that
    happen to agree; src/components/skeletonMetrics.ts mirrors them and its test pins the pair. */
-.page-skeleton {
+.page-skeleton,
+.loading-fallback {
   --m-stat-tile: 115px;
   --m-owner-strip: 41px;
 }

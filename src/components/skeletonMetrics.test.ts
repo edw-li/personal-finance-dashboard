@@ -31,7 +31,7 @@ describe('skeletonMetrics', () => {
     // A real header is not the ghost's stand-in label: charging CARD_CHROME here under-counted a
     // card with controls by 21px and over-counted a bare one by 6.
     expect([chartCardBox(320), chartCardBox(360, { controls: true, zoomable: true }), chartCardBox(280, { zoomable: true, footer: true })]).toEqual([421, 497, 428])
-    expect([FEED_SKELETON.paycheckBreakdown, FEED_SKELETON.compVesting, FEED_SKELETON.compEvents, FEED_SKELETON.esppLots, FEED_SKELETON.esppOfferings]).toEqual([581, 71, 357, 282, 216])
+    expect([FEED_SKELETON.paycheckBreakdown, FEED_SKELETON.compVesting, FEED_SKELETON.compEvents, FEED_SKELETON.esppLots, FEED_SKELETON.esppOfferings]).toEqual([581, 71, 357, 315, 216])
   })
   it('pins the scope row and its ghost to ONE height, and leaves `:empty` able to hide the row', () => {
     // The sticky row is 0px while ScopeBar has nothing to put in it and ~50px once the owner

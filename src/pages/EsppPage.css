@@ -114,41 +114,4 @@
   font-size: 0.7rem;
 }
 
-/* Advisory register (net-worth-projection precedent): amber, not the error banner. */
-.espp-warning {
-  color: var(--warn);
-}
-
 /* Year chips reuse the app's segmented control look; panels.css owns .segmented. */
-
-/* ── $25k gauge ────────────────────────────────────────────────────── */
-
-.gauge {
-  margin: 0.25rem 0 1rem;
-  max-width: 720px;
-}
-
-.gauge-track {
-  height: 14px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-2);
-  overflow: hidden;
-}
-
-.gauge-fill {
-  height: 100%;
-  background: var(--accent);
-  /* The width is a rendered quantity, not an animation: reduced-motion users get the
-     same bar without a sweep, so no transition is declared at all. */
-}
-
-.gauge-labels {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-top: 0.35rem;
-  font-size: 0.78rem;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}

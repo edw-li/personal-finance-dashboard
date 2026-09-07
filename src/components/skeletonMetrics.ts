@@ -71,6 +71,6 @@ export const FEED_SKELETON = {
   paycheckBreakdown: 3 * HINT_LINE + TILE_ROW + 12 * TABLE_ROW, // 3-line hint, net-pay tile, 11 waterfall lines + total
   compVesting: ghostCardBody(TILE_ROW), // VestingTiles is a bare .kpi-row, not a card
   compEvents: 5 * HINT_LINE + 2 * FORM_ROW + 5 * TABLE_ROW, // 5-line hint, the auto-fit form's two rows, header + 4 focal years
-  esppLots: HINT_LINE + 8 * TABLE_ROW, // hint, the add-row form, table header + 5 rows
+  esppLots: HINT_LINE + 9 * TABLE_ROW, // hint, the add-row form, table header + 5 rows + the held totals row
   esppOfferings: HINT_LINE + 6 * TABLE_ROW, // hint, add form, header + 3 rows
 } as const
