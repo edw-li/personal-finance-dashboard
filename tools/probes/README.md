@@ -14,6 +14,7 @@ gitignored `scratchpad/`, never next to these tracked scripts.
 | `sandbox-v/smoke.mjs` | The three planning sandboxes opened FROM a `whatif=` link in both themes: arrival state, a real slider drag (history must not grow), presets, pins across a reload and a year switch, both Apply doors up to their confirm, the legacy `?whatif=TICKER` and `?whatif-lot=` aliases, and the assistant's tool chip through to the page it lands on. Every mutating request outside a four-entry allowlist is aborted, so the walk cannot write | needs the dev stack — see below |
 | `honest-v/smoke.mjs` | The honest-numbers program end to end in both themes: the wizard's per-step saves (a balances-only save must fire NO spending PUT), the deliberate `$0` door and the repair banner it produces, read-only derived parent rows, Overview's coverage footer and its two new attention items, Spending's savings card and kind columns, the Projection window echo, the money-flow pending-take-home node and the Settings kind picker. The only smoke that WRITES — always to the scratch month `2019-01`, swept before each theme and again in a `finally` | needs the dev stack — see below |
 | `motion-v/smoke.mjs` | The twelve motion claims of the 2026-09-05 spec §10, in both themes: chart entrances measured as PAINT DELTAS (≥300ms, where the audit found 1–2 frames), `#main` non-empty on every frame of all 13 nav clicks, CLS per page, the nav indicator's ~200ms slide, an InfoHint parked under the STUCK scope row, `--reveal` at the bottom edge, mid-page and at the STUCK scope row's underside (which is the top edge the view() timelines are inset to), plus a scroll back UP that follows one card from the moment it clears the row to full brightness at 45% shown, the two viewport-edge scrims read at three scroll positions (top 0/bottom 1 at rest, 1/1 mid-page, 1/0 at the end) with a hit test 8px inside each band and an A/B proving they cost the flow nothing, a below-fold chart that waits to be seen and then draws once, the Spending drill morphing without a dispose, a theme swap that does not replay the entrance, reduced-motion emulation, and the error grammar on a stubbed 500. READ-ONLY BY CONSTRUCTION — a write fence, not a sweep | needs the dev stack — see below |
+| `pace-v/smoke.mjs` | Settings' five sections, the sticky chip rail, the four old anchors still ringing, `#sec-` hashes that do not, and every card-grid row filled to the right edge; the pace strip's ESPP soft tick, window label and note line plus the 415(c) label judged against the profiles the API reports; Net Worth's What moved bars, lede and Groups · Accounts toggle. READ-ONLY BY CONSTRUCTION — a write fence, not a sweep | needs the dev stack — see below |
 
 ## Running the C7 / sandbox smokes against the dev servers (dev only)
 
@@ -134,6 +135,7 @@ Roughly four minutes per theme at 1440×900; ~21 PNGs and `report.json` per them
 step's four go in a `scrims/` subfolder, because a scrim photographs as a gradient at the edge of
 the frame and is only legible with the whole viewport beside it.
 
+
 Its instruments are the 2026-09-05 UX-pass probes' own, so every number is comparable with the
 audit's: a per-frame rAF tracer that hashes each chart canvas, a buffered `layout-shift`
 observer, and an ECharts prototype wrapper that logs every `setOption`/`dispose` with its
@@ -145,3 +147,28 @@ the reveal's `translateY(±4px)` is inside `getBoundingClientRect`, so one compu
 7px off and leaves no card straddling the edge at all. A bare "Failed to load resource" console
 line is recorded as a NOTE with its URL (the dev book's `/paycheck/breakdown?person_id=2` 404
 is the same known non-defect the C7 smoke lists); anything else in the console still fails.
+
+## Running the pace smoke (dev only)
+
+Same stack and the same dev seed credentials, and **read-only by construction** in exactly the
+motion smoke's way: the fence in `makeContext` continues GET/HEAD/OPTIONS and answers every other
+`/api/v1/**` call from memory (`PATCH /prefs` included), recording each under `writesBlocked`.
+This walk provokes no write at all, so anything landing in `writesBlocked` is itself a finding.
+Restart uvicorn first — it runs without `--reload`, so a server started before the backend lane
+merged answers with the old code and every new wire field (`soft_limit`, `halves`,
+`employer_match`) reads as missing.
+
+```bash
+OUT=scratchpad/pace-smoke && mkdir -p "$OUT"
+curl -s http://127.0.0.1:8000/api/v1/auth/login -H 'content-type: application/json'   -d '{"email":"admin@example.com","password":"changeme123"}'   | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).access_token))" > "$OUT/token.txt"
+TOKEN_FILE=$OUT/token.txt SMOKE_OUT=$OUT node tools/probes/pace-v/smoke.mjs
+```
+
+Prints `PACE SMOKE OK`, or exits 1 listing every failed check with its observed numbers. Env:
+`SMOKE_OUT`, `TOKEN_FILE`, `APP_BASE`, `API_BASE`, `EDGE_PATH`, `PLAYWRIGHT_CORE`, `ONLY_THEME`,
+`ONLY_STEP` (settings|rows|rail|anchors|pace|movers). Roughly three minutes per theme at
+1440×900; nine PNGs and `report.json` per theme. `API_BASE` is used directly (not through the
+page) for the one `GET /paycheck/profiles` that decides whether this book's in-force profiles
+carry a match policy — the 415(c) label is judged against that answer rather than against memory.
+The `rows` step resizes the viewport to 721 and 1400 px and flips `data-density` to `compact`,
+restoring both before it hands over.
