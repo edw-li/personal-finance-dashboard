@@ -290,7 +290,11 @@ it('draws the year in two segments: what is already in, and where it lands', () 
   const sofar = meter.querySelector('.pace-fill-sofar') as HTMLElement
   const projected = meter.querySelector('.pace-fill') as HTMLElement
   expect(sofar.style.width).toBe('81.82%') // 3,600 of 4,400
-  expect(projected.style.width).toBe('100%')
+  // The projected run starts where the so-far run ends and carries only the REMAINDER, so
+  // the two are neighbours on the track rather than one drawn over the other — which is what
+  // lets a pointer be over exactly one of them.
+  expect(projected.style.left).toBe('81.82%')
+  expect(projected.style.width).toBe('18.18%')
   // One tone, two weights: the run past "so far" is a projection, not a second verdict.
   expect(sofar.className).toBe('pace-fill-sofar is-warn')
   expect(projected.className).toBe('pace-fill is-warn is-projected')
@@ -401,10 +405,11 @@ it('tells the segments apart on hover, and clears the tip on the way out', () =>
   fireEvent.mouseOver(meter.querySelector('.pace-fill') as HTMLElement)
   expect(tipText()).toBe('Projected $41,667.90 · incl. $11,500.00 employer match')
 
-  // The bare track is the projection's own ground: same tip, no dead zone between segments.
+  // The empty track past the projection describes nothing, so it says nothing.
   fireEvent.mouseOver(meter)
-  expect(tipText()).toBe('Projected $41,667.90 · incl. $11,500.00 employer match')
+  expect(screen.queryByRole('tooltip')).toBeNull()
 
+  fireEvent.mouseOver(meter.querySelector('.pace-fill') as HTMLElement)
   fireEvent.mouseOut(meter)
   expect(screen.queryByRole('tooltip')).toBeNull()
 })
@@ -456,4 +461,64 @@ it('reads the practical cap on the ESPP row when focused', () => {
   renderPanel([{ ...ESPP, so_far: '10391.15' }])
   fireEvent.focus(screen.getByRole('meter'))
   expect(tipText()).toContain('Practical cap $21,250.00 of the $25,000.00 §423 cap')
+})
+
+
+/** jsdom measures nothing, so the meter is given a rect: 200px wide, starting at x=100. */
+function measured(): HTMLElement {
+  const meter = screen.getByRole('meter')
+  meter.getBoundingClientRect = () =>
+    ({ left: 100, right: 300, width: 200, top: 0, bottom: 4, height: 4, x: 100, y: 0 }) as DOMRect
+  return meter
+}
+
+it('opens the tip at the pointer and follows it along the track', () => {
+  renderPanel([TOTAL])
+  const meter = measured()
+  const sofar = meter.querySelector('.pace-fill-sofar') as HTMLElement
+
+  fireEvent.mouseOver(sofar, { clientX: 150 })
+  expect((screen.getByRole('tooltip') as HTMLElement).style.left).toBe('25%')
+  // A pointer moving inside one segment moves the tip with it — no jump to a midpoint.
+  fireEvent.mouseMove(sofar, { clientX: 180 })
+  expect((screen.getByRole('tooltip') as HTMLElement).style.left).toBe('40%')
+  // Clamped to the track: a tip centred on x=0 would hang into the label beside it.
+  fireEvent.mouseMove(sofar, { clientX: 90 })
+  expect((screen.getByRole('tooltip') as HTMLElement).style.left).toBe('2%')
+  fireEvent.mouseMove(sofar, { clientX: 400 })
+  expect((screen.getByRole('tooltip') as HTMLElement).style.left).toBe('98%')
+})
+
+it('centres the focus tip on the track, where no pointer is', () => {
+  renderPanel([TOTAL])
+  fireEvent.focus(measured())
+  expect((screen.getByRole('tooltip') as HTMLElement).style.left).toBe('50%')
+})
+
+it('lights up the segment under the pointer, and only that one', () => {
+  renderPanel([TOTAL])
+  const meter = screen.getByRole('meter')
+  const sofar = meter.querySelector('.pace-fill-sofar') as HTMLElement
+  const projected = meter.querySelector('.pace-fill') as HTMLElement
+
+  fireEvent.mouseOver(projected)
+  expect(projected.className).toContain('is-hot')
+  expect(sofar.className).not.toContain('is-hot')
+
+  fireEvent.mouseOver(sofar)
+  expect(sofar.className).toContain('is-hot')
+  expect(projected.className).not.toContain('is-hot')
+
+  fireEvent.mouseOut(meter)
+  expect(meter.querySelector('.is-hot')).toBeNull()
+})
+
+it('lights up a tick the same way', () => {
+  renderPanel([ESPP])
+  const meter = screen.getByRole('meter')
+  const tick = meter.querySelector('.pace-soft-tick') as HTMLElement
+  fireEvent.mouseOver(tick)
+  expect(tick.className).toContain('is-hot')
+  fireEvent.mouseOut(meter)
+  expect(meter.querySelector('.is-hot')).toBeNull()
 })

@@ -62,13 +62,27 @@ function paceNote(item: PaceItem): string | null {
   return `${parts.join(' · ')}. At your current ${rate}, a full purchase year is ${formatCurrency(projected)}${excess}.`
 }
 
-/** What the tip is saying, and where on the track it points (a percentage of the limit). */
-type Tip = { lines: string[]; left: number }
+/** The four things the track draws, and which one the pointer is over. */
+type Hot = 'sofar' | 'fill' | 'soft' | 'overflow'
 
-// Kept off the row's edges: a tip is centred on the part it describes, and one centred on a
-// 2 %-wide segment would hang into the label beside it.
+/** What the tip is saying, where along the track it points, and which part it belongs to. */
+type Tip = { lines: string[]; left: number; hot: Hot | null }
+
+// Kept off the track's ends: the tip is centred on the pointer, and one centred on x=0 would
+// hang into the label beside it.
 function tipLeft(pct: number): number {
-  return Math.min(Math.max(pct, 8), 92)
+  return Math.min(Math.max(pct, 2), 98)
+}
+
+// Which drawn part a pointer is over — `closest`, not the target itself, because the hit
+// bands are ::before pseudo-elements of the segments and a browser may report either.
+function partAt(target: Element): Hot | null {
+  const part = target.closest('.pace-fill-sofar, .pace-fill, .pace-soft-tick, .pace-overflow-tick')
+  if (part === null) return null
+  if (part.classList.contains('pace-fill-sofar')) return 'sofar'
+  if (part.classList.contains('pace-fill')) return 'fill'
+  if (part.classList.contains('pace-soft-tick')) return 'soft'
+  return 'overflow'
 }
 
 /**
@@ -130,23 +144,30 @@ function PaceRow({ item }: { item: PaceItem }) {
       ? null
       : `Over the cap by ${formatCurrency(Number(item.annualized) - Number(item.limit))}`
 
-  const showFor = (target: Element) => {
+  const linesFor = (part: Hot): string[] | null => {
+    if (part === 'sofar') return soFarLine === null ? null : [soFarLine]
+    if (part === 'soft') return softLimit === null ? null : [capLine]
+    if (part === 'overflow') return overflowLine === null ? null : [overflowLine]
+    return [projectedLine]
+  }
+
+  // At the POINTER, not at the segment's midpoint: a tip that opens half a track away from
+  // the cursor reads as a label for something else.
+  const pointerLeft = (event: ReactMouseEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    // A track jsdom never measured (or a zero-width one) has no pointer position to speak
+    // of: centre the tip rather than divide by zero.
+    if (rect.width <= 0) return 50
+    return tipLeft(((event.clientX - rect.left) / rect.width) * 100)
+  }
+
+  const show = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (item.limit === null || item.ratio === null) return
-    if (soFar !== null && soFarLine !== null && target.classList.contains('pace-fill-sofar')) {
-      setTip({ lines: [soFarLine], left: tipLeft(trackPct(soFar, item.limit) / 2) })
-      return
-    }
-    if (softLimit !== null && target.classList.contains('pace-soft-tick')) {
-      setTip({ lines: [capLine], left: tipLeft(trackPct(softLimit, item.limit)) })
-      return
-    }
-    if (overflowLine !== null && target.classList.contains('pace-overflow-tick')) {
-      setTip({ lines: [overflowLine], left: tipLeft(100) })
-      return
-    }
-    // The projected run and the bare track under it are the same statement, so the gap
-    // between segments is not a dead zone.
-    setTip({ lines: [projectedLine], left: tipLeft(fillPct(item.ratio) / 2) })
+    const part = partAt(event.target as Element)
+    const lines = part === null ? null : linesFor(part)
+    // The empty track past the projection describes nothing — hovering it says nothing, and
+    // clears whatever the last segment said.
+    setTip(lines === null || part === null ? null : { lines, left: pointerLeft(event), hot: part })
   }
 
   const hide = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -155,10 +176,17 @@ function PaceRow({ item }: { item: PaceItem }) {
     if (to === null || !event.currentTarget.contains(to)) setTip(null)
   }
 
-  // Focus is not a pointer: it has no part to be over, so it says everything at once.
+  // Focus is not a pointer: it has no part to be over, so it says everything at once, from
+  // the middle of the track, and lights nothing up.
   const focusLines = [soFarLine, projectedLine, capLine].filter(
     (line): line is string => line !== null,
   )
+
+  // The two runs are NEIGHBOURS, not one drawn over the other: the projected segment starts
+  // where the so-far one ends and carries only the remainder, which is what lets a pointer be
+  // over exactly one of them (and what makes the hover swell read as one segment, not two).
+  const soFarPct = soFar === null || item.limit === null ? 0 : trackPct(soFar, item.limit)
+  const projectedPct = item.ratio === null ? 0 : fillPct(item.ratio)
 
   return (
     <div className="pace-row">
@@ -192,9 +220,10 @@ function PaceRow({ item }: { item: PaceItem }) {
             aria-valuetext={valueText}
             // mouseOver/mouseOut, not the enter/leave pair: these bubble, so ONE handler on
             // the track can read which part the pointer is over (ToastProvider's note).
-            onMouseOver={(event) => showFor(event.target as Element)}
+            onMouseOver={show}
+            onMouseMove={show}
             onMouseOut={hide}
-            onFocus={() => setTip({ lines: focusLines, left: 50 })}
+            onFocus={() => setTip({ lines: focusLines, left: 50, hot: null })}
             onBlur={() => setTip(null)}
             onKeyDown={(event) => {
               if (event.key === 'Escape') setTip(null)
@@ -204,18 +233,21 @@ function PaceRow({ item }: { item: PaceItem }) {
                 tone, and the solid segment over it is the money already in. One track,
                 because they are the same year — not two meters. */}
             <div
-              className={`pace-fill is-${item.tone}${soFar === null ? '' : ' is-projected'}`}
-              style={{ width: `${fillPct(item.ratio).toFixed(2)}%` }}
+              className={`pace-fill is-${item.tone}${soFar === null ? '' : ' is-projected'}${tip?.hot === 'fill' ? ' is-hot' : ''}`}
+              style={{
+                left: `${soFarPct.toFixed(2)}%`,
+                width: `${Math.max(projectedPct - soFarPct, 0).toFixed(2)}%`,
+              }}
             />
             {soFar !== null && (
               <div
-                className={`pace-fill-sofar is-${item.tone}`}
-                style={{ width: `${trackPct(soFar, item.limit).toFixed(2)}%` }}
+                className={`pace-fill-sofar is-${item.tone}${tip?.hot === 'sofar' ? ' is-hot' : ''}`}
+                style={{ width: `${soFarPct.toFixed(2)}%` }}
               />
             )}
             {softLimit !== null && (
               <span
-                className="pace-soft-tick"
+                className={`pace-soft-tick${tip?.hot === 'soft' ? ' is-hot' : ''}`}
                 aria-hidden="true"
                 style={{ left: `${trackPct(softLimit, item.limit).toFixed(2)}%` }}
               />
@@ -223,7 +255,12 @@ function PaceRow({ item }: { item: PaceItem }) {
             {/* The FILL's clamp, not the tone: the ESPP row's tone is judged on the
                 practical cap, so an "over" row can sit mid-track — and a tick past the end
                 would then describe an overflow that never happened. */}
-            {Number(item.ratio) > 1 && <span className="pace-overflow-tick" aria-hidden="true" />}
+            {Number(item.ratio) > 1 && (
+              <span
+                className={`pace-overflow-tick${tip?.hot === 'overflow' ? ' is-hot' : ''}`}
+                aria-hidden="true"
+              />
+            )}
             {tip !== null && (
               <div className="pace-tip" role="tooltip" style={{ left: `${tip.left.toFixed(2)}%` }}>
                 {tip.lines.map((line) => (
