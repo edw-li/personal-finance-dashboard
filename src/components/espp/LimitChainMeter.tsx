@@ -39,7 +39,8 @@ export default function LimitChainMeter({ data }: { data: EsppModelerOut }) {
 
   const cashClauses = [`${formatCurrency(totals.total_contribution)} contributed`]
   if (refund > 0) cashClauses.push(`${formatCurrency(totals.total_refund)} refunded`)
-  if (carryOut > 0) cashClauses.push(`${formatCurrency(carryOut.toFixed(2))} carries forward`)
+  if (carryOut > 0)
+    cashClauses.push(`${formatCurrency(periods[periods.length - 1].carry_forward_out)} carries forward`)
 
   return (
     <div className="chain-meter">
@@ -115,6 +116,12 @@ export default function LimitChainMeter({ data }: { data: EsppModelerOut }) {
       )}
       {/* Identity in words as well as tone (never colour alone). */}
       <div className="chain-legend" aria-hidden="true">
+        {carryIn > 0 && (
+          <span className="chain-chip">
+            <i className="chain-swatch is-carry" />
+            Carried in
+          </span>
+        )}
         {periods.map((p, i) => (
           <span key={p.label} className="chain-chip">
             <i className={`chain-swatch ${tone(i)}`} />
@@ -132,7 +139,7 @@ export default function LimitChainMeter({ data }: { data: EsppModelerOut }) {
           Remaining
         </span>
       </div>
-      {/* Advisory, never the error banner: the chain still ran (the page's espp-warning register). */}
+      {/* Advisory, never the error banner: the chain still ran (espp.css's espp-warning register). */}
       {capped.map((p) => (
         <p key={p.label} className="drill-hint espp-warning">
           {`Cap reached in ${p.label} — ${formatCurrency(p.refund)} refunded.`}

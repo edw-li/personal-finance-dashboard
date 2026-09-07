@@ -64,6 +64,8 @@ describe('PositionStrip', () => {
   it('paints the $25k tile and ghosts the four lot slots until the lots land', () => {
     render(<PositionStrip lots={null} lotsBusy modeler={modeler} modelerBusy={false} modelerDirty={false} />)
     expect(ghosts().length).toBe(4)
+    // Nothing painted is being revalidated, so the row is not dimmed on top of the ghosts.
+    expect(document.querySelector('.is-loading')).toBeNull()
     const tile = screen.getByText('$25k limit used — 2024').closest('.stat-tile') as HTMLElement
     expect(tile.textContent).toContain('$18,917.13')
     expect(tile.textContent).toContain('$6,082.87 left')
@@ -96,9 +98,33 @@ describe('PositionStrip', () => {
     expect(container.innerHTML).toBe('')
   })
 
+  it('prints em-dash lot tiles when the lots feed failed and the modeler answered', () => {
+    render(<PositionStrip lots={null} lotsBusy={false} modeler={modeler} modelerBusy={false} modelerDirty={false} />)
+    expect(tiles().length).toBe(5)
+    // A ghost that never resolves promises a number that is not coming; the banner names why.
+    expect(ghosts().length).toBe(0)
+    for (const label of ['Market value', 'Cost basis', 'Unrealized gain', 'Shares held']) {
+      const tile = screen.getByText(label).closest('.stat-tile') as HTMLElement
+      expect(tile.querySelector('.stat-value')?.textContent).toBe('—')
+      expect(tile.querySelector('.stat-delta')).toBeNull()
+    }
+    expect(screen.getByText('$25k limit used — 2024').closest('.stat-tile')?.textContent).toContain('$18,917.13')
+  })
+
+  it('prints an em-dash $25k tile when the modeler failed and the lots answered', () => {
+    render(<PositionStrip lots={lots} lotsBusy={false} modeler={null} modelerBusy={false} modelerDirty={false} />)
+    expect(tiles().length).toBe(5)
+    expect(ghosts().length).toBe(0)
+    // No payload, so no year to name it by.
+    const tile = screen.getByText('$25k limit used').closest('.stat-tile') as HTMLElement
+    expect(tile.querySelector('.stat-value')?.textContent).toBe('—')
+    expect(tile.querySelector('.stat-delta')).toBeNull()
+    expect(screen.getByText('Market value').closest('.stat-tile')?.textContent).toContain('$85,826.31')
+  })
+
   it('dims the row while a feed revalidates and carries the modeler dirty note', () => {
     render(<PositionStrip lots={lots} lotsBusy modeler={modeler} modelerBusy={false} modelerDirty />)
     expect(document.querySelector('.loading-dim.is-loading')).not.toBeNull()
-    expect(screen.getByText(/Unsaved period edits below/).className).toBe('hint')
+    expect(screen.getByText(/Unsaved period edits below/).className).toBe('drill-hint')
   })
 })

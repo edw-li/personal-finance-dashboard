@@ -102,5 +102,19 @@ describe('ghost parity (motion spec §7)', () => {
     const tile = document.querySelector('.stat-tile.skeleton-tile')
     expect(tile).not.toBeNull()
     expect(tile?.querySelectorAll('.skeleton').length).toBe(3) // label, value, delta
+    // Its own attribute, not the row's: in the ESPP strip this tile stands BESIDE real tiles,
+    // so no aria-hidden container is above it to silence it.
+    expect(tile?.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('gives a page-level ghost row the same tile height variable the page skeleton reads', () => {
+    // --m-stat-tile was declared on .page-skeleton alone, so a SkeletonTileRow's ghosts — which
+    // ride .loading-fallback and never sit inside a page skeleton — fell back to their content
+    // box (~95px) and the row grew 20px when the first feed landed. jsdom computes no custom
+    // properties, so the pin is on the stylesheet's own text, like this file's other CSS pins.
+    const css = readFileSync(path.join(__dirname, 'panels.css'), 'utf8').replace(/\s+/g, ' ')
+    expect(css).toContain('.page-skeleton, .loading-fallback { --m-stat-tile: 115px;')
+    render(<SkeletonTileRow tiles={2} />)
+    expect(document.querySelector('.skeleton-tile')?.closest('.loading-fallback')).not.toBeNull()
   })
 })

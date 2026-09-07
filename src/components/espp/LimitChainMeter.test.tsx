@@ -72,6 +72,10 @@ describe('LimitChainMeter', () => {
     expect(cash.querySelector('.chain-seg')?.className).toContain('is-carry')
     expect(widths(cash)[0]).toBe('0.4%') // 100 / 25000
     expect(screen.getByText('$16,812.00 contributed · $45.10 carries forward')).toBeTruthy()
+    // The legend names the first segment too, in the order the row draws it.
+    const chips = [...(document.querySelector('.chain-legend') as HTMLElement).children]
+    expect(chips[0].textContent).toBe('Carried in')
+    expect(chips[0].querySelector('.chain-swatch')?.className).toContain('is-carry')
   })
 
   it('names every capped period in the advisory register', () => {

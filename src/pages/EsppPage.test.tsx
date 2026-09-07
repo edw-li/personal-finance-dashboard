@@ -1367,6 +1367,31 @@ describe('EsppPage — modeler', () => {
     expect(screen.queryAllByRole('meter')).toHaveLength(0)
   })
 
+  it('draws one meter row and em-dash tiles for a modeler payload from before the totals landed', async () => {
+    // A warm snapshot (or an older backend) carries no total_shares / total_contribution /
+    // total_refund: the contributions row and its two tiles have nothing to draw, and neither
+    // may invent a zero.
+    vi.mocked(fetchModeler).mockResolvedValue(
+      modelerResponse({
+        totals: {
+          total_25k_value: '18917.13',
+          out_of_pocket_cost: '16130.72',
+          fmv_of_shares: '19200.00',
+          remaining_25k: '6082.87',
+        },
+      }),
+    )
+    renderPage()
+    await screen.findByText(/\$18,917\.13 used/)
+
+    expect(within(modelerCard()).getAllByRole('meter')).toHaveLength(1)
+    const card = within(modelerCard().querySelector('.kpi-row') as HTMLElement)
+    expect(card.getByText('Shares bought').closest('.stat-tile')?.querySelector('.stat-value')?.textContent).toBe('—')
+    expect(card.getByText('Refunded').closest('.stat-tile')?.querySelector('.stat-value')?.textContent).toBe('—')
+    // The limit row still carries the full chain.
+    expect(card.getByText('Out of pocket').closest('.stat-tile')?.textContent).toContain('$16,130.72')
+  })
+
   it('does not remount the lots panel when the modeler reloads', async () => {
     renderPage()
     await screen.findAllByRole('meter')

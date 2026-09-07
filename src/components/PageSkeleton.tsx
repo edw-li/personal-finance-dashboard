@@ -54,7 +54,9 @@ export default function PageSkeleton({
    so it ghosts the slots of whichever feed is still in flight with this very tile. */
 export function GhostTile() {
   return (
-    <div className="stat-tile skeleton-tile">
+    // aria-hidden on the TILE, not only on the row above it: in a mixed row (the ESPP strip)
+    // its neighbours are real tiles that must stay readable, so there is no hidden container.
+    <div className="stat-tile skeleton-tile" aria-hidden="true">
       <div className="skeleton skeleton-label" />
       <div className="skeleton skeleton-value" />
       <div className="skeleton skeleton-delta" />
