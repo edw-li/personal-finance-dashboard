@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.models import (
     AppSetting,
     DividendPayment,
+    EsppLot,
+    EsppOffering,
     LatestPrice,
     PortfolioValueHistory,
     PositionTransaction,
@@ -1054,6 +1056,43 @@ async def test_employer_backfill_respects_manual_priced_employers(db):
 
     assert await backfill_employer_history(db, provider) == 0
     assert provider.calls == []
+
+
+def espp_lot(purchase):
+    return EsppLot(
+        purchase_date=purchase,
+        qualifying_date=date(purchase.year + 1, 9, 1),
+        shares=D("260.0000"),
+        subscription_price=D("48.50900"),
+        purchase_fmv=D("79.11200"),
+        purchase_price=D("41.23265"),
+    )
+
+
+async def test_employer_backfill_reaches_the_earliest_espp_lot_when_it_predates_the_grants(db):
+    await seed_employer(db)
+    db.add(rsu_grant(date(2024, 9, 18)))
+    db.add(espp_lot(date(2024, 2, 29)))
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(date(2024, 2, 15), "70"), bar(date(2024, 9, 4), "115")]})
+
+    assert await backfill_employer_history(db, provider) == 2
+    # The window opens a buffer before the FIRST PURCHASE, not the first vest: the ESPP price
+    # chart draws every lot on the line (2026-09-07 spec §3.4).
+    assert provider.calls == [("NVDA", date(2024, 2, 29) - timedelta(days=14))]
+
+
+async def test_employer_backfill_reaches_the_earliest_offering_with_no_grant_at_all(db):
+    await seed_employer(db)
+    db.add(EsppOffering(offering_start=date(2023, 9, 1), subscription_price=D("48.50900")))
+    db.add(espp_lot(date(2024, 2, 29)))
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(date(2023, 8, 21), "48.5")]})
+
+    # No grant anywhere: the ESPP rows alone are reason enough to fetch, and the offering's
+    # start is the oldest anchor of the three.
+    assert await backfill_employer_history(db, provider) == 1
+    assert provider.calls == [("NVDA", date(2023, 9, 1) - timedelta(days=14))]
 
 
 async def test_employer_backfill_failure_degrades_alone_in_run_refresh(db, monkeypatch):
