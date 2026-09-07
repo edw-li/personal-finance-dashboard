@@ -248,6 +248,13 @@ describe('ScenarioPanel', () => {
     expect(inUse.disabled).toBe(true)
   })
 
+  it('reads as in use when the URL carries the same figure spelled without its trailing zeros', async () => {
+    preview.mockImplementation(async () => ({ ...echo, budget_annual_spend: '61752.00', budget_month: '2026-09-01' }))
+    mount('/projection?whatif=annual_spend%3A61752')
+    const inUse = (await screen.findByRole('button', { name: 'using your budgets' })) as HTMLButtonElement
+    expect(inUse.disabled).toBe(true)
+  })
+
   it('hides the budgets preset when the echo has none', async () => {
     mount()
     // BOTH windowed knobs print the window, so this wait is a findAll — it only has to prove

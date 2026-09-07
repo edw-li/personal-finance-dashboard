@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import CompareTable from '../../sandbox/CompareTable'
+import { compareDecimals } from '../../sandbox/decimal'
 import SandboxPanel from '../../sandbox/SandboxPanel'
 import { MONTH_TOKEN } from '../../sandbox/scenarioUrl'
 import SliderBox from '../../sandbox/SliderBox'
@@ -182,6 +183,13 @@ export default function ScenarioPanel({
         const budgetAnnual = key === 'annual_spend' ? (baseline?.budget_annual_spend ?? null) : null
         const budgetMonth = baseline?.budget_month ?? null
         const showsBudgets = budgetAnnual !== null
+        // Compared as a DECIMAL, not as text: a hand-typed 61752 is the same annual spend as
+        // the echo's 61752.00, and both spellings survive the URL, so a string test would
+        // leave the preset offering a figure the knob already carries.
+        const usingBudgets =
+          budgetAnnual !== null &&
+          scenario.knobs.annual_spend !== undefined &&
+          compareDecimals(scenario.knobs.annual_spend, budgetAnnual) === 0
         const windowed = key === 'monthly_contribution' || key === 'annual_spend'
         const showsBreakdown = key === 'monthly_contribution' && breakdown !== null
         if (!showsBreakdown && !(windowed && derivedWindow !== null) && !showsBudgets) return slider
@@ -217,10 +225,10 @@ export default function ScenarioPanel({
                 <button
                   type="button"
                   className="button"
-                  disabled={scenario.knobs.annual_spend === budgetAnnual}
+                  disabled={usingBudgets}
                   onClick={() => knob('annual_spend')(budgetAnnual, true)}
                 >
-                  {scenario.knobs.annual_spend === budgetAnnual
+                  {usingBudgets
                     ? 'using your budgets'
                     : `Use my budgets · ${formatCurrency(budgetAnnual)}/yr`}
                 </button>

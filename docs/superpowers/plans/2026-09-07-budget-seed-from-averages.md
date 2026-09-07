@@ -2059,7 +2059,22 @@ curl -s -H "$H" "$API/spending/matrix" | node -e "let s='';process.stdin.on('dat
 curl -s -H "$H" "$API/projection" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const p=JSON.parse(s);console.log('budget_annual_spend',p.budget_annual_spend,'budget_month',p.budget_month)})"
 ```
 
-Expected: `written` = the seedable count from the suggestions, `total_budget` at the focused month = the sum of the written seeds, `budget_annual_spend` = 12 × the living seeds (the dev book's start month is the CURRENT calendar month, so this is non-null only if the focused month ≤ today — with the dev book ending in 2025 it IS: the seeds resolve forward). **Run the browser smoke (step 5) now, in the seeded state**, then undo:
+Expected: `written` = the seedable count from the suggestions, `total_budget` at the focused month = the sum of the written seeds, `budget_annual_spend` = 12 × the living seeds (the dev book's start month is the CURRENT calendar month, so this is non-null only if the focused month ≤ today — with the dev book ending in 2025 it IS: the seeds resolve forward). **Run the browser smoke (step 5) now, in the seeded state — but hand-set ONE budget first.** A book seeded moments ago has every seedable category standing exactly at its seed, and `seedCounts` skips those as unchanged, so `writes` is 0 and the card correctly offers NO "Re-seed from averages" — the probe would be judging a right card against a wrong state. Give it one row to rewrite (any living category the seed wrote — Housing, say; `$CAT` is its id from the suggestions printout):
+
+```bash
+CAT=<id of a living category the seed wrote>
+curl -s -o /dev/null -X PUT -H "$H" -H 'content-type: application/json' \
+  -d "{\"amount\":\"2500.00\",\"effective_month\":\"$MONTH\"}" \
+  "$API/spending/categories/$CAT/budget"
+```
+
+The card then offers "Re-seed from averages", and its confirm line reads `Rewrites 1 existing budget and sets N new ones from <Mon YYYY>` — N is 0 right after a full seed, since every other seedable category already stands at its average. Run the probe, then take the hand-set row back out:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE -H "$H" "$API/spending/categories/$CAT/budget/$MONTH"  # 204
+```
+
+Then undo the seed:
 
 ```bash
 BATCH=$(node -e "process.stdout.write(require('./$OUT/seed.json').batch_id ?? '')")
@@ -2076,7 +2091,9 @@ Expected: `Undid: Seeded N budgets from averages, from <Mon YYYY> rows N`, then 
 // Recipe: tools/probes/README.md. READ-ONLY BY CONSTRUCTION: every non-GET /api/v1 call is fenced and
 // answered from memory, so a click on Confirm here cannot write; the WRITE path is proven by the plan's
 // API walk (seed → matrix → undo) and by the unit tests. Run it TWICE around that walk: once with budgets
-// on the book (the re-seed row, the Projection preset) and once without (the empty state's action).
+// on the book (the re-seed row, the Projection preset) and once without (the empty state's action). The
+// seeded run needs a book whose budgets DIFFER from the seeds — hand-set one budget at the focused month
+// first — because a book seeded moments ago has nothing left to write, and the card offers no Re-seed then.
 // Env: SMOKE_OUT, TOKEN_FILE, APP_BASE, API_BASE, EDGE_PATH, PLAYWRIGHT_CORE, ONLY_THEME.
 // The first two lines spoof the node version: this box runs node 18, playwright-core wants 20.
 Object.defineProperty(process, 'version', { value: 'v20.19.0' })
@@ -2109,10 +2126,21 @@ const matrix = await get('/api/v1/spending/matrix')
 const suggestions = await get('/api/v1/spending/budgets/suggestions')
 const projection = await get('/api/v1/projection').catch((e) => ({ error: String(e) }))
 const last = matrix.months.length - 1
-const hasBudgets = matrix.series.some((s) => s.budgets[last] !== null)
+// The card meters ACTIVE categories only, so a budget left on a retired one is not a budget it shows.
+const activeIds = new Set(matrix.categories.filter((c) => c.is_active).map((c) => c.id))
+const hasBudgets = matrix.series.some((s) => activeIds.has(s.category_id) && s.budgets[last] !== null)
 const seedable = suggestions.suggestions.filter((s) => s.seed !== null).length
+// The panel's own rule (seedCounts in src/components/spending/budgetSeed.ts): a seed whose resolved budget
+// at the focused month ALREADY equals it is skipped as unchanged, so both affordances turn on `writes`, not
+// on `seedable`. A book seeded moments ago has seedable > 0 and writes === 0 — and no Re-seed button.
+const budgetAt = new Map(matrix.series.map((s) => [s.category_id, s.budgets[last] ?? null]))
+const writes = suggestions.suggestions.filter((s) => {
+  if (s.seed === null) return false
+  const resolved = budgetAt.get(s.category_id) ?? null
+  return resolved === null || Number(resolved) !== Number(s.seed)
+}).length
 const enoughHistory = (suggestions.window?.months ?? 0) >= 3
-note('book', 'state', { months: matrix.months.length, focused: matrix.months[last], hasBudgets, seedable, window: suggestions.window, budget_annual_spend: projection.budget_annual_spend ?? null })
+note('book', 'state', { months: matrix.months.length, focused: matrix.months[last], hasBudgets, seedable, writes, window: suggestions.window, budget_annual_spend: projection.budget_annual_spend ?? null, projectionError: projection.error ?? null })
 
 const browser = await chromium.launch({ executablePath: EDGE, headless: true, args: ['--no-sandbox', '--disable-gpu', '--force-device-scale-factor=1'] })
 try {
@@ -2140,8 +2168,8 @@ try {
     await card.scrollIntoViewIfNeeded(); await sleep(1200)
     if (hasBudgets) {
       const reseed = card.getByRole('button', { name: 'Re-seed from averages' })
-      const expected = enoughHistory && seedable > 0 ? 1 : 0
-      check(theme, 'a budgeted card offers Re-seed exactly when the book can seed', (await reseed.count()) === expected, { count: await reseed.count(), enoughHistory, seedable })
+      const expected = enoughHistory && writes > 0 ? 1 : 0
+      check(theme, 'a budgeted card offers Re-seed exactly when the book can seed', (await reseed.count()) === expected, { count: await reseed.count(), enoughHistory, writes })
       if (await reseed.count()) {
         await reseed.click(); await sleep(300)
         const confirm = await card.locator('.budget-reseed-confirm').textContent().catch(() => null)
@@ -2154,7 +2182,7 @@ try {
       const start = card.getByRole('button', { name: 'Start from my averages' })
       check(theme, 'the empty card offers Start from my averages', (await start.count()) === 1, await start.count())
       const disabled = (await start.count()) ? await start.isDisabled() : null
-      check(theme, 'the seed is enabled exactly when the window has three months and something to write', disabled === !(enoughHistory && seedable > 0), { disabled, enoughHistory, seedable })
+      check(theme, 'the seed is enabled exactly when the window has three months and something to write', disabled === !(enoughHistory && writes > 0), { disabled, enoughHistory, writes })
       const hint = await card.locator('.budget-seed-hint').textContent().catch(() => null)
       check(theme, 'the hint names the effective month, or the reason', /effective from|Not yet|Nothing to seed|Loading/.test(hint ?? ''), hint)
     }

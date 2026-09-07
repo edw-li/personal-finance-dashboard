@@ -308,8 +308,9 @@ it('a failed seed lands in the banner and refetches nothing', async () => {
   expect(onBudgetsChanged).not.toHaveBeenCalled()
 })
 
-it('says when there is nothing to seed and hides the re-seed affordance', async () => {
-  // Both seeds equal the resolved budgets -> the server would skip both as unchanged.
+it('hides Re-seed when every seed already stands', async () => {
+  // Both seeds equal the resolved budgets -> the server would skip both as unchanged, so
+  // there is nothing left to re-seed and the card does not offer it.
   const settled: SpendingMatrix = {
     ...matrix,
     series: [
@@ -322,19 +323,16 @@ it('says when there is nothing to seed and hides the re-seed affordance', async 
   render(<BudgetPanel matrix={settled} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
   await screen.findByRole('button', { name: 'Use Food median $390.00' }) // suggestions arrived
   expect(screen.queryByRole('button', { name: 'Re-seed from averages' })).toBeNull()
-  const blankSettled: SpendingMatrix = {
-    ...settled,
-    series: settled.series.map((s) => ({ ...s, budgets: [null, null] })),
-    total_budget: [null, null],
-  }
-  cleanup()
+})
+
+it('says Nothing to seed when every category is dormant', async () => {
   vi.mocked(fetchBudgetSuggestions).mockResolvedValue({
     ...suggestions,
     suggestions: suggestions.suggestions.map(
       (s): BudgetSuggestion => ({ ...s, seed: null, profile: 'dormant', skip_reason: 'dormant' }),
     ),
   })
-  render(<BudgetPanel matrix={blankSettled} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
   await screen.findByText(/Nothing to seed — every category is dormant/)
   expect(
     (screen.getByRole('button', { name: 'Start from my averages' }) as HTMLButtonElement).disabled,
