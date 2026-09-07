@@ -48,7 +48,9 @@ export default defineConfig({
     proxy: {
       // 127.0.0.1, not localhost: Node >=17 resolves localhost to ::1 first, but
       // uvicorn binds IPv4 only — every dev API call would 500 with ECONNREFUSED ::1.
-      '/api': 'http://127.0.0.1:8000',
+      // VITE_API_PROXY points a lane's vite (on its own port) at that lane's uvicorn instead
+      // of whatever owns 8000 — the probes README's "own pair of servers" recipe needs it.
+      '/api': process.env.VITE_API_PROXY ?? 'http://127.0.0.1:8000',
     },
   },
   test: {

@@ -47,9 +47,9 @@ the shared ones so the walk is judged on the lane's build, not on whatever owns 
 ```bash
 # Anywhere outside the repo; the C7 recipe above writes to the gitignored scratchpad/ instead.
 OUT=/tmp/calendar-smoke && mkdir -p "$OUT"
-# in the worktree: uvicorn on 8010, vite on 5174
+# in the worktree: uvicorn on 8010, vite on 5174 — VITE_API_PROXY makes that vite talk to THAT uvicorn
 (cd backend && SCHEDULER_ENABLED=0 .venv/Scripts/python.exe -m uvicorn app.main:app --port 8010 &)
-npm run dev -- --port 5174 &
+VITE_API_PROXY=http://127.0.0.1:8010 npm run dev -- --port 5174 &
 curl -s http://127.0.0.1:8010/api/v1/auth/login -H 'content-type: application/json' \
   -d '{"email":"admin@example.com","password":"changeme123"}' \
   | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).access_token))" > "$OUT/token.txt"
