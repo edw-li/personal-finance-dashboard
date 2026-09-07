@@ -3,12 +3,23 @@
 // display-only geometry: the server's Decimal strings are parsed once and never handed back
 // (format.ts's rule), and every figure a tooltip or CSV prints is the wire string, formatted.
 import type { EChartsOption } from '../../charts/echarts'
-import { BAR_MARKS, capLabel, cents, grid, moneyAxis, monthAxis, stagger } from '../../charts/grammar'
+import {
+  BAR_MARKS,
+  LINE,
+  capLabel,
+  cents,
+  dateAxis,
+  grid,
+  moneyAxis,
+  monthAxis,
+  stagger,
+} from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { referenceLine } from '../../charts/reference'
-import { INK, MUTED, NEGATIVE, PALETTE, SURFACE } from '../../charts/theme'
+import { INK, MUTED, NEGATIVE, PALETTE, POSITIVE, SURFACE } from '../../charts/theme'
+import { timeZoom } from '../../charts/timeZoom'
 import { axisTooltip } from '../../charts/tooltip'
-import type { EsppLotOut, EsppLotsResponse } from '../../types/api'
+import type { EsppLotOut, EsppLotsResponse, EsppOfferingOut, PricePoint } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import {
   escapeHtml,
@@ -18,6 +29,9 @@ import {
   formatPct,
   formatShares,
 } from '../../utils/format'
+import { addDays } from '../../utils/months'
+import { eventLines } from '../portfolio/historyChartOptions'
+import type { ChartEventPoint } from '../portfolio/historyChartOptions'
 
 export type AnatomyView = 'dollars' | 'per-share'
 
@@ -29,6 +43,10 @@ export const LOSS = 'Below purchase FMV'
 export const PRICE_DOT = 'Price'
 export const SUBSCRIPTION = 'Subscription price'
 export const QUOTE_RULE = 'Current quote'
+export const CLOSE = 'Close'
+export const AVG_PAID = 'Avg paid to date'
+export const PURCHASES = 'Purchases'
+export const SALES = 'Sales'
 
 // Slots 2, 3, 1 — orange, green, blue — validated in both themes (spec §8.2). Fixed by
 // COMPONENT, never by lot: lots pass eight by 2028 and identity was never the story.
@@ -347,5 +365,224 @@ export function lotAnatomyCsv(data: EsppLotsResponse): ExportTable {
       l.appreciation ?? '',
       l.market_value ?? '',
     ]),
+  }
+}
+
+// ── The employer price with your purchases (spec §6) ─────────────────────────────────────────
+
+export interface EsppPriceInput {
+  /** The window's daily bars, oldest first. */
+  points: PricePoint[]
+  /** Ascending by offering_start — the resolution order. */
+  offerings: EsppOfferingOut[]
+  lots: EsppLotOut[]
+}
+
+/** A purchase marker rides the close line at its bar; a sold lot's marker goes hollow. */
+export interface PurchaseMarker extends ChartEventPoint {
+  itemStyle?: { color: string; borderColor: string; borderWidth: number }
+}
+
+/** Index of the last bar on or before `iso`, or -1 when the history starts later. ISO strings
+ *  compare as dates (format.ts's never-`new Date(iso)` rule). */
+function barOnOrBefore(dates: string[], iso: string): number {
+  let index = -1
+  for (let i = 0; i < dates.length && dates[i] <= iso; i++) index = i
+  return index
+}
+
+/** The covering offering's price per bar — greatest offering_start <= date (espp_calc's rule),
+ *  null before the first offering. */
+function subscriptionSteps(dates: string[], offerings: EsppOfferingOut[]): (number | null)[] {
+  return dates.map((d) => {
+    let covering: EsppOfferingOut | null = null
+    for (const o of offerings) if (o.offering_start <= d) covering = o
+    return covering === null ? null : Number(covering.subscription_price)
+  })
+}
+
+/** The latest lot bought on or before each bar, and its running average — null before the first
+ *  purchase, or on a pre-batch payload that carries no average. */
+function avgPaidSteps(dates: string[], chain: EsppLotOut[]): (number | null)[] {
+  return dates.map((d) => {
+    let latest: EsppLotOut | null = null
+    for (const l of chain) if (l.purchase_date <= d) latest = l
+    const avg = latest?.avg_paid_to_date
+    return avg === undefined || avg === null ? null : Number(avg)
+  })
+}
+
+/**
+ * Daily closes for the employer ticker against two stepped rules — the subscription price of the
+ * offering in force and your average paid per share to date — with the above/below wash against
+ * the average and one marker per purchase (and per sale). The holding drill-in's chart, with the
+ * rules that make an ESPP legible: whenever the close sits above the subscription rule, the
+ * lookback is binding. Returns null under two bars.
+ */
+export function esppPriceOption({ points, offerings, lots }: EsppPriceInput): EChartsOption | null {
+  if (points.length < 2) return null
+  const dates = points.map((p) => p.d)
+  const labels = dates.map(formatDate)
+  const closes = points.map((p) => Number(p.c))
+  const chain = sortLots(lots)
+  const subscription = subscriptionSteps(dates, offerings)
+  const avgPaid = avgPaidSteps(dates, chain)
+  const hasSub = subscription.some((v) => v !== null)
+  const hasAvg = avgPaid.some((v) => v !== null)
+  // The wash is TWO STACKED PAIRS against the STEPPED average (priceChartOptions' technique — a
+  // piecewise visualMap with open-ended pieces throws on a real canvas, the 2026-09-04 probe).
+  // Nothing draws before the first purchase: a null in every member leaves the gap honest.
+  const wash = (name: string, stack: string, color: string, data: (number | null)[]) => ({
+    name,
+    type: 'line' as const,
+    stack,
+    symbol: 'none' as const,
+    lineStyle: { width: 0 },
+    color,
+    emphasis: { disabled: true },
+    tooltip: { show: false },
+    silent: true,
+    connectNulls: false,
+    ...(color === 'transparent' ? {} : { areaStyle: { opacity: 0.12 } }),
+    data,
+  })
+  const at = (i: number) => avgPaid[i] as number
+  const washes = hasAvg
+    ? [
+        wash('wash-above-base', 'above-paid', 'transparent', avgPaid),
+        wash('Above avg paid', 'above-paid', POSITIVE, closes.map((c, i) => (avgPaid[i] === null ? null : cents(Math.max(c - at(i), 0))))),
+        wash('wash-below-base', 'below-paid', 'transparent', closes.map((c, i) => (avgPaid[i] === null ? null : Math.min(c, at(i))))),
+        wash('Below avg paid', 'below-paid', NEGATIVE, closes.map((c, i) => (avgPaid[i] === null ? null : cents(Math.max(at(i) - c, 0))))),
+      ]
+    : []
+  const purchases: PurchaseMarker[] = []
+  const sales: ChartEventPoint[] = []
+  for (const l of chain) {
+    const bought = barOnOrBefore(dates, l.purchase_date)
+    if (bought >= 0) {
+      purchases.push({
+        value: [labels[bought], closes[bought]],
+        symbol: 'diamond',
+        symbolRotate: 0,
+        events: [
+          {
+            text: `${formatDate(l.purchase_date)} · ${formatShares(l.shares)} sh · paid ${formatCurrency(
+              l.purchase_price,
+            )} · FMV ${formatCurrency(l.purchase_fmv)}${l.is_sold ? ` · sold ${formatDate(l.sold_date)}` : ''}`,
+          },
+        ],
+        // Hollow = sold, the page's one meaning for it (spec §5.2).
+        ...(l.is_sold ? { itemStyle: { color: SURFACE, borderColor: PALETTE[1], borderWidth: 1.5 } } : {}),
+      })
+    }
+    if (l.is_sold && l.sold_date !== null) {
+      const sold = barOnOrBefore(dates, l.sold_date)
+      if (sold >= 0) {
+        sales.push({
+          value: [labels[sold], closes[sold]],
+          // The events grammar's sell glyph (historyChartOptions): the triangle, rotated.
+          symbol: 'triangle',
+          symbolRotate: 180,
+          events: [
+            {
+              text: `Sold ${formatDate(l.sold_date)} · ${formatShares(l.shares)} sh${
+                l.sold_price === null ? '' : ` at ${formatCurrency(l.sold_price)}`
+              }`,
+            },
+          ],
+        })
+      }
+    }
+  }
+  // Two dashed MUTED references look alike, so each names itself at its end (grid 'endLabel').
+  const step = (name: string, data: (number | null)[]) => ({
+    ...referenceLine(name, data, { step: 'end' }),
+    endLabel: { show: true, formatter: '{a}', color: MUTED, fontSize: 11 },
+  })
+  const names = [
+    CLOSE,
+    ...(hasSub ? [SUBSCRIPTION] : []),
+    ...(hasAvg ? [AVG_PAID] : []),
+    ...(purchases.length > 0 ? [PURCHASES] : []),
+    ...(sales.length > 0 ? [SALES] : []),
+  ]
+  const marker = (name: string, color: string, symbolSize: number, data: ChartEventPoint[]) => ({
+    type: 'scatter' as const,
+    name,
+    color,
+    symbolSize,
+    itemStyle: { borderColor: INK, borderWidth: 1 },
+    z: 11,
+    data,
+  })
+  return {
+    // 'all': the chips change the WINDOW handed in, so the zoom opens on everything it was given.
+    dataZoom: timeZoom(dates, 'all'),
+    grid: grid('endLabel'),
+    // Listed explicitly so the four wash members stay OUT of the legend (the price chart's rule).
+    legend: { ...legendFor(names.length), data: names },
+    tooltip: axisTooltip({
+      unit: 'money',
+      references: [SUBSCRIPTION, AVG_PAID],
+      annotationSeries: [PURCHASES, SALES],
+      annotations: eventLines,
+    }),
+    xAxis: dateAxis(labels),
+    // scale, unlike the money charts' zero anchor: a price line has no additive reading.
+    yAxis: moneyAxis({ zero: false }),
+    series: [
+      ...washes,
+      { ...LINE, name: CLOSE, color: PALETTE[0], data: closes },
+      ...(hasSub ? [step(SUBSCRIPTION, subscription)] : []),
+      ...(hasAvg ? [step(AVG_PAID, avgPaid)] : []),
+      ...(purchases.length > 0 ? [marker(PURCHASES, PALETTE[1], 10, purchases)] : []),
+      ...(sales.length > 0 ? [marker(SALES, MUTED, 9, sales)] : []),
+    ],
+  }
+}
+
+/** The chip window over the ONE fetched series, anchored on today (the chips slice, they do not
+ *  refetch — the page already holds 3650 days for the offerings chip). */
+export function sliceWindow(points: PricePoint[], days: number, todayIso: string): PricePoint[] {
+  const since = addDays(todayIso, -days)
+  return points.filter((p) => p.d >= since)
+}
+
+/** How many lots were bought before the stored history begins — the footer's honesty line. */
+export function lotsBeforeHistory(points: PricePoint[], lots: EsppLotOut[]): number {
+  if (points.length === 0) return 0
+  const first = points[0].d
+  return lots.filter((l) => l.purchase_date < first).length
+}
+
+/** The window as a table (F12): one row per bar, the two rules, and the day's purchase or sale. */
+export function esppPriceCsv(points: PricePoint[], offerings: EsppOfferingOut[], lots: EsppLotOut[]): ExportTable {
+  const dates = points.map((p) => p.d)
+  const chain = sortLots(lots)
+  const bought = new Map<number, string>()
+  const sold = new Map<number, string>()
+  for (const l of chain) {
+    const b = barOnOrBefore(dates, l.purchase_date)
+    if (b >= 0) bought.set(b, l.shares)
+    if (l.is_sold && l.sold_date !== null) {
+      const s = barOnOrBefore(dates, l.sold_date)
+      if (s >= 0) sold.set(s, l.shares)
+    }
+  }
+  // Verbatim wire strings where one exists, so the table never re-scales a Numeric(14,5): the
+  // rules print the covering row's own text rather than the builder's parsed step.
+  const subText = (d: string) => {
+    let covering: EsppOfferingOut | null = null
+    for (const o of offerings) if (o.offering_start <= d) covering = o
+    return covering === null ? '' : covering.subscription_price
+  }
+  const avgText = (d: string) => {
+    let latest: EsppLotOut | null = null
+    for (const l of chain) if (l.purchase_date <= d) latest = l
+    return latest?.avg_paid_to_date ?? ''
+  }
+  return {
+    headers: ['Date', 'Close', 'Subscription price', 'Avg paid to date', 'Purchase (shares)', 'Sale (shares)'],
+    rows: points.map((p, i) => [p.d, p.c, subText(p.d), avgText(p.d), bought.get(i) ?? '', sold.get(i) ?? '']),
   }
 }

@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { BAR_MARKS, GRID_VARIANTS } from '../../charts/grammar'
-import { INK, MUTED, NEGATIVE, PALETTE, SURFACE } from '../../charts/theme'
+import { INK, MUTED, NEGATIVE, PALETTE, POSITIVE, SURFACE } from '../../charts/theme'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { tooltipRows } from '../../testing/tooltipRows'
-import { anatomyLots, esppLot, esppLotsResponse } from '../../testing/esppFixtures'
+import { anatomyLots, bars, esppLot, esppLotsResponse, septOffering } from '../../testing/esppFixtures'
 import {
-  APPRECIATION, BARGAIN, LOSS, PAID, PRICE_DOT, QUOTE_RULE, SUBSCRIPTION,
-  hasAnatomy, lotAnatomyCsv, lotAnatomyOption, lotLabels, sortLots,
+  APPRECIATION, AVG_PAID, BARGAIN, CLOSE, LOSS, PAID, PRICE_DOT, PURCHASES, QUOTE_RULE, SALES, SUBSCRIPTION,
+  esppPriceCsv, esppPriceOption, hasAnatomy, lotAnatomyCsv, lotAnatomyOption, lotLabels, lotsBeforeHistory,
+  sliceWindow, sortLots,
 } from './esppChartOptions'
 
 // EChartsOption is a wide union; narrow once (the option-builder tests' shared posture).
@@ -270,5 +271,108 @@ describe('lotAnatomyCsv', () => {
     ])
     expect(table.rows[1][1]).toBe('sold')
     expect(table.rows[1][6]).toBe('120.00000')
+  })
+})
+
+describe('esppPriceOption', () => {
+  const lots = [
+    esppLot(), // bought 2024-02-29
+    esppLot({ id: 2, purchase_date: '2024-08-30', shares: '255.0000', sold_date: '2024-09-03', sold_price: '120.00000', is_sold: true, days_until_qualified: null }),
+  ]
+
+  it('returns null under two bars', () => {
+    expect(esppPriceOption({ points: [], offerings: [septOffering], lots })).toBeNull()
+    expect(esppPriceOption({ points: [bars[0]], offerings: [septOffering], lots })).toBeNull()
+  })
+
+  it('draws the closes, the two stepped rules with end labels, the wash against the average, and the markers', () => {
+    const option = read(esppPriceOption({ points: bars, offerings: [septOffering], lots }))
+    expect(option.grid).toEqual(GRID_VARIANTS.endLabel)
+    expect(option.xAxis.data).toEqual(['Feb 27, 2024', 'Feb 29, 2024', 'Mar 1, 2024', 'Aug 30, 2024', 'Sep 3, 2024'])
+    expect(option.yAxis.scale).toBe(true) // a price line has no additive reading
+    expect(option.legend.data).toEqual([CLOSE, SUBSCRIPTION, AVG_PAID, PURCHASES, SALES])
+    expect(byName(option, CLOSE)).toMatchObject({ type: 'line', color: PALETTE[0], lineStyle: { width: 2 } })
+    expect(byName(option, CLOSE).data).toEqual([75, 79.112, 80, 119.37, 121])
+    const sub = byName(option, SUBSCRIPTION) as unknown as { step: string; endLabel: { show: boolean; formatter: string } }
+    expect(byName(option, SUBSCRIPTION)).toMatchObject({ color: MUTED, z: 9, lineStyle: { type: 'dashed', width: 2 } })
+    expect(sub.step).toBe('end')
+    expect(sub.endLabel).toEqual({ show: true, formatter: '{a}', color: MUTED, fontSize: 11 })
+    expect(byName(option, SUBSCRIPTION).data).toEqual([48.509, 48.509, 48.509, 48.509, 48.509])
+    // Null before the first purchase; the running average from the lot itself afterwards.
+    expect(byName(option, AVG_PAID).data).toEqual([null, 41.23265, 41.23265, 41.23265, 41.23265])
+    const above = option.series.find((s) => s.name === 'Above avg paid')!
+    expect(above).toMatchObject({ stack: 'above-paid', color: POSITIVE, silent: true })
+    expect(above.data).toEqual([null, 37.88, 38.77, 78.14, 79.77])
+    expect(option.series.find((s) => s.name === 'Below avg paid')!.data).toEqual([null, 0, 0, 0, 0])
+  })
+
+  it('snaps purchases to the last bar on or before the date, hollow once sold, and sales to theirs', () => {
+    const option = read(esppPriceOption({ points: bars, offerings: [septOffering], lots }))
+    const purchases = byName(option, PURCHASES)
+    expect(purchases).toMatchObject({ type: 'scatter', color: PALETTE[1], symbolSize: 10, z: 11 })
+    expect(purchases.itemStyle).toEqual({ borderColor: INK, borderWidth: 1 })
+    expect(purchases.data).toEqual([
+      { value: ['Feb 29, 2024', 79.112], symbol: 'diamond', symbolRotate: 0, events: [{ text: 'Feb 29, 2024 · 260 sh · paid $41.23 · FMV $79.11' }] },
+      {
+        value: ['Aug 30, 2024', 119.37], symbol: 'diamond', symbolRotate: 0,
+        events: [{ text: 'Aug 30, 2024 · 255 sh · paid $41.23 · FMV $79.11 · sold Sep 3, 2024' }],
+        itemStyle: { color: SURFACE, borderColor: PALETTE[1], borderWidth: 1.5 },
+      },
+    ])
+    const sales = byName(option, SALES)
+    expect(sales).toMatchObject({ type: 'scatter', color: MUTED, symbolSize: 9 })
+    expect(sales.data).toEqual([
+      { value: ['Sep 3, 2024', 121], symbol: 'triangle', symbolRotate: 180, events: [{ text: 'Sold Sep 3, 2024 · 255 sh at $120.00' }] },
+    ])
+  })
+
+  it('skips a purchase the history does not reach and drops the series and legend entries it cannot fill', () => {
+    const early = esppLot({ id: 7, purchase_date: '2023-12-01' })
+    const option = read(esppPriceOption({ points: bars.slice(0, 3), offerings: [], lots: [early] }))
+    expect(option.series.some((s) => s.name === PURCHASES)).toBe(false)
+    expect(option.series.some((s) => s.name === SUBSCRIPTION)).toBe(false) // no offering
+    // The early lot's average still rules the whole window — it was bought before every bar.
+    expect(byName(option, AVG_PAID).data).toEqual([41.23265, 41.23265, 41.23265])
+    expect(option.legend.data).toEqual([CLOSE, AVG_PAID])
+  })
+
+  it('tooltips Close first, the two rules as references, and the markers as lines', () => {
+    const option = read(esppPriceOption({ points: bars, offerings: [septOffering], lots }))
+    expect(isGrammarTooltip(option.tooltip.formatter)).toBe(true)
+    const purchase = (byName(option, PURCHASES).data as unknown[])[0]
+    const parsed = tooltipRows(
+      option.tooltip.formatter([
+        { seriesName: CLOSE, seriesType: 'line', axisValueLabel: 'Feb 29, 2024', value: 79.112, color: PALETTE[0] },
+        { seriesName: SUBSCRIPTION, seriesType: 'line', value: 48.509, color: MUTED },
+        { seriesName: AVG_PAID, seriesType: 'line', value: 41.23265, color: MUTED },
+        { seriesName: PURCHASES, seriesType: 'scatter', value: ['Feb 29, 2024', 79.112], color: PALETTE[1], data: purchase },
+      ]),
+    )
+    expect(parsed.rows.map((r) => [r.kind, r.label, r.value])).toEqual([
+      ['row', CLOSE, '$79.11'],
+      ['ref', SUBSCRIPTION, '$48.51'],
+      ['ref', AVG_PAID, '$41.23'],
+    ])
+    expect(parsed.notes).toEqual(['Feb 29, 2024 · 260 sh · paid $41.23 · FMV $79.11'])
+  })
+})
+
+describe('sliceWindow / lotsBeforeHistory / esppPriceCsv', () => {
+  it('slices the fetched series to the chip window, anchored on today', () => {
+    expect(sliceWindow(bars, 365, '2024-09-04').map((p) => p.d)).toEqual(['2024-02-27', '2024-02-29', '2024-03-01', '2024-08-30', '2024-09-03'])
+    expect(sliceWindow(bars, 30, '2024-09-04').map((p) => p.d)).toEqual(['2024-08-30', '2024-09-03'])
+    expect(sliceWindow([], 30, '2024-09-04')).toEqual([])
+  })
+  it('counts the lots the stored history cannot reach', () => {
+    expect(lotsBeforeHistory(bars, [esppLot({ purchase_date: '2023-12-01' }), esppLot()])).toBe(1)
+    expect(lotsBeforeHistory([], [esppLot()])).toBe(0)
+  })
+  it('prints one row per bar with the rules and the day’s purchase or sale shares', () => {
+    const lots = [esppLot(), esppLot({ id: 2, purchase_date: '2024-08-30', shares: '255.0000', sold_date: '2024-09-03', sold_price: '120.00000', is_sold: true })]
+    const table = esppPriceCsv(bars, [septOffering], lots)
+    expect(table.headers).toEqual(['Date', 'Close', 'Subscription price', 'Avg paid to date', 'Purchase (shares)', 'Sale (shares)'])
+    expect(table.rows[0]).toEqual(['2024-02-27', '75.0000', '48.50900', '', '', ''])
+    expect(table.rows[1]).toEqual(['2024-02-29', '79.1120', '48.50900', '41.23265', '260.0000', ''])
+    expect(table.rows[4]).toEqual(['2024-09-03', '121.0000', '48.50900', '41.23265', '', '255.0000'])
   })
 })
