@@ -73,7 +73,7 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
     <section className="card" role="region" aria-label="Contribution pace">
       <h2 className="eyebrow">
         Contribution pace
-        <InfoHint text="Each contribution line annualized from the paycheck profile in force, against the caps you entered in Settings. A projection at today's percentages — not a year-to-date total, which this app has no per-paycheck ledger to compute. Employer HSA contributions are not modeled; set your 401(k) match on your paycheck profile. The ESPP row grades the purchases that fall in this calendar year, so autumn checks count toward next year. Its cap is the most contribution dollars the §423 limit can buy at your plan discount; the exact chained figures live on the ESPP page." />
+        <InfoHint text="Each contribution line annualized from the paycheck profile in force, against the caps you entered in Settings. A projection at today's percentages — not a year-to-date total, which this app has no per-paycheck ledger to compute. Employer HSA deposits and the 401(k) match count once they are entered on your paycheck profile. The ESPP row grades the purchases that fall in this calendar year, so autumn checks count toward next year. Its cap is the most contribution dollars the §423 limit can buy at your plan discount; the exact chained figures live on the ESPP page." />
       </h2>
       <p className="drill-hint">
         At this rate, over a full year — not what you have contributed so far. Change a percentage
@@ -99,6 +99,13 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
             item.employer_match == null ? null : (
               <span className="pace-match">{` incl. ${formatCurrency(item.employer_match)} match`}</span>
             )
+          // The HSA row's twin, in the same muted span: the deposit is a component of the
+          // figure, not a second verdict. No row ever carries both — the match rides 415(c)
+          // and the deposit rides the one HSA row — so they never compete for the cell.
+          const employerSuffix =
+            item.employer_hsa == null ? matchSuffix : (
+              <span className="pace-match">{` incl. ${formatCurrency(item.employer_hsa)} employer`}</span>
+            )
           return (
             <div className="pace-row" key={item.key}>
               <span className="pace-name">
@@ -109,7 +116,7 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
                 <>
                   <span className="pace-figures">
                     {formatCurrency(item.annualized)}
-                    {matchSuffix}
+                    {employerSuffix}
                   </span>
                   <span className="pace-cta">
                     <Link to="/settings">enter this year&apos;s limit</Link>
@@ -148,7 +155,7 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
                   </div>
                   <span className={`pace-figures tone-${item.tone}`}>
                     {figures}
-                    {matchSuffix}
+                    {employerSuffix}
                   </span>
                   {/* The tone in WORDS as well as colour — the meter's own aria-valuetext
                       carries the dollars, and this carries the verdict. The percentage prints to
