@@ -247,8 +247,12 @@ The HSA row counted only the employee's per-check deduction, so the entered cap 
 reached. Three more profile columns, `NOT NULL` with `server_default '0'`: `hsa_employer_annual`
 Numeric(8,2) — the employer's yearly deposit for the employee's own coverage; `hsa_employer_per_dependent`
 Numeric(8,2) — added once per additional covered individual; `hsa_dependents` int — how many additional
-individuals are covered (0 for self-only). `employer_hsa = annual + per_dependent × dependents`, zero
-when `hsa_coverage` is `none`. The HSA row's figure includes it, the label gains "(incl. employer)"
+individuals are covered (0 for self-only). `employer_hsa = annual + per_dependent × dependents`, where
+the per-dependent term counts only under `family` coverage (self-only covers nobody else, so a stray
+count is ignored — review decision 2026-09-07), and the whole figure is zero when `hsa_coverage` is
+`none`. In the walked rows (§2.6) the so-far employer legs — the January deposit and the match earned
+so far — are priced by the profile in force before today, never by a Try-it scenario, so "so far"
+cannot move when a knob is turned; the projected legs follow the scenario. The HSA row's figure includes it, the label gains "(incl. employer)"
 when it is > 0, `employer_hsa` rides the wire (null unless > 0) and the figures cell reads
 "incl. {employer_hsa} employer". Edited in the Paycheck profile form's "Employer HSA contribution"
 fieldset, carried forward like the match. Verified against the tax inputs: the recorded employer
