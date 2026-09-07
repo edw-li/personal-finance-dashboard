@@ -239,9 +239,8 @@ async def backfill_employer_history(db: AsyncSession, provider: PriceProvider) -
     history simply starts later). Either way a later call is a handful of point SELECTs and
     out, re-arming only if an older anchor is added. Skips quietly when there is no employer
     ticker, no matching security, none of the three anchors, or the security is manual-priced
-    (its bars are
-    hand entries, and a provider fetch would be a second opinion about them). Bars upsert
-    exactly like refresh_prices'; latest_prices and the TTM dividend metadata are
+    (its bars are hand entries, and a provider fetch would be a second opinion about them).
+    Bars upsert exactly like refresh_prices'; latest_prices and the TTM dividend metadata are
     deliberately NOT touched — this is history repair, not a quote refresh. Returns the
     number of bars written (0 on every skip). Caller commits.
     """
