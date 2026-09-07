@@ -1,4 +1,5 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -9,7 +10,9 @@ from app.models import (
     CategoryBudget,
     ChangeLog,
     LifecycleRun,
+    MonthlySpending,
     NetWorthSnapshot,
+    SpendingCategory,
 )
 from app.services.changelog import (
     ALREADY_UNDONE,
@@ -316,3 +319,37 @@ async def test_the_listing_greys_a_batch_a_later_change_touched(auth_client, db)
     assert listing[first]["undoable"] is False and listing[second]["undoable"] is True
     refused = await auth_client.post(f"{ACTIVITY}/batches/{first}/undo")
     assert refused.status_code == 409 and refused.json()["detail"] == OVERLAP_REFUSAL
+
+
+async def test_undo_a_budget_seed_removes_every_row_it_wrote(auth_client, db, monkeypatch):
+    """Rent 3 × 2030 → fixed (cv 0) → 2030; Food 900/1000/1100 → cv exactly 0.1000, NOT under
+    the fixed line → variable → mean 1000; Taxes is a tax kind → skipped. Two inserts, one
+    batch, one undo."""
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    food = SpendingCategory(name="Food", slug="food", sort_order=2)
+    taxes = SpendingCategory(name="Taxes", slug="taxes", sort_order=3, kind="tax")
+    db.add_all([rent, food, taxes])
+    await db.flush()
+    for month, food_amount in (
+        (date(2026, 6, 1), "900.00"),
+        (date(2026, 7, 1), "1000.00"),
+        (date(2026, 8, 1), "1100.00"),
+    ):
+        db.add_all(
+            [
+                MonthlySpending(month=month, category_id=rent.id, amount=Decimal("2030.00")),
+                MonthlySpending(month=month, category_id=food.id, amount=Decimal(food_amount)),
+                MonthlySpending(month=month, category_id=taxes.id, amount=Decimal("0.00")),
+            ]
+        )
+    await db.commit()
+    monkeypatch.setattr("app.api.spending.product_today", lambda: date(2026, 9, 7))
+    seeded = await auth_client.post(f"{SP}/budgets/seed", json={"effective_month": "2026-09-01"})
+    assert seeded.status_code == 200, seeded.text
+    assert [w["amount"] for w in seeded.json()["written"]] == ["2030.00", "1000.00"]
+    assert await count_of(db, CategoryBudget) == 2
+    resp = await auth_client.post(f"{ACTIVITY}/batches/{seeded.json()['batch_id']}/undo")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["label"] == "Undid: Seeded 2 budgets from averages, from Sep 2026"
+    assert resp.json()["rows"] == 2
+    assert await count_of(db, CategoryBudget) == 0
