@@ -554,6 +554,9 @@ describe('PaycheckPage — the profile form', () => {
       match_band_1: '6000.00',
       match_rate_2: '0.5',
       match_band_2: '11000.00',
+      hsa_employer_annual: '2000.00',
+      hsa_employer_per_dependent: '500.00',
+      hsa_dependents: 0,
       notes: 'July raise',
     })
     // A new profile moves both halves of the page: the list, and which one is in force.
@@ -592,6 +595,9 @@ describe('PaycheckPage — the profile form', () => {
       match_band_1: '6000.00',
       match_rate_2: '0.5',
       match_band_2: '11000.00',
+      hsa_employer_annual: '2000.00',
+      hsa_employer_per_dependent: '500.00',
+      hsa_dependents: 0,
       notes: 'Jan 2026 comp',
     })
   })
@@ -906,6 +912,70 @@ describe('PaycheckPage — the profile form', () => {
     expect(body.match_band_1).toBe('6000.00')
     expect(body.match_rate_2).toBe('0.5')
     expect(body.match_band_2).toBe('9000')
+  })
+
+  it('carries the employer HSA policy forward into the next profile', async () => {
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    expect(field('Employer HSA per year').value).toBe('$2,000.00')
+    expect(field('Per additional covered individual').value).toBe('$500.00')
+    // A count, not money: the box shows what was stored, unformatted.
+    expect(field('Additional individuals covered').value).toBe('0')
+    expect(
+      screen.getByText(
+        '$2,000.00 a year for your coverage, plus $500.00 for each of 0 additional individuals',
+      ),
+    ).toBeTruthy()
+  })
+
+  it('says a household with no employer HSA deposit has none, rather than printing zeros', async () => {
+    vi.mocked(fetchProfiles).mockResolvedValue([
+      { ...profile2026, hsa_employer_annual: '0.00', hsa_employer_per_dependent: '0.00' },
+    ])
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    expect(await screen.findByText('No employer HSA contribution entered.')).toBeTruthy()
+  })
+
+  it('posts the employer HSA deposit as money and the covered count as a whole number', async () => {
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    type('Effective date', '2026-07-01')
+    type('Employer HSA per year', '2400')
+    type('Additional individuals covered', '2')
+    // The sentence reads back what is in the boxes, before the submit reseeds the form.
+    expect(
+      screen.getByText(
+        '$2,400.00 a year for your coverage, plus $500.00 for each of 2 additional individuals',
+      ),
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    await waitFor(() => expect(vi.mocked(createProfile)).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(createProfile).mock.calls[0][0]
+    expect(body.hsa_employer_annual).toBe('2400')
+    expect(body.hsa_employer_per_dependent).toBe('500.00') // untouched, carried forward
+    // A count, not a money string: the wire wants the int the column stores.
+    expect(body.hsa_dependents).toBe(2)
+  })
+
+  it('refuses a covered count that is not a whole number in range', async () => {
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    type('Effective date', '2026-07-01')
+    // 25 is a typo, not a household: the box says so in its own vocabulary rather than
+    // quoting the column's `hsa_dependents`.
+    type('Additional individuals covered', '25')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    expect(
+      await screen.findByText('Additional individuals covered must be a whole number between 0 and 20'),
+    ).toBeTruthy()
+    expect(vi.mocked(createProfile)).not.toHaveBeenCalled()
+    type('Additional individuals covered', '1.5')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    expect(
+      await screen.findByText('Additional individuals covered must be a whole number between 0 and 20'),
+    ).toBeTruthy()
+    expect(vi.mocked(createProfile)).not.toHaveBeenCalled()
   })
 
   it('bounds a match rate at a full doubling, in the box’s vocabulary', async () => {

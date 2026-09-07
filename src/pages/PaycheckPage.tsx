@@ -193,6 +193,9 @@ interface ProfileFormState {
   match_band_1: string
   match_rate_2: string
   match_band_2: string
+  hsa_employer_annual: string
+  hsa_employer_per_dependent: string
+  hsa_dependents: string // a plain count, never money — "2", not "$2.00"
   notes: string
 }
 
@@ -246,6 +249,40 @@ function matchWords(form: ProfileFormState): string {
   return `${first}, then ${form.match_rate_2.trim() || '0'}% of the next ${formatCurrency(String(band2))}`
 }
 
+type EmployerHsaField = 'hsa_employer_annual' | 'hsa_employer_per_dependent' | 'hsa_dependents'
+
+// ONE table in the order the policy reads, driving the boxes, the checks and the sentence —
+// the match's rule. `money` is false for exactly one box: the covered count is a count, so it
+// gets neither a currency mask nor a money check.
+const EMPLOYER_HSA_FIELDS: { field: EmployerHsaField; label: string; money: boolean }[] = [
+  { field: 'hsa_employer_annual', label: 'Employer HSA per year', money: true },
+  { field: 'hsa_employer_per_dependent', label: 'Per additional covered individual', money: true },
+  { field: 'hsa_dependents', label: 'Additional individuals covered', money: false },
+]
+
+// A typo fence, not an opinion about family size — the server's own bound, in the box's
+// vocabulary.
+const MAX_HSA_DEPENDENTS = 20
+
+/** The employer's HSA policy in words, read back from the FORM's own state (matchWords'
+ *  rule): typed input, never a server figure re-derived. Both amounts zero is the stored way
+ *  to say "no employer deposit", so that is the one sentence with a full stop. */
+function employerHsaWords(form: ProfileFormState): string {
+  // The money boxes' own options, exactly as submit's belt reads them — parsing them any
+  // other way would describe a figure that is not the one being saved. A half-typed "=5000+"
+  // gives NaN, which is a zero here and never a "$NaN" on screen (matchWords' lesson).
+  const num = (text: string) => {
+    const value = Number(canonicalAmount(text.trim() || '0'))
+    return Number.isFinite(value) ? value : 0
+  }
+  const annual = num(form.hsa_employer_annual)
+  const perHead = num(form.hsa_employer_per_dependent)
+  if (annual <= 0 && perHead <= 0) return 'No employer HSA contribution entered.'
+  const typed = Number(form.hsa_dependents.trim() || '0')
+  const covered = Number.isFinite(typed) ? Math.trunc(typed) : 0
+  return `${formatCurrency(String(annual))} a year for your coverage, plus ${formatCurrency(String(perHead))} for each of ${covered} additional individual${covered === 1 ? '' : 's'}`
+}
+
 // The tier's own vocabulary, not the column's: the stored value is 'self', the box says
 // "Self only" — the same distinction the percent boxes draw between 13 and 0.13.
 const HSA_COVERAGES: { value: HsaCoverage; label: string }[] = [
@@ -264,6 +301,7 @@ const EMPTY_PROFILE: ProfileFormState = {
   withholding_pct: '', dental_vision_per_check: '', hsa_per_check: '',
   hsa_coverage: 'self',
   match_rate_1: '', match_band_1: '', match_rate_2: '', match_band_2: '',
+  hsa_employer_annual: '', hsa_employer_per_dependent: '', hsa_dependents: '',
   notes: '',
 }
 
@@ -285,6 +323,9 @@ function formFrom(profile: PaycheckProfileOut): ProfileFormState {
     match_band_1: profile.match_band_1,
     match_rate_2: shiftPoint(profile.match_rate_2, 2),
     match_band_2: profile.match_band_2,
+    hsa_employer_annual: profile.hsa_employer_annual,
+    hsa_employer_per_dependent: profile.hsa_employer_per_dependent,
+    hsa_dependents: String(profile.hsa_dependents),
     notes: profile.notes ?? '',
   }
 }
@@ -447,6 +488,28 @@ function ProfilesPanel({
         return
       }
     }
+    for (const { field, label, money } of EMPLOYER_HSA_FIELDS) {
+      const text = form[field].trim()
+      if (!money) {
+        // A count, not an amount: the pay-periods check's shape, in this box's own
+        // vocabulary rather than the column's `hsa_dependents`.
+        const covered = Number(text || '0')
+        if (!Number.isInteger(covered) || covered < 0 || covered > MAX_HSA_DEPENDENTS) {
+          setError(`${label} must be a whole number between 0 and ${MAX_HSA_DEPENDENTS}`)
+          return
+        }
+        continue
+      }
+      // Money boxes: the match BANDS' rule, expressions and all.
+      if (text !== '' && !isAmount(text)) {
+        setError(`${label} must be a number`)
+        return
+      }
+      if (Number(canonicalAmount(text || '0')) < 0) {
+        setError(`${label} must be >= 0`)
+        return
+      }
+    }
     setBusy(true)
     setError(null)
     // Blank is a real ZERO here, not "leave it alone": every box was prefilled from a row,
@@ -487,6 +550,15 @@ function ProfilesPanel({
       match_band_1: canonicalAmount(form.match_band_1.trim() || '0'),
       match_rate_2: shiftPoint(canonicalAmount(form.match_rate_2.trim() || '0', { expressions: false }), -2),
       match_band_2: canonicalAmount(form.match_band_2.trim() || '0'),
+      // The employer's HSA deposit: two money boxes with the bands' belt, and a COUNT that
+      // travels as an int like pay_periods_per_year — never a money string.
+      hsa_employer_annual: canonicalAmount(form.hsa_employer_annual.trim() || '0'),
+      hsa_employer_per_dependent: canonicalAmount(
+        form.hsa_employer_per_dependent.trim() || '0',
+      ),
+      // Number(), the SAME expression the check above validated as a whole number in range:
+      // parseInt would read a "2e1" the check passed as 20 and ship 2.
+      hsa_dependents: Number(form.hsa_dependents.trim() || '0'),
       notes: form.notes.trim() || null,
       // Create only, and only for an explicitly-picked person: an absent person_id resolves
       // to the primary server-side (spec §4.1), so the default create is byte-identical to
@@ -647,6 +719,29 @@ function ProfilesPanel({
             </label>
           ))}
           <p className="paycheck-match-words">{matchWords(form)}</p>
+        </fieldset>
+        {/* The match's twin, and the same rule around it: the employer's HSA deposit is a
+            POLICY, not three unrelated columns, and the sentence reads it back in the order
+            it applies. Same class — one fieldset shape for both policies. */}
+        <fieldset className="paycheck-match">
+          <legend>Employer HSA contribution</legend>
+          {EMPLOYER_HSA_FIELDS.map(({ field, label, money }) => (
+            <label key={field}>
+              {label}
+              {money ? (
+                <AmountInput value={form[field]} onValueChange={set(field)} />
+              ) : (
+                /* A count gets a plain box: a currency mask would print "$2.00" people. */
+                <input
+                  className="field-input"
+                  inputMode="numeric"
+                  value={form[field]}
+                  onChange={(e) => set(field)(e.target.value)}
+                />
+              )}
+            </label>
+          ))}
+          <p className="paycheck-match-words">{employerHsaWords(form)}</p>
         </fieldset>
         <label className="span-2">
           Notes
