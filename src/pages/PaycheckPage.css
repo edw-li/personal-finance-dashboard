@@ -210,3 +210,20 @@
   color: var(--muted);
 }
 .paycheck-match-words { grid-column: 1 / -1; margin: 0; font-size: 0.75rem; color: var(--muted); }
+
+/* One grid cell holding a box and its own note (the note cannot live inside the label: a
+   label's text is the box's accessible name). */
+.paycheck-form .paycheck-count-field {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+/* A note that belongs to ONE box rather than to the fieldset: the sentence under the boxes
+   speaks for all three, this speaks for the count. */
+.paycheck-form .paycheck-field-note {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
