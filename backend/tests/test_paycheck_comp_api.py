@@ -1458,3 +1458,36 @@ async def test_breakdown_pace_walks_the_year_into_so_far_and_projected(auth_clie
     assert D(hsa["so_far"]) == so_far / 10 + deposit
     # And 415(c) walks too — it is the only row that adds three legs together.
     assert rows["limit_415c_total"]["so_far"] is not None
+    # A timeline that opens with the year borrowed nothing to build these figures from.
+    assert [row["backfilled_from"] for row in rows.values()] == [None] * 3
+
+
+async def test_breakdown_pace_says_when_a_walked_row_borrowed_a_profile(auth_client, db, me):
+    """A new hire has no profile for January, so those paydays are priced from the earliest
+    one there is — and EVERY walked row says so, not just the ESPP one."""
+    from app.models import ContributionLimit
+    from app.services.pace_walk import first_payday
+
+    this_year = date.today().year
+    db.add(ContributionLimit(year=this_year, key="limit_401k_elective", value=D("24500.00")))
+    await db.commit()
+    started = date(this_year, 3, 1)
+    created = await auth_client.post(
+        PROFILES,
+        json={
+            "effective_date": started.isoformat(),
+            "annual_salary": "240000",
+            "pay_periods_per_year": 24,
+            "trad_401k_pct": "0.10",
+            "espp_pct": "0",
+            "hsa_per_check": "0",
+            "hsa_coverage": "none",
+        },
+    )
+    assert created.status_code == 201, created.text
+    rows = {row["key"]: row for row in (await auth_client.get(BREAKDOWN)).json()["pace"]}
+    # Computed, not pinned: read before this year's first payday there is nothing behind
+    # today to have borrowed for.
+    borrowed = started.isoformat() if first_payday(this_year, 24) < date.today() else None
+    assert rows["limit_401k_elective"]["backfilled_from"] == borrowed
+    assert rows["limit_415c_total"]["backfilled_from"] == borrowed

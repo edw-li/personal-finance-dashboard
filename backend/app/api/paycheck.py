@@ -17,7 +17,7 @@ contribution limits the pace rows are measured against.
 """
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Annotated
 
@@ -53,7 +53,7 @@ from app.services.money import (
     quantize_money,
     require_reasonable_date,
 )
-from app.services.pace_walk import walk
+from app.services.pace_walk import in_force, walk
 from app.services.paycheck_calc import (
     MONTHS_PER_YEAR,
     PAYROLL_SAVING_KEYS,
@@ -673,24 +673,15 @@ def _text(value) -> str:
     return format(value, "f") if isinstance(value, Decimal) else str(value)
 
 
-async def _pace_rows(
-    db: AsyncSession,
-    profile,
-    person_id: int,
-    scenario,
-    limits: dict[str, Decimal],
-    today: date,
-) -> list[PaceItem]:
-    """The pace strip's rows: every one WALKED payday by payday (§2.6), with the ESPP row
-    replaced by the PURCHASE-year one (§1.6).
+async def _pace_inputs(
+    db: AsyncSession, person_id: int
+) -> tuple[list[PaycheckProfile], list[StoredPeriod], Decimal]:
+    """Everything the pace strip reads from the database, ONCE: the person's profile
+    timeline, the stored ESPP periods and the plan discount.
 
-    One walk of this person's timeline serves the whole strip, so no two rows can disagree
-    about which paydays the year has or who priced them. The ESPP windows are planned
-    exactly as the calendar generator plans them — `plan_year_rows(Y, stored, [], None,
-    None)`, pricing inputs deliberately empty — so the strip and the calendar can never
-    disagree about which halves exist. `person_id` is a parameter because a
-    `ScenarioProfile` has no owner. SELECTs only: this runs inside the preview, which writes
-    nothing (tests/test_sandbox_purity.py).
+    A preview builds two strips from one request, and they read exactly the same rows — so
+    the reads live here and `_pace_rows` below is pure. SELECTs only, on both doors
+    (tests/test_sandbox_purity.py).
     """
     profiles = list(
         (
@@ -701,6 +692,44 @@ async def _pace_rows(
             )
         ).scalars()
     )
+    stored = list(
+        (
+            await db.execute(select(EsppPeriod).order_by(EsppPeriod.period_end, EsppPeriod.id))
+        ).scalars()
+    )
+    periods = [
+        StoredPeriod(
+            id=row.id,
+            label=row.label,
+            period_start=row.period_start,
+            period_end=row.period_end,
+            semi_annual_base=row.semi_annual_base,
+            additional_payments=row.additional_payments,
+            contribution_pct=row.contribution_pct,
+        )
+        for row in stored
+    ]
+    return profiles, periods, await read_espp_discount(db)
+
+
+def _pace_rows(
+    profile,
+    scenario,
+    limits: dict[str, Decimal],
+    today: date,
+    profiles: list[PaycheckProfile],
+    periods: list[StoredPeriod],
+    discount: Decimal,
+) -> list[PaceItem]:
+    """The pace strip's rows: every one WALKED payday by payday (§2.6), with the ESPP row
+    replaced by the PURCHASE-year one (§1.6).
+
+    One walk of this person's timeline serves the whole strip, so no two rows can disagree
+    about which paydays the year has or who priced them. The ESPP windows are planned
+    exactly as the calendar generator plans them — `plan_year_rows(Y, stored, [], None,
+    None)`, pricing inputs deliberately empty — so the strip and the calendar can never
+    disagree about which halves exist. Pure: every read happened in `_pace_inputs`.
+    """
     # The window is the CALENDAR YEAR of the limits these rows are measured against — the
     # ESPP row is the one with a window of its own (§1.2). A person with no stored profile
     # cannot be walked at all, and there the pure fallback ("a year at this rate") is the
@@ -710,36 +739,17 @@ async def _pace_rows(
         if profiles
         else None
     )
-    items = paycheck_pace(profile, limits, profile.hsa_coverage, walked)
-    stored = list(
-        (
-            await db.execute(select(EsppPeriod).order_by(EsppPeriod.period_end, EsppPeriod.id))
-        ).scalars()
-    )
-    rows, _warnings = plan_year_rows(
-        today.year,
-        [
-            StoredPeriod(
-                id=row.id,
-                label=row.label,
-                period_start=row.period_start,
-                period_end=row.period_end,
-                semi_annual_base=row.semi_annual_base,
-                additional_payments=row.additional_payments,
-                contribution_pct=row.contribution_pct,
-            )
-            for row in stored
-        ],
-        [],
-        None,
-        None,
-    )
+    # Whose employer policy PAID the past: the stored row in force the day before today,
+    # never a sandbox knob and never a profile that only takes effect today (spec §2.5).
+    paid_by = in_force(profiles, today - timedelta(days=1)) if profiles else None
+    items = paycheck_pace(profile, limits, profile.hsa_coverage, walked, paid_by)
+    rows, _warnings = plan_year_rows(today.year, periods, [], None, None)
     espp = espp_pace_item(
         rows=rows,
         profiles=profiles,
         scenario_from_today=scenario,
         limit=limits.get(LIMIT_ESPP_423),
-        discount=await read_espp_discount(db),
+        discount=discount,
         today=today,
     )
     # limit_check already emits ESPP last, so appending keeps the display order intact.
@@ -762,9 +772,10 @@ async def get_breakdown(
     lines = {name: half_up2(value) for name, value in breakdown(profile).items()}
     warnings = _advisories(profile, lines["net_pay"])
     limits = await _limits_for(db, today.year)
+    inputs = await _pace_inputs(db, profile.person_id)
     pace = [
         PaceItemOut.model_validate(item)
-        for item in await _pace_rows(db, profile, profile.person_id, profile, limits, today)
+        for item in _pace_rows(profile, profile, limits, today, *inputs)
     ]
     # Per check from the ANNUAL policy, not the other way round: the bands are annual
     # dollars, so the year is the only place the tiers can be applied honestly.
@@ -799,14 +810,17 @@ async def preview(body: PreviewIn, db: AsyncSession = Depends(get_db)) -> Previe
     annual = _block(base, scenario, _annual)
 
     limits = await _limits_for(db, today.year)
+    # ONE set of reads for both halves: they describe the same person, the same periods and
+    # the same plan discount, and reading twice could only introduce a disagreement.
+    inputs = await _pace_inputs(db, base.person_id)
     pace = PreviewPace(
         baseline=[
             PaceItemOut.model_validate(item)
-            for item in await _pace_rows(db, base, base.person_id, base, limits, today)
+            for item in _pace_rows(base, base, limits, today, *inputs)
         ],
         scenario=[
             PaceItemOut.model_validate(item)
-            for item in await _pace_rows(db, scenario, base.person_id, scenario, limits, today)
+            for item in _pace_rows(scenario, scenario, limits, today, *inputs)
         ],
     )
     changed = [

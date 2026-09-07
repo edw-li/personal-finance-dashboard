@@ -377,6 +377,34 @@ async def test_preview_pace_moves_the_projection_and_leaves_so_far_alone(auth_cl
     assert before[key]["so_far"] == shown[key]["so_far"]
     assert before[key]["so_far"] is not None
     assert after[key]["so_far"] == before[key]["so_far"]
-    assert D(after[key]["annualized"]) > D(before[key]["annualized"])
+    # `>=`, not `>`: read after the year's last payday there is nothing left to reprice. The
+    # strict move is pinned date-free in test_pace_walk.py.
+    assert D(after[key]["annualized"]) >= D(before[key]["annualized"])
     # The ESPP row walks its own purchase window, and its past is just as fixed.
     assert after["limit_espp_423"]["so_far"] == before["limit_espp_423"]["so_far"]
+
+
+async def test_preview_employer_legs_move_the_projection_and_never_the_past(auth_client, db, me):
+    """A match doubled today pays nothing on checks already cut (spec §2.5): every row's
+    so-far figure is the baseline's, and only the projections move."""
+    db.add(
+        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+    )
+    await db.commit()
+    await create_profile(
+        auth_client,
+        match_rate_1="1",
+        match_band_1="6000",
+        match_rate_2="0.5",
+        match_band_2="11000",
+        hsa_employer_annual="2000",
+        hsa_coverage="self",
+    )
+    body = await preview(auth_client, overrides={"match_rate_1": "2"})
+    before = {row["key"]: row for row in body["pace"]["baseline"]}
+    after = {row["key"]: row for row in body["pace"]["scenario"]}
+    assert [after[key]["so_far"] for key in before] == [before[key]["so_far"] for key in before]
+    # The knob is real — it just points forward.
+    assert D(after["limit_415c_total"]["employer_match"]) > D(
+        before["limit_415c_total"]["employer_match"]
+    )

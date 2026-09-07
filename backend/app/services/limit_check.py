@@ -48,6 +48,9 @@ TOTAL_ADDITIONS_MATCH = " (incl. employer match)"
 # Short, because the figure rides the row beside it: the meter says the cap includes money
 # the user never sees on a payslip, and the panel prints how much.
 HSA_INCL_EMPLOYER = " (incl. employer)"
+# The one tier that covers anybody besides the employee: a per-head add-on can only be
+# earned there (review decision 2026-09-07).
+FAMILY_COVERAGE = "family"
 
 
 @dataclass(frozen=True)
@@ -110,6 +113,7 @@ def _item(
     employer_match: Decimal | None = None,
     employer_hsa: Decimal | None = None,
     so_far: Decimal | None = None,
+    backfilled_from: date | None = None,
 ) -> PaceItem:
     money = half_up2(annualized)
     # Quantized HERE and only here, beside the projection it sits under, so the two figures
@@ -127,6 +131,7 @@ def _item(
             employer_match=employer_match,
             employer_hsa=employer_hsa,
             so_far=walked_so_far,
+            backfilled_from=backfilled_from,
         )
     ratio = (money / limit).quantize(RATIO_QUANTUM, rounding=ROUND_HALF_UP)
     if ratio > OVER_ABOVE:
@@ -145,6 +150,7 @@ def _item(
         employer_match=employer_match,
         employer_hsa=employer_hsa,
         so_far=walked_so_far,
+        backfilled_from=backfilled_from,
     )
 
 
@@ -171,29 +177,38 @@ def employer_hsa(profile, hsa_coverage: str) -> Decimal:
     not per check, because the deposit lands as a lump: the pace strip only ever needs the
     year's total.
 
-    Zero when coverage is 'none' or unrecognized — no HDHP is no HSA, so the policy is
-    money that never arrives, and `paycheck_pace` drops the row for exactly the same
-    reason. Full precision: the caller owns the rounding.
+    The per-head term counts only under FAMILY coverage: self-only covers nobody else, so a
+    count left on a row that has since dropped to self-only is ignored rather than paid for
+    (review decision 2026-09-07). Zero altogether when coverage is 'none' or unrecognized —
+    no HDHP is no HSA, so the policy is money that never arrives, and `paycheck_pace` drops
+    the row for exactly the same reason. Full precision: the caller owns the rounding.
     """
     if hsa_coverage not in HSA_LIMIT_KEY_BY_COVERAGE:
         return ZERO
+    if hsa_coverage != FAMILY_COVERAGE:
+        return profile.hsa_employer_annual
     return profile.hsa_employer_annual + profile.hsa_employer_per_dependent * Decimal(
         profile.hsa_dependents
     )
 
 
-def _total_additions_so_far(profile, walked: Walked, elective_cap: Decimal | None) -> Decimal:
+def _total_additions_so_far(policy, walked: Walked, elective_cap: Decimal | None) -> Decimal:
     """415(c) so far: the capped elective already deferred, plus after-tax, plus the match
     those deferrals have already earned — the match follows contributions actually made, so
-    it is re-earned on the so-far figure rather than prorated out of the year's."""
+    it is re-earned on the so-far figure rather than prorated out of the year's, under the
+    `policy` that was in force when they were made."""
     elective = walked.so_far["elective"]
     capped = elective if elective_cap is None else min(elective, elective_cap)
-    earned = half_up2(employer_match(profile, elective, elective_cap))
+    earned = half_up2(employer_match(policy, elective, elective_cap))
     return capped + walked.so_far["after_tax"] + earned
 
 
 def paycheck_pace(
-    profile, limits: dict[str, Decimal], hsa_coverage: str, walked: Walked | None = None
+    profile,
+    limits: dict[str, Decimal],
+    hsa_coverage: str,
+    walked: Walked | None = None,
+    base=None,
 ) -> list[PaceItem]:
     """The rows the Paycheck page's pace strip renders, in display order.
 
@@ -205,7 +220,12 @@ def paycheck_pace(
     PROJECTED year end and `so_far` is what is already behind today. Without one — the pure
     callers — the rows are exactly what they were before the walk existed: "a year at this
     rate", with a null `so_far`, because a rate has no past to point at.
+
+    `base` is the profile whose EMPLOYER POLICY paid the past — the stored row in force
+    before today, which a Try-it knob must not be able to rewrite (spec §2.5). It defaults to
+    `profile`, which is the same row on every read but the sandbox's scenario half.
     """
+    policy_so_far = profile if base is None else base
     salary = profile.annual_salary
     elective_pct = profile.trad_401k_pct + profile.roth_401k_pct
     elective = elective_pct * salary if walked is None else walked.projected["elective"]
@@ -227,6 +247,7 @@ def paycheck_pace(
             elective,
             limits,
             so_far=None if walked is None else walked.so_far["elective"],
+            backfilled_from=None if walked is None else walked.backfilled_from,
         ),
         _item(
             LIMIT_415C_TOTAL,
@@ -239,8 +260,11 @@ def paycheck_pace(
             # PROJECTED match either way — it qualifies the figure the meter is judged on.
             employer_match=match if match > ZERO else None,
             so_far=(
-                None if walked is None else _total_additions_so_far(profile, walked, elective_cap)
+                None
+                if walked is None
+                else _total_additions_so_far(policy_so_far, walked, elective_cap)
             ),
+            backfilled_from=None if walked is None else walked.backfilled_from,
         ),
     ]
     # 'none' is not a zero-dollar HSA — it is "no HDHP", so NEITHER cap applies. An
@@ -272,13 +296,19 @@ def paycheck_pace(
                 # it rendered before there was one.
                 employer_hsa=deposit if deposit > ZERO else None,
                 # The deposit lands in ONE January check, so it joins the so-far figure the
-                # moment that check has been cut and not a day before (spec §2.6).
+                # moment that check has been cut and not a day before (spec §2.6) — at the
+                # amount the policy in force THEN deposited, not the one a knob asks for now.
                 so_far=(
                     None
                     if walked is None
                     else walked.so_far["hsa_employee"]
-                    + (deposit if walked.first_payday_passed else ZERO)
+                    + (
+                        half_up2(employer_hsa(policy_so_far, hsa_coverage))
+                        if walked.first_payday_passed
+                        else ZERO
+                    )
                 ),
+                backfilled_from=None if walked is None else walked.backfilled_from,
             )
         )
     # espp_pct 0 is "not enrolled", which is a different statement from "enrolled at 0 %".

@@ -9,6 +9,7 @@ the percentage rendered beside it.
 """
 
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 
 from app.limit_keys import (
@@ -301,6 +302,9 @@ def test_employer_hsa_golden():
     # A family of three: the employee plus two more heads at 500 each.
     profile = FakeProfile(hsa_dependents=2, **EMPLOYER_HSA)
     assert employer_hsa(profile, "family") == Decimal("3000.00")
+    # The SAME row under self-only coverage: it covers nobody else, so the count is ignored
+    # rather than paid for (review decision 2026-09-07).
+    assert employer_hsa(profile, "self") == Decimal("2000.00")
     # No HDHP is no deposit — the policy is real, the coverage is not.
     assert employer_hsa(profile, "none") == Decimal("0")
     # A hand-edited coverage string degrades to silence, exactly as the row does.
@@ -441,3 +445,65 @@ def test_an_unwalked_row_answers_exactly_as_it_did_before_the_walk():
     items = paycheck_pace(profile, {LIMIT_HSA_SELF: Decimal("4400.00")}, "self")
     assert [item.so_far for item in items] == [None, None, None]
     assert by_key(items)[LIMIT_HSA_SELF].annualized == Decimal("4400.00")
+
+
+def walked(**over) -> Walked:
+    fields = {
+        "so_far": WALKED.so_far,
+        "projected": WALKED.projected,
+        "basis": "paydays",
+        "backfilled_from": None,
+        "first_payday_passed": True,
+    }
+    fields.update(over)
+    return Walked(**fields)
+
+
+def test_every_walked_row_carries_the_walks_backfill_caveat():
+    """A new hire's January paydays borrow the earliest profile, and each row the walk feeds
+    says so — the caveat belongs to the FIGURE, not to the ESPP row alone."""
+    profile = FakeProfile(hsa_per_check=Decimal("100.00"), **EMPLOYER_HSA)
+    limits = {LIMIT_HSA_SELF: Decimal("4400.00")}
+    items = paycheck_pace(profile, limits, "self", walked(backfilled_from=date(2026, 3, 1)))
+    assert [item.backfilled_from for item in items] == [date(2026, 3, 1)] * 3
+    # A timeline that covers the whole window borrowed nothing, and neither does an unwalked
+    # row — which has no window to have borrowed in.
+    assert [item.backfilled_from for item in paycheck_pace(profile, limits, "self", walked())] == [
+        None
+    ] * 3
+    assert [item.backfilled_from for item in paycheck_pace(profile, limits, "self")] == [None] * 3
+
+
+def test_a_try_it_knob_cannot_rewrite_the_employer_legs_already_paid():
+    """A scenario prices the REST of the year: the past was paid under the stored policy, so
+    the so-far match and the January deposit follow the base profile (spec §2.5)."""
+    base = FakeProfile(hsa_per_check=Decimal("100.00"), **POLICY, **EMPLOYER_HSA)
+    scenario = FakeProfile(
+        hsa_per_check=Decimal("100.00"),
+        match_rate_1=Decimal("2"),
+        match_band_1=Decimal("6000.00"),
+        match_rate_2=Decimal("1"),
+        match_band_2=Decimal("11000.00"),
+        hsa_employer_annual=Decimal("4000.00"),
+        hsa_employer_per_dependent=Decimal("500.00"),
+    )
+    limits = {LIMIT_401K_ELECTIVE: Decimal("24500.00"), LIMIT_HSA_SELF: Decimal("4400.00")}
+    rows = by_key(paycheck_pace(scenario, limits, "self", WALKED, base))
+    # 415(c): the projection earns the doubled match (2 x 6,000 + 1 x 11,000), the past keeps
+    # the 11,186.97 the stored policy actually paid on 16,373.93 of deferrals.
+    assert rows[LIMIT_415C_TOTAL].employer_match == Decimal("23000.00")
+    assert rows[LIMIT_415C_TOTAL].annualized == Decimal("53167.90")
+    assert rows[LIMIT_415C_TOTAL].so_far == Decimal("31339.50")
+    # HSA: 4,000 deposited under the knob, 2,000 under the policy that actually deposited.
+    assert rows[LIMIT_HSA_SELF].employer_hsa == Decimal("4000.00")
+    assert rows[LIMIT_HSA_SELF].annualized == Decimal("6400.00")
+    assert rows[LIMIT_HSA_SELF].so_far == Decimal("3600.00")
+
+
+def test_without_a_base_the_row_prices_both_figures_from_the_profile_in_hand():
+    """The GET hands over one row for both jobs, and nothing changes for it."""
+    profile = FakeProfile(hsa_per_check=Decimal("100.00"), **POLICY, **EMPLOYER_HSA)
+    limits = {LIMIT_401K_ELECTIVE: Decimal("24500.00"), LIMIT_HSA_SELF: Decimal("4400.00")}
+    assert by_key(paycheck_pace(profile, limits, "self", WALKED)) == by_key(
+        paycheck_pace(profile, limits, "self", WALKED, profile)
+    )
