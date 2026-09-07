@@ -1,0 +1,140 @@
+/* ESPP components' own sheet (portfolio.css's posture): the strip, the lots totals rows and
+   the $25k chain meter travel with src/components/espp/*, never with the page stylesheet. */
+
+/* A totals row reads as a footer, not as one more lot. */
+.espp-page tfoot .espp-totals td {
+  border-top: 1px solid var(--border);
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* ── $25k chain meter (2026-09-07 spec §7): the pace meter grammar, two rows on ONE dollar
+   scale, so the limit (shares at the subscription price) and the cash (at the discounted
+   price) can be read against each other. ───────────────────────────────────────────── */
+
+.chain-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin: 0.25rem 0 1rem;
+}
+
+.chain-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 260px) 1fr minmax(240px, auto);
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.chain-name {
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.chain-bar {
+  position: relative;
+  height: 14px;
+}
+
+/* Row 1's track spans $25,000 on the shared scale — the full row at $25k, shorter when
+   contributions push the scale past it. */
+.chain-track {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+/* The 2px gap between segments is the dataviz surface gap: neighbours read distinct because
+   of the gap, not a stroke. */
+.chain-segments {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  gap: 2px;
+}
+
+.chain-seg {
+  height: 100%;
+  border-radius: 3px;
+}
+
+/* Two ordered periods = two steps of ONE hue (an ordinal job, never identity). */
+.chain-seg.is-period-a,
+.chain-swatch.is-period-a {
+  background: var(--accent);
+}
+
+.chain-seg.is-period-b,
+.chain-swatch.is-period-b {
+  background: var(--accent);
+  opacity: 0.55;
+}
+
+.chain-seg.is-refund,
+.chain-swatch.is-refund {
+  background: var(--other-series);
+}
+
+.chain-seg.is-carry,
+.chain-swatch.is-remaining,
+.chain-swatch.is-carry {
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+/* The $25,000 mark — a POSITION cue, redundant with the track's end (CVD-safe). */
+.chain-tick {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 20px;
+  border-radius: 1px;
+  background: var(--muted);
+  box-shadow: 0 0 0 1px var(--surface);
+  transform: translateX(-1px);
+  pointer-events: none;
+}
+
+.chain-figures {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  text-align: right;
+  color: var(--muted);
+}
+
+.chain-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.chain-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.chain-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+@media (max-width: 720px) {
+  .chain-row {
+    grid-template-columns: 1fr;
+  }
+
+  .chain-figures {
+    text-align: left;
+  }
+}
