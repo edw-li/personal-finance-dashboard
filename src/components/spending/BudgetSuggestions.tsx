@@ -1,4 +1,4 @@
-import type { BudgetSuggestion } from '../../types/api'
+import type { BudgetSuggestion, CategoryKind } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
 import { profileCue } from './budgetSeed'
 
@@ -15,7 +15,7 @@ export default function BudgetSuggestions({
   onPick,
 }: {
   categoryName: string
-  kind: string
+  kind: CategoryKind
   suggestion: BudgetSuggestion
   onPick: (amount: string) => void
 }) {

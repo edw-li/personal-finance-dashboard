@@ -1,4 +1,4 @@
-import type { BudgetSeedOut, BudgetSuggestion, SpendingMatrix } from '../../types/api'
+import type { BudgetSeedOut, BudgetSuggestion, CategoryKind, SpendingMatrix } from '../../types/api'
 
 // Pure companions of the Budget card's seed (2026-09-07 spec §3). Number() here is display-side
 // math on server strings — the chart builders' license.
@@ -56,7 +56,7 @@ export function skipSummary(skipped: BudgetSeedOut['skipped']): string | null {
  * variable category needs no warning. The kind reads first: a tax payment or a transfer is
  * not spending to budget whatever its shape.
  */
-export function profileCue(suggestion: BudgetSuggestion, kind: string): string | null {
+export function profileCue(suggestion: BudgetSuggestion, kind: CategoryKind): string | null {
   if (kind !== 'living') {
     return 'Not living spend — the seed leaves tax payments and transfers unbudgeted.'
   }

@@ -16,6 +16,7 @@ from app.models import (
     Person,
     SpendingCategory,
 )
+from app.services.budgets import living_budget_total
 
 
 async def test_spending_requires_auth(client):
@@ -1072,8 +1073,6 @@ async def test_living_budget_total_counts_only_active_living_budgets(db):
     """The projection's preset input (spec §4): a tax target, an archived category's stale
     budget and a not-yet-in-force row are not modeled spend; with no living category at all
     the answer is None, not 0.00."""
-    from app.services.budgets import living_budget_total
-
     tax = SpendingCategory(name="Taxes", slug="taxes", sort_order=1, kind="tax")
     db.add(tax)
     await db.flush()
