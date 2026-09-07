@@ -163,6 +163,8 @@ class PaceItemOut(BaseModel):
     current_rate: Decimal | None
     # 415(c) only, and only when it is > 0.
     employer_match: Decimal | None
+    # The HSA row's twin: the year's employer deposit, null unless it is > 0.
+    employer_hsa: Decimal | None
 
 
 class BreakdownOut(BaseModel):
