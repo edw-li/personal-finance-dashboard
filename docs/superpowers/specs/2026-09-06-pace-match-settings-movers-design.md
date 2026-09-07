@@ -241,6 +241,50 @@ scenario 415(c) row. `test_projection_api.py`: employer leg in the breakdown and
 retirement drop; `test_savings_service.py` unchanged and green. Frontend: profile form
 fieldset, PacePanel suffix, breakdown line, Projection copy, TryIt disclosure.
 
+### 2.5 Employer HSA contribution (added 2026-09-07)
+
+The HSA row counted only the employee's per-check deduction, so the entered cap could never be
+reached. Three more profile columns, `NOT NULL` with `server_default '0'`: `hsa_employer_annual`
+Numeric(8,2) — the employer's yearly deposit for the employee's own coverage; `hsa_employer_per_dependent`
+Numeric(8,2) — added once per additional covered individual; `hsa_dependents` int — how many additional
+individuals are covered (0 for self-only). `employer_hsa = annual + per_dependent × dependents`, zero
+when `hsa_coverage` is `none`. The HSA row's figure includes it, the label gains "(incl. employer)"
+when it is > 0, `employer_hsa` rides the wire (null unless > 0) and the figures cell reads
+"incl. {employer_hsa} employer". Edited in the Paycheck profile form's "Employer HSA contribution"
+fieldset, carried forward like the match. Verified against the tax inputs: the recorded employer
+deposit is 2,000.00 for 2024, 2025 and 2026 (self-only). The deposit lands in January (§2.6).
+
+### 2.6 Every pace row: year to date plus projected year end (added 2026-09-07)
+
+The user's reading of "$2,400 / $4,400 in September" — "shouldn't the pace be less than the full
+year?" — replaces the 2026-08-27 "current election × pay periods" annualization with the payday
+walk the ESPP row already uses, for every row:
+
+- **Window** for the 401(k), 415(c) and HSA rows: the calendar year of the limits (`Jan 1 Y … Dec 31 Y`).
+  The ESPP row keeps its purchase-year windows (§1.2).
+- **Walk**: each payday in the window (`semi_monthly_paydays` for a 24-check profile; the per-month
+  basis otherwise, as §1.3) is priced by the profile in force on that day; paydays on or after
+  `today` are priced by the scenario profile (the in-force profile for the GET, the sandbox's knobs
+  for the preview). Paydays before the earliest profile borrow it (§1.3's `backfilled_from`).
+- **Two figures per row.** `so_far` = the paydays before today (the estimate of what has gone in);
+  `annualized` keeps its wire name and now means the **projected year end** = every payday in the
+  window. Employer legs: the match is `employer_match()` applied to the so-far elective and to the
+  projected (402(g)-capped) elective respectively; the employer HSA deposit counts in `so_far` once
+  the year's first payday has passed and always in the projection. Both quantized to cents once.
+- **Verdict** (tone, percentage) stays on the projection — the strip's question is still "will this
+  election hit the cap". A judged ratio of exactly 1.0000 reads "at the cap" instead of "near the cap".
+- **Rendering**: one track, two segments — a solid `so_far / limit` segment in the tone colour and
+  a lighter run to `annualized / limit`; figures "{so_far} so far · {annualized} projected / {limit}"
+  ("/ {soft_limit} practical" on the ESPP row); the practical-cap tick and overflow tick unchanged.
+  The card hint says the so-far figure is estimated from the profile timeline, never a ledger.
+- Pure module `services/pace_walk.py` owns the walk; `espp_pace.py` reuses it and gains `so_far`
+  for its window (entered halves count wholly as so far); `limit_check.paycheck_pace` accepts the
+  walked totals and falls back to the old annualization only when none are supplied (pure callers).
+
+Worked example, Edward on 2026-09-07 (16 semi-monthly paydays so far): elective 16,373.93 so far,
+24,560.90 projected, over; HSA 1,600.00 + 2,000.00 deposit = 3,600.00 so far, 4,400.00 projected of
+4,400.00, at the cap.
+
 ## 3. Settings: five sections and a sticky chip rail
 
 ### 3.1 Sections and order
