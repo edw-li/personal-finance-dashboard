@@ -2050,7 +2050,27 @@ MONTH=$(curl -s -H "$H" "$API/spending/matrix" | node -e "let s='';process.stdin
 echo "focused month: $MONTH"
 ```
 
-Read the printout against the spec's table: the dev book's window ends at its last complete entered month, dormant categories carry `seed null / dormant`, the `tax`/`transfer` kinds carry `kind`, and every seed is a whole-dollar figure. Then the seed, the matrix, the undo:
+Read the printout against the spec's table: the dev book's window ends at its last complete entered month, dormant categories carry `seed null / dormant`, the `tax`/`transfer` kinds carry `kind`, and every seed is a whole-dollar figure.
+
+**Order matters — hand-set FIRST, seed LAST.** The change log refuses to undo a batch when a LATER batch touched one of its rows ("Later changes touched these rows — undo those first"). A seed followed by a hand-set PUT on a seeded row (and then a DELETE of it) would leave the seed's undo 409ing and the dev book holding the other rows. So the walk runs in this order: one hand-set budget → the probe's seeded face → remove that row → the untouched seed → matrix → undo → the probe's empty face. Nothing later ever names a row the seed wrote.
+
+**3a — one hand-set budget, so the card has something to rewrite.** A book seeded moments ago has every seedable category standing exactly at its seed, and `seedCounts` skips those as unchanged (`writes` 0, no "Re-seed from averages") — the probe would be judging a right card against a wrong state. Pick a living category whose seed is not 2500.00 (Housing, say; `$CAT` is its id from the suggestions printout):
+
+```bash
+CAT=<id of a living category with a seed>
+curl -s -X PUT -H "$H" -H 'content-type: application/json' \
+  -d "{\"amount\":\"2500.00\",\"effective_month\":\"$MONTH\"}" \
+  "$API/spending/categories/$CAT/budget"   # → that category's history, one row
+curl -s -H "$H" "$API/projection" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const p=JSON.parse(s);console.log('budget_annual_spend',p.budget_annual_spend,'budget_month',p.budget_month)})"
+```
+
+Expected: the card offers "Re-seed from averages" and its confirm line reads `Rewrites 1 existing budget and sets N−1 new ones from <Mon YYYY>` (N = the seedable count); Projection echoes `budget_annual_spend` `30000.00` (12 × 2500 — the hand-set row resolves forward to `start_month`). **Run the browser smoke (step 5) now, in this hand-set state.** Then take the row back out — nothing later has named it, so either verb is clean:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE -H "$H" "$API/spending/categories/$CAT/budget/$MONTH"  # 204
+```
+
+**3b — the seed, the matrix, the undo (on the clean book).**
 
 ```bash
 curl -s -X POST -H "$H" -H 'content-type: application/json' -d "{\"effective_month\":\"$MONTH\"}" "$API/spending/budgets/seed" > "$OUT/seed.json"
@@ -2059,22 +2079,7 @@ curl -s -H "$H" "$API/spending/matrix" | node -e "let s='';process.stdin.on('dat
 curl -s -H "$H" "$API/projection" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const p=JSON.parse(s);console.log('budget_annual_spend',p.budget_annual_spend,'budget_month',p.budget_month)})"
 ```
 
-Expected: `written` = the seedable count from the suggestions, `total_budget` at the focused month = the sum of the written seeds, `budget_annual_spend` = 12 × the living seeds (the dev book's start month is the CURRENT calendar month, so this is non-null only if the focused month ≤ today — with the dev book ending in 2025 it IS: the seeds resolve forward). **Run the browser smoke (step 5) now, in the seeded state — but hand-set ONE budget first.** A book seeded moments ago has every seedable category standing exactly at its seed, and `seedCounts` skips those as unchanged, so `writes` is 0 and the card correctly offers NO "Re-seed from averages" — the probe would be judging a right card against a wrong state. Give it one row to rewrite (any living category the seed wrote — Housing, say; `$CAT` is its id from the suggestions printout):
-
-```bash
-CAT=<id of a living category the seed wrote>
-curl -s -o /dev/null -X PUT -H "$H" -H 'content-type: application/json' \
-  -d "{\"amount\":\"2500.00\",\"effective_month\":\"$MONTH\"}" \
-  "$API/spending/categories/$CAT/budget"
-```
-
-The card then offers "Re-seed from averages", and its confirm line reads `Rewrites 1 existing budget and sets N new ones from <Mon YYYY>` — N is 0 right after a full seed, since every other seedable category already stands at its average. Run the probe, then take the hand-set row back out:
-
-```bash
-curl -s -o /dev/null -w '%{http_code}\n' -X DELETE -H "$H" "$API/spending/categories/$CAT/budget/$MONTH"  # 204
-```
-
-Then undo the seed:
+Expected: `written` = the seedable count from the suggestions, `total_budget` at the focused month = the sum of the written seeds, `budget_annual_spend` = 12 × the living seeds (the dev book's start month is the CURRENT calendar month; the seeds resolve forward to it). Then undo:
 
 ```bash
 BATCH=$(node -e "process.stdout.write(require('./$OUT/seed.json').batch_id ?? '')")
@@ -2213,7 +2218,7 @@ if (report.problems.length) { console.error('BUDGET SEED SMOKE FAILED\n' + repor
 console.log(`BUDGET SEED SMOKE OK — ${report.checks.filter((c) => c.ok === true).length} checks, ${report.writesBlocked.length} writes fenced, files: ${report.files.join(', ')}`)
 ```
 
-- [ ] **5 Run the probe** (twice, as step 3 directs — once seeded, once after the undo):
+- [ ] **5 Run the probe** (twice, as step 3 directs — once in the hand-set state, once on the clean book after the undo):
 
 ```bash
 TOKEN_FILE=scratchpad/budget-seed-smoke/token.txt SMOKE_OUT=scratchpad/budget-seed-smoke/seeded APP_BASE=http://localhost:5174 API_BASE=http://127.0.0.1:8010 node tools/probes/budget-seed/smoke.mjs
