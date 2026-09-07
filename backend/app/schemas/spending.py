@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.projection import DerivedWindowOut
+
 # The write side's vocabulary (2026-09-04 honest-numbers spec §1). CategoryOut deliberately
 # types `kind` as a plain str: a GET must never 422 on a value the database already holds.
 CategoryKind = Literal["living", "tax", "transfer"]
@@ -159,3 +161,53 @@ class BudgetHistoryEntry(BaseModel):
 
     effective_month: date
     amount: Decimal | None
+
+
+# --- budgets seeded from averages (2026-09-07 spec §2) ---
+
+
+class BudgetSuggestion(BaseModel):
+    """One category's window figures and the seed the one-click action would write. `seed`
+    is None with a `skip_reason` for a non-living kind, a dormant category or one with fewer
+    than three window months; the figures still come through for the editor's chips."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    category_id: int
+    profile: Literal["dormant", "sparse", "fixed", "episodic", "variable"]
+    months: int
+    mean: Decimal | None
+    median: Decimal | None
+    latest: Decimal | None
+    latest_month: date | None
+    cv: Decimal | None
+    seed: Decimal | None
+    skip_reason: Literal["kind", "dormant", "sparse"] | None
+
+
+class BudgetSuggestionsOut(BaseModel):
+    # The projection's window echo, reused: spelled `from`/`to` on the wire. None when nothing
+    # is entered yet.
+    window: DerivedWindowOut | None
+    suggestions: list[BudgetSuggestion]
+
+
+class BudgetSeedIn(BaseModel):
+    effective_month: date
+
+
+class BudgetSkip(BaseModel):
+    category_id: int
+    # `unchanged`: the budget already resolved for the effective month equals the seed — no
+    # redundant history step is written.
+    reason: Literal["kind", "dormant", "sparse", "unchanged"]
+
+
+class BudgetSeedOut(BaseModel):
+    effective_month: date
+    window: DerivedWindowOut | None
+    written: list[AmountEntry]
+    skipped: list[BudgetSkip]
+    # The change batch (the month PUT's contract): None when nothing changed, so the client
+    # offers no Undo.
+    batch_id: UUID | None

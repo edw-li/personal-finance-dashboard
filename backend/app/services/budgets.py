@@ -11,7 +11,11 @@ from datetime import date
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 from typing import Literal
 
-from app.models import CategoryBudget
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import CategoryBudget, MonthlySpending, SpendingCategory
+from app.services.coverage import load_coverage
 from app.services.savings import LIVING
 
 
@@ -63,7 +67,8 @@ def seed_window(
     month has nothing to average, and an empty month is not entered at all."""
     skip = set(without_spending)
     complete = [month for month in sorted(entered) if month < current_month and month not in skip]
-    return complete[-limit:]
+    # `complete[-0:]` is the WHOLE list, so a zero limit has to be spelled out.
+    return complete[-limit:] if limit > 0 else []
 
 
 def ceil_dollars(value: Decimal) -> Decimal:
@@ -102,7 +107,18 @@ def suggest(category_id: int, kind: str, series: Sequence[tuple[date, Decimal]])
     n = len(series)
     if n == 0:
         reason: SkipReason = "kind" if kind != LIVING else "dormant"
-        return Suggestion(category_id, "dormant", 0, None, None, None, None, None, None, reason)
+        return Suggestion(
+            category_id=category_id,
+            profile="dormant",
+            months=0,
+            mean=None,
+            median=None,
+            latest=None,
+            latest_month=None,
+            cv=None,
+            seed=None,
+            skip_reason=reason,
+        )
     amounts = [amount for _, amount in series]
     mean_exact = sum(amounts, Decimal(0)) / n
     latest_month, latest = series[-1]
@@ -133,14 +149,76 @@ def suggest(category_id: int, kind: str, series: Sequence[tuple[date, Decimal]])
         # everything else seeds the mean, which conserves the annual total for modeling.
         seed, skip = ceil_dollars(latest if profile == "fixed" else mean_exact), None
     return Suggestion(
-        category_id,
-        profile,
-        n,
-        mean_exact.quantize(CENTS, rounding=ROUND_HALF_UP),
-        median.quantize(CENTS, rounding=ROUND_HALF_UP),
-        latest,
-        latest_month,
-        cv,
-        seed,
-        skip,
+        category_id=category_id,
+        profile=profile,
+        months=n,
+        mean=mean_exact.quantize(CENTS, rounding=ROUND_HALF_UP),
+        median=median.quantize(CENTS, rounding=ROUND_HALF_UP),
+        latest=latest,
+        latest_month=latest_month,
+        cv=cv,
+        seed=seed,
+        skip_reason=skip,
     )
+
+
+# --- the database-facing half: everything above is arithmetic a test can hand a list to ---
+
+
+async def load_suggestions(db: AsyncSession, today: date) -> tuple[list[date], list[Suggestion]]:
+    """The window and one Suggestion per ACTIVE category (the card lists only those), in the
+    categories' own order. One coverage load (spec §3's ONE definition of entered), one
+    categories query, one spending query bounded to the window."""
+    coverage = await load_coverage(db)
+    window = seed_window(coverage.entered, coverage.net_pay_without_spending, today.replace(day=1))
+    categories = list(
+        (
+            await db.execute(
+                select(SpendingCategory)
+                .where(SpendingCategory.is_active)
+                .order_by(SpendingCategory.sort_order, SpendingCategory.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_category: dict[int, list[tuple[date, Decimal]]] = {c.id: [] for c in categories}
+    if window:
+        in_window = set(window)  # the window can straddle a gap month: bound, then filter
+        rows = (
+            await db.execute(
+                select(MonthlySpending)
+                .where(MonthlySpending.month >= window[0], MonthlySpending.month <= window[-1])
+                .order_by(MonthlySpending.month)
+            )
+        ).scalars()
+        for row in rows:
+            if row.month in in_window and row.category_id in by_category:
+                by_category[row.category_id].append((row.month, row.amount))
+    return window, [suggest(c.id, c.kind, by_category[c.id]) for c in categories]
+
+
+async def living_budget_total(db: AsyncSession, month: date) -> Decimal | None:
+    """The ACTIVE living categories' budgets resolved for `month`, summed (spec §4) — an
+    archived category's stale budget and a tax or transfer target are not modeled spend.
+    None when no such category has a budget that month."""
+    living_ids = set(
+        (
+            await db.execute(
+                select(SpendingCategory.id).where(
+                    SpendingCategory.is_active, SpendingCategory.kind == LIVING
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    rows = [
+        row
+        for row in (await db.execute(select(CategoryBudget))).scalars()
+        if row.category_id in living_ids
+    ]
+    amounts = [
+        values[0] for values in resolve_budgets(rows, [month]).values() if values[0] is not None
+    ]
+    return sum(amounts, Decimal("0.00")) if amounts else None

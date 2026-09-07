@@ -1,6 +1,7 @@
 """The budget suggestion model (2026-09-07 budget-seed spec §1).
 
-Pure module, so no database: each case is a hand-built (month, amount) series shaped like a
+The PURE half lives here, so no database (the loaders around it are proved in
+test_spending_api.py): each case is a hand-built (month, amount) series shaped like a
 category production actually holds — a rent that stepped up, food that wanders, travel that
 fires twice a year. Every figure asserted here was computed with the spec's arithmetic
 (cents HALF_UP, sample standard deviation, cv at 4 dp, seeds ceilinged to whole dollars).
@@ -62,6 +63,8 @@ def test_seed_window_takes_what_exists_sorted_and_never_the_present_or_future():
     assert seed_window([m(2026, 8), m(2026, 7)], [], m(2026, 9)) == [m(2026, 7), m(2026, 8)]
     assert seed_window([], [], m(2026, 9)) == []
     assert seed_window([m(2026, 9), m(2026, 10)], [], m(2026, 9)) == []
+    assert seed_window([m(2026, 7), m(2026, 8)], [], m(2026, 9), limit=1) == [m(2026, 8)]
+    assert seed_window([m(2026, 7)], [], m(2026, 9), limit=0) == []
 
 
 def test_ceil_dollars_rounds_up_to_the_next_dollar_spelled_in_cents():
@@ -133,6 +136,12 @@ def test_a_variable_category_seeds_the_ceiling_of_its_mean():
         D("600.00"),
         D("0.4796"),
         D("525.00"),
+    )
+    refunded = suggest(14, "living", series(m(2026, 6), ["-50.00", "200.00", "300.00"]))
+    assert (refunded.profile, refunded.mean, refunded.seed) == (
+        "variable",
+        D("150.00"),
+        D("150.00"),
     )
 
 
@@ -215,6 +224,15 @@ def test_sparse_under_three_months_even_when_steady_and_fixed_at_exactly_three()
     )
     three = suggest(10, "living", series(m(2026, 6), ["100.00", "105.00", "110.00"]))
     assert (three.profile, three.cv, three.seed) == ("fixed", D("0.0476"), D("110.00"))
+    one = suggest(13, "living", series(m(2026, 8), ["75.00"]))
+    # A single month has no spread to measure, so cv stays None rather than reading as steady.
+    assert (one.profile, one.months, one.cv, one.seed, one.skip_reason) == (
+        "sparse",
+        1,
+        None,
+        None,
+        "sparse",
+    )
 
 
 def test_non_living_kinds_get_figures_but_no_seed():

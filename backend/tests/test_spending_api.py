@@ -760,3 +760,186 @@ async def test_yearly_payroll_savings_is_the_sum_of_the_matrix_months(auth_clien
     months_sum = sum(Decimal(v) for v in matrix["payroll_savings"])
     assert Decimal(year["payroll_savings"]) == months_sum == Decimal("13352.79")
     assert Decimal(year["total_savings"]) == Decimal("28352.79")  # 15,000 cash + 13,352.79
+
+
+# --- budgets seeded from averages (2026-09-07 spec §1–§2) ---
+
+
+def _month(year: int, month: int) -> date:
+    return date(year, month, 1)
+
+
+async def _seed_budget_history(db) -> dict[str, int]:
+    """Fourteen entered months (Jul 2025 – Aug 2026) plus the CURRENT month (Sep 2026, rent
+    only — the routes' clock is pinned to 2026-09-07) across six categories: Rent (fixed;
+    steps up in Apr 2026), Food (variable), Travel (episodic), Kids (dormant), Streaming
+    (sparse — its first row is Jul 2026, so earlier months are ABSENT, not zero), Taxes (kind
+    tax). The window is the last twelve complete months: Sep 2025 – Aug 2026, so Jul/Aug 2025
+    and the partial September never reach a mean. Every figure below is scratchpad/figures.py's."""
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    food = SpendingCategory(name="Food", slug="food", sort_order=2)
+    travel = SpendingCategory(name="Travel", slug="travel", sort_order=3)
+    kids = SpendingCategory(name="Kids", slug="kids", sort_order=4)
+    streaming = SpendingCategory(name="Streaming", slug="streaming", sort_order=5)
+    taxes = SpendingCategory(name="Taxes", slug="taxes", sort_order=6, kind="tax")
+    db.add_all([rent, food, travel, kids, streaming, taxes])
+    await db.flush()
+    months = [_month(2025, 7 + i) for i in range(6)] + [_month(2026, i) for i in range(1, 9)]
+    food_amounts = [
+        "700.00",
+        "800.00",
+        "900.00",
+        "1100.00",
+        "1000.00",
+        "1250.50",
+        "850.00",
+        "1000.25",
+        "1120.00",
+        "980.00",
+        "1010.00",
+        "1300.00",
+        "940.00",
+        "1049.25",
+    ]
+    travel_amounts = [
+        "0.00",
+        "0.00",
+        "0.00",
+        "0.00",
+        "0.00",
+        "1525.63",
+        "0.00",
+        "0.00",
+        "0.00",
+        "0.00",
+        "810.20",
+        "0.00",
+        "0.00",
+        "0.00",
+    ]
+    for i, month in enumerate(months):
+        rent_amount = "2072.80" if month >= _month(2026, 4) else "2030.00"
+        db.add_all(
+            [
+                MonthlySpending(month=month, category_id=rent.id, amount=Decimal(rent_amount)),
+                MonthlySpending(month=month, category_id=food.id, amount=Decimal(food_amounts[i])),
+                MonthlySpending(
+                    month=month, category_id=travel.id, amount=Decimal(travel_amounts[i])
+                ),
+                MonthlySpending(month=month, category_id=kids.id, amount=Decimal("0.00")),
+                MonthlySpending(
+                    month=month,
+                    category_id=taxes.id,
+                    amount=Decimal("5044.00" if month == _month(2026, 4) else "0.00"),
+                ),
+                MonthlyCashflow(month=month, net_pay=Decimal("9000.00")),
+            ]
+        )
+        if month >= _month(2026, 7):
+            db.add(MonthlySpending(month=month, category_id=streaming.id, amount=Decimal("15.99")))
+    # The current month, seven days old: rent paid, nothing else — entered, never in the window.
+    db.add(MonthlySpending(month=_month(2026, 9), category_id=rent.id, amount=Decimal("2030.00")))
+    await db.commit()
+    return {
+        "rent": rent.id,
+        "food": food.id,
+        "travel": travel.id,
+        "kids": kids.id,
+        "streaming": streaming.id,
+        "taxes": taxes.id,
+    }
+
+
+def _pin_today(monkeypatch, today: date) -> None:
+    monkeypatch.setattr("app.api.spending.product_today", lambda: today)
+
+
+async def test_budget_suggestions_window_and_profiles(auth_client, db, monkeypatch):
+    ids = await _seed_budget_history(db)
+    _pin_today(monkeypatch, date(2026, 9, 7))
+    resp = await auth_client.get("/api/v1/spending/budgets/suggestions")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["window"] == {"from": "2025-09-01", "to": "2026-08-01", "months": 12}
+    assert [s["category_id"] for s in body["suggestions"]] == [
+        ids["rent"],
+        ids["food"],
+        ids["travel"],
+        ids["kids"],
+        ids["streaming"],
+        ids["taxes"],
+    ]
+    by_id = {s["category_id"]: s for s in body["suggestions"]}
+    assert by_id[ids["rent"]] == {
+        "category_id": ids["rent"],
+        "profile": "fixed",
+        "months": 12,
+        "mean": "2047.83",
+        "median": "2030.00",
+        "latest": "2072.80",
+        "latest_month": "2026-08-01",
+        "cv": "0.0108",
+        "seed": "2073.00",
+        "skip_reason": None,
+    }
+    assert (by_id[ids["food"]]["profile"], by_id[ids["food"]]["seed"]) == ("variable", "1042.00")
+    assert (by_id[ids["travel"]]["profile"], by_id[ids["travel"]]["seed"]) == ("episodic", "195.00")
+    kids = by_id[ids["kids"]]
+    assert (kids["profile"], kids["mean"], kids["seed"], kids["skip_reason"]) == (
+        "dormant",
+        "0.00",
+        None,
+        "dormant",
+    )
+    streaming = by_id[ids["streaming"]]
+    assert (
+        streaming["profile"],
+        streaming["months"],
+        streaming["mean"],
+        streaming["skip_reason"],
+    ) == (
+        "sparse",
+        2,
+        "15.99",
+        "sparse",
+    )
+    taxes = by_id[ids["taxes"]]
+    assert (taxes["profile"], taxes["mean"], taxes["seed"], taxes["skip_reason"]) == (
+        "episodic",
+        "420.33",
+        None,
+        "kind",
+    )
+
+
+async def test_budget_suggestions_with_nothing_entered(auth_client, db):
+    db.add(SpendingCategory(name="Food", slug="food", sort_order=1))
+    await db.commit()
+    body = (await auth_client.get("/api/v1/spending/budgets/suggestions")).json()
+    assert body["window"] is None
+    assert body["suggestions"] == [
+        {
+            "category_id": ANY,
+            "profile": "dormant",
+            "months": 0,
+            "mean": None,
+            "median": None,
+            "latest": None,
+            "latest_month": None,
+            "cv": None,
+            "seed": None,
+            "skip_reason": "dormant",
+        }
+    ]
+
+
+async def test_budget_suggestions_list_only_active_categories(auth_client, db):
+    db.add_all(
+        [
+            SpendingCategory(name="Food", slug="food", sort_order=1),
+            SpendingCategory(name="Old", slug="old", sort_order=2, is_active=False),
+        ]
+    )
+    await db.commit()
+    body = (await auth_client.get("/api/v1/spending/budgets/suggestions")).json()
+    assert len(body["suggestions"]) == 1

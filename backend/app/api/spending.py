@@ -9,10 +9,13 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
 from app.models import CategoryBudget, MonthlyCashflow, MonthlySpending, SpendingCategory
+from app.schemas.projection import DerivedWindowOut
 from app.schemas.spending import (
     AmountEntry,
     BudgetHistoryEntry,
     BudgetPut,
+    BudgetSuggestion,
+    BudgetSuggestionsOut,
     CategoryCreate,
     CategoryOut,
     CategorySeries,
@@ -25,7 +28,7 @@ from app.schemas.spending import (
     YearlyOut,
     YearRollup,
 )
-from app.services.budgets import resolve_budgets
+from app.services.budgets import load_suggestions, resolve_budgets
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
@@ -40,6 +43,7 @@ from app.services.savings import (
     load_payroll_by_month,
     rollup,
 )
+from app.services.scheduler import product_today
 from app.services.spending_guard import EMPTY_MONTH_REFUSAL, records_something
 
 router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(get_current_user)])
@@ -260,6 +264,25 @@ async def delete_category_budget(
     await db.delete(row)
     await batch.commit()
     return Response(status_code=204, headers=batch_header(batch.id if batch.rows else None))
+
+
+def _window_out(window: list[date]) -> DerivedWindowOut | None:
+    return (
+        DerivedWindowOut(from_month=window[0], to_month=window[-1], months=len(window))
+        if window
+        else None
+    )
+
+
+@router.get("/budgets/suggestions", response_model=BudgetSuggestionsOut)
+async def budget_suggestions(db: AsyncSession = Depends(get_db)) -> BudgetSuggestionsOut:
+    """The Budget card's figures (spec §2): read-only, no batch. `product_today`, never
+    date.today(): the window's "current month" must agree with the rest of the ritual's clock."""
+    window, suggestions = await load_suggestions(db, product_today())
+    return BudgetSuggestionsOut(
+        window=_window_out(window),
+        suggestions=[BudgetSuggestion.model_validate(s) for s in suggestions],
+    )
 
 
 def _kind_split(
