@@ -6,7 +6,8 @@ import { isGrammarTooltip } from '../../charts/tooltip'
 import { tooltipRows } from '../../testing/tooltipRows'
 import { anatomyLots, esppLot, esppLotsResponse } from '../../testing/esppFixtures'
 import {
-  APPRECIATION, BARGAIN, LOSS, PAID, hasAnatomy, lotAnatomyCsv, lotAnatomyOption, lotLabels, sortLots,
+  APPRECIATION, BARGAIN, LOSS, PAID, PRICE_DOT, QUOTE_RULE, SUBSCRIPTION,
+  hasAnatomy, lotAnatomyCsv, lotAnatomyOption, lotLabels, sortLots,
 } from './esppChartOptions'
 
 // EChartsOption is a wide union; narrow once (the option-builder tests' shared posture).
@@ -169,6 +170,90 @@ describe('lotAnatomyOption — Dollars', () => {
     expect(foot(1)[1]).toBe('255 sh · paid $41.23 · FMV $79.11 · subscription $48.51 · price $120.00')
     expect(foot(1)[3]).toBe('Sold Oct 15, 2025 at $120.00')
     expect(foot(3)[3]).toBe('Qualifies in 13 days')
+  })
+})
+
+describe('lotAnatomyOption — Per share', () => {
+  const hollowDot = (value: number, color: string) => ({
+    value,
+    itemStyle: { color: SURFACE, borderColor: color, borderWidth: 1.5 },
+  })
+
+  it('floats each lot from the paid price: a silent base, then bargain and appreciation per share, 10px wide', () => {
+    const option = read(lotAnatomyOption(esppLotsResponse(), { view: 'per-share' }))
+    expect(option.yAxis.scale).toBeUndefined() // zero-anchored: the discount as a true share of the price
+    const base = option.series.find((s) => s.name === 'ladder-base')!
+    expect(base).toMatchObject({ type: 'bar', stack: 'ladder', silent: true, color: 'transparent', barMaxWidth: 10 })
+    expect(base.data).toEqual([41.23265, 41.23265, 41.23265, 41.23265])
+    const bargain = byName(option, BARGAIN)
+    expect(bargain).toMatchObject({ id: 'bargain', stack: 'ladder', barMaxWidth: 10, color: PALETTE[2] })
+    // cents(): 79.112 − 41.23265 and 174.18 − 41.23265 are float dust, and dust must not reach a chart.
+    expect(bargain.data).toEqual([37.88, hollow(37.88, PALETTE[2]), hollow(83.57, PALETTE[2]), 132.95])
+    const appreciation = byName(option, APPRECIATION)
+    expect(appreciation.data).toEqual([92.2, hollow(40.89, PALETTE[0]), hollow(0, PALETTE[0]), 0])
+    expect(appreciation.label!.formatter({ dataIndex: 2 })).toBe('Sold')
+  })
+
+  it('overlays a per-share loss from the price up to the purchase FMV', () => {
+    const option = read(lotAnatomyOption(esppLotsResponse(), { view: 'per-share' }))
+    expect(option.series.find((s) => s.name === 'loss-base')!.data).toEqual([0, 0, 110, 171.31])
+    const loss = byName(option, LOSS)
+    expect(loss).toMatchObject({ stack: 'loss', color: NEGATIVE, barGap: '-100%', barMaxWidth: 10 })
+    expect(loss.data).toEqual([0, 0, 14.8, 2.87]) // 124.80 − 110, 174.18 − 171.31
+  })
+
+  it('rides the ends with Paid and Price dots, hollow on sold lots, the subscription diamond and the quote rule', () => {
+    const option = read(lotAnatomyOption(esppLotsResponse(), { view: 'per-share' }))
+    const paid = byName(option, PAID)
+    expect(paid).toMatchObject({ id: 'paid', type: 'scatter', color: PALETTE[1], symbolSize: 9, z: 11 })
+    expect(paid.itemStyle).toEqual({ borderColor: INK, borderWidth: 1 })
+    expect(paid.data).toEqual([41.23265, hollowDot(41.23265, PALETTE[1]), hollowDot(41.23265, PALETTE[1]), 41.23265])
+    const price = byName(option, PRICE_DOT)
+    expect(price).toMatchObject({ type: 'scatter', color: PALETTE[0] })
+    expect(price.data).toEqual([171.31, hollowDot(120, PALETTE[0]), hollowDot(110, PALETTE[0]), 171.31])
+    const subscription = byName(option, SUBSCRIPTION)
+    expect(subscription).toMatchObject({ type: 'scatter', color: MUTED, symbol: 'diamond', symbolSize: 9 })
+    expect(subscription.itemStyle).toEqual({ borderColor: INK, borderWidth: 1 }) // filled — hollow means sold
+    expect(subscription.data).toEqual([48.509, 48.509, 48.509, 48.509])
+    const rule = byName(option, QUOTE_RULE)
+    expect(rule).toMatchObject({ type: 'line', color: MUTED, z: 9, lineStyle: { type: 'dashed', width: 2 } })
+    expect(rule.data).toEqual([171.31, 171.31, 171.31, 171.31])
+    expect(option.legend.data).toEqual([PAID, BARGAIN, APPRECIATION, LOSS, PRICE_DOT, SUBSCRIPTION, QUOTE_RULE])
+  })
+
+  it('drops the Price dots and the quote rule when unpriced', () => {
+    const unpriced = esppLotsResponse({
+      current_price: null,
+      quoted_at: null,
+      lots: [esppLot({ market_value: null, gain_amount: null, gain_pct: null, appreciation: null })],
+    })
+    const option = read(lotAnatomyOption(unpriced, { view: 'per-share' }))
+    expect(byName(option, PRICE_DOT).data).toEqual([null])
+    expect(option.series.some((s) => s.name === QUOTE_RULE)).toBe(false)
+    expect(option.legend.data).toEqual([PAID, BARGAIN, APPRECIATION, PRICE_DOT, SUBSCRIPTION])
+  })
+
+  it('tooltips the per-share components as rows and the paid, price, subscription and quote figures as references', () => {
+    const option = read(lotAnatomyOption(esppLotsResponse(), { view: 'per-share' }))
+    const parsed = tooltipRows(
+      option.tooltip.formatter([
+        { seriesName: BARGAIN, seriesType: 'bar', axisValueLabel: 'Feb 2024', dataIndex: 0, value: 37.88, color: PALETTE[2] },
+        { seriesName: APPRECIATION, seriesType: 'bar', axisValueLabel: 'Feb 2024', dataIndex: 0, value: 92.2, color: PALETTE[0] },
+        { seriesName: PAID, seriesType: 'scatter', dataIndex: 0, value: 41.23265, color: PALETTE[1] },
+        { seriesName: PRICE_DOT, seriesType: 'scatter', dataIndex: 0, value: 171.31, color: PALETTE[0] },
+        { seriesName: SUBSCRIPTION, seriesType: 'scatter', dataIndex: 0, value: 48.509, color: MUTED },
+        { seriesName: QUOTE_RULE, seriesType: 'line', dataIndex: 0, value: 171.31, color: MUTED },
+      ]),
+    )
+    expect(parsed.rows.map((r) => [r.kind, r.label, r.value])).toEqual([
+      ['row', APPRECIATION, '$92.20'],
+      ['row', BARGAIN, '$37.88'],
+      ['ref', PAID, '$41.23'],
+      ['ref', PRICE_DOT, '$171.31'],
+      ['ref', SUBSCRIPTION, '$48.51'],
+      ['ref', QUOTE_RULE, '$171.31'],
+    ])
+    expect(parsed.foot[0]).toBe('Value $44,540.60 · gain $33,820.11 (+315.5%)')
   })
 })
 

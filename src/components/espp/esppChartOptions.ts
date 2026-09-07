@@ -5,7 +5,8 @@
 import type { EChartsOption } from '../../charts/echarts'
 import { BAR_MARKS, capLabel, cents, grid, moneyAxis, monthAxis, stagger } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
-import { NEGATIVE, PALETTE } from '../../charts/theme'
+import { referenceLine } from '../../charts/reference'
+import { INK, MUTED, NEGATIVE, PALETTE, SURFACE } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
 import type { EsppLotOut, EsppLotsResponse } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
@@ -25,6 +26,9 @@ export const PAID = 'Paid'
 export const BARGAIN = 'Bargain element'
 export const APPRECIATION = 'Appreciation'
 export const LOSS = 'Below purchase FMV'
+export const PRICE_DOT = 'Price'
+export const SUBSCRIPTION = 'Subscription price'
+export const QUOTE_RULE = 'Current quote'
 
 // Slots 2, 3, 1 — orange, green, blue — validated in both themes (spec §8.2). Fixed by
 // COMPONENT, never by lot: lots pass eight by 2028 and identity was never the story.
@@ -168,8 +172,9 @@ export function lotAnatomyOption(
   const footer = lotFooter(lots, data.current_price)
   // The text backup for the hollow outline: a cap label on the top-most segment.
   const soldCap = { label: capLabel((p) => (lots[p.dataIndex]?.is_sold ? 'Sold' : '')) }
-  // The per-share view lands in the next step; until then only Dollars has geometry to draw.
-  return view === 'dollars' ? dollarsOption(lots, labels, footer, soldCap, selected) : null
+  return view === 'dollars'
+    ? dollarsOption(lots, labels, footer, soldCap, selected)
+    : perShareOption(lots, labels, footer, soldCap, data.current_price, selected)
 }
 
 function dollarsOption(
@@ -211,6 +216,110 @@ function dollarsOption(
       bar('bargain', BARGAIN, ANATOMY_COLORS.bargain, bargain, 1),
       bar('appreciation', APPRECIATION, ANATOMY_COLORS.appreciation, appreciation, 2, soldCap),
       ...(hasLoss ? lossStack(lossBase, loss, BAR_MARKS.barMaxWidth, 3) : []),
+    ],
+  }
+}
+
+/** The dumbbell form for "before → after per item": every lot on one price axis, its bar a range
+ *  from the paid price up to today's quote (or its sale price), the colour change at the FMV on
+ *  purchase day. Every unsold column's Price dot sits on the quote rule — the view's point: the
+ *  spread is your entry prices, the line is where they all are today (spec §5.4). */
+function perShareOption(
+  lots: AnatomyLot[],
+  labels: string[],
+  footer: (dataIndex: number) => string[],
+  soldCap: { label: ReturnType<typeof capLabel> },
+  currentPrice: string | null,
+  selected?: Record<string, boolean>,
+): EChartsOption {
+  const WIDTH = 10 // a dumbbell's bar is thin; BAR_MARKS' surface hairline stays
+  const paid = lots.map((l) => Number(l.purchase_price))
+  const fmv = lots.map((l) => Number(l.purchase_fmv))
+  const price = lots.map((l) =>
+    l.is_sold
+      ? l.sold_price === null
+        ? null
+        : Number(l.sold_price)
+      : currentPrice === null
+        ? null
+        : Number(currentPrice),
+  )
+  const bargain = lots.map((_, i) => cents(Math.max(fmv[i] - paid[i], 0)))
+  const appreciation = lots.map((_, i) => (price[i] === null ? 0 : cents(Math.max((price[i] as number) - fmv[i], 0))))
+  const underwater = lots.map((_, i) => price[i] !== null && (price[i] as number) < fmv[i])
+  const lossBase = lots.map((_, i) => (underwater[i] ? (price[i] as number) : 0))
+  const loss = lots.map((_, i) => (underwater[i] ? cents(fmv[i] - (price[i] as number)) : 0))
+  const hasLoss = underwater.some(Boolean)
+  const bar = (id: string, name: string, color: string, values: number[], index: number, extra = {}) => ({
+    id,
+    name,
+    type: 'bar' as const,
+    stack: 'ladder',
+    ...BAR_MARKS,
+    barMaxWidth: WIDTH,
+    ...stagger(index),
+    color,
+    data: hollowIfSold(values, lots, color),
+    ...extra,
+  })
+  // The end dots wear the house marker (9px, INK ring); a sold lot's dots go hollow like its bar.
+  const dot = (id: string, name: string, color: string, values: (number | null)[]) => ({
+    id,
+    name,
+    type: 'scatter' as const,
+    color,
+    symbolSize: 9,
+    z: 11,
+    itemStyle: { borderColor: INK, borderWidth: 1 },
+    data: values.map((v, i) =>
+      v === null ? null : lots[i].is_sold ? { value: v, itemStyle: { color: SURFACE, borderColor: color, borderWidth: 1.5 } } : v,
+    ),
+  })
+  const priced = currentPrice !== null
+  const names = [PAID, BARGAIN, APPRECIATION, ...(hasLoss ? [LOSS] : []), PRICE_DOT, SUBSCRIPTION, ...(priced ? [QUOTE_RULE] : [])]
+  return {
+    grid: grid(),
+    legend: { ...legendFor(names.length, selected), data: names },
+    tooltip: axisTooltip({
+      unit: 'money',
+      pointer: 'shadow',
+      groups: [BARGAIN, APPRECIATION, ...(hasLoss ? [LOSS] : [])],
+      totalLabel: false,
+      references: [PAID, PRICE_DOT, SUBSCRIPTION, ...(priced ? [QUOTE_RULE] : [])],
+      footer,
+    }),
+    xAxis: monthAxis(labels, { gap: true }),
+    yAxis: moneyAxis(),
+    series: [
+      {
+        id: 'ladder-base',
+        name: 'ladder-base',
+        type: 'bar' as const,
+        stack: 'ladder',
+        silent: true,
+        tooltip: { show: false },
+        color: 'transparent',
+        barMaxWidth: WIDTH,
+        data: paid,
+      },
+      bar('bargain', BARGAIN, ANATOMY_COLORS.bargain, bargain, 1),
+      bar('appreciation', APPRECIATION, ANATOMY_COLORS.appreciation, appreciation, 2, soldCap),
+      ...(hasLoss ? lossStack(lossBase, loss, WIDTH, 3) : []),
+      dot('paid', PAID, ANATOMY_COLORS.paid, paid),
+      dot('price', PRICE_DOT, ANATOMY_COLORS.appreciation, price),
+      {
+        // The annotation-marker grammar, FILLED: hollow stays reserved for sold.
+        id: 'subscription',
+        name: SUBSCRIPTION,
+        type: 'scatter' as const,
+        color: MUTED,
+        symbol: 'diamond' as const,
+        symbolSize: 9,
+        z: 12,
+        itemStyle: { borderColor: INK, borderWidth: 1 },
+        data: lots.map((l) => Number(l.subscription_price)),
+      },
+      ...(priced ? [referenceLine(QUOTE_RULE, lots.map(() => Number(currentPrice)))] : []),
     ],
   }
 }
