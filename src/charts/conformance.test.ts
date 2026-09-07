@@ -72,6 +72,12 @@ const ROSTER = [
   'paycheckSankey',
   // Sandbox T (planning-sandboxes spec section 10) — the what-if's per-jurisdiction delta.
   'whatIfDeltaBar',
+  // ESPP visuals (2026-09-07 spec §5–§6): both views of the lot anatomy — hollow sold lots and
+  // the loss overlay stack are branches the dollars fixture alone would not reach without a
+  // sold and an underwater lot, so the shared fixtures carry both — and the price chart.
+  'esppLotAnatomyDollars',
+  'esppLotAnatomyPerShare',
+  'esppPrice',
 ]
 
 describe('the fixture roster', () => {
