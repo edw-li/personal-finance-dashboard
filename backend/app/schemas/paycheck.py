@@ -165,6 +165,9 @@ class PaceItemOut(BaseModel):
     employer_match: Decimal | None
     # The HSA row's twin: the year's employer deposit, null unless it is > 0.
     employer_hsa: Decimal | None
+    # `annualized`'s own twin (spec §2.6): what is already behind today, against the
+    # projected year end beside it. Null on a row nobody walked.
+    so_far: Decimal | None
 
 
 class BreakdownOut(BaseModel):

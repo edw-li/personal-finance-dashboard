@@ -45,10 +45,10 @@ const profile: PaycheckProfileOut = {
 }
 
 const pace = (over: Partial<PaceItem>[] = []): PaceItem[] => [
-  { key: 'limit_401k_elective', label: '401(k) elective deferral', annualized: '13000.00', limit: '24500.00', ratio: '0.5306', tone: 'ok' },
-  { key: 'limit_415c_total', label: '415(c) total additions (excludes employer match)', annualized: '16000.00', limit: null, ratio: null, tone: 'ok' },
-  { key: 'limit_hsa_self', label: 'HSA — self-only', annualized: '2400.00', limit: '4300.00', ratio: '0.5581', tone: 'ok' },
-  { key: 'limit_espp_423', label: 'ESPP §423 annual', annualized: '11000.00', limit: '25000.00', ratio: '0.4400', tone: 'ok' },
+  { key: 'limit_401k_elective', label: '401(k) elective deferral', annualized: '13000.00', so_far: '8666.67', limit: '24500.00', ratio: '0.5306', tone: 'ok' },
+  { key: 'limit_415c_total', label: '415(c) total additions (excludes employer match)', annualized: '16000.00', so_far: '10666.67', limit: null, ratio: null, tone: 'ok' },
+  { key: 'limit_hsa_self', label: 'HSA — self-only', annualized: '2400.00', so_far: '1600.00', limit: '4300.00', ratio: '0.5581', tone: 'ok' },
+  { key: 'limit_espp_423', label: 'ESPP §423 annual', annualized: '11000.00', so_far: '5500.00', limit: '25000.00', ratio: '0.4400', tone: 'ok' },
   ...(over as PaceItem[]),
 ]
 

@@ -2080,6 +2080,10 @@ export interface PaceItem {
   employer_match?: string | null
   /** HSA only: the year's employer deposit already inside `annualized` (2026-09-07 spec). */
   employer_hsa?: string | null
+  /** What is already behind today, against `annualized`'s projected year end (spec §2.6).
+   *  Null/absent on a row the server did not walk — a pre-batch snapshot, or a pure caller —
+   *  and the panel then draws exactly the one-figure meter it always drew. */
+  so_far?: string | null
 }
 
 // --- assistant (2026-09-01 spec §3–§5) ---

@@ -18,14 +18,12 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.limit_keys import LIMIT_ESPP_423, LIMIT_LABELS
-from app.services.business_days import semi_monthly_paydays
 from app.services.limit_check import OVER_ABOVE, RATIO_QUANTUM, WARN_AT, PaceHalf, PaceItem
-from app.services.paycheck_calc import MONTHS_PER_YEAR, half_up2
+from app.services.pace_walk import walk
+from app.services.paycheck_calc import half_up2
 
 ZERO = Decimal("0")
 ONE = Decimal("1")
-# The only cadence `semi_monthly_paydays` describes; anything else takes the month basis.
-SEMI_MONTHLY = 24
 MONTH_NAMES = (
     "Jan",
     "Feb",
@@ -48,77 +46,22 @@ def _stamp(day: date) -> str:
     return f"{MONTH_NAMES[day.month - 1]} {day.year}"
 
 
-def _months(start: date, end: date):
-    """Every (year, month) from `start`'s month through `end`'s, inclusive."""
-    year, month = start.year, start.month
-    while (year, month) <= (end.year, end.month):
-        yield year, month
-        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
-
-
-def _in_force(profiles: list, day: date):
-    """The latest profile effective on or before `day` — `_default_profile`'s rule without
-    the DB. Before the earliest profile there is nothing to read, so the earliest one stands
-    in: the strip's "at this rate" posture, applied backwards."""
-    eligible = [p for p in profiles if p.effective_date <= day]
-    if eligible:
-        return max(eligible, key=lambda p: p.effective_date)
-    return min(profiles, key=lambda p: p.effective_date)
-
-
 def _estimate(
     profiles: list, scenario, today: date, start: date, end: date
-) -> tuple[Decimal, str, date | None]:
-    """One window's (amount, basis, backfilled_from), payday by payday.
+) -> tuple[Decimal, Decimal, str, date | None]:
+    """One window's (amount, so_far, basis, backfilled_from), payday by payday.
 
-    A semi-monthly month contributes its two real paydays (the 15th and the month end, each
-    pulled BACK over weekends and holidays — payroll's own convention), priced by the profile
-    in force on THAT day. Any other cadence has no payday calendar in this app, so the month
-    contributes one twelfth of the annual rate instead and the row says "estimated by month";
-    a window that mixes the two reports the coarser word. Paydays on or after `today` are
-    priced by the SCENARIO — the in-force profile for the GET, the sandbox's knobs for the
-    preview — so the row answers "if I change now, where do this year's purchases land?",
-    never "what if I had changed in March".
+    The walk itself is `pace_walk.walk` — ONE payday calendar for every pace row, so this
+    window and the 401(k) / HSA rows beside it can never disagree about which paydays a year
+    has or who priced them. This reads its 'espp' leg and nothing else.
     """
-    earliest = min(p.effective_date for p in profiles)
-    amount = ZERO
-    by_month = False
-    backfilled: date | None = None
-
-    def priced_by(day: date):
-        """Who prices `day` — PURE, so asking the question never records an answer."""
-        return scenario if day >= today else _in_force(profiles, day)
-
-    def borrowed(day: date) -> bool:
-        """Did `priced_by` have to reach forward for a profile that did not exist yet?
-
-        Asked only where a figure was actually PRICED, never on the cadence probe below: a
-        window opening after the earliest profile has one real payday inside it and has
-        borrowed nothing, and must not say it did.
-        """
-        return day < today and day < earliest
-
-    for year, month in _months(start, end):
-        mid = date(year, month, 15)
-        # Clamped so a window that opens after the 15th still probes a date inside it. This
-        # read decides the CADENCE only — it prices nothing, so it flags nothing.
-        monthly = priced_by(min(max(mid, start), end))
-        if monthly.pay_periods_per_year == SEMI_MONTHLY:
-            for day in semi_monthly_paydays(year, month):
-                if start <= day <= end:
-                    payer = priced_by(day)
-                    if borrowed(day):
-                        backfilled = earliest
-                    amount += payer.espp_pct * (
-                        payer.annual_salary / Decimal(payer.pay_periods_per_year)
-                    )
-        else:
-            by_month = True
-            if start <= mid <= end:
-                if borrowed(mid):
-                    backfilled = earliest
-                amount += monthly.espp_pct * (monthly.annual_salary / MONTHS_PER_YEAR)
-    return half_up2(amount), ("months" if by_month else "paydays"), backfilled
+    walked = walk(profiles, scenario, today, start, end)
+    return (
+        walked.projected["espp"],
+        walked.so_far["espp"],
+        walked.basis,
+        walked.backfilled_from,
+    )
 
 
 def espp_pace_item(
@@ -141,26 +84,33 @@ def espp_pace_item(
         return None
     halves: list[PaceHalf] = []
     backfilled_from: date | None = None
+    # The window's own §2.6 figure: what is already behind today.
+    so_far = ZERO
     for row in rows:
         if row.stored and row.period_end < today:
             # The purchase happened and the user typed the contribution: their number wins
             # over any estimate this module could build (spec §1.3).
+            entered = half_up2(
+                (row.semi_annual_base + row.additional_payments) * row.contribution_pct
+            )
             halves.append(
                 PaceHalf(
                     label=row.label,
                     start=row.period_start,
                     end=row.period_end,
-                    amount=half_up2(
-                        (row.semi_annual_base + row.additional_payments) * row.contribution_pct
-                    ),
+                    amount=entered,
                     source="entered",
                     basis=None,
                 )
             )
+            # Wholly behind us: the purchase is done, so second-guessing it with an estimate
+            # of the same months would be the one thing this module must never do.
+            so_far += entered
             continue
-        amount, basis, backfill = _estimate(
+        amount, half_so_far, basis, backfill = _estimate(
             profiles, scenario_from_today, today, row.period_start, row.period_end
         )
+        so_far += half_so_far
         if backfill is not None and (backfilled_from is None or backfill < backfilled_from):
             backfilled_from = backfill
         halves.append(
@@ -182,6 +132,7 @@ def espp_pace_item(
         "key": LIMIT_ESPP_423,
         "label": LIMIT_LABELS[LIMIT_ESPP_423],
         "annualized": window,
+        "so_far": half_up2(so_far),
         "measure": "window",
         "window_label": f"{_stamp(halves[0].start)} – {_stamp(halves[-1].end)} purchases",
         "halves": halves,

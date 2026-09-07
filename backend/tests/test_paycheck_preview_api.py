@@ -302,10 +302,18 @@ async def test_preview_pace_scenario_reflects_the_overrides(auth_client, db, me)
     body = await preview(auth_client, overrides={"trad_401k_pct": "0.245"})
     before = {row["key"]: row for row in body["pace"]["baseline"]}
     after = {row["key"]: row for row in body["pace"]["scenario"]}
+    # 24 paydays at 10 % of 100,000 is 10,000 of 24,500, whatever today is.
     assert before["limit_401k_elective"]["ratio"] == "0.4082"
-    assert after["limit_401k_elective"]["annualized"] == "24500.00"
-    assert after["limit_401k_elective"]["ratio"] == "1.0000"
-    assert after["limit_401k_elective"]["tone"] == "warn"
+    # The override prices the paydays from TODAY onward and no others (§2.6), so the
+    # projection rises toward "a year at 24.5 %" without ever reaching it once a check has
+    # been cut — and the past it shares with the baseline does not move at all. The moving
+    # half is pinned date-free in test_pace_walk.py.
+    assert after["limit_401k_elective"]["so_far"] == before["limit_401k_elective"]["so_far"]
+    assert (
+        D(before["limit_401k_elective"]["annualized"])
+        <= D(after["limit_401k_elective"]["annualized"])
+        <= D("24500.00")
+    )
 
 
 async def test_preview_monthly_matches_the_breakdowns_operation_order(auth_client, me):
@@ -349,3 +357,26 @@ async def test_preview_espp_row_moves_with_the_rate_override(auth_client, db, me
     assert before["projected_full_year"] == "20782.30"  # 11 %, the stored profile
     assert after["current_rate"] == "0.200000000"
     assert before["soft_limit"] == after["soft_limit"] == "21250.00"
+
+
+async def test_preview_pace_moves_the_projection_and_leaves_so_far_alone(auth_client, db, me):
+    """A knob turned today cannot rewrite a check already cut (spec §2.6): the two halves
+    agree about the past and differ about the rest of the year."""
+    db.add(
+        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+    )
+    await db.commit()
+    await create_profile(auth_client)
+    shown = {row["key"]: row for row in (await auth_client.get(BREAKDOWN)).json()["pace"]}
+
+    body = await preview(auth_client, overrides={"trad_401k_pct": "0.20"})
+    before = {row["key"]: row for row in body["pace"]["baseline"]}
+    after = {row["key"]: row for row in body["pace"]["scenario"]}
+    key = "limit_401k_elective"
+    # The baseline half IS the GET, so_far included — one compute, two doors.
+    assert before[key]["so_far"] == shown[key]["so_far"]
+    assert before[key]["so_far"] is not None
+    assert after[key]["so_far"] == before[key]["so_far"]
+    assert D(after[key]["annualized"]) > D(before[key]["annualized"])
+    # The ESPP row walks its own purchase window, and its past is just as fixed.
+    assert after["limit_espp_423"]["so_far"] == before["limit_espp_423"]["so_far"]

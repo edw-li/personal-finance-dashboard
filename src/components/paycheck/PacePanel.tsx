@@ -12,10 +12,11 @@ function fillPct(ratio: string): number {
   return Math.min(Number(ratio) * 100, 100)
 }
 
-// The practical cap's POSITION on the §423 track (spec §1.7) — fillPct's licence: a position
-// is the client's to compute, the dollars beside it are always the server's.
-function tickPct(soft: string, limit: string): number {
-  return Math.min(Math.max((Number(soft) / Number(limit)) * 100, 0), 100)
+// Where a figure sits on the track, as a percentage of the limit: the practical cap's tick
+// (spec §1.7) and the so-far segment's width (§2.6) are the same computation. fillPct's
+// licence — a position is the client's to compute, the dollars beside it are the server's.
+function trackPct(value: string, limit: string): number {
+  return Math.min(Math.max((Number(value) / Number(limit)) * 100, 0), 100)
 }
 
 const TONE_WORD: Record<PaceItem['tone'], string> = {
@@ -23,6 +24,9 @@ const TONE_WORD: Record<PaceItem['tone'], string> = {
   warn: 'near the cap',
   over: 'over',
 }
+// Landing exactly ON the cap is its own sentence: "near the cap" reads as a warning about
+// something that has not happened yet, and at 1.0000 it has (spec §2.6).
+const AT_THE_CAP = 'at the cap'
 
 /**
  * The ESPP row's provenance and forward sentences (spec §1.7). Every figure is the server's
@@ -73,11 +77,11 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
     <section className="card" role="region" aria-label="Contribution pace">
       <h2 className="eyebrow">
         Contribution pace
-        <InfoHint text="Each contribution line annualized from the paycheck profile in force, against the caps you entered in Settings. A projection at today's percentages — not a year-to-date total, which this app has no per-paycheck ledger to compute. Employer HSA deposits and the 401(k) match count once they are entered on your paycheck profile. The ESPP row grades the purchases that fall in this calendar year, so autumn checks count toward next year. Its cap is the most contribution dollars the §423 limit can buy at your plan discount; the exact chained figures live on the ESPP page." />
+        <InfoHint text="Each contribution line annualized from the paycheck profile in force, against the caps you entered in Settings. So far is estimated from your profile timeline payday by payday — the app has no per-paycheck ledger; the projection runs the rest of the year at today's percentages. Employer HSA deposits and the 401(k) match count once they are entered on your paycheck profile. The ESPP row grades the purchases that fall in this calendar year, so autumn checks count toward next year. Its cap is the most contribution dollars the §423 limit can buy at your plan discount; the exact chained figures live on the ESPP page." />
       </h2>
       <p className="drill-hint">
-        At this rate, over a full year — not what you have contributed so far. Change a percentage
-        mid-year and this moves with it.
+        So far this year, and where the year lands at today&apos;s percentages. Change a percentage
+        and the projection moves; so far does not.
       </p>
       <div className="pace-rows">
         {items.map((item) => {
@@ -85,14 +89,18 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
           // practical cap for, so every other row falls through unchanged.
           const softLimit = item.soft_limit ?? null
           const softRatio = item.soft_ratio ?? null
-          const figures =
-            softLimit !== null
-              ? `${formatCurrency(item.annualized)} / ${formatCurrency(softLimit)} practical`
-              : `${formatCurrency(item.annualized)} / ${formatCurrency(item.limit)}`
+          // The walked year (spec §2.6): null on a row the server did not walk, and then
+          // every string below is the one this panel printed before the walk existed.
+          const soFar = item.so_far ?? null
+          const projected = `${formatCurrency(item.annualized)}${soFar === null ? '' : ' projected'}`
+          const cap = softLimit !== null ? `${formatCurrency(softLimit)} practical` : formatCurrency(item.limit)
+          const behind = soFar === null ? '' : `${formatCurrency(soFar)} so far`
+          const figures = `${behind === '' ? '' : `${behind} · `}${projected} / ${cap}`
           const valueText =
-            softLimit !== null
+            (behind === '' ? '' : `${behind}; `) +
+            (softLimit !== null
               ? `${formatCurrency(item.annualized)} of ${formatCurrency(softLimit)} practical cap; §423 cap ${formatCurrency(item.limit)}`
-              : `${formatCurrency(item.annualized)} of ${formatCurrency(item.limit)}`
+              : `${formatCurrency(item.annualized)} of ${formatCurrency(item.limit)}`)
           const note = paceNote(item)
           // Muted inside the figures cell: a component of the figure, not a second verdict.
           const matchSuffix =
@@ -137,15 +145,24 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
                     aria-valuenow={Math.min(Math.round(Number(item.ratio) * 100), 100)}
                     aria-valuetext={valueText}
                   >
+                    {/* Two segments on one track: the projection runs the whole way in a
+                        dimmed tone, and the solid segment over it is the money already in.
+                        One track, because they are the same year — not two meters. */}
                     <div
-                      className={`pace-fill is-${item.tone}`}
+                      className={`pace-fill is-${item.tone}${soFar === null ? '' : ' is-projected'}`}
                       style={{ width: `${fillPct(item.ratio).toFixed(2)}%` }}
                     />
+                    {soFar !== null && (
+                      <div
+                        className={`pace-fill-sofar is-${item.tone}`}
+                        style={{ width: `${trackPct(soFar, item.limit).toFixed(2)}%` }}
+                      />
+                    )}
                     {softLimit !== null && (
                       <span
                         className="pace-soft-tick"
                         aria-hidden="true"
-                        style={{ left: `${tickPct(softLimit, item.limit).toFixed(2)}%` }}
+                        style={{ left: `${trackPct(softLimit, item.limit).toFixed(2)}%` }}
                       />
                     )}
                     {/* The FILL's clamp, not the tone: the ESPP row's tone is judged on the
@@ -166,7 +183,9 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
                   <span className={`pace-verdict tone-${item.tone}`}>
                     {/* soft_ratio where there is one: the ratio the TONE was judged on. */}
                     {`${(Number(softRatio ?? item.ratio) * 100).toFixed(2)}%`}
-                    <span className="pace-verdict-word">{TONE_WORD[item.tone]}</span>
+                    <span className="pace-verdict-word">
+                      {Number(softRatio ?? item.ratio) === 1 ? AT_THE_CAP : TONE_WORD[item.tone]}
+                    </span>
                   </span>
                 </>
               )}
