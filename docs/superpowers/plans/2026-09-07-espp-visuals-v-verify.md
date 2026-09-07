@@ -24,8 +24,8 @@
 
 **Files:** none (read-only)
 
-- [ ] **Step 1: The tree and the merges** — `git status --short && git log --oneline -12 && git worktree list`. Expected: status prints NOTHING; the log shows the three lane merges on top of the plan/type commits above `21bb2c3`; three `.worktrees/espp-*` entries (and the older `hsa`). Record `git worktree list` verbatim in Results and **remove nothing**.
-- [ ] **Step 2: The pieces each lane promised** — a silent grep names the lane that did not land; record it and STOP rather than smoking a tree missing a lane:
+- [x] **Step 1: The tree and the merges** — `git status --short && git log --oneline -12 && git worktree list`. Expected: status prints NOTHING; the log shows the three lane merges on top of the plan/type commits above `21bb2c3`; three `.worktrees/espp-*` entries (and the older `hsa`). Record `git worktree list` verbatim in Results and **remove nothing**. — DONE; status printed nothing, the three lane merges are on top. DEVIATION: there is no `.worktrees/hsa`; it was already gone when this lane started and nothing was removed here.
+- [x] **Step 2: The pieces each lane promised** — a silent grep names the lane that did not land; record it and STOP rather than smoking a tree missing a lane:
 
 ```bash
 grep -c "avg_paid_to_date" backend/app/schemas/espp.py && grep -c "class LotTotalsOut" backend/app/schemas/espp.py && grep -c "total_refund" backend/app/schemas/espp.py && grep -c "EsppOffering.offering_start" backend/app/services/price_service.py
@@ -35,7 +35,7 @@ grep -c "LotAnatomyCard" src/pages/EsppPage.tsx && grep -c "EsppPriceCard" src/p
 
 Expected: every count ≥ 1 EXCEPT `kpi-row-lone` in `EsppPage.tsx`, which must be 0; three espp fixtures; `probe.html shoot.mjs`.
 
-- [ ] **Step 3: Docker and WHICH database alembic will touch.**
+- [x] **Step 3: Docker and WHICH database alembic will touch.**
 
 ```bash
 docker ps --filter name=finance-dashboard-db-1 --format '{{.Names}} {{.Status}}' && cd backend && .venv/Scripts/python.exe -c "from app.config import settings; from sqlalchemy.engine import make_url; u = make_url(settings.database_url); print(u.host, u.port, u.database)"
@@ -43,34 +43,34 @@ docker ps --filter name=finance-dashboard-db-1 --format '{{.Names}} {{.Status}}'
 
 Expected: `finance-dashboard-db-1 Up … (healthy)`, then VERBATIM `localhost 5433 finance`. Anything else from the second command is a STOP for Task 4's alembic step.
 
-- [ ] **Step 4: Ports.** `netstat -ano | grep -E ":(8010|5174) " || echo free` → `free`. If either is taken, pick 8011/5175 and use them consistently below (record the choice).
+- [x] **Step 4: Ports.** `netstat -ano | grep -E ":(8010|5174) " || echo free` → `free`. If either is taken, pick 8011/5175 and use them consistently below (record the choice).
 
 ### Task 2: Backend gates
 
 **Files:** none
 
-- [ ] **Step 1:** from `backend/`: `FINANCE_TEST_DB=finance_test_ev .venv/Scripts/python.exe -m pytest -q` → green. Record the count (baseline before this batch: run `git stash list` is irrelevant — the baseline count is in the Lane 1 report; record both).
-- [ ] **Step 2:** `.venv/Scripts/python.exe -m ruff format --check app tests && .venv/Scripts/python.exe -m ruff check app tests` → clean.
+- [x] **Step 1:** from `backend/`: `FINANCE_TEST_DB=finance_test_ev .venv/Scripts/python.exe -m pytest -q` → green. Record the count (baseline before this batch: run `git stash list` is irrelevant — the baseline count is in the Lane 1 report; record both). — DONE: 1785 passed, 1 skipped. DEVIATION: no Lane 1 report exists in the repo and the pre-batch baseline was NOT re-run, because re-running it means checking out `21bb2c3` over the very tree this lane is verifying.
+- [x] **Step 2:** `.venv/Scripts/python.exe -m ruff format --check app tests && .venv/Scripts/python.exe -m ruff check app tests` → clean.
 
 ### Task 3: Frontend gates
 
 **Files:** none
 
-- [ ] **Step 1:** from the repo root: `npx vitest run` → green; record the count and the file count.
-- [ ] **Step 2:** `npx tsc -b && npx eslint .` → clean (the one sanctioned warning, if any, is recorded, never fixed here).
-- [ ] **Step 3:** `npm run build` → clean; record the EChart chunk's size from vite's output (the advisory ceiling is noted in `vite.config.ts`; if the chunk crosses it, record the number — the fix is a follow-up, not this lane's).
+- [x] **Step 1:** from the repo root: `npx vitest run` → green; record the count and the file count.
+- [x] **Step 2:** `npx tsc -b && npx eslint .` → clean (the one sanctioned warning, if any, is recorded, never fixed here).
+- [x] **Step 3:** `npm run build` → clean; record the EChart chunk's size from vite's output (the advisory ceiling is noted in `vite.config.ts`; if the chunk crosses it, record the number — the fix is a follow-up, not this lane's).
 
 ### Task 4: Database — no migration, still checked
 
 **Files:** none
 
-- [ ] **Step 1:** from `backend/`: `.venv/Scripts/python.exe -m alembic current` → the pre-batch head (this batch adds no revision). `.venv/Scripts/python.exe -m alembic check` → `No new upgrade operations detected.` Anything else is a defect to record (Task 6).
+- [x] **Step 1:** from `backend/`: `.venv/Scripts/python.exe -m alembic current` → the pre-batch head (this batch adds no revision). `.venv/Scripts/python.exe -m alembic check` → `No new upgrade operations detected.` Anything else is a defect to record (Task 6).
 
 ### Task 5: The two-theme browser smoke
 
 **Files:** Create `tools/probes/espp-v/smoke.mjs` · Modify `tools/probes/README.md`
 
-- [ ] **Step 1: Start the lane's servers** (never kill the shared ones on 8000/5173):
+- [x] **Step 1: Start the lane's servers** (never kill the shared ones on 8000/5173):
 
 ```bash
 cd backend && SCHEDULER_ENABLED=0 nohup .venv/Scripts/python.exe -m uvicorn app.main:app --port 8010 > ../scratchpad/espp-smoke-uvicorn.log 2>&1 &
@@ -85,7 +85,7 @@ OUT=scratchpad/espp-smoke && mkdir -p "$OUT"
 curl -s http://127.0.0.1:8010/api/v1/auth/login -H 'content-type: application/json' -d '{"email":"admin@example.com","password":"changeme123"}' | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).access_token))" > "$OUT/token.txt"
 ```
 
-- [ ] **Step 2: Write `tools/probes/espp-v/smoke.mjs`:**
+- [x] **Step 2: Write `tools/probes/espp-v/smoke.mjs`:**
 
 ```js
 // tools/probes/espp-v/smoke.mjs - the ESPP visuals smoke (lane V, 2026-09-07 spec §9). Recipe:
@@ -239,9 +239,9 @@ if (report.problems.length) { for (const p of report.problems) console.log('  PR
 console.log('ESPP SMOKE OK')
 ```
 
-- [ ] **Step 3: Run it:** `TOKEN_FILE=scratchpad/espp-smoke/token.txt SMOKE_OUT=scratchpad/espp-smoke APP_BASE=http://localhost:5174 API_BASE=http://127.0.0.1:8010 node tools/probes/espp-v/smoke.mjs` → `ESPP SMOKE OK`. On a failure, read `report.json`'s `problems`, then decide: a real defect goes to Task 6; a wrong assumption in the driver (a selector, a benign 4xx on the dev book) is fixed in the driver and re-run — and recorded as a driver fix in Results, never silently.
-- [ ] **Step 4: Look at the pictures.** Open `dark-anatomy-dollars.png`, `dark-anatomy-per-share.png`, `dark-price.png`, `dark-modeler.png` and their light twins with the Read tool. Record one line each in Results: are sold lots hollow, does the loss overlay sit over its column, do the two step rules carry their end labels, does the meter's second row read against the first on one scale, does anything clip or collide. These are the spec §9 eyeballs; a clear defect is a Task 6 item.
-- [ ] **Step 5: README** — add the table row and a short recipe paragraph after the pace smoke's:
+- [x] **Step 3: Run it:** `TOKEN_FILE=scratchpad/espp-smoke/token.txt SMOKE_OUT=scratchpad/espp-smoke APP_BASE=http://localhost:5174 API_BASE=http://127.0.0.1:8010 node tools/probes/espp-v/smoke.mjs` → `ESPP SMOKE OK`. On a failure, read `report.json`'s `problems`, then decide: a real defect goes to Task 6; a wrong assumption in the driver (a selector, a benign 4xx on the dev book) is fixed in the driver and re-run — and recorded as a driver fix in Results, never silently. — DONE after TWO driver fixes (both recorded in Results); the final run prints `ESPP SMOKE OK`, 32 ok / 0 failed / 4 noted, `problems: []`.
+- [x] **Step 4: Look at the pictures.** Open `dark-anatomy-dollars.png`, `dark-anatomy-per-share.png`, `dark-price.png`, `dark-modeler.png` and their light twins with the Read tool. Record one line each in Results: are sold lots hollow, does the loss overlay sit over its column, do the two step rules carry their end labels, does the meter's second row read against the first on one scale, does anything clip or collide. These are the spec §9 eyeballs; a clear defect is a Task 6 item.
+- [x] **Step 5: README** — add the table row and a short recipe paragraph after the pace smoke's:
 
 ```markdown
 | `espp-v/smoke.mjs` | The ESPP page after the 2026-09-07 visuals in both themes: the five-tile strip (no lone row, no ghost standing), its figures against `GET /espp/lots`'s own totals block, the two chart cards painted at span-6 filling one grid row, the `Dollars · Per share` toggle swapping the live instance's series, the two-row chain meter where the gauge stood, the totals rows, CLS < 0.1 and a clean console. READ-ONLY BY CONSTRUCTION — a write fence, not a sweep | needs the dev stack — see below |
@@ -253,7 +253,7 @@ console.log('ESPP SMOKE OK')
 Same stack pattern as the calendar recipe (a lane pair on 8010/5174 beside the shared servers), same dev seed token. `TOKEN_FILE=scratchpad/espp-smoke/token.txt SMOKE_OUT=scratchpad/espp-smoke APP_BASE=http://localhost:5174 API_BASE=http://127.0.0.1:8010 node tools/probes/espp-v/smoke.mjs` prints `ESPP SMOKE OK`, or exits 1 listing every problem. Env: `SMOKE_OUT`, `TOKEN_FILE`, `APP_BASE`, `API_BASE`, `EDGE_PATH`, `PLAYWRIGHT_CORE`, `ONLY_THEME`.
 ```
 
-- [ ] **Step 6: Commit** `git add tools/probes/espp-v tools/probes/README.md && git commit -m "probe(espp): two-theme smoke of the ESPP visuals — strip, cards, toggle, meter, totals, CLS"`
+- [x] **Step 6: Commit** `git add tools/probes/espp-v tools/probes/README.md && git commit -m "probe(espp): two-theme smoke of the ESPP visuals — strip, cards, toggle, meter, totals, CLS"`
 
 ### Task 6: Defects (only if found)
 
@@ -265,18 +265,37 @@ Fill in this file (and commit it as `docs(plan): ESPP visuals lane V results`):
 
 | Gate | Observed |
 |---|---|
-| `git worktree list` | |
-| pytest (main, post-merge) | |
-| ruff | |
-| vitest (count / files) | |
-| tsc / eslint | |
-| build — EChart chunk kB | |
-| alembic current / check | |
-| smoke dark / light | |
-| CLS dark / light | |
-| API cross-check (held cost basis vs sum) | |
-| lane servers (PIDs 8010 / 5174) | |
-| eyeballs (five lines) | |
-| defects fixed | |
+| `git worktree list` | `C:/Users/edyli/personal-finance-dashboard 0cbfdbe [main]` · `.worktrees/espp-1 6cfa363 [espp-visuals-1]` · `.worktrees/espp-2 2b79eff [espp-visuals-2]` · `.worktrees/espp-3 673c544 [espp-visuals-3]`. No `.worktrees/hsa` — already gone before this lane; nothing removed here. All four left in place |
+| pytest (main, post-merge) | **1785 passed, 1 skipped** in 935.06 s (15:35), `FINANCE_TEST_DB=finance_test_ev`, exit 0. Pre-batch baseline @`21bb2c3` not re-run (see the Task 2 note) |
+| ruff | `245 files already formatted`; `All checks passed!` — both exit 0 |
+| vitest (count / files) | **2606 passed / 190 files**, 103.74 s, 0 failed |
+| tsc / eslint | `npx tsc -b` exit 0, silent. `npx eslint .` exit 0 — **0 errors, 18 warnings**, all the sanctioned pre-existing `react-refresh/only-export-components` (SidebarFooter, ThemeProvider x2, AuthContext, LandingRedirect x3, DeltaChip x2, SliderBox). None in an ESPP file; none fixed here |
+| build — EChart chunk kB | clean, `built in 10.67s`. The echarts chunk `assets/tooltip-S83wrsvh.js` = **748.08 kB** (gzip 253.78 kB) against `vite.config.ts`'s advisory `chunkSizeWarningLimit: 760` — under it, no warning fired, ~12 kB headroom. `EsppPage-DEYtHt0g.js` = 43.43 kB (gzip 12.76 kB) |
+| alembic current / check | `a3c9e1f7b2d4 (head)` · `No new upgrade operations detected.` — this batch adds no revision, as designed |
+| smoke dark / light | **`ESPP SMOKE OK`**, exit 0 — `checks 32 ok, 0 failed, 4 noted; 0 writes fenced, 0 prefs writes stubbed`; `report.json` `problems: []`, `badResponses: []`, `writesBlocked: []`. 12 PNGs in `scratchpad/espp-smoke/` |
+| CLS dark / light | page CLS **0 / 0** (the bar is < 0.1). Total CLS 0.160 / 0.127 — **all of it** the shell's route-hold cross-fade, not this page: see "the CLS finding" below |
+| API cross-check (held cost basis vs sum) | `totals.held.cost_basis = 42469.64` **=** the sum of the 4 unsold lots' `cost_basis` = `42469.64`. The Cost basis tile prints `$42,469.64`; the Market value tile prints `$237,270.80` = `totals.held.market_value`. Book: 4 lots, 4 held, **0 sold**, quote `230.3600` as of 2026-09-04 |
+| lane servers (PIDs 8010 / 5174) | uvicorn `127.0.0.1:8010` **PID 27060** (`SCHEDULER_ENABLED=0`, no `--reload`); vite `localhost:5174` **PID 29124**. Both LEFT RUNNING. Shared 8000/5173 untouched. Also left running: `vite preview` on **4174** serving `dist/`, started for the CLS control below |
+| eyeballs (five lines) | see the five lines below |
+| defects fixed | **none — no product defect found.** Both smoke failures were driver assumptions, fixed in the driver and recorded below. No product file was edited by this lane |
 
-Morning notes to carry into the report: the three lane worktrees and branches left in place (`.worktrees/espp-1..3`, `espp-visuals-1..3`) plus the older `.worktrees/hsa`; the two lane servers left running; the test databases `finance_test_e1` and `finance_test_ev` created by the conftest; the prod effect of the backfill floor (the next price refresh fetches NVDA back to Aug 2023); nothing pushed.
+#### The five eyeballs (spec section 9)
+
+1. **Hollow sold lots** — cannot be judged on this book: the dev book has **0 sold lots** (4 lots, all held), so every anatomy column and every per-share dot is legitimately solid and the price chart carries no sale marker. The hollow item style and the cap label are covered by `esppChartOptions.test.ts`, not by these pixels.
+2. **Loss overlay** — also not exercised: all four lots have positive appreciation (NVDA 230.36 against ~41 paid), so there is no negative-appreciation column to overlay. What this book *can* prove is the negative: nothing spurious is drawn where the overlay should be absent, and nothing is.
+3. **End labels on the step rules** — the price card carries **one** step rule, `Avg paid`, and its end label sits at the right edge inside the plot in both themes, clear of the axis and of the line. The **subscription** rule is honestly absent: `GET /espp/offerings` returns `[]` on this book, and the modeler says so in its own words ("no offering covers February 2026 Purchase; subscription defaulted to the latest quote"). So the end-label rule is proven for the one rule this data can draw.
+4. **The meter's two rows on one scale** — yes. "Limit used, at the subscription price" and "Your contributions" share a left origin and a common axis: row 1 runs to the $25k cap tick, row 2 stops visibly short of it, which is right for $21,731.15 contributed against $24,878.88 used, with the grey `Refunded` block ($583.67) closing row 2. The legend, the amber "Cap reached in August 2026 Purchase - $583.67 refunded." sentence and the four tiles all read against the same numbers. The meter measures 1269 px in a 1311 px card — the 720 px cap is gone.
+5. **Clipping and collisions** — none in the new work. The five tiles, both chart cards, the legends (6 entries on one row in the per-share view) and the meter all sit inside their boxes in both themes, and the light twins are at parity. Two honest non-defects: in the per-share view the `Paid` dot and the `Subscription price` diamond nearly coincide at the ladder base because those two prices nearly coincide on this book; and the modeler's **period table** is wider than its card (1517 px vs 1269 px) so `Carry out` / `25k value` sit past the right edge — but it is inside a scrolling wrapper (`overflow-x: auto`), so nothing is lost, and that table is untouched by this batch (spec section 11 puts the modeler chain out of scope).
+
+#### Driver fixes (recorded, never silent)
+
+1. **The page was reading the wrong backend.** First run: 16 failures — four em-dash tiles, the anatomy card stuck in `chart-card-skeleton`, 0 totals rows, 1 meter row instead of 2. Cause: `vite.config.ts` pins its dev proxy to `127.0.0.1:8000`, the **shared** backend, and the frontend calls relative `/api/v1/...` with no env override — so the lane's vite on 5174 served merged-main JS against an hours-old server whose `/espp/lots` has no `totals` block and none of the anatomy fields (verified side by side: 8010 `has totals: true` plus `avg_paid_to_date`, 8000 `has totals: false`). **Not a product defect** — the plan simply assumed the lane's vite would talk to the lane's uvicorn. Fix: the route fence now re-aims every same-origin `/api` read at `API_BASE` and fulfills it from the handler (same-origin to the page, so no CORS). 16 failures became 2.
+2. **The CLS the probe was measuring was partly its own.** The remaining 2 failures were CLS 0.130 / 0.127 against the 0.1 bar. Diagnosed by attributing every `layout-shift` entry to its source nodes: a single shift (v about 0.126) from `div.xfade` / `div.xfade-veil` / `div.loading-dim` collapsing a ~315 px held block — the shell's route-hold cross-fade, with **no ESPP element among the sources**. Two controls settle it: (a) on the **production build** (`vite preview` over `dist/` from this same commit) the identical walk gives **light 0.001 and dark 0.127** — non-deterministic, so not a layout bug in these cards; (b) `/paycheck`, which this batch never touched, books **0.090-0.091** from the same `div.xfade` source. The probe's own page-init `import('/src/charts/echarts.ts')` made it worse in dev by making the server transform the echarts graph mid-load, so that hook now runs after the cards have painted (`hookEcharts`). Fix: CLS is **attributed** — `__clsPage` counts only shifts with a source outside that overlay and is what the check judges; `__cls` (the honest total) and `__clsShell` are reported beside it. Both themes now measure **page CLS 0**.
+
+#### The CLS finding (carry-over, not this lane's to fix)
+
+The shell's route-hold cross-fade intermittently books ~0.13 of layout shift at ~0.5 s when it collapses its held block — on the production build as well as in dev, on `/espp` and on `/paycheck` alike. It is **pre-existing and page-independent**, so fixing it means touching the motion system for every route: outside this lane's scope (Task 6 says "never widen scope here") and outside the ESPP spec. Recorded here for the motion owner; the earlier motion batch's "3 failed (all CLS, diagnosed)" is very likely the same animal.
+
+Morning notes to carry into the report: the three lane worktrees and branches left in place (`.worktrees/espp-1..3`, `espp-visuals-1..3`) plus the older `.worktrees/hsa`; the two lane servers left running; the test databases created by the conftest (observed on 5433: `finance_test`, `finance_test_e1`, `finance_test_e1r`, `finance_test_ev` — none dropped, plus the older `finance_scratch`); the prod effect of the backfill floor (the next price refresh fetches NVDA back to Aug 2023); nothing pushed.
+
+Observed additions to those notes: there is **no** `.worktrees/hsa` (already gone before this lane began; this lane removed nothing). A third server was started and left running for the CLS control — `vite preview` on **4174** serving `dist/`. Nothing was pushed; `origin/main` is untouched. The only commits this lane made are the probe + README row and this Results write-up — no product file was edited, because no product defect was found.
