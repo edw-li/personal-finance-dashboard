@@ -224,7 +224,7 @@ that seeds.
 - §4: "in use" is decimal equality (`compareDecimals`), not string equality.
 - §6 verification: the read-only probe (`tools/probes/budget-seed/smoke.mjs`) judges the card by
   the panel's own rule — Re-seed appears only when a seed would WRITE (a book seeded moments ago has
-  nothing left to write, so the seeded-state run needs one hand-set budget that differs), and the
+  nothing left to write, so the budgeted face is proved on a clean book with ONE hand-set budget that differs), and the
   change-log route census (`tests/test_changelog_pin.py`) lists `seed_budgets` as a LOGGED write path.
 - Known asterisk (not changed): the projection's echo follows the router's `date.today()` clock while
   the budget routes follow `product_today()`; at a month turnover in the UTC container the preset's

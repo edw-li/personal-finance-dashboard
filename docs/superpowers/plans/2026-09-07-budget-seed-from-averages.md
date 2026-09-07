@@ -2221,7 +2221,7 @@ console.log(`BUDGET SEED SMOKE OK — ${report.checks.filter((c) => c.ok === tru
 - [ ] **5 Run the probe** (twice, as step 3 directs — once in the hand-set state, once on the clean book after the undo):
 
 ```bash
-TOKEN_FILE=scratchpad/budget-seed-smoke/token.txt SMOKE_OUT=scratchpad/budget-seed-smoke/seeded APP_BASE=http://localhost:5174 API_BASE=http://127.0.0.1:8010 node tools/probes/budget-seed/smoke.mjs
+TOKEN_FILE=scratchpad/budget-seed-smoke/token.txt SMOKE_OUT=scratchpad/budget-seed-smoke/handset APP_BASE=http://localhost:5174 API_BASE=http://127.0.0.1:8010 node tools/probes/budget-seed/smoke.mjs
 # … the undo from step 3 …
 TOKEN_FILE=scratchpad/budget-seed-smoke/token.txt SMOKE_OUT=scratchpad/budget-seed-smoke/empty APP_BASE=http://localhost:5174 API_BASE=http://127.0.0.1:8010 node tools/probes/budget-seed/smoke.mjs
 ```
