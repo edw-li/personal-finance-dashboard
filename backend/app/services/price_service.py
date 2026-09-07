@@ -20,7 +20,15 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AppSetting, LatestPrice, PriceHistory, RsuGrant, Security
+from app.models import (
+    AppSetting,
+    EsppLot,
+    EsppOffering,
+    LatestPrice,
+    PriceHistory,
+    RsuGrant,
+    Security,
+)
 from app.services.price_provider import DailyBar, PriceProvider
 from app.services.scheduler import product_today
 
@@ -214,23 +222,25 @@ EMPLOYER_BACKFILL_BUFFER_DAYS = 14
 # own history starts after `needed` (an employer that listed later, a depth-capped feed),
 # the oldest-bar check alone would re-run the deep fetch on every refresh forever. After any
 # successful deep fetch the request's floor is recorded here, and a request no deeper than a
-# recorded one is skipped; an older grant lowers `needed` past the watermark and re-arms it.
+# recorded one is skipped; an older anchor lowers `needed` past the watermark and re-arms it.
 EMPLOYER_BACKFILL_KEY = "employer_backfill_floor"
 
 
 async def backfill_employer_history(db: AsyncSession, provider: PriceProvider) -> int:
-    """One-time deep backfill of the employer ticker's daily closes, back past the earliest
-    RSU grant's first vest (2026-08-21: the vesting schedule prices past tranches at their
-    own vest-date closes, and the standing HISTORY_WINDOW_DAYS refresh window cannot reach a
-    grant that began vesting years ago — those vests rendered "no stored price" forever).
+    """One-time deep backfill of the employer ticker's daily closes, back past the earliest of
+    the earliest RSU vest, the earliest ESPP purchase and the earliest ESPP offering start
+    (2026-08-21: the vesting schedule prices past tranches at their own vest-date closes, and
+    the standing HISTORY_WINDOW_DAYS refresh window cannot reach a grant that began vesting
+    years ago — those vests rendered "no stored price" forever; 2026-09-07 spec §3.4: the ESPP
+    price chart draws every lot and every offering's subscription rule on this history).
 
     Self-extinguishing two ways: the oldest stored bar reaching the needed date (the normal
     case), or the recorded watermark saying this depth was already fetched (the provider's
     history simply starts later). Either way a later call is a handful of point SELECTs and
-    out, re-arming only if an older grant is added. Skips quietly when there is no employer
-    ticker, no matching security, no grants, or the security is manual-priced (its bars are
-    hand entries, and a provider fetch would be a second opinion about them). Bars upsert
-    exactly like refresh_prices'; latest_prices and the TTM dividend metadata are
+    out, re-arming only if an older anchor is added. Skips quietly when there is no employer
+    ticker, no matching security, none of the three anchors, or the security is manual-priced
+    (its bars are hand entries, and a provider fetch would be a second opinion about them).
+    Bars upsert exactly like refresh_prices'; latest_prices and the TTM dividend metadata are
     deliberately NOT touched — this is history repair, not a quote refresh. Returns the
     number of bars written (0 on every skip). Caller commits.
     """
@@ -246,12 +256,24 @@ async def backfill_employer_history(db: AsyncSession, provider: PriceProvider) -
     )
     if security is None or security.is_manual_priced:
         return 0
-    earliest_vest = (
-        await db.execute(select(func.min(RsuGrant.first_vest_date)))
-    ).scalar_one_or_none()
-    if earliest_vest is None:
+    # Three anchors, the earliest wins (2026-09-07 spec §3.4): the vesting calendar prices past
+    # tranches at their own closes, and the ESPP price chart draws every purchase on the line
+    # and the subscription rule from each offering's start — so the deep window must reach the
+    # oldest of the three. An absent source simply drops out; with none there is nothing to
+    # reach for. `min` over dates, never over Optionals.
+    anchors = [
+        d
+        for d in (
+            (await db.execute(select(func.min(RsuGrant.first_vest_date)))).scalar_one_or_none(),
+            (await db.execute(select(func.min(EsppLot.purchase_date)))).scalar_one_or_none(),
+            (await db.execute(select(func.min(EsppOffering.offering_start)))).scalar_one_or_none(),
+        )
+        if d is not None
+    ]
+    if not anchors:
         return 0
-    needed = earliest_vest - timedelta(days=EMPLOYER_BACKFILL_BUFFER_DAYS)
+    earliest = min(anchors)
+    needed = earliest - timedelta(days=EMPLOYER_BACKFILL_BUFFER_DAYS)
     oldest_bar = (
         await db.execute(
             select(func.min(PriceHistory.price_date)).where(PriceHistory.security_id == security.id)
@@ -285,17 +307,17 @@ async def backfill_employer_history(db: AsyncSession, provider: PriceProvider) -
     if floor > needed:
         logger.info(
             "employer backfill: %s history starts %s, after the needed %s — recorded; "
-            "no refetch unless an older grant appears",
+            "no refetch unless an older anchor appears",
             ticker,
             floor,
             needed,
         )
     logger.info(
-        "employer backfill: %d %s bars fetched for the window from %s (earliest vest %s)",
+        "employer backfill: %d %s bars fetched for the window from %s (earliest anchor %s)",
         len(bars),
         ticker,
         needed,
-        earliest_vest,
+        earliest,
     )
     return len(bars)
 

@@ -51,6 +51,114 @@ def _pct6(value: Decimal) -> Decimal:
     return value.quantize(PCT_QUANTUM, rounding=ROUND_HALF_UP) + ZERO
 
 
+# The espp lot price family — Numeric(14,5), the one place in the app that is not 4dp.
+PRICE5_QUANTUM = Decimal("0.00001")
+
+
+def price5(value: Decimal) -> Decimal:
+    """HALF_UP at the lot price scale, signed zero collapsed (the module's wire rule)."""
+    return value.quantize(PRICE5_QUANTUM, rounding=ROUND_HALF_UP) + ZERO
+
+
+def running_avg_paid(lots) -> list[Decimal | None]:
+    """Average price paid per share TO DATE, one figure per lot, over `lots` in chain order
+    ((purchase_date, id) — the router's own ordering; 2026-09-07 spec §3.1).
+
+    Sold lots stay in the walk: this is what the purchases cost on average as they happened —
+    the price chart's stepped rule — never a tax basis, and the wire name says "paid". None
+    only where the cumulative share count is zero, which the API forbids but a hand-edited
+    row could store: a GET must never divide by it. Each lot's cost is half_up2(shares x
+    price), the same cents `lot_metrics` reports as cost_basis, so the two never drift.
+    """
+    cumulative_cost = ZERO
+    cumulative_shares = ZERO
+    averages: list[Decimal | None] = []
+    for lot in lots:
+        cumulative_cost += half_up2(lot.shares * lot.purchase_price)
+        cumulative_shares += lot.shares
+        averages.append(
+            None if cumulative_shares == 0 else price5(cumulative_cost / cumulative_shares)
+        )
+    return averages
+
+
+# Accumulators start AT column scale so an empty block still serializes "0.0000" / "0.00"
+# rather than a bare "0" (Pct9's lesson: the wire text is the Decimal's own str()).
+SHARES_ZERO = Decimal("0.0000")
+MONEY_ZERO = Decimal("0.00")
+HELD_SUMMED = (
+    "cost_basis",
+    "fmv_value",
+    "bargain_element",
+    "lookback_component",
+    "discount_component",
+)
+
+
+def position_totals(rows) -> dict[str, dict]:
+    """The lots envelope's totals block (2026-09-07 spec §3.2): held and sold lots summed
+    apart, from the (lot, lot_metrics(lot, …)) pairs the router already built.
+
+    Held: the quote-dependent fields (market_value, gain_amount, gain_pct, appreciation) go
+    None as soon as ONE held lot is unpriced — a partial sum would be a smaller number
+    pretending to be the position — while the purchase-day facts always sum. gain_pct is
+    gain / cost, a MONEY ratio; the per-lot gain_pct is the sheet's PRICE ratio, and the two
+    agree only while every lot was bought at one price (the schema docstring says so too).
+    Sold: a row with a sold_date but no price counts in `lots` and `shares` and in no money
+    field, so proceeds and gain stay over one and the same priced subset. The SUMS are never
+    re-rounded — every operand arrives at cents already, and the closing `+ ZERO` pass only
+    collapses signed zeros; the two ratios (gain_pct at 6 dp, avg_paid at 5 dp) are the only
+    quantizes in this function.
+    """
+    held: dict = {
+        "lots": 0,
+        "shares": SHARES_ZERO,
+        "market_value": MONEY_ZERO,
+        "gain_amount": MONEY_ZERO,
+        "appreciation": MONEY_ZERO,
+    }
+    held.update({key: MONEY_ZERO for key in HELD_SUMMED})
+    sold: dict = {
+        "lots": 0,
+        "shares": SHARES_ZERO,
+        "cost_basis": MONEY_ZERO,
+        "proceeds": MONEY_ZERO,
+        "gain_amount": MONEY_ZERO,
+    }
+    unpriced_held = False
+    for lot, metrics in rows:
+        if metrics["is_sold"]:
+            sold["lots"] += 1
+            sold["shares"] += lot.shares
+            if metrics["market_value"] is not None:
+                sold["cost_basis"] += metrics["cost_basis"]
+                sold["proceeds"] += metrics["market_value"]
+                sold["gain_amount"] += metrics["gain_amount"]
+            continue
+        held["lots"] += 1
+        held["shares"] += lot.shares
+        for key in HELD_SUMMED:
+            held[key] += metrics[key]
+        if metrics["market_value"] is None:
+            unpriced_held = True
+        else:
+            held["market_value"] += metrics["market_value"]
+            held["gain_amount"] += metrics["gain_amount"]
+            held["appreciation"] += metrics["appreciation"]
+    if unpriced_held:
+        held["market_value"] = held["gain_amount"] = held["appreciation"] = held["gain_pct"] = None
+    else:
+        held["gain_pct"] = (
+            None if held["cost_basis"] == 0 else _pct6(held["gain_amount"] / held["cost_basis"])
+        )
+    held["avg_paid"] = None if held["shares"] == 0 else price5(held["cost_basis"] / held["shares"])
+    for block in (held, sold):
+        for key, value in block.items():
+            if isinstance(value, Decimal):
+                block[key] = value + ZERO
+    return {"held": held, "sold": sold}
+
+
 @dataclass(frozen=True)
 class StoredPeriod:
     """One `espp_periods` row, as the router hands it over (already at column scale) — the
@@ -236,6 +344,10 @@ class ModelerTotals:
     out_of_pocket_cost: Decimal
     fmv_of_shares: Decimal
     remaining_25k: Decimal
+    # 2026-09-07 spec §3.3 — the chain meter's labels and tiles, exposed so no client sums.
+    total_shares: int
+    total_contribution: Decimal
+    total_refund: Decimal
 
 
 @dataclass(frozen=True)
@@ -325,6 +437,9 @@ def run_modeler(
             # that stays a no-op while one purchase_fmv knob drives the whole year.
             fmv_of_shares=half_up2(Decimal(total_shares) * purchase_fmv),
             remaining_25k=half_up2(ANNUAL_LIMIT - total_value),
+            total_shares=total_shares,
+            total_contribution=half_up2(sum((row.contribution for row in results), ZERO)),
+            total_refund=half_up2(sum((row.refund for row in results), ZERO)),
         ),
     )
 
@@ -346,6 +461,10 @@ def lot_metrics(lot, current_price: Decimal | None, today: date) -> dict:
         the stored sale price is IGNORED and the row is priced off the live quote.
       - purchase_price == 0: only gain_pct goes null (its divisor); cost_basis,
         market_value and gain_amount all still compute.
+
+    The five anatomy keys (fmv_value, bargain_element, lookback_component,
+    discount_component, appreciation) are the lot's value on purchase day and its split —
+    only `appreciation` needs a price, so only it can be None.
     """
     is_sold = lot.sold_date is not None
     price = lot.sold_price if is_sold else current_price
@@ -361,6 +480,18 @@ def lot_metrics(lot, current_price: Decimal | None, today: date) -> dict:
             # The sheet's r16 shape: a PRICE ratio, not market_value/cost_basis.
             gain_pct = _pct6((price - lot.purchase_price) / lot.purchase_price)
 
+    # The anatomy (2026-09-07 spec §3.1). The bargain element is the lot's value on purchase
+    # day less what it cost — the plan discount PLUS the lookback (FMV above the subscription
+    # price). It is split from the two stored prices, never from the discount setting: an
+    # over-typed purchase_price then shows up honestly as a NEGATIVE discount component
+    # rather than as a lie about the lookback.
+    fmv_value = half_up2(lot.shares * lot.purchase_fmv)
+    bargain_element = (fmv_value - cost_basis) + ZERO
+    lookback_component = half_up2(lot.shares * max(lot.purchase_fmv - lot.subscription_price, ZERO))
+    discount_component = (bargain_element - lookback_component) + ZERO
+    # Realized for a sold lot (market_value is at the sale price), None while unpriced.
+    appreciation = None if market_value is None else (market_value - fmv_value) + ZERO
+
     # A disposition is judged on the SALE date; an unsold lot is judged on today.
     reference_date = lot.sold_date if is_sold else today
     return {
@@ -368,6 +499,11 @@ def lot_metrics(lot, current_price: Decimal | None, today: date) -> dict:
         "market_value": market_value,
         "gain_amount": gain_amount,
         "gain_pct": gain_pct,
+        "fmv_value": fmv_value,
+        "bargain_element": bargain_element,
+        "lookback_component": lookback_component,
+        "discount_component": discount_component,
+        "appreciation": appreciation,
         "qualified": reference_date >= lot.qualifying_date,
         "days_until_qualified": (None if is_sold else max(0, (lot.qualifying_date - today).days)),
         "is_sold": is_sold,

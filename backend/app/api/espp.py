@@ -28,9 +28,11 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.models import AppSetting, EsppLot, EsppOffering, EsppPeriod, LatestPrice, Security
 from app.schemas.espp import (
+    HeldTotalsOut,
     LotIn,
     LotOut,
     LotsOut,
+    LotTotalsOut,
     LotUpdate,
     ModelerOut,
     ModelerPeriodOut,
@@ -41,13 +43,16 @@ from app.schemas.espp import (
     PeriodIn,
     PeriodOut,
     PeriodUpdate,
+    SoldTotalsOut,
 )
 from app.services.espp_calc import (
     OfferingInfo,
     StoredPeriod,
     lot_metrics,
     plan_year_rows,
+    position_totals,
     run_modeler,
+    running_avg_paid,
 )
 from app.services.money import (
     DATE_MAX,
@@ -216,7 +221,7 @@ def _validated_lot(
     }
 
 
-def _lot_out(lot: EsppLot, current_price: Decimal | None, today: date) -> LotOut:
+def _lot_out(lot: EsppLot, metrics: dict, avg_paid_to_date: Decimal | None) -> LotOut:
     return LotOut(
         id=lot.id,
         purchase_date=lot.purchase_date,
@@ -228,8 +233,28 @@ def _lot_out(lot: EsppLot, current_price: Decimal | None, today: date) -> LotOut
         sold_date=lot.sold_date,
         sold_price=lot.sold_price,
         notes=lot.notes,
-        **lot_metrics(lot, current_price, today),
+        avg_paid_to_date=avg_paid_to_date,
+        **metrics,
     )
+
+
+async def _ordered_lots(db: AsyncSession) -> list[EsppLot]:
+    """The chain in its one order, (purchase_date, id) — the list, the running average and
+    the totals all read this same sequence."""
+    return list(
+        (await db.execute(select(EsppLot).order_by(EsppLot.purchase_date, EsppLot.id))).scalars()
+    )
+
+
+async def _running_average_for(db: AsyncSession, lot_id: int) -> Decimal | None:
+    """The just-written lot's avg_paid_to_date, from the WHOLE chain — the write responses
+    carry the same field the list does, so a client painting from one never meets a shape
+    the other lacks (and a moved purchase_date re-slots the lot before this reads)."""
+    rows = await _ordered_lots(db)
+    for lot, average in zip(rows, running_avg_paid(rows), strict=True):
+        if lot.id == lot_id:
+            return average
+    return None
 
 
 async def _get_lot(db: AsyncSession, lot_id: int) -> EsppLot:
@@ -257,12 +282,20 @@ async def list_lots(db: AsyncSession = Depends(get_db)) -> LotsOut:
     # One of the module's two `date.today()` reads (the modeler's year default is the
     # other); container-local by design (spec §9).
     today = date.today()
-    rows = (await db.execute(select(EsppLot).order_by(EsppLot.purchase_date, EsppLot.id))).scalars()
+    rows = await _ordered_lots(db)
+    metrics = [lot_metrics(lot, current_price, today) for lot in rows]
+    totals = position_totals(list(zip(rows, metrics, strict=True)))
     return LotsOut(
         espp_ticker=ticker,
         current_price=current_price,
         quoted_at=quoted_at,
-        lots=[_lot_out(lot, current_price, today) for lot in rows],
+        lots=[
+            _lot_out(lot, m, average)
+            for lot, m, average in zip(rows, metrics, running_avg_paid(rows), strict=True)
+        ],
+        totals=LotTotalsOut(
+            held=HeldTotalsOut(**totals["held"]), sold=SoldTotalsOut(**totals["sold"])
+        ),
     )
 
 
@@ -287,7 +320,9 @@ async def create_lot(body: LotIn, db: AsyncSession = Depends(get_db)) -> LotOut:
     db.add(lot)
     await db.commit()
     _ticker, current_price, _quoted_at = await _espp_quote(db)
-    return _lot_out(lot, current_price, date.today())
+    return _lot_out(
+        lot, lot_metrics(lot, current_price, date.today()), await _running_average_for(db, lot.id)
+    )
 
 
 def _merged(provided: dict, key: str, current):
@@ -327,7 +362,9 @@ async def update_lot(lot_id: IdPath, body: LotUpdate, db: AsyncSession = Depends
         lot.notes = provided["notes"]
     await db.commit()
     _ticker, current_price, _quoted_at = await _espp_quote(db)
-    return _lot_out(lot, current_price, date.today())
+    return _lot_out(
+        lot, lot_metrics(lot, current_price, date.today()), await _running_average_for(db, lot.id)
+    )
 
 
 @router.delete("/lots/{lot_id}", status_code=204)
@@ -675,5 +712,8 @@ async def modeler(
             out_of_pocket_cost=result.totals.out_of_pocket_cost,
             fmv_of_shares=result.totals.fmv_of_shares,
             remaining_25k=result.totals.remaining_25k,
+            total_shares=Decimal(result.totals.total_shares),
+            total_contribution=result.totals.total_contribution,
+            total_refund=result.totals.total_refund,
         ),
     )
