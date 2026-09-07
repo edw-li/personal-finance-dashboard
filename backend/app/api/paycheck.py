@@ -53,6 +53,7 @@ from app.services.money import (
     quantize_money,
     require_reasonable_date,
 )
+from app.services.pace_walk import walk
 from app.services.paycheck_calc import (
     MONTHS_PER_YEAR,
     PAYROLL_SAVING_KEYS,
@@ -672,7 +673,7 @@ def _text(value) -> str:
     return format(value, "f") if isinstance(value, Decimal) else str(value)
 
 
-async def _espp_pace_rows(
+async def _pace_rows(
     db: AsyncSession,
     profile,
     person_id: int,
@@ -680,15 +681,36 @@ async def _espp_pace_rows(
     limits: dict[str, Decimal],
     today: date,
 ) -> list[PaceItem]:
-    """`paycheck_pace`'s rows with the ESPP one replaced by the PURCHASE-year row (§1.6).
+    """The pace strip's rows: every one WALKED payday by payday (§2.6), with the ESPP row
+    replaced by the PURCHASE-year one (§1.6).
 
-    The windows are planned exactly as the calendar generator plans them —
-    `plan_year_rows(Y, stored, [], None, None)`, pricing inputs deliberately empty — so the
-    strip and the calendar can never disagree about which halves exist. `person_id` is a
-    parameter because a `ScenarioProfile` has no owner. SELECTs only: this runs inside the
-    preview, which writes nothing (tests/test_sandbox_purity.py).
+    One walk of this person's timeline serves the whole strip, so no two rows can disagree
+    about which paydays the year has or who priced them. The ESPP windows are planned
+    exactly as the calendar generator plans them — `plan_year_rows(Y, stored, [], None,
+    None)`, pricing inputs deliberately empty — so the strip and the calendar can never
+    disagree about which halves exist. `person_id` is a parameter because a
+    `ScenarioProfile` has no owner. SELECTs only: this runs inside the preview, which writes
+    nothing (tests/test_sandbox_purity.py).
     """
-    items = paycheck_pace(profile, limits, profile.hsa_coverage)
+    profiles = list(
+        (
+            await db.execute(
+                select(PaycheckProfile)
+                .where(PaycheckProfile.person_id == person_id)
+                .order_by(PaycheckProfile.effective_date)
+            )
+        ).scalars()
+    )
+    # The window is the CALENDAR YEAR of the limits these rows are measured against — the
+    # ESPP row is the one with a window of its own (§1.2). A person with no stored profile
+    # cannot be walked at all, and there the pure fallback ("a year at this rate") is the
+    # only honest answer.
+    walked = (
+        walk(profiles, scenario, today, date(today.year, 1, 1), date(today.year, 12, 31))
+        if profiles
+        else None
+    )
+    items = paycheck_pace(profile, limits, profile.hsa_coverage, walked)
     stored = list(
         (
             await db.execute(select(EsppPeriod).order_by(EsppPeriod.period_end, EsppPeriod.id))
@@ -711,15 +733,6 @@ async def _espp_pace_rows(
         [],
         None,
         None,
-    )
-    profiles = list(
-        (
-            await db.execute(
-                select(PaycheckProfile)
-                .where(PaycheckProfile.person_id == person_id)
-                .order_by(PaycheckProfile.effective_date)
-            )
-        ).scalars()
     )
     espp = espp_pace_item(
         rows=rows,
@@ -751,7 +764,7 @@ async def get_breakdown(
     limits = await _limits_for(db, today.year)
     pace = [
         PaceItemOut.model_validate(item)
-        for item in await _espp_pace_rows(db, profile, profile.person_id, profile, limits, today)
+        for item in await _pace_rows(db, profile, profile.person_id, profile, limits, today)
     ]
     # Per check from the ANNUAL policy, not the other way round: the bands are annual
     # dollars, so the year is the only place the tiers can be applied honestly.
@@ -789,11 +802,11 @@ async def preview(body: PreviewIn, db: AsyncSession = Depends(get_db)) -> Previe
     pace = PreviewPace(
         baseline=[
             PaceItemOut.model_validate(item)
-            for item in await _espp_pace_rows(db, base, base.person_id, base, limits, today)
+            for item in await _pace_rows(db, base, base.person_id, base, limits, today)
         ],
         scenario=[
             PaceItemOut.model_validate(item)
-            for item in await _espp_pace_rows(db, scenario, base.person_id, scenario, limits, today)
+            for item in await _pace_rows(db, scenario, base.person_id, scenario, limits, today)
         ],
     )
     changed = [

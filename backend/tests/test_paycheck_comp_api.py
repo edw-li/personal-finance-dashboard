@@ -1414,3 +1414,47 @@ async def test_breakdown_espp_row_grades_the_purchase_year(auth_client, db, me):
     await db.commit()
     again = {r["key"]: r for r in (await auth_client.get(BREAKDOWN)).json()["pace"]}
     assert again["limit_espp_423"]["soft_limit"] == "22500.00"  # 25,000 x (1 - 0.10)
+
+
+async def test_breakdown_pace_walks_the_year_into_so_far_and_projected(auth_client, db, me):
+    """Spec §2.6: one payday walk answers "what has gone in" and "where does it land" at
+    once — the reason a September HSA row reading 2,400 of 4,400 was never a bug."""
+    from app.models import ContributionLimit
+    from app.services.pace_walk import first_payday
+
+    this_year = date.today().year
+    db.add(ContributionLimit(year=this_year, key="limit_401k_elective", value=D("24500.00")))
+    db.add(ContributionLimit(year=this_year, key="limit_hsa_self", value=D("4400.00")))
+    await db.commit()
+    # 240,000 over 24 checks at 10 % is exactly 1,000 a payday, so a walked figure is a whole
+    # number of paydays — and nothing but a walk produces one.
+    created = await auth_client.post(
+        PROFILES,
+        json={
+            "effective_date": f"{this_year}-01-01",
+            "annual_salary": "240000",
+            "pay_periods_per_year": 24,
+            "trad_401k_pct": "0.10",
+            "espp_pct": "0",
+            "hsa_per_check": "100",
+            "hsa_coverage": "self",
+            "hsa_employer_annual": "2000",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    rows = {row["key"]: row for row in (await auth_client.get(BREAKDOWN)).json()["pace"]}
+    elective = rows["limit_401k_elective"]
+    # The projection is the whole year's paydays, wherever in the year today falls.
+    assert elective["annualized"] == "24000.00"
+    so_far = D(elective["so_far"])
+    assert so_far % 1000 == 0  # whole paydays, never a prorated slice of the year
+    assert D("0") <= so_far <= D("24000")
+    hsa = rows["limit_hsa_self"]
+    assert hsa["annualized"] == "4400.00"  # 100 x 24 + the employer's 2,000
+    # ONE walk behind both rows: the HSA leg is a tenth of the elective one payday for
+    # payday, plus the January deposit once that check has been cut.
+    deposit = D("2000.00") if first_payday(this_year, 24) < date.today() else D("0")
+    assert D(hsa["so_far"]) == so_far / 10 + deposit
+    # And 415(c) walks too — it is the only row that adds three legs together.
+    assert rows["limit_415c_total"]["so_far"] is not None
