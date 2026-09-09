@@ -277,8 +277,8 @@ export default function CategoriesPanel({
             {formatCurrency(auto / pool)}
             <span className="sub">
               {' '}
-              auto · {pool > 1 ? `1/${pool} of ` : 'from '}
-              {entered} entered month{entered === 1 ? '' : 's'}
+              auto · {pool > 1 ? `1/${pool} share · ` : ''}from {entered} entered month
+              {entered === 1 ? '' : 's'}
             </span>
           </>
         )

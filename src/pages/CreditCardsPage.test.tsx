@@ -484,6 +484,7 @@ describe('CreditCardsPage', () => {
     // ($300 × 12 / 2), and the caption says so — an unentered month is not a $0 month.
     vi.mocked(fetchRewardCategories).mockResolvedValue([
       { ...CATEGORIES[0], annual_spend: null, spending_category_id: 7 },
+      { ...CATEGORIES[1], annual_spend: null, spending_category_id: 7 },
     ])
     vi.mocked(fetchCategories).mockResolvedValue([
       { id: 7, name: 'Food', slug: 'food', sort_order: 0, is_active: true, kind: 'spending' },
@@ -498,9 +499,19 @@ describe('CreditCardsPage', () => {
     } as unknown as SpendingMatrix)
     renderPage()
     await screen.findByText('Categories & weights')
-    const row = categoriesRow('Groceries')
-    expect(row.textContent).toContain('$1,800')
-    expect(row.textContent).toContain('auto · from 2 entered months')
+    // Two rows share the one pool of Food dollars, so each carries half of it — and the
+    // caption keeps the share and the denominator as separate clauses.
+    const shared = categoriesRow('Groceries').textContent
+    expect(shared).toContain('$900.00')
+    expect(shared).toContain('auto · 1/2 share · from 2 entered months')
+    vi.mocked(fetchRewardCategories).mockResolvedValue([
+      { ...CATEGORIES[0], annual_spend: null, spending_category_id: 7 },
+    ])
+    cleanup()
+    renderPage()
+    await screen.findByText('Categories & weights')
+    expect(categoriesRow('Groceries').textContent).toContain('$1,800.00')
+    expect(categoriesRow('Groceries').textContent).toContain('auto · from 2 entered months')
   })
 
   it('reordering a category is optimistic and PATCHes only the rows that moved', async () => {
