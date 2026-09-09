@@ -742,6 +742,35 @@ async def test_withholding_safe_harbor_is_110_pct_of_the_prior_year(
     ).quantize(Decimal("0.01"))
 
 
+async def test_the_110_pct_gate_is_judged_on_true_agi(auth_client, db, world, frozen_today):
+    """§6654(d)(1)(C)(i)'s $150,000 gate reads AGI, and AGI includes long-term gains and
+    qualified dividends — which `_federal_agi` deliberately does not (2026-09-09 taxes spec
+    4f: it is the ORDINARY income the brackets walk, and the gains are stacked separately).
+
+    140000 of wages with 20000 of long-term gain: ordinary AGI 140000 is UNDER the gate and
+    would have selected the 100% multiplier, while the AGI a 1040 reports — 160000 — is over
+    it. The harbor is 110% of the prior year, and the reported prior_agi is the figure the
+    gate was actually judged on rather than a smaller one beside a 1.10 nobody can derive.
+    """
+    await seed_tax_year(db, YEAR - 1, "140000.0000")
+    db.add(TaxInput(year=YEAR - 1, key="ltcg_total", value=Decimal("20000.0000")))
+    await db.commit()
+
+    body = await get_withholding(auth_client)
+    prior = (await auth_client.get(f"{YEARS}/{YEAR - 1}/summary")).json()
+    # Ordinary AGI is the sheet's Total Income row, and it is BELOW the gate.
+    assert prior["totals"]["total_income"] == "140000.00"
+    assert Decimal(prior["totals"]["total_income"]) < Decimal("150000")
+    assert prior["federal"]["agi"] == "160000.00"  # + the 20000 of netted gains
+
+    harbor = body["safe_harbor"]
+    assert harbor["prior_agi"] == "160000.00"
+    assert harbor["multiplier"] == "1.10"  # 1.00 while the gate read ordinary AGI
+    # 14000 federal + 8000 state + 2030 medicare + 8680 SS + 1540 SDI + 3000 CG.
+    assert harbor["prior_total_tax"] == prior["totals"]["total_tax"] == "37250.00"
+    assert harbor["threshold"] == "40975.00"  # 37250.00 x 1.10
+
+
 async def test_withholding_safe_harbor_is_unavailable_when_the_prior_year_computes_nothing(
     auth_client, db, world, frozen_today
 ):
