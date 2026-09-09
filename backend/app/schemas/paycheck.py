@@ -195,6 +195,18 @@ class PaceItemOut(BaseModel):
     # `annualized`'s own twin (spec §2.6): what is already behind today, against the
     # projected year end beside it. Null on a row nobody walked.
     so_far: Decimal | None
+    # The window's tail and the election that lands on the cap across it (2026-09-09 audit
+    # item 5). The first two ride every walked row — one walk, one answer to "how much year
+    # is left". `to_cap_rate` is the 402(g) row's TOTAL elective rate (traditional + Roth, a
+    # 9 dp fraction) and `to_cap_per_check` is the HSA row's employee amount; each is floored
+    # so the projection built from it lands at or under the cap and the ratio reads 1.0000.
+    # 0 means "no room left", null means the question has no answer — nothing walked, no cap
+    # entered, or no paydays left this year. A client may SUBTRACT its own Roth rate from
+    # `to_cap_rate`; nothing else here is safe to re-derive from a salary.
+    remaining_checks: int | None
+    remaining_gross: Decimal | None
+    to_cap_rate: Decimal | None
+    to_cap_per_check: Decimal | None
 
 
 class BreakdownOut(BaseModel):

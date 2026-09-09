@@ -19,12 +19,14 @@ and only when a payday actually had to borrow.
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 
 from app.services.business_days import previous_business_day, semi_monthly_paydays
 from app.services.paycheck_calc import MONTHS_PER_YEAR, half_up2
 
 ZERO = Decimal("0")
+ONE = Decimal("1")
+CENTS = Decimal("0.01")
 # The only cadence `semi_monthly_paydays` describes; anything else takes the month basis.
 SEMI_MONTHLY = 24
 # The four legs a paycheck contributes, named for the rows that read them. 'elective' is
@@ -50,6 +52,22 @@ class Walked:
     # (spec §2.6) and `limit_check.paycheck_pace` is pure — it has no clock of its own, so
     # the walk answers it here, where `today` and the cadence are both already in hand.
     first_payday_passed: bool
+    # What the window still has AHEAD of it — the paychecks left from `today` onward and the
+    # gross they pay, priced by the SCENARIO like every other future payday (2026-09-09 audit
+    # item 5). These are the two divisors a "land exactly on the cap" target is built from: a
+    # rate over the remaining GROSS, a per-check amount over the remaining CHECKS. The walk
+    # answers them because it is the only thing here that knows which paydays are left.
+    #
+    # Both round AWAY from the target — the count UP, the gross UP to the cent — so a figure
+    # divided by either lands UNDER the cap rather than a hair over it, which is the whole
+    # point of the exercise. On the month basis a "check" is `pay_periods_per_year / 12` of a
+    # month's credit, so a cadence with no payday calendar still divides by checks and not by
+    # months; the rounding up is what makes that fraction safe to report as a count.
+    #
+    # The defaults are the empty tail — a window with nothing left — so a hand-built Walked
+    # stays constructible; `walk` always states both.
+    remaining_checks: int = 0
+    remaining_gross: Decimal = ZERO
 
 
 def first_payday(year: int, pay_periods: int) -> date:
@@ -82,10 +100,17 @@ def in_force(profiles: list, day: date):
     return min(profiles, key=lambda p: p.effective_date)
 
 
+def _payday_gross(profile) -> Decimal:
+    """One check's gross under `profile` — the figure every percentage leg is a share of, and
+    the unit the window's remaining gross is summed from. Full precision: the walk quantizes
+    once, at the end."""
+    return profile.annual_salary / Decimal(profile.pay_periods_per_year)
+
+
 def _per_payday(profile) -> dict[str, Decimal]:
     """One check under `profile`: the same expressions `paycheck_calc.breakdown` uses, so a
     walked year and the waterfall above it can never disagree about one payday."""
-    gross = profile.annual_salary / Decimal(profile.pay_periods_per_year)
+    gross = _payday_gross(profile)
     return {
         "elective": (profile.trad_401k_pct + profile.roth_401k_pct) * gross,
         "after_tax": profile.after_tax_401k_pct * gross,
@@ -120,13 +145,18 @@ def walk(profiles: list, scenario, today: date, start: date, end: date) -> Walke
     contributes one twelfth of the annual rate instead and the walk says "months". Paydays on
     or after `today` are priced by the SCENARIO — the in-force profile for the GET, the
     sandbox's knobs for the preview — so the projection answers "if I change now, where does
-    the year land?", never "what if I had changed in March".
+    the year land?", never "what if I had changed in March". The same fence gives the window
+    its TAIL: the paydays from `today` onward, counted and grossed up, which is what a "what
+    rate lands me exactly on the cap" question divides by.
     """
     earliest = min(p.effective_date for p in profiles)
     so_far = dict.fromkeys(LEGS, ZERO)
     projected = dict.fromkeys(LEGS, ZERO)
     by_month = False
     backfilled: date | None = None
+    # Summed in the same pass, on the far side of `today`: the paydays left and their gross.
+    remaining_checks = ZERO
+    remaining_gross = ZERO
 
     def priced_by(day: date):
         """Who prices `day` — PURE, so asking the question never records an answer."""
@@ -141,11 +171,17 @@ def walk(profiles: list, scenario, today: date, start: date, end: date) -> Walke
         """
         return day < today and day < earliest
 
-    def credit(day: date, legs: dict[str, Decimal]) -> None:
+    def credit(day: date, legs: dict[str, Decimal], gross: Decimal, checks: Decimal) -> None:
+        nonlocal remaining_checks, remaining_gross
         for name, value in legs.items():
             projected[name] += value
             if day < today:
                 so_far[name] += value
+        # The same fence `so_far` is drawn at, from the other side: a payday is either behind
+        # today or still to come, so the two halves can never double-count or lose one.
+        if day >= today:
+            remaining_gross += gross
+            remaining_checks += checks
 
     # The cadence pricing the window's opening is the one the year's first check rides.
     opener = first_payday(start.year, priced_by(start).pay_periods_per_year)
@@ -159,13 +195,22 @@ def walk(profiles: list, scenario, today: date, start: date, end: date) -> Walke
                 if start <= day <= end:
                     if borrowed(day):
                         backfilled = earliest
-                    credit(day, _per_payday(priced_by(day)))
+                    payer = priced_by(day)
+                    credit(day, _per_payday(payer), _payday_gross(payer), ONE)
         else:
             by_month = True
             if start <= mid <= end:
                 if borrowed(mid):
                     backfilled = earliest
-                credit(mid, _per_month(monthly))
+                # A month is one credit but `pay_periods_per_year / 12` CHECKS: the HSA leg
+                # is per-check dollars, so a divisor counted in months would under-fill by
+                # exactly the cadence.
+                credit(
+                    mid,
+                    _per_month(monthly),
+                    monthly.annual_salary / MONTHS_PER_YEAR,
+                    Decimal(monthly.pay_periods_per_year) / MONTHS_PER_YEAR,
+                )
     return Walked(
         # Quantized ONCE, here, at the end of the walk: every consumer adds these figures to
         # employer legs that are themselves cents, so a second rounding pass downstream is a
@@ -175,4 +220,8 @@ def walk(profiles: list, scenario, today: date, start: date, end: date) -> Walke
         basis="months" if by_month else "paydays",
         backfilled_from=backfilled,
         first_payday_passed=opener < today,
+        # Rounded UP, both of them — a target divided by these can only come out SMALLER, and
+        # a projection that lands a hair under the cap is the one that reads 100 %.
+        remaining_checks=int(remaining_checks.to_integral_value(rounding=ROUND_CEILING)),
+        remaining_gross=remaining_gross.quantize(CENTS, rounding=ROUND_CEILING),
     )

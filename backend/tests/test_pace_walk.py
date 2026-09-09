@@ -116,3 +116,43 @@ def test_the_walk_says_whether_the_years_first_payday_has_gone_by():
     assert year().first_payday_passed is True
     # Read on January 2nd, the 15th has not come: nothing has been deposited yet.
     assert year(today=date(2026, 1, 2)).first_payday_passed is False
+
+
+def test_the_walk_counts_the_paydays_still_ahead_and_the_gross_they_pay():
+    """The tail a "what rate lands me on the cap" question divides by (2026-09-09 audit item
+    5). Eight of Edward's 24 checks are still to come on 2026-09-07, at 188,930 / 24 each."""
+    walked = year()
+    assert walked.remaining_checks == 8
+    # 62,976.666… rounded UP to the cent: a divisor that can only make a target SMALLER, so
+    # the projection it builds lands under the cap rather than a hair over it.
+    assert walked.remaining_gross == D("62976.67")
+    # The two halves of the year are one year: 16 paid + 8 ahead, and the gross of both is
+    # the salary.
+    assert walked.remaining_gross + D("125953.33") == D("188930.00")
+
+
+def test_the_whole_year_is_ahead_on_january_the_second():
+    walked = year(today=date(2026, 1, 2))
+    assert walked.remaining_checks == 24
+    assert walked.remaining_gross == D("188930.00")
+    assert walked.so_far["elective"] == D("0.00")
+
+
+def test_a_year_already_finished_has_no_tail_left():
+    """December's last payday is behind a January read of the year just gone — nothing can be
+    changed about it, and the pace targets built from this say so by being null."""
+    walked = walk(EDWARD, EDWARD[-1], date(2027, 1, 1), JAN, DEC)
+    assert walked.remaining_checks == 0
+    assert walked.remaining_gross == D("0.00")
+
+
+def test_the_month_basis_counts_CHECKS_and_not_months():
+    """A biweekly profile has no payday calendar here, so four remaining months carry
+    26 x 4 / 12 = 8.67 checks — rounded UP to 9, because the HSA divisor is per CHECK and a
+    month-shaped one would under-fill by exactly the cadence."""
+    biweekly = [FakeProfile(effective_date=date(2026, 1, 1), pay_periods_per_year=26)]
+    walked = year(profiles=biweekly)
+    assert walked.basis == "months"
+    assert walked.remaining_checks == 9
+    # Four twelfths of the salary, whatever the cadence: the gross is a rate's divisor.
+    assert walked.remaining_gross == D("62976.67")

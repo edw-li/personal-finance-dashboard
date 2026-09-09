@@ -421,3 +421,40 @@ async def test_preview_employer_legs_move_the_projection_and_never_the_past(auth
     assert D(after["limit_415c_total"]["employer_match"]) > D(
         before["limit_415c_total"]["employer_match"]
     )
+
+
+async def test_pace_rows_name_the_election_that_lands_on_the_cap(auth_client, db, me, monkeypatch):
+    """2026-09-09 audit item 5: the Try-it presets used to size themselves `limit / salary`
+    and `limit / periods`, which asks the checks that are LEFT to carry a whole year and lands
+    the strip beside the chip on "over". The server answers with the election instead, on both
+    doors — the clock is pinned so the tail is a fixed 8 of 24 checks."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2026, 9, 7))
+    db.add(ContributionLimit(year=2026, key="limit_401k_elective", value=D("24500.00")))
+    db.add(ContributionLimit(year=2026, key="limit_hsa_self", value=D("4400.00")))
+    await db.commit()
+    await create_profile(auth_client, hsa_coverage="self", hsa_employer_annual="2000")
+
+    shown = {row["key"]: row for row in (await auth_client.get(BREAKDOWN)).json()["pace"]}
+    elective = shown["limit_401k_elective"]
+    assert elective["remaining_checks"] == 8
+    assert elective["remaining_gross"] == "62976.67"
+    assert elective["to_cap_rate"] == "0.129033021"
+    assert elective["to_cap_per_check"] is None
+    # 4,400 less the employer's 2,000 and the 1,600 already deferred, over eight checks.
+    assert shown["limit_hsa_self"]["to_cap_per_check"] == "100.00"
+    assert shown["limit_hsa_self"]["to_cap_rate"] is None
+
+    # Elect it and the projection lands ON the cap: the verdict the old chip could not reach.
+    body = await preview(
+        auth_client, overrides={"trad_401k_pct": elective["to_cap_rate"], "hsa_per_check": "100"}
+    )
+    before = {row["key"]: row for row in body["pace"]["baseline"]}
+    after = {row["key"]: row for row in body["pace"]["scenario"]}
+    assert before["limit_401k_elective"]["to_cap_rate"] == elective["to_cap_rate"]
+    assert after["limit_401k_elective"]["annualized"] == "24500.00"
+    assert after["limit_401k_elective"]["ratio"] == "1.0000"
+    assert after["limit_401k_elective"]["tone"] != "over"
+    assert after["limit_hsa_self"]["ratio"] == "1.0000"
+    assert after["limit_hsa_self"]["tone"] != "over"
+    # The tail is the WALK's, so a knob that moves neither salary nor cadence cannot move it.
+    assert after["limit_401k_elective"]["remaining_checks"] == 8
