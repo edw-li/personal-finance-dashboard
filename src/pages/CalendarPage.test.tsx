@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
@@ -92,6 +92,15 @@ function renderPage(events: CalendarEvent[] = fixtureEvents(), entry = '/calenda
 const url = () => screen.getByTestId('url').textContent
 const cell = (day: string) =>
   document.querySelector(`[role="gridcell"][data-day="${day}"]`) as HTMLElement
+/** The grid's ONE roving tab stop, as a day string — there must be exactly one, or the
+ *  grid is unreachable by keyboard. */
+const cursor = () => {
+  const stops = Array.from(document.querySelectorAll('[role="gridcell"][data-day]')).filter(
+    (c) => c.getAttribute('tabindex') === '0',
+  )
+  expect(stops).toHaveLength(1)
+  return stops[0].getAttribute('data-day') as string
+}
 const chipIn = (day: string, prefix: string) =>
   Array.from(cell(day).querySelectorAll('button.cal-chip')).find((c) =>
     c.textContent?.startsWith(prefix),
@@ -154,13 +163,6 @@ describe('CalendarPage — month, views, grid', () => {
     // all — Tab fell straight past the grid.
     renderPage()
     await screen.findByRole('grid')
-    const cursor = () => {
-      const stops = Array.from(document.querySelectorAll('[role="gridcell"][data-day]')).filter(
-        (c) => c.getAttribute('tabindex') === '0',
-      )
-      expect(stops).toHaveLength(1)
-      return stops[0].getAttribute('data-day') as string
-    }
     const today = todayIso()
     expect(cursor()).toBe(today)
     // ‹ › keep the day-of-month, clamped — the move PageUp/PageDown already make.
@@ -174,6 +176,53 @@ describe('CalendarPage — month, views, grid', () => {
     expect(cursor()).toBe('2027-03-01')
     fireEvent.click(screen.getByRole('button', { name: 'Today' }))
     expect(cursor()).toBe(today)
+  })
+
+  it('the cursor follows a month changed from OUTSIDE the controls (item 13 follow-up)', async () => {
+    // Back/Forward, a pasted ?month= link and the palette write the scope without going
+    // through ‹ › / Today / Jump, so nothing there could move `activeDay` — and a cursor
+    // left in a month that is no longer shown is a grid with no tab stop at all.
+    const Jump = () => {
+      const navigate = useNavigate()
+      return (
+        <>
+          <button type="button" onClick={() => navigate('/calendar?month=2027-03')}>
+            router jump
+          </button>
+          <button type="button" onClick={() => navigate(-1)}>
+            router back
+          </button>
+        </>
+      )
+    }
+    vi.mocked(fetchCalendar).mockResolvedValue(payload())
+    render(
+      <MemoryRouter initialEntries={['/calendar']}>
+        <ToastProvider>
+          <Routes>
+            <Route
+              path="*"
+              element={
+                <>
+                  <CalendarPage />
+                  <Jump />
+                </>
+              }
+            />
+          </Routes>
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+    await screen.findByRole('grid')
+    expect(cursor()).toBe(todayIso())
+    fireEvent.click(screen.getByRole('button', { name: 'router jump' }))
+    await screen.findByRole('heading', { name: formatMonth('2027-03-01') })
+    // Today is not in March 2027, so the cursor is that month's first day.
+    expect(cursor()).toBe('2027-03-01')
+    // ...and Back is a month change too: today is in it, so the cursor is today.
+    fireEvent.click(screen.getByRole('button', { name: 'router back' }))
+    await screen.findByRole('heading', { name: formatMonth(MONTH) })
+    expect(cursor()).toBe(todayIso())
   })
 
   it('accepts a legacy YYYY-MM-DD month link and the month input jumps', async () => {

@@ -108,10 +108,8 @@ export default function CalendarPage() {
   const [openKey, setOpenKey] = useState<string | null>(null) // the grid's anchored popover
   const [openListKey, setOpenListKey] = useState<string | null>(null) // the list's accordion
   const [drawerDay, setDrawerDay] = useState<string | null>(null)
-  const [activeDay, setActiveDay] = useState<string>(() => {
-    const today = todayIso()
-    return today.slice(0, 7) === month.slice(0, 7) ? today : month
-  })
+  // Where the user last pointed. The grid reads `cursorDay` below, not this — see there.
+  const [activeDay, setActiveDay] = useState<string>(todayIso)
   const [focusTick, setFocusTick] = useState(0)
   // Bumped whenever the form is opened, so the caret lands in it rather than wherever the
   // button that opened it used to be (the drawer's "Add event on …" unmounts with it).
@@ -187,6 +185,19 @@ export default function CalendarPage() {
   const busy = revalidating || data === null || data.month !== month
   const visible = shown === null ? [] : visibleEvents(shown.events)
   const byDate = groupByDate(visible)
+  // The roving tab stop, and the ONLY day the grid is told about. Derived from the month
+  // on screen, never seeded from an effect: the controls are not the only thing that
+  // changes the month — Back/Forward, a pasted ?month= link and the palette write the
+  // scope directly, and a cursor stranded in a month that is no longer shown leaves the
+  // grid with no tab stop at all (2026-09-09 audit item 13). Inside the shown month the
+  // user's own day wins, so ‹ ›'s same-day clamp and a Back to where they were both hold;
+  // outside it the cursor falls to today, else to the first of the month.
+  const cursorDay =
+    activeDay.slice(0, 7) === month.slice(0, 7)
+      ? activeDay
+      : todayIso().slice(0, 7) === month.slice(0, 7)
+        ? todayIso()
+        : month
 
   const revalidate = (monthIso: string) => {
     setRevalidating(true)
@@ -212,7 +223,7 @@ export default function CalendarPage() {
   // ‹ › keep the day of month, clamped — the move PageUp/PageDown already make.
   const stepMonth = (delta: 1 | -1) => {
     const next = addMonths(month, delta)
-    goToMonth(next, dayInMonth(next, activeDay))
+    goToMonth(next, dayInMonth(next, cursorDay))
   }
 
   // `view` is the page's own param, not the shell's scope, so it is written straight
@@ -680,7 +691,7 @@ export default function CalendarPage() {
                     month={month}
                     events={visible}
                     today={todayIso()}
-                    activeDay={activeDay}
+                    activeDay={cursorDay}
                     focusTick={focusTick}
                     openKey={openKey}
                     popoverRef={popoverRef}
