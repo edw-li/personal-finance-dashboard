@@ -156,8 +156,6 @@ FIELD_LABELS = {
     "match_band_1": "Match band 1",
     "match_rate_2": "Match rate (second band)",
     "match_band_2": "Match band 2",
-    "fed_withholding_pct": "Federal withholding %",
-    "state_withholding_pct": "State withholding %",
     "hsa_employer_annual": "Employer HSA (annual)",
     "hsa_employer_per_dependent": "Employer HSA per dependent",
     "hsa_dependents": "Covered dependents",
