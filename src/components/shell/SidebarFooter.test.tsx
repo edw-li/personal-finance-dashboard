@@ -7,6 +7,7 @@ import { clearSnapshots, getSnapshot } from '../../api/snapshotCache'
 import { fetchSystemStatus } from '../../api/system'
 import { useAuth } from '../../contexts/AuthContext'
 import type { SystemStatus } from '../../types/api'
+import ToastProvider from '../ToastProvider'
 import ThemeProvider from './ThemeProvider'
 import SidebarFooter, { getLastSystemStatus, SYSTEM_SNAPSHOT } from './SidebarFooter'
 
@@ -37,6 +38,46 @@ describe('SidebarFooter', () => {
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe('light'))
     expect(localStorage.getItem('finance.theme')).toBe('light')
     expect(screen.getByRole('button', { name: /switch to dark theme/i })).toBeTruthy()
+  })
+
+  // Audit item 39: the toggle writes an EXPLICIT choice, which ends "follow my system" —
+  // a preference the user set on purpose and nothing on screen said was gone. The toggle
+  // stays two-state (a three-state cycle through System is worse to operate); leaving
+  // System is announced instead, with the way back one click away.
+  it('announces leaving System and undoes back to it', async () => {
+    localStorage.setItem('finance.theme', 'system')
+    render(
+      <ToastProvider>
+        <ThemeProvider>
+          <SidebarFooter buildHash="abc123" />
+        </ThemeProvider>
+      </ToastProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /switch to light theme/i }))
+    await waitFor(() => expect(localStorage.getItem('finance.theme')).toBe('light'))
+    expect(
+      screen.getByText('Theme set to light — no longer following your system'),
+    ).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(localStorage.getItem('finance.theme')).toBe('system'))
+    // Back under the OS's answer, which jsdom reports as dark.
+    expect(document.documentElement.dataset.theme).toBe('dark')
+  })
+
+  it('says nothing when the choice being replaced was already explicit', async () => {
+    localStorage.setItem('finance.theme', 'dark')
+    render(
+      <ToastProvider>
+        <ThemeProvider>
+          <SidebarFooter buildHash="abc123" />
+        </ThemeProvider>
+      </ToastProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /switch to light theme/i }))
+    await waitFor(() => expect(localStorage.getItem('finance.theme')).toBe('light'))
+    // Nothing was abandoned, so nothing is announced — every toggle would otherwise toast.
+    expect(screen.queryByText(/no longer following your system/)).toBeNull()
   })
 
   it('hides the pill until the status answers, and survives a failed status', async () => {

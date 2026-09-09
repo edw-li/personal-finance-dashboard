@@ -4,6 +4,7 @@ import { getSnapshot, setSnapshot } from '../../api/snapshotCache'
 import { fetchSystemStatus } from '../../api/system'
 import { useAuth } from '../../contexts/AuthContext'
 import type { SystemStatus } from '../../types/api'
+import { useToast } from '../ToastProvider'
 import { useTheme } from './ThemeProvider'
 import './shell.css'
 
@@ -29,7 +30,8 @@ export function getLastSystemStatus(): SystemStatus | null {
 // confused — plus a one-click theme toggle and Log out.
 export default function SidebarFooter({ buildHash }: { buildHash: string }) {
   const { email, logout } = useAuth()
-  const { resolved, setTheme } = useTheme()
+  const { theme, resolved, setTheme } = useTheme()
+  const toast = useToast()
   // Seeded from the cache so a remount WITHIN a session (a StrictMode double-mount, a shell
   // re-render) shows the pill immediately instead of blinking it back in. Not after a
   // logout/login — logout clears the snapshots by design, since they are session data — and
@@ -58,6 +60,22 @@ export default function SidebarFooter({ buildHash }: { buildHash: string }) {
   }, [])
 
   const next = resolved === 'dark' ? 'light' : 'dark'
+  // Audit item 39: this button writes an EXPLICIT choice, so a click while the stored
+  // choice is System quietly ends "follow my system" — a preference the user set on
+  // purpose, replaced by whatever the OS happened to be answering at that moment. The
+  // toggle stays two-state (a three-state cycle through System is worse to operate under
+  // the thumb): the abandonment is announced instead, and Undo puts System back. Only
+  // when something was actually abandoned — every toggle toasting would be noise.
+  const onToggleTheme = () => {
+    const leavingSystem = theme === 'system'
+    setTheme(next)
+    if (leavingSystem) {
+      toast.info(`Theme set to ${next} — no longer following your system`, {
+        action: { label: 'Undo', onAction: () => setTheme('system') },
+      })
+    }
+  }
+
   return (
     <div className="sidebar-footer">
       {/* The row, not just the address, is conditional: an email-less footer (the context
@@ -82,7 +100,7 @@ export default function SidebarFooter({ buildHash }: { buildHash: string }) {
           {buildHash}
         </span>
       </div>
-      <button type="button" className="sidebar-footer-icon" onClick={() => setTheme(next)} aria-label={`Switch to ${next} theme`}>
+      <button type="button" className="sidebar-footer-icon" onClick={onToggleTheme} aria-label={`Switch to ${next} theme`}>
         {resolved === 'dark' ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
         <span>{resolved === 'dark' ? 'Light theme' : 'Dark theme'}</span>
       </button>
