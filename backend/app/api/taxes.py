@@ -158,6 +158,14 @@ ZERO = Decimal("0")
 RATE_MAX_ABS = Decimal("1e12")
 # Spelled once: the ONE per-person key whose suggestion comes from outside tax_inputs.
 ANNUAL_SALARY_KEY = "annual_salary"
+# The household rows that are a FIGURE OF THE YEAR rather than of the filer's own
+# behaviour: the IRS and the FTB publish them, they move a little every year, and a year
+# that never had them entered silently taxed AGI in full (2026-09-09 spec 4e). Absent one,
+# last year's stored value is the honest starting point — offered as a chip labelled for
+# what it is, never applied. `derive_suggestions` has no formula for any of the three, so
+# this is an addition to the map rather than an override of one.
+CARRY_FORWARD_KEYS = ("standard_deduction", "state_standard_deduction", "state_exemption_credits")
+CARRY_FORWARD_SOURCE = "last year's"
 
 
 async def _require_year(db: AsyncSession, year: int) -> None:
@@ -413,6 +421,26 @@ async def _profile_salaries(
     return salaries
 
 
+async def _carried_forward(
+    db: AsyncSession, year: int, household: dict[str, Decimal]
+) -> dict[str, Decimal]:
+    """Last year's value for each CARRY_FORWARD_KEYS row THIS year has not stored.
+
+    Absent, strictly: a key the user has already answered — even with a zero — is never
+    second-guessed by a chip. All three are household keys, so the prior year holds exactly
+    one row each and no person column is involved.
+    """
+    absent = [key for key in CARRY_FORWARD_KEYS if key not in household]
+    if not absent:
+        return {}
+    rows = (
+        await db.execute(
+            select(TaxInput).where(TaxInput.year == year - 1, TaxInput.key.in_(absent))
+        )
+    ).scalars()
+    return {row.key: row.value for row in rows}
+
+
 async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
     """Every definition, one item per PERSON COLUMN, each with its own suggestions.
 
@@ -451,6 +479,12 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
     # gross_paycheck still divides the STORED annual_salary.
     for column, salary in (await _profile_salaries(db, columns, date.today())).items():
         suggestions[column][ANNUAL_SALARY_KEY] = salary
+    # Household keys, so the same value in every column (a household row renders from the
+    # first one) — and the only suggestions on this payload that are not a sheet formula,
+    # which is what `suggestion_source` tells the chip.
+    carried = await _carried_forward(db, year, household)
+    for values in suggestions.values():
+        values.update(carried)
     by_section: dict[str, list[TaxInputItemOut]] = {}
     for definition in sorted(definitions, key=lambda d: (d.sort_order, d.key)):
         item_columns = columns if definition.is_per_person else [None]
@@ -475,6 +509,7 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
                     suggested=suggestions[column if definition.is_per_person else columns[0]].get(
                         definition.key
                     ),
+                    suggestion_source=(CARRY_FORWARD_SOURCE if definition.key in carried else None),
                 )
             )
     # tax_keys order first; a section seeded later still renders (appended, name order).

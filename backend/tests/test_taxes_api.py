@@ -292,6 +292,69 @@ async def test_put_inputs_fences_the_count_and_percent_units(auth_client, defini
     assert items_by_key(zeroed)["pay_periods"]["value"] == "0.0000"
 
 
+async def test_get_inputs_carries_the_deduction_rows_forward(auth_client, definitions):
+    """4e (2026-09-09 spec): the three published figures are offered from last year.
+
+    standard_deduction, state_standard_deduction and state_exemption_credits are figures OF
+    THE YEAR rather than of the filer's behaviour, and a year that never had them entered
+    silently taxed AGI in full. Absent, last year's stored value is the honest starting
+    point — offered as a chip that says where it came from, never applied.
+    """
+    await put_inputs(
+        auth_client,
+        2024,
+        {
+            "standard_deduction": "14600",
+            "state_standard_deduction": "5540",
+            "state_exemption_credits": "149",
+        },
+    )
+    await put_inputs(auth_client, 2025, {"annual_salary": "1"})
+
+    items = items_by_key((await auth_client.get(f"{YEARS}/2025/inputs")).json())
+    for key, value in (
+        ("standard_deduction", "14600.0000"),
+        ("state_standard_deduction", "5540.0000"),
+        ("state_exemption_credits", "149.0000"),
+    ):
+        assert items[key]["value"] is None, key
+        assert items[key]["suggested"] == value, key
+        assert items[key]["suggestion_source"] == "last year's", key
+    # A sheet formula is not relabelled by any of this.
+    assert items["itemized_deduction"]["suggestion_source"] is None
+
+
+async def test_the_carry_forward_defers_to_an_answered_row(auth_client, definitions):
+    """Absent, strictly: a key the user has already answered — even with a zero — is never
+    second-guessed, and a year whose predecessor stored nothing gets no chip at all."""
+    await put_inputs(auth_client, 2024, {"standard_deduction": "14600"})
+    await put_inputs(auth_client, 2025, {"standard_deduction": "0"})
+
+    items = items_by_key((await auth_client.get(f"{YEARS}/2025/inputs")).json())
+    assert items["standard_deduction"]["value"] == "0.0000"
+    assert items["standard_deduction"]["suggested"] is None
+    assert items["standard_deduction"]["suggestion_source"] is None
+    # 2024's own predecessor has no rows, so 2024 is offered nothing.
+    prior = items_by_key((await auth_client.get(f"{YEARS}/2024/inputs")).json())
+    assert prior["state_standard_deduction"]["suggested"] is None
+
+
+async def test_summary_names_a_missing_deduction_on_its_own_line(auth_client, definitions):
+    """The wire half of 4e: the sentence travels as its own warning, ahead of the muted
+    defaulted-to-zero list, which no longer names either deduction key."""
+    await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
+    await put_inputs(auth_client, 2024, {"latest_w2_income": "100000"})
+
+    body = (await auth_client.get(f"{YEARS}/2024/summary")).json()
+    assert body["warnings"][0] == (
+        "No standard or itemized deduction entered for 2024 — federal tax is overstated"
+    )
+    muted = body["warnings"][1].removeprefix("missing inputs defaulted to 0: ").split(", ")
+    assert "standard_deduction" not in muted  # split: it is a substring of the state key
+    assert "itemized_deduction" not in muted
+    assert body["federal"]["taxable_income"] == "100000.00"
+
+
 async def test_put_inputs_creates_year_upserts_and_deletes(auth_client, definitions):
     created = await put_inputs(auth_client, 2027, {"annual_salary": "150000", "pay_periods": 18})
     items = items_by_key(created)

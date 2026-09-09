@@ -43,6 +43,16 @@ Bracket = tuple[Decimal, Decimal]
 
 JURISDICTION_WARN_MISSING = "no {j} brackets for {year}: {j} tax computed as 0"
 MISSING_INPUTS_WARNING = "missing inputs defaulted to 0: {keys}"
+# Its own sentence, not a name inside the muted list above (2026-09-09 spec 4e): with
+# neither deduction stored the engine taxes AGI in full, which is the single largest way a
+# freshly created year can be wrong, and "standard_deduction" buried among twenty other key
+# names reads like housekeeping. The two keys are REMOVED from the muted list when this
+# fires, so nothing is said twice. `src/components/taxes/SummaryPanel.tsx` matches its
+# opening words to render it in the advisory register.
+DEDUCTION_KEYS = ("standard_deduction", "itemized_deduction")
+DEDUCTION_MISSING_WARNING = (
+    "No standard or itemized deduction entered for {year} — federal tax is overstated"
+)
 NEGATIVE_STATE_TAX_WARNING = "state tax negative after exemption credits"
 # Both are ADVISORY: a GET never rejects stored data, so the value is used verbatim
 # either way. `{value}`/`{cap}` arrive pre-formatted via `f"{d.normalize():f}"` — plain
@@ -453,6 +463,12 @@ def compute_breakdown(
             values[key] = found
 
     warnings: list[str] = []
+    # Absent is not zero here, it is a headline: see DEDUCTION_MISSING_WARNING. Both, not
+    # either — a year that stores one of the pair has told the engine what it needs, and
+    # max(standard, itemized) reads the other as the zero it is.
+    if all(key in missing_inputs for key in DEDUCTION_KEYS):
+        warnings.append(DEDUCTION_MISSING_WARNING.format(year=year))
+        missing_inputs = [key for key in missing_inputs if key not in DEDUCTION_KEYS]
     if missing_inputs:
         warnings.append(MISSING_INPUTS_WARNING.format(keys=", ".join(missing_inputs)))
 

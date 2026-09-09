@@ -11,6 +11,13 @@ import { waterfallCsv, waterfallOption } from './taxChartOptions'
 // imports — and StatTile brings it along regardless.
 import './taxes.css'
 
+// The engine's own deduction sentence (backend/app/services/tax_service.py
+// DEDUCTION_MISSING_WARNING). Matched on its opening rather than reconstructed, because the
+// year is inside it: with neither deduction stored the engine taxes AGI in full, which is
+// the largest single way a freshly created year can be wrong, and it must not read like the
+// muted housekeeping list beside it (2026-09-09 spec 4e).
+const DEDUCTION_WARNING_OPENING = 'No standard or itemized deduction entered for'
+
 // D2 (2026-08-31): the summary sections rendered as FIGURES, not only as chart geometry.
 // One rule per column: Base is the jurisdiction's income context (agi / w2_income /
 // gains_amount), Taxable the field its rates are actually walked over (taxable_income /
@@ -70,6 +77,11 @@ export default function SummaryPanel({
   // Null exactly when the engine refused: the tiles read em-dashes (formatCurrency/formatPct
   // answer '—' for an absent value) rather than the zeros it declined to compute.
   const totals = missing.length > 0 ? null : summary.totals
+
+  // One list on the wire, two registers on screen. Everything the engine says is still
+  // shown, in the order it said it; the deduction sentence is simply not muted.
+  const alerts = summary.warnings.filter((w) => w.startsWith(DEDUCTION_WARNING_OPENING))
+  const notes = summary.warnings.filter((w) => !w.startsWith(DEDUCTION_WARNING_OPENING))
 
   return (
     <>
@@ -140,13 +152,23 @@ export default function SummaryPanel({
           </div>
         )}
 
-        {summary.warnings.length > 0 && (
+        {alerts.length > 0 && (
+          // The advisory register (--warn), and role="alert" rather than a silent note: it
+          // is saying the figures above are overstated, which is the one warning a reader
+          // must not skim past.
+          <div className="tax-warnings is-alert" role="alert">
+            {alerts.map((warning, i) => (
+              <p key={i}>{warning}</p>
+            ))}
+          </div>
+        )}
+        {notes.length > 0 && (
           // React text nodes, so the engine's sentences are escaped by construction. A
-          // sparse year's "missing inputs defaulted to 0: …" names all 22 keys in one
+          // sparse year's "missing inputs defaulted to 0: …" names every absent key in one
           // line — it wraps (see taxes.css) rather than being clipped or summarised: the
           // list IS the message.
           <div className="tax-warnings">
-            {summary.warnings.map((warning, i) => (
+            {notes.map((warning, i) => (
               // Index key: a fixed, non-reordered list rendered straight from the payload.
               <p key={i}>{warning}</p>
             ))}

@@ -136,7 +136,7 @@ function unitInputs(): TaxInputsOut {
           },
           {
             key: 'unq_div_state_exempt_pct',
-            label: 'Treasury-fund dividends \u2014 state-exempt share (%)',
+            label: 'Treasury-fund dividends — state-exempt share (%)',
             sort_order: 170, is_derived: false, unit: 'percent', suggestion_source: null,
             value: '0.9753', suggested: null, is_per_person: false, person_id: null,
           },
@@ -226,7 +226,7 @@ describe('InputsForm', () => {
   it('renders a count as an integer and a percent as a percent', () => {
     render(<InputsForm inputs={unitInputs()} onSaved={vi.fn()} />)
     const count = field('Pay periods (checks received so far this year)')
-    const percent = field('Treasury-fund dividends \u2014 state-exempt share (%)')
+    const percent = field('Treasury-fund dividends — state-exempt share (%)')
 
     // Both columns are Numeric(14,4), so both arrive with four decimals; neither box is a
     // money box, so neither wears a "$". The count drops the trailing zeros it can never
@@ -247,7 +247,7 @@ describe('InputsForm', () => {
     fireEvent.change(field('Pay periods (checks received so far this year)'), {
       target: { value: '21' },
     })
-    fireEvent.change(field('Treasury-fund dividends \u2014 state-exempt share (%)'), {
+    fireEvent.change(field('Treasury-fund dividends — state-exempt share (%)'), {
       target: { value: '98' },
     })
     fireEvent.click(saveButton())
@@ -257,6 +257,31 @@ describe('InputsForm', () => {
     await waitFor(() =>
       expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2025, {
         values: { pay_periods: '21', unq_div_state_exempt_pct: '0.98' },
+      }),
+    )
+  })
+
+  it("labels a carried-forward suggestion as last year's", async () => {
+    // 4e (2026-09-09): the three published deduction rows are suggested from the prior
+    // year, and a chip that just said "suggested $14,600" would look like a sheet formula.
+    const carried = inputsFixture()
+    carried.sections[1].items.push({
+      key: 'standard_deduction', label: 'Standard Deduction', sort_order: 80,
+      is_derived: false, unit: 'money', value: null,
+      suggested: '14600.0000', suggestion_source: "last year's",
+      is_per_person: false, person_id: null,
+    })
+    render(<InputsForm inputs={carried} onSaved={vi.fn()} />)
+
+    expect(screen.getByText("last year's $14,600.00")).toBeTruthy()
+    // A sheet formula keeps the default word.
+    expect(screen.getByText('suggested $8,333.33')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply suggestion for Standard Deduction' }))
+    fireEvent.click(saveButton())
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2024, {
+        values: { standard_deduction: '14600.0000' },
       }),
     )
   })

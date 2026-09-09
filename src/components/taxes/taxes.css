@@ -40,6 +40,18 @@
   overflow-wrap: anywhere;
 }
 
+/* The advisory register for a warning that is about the FIGURES rather than about the
+   data behind them (2026-09-09 spec 4e): the same amber left rule .tax-brackets-missing
+   wears, and full-strength text, because a muted grey sentence beside a wrong total reads
+   as housekeeping. */
+.tax-warnings.is-alert {
+  border-left-color: var(--warn);
+}
+
+.tax-warnings.is-alert p {
+  color: var(--text);
+}
+
 .tax-section {
   margin-bottom: 1.1rem;
 }

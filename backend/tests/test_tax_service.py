@@ -1055,6 +1055,40 @@ def test_input_units_cover_defined_keys_and_default_to_money():
     assert {key for key in defined if unit_for(key) != "money"} == set(TAX_INPUT_UNITS)
 
 
+def test_both_deductions_absent_gets_its_own_sentence():
+    """4e (2026-09-09 spec): with neither deduction stored the engine taxes AGI in full —
+    the largest single way a freshly created year can be wrong — so it says so on its own
+    line instead of naming `standard_deduction` among twenty other keys in the muted list.
+
+    Both, not either: a year that stores one of the pair has answered the question, and
+    max(standard, itemized) reads the other as the zero it is.
+    """
+    sparse = compute_breakdown(2024, {"latest_w2_income": Decimal("100000")}, YEAR_BRACKETS[2024])
+    assert sparse.warnings[0] == (
+        "No standard or itemized deduction entered for 2024 — federal tax is overstated"
+    )
+    # Said once: the two keys leave the muted list when the sentence above fires. Split
+    # rather than searched — "standard_deduction" is a substring of the state row's key.
+    muted = sparse.warnings[1]
+    assert muted.startswith("missing inputs defaulted to 0: ")
+    muted_keys = muted.removeprefix("missing inputs defaulted to 0: ").split(", ")
+    assert "standard_deduction" not in muted_keys
+    assert "itemized_deduction" not in muted_keys
+    assert "state_standard_deduction" in muted_keys  # the rest of the list is untouched
+    # ...and the figures really are the overstated ones the sentence describes.
+    assert sparse.federal.taxable_income == Decimal("100000")
+
+    # One of the pair is enough to retire it, and the OTHER then reads as the zero it is.
+    answered = compute_breakdown(
+        2024,
+        {"latest_w2_income": Decimal("100000"), "standard_deduction": Decimal("14600")},
+        YEAR_BRACKETS[2024],
+    )
+    assert not any(w.startswith("No standard or itemized deduction") for w in answered.warnings)
+    assert "itemized_deduction" in answered.warnings[0].split(", ")
+    assert answered.federal.taxable_income == Decimal("85400")
+
+
 def test_missing_inputs_warning():
     inputs = dict(YEAR_INPUTS[2024])
     del inputs["interest_total"]
