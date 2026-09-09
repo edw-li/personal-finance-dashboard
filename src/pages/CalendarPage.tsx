@@ -41,7 +41,7 @@ import type {
   PersonOut,
 } from '../types/api'
 import { canonicalAmount, isAmount } from '../utils/amount'
-import { formatDate, formatMonth } from '../utils/format'
+import { formatCurrency, formatDate, formatMonth } from '../utils/format'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import '../components/panels.css'
 import './CalendarPage.css'
@@ -719,10 +719,7 @@ export default function CalendarPage() {
                                     <span className="cal-list-detail">
                                       {' — '}
                                       {event.items
-                                        .map(
-                                          (i) =>
-                                            `${i.label} ${i.amount === null ? '—' : `$${i.amount}`}`,
-                                        )
+                                        .map((i) => `${i.label} ${formatCurrency(i.amount)}`)
                                         .join(', ')}
                                     </span>
                                   )}

@@ -191,7 +191,10 @@ describe('CalendarPage — month, views, grid', () => {
     expect(screen.queryByRole('grid')).toBeNull()
     const list = document.querySelector('.cal-list') as HTMLElement
     expect(list.textContent).toContain('+$6.8k')
-    expect(list.textContent).toContain('2025 offer')
+    // A fold's parts carry FORMATTED money, not the wire's raw decimal string
+    // (2026-09-09 audit item 53).
+    expect(list.textContent).toContain('2025 offer $41,200.00')
+    expect(list.textContent).not.toContain('$41200.00')
     fireEvent.click(screen.getByRole('button', { name: 'Grid' }))
     expect(url()).toBe('/calendar')
     await screen.findByRole('grid')
