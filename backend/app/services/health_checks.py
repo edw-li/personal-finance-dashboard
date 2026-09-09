@@ -5,17 +5,15 @@ month in `months`, `snapshot_now`). `now` is injected so the rules are clock-tes
 Thresholds are twins of src/utils/staleness.ts; test_health_checks pins them."""
 
 import asyncio
-from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     AccountBalance,
     AppSetting,
     LatestPrice,
-    MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
     Security,
@@ -70,45 +68,22 @@ def _month_gap(
     )
 
 
-async def load_zero_with_net_pay(db: AsyncSession) -> list[date]:
-    """Months whose stored spending rows are ALL $0.00 but which DO carry a take-home row.
-
-    Coverage cannot answer this and should not: those months are ENTERED by its definition
-    (a take-home figure is content), which is why they slipped past every earlier card. They
-    are the wizard's own phantom (2026-09-09 audit item 1) — the old save shipped all
-    nineteen seeded "0.00" boxes alongside the net pay, and the guard waved them through
-    because the body recorded *something*. One grouped query, the same shape
-    `load_coverage` uses, so the peak |amount| decides in SQL's words.
-    """
-    zero_months = (
-        (
-            await db.execute(
-                select(MonthlySpending.month)
-                .group_by(MonthlySpending.month)
-                .having(func.max(func.abs(MonthlySpending.amount)) == 0)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    pay = set((await db.execute(select(MonthlyCashflow.month))).scalars().all())
-    return sorted(month for month in zero_months if month in pay)
-
-
-def check_zero_filled_spending(
-    coverage: Coverage, with_net_pay: Sequence[date] = ()
-) -> HealthCheckOut:
+def check_zero_filled_spending(coverage: Coverage) -> HealthCheckOut:
     """Months saved with rows that are ALL $0.00 — the audit's phantom month, in its two
-    shapes. `coverage.empty` is the shared definition of the first (2026-09-04 honest-numbers
-    spec §3), so this card, the footer and the ribbon can never disagree; `with_net_pay`
-    carries the second (2026-09-09 audit item 1), where the zeros ride beside a real
-    take-home figure and coverage therefore calls the month entered.
+    shapes, both from `coverage` so this card, the footer and the ribbon can never disagree.
+
+    `coverage.empty` (2026-09-04 honest-numbers spec §3) is a month with no take-home
+    either: nothing about it is real, so it is an ERROR. `coverage.zero_with_net_pay`
+    (2026-09-09 audit item 1) is the wizard's own phantom — the old save shipped all
+    nineteen seeded "0.00" boxes behind a single take-home figure — but a deliberately
+    confirmed $0 month with pay has the very same shape, so it can only be a WARN and its
+    sentence has to leave that reading open.
 
     Both offer the same repair, and it removes the zero spending rows only: the take-home is
     the one figure the user really typed, and a month left with it reads honestly as
     "take-home entered, spending missing" on the very next card.
     """
-    months = sorted({*coverage.empty, *with_net_pay})
+    months = sorted({*coverage.empty, *coverage.zero_with_net_pay})
     if not months:
         return _ok("zero_filled_spending", "Spending months carry real amounts")
     plural = "s" if len(months) > 1 else ""
@@ -118,15 +93,16 @@ def check_zero_filled_spending(
             f"{', '.join(_label(m) for m in coverage.empty)}: every category is $0.00 and no "
             "take-home was entered — an empty month that reads as spending nothing."
         )
-    if with_net_pay:
+    if coverage.zero_with_net_pay:
         sentences.append(
-            f"{', '.join(_label(m) for m in with_net_pay)}: every category is $0.00 beside a "
-            "take-home figure — zeros nobody entered, which every average and mover reads as "
-            "a real month of spending nothing."
+            "All-zero spending beside a take-home figure for "
+            f"{', '.join(_label(m) for m in coverage.zero_with_net_pay)} — delete the zero "
+            "rows unless you recorded a genuine $0 month."
         )
     return HealthCheckOut(
         id="zero_filled_spending",
-        severity="error",
+        # The louder of the two shapes wins when a book carries both.
+        severity="error" if coverage.empty else "warn",
         title=f"Zero-filled spending month{plural}",
         detail=" ".join(sentences),
         count=len(months),
@@ -379,7 +355,7 @@ async def run_checks(
     coverage = await load_coverage(db)
     without_spending, without_balances = await check_coverage_gaps(db, today=now.date())
     return [
-        check_zero_filled_spending(coverage, await load_zero_with_net_pay(db)),
+        check_zero_filled_spending(coverage),
         check_spending_gap(coverage),
         check_net_pay_without_spending(coverage),
         without_spending,

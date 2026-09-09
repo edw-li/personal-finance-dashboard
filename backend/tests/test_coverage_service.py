@@ -27,6 +27,9 @@ def test_classify_sorts_months_into_entered_empty_and_missing():
         date(2026, 6, 1),  # take-home alone is enough to call a month entered
     ]
     assert found.empty == [date(2026, 2, 1)]
+    # March: the same all-$0.00 rows, but a take-home beside them. Entered, and still worth
+    # naming — the wizard used to seed those zeros behind any take-home (audit item 1).
+    assert found.zero_with_net_pay == [date(2026, 3, 1)]
     assert found.missing == [date(2026, 4, 1)]  # inside the window, nothing at all on file
     assert found.net_pay_missing == [date(2026, 1, 1), date(2026, 2, 1), date(2026, 4, 1)]
     # June: pay saved alone. Entered, but there is no spend to average — the health card
@@ -52,14 +55,18 @@ async def test_load_coverage_classifies_what_the_tables_hold(db):
             # A refund-only month is still ENTERED: non-zero is non-zero, sign and all.
             MonthlySpending(month=date(2026, 2, 1), category_id=cat.id, amount=D("-50.00")),
             MonthlySpending(month=date(2026, 4, 1), category_id=cat.id, amount=D("0.00")),
+            # Zeros WITH a take-home: entered, and the zero-filled health card's warn shape.
+            MonthlySpending(month=date(2026, 3, 1), category_id=cat.id, amount=D("0.00")),
+            MonthlyCashflow(month=date(2026, 3, 1), net_pay=D("8000.00")),
             MonthlyCashflow(month=date(2026, 1, 1), net_pay=D("8000.00")),
         ]
     )
     await db.commit()
     found = await load_coverage(db)
-    assert found.entered == [date(2026, 1, 1), date(2026, 2, 1)]
+    assert found.entered == [date(2026, 1, 1), date(2026, 2, 1), date(2026, 3, 1)]
     assert found.empty == [date(2026, 4, 1)]
-    assert found.missing == [date(2026, 3, 1)]
-    assert found.net_pay == [date(2026, 1, 1)]
-    assert found.net_pay_missing == [date(2026, 2, 1), date(2026, 3, 1), date(2026, 4, 1)]
+    assert found.zero_with_net_pay == [date(2026, 3, 1)]
+    assert found.missing == []
+    assert found.net_pay == [date(2026, 1, 1), date(2026, 3, 1)]
+    assert found.net_pay_missing == [date(2026, 2, 1), date(2026, 4, 1)]
     assert found.net_pay_without_spending == []

@@ -1724,7 +1724,9 @@ export default function MonthlyUpdatePage() {
                 <div className="stat-value">{formatCurrency(preview.totalSpend)}</div>
               </div>
               <div>
-                <div className="stat-label">Savings rate</div>
+                {/* Same qualifier as the sticky footer's: the tile beside it is the
+                    ALL-kind Total spend, so the unqualified name read as one minus the other. */}
+                <div className="stat-label">Savings rate (cash)</div>
                 <div className="stat-value">
                   {preview.savings === null ? '—' : formatPct(preview.savings, { signed: false })}
                 </div>

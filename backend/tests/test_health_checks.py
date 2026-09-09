@@ -26,7 +26,6 @@ from app.services.health_checks import (
     check_spending_gap,
     check_stale_quotes,
     check_zero_filled_spending,
-    load_zero_with_net_pay,
     run_checks,
 )
 from app.services.snapshot import snapshots_dir
@@ -65,7 +64,7 @@ async def test_zero_filled_spending_names_the_phantom_month_with_a_repair_action
         ]
     )
     await db.commit()
-    check = check_zero_filled_spending(await load_coverage(db), await load_zero_with_net_pay(db))
+    check = check_zero_filled_spending(await load_coverage(db))
     assert check.severity == "error" and check.count == 1 and check.months == [date(2026, 9, 1)]
     assert check.title == "Zero-filled spending month"
     assert "Sep 2026" in check.detail
@@ -75,12 +74,7 @@ async def test_zero_filled_spending_names_the_phantom_month_with_a_repair_action
         MonthlySpending.__table__.delete().where(MonthlySpending.month == date(2026, 9, 1))
     )
     await db.commit()
-    assert (
-        check_zero_filled_spending(
-            await load_coverage(db), await load_zero_with_net_pay(db)
-        ).severity
-        == "ok"
-    )
+    assert check_zero_filled_spending(await load_coverage(db)).severity == "ok"
 
 
 async def test_zero_filled_spending_also_flags_zeros_beside_a_take_home(db):
@@ -105,11 +99,38 @@ async def test_zero_filled_spending_also_flags_zeros_beside_a_take_home(db):
     await db.commit()
     coverage = await load_coverage(db)
     assert coverage.empty == []  # August is ENTERED: it carries a take-home row
-    check = check_zero_filled_spending(coverage, await load_zero_with_net_pay(db))
-    assert check.severity == "error" and check.months == [date(2026, 8, 1)]
-    assert "Aug 2026" in check.detail and "take-home" in check.detail
+    assert coverage.zero_with_net_pay == [date(2026, 8, 1)]
+    check = check_zero_filled_spending(coverage)
+    # WARN, not error: a deliberately confirmed $0 month with pay has this exact shape, so
+    # the card suggests rather than accuses.
+    assert check.severity == "warn" and check.months == [date(2026, 8, 1)]
+    assert check.detail == (
+        "All-zero spending beside a take-home figure for Aug 2026 — delete the zero rows "
+        "unless you recorded a genuine $0 month."
+    )
     assert check.fix is not None
     assert (check.fix.kind, check.fix.action) == ("action", "delete_spending_month")
+
+
+async def test_zero_filled_spending_takes_the_louder_severity_when_a_book_has_both(db):
+    food, _rent = await categories(db)
+    db.add_all(
+        [
+            # Sep: nothing real at all — the error shape.
+            MonthlySpending(month=date(2026, 9, 1), category_id=food.id, amount=Decimal("0.00")),
+            # Aug: zeros beside a real take-home — the warn shape.
+            MonthlySpending(month=date(2026, 8, 1), category_id=food.id, amount=Decimal("0.00")),
+            MonthlyCashflow(month=date(2026, 8, 1), net_pay=Decimal("5000.00")),
+        ]
+    )
+    await db.commit()
+    check = check_zero_filled_spending(await load_coverage(db))
+    assert check.severity == "error"
+    assert check.months == [date(2026, 8, 1), date(2026, 9, 1)] and check.count == 2
+    assert check.title == "Zero-filled spending months"
+    # One sentence per shape, the error's first.
+    assert check.detail.startswith("Sep 2026: every category is $0.00")
+    assert "All-zero spending beside a take-home figure for Aug 2026" in check.detail
 
 
 async def test_coverage_gaps_look_back_twelve_months_and_skip_the_current(db):
@@ -318,7 +339,7 @@ async def test_spending_gap_names_months_missing_inside_the_balances_window(db):
     assert gap.months == [date(2026, 8, 1)]  # nothing at all on file, and inside the window
     assert gap.fix.to == "/update?month=2026-08-01&step=spending"
     # The empty September belongs to the zero-filled check; neither claims the other's month.
-    assert check_zero_filled_spending(coverage, []).months == [date(2026, 9, 1)]
+    assert check_zero_filled_spending(coverage).months == [date(2026, 9, 1)]
 
 
 async def test_spending_gap_is_ok_when_the_window_is_covered(db):
