@@ -730,6 +730,9 @@ describe('SpendingPage — one failed feed never blanks the page', () => {
     // equals the one the failed load never got to show.
     expect(await screen.findByText('Yearly rollups')).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
+    // …and the feed that never failed was left alone: re-fetching it would repaint charts
+    // that are already right.
+    expect(fetchMatrix).toHaveBeenCalledTimes(1)
   })
 
   it('names the page in the frame alert when the matrix fails', async () => {

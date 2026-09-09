@@ -218,6 +218,26 @@ export default function SpendingPage() {
       .finally(() => setLoading(false))
   }, [])
 
+  // The BANNER's retry, and deliberately not `load`: the matrix on screen answered, and
+  // re-fetching it would repaint charts that never failed (its payload is a fresh object, and
+  // `shown` is null while the pair is broken, so the identical-payload skip cannot catch it).
+  // On success the pair is whole again, so the cache and `shown` are written from the matrix
+  // already in hand.
+  const retryYearly = useCallback(() => {
+    setLoading(true)
+    setYearlyError(null)
+    fetchYearly()
+      .then((y) => {
+        setYearly(y)
+        if (matrix === null) return // nothing on screen to pair it with
+        const snapshot: SpendingSnapshot = { matrix, yearly: y }
+        setSnapshot(SNAPSHOT_KEY, snapshot)
+        shown.current = snapshot
+      })
+      .catch((err: unknown) => setYearlyError(describeError(err, 'the yearly rollup')))
+      .finally(() => setLoading(false))
+  }, [matrix])
+
   // Mount fetch is covered by useState's initial `true`; Retry flips these itself.
   const beginLoad = () => {
     setLoading(true)
@@ -482,14 +502,7 @@ export default function SpendingPage() {
       >
         {/* The secondary feed's own alert (2026-09-09 audit item 10) — at the top of the
             page, where the card it speaks for is missing from the bottom of it. */}
-        <FeedBanner
-          error={yearlyError}
-          retry={() => {
-            beginLoad()
-            load()
-          }}
-          retryLabel="Retry the yearly rollup"
-        />
+        <FeedBanner error={yearlyError} retry={retryYearly} retryLabel="Retry the yearly rollup" />
         {kpis && (
           <div className="kpi-row">
             <StatTile

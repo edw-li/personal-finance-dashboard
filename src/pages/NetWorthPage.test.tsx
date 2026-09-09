@@ -640,6 +640,9 @@ describe('NetWorthPage — one failed feed never blanks the page', () => {
     // equals the one the failed load never got to show.
     expect(await screen.findByText('Net worth — Aug 2026')).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
+    // …and the feed that never failed was left alone: re-fetching it would repaint charts
+    // that are already right.
+    expect(fetchTimeseries).toHaveBeenCalledTimes(1)
   })
 
   it('names the page in the frame alert when the timeseries fails', async () => {
@@ -707,6 +710,61 @@ describe('NetWorthPage — a scope with no accounts', () => {
 // The summary had no grain of its own, so tiles saying "vs prior month" sat beside a
 // quarterly chart and a ribbon pick landed on a column the quarterly series does not carry.
 describe('NetWorthPage — the tiles follow the grain on screen', () => {
+  it('reads the last column at or before the pick when that quarter has no snapshot', async () => {
+    // March and September only: the client snaps August to June by the calendar, and June is
+    // not in the book — the table must land on March with the tiles rather than fall back to
+    // the latest quarter.
+    const gapped = timeseriesOut({ months: ['2026-03-01', '2026-09-01'] })
+    vi.mocked(fetchTimeseries).mockImplementation((g) =>
+      Promise.resolve(g === 'quarterly' ? gapped : timeseriesOut()),
+    )
+    vi.mocked(fetchSummary).mockResolvedValue(summaryOut({ month: '2026-03-01', period: 'quarter' }))
+    renderPage('/net-worth?month=2026-08')
+    await screen.findByText('By group over time')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+    expect(await screen.findByText('Accounts — Mar 2026')).toBeTruthy()
+    expect(screen.getByText('Net worth — Mar 2026')).toBeTruthy()
+  })
+
+  it('says so when no quarter has closed by the picked month', async () => {
+    vi.mocked(fetchSummary).mockResolvedValue(
+      summaryOut({ month: null, net_worth: null, mom_delta: null, mom_pct: null, groups: [], owner_totals: [], period: 'quarter' }),
+    )
+    renderPage('/net-worth?month=2026-08')
+    await screen.findByText('By group over time')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+    // The tiles have nothing to say, so the page says why instead of dropping them silently.
+    expect(await screen.findByText('No quarter has closed by Jun 2026 yet.')).toBeTruthy()
+  })
+
+  it('prints no figure on a ribbon chip for a scope that owns nothing', async () => {
+    vi.mocked(fetchTimeseries).mockResolvedValue(
+      timeseriesOut({ accounts: [], series: [], owner_series: [], net_worth: ['0.00', '0.00'] }),
+    )
+    renderPage('/net-worth?owner=2')
+    // The chip carries coverage alone — never a fabricated "$0.00" in its label or its aria.
+    expect(
+      await screen.findByRole('button', { name: 'Aug 2026 — balances entered, spending missing' }),
+    ).toBeTruthy()
+  })
+
+  it('names the grain in the movers card, not the month', async () => {
+    const quarterly = timeseriesOut({ months: ['2026-03-01', '2026-06-01'] })
+    vi.mocked(fetchTimeseries).mockImplementation((g) =>
+      Promise.resolve(g === 'quarterly' ? quarterly : timeseriesOut()),
+    )
+    renderPage()
+    await screen.findByText('By group over time')
+    expect(screen.getByLabelText(/moved net worth from the prior month to this one/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+    expect(
+      await screen.findByLabelText(/moved net worth from the prior quarter to this one/),
+    ).toBeTruthy()
+  })
+
   it('asks for the summary at that grain and says "vs prior quarter"', async () => {
     renderPage()
     await screen.findByText('By group over time')

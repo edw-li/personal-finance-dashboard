@@ -414,7 +414,9 @@ describe('ProjectionPage', () => {
     vi.mocked(fetchTimeseries).mockRejectedValue(new ApiError('history unavailable', 500))
     renderPage()
 
-    expect(await screen.findByText('history unavailable')).toBeTruthy()
+    expect(
+      await screen.findByText("Couldn't load the net-worth history — the server had a problem (HTTP 500)"),
+    ).toBeTruthy()
     await loaded()
     expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00') // tiles still stand
     expect(screen.getAllByTestId('echart')).toHaveLength(1) // the investable chart

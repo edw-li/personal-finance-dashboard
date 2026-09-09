@@ -1162,6 +1162,31 @@ async def test_summary_quarterly_before_the_first_quarter_end_is_empty_not_404(a
     assert body["period"] == "quarter"
 
 
+async def test_summary_quarterly_skips_a_quarter_with_no_snapshot(auth_client, db):
+    """March and September, no June: "the previous quarter end" is the previous ROW, so
+    September compares against March — and an August as-of reads March too, since June is
+    not in the book for the client's calendar snap to land on."""
+    acct = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(acct)
+    await db.flush()
+    snaps = [NetWorthSnapshot(month=date(2026, m, 1)) for m in (3, 9)]
+    db.add_all(snaps)
+    await db.flush()
+    for snap, amount in zip(snaps, ("100.00", "200.00"), strict=True):
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=acct.id, balance=Decimal(amount)))
+    await db.commit()
+
+    latest = (await auth_client.get("/api/v1/net-worth/summary?granularity=quarterly")).json()
+    assert latest["month"] == "2026-09-01"
+    assert latest["mom_delta"] == "100.00"  # against March, the quarter end that IS there
+
+    august = (
+        await auth_client.get("/api/v1/net-worth/summary?granularity=quarterly&month=2026-08-01")
+    ).json()
+    assert august["month"] == "2026-03-01"
+    assert august["mom_delta"] is None  # nothing before it
+
+
 async def test_summary_quarterly_still_422s_a_mid_month_value_and_a_bad_grain(auth_client, db):
     await _seed_quarterly(db)
     resp = await auth_client.get("/api/v1/net-worth/summary?granularity=quarterly&month=2026-08-15")

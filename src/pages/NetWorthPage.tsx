@@ -326,6 +326,26 @@ export default function NetWorthPage() {
       .finally(() => setLoading(false))
   }, [granularity, owner, viewedMonth])
 
+  // The BANNER's retry, and deliberately not `load`: the timeseries on screen answered, and
+  // re-fetching it would repaint charts that never failed (its payload is a fresh object, and
+  // `shown` is null while the pair is broken, so the identical-payload skip cannot catch it).
+  // On success the pair is whole again, so the cache and `shown` are written from the
+  // timeseries already in hand.
+  const retrySummary = useCallback(() => {
+    setLoading(true)
+    setSummaryError(null)
+    fetchSummary(owner, viewedMonth ?? undefined, granularity)
+      .then((sum) => {
+        setSummary(sum)
+        if (data === null) return // nothing on screen to pair it with
+        const snapshot: NetWorthSnapshot = { ts: data, summary: sum }
+        setSnapshot(netWorthKey(granularity, owner, viewedMonth), snapshot)
+        shown.current = snapshot
+      })
+      .catch((err: unknown) => setSummaryError(describeError(err, 'the month summary')))
+      .finally(() => setLoading(false))
+  }, [data, granularity, owner, viewedMonth])
+
   useEffect(() => {
     load()
   }, [load])
@@ -371,9 +391,11 @@ export default function NetWorthPage() {
 
   // The ribbon prints that month's net worth in its chip label (spec §7) — the figure the
   // page already has, rather than a second round trip per chip.
+  // A scope with no accounts has no figure to print: every chip would carry a fabricated
+  // "$0.00" in its label and its aria-label (2026-09-09 audit item 11).
   const ribbonFigures = useMemo(
     () =>
-      data === null
+      data === null || data.accounts.length === 0
         ? undefined
         : Object.fromEntries(data.months.map((m, i) => [m, formatCurrency(data.net_worth[i])])),
     [data],
@@ -390,7 +412,18 @@ export default function NetWorthPage() {
   // The accounts table follows the VIEWED month (a ribbon click writes ?month=), and the
   // latest column when nothing is selected — or when the selection has no column in this
   // scope at all (a quarterly grain, a series that starts later).
-  const selectedIndex = viewedMonth === null ? -1 : months.indexOf(viewedMonth)
+  // Under quarterly the client snaps by the CALENDAR and the server by the DATA, so a
+  // quarter with no snapshot behind it (a pick in August with no June row) would leave
+  // indexOf empty and drop the table back to the latest column while the tiles read March.
+  // Same rule as the server instead: the last column at or before the viewed month. `months`
+  // is ascending, so the count of columns that qualify IS the index of the last one — this
+  // lib target has no findLastIndex.
+  const selectedIndex =
+    viewedMonth === null
+      ? -1
+      : granularity === 'quarterly'
+        ? months.filter((m) => m <= viewedMonth).length - 1
+        : months.indexOf(viewedMonth)
   const viewedIndex = selectedIndex >= 0 ? selectedIndex : months.length - 1
   // …so the card heading names that month rather than claiming "latest" over it.
   const viewedLabel =
@@ -398,6 +431,9 @@ export default function NetWorthPage() {
       ? formatMonth(months[selectedIndex])
       : `latest ${granularity === 'quarterly' ? 'quarter' : 'month'}`
   const momHeader = granularity === 'quarterly' ? 'QoQ %' : 'MoM %'
+  // The two snapshots the movers card compares are whatever the grain on screen draws, so
+  // its aria sentence and its empty state have to say which (2026-09-09 audit item 23).
+  const priorNoun = granularity === 'quarterly' ? 'quarter' : 'month'
 
   const stackedOption = useMemo(
     () =>
@@ -442,6 +478,15 @@ export default function NetWorthPage() {
     for (const { accountId } of drill) if (!next.has(accountId)) toggleDrill(accountId)
     for (const id of next) if (!drill.some((d) => d.accountId === id)) toggleDrill(id)
   }
+
+  // Quarterly, a month is picked, and the server answered empty: nothing had closed by then.
+  // Read off the SUMMARY, never guessed from the months on screen — the server owns which
+  // quarters exist, and a failed summary (null) leaves the banner to do the talking.
+  const noClosedQuarter =
+    granularity === 'quarterly' &&
+    viewedMonth !== null &&
+    summary !== null &&
+    summary.month === null
 
   // A scope that owns nothing (2026-09-09 audit item 11). Judged on the TIMESERIES, which
   // lists the accounts in scope, never on the summary's totals — those are zeros either way,
@@ -510,16 +555,15 @@ export default function NetWorthPage() {
       >
         {/* The secondary feed's own alert (2026-09-09 audit item 10). Above the charts it
             failed beside, because the tiles it feeds are what is missing from up here. */}
-        <FeedBanner
-          error={summaryError}
-          retry={() => {
-            setLoading(true)
-            setError(null)
-            setSummaryError(null)
-            load()
-          }}
-          retryLabel="Retry the month summary"
-        />
+        <FeedBanner error={summaryError} retry={retrySummary} retryLabel="Retry the month summary" />
+        {/* The pick is older than every quarter end in the book, so the server's as-of answer
+            is empty and there are no tiles to show. Saying so beats a page that just drops
+            them (2026-09-09 audit item 23). */}
+        {noClosedQuarter && (
+          <p className="drill-hint" role="status">
+            No quarter has closed by {formatMonth(viewedMonth)} yet.
+          </p>
+        )}
         {/* A scope that owns nothing has no honest chart to draw: the summary answers zeros,
             the series is flat, and ECharts picks a 0..1 axis over it (2026-09-09 audit item
             11). One sentence and the verb that fixes it, in place of tiles, charts and table. */}
@@ -685,9 +729,9 @@ export default function NetWorthPage() {
                   hint="How each account group — or account — moved net worth from the prior snapshot to this one, largest first. Every bar grows from zero by the size of the move; a loss is drawn outlined, a gain solid, and the label carries the sign. Groups that did not move are left out."
                   // The aria follows the TOGGLE: a sentence saying "group" over a chart of
                   // accounts is the one reading a screen-reader user cannot check.
-                  ariaLabel={`Horizontal bar chart of how each ${moversBy === 'account' ? 'account' : 'account group'} moved net worth from the prior month to this one`}
+                  ariaLabel={`Horizontal bar chart of how each ${moversBy === 'account' ? 'account' : 'account group'} moved net worth from the prior ${priorNoun} to this one`}
                   option={moversOption}
-                  empty="Nothing moved between these two months."
+                  empty={`Nothing moved between these two ${priorNoun}s.`}
                   exportName="net-worth-movers"
                   csv={() => netWorthMoversCsv(data, viewedIndex, moversBy)}
                   height={moversHeight(movers.length)}
