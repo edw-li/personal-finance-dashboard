@@ -84,25 +84,46 @@ def _month_gap(
 
 
 def check_zero_filled_spending(coverage: Coverage) -> HealthCheckOut:
-    """Months saved with rows that are ALL $0.00 and no take-home — the audit's phantom
-    month. `coverage.empty` is the shared definition (2026-09-04 honest-numbers spec §3),
-    so this card, the footer and the ribbon can never disagree."""
-    months = coverage.empty
+    """Months saved with rows that are ALL $0.00 — the audit's phantom month, in its two
+    shapes, both from `coverage` so this card, the footer and the ribbon can never disagree.
+
+    `coverage.empty` (2026-09-04 honest-numbers spec §3) is a month with no take-home
+    either: nothing about it is real, so it is an ERROR. `coverage.zero_with_net_pay`
+    (2026-09-09 audit item 1) is the wizard's own phantom — the old save shipped all
+    nineteen seeded "0.00" boxes behind a single take-home figure — but a deliberately
+    confirmed $0 month with pay has the very same shape, so it can only be a WARN and its
+    sentence has to leave that reading open.
+
+    Both offer the same repair, and it removes the zero spending rows only: the take-home is
+    the one figure the user really typed, and a month left with it reads honestly as
+    "take-home entered, spending missing" on the very next card.
+    """
+    months = sorted({*coverage.empty, *coverage.zero_with_net_pay})
     if not months:
         return _ok("zero_filled_spending", "Spending months carry real amounts")
     plural = "s" if len(months) > 1 else ""
+    sentences = []
+    if coverage.empty:
+        sentences.append(
+            f"{', '.join(_label(m) for m in coverage.empty)}: every category is $0.00 and no "
+            "take-home was entered — an empty month that reads as spending nothing."
+        )
+    if coverage.zero_with_net_pay:
+        sentences.append(
+            "All-zero spending beside a take-home figure for "
+            f"{', '.join(_label(m) for m in coverage.zero_with_net_pay)} — delete the zero "
+            "rows unless you recorded a genuine $0 month."
+        )
     return HealthCheckOut(
         id="zero_filled_spending",
-        severity="error",
+        # The louder of the two shapes wins when a book carries both.
+        severity="error" if coverage.empty else "warn",
         title=f"Zero-filled spending month{plural}",
-        detail=(
-            f"{', '.join(_label(m) for m in months)}: every category is $0.00 and no take-home "
-            "was entered — an empty month that reads as spending nothing."
-        ),
+        detail=" ".join(sentences),
         count=len(months),
         months=months,
         fix=HealthFixOut(
-            kind="action", action="delete_spending_month", label="Delete the zero-filled month"
+            kind="action", action="delete_spending_month", label="Delete the zero-filled rows"
         ),
     )
 

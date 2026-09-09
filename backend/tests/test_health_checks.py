@@ -66,10 +66,6 @@ async def test_zero_filled_spending_names_the_phantom_month_with_a_repair_action
         [
             MonthlySpending(month=date(2026, 9, 1), category_id=food.id, amount=Decimal("0.00")),
             MonthlySpending(month=date(2026, 9, 1), category_id=rent.id, amount=Decimal("0.00")),
-            # August: zeros but WITH a cashflow row - a real month of no spending, not a
-            # phantom.
-            MonthlySpending(month=date(2026, 8, 1), category_id=food.id, amount=Decimal("0.00")),
-            MonthlyCashflow(month=date(2026, 8, 1), net_pay=Decimal("5000.00")),
             # July: real amounts.
             MonthlySpending(month=date(2026, 7, 1), category_id=food.id, amount=Decimal("400.00")),
         ]
@@ -86,6 +82,62 @@ async def test_zero_filled_spending_names_the_phantom_month_with_a_repair_action
     )
     await db.commit()
     assert check_zero_filled_spending(await load_coverage(db)).severity == "ok"
+
+
+async def test_zero_filled_spending_also_flags_zeros_beside_a_take_home(db):
+    """The wizard's real bug (2026-09-09 audit item 1): a take-home figure carried a page of
+    seeded $0.00 rows past the empty-month guard, so the month is "entered" and its zeros
+    read as a real month of spending nothing. Coverage calls it entered - correctly - which
+    is exactly why this card has to name it."""
+    food, rent = await categories(db)
+    db.add_all(
+        [
+            MonthlySpending(month=date(2026, 8, 1), category_id=food.id, amount=Decimal("0.00")),
+            MonthlySpending(month=date(2026, 8, 1), category_id=rent.id, amount=Decimal("0.00")),
+            MonthlyCashflow(month=date(2026, 8, 1), net_pay=Decimal("5000.00")),
+            # July: a real month beside a take-home - never flagged.
+            MonthlySpending(month=date(2026, 7, 1), category_id=food.id, amount=Decimal("400.00")),
+            MonthlyCashflow(month=date(2026, 7, 1), net_pay=Decimal("5000.00")),
+            # June: take-home alone, no rows at all - that is the net_pay_without_spending
+            # card's month, not this one.
+            MonthlyCashflow(month=date(2026, 6, 1), net_pay=Decimal("5000.00")),
+        ]
+    )
+    await db.commit()
+    coverage = await load_coverage(db)
+    assert coverage.empty == []  # August is ENTERED: it carries a take-home row
+    assert coverage.zero_with_net_pay == [date(2026, 8, 1)]
+    check = check_zero_filled_spending(coverage)
+    # WARN, not error: a deliberately confirmed $0 month with pay has this exact shape, so
+    # the card suggests rather than accuses.
+    assert check.severity == "warn" and check.months == [date(2026, 8, 1)]
+    assert check.detail == (
+        "All-zero spending beside a take-home figure for Aug 2026 — delete the zero rows "
+        "unless you recorded a genuine $0 month."
+    )
+    assert check.fix is not None
+    assert (check.fix.kind, check.fix.action) == ("action", "delete_spending_month")
+
+
+async def test_zero_filled_spending_takes_the_louder_severity_when_a_book_has_both(db):
+    food, _rent = await categories(db)
+    db.add_all(
+        [
+            # Sep: nothing real at all — the error shape.
+            MonthlySpending(month=date(2026, 9, 1), category_id=food.id, amount=Decimal("0.00")),
+            # Aug: zeros beside a real take-home — the warn shape.
+            MonthlySpending(month=date(2026, 8, 1), category_id=food.id, amount=Decimal("0.00")),
+            MonthlyCashflow(month=date(2026, 8, 1), net_pay=Decimal("5000.00")),
+        ]
+    )
+    await db.commit()
+    check = check_zero_filled_spending(await load_coverage(db))
+    assert check.severity == "error"
+    assert check.months == [date(2026, 8, 1), date(2026, 9, 1)] and check.count == 2
+    assert check.title == "Zero-filled spending months"
+    # One sentence per shape, the error's first.
+    assert check.detail.startswith("Sep 2026: every category is $0.00")
+    assert "All-zero spending beside a take-home figure for Aug 2026" in check.detail
 
 
 async def test_coverage_gaps_look_back_twelve_months_and_skip_the_current(db):

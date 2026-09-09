@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import select
 
@@ -233,16 +234,46 @@ async def test_spending_put_logs_rows_and_cashflow(auth_client, db):
     assert unchanged.json()["batch_id"] is None
 
 
-async def test_spending_delete_logs_everything_and_honours_the_repair_source(auth_client, db):
+async def test_spending_delete_logs_every_row_it_removes(auth_client, db):
     food, rent = await two_categories(db)
     await auth_client.put(
         f"{SP}/months/2026-09-01",
         json={
             "net_pay": "5000.00",
             "amounts": [
+                {"category_id": food.id, "amount": "410.00"},
+                {"category_id": rent.id, "amount": "2100.00"},
+            ],
+        },
+    )
+    resp = await auth_client.delete(f"{SP}/months/2026-09-01")
+    assert resp.status_code == 204
+    logged = await rows(db, resp.headers["x-change-batch"])
+    assert sorted((r.op, r.table_name) for r in logged) == [
+        ("delete", "monthly_cashflow"),
+        ("delete", "monthly_spending"),
+        ("delete", "monthly_spending"),
+    ]
+    assert {r.source for r in logged} == {"ui"}
+    assert {r.label for r in logged} == {"Deleted Sep 2026 spending"}
+    assert (await db.execute(select(MonthlySpending))).scalars().all() == []
+    assert (await db.execute(select(MonthlyCashflow))).scalars().all() == []
+
+
+async def test_spending_delete_honours_the_repair_source_and_spares_the_take_home(auth_client, db):
+    """The Data-health card's zero-filled repair (2026-09-09 audit item 1): its subject is
+    the phantom $0.00 rows, so it removes those and leaves the take-home the user really
+    entered — the month drops back to "take-home entered, spending missing"."""
+    food, rent = await two_categories(db)
+    await auth_client.put(f"{SP}/months/2026-09-01", json={"net_pay": "5000.00", "amounts": []})
+    await auth_client.put(
+        f"{SP}/months/2026-09-01",
+        json={
+            "amounts": [
                 {"category_id": food.id, "amount": "0.00"},
                 {"category_id": rent.id, "amount": "0.00"},
             ],
+            "confirm_zero": True,
         },
     )
     resp = await auth_client.delete(
@@ -251,14 +282,14 @@ async def test_spending_delete_logs_everything_and_honours_the_repair_source(aut
     assert resp.status_code == 204
     logged = await rows(db, resp.headers["x-change-batch"])
     assert sorted((r.op, r.table_name) for r in logged) == [
-        ("delete", "monthly_cashflow"),
         ("delete", "monthly_spending"),
         ("delete", "monthly_spending"),
     ]
     assert {r.source for r in logged} == {"repair"}  # the health card's repair (spec §11)
-    assert {r.label for r in logged} == {"Deleted Sep 2026 spending"}
+    assert {r.label for r in logged} == {"Deleted Sep 2026 zero-filled spending rows"}
     assert (await db.execute(select(MonthlySpending))).scalars().all() == []
-    assert (await db.execute(select(MonthlyCashflow))).scalars().all() == []
+    kept = (await db.execute(select(MonthlyCashflow))).scalars().all()
+    assert [(c.month, c.net_pay) for c in kept] == [(date(2026, 9, 1), Decimal("5000.00"))]
 
 
 async def test_a_bogus_claimed_source_reads_as_ui(auth_client, db):

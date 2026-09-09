@@ -2,7 +2,9 @@
 
 A spending month is ENTERED when it has at least one non-zero amount OR a net-pay row.
 A month whose rows are all $0.00 with no net pay is EMPTY — saved, but carrying nothing,
-and it must never draw as a real $0 month. A month inside the window with no rows and no
+and it must never draw as a real $0 month. All-$0.00 rows BESIDE a net-pay row make an
+entered month still worth naming (`zero_with_net_pay`): the take-home is real, the zeros
+usually are not. A month inside the window with no rows and no
 net pay is MISSING. The window is the balances coverage (first snapshot month … latest
 snapshot month): balances are the ritual's anchor, so a month outside them was never part
 of the book and cannot be "missing" from it.
@@ -28,6 +30,10 @@ class Coverage:
     balances: list[date]
     entered: list[date]
     empty: list[date]
+    # The same all-$0.00 rows, but WITH a take-home row beside them (2026-09-09 audit
+    # item 1). Such a month is `entered` — a take-home figure is content — which is exactly
+    # why the wizard's seeded zeros could ride in behind one and no card named them.
+    zero_with_net_pay: list[date]
     missing: list[date]
     net_pay: list[date]
     net_pay_missing: list[date]
@@ -56,6 +62,9 @@ def classify(
         entered=sorted({month for month, nonzero in spending.items() if nonzero} | pay),
         empty=sorted(
             month for month, nonzero in spending.items() if not nonzero and month not in pay
+        ),
+        zero_with_net_pay=sorted(
+            month for month, nonzero in spending.items() if not nonzero and month in pay
         ),
         missing=[month for month in window if month not in spending and month not in pay],
         net_pay=sorted(pay),
