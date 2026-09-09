@@ -49,6 +49,20 @@ describe('formatCurrency', () => {
     expect(formatCurrencyCompact('4500.00')).toBe('$4.5K')
     expect(formatCurrencyCompact('950.00')).toBe('$950')
   })
+  // An all-zero series makes ECharts pick a 0..1 axis, and rounding printed that as the
+  // ladder "$0 · $0 · $1 · $1" (2026-09-09 audit item 11).
+  it('spends two decimals on values under a dollar', () => {
+    expect(formatCurrencyCompact('0.20')).toBe('$0.20')
+    expect(formatCurrencyCompact('-0.20')).toBe('-$0.20')
+    expect(formatCurrencyCompact(0.25)).toBe('$0.25')
+    expect(formatCurrencyCompact('0.999')).toBe('$1.00')
+  })
+  it('leaves a dollar and up, and zero itself, exactly as they were', () => {
+    expect(formatCurrencyCompact('0.00')).toBe('$0')
+    expect(formatCurrencyCompact('1.00')).toBe('$1')
+    expect(formatCurrencyCompact('1.40')).toBe('$1')
+    expect(formatCurrencyCompact(null)).toBe('—')
+  })
 })
 
 describe('formatPct', () => {

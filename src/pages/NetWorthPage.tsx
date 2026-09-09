@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import type { OwnerScope } from '../api/netWorth'
@@ -416,6 +416,19 @@ export default function NetWorthPage() {
     for (const id of next) if (!drill.some((d) => d.accountId === id)) toggleDrill(id)
   }
 
+  // A scope that owns nothing (2026-09-09 audit item 11). Judged on the TIMESERIES, which
+  // lists the accounts in scope, never on the summary's totals — those are zeros either way,
+  // and zeros are exactly what this page must stop drawing.
+  const emptyScope = data !== null && data.accounts.length === 0
+  // Whose emptiness it is, in the words the chips above use. The household payload is
+  // fetched on its own and may not have landed (or may have failed), hence the fallback.
+  const scopeName =
+    owner === null
+      ? 'this household'
+      : owner === 'joint'
+        ? 'Joint'
+        : (orderedPeople.find((person) => person.id === owner)?.name ?? 'this person')
+
   // Components sit under their parent aggregate (table indent + chip adjacency),
   // not at their raw sheet-column sort position.
   const orderedAccounts = useMemo(() => (data ? nestComponents(data.accounts) : []), [data])
@@ -480,309 +493,325 @@ export default function NetWorthPage() {
           }}
           retryLabel="Retry the month summary"
         />
-        {summary && summary.month && (
-          <div className="kpi-row">
-            <StatTile
-              hero
-              label={`Net worth — ${formatMonth(summary.month)}`}
-              value={formatCurrency(summary.net_worth)}
-              // Fresh paints only (spec §8); a decimal-string amount, so Number() for the ease.
-              countUp={
-                !fromCache && summary.net_worth !== null
-                  ? { value: Number(summary.net_worth), format: formatCurrency }
-                  : undefined
-              }
-              delta={
-                summary.mom_delta === null
-                  ? undefined
-                  : `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)}) vs prior month`
-              }
-              // Shared rule (src/utils/tone.ts): a flat month is NEUTRAL. This tile used to
-              // fold zero into positive; ratified Plan 6 Task 8 review — a green "▲ $0.00"
-              // congratulates the user for standing still.
-              tone={toneOf(summary.mom_delta)}
-              hint="Assets minus liabilities for the latest snapshot; liabilities are entered as negatives."
-            />
-            {(['taxable', 'pre_tax', 'liability'] as AccountGroup[]).map((group) => {
-              const entry = summary.groups.find((g) => g.group === group)
-              if (!entry) return null
-              const delta = entry.mom_delta
-              return (
-                <StatTile
-                  key={group}
-                  label={GROUP_LABELS[group]}
-                  value={formatCurrency(entry.total)}
-                  delta={delta === null ? undefined : `${formatCurrency(delta)} vs prior`}
-                  tone={toneOf(delta)}
-                  hint={GROUP_TILE_HINT}
-                />
-              )
-            })}
+        {/* A scope that owns nothing has no honest chart to draw: the summary answers zeros,
+            the series is flat, and ECharts picks a 0..1 axis over it (2026-09-09 audit item
+            11). One sentence and the verb that fixes it, in place of tiles, charts and table. */}
+        {emptyScope ? (
+          <div className="card-grid">
+            <div className="card span-12">
+              <p className="drill-hint">
+                No accounts for {scopeName} yet — add one in{' '}
+                <Link to="/settings#accounts">Settings → Accounts</Link>
+              </p>
+            </div>
           </div>
-        )}
-
-        {/* D5 (2026-08-31): the latest snapshot split by owner — the same money the chips
-            above scope, read straight off the already-fetched summary. Ordered BY the chips
-            (primary, others, Joint) so the strip and the control can never disagree; an
-            owner with no owner_totals row is SKIPPED, never a fabricated $0.00. Under a
-            person scope the server narrows owner_totals to that person + Joint, and the
-            strip honestly narrows with it. */}
-        {ownerScopes.length > 0 && summary && summary.month && summary.owner_totals.length > 0 && (
-          <dl className="networth-owner-strip">
-            {ownerScopes
-              .filter(({ ownerScope }) => ownerScope !== null)
-              .map(({ ownerScope, label }) => {
-                const entry = summary.owner_totals.find((total) =>
-                  ownerScope === 'joint'
-                    ? total.person_id === null
-                    : total.person_id === ownerScope,
-                )
-                if (entry === undefined) return null
-                return (
-                  <div key={label}>
-                    <dt>{label}</dt>
-                    <dd>{formatCurrency(entry.total)}</dd>
-                  </div>
-                )
-              })}
-          </dl>
-        )}
-
-        <div className="card-grid">
-          <ChartCard
-            title="By group over time"
-            hint={
-              stackBy === 'share'
-                ? 'Each asset group as a share of that month’s assets — composition, not size.'
-                : 'Asset groups stacked to their combined total, with liabilities and net worth as their own lines. Diamonds mark months with a saved note. Liabilities under 1% of assets stay in the tooltip but are not drawn.'
-            }
-            ariaLabel={
-              stackBy === 'owner'
-                ? 'Stacked area chart of net worth by owner over time'
-                : stackBy === 'share'
-                  ? 'Stacked area chart of each asset group as a share of assets per month'
-                  : 'Stacked area chart of asset groups over time with liabilities and net worth as lines'
-            }
-            option={stackedOption}
-            empty="No snapshots yet — enter your first month to start the chart."
-            exportName="net-worth"
-            csv={data === null ? undefined : () => netWorthCsv(data)}
-            height={360}
-            zoomable
-            group="net-worth"
-            onLegendChange={onStackedLegendChange}
-            onDataZoom={onZoomWindow}
-            zoomWindow={zoomWindow}
-            controls={
-              <>
-                <Segmented
-                  variant="toggle"
-                  size="sm"
-                  ariaLabel="Stack by"
-                  // One person means "whose" has nothing to choose between — By owner hides.
-                  options={ownerScopes.length > 0 ? STACK_MODES : STACK_MODES.filter((m) => m.value !== 'owner')}
-                  value={stackBy}
-                  onChange={setStackBy}
+        ) : (
+          <>
+            {summary && summary.month && (
+              <div className="kpi-row">
+                <StatTile
+                  hero
+                  label={`Net worth — ${formatMonth(summary.month)}`}
+                  value={formatCurrency(summary.net_worth)}
+                  // Fresh paints only (spec §8); a decimal-string amount, so Number() for the ease.
+                  countUp={
+                    !fromCache && summary.net_worth !== null
+                      ? { value: Number(summary.net_worth), format: formatCurrency }
+                      : undefined
+                  }
+                  delta={
+                    summary.mom_delta === null
+                      ? undefined
+                      : `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)}) vs prior month`
+                  }
+                  // Shared rule (src/utils/tone.ts): a flat month is NEUTRAL. This tile used to
+                  // fold zero into positive; ratified Plan 6 Task 8 review — a green "▲ $0.00"
+                  // congratulates the user for standing still.
+                  tone={toneOf(summary.mom_delta)}
+                  hint="Assets minus liabilities for the latest snapshot; liabilities are entered as negatives."
                 />
-                <Segmented
-                  variant="toggle"
-                  size="sm"
-                  ariaLabel="Granularity"
-                  options={[
-                    { value: 'monthly', label: 'Monthly' },
-                    { value: 'quarterly', label: 'Quarterly' },
-                  ]}
-                  value={granularity}
-                  onChange={(g) => {
-                    // A press on the ACTIVE chip is a no-op, not a refetch: setGranularity
-                    // would bail out and leave the dim raised with nothing coming to lower it.
-                    if (g === granularity) return
-                    setLoading(true)
-                    setError(null)
-                    setSummaryError(null)
-                    // Same handler-side seed as the owner adoption above: a warm grain paints
-                    // instantly, and the rendered-state guard in load() stays truthful. The
-                    // ref write is fine HERE — an event handler, never a render.
-                    const peeked = getSnapshot<NetWorthSnapshot>(
-                      netWorthKey(g, owner, scope.month),
-                    )
-                    if (peeked !== undefined) {
-                      shown.current = peeked
-                      setFromCache(true)
-                      setData(peeked.ts)
-                      setSummary(peeked.summary)
-                    }
-                    setGranularity(g)
-                  }}
-                />
-              </>
-            }
-          />
-
-          {data !== null && viewedIndex >= 1 && (
-            <ChartCard
-              title={`What moved — ${formatMonth(months[viewedIndex])}`}
-              hint="How each account group — or account — moved net worth from the prior snapshot to this one, largest first. Every bar grows from zero by the size of the move; a loss is drawn outlined, a gain solid, and the label carries the sign. Groups that did not move are left out."
-              // The aria follows the TOGGLE: a sentence saying "group" over a chart of
-              // accounts is the one reading a screen-reader user cannot check.
-              ariaLabel={`Horizontal bar chart of how each ${moversBy === 'account' ? 'account' : 'account group'} moved net worth from the prior month to this one`}
-              option={moversOption}
-              empty="Nothing moved between these two months."
-              exportName="net-worth-movers"
-              csv={() => netWorthMoversCsv(data, viewedIndex, moversBy)}
-              height={moversHeight(movers.length)}
-              controls={
-                <Segmented variant="toggle" size="sm" ariaLabel="Break down by" options={MOVERS_MODES} value={moversBy} onChange={setMoversBy} />
-              }
-              lede={
-                moversLede === null || summary === null ? undefined : (
-                  <>
-                    {`${moversLede.fromLabel} `}<b>{moversLede.fromValue}</b>{` → ${moversLede.toLabel} `}
-                    <b>{moversLede.toValue}</b>{' · '}
-                    <span className={`stat-delta-${moversLede.tone}`}>{moversLede.delta}</span>
-                    {moversLede.pct !== null && (
-                      <>{' · '}<span className={`stat-delta-${moversLede.tone}`}>{moversLede.pct}</span></>
-                    )}
-                  </>
-                )
-              }
-            />
-          )}
-
-          <ChartCard
-            title="Account drill-down"
-            hint="Individual account balances over time — toggle accounts below or by clicking table rows."
-            ariaLabel="Line chart of the selected accounts’ balances over time"
-            option={drillOption}
-            empty="No accounts selected."
-            exportName="net-worth-accounts"
-            csv={data === null ? undefined : () => netWorthDrillCsv(data, drill)}
-            height={280}
-            zoomable
-            group="net-worth"
-            onLegendChange={onDrillLegendChange}
-            onDataZoom={onZoomWindow}
-            zoomWindow={zoomWindow}
-            footer={
-              <>
-                <p className="drill-hint">
-                  Pick up to {MAX_DRILL} accounts to compare their history. Clicking rows in the
-                  accounts table below toggles them here too.
-                </p>
-                <Segmented
-                  variant="chips"
-                  multiple
-                  ariaLabel="Accounts to compare"
-                  options={orderedAccounts.map((account) => {
-                    const active = drill.find((d) => d.accountId === account.id)
-                    return {
-                      value: String(account.id),
-                      // Slot hue rides a swatch beside the name, never the text itself
-                      // (SpendingPage's chip rule). The DOM swatch reads the CSS slot, not
-                      // PALETTE: index.css repoints --chart-N per theme, so it tracks a
-                      // light/dark switch that a baked hex would ignore. Slots are 0-based,
-                      // the tokens are 1-based.
-                      label: (
-                        <>
-                          {active !== undefined && (
-                            <span
-                              className="networth-drill-swatch"
-                              aria-hidden="true"
-                              style={{ background: `var(--chart-${active.slot + 1})` }}
-                            />
-                          )}
-                          {account.name}
-                        </>
-                      ),
-                      // Every palette slot spoken for: the rest go quiet rather than silently
-                      // refusing the click (theme.ts: never cycle past 8).
-                      disabled: active === undefined && drill.length >= MAX_DRILL,
-                    }
-                  })}
-                  value={drill.map((d) => String(d.accountId))}
-                  onChange={syncDrill}
-                />
-              </>
-            }
-          />
-
-          <div className="card span-12">
-            <h2 className="eyebrow">
-              Accounts — {viewedLabel}
-              <InfoHint text="Each account's balance for the month named above and its change from the one before. Component accounts live inside a parent aggregate and are excluded from totals." />
-            </h2>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Account</th>
-                  <th>Group</th>
-                  <th className="num">Balance</th>
-                  <th className="num">{momHeader}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orderedAccounts.map((account) => {
-                  const values = data?.series.find((s) => s.account_id === account.id)?.values ?? []
-                  const curr = viewedIndex >= 0 ? values[viewedIndex] : null
-                  const prev = viewedIndex >= 1 ? values[viewedIndex - 1] : null
-                  const pct = pctChange(curr, prev)
-                  const selected = drill.some((d) => d.accountId === account.id)
+                {(['taxable', 'pre_tax', 'liability'] as AccountGroup[]).map((group) => {
+                  const entry = summary.groups.find((g) => g.group === group)
+                  if (!entry) return null
+                  const delta = entry.mom_delta
                   return (
-                    <tr
-                      key={account.id}
-                      className={account.is_component ? 'component-row row-click' : 'row-click'}
-                      onClick={() => toggleDrill(account.id)}
-                      style={{ cursor: 'pointer', background: selected ? 'var(--surface-2)' : undefined }}
-                    >
-                      <td>
-                        <button
-                          type="button"
-                          className="row-toggle"
-                          aria-pressed={selected}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            toggleDrill(account.id)
-                          }}
-                        >
-                          {account.name}
-                        </button>
-                        {account.is_component && <span className="badge">component</span>}
-                        {!account.is_active && <span className="badge">inactive</span>}
-                      </td>
-                      <td>{GROUP_LABELS[account.group]}</td>
-                      <td className="num">{formatCurrency(curr)}</td>
-                      <td className="num">
-                        {pct === null ? (
-                          '—'
-                        ) : (
-                          <span className={pct >= 0 ? 'delta-positive' : 'delta-negative'}>
-                            {formatPct(pct)}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
+                    <StatTile
+                      key={group}
+                      label={GROUP_LABELS[group]}
+                      value={formatCurrency(entry.total)}
+                      delta={delta === null ? undefined : `${formatCurrency(delta)} vs prior`}
+                      tone={toneOf(delta)}
+                      hint={GROUP_TILE_HINT}
+                    />
                   )
                 })}
-              </tbody>
-              {data && months.length > 0 && (
-                <tfoot>
-                  <tr>
-                    <td style={{ fontWeight: 600 }}>Net worth</td>
-                    <td />
-                    <td className="num" style={{ fontWeight: 600 }}>
-                      {formatCurrency(data.net_worth[viewedIndex])}
-                    </td>
-                    <td className="num">{formatPct(data.mom_pct[viewedIndex])}</td>
-                  </tr>
-                </tfoot>
+              </div>
+            )}
+
+            {/* D5 (2026-08-31): the latest snapshot split by owner — the same money the chips
+                above scope, read straight off the already-fetched summary. Ordered BY the chips
+                (primary, others, Joint) so the strip and the control can never disagree; an
+                owner with no owner_totals row is SKIPPED, never a fabricated $0.00. Under a
+                person scope the server narrows owner_totals to that person + Joint, and the
+                strip honestly narrows with it. */}
+            {ownerScopes.length > 0 && summary && summary.month && summary.owner_totals.length > 0 && (
+              <dl className="networth-owner-strip">
+                {ownerScopes
+                  .filter(({ ownerScope }) => ownerScope !== null)
+                  .map(({ ownerScope, label }) => {
+                    const entry = summary.owner_totals.find((total) =>
+                      ownerScope === 'joint'
+                        ? total.person_id === null
+                        : total.person_id === ownerScope,
+                    )
+                    if (entry === undefined) return null
+                    return (
+                      <div key={label}>
+                        <dt>{label}</dt>
+                        <dd>{formatCurrency(entry.total)}</dd>
+                      </div>
+                    )
+                  })}
+              </dl>
+            )}
+
+            <div className="card-grid">
+              <ChartCard
+                title="By group over time"
+                hint={
+                  stackBy === 'share'
+                    ? 'Each asset group as a share of that month’s assets — composition, not size.'
+                    : 'Asset groups stacked to their combined total, with liabilities and net worth as their own lines. Diamonds mark months with a saved note. Liabilities under 1% of assets stay in the tooltip but are not drawn.'
+                }
+                ariaLabel={
+                  stackBy === 'owner'
+                    ? 'Stacked area chart of net worth by owner over time'
+                    : stackBy === 'share'
+                      ? 'Stacked area chart of each asset group as a share of assets per month'
+                      : 'Stacked area chart of asset groups over time with liabilities and net worth as lines'
+                }
+                option={stackedOption}
+                empty="No snapshots yet — enter your first month to start the chart."
+                exportName="net-worth"
+                csv={data === null ? undefined : () => netWorthCsv(data)}
+                height={360}
+                zoomable
+                group="net-worth"
+                onLegendChange={onStackedLegendChange}
+                onDataZoom={onZoomWindow}
+                zoomWindow={zoomWindow}
+                controls={
+                  <>
+                    <Segmented
+                      variant="toggle"
+                      size="sm"
+                      ariaLabel="Stack by"
+                      // One person means "whose" has nothing to choose between — By owner hides.
+                      options={ownerScopes.length > 0 ? STACK_MODES : STACK_MODES.filter((m) => m.value !== 'owner')}
+                      value={stackBy}
+                      onChange={setStackBy}
+                    />
+                    <Segmented
+                      variant="toggle"
+                      size="sm"
+                      ariaLabel="Granularity"
+                      options={[
+                        { value: 'monthly', label: 'Monthly' },
+                        { value: 'quarterly', label: 'Quarterly' },
+                      ]}
+                      value={granularity}
+                      onChange={(g) => {
+                        // A press on the ACTIVE chip is a no-op, not a refetch: setGranularity
+                        // would bail out and leave the dim raised with nothing coming to lower it.
+                        if (g === granularity) return
+                        setLoading(true)
+                        setError(null)
+                        setSummaryError(null)
+                        // Same handler-side seed as the owner adoption above: a warm grain paints
+                        // instantly, and the rendered-state guard in load() stays truthful. The
+                        // ref write is fine HERE — an event handler, never a render.
+                        const peeked = getSnapshot<NetWorthSnapshot>(
+                          netWorthKey(g, owner, scope.month),
+                        )
+                        if (peeked !== undefined) {
+                          shown.current = peeked
+                          setFromCache(true)
+                          setData(peeked.ts)
+                          setSummary(peeked.summary)
+                        }
+                        setGranularity(g)
+                      }}
+                    />
+                  </>
+                }
+              />
+
+              {data !== null && viewedIndex >= 1 && (
+                <ChartCard
+                  title={`What moved — ${formatMonth(months[viewedIndex])}`}
+                  hint="How each account group — or account — moved net worth from the prior snapshot to this one, largest first. Every bar grows from zero by the size of the move; a loss is drawn outlined, a gain solid, and the label carries the sign. Groups that did not move are left out."
+                  // The aria follows the TOGGLE: a sentence saying "group" over a chart of
+                  // accounts is the one reading a screen-reader user cannot check.
+                  ariaLabel={`Horizontal bar chart of how each ${moversBy === 'account' ? 'account' : 'account group'} moved net worth from the prior month to this one`}
+                  option={moversOption}
+                  empty="Nothing moved between these two months."
+                  exportName="net-worth-movers"
+                  csv={() => netWorthMoversCsv(data, viewedIndex, moversBy)}
+                  height={moversHeight(movers.length)}
+                  controls={
+                    <Segmented variant="toggle" size="sm" ariaLabel="Break down by" options={MOVERS_MODES} value={moversBy} onChange={setMoversBy} />
+                  }
+                  lede={
+                    moversLede === null || summary === null ? undefined : (
+                      <>
+                        {`${moversLede.fromLabel} `}<b>{moversLede.fromValue}</b>{` → ${moversLede.toLabel} `}
+                        <b>{moversLede.toValue}</b>{' · '}
+                        <span className={`stat-delta-${moversLede.tone}`}>{moversLede.delta}</span>
+                        {moversLede.pct !== null && (
+                          <>{' · '}<span className={`stat-delta-${moversLede.tone}`}>{moversLede.pct}</span></>
+                        )}
+                      </>
+                    )
+                  }
+                />
               )}
-            </table>
-            <p className="drill-hint" style={{ marginTop: '0.5rem' }}>
-              Component accounts are tracked inside an aggregate account and are excluded
-              from group totals and net worth.
-            </p>
-          </div>
-        </div>
+
+              <ChartCard
+                title="Account drill-down"
+                hint="Individual account balances over time — toggle accounts below or by clicking table rows."
+                ariaLabel="Line chart of the selected accounts’ balances over time"
+                option={drillOption}
+                empty="No accounts selected."
+                exportName="net-worth-accounts"
+                csv={data === null ? undefined : () => netWorthDrillCsv(data, drill)}
+                height={280}
+                zoomable
+                group="net-worth"
+                onLegendChange={onDrillLegendChange}
+                onDataZoom={onZoomWindow}
+                zoomWindow={zoomWindow}
+                footer={
+                  <>
+                    <p className="drill-hint">
+                      Pick up to {MAX_DRILL} accounts to compare their history. Clicking rows in the
+                      accounts table below toggles them here too.
+                    </p>
+                    <Segmented
+                      variant="chips"
+                      multiple
+                      ariaLabel="Accounts to compare"
+                      options={orderedAccounts.map((account) => {
+                        const active = drill.find((d) => d.accountId === account.id)
+                        return {
+                          value: String(account.id),
+                          // Slot hue rides a swatch beside the name, never the text itself
+                          // (SpendingPage's chip rule). The DOM swatch reads the CSS slot, not
+                          // PALETTE: index.css repoints --chart-N per theme, so it tracks a
+                          // light/dark switch that a baked hex would ignore. Slots are 0-based,
+                          // the tokens are 1-based.
+                          label: (
+                            <>
+                              {active !== undefined && (
+                                <span
+                                  className="networth-drill-swatch"
+                                  aria-hidden="true"
+                                  style={{ background: `var(--chart-${active.slot + 1})` }}
+                                />
+                              )}
+                              {account.name}
+                            </>
+                          ),
+                          // Every palette slot spoken for: the rest go quiet rather than silently
+                          // refusing the click (theme.ts: never cycle past 8).
+                          disabled: active === undefined && drill.length >= MAX_DRILL,
+                        }
+                      })}
+                      value={drill.map((d) => String(d.accountId))}
+                      onChange={syncDrill}
+                    />
+                  </>
+                }
+              />
+
+              <div className="card span-12">
+                <h2 className="eyebrow">
+                  Accounts — {viewedLabel}
+                  <InfoHint text="Each account's balance for the month named above and its change from the one before. Component accounts live inside a parent aggregate and are excluded from totals." />
+                </h2>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Account</th>
+                      <th>Group</th>
+                      <th className="num">Balance</th>
+                      <th className="num">{momHeader}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orderedAccounts.map((account) => {
+                      const values = data?.series.find((s) => s.account_id === account.id)?.values ?? []
+                      const curr = viewedIndex >= 0 ? values[viewedIndex] : null
+                      const prev = viewedIndex >= 1 ? values[viewedIndex - 1] : null
+                      const pct = pctChange(curr, prev)
+                      const selected = drill.some((d) => d.accountId === account.id)
+                      return (
+                        <tr
+                          key={account.id}
+                          className={account.is_component ? 'component-row row-click' : 'row-click'}
+                          onClick={() => toggleDrill(account.id)}
+                          style={{ cursor: 'pointer', background: selected ? 'var(--surface-2)' : undefined }}
+                        >
+                          <td>
+                            <button
+                              type="button"
+                              className="row-toggle"
+                              aria-pressed={selected}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleDrill(account.id)
+                              }}
+                            >
+                              {account.name}
+                            </button>
+                            {account.is_component && <span className="badge">component</span>}
+                            {!account.is_active && <span className="badge">inactive</span>}
+                          </td>
+                          <td>{GROUP_LABELS[account.group]}</td>
+                          <td className="num">{formatCurrency(curr)}</td>
+                          <td className="num">
+                            {pct === null ? (
+                              '—'
+                            ) : (
+                              <span className={pct >= 0 ? 'delta-positive' : 'delta-negative'}>
+                                {formatPct(pct)}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                  {data && months.length > 0 && (
+                    <tfoot>
+                      <tr>
+                        <td style={{ fontWeight: 600 }}>Net worth</td>
+                        <td />
+                        <td className="num" style={{ fontWeight: 600 }}>
+                          {formatCurrency(data.net_worth[viewedIndex])}
+                        </td>
+                        <td className="num">{formatPct(data.mom_pct[viewedIndex])}</td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+                <p className="drill-hint" style={{ marginTop: '0.5rem' }}>
+                  Component accounts are tracked inside an aggregate account and are excluded
+                  from group totals and net worth.
+                </p>
+              </div>
+            </div>
+          </>
+        )}
       </PageFrame>
     </div>
   )

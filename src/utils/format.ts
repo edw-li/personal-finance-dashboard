@@ -18,6 +18,10 @@ export function formatCurrencyCompact(value: string | number | null | undefined)
   const sign = n < 0 ? '-' : ''
   if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`
   if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(1)}K`
+  // Under a dollar the round is a lie the axis repeats: an all-zero series makes ECharts
+  // pick a 0..1 range, and its ticks came out as the ladder "$0 · $0 · $1 · $1"
+  // (2026-09-09 audit item 11). Exact zero keeps its bare "$0" — it IS zero.
+  if (abs > 0 && abs < 1) return `${sign}$${abs.toFixed(2)}`
   return `${sign}$${Math.round(abs)}`
 }
 

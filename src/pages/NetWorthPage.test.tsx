@@ -652,3 +652,53 @@ describe('NetWorthPage — one failed feed never blanks the page', () => {
     expect(screen.queryByText('boom')).toBeNull()
   })
 })
+
+// ── An owner with no accounts (2026-09-09 audit item 11) ─────────────────────────────────
+// The summary answers zeros for a scope that owns nothing, so the page drew a wall of
+// $0.00 tiles over charts whose all-zero series made ECharts pick a 0..1 axis.
+describe('NetWorthPage — a scope with no accounts', () => {
+  const noAccounts = () =>
+    timeseriesOut({
+      accounts: [],
+      series: [],
+      group_totals: {
+        cash: ['0.00', '0.00'], pre_tax: ['0.00', '0.00'], post_tax: ['0.00', '0.00'],
+        taxable: ['0.00', '0.00'], equity: ['0.00', '0.00'], other: ['0.00', '0.00'],
+        liability: ['0.00', '0.00'],
+      },
+      net_worth: ['0.00', '0.00'],
+      mom_pct: [null, null],
+      owner_series: [],
+    })
+
+  it('names the person and points at Settings instead of drawing zeros', async () => {
+    vi.mocked(fetchTimeseries).mockResolvedValue(noAccounts())
+    vi.mocked(fetchSummary).mockResolvedValue(
+      summaryOut({ net_worth: '0.00', mom_delta: '0.00', mom_pct: null, owner_totals: [] }),
+    )
+    renderPage('/net-worth?owner=2')
+
+    expect(await screen.findByText(/No accounts for Sam yet/)).toBeTruthy()
+    expect(
+      screen.getByRole('link', { name: 'Settings → Accounts' }).getAttribute('href'),
+    ).toBe('/settings#accounts')
+    // Nothing that would have to invent a number is on screen.
+    expect(screen.queryAllByTestId('echart')).toHaveLength(0)
+    expect(screen.queryByText('Net worth — Aug 2026')).toBeNull()
+    expect(screen.queryByText('Accounts — latest month')).toBeNull()
+    expect(document.querySelector('.networth-owner-strip')).toBeNull()
+  })
+
+  it('falls back to "this person" while the household payload is missing', async () => {
+    vi.mocked(fetchTimeseries).mockResolvedValue(noAccounts())
+    vi.mocked(fetchHousehold).mockRejectedValue(new Error('household down'))
+    renderPage('/net-worth?owner=2')
+    expect(await screen.findByText(/No accounts for this person yet/)).toBeTruthy()
+  })
+
+  it('says so of the household itself when the whole book is empty', async () => {
+    vi.mocked(fetchTimeseries).mockResolvedValue(noAccounts())
+    renderPage('/net-worth')
+    expect(await screen.findByText(/No accounts for this household yet/)).toBeTruthy()
+  })
+})
