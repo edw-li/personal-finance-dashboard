@@ -23,7 +23,30 @@ from decimal import ROUND_HALF_UP, Decimal
 
 ZERO = Decimal("0")
 MONEY_Q = Decimal("0.01")
-LONG_TERM_DAYS = 365
+
+
+def first_anniversary(purchase: date) -> date:
+    """The purchase date's first anniversary.
+
+    February 29 has no anniversary in a non-leap year; the decision (2026-09-09 spec 4i) is
+    March 1, which is also where the IRS's "the day after the anniversary" counting lands.
+    """
+    try:
+        return purchase.replace(year=purchase.year + 1)
+    except ValueError:
+        return date(purchase.year + 1, 3, 1)
+
+
+def is_long_term(purchase: date, sale: date) -> bool:
+    """Long-term when the sale is STRICTLY AFTER the first anniversary (2026-09-09 spec 4i).
+
+    This was `(sale - purchase).days > 365`, which is the right answer only when the
+    holding period misses February 29: a lot bought 2027-03-01 and sold 2028-03-01 is 366
+    days old and was called long-term, though it had been held exactly one year to the day
+    and the statute wants one year AND a day. A calendar rule cannot drift with the
+    calendar.
+    """
+    return sale > first_anniversary(purchase)
 
 
 def qualified_discount_ratio(discount: Decimal) -> Decimal:
@@ -139,7 +162,7 @@ def decompose_espp(
             MONEY_Q, rounding=ROUND_HALF_UP
         )
         capital = (shares * (sale_price - purchase_fmv)).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
-        term = "long" if (today - purchase_date).days > LONG_TERM_DAYS else "short"
+        term = "long" if is_long_term(purchase_date, today) else "short"
     return EsppSaleDetail(
         lot_id=lot_id,
         purchase_date=purchase_date,
