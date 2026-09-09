@@ -2223,7 +2223,9 @@ export interface AssistantModelsOut {
 export interface AssistantContextIn {
   route: string
   search: Record<string, string>
-  view: Record<string, string | number | null>
+  // A list value is a repeated url param (`?whatif=a&whatif=b`), which `search` cannot
+  // carry — URLSearchParams keeps only the last (2026-09-09 audit item 8).
+  view: Record<string, string | number | string[] | null>
 }
 
 export interface AssistantPreviewSection {

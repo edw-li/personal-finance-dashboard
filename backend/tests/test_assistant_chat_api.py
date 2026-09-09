@@ -1236,6 +1236,22 @@ async def test_preview_lists_sections(auth_client):
     assert "household" in names
 
 
+async def test_the_view_bag_accepts_a_repeated_url_params_list(auth_client):
+    """The Projection page publishes its scenario as the LIST of `whatif=` entries the URL
+    carries; a scalar-only view bag would 422 the whole request on that page."""
+    r = await auth_client.post(
+        PREVIEW_URL,
+        json={
+            "context": {
+                "route": "/projection",
+                "search": {},
+                "view": {"whatif": ["annual_return:0.2", "retire:2:2035-06"]},
+            }
+        },
+    )
+    assert r.status_code == 200
+
+
 async def test_tool_result_carries_a_sandbox_link_for_a_what_if(monkeypatch, db):
     """spec §12: the tool_result frame gains `link` when the tool answered with a sandbox_url,
     so the drawer can render "Open 2026 in What-if →" under the chip -- the year included,

@@ -215,6 +215,81 @@ async def test_projection_section_decimates_to_year_grain_keeping_the_last_month
     assert lengths == {31}  # t0 plus one point per projected year
 
 
+async def _seed_investable_base(db):
+    account = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(account)
+    await db.flush()
+    snap = NetWorthSnapshot(month=clock.product_today().replace(day=1))
+    db.add(snap)
+    await db.flush()
+    db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal("100000.00")))
+    await db.commit()
+
+
+async def test_projection_section_runs_the_scenario_the_page_is_showing(db):
+    """The Projection page's knobs live in the URL as repeated `whatif=` entries and reach
+    the drawer through useAssistantView. Without them the assistant explained the DERIVED
+    run while the reader was looking at a 20% one."""
+    await _seed_investable_base(db)
+    section = (
+        await build_context(
+            db,
+            route="/projection",
+            search={},
+            view={"whatif": ["annual_return:0.2", "years:10"]},
+        )
+    )["projection"]
+    assert section["annual_return"] == "0.200000"
+    assert section["years"] == 10
+    assert section["scenario_entries"] == ["annual_return:0.2", "years:10"]
+
+
+async def test_projection_section_drops_entries_the_grammar_does_not_name(db):
+    """Unknown keys, unparseable values and a malformed retirement are dropped rather than
+    422ing the section; `scenario_entries` echoes only what actually ran."""
+    await _seed_investable_base(db)
+    section = (
+        await build_context(
+            db,
+            route="/projection",
+            search={},
+            view={
+                "whatif": [
+                    "nonsense:1",
+                    "annual_return:banana",
+                    "volatility:NaN",
+                    "retire:soon",
+                    "years:900",
+                    "inflation:0.01",
+                ]
+            },
+        )
+    )["projection"]
+    assert section["scenario_entries"] == ["inflation:0.01"]
+    assert section["inflation"] == "0.010000"
+    assert section["years"] == 30  # the builder's own horizon, not the 900 that was dropped
+
+
+async def test_projection_section_reads_a_single_whatif_off_the_url(db):
+    """URLSearchParams collapses repeats, so the drawer's `search` bag can only ever carry
+    the LAST `whatif=`; a bare string is decoded like a one-entry list."""
+    await _seed_investable_base(db)
+    section = (
+        await build_context(
+            db, route="/projection", search={"whatif": "annual_return:0.2"}, view={}
+        )
+    )["projection"]
+    assert section["annual_return"] == "0.200000"
+    assert section["scenario_entries"] == ["annual_return:0.2"]
+
+
+async def test_projection_section_with_no_scenario_still_runs_the_derived_projection(db):
+    await _seed_investable_base(db)
+    section = (await build_context(db, route="/projection", search={}, view={}))["projection"]
+    assert section["scenario_entries"] == []
+    assert section["years"] == 30
+
+
 async def test_preview_summarizes_sections_with_row_counts(db):
     await _seed_two_spending_months(db)
     sections = await preview_sections(db, route="/spending", search={}, view={})

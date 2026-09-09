@@ -5,7 +5,10 @@
 // has no component tree, and the drawer reads at SEND time, not render time.
 import { useEffect, useSyncExternalStore } from 'react'
 
-export type AssistantView = Record<string, string | number | null>
+/** A LIST value carries a REPEATED url param, which the drawer's `search` bag cannot:
+ *  it is built from URLSearchParams, which collapses `?whatif=a&whatif=b` to its last
+ *  value. The Projection sandbox's scenario is exactly that shape (2026-09-09 item 8). */
+export type AssistantView = Record<string, string | number | string[] | null>
 
 let currentView: AssistantView = {}
 let version = 0

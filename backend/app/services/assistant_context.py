@@ -12,7 +12,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import BaseModel
@@ -30,6 +30,21 @@ CONTEXT_CHAR_CAP = 50_000
 MONTHS_WINDOW = 24
 MONTHS_WINDOW_TIGHT = 12
 UP_NEXT_DAYS = 60
+# The projection horizon this section reads, matching api/projection.DEFAULT_YEARS. Named
+# because a `years` entry in the page's scenario replaces it.
+PROJECTION_YEARS = 30
+# The seven Decimal knobs `projection()` takes. `years` is an int and is handled beside
+# them; the vocabulary itself is the page's (src/components/projection/projectionScenario.ts
+# KNOBS) and the router's — this list only says which of them survive a URL.
+PROJECTION_KNOBS = (
+    "annual_return",
+    "annual_spend",
+    "contribution_growth",
+    "inflation",
+    "monthly_contribution",
+    "swr",
+    "volatility",
+)
 
 
 def jsonable(value: Any) -> Any:
@@ -437,27 +452,96 @@ async def _credit_cards(db: AsyncSession, search: dict, view: dict) -> dict:
     return {"cards": cards, "reward_categories": categories, "rates": rates}
 
 
+def _whatif_entries(search: dict, view: dict) -> list[str]:
+    """The Projection page's live scenario, in the server's OWN wire grammar
+    (services/sandbox_links.py): `<knob>:<value>` and `retire:<person_id>:<YYYY-MM>`.
+
+    The page publishes its canonical entry list through useAssistantView, so `view` is the
+    channel that carries all of them. `search` is a fallback and can only ever hold ONE:
+    the drawer builds it from URLSearchParams, which collapses repeated params to the last."""
+    raw = view.get("whatif")
+    if raw is None:
+        raw = search.get("whatif")
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, str)]
+    return []
+
+
+def _projection_scenario(entries: list[str]) -> tuple[dict[str, Any], list[str]]:
+    """Entries → `projection()` keyword arguments, plus the entries actually honored.
+
+    Every FENCE is the router's (api/projection.py raises 422 for a knob out of bounds,
+    exactly as it would for the query param the page sends): decoding here only refuses
+    what could never have arrived through a query string in the first place — a key outside
+    the vocabulary, a value no parser reads, a retirement that fails the router's own
+    RETIRE_PATTERN. Those are dropped rather than raised: a stale link must not blank the
+    section. Last mention of a knob wins, like a repeated query param."""
+    from app.api.projection import RETIRE_PATTERN
+
+    knobs: dict[str, Any] = {}
+    retire: list[str] = []
+    honored: dict[str, str] = {}
+    for entry in entries:
+        key, separator, value = entry.partition(":")
+        if separator == "":
+            continue
+        if key == "retire":
+            # `retire:2:2035-06` → the "2:2035-06" the router's own parser takes.
+            if RETIRE_PATTERN.match(value):
+                retire.append(value)
+                honored[entry] = entry
+            continue
+        if key == "years":
+            # YearsQuery's ge/le is FastAPI's, and FastAPI never runs on a direct call —
+            # so the horizon is fenced here or nowhere.
+            if value.isdigit() and 1 <= int(value) <= 60:
+                knobs["years"] = int(value)
+                honored[key] = entry
+            continue
+        if key not in PROJECTION_KNOBS:
+            continue
+        try:
+            parsed = Decimal(value)
+        except InvalidOperation:
+            continue
+        # NaN and Infinity parse as Decimals and would reach arithmetic the router only
+        # guards for four of the seven knobs.
+        if not parsed.is_finite():
+            continue
+        knobs[key] = parsed
+        honored[key] = entry
+    return {**knobs, "retire": retire or None}, list(honored.values())
+
+
 async def _projection(db: AsyncSession, search: dict, view: dict) -> dict:
     from fastapi import HTTPException
 
     from app.api.projection import projection
 
+    scenario, honored = _projection_scenario(_whatif_entries(search, view))
     try:
         p = await projection(
-            annual_return=None,
-            monthly_contribution=None,
-            annual_spend=None,
-            swr=None,
-            years=30,
-            volatility=None,
-            inflation=None,
-            contribution_growth=None,
-            retire=None,
+            annual_return=scenario.get("annual_return"),
+            monthly_contribution=scenario.get("monthly_contribution"),
+            annual_spend=scenario.get("annual_spend"),
+            swr=scenario.get("swr"),
+            years=scenario.get("years", PROJECTION_YEARS),
+            volatility=scenario.get("volatility"),
+            inflation=scenario.get("inflation"),
+            contribution_growth=scenario.get("contribution_growth"),
+            retire=scenario["retire"],
             db=db,
         )
     except HTTPException as exc:
-        return {"error": exc.detail}  # NO_SNAPSHOTS on a fresh database
+        # NO_SNAPSHOTS on a fresh database — or a knob the router refuses, which is the
+        # same sentence the PAGE is showing, since it sends these very params.
+        return {"error": exc.detail, "scenario_entries": honored}
     payload = p.model_dump()
+    # So the model knows a scenario is in play and can name it: without this every figure
+    # below reads as the household's derived plan rather than the what-if on screen.
+    payload["scenario_entries"] = honored
     # Decimate month-grain series to year-grain: the model reads trends, not 360 points.
     # Every series is sampled at the SAME indices, so index i still names one month across
     # all of them — and the horizon's last month survives (see _decimate).
