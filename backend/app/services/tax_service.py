@@ -170,6 +170,10 @@ def stack(brackets: list[Bracket], base: Decimal, amount: Decimal) -> Decimal:
     space, so ordinary taxable income decides which CG rates they meet. Non-positive
     amount is 0; a negative base clamps to 0 rather than sliding the gains below the
     first bracket. Full precision.
+
+    `compute_breakdown` has passed a base clamped at 0 since 2026-09-09 (spec 4a) — an
+    unused deduction now reduces the AMOUNT instead — so the clamp here is a belt for
+    direct callers, not the engine's working path.
     """
     if amount <= 0:
         return ZERO
@@ -456,8 +460,15 @@ def compute_breakdown(
             )
     fed_agi = _federal_agi(values.__getitem__)
     fed_deduction = max(values["standard_deduction"], values["itemized_deduction"])
-    fed_ti = fed_agi - fed_deduction
-    fed_tax = walk(tables["federal"], fed_ti)
+    # 4a (2026-09-09 spec): the deduction is spent on ordinary income FIRST, and whatever it
+    # cannot use comes off the preferential income below rather than evaporating. `walk`
+    # clamps a negative income to 0 and `stack` clamps a negative base to 0, so before this
+    # a filer whose deduction exceeded AGI paid capital-gains tax on gains the deduction had
+    # already covered — and the reported taxable income was a negative figure nothing
+    # consumed. Two names, one arithmetic: exactly one of them is ever non-zero.
+    ordinary_ti = max(fed_agi - fed_deduction, ZERO)
+    unused_deduction = max(fed_deduction - fed_agi, ZERO)
+    fed_tax = walk(tables["federal"], ordinary_ti)
 
     # Capital gains (rows 118-120): netted in `_cg_amount`, computed here — above the
     # state section — because state AGI consumes cg_amount too; the federal CG stack
@@ -524,8 +535,12 @@ def compute_breakdown(
     sdi_tax = sum((walk(sdi_table, earner.sdi_wages) for earner in bundles), ZERO)
 
     # The federal CG stack (row 120): cg_amount was netted above the state section, which
-    # shares it; the gains stack on top of federal taxable income.
-    cg_tax = stack(tables["capital_gains"], fed_ti, cg_amount)
+    # shares it; the gains stack on top of ordinary taxable income, minus whatever the
+    # deduction could not spend there (4a). The netted gains LINE is untouched — state AGI,
+    # MAGI and the NIIT base all read it, and this is a federal stacking rule rather than a
+    # re-netting of the gains.
+    stacked_gains = max(cg_amount - unused_deduction, ZERO)
+    cg_tax = stack(tables["capital_gains"], ordinary_ti, stacked_gains)
 
     # NIIT (2026-08-31 spec C2) — its own line, never a folded bracket rate: 3.8% of the
     # smaller of net investment income and the MAGI excess over the status threshold.
@@ -570,7 +585,7 @@ def compute_breakdown(
             tax=fed_tax,
             effective_rate=_rate(fed_tax, fed_agi),
             agi=fed_agi,
-            taxable_income=fed_ti,
+            taxable_income=ordinary_ti,
         ),
         state=JurisdictionResult(
             tax=state_tax,
@@ -599,7 +614,7 @@ def compute_breakdown(
         capital_gains=JurisdictionResult(
             tax=cg_tax,
             effective_rate=_rate(cg_tax, cg_amount),
-            taxable_income=fed_ti,
+            taxable_income=ordinary_ti,
             gains_amount=cg_amount,
         ),
         niit=JurisdictionResult(

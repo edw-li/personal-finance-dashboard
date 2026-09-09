@@ -538,21 +538,66 @@ def test_capital_gains_amount_branches(ltcg, qualified, other, expected):
     assert breakdown.capital_gains.gains_amount == Decimal(expected)
 
 
-def test_capital_gains_stack_clamps_a_negative_taxable_income():
-    """A deduction larger than AGI drives taxable income negative; the gains must then stack
-    from 0 (the first CG bracket), never from the negative floor."""
+def test_unused_deduction_comes_off_the_stacked_gains():
+    """4a (2026-09-09 spec): a deduction larger than ordinary AGI is not thrown away.
+
+    GOLDEN MOVED. This test used to be `test_capital_gains_stack_clamps_a_negative_taxable_
+    income` and pinned federal.taxable_income == -80000 with a capital-gains tax of
+    5306.25. Both were wrong in the same direction: `walk` clamps a negative income to 0
+    and `stack` clamps a negative base to 0, so the 80000 of deduction AGI could not use
+    simply evaporated and the whole 80000 of gains was stacked and taxed. It now absorbs
+    the gains first — ordinary taxable income max(agi - deduction, 0) = 0, excess
+    max(deduction - agi, 0) = 80000, stacked gains max(80000 - 80000, 0) = 0 — so the
+    capital-gains tax is 0.00 (was 5306.25).
+    """
     inputs = {
         "latest_w2_income": Decimal("20000"),
         "standard_deduction": Decimal("100000"),
         "ltcg_total": Decimal("80000"),
     }
     breakdown = compute_breakdown(2023, inputs, YEAR_BRACKETS[2023])
-    assert breakdown.federal.taxable_income == Decimal("-80000")
+    # Reported, not just walked: a negative taxable income was a figure nothing consumed.
+    assert breakdown.federal.taxable_income == Decimal("0")
     assert breakdown.federal.tax == Decimal("0")  # the walker never taxes a loss
+    # The netted gains line is untouched — state AGI, MAGI and NIIT all read it, and the
+    # absorption is a FEDERAL stacking rule, not a re-netting of the gains themselves.
     assert breakdown.capital_gains.gains_amount == Decimal("80000")
-    # 44625 at 0%, then (80000 - 44625) × .15. Unclamped, the whole 80000 would sit below
-    # 44625 and be taxed at 0.
-    assert breakdown.capital_gains.tax == Decimal("5306.25")
+    assert breakdown.capital_gains.taxable_income == Decimal("0")
+    assert breakdown.capital_gains.tax == Decimal("0")
+
+
+def test_unused_deduction_only_partly_absorbs_a_larger_gain():
+    """The remainder stacks from zero, at the CG rates it really meets.
+
+    Same 80000 of unused deduction against 150000 of long-term gain: 70000 survives it and
+    stacks from an ordinary taxable income of 0 — 44625 in 2023's 0% tier, then 25375 at
+    15%.
+    """
+    inputs = {
+        "latest_w2_income": Decimal("20000"),
+        "standard_deduction": Decimal("100000"),
+        "ltcg_total": Decimal("150000"),
+    }
+    breakdown = compute_breakdown(2023, inputs, YEAR_BRACKETS[2023])
+    assert breakdown.capital_gains.gains_amount == Decimal("150000")
+    assert breakdown.capital_gains.tax == Decimal("25375") * Decimal("0.15")
+    # The effective rate divides by the FULL netted gains, so absorption shows up as a rate
+    # below the tier the survivors met.
+    assert breakdown.capital_gains.effective_rate == Decimal("3806.25") / Decimal("150000")
+
+
+def test_gains_still_stack_on_ordinary_income_when_the_deduction_is_used_up():
+    """The unchanged path: AGI above the deduction leaves no excess, so the gains stack on
+    ordinary taxable income exactly as they always did."""
+    inputs = {
+        "latest_w2_income": Decimal("120000"),
+        "standard_deduction": Decimal("100000"),
+        "ltcg_total": Decimal("80000"),
+    }
+    breakdown = compute_breakdown(2023, inputs, YEAR_BRACKETS[2023])
+    assert breakdown.federal.taxable_income == Decimal("20000")
+    # [20000, 100000] against 2023's (0, 44625, 492300): 24625 at 0%, 55375 at 15%.
+    assert breakdown.capital_gains.tax == Decimal("55375") * Decimal("0.15")
 
 
 def test_state_agi_carries_cg_amount_every_year():
