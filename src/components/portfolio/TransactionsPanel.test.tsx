@@ -93,8 +93,13 @@ describe('TransactionsPanel', () => {
     // No roster prop at all — the page's own fetch is still in flight, or it failed. An
     // empty list would raise the warning over every account the household already has.
     render(<TransactionsPanel securities={securities} transactions={[]} onChanged={() => {}} />)
-    fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'Schwab' } })
+    const box = screen.getByLabelText('Account')
+    fireEvent.change(box, { target: { value: 'Schwab' } })
     expect(screen.queryByText(/will be created/)).toBeNull()
+    // ...and no empty list either: a `list` pointing at an empty datalist is a dropdown
+    // arrow that opens on nothing.
+    expect(document.getElementById('txn-account-labels')).toBeNull()
+    expect(box.getAttribute('list')).toBeNull()
   })
 
   it('marks import-owned rows and shows the re-import caveat', () => {

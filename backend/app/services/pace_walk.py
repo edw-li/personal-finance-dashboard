@@ -58,15 +58,19 @@ class Walked:
     # rate over the remaining GROSS, a per-check amount over the remaining CHECKS. The walk
     # answers them because it is the only thing here that knows which paydays are left.
     #
-    # Both round AWAY from the target — the count UP, the gross UP to the cent — so a figure
-    # divided by either lands UNDER the cap rather than a hair over it, which is the whole
-    # point of the exercise. On the month basis a "check" is `pay_periods_per_year / 12` of a
-    # month's credit, so a cadence with no payday calendar still divides by checks and not by
-    # months; the rounding up is what makes that fraction safe to report as a count.
+    # `remaining_checks` is EXACT and fractional on purpose: on the month basis a "check" is
+    # `pay_periods_per_year / 12` of a month's credit, so four months of a biweekly profile
+    # are 8.67 checks and the walk will credit 8.67 of them. Dividing by a rounded 9 would
+    # under-fill the cap by a whole check's worth (4,400 landing at 99.44 %), so the DIVISOR
+    # is this number and the rounding up happens once, at the wire, where the figure is a
+    # count a sentence prints rather than a divisor.
+    #
+    # `remaining_gross` does round up to the cent, which is safe in the other direction: a
+    # bigger divisor makes a rate SMALLER, so the projection lands under the cap, never over.
     #
     # The defaults are the empty tail — a window with nothing left — so a hand-built Walked
     # stays constructible; `walk` always states both.
-    remaining_checks: int = 0
+    remaining_checks: Decimal = ZERO
     remaining_gross: Decimal = ZERO
 
 
@@ -220,8 +224,9 @@ def walk(profiles: list, scenario, today: date, start: date, end: date) -> Walke
         basis="months" if by_month else "paydays",
         backfilled_from=backfilled,
         first_payday_passed=opener < today,
-        # Rounded UP, both of them — a target divided by these can only come out SMALLER, and
-        # a projection that lands a hair under the cap is the one that reads 100 %.
-        remaining_checks=int(remaining_checks.to_integral_value(rounding=ROUND_CEILING)),
+        # The count stays exact (it is a divisor); the gross rounds UP to the cent, which can
+        # only make a rate smaller — a projection that lands a hair under the cap is the one
+        # that reads 100 %.
+        remaining_checks=remaining_checks,
         remaining_gross=remaining_gross.quantize(CENTS, rounding=ROUND_CEILING),
     )

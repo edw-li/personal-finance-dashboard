@@ -458,3 +458,23 @@ async def test_pace_rows_name_the_election_that_lands_on_the_cap(auth_client, db
     assert after["limit_hsa_self"]["tone"] != "over"
     # The tail is the WALK's, so a knob that moves neither salary nor cadence cannot move it.
     assert after["limit_401k_elective"]["remaining_checks"] == 8
+
+
+async def test_an_already_over_row_sends_a_rate_a_decimal_parser_can_read(
+    auth_client, db, me, monkeypatch
+):
+    """A 9 dp quantize of nothing is Decimal("0E-9"), and "0E-9" is a string no JS decimal
+    parser reads — the client's exact arithmetic throws on it mid-render and takes the page
+    down. The schema's Pct9Opt is the fix; this is the assertion that keeps it there.
+
+    The clock is pinned because "already over" is a fact about a DATE: read in February, a
+    5,000 cap still has room in the checks that are left."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2026, 9, 7))
+    db.add(ContributionLimit(year=2026, key="limit_401k_elective", value=D("5000.00")))
+    await db.commit()
+    # 16 paydays at 13 % of 188,930 have already put 16,373.93 past a 5,000 cap.
+    await create_profile(auth_client)
+    shown = {row["key"]: row for row in (await auth_client.get(BREAKDOWN)).json()["pace"]}
+    row = shown["limit_401k_elective"]
+    assert row["tone"] == "over"
+    assert row["to_cap_rate"] == "0.000000000"

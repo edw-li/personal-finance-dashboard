@@ -112,8 +112,13 @@ describe('DividendsPanel ownership', () => {
     render(
       <DividendsPanel securities={securities} dividends={[]} annualIncome={null} onChanged={() => {}} />,
     )
-    fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'Schwab' } })
+    const box = screen.getByLabelText('Account')
+    fireEvent.change(box, { target: { value: 'Schwab' } })
     expect(screen.queryByText(/will be created/)).toBeNull()
+    // ...and no empty list either: a `list` pointing at an empty datalist is a dropdown
+    // arrow that opens on nothing.
+    expect(document.getElementById('div-account-labels')).toBeNull()
+    expect(box.getAttribute('list')).toBeNull()
   })
 
   it('badges every row with its owner and spells out the resurrect rule', () => {

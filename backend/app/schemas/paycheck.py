@@ -205,7 +205,10 @@ class PaceItemOut(BaseModel):
     # `to_cap_rate`; nothing else here is safe to re-derive from a salary.
     remaining_checks: int | None
     remaining_gross: Decimal | None
-    to_cap_rate: Decimal | None
+    # Pct9Opt, not a bare Decimal: a rate quantized to 9 dp is Decimal("0E-9") when there is
+    # no room left, and "0E-9" is a string no JS decimal parser reads — the client's exact
+    # arithmetic THROWS on it, mid-render (the module docstring's warning, earned again).
+    to_cap_rate: Pct9Opt
     to_cap_per_check: Decimal | None
 
 

@@ -970,9 +970,12 @@ describe('PaycheckPage — the profile form', () => {
         '$2,000.00 a year for your coverage, plus $500.00 for each of 2 additional individuals',
       ),
     ).toBeTruthy()
-    // ...and no HDHP at all is no deposit for anybody but the employee's own line.
+    // ...and no HDHP at all is no deposit AND no account: neither term arrives, so the
+    // sentence names the tier rather than promising the employee's own line.
     fireEvent.change(field('HSA coverage'), { target: { value: 'none' } })
-    expect(screen.getByText('$2,000.00 a year for your coverage')).toBeTruthy()
+    expect(
+      screen.getByText('No employer HSA contribution applies without HSA coverage.'),
+    ).toBeTruthy()
   })
 
   it('says a household with no employer HSA deposit has none, rather than printing zeros', async () => {

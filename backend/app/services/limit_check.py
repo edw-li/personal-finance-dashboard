@@ -21,7 +21,7 @@ router mirrors it with a 422, so a stored limit of zero is unrepresentable.
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 
 from app.limit_keys import (
     HSA_LIMIT_KEY_BY_COVERAGE,
@@ -134,7 +134,7 @@ def _to_cap_rate(
     """
     if walked is None or so_far is None or limit is None:
         return None
-    if walked.remaining_checks <= 0 or walked.remaining_gross <= ZERO:
+    if walked.remaining_checks <= ZERO or walked.remaining_gross <= ZERO:
         return None
     room = max(limit - so_far, ZERO)
     return (room / walked.remaining_gross).quantize(RATE_QUANTUM, rounding=ROUND_FLOOR)
@@ -144,11 +144,16 @@ def _to_cap_per_check(
     limit: Decimal | None, so_far: Decimal | None, walked: Walked | None
 ) -> Decimal | None:
     """`_to_cap_rate`'s twin in DOLLARS: the employee amount per remaining check that lands
-    on `limit`. Floored to cents, for the same reason and with the same three nulls."""
-    if walked is None or so_far is None or limit is None or walked.remaining_checks <= 0:
+    on `limit`. Floored to cents, for the same reason and with the same three nulls.
+
+    The divisor is the walk's EXACT count, fractions and all — a month-basis window of 8.67
+    checks will credit 8.67 of them, and dividing by the 9 the wire prints would leave a
+    whole check's worth of the cap unfilled. The cents floor still leaves up to a cent per
+    check on the table, which is what keeps the projection at or under the cap."""
+    if walked is None or so_far is None or limit is None or walked.remaining_checks <= ZERO:
         return None
     room = max(limit - so_far, ZERO)
-    return (room / Decimal(walked.remaining_checks)).quantize(CENTS, rounding=ROUND_FLOOR)
+    return (room / walked.remaining_checks).quantize(CENTS, rounding=ROUND_FLOOR)
 
 
 def _item(
@@ -304,7 +309,12 @@ def paycheck_pace(
         {}
         if walked is None
         else {
-            "remaining_checks": walked.remaining_checks,
+            # Rounded UP here and only here: a count is what a sentence prints ("eight checks
+            # left"), and half a check is not a thing to say. The DIVISORS above keep the
+            # walk's exact figure.
+            "remaining_checks": int(
+                walked.remaining_checks.to_integral_value(rounding=ROUND_CEILING)
+            ),
             "remaining_gross": walked.remaining_gross,
         }
     )

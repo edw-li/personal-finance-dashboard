@@ -148,11 +148,12 @@ def test_a_year_already_finished_has_no_tail_left():
 
 def test_the_month_basis_counts_CHECKS_and_not_months():
     """A biweekly profile has no payday calendar here, so four remaining months carry
-    26 x 4 / 12 = 8.67 checks — rounded UP to 9, because the HSA divisor is per CHECK and a
-    month-shaped one would under-fill by exactly the cadence."""
+    26 x 4 / 12 = 8.67 checks. EXACT and fractional on purpose: it is a divisor, and a
+    month-shaped one would under-fill by exactly the cadence while a rounded 9 would leave a
+    whole check's worth of the cap unfilled. The wire rounds it for display; this does not."""
     biweekly = [FakeProfile(effective_date=date(2026, 1, 1), pay_periods_per_year=26)]
     walked = year(profiles=biweekly)
     assert walked.basis == "months"
-    assert walked.remaining_checks == 9
+    assert walked.remaining_checks.quantize(D("0.0001")) == D("8.6667")
     # Four twelfths of the salary, whatever the cadence: the gross is a rate's divisor.
     assert walked.remaining_gross == D("62976.67")

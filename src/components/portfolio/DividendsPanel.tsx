@@ -310,14 +310,17 @@ export default function DividendsPanel({
               which is now select-only — every plain text control in this form states it. */}
           {/* aria-label, not the wrapping label's text: the note below is a describedby, so
               the box keeps announcing "Account" rather than the whole sentence. */}
-          <input className="field-input" list="div-account-labels" aria-label="Account" aria-describedby={accountNote === null ? undefined : 'div-account-note'} value={form.account} onChange={(e) => setForm((f) => ({ ...f, account: e.target.value }))} />
+          <input className="field-input" list={accounts === null ? undefined : 'div-account-labels'} aria-label="Account" aria-describedby={accountNote === null ? undefined : 'div-account-note'} value={form.account} onChange={(e) => setForm((f) => ({ ...f, account: e.target.value }))} />
           {/* Completions, not a fence: a genuinely new account is a legal thing to type, so
-              the box stays free text and the note below owns the consequence. */}
-          <datalist id="div-account-labels">
-            {(accounts ?? []).map((label) => (
-              <option key={label} value={label} />
-            ))}
-          </datalist>
+              the box stays free text and the note below owns the consequence. No roster, no
+              list at all — an empty one is a dropdown arrow that opens on nothing. */}
+          {accounts !== null && (
+            <datalist id="div-account-labels">
+              {accounts.map((label) => (
+                <option key={label} value={label} />
+              ))}
+            </datalist>
+          )}
           {accountNote !== null && (
             <p className="hint" id="div-account-note">
               {accountNote}

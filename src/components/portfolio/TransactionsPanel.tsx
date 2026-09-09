@@ -336,7 +336,7 @@ export default function TransactionsPanel({
               which is now select-only — every plain text control in this form states it. */}
           <input
             className="field-input"
-            list="txn-account-labels"
+            list={accounts === null ? undefined : 'txn-account-labels'}
             // The box announces "Account" whatever the note below says: a describedby, never
             // part of the name — a wrapping label would have read the whole sentence out.
             aria-label="Account"
@@ -345,12 +345,15 @@ export default function TransactionsPanel({
             onChange={(e) => set('account')(e.target.value)}
           />
           {/* Completions, not a fence: a genuinely new account is a legal thing to type, so
-              the box stays free text and the note below owns the consequence. */}
-          <datalist id="txn-account-labels">
-            {(accounts ?? []).map((label) => (
-              <option key={label} value={label} />
-            ))}
-          </datalist>
+              the box stays free text and the note below owns the consequence. No roster, no
+              list at all — an empty one is a dropdown arrow that opens on nothing. */}
+          {accounts !== null && (
+            <datalist id="txn-account-labels">
+              {accounts.map((label) => (
+                <option key={label} value={label} />
+              ))}
+            </datalist>
+          )}
           {accountNote !== null && (
             <p className="hint" id="txn-account-note">
               {accountNote}

@@ -211,7 +211,9 @@ describe('paycheck scenario codec', () => {
 
   it('says “already at the cap” rather than aiming at nothing', () => {
     const apply = vi.fn()
-    const presets = paycheckPresets(ctx({ toCapRate: '0', toCapPerCheck: '0' }), apply)
+    // The WIRE's spelling of no room left: Pct9Opt renders the 9 dp zero in plain notation,
+    // and `decimal.ts` throws on anything else (a bare "0E-9" would take the page down).
+    const presets = paycheckPresets(ctx({ toCapRate: '0.000000000', toCapPerCheck: '0.00' }), apply)
     expect(presets[0].title).toBe('Already at the cap')
     expect(presets[1].title).toBe('Already at the cap')
     presets[0].apply()

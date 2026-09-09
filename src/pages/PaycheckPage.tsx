@@ -300,12 +300,18 @@ function employerHsaWords(form: ProfileFormState): string {
   const annual = num(form.hsa_employer_annual)
   const perHead = num(form.hsa_employer_per_dependent)
   if (annual <= 0 && perHead <= 0) return 'No employer HSA contribution entered.'
+  // No HDHP is no HSA, so NEITHER term arrives — `limit_check.employer_hsa` returns zero for
+  // this tier before it looks at the policy at all. Saying "$2,000.00 a year for your
+  // coverage" here would promise a deposit against an account the tier says does not exist.
+  if (form.hsa_coverage === 'none') {
+    return 'No employer HSA contribution applies without HSA coverage.'
+  }
   const typed = Number(form.hsa_dependents.trim() || '0')
   const covered = Number.isFinite(typed) ? Math.trunc(typed) : 0
   const own = `${formatCurrency(String(annual))} a year for your coverage`
-  // Not a family plan, nobody else covered, or nothing paid per head: the clause would
-  // describe money that does not exist (matchWords' rule for a band nobody funds). A count
-  // left behind on a row that has since dropped to self-only is ignored here exactly as the
+  // Self-only, nobody else covered, or nothing paid per head: the clause would describe
+  // money that does not exist (matchWords' rule for a band nobody funds). A count left
+  // behind on a row that has since dropped to self-only is ignored here exactly as the
   // server ignores it — the sentence promises what the deposit will actually be.
   if (form.hsa_coverage !== 'family' || perHead <= 0 || covered === 0) return own
   return `${own}, plus ${formatCurrency(String(perHead))} for each of ${covered} additional individual${covered === 1 ? '' : 's'}`
