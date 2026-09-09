@@ -22,6 +22,16 @@ presumed to cover it — understates the estimate and overstates what the card s
 owe. The YEAR TOTAL is order-invariant either way: FICA(salary + vests) telescopes regardless
 of which leg claims which slice.
 
+Two later legs sit beside those (2026-09-09 audit items 3, 4c and 4d). The BONUS leg is
+`w2_bonuses` at the supplemental rates plus marginal FICA, stacked UNDER the vests in both
+the FICA walk and the $1M federal supplemental tier because a bonus is money already
+received; an entered `w2_bonus_withholding` replaces the whole modelled leg. The
+JURISDICTION legs split the combined total into federal, state and payroll when — and only
+when — every profile pricing a check carries both paystub rates: federal and state are
+built from the taxable base and the supplemental rates, payroll is the remainder, and the
+three add back to the combined figures to the cent. Everything the module published before
+those two keeps its meaning; the combined total simply also carries the bonus leg now.
+
 Preconditions (enforced at the API boundary, not here): every profile's
 `pay_periods_per_year` >= 1 — paycheck_calc's own divide-by-zero guard; note the failure mode
 differs here, since `check_dates(year, 0)` does not divide by zero but returns [], and
