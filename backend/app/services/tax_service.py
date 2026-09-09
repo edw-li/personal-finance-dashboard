@@ -247,14 +247,29 @@ def _cg_amount(value: Callable[[str], Decimal]) -> Decimal:
     return value("qualified_dividends") + value("other_capital_gains")
 
 
-def _magi(value: Callable[[str], Decimal]) -> Decimal:
-    """Modified AGI: federal AGI plus the netted gains — the base the NIIT threshold test
-    and the SALT phase-down are statutorily judged on (2026-08-31 spec C1). One
-    definition, two consumers. It inherits capital_loss_deductions through `_federal_agi`
-    (spec C3): the §1211 deduction is inside AGI, so MAGI carries it — correct for both
-    consumers, and pinned by the capital-loss NIIT test.
+def _true_agi(value: Callable[[str], Decimal]) -> Decimal:
+    """AGI as a 1040 reports it: the ordinary chain plus the netted gains.
+
+    `_federal_agi` is deliberately ORDINARY AGI — the income the federal brackets are
+    walked over — because the sheet's chain keeps preferential income out of it and stacks
+    it separately. That is a bracket-walking device, not a definition of AGI: long-term
+    gains and qualified dividends are inside AGI on every real return. This is the figure
+    the summary reports as the federal Base and divides the federal effective rate by
+    (2026-09-09 spec 4f), and the same quantity the NIIT threshold and the SALT phase-down
+    are judged on. It inherits capital_loss_deductions through `_federal_agi` (spec C3).
     """
     return _federal_agi(value) + _cg_amount(value)
+
+
+def _magi(value: Callable[[str], Decimal]) -> Decimal:
+    """Modified AGI — the base the NIIT threshold test and the SALT phase-down are
+    statutorily judged on (2026-08-31 spec C1).
+
+    It IS `_true_agi` today: the app models no addback (no foreign earned income
+    exclusion, no excluded savings-bond interest) that would sit between the two. The name
+    is kept separate because the day one is modelled, only this function moves.
+    """
+    return _true_agi(value)
 
 
 @dataclass(frozen=True)
@@ -490,6 +505,12 @@ def compute_breakdown(
     # state section — because state AGI consumes cg_amount too; the federal CG stack
     # itself is applied after FICA, where the sheet computes it.
     cg_amount = _cg_amount(values.__getitem__)
+    # True AGI: what the federal line REPORTS as its Base and divides its effective rate by
+    # (spec 4f), and the base the NIIT threshold below is judged on. `fed_agi` stays the
+    # ordinary income the brackets walk; reporting it as "AGI" understated the base by every
+    # dollar of long-term gain and qualified dividend the return actually carried, which
+    # flattered the effective rate on exactly the years with the most preferential income.
+    true_agi = _true_agi(values.__getitem__)
 
     # State (rows 100-103): CA exempts the treasury slice of unqualified dividends and
     # does NOT recognise the HSA deduction, so both are added back — and, deliberately
@@ -567,8 +588,9 @@ def compute_breakdown(
 
     # NIIT (2026-08-31 spec C2) — its own line, never a folded bracket rate: 3.8% of the
     # smaller of net investment income and the MAGI excess over the status threshold.
-    # MAGI is `_magi`'s definition (fed AGI + cg_amount, capital_loss_deductions inside
-    # via _federal_agi). The clamps guard stored-negative edges: a short-term or netted
+    # MAGI is `_magi`'s definition, which is `true_agi` above (fed AGI + cg_amount,
+    # capital_loss_deductions inside via _federal_agi). The clamps guard stored-negative
+    # edges: a short-term or netted
     # CG loss reduces AGI, never investment income, and a net-negative NII must never
     # surface as a negative surcharge.
     nii = (
@@ -577,9 +599,8 @@ def compute_breakdown(
         + max(values["stcg_total"], ZERO)
         + max(cg_amount, ZERO)
     )
-    magi = _magi(values.__getitem__)
     niit_threshold = NIIT_AGI_THRESHOLDS.get(filing_status, NIIT_AGI_THRESHOLD)
-    niit_base = max(ZERO, min(nii, magi - niit_threshold))
+    niit_base = max(ZERO, min(nii, true_agi - niit_threshold))
     niit_tax = NIIT_RATE * niit_base
 
     # Totals (rows 121-125). Gross income sums the *_standard / *_brokerage COMPONENTS,
@@ -606,8 +627,8 @@ def compute_breakdown(
         year=year,
         federal=JurisdictionResult(
             tax=fed_tax,
-            effective_rate=_rate(fed_tax, fed_agi),
-            agi=fed_agi,
+            effective_rate=_rate(fed_tax, true_agi),
+            agi=true_agi,
             taxable_income=ordinary_ti,
         ),
         state=JurisdictionResult(
@@ -648,6 +669,9 @@ def compute_breakdown(
         ),
         totals=TaxTotals(
             gross_income=gross_income,
+            # The sheet's own "Total Income" row: ORDINARY AGI, the figure the federal
+            # brackets walk. It is deliberately not the federal line's Base, which carries
+            # the gains too (spec 4f) — the two differ by exactly cg_amount.
             total_income=fed_agi,
             total_tax=total_tax,
             take_home=gross_income - total_tax,

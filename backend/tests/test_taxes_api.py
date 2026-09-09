@@ -594,11 +594,14 @@ async def test_summary_2024_matches_the_sheet_except_the_state_chain(auth_client
     body = (await auth_client.get(f"{YEARS}/2024/summary")).json()
     assert body["year"] == 2024
     assert body["warnings"] == []  # every input present, every jurisdiction present
+    # The federal Base is TRUE AGI since 2026-09-09 (spec 4f): ordinary AGI 211776.20 plus
+    # the 179.13 of netted gains, and the effective rate divides by it (was 0.192575 over
+    # the ordinary figure). The sheet's own Total Income row is still 211776.20, below.
     assert body["federal"] == {
-        "agi": "211776.20",
+        "agi": "211955.33",
         "taxable_income": "197176.20",
         "tax": "40782.88",
-        "effective_rate": "0.192575",
+        "effective_rate": "0.192413",
     }
     assert body["state"] == {
         "agi": "215301.15",

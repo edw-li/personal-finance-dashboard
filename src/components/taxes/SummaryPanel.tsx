@@ -110,7 +110,7 @@ export default function SummaryPanel({
           <div className="tax-section tax-jurisdiction-detail">
             <h3 className="eyebrow">
               By jurisdiction
-              <InfoHint text="Base is each jurisdiction&apos;s income context — AGI for the income taxes, W-2 wages for the payroll taxes, gains or net investment income for capital gains and NIIT. Taxable is what its rates are actually walked over: for capital gains, the ordinary income the gains stack on top of; for NIIT, the surcharged base." />
+              <InfoHint text="Base is each jurisdiction&apos;s income context — AGI for the income taxes, W-2 wages for the payroll taxes, gains or net investment income for capital gains and NIIT. The federal AGI includes long-term gains and qualified dividends, which the brackets do not walk: those are taxed by the capital-gains row instead. Taxable is what each row&apos;s rates are actually walked over: for federal, ordinary income after the deduction; for capital gains, the ordinary income the gains stack on top of; for NIIT, the surcharged base." />
             </h3>
             <table className="data-table">
               <thead>
