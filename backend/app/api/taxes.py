@@ -91,6 +91,7 @@ from app.schemas.taxes import (
     WithholdingVestOut,
 )
 from app.services import clock, rsu_vesting, withholding_calc
+from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     MONEY_MAX_ABS_14_4,
@@ -122,13 +123,19 @@ from app.services.tax_whatif import (
     decompose_espp,
 )
 from app.tax_keys import (
+    COUNT,
     JURISDICTIONS,
     MARRIED_JOINT,
     MARRIED_SEPARATE,
+    MAX_INPUT_COUNT,
+    MIN_INPUT_COUNT,
     PER_PERSON_KEYS,
+    PERCENT,
     SECTIONS,
     SINGLE,
     TAX_INPUT_DEFINITIONS,
+    label_for,
+    unit_for,
 )
 
 router = APIRouter(prefix="/taxes", tags=["taxes"], dependencies=[Depends(get_current_user)])
@@ -154,6 +161,14 @@ ZERO = Decimal("0")
 RATE_MAX_ABS = Decimal("1e12")
 # Spelled once: the ONE per-person key whose suggestion comes from outside tax_inputs.
 ANNUAL_SALARY_KEY = "annual_salary"
+# The household rows that are a FIGURE OF THE YEAR rather than of the filer's own
+# behaviour: the IRS and the FTB publish them, they move a little every year, and a year
+# that never had them entered silently taxed AGI in full (2026-09-09 spec 4e). Absent one,
+# last year's stored value is the honest starting point — offered as a chip labelled for
+# what it is, never applied. `derive_suggestions` has no formula for any of the three, so
+# this is an addition to the map rather than an override of one.
+CARRY_FORWARD_KEYS = ("standard_deduction", "state_standard_deduction", "state_exemption_credits")
+CARRY_FORWARD_SOURCE = "last year's"
 
 
 async def _require_year(db: AsyncSession, year: int) -> None:
@@ -199,9 +214,12 @@ class EngineFeed:
 
     @property
     def computable(self) -> bool:
-        """'single' always computes (the grandfathered path every stored year uses); a
-        married status refuses rather than walk a single filer's thresholds."""
-        return self.filing_status == SINGLE or not self.brackets_missing_for_status
+        """One rule for every status: a year with a reported missing table refuses.
+
+        WHICH tables count is `_missing_for_status`' business — a married year needs all
+        six, and a single year is judged by the calendar (2026-09-09 spec 4g).
+        """
+        return not self.brackets_missing_for_status
 
     def warning(self) -> str:
         return BRACKETS_MISSING_WARNING.format(
@@ -310,12 +328,43 @@ async def _engine_tables(
     return tables
 
 
-def _missing_for_status(tables: dict[str, list[Bracket]], filing_status: str) -> list[str]:
-    """Jurisdictions with no table under this status, in tax_keys order. Always empty for
-    'single' — see EngineFeed.computable."""
-    if filing_status == SINGLE:
+CORE_JURISDICTIONS = ("federal", "state", "capital_gains")
+
+
+def _current_tax_year() -> int:
+    """This calendar year, by the product clock.
+
+    `clock.product_today()` (the module, not the name — clock.py's own instruction), so a
+    test moves the boundary by patching `app.services.clock.product_today` the way every
+    other dated decision in this app is moved. THE only place a tax year meets "now".
+    """
+    return clock.product_today().year
+
+
+def _missing_for_status(
+    tables: dict[str, list[Bracket]], filing_status: str, year: int
+) -> list[str]:
+    """Jurisdictions with no table under this status, in tax_keys order — the list that
+    makes a year refuse to compute (EngineFeed.computable).
+
+    A married status needs all six: the single-filer tables are right there and walking a
+    couple's income over them would produce a confident, wrong number.
+
+    'single' used to return [] unconditionally, so a single year NEVER refused (spec 4g).
+    That is right for imported history — a settled year whose payroll table was never
+    typed in still has real, checked figures — and wrong for the year being lived in: a
+    brand-new 2026 with no federal table reported a federal tax of 0.00 with a straight
+    face, next to a warning in the muted list. So a single year BEFORE this calendar year
+    is grandfathered, and the current or a future one is judged on the three CORE income
+    tables. Missing only a payroll table there still computes: that jurisdiction reports 0
+    with its own named warning, which is a gap the user can see rather than a wrong total.
+    """
+    missing = [name for name in JURISDICTIONS if not tables.get(name)]
+    if filing_status != SINGLE:
+        return missing
+    if year < _current_tax_year():
         return []
-    return [name for name in JURISDICTIONS if not tables.get(name)]
+    return missing if any(name in CORE_JURISDICTIONS for name in missing) else []
 
 
 async def _engine_feed(
@@ -336,7 +385,7 @@ async def _engine_feed(
         inputs=_assemble_inputs(rows, columns),
         earners=_assemble_earners(rows, columns),
         tables=tables,
-        brackets_missing_for_status=_missing_for_status(tables, filing_status),
+        brackets_missing_for_status=_missing_for_status(tables, filing_status, year),
         rows=rows,
     )
 
@@ -373,6 +422,26 @@ async def _profile_salaries(
                 SUGGESTION_QUANTUM, rounding=ROUND_HALF_UP
             )
     return salaries
+
+
+async def _carried_forward(
+    db: AsyncSession, year: int, household: dict[str, Decimal]
+) -> dict[str, Decimal]:
+    """Last year's value for each CARRY_FORWARD_KEYS row THIS year has not stored.
+
+    Absent, strictly: a key the user has already answered — even with a zero — is never
+    second-guessed by a chip. All three are household keys, so the prior year holds exactly
+    one row each and no person column is involved.
+    """
+    absent = [key for key in CARRY_FORWARD_KEYS if key not in household]
+    if not absent:
+        return {}
+    rows = (
+        await db.execute(
+            select(TaxInput).where(TaxInput.year == year - 1, TaxInput.key.in_(absent))
+        )
+    ).scalars()
+    return {row.key: row.value for row in rows}
 
 
 async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
@@ -413,6 +482,12 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
     # gross_paycheck still divides the STORED annual_salary.
     for column, salary in (await _profile_salaries(db, columns, clock.product_today())).items():
         suggestions[column][ANNUAL_SALARY_KEY] = salary
+    # Household keys, so the same value in every column (a household row renders from the
+    # first one) — and the only suggestions on this payload that are not a sheet formula,
+    # which is what `suggestion_source` tells the chip.
+    carried = await _carried_forward(db, year, household)
+    for values in suggestions.values():
+        values.update(carried)
     by_section: dict[str, list[TaxInputItemOut]] = {}
     for definition in sorted(definitions, key=lambda d: (d.sort_order, d.key)):
         item_columns = columns if definition.is_per_person else [None]
@@ -421,9 +496,15 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
             by_section.setdefault(definition.section, []).append(
                 TaxInputItemOut(
                     key=definition.key,
-                    label=definition.label,
+                    # From tax_keys when it knows the key: the seed is insert-only, so a row
+                    # written before a relabel still carries the old text.
+                    label=label_for(definition.key, definition.label),
                     sort_order=definition.sort_order,
                     is_derived=definition.is_derived,
+                    # From tax_keys, not from the row: the unit is a property of the KEY,
+                    # so an older database that never migrated one still renders the right
+                    # box (see tax_keys.TAX_INPUT_UNITS).
+                    unit=unit_for(definition.key),
                     is_per_person=definition.is_per_person,
                     person_id=column if definition.is_per_person else None,
                     value=source.get(definition.key),
@@ -433,6 +514,7 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
                     suggested=suggestions[column if definition.is_per_person else columns[0]].get(
                         definition.key
                     ),
+                    suggestion_source=(CARRY_FORWARD_SOURCE if definition.key in carried else None),
                 )
             )
     # tax_keys order first; a section seeded later still renders (appended, name order).
@@ -586,6 +668,29 @@ async def _require_known_input_keys(db: AsyncSession, keys: Iterable[str]) -> No
         raise HTTPException(status_code=422, detail=f"unknown input key(s): {unknown}")
 
 
+COUNT_MESSAGE = f"must be a whole number of checks between {MIN_INPUT_COUNT} and {MAX_INPUT_COUNT}"
+PERCENT_MESSAGE = "must be a fraction between 0 and 1 (the form enters it as a percent)"
+
+
+def _check_input_unit(key: str, value: Decimal) -> None:
+    """The per-UNIT fence (2026-09-09 spec §2), over the already-quantized value.
+
+    Money keys keep the column bound alone — every figure on a tax sheet is money and the
+    engine has no opinion about its size. The two non-money keys DO have one: `pay_periods`
+    counts checks received so far this year (a whole number; 53 is the most a weekly
+    payroll can pay), and a percent key stores the FRACTION the engine multiplies by, so a
+    stored 98 would have multiplied treasury dividends by ninety-eight. Same `values.{key}`
+    vocabulary as the quantizer above, so a rejected input reads the same wherever it
+    arrived.
+    """
+    unit = unit_for(key)
+    if unit == COUNT:
+        if value != value.to_integral_value() or not (MIN_INPUT_COUNT <= value <= MAX_INPUT_COUNT):
+            raise HTTPException(status_code=422, detail=f"values.{key} {COUNT_MESSAGE}")
+    elif unit == PERCENT and not (ZERO <= value <= Decimal("1")):
+        raise HTTPException(status_code=422, detail=f"values.{key} {PERCENT_MESSAGE}")
+
+
 def _validated_input_value(key: str, value: Decimal | None) -> Decimal | None:
     """One input value at the tax_inputs column scale, Numeric(14,4); null stays null.
 
@@ -598,12 +703,18 @@ def _validated_input_value(key: str, value: Decimal | None) -> Decimal | None:
     """
     if value is None:
         return None
-    return quantize_price(value, f"values.{key}", max_abs=MONEY_MAX_ABS_14_4) + ZERO
+    quantized = quantize_price(value, f"values.{key}", max_abs=MONEY_MAX_ABS_14_4) + ZERO
+    _check_input_unit(key, quantized)
+    return quantized
 
 
 @router.put("/years/{year}/inputs", response_model=TaxInputsOut)
 async def put_inputs(
-    year: YearPath, body: TaxInputsIn, db: AsyncSession = Depends(get_db)
+    year: YearPath,
+    body: TaxInputsIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> TaxInputsOut:
     """Bulk upsert of the (key, person) slots in the body; a null value unsets one slot.
 
@@ -611,6 +722,12 @@ async def put_inputs(
     years it covers, so edits made here to an imported year are clobbered by the next
     re-import — for the PRIMARY person's sheet-tracked keys only, since the importer's
     sweeps are scoped to the sheet's own vocabulary and to that one person.
+
+    CHANGE-LOGGED since 2026-09-09: the Data-health card repairs a year's itemized total
+    through this route (the §199A leftover, taxes spec 4h), and a repair that rewrites
+    money has to be undoable like the zero-month delete beside it. The batch id rides the
+    `X-Change-Batch` header rather than the body — `TaxInputsOut` is the GET's shape too,
+    and the two payloads are pinned byte-for-byte.
     """
     submitted = [TaxInputRowIn(key=key, value=value) for key, value in body.values.items()]
     submitted += list(body.rows)
@@ -661,6 +778,7 @@ async def put_inputs(
         (row.key, row.person_id): row
         for row in (await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars()
     }
+    changed = 0
     for (key, owner), value in resolved.items():
         row = existing.get((key, owner))
         if row is None and owner is not None and owner == null_row_column:
@@ -678,13 +796,25 @@ async def put_inputs(
             row = existing.pop((key, None), None)
         if value is None:
             if row is not None:
+                batch.record_delete(row)  # the image is needed BEFORE the delete
                 await db.delete(row)  # null means "unset this line", not "store 0"
+                changed += 1
         elif row is None:
-            db.add(TaxInput(year=year, key=key, person_id=owner, value=value))
+            fresh = TaxInput(year=year, key=key, person_id=owner, value=value)
+            db.add(fresh)
+            await db.flush()  # the image needs the generated id
+            batch.record_insert(fresh)
+            changed += 1
         else:
+            before = row_image(row)
             row.person_id = owner
             row.value = value
-    await db.commit()
+            # An unchanged pair records nothing (ChangeBatch.record's rule), so a re-save of
+            # the same figures logs an empty batch and offers no Undo.
+            batch.record_update(row, before)
+            changed += 1
+    batch.label = f"Saved {year} tax inputs — {changed} slot{'' if changed == 1 else 's'}"
+    response.headers.update(batch_header(await batch.commit()))
     return await _inputs_payload(db, year)
 
 

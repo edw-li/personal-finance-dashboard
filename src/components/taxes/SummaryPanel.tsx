@@ -11,6 +11,13 @@ import { waterfallCsv, waterfallOption } from './taxChartOptions'
 // imports — and StatTile brings it along regardless.
 import './taxes.css'
 
+// The engine's own deduction sentence (backend/app/services/tax_service.py
+// DEDUCTION_MISSING_WARNING). Matched on its opening rather than reconstructed, because the
+// year is inside it: with neither deduction stored the engine taxes AGI in full, which is
+// the largest single way a freshly created year can be wrong, and it must not read like the
+// muted housekeeping list beside it (2026-09-09 spec 4e).
+const DEDUCTION_WARNING_OPENING = 'No standard or itemized deduction entered for'
+
 // D2 (2026-08-31): the summary sections rendered as FIGURES, not only as chart geometry.
 // One rule per column: Base is the jurisdiction's income context (agi / w2_income /
 // gains_amount), Taxable the field its rates are actually walked over (taxable_income /
@@ -71,6 +78,11 @@ export default function SummaryPanel({
   // answer '—' for an absent value) rather than the zeros it declined to compute.
   const totals = missing.length > 0 ? null : summary.totals
 
+  // One list on the wire, two registers on screen. Everything the engine says is still
+  // shown, in the order it said it; the deduction sentence is simply not muted.
+  const alerts = summary.warnings.filter((w) => w.startsWith(DEDUCTION_WARNING_OPENING))
+  const notes = summary.warnings.filter((w) => !w.startsWith(DEDUCTION_WARNING_OPENING))
+
   return (
     <>
       <section className="card">
@@ -110,7 +122,7 @@ export default function SummaryPanel({
           <div className="tax-section tax-jurisdiction-detail">
             <h3 className="eyebrow">
               By jurisdiction
-              <InfoHint text="Base is each jurisdiction&apos;s income context — AGI for the income taxes, W-2 wages for the payroll taxes, gains or net investment income for capital gains and NIIT. Taxable is what its rates are actually walked over: for capital gains, the ordinary income the gains stack on top of; for NIIT, the surcharged base." />
+              <InfoHint text="Base is each jurisdiction&apos;s income context — AGI for the income taxes, W-2 wages for the payroll taxes, gains or net investment income for capital gains and NIIT. The federal AGI includes long-term gains and qualified dividends, which the brackets do not walk: those are taxed by the capital-gains row instead. Taxable is what each row&apos;s rates are actually walked over: for federal, ordinary income after the deduction; for capital gains, the ordinary income the gains stack on top of; for NIIT, the surcharged base." />
             </h3>
             <table className="data-table">
               <thead>
@@ -140,13 +152,23 @@ export default function SummaryPanel({
           </div>
         )}
 
-        {summary.warnings.length > 0 && (
+        {alerts.length > 0 && (
+          // The advisory register (--warn), and role="alert" rather than a silent note: it
+          // is saying the figures above are overstated, which is the one warning a reader
+          // must not skim past.
+          <div className="tax-warnings is-alert" role="alert">
+            {alerts.map((warning, i) => (
+              <p key={i}>{warning}</p>
+            ))}
+          </div>
+        )}
+        {notes.length > 0 && (
           // React text nodes, so the engine's sentences are escaped by construction. A
-          // sparse year's "missing inputs defaulted to 0: …" names all 22 keys in one
+          // sparse year's "missing inputs defaulted to 0: …" names every absent key in one
           // line — it wraps (see taxes.css) rather than being clipped or summarised: the
           // list IS the message.
           <div className="tax-warnings">
-            {summary.warnings.map((warning, i) => (
+            {notes.map((warning, i) => (
               // Index key: a fixed, non-reordered list rendered straight from the payload.
               <p key={i}>{warning}</p>
             ))}
@@ -169,11 +191,26 @@ export default function SummaryPanel({
               <p className="tax-brackets-missing-list">
                 {missing.map(jurisdictionLabel).join(', ')}
               </p>
-              <p>
-                Open <strong>Bracket tables</strong> below, pick the{' '}
-                {FILING_STATUS_LABELS[filingStatus]} tab, and clone {summary.year}&apos;s
-                single-filer tables — then edit the thresholds that move with filing status.
-              </p>
+              {/* The way out differs by status. A married year has the single-filer
+                  tables sitting right there, so the editor's clone is the answer; a SINGLE
+                  year has nothing to clone from and is refusing because it is the year
+                  being lived in (2026-09-09 spec 4g) — telling it to clone its own tables
+                  would be nonsense. */}
+              {filingStatus === 'single' ? (
+                <p>
+                  Open <strong>Bracket tables</strong> below and enter {summary.year}&apos;s
+                  rates — the IRS and the Franchise Tax Board publish them each autumn. A
+                  settled year that was imported without them still computes; this one is
+                  the year you are living in, so a zero here would be a wrong answer rather
+                  than a gap.
+                </p>
+              ) : (
+                <p>
+                  Open <strong>Bracket tables</strong> below, pick the{' '}
+                  {FILING_STATUS_LABELS[filingStatus]} tab, and clone {summary.year}&apos;s
+                  single-filer tables — then edit the thresholds that move with filing status.
+                </p>
+              )}
             </div>
           </div>
         )}

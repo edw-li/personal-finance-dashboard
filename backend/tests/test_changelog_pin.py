@@ -1,8 +1,13 @@
 """The change-log's hand-maintained path list (2026-09-03 data-lifecycle spec §9), pinned
-the way EXPORTED_TABLES is: every route in the two money-bearing routers that commits must
+the way EXPORTED_TABLES is: every route in the money-bearing routers that commits must
 either be listed as LOGGED (and commit THROUGH its ChangeBatch) or be named EXEMPT with a
 reason. A new write path lands here red until someone decides — that decision is the
-feature. Exempt today: nothing."""
+feature.
+
+`taxes.py` joined the list on 2026-09-09: its inputs PUT became change-logged so the
+Data-health card's §199A repair could offer Undo, and the four routes beside it are named
+EXEMPT rather than left unlisted, so the next person to touch one has to decide about it
+too."""
 
 import ast
 from pathlib import Path
@@ -27,8 +32,24 @@ LOGGED: dict[str, set[str]] = {
         "put_month",
         "delete_month",
     },
+    # The Data-health card repairs a year's itemized total through this route (2026-09-09
+    # taxes spec 4h), and a repair that rewrites money has to be undoable.
+    "taxes.py": {"put_inputs"},
 }
-EXEMPT: dict[str, dict[str, str]] = {}  # module -> {function: reason}
+# module -> {function: reason}. An exempt route still commits directly; the reason says
+# why that is the right answer for now, not that nobody looked.
+EXEMPT: dict[str, dict[str, str]] = {
+    "taxes.py": {
+        "update_year": "sets one enum on a year row — no money moves, and the status is "
+        "visible on the page it is set from",
+        "delete_year": "removes a whole year vertical through an ON DELETE CASCADE, which "
+        "a row-image undo cannot replay — a snapshot restore is the exit",
+        "put_brackets": "replaces a jurisdiction's rate table wholesale; the tables are "
+        "reference data the user retypes from the IRS/FTB, not their own figures",
+        "clone_brackets": "copies those same tables into another filing status, and refuses "
+        "when the target already has rows — the undo is a second clone",
+    }
+}
 
 
 def _committing_functions(source: str):

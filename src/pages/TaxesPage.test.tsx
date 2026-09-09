@@ -158,6 +158,7 @@ function inputsFor(year: number): TaxInputsOut {
           {
             key: 'annual_salary', label: 'Annual Salary', sort_order: 10,
             is_derived: false, value: '200000.0000', suggested: null,
+            unit: 'money', suggestion_source: null,
             is_per_person: true, person_id: 1,
           },
         ],
@@ -305,17 +306,26 @@ function withholdingFor(year: number): WithholdingOut {
   }
 }
 
-// The engine's own sparse-year sentence: ENGINE_INPUT_KEYS in definition order, all 22 of
-// them, in ONE line (backend/app/services/tax_service.py MISSING_INPUTS_WARNING). It is
-// rendered verbatim — the list IS the message.
-const MISSING_22 =
+// The engine's own sparse-year sentence: ENGINE_INPUT_KEYS in definition order, in ONE
+// line (backend/app/services/tax_service.py MISSING_INPUTS_WARNING). It is rendered
+// verbatim — the list IS the message. Two keys joined the engine's on 2026-09-09:
+// interest_us_treasuries (spec 4b: California exempts it) and itemized_sec199a_div (spec
+// 4h: the QBI deduction is below the line); the two DEDUCTION keys left it the same day
+// (spec 4e), because with neither stored the engine says so on a line of its own.
+const MISSING_KEYS_LINE =
   'missing inputs defaulted to 0: latest_w2_income, other_w2_income, stcg_total, ' +
   'stcg_standard, unqualified_dividends, unq_div_us_treasuries_etf, ' +
-  'unq_div_state_exempt_pct, interest_total, other_income_1099, trad_401k_contributions, ' +
+  'unq_div_state_exempt_pct, interest_total, interest_us_treasuries, other_income_1099, ' +
+  'trad_401k_contributions, ' +
   'hsa_contributions, hsa_contributions_employer, capital_loss_deductions, ' +
-  'other_pretax_deductions, standard_deduction, itemized_deduction, ' +
+  'other_pretax_deductions, itemized_sec199a_div, ' +
   'state_standard_deduction, state_exemption_credits, ltcg_total, ltcg_brokerage, ' +
   'qualified_dividends, other_capital_gains'
+
+// Its companion (backend DEDUCTION_MISSING_WARNING): the one warning that is about the
+// FIGURES rather than about the data behind them.
+const DEDUCTION_WARNING =
+  'No standard or itemized deduction entered for 2024 — federal tax is overstated'
 
 // The tax inputs and the bracket cells are AmountInputs now, so a BLURRED box reads its
 // formatted echo, not its raw state (spec §3.3): "999" shows as "$999.00", and a percent
@@ -947,15 +957,32 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(screen.getAllByTestId('echart')).toHaveLength(1))
   })
 
-  it('renders every engine warning verbatim, including the 22-key sparse-year line', async () => {
+  it('renders every engine warning verbatim, including the sparse-year key line', async () => {
     const sparse = summaryFor(2024)
-    sparse.warnings = [MISSING_22, 'no state brackets for 2024: state tax computed as 0']
+    sparse.warnings = [MISSING_KEYS_LINE, 'no state brackets for 2024: state tax computed as 0']
     vi.mocked(fetchTaxSummary).mockResolvedValue(sparse)
     renderPage()
 
     // One text node, wrapped by CSS — not truncated, not summarised, not re-worded.
-    expect(await screen.findByText(MISSING_22)).toBeTruthy()
+    expect(await screen.findByText(MISSING_KEYS_LINE)).toBeTruthy()
     expect(screen.getByText('no state brackets for 2024: state tax computed as 0')).toBeTruthy()
+  })
+
+  it('lifts the missing-deduction warning out of the muted list', async () => {
+    // 4e (2026-09-09): the deduction sentence says the figures above are overstated, which
+    // is the one warning a reader must not skim past — so it is an alert in the advisory
+    // register, while the key list stays the muted note it always was.
+    const sparse = summaryFor(2024)
+    sparse.warnings = [DEDUCTION_WARNING, MISSING_KEYS_LINE]
+    vi.mocked(fetchTaxSummary).mockResolvedValue(sparse)
+    renderPage()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe(DEDUCTION_WARNING)
+    expect(alert.className).toContain('is-alert')
+    // Everything the engine said is still on screen, in the register it belongs to.
+    const muted = screen.getByText(MISSING_KEYS_LINE)
+    expect(muted.closest('.tax-warnings')?.className).not.toContain('is-alert')
   })
 
   it('offers a note instead of a waterfall for a year that computes to zeros', async () => {
@@ -1766,6 +1793,24 @@ describe('filing status (2026-08-26 design §6)', () => {
     // The tiles stay, reading em-dashes: the engine sent no figures, and inventing zeros
     // would be exactly the confidently-wrong answer it refused to compute.
     expect(screen.getByText('Total tax')).toBeTruthy()
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4)
+    expect(screen.queryByText('By jurisdiction')).toBeNull()
+  })
+
+  it('offers a single year the rates, not a clone of its own tables', async () => {
+    // 4g (2026-09-09): a single year the user is LIVING IN refuses when its core tables
+    // are missing, and it has nothing to clone from - the married copy would read "clone
+    // 2026's single-filer tables" at a single-filer year.
+    vi.mocked(fetchTaxYears).mockResolvedValue([{ ...year2024, filing_status: 'single' }])
+    vi.mocked(fetchTaxSummary).mockResolvedValue(
+      missingSummaryFor(2024, ['federal', 'state', 'capital_gains']),
+    )
+    renderPage()
+
+    expect(await screen.findByText('No Single bracket tables for 2024')).toBeTruthy()
+    expect(screen.getByText(/the IRS and the Franchise Tax Board publish them/)).toBeTruthy()
+    expect(screen.queryByText(/clone/i)).toBeNull()
+    // Same refusal shape as a married year: em-dashes, no waterfall, no jurisdiction table.
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4)
     expect(screen.queryByText('By jurisdiction')).toBeNull()
   })

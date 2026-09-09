@@ -28,13 +28,14 @@ from app.services.tax_service import (
     JURISDICTION_WARN_MISSING,
     NEGATIVE_STATE_TAX_WARNING,
     SUGGESTION_KEYS,
+    ZERO,
     compute_breakdown,
     derive_suggestions,
     niit_advisory,
     stack,
     walk,
 )
-from app.tax_keys import TAX_INPUT_DEFINITIONS
+from app.tax_keys import INPUT_UNITS, TAX_INPUT_DEFINITIONS, TAX_INPUT_UNITS, unit_for
 
 CENT = Decimal("0.01")
 YEARS = (2023, 2024, 2025, 2026)
@@ -172,12 +173,28 @@ YEAR_BRACKETS: dict[int, dict[str, list[tuple[Decimal, Decimal]]]] = {
 # The canonical model's expected outputs, at cents.
 _CANONICAL_TABLE: dict[str, tuple[str, str, str, str]] = {
     "fed_agi": ("117726.64", "211776.20", "259376.05", "280128.21"),
-    "fed_deduction": ("13850.00", "14600.00", "27213.28", "29824.00"),
-    "fed_ti": ("103876.64", "197176.20", "232162.77", "250304.21"),
-    "fed_tax": ("18330.39", "40782.88", "51355.09", "57160.35"),
-    "state_agi": ("119875.28", "215301.15", "263400.08", "284428.21"),
-    "state_ti": ("114512.28", "209761.15", "257694.08", "278722.21"),
-    "state_tax": ("7158.49", "15901.12", "20257.19", "22206.80"),
+    # NEW ROW 2026-09-09 (spec 4f). `fed_agi` above is the sheet's r96, the ORDINARY income
+    # the federal brackets walk; the federal line's reported Base is now true AGI, which
+    # carries the netted gains as every real 1040 does. The two differ by exactly
+    # cg_amount, so 2026 (no gains) is the control.
+    "fed_base": ("117855.64", "211955.33", "260643.24", "280128.21"),
+    # `fed_deduction` is the AGI-to-TI step, which since 2026-09-09 (spec 4h) carries
+    # §199A as well as max(standard, itemized): 2025 27213.28 -> 27219.50 (+6.222) and
+    # 2026 29824.00 -> 29832.00 (+8). 2023/2026 [sic 2023/2024] store no QBI dividends, so
+    # their columns are the unchanged controls. Taxable income and federal tax follow:
+    # 2025 TI 232162.77 -> 232156.55 and tax 51355.09 -> 51353.09; 2026 TI 250304.21 ->
+    # 250296.21 and tax 57160.35 -> 57157.79.
+    "fed_deduction": ("13850.00", "14600.00", "27219.50", "29832.00"),
+    "fed_ti": ("103876.64", "197176.20", "232156.55", "250296.21"),
+    "fed_tax": ("18330.39", "40782.88", "51353.09", "57157.79"),
+    # 2023 moved 2026-09-09 (spec 4b): California does not tax interest on US Treasury
+    # obligations, and state AGI subtracted only the exempt slice of treasury-FUND
+    # dividends. 2023 is the only pinned year with a direct treasury-interest line
+    # (20668.00), so it is the only column that moves: state AGI 119875.28 -> 99207.28,
+    # state TI 114512.28 -> 93844.28, state tax 7158.49 -> 5236.37.
+    "state_agi": ("99207.28", "215301.15", "263400.08", "284428.21"),
+    "state_ti": ("93844.28", "209761.15", "257694.08", "278722.21"),
+    "state_tax": ("5236.37", "15901.12", "20257.19", "22206.80"),
     "medicare_tax": ("1490.92", "3634.95", "4582.05", "5299.21"),
     "ss_tax": ("6374.99", "10453.20", "10918.20", "10918.20"),
     "sdi_tax": ("944.90", "1950.00", "2700.00", "3000.00"),
@@ -195,9 +212,13 @@ _CANONICAL_TABLE: dict[str, tuple[str, str, str, str]] = {
     "gross_income": ("126321.23", "237973.17", "287209.06", "306694.03"),
     # 2024: 72755.83 - (33.68 - 26.87 cg unfold, exactly 179.13 x 0.038 = 6.80694 at full
     # precision) + 75.59264 NIIT = 72824.61; take_home moves opposite. 2025: 90050.76
-    # - 1267.19 x 0.038 (48.15322) + 418.88464 = 90421.49. 2023/2026: unchanged controls.
-    "total_tax": ("34319.05", "72824.61", "90421.49", "98584.56"),
-    "take_home": ("92002.18", "165148.56", "196787.57", "208109.47"),
+    # - 1267.19 x 0.038 (48.15322) + 418.88464 = 90421.49. 2026: unchanged control.
+    # 2023 moved with its state tax (spec 4b): 34319.05 - 1922.124 = 32396.93, and
+    # take_home 92002.18 -> 93924.30 by the same amount in the other direction. 2025/2026
+    # moved with §199A (spec 4h): total tax 90421.49 -> 90419.50 and 98584.56 -> 98582.00,
+    # take_home 196787.57 -> 196789.56 and 208109.47 -> 208112.03.
+    "total_tax": ("32396.93", "72824.61", "90419.50", "98582.00"),
+    "take_home": ("93924.30", "165148.56", "196789.56", "208112.03"),
 }
 
 CANONICAL: dict[int, dict[str, Decimal]] = {
@@ -214,8 +235,11 @@ def actuals(breakdown) -> dict[str, Decimal]:
     """Map the breakdown onto the workbook's row names (the deduction is the AGI-to-TI
     step, which the dataclass carries implicitly)."""
     return {
-        "fed_agi": breakdown.federal.agi,
-        "fed_deduction": breakdown.federal.agi - breakdown.federal.taxable_income,
+        # The workbook's r96 is ORDINARY AGI, which the engine reports as totals.total_income;
+        # federal.agi is the true-AGI Base (spec 4f), pinned on its own row.
+        "fed_agi": breakdown.totals.total_income,
+        "fed_base": breakdown.federal.agi,
+        "fed_deduction": breakdown.totals.total_income - breakdown.federal.taxable_income,
         "fed_ti": breakdown.federal.taxable_income,
         "fed_tax": breakdown.federal.tax,
         "state_agi": breakdown.state.agi,
@@ -346,7 +370,10 @@ def test_golden_2024():
     assert breakdown.medicare.taxable_wages == Decimal("231274.46")
     assert breakdown.social_security.taxable_wages == Decimal("168600")
     assert breakdown.disability.taxable_wages == Decimal("235424.46")
-    assert breakdown.totals.total_income == breakdown.federal.agi
+    # The sheet's Total Income row is ORDINARY AGI; the federal Base sits exactly the
+    # netted gains above it (spec 4f).
+    assert breakdown.totals.total_income == Decimal("211776.2")
+    assert breakdown.federal.agi - breakdown.totals.total_income == Decimal("179.13")
 
 
 def test_golden_2024_equals_sheet_cached_values():
@@ -409,19 +436,50 @@ def test_golden_2024_equals_sheet_cached_values():
 
 def test_golden_2025():
     breakdown = assert_canonical(2025)
-    # The sheet's 2025 column pulls CG into fed AGI (D2); the canonical AGI does not, so
-    # it equals the sheet's own untouched "Total Income" row instead.
-    assert cents(breakdown.federal.agi) == Decimal("259376.05")
+    # The sheet's 2025 column pulls CG into the AGI it then WALKS THE BRACKETS OVER (D2);
+    # the canonical ordinary AGI does not, so it equals the sheet's own untouched "Total
+    # Income" row instead. The reported Base does carry the gains (spec 4f) and so happens
+    # to land on the sheet's drifted figure — same number, different job: the drift taxes
+    # the gains at ordinary rates, the Base only reports them.
+    assert cents(breakdown.totals.total_income) == Decimal("259376.05")
+    assert cents(breakdown.federal.agi) == Decimal("260643.24")
     assert breakdown.capital_gains.gains_amount == Decimal("1267.19")
 
 
 def test_golden_2026():
     breakdown = assert_canonical(2026)
     # Itemized (29824) beats the 16100 standard deduction; the sheet hardcoded 15750 (D3).
-    assert breakdown.federal.agi - breakdown.federal.taxable_income == Decimal("29824")
+    # The AGI-to-TI step is 29832 rather than 29824 since 2026-09-09 (spec 4h): §199A's 8
+    # of QBI dividends is a below-the-line deduction of its own, on top of the itemized
+    # total the sheet had already folded it into.
+    assert breakdown.federal.agi - breakdown.federal.taxable_income == Decimal("29832")
     assert breakdown.capital_gains.gains_amount == Decimal("0")
     assert breakdown.capital_gains.effective_rate is None
     assert breakdown.social_security.taxable_wages == Decimal("176100")
+
+
+def test_federal_base_is_true_agi_and_the_rate_divides_by_it():
+    """4f (2026-09-09 spec): the federal line reports AGI the way a 1040 does.
+
+    `_federal_agi` keeps long-term gains and qualified dividends OUT so the brackets can be
+    walked over ordinary income and the gains stacked separately — a bracket-walking device,
+    not a definition of AGI. Reporting it as the federal "Base" understated the base by
+    every dollar of preferential income and flattered the effective rate on exactly the
+    years that had the most of it. Base 2025: 259376.05 -> 260643.24.
+    """
+    breakdown = breakdown_for(2025)
+    assert breakdown.federal.agi == (
+        breakdown.totals.total_income + breakdown.capital_gains.gains_amount
+    )
+    assert breakdown.federal.effective_rate == breakdown.federal.tax / breakdown.federal.agi
+    # Lower than the old ratio over ordinary AGI alone, by construction: same tax, bigger
+    # base.
+    assert breakdown.federal.effective_rate < (
+        breakdown.federal.tax / breakdown.totals.total_income
+    )
+    # A year with no preferential income is the control: the two are the same figure.
+    control = breakdown_for(2026)
+    assert control.federal.agi == control.totals.total_income
 
 
 def test_effective_rates_are_full_precision_ratios():
@@ -538,38 +596,152 @@ def test_capital_gains_amount_branches(ltcg, qualified, other, expected):
     assert breakdown.capital_gains.gains_amount == Decimal(expected)
 
 
-def test_capital_gains_stack_clamps_a_negative_taxable_income():
-    """A deduction larger than AGI drives taxable income negative; the gains must then stack
-    from 0 (the first CG bracket), never from the negative floor."""
+def test_unused_deduction_comes_off_the_stacked_gains():
+    """4a (2026-09-09 spec): a deduction larger than ordinary AGI is not thrown away.
+
+    GOLDEN MOVED. This test used to be `test_capital_gains_stack_clamps_a_negative_taxable_
+    income` and pinned federal.taxable_income == -80000 with a capital-gains tax of
+    5306.25. Both were wrong in the same direction: `walk` clamps a negative income to 0
+    and `stack` clamps a negative base to 0, so the 80000 of deduction AGI could not use
+    simply evaporated and the whole 80000 of gains was stacked and taxed. It now absorbs
+    the gains first — ordinary taxable income max(agi - deduction, 0) = 0, excess
+    max(deduction - agi, 0) = 80000, stacked gains max(80000 - 80000, 0) = 0 — so the
+    capital-gains tax is 0.00 (was 5306.25).
+    """
     inputs = {
         "latest_w2_income": Decimal("20000"),
         "standard_deduction": Decimal("100000"),
         "ltcg_total": Decimal("80000"),
     }
     breakdown = compute_breakdown(2023, inputs, YEAR_BRACKETS[2023])
-    assert breakdown.federal.taxable_income == Decimal("-80000")
+    # Reported, not just walked: a negative taxable income was a figure nothing consumed.
+    assert breakdown.federal.taxable_income == Decimal("0")
     assert breakdown.federal.tax == Decimal("0")  # the walker never taxes a loss
+    # The netted gains line is untouched — state AGI, MAGI and NIIT all read it, and the
+    # absorption is a FEDERAL stacking rule, not a re-netting of the gains themselves.
     assert breakdown.capital_gains.gains_amount == Decimal("80000")
-    # 44625 at 0%, then (80000 - 44625) × .15. Unclamped, the whole 80000 would sit below
-    # 44625 and be taxed at 0.
-    assert breakdown.capital_gains.tax == Decimal("5306.25")
+    assert breakdown.capital_gains.taxable_income == Decimal("0")
+    assert breakdown.capital_gains.tax == Decimal("0")
+
+
+def test_unused_deduction_only_partly_absorbs_a_larger_gain():
+    """The remainder stacks from zero, at the CG rates it really meets.
+
+    Same 80000 of unused deduction against 150000 of long-term gain: 70000 survives it and
+    stacks from an ordinary taxable income of 0 — 44625 in 2023's 0% tier, then 25375 at
+    15%.
+    """
+    inputs = {
+        "latest_w2_income": Decimal("20000"),
+        "standard_deduction": Decimal("100000"),
+        "ltcg_total": Decimal("150000"),
+    }
+    breakdown = compute_breakdown(2023, inputs, YEAR_BRACKETS[2023])
+    assert breakdown.capital_gains.gains_amount == Decimal("150000")
+    assert breakdown.capital_gains.tax == Decimal("25375") * Decimal("0.15")
+    # The effective rate divides by the FULL netted gains, so absorption shows up as a rate
+    # below the tier the survivors met.
+    assert breakdown.capital_gains.effective_rate == Decimal("3806.25") / Decimal("150000")
+
+
+def test_gains_still_stack_on_ordinary_income_when_the_deduction_is_used_up():
+    """The unchanged path: AGI above the deduction leaves no excess, so the gains stack on
+    ordinary taxable income exactly as they always did."""
+    inputs = {
+        "latest_w2_income": Decimal("120000"),
+        "standard_deduction": Decimal("100000"),
+        "ltcg_total": Decimal("80000"),
+    }
+    breakdown = compute_breakdown(2023, inputs, YEAR_BRACKETS[2023])
+    assert breakdown.federal.taxable_income == Decimal("20000")
+    # [20000, 100000] against 2023's (0, 44625, 492300): 24625 at 0%, 55375 at 15%.
+    assert breakdown.capital_gains.tax == Decimal("55375") * Decimal("0.15")
+
+
+def test_sec199a_is_deducted_under_the_standard_deduction_too():
+    """4h (2026-09-09 spec): the QBI deduction is taken WHETHER OR NOT the filer itemizes.
+
+    The sheet modelled §199A as an itemized component, so it vanished for every year the
+    standard deduction won — which is most years, and every year in this workbook but two.
+    It is a below-the-line deduction of its own now: taxable income drops by it in both
+    branches, and by it exactly once in the itemizing one.
+    """
+    base = {
+        "latest_w2_income": Decimal("100000"),
+        "standard_deduction": Decimal("15000"),
+        "itemized_deduction": Decimal("0"),
+    }
+    qbi = {"itemized_sec199a_div": Decimal("1000")}
+
+    standard = compute_breakdown(2025, base, YEAR_BRACKETS[2025])
+    standard_qbi = compute_breakdown(2025, base | qbi, YEAR_BRACKETS[2025])
+    assert standard.federal.taxable_income == Decimal("85000")
+    assert standard_qbi.federal.taxable_income == Decimal("84000")
+    assert standard_qbi.federal.tax == walk(YEAR_BRACKETS[2025]["federal"], Decimal("84000"))
+
+    # Itemizing: the larger of the two deductions, then §199A once on top of it.
+    itemizing = compute_breakdown(
+        2025, base | qbi | {"itemized_deduction": Decimal("20000")}, YEAR_BRACKETS[2025]
+    )
+    assert itemizing.federal.taxable_income == Decimal("79000")
+
+
+def test_sec199a_left_the_itemized_suggestion():
+    """The other half of 4h: the sheet's itemized formula added the §199A line, and leaving
+    it there beside a below-the-line deduction would deduct the same dollars twice for
+    anyone who applies the chip."""
+    items = {
+        "itemized_salt": Decimal("5000"),
+        "itemized_donations": Decimal("1000"),
+        "itemized_vehicle_reg": Decimal("16"),
+        "itemized_other": Decimal("0"),
+    }
+    assert derive_suggestions(2025, items)["itemized_deduction"] == Decimal("6016")
+    with_qbi = derive_suggestions(2025, items | {"itemized_sec199a_div": Decimal("250")})
+    assert with_qbi["itemized_deduction"] == Decimal("6016")
 
 
 def test_state_agi_carries_cg_amount_every_year():
     """CA taxes capital gains and ALL dividends as ordinary income (2026-08-25 spec §1):
-    state AGI = fed AGI - treasury slice + HSA addbacks + cg_amount, in EVERY year,
-    unconditionally — the same netted quantity the federal CG stack taxes, never a second
-    definition. 2026 rides along as the zero-gains control: its state chain must not move."""
+    state AGI = fed AGI - treasury slice - treasury interest + HSA addbacks + cg_amount, in
+    EVERY year, unconditionally — the same netted quantity the federal CG stack taxes, never
+    a second definition. 2026 rides along as the zero-gains control: its state chain must
+    not move. The treasury-INTEREST term joined on 2026-09-09 (spec 4b)."""
     for year in YEARS:
         breakdown = breakdown_for(year)
         values = YEAR_INPUTS[year]
+        # From ORDINARY AGI (totals.total_income): the state chain starts where the federal
+        # brackets do and adds the gains itself, so federal.agi's true-AGI Base would
+        # double-count them (spec 4f).
         assert breakdown.state.agi == (
-            breakdown.federal.agi
+            breakdown.totals.total_income
             - values["unq_div_us_treasuries_etf"] * values["unq_div_state_exempt_pct"]
+            - values["interest_us_treasuries"]
             + values["hsa_contributions"]
             + values["hsa_contributions_employer"]
             + breakdown.capital_gains.gains_amount
         ), year
+
+
+def test_state_agi_exempts_us_treasury_interest():
+    """4b (2026-09-09 spec): California does not tax interest on US Treasury obligations.
+
+    The state chain already backed out the exempt slice of treasury-FUND dividends and
+    stopped there, so a year holding Treasuries DIRECTLY — 2023's 20668.00 of the 20750.50
+    interest line — paid California income tax on federally-exempt interest. The line is a
+    stored input the sheet only ever used to derive interest_total; the engine reads it now.
+    """
+    values = YEAR_INPUTS[2023]
+    assert values["interest_us_treasuries"] == Decimal("20668")
+    breakdown = breakdown_for(2023)
+    # Federal is untouched: the exemption is California's alone.
+    assert cents(breakdown.totals.total_income) == Decimal("117726.64")
+    exempted = compute_breakdown(
+        2023, dict(values) | {"interest_us_treasuries": ZERO}, YEAR_BRACKETS[2023]
+    )
+    assert exempted.state.agi - breakdown.state.agi == Decimal("20668")
+    # One 9.3%-bracket walk apart: no boundary is crossed between the two taxable incomes.
+    assert exempted.state.tax - breakdown.state.tax == Decimal("20668") * Decimal("0.093")
 
 
 def test_state_tax_walks_the_capital_gains_increment():
@@ -584,8 +756,10 @@ def test_state_tax_walks_the_capital_gains_increment():
 
     # The netting rules are unchanged: a bigger long-term gain lands 1:1 on cg_amount...
     assert after.capital_gains.gains_amount - before.capital_gains.gains_amount == increment
-    # ...and 1:1 on the state chain ALONE.
-    assert after.federal.agi == before.federal.agi
+    # ...and 1:1 on the state chain ALONE. The federal BASE moves with it too (it reports
+    # the gains, spec 4f); what must not move is the ordinary income and the tax on it.
+    assert after.totals.total_income == before.totals.total_income
+    assert after.federal.agi - before.federal.agi == increment
     assert after.federal.tax == before.federal.tax
     assert after.state.agi - before.state.agi == increment
     assert after.state.taxable_income - before.state.taxable_income == increment
@@ -680,13 +854,18 @@ def test_sheet_drift_2025_cg_in_agi():
     breakdown = breakdown_for(2025)
     doubled = Decimal("1267.19")
 
-    drifted_agi = breakdown.federal.agi + doubled
+    drifted_agi = breakdown.totals.total_income + doubled
     assert drifted_agi == Decimal("260643.24")  # sheet r96c5
-    drifted_ti = drifted_agi - (breakdown.federal.agi - breakdown.federal.taxable_income)
+    # The sheet's own deduction, read from the stored input rather than from the engine's
+    # AGI-to-TI step: since 2026-09-09 (spec 4h) that step also carries §199A, which the
+    # sheet's r97 never subtracted separately.
+    drifted_ti = drifted_agi - YEAR_INPUTS[2025]["itemized_deduction"]
     assert drifted_ti == Decimal("233429.958")  # sheet r97c5
     drifted_tax = walk(YEAR_BRACKETS[2025]["federal"], drifted_ti)
     assert drifted_tax == Decimal("51760.58656")  # sheet r98c5
-    assert cents(drifted_tax - breakdown.federal.tax) == Decimal("405.50")  # 1267.19 × .32
+    # 1267.19 of double-taxed gains + 6.222 of §199A the sheet never deducted, both in the
+    # 32% bracket: (1267.19 + 6.222) × .32 = 407.49 (was 405.50 before §199A moved).
+    assert cents(drifted_tax - breakdown.federal.tax) == Decimal("407.49")
 
     # The sheet's state chain, rebuilt from ITS drifted fed AGI, lands exactly on the
     # canonical one — both add the same 1267.19 (the sheet through fed AGI, the app
@@ -711,12 +890,14 @@ def test_sheet_drift_2026_stale_deduction():
     """2026 r43 is a hardcoded 15750 (2025's standard deduction) instead of its own
     max(16100, 29824), and r97 keeps 2023's stray `-F41-1` tail."""
     breakdown = breakdown_for(2026)
-    drifted_ti = breakdown.federal.agi - Decimal("15750") - Decimal("1")
+    drifted_ti = breakdown.totals.total_income - Decimal("15750") - Decimal("1")
     assert drifted_ti == Decimal("264377.2067")  # sheet r97c6
     drifted_tax = walk(YEAR_BRACKETS[2026]["federal"], drifted_ti)
     assert abs(drifted_tax - Decimal("62079.27233")) < Decimal("0.001")
     assert cents(drifted_tax) == Decimal("62079.27")
-    assert cents(drifted_tax - breakdown.federal.tax) == Decimal("4918.93")
+    # 4918.93 before 2026-09-09: the canonical federal tax dropped by 8 × .32 when §199A
+    # became a deduction of its own (spec 4h), so the sheet's overstatement grew by 2.56.
+    assert cents(drifted_tax - breakdown.federal.tax) == Decimal("4921.49")
 
 
 # --------------------------------------------------------------------------------------
@@ -738,14 +919,23 @@ def test_suggestions_match_stored_2025():
         "interest_total": "62.87",
         "capital_loss_deductions": "0",
         "other_pretax_deductions": "300",
-        "itemized_deduction": "27213.282",
+        # 27213.282 until 2026-09-09 (spec 4h): the sheet's itemized formula added the
+        # 6.222 §199A line, which is now a below-the-line deduction the engine reads on its
+        # own — leaving it here would deduct it twice for anyone who applies the chip. It
+        # is therefore the ONE suggestion that no longer reproduces its stored 2025 cell.
+        "itemized_deduction": "27207.06",
         "ltcg_total": "536.38",
     }
     assert set(suggested) == set(expected)
     for key, value in expected.items():
         assert suggested[key] == Decimal(value), key
-        assert suggested[key] == YEAR_INPUTS[2025][key], key
+        if key != "itemized_deduction":
+            assert suggested[key] == YEAR_INPUTS[2025][key], key
         assert suggested[key].as_tuple().exponent == -4, key
+    assert (
+        YEAR_INPUTS[2025]["itemized_deduction"] - suggested["itemized_deduction"]
+        == YEAR_INPUTS[2025]["itemized_sec199a_div"]
+    )
 
 
 def test_suggestion_salt_cap_2024_vs_2025():
@@ -849,6 +1039,54 @@ def test_engine_keys_are_defined_tax_keys():
 
 def test_suggestion_keys_are_defined_tax_keys():
     assert set(SUGGESTION_KEYS) <= {key for key, *_ in TAX_INPUT_DEFINITIONS}
+
+
+def test_input_units_cover_defined_keys_and_default_to_money():
+    """The unit registry is an EXCEPTION list (2026-09-09 spec §2): every key it names is
+    a real definition, everything else is money, and a key added later is money until it
+    says otherwise."""
+    defined = {key for key, *_ in TAX_INPUT_DEFINITIONS}
+    assert set(TAX_INPUT_UNITS) <= defined
+    assert set(TAX_INPUT_UNITS.values()) <= set(INPUT_UNITS)
+    assert unit_for("pay_periods") == "count"
+    assert unit_for("unq_div_state_exempt_pct") == "percent"
+    assert unit_for("annual_salary") == "money"
+    assert unit_for("a_key_no_definition_has") == "money"
+    assert {key for key in defined if unit_for(key) != "money"} == set(TAX_INPUT_UNITS)
+
+
+def test_both_deductions_absent_gets_its_own_sentence():
+    """4e (2026-09-09 spec): with neither deduction stored the engine taxes AGI in full —
+    the largest single way a freshly created year can be wrong — so it says so on its own
+    line instead of naming `standard_deduction` among twenty other keys in the muted list.
+
+    Both, not either: a year that stores one of the pair has answered the question, and
+    max(standard, itemized) reads the other as the zero it is.
+    """
+    sparse = compute_breakdown(2024, {"latest_w2_income": Decimal("100000")}, YEAR_BRACKETS[2024])
+    assert sparse.warnings[0] == (
+        "No standard or itemized deduction entered for 2024 — federal tax is overstated"
+    )
+    # Said once: the two keys leave the muted list when the sentence above fires. Split
+    # rather than searched — "standard_deduction" is a substring of the state row's key.
+    muted = sparse.warnings[1]
+    assert muted.startswith("missing inputs defaulted to 0: ")
+    muted_keys = muted.removeprefix("missing inputs defaulted to 0: ").split(", ")
+    assert "standard_deduction" not in muted_keys
+    assert "itemized_deduction" not in muted_keys
+    assert "state_standard_deduction" in muted_keys  # the rest of the list is untouched
+    # ...and the figures really are the overstated ones the sentence describes.
+    assert sparse.federal.taxable_income == Decimal("100000")
+
+    # One of the pair is enough to retire it, and the OTHER then reads as the zero it is.
+    answered = compute_breakdown(
+        2024,
+        {"latest_w2_income": Decimal("100000"), "standard_deduction": Decimal("14600")},
+        YEAR_BRACKETS[2024],
+    )
+    assert not any(w.startswith("No standard or itemized deduction") for w in answered.warnings)
+    assert "itemized_deduction" in answered.warnings[0].split(", ")
+    assert answered.federal.taxable_income == Decimal("85400")
 
 
 def test_missing_inputs_warning():

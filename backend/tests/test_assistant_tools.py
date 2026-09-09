@@ -59,9 +59,12 @@ async def test_run_tax_whatif_requires_an_existing_year(db):
 
 
 async def test_run_tax_whatif_compacts_the_engine_answer(db):
-    db.add(TaxYear(year=2026))
+    # A SETTLED year (was 2026): a bare current-or-future single year refuses to compute
+    # without bracket tables since 2026-09-09 (taxes spec 4g), and this test is about the
+    # SHAPE of the answer. 2024 is past on every clock this suite will ever run under.
+    db.add(TaxYear(year=2024))
     await db.commit()
-    result = await execute_tool(db, "run_tax_whatif", {"year": 2026, "overrides": {}})
+    result = await execute_tool(db, "run_tax_whatif", {"year": 2024, "overrides": {}})
     # An empty scenario still answers: baseline == scenario, delta zeros.
     assert set(result) >= {"year", "baseline_totals", "scenario_totals", "delta", "warnings"}
     assert json.dumps(result)  # fully jsonable
@@ -72,27 +75,28 @@ async def test_run_tax_whatif_carries_a_sandbox_link_in_the_page_grammar(db):
     scenario the tool just ran, in the whatif grammar, so the user lands on the live panel."""
     from app.seed import seed_tax_definitions
 
-    db.add(TaxYear(year=2026))
+    # A settled year, for the reason above (taxes spec 4g).
+    db.add(TaxYear(year=2024))
     await seed_tax_definitions(db)
     await db.commit()
     result = await execute_tool(
         db,
         "run_tax_whatif",
-        {"year": 2026, "overrides": {"qualified_dividends": "2500", "interest_total": None}},
+        {"year": 2024, "overrides": {"qualified_dividends": "2500", "interest_total": None}},
     )
     assert "error" not in result, result
     # The year leads the query: a what-if is only true within the year it was run
     # against, so a link that dropped it would open the panel on the wrong one.
     assert result["sandbox_url"] == (
-        "/taxes?year=2026&whatif=interest_total%3Anull&whatif=qualified_dividends%3A2500"
+        "/taxes?year=2024&whatif=interest_total%3Anull&whatif=qualified_dividends%3A2500"
     )
 
 
 async def test_run_tax_whatif_empty_scenario_links_to_the_bare_page(db):
-    db.add(TaxYear(year=2026))
+    db.add(TaxYear(year=2024))  # settled: see the shape test above (taxes spec 4g)
     await db.commit()
-    result = await execute_tool(db, "run_tax_whatif", {"year": 2026, "overrides": {}})
-    assert result["sandbox_url"] == "/taxes?year=2026"
+    result = await execute_tool(db, "run_tax_whatif", {"year": 2024, "overrides": {}})
+    assert result["sandbox_url"] == "/taxes?year=2024"
 
 
 def test_capped_result_keeps_the_sandbox_link_it_truncates_around():

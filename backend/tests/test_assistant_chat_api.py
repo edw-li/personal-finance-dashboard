@@ -1271,12 +1271,17 @@ async def test_an_oversized_whatif_list_is_refused_like_every_other_cap(auth_cli
 
 async def test_tool_result_carries_a_sandbox_link_for_a_what_if(monkeypatch, db):
     """spec §12: the tool_result frame gains `link` when the tool answered with a sandbox_url,
-    so the drawer can render "Open 2026 in What-if →" under the chip -- the year included,
-    being the scope the scenario is only true within. Tools without one emit no key."""
+    so the drawer can render "Open 2024 in What-if →" under the chip -- the year included,
+    being the scope the scenario is only true within. Tools without one emit no key.
+
+    A SETTLED year (was 2026): a bare current-or-future single year refuses to compute
+    without bracket tables since 2026-09-09 (taxes spec 4g), and the tool would answer with
+    an error rather than a link.
+    """
     from app.models import TaxYear
     from app.seed import seed_tax_definitions
 
-    db.add(TaxYear(year=2026))
+    db.add(TaxYear(year=2024))
     await seed_tax_definitions(db)
     await db.commit()
 
@@ -1288,7 +1293,7 @@ async def test_tool_result_carries_a_sandbox_link_for_a_what_if(monkeypatch, db)
             chunk = _tool_call_chunk(
                 "call_1",
                 "run_tax_whatif",
-                {"year": 2026, "overrides": {"qualified_dividends": "2500"}},
+                {"year": 2024, "overrides": {"qualified_dividends": "2500"}},
             )
             return httpx.Response(
                 200,
@@ -1307,7 +1312,7 @@ async def test_tool_result_carries_a_sandbox_link_for_a_what_if(monkeypatch, db)
             stream_chat(
                 model_key="kimi-k3",
                 messages=[{"role": "user", "content": "what if I had 2500 of dividends?"}],
-                context={"route": "/taxes", "search": {}, "view": {"year": 2026}},
+                context={"route": "/taxes", "search": {}, "view": {"year": 2024}},
             )
         )
     )
@@ -1316,8 +1321,8 @@ async def test_tool_result_carries_a_sandbox_link_for_a_what_if(monkeypatch, db)
         "name": "run_tax_whatif",
         "summary": "ok",
         "link": {
-            "to": "/taxes?year=2026&whatif=qualified_dividends%3A2500",
-            "label": "Open 2026 in What-if →",
+            "to": "/taxes?year=2024&whatif=qualified_dividends%3A2500",
+            "label": "Open 2024 in What-if →",
         },
     }
 
