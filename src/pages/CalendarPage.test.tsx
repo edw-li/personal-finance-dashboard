@@ -123,7 +123,9 @@ describe('CalendarPage — month, views, grid', () => {
     renderPage()
     await screen.findByRole('grid')
     expect(fetchCalendar).toHaveBeenCalledWith(...windowFor(MONTH))
-    expect(chipIn(DAY_16, 'RSU vest').textContent).toBe('RSU vest · 4 grants ~+$41.2k')
+    const vest = chipIn(DAY_16, 'RSU vest')
+    expect(vest.querySelector('.cal-chip-label')?.textContent).toBe('RSU vest · 4 grants')
+    expect(vest.querySelector('.cal-chip-amount')?.textContent).toBe('~+$41.2k')
     expect(cell(DAY_15).querySelectorAll('button.cal-chip')).toHaveLength(2)
     expect(cell(DAY_15).querySelector('button.cal-more')?.textContent).toBe('+2 more')
     expect(screen.queryByText(/confirmed announcements only/)).toBeNull() // the caveat prose is gone

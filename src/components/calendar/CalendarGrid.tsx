@@ -6,6 +6,7 @@ import { addDays, addMonths, isoWeekday, monthGrid } from '../../utils/months'
 import {
   CHIP_CAP,
   SOURCE_COLORS,
+  chipParts,
   chipText,
   chipTitle,
   groupByDate,
@@ -200,6 +201,7 @@ export default function CalendarGrid({
                 </button>
                 {shown.map((event) => {
                   const isOpen = openKey === event.key
+                  const chip = chipParts(event)
                   return (
                     <div key={event.key} className="cal-chip-slot">
                       <button
@@ -208,6 +210,10 @@ export default function CalendarGrid({
                         tabIndex={tab}
                         aria-expanded={isOpen}
                         aria-haspopup="dialog"
+                        // Two spans, ONE name: flex blockifies its items, and a name
+                        // assembled from blockified children is not the string a screen
+                        // reader read before the split. `chipText` still spells it.
+                        aria-label={chipText(event)}
                         title={chipTitle(event)}
                         style={{ borderLeftColor: SOURCE_COLORS[event.source] }}
                         onClick={(e) => {
@@ -215,7 +221,10 @@ export default function CalendarGrid({
                           onToggleEvent(event, e.currentTarget)
                         }}
                       >
-                        {chipText(event)}
+                        <span className="cal-chip-label">{chip.label}</span>
+                        {chip.amount !== null && (
+                          <span className="cal-chip-amount num">{chip.amount}</span>
+                        )}
                       </button>
                       {isOpen && (
                         <div

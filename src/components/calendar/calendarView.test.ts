@@ -7,6 +7,7 @@ import {
   SOURCE_COLORS,
   SOURCE_LABELS,
   SOURCE_ORDER,
+  chipParts,
   chipText,
   chipTitle,
   eventKey,
@@ -36,6 +37,13 @@ describe('chip grammar', () => {
   const q3 = calendarEvent({ date: '2026-09-15', type: 'tax_deadline', label: 'Tax deadline — Q3 estimated payment', short_label: 'Q3 est. tax', amount: '2400.00', direction: 'out', basis: 'estimated' })
   const payday = calendarEvent({ date: '2026-09-15', type: 'payday', label: 'Payday', short_label: 'Payday', amount: '6812.44', direction: 'in' })
   const bare = calendarEvent({ date: '2026-09-15', type: 'ex_dividend', label: 'Ex-dividend — NVDA', short_label: 'Ex-div NVDA' })
+
+  it('chipParts keeps the amount apart from the label (2026-09-09 audit item 54)', () => {
+    // The chip renders the two as separate spans so a narrow cell ellipsizes the LABEL;
+    // truncating "RSU vest · 4 gra…" is a loss, truncating the money is a lie.
+    expect(chipParts(vest)).toEqual({ label: 'RSU vest · 4 grants', amount: '~+$41.2k' })
+    expect(chipParts(bare)).toEqual({ label: 'Ex-div NVDA', amount: null })
+  })
 
   it('chipText is the short label plus the compact signed amount, tilde on estimates', () => {
     expect(chipText(vest)).toBe('RSU vest · 4 grants ~+$41.2k')
