@@ -382,7 +382,7 @@ describe('SettingsPage — lifecycle', () => {
     renderPage()
 
     const banner = await screen.findByRole('alert')
-    expect(banner.textContent).toContain('settings unavailable')
+    expect(banner.textContent).toContain("Couldn't load settings — the server had a problem (HTTP 503)")
     // Bare: "Showing earlier data" would be a claim about cards that never arrived.
     expect(banner.textContent).not.toContain('Showing earlier data')
     // Named for the fetch it repeats, because the cards below own Retry buttons of their
@@ -401,7 +401,7 @@ describe('SettingsPage — lifecycle', () => {
 
     // The frame is ready (the Appearance card needs no network), so the failure arrives as
     // a plain banner above the grid — nothing is on screen for it to be stale over.
-    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     // A FIRST load that failed knows nothing about the stored settings, and a card seeded
     // with blanks would offer to save them (PortfolioPage's null-holdings rule).
     expect(screen.queryByRole('region', { name: 'Plan assumptions' })).toBeNull()
@@ -506,7 +506,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
 
-    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     // The card shares the two forms' `loadedOnce` gate on purpose: a settings GET that
     // failed means the API is unreachable, and an upload card that could only fail —
     // possibly after the user picked a 14 MB workbook — is not worth offering.
@@ -803,7 +803,7 @@ describe('SettingsPage — backups and restore cards', () => {
   it('offers neither card when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
-    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Restore' })).toBeNull()
     expect(vi.mocked(fetchSnapshots)).not.toHaveBeenCalled()
   })
@@ -841,7 +841,7 @@ describe('SettingsPage — appearance card', () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
 
-    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     // It owns no fetch, so it sits OUTSIDE the loadedOnce gate the other cards share: theme
     // and density — and the palette's #appearance jump — still work when the API is
     // unreachable, which is one of the moments a reader most wants the light theme back.
@@ -880,7 +880,7 @@ describe('SettingsPage — household, accounts and categories cards', () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
 
-    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     // They share the import card's `loadedOnce` gate: a settings GET that failed means the
     // API is unreachable, and three cards that could only fail are not worth offering. By id:
     // the rail chip that says "Household" rides the scope row whatever the API answered.
@@ -906,7 +906,7 @@ describe('SettingsPage — assistant card', () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
 
-    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Assistant' })).toBeNull()
     expect(vi.mocked(fetchAssistantSettings)).not.toHaveBeenCalled()
   })
@@ -916,7 +916,7 @@ describe('SettingsPage — health and activity cards', () => {
   it('offers neither card when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
-    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Data health' })).toBeNull()
     expect(vi.mocked(fetchHealth)).not.toHaveBeenCalled()
   })
@@ -964,7 +964,7 @@ describe('SettingsPage — section order (2026-09-06 spec §3.1)', () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
 
-    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     // Appearance owns no fetch, so theme, density and the palette's #appearance jump keep
     // working when the API is unreachable — and its band comes with it.
     expect(document.getElementById('appearance')).not.toBeNull()

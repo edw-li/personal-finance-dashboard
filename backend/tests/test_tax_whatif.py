@@ -3,7 +3,7 @@
 No DB, no HTTP — the service is `tax_service`'s posture, so every figure below is
 hand-computed from the spec's formulas (§3, §4, §5) and pinned as an exact Decimal.
 `today` is a parameter, never a clock read, so nothing here depends on the day the suite
-runs; only the router reads `date.today()`.
+runs; only the router reads the clock (`clock.product_today()`).
 
 The dual-key assertions in the last two tests are the load-bearing ones: the engine reads
 the TOTAL keys, so a delta that moved only its component key would compute a scenario
@@ -22,6 +22,8 @@ from app.services.tax_whatif import (
     apply_scenario,
     classify_sale,
     decompose_espp,
+    first_anniversary,
+    is_long_term,
 )
 
 D = Decimal
@@ -35,6 +37,7 @@ def espp(
     *,
     sale_price: str,
     today: date = TODAY,
+    purchase_date: date = PURCHASE,
     shares: str = "10",
     subscription_price: str = "100",
     purchase_fmv: str = "120",
@@ -44,8 +47,9 @@ def espp(
     """One lot's decomposition. Defaults are the spec's worked example, the 15 % plan."""
     return decompose_espp(
         lot_id=7,
-        purchase_date=PURCHASE,
-        qualifying_date=QUALIFYING,
+        purchase_date=purchase_date,
+        # Two years past the purchase, the way a stored lot encodes the 2y/1y rule.
+        qualifying_date=purchase_date.replace(year=purchase_date.year + 2),
         shares=D(shares),
         subscription_price=D(subscription_price),
         purchase_fmv=D(purchase_fmv),
@@ -126,13 +130,50 @@ def test_decompose_disqualified_gain():
 
 
 def test_decompose_disqualified_long_term_boundary():
-    """`> 365 days` is long: day 365 is still short, day 366 crosses."""
+    """One year AND a day: the anniversary itself is still short, the next day crosses.
+
+    PURCHASE is 2026-02-28 and the year after it has no February 29, so day 365 IS the
+    anniversary and these two pins read the same under the day count they were written for
+    and the anniversary rule that replaced it (2026-09-09 spec 4i). The leap cases below
+    are where the two disagree.
+    """
     assert espp(sale_price="150", today=PURCHASE + timedelta(days=366)).term == "long"
     assert espp(sale_price="150", today=PURCHASE + timedelta(days=365)).term == "short"
+    assert PURCHASE + timedelta(days=365) == first_anniversary(PURCHASE)
     # Both dates are still short of the qualifying date, so the branch is unchanged.
     assert espp(sale_price="150", today=PURCHASE + timedelta(days=366)).disposition == (
         "disqualified"
     )
+
+
+def test_long_term_is_the_anniversary_not_a_day_count():
+    """4i (2026-09-09 spec): GOLDEN MOVED where the holding period spans February 29.
+
+    `(sale - purchase).days > 365` called a lot bought 2027-03-01 and sold 2028-03-01
+    long-term, because 2028 is a leap year and the span is 366 days — but it had been held
+    exactly one year to the day, and the statute wants one year and a day. The rule is a
+    calendar one now, so it cannot drift with the calendar.
+    """
+    bought = date(2027, 3, 1)
+    assert (date(2028, 3, 1) - bought).days == 366  # the day count that used to say "long"
+    assert not is_long_term(bought, date(2028, 3, 1))
+    assert is_long_term(bought, date(2028, 3, 2))
+    # The ESPP decomposition reads the same rule.
+    assert espp(sale_price="150", purchase_date=bought, today=date(2028, 3, 1)).term == "short"
+    assert espp(sale_price="150", purchase_date=bought, today=date(2028, 3, 2)).term == "long"
+
+
+def test_february_29_has_its_anniversary_on_march_1():
+    """A leap-day purchase has no anniversary in a non-leap year; the decision is March 1,
+    so the sale must be March 2 or later to be long-term."""
+    leap_day = date(2028, 2, 29)
+    assert first_anniversary(leap_day) == date(2029, 3, 1)
+    assert not is_long_term(leap_day, date(2029, 2, 28))
+    assert not is_long_term(leap_day, date(2029, 3, 1))
+    assert is_long_term(leap_day, date(2029, 3, 2))
+    # And a purchase whose anniversary year IS a leap year keeps its own date.
+    assert first_anniversary(date(2027, 2, 28)) == date(2028, 2, 28)
+    assert is_long_term(date(2027, 2, 28), date(2028, 2, 29))
 
 
 def test_decompose_disqualified_capital_loss():

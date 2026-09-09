@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ApiError } from '../api/client'
+import { ApiError, describeError } from '../api/client'
 import {
   cloneBrackets,
   deleteTaxYear,
@@ -312,7 +312,7 @@ export default function TaxesPage() {
         }
       })
       .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Failed to load tax years')
+        setError(describeError(err, 'the tax years'))
         setBusy(false)
       })
       .finally(() => setLoading(false))
@@ -362,7 +362,7 @@ export default function TaxesPage() {
         if (seq !== seqRef.current) return
         // Drop the previous year's data: left on screen it would read as this year's.
         setDetail(null)
-        setYearError(err instanceof ApiError ? err.message : `Failed to load tax year ${year}`)
+        setYearError(describeError(err, `tax year ${year}`))
       })
       .finally(() => {
         if (seq === seqRef.current) setBusy(false)
@@ -619,7 +619,7 @@ export default function TaxesPage() {
         loadYear(year)
         // The main banner owns this one, because the main banner is the thing with Retry.
         return reconcileYears().catch((err: unknown) => {
-          setError(err instanceof ApiError ? err.message : 'Failed to load tax years')
+          setError(describeError(err, 'the tax years'))
         })
       })
       .catch((err: unknown) => {
@@ -677,7 +677,7 @@ export default function TaxesPage() {
         // The year EXISTS no more from here on, so nothing past this point may be reported
         // as a delete failure: the main banner owns it, because the main banner has Retry.
         return reconcileYears().catch((err: unknown) => {
-          setError(err instanceof ApiError ? err.message : 'Failed to load tax years')
+          setError(describeError(err, 'the tax years'))
         })
       })
       .catch((err: unknown) => {
@@ -711,7 +711,7 @@ export default function TaxesPage() {
     // The banner may have come from the LIST (a create whose reload failed leaves an
     // un-reconciled placeholder chip), so retry that too rather than only the detail.
     reconcileYears().catch((err: unknown) => {
-      setError(err instanceof ApiError ? err.message : 'Failed to load tax years')
+      setError(describeError(err, 'the tax years'))
     })
   }
 

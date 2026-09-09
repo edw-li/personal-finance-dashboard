@@ -76,10 +76,14 @@ describe('CalendarGrid', () => {
 
   it('caps a day at three slots: two chips plus "+N more" in priority order', () => {
     const handlers = mount()
-    const chips = Array.from(cell(SEP15).querySelectorAll('button.cal-chip')).map(
-      (c) => c.textContent,
-    )
-    expect(chips).toEqual(['Zoo', 'Q3 est. tax ~−$395'])
+    const chips = Array.from(cell(SEP15).querySelectorAll('button.cal-chip')).map((c) => [
+      c.querySelector('.cal-chip-label')?.textContent,
+      c.querySelector('.cal-chip-amount')?.textContent ?? null,
+    ])
+    expect(chips).toEqual([
+      ['Zoo', null],
+      ['Q3 est. tax', '~−$395'],
+    ])
     const more = cell(SEP15).querySelector('button.cal-more') as HTMLElement
     expect(more.textContent).toBe('+3 more')
     fireEvent.click(more)
@@ -96,7 +100,14 @@ describe('CalendarGrid', () => {
   it('renders chip text, title, source color and the done strike-through', () => {
     mount()
     const vest = cell('2026-09-16').querySelector('button.cal-chip') as HTMLElement
-    expect(vest.textContent).toBe('RSU vest · 4 grants ~+$41.2k')
+    // Label and amount are separate text nodes: the label span ellipsizes in a narrow
+    // cell, the amount span never does (2026-09-09 audit item 54).
+    expect(vest.querySelector('.cal-chip-label')?.textContent).toBe('RSU vest · 4 grants')
+    expect(vest.querySelector('.cal-chip-amount')?.textContent).toBe('~+$41.2k')
+    const zoo = cell(SEP15).querySelector('button.cal-chip') as HTMLElement
+    expect(zoo.querySelector('.cal-chip-amount')).toBeNull() // Zoo has no amount, no span
+    // Split spans, one accessible name — the sentence the chip read before the split.
+    expect(screen.getByRole('button', { name: 'RSU vest · 4 grants ~+$41.2k' })).toBe(vest)
     expect(vest.getAttribute('title')).toBe('RSU vest — 4 grants · $41,200.00 · estimated')
     expect(vest.getAttribute('style')).toContain('border-left-color: var(--chart-1)')
     expect(cell('2026-09-02').querySelector('button.cal-chip')?.classList.contains('is-done')).toBe(

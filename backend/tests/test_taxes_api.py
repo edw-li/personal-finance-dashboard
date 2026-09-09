@@ -28,6 +28,7 @@ from app.models import (
     TaxYear,
 )
 from app.seed import seed_tax_definitions
+from app.services import clock
 from app.services.tax_service import JURISDICTION_WARN_MISSING, SUGGESTION_KEYS
 from app.tax_keys import JURISDICTIONS, SECTIONS, TAX_INPUT_DEFINITIONS
 from tests.portfolio_factories import acct
@@ -195,7 +196,7 @@ async def test_get_inputs_lists_every_definition_with_null_values(auth_client, d
     assert body["year"] == 2024
     assert [section["section"] for section in body["sections"]] == list(SECTIONS)
     items = items_by_key(body)
-    assert len(items) == len(TAX_INPUT_DEFINITIONS) == 45
+    assert len(items) == len(TAX_INPUT_DEFINITIONS) == 46
     for section in body["sections"]:
         orders = [item["sort_order"] for item in section["items"]]
         assert orders == sorted(orders)
@@ -219,15 +220,192 @@ async def test_get_inputs_echoes_values_and_suggestions(auth_client, definitions
     assert items["unq_div_state_exempt_pct"]["value"] == "0.9514"
     # The sheet's own gray-cell formulas: the stored 2025 column agrees with the engine.
     assert items["gross_paycheck"]["suggested"] == items["gross_paycheck"]["value"] == "6750.0000"
-    assert (
-        items["itemized_deduction"]["suggested"]
-        == items["itemized_deduction"]["value"]
-        == "27213.2820"
-    )
+    # The ONE suggestion that no longer reproduces its stored cell: the sheet's itemized
+    # formula added the 6.2220 §199A line, which became a below-the-line deduction of its
+    # own on 2026-09-09 (spec 4h). Stored 27213.2820, suggested 27207.0600.
+    assert items["itemized_deduction"]["value"] == "27213.2820"
+    assert items["itemized_deduction"]["suggested"] == "27207.0600"
     # Chips follow the suggestions map, not is_derived: capital_loss_deductions is stored
     # with is_derived=False yet the sheet computes it (Plan 5 Workbook reference).
     assert items["capital_loss_deductions"]["is_derived"] is False
     assert items["capital_loss_deductions"]["suggested"] == "0.0000"
+
+
+async def test_get_inputs_stamps_the_unit_and_the_two_relabelled_rows(auth_client, definitions):
+    """Item 2 (2026-09-09 spec §2): every item says which BOX it is entered through.
+
+    Money is the default for 43 of the 45 rows; `pay_periods` is a count of checks and
+    `unq_div_state_exempt_pct` a percent stored as a fraction. The unit rides the payload
+    from tax_keys rather than from the definition row, so a database seeded before units
+    existed still renders the right box — which is also why the two relabels are asserted
+    here: seed_tax_definitions syncs the label of a row it already has.
+    """
+    await put_inputs(auth_client, 2024, {})
+
+    items = items_by_key((await auth_client.get(f"{YEARS}/2024/inputs")).json())
+    assert items["pay_periods"]["unit"] == "count"
+    assert items["unq_div_state_exempt_pct"]["unit"] == "percent"
+    assert {key for key, item in items.items() if item["unit"] != "money"} == {
+        "pay_periods",
+        "unq_div_state_exempt_pct",
+    }
+    assert items["pay_periods"]["label"] == "Pay periods (checks received so far this year)"
+    assert (
+        items["unq_div_state_exempt_pct"]["label"]
+        == "Treasury-fund dividends — state-exempt share (%)"
+    )
+    # Nothing else about the item moved: `suggestion_source` is null for a sheet formula.
+    assert items["gross_paycheck"]["suggestion_source"] is None
+
+
+async def test_put_inputs_fences_the_count_and_percent_units(auth_client, definitions):
+    """A count is whole and 0..53; a percent key stores the FRACTION the engine multiplies.
+
+    A stored 98 on the exempt-share row would have multiplied treasury dividends by
+    ninety-eight, and a stored 20.5 checks is not a paycheck — both are refused at the
+    boundary in the PUT's own `values.{key}` vocabulary, with no partial write.
+    """
+    for value in ("54", "-1", "20.5"):
+        resp = await auth_client.put(
+            f"{YEARS}/2024/inputs", json={"values": {"pay_periods": value}}
+        )
+        assert resp.status_code == 422, value
+        assert "values.pay_periods" in resp.json()["detail"]
+    for value in ("98", "-0.5", "1.0001"):
+        resp = await auth_client.put(
+            f"{YEARS}/2024/inputs", json={"values": {"unq_div_state_exempt_pct": value}}
+        )
+        assert resp.status_code == 422, value
+        assert "values.unq_div_state_exempt_pct" in resp.json()["detail"]
+    assert (await auth_client.get(YEARS)).json() == []  # not even the year row
+
+    # The bounds are inclusive, and a legal pair still lands.
+    body = await put_inputs(
+        auth_client, 2024, {"pay_periods": "53", "unq_div_state_exempt_pct": "1"}
+    )
+    items = items_by_key(body)
+    assert items["pay_periods"]["value"] == "53.0000"
+    assert items["unq_div_state_exempt_pct"]["value"] == "1.0000"
+    zeroed = await put_inputs(
+        auth_client, 2024, {"pay_periods": "0", "unq_div_state_exempt_pct": "0"}
+    )
+    assert items_by_key(zeroed)["pay_periods"]["value"] == "0.0000"
+
+
+async def test_get_inputs_carries_the_deduction_rows_forward(auth_client, definitions):
+    """4e (2026-09-09 spec): the three published figures are offered from last year.
+
+    standard_deduction, state_standard_deduction and state_exemption_credits are figures OF
+    THE YEAR rather than of the filer's behaviour, and a year that never had them entered
+    silently taxed AGI in full. Absent, last year's stored value is the honest starting
+    point — offered as a chip that says where it came from, never applied.
+    """
+    await put_inputs(
+        auth_client,
+        2024,
+        {
+            "standard_deduction": "14600",
+            "state_standard_deduction": "5540",
+            "state_exemption_credits": "149",
+        },
+    )
+    await put_inputs(auth_client, 2025, {"annual_salary": "1"})
+
+    items = items_by_key((await auth_client.get(f"{YEARS}/2025/inputs")).json())
+    for key, value in (
+        ("standard_deduction", "14600.0000"),
+        ("state_standard_deduction", "5540.0000"),
+        ("state_exemption_credits", "149.0000"),
+    ):
+        assert items[key]["value"] is None, key
+        assert items[key]["suggested"] == value, key
+        assert items[key]["suggestion_source"] == "last year's", key
+    # A sheet formula is not relabelled by any of this.
+    assert items["itemized_deduction"]["suggestion_source"] is None
+
+
+async def test_the_carry_forward_defers_to_an_answered_row(auth_client, definitions):
+    """Absent, strictly: a key the user has already answered — even with a zero — is never
+    second-guessed, and a year whose predecessor stored nothing gets no chip at all."""
+    await put_inputs(auth_client, 2024, {"standard_deduction": "14600"})
+    await put_inputs(auth_client, 2025, {"standard_deduction": "0"})
+
+    items = items_by_key((await auth_client.get(f"{YEARS}/2025/inputs")).json())
+    assert items["standard_deduction"]["value"] == "0.0000"
+    assert items["standard_deduction"]["suggested"] is None
+    assert items["standard_deduction"]["suggestion_source"] is None
+    # 2024's own predecessor has no rows, so 2024 is offered nothing.
+    prior = items_by_key((await auth_client.get(f"{YEARS}/2024/inputs")).json())
+    assert prior["state_standard_deduction"]["suggested"] is None
+
+
+async def test_summary_names_a_missing_deduction_on_its_own_line(auth_client, definitions):
+    """The wire half of 4e: the sentence travels as its own warning, ahead of the muted
+    defaulted-to-zero list, which no longer names either deduction key."""
+    await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
+    await put_inputs(auth_client, 2024, {"latest_w2_income": "100000"})
+
+    body = (await auth_client.get(f"{YEARS}/2024/summary")).json()
+    assert body["warnings"][0] == (
+        "No standard or itemized deduction entered for 2024 — federal tax is overstated"
+    )
+    muted = body["warnings"][1].removeprefix("missing inputs defaulted to 0: ").split(", ")
+    assert "standard_deduction" not in muted  # split: it is a substring of the state key
+    assert "itemized_deduction" not in muted
+    assert body["federal"]["taxable_income"] == "100000.00"
+
+
+async def test_health_names_the_sec199a_leftover_and_the_repair_writes_the_new_total(
+    auth_client, definitions
+):
+    """The §199A repair, end to end (taxes spec 4h + the 2026-09-09 data-health follow-on).
+
+    The 2025 column as the OLD chip left it: an itemized total that still has the 6.2220
+    §199A line inside it, beside a §199A row the engine now deducts on its own. The card
+    names the year; the repair is a plain write of the CURRENT suggestion through this
+    router's own inputs PUT, which is change-logged — so the toast can offer Undo — and the
+    check goes quiet afterwards.
+    """
+    await put_inputs(auth_client, 2025, inputs_payload(2025))
+
+    check = next(
+        c
+        for c in (await auth_client.get("/api/v1/system/health")).json()["checks"]
+        if c["id"] == "sec199a_in_itemized"
+    )
+    assert check["severity"] == "warn"
+    assert check["years"] == [2025]
+    assert check["fix"]["action"] == "rewrite_itemized_deduction"
+
+    # What the card writes: the year's own suggestion, read back from this same router.
+    items = items_by_key((await auth_client.get(f"{YEARS}/2025/inputs")).json())
+    suggested = items["itemized_deduction"]["suggested"]
+    assert (items["itemized_deduction"]["value"], suggested) == ("27213.2820", "27207.0600")
+
+    resp = await auth_client.put(
+        f"{YEARS}/2025/inputs",
+        json={"values": {"itemized_deduction": suggested}},
+        headers={"X-Change-Source": "repair"},
+    )
+    assert resp.status_code == 200, resp.text
+    # Undoable: the batch id rides the header, not the body (TaxInputsOut is the GET's
+    # shape too, and the two payloads are pinned byte-for-byte).
+    batch_id = resp.headers.get("X-Change-Batch")
+    assert batch_id
+    assert items_by_key(resp.json())["itemized_deduction"]["value"] == "27207.0600"
+
+    repaired = next(
+        c
+        for c in (await auth_client.get("/api/v1/system/health")).json()["checks"]
+        if c["id"] == "sec199a_in_itemized"
+    )
+    assert repaired["severity"] == "ok"
+
+    # And the undo really puts the old figure back.
+    undo = await auth_client.post(f"/api/v1/activity/batches/{batch_id}/undo")
+    assert undo.status_code == 200, undo.text
+    restored = items_by_key((await auth_client.get(f"{YEARS}/2025/inputs")).json())
+    assert restored["itemized_deduction"]["value"] == "27213.2820"
 
 
 async def test_put_inputs_creates_year_upserts_and_deletes(auth_client, definitions):
@@ -533,11 +711,14 @@ async def test_summary_2024_matches_the_sheet_except_the_state_chain(auth_client
     body = (await auth_client.get(f"{YEARS}/2024/summary")).json()
     assert body["year"] == 2024
     assert body["warnings"] == []  # every input present, every jurisdiction present
+    # The federal Base is TRUE AGI since 2026-09-09 (spec 4f): ordinary AGI 211776.20 plus
+    # the 179.13 of netted gains, and the effective rate divides by it (was 0.192575 over
+    # the ordinary figure). The sheet's own Total Income row is still 211776.20, below.
     assert body["federal"] == {
-        "agi": "211776.20",
+        "agi": "211955.33",
         "taxable_income": "197176.20",
         "tax": "40782.88",
-        "effective_rate": "0.192575",
+        "effective_rate": "0.192413",
     }
     assert body["state"] == {
         "agi": "215301.15",
@@ -596,7 +777,9 @@ async def test_summary_2026_has_no_gains_so_no_capital_gains_rate(auth_client, d
     body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
     assert body["warnings"] == []
     assert body["capital_gains"] == {
-        "taxable_income": "250304.21",
+        # 250304.21 until 2026-09-09: §199A's 8 is a below-the-line deduction now (spec 4h),
+        # so the ordinary income the gains would stack on is 8 lower.
+        "taxable_income": "250296.21",
         "gains_amount": "0.00",
         "tax": "0.00",
         "effective_rate": None,
@@ -607,8 +790,10 @@ async def test_summary_2026_has_no_gains_so_no_capital_gains_rate(auth_client, d
         "tax": "0.00",
         "effective_rate": None,  # NII of 0 is the sheet's #DIV/0!
     }
-    assert body["federal"]["tax"] == "57160.35"
-    assert body["totals"]["total_tax"] == "98584.56"
+    # Both moved by the same §199A deduction: federal tax 57160.35 -> 57157.79 (8 × .32)
+    # and the total with it.
+    assert body["federal"]["tax"] == "57157.79"
+    assert body["totals"]["total_tax"] == "98582.00"
 
 
 async def test_summary_warns_on_stored_folded_niit_rates(auth_client, definitions):
@@ -634,10 +819,14 @@ async def test_summary_warns_on_stored_folded_niit_rates(auth_client, definition
 
 async def test_summary_never_serializes_a_signed_zero(auth_client, definitions):
     """Exemption credits with no tax to offset drive state tax to -0.001, which quantizes
-    to Decimal("-0.00") — "-0.00" on the wire unless the serializer collapses the sign."""
-    await put_inputs(auth_client, 2033, {"state_exemption_credits": "0.001"})
+    to Decimal("-0.00") — "-0.00" on the wire unless the serializer collapses the sign.
 
-    body = (await auth_client.get(f"{YEARS}/2033/summary")).json()
+    On a SETTLED year (was 2033): a table-less single year in the future refuses to compute
+    at all since 2026-09-09 (spec 4g), and this test needs the numbers.
+    """
+    await put_inputs(auth_client, 2023, {"state_exemption_credits": "0.001"})
+
+    body = (await auth_client.get(f"{YEARS}/2023/summary")).json()
     assert body["state"]["tax"] == "0.00"
     assert body["totals"]["total_tax"] == "0.00"
     assert body["totals"]["take_home"] == "0.00"
@@ -670,18 +859,26 @@ async def test_all_years_summary_skips_input_less_years(auth_client, definitions
 async def test_summary_guards_absurd_but_legal_inputs(auth_client, definitions):
     """A GET must never 422/500 on values the API itself accepted (Task 1 review I3).
 
-    Both factors below are bound-legal (|v| < 10^10) yet their product is ~10^20, which
-    blows past every money column and — over a 0.0001 gross income — produces a ~10^23
-    effective rate. Money serializes anyway (plain quantize, never money.py's bounded
-    one); only the out-of-range rate degrades to null plus a warning.
+    MOVED 2026-09-09 (spec §2, units): this test used to build its absurdity from the
+    engine's one PRODUCT of two inputs, treasury dividends x a -9999999999.9999 exempt
+    share, for a ~10^20 state AGI. That share is now a percent key fenced to 0..1, so the
+    API no longer accepts the factor and the product is unreachable — the guard is proved
+    from money keys instead. Four bound-legal (|v| < 10^10) NEGATIVE pre-tax deductions
+    each ADD to AGI, none of them appears in gross income, and the result is a ~4x10^10
+    AGI over a 0.0001 gross income: money past the 10^10 column bound serializes anyway
+    (plain quantize, never money.py's bounded one), and only the ~10^14 totals rate
+    degrades to null plus a warning. Old figures: state AGI 99999999999998000000.00,
+    total tax 12299999999999735394.73.
     """
     await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
     await put_inputs(
         auth_client,
         2024,
         {
-            "unq_div_us_treasuries_etf": "9999999999.9999",
-            "unq_div_state_exempt_pct": "-9999999999.9999",
+            "trad_401k_contributions": "-9999999999.9999",
+            "hsa_contributions": "-9999999999.9999",
+            "hsa_contributions_employer": "-9999999999.9999",
+            "other_pretax_deductions": "-9999999999.9999",
             "unqualified_dividends": "0.0001",
         },
     )
@@ -689,12 +886,13 @@ async def test_summary_guards_absurd_but_legal_inputs(auth_client, definitions):
     resp = await auth_client.get(f"{YEARS}/2024/summary")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["state"]["agi"] == "99999999999998000000.00"
-    assert body["state"]["tax"] == "12299999999999735394.73"
-    assert body["totals"]["total_tax"] == "12299999999999735394.73"
-    assert body["totals"]["take_home"] == "-12299999999999735394.73"
-    assert body["state"]["effective_rate"] == "0.123000"  # in range: still served
-    assert body["totals"]["effective_rate"] is None  # ~10^23: nulled, not 500
+    assert body["federal"]["agi"] == "40000000000.00"
+    assert body["state"]["agi"] == "20000000000.00"  # the two HSA legs are added back
+    assert body["state"]["tax"] == "2459981394.73"
+    assert body["totals"]["total_tax"] == "17964950185.68"
+    assert body["totals"]["take_home"] == "-17964950185.68"
+    assert body["state"]["effective_rate"] == "0.122999"  # in range: still served
+    assert body["totals"]["effective_rate"] is None  # ~10^14 over 0.0001: nulled, not 500
     assert "totals effective rate out of range" in body["warnings"]
 
 
@@ -1212,15 +1410,73 @@ async def test_single_summary_shape_is_unchanged(auth_client, definitions):
     assert body["totals"]["total_tax"] == "72824.61"
 
 
-async def test_single_year_with_no_brackets_still_computes(auth_client, definitions):
-    """The grandfathered path: 'single' NEVER gates. A partial single-filer year has
-    always computed with per-jurisdiction warnings, and stored history depends on it."""
+async def test_settled_single_year_with_no_brackets_still_computes(auth_client, definitions):
+    """The grandfathered half of 4g: a single year BEFORE this calendar year computes.
+
+    Imported history carries real, checked figures for years whose payroll table was never
+    typed in, and the per-jurisdiction warnings are how that gap is reported. (This test
+    used to run on 2033 and assert that 'single' NEVER gates — see its sibling below.)
+    """
+    await put_inputs(auth_client, 2020, {"latest_w2_income": "1000"})
+
+    body = (await auth_client.get(f"{YEARS}/2020/summary")).json()
+    assert body["brackets_missing_for_status"] == []
+    assert body["totals"]["total_tax"] == "0.00"
+    assert JURISDICTION_WARN_MISSING.format(j="federal", year=2020) in body["warnings"]
+
+
+async def test_current_or_future_single_year_without_core_tables_refuses(auth_client, definitions):
+    """GOLDEN MOVED (2026-09-09 spec 4g). `test_single_year_with_no_brackets_still_computes`
+    asserted that a single 2033 with no tables computed a total tax of "0.00" with a muted
+    warning; a year the user is living in reported a federal tax of zero with a straight
+    face. It now takes the same refusal path a married year does: no sections, the
+    call-to-action warning, and the tiles read "—".
+    """
     await put_inputs(auth_client, 2033, {"latest_w2_income": "1000"})
 
     body = (await auth_client.get(f"{YEARS}/2033/summary")).json()
+    assert body["brackets_missing_for_status"] == list(JURISDICTIONS)
+    for section in ("federal", "state", "capital_gains", "totals"):
+        assert body[section] is None, section
+    assert body["warnings"] == [
+        "2033 is filed as single and has no single bracket table for: "
+        "federal, state, medicare, social_security, disability, capital_gains"
+    ]
+
+
+async def test_future_single_year_missing_only_a_payroll_table_still_computes(
+    auth_client, definitions
+):
+    """The three CORE income tables are what a refusal is judged on. A missing payroll
+    table reports 0 for that jurisdiction with its own named warning — a gap the reader can
+    see, rather than a wrong total hidden behind an em-dash."""
+    await put_inputs(auth_client, 2033, inputs_payload(2026))
+    tables = dict(brackets_payload(2026)["jurisdictions"])
+    del tables["disability"]
+    await put_brackets(auth_client, 2033, tables)
+
+    body = (await auth_client.get(f"{YEARS}/2033/summary")).json()
     assert body["brackets_missing_for_status"] == []
-    assert body["totals"]["total_tax"] == "0.00"
-    assert JURISDICTION_WARN_MISSING.format(j="federal", year=2033) in body["warnings"]
+    assert body["disability"]["tax"] == "0.00"
+    assert JURISDICTION_WARN_MISSING.format(j="disability", year=2033) in body["warnings"]
+
+
+async def test_the_single_grandfather_boundary_is_this_calendar_year(
+    auth_client, definitions, monkeypatch
+):
+    """One clock, one boundary: the year BEFORE the current one is grandfathered and the
+    current one is not. The PRODUCT clock is patched rather than the helper that reads it,
+    so `_current_tax_year` — the only place a tax year meets "now" — is exercised too."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2030, 6, 15))
+    await put_inputs(auth_client, 2029, {"latest_w2_income": "1000"})
+    await put_inputs(auth_client, 2030, {"latest_w2_income": "1000"})
+
+    settled = (await auth_client.get(f"{YEARS}/2029/summary")).json()
+    assert settled["brackets_missing_for_status"] == []
+    assert settled["totals"]["total_tax"] == "0.00"
+    current = (await auth_client.get(f"{YEARS}/2030/summary")).json()
+    assert current["brackets_missing_for_status"] == list(JURISDICTIONS)
+    assert current["totals"] is None
 
 
 async def test_married_year_without_its_tables_refuses_to_compute(auth_client, definitions):
@@ -1291,7 +1547,7 @@ async def test_inputs_payload_shape_is_unchanged_without_a_roster(auth_client, d
     assert body["filing_status"] == "single"
     assert body["people"] == []
     items = items_by_key(body)
-    assert len(items) == len(TAX_INPUT_DEFINITIONS) == 45
+    assert len(items) == len(TAX_INPUT_DEFINITIONS) == 46
     assert items["annual_salary"]["value"] == "150000.0000"
     assert items["annual_salary"]["person_id"] is None
     assert items["annual_salary"]["is_per_person"] is True
@@ -1412,7 +1668,7 @@ async def test_annual_salary_suggests_each_persons_in_force_profile(
     paycheck profile has already told the app their salary, so the Taxes page offers it
     instead of asking twice (spec §4.1). One profile in force PER PERSON."""
     me, partner = household
-    today = date.today()
+    today = clock.product_today()
     db.add_all(
         [
             PaycheckProfile(
@@ -1457,7 +1713,7 @@ async def test_annual_salary_has_no_suggestion_without_a_profile(
     db.add(
         PaycheckProfile(
             person_id=me.id,
-            effective_date=date.today() - timedelta(days=30),
+            effective_date=clock.product_today() - timedelta(days=30),
             annual_salary=Decimal("188930.00"),
         )
     )
@@ -1734,8 +1990,9 @@ async def test_brackets_missing_state_clears_once_the_tables_are_cloned(auth_cli
     )
     body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
     assert body["brackets_missing_for_status"] == []
-    # Cloned verbatim from the single tables, so the figures are the single goldens.
-    assert body["totals"]["total_tax"] == "98584.56"
+    # Cloned verbatim from the single tables, so the figures are the single goldens
+    # (98584.56 until §199A moved below the line on 2026-09-09, spec 4h).
+    assert body["totals"]["total_tax"] == "98582.00"
 
 
 async def test_married_year_reports_only_the_missing_tables(auth_client, definitions):

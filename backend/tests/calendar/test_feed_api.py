@@ -19,7 +19,7 @@ TODAY = date(2026, 8, 24)
 
 
 def freeze_today(monkeypatch):
-    monkeypatch.setattr("app.api.calendar.product_today", lambda: TODAY)
+    monkeypatch.setattr("app.services.clock.product_today", lambda: TODAY)
 
 
 async def make_token(auth_client, label="phone") -> tuple[int, str]:

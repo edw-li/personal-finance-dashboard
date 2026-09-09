@@ -14,6 +14,7 @@ from app.models import (
     Security,
     SecurityDividendEvent,
 )
+from app.services import clock
 from tests.portfolio_factories import acct
 
 SECURITIES = "/api/v1/portfolio/securities"
@@ -864,7 +865,7 @@ def _latest(security_id: int, price: str, day: int) -> LatestPrice:
 async def test_holdings_end_to_end_math(auth_client, db):
     # Dates are relative to today so XIRR is deterministic: the flow SPANS (365d, 180d) are
     # fixed, so the solved rate never depends on the day the suite runs.
-    today = date.today()
+    today = clock.product_today()
     voo = await _create_security(auth_client, industry="Index Funds", annual_dividend="6")
     nvda = await _create_security(
         auth_client, ticker="NVDA", name="NVIDIA", industry="Technology", holding_type="stock"

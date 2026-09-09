@@ -8,11 +8,11 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
-from datetime import date
 
 import httpx
 
 from app.database import SessionLocal
+from app.services import clock
 from app.services.assistant_context import build_context
 from app.services.assistant_models import (
     REGISTRY,
@@ -106,7 +106,7 @@ class _Internal(Exception):
 def system_prompt(context_json: str, tools_enabled: bool) -> str:
     lines = [
         "You are the analyst inside a self-hosted personal-finance dashboard.",
-        f"Today is {date.today().isoformat()}.",
+        f"Today is {clock.product_today().isoformat()}.",
         "Answer ONLY from the CONTEXT JSON below and any tool results — never from general",
         "knowledge of markets, prices, or tax law beyond naming concepts.",
         "Quote figures verbatim with their month or year; write money like $1,234.56.",

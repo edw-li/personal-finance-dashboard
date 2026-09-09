@@ -10,10 +10,12 @@ Plan 1 forward note, since `gross = annual_salary / pay_periods_per_year`.
 The read side never rejects stored data OVER ITS SCALE: `paycheck_calc` returns
 full-precision Decimals and `half_up2` is a plain quantize, never a bounded one. Its one
 refusal is the divide-by-zero itself — a hand-written 0 periods 422s rather than 500s,
-because there is no number the breakdown could show. `date.today()` is read HERE and
-only here — the calc module takes no clock — and it decides two things off that single
-read: which profile is current when no `profile_id` is given, and which year's
-contribution limits the pace rows are measured against.
+because there is no number the breakdown could show. The PRODUCT clock (services/clock.py,
+never the container's UTC day) is read HERE and only here — the calc module takes no
+clock — and it decides two things off that single read: which profile is current when no
+`profile_id` is given, and which year's contribution limits the pace rows are measured
+against. Both would be wrong for the PT evening hours the container already calls
+tomorrow, and on 31 December they would be a YEAR wrong (audit item 31).
 """
 
 from dataclasses import dataclass
@@ -44,6 +46,7 @@ from app.schemas.paycheck import (
     ProfileOverrides,
     ProfileUpdate,
 )
+from app.services import clock
 from app.services.espp_calc import StoredPeriod, plan_year_rows
 from app.services.espp_pace import espp_pace_item
 from app.services.limit_check import PaceItem, employer_match, paycheck_pace
@@ -97,6 +100,11 @@ PCT_FIELDS = (
 )
 # Withholding is a tax, not a contribution — it is NOT part of the >100% check.
 CONTRIBUTION_FIELDS = ("trad_401k_pct", "roth_401k_pct", "after_tax_401k_pct", "espp_pct")
+# The all-in rate's per-jurisdiction split (2026-09-09 audit item 3), read off a paystub.
+# A SEPARATE tuple from PCT_FIELDS because these two are NULLABLE — absent is not zero, and
+# PCT_FIELDS' loop would turn a missing rate into a confident 0%. Same 0–1 fence and the
+# same 422 sentence, so the two read alike wherever they are entered.
+OPTIONAL_PCT_FIELDS = ("fed_withholding_pct", "state_withholding_pct")
 MATCH_RATE_FIELDS = ("match_rate_1", "match_rate_2")
 MATCH_BAND_FIELDS = ("match_band_1", "match_band_2")
 MATCH_FIELDS = (*MATCH_RATE_FIELDS, *MATCH_BAND_FIELDS)
@@ -227,6 +235,7 @@ def _validated_profile(
     hsa_employer_per_dependent: Decimal,
     hsa_dependents: int,
     pcts: dict[str, Decimal],
+    optional_pcts: dict[str, Decimal | None],
     match: dict[str, Decimal],
 ) -> dict:
     """One profile's stored columns, validated as a WHOLE row (Plan 4 house law) so a
@@ -252,6 +261,14 @@ def _validated_profile(
         ),
         "hsa_dependents": _validated_dependents(hsa_dependents),
         **{name: _validated_pct(pcts[name], name) for name in PCT_FIELDS},
+        # None passes THROUGH the fence rather than around it: "nothing entered" is a
+        # legal value for these two, and only a value present has a range to be in.
+        **{
+            name: (
+                None if optional_pcts[name] is None else _validated_pct(optional_pcts[name], name)
+            )
+            for name in OPTIONAL_PCT_FIELDS
+        },
         **{name: _validated_match_rate(match[name], name) for name in MATCH_RATE_FIELDS},
         **{name: _validated_band(match[name], name) for name in MATCH_BAND_FIELDS},
     }
@@ -339,7 +356,7 @@ async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[PaycheckProf
             )
         ).scalars()
     )
-    await _mark_in_force(db, rows, date.today())
+    await _mark_in_force(db, rows, clock.product_today())
     return rows
 
 
@@ -357,6 +374,7 @@ async def create_profile(body: ProfileIn, db: AsyncSession = Depends(get_db)) ->
         hsa_employer_per_dependent=body.hsa_employer_per_dependent,
         hsa_dependents=body.hsa_dependents,
         pcts={name: getattr(body, name) for name in PCT_FIELDS},
+        optional_pcts={name: getattr(body, name) for name in OPTIONAL_PCT_FIELDS},
         match={name: getattr(body, name) for name in MATCH_FIELDS},
     )
     # (person_id, effective_date) is the natural key. Plain check-then-409: two concurrent
@@ -366,7 +384,7 @@ async def create_profile(body: ProfileIn, db: AsyncSession = Depends(get_db)) ->
     profile = PaycheckProfile(person_id=person_id, notes=body.notes, **fields)
     db.add(profile)
     await db.commit()
-    await _mark_in_force(db, [profile], date.today())
+    await _mark_in_force(db, [profile], clock.product_today())
     return profile
 
 
@@ -393,6 +411,13 @@ async def update_profile(
         ),
         hsa_dependents=_merged(provided, "hsa_dependents", profile.hsa_dependents),
         pcts={name: _merged(provided, name, getattr(profile, name)) for name in PCT_FIELDS},
+        # NOT `_merged`: these two are nullable, so an explicit null CLEARS them (`notes`'
+        # rule) instead of meaning "leave it alone". Presence in the dump is the whole
+        # test — `exclude_unset` is what tells a sent null from an omitted field.
+        optional_pcts={
+            name: (provided[name] if name in provided else getattr(profile, name))
+            for name in OPTIONAL_PCT_FIELDS
+        },
         match={name: _merged(provided, name, getattr(profile, name)) for name in MATCH_FIELDS},
     )
     if fields["effective_date"] != profile.effective_date:
@@ -405,7 +430,7 @@ async def update_profile(
     if "notes" in provided:
         profile.notes = provided["notes"]  # nullable: an explicit null really clears it
     await db.commit()
-    await _mark_in_force(db, [profile], date.today())
+    await _mark_in_force(db, [profile], clock.product_today())
     return profile
 
 
@@ -551,6 +576,11 @@ class ScenarioProfile:
     hsa_employer_annual: Decimal
     hsa_employer_per_dependent: Decimal
     hsa_dependents: int
+    # Carried from the base row, never overridden: the sandbox models one CHECK, and these
+    # two are read only by the year-scale withholding tracker. They are here so a scenario
+    # profile still answers for every column of the row it stands in for.
+    fed_withholding_pct: Decimal | None = None
+    state_withholding_pct: Decimal | None = None
 
 
 def _scenario_profile(base: PaycheckProfile, overrides: ProfileOverrides) -> ScenarioProfile:
@@ -621,6 +651,7 @@ def _scenario_profile(base: PaycheckProfile, overrides: ProfileOverrides) -> Sce
         ),
         **pcts,
         **match,
+        **{name: getattr(base, name) for name in OPTIONAL_PCT_FIELDS},
     )
 
 
@@ -767,7 +798,7 @@ async def get_breakdown(
     # and which year's contribution limits the pace rows are measured against. One read, so
     # a request that straddles midnight on 31 December cannot pair January's profile with
     # December's caps.
-    today = date.today()
+    today = clock.product_today()
     profile = await _resolve_breakdown_profile(db, profile_id, person_id, today)
     lines = {name: half_up2(value) for name, value in breakdown(profile).items()}
     warnings = _advisories(profile, lines["net_pay"])
@@ -801,7 +832,7 @@ async def preview(body: PreviewIn, db: AsyncSession = Depends(get_db)) -> Previe
     with `overrides` applied. NOTHING is stored: SELECTs only, no add/flush/commit anywhere
     in this call graph (tests/test_sandbox_purity.py proves it). `today` is read once for
     both the profile in force and the limits year, like the GET."""
-    today = date.today()
+    today = clock.product_today()
     base = await _resolve_breakdown_profile(db, body.profile_id, body.person_id, today)
     scenario = _scenario_profile(base, body.overrides)
 

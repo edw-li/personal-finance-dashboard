@@ -196,6 +196,10 @@ interface ProfileFormState {
   hsa_employer_annual: string
   hsa_employer_per_dependent: string
   hsa_dependents: string // a plain count, never money — "2", not "$2.00"
+  // The withholding split, in percent form like the five above. BLANK is not "0" here: it
+  // is the stored NULL, i.e. no figure from a paystub (2026-09-09 audit item 3).
+  fed_withholding_pct: string
+  state_withholding_pct: string
   notes: string
 }
 
@@ -215,6 +219,20 @@ const PCT_FIELDS: { field: PctField; label: string }[] = [
   { field: 'espp_pct', label: 'ESPP %' },
   { field: 'withholding_pct', label: 'Withholding %' },
 ]
+
+type OptionalPctField = 'fed_withholding_pct' | 'state_withholding_pct'
+
+// The all-in rate's per-jurisdiction split (2026-09-09 audit item 3): the same 0-100 box,
+// but a BLANK one stores NULL rather than a zero. Its own table for exactly that reason —
+// PCT_FIELDS' loop turns every blank into a real zero, which is the one thing these two
+// must never say.
+const OPTIONAL_PCT_FIELDS: { field: OptionalPctField; label: string }[] = [
+  { field: 'fed_withholding_pct', label: 'Federal withholding %' },
+  { field: 'state_withholding_pct', label: 'State withholding %' },
+]
+
+const WITHHOLDING_SPLIT_HINT =
+  "From a paystub: federal (or state) withheld ÷ taxable wages. Optional — splits the Taxes page's balance by jurisdiction."
 
 type MatchField = 'match_rate_1' | 'match_band_1' | 'match_rate_2' | 'match_band_2'
 
@@ -266,7 +284,11 @@ const MAX_HSA_DEPENDENTS = 20
 
 /** The employer's HSA policy in words, read back from the FORM's own state (matchWords'
  *  rule): typed input, never a server figure re-derived. Both amounts zero is the stored way
- *  to say "no employer deposit", so that is the one sentence with a full stop. */
+ *  to say "no employer deposit", so that is the one sentence with a full stop.
+ *
+ *  The COVERAGE box is part of the policy (2026-09-09 audit item 29): the per-head term is
+ *  earned under family coverage and nowhere else — `limit_check.employer_hsa`'s own rule —
+ *  so under self-only the clause described money the server pays to nobody. */
 function employerHsaWords(form: ProfileFormState): string {
   // The money boxes' own options, exactly as submit's belt reads them — parsing them any
   // other way would describe a figure that is not the one being saved. A half-typed "=5000+"
@@ -278,12 +300,20 @@ function employerHsaWords(form: ProfileFormState): string {
   const annual = num(form.hsa_employer_annual)
   const perHead = num(form.hsa_employer_per_dependent)
   if (annual <= 0 && perHead <= 0) return 'No employer HSA contribution entered.'
+  // No HDHP is no HSA, so NEITHER term arrives — `limit_check.employer_hsa` returns zero for
+  // this tier before it looks at the policy at all. Saying "$2,000.00 a year for your
+  // coverage" here would promise a deposit against an account the tier says does not exist.
+  if (form.hsa_coverage === 'none') {
+    return 'No employer HSA contribution applies without HSA coverage.'
+  }
   const typed = Number(form.hsa_dependents.trim() || '0')
   const covered = Number.isFinite(typed) ? Math.trunc(typed) : 0
   const own = `${formatCurrency(String(annual))} a year for your coverage`
-  // Nobody else covered, or nothing paid per head: the clause would describe money that does
-  // not exist (matchWords' rule for a band nobody funds).
-  if (perHead <= 0 || covered === 0) return own
+  // Self-only, nobody else covered, or nothing paid per head: the clause would describe
+  // money that does not exist (matchWords' rule for a band nobody funds). A count left
+  // behind on a row that has since dropped to self-only is ignored here exactly as the
+  // server ignores it — the sentence promises what the deposit will actually be.
+  if (form.hsa_coverage !== 'family' || perHead <= 0 || covered === 0) return own
   return `${own}, plus ${formatCurrency(String(perHead))} for each of ${covered} additional individual${covered === 1 ? '' : 's'}`
 }
 
@@ -306,6 +336,7 @@ const EMPTY_PROFILE: ProfileFormState = {
   hsa_coverage: 'self',
   match_rate_1: '', match_band_1: '', match_rate_2: '', match_band_2: '',
   hsa_employer_annual: '', hsa_employer_per_dependent: '', hsa_dependents: '',
+  fed_withholding_pct: '', state_withholding_pct: '',
   notes: '',
 }
 
@@ -330,6 +361,12 @@ function formFrom(profile: PaycheckProfileOut): ProfileFormState {
     hsa_employer_annual: profile.hsa_employer_annual,
     hsa_employer_per_dependent: profile.hsa_employer_per_dependent,
     hsa_dependents: String(profile.hsa_dependents),
+    // A stored NULL stays a BLANK box (shiftPoint('', 2) would be a zero): the split is
+    // optional, and "not entered" has to survive the round trip.
+    fed_withholding_pct:
+      profile.fed_withholding_pct === null ? '' : shiftPoint(profile.fed_withholding_pct, 2),
+    state_withholding_pct:
+      profile.state_withholding_pct === null ? '' : shiftPoint(profile.state_withholding_pct, 2),
     notes: profile.notes ?? '',
   }
 }
@@ -475,6 +512,21 @@ function ProfilesPanel({
         return
       }
     }
+    for (const { field, label } of OPTIONAL_PCT_FIELDS) {
+      // Blank is the STORED NULL here, not a zero — but anything else obeys the five pcts'
+      // rule word for word, including the refusal of exponents and "=" arithmetic.
+      const text = form[field].trim()
+      if (text === '') continue
+      if (!isAmount(text, { expressions: false })) {
+        setError(`${label} must be a number`)
+        return
+      }
+      const value = Number(canonicalAmount(text, { expressions: false }))
+      if (value < 0 || value > 100) {
+        setError(`${label} must be between 0 and 100`)
+        return
+      }
+    }
     for (const { field, label, rate } of MATCH_FIELDS) {
       const text = form[field].trim()
       // Percent boxes refuse expressions and exponents, exactly as the five pcts do.
@@ -525,6 +577,12 @@ function ProfilesPanel({
     // travel as "$13" and 422 on the far side.
     const pct = (field: PctField) =>
       shiftPoint(canonicalAmount(form[field].trim() || '0', { expressions: false }), -2)
+    // The split's own belt: a blank box travels as NULL, which is the one value that really
+    // CLEARS these two server-side (every other column reads an explicit null as a no-op).
+    const optionalPct = (field: OptionalPctField) => {
+      const text = form[field].trim()
+      return text === '' ? null : shiftPoint(canonicalAmount(text, { expressions: false }), -2)
+    }
     // The FULL profile on both verbs (Task 4 review M6's BINDING): the router validates
     // the MERGED row, so a delta PATCH would 422 on a stored field this form never
     // touched. `notes` is the one column whose null really clears.
@@ -563,6 +621,8 @@ function ProfilesPanel({
       // Number(), the SAME expression the check above validated as a whole number in range:
       // parseInt would read a "2e1" the check passed as 20 and ship 2.
       hsa_dependents: Number(form.hsa_dependents.trim() || '0'),
+      fed_withholding_pct: optionalPct('fed_withholding_pct'),
+      state_withholding_pct: optionalPct('state_withholding_pct'),
       notes: form.notes.trim() || null,
       // Create only, and only for an explicitly-picked person: an absent person_id resolves
       // to the primary server-side (spec §4.1), so the default create is byte-identical to
@@ -681,6 +741,19 @@ function ProfilesPanel({
             <AmountInput kind="percent" value={form[field]} onValueChange={set(field)} />
           </label>
         ))}
+        {/* The all-in rate's split, right under it because that is the row it divides. Its
+            own fieldset (the match's shape) so ONE hint covers both boxes and neither
+            label has to carry the caveat that would rename it. */}
+        <fieldset className="paycheck-match">
+          <legend>Withholding split (optional)</legend>
+          {OPTIONAL_PCT_FIELDS.map(({ field, label }) => (
+            <label key={field}>
+              {label}
+              <AmountInput kind="percent" value={form[field]} onValueChange={set(field)} />
+            </label>
+          ))}
+          <p className="paycheck-match-words">{WITHHOLDING_SPLIT_HINT}</p>
+        </fieldset>
         <label>
           Dental &amp; vision
           <AmountInput
@@ -794,6 +867,8 @@ function ProfilesPanel({
                 <th className="num">After-tax</th>
                 <th className="num">ESPP</th>
                 <th className="num">Withholding</th>
+                <th className="num">Withholding (fed)</th>
+                <th className="num">Withholding (state)</th>
                 <th className="num">Dental &amp; vision</th>
                 <th className="num">HSA</th>
                 <th>HSA coverage</th>
@@ -831,6 +906,15 @@ function ProfilesPanel({
                   <td className="num">{formatPct(profile.espp_pct, { signed: false })}</td>
                   <td className="num">
                     {formatPct(profile.withholding_pct, { signed: false })}
+                  </td>
+                  {/* An em dash on a null, by formatPct's own rule — never "0.0%": these
+                      two are unentered until a paystub says otherwise, and a confident zero
+                      would read as a rate somebody typed. */}
+                  <td className="num">
+                    {formatPct(profile.fed_withholding_pct, { signed: false })}
+                  </td>
+                  <td className="num">
+                    {formatPct(profile.state_withholding_pct, { signed: false })}
                   </td>
                   <td className="num">{formatCurrency(profile.dental_vision_per_check)}</td>
                   <td className="num">{formatCurrency(profile.hsa_per_check)}</td>

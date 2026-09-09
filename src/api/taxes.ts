@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, apiWithHeaders } from './client'
 import type {
   FilingStatus,
   TaxBracketsCloneOut,
@@ -86,6 +86,23 @@ export function putTaxInputs(year: number, body: TaxInputsUpdate): Promise<TaxIn
     method: 'PUT',
     body: JSON.stringify(body),
   })
+}
+
+// The same write, with the change batch its response header carries (spec §9) — the shape
+// `deleteSpendingMonth` established for the Data-health card's repairs. `source: 'repair'`
+// logs the batch as a repair rather than a UI edit; it is still undoable, which is the
+// whole point of routing the §199A fix through the ordinary inputs PUT instead of a
+// bespoke endpoint that would need its own logging.
+export async function putTaxInputsForRepair(
+  year: number,
+  body: TaxInputsUpdate,
+): Promise<{ data: TaxInputsOut; batchId: string | null }> {
+  const { data, headers } = await apiWithHeaders<TaxInputsOut>(`/taxes/years/${year}/inputs`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+    headers: { 'X-Change-Source': 'repair' },
+  })
+  return { data, batchId: headers.get('x-change-batch') }
 }
 
 // The tables of ONE filing status. The status is REQUIRED because the server's own default

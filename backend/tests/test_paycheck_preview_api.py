@@ -16,6 +16,7 @@ from app.api.paycheck import (
     PAY_PERIODS_MESSAGE,
 )
 from app.models import ContributionLimit, Person
+from app.services import clock
 
 PROFILES = "/api/v1/paycheck/profiles"
 BREAKDOWN = "/api/v1/paycheck/breakdown"
@@ -155,7 +156,9 @@ async def test_preview_scenario_equals_a_real_profile_with_those_values(auth_cli
     # strip onward it no longer reaches behind that profile and nothing is borrowed.
     espp = {row["key"]: row for row in shown["pace"]}["limit_espp_423"]
     assert espp["backfilled_from"] is None
-    borrowed = "2026-01-01" if date(date.today().year - 1, 9, 1) < date(2026, 1, 1) else None
+    borrowed = (
+        "2026-01-01" if date(clock.product_today().year - 1, 9, 1) < date(2026, 1, 1) else None
+    )
     previewed = {row["key"]: row for row in body["pace"]["scenario"]}["limit_espp_423"]
     assert previewed["backfilled_from"] == borrowed
     assert (await auth_client.delete(f"{PROFILES}/{twin['id']}")).status_code == 204
@@ -293,7 +296,9 @@ async def test_preview_warnings_are_the_scenario_side(auth_client, me):
 
 async def test_preview_pace_scenario_reflects_the_overrides(auth_client, db, me):
     db.add(
-        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+        ContributionLimit(
+            year=clock.product_today().year, key="limit_401k_elective", value=D("24500.00")
+        )
     )
     await db.commit()
     await create_profile(
@@ -343,7 +348,11 @@ async def test_preview_monthly_matches_the_breakdowns_operation_order(auth_clien
 
 
 async def test_preview_espp_row_moves_with_the_rate_override(auth_client, db, me):
-    db.add(ContributionLimit(year=date.today().year, key="limit_espp_423", value=D("25000.00")))
+    db.add(
+        ContributionLimit(
+            year=clock.product_today().year, key="limit_espp_423", value=D("25000.00")
+        )
+    )
     await db.commit()
     await auth_client.post(PROFILES, json=profile_payload(effective_date="2020-01-01"))
     body = (await auth_client.post(PREVIEW, json={"overrides": {"espp_pct": "0.2"}})).json()
@@ -363,7 +372,9 @@ async def test_preview_pace_moves_the_projection_and_leaves_so_far_alone(auth_cl
     """A knob turned today cannot rewrite a check already cut (spec §2.6): the two halves
     agree about the past and differ about the rest of the year."""
     db.add(
-        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+        ContributionLimit(
+            year=clock.product_today().year, key="limit_401k_elective", value=D("24500.00")
+        )
     )
     await db.commit()
     await create_profile(auth_client)
@@ -388,7 +399,9 @@ async def test_preview_employer_legs_move_the_projection_and_never_the_past(auth
     """A match doubled today pays nothing on checks already cut (spec §2.5): every row's
     so-far figure is the baseline's, and only the projections move."""
     db.add(
-        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+        ContributionLimit(
+            year=clock.product_today().year, key="limit_401k_elective", value=D("24500.00")
+        )
     )
     await db.commit()
     await create_profile(
@@ -408,3 +421,60 @@ async def test_preview_employer_legs_move_the_projection_and_never_the_past(auth
     assert D(after["limit_415c_total"]["employer_match"]) > D(
         before["limit_415c_total"]["employer_match"]
     )
+
+
+async def test_pace_rows_name_the_election_that_lands_on_the_cap(auth_client, db, me, monkeypatch):
+    """2026-09-09 audit item 5: the Try-it presets used to size themselves `limit / salary`
+    and `limit / periods`, which asks the checks that are LEFT to carry a whole year and lands
+    the strip beside the chip on "over". The server answers with the election instead, on both
+    doors — the clock is pinned so the tail is a fixed 8 of 24 checks."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2026, 9, 7))
+    db.add(ContributionLimit(year=2026, key="limit_401k_elective", value=D("24500.00")))
+    db.add(ContributionLimit(year=2026, key="limit_hsa_self", value=D("4400.00")))
+    await db.commit()
+    await create_profile(auth_client, hsa_coverage="self", hsa_employer_annual="2000")
+
+    shown = {row["key"]: row for row in (await auth_client.get(BREAKDOWN)).json()["pace"]}
+    elective = shown["limit_401k_elective"]
+    assert elective["remaining_checks"] == 8
+    assert elective["remaining_gross"] == "62976.67"
+    assert elective["to_cap_rate"] == "0.129033021"
+    assert elective["to_cap_per_check"] is None
+    # 4,400 less the employer's 2,000 and the 1,600 already deferred, over eight checks.
+    assert shown["limit_hsa_self"]["to_cap_per_check"] == "100.00"
+    assert shown["limit_hsa_self"]["to_cap_rate"] is None
+
+    # Elect it and the projection lands ON the cap: the verdict the old chip could not reach.
+    body = await preview(
+        auth_client, overrides={"trad_401k_pct": elective["to_cap_rate"], "hsa_per_check": "100"}
+    )
+    before = {row["key"]: row for row in body["pace"]["baseline"]}
+    after = {row["key"]: row for row in body["pace"]["scenario"]}
+    assert before["limit_401k_elective"]["to_cap_rate"] == elective["to_cap_rate"]
+    assert after["limit_401k_elective"]["annualized"] == "24500.00"
+    assert after["limit_401k_elective"]["ratio"] == "1.0000"
+    assert after["limit_401k_elective"]["tone"] != "over"
+    assert after["limit_hsa_self"]["ratio"] == "1.0000"
+    assert after["limit_hsa_self"]["tone"] != "over"
+    # The tail is the WALK's, so a knob that moves neither salary nor cadence cannot move it.
+    assert after["limit_401k_elective"]["remaining_checks"] == 8
+
+
+async def test_an_already_over_row_sends_a_rate_a_decimal_parser_can_read(
+    auth_client, db, me, monkeypatch
+):
+    """A 9 dp quantize of nothing is Decimal("0E-9"), and "0E-9" is a string no JS decimal
+    parser reads — the client's exact arithmetic throws on it mid-render and takes the page
+    down. The schema's Pct9Opt is the fix; this is the assertion that keeps it there.
+
+    The clock is pinned because "already over" is a fact about a DATE: read in February, a
+    5,000 cap still has room in the checks that are left."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2026, 9, 7))
+    db.add(ContributionLimit(year=2026, key="limit_401k_elective", value=D("5000.00")))
+    await db.commit()
+    # 16 paydays at 13 % of 188,930 have already put 16,373.93 past a 5,000 cap.
+    await create_profile(auth_client)
+    shown = {row["key"]: row for row in (await auth_client.get(BREAKDOWN)).json()["pace"]}
+    row = shown["limit_401k_elective"]
+    assert row["tone"] == "over"
+    assert row["to_cap_rate"] == "0.000000000"

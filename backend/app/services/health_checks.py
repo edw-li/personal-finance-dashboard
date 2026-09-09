@@ -1,11 +1,13 @@
 """Data health (2026-09-03 data-lifecycle spec §11): one cheap query per check, each
 answering a HealthCheckOut with its severity and, when there is something to do, a fix —
 a link into the app or an action the Data-health card runs (`delete_spending_month` per
-month in `months`, `snapshot_now`). `now` is injected so the rules are clock-testable.
+month in `months`, `snapshot_now`). The instant `now` is injected so the AGE rules are
+clock-testable; the calendar-day rules read the product clock (services/clock.py).
 Thresholds are twins of src/utils/staleness.ts; test_health_checks pins them."""
 
 import asyncio
 from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,11 +19,17 @@ from app.models import (
     MonthlySpending,
     NetWorthSnapshot,
     Security,
+    TaxInput,
+    TaxYear,
 )
 from app.schemas.lifecycle import HealthCheckOut, HealthFixOut
 from app.schemas.system import BackupStatusOut
+from app.services import clock
 from app.services.coverage import Coverage, load_coverage
+from app.services.people import load_people
 from app.services.snapshot import SNAPSHOT_NAME_RE, snapshot_stamp, snapshots_dir
+from app.services.tax_service import derive_suggestions
+from app.tax_keys import SINGLE
 
 STALE_QUOTE_DAYS = 4  # staleness.ts STALE_AFTER_DAYS
 BACKUP_WARN_HOURS = 48  # staleness.ts BACKUP_STALE_HOURS
@@ -29,6 +37,13 @@ BACKUP_ERROR_DAYS = 7  # staleness.ts BACKUP_OVERDUE_DAYS
 SNAPSHOT_WARN_HOURS = 36
 COVERAGE_WINDOW_MONTHS = 12
 BACKUP_STATUS_KEY = "backup_status"  # app/api/system.py's key, read here without the router
+# One cent. The stored itemized figure is Numeric(14,4) and the workbook summed its
+# own formula at full precision, so the equality test has to tolerate the rounding
+# that happened on the way in — and no more than that, or a hand-typed figure that
+# happens to land near the legacy sum would be called a leftover.
+LEGACY_ITEMIZED_TOLERANCE = Decimal("0.01")
+SEC199A_KEY = "itemized_sec199a_div"
+ITEMIZED_KEY = "itemized_deduction"
 
 
 def _ok(check_id: str, title: str) -> HealthCheckOut:
@@ -348,18 +363,93 @@ def check_snapshot(*, now: datetime, snapshot_enabled: bool) -> HealthCheckOut:
     return _ok("snapshot", "A stored snapshot is recent")
 
 
+async def check_sec199a_in_itemized(db: AsyncSession) -> HealthCheckOut:
+    """Years whose stored itemized deduction still has the §199A line inside it.
+
+    §199A moved below the line on 2026-09-09 (taxes spec 4h): the engine deducts it in its
+    own right now, and `derive_suggestions` dropped it from the itemized formula. A year
+    whose `itemized_deduction` was APPLIED from the old chip therefore carries the same
+    dollars twice — once inside the itemized total, once below the line — and understates
+    the tax silently, which is the failure this card exists to name.
+
+    The test is exact rather than heuristic: the only difference between the two formulas
+    IS the §199A term, so a stored figure equal (to the cent) to `suggestion + §199A` is a
+    figure the old chip wrote. A hand-typed total, or a year whose §199A line is zero, is
+    left alone — absent a positive §199A there is nothing double-counted to begin with.
+
+    Values are assembled through the taxes router's own `_assemble_inputs`, narrowed to the
+    people THIS year's return covers, so the suggestion compared against is exactly the one
+    the page offers. Summing every stored row instead would be wrong for a filing-separately
+    year with a partner's rows on file: their income is off that return, but it would still
+    raise the MAGI the SALT phase-down is judged on, shrink the suggestion, and let a real
+    leftover pass unnoticed. The import is function-local, the way `assistant_context`
+    borrows the routers it reads — a service must not import a router at module scope.
+    """
+    from app.api.taxes import _assemble_inputs, _return_people
+
+    check_id = "sec199a_in_itemized"
+    title = "Itemized deductions exclude the §199A line"
+    statuses = {
+        row.year: row.filing_status for row in (await db.execute(select(TaxYear))).scalars()
+    }
+    people = await load_people(db)
+    rows_by_year: dict[int, list[TaxInput]] = {}
+    for row in (await db.execute(select(TaxInput))).scalars():
+        rows_by_year.setdefault(row.year, []).append(row)
+
+    years: list[int] = []
+    for year in sorted(rows_by_year):
+        status = statuses.get(year, SINGLE)
+        columns = [person.id for person in _return_people(people, status)] or [None]
+        inputs = _assemble_inputs(rows_by_year[year], columns)
+        sec199a = inputs.get(SEC199A_KEY)
+        itemized = inputs.get(ITEMIZED_KEY)
+        if sec199a is None or sec199a <= 0 or itemized is None:
+            continue
+        suggested = derive_suggestions(year, inputs, status)[ITEMIZED_KEY]
+        if abs(itemized - (suggested + sec199a)) <= LEGACY_ITEMIZED_TOLERANCE:
+            years.append(year)
+    if not years:
+        return _ok(check_id, title)
+    plural = "s" if len(years) > 1 else ""
+    return HealthCheckOut(
+        id=check_id,
+        severity="warn",
+        title=f"Itemized deduction for {', '.join(str(y) for y in years)} still includes "
+        f"the §199A line",
+        detail=(
+            f"{', '.join(str(y) for y in years)}: the stored itemized total matches the OLD "
+            "formula, which added the §199A line the engine now deducts on its own — so those "
+            f"dollars are deducted twice and the year{plural} read{'' if plural else 's'} "
+            "under-taxed. The repair rewrites the total to the current suggestion."
+        ),
+        count=len(years),
+        years=years,
+        fix=HealthFixOut(
+            kind="action",
+            action="rewrite_itemized_deduction",
+            label="Rewrite the itemized total",
+        ),
+    )
+
+
 async def run_checks(
     db: AsyncSession, *, now: datetime, environment: str, snapshot_enabled: bool
 ) -> list[HealthCheckOut]:
     # ONE coverage read for the three rules that share its definition.
     coverage = await load_coverage(db)
-    without_spending, without_balances = await check_coverage_gaps(db, today=now.date())
+    # `now` is UTC ON PURPOSE (check_stale_quotes' note) and stays that way for the
+    # AGE comparisons. The coverage window is a CALENDAR question — which months are
+    # complete — so it reads the product clock instead, or the last evening of a month
+    # would close that month's window early in Pacific eyes (audit item 31).
+    without_spending, without_balances = await check_coverage_gaps(db, today=clock.product_today())
     return [
         check_zero_filled_spending(coverage),
         check_spending_gap(coverage),
         check_net_pay_without_spending(coverage),
         without_spending,
         without_balances,
+        await check_sec199a_in_itemized(db),
         await check_stale_quotes(db, now=now),
         await check_identical_snapshot(db),
         await check_backup(db, now=now, environment=environment),

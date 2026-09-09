@@ -29,6 +29,8 @@ const fixture: ChartFixture = {
         hsa_employer_annual: '2000.00',
         hsa_employer_per_dependent: '500.00',
         hsa_dependents: 0,
+        fed_withholding_pct: null,
+        state_withholding_pct: null,
         notes: null,
       },
       gross: '7872.08',

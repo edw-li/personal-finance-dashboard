@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -146,3 +147,7 @@ class SummaryOut(BaseModel):
     # Beside `groups`, never instead of it: the same latest snapshot split the other way.
     # Empty when there are no snapshots. Sums to `net_worth`.
     owner_totals: list[OwnerTotal]
+    # Which grain the two figures above compare (2026-09-09 audit item 23): the client's
+    # tiles say "vs prior month" or "vs prior quarter" from this, and never from their own
+    # idea of what the charts beside them are drawing.
+    period: Literal["month", "quarter"] = "month"

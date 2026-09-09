@@ -48,7 +48,7 @@ async def test_one_value_per_year_per_key(db):
 
 
 async def test_definitions_constant_is_complete():
-    assert len(TAX_INPUT_DEFINITIONS) == 45
+    assert len(TAX_INPUT_DEFINITIONS) == 46
     keys = [d[0] for d in TAX_INPUT_DEFINITIONS]
     assert len(keys) == len(set(keys)), "duplicate keys"
 
@@ -59,7 +59,7 @@ async def test_seed_inserts_definitions(db):
     await seed_tax_definitions(db)
     await db.commit()
     count = (await db.execute(select(func.count(TaxInputDefinition.key)))).scalar_one()
-    assert count == 45
+    assert count == 46
     # payload fidelity, not just count — a transposed tuple in tax_keys.py fits the columns
     row = await db.get(TaxInputDefinition, "gross_paycheck")
     assert (row.label, row.section, row.sort_order, row.is_derived) == (
@@ -72,7 +72,7 @@ async def test_seed_inserts_definitions(db):
     await seed_tax_definitions(db)
     await db.commit()
     count = (await db.execute(select(func.count(TaxInputDefinition.key)))).scalar_one()
-    assert count == 45
+    assert count == 46
 
 
 async def test_tax_input_value_keeps_four_decimal_places(db):
@@ -181,12 +181,12 @@ async def test_per_person_keys_are_defined_and_flagged(db):
 
     defined = {key for key, *_ in TAX_INPUT_DEFINITIONS}
     assert set(PER_PERSON_KEYS) <= defined
-    assert len(PER_PERSON_KEYS) == 19
-    assert len(set(PER_PERSON_KEYS)) == 19
-    # The two tracker-only keys are per-person and stored, but the engine never reads them.
+    assert len(PER_PERSON_KEYS) == 20
+    assert len(set(PER_PERSON_KEYS)) == 20
+    # The three tracker-only keys are per-person and stored, but the engine never reads them.
     from app.services.tax_service import ENGINE_INPUT_KEYS, SUGGESTION_KEYS
 
-    for key in ("w2_fed_withholding", "w2_state_withholding"):
+    for key in ("w2_fed_withholding", "w2_state_withholding", "w2_bonus_withholding"):
         assert key in PER_PERSON_KEYS
         assert key in defined
         assert key not in ENGINE_INPUT_KEYS

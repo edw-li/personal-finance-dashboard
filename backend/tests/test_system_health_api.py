@@ -23,6 +23,7 @@ async def test_health_shape_on_a_bare_database(auth_client):
         "net_pay_without_spending",
         "balances_without_spending",
         "spending_without_balances",
+        "sec199a_in_itemized",
         "stale_quotes",
         "identical_snapshot",
         "backup",

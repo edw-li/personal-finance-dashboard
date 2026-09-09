@@ -13,10 +13,12 @@ from app.models import (
     NetWorthSnapshot,
     SpendingCategory,
 )
+from app.services import clock
 from app.services.assistant_context import (
     CONTEXT_CHAR_CAP,
     MONTHS_WINDOW_TIGHT,
     _decimate,
+    _projection_scenario,
     build_context,
     jsonable,
     preview_sections,
@@ -62,6 +64,60 @@ async def test_spending_focused_month_follows_the_search_param(db):
     await _seed_two_spending_months(db)
     context = await build_context(db, route="/spending", search={"month": "2026-07-01"}, view={})
     assert context["spending"]["movers"][0]["value"] == "2000.00"
+
+
+async def test_spending_focused_month_accepts_the_shells_short_month_grammar(db):
+    """`useScope` writes `month=YYYY-MM` into the URL (src/components/shell/useScope.ts);
+    date.fromisoformat refuses the reduced form, so the builder used to fall through to the
+    latest month and answer about August while the reader was looking at March."""
+    cat = await _seed_two_spending_months(db)
+    db.add(MonthlySpending(month=date(2026, 3, 1), category_id=cat.id, amount=Decimal("1500.00")))
+    db.add(MonthlyCashflow(month=date(2026, 3, 1), net_pay=Decimal("7000.00")))
+    await db.commit()
+    context = await build_context(db, route="/spending", search={"month": "2026-03"}, view={})
+    assert context["spending"]["focused_month"] == "2026-03-01"
+    assert context["spending"]["movers"][0]["value"] == "1500.00"
+
+
+async def test_a_garbled_month_still_falls_back_to_the_latest(db):
+    await _seed_two_spending_months(db)
+    context = await build_context(db, route="/spending", search={"month": "last-tuesday"}, view={})
+    assert context["spending"]["focused_month"] == "2026-08-01"
+
+
+async def _seed_two_snapshots(db):
+    account = Account(name="Checking", slug="checking", group="cash", sort_order=1)
+    db.add(account)
+    await db.flush()
+    for month, balance in ((date(2026, 3, 1), "10.00"), (date(2026, 8, 1), "90.00")):
+        snap = NetWorthSnapshot(month=month)
+        db.add(snap)
+        await db.flush()
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal(balance)))
+    await db.commit()
+    return account
+
+
+async def test_net_worth_builder_follows_the_viewed_month(db):
+    """The ribbon's month is the whole point of the section: the summary, the per-account
+    values and the echoed `viewed_month` all stand on the month the reader clicked."""
+    await _seed_two_snapshots(db)
+    context = await build_context(db, route="/net-worth", search={"month": "2026-03"}, view={})
+    section = context["net_worth"]
+    assert section["viewed_month"] == "2026-03-01"
+    assert section["summary"]["month"] == "2026-03-01"
+    assert section["accounts"][0]["latest_balance"] == "10.00"
+
+
+async def test_net_worth_builder_falls_back_to_the_latest_month(db):
+    """A month with no snapshot would 404 inside net_worth_summary and take the whole
+    section down; the spending builder's rule — fall back to the latest — holds here too."""
+    await _seed_two_snapshots(db)
+    context = await build_context(db, route="/net-worth", search={"month": "2026-05"}, view={})
+    section = context["net_worth"]
+    assert section["viewed_month"] == "2026-08-01"
+    assert section["summary"]["month"] == "2026-08-01"
+    assert section["accounts"][0]["latest_balance"] == "90.00"
 
 
 async def test_net_worth_builder_honors_the_view_owner_and_granularity(db):
@@ -146,7 +202,7 @@ async def test_projection_section_decimates_to_year_grain_keeping_the_last_month
     account = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
     db.add(account)
     await db.flush()
-    snap = NetWorthSnapshot(month=date.today().replace(day=1))
+    snap = NetWorthSnapshot(month=clock.product_today().replace(day=1))
     db.add(snap)
     await db.flush()
     db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal("100000.00")))
@@ -158,6 +214,98 @@ async def test_projection_section_decimates_to_year_grain_keeping_the_last_month
     lengths = {len(section[key]) for key in ("months", "projected", "coast")}
     lengths |= {len(band) for band in (section["bands"] or {}).values()}
     assert lengths == {31}  # t0 plus one point per projected year
+
+
+async def _seed_investable_base(db):
+    account = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(account)
+    await db.flush()
+    snap = NetWorthSnapshot(month=clock.product_today().replace(day=1))
+    db.add(snap)
+    await db.flush()
+    db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal("100000.00")))
+    await db.commit()
+
+
+def test_a_retirement_entry_decodes_to_the_routers_own_parameter():
+    """`retire:<id>:<YYYY-MM>` in the URL is `retire=<id>:<YYYY-MM>` on the wire: the prefix
+    names the entry, the rest is the string _resolve_retirements parses. Dropping the wrong
+    half would silently retire nobody."""
+    scenario, honored = _projection_scenario(["retire:2:2035-06"])
+    assert scenario["retire"] == ["2:2035-06"]
+    assert honored == ["retire:2:2035-06"]
+
+
+def test_a_years_entry_no_int_would_accept_is_dropped_not_raised():
+    """isdigit() admits characters int() refuses; a garbled entry must never become an
+    exception, which the section's fence would report as "section unavailable"."""
+    scenario, honored = _projection_scenario(["years:²", "years:" + "9" * 5000])
+    assert honored == []
+    assert scenario["years"] == 30  # api/projection.DEFAULT_YEARS
+
+
+async def test_projection_section_runs_the_scenario_the_page_is_showing(db):
+    """The Projection page's knobs live in the URL as repeated `whatif=` entries and reach
+    the drawer through useAssistantView. Without them the assistant explained the DERIVED
+    run while the reader was looking at a 20% one."""
+    await _seed_investable_base(db)
+    section = (
+        await build_context(
+            db,
+            route="/projection",
+            search={},
+            view={"whatif": ["annual_return:0.2", "years:10"]},
+        )
+    )["projection"]
+    assert section["annual_return"] == "0.200000"
+    assert section["years"] == 10
+    assert section["scenario_entries"] == ["annual_return:0.2", "years:10"]
+
+
+async def test_projection_section_drops_entries_the_grammar_does_not_name(db):
+    """Unknown keys, unparseable values and a malformed retirement are dropped rather than
+    422ing the section; `scenario_entries` echoes only what actually ran."""
+    await _seed_investable_base(db)
+    section = (
+        await build_context(
+            db,
+            route="/projection",
+            search={},
+            view={
+                "whatif": [
+                    "nonsense:1",
+                    "annual_return:banana",
+                    "volatility:NaN",
+                    "retire:soon",
+                    "years:900",
+                    "inflation:0.01",
+                ]
+            },
+        )
+    )["projection"]
+    assert section["scenario_entries"] == ["inflation:0.01"]
+    assert section["inflation"] == "0.010000"
+    assert section["years"] == 30  # the builder's own horizon, not the 900 that was dropped
+
+
+async def test_projection_section_reads_a_single_whatif_off_the_url(db):
+    """URLSearchParams collapses repeats, so the drawer's `search` bag can only ever carry
+    the LAST `whatif=`; a bare string is decoded like a one-entry list."""
+    await _seed_investable_base(db)
+    section = (
+        await build_context(
+            db, route="/projection", search={"whatif": "annual_return:0.2"}, view={}
+        )
+    )["projection"]
+    assert section["annual_return"] == "0.200000"
+    assert section["scenario_entries"] == ["annual_return:0.2"]
+
+
+async def test_projection_section_with_no_scenario_still_runs_the_derived_projection(db):
+    await _seed_investable_base(db)
+    section = (await build_context(db, route="/projection", search={}, view={}))["projection"]
+    assert section["scenario_entries"] == []
+    assert section["years"] == 30
 
 
 async def test_preview_summarizes_sections_with_row_counts(db):

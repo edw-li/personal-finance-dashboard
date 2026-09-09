@@ -68,7 +68,7 @@ def test_empty_earner_list_is_not_a_bundle():
     assert breakdown.social_security.tax == Decimal("0")
     assert breakdown.disability.tax == Decimal("0")
     # The income chains are untouched: FICA is the only thing earners describe.
-    assert breakdown.federal.agi == Decimal("211776.2")
+    assert breakdown.totals.total_income == Decimal("211776.2")
 
 
 # --------------------------------------------------------------------------------------
@@ -100,9 +100,15 @@ MFJ_HOUSEHOLD = {
     "unq_div_us_treasuries_etf": D("0"),
     "unq_div_state_exempt_pct": D("0"),
     "interest_total": D("2000"),
+    # Zero, so the state chain's treasury-interest exemption (2026-09-09 spec 4b) has
+    # nothing to back out of this reference year: the MFJ figures below stay hand-checkable.
+    "interest_us_treasuries": D("0"),
     "other_income_1099": D("0"),
     "standard_deduction": D("30000"),
     "itemized_deduction": D("0"),
+    # Zero, so §199A's below-the-line deduction (2026-09-09 spec 4h) leaves the MFJ
+    # reference figures hand-checkable.
+    "itemized_sec199a_div": D("0"),
     "state_standard_deduction": D("11000"),
     "state_exemption_credits": D("300"),
     "ltcg_total": D("40000"),
@@ -159,9 +165,12 @@ def test_mfj_reference_year_to_the_cent():
     assert breakdown.warnings == []  # every key present, every table present, rates agree
 
     # Federal: income 250000 + 50000 + 1000 + 2000 = 303000; pre-tax 30000 + 5000 + 1000
-    # + 500 = 36500 -> AGI 266500. Deduction max(30000, 0). TI 236500.
+    # + 500 = 36500 -> ordinary AGI 266500. Deduction max(30000, 0). TI 236500.
     # Tax = 100000x.10 + 136500x.22 = 10000 + 30030.
-    assert breakdown.federal.agi == D("266500")
+    assert breakdown.totals.total_income == D("266500")
+    # The reported federal Base is true AGI (2026-09-09 spec 4f): 266500 + the 45000 of
+    # netted gains = 311500, where it used to read 266500.
+    assert breakdown.federal.agi == D("311500")
     assert breakdown.federal.taxable_income == D("236500")
     assert cents(breakdown.federal.tax) == D("40030.00")
 

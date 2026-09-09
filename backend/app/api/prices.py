@@ -1,5 +1,5 @@
 import time as time_module
-from datetime import date, timedelta
+from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,6 +19,7 @@ from app.schemas.portfolio import (
     RefreshOut,
     RefreshStatusOut,
 )
+from app.services import clock
 from app.services.money import quantize_price, require_reasonable_date
 from app.services.portfolio_calc import fold_transactions
 from app.services.price_service import read_last_refresh, run_refresh, set_manual_price
@@ -116,7 +117,7 @@ async def history(
     db: AsyncSession = Depends(get_db),
 ) -> PriceHistoryOut:
     security = await _security_by_ticker(db, ticker)
-    since = date.today() - timedelta(days=days)
+    since = clock.product_today() - timedelta(days=days)
     rows = (
         await db.execute(
             select(PriceHistory)
@@ -156,7 +157,7 @@ async def sparklines(
         s.id: s
         for s in (await db.execute(select(Security).where(Security.id.in_(held_ids)))).scalars()
     }
-    since = date.today() - timedelta(days=days)
+    since = clock.product_today() - timedelta(days=days)
     rows = (
         await db.execute(
             select(PriceHistory)
@@ -190,8 +191,11 @@ async def put_manual_price(
     price = quantize_price(body.price, "price")
     if price <= 0:
         raise HTTPException(status_code=422, detail="price must be positive")
-    as_of = require_reasonable_date(body.as_of or date.today(), "as_of")
-    if as_of > date.today():
+    # ONE clock read for the default and the future check: two reads could straddle
+    # midnight and reject the very date they just defaulted to.
+    today = clock.product_today()
+    as_of = require_reasonable_date(body.as_of or today, "as_of")
+    if as_of > today:
         raise HTTPException(status_code=422, detail="as_of cannot be in the future")
     await set_manual_price(db, security, price, as_of)
     await db.commit()

@@ -14,10 +14,12 @@ from app.models import (
     Person,
     SpendingCategory,
 )
+from app.services import clock
 from app.services.projection import drop_schedule, project
 
-# The projection anchors on date.today() (the router's one clock read), so the seeds are
-# built RELATIVE to the run's own month — nothing here goes stale with the calendar.
+# The projection anchors on the product clock (the router's one clock read), so the seeds
+# are built RELATIVE to the run's own month — nothing here goes stale with the calendar,
+# and a UTC CI runner on a PT evening still agrees with the route.
 
 
 def month_add(start: date, delta: int) -> date:
@@ -32,7 +34,7 @@ async def _seed_book(db, *, with_history: bool = True) -> date:
     excluded by net_worth_calc's rule): 100,000. With history: trailing spend mean 5,000
     (6,000 and 4,000), trailing savings mean 4,000 (9,000 net pay both months).
     """
-    this_month = date.today().replace(day=1)
+    this_month = clock.product_today().replace(day=1)
     taxable = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
     cash = Account(name="Checking", slug="checking", group="cash", sort_order=2)
     bucket = Account(name="Bucket", slug="bucket", group="taxable", sort_order=3, is_component=True)
@@ -80,7 +82,7 @@ async def _seed_profile(db, person: Person, **overrides) -> PaycheckProfile:
     0 nets 1,000.00 a check, i.e. a monthly_net of exactly 2,000.00 — so the drop the
     endpoint applies is checkable by eye against the 4,000 derived contribution."""
     fields = {
-        "effective_date": date.today() - timedelta(days=30),
+        "effective_date": clock.product_today() - timedelta(days=30),
         "annual_salary": Decimal("24000.00"),
         "pay_periods_per_year": 24,
     }
@@ -634,7 +636,7 @@ async def test_projection_retirement_uses_the_profile_in_force_not_the_newest(au
     await _seed_profile(
         db,
         alex,
-        effective_date=date.today() + timedelta(days=400),
+        effective_date=clock.product_today() + timedelta(days=400),
         annual_salary=Decimal("120000.00"),
     )
     body = (

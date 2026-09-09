@@ -12,10 +12,24 @@ back from the driver as Decimal("0E-9"), which no JS decimal parser reads as a n
 
 from datetime import date
 from decimal import Decimal
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
 
 from app.schemas.espp import Pct9
+
+# `Pct9`'s NULLABLE twin, for the two withholding-split columns: same plain-notation fix
+# (a stored zero comes back from the driver as Decimal("0E-9"), which no JS decimal parser
+# reads as a number), but a null has to stay a null — `format(None, "f")` raises, so the
+# serializer cannot be Pct9's.
+Pct9Opt = Annotated[
+    Decimal | None,
+    PlainSerializer(
+        lambda v: None if v is None else format(v, "f"),
+        return_type=str | None,
+        when_used="json",
+    ),
+]
 
 # The people PK is an int4: an out-of-range id would reach asyncpg as a bare DataError
 # (a 500 on a plain create), so it is fenced at the boundary — api/paycheck.py's IdPath
@@ -54,6 +68,11 @@ class ProfileIn(BaseModel):
     hsa_employer_annual: Decimal = Decimal("0")
     hsa_employer_per_dependent: Decimal = Decimal("0")
     hsa_dependents: int = 0
+    # The all-in rate above, split by jurisdiction (2026-09-09 audit item 3). OPTIONAL and
+    # None by default: absent is not zero — the withholding tracker splits its balance only
+    # when BOTH are entered, and prices neither jurisdiction at 0% when they are not.
+    fed_withholding_pct: Decimal | None = None
+    state_withholding_pct: Decimal | None = None
     notes: str | None = None
 
 
@@ -80,6 +99,11 @@ class ProfileUpdate(BaseModel):
     hsa_employer_annual: Decimal | None = None
     hsa_employer_per_dependent: Decimal | None = None
     hsa_dependents: int | None = None
+    # The one pair besides `notes` whose explicit null really CLEARS (they are nullable
+    # columns): a paystub figure the user no longer stands behind has to be removable, and
+    # the profile form sends the whole row on both verbs.
+    fed_withholding_pct: Decimal | None = None
+    state_withholding_pct: Decimal | None = None
     notes: str | None = None
 
 
@@ -108,6 +132,9 @@ class ProfileOut(BaseModel):
     hsa_employer_annual: Decimal
     hsa_employer_per_dependent: Decimal
     hsa_dependents: int
+    # NULL means "no figure from a paystub", never 0% (2026-09-09 audit item 3).
+    fed_withholding_pct: Pct9Opt
+    state_withholding_pct: Pct9Opt
     # Is THIS the row `_default_profile` would pick for its owner today (spec §2.3)? The
     # Settings summary and the Paycheck page must never disagree about whose policy is live,
     # so the server answers once instead of both clients re-deriving it.
@@ -168,6 +195,21 @@ class PaceItemOut(BaseModel):
     # `annualized`'s own twin (spec §2.6): what is already behind today, against the
     # projected year end beside it. Null on a row nobody walked.
     so_far: Decimal | None
+    # The window's tail and the election that lands on the cap across it (2026-09-09 audit
+    # item 5). The first two ride every walked row — one walk, one answer to "how much year
+    # is left". `to_cap_rate` is the 402(g) row's TOTAL elective rate (traditional + Roth, a
+    # 9 dp fraction) and `to_cap_per_check` is the HSA row's employee amount; each is floored
+    # so the projection built from it lands at or under the cap and the ratio reads 1.0000.
+    # 0 means "no room left", null means the question has no answer — nothing walked, no cap
+    # entered, or no paydays left this year. A client may SUBTRACT its own Roth rate from
+    # `to_cap_rate`; nothing else here is safe to re-derive from a salary.
+    remaining_checks: int | None
+    remaining_gross: Decimal | None
+    # Pct9Opt, not a bare Decimal: a rate quantized to 9 dp is Decimal("0E-9") when there is
+    # no room left, and "0E-9" is a string no JS decimal parser reads — the client's exact
+    # arithmetic THROWS on it, mid-render (the module docstring's warning, earned again).
+    to_cap_rate: Pct9Opt
+    to_cap_per_check: Decimal | None
 
 
 class BreakdownOut(BaseModel):

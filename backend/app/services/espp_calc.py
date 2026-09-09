@@ -2,7 +2,8 @@
 computed columns.
 
 Pure module — no DB, no HTTP, no FastAPI. `today` is a PARAMETER of `lot_metrics`, never
-`date.today()`, so the endpoint owns the clock and the tests stay deterministic.
+read from a clock here, so the endpoint owns the clock (services/clock.py) and the tests
+stay deterministic.
 
 The helper names map to the sheet's functions one for one: `half_up2` is ROUND(x, 2),
 `ceil2` is ROUNDUP(x, 2) (the modeler's purchase price always rounds AWAY from the

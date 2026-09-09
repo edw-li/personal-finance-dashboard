@@ -26,8 +26,9 @@ params and are the one input this module resolves against ANOTHER router's rule:
 is the take-home of the paycheck profile `paycheck._default_profile` says is in force
 today. Absent, the response is the pre-retirement one plus an empty `retirements` echo.
 
-`date.today()` is read HERE and only here (paycheck.py's posture): it anchors the
-starting balance and the month axis; services/projection.py takes no clock.
+The PRODUCT clock (services/clock.py) is read HERE and only here (paycheck.py's
+posture): it anchors the starting balance and the month axis; services/projection.py
+takes no clock.
 """
 
 import re
@@ -56,6 +57,7 @@ from app.schemas.projection import (
     ProjectionOut,
     RetirementOut,
 )
+from app.services import clock
 from app.services.budgets import living_budget_total
 from app.services.limit_check import employer_match
 from app.services.money import quantize_money, quantize_pct
@@ -99,7 +101,12 @@ DEFAULT_CONTRIBUTION_GROWTH = Decimal("0.03")
 CONTRIBUTION_MAX_ABS = Decimal(10) ** 7
 SPEND_MAX_ABS = Decimal(10) ** 9
 
-YearsQuery = Annotated[int, Query(ge=1, le=60)]
+# Named, not inline: assistant_context decodes a `years` entry from the page's URL by
+# calling this router's function DIRECTLY, where FastAPI's Query validation never runs. It
+# fences the horizon against these two, so the sandbox and the assistant cannot drift.
+YEARS_MIN = 1
+YEARS_MAX = 60
+YearsQuery = Annotated[int, Query(ge=YEARS_MIN, le=YEARS_MAX)]
 
 # Repeated, order-free, and STRINGS: "<person_id>:<YYYY-MM>" is one value the user can see
 # in the URL, where two parallel int/date lists could arrive at different lengths. No count
@@ -279,7 +286,7 @@ async def projection(
     retire: RetireQuery = None,
     db: AsyncSession = Depends(get_db),
 ) -> ProjectionOut:
-    today = date.today()  # the ONLY clock read (module docstring)
+    today = clock.product_today()  # the ONLY clock read (module docstring)
     start_month = today.replace(day=1)
 
     # The starting balance and the month it stands on. A missing snapshot is the ESPP
@@ -511,9 +518,9 @@ async def projection(
 
     # The budgets' own annual figure rides beside the derived one (spec §4): a preset the
     # card can offer, never a replacement for what the data derived. The echo keeps THIS
-    # route's clock — `start_month`, from the module's one `date.today()` — not the
-    # calendar ritual's `product_today`, and `budget_month` below says which month was
-    # resolved, so a reader chasing a month-turnover difference has the answer here.
+    # route's clock — `start_month`, from the module's one clock read — and `budget_month`
+    # below says which month was resolved, so a reader chasing a month-turnover
+    # difference has the answer here. One product clock now, so the two agree.
     budget_total = await living_budget_total(db, start_month)
     budget_annual_spend = None if budget_total is None else budget_total * 12
 

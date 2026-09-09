@@ -122,8 +122,8 @@ describe('tax scenario codec', () => {
         {
           section: 'deductions',
           items: [
-            { key: 'hsa_contributions_employer', label: 'HSA Contributions (Employer)', sort_order: 30, is_derived: false, is_per_person: true, person_id: 1, value: '1000.00', suggested: null },
-            { key: 'hsa_contributions_employer', label: 'HSA Contributions (Employer)', sort_order: 30, is_derived: false, is_per_person: true, person_id: 2, value: '500.50', suggested: null },
+            { key: 'hsa_contributions_employer', label: 'HSA Contributions (Employer)', sort_order: 30, is_derived: false, unit: 'money', suggestion_source: null, is_per_person: true, person_id: 1, value: '1000.00', suggested: null },
+            { key: 'hsa_contributions_employer', label: 'HSA Contributions (Employer)', sort_order: 30, is_derived: false, unit: 'money', suggestion_source: null, is_per_person: true, person_id: 2, value: '500.50', suggested: null },
           ],
         },
       ],

@@ -10,13 +10,14 @@ The modeler golden is the Workbook reference chain (sub 170.79 / fmv 171.0 / car
 pushed through the REAL endpoint with the two real periods seeded.
 """
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
 
 from app.models import AppSetting, EsppLot, EsppPeriod, LatestPrice, Security
+from app.services import clock
 
 LOTS = "/api/v1/espp/lots"
 PERIODS = "/api/v1/espp/periods"
@@ -132,7 +133,7 @@ async def test_lots_envelope_carries_the_ticker_quote_and_computed_metrics(
 
 
 async def test_lots_metrics_count_down_from_today(auth_client, priced_ticker):
-    soon = date.today() + timedelta(days=13)
+    soon = clock.product_today() + timedelta(days=13)
     await create_lot(auth_client, qualifying_date=str(soon))
     (row,) = (await auth_client.get(LOTS)).json()["lots"]
     assert row["qualified"] is False
@@ -1006,7 +1007,7 @@ async def test_modeler_year_defaults_to_the_current_year(auth_client, db):
 
     # A future-year-only period: the OLD default (max period_end.year) would pick it,
     # so this is what makes the current-calendar-year assertion discriminating today.
-    future = date.today().year + 1
+    future = clock.product_today().year + 1
     await create_period(
         auth_client,
         label="future H2",
@@ -1017,8 +1018,8 @@ async def test_modeler_year_defaults_to_the_current_year(auth_client, db):
     )
 
     default = (await auth_client.get(MODELER, params=params)).json()
-    assert default["year"] == date.today().year  # not "the latest year with periods"
-    if date.today().year == 2026:
+    assert default["year"] == clock.product_today().year  # not "the latest year with periods"
+    if clock.product_today().year == 2026:
         assert [row["label"] for row in default["periods"]] == ["2026 H1", "2026 H2"]
         assert [row["stored"] for row in default["periods"]] == [True, True]
     else:
@@ -1071,7 +1072,7 @@ async def test_modeler_resolves_subscription_from_the_covering_offering(auth_cli
 async def test_modeler_available_years_composition(auth_client, priced_ticker):
     # No stored periods at all: the chips still have to cover every year the offering
     # buys in, plus the current one and the next.
-    current = date.today().year
+    current = clock.product_today().year
     await auth_client.post(
         OFFERINGS, json={"offering_start": "2023-09-01", "subscription_price": "48.509"}
     )
@@ -1085,7 +1086,7 @@ async def test_modeler_available_years_skips_an_uncovered_off_cycle_start_year(
 ):
     # An off-cycle (hire-month) offering starting after Mar 1 buys nothing until the
     # NEXT year's February — its start year must not get a chip.
-    current = date.today().year
+    current = clock.product_today().year
     await auth_client.post(
         OFFERINGS, json={"offering_start": "2024-06-01", "subscription_price": "100"}
     )

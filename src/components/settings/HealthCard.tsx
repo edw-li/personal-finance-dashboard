@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { ApiError } from '../../api/client'
 import { createSnapshot, fetchHealth, undoBatch } from '../../api/lifecycle'
 import { deleteSpendingMonth } from '../../api/spending'
+import { fetchTaxInputs, putTaxInputsForRepair } from '../../api/taxes'
 import type { HealthCheck } from '../../types/api'
 import { formatMonth } from '../../utils/format'
 import InfoHint from '../InfoHint'
@@ -82,6 +83,60 @@ export default function HealthCard() {
       .finally(() => setBusy(false))
   }
 
+  /**
+   * The §199A repair (taxes spec 4h): rewrite one year's itemized total to the CURRENT
+   * suggestion, which is the same figure without the §199A line the engine now deducts on
+   * its own. The number comes from the server's own suggestion rather than being computed
+   * here — one definition of the itemized formula, and it is already on the payload this
+   * fetch returns. The write is the ordinary inputs PUT, logged as a repair, so the toast
+   * can offer Undo exactly like the zero-month delete above.
+   */
+  const repairItemized = (check: HealthCheck, year: number) => {
+    const key = `${check.id}:${year}`
+    if (armed !== key) {
+      setArmed(key)
+      return
+    }
+    setBusy(true)
+    setError(null)
+    fetchTaxInputs(year)
+      .then((inputs) => {
+        const item = inputs.sections
+          .flatMap((section) => section.items)
+          .find((entry) => entry.key === 'itemized_deduction')
+        if (item?.suggested == null) {
+          // Named, not guessed at: the card writes the server's figure or nothing.
+          setError(`No itemized suggestion for ${year} — open the year and check it.`)
+          return null
+        }
+        return putTaxInputsForRepair(year, { values: { itemized_deduction: item.suggested } })
+      })
+      .then((written) => {
+        if (written === null) return
+        const { batchId } = written
+        toast.success(
+          `Rewrote ${year}'s itemized deduction without the §199A line`,
+          batchId === null
+            ? undefined
+            : {
+                action: {
+                  label: 'Undo',
+                  onAction: () =>
+                    void undoBatch(batchId)
+                      .then(() => {
+                        toast.success(`Undone — ${year}'s itemized total is back`)
+                        load()
+                      })
+                      .catch((err: unknown) => toast.error(message(err, 'Undo failed'))),
+                },
+              },
+        )
+        load()
+      })
+      .catch((err: unknown) => setError(message(err, 'Repair failed.')))
+      .finally(() => setBusy(false))
+  }
+
   const snapshotNow = () => {
     setBusy(true)
     setError(null)
@@ -120,6 +175,22 @@ export default function HealthCard() {
         )
       })
     }
+    if (fix.action === 'rewrite_itemized_deduction') {
+      return check.years.map((year) => {
+        const key = `${check.id}:${year}`
+        return (
+          <button
+            key={year}
+            type="button"
+            className={`button${armed === key ? ' danger-button' : ''}`}
+            disabled={busy}
+            onClick={() => repairItemized(check, year)}
+          >
+            {armed === key ? `Rewrite ${year}?` : `Rewrite ${year}`}
+          </button>
+        )
+      })
+    }
     if (fix.action === 'snapshot_now') {
       return (
         <button type="button" className="button" disabled={busy} onClick={snapshotNow}>
@@ -134,7 +205,7 @@ export default function HealthCard() {
     <section className="card span-6" id="health" role="region" aria-label="Data health">
       <h2 className="eyebrow">
         Data health
-        <InfoHint text="Checks the server runs on every visit: zero-filled spending months, balances or spending entered without the other, stale quotes, two identical months, the backup marker and the stored snapshots. Each names its fix; the zero-month repair is a logged, undoable delete." />
+        <InfoHint text="Checks the server runs on every visit: zero-filled spending months, balances or spending entered without the other, an itemized total that still carries the §199A line, stale quotes, two identical months, the backup marker and the stored snapshots. Each names its fix; the two repairs are logged and undoable." />
       </h2>
       <FeedBanner error={error} retry={load} retryLabel="Retry the health checks" />
       {checks === null && error === null && <p className="empty-note">Loading…</p>}

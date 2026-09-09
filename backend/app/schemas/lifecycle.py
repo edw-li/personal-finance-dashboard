@@ -126,7 +126,8 @@ class HealthFixOut(BaseModel):
     kind: Literal["link", "action"]
     label: str
     to: str | None = None
-    # 'delete_spending_month' (per month in the check's `months`) | 'snapshot_now'.
+    # 'delete_spending_month' (per month in the check's `months`) | 'snapshot_now' |
+    # 'rewrite_itemized_deduction' (per year in the check's `years`).
     action: str | None = None
 
 
@@ -137,6 +138,10 @@ class HealthCheckOut(BaseModel):
     detail: str
     count: int = 0
     months: list[date] = Field(default_factory=list)
+    # The TAX YEARS a check is about, where a check is about years rather than
+    # months. Same role `months` plays for the spending rules: the card runs its
+    # action once per entry, and the sentence names them in the same order.
+    years: list[int] = Field(default_factory=list)
     fix: HealthFixOut | None = None
 
 

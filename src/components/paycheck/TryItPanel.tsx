@@ -22,8 +22,10 @@ import Segmented from '../shell/Segmented'
 import PacePanel from './PacePanel'
 import {
   ESPP_MAX_PCT,
+  HSA_LIMIT_KEY,
   HSA_TIERS,
   KNOB_MAX,
+  LIMIT_401K_ELECTIVE,
   MAX_PAY_PERIODS,
   MIN_PAY_PERIODS,
   acceptKnob,
@@ -191,15 +193,31 @@ export default function TryItPanel({
   // The practical cap off the SAME row the limit came from, so a chip can never mix one
   // row's statutory cap with another's practical one.
   const softLimitFor = (key: string): string | null => paceRow(key)?.soft_limit ?? null
+  // The payday walk rides EVERY row it fed, so the first row carrying it answers for the
+  // whole strip — a cap nobody has entered must not hide how much year is left (a null here
+  // is "the server did not walk this payload", which the chips word differently).
+  const walkedRow = () => {
+    for (const rows of [result?.pace.scenario, result?.pace.baseline, breakdown.pace]) {
+      const row = rows?.find((r) => r.remaining_checks !== null && r.remaining_checks !== undefined)
+      if (row !== undefined) return row
+    }
+    return null
+  }
   const coverage = (scenario.hsa_coverage as HsaCoverage | undefined) ?? profile.hsa_coverage
+  const hsaKey = coverage === 'none' ? null : HSA_LIMIT_KEY[coverage]
   const presets = paycheckPresets(
     {
       salary: scenario.annual_salary ?? profile.annual_salary,
-      periods: Number(scenario.pay_periods_per_year ?? profile.pay_periods_per_year),
       coverage,
       esppPct: scenario.espp_pct ?? profile.espp_pct,
+      rothPct: scenario.roth_401k_pct ?? profile.roth_401k_pct,
       limitFor,
       softLimitFor,
+      // Off the same rows the limits come from, so a chip and the meter under it were
+      // always talking about one payload (2026-09-09 audit item 5).
+      toCapRate: paceRow(LIMIT_401K_ELECTIVE)?.to_cap_rate ?? null,
+      toCapPerCheck: hsaKey === null ? null : (paceRow(hsaKey)?.to_cap_per_check ?? null),
+      remainingChecks: walkedRow()?.remaining_checks ?? null,
     },
     (patch) => sandbox.set(patch, { immediate: true }),
   )

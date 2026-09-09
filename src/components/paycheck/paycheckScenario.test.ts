@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { PaycheckProfileOut } from '../../types/api'
-import type { PaycheckScenario } from './paycheckScenario'
+import type { PaycheckScenario, PresetContext } from './paycheckScenario'
 import {
   applySeedFor,
   decodePaycheck,
@@ -33,6 +33,8 @@ const profile: PaycheckProfileOut = {
   hsa_employer_annual: '2000.00',
   hsa_employer_per_dependent: '500.00',
   hsa_dependents: 0,
+  fed_withholding_pct: null,
+  state_withholding_pct: null,
   notes: null,
 }
 
@@ -128,45 +130,63 @@ describe('paycheck scenario codec', () => {
     expect(labelForPaycheck({ annual_salary: '200000' })).toBe('Salary $200,000.00')
     expect(labelForPaycheck({ hsa_coverage: 'family', pay_periods_per_year: '26' })).toBe('HSA family · 26 periods')
   })
+  // --- the preset chips (2026-09-09 audit item 5) ---
+  // The two cap chips APPLY the server's own target — the rate/amount that lands exactly on
+  // the cap given the checks this year has already paid. `limit / salary` and
+  // `limit / periods` asked the checks that are LEFT to carry a whole year, which is what
+  // made the pace strip beside the chip read "over" the moment you clicked it.
 
-  it('sizes presets from the limits by exact division, and disables the ones without a datum', () => {
-    const apply = vi.fn()
-    const limits: Record<string, string | null> = {
-      limit_401k_elective: '24500.00',
-      limit_hsa_self: '4300.00',
-      limit_hsa_family: null,
-      limit_espp_423: '25000.00',
+  const LIMITS: Record<string, string | null> = {
+    limit_401k_elective: '24500.00',
+    limit_hsa_self: '4300.00',
+    limit_hsa_family: null,
+    limit_espp_423: '25000.00',
+  }
+
+  function ctx(over: Partial<PresetContext> = {}): PresetContext {
+    return {
+      salary: '100000.00',
+      coverage: 'self',
+      esppPct: '0.110000000',
+      rothPct: '0',
+      limitFor: (key: string) => LIMITS[key] ?? null,
+      softLimitFor: () => null,
+      toCapRate: '0.129033021',
+      toCapPerCheck: '179.16',
+      remainingChecks: 8,
+      ...over,
     }
-    const presets = paycheckPresets(
-      { salary: '100000.00', periods: 24, coverage: 'self', esppPct: '0.110000000', limitFor: (key) => limits[key] ?? null, softLimitFor: () => null },
-      apply,
-    )
+  }
+
+  it('applies the server’s cap targets, and disables the chips with no datum behind them', () => {
+    const apply = vi.fn()
+    const presets = paycheckPresets(ctx(), apply)
     expect(presets.map((p) => [p.id, p.disabled ?? false])).toEqual([
       ['max401k', false],
       ['maxhsa', false],
       ['maxespp', false],
       ['stopespp', false],
     ])
+    // Verbatim: the rate is the server's, floored there so the projection lands ON the cap.
     presets[0].apply()
-    expect(apply).toHaveBeenLastCalledWith({ trad_401k_pct: '0.245' })
+    expect(apply).toHaveBeenLastCalledWith({ trad_401k_pct: '0.129033021' })
     presets[1].apply()
-    expect(apply).toHaveBeenLastCalledWith({ hsa_per_check: '179.16' }) // 4300 / 24, floored to cents
+    expect(apply).toHaveBeenLastCalledWith({ hsa_per_check: '179.16' })
+    // The ESPP chips are unchanged: that row is measured over a purchase window, not a
+    // calendar year of paydays, so the §423 share of salary is still the right question.
     presets[2].apply()
-    expect(apply).toHaveBeenLastCalledWith({ espp_pct: '0.15' }) // the lesser of 15 % and 25000 / 100000
+    expect(apply).toHaveBeenLastCalledWith({ espp_pct: '0.15' })
     presets[3].apply()
     expect(apply).toHaveBeenLastCalledWith({ espp_pct: '0' })
 
-    const family = paycheckPresets(
-      { salary: '100000.00', periods: 24, coverage: 'family', esppPct: '0', limitFor: (key) => limits[key] ?? null, softLimitFor: () => null },
-      apply,
-    )
+    const family = paycheckPresets(ctx({ coverage: 'family', esppPct: '0', toCapPerCheck: null }), apply)
     expect(family[1].disabled).toBe(true)
     expect(family[1].title).toBe("Enter this year's HSA limit in Settings › Limits")
     expect(family[3].disabled).toBe(true)
     expect(family[3].title).toBe('ESPP is already 0%')
 
     const none = paycheckPresets(
-      { salary: '100000.00', periods: 24, coverage: 'none', esppPct: '0.1', limitFor: () => null, softLimitFor: () => null },
+      ctx({ coverage: 'none', esppPct: '0.1', limitFor: () => null, toCapRate: null, toCapPerCheck: null }),
       apply,
     )
     expect(none[0].title).toBe("Enter this year's 401(k) limit in Settings › Limits")
@@ -176,43 +196,77 @@ describe('paycheck scenario codec', () => {
     )
   })
 
+  it('subtracts the scenario’s Roth from the 401(k) target, because 402(g) counts both', () => {
+    const apply = vi.fn()
+    // The server's 12.9033021 % is the TOTAL elective rate; 5 % of it is already Roth.
+    paycheckPresets(ctx({ rothPct: '0.050000000' }), apply)[0].apply()
+    expect(apply).toHaveBeenLastCalledWith({ trad_401k_pct: '0.079033021' })
+  })
+
+  it('refuses when the Roth percentage alone already fills the cap', () => {
+    const preset = paycheckPresets(ctx({ rothPct: '0.200000000' }), vi.fn())[0]
+    expect(preset.disabled).toBe(true)
+    expect(preset.title).toBe('Your Roth percentage alone reaches the cap')
+  })
+
+  it('says “already at the cap” rather than aiming at nothing', () => {
+    const apply = vi.fn()
+    // The WIRE's spelling of no room left: Pct9Opt renders the 9 dp zero in plain notation,
+    // and `decimal.ts` throws on anything else (a bare "0E-9" would take the page down).
+    const presets = paycheckPresets(ctx({ toCapRate: '0.000000000', toCapPerCheck: '0.00' }), apply)
+    expect(presets[0].title).toBe('Already at the cap')
+    expect(presets[1].title).toBe('Already at the cap')
+    presets[0].apply()
+    presets[1].apply()
+    expect(apply).not.toHaveBeenCalled()
+  })
+
+  it('tells a year with no paydays left from a payload nobody walked', () => {
+    const spent = paycheckPresets(ctx({ toCapRate: null, toCapPerCheck: null, remainingChecks: 0 }), vi.fn())
+    expect(spent[0].title).toBe('No paychecks left this year')
+    expect(spent[1].title).toBe('No paychecks left this year')
+    // A warm pre-batch snapshot carries neither figure and no walk at all — the fresh
+    // payload is still in flight, so the chip must not claim the year is over.
+    const cold = paycheckPresets(ctx({ toCapRate: null, toCapPerCheck: null, remainingChecks: null }), vi.fn())
+    expect(cold[0].title).toBe("This year's paydays are still loading")
+    expect(cold[1].title).toBe("This year's paydays are still loading")
+  })
+
+  it('refuses a target past the end of the track it moves, and names the figure', () => {
+    const apply = vi.fn()
+    // A mid-year start against a full cap: 62 % of the remaining gross is past the 50 %
+    // slider, and $612.50 a check is past the $500 one. The chip has to land ON its track.
+    const presets = paycheckPresets(ctx({ toCapRate: '0.620000000', toCapPerCheck: '612.50' }), apply)
+    expect(presets[0].disabled).toBe(true)
+    expect(presets[0].title).toBe('Needs 62.0% — above the slider')
+    expect(presets[1].disabled).toBe(true)
+    expect(presets[1].title).toBe('Needs $612.50 a check — above the slider')
+    presets[0].apply()
+    presets[1].apply()
+    expect(apply).not.toHaveBeenCalled()
+    // The ESPP chip still clamps rather than refusing: its ceiling IS the §423 15 %.
+    paycheckPresets(ctx({ salary: '20000', esppPct: '0.2', limitFor: () => '24500' }), apply)[2].apply()
+    expect(apply).toHaveBeenLastCalledWith({ espp_pct: '0.15' })
+  })
+
   it('sizes Max ESPP from the PRACTICAL cap when the row carries one', () => {
     const apply = vi.fn()
     // 21,250 is the most contribution dollars the §423 cap buys at the plan discount. Sizing
     // from the statutory 25,000 would build a scenario the very strip beside it grades
     // "over" — a chip that walks straight into the warning it exists to avoid.
     const presets = paycheckPresets(
-      {
+      ctx({
         salary: '250000.00',
-        periods: 24,
         coverage: 'none',
         esppPct: '0.11',
-        limitFor: (key) => (key === LIMIT_ESPP_423 ? '25000.00' : null),
-        softLimitFor: (key) => (key === LIMIT_ESPP_423 ? '21250.00' : null),
-      },
+        limitFor: (key: string) => (key === LIMIT_ESPP_423 ? '25000.00' : null),
+        softLimitFor: (key: string) => (key === LIMIT_ESPP_423 ? '21250.00' : null),
+      }),
       apply,
     )
     presets[2].apply()
     // 21250 / 250000 = 0.085, well inside the 15 % track — the §423 figure would have been 0.1.
     expect(apply).toHaveBeenLastCalledWith({ espp_pct: '0.085' })
-  })
-
-  it('caps a preset at the knob’s own track, not just at the server bound', () => {
-    const apply = vi.fn()
-    // 24500 / 20000 = 1.225: past the server's 1 AND past the slider's 50 %. The chip has
-    // to land on the track it moves, or the thumb sits off the end and the box refuses it.
-    const presets = paycheckPresets(
-      { salary: '20000', periods: 1, coverage: 'self', esppPct: '0.2', limitFor: () => '24500', softLimitFor: () => null },
-      apply,
-    )
-    presets[0].apply()
-    expect(apply).toHaveBeenLastCalledWith({ trad_401k_pct: '0.5' })
-    // 24500 for a single yearly check is far past the $500 HSA track.
-    presets[1].apply()
-    expect(apply).toHaveBeenLastCalledWith({ hsa_per_check: '500' })
-    // And the ESPP chip keeps landing on the §423 ceiling.
-    presets[2].apply()
-    expect(apply).toHaveBeenLastCalledWith({ espp_pct: '0.15' })
   })
 
   it('builds the Apply seed: the profile with the scenario applied, percents shifted, dated next month', () => {
@@ -238,6 +292,10 @@ describe('paycheck scenario codec', () => {
       hsa_employer_annual: '2000.00',
       hsa_employer_per_dependent: '500.00',
       hsa_dependents: '0',
+      // Same rule for the withholding split: no knob moves it, and an unentered rate seeds
+      // a BLANK box rather than a "0" the user never typed.
+      fed_withholding_pct: '',
+      state_withholding_pct: '',
       notes: '',
     })
   })

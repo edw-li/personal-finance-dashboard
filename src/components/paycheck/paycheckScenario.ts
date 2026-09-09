@@ -2,11 +2,11 @@
 // no React, no fetching. Values are the SERVER'S wire vocabulary throughout (fractions for
 // the five pcts, money strings, the coverage tier as stored); the percent shift lives in
 // SliderBox's box and in the Apply seed, which speaks the profile form's percent grammar.
-import { compareDecimals, divideDecimals } from '../../sandbox/decimal'
+import { compareDecimals, divideDecimals, subtractDecimals } from '../../sandbox/decimal'
 import type { Preset } from '../../sandbox/PresetRow'
 import { formatEntry, isWireDecimal, lastWins, parseEntry, parseKnob } from '../../sandbox/scenarioUrl'
 import type { HsaCoverage, PaycheckPreviewOverrides, PaycheckProfileOut } from '../../types/api'
-import { formatCurrency } from '../../utils/format'
+import { formatCurrency, formatPct } from '../../utils/format'
 import { addMonths } from '../../utils/months'
 import { shiftPoint } from '../../utils/percent'
 
@@ -159,29 +159,104 @@ export function labelForPaycheck(scenario: PaycheckScenario): string {
 }
 
 export interface PresetContext {
-  /** The SCENARIO's salary and periods — presets are sized against what is being modelled. */
+  /** The SCENARIO's salary — the ESPP chip, the one still sized here, is a share of it. */
   salary: string
-  periods: number
   coverage: HsaCoverage
   esppPct: string
+  /** The SCENARIO's Roth percentage (the profile's, where the scenario leaves it alone). The
+   *  server's 401(k) target is the TOTAL elective rate, because 402(g) counts traditional and
+   *  Roth together; the chip moves only the traditional half, so it subtracts this. That
+   *  subtraction — two rates, with no limit and no salary anywhere near it — is the ONE piece
+   *  of arithmetic this module still does to a cap (2026-09-09 audit item 5). */
+  rothPct: string
   /** A limit from the pace rows already in the payload; null when nothing is entered. */
   limitFor: (key: string) => string | null
   /** The PRACTICAL cap off the same row (spec §1.7) — today only the ESPP row carries one.
    *  Required rather than optional so no panel can quietly size a chip from the statutory
    *  cap and walk into the "over" the practical one exists to prevent. */
   softLimitFor: (key: string) => string | null
+  /** The server's own answers to "what election lands me exactly on the cap", off the 401(k)
+   *  and HSA pace rows: a total elective RATE and an employee per-check AMOUNT, each measured
+   *  against the checks the payday walk has already counted this year and floored so the
+   *  projection lands at or under the cap. `limit / salary` and `limit / periods` asked the
+   *  checks that are LEFT to carry a whole year, which is why the strip beside the chip read
+   *  "over"; these are required for the same reason `softLimitFor` is. 0 = no room left. */
+  toCapRate: string | null
+  toCapPerCheck: string | null
+  /** How many checks those targets are spread over — null on a payload the server did not
+   *  walk, which is how a disabled chip tells "the year is spent" from "still loading". */
+  remainingChecks: number | null
 }
 
 const LIMITS_HINT = 'in Settings › Limits'
+const AT_THE_CAP = 'Already at the cap'
+const ROTH_ALONE = 'Your Roth percentage alone reaches the cap'
+const YEAR_SPENT = 'No paychecks left this year'
+const NOT_WALKED = "This year's paydays are still loading"
 
-/** Max 401(k) · Max HSA · Max ESPP · Stop ESPP (spec §9). Exact division, floored, so an
- *  annualized figure never exceeds the cap it was sized from; the server still validates. */
+/** Why a chip that cannot aim at `target` is disabled, or undefined when it can.
+ *
+ * ONE ladder for both cap chips: no answer (and which kind of no answer), no room left, or a
+ * figure past the end of the track the chip moves. A chip that parked a thumb off its own
+ * slider would be refused by the box anyway — better to say so before the click. */
+function refusal(
+  target: string | null,
+  max: string,
+  remainingChecks: number | null,
+  above: (target: string) => string,
+): string | undefined {
+  if (target === null) return remainingChecks === 0 ? YEAR_SPENT : NOT_WALKED
+  if (compareDecimals(target, '0') <= 0) return AT_THE_CAP
+  if (compareDecimals(target, max) > 0) return above(target)
+  return undefined
+}
+
+/** Max 401(k) · Max HSA · Max ESPP · Stop ESPP (spec §9).
+ *
+ *  The two cap chips APPLY the server's figure (2026-09-09 audit item 5): it knows what the
+ *  year has already counted, which is the thing a client dividing a limit by a salary can
+ *  never know. Max ESPP is still sized here — its row is measured over a PURCHASE window
+ *  against a practical cap, not a calendar year of paydays, so the division is the right
+ *  question there. Exact, floored, so a figure never exceeds the cap it came from; the
+ *  server still validates. */
 export function paycheckPresets(
   ctx: PresetContext,
   apply: (patch: PaycheckScenario) => void,
 ): Preset[] {
   const elective = ctx.limitFor(LIMIT_401K_ELECTIVE)
   const hsaLimit = ctx.coverage === 'none' ? null : ctx.limitFor(HSA_LIMIT_KEY[ctx.coverage])
+  // The traditional half of the server's total — what this chip actually moves. Never below
+  // zero: a Roth that already fills the cap asks for no traditional at all, and says so.
+  const floorAtZero = (value: string) => (compareDecimals(value, '0') < 0 ? '0' : value)
+  const tradTarget =
+    ctx.toCapRate === null ? null : floorAtZero(subtractDecimals(ctx.toCapRate, ctx.rothPct))
+  const tradRefusal =
+    elective === null
+      ? `Enter this year's 401(k) limit ${LIMITS_HINT}`
+      : // The cap has room, and the Roth percentage is eating all of it: a different
+        // sentence from "already at the cap", because the fix is a different knob.
+        ctx.toCapRate !== null &&
+          compareDecimals(ctx.toCapRate, '0') > 0 &&
+          tradTarget !== null &&
+          compareDecimals(tradTarget, '0') === 0
+        ? ROTH_ALONE
+        : refusal(
+            tradTarget,
+            KNOB_MAX.trad_401k_pct,
+            ctx.remainingChecks,
+            (target) => `Needs ${formatPct(target, { signed: false })} — above the slider`,
+          )
+  const hsaRefusal =
+    ctx.coverage === 'none'
+      ? 'Choose Self or Family HSA coverage first'
+      : hsaLimit === null
+        ? `Enter this year's HSA limit ${LIMITS_HINT}`
+        : refusal(
+            ctx.toCapPerCheck,
+            KNOB_MAX.hsa_per_check,
+            ctx.remainingChecks,
+            (target) => `Needs ${formatCurrency(target)} a check — above the slider`,
+          )
   const espp = ctx.limitFor(LIMIT_ESPP_423)
   const softEspp = ctx.softLimitFor(LIMIT_ESPP_423)
   // Two ceilings, both real: the knob's own track and the server's [0, 1]. A limit larger
@@ -194,28 +269,20 @@ export function paycheckPresets(
     {
       id: 'max401k',
       label: 'Max 401(k)',
-      disabled: elective === null,
-      title: elective === null ? `Enter this year's 401(k) limit ${LIMITS_HINT}` : undefined,
+      disabled: tradRefusal !== undefined,
+      title: tradRefusal,
       apply: () => {
-        if (elective !== null) {
-          apply({ trad_401k_pct: clamp(fraction(elective), KNOB_MAX.trad_401k_pct) })
-        }
+        if (tradRefusal === undefined && tradTarget !== null) apply({ trad_401k_pct: tradTarget })
       },
     },
     {
       id: 'maxhsa',
       label: 'Max HSA',
-      disabled: hsaLimit === null,
-      title:
-        ctx.coverage === 'none'
-          ? 'Choose Self or Family HSA coverage first'
-          : hsaLimit === null
-            ? `Enter this year's HSA limit ${LIMITS_HINT}`
-            : undefined,
+      disabled: hsaRefusal !== undefined,
+      title: hsaRefusal,
       apply: () => {
-        if (hsaLimit !== null) {
-          const perCheck = divideDecimals(hsaLimit, String(ctx.periods), 2) ?? '0'
-          apply({ hsa_per_check: clamp(perCheck, KNOB_MAX.hsa_per_check) })
+        if (hsaRefusal === undefined && ctx.toCapPerCheck !== null) {
+          apply({ hsa_per_check: ctx.toCapPerCheck })
         }
       },
     },
@@ -274,6 +341,11 @@ export interface ApplySeed {
   hsa_employer_annual: string
   hsa_employer_per_dependent: string
   hsa_dependents: string
+  // Same rule for the withholding split (2026-09-09 audit item 3): no knob moves it, so it
+  // rides the profile through. A stored NULL seeds a BLANK box — the form's spelling of
+  // "no figure from a paystub" — never a "0".
+  fed_withholding_pct: string
+  state_withholding_pct: string
   notes: string
 }
 
@@ -302,6 +374,10 @@ export function applySeedFor(
     hsa_employer_annual: profile.hsa_employer_annual,
     hsa_employer_per_dependent: profile.hsa_employer_per_dependent,
     hsa_dependents: String(profile.hsa_dependents),
+    fed_withholding_pct:
+      profile.fed_withholding_pct === null ? '' : shiftPoint(profile.fed_withholding_pct, 2),
+    state_withholding_pct:
+      profile.state_withholding_pct === null ? '' : shiftPoint(profile.state_withholding_pct, 2),
     notes: '',
   }
 }

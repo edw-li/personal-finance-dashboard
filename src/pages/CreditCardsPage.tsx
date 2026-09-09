@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ApiError } from '../api/client'
+import { describeError } from '../api/client'
 import {
   fetchCreditCards,
   fetchRewardCategories,
@@ -27,6 +27,7 @@ import {
   limitMonths,
 } from '../components/creditcards/creditLineChartOptions'
 import {
+  enteredMonthCounts,
   householdAdvantage,
   optimize,
   ownerMatches,
@@ -150,7 +151,7 @@ export default function CreditCardsPage() {
         setAccounts(accountsData)
       })
       .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Failed to load credit cards')
+        setError(describeError(err, 'credit cards'))
       })
       .finally(() => setLoading(false))
   }, [])
@@ -193,6 +194,12 @@ export default function CreditCardsPage() {
 
   const suggested = useMemo(
     () => (matrix ? suggestedAnnualSpend(matrix) : new Map<number, number>()),
+    [matrix],
+  )
+  // The same window's ENTERED months per category — the denominator the weight caption
+  // names, so the panel never has to guess what a figure was divided by (audit item 6).
+  const enteredMonths = useMemo(
+    () => (matrix ? enteredMonthCounts(matrix) : new Map<number, number>()),
     [matrix],
   )
   // ONE weight rule for the page (shared suggestions split across the rows mapped to
@@ -497,6 +504,7 @@ export default function CreditCardsPage() {
                   cards={cards ?? []}
                   spendingCategories={spendingCategories}
                   suggested={suggested}
+                  enteredMonths={enteredMonths}
                   onChanged={load}
                 />
               )}
