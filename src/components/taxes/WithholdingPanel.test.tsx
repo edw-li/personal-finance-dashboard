@@ -1,8 +1,14 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react'
+import type { ReactElement } from 'react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { WithholdingOut } from '../../types/api'
 import WithholdingPanel from './WithholdingPanel'
+
+// Every case mounts inside a router: the nudge under the unsplit card links to the Paycheck
+// page, and a <Link> outside a Router throws.
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: MemoryRouter })
 
 // The two calls this card makes: its own feed, and (D4) the inputs PUT the Apply chip fires.
 // JURISDICTIONS and the other taxes helpers stay real — nothing here touches them, but the
@@ -60,6 +66,8 @@ function fixture(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
     partner_salary: null,
     additional_medicare_gap: '0.00',
     brackets_missing_for_status: [],
+    // The ordinary state: nobody has typed the two paystub rates yet.
+    jurisdictions: null,
     safe_harbor: {
       prior_year: 2025,
       prior_total_tax: '110000.00',
@@ -74,6 +82,65 @@ function fixture(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
     warnings: [],
     ...overrides,
   }
+}
+
+/**
+ * The same payload with the split available — the server's own figures from
+ * test_withholding_api's `split_world`: a federal refund, a California shortfall, and a
+ * payroll leg that is informational only (no remedy, no harbor).
+ */
+function withSplit(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
+  return fixture({
+    jurisdictions: {
+      federal: {
+        liability: '60000.00',
+        withheld_ytd: '31570.00',
+        withheld_projected: '63580.00',
+        balance: '-3580.00',
+        // The formula is max(balance, 0) over the checks left, so a refund reads 0.00 —
+        // and the card must not turn that into an instruction.
+        remedy_per_check: '0.00',
+        safe_harbor: {
+          prior_year: 2025,
+          prior_total_tax: '40000.00',
+          prior_agi: '400000.00',
+          multiplier: '1.10',
+          threshold: '44000.00',
+          prior_filing_status: 'single',
+          current_year_threshold: '54000.00',
+          effective_threshold: '44000.00',
+          met: true,
+        },
+      },
+      state: {
+        liability: '30000.00',
+        withheld_ytd: '11286.00',
+        withheld_projected: '22159.50',
+        balance: '7840.50',
+        remedy_per_check: '603.12',
+        safe_harbor: {
+          prior_year: null,
+          prior_total_tax: null,
+          prior_agi: null,
+          multiplier: null,
+          threshold: null,
+          prior_filing_status: null,
+          current_year_threshold: '27000.00',
+          effective_threshold: '27000.00',
+          met: false,
+        },
+      },
+      payroll: {
+        liability: '25753.20',
+        withheld_ytd: '8489.00',
+        withheld_projected: '11143.50',
+        balance: '14609.70',
+        remedy_per_check: null,
+        safe_harbor: null,
+      },
+    },
+    ...overrides,
+  })
 }
 
 /** The married payload the partner cases share. */
@@ -134,6 +201,123 @@ describe('WithholdingPanel', () => {
     // The withholding tile is a LEVEL with its progress under it: no glyph, no colour.
     expect(deltaOf('Projected withholding').className).toContain('stat-delta-neutral')
     expect(deltaOf('Projected withholding').textContent).not.toContain('▲')
+  })
+
+  it('nudges toward the paystub rates while the split is unavailable', async () => {
+    render(<WithholdingPanel year={2026} />)
+    expect(
+      await screen.findByText(
+        /Enter the federal and state rates from a paystub on your/,
+      ),
+    ).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'paycheck profile' }).getAttribute('href')).toBe(
+      '/paycheck',
+    )
+    // The combined card is exactly what it was.
+    expect(tile('Projected balance').textContent).toContain('$18,870.20')
+    expect(screen.queryByText('Federal balance')).toBeNull()
+  })
+
+  it('renders a balance tile per jurisdiction when the rates are entered', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(withSplit())
+    render(<WithholdingPanel year={2026} />)
+
+    // A federal refund and a California shortfall are two facts, each with its own words
+    // and its own tone — which is the whole point of the split.
+    expect(await screen.findByText('Federal balance')).toBeTruthy()
+    expect(tile('Federal balance').textContent).toContain('$3,580.00')
+    expect(deltaOf('Federal balance').textContent).toContain('refund expected')
+    expect(deltaOf('Federal balance').className).toContain('stat-delta-positive')
+    expect(tile('California balance').textContent).toContain('$7,840.50')
+    expect(deltaOf('California balance').textContent).toContain('to pay at filing')
+    expect(deltaOf('California balance').className).toContain('stat-delta-negative')
+    // Payroll is informational: what will be withheld against what is owed, no balance
+    // words and nothing to act on.
+    expect(tile('Payroll taxes').textContent).toContain('$11,143.50')
+    expect(deltaOf('Payroll taxes').textContent).toContain('$25,753.20 owed')
+    // The three combined tiles give way to them; the combined figures keep one line.
+    expect(screen.queryByText('Projected balance')).toBeNull()
+    expect(
+      screen.getByText(
+        'Combined: $123,456.78 tax · $104,586.58 projected withholding · $18,870.20 to pay at filing',
+      ),
+    ).toBeTruthy()
+    // ...and the nudge is gone, because there is nothing left to do about it.
+    expect(screen.queryByText(/Enter the federal and state rates/)).toBeNull()
+  })
+
+  it('aims each remedy at the form that jurisdiction is actually fixed on', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(withSplit())
+    render(<WithholdingPanel year={2026} />)
+
+    expect(
+      await screen.findByText('Add $603.12 per remaining paycheck on DE 4.'),
+    ).toBeTruthy()
+    // The federal leg is a refund (remedy 0.00) and payroll has no form at all, so neither
+    // asks for anything — and the old combined "W-4 line 4c" line is gone with them.
+    expect(screen.queryByText(/W-4 line 4c/)).toBeNull()
+    expect(screen.queryByText(/to close the gap/)).toBeNull()
+  })
+
+  it('gives each jurisdiction its own safe-harbor sentence instead of the combined one', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(withSplit())
+    render(<WithholdingPanel year={2026} />)
+
+    expect(
+      await screen.findByText(
+        "Federal safe harbor: the lesser of 110% of 2025's total tax ($44,000.00) and 90% of " +
+          "this year's projected liability ($54,000.00) is $44,000.00 — the prior-year leg " +
+          'binds; covered by projected withholding',
+      ),
+    ).toBeTruthy()
+    // California here has only the current-year leg (a first year, or the $1M rule), so the
+    // survivor's own figure IS the threshold and is named once.
+    expect(
+      screen.getByText(
+        "California safe harbor: 90% of this year's projected liability is $27,000.00 — NOT " +
+          'covered by projected withholding',
+      ),
+    ).toBeTruthy()
+    // The approximate all-in sentence is superseded, not stacked on top of them.
+    expect(screen.queryByText(/Safe harbor \(approx\.\)/)).toBeNull()
+  })
+
+  it('shows the split with no figures when the engine refused the year', async () => {
+    const refused = withSplit({ liability_total: null, balance_projected: null })
+    refused.jurisdictions = {
+      federal: {
+        liability: null,
+        withheld_ytd: '31570.00',
+        withheld_projected: '63580.00',
+        balance: null,
+        remedy_per_check: null,
+        safe_harbor: null,
+      },
+      state: {
+        liability: null,
+        withheld_ytd: '11286.00',
+        withheld_projected: '22159.50',
+        balance: null,
+        remedy_per_check: null,
+        safe_harbor: null,
+      },
+      payroll: {
+        liability: null,
+        withheld_ytd: '8489.00',
+        withheld_projected: '11143.50',
+        balance: null,
+        remedy_per_check: null,
+        safe_harbor: null,
+      },
+    }
+    vi.mocked(fetchWithholding).mockResolvedValue(refused)
+    render(<WithholdingPanel year={2026} />)
+
+    expect(await screen.findByText('Federal balance')).toBeTruthy()
+    // Nothing is known, so the tile says nothing rather than a confident "dead even".
+    expect(tile('Federal balance').textContent).toContain('—')
+    expect(deltaOf('Federal balance').textContent).toContain('no liability to compare')
+    expect(screen.queryByText(/per remaining paycheck/)).toBeNull()
   })
 
   it('reads a POSITIVE balance as money to pay, in words and in the bad tone', async () => {

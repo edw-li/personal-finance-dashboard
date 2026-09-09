@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { ApiError } from '../../api/client'
 import { fetchWithholding, putTaxInputs } from '../../api/taxes'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
-import type { TaxInputsOut, WithholdingOut } from '../../types/api'
+import type {
+  TaxInputsOut,
+  WithholdingJurisdiction,
+  WithholdingOut,
+  WithholdingSafeHarbor,
+} from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
 import type { Tone } from '../../utils/tone'
 // This component's own sheet, like its siblings: the app-wide vocabulary
@@ -32,7 +38,10 @@ import './taxes.css'
 // only narrates which leg that figure came from, so it can never contradict the badge.
 // The 90% literal matches the server's SAFE_HARBOR_CURRENT_MULTIPLIER (the
 // supplemental-rates sentence below sets the precedent for statutory literals in copy).
-function safeHarborSentence(harbor: NonNullable<WithholdingOut['safe_harbor']>): string {
+// `lead` is what the sentence is ABOUT: the combined figure is approximate by construction
+// (it compares all-in totals), while a per-jurisdiction one is the statutory rule itself —
+// so the two must not be introduced with the same words.
+function safeHarborSentence(harbor: WithholdingSafeHarbor, lead = 'Safe harbor (approx.)'): string {
   const prior =
     harbor.prior_year === null || harbor.multiplier === null || harbor.threshold === null
       ? null
@@ -51,7 +60,7 @@ function safeHarborSentence(harbor: NonNullable<WithholdingOut['safe_harbor']>):
         ? 'current-year'
         : 'prior-year'
     return (
-      `Safe harbor (approx.): the lesser of ${prior} (${formatCurrency(harbor.threshold)}) ` +
+      `${lead}: the lesser of ${prior} (${formatCurrency(harbor.threshold)}) ` +
       `and ${current} (${formatCurrency(harbor.current_year_threshold)}) is ${effective} — ` +
       `the ${binding} leg binds; ${met}`
     )
@@ -62,9 +71,71 @@ function safeHarborSentence(harbor: NonNullable<WithholdingOut['safe_harbor']>):
     // The contract sends null instead of a both-legs-missing object — armor for a
     // violated contract: name the figure without a leg rather than interpolating the
     // word "null" into user-facing copy (final review, minor 1).
-    return `Safe harbor (approx.): ${effective} — ${met}`
+    return `${lead}: ${effective} — ${met}`
   }
-  return `Safe harbor (approx.): ${prior ?? current} is ${effective} — ${met}`
+  return `${lead}: ${prior ?? current} is ${effective} — ${met}`
+}
+
+/**
+ * The words, tone and glyph a balance wears — the card's one piece of client arithmetic
+ * (the display-only sign/abs on a server figure, utils/format.ts's Number() rule), read
+ * once for the combined balance and once per jurisdiction so the tiles cannot disagree
+ * about what "positive" means.
+ *
+ * NULL is its own state: the server sends null for the liability AND the balance when it
+ * REFUSED to price the year, and Number(null) is 0 — which would render as a confident
+ * "dead even" beside a $0.00 balance.
+ */
+function balanceFace(raw: string | null): {
+  amount: number | null
+  tone: Tone
+  direction: 'up' | 'down' | undefined
+  words: string
+} {
+  const amount = raw === null ? null : Number(raw)
+  return {
+    amount,
+    // Owing is the BAD direction, so the tone is the inverse of the number's sign — while
+    // the glyph follows the NUMBER (a balance that grew points up however unwelcome it is),
+    // which is exactly the case StatTile's explicit `direction` exists for.
+    tone: amount === null || amount === 0 ? 'neutral' : amount > 0 ? 'negative' : 'positive',
+    direction: amount === null || amount === 0 ? undefined : amount > 0 ? 'up' : 'down',
+    words:
+      amount === null
+        ? 'no liability to compare'
+        : amount > 0
+          ? 'to pay at filing'
+          : amount < 0
+            ? 'refund expected'
+            : 'dead even',
+  }
+}
+
+/** One jurisdiction's balance tile plus its remedy line — the same shape twice, and the
+ *  `form` is the only thing that differs, because a federal shortfall and a California one
+ *  are fixed on two different pieces of paper. */
+function JurisdictionTile({
+  label,
+  leg,
+  form,
+  hint,
+}: {
+  label: string
+  leg: WithholdingJurisdiction
+  form: string
+  hint: string
+}) {
+  const face = balanceFace(leg.balance)
+  return (
+    <StatTile
+      label={label}
+      value={formatCurrency(face.amount === null ? null : Math.abs(face.amount))}
+      delta={face.words}
+      tone={face.tone}
+      direction={face.direction}
+      hint={`${hint} Fix a shortfall on ${form}.`}
+    />
+  )
 }
 
 export default function WithholdingPanel({
@@ -139,25 +210,11 @@ export default function WithholdingPanel({
   // no bracket table for its filing status), and Number(null) is 0 — which this card used to
   // render as a confident "dead even" beside a $0.00 balance. Nothing is known there, so the
   // tile says nothing and the missing-brackets call to action below explains why.
-  const balance =
-    withholding === null || withholding.balance_projected === null
-      ? null
-      : Number(withholding.balance_projected)
-  // Owing is the BAD direction, so the tone is the inverse of the number's sign — and the
-  // glyph follows the NUMBER (a balance that grew points up however unwelcome it is), which is
-  // exactly the case StatTile's explicit `direction` exists for.
-  const balanceTone: Tone =
-    balance === null || balance === 0 ? 'neutral' : balance > 0 ? 'negative' : 'positive'
-  const balanceDirection =
-    balance === null || balance === 0 ? undefined : balance > 0 ? 'up' : 'down'
-  const balanceWords =
-    balance === null
-      ? 'no liability to compare'
-      : balance > 0
-        ? 'to pay at filing'
-        : balance < 0
-          ? 'refund expected'
-          : 'dead even'
+  const combined = balanceFace(withholding === null ? null : withholding.balance_projected)
+  const balance = combined.amount
+  // The split, when the profile carries both paystub rates. Null is the ordinary state —
+  // nobody has typed the two rates yet — and it is what the nudge below the card is for.
+  const split = withholding === null ? null : withholding.jurisdictions
 
   // D4 remedy: a positive balance split evenly over the checks still to come. Rides the
   // same null rule as the tile — no liability, no remedy — and says nothing once the
@@ -166,6 +223,15 @@ export default function WithholdingPanel({
     withholding === null ? 0 : withholding.checks_total - withholding.checks_elapsed
   const perCheck =
     balance !== null && balance > 0 && remainingChecks > 0 ? balance / remainingChecks : null
+  // Under a split the remedies are the SERVER's own per-jurisdiction figures (money math
+  // lives on the server), and the combined division above is not one of them: two forms,
+  // two numbers, and their sum is not what either form should carry.
+  const remedy = (leg: WithholdingJurisdiction, form: string) =>
+    leg.remedy_per_check === null || Number(leg.remedy_per_check) <= 0 ? null : (
+      <p className="hint withholding-remedy" key={form}>
+        {`Add ${formatCurrency(leg.remedy_per_check)} per remaining paycheck on ${form}.`}
+      </p>
+    )
 
   // D4 Apply: income_projected ALONE is the full-year vest base — the backend sums past
   // vests INTO it (withholding_calc.py: income_projected = income_ytd + future), so the
@@ -236,29 +302,59 @@ export default function WithholdingPanel({
         // Dimmed while a reload is in flight over figures that are still on screen — the same
         // treatment the page gives its own panels.
         <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-          <div className="kpi-row">
-            <StatTile
-              label="Projected tax"
-              value={formatCurrency(withholding.liability_total)}
-              hint="The tax engine&apos;s total on this year&apos;s stored inputs — keep them current as the year moves."
-            />
-            <StatTile
-              label="Projected withholding"
-              value={formatCurrency(withholding.total.projected)}
-              delta={`${formatCurrency(withholding.total.ytd)} so far`}
-              // A level with its own progress under it, not a movement: no glyph, no colour.
-              tone="neutral"
-              hint="Salary checks at your all-in withholding % plus RSU vests at 22% federal + 10.23% CA plus their FICA."
-            />
-            <StatTile
-              label="Projected balance"
-              value={formatCurrency(balance === null ? null : Math.abs(balance))}
-              delta={balanceWords}
-              tone={balanceTone}
-              direction={balanceDirection}
-              hint="Liability minus projected withholding — positive means withholding falls short."
-            />
-          </div>
+          {/* With the split there is no "one balance" to lead with: a federal refund and a
+              California shortfall are two facts, and the combined figure below them is the
+              summary, not the headline. Without it, the three tiles the card has always had. */}
+          {split === null ? (
+            <div className="kpi-row">
+              <StatTile
+                label="Projected tax"
+                value={formatCurrency(withholding.liability_total)}
+                hint="The tax engine&apos;s total on this year&apos;s stored inputs — keep them current as the year moves."
+              />
+              <StatTile
+                label="Projected withholding"
+                value={formatCurrency(withholding.total.projected)}
+                delta={`${formatCurrency(withholding.total.ytd)} so far`}
+                // A level with its own progress under it, not a movement: no glyph, no colour.
+                tone="neutral"
+                hint="Salary checks at your all-in withholding % plus RSU vests at 22% federal + 10.23% CA plus their FICA."
+              />
+              <StatTile
+                label="Projected balance"
+                value={formatCurrency(balance === null ? null : Math.abs(balance))}
+                delta={combined.words}
+                tone={combined.tone}
+                direction={combined.direction}
+                hint="Liability minus projected withholding — positive means withholding falls short."
+              />
+            </div>
+          ) : (
+            <div className="kpi-row">
+              <JurisdictionTile
+                label="Federal balance"
+                leg={split.federal}
+                form="W-4 line 4c"
+                hint="Federal income tax — including capital gains and the NIIT — minus what will be withheld for it."
+              />
+              <JurisdictionTile
+                label="California balance"
+                leg={split.state}
+                form="DE 4"
+                hint="California income tax minus what will be withheld for it."
+              />
+              {/* Informational, and shaped differently on purpose: payroll tax is withheld
+                  by an employer at statutory rates, so there is no balance to act on and no
+                  form to act on it with — only whether the two figures look like each other. */}
+              <StatTile
+                label="Payroll taxes"
+                value={formatCurrency(split.payroll.withheld_projected)}
+                delta={`${formatCurrency(split.payroll.liability)} owed`}
+                tone="neutral"
+                hint="Medicare, Social Security and CA SDI, withheld by payroll at statutory rates — informational: there is no form to change."
+              />
+            </div>
+          )}
 
           <p className="drill-hint">
             {`${formatCurrency(withholding.total.ytd)} withheld so far · ${
@@ -268,11 +364,37 @@ export default function WithholdingPanel({
             )}`}
           </p>
 
+          {/* The combined figures keep a line of their own under a split: they are what the
+              calendar prices its estimated payments with, and what the year as a whole
+              comes to. */}
+          {split !== null && (
+            <p className="drill-hint">
+              {`Combined: ${formatCurrency(withholding.liability_total)} tax · ${formatCurrency(
+                withholding.total.projected,
+              )} projected withholding · ${formatCurrency(
+                balance === null ? null : Math.abs(balance),
+              )} ${combined.words}`}
+            </p>
+          )}
+
           {/* The one actionable line on the card: the shortfall as a per-check number, which
-              is the shape W-4 line 4(c) actually takes. */}
-          {perCheck !== null && (
-            <p className="hint withholding-remedy">
-              {`Add ${formatCurrency(perCheck)} per remaining paycheck (W-4 line 4c) to close the gap.`}
+              is the shape W-4 line 4(c) actually takes. Under a split there are two of them,
+              each aimed at the form that jurisdiction is actually fixed on. */}
+          {split === null
+            ? perCheck !== null && (
+                <p className="hint withholding-remedy">
+                  {`Add ${formatCurrency(perCheck)} per remaining paycheck (W-4 line 4c) to close the gap.`}
+                </p>
+              )
+            : [remedy(split.federal, 'W-4 line 4c'), remedy(split.state, 'DE 4')]}
+
+          {/* The nudge that turns one balance into three. Only when the split is missing —
+              it is a call to action, and there is nothing to act on once it is done. */}
+          {split === null && (
+            <p className="hint">
+              Enter the federal and state rates from a paystub on your{' '}
+              <Link to="/paycheck">paycheck profile</Link> to split this balance by
+              jurisdiction.
             </p>
           )}
 
@@ -375,10 +497,27 @@ export default function WithholdingPanel({
               the SERVER'S — 110% only above the IRC 6654(d)(1)(C) prior-year AGI gate, 100%
               at or below it — never a literal here, or a low-AGI year reads as an arithmetic
               error next to a threshold that equals the figure beside it. */}
-          {withholding.safe_harbor !== null && (
+          {split === null && withholding.safe_harbor !== null && (
             <p className="hint">
               {safeHarborSentence(withholding.safe_harbor)}
               <InfoHint text="Real safe harbor is per-jurisdiction; this compares all-in totals — approximate by construction. The statutory harbor is the LESSER of last year's 100/110% figure and 90% of this year's liability." />
+            </p>
+          )}
+
+          {/* The real thing, once the split makes it computable: two harbors against two
+              liabilities, which is how the statute is actually written. The combined
+              sentence above is suppressed rather than shown alongside them — it exists to
+              approximate exactly what these two say properly. */}
+          {split !== null && split.federal.safe_harbor !== null && (
+            <p className="hint">
+              {safeHarborSentence(split.federal.safe_harbor, 'Federal safe harbor')}
+              <InfoHint text="IRC 6654: the LESSER of 100/110% of last year's federal tax and 90% of this year's. Withhold at least that much and the underpayment penalty does not apply, however large the April bill is." />
+            </p>
+          )}
+          {split !== null && split.state.safe_harbor !== null && (
+            <p className="hint">
+              {safeHarborSentence(split.state.safe_harbor, 'California safe harbor')}
+              <InfoHint text="R&TC 19136, the federal rule with one extra clause: at $1,000,000 of California AGI the prior-year leg is gone and only 90% of this year's tax will do." />
             </p>
           )}
 
