@@ -544,7 +544,7 @@ it('keeps the live spending footer in sync while entering amounts', async () => 
   // Same lesson as the balances footer: select the totals bar by its label, not by role.
   const footer = screen.getByRole('status', { name: /live totals/i })
   expect(within(footer).getByText('$250.00')).toBeDefined()
-  expect(within(footer).getByText(/savings rate \(cash\): 75\.0%/i)).toBeDefined()
+  expect(within(footer).getByText(/savings rate — cash: 75\.0%/i)).toBeDefined()
 })
 
 it('clears a previously saved net pay when the box is blanked', async () => {
