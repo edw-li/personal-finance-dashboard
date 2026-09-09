@@ -169,11 +169,26 @@ export default function SummaryPanel({
               <p className="tax-brackets-missing-list">
                 {missing.map(jurisdictionLabel).join(', ')}
               </p>
-              <p>
-                Open <strong>Bracket tables</strong> below, pick the{' '}
-                {FILING_STATUS_LABELS[filingStatus]} tab, and clone {summary.year}&apos;s
-                single-filer tables — then edit the thresholds that move with filing status.
-              </p>
+              {/* The way out differs by status. A married year has the single-filer
+                  tables sitting right there, so the editor's clone is the answer; a SINGLE
+                  year has nothing to clone from and is refusing because it is the year
+                  being lived in (2026-09-09 spec 4g) — telling it to clone its own tables
+                  would be nonsense. */}
+              {filingStatus === 'single' ? (
+                <p>
+                  Open <strong>Bracket tables</strong> below and enter {summary.year}&apos;s
+                  rates — the IRS and the Franchise Tax Board publish them each autumn. A
+                  settled year that was imported without them still computes; this one is
+                  the year you are living in, so a zero here would be a wrong answer rather
+                  than a gap.
+                </p>
+              ) : (
+                <p>
+                  Open <strong>Bracket tables</strong> below, pick the{' '}
+                  {FILING_STATUS_LABELS[filingStatus]} tab, and clone {summary.year}&apos;s
+                  single-filer tables — then edit the thresholds that move with filing status.
+                </p>
+              )}
             </div>
           </div>
         )}

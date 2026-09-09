@@ -1773,6 +1773,24 @@ describe('filing status (2026-08-26 design §6)', () => {
     expect(screen.queryByText('By jurisdiction')).toBeNull()
   })
 
+  it('offers a single year the rates, not a clone of its own tables', async () => {
+    // 4g (2026-09-09): a single year the user is LIVING IN refuses when its core tables
+    // are missing, and it has nothing to clone from - the married copy would read "clone
+    // 2026's single-filer tables" at a single-filer year.
+    vi.mocked(fetchTaxYears).mockResolvedValue([{ ...year2024, filing_status: 'single' }])
+    vi.mocked(fetchTaxSummary).mockResolvedValue(
+      missingSummaryFor(2024, ['federal', 'state', 'capital_gains']),
+    )
+    renderPage()
+
+    expect(await screen.findByText('No Single bracket tables for 2024')).toBeTruthy()
+    expect(screen.getByText(/the IRS and the Franchise Tax Board publish them/)).toBeTruthy()
+    expect(screen.queryByText(/clone/i)).toBeNull()
+    // Same refusal shape as a married year: em-dashes, no waterfall, no jurisdiction table.
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4)
+    expect(screen.queryByText('By jurisdiction')).toBeNull()
+  })
+
   it('draws the waterfall as usual when the flag list came back empty', async () => {
     const complete = summaryFor(2024)
     complete.brackets_missing_for_status = []

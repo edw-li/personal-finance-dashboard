@@ -203,9 +203,12 @@ class EngineFeed:
 
     @property
     def computable(self) -> bool:
-        """'single' always computes (the grandfathered path every stored year uses); a
-        married status refuses rather than walk a single filer's thresholds."""
-        return self.filing_status == SINGLE or not self.brackets_missing_for_status
+        """One rule for every status: a year with a reported missing table refuses.
+
+        WHICH tables count is `_missing_for_status`' business — a married year needs all
+        six, and a single year is judged by the calendar (2026-09-09 spec 4g).
+        """
+        return not self.brackets_missing_for_status
 
     def warning(self) -> str:
         return BRACKETS_MISSING_WARNING.format(
@@ -314,12 +317,43 @@ async def _engine_tables(
     return tables
 
 
-def _missing_for_status(tables: dict[str, list[Bracket]], filing_status: str) -> list[str]:
-    """Jurisdictions with no table under this status, in tax_keys order. Always empty for
-    'single' — see EngineFeed.computable."""
-    if filing_status == SINGLE:
+CORE_JURISDICTIONS = ("federal", "state", "capital_gains")
+
+
+def _current_tax_year() -> int:
+    """This calendar year, by the app's one clock.
+
+    `product_today` is the scheduler's zone-aware day, which every other dated decision in
+    this app keeps time by; there is no `services.clock`. THE only place a tax year is
+    compared against "now", so a test can move the boundary by patching this name.
+    """
+    return product_today().year
+
+
+def _missing_for_status(
+    tables: dict[str, list[Bracket]], filing_status: str, year: int
+) -> list[str]:
+    """Jurisdictions with no table under this status, in tax_keys order — the list that
+    makes a year refuse to compute (EngineFeed.computable).
+
+    A married status needs all six: the single-filer tables are right there and walking a
+    couple's income over them would produce a confident, wrong number.
+
+    'single' used to return [] unconditionally, so a single year NEVER refused (spec 4g).
+    That is right for imported history — a settled year whose payroll table was never
+    typed in still has real, checked figures — and wrong for the year being lived in: a
+    brand-new 2026 with no federal table reported a federal tax of 0.00 with a straight
+    face, next to a warning in the muted list. So a single year BEFORE this calendar year
+    is grandfathered, and the current or a future one is judged on the three CORE income
+    tables. Missing only a payroll table there still computes: that jurisdiction reports 0
+    with its own named warning, which is a gap the user can see rather than a wrong total.
+    """
+    missing = [name for name in JURISDICTIONS if not tables.get(name)]
+    if filing_status != SINGLE:
+        return missing
+    if year < _current_tax_year():
         return []
-    return [name for name in JURISDICTIONS if not tables.get(name)]
+    return missing if any(name in CORE_JURISDICTIONS for name in missing) else []
 
 
 async def _engine_feed(
@@ -340,7 +374,7 @@ async def _engine_feed(
         inputs=_assemble_inputs(rows, columns),
         earners=_assemble_earners(rows, columns),
         tables=tables,
-        brackets_missing_for_status=_missing_for_status(tables, filing_status),
+        brackets_missing_for_status=_missing_for_status(tables, filing_status, year),
         rows=rows,
     )
 

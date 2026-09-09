@@ -15,6 +15,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import func, select, text
 
+from app.api import taxes as taxes_api
 from app.models import (
     EsppLot,
     LatestPrice,
@@ -702,10 +703,14 @@ async def test_summary_warns_on_stored_folded_niit_rates(auth_client, definition
 
 async def test_summary_never_serializes_a_signed_zero(auth_client, definitions):
     """Exemption credits with no tax to offset drive state tax to -0.001, which quantizes
-    to Decimal("-0.00") — "-0.00" on the wire unless the serializer collapses the sign."""
-    await put_inputs(auth_client, 2033, {"state_exemption_credits": "0.001"})
+    to Decimal("-0.00") — "-0.00" on the wire unless the serializer collapses the sign.
 
-    body = (await auth_client.get(f"{YEARS}/2033/summary")).json()
+    On a SETTLED year (was 2033): a table-less single year in the future refuses to compute
+    at all since 2026-09-09 (spec 4g), and this test needs the numbers.
+    """
+    await put_inputs(auth_client, 2023, {"state_exemption_credits": "0.001"})
+
+    body = (await auth_client.get(f"{YEARS}/2023/summary")).json()
     assert body["state"]["tax"] == "0.00"
     assert body["totals"]["total_tax"] == "0.00"
     assert body["totals"]["take_home"] == "0.00"
@@ -1289,15 +1294,73 @@ async def test_single_summary_shape_is_unchanged(auth_client, definitions):
     assert body["totals"]["total_tax"] == "72824.61"
 
 
-async def test_single_year_with_no_brackets_still_computes(auth_client, definitions):
-    """The grandfathered path: 'single' NEVER gates. A partial single-filer year has
-    always computed with per-jurisdiction warnings, and stored history depends on it."""
+async def test_settled_single_year_with_no_brackets_still_computes(auth_client, definitions):
+    """The grandfathered half of 4g: a single year BEFORE this calendar year computes.
+
+    Imported history carries real, checked figures for years whose payroll table was never
+    typed in, and the per-jurisdiction warnings are how that gap is reported. (This test
+    used to run on 2033 and assert that 'single' NEVER gates — see its sibling below.)
+    """
+    await put_inputs(auth_client, 2020, {"latest_w2_income": "1000"})
+
+    body = (await auth_client.get(f"{YEARS}/2020/summary")).json()
+    assert body["brackets_missing_for_status"] == []
+    assert body["totals"]["total_tax"] == "0.00"
+    assert JURISDICTION_WARN_MISSING.format(j="federal", year=2020) in body["warnings"]
+
+
+async def test_current_or_future_single_year_without_core_tables_refuses(auth_client, definitions):
+    """GOLDEN MOVED (2026-09-09 spec 4g). `test_single_year_with_no_brackets_still_computes`
+    asserted that a single 2033 with no tables computed a total tax of "0.00" with a muted
+    warning; a year the user is living in reported a federal tax of zero with a straight
+    face. It now takes the same refusal path a married year does: no sections, the
+    call-to-action warning, and the tiles read "—".
+    """
     await put_inputs(auth_client, 2033, {"latest_w2_income": "1000"})
 
     body = (await auth_client.get(f"{YEARS}/2033/summary")).json()
+    assert body["brackets_missing_for_status"] == list(JURISDICTIONS)
+    for section in ("federal", "state", "capital_gains", "totals"):
+        assert body[section] is None, section
+    assert body["warnings"] == [
+        "2033 is filed as single and has no single bracket table for: "
+        "federal, state, medicare, social_security, disability, capital_gains"
+    ]
+
+
+async def test_future_single_year_missing_only_a_payroll_table_still_computes(
+    auth_client, definitions
+):
+    """The three CORE income tables are what a refusal is judged on. A missing payroll
+    table reports 0 for that jurisdiction with its own named warning — a gap the reader can
+    see, rather than a wrong total hidden behind an em-dash."""
+    await put_inputs(auth_client, 2033, inputs_payload(2026))
+    tables = dict(brackets_payload(2026)["jurisdictions"])
+    del tables["disability"]
+    await put_brackets(auth_client, 2033, tables)
+
+    body = (await auth_client.get(f"{YEARS}/2033/summary")).json()
     assert body["brackets_missing_for_status"] == []
-    assert body["totals"]["total_tax"] == "0.00"
-    assert JURISDICTION_WARN_MISSING.format(j="federal", year=2033) in body["warnings"]
+    assert body["disability"]["tax"] == "0.00"
+    assert JURISDICTION_WARN_MISSING.format(j="disability", year=2033) in body["warnings"]
+
+
+async def test_the_single_grandfather_boundary_is_this_calendar_year(
+    auth_client, definitions, monkeypatch
+):
+    """One clock, one boundary: the year BEFORE the current one is grandfathered and the
+    current one is not. Patched rather than waited for — `_current_tax_year` is the only
+    place a tax year meets "now"."""
+    monkeypatch.setattr(taxes_api, "_current_tax_year", lambda: 2030)
+    await put_inputs(auth_client, 2029, {"latest_w2_income": "1000"})
+    await put_inputs(auth_client, 2030, {"latest_w2_income": "1000"})
+
+    settled = (await auth_client.get(f"{YEARS}/2029/summary")).json()
+    assert settled["brackets_missing_for_status"] == []
+    assert settled["totals"]["total_tax"] == "0.00"
+    current = (await auth_client.get(f"{YEARS}/2030/summary")).json()
+    assert current["brackets_missing_for_status"] == list(JURISDICTIONS)
+    assert current["totals"] is None
 
 
 async def test_married_year_without_its_tables_refuses_to_compute(auth_client, definitions):
