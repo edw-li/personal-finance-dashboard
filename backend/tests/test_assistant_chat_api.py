@@ -1252,6 +1252,23 @@ async def test_the_view_bag_accepts_a_repeated_url_params_list(auth_client):
     assert r.status_code == 200
 
 
+async def test_an_oversized_whatif_list_is_refused_like_every_other_cap(auth_client):
+    """The list value is capped exactly like the bag around it (the transcript cap's rule):
+    a scenario is a handful of knobs, and anything longer is a client bug or an attempt to
+    pad the upstream prompt."""
+    r = await auth_client.post(
+        PREVIEW_URL,
+        json={
+            "context": {
+                "route": "/projection",
+                "search": {},
+                "view": {"whatif": ["annual_return:0.2"] * 41},
+            }
+        },
+    )
+    assert r.status_code == 422
+
+
 async def test_tool_result_carries_a_sandbox_link_for_a_what_if(monkeypatch, db):
     """spec §12: the tool_result frame gains `link` when the tool answered with a sandbox_url,
     so the drawer can render "Open 2026 in What-if →" under the chip -- the year included,

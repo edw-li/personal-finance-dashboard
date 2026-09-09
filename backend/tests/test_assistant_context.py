@@ -18,6 +18,7 @@ from app.services.assistant_context import (
     CONTEXT_CHAR_CAP,
     MONTHS_WINDOW_TIGHT,
     _decimate,
+    _projection_scenario,
     build_context,
     jsonable,
     preview_sections,
@@ -224,6 +225,23 @@ async def _seed_investable_base(db):
     await db.flush()
     db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal("100000.00")))
     await db.commit()
+
+
+def test_a_retirement_entry_decodes_to_the_routers_own_parameter():
+    """`retire:<id>:<YYYY-MM>` in the URL is `retire=<id>:<YYYY-MM>` on the wire: the prefix
+    names the entry, the rest is the string _resolve_retirements parses. Dropping the wrong
+    half would silently retire nobody."""
+    scenario, honored = _projection_scenario(["retire:2:2035-06"])
+    assert scenario["retire"] == ["2:2035-06"]
+    assert honored == ["retire:2:2035-06"]
+
+
+def test_a_years_entry_no_int_would_accept_is_dropped_not_raised():
+    """isdigit() admits characters int() refuses; a garbled entry must never become an
+    exception, which the section's fence would report as "section unavailable"."""
+    scenario, honored = _projection_scenario(["years:²", "years:" + "9" * 5000])
+    assert honored == []
+    assert scenario["years"] == 30  # api/projection.DEFAULT_YEARS
 
 
 async def test_projection_section_runs_the_scenario_the_page_is_showing(db):

@@ -30,9 +30,6 @@ CONTEXT_CHAR_CAP = 50_000
 MONTHS_WINDOW = 24
 MONTHS_WINDOW_TIGHT = 12
 UP_NEXT_DAYS = 60
-# The projection horizon this section reads, matching api/projection.DEFAULT_YEARS. Named
-# because a `years` entry in the page's scenario replaces it.
-PROJECTION_YEARS = 30
 # The seven Decimal knobs `projection()` takes. `years` is an int and is handled beside
 # them; the vocabulary itself is the page's (src/components/projection/projectionScenario.ts
 # KNOBS) and the router's — this list only says which of them survive a URL.
@@ -478,7 +475,7 @@ def _projection_scenario(entries: list[str]) -> tuple[dict[str, Any], list[str]]
     the vocabulary, a value no parser reads, a retirement that fails the router's own
     RETIRE_PATTERN. Those are dropped rather than raised: a stale link must not blank the
     section. Last mention of a knob wins, like a repeated query param."""
-    from app.api.projection import RETIRE_PATTERN
+    from app.api.projection import DEFAULT_YEARS, RETIRE_PATTERN, YEARS_MAX, YEARS_MIN
 
     knobs: dict[str, Any] = {}
     retire: list[str] = []
@@ -494,11 +491,17 @@ def _projection_scenario(entries: list[str]) -> tuple[dict[str, Any], list[str]]
                 honored[entry] = entry
             continue
         if key == "years":
-            # YearsQuery's ge/le is FastAPI's, and FastAPI never runs on a direct call —
-            # so the horizon is fenced here or nowhere.
-            if value.isdigit() and 1 <= int(value) <= 60:
-                knobs["years"] = int(value)
-                honored[key] = entry
+            # YearsQuery's ge/le is FastAPI's, and FastAPI never runs on a direct call — so
+            # the horizon is fenced here, against the router's own numbers.
+            #
+            # isdecimal(), NOT isdigit(): "²" is a digit that int() refuses, and the
+            # length fence keeps int() clear of CPython's 4300-digit conversion limit, which
+            # refuses too. Everything in this loop must DROP a garbled entry, never raise
+            # one — a raised one would blank the whole section.
+            if value.isdecimal() and len(value) <= len(str(YEARS_MAX)):
+                if YEARS_MIN <= int(value) <= YEARS_MAX:
+                    knobs["years"] = int(value)
+                    honored[key] = entry
             continue
         if key not in PROJECTION_KNOBS:
             continue
@@ -512,6 +515,8 @@ def _projection_scenario(entries: list[str]) -> tuple[dict[str, Any], list[str]]
             continue
         knobs[key] = parsed
         honored[key] = entry
+    # The horizon is the one knob with a default: absent, the section reads the router's own.
+    knobs.setdefault("years", DEFAULT_YEARS)
     return {**knobs, "retire": retire or None}, list(honored.values())
 
 
@@ -527,7 +532,7 @@ async def _projection(db: AsyncSession, search: dict, view: dict) -> dict:
             monthly_contribution=scenario.get("monthly_contribution"),
             annual_spend=scenario.get("annual_spend"),
             swr=scenario.get("swr"),
-            years=scenario.get("years", PROJECTION_YEARS),
+            years=scenario["years"],
             volatility=scenario.get("volatility"),
             inflation=scenario.get("inflation"),
             contribution_growth=scenario.get("contribution_growth"),
