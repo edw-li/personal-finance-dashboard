@@ -270,6 +270,14 @@ def _harbor_facts(
     )
 
 
+def _prior_note(note: str, prior_facts: TaxFacts | None) -> str:
+    """A current-year note qualified by what the PRIOR year can still price. "dates only"
+    is a lie standing beside a Jan 15 chip carrying money, so the note names it."""
+    if prior_facts is None or prior_facts.effective_threshold is None:
+        return note
+    return f"{note}; Jan 15 is priced from {prior_facts.year}"
+
+
 async def _tax_facts(
     db: AsyncSession, window: Window, today: date
 ) -> tuple[dict[int, TaxFacts], SourceHealthOut]:
@@ -317,15 +325,13 @@ async def _tax_facts(
     except HTTPException:
         # No current year: the shortfall split is unknowable, the filing balance is not.
         facts = TaxFacts(today.year, None, None, None, prior_balance)
-        return facts_by_year | {today.year: facts}, _health(
-            "tax", "partial", f"no {today.year} tax year entered — dates only"
-        )
+        note = _prior_note(f"no {today.year} tax year entered — dates only", prior_facts)
+        return facts_by_year | {today.year: facts}, _health("tax", "partial", note)
     harbor = current.safe_harbor
     if harbor is None:
         facts = TaxFacts(today.year, None, current.total.projected, None, prior_balance)
-        return facts_by_year | {today.year: facts}, _health(
-            "tax", "partial", "no safe-harbor leg yet — estimated payments unknown"
-        )
+        note = _prior_note("no safe-harbor leg yet — estimated payments unknown", prior_facts)
+        return facts_by_year | {today.year: facts}, _health("tax", "partial", note)
     facts = _harbor_facts(today.year, current, prior_balance)
     note = (
         "safe harbor met"

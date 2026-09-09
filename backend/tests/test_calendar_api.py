@@ -1054,11 +1054,12 @@ async def test_a_january_q4_payment_is_priced_from_the_prior_years_facts(
     assert share == shortfall > 0  # the only 2025 payment date still ahead
     assert (money(q4["amount"]), q4["basis"]) == (share, "estimated")
     # 2026 itself is not entered, and the footer still says so — the prior year's facts ride
-    # alongside the current year's, they do not replace them.
+    # alongside the current year's, they do not replace them. "dates only" would now be a
+    # lie about the chip beside it, so the note names what IS priced.
     assert next(s for s in body["sources"] if s["source"] == "tax") == {
         "source": "tax",
         "status": "partial",
-        "note": "no 2026 tax year entered — dates only",
+        "note": "no 2026 tax year entered — dates only; Jan 15 is priced from 2025",
     }
 
 
