@@ -13,7 +13,7 @@ That is the deliberate difference from the espp lots router, where nothing clear
 
 The second half of the file is /rsu-grants (2026-08-21 spec §3): grant PARAMETERS in,
 `rsu_vesting`'s schedule out. No vest row is ever stored, so every echo recomputes — and
-the vested/unvested split is judged on `scheduler.product_today()`, read at the route.
+the vested/unvested split is judged on the product clock, read at the route.
 
 The third is /vesting-schedule (spec §4), the whole Comp card set in one computed payload.
 It is a pure READ over stored rows, so it degrades where the CRUD half raises: an unpriced
@@ -53,7 +53,7 @@ from app.schemas.comp import (
     VestingTilesOut,
     VestOut,
 )
-from app.services import rsu_vesting
+from app.services import clock, rsu_vesting
 from app.services.comp_calc import metrics
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
@@ -63,7 +63,6 @@ from app.services.money import (
     quantize_price,
     require_reasonable_date,
 )
-from app.services.scheduler import product_today
 
 router = APIRouter(prefix="/comp", tags=["comp"], dependencies=[Depends(get_current_user)])
 
@@ -367,9 +366,9 @@ async def list_grants(db: AsyncSession = Depends(get_db)) -> list[RsuGrantOut]:
     rows = (
         await db.execute(select(RsuGrant).order_by(RsuGrant.first_vest_date, RsuGrant.id))
     ).scalars()
-    # One clock for the whole page: `product_today` is the scheduler-zone day, never
-    # date.today() (the prod container runs UTC — price_service's note).
-    today = product_today()
+    # One clock for the whole page: the product-zone day, never the container's UTC
+    # day (services/clock.py; the prod container runs UTC).
+    today = clock.product_today()
     return [_grant_out(grant, today) for grant in rows]
 
 
@@ -392,7 +391,7 @@ async def create_grant(body: RsuGrantIn, db: AsyncSession = Depends(get_db)) -> 
     grant = RsuGrant(notes=body.notes, **fields)
     db.add(grant)
     await db.commit()
-    return _grant_out(grant, product_today())
+    return _grant_out(grant, clock.product_today())
 
 
 @router.patch("/rsu-grants/{grant_id}", response_model=RsuGrantOut)
@@ -420,7 +419,7 @@ async def update_grant(
     if "notes" in provided:
         grant.notes = provided["notes"]
     await db.commit()
-    return _grant_out(grant, product_today())
+    return _grant_out(grant, clock.product_today())
 
 
 @router.delete("/rsu-grants/{grant_id}", status_code=204)
@@ -499,7 +498,7 @@ def _unvested_shares(grants: list[RsuGrant], today: date) -> int:
 async def vesting_schedule(db: AsyncSession = Depends(get_db)) -> VestingScheduleOut:
     # One clock for the whole payload (list_grants' note): every `is_past` flag, the grant
     # echoes and the this-year tile have to agree with each other.
-    today = product_today()
+    today = clock.product_today()
     warnings: list[str] = []
     ticker, latest_price, quoted_at = await _espp_quote(db)
     if ticker is None:

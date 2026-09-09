@@ -32,7 +32,7 @@ from app.services import rsu_vesting
 from tests.portfolio_factories import acct
 
 CALENDAR = "/api/v1/calendar"
-TODAY = date(2026, 8, 24)  # a Monday; the router's clock is product_today()
+TODAY = date(2026, 8, 24)  # a Monday; the router's clock is the product clock
 # Feb 2026: every 2026 payment date AND the Apr 15 filing are still ahead.
 FEBRUARY = date(2026, 2, 2)
 APRIL = f"{CALENDAR}?start=2026-04-01&end=2026-04-30"
@@ -73,9 +73,9 @@ async def seed_priceable_year(db, year: int, w2: str = "240000") -> None:
 
 
 def freeze_today(monkeypatch):
-    # The router imports the name, so the patch lands on app.api.calendar (the
-    # test_prices_api freeze_service_today precedent).
-    monkeypatch.setattr("app.api.calendar.product_today", lambda: TODAY)
+    # ONE clock symbol for the whole app (audit item 31): every module calls
+    # `clock.product_today()` through the module, so this one patch moves them all.
+    monkeypatch.setattr("app.services.clock.product_today", lambda: TODAY)
 
 
 async def seed_primary(db) -> Person:
@@ -1015,7 +1015,7 @@ async def test_the_apr_15_filing_balance_survives_a_missing_current_year_row(
     """Feb 2026 with 2025 entered and 2026 not. The estimated-payment split is unknowable
     without a current year, but what last year's return owes is a settled fact and still
     has to land on Apr 15."""
-    monkeypatch.setattr("app.api.calendar.product_today", lambda: FEBRUARY)
+    monkeypatch.setattr("app.services.clock.product_today", lambda: FEBRUARY)
     await seed_priceable_year(db, 2025)  # no paycheck profile: the whole bill is unwithheld
     await db.commit()
     body = (await auth_client.get(APRIL)).json()
@@ -1037,7 +1037,7 @@ async def test_apr_15_carries_the_prior_years_balance_beside_this_years_share(
 ):
     """The prior-year `withholding_estimate` call end to end: with BOTH years entered, Apr
     15 is this year's Q1 share of the safe-harbor shortfall PLUS last year's balance."""
-    monkeypatch.setattr("app.api.calendar.product_today", lambda: FEBRUARY)
+    monkeypatch.setattr("app.services.clock.product_today", lambda: FEBRUARY)
     await seed_priceable_year(db, 2025)
     await seed_priceable_year(db, 2026)
     db.add(

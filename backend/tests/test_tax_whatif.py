@@ -3,7 +3,7 @@
 No DB, no HTTP — the service is `tax_service`'s posture, so every figure below is
 hand-computed from the spec's formulas (§3, §4, §5) and pinned as an exact Decimal.
 `today` is a parameter, never a clock read, so nothing here depends on the day the suite
-runs; only the router reads `date.today()`.
+runs; only the router reads the clock (`clock.product_today()`).
 
 The dual-key assertions in the last two tests are the load-bearing ones: the engine reads
 the TOTAL keys, so a delta that moved only its component key would compute a scenario

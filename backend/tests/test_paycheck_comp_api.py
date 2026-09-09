@@ -25,6 +25,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models import CompEvent, PaycheckProfile, Person
+from app.services import clock
 from app.services.comp_calc import metrics
 from app.services.paycheck_calc import breakdown, half_up2
 
@@ -593,7 +594,7 @@ async def test_breakdown_golden_over_the_real_profile(auth_client, me):
 
 async def test_breakdown_defaults_to_the_latest_profile_effective_today_or_earlier(auth_client, me):
     # Dates relative to the run, never frozen: "today" is read at the ENDPOINT.
-    today = date.today()
+    today = clock.product_today()
     await create_profile(auth_client, effective_date=str(today - timedelta(days=400)))
     current = await create_profile(auth_client, effective_date=str(today), annual_salary="200000")
     await create_profile(
@@ -606,7 +607,7 @@ async def test_breakdown_defaults_to_the_latest_profile_effective_today_or_earli
 
 
 async def test_breakdown_falls_back_to_the_earliest_future_profile(auth_client, me):
-    today = date.today()
+    today = clock.product_today()
     soon = await create_profile(
         auth_client, effective_date=str(today + timedelta(days=10)), annual_salary="120000"
     )
@@ -634,7 +635,7 @@ async def test_breakdown_takes_a_person_and_defaults_to_the_primary(auth_client,
     partner = Person(name="Partner")
     db.add(partner)
     await db.commit()
-    today = date.today()
+    today = clock.product_today()
     await create_profile(auth_client, effective_date=str(today - timedelta(days=30)))
     await create_profile(
         auth_client,
@@ -1141,7 +1142,9 @@ async def test_breakdown_embeds_pace_for_the_current_year(auth_client, db, me):
     from app.models import ContributionLimit
 
     db.add(
-        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+        ContributionLimit(
+            year=clock.product_today().year, key="limit_401k_elective", value=D("24500.00")
+        )
     )
     await db.commit()
     created = await auth_client.post(
@@ -1191,13 +1194,13 @@ async def test_breakdown_pace_is_empty_of_optional_rows_without_them(auth_client
 
 
 async def test_breakdown_pace_measures_this_year_not_a_stored_year(auth_client, db, me):
-    """The limits year comes from the SAME date.today() that picks the profile in force —
-    entering next year's caps early must not change today's strip."""
+    """The limits year comes from the SAME product-clock read that picks the profile in
+    force — entering next year's caps early must not change today's strip."""
     from app.models import ContributionLimit
 
     db.add(
         ContributionLimit(
-            year=date.today().year + 1, key="limit_401k_elective", value=D("25000.00")
+            year=clock.product_today().year + 1, key="limit_401k_elective", value=D("25000.00")
         )
     )
     await db.commit()
@@ -1334,12 +1337,13 @@ async def test_profiles_list_marks_the_one_in_force(auth_client, me):
         PROFILES, json={"effective_date": "2020-01-01", "annual_salary": "100000"}
     )
     now = await auth_client.post(
-        PROFILES, json={"effective_date": date.today().isoformat(), "annual_salary": "110000"}
+        PROFILES,
+        json={"effective_date": clock.product_today().isoformat(), "annual_salary": "110000"},
     )
     later = await auth_client.post(
         PROFILES,
         json={
-            "effective_date": (date.today() + timedelta(days=400)).isoformat(),
+            "effective_date": (clock.product_today() + timedelta(days=400)).isoformat(),
             "annual_salary": "120000",
         },
     )
@@ -1355,7 +1359,9 @@ async def test_breakdown_reports_the_employer_match_per_check(auth_client, db, m
     from app.models import ContributionLimit
 
     db.add(
-        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+        ContributionLimit(
+            year=clock.product_today().year, key="limit_401k_elective", value=D("24500.00")
+        )
     )
     await db.commit()
     await auth_client.post(
@@ -1387,7 +1393,11 @@ async def test_breakdown_employer_match_is_zero_without_a_policy(auth_client, me
 async def test_breakdown_espp_row_grades_the_purchase_year(auth_client, db, me):
     from app.models import AppSetting, ContributionLimit
 
-    db.add(ContributionLimit(year=date.today().year, key="limit_espp_423", value=D("25000.00")))
+    db.add(
+        ContributionLimit(
+            year=clock.product_today().year, key="limit_espp_423", value=D("25000.00")
+        )
+    )
     await db.commit()
     await auth_client.post(
         PROFILES,
@@ -1422,7 +1432,7 @@ async def test_breakdown_pace_walks_the_year_into_so_far_and_projected(auth_clie
     from app.models import ContributionLimit
     from app.services.pace_walk import first_payday
 
-    this_year = date.today().year
+    this_year = clock.product_today().year
     db.add(ContributionLimit(year=this_year, key="limit_401k_elective", value=D("24500.00")))
     db.add(ContributionLimit(year=this_year, key="limit_hsa_self", value=D("4400.00")))
     await db.commit()
@@ -1454,7 +1464,7 @@ async def test_breakdown_pace_walks_the_year_into_so_far_and_projected(auth_clie
     assert hsa["annualized"] == "4400.00"  # 100 x 24 + the employer's 2,000
     # ONE walk behind both rows: the HSA leg is a tenth of the elective one payday for
     # payday, plus the January deposit once that check has been cut.
-    deposit = D("2000.00") if first_payday(this_year, 24) < date.today() else D("0")
+    deposit = D("2000.00") if first_payday(this_year, 24) < clock.product_today() else D("0")
     assert D(hsa["so_far"]) == so_far / 10 + deposit
     # And 415(c) walks too — it is the only row that adds three legs together.
     assert rows["limit_415c_total"]["so_far"] is not None
@@ -1468,7 +1478,7 @@ async def test_breakdown_pace_says_when_a_walked_row_borrowed_a_profile(auth_cli
     from app.models import ContributionLimit
     from app.services.pace_walk import first_payday
 
-    this_year = date.today().year
+    this_year = clock.product_today().year
     db.add(ContributionLimit(year=this_year, key="limit_401k_elective", value=D("24500.00")))
     await db.commit()
     started = date(this_year, 3, 1)
@@ -1488,6 +1498,6 @@ async def test_breakdown_pace_says_when_a_walked_row_borrowed_a_profile(auth_cli
     rows = {row["key"]: row for row in (await auth_client.get(BREAKDOWN)).json()["pace"]}
     # Computed, not pinned: read before this year's first payday there is nothing behind
     # today to have borrowed for.
-    borrowed = started.isoformat() if first_payday(this_year, 24) < date.today() else None
+    borrowed = started.isoformat() if first_payday(this_year, 24) < clock.product_today() else None
     assert rows["limit_401k_elective"]["backfilled_from"] == borrowed
     assert rows["limit_415c_total"]["backfilled_from"] == borrowed

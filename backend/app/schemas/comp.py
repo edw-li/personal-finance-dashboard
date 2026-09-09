@@ -114,7 +114,7 @@ class RsuGrantOut(BaseModel):
     cliff_pct: Decimal
     vest_quantum: int
     notes: str | None
-    # --- computed (rsu_vesting); the vested split is judged on the scheduler-zone day the
+    # --- computed (rsu_vesting); the vested split is judged on the product-zone day the
     # ROUTE reads, never a clock inside the helper.
     vest_count: int
     vested_shares: int

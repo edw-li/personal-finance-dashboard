@@ -343,7 +343,7 @@ async def test_undo_a_budget_seed_removes_every_row_it_wrote(auth_client, db, mo
             ]
         )
     await db.commit()
-    monkeypatch.setattr("app.api.spending.product_today", lambda: date(2026, 9, 7))
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2026, 9, 7))
     # A hand-set Food budget AT the effective month, so the seed takes BOTH paths: Rent is an
     # insert, Food an update of this row. Its own batch is earlier, so undoing the LATER seed
     # batch is not the overlap refusal — it just restores what the hand set.

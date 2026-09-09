@@ -29,8 +29,8 @@ from app.models import (
     RsuGrant,
     Security,
 )
+from app.services import clock
 from app.services.price_provider import DailyBar, PriceProvider
-from app.services.scheduler import product_today
 
 if TYPE_CHECKING:
     # Annotation only: dividend_ingest imports THIS module, so a runtime import here
@@ -88,9 +88,9 @@ def _bar_datetime(day: date) -> datetime:
 async def refresh_prices(
     db: AsyncSession, provider: PriceProvider, *, today: date | None = None
 ) -> RefreshResult:
-    # product_today, never date.today(): the container clock is UTC, and the run's
-    # calendar day (fetch window, snapshot key, TTM window) must match the fire zone.
-    today = today or product_today()
+    # The product clock, never the container's UTC day: the run's calendar day
+    # (fetch window, snapshot key, TTM window) must match the fire zone.
+    today = today or clock.product_today()
     start = today - timedelta(days=HISTORY_WINDOW_DAYS)
     result = RefreshResult()
     securities = list(
@@ -433,7 +433,7 @@ async def run_refresh(
     from app.services.dividend_ingest import DividendIngestResult, ingest_dividends
     from app.services.value_history import append_value_snapshot, backfill_missed_snapshots
 
-    today = today or product_today()
+    today = today or clock.product_today()
     result = await refresh_prices(db, provider, today=today)
     # Deep employer history first (its own savepoint, its own quiet failure): the vest
     # calendar prices past tranches at their own closes, and this is the one step that can

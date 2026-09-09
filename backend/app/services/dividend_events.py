@@ -45,8 +45,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DividendPayment, PortfolioValueHistory, Security, SecurityDividendEvent
+from app.services import clock
 from app.services.price_provider import PriceProvider
-from app.services.scheduler import product_today
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +82,10 @@ async def backfill_dividend_events(
     price leg has just burned one call each, and a second FULL-history call per blocked
     ticker doubles the pressure on the rate limiter that most likely caused the block. A
     skipped security is left unmarked, so the next run tries it normally."""
-    # product_today, never date.today(): the container clock is UTC, and this run's idea of
+    # The product clock, never the container's UTC day: this run's idea of
     # "today" must be the same calendar day refresh_prices used — it is the top of the range
     # annotated below. (run_refresh always passes it explicitly.)
-    today = today or product_today()
+    today = today or clock.product_today()
     counts = {"created": 0, "synced": 0, "failed": 0}
     floor = (
         await db.execute(select(func.min(PortfolioValueHistory.snapshot_date)))

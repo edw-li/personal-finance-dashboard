@@ -1,5 +1,4 @@
 import re
-from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, Literal
 
@@ -40,6 +39,7 @@ from app.schemas.portfolio import (
     TransactionOut,
     TransactionUpdate,
 )
+from app.services import clock
 from app.services.money import (
     MONEY_MAX_ABS_10_2,
     MONEY_MAX_ABS_10_4,
@@ -547,7 +547,9 @@ async def holdings(owner: OwnerQuery = None, db: AsyncSession = Depends(get_db))
         db, owner_filter=_owner_filter(owner)
     )
     positions = fold_transactions(txns)
-    rows = build_holdings(positions, securities, latest, history, dividends, today=date.today())
+    rows = build_holdings(
+        positions, securities, latest, history, dividends, today=clock.product_today()
+    )
 
     total_mv = sum((h.market_value for h in rows if h.market_value is not None), Decimal("0"))
     total_cost = sum((h.cost_basis for h in rows), Decimal("0"))

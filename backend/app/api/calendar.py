@@ -57,6 +57,7 @@ from app.schemas.calendar import (
     OverrideOut,
     SourceHealthOut,
 )
+from app.services import clock
 from app.services.business_days import next_business_day
 from app.services.calendar import Sources, compose
 from app.services.calendar.generators.cards import CardCreditFacts, CardFacts
@@ -73,7 +74,6 @@ from app.services.money import MONEY_MAX_ABS_12_2, quantize_money
 from app.services.paycheck_calc import breakdown, half_up2
 from app.services.people import load_people, primary_person
 from app.services.portfolio_calc import SHARE_Q, fold_transactions
-from app.services.scheduler import product_today
 
 router = APIRouter(prefix="/calendar", tags=["calendar"], dependencies=[Depends(get_current_user)])
 
@@ -536,9 +536,9 @@ async def get_calendar(start: date, end: date, db: AsyncSession = Depends(get_db
     """{events, sources, quote_as_of} for [start, end] INCLUSIVE, sorted by (date, type,
     label). 422 on a reversed pair or a span past 400 days."""
     _validated_span(start, end)
-    # product_today, never date.today(): the reminder date and the fold's "today" must
-    # agree with the scheduler-zone day (comp.py's clock rule).
-    events, health, quoted_at = await _compose_for(db, start, end, product_today())
+    # The product clock, never the container's UTC day: the reminder date and the
+    # fold's "today" must agree with the product-zone day (services/clock.py).
+    events, health, quoted_at = await _compose_for(db, start, end, clock.product_today())
     return CalendarOut(
         events=[_event_out(event) for event in events], sources=health, quote_as_of=quoted_at
     )
@@ -717,7 +717,7 @@ async def export_ics(start: date, end: date, db: AsyncSession = Depends(get_db))
     """The "Add to calendar (.ics)" download: the same window fence as GET /calendar, the
     same composer, rendered once."""
     _validated_span(start, end)
-    events, _health, _quoted_at = await _compose_for(db, start, end, product_today())
+    events, _health, _quoted_at = await _compose_for(db, start, end, clock.product_today())
     return _ics_response(
         render(events, public_url=settings.public_url),
         {"Content-Disposition": f'attachment; filename="{ICS_FILENAME}"'},
@@ -754,7 +754,7 @@ async def feed_ics(
     if row.last_used_at is None or now - row.last_used_at >= LAST_USED_BUMP:
         row.last_used_at = now
         await db.commit()
-    today = product_today()
+    today = clock.product_today()
     events, _health, _quoted_at = await _compose_for(
         db, today - timedelta(days=FEED_BACK_DAYS), today + timedelta(days=FEED_FORWARD_DAYS), today
     )

@@ -34,8 +34,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import LatestPrice, PortfolioValueHistory, PriceHistory, Security
+from app.services import clock
 from app.services.portfolio_calc import MONEY_Q, SHARE_Q, fold_transactions, load_portfolio
-from app.services.scheduler import product_today
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +49,9 @@ ZERO = Decimal("0")
 # imported snapshot_date is a Monday). Appending on other days would thicken it into a
 # daily series and break parity, so the gate lives here with the series semantics rather
 # than in run_refresh: every caller inherits it, manual refreshes included. Weekday is
-# judged on the SCHEDULER-ZONE day (product_today): the prod container clock is UTC,
-# where Monday evening PT is already Tuesday — date.today() would silently end the series
-# under any post-close-evening cron (branch review F1).
+# judged on the PRODUCT-ZONE day (services/clock.py): the prod container clock is UTC,
+# where Monday evening PT is already Tuesday — the container day would silently end the
+# series under any post-close-evening cron (branch review F1).
 SNAPSHOT_WEEKDAY = 0  # Monday, in date.weekday() numbering
 
 
@@ -257,7 +257,7 @@ async def append_value_snapshot(db: AsyncSession, *, today: date | None = None) 
     reruns upsert the same date (the importer's own key), so the series never forks.
     Caller commits (refresh_prices' session posture).
     """
-    today = today or product_today()
+    today = today or clock.product_today()
     if today.weekday() != SNAPSHOT_WEEKDAY:
         return False
     shares_by_sec, cost_by_sec, latest = await _current_book(db)
@@ -307,7 +307,7 @@ async def backfill_missed_snapshots(db: AsyncSession, *, today: date | None = No
     out. A Monday NOTHING reaches stays a hole rather than a guess. Returns rows written;
     0 with no series to extend (a book that never imported one starts at its first live
     Monday instead). Caller commits (refresh_prices' session posture)."""
-    today = today or product_today()
+    today = today or clock.product_today()
     latest_row = (
         (
             await db.execute(

@@ -8,7 +8,7 @@ a missing quote all have to come back 200 with a warning.
 The arithmetic pins are deliberately the SAME shape `test_withholding_calc` hand-derives —
 2026, a $240k semi-monthly profile at 30% withholding, the small FICA tables — so a number
 that moves here and not there (or vice versa) points at the router, not the service. "Today"
-is frozen by monkeypatching `app.api.taxes.product_today`, the one clock this route reads.
+is frozen by monkeypatching `app.services.clock.product_today`, the app's one clock.
 """
 
 from datetime import UTC, date, datetime
@@ -71,8 +71,8 @@ def url(year: int = YEAR) -> str:
 
 @pytest.fixture
 def frozen_today(monkeypatch):
-    """`product_today` as the ROUTE sees it (test_rsu_api's patch-target convention)."""
-    monkeypatch.setattr("app.api.taxes.product_today", lambda: PINNED_TODAY)
+    """The one product clock (app/services/clock.py), which the route reads."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: PINNED_TODAY)
 
 
 @pytest.fixture

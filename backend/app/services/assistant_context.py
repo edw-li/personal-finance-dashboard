@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Person
+from app.services import clock
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ async def _household(db: AsyncSession, search: dict, view: dict) -> dict:
     port = await portfolio_holdings(owner=None, db=db)
     spend = await spending_matrix(db=db)
     latest_index = len(spend.months) - 1
-    current_year = date.today().year
+    current_year = clock.product_today().year
     tax_summaries = await get_all_summaries(db=db)
     tax = next((y for y in tax_summaries.years if y.year == current_year), None)
 
@@ -97,7 +98,7 @@ async def _household(db: AsyncSession, search: dict, view: dict) -> dict:
         return values[latest_index] if latest_index >= 0 else None
 
     return {
-        "today": date.today().isoformat(),
+        "today": clock.product_today().isoformat(),
         "people": [{"id": p.id, "name": p.name, "is_primary": p.is_primary} for p in people],
         "net_worth": {
             "month": nw.month,
@@ -141,7 +142,7 @@ async def _overview(db: AsyncSession, search: dict, view: dict) -> dict:
     from app.api.calendar import get_calendar
     from app.api.overview import money_flow
 
-    today = date.today()
+    today = clock.product_today()
     events = await get_calendar(start=today, end=today + timedelta(days=UP_NEXT_DAYS), db=db)
     flow = await money_flow(year=None, db=db)
     return {
@@ -310,7 +311,7 @@ async def _taxes(db: AsyncSession, search: dict, view: dict) -> dict:
 
     from app.api.taxes import get_brackets, get_inputs, get_summary, get_withholding
 
-    year = _view_year(view) or date.today().year
+    year = _view_year(view) or clock.product_today().year
     try:
         summary = await get_summary(year=year, db=db)
         inputs = await get_inputs(year=year, db=db)
@@ -331,7 +332,7 @@ async def _taxes(db: AsyncSession, search: dict, view: dict) -> dict:
         if item.value is not None
     ]
     withholding = None
-    if year == date.today().year:
+    if year == clock.product_today().year:
         try:
             withholding = await get_withholding(year=year, db=db)
         except HTTPException:
@@ -441,7 +442,7 @@ async def _projection(db: AsyncSession, search: dict, view: dict) -> dict:
 async def _calendar(db: AsyncSession, search: dict, view: dict) -> dict:
     from app.api.calendar import get_calendar
 
-    today = date.today()
+    today = clock.product_today()
     events = await get_calendar(start=today, end=today + timedelta(days=UP_NEXT_DAYS), db=db)
     return {"events": events.events}
 
