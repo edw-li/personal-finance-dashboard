@@ -12,7 +12,7 @@ import { ApiError } from '../api/client'
 import { fetchHousehold } from '../api/household'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
-import CalendarGrid from '../components/calendar/CalendarGrid'
+import CalendarGrid, { dayInMonth } from '../components/calendar/CalendarGrid'
 import CashflowStrip from '../components/calendar/CashflowStrip'
 import DayDrawer from '../components/calendar/DayDrawer'
 import EventDetails from '../components/calendar/EventDetails'
@@ -197,6 +197,22 @@ export default function CalendarPage() {
     setOpenKey(null)
     setDrawerDay(null)
     setScope({ month: next === currentMonthIso() ? null : next })
+  }
+
+  // Mouse navigation carries the keyboard cursor with it (2026-09-09 audit item 13): only
+  // the active day's cell is in the tab order, so a month reached by ‹ ›, Today or the
+  // month box used to have no tab stop at all — Tab fell straight past the grid. The
+  // keyboard's own month steps (PageUp/PageDown, an arrow off the edge) set the day
+  // themselves and still call `showMonth` directly, as does landing on a saved event.
+  const goToMonth = (next: string, day: string) => {
+    setActiveDay(day)
+    showMonth(next)
+  }
+
+  // ‹ › keep the day of month, clamped — the move PageUp/PageDown already make.
+  const stepMonth = (delta: 1 | -1) => {
+    const next = addMonths(month, delta)
+    goToMonth(next, dayInMonth(next, activeDay))
   }
 
   // `view` is the page's own param, not the shell's scope, so it is written straight
@@ -495,18 +511,22 @@ export default function CalendarPage() {
               type="button"
               className="button"
               aria-label="Previous month"
-              onClick={() => showMonth(addMonths(month, -1))}
+              onClick={() => stepMonth(-1)}
             >
               ‹
             </button>
-            <button type="button" className="button" onClick={() => showMonth(currentMonthIso())}>
+            <button
+              type="button"
+              className="button"
+              onClick={() => goToMonth(currentMonthIso(), todayIso())}
+            >
               Today
             </button>
             <button
               type="button"
               className="button"
               aria-label="Next month"
-              onClick={() => showMonth(addMonths(month, 1))}
+              onClick={() => stepMonth(1)}
             >
               ›
             </button>
@@ -516,7 +536,9 @@ export default function CalendarPage() {
               aria-label="Jump to month"
               value={month.slice(0, 7)}
               onChange={(e) => {
-                if (ISO_MONTH.test(e.target.value)) showMonth(`${e.target.value}-01`)
+                // The box names a month, not a day, so the cursor lands on its first.
+                if (ISO_MONTH.test(e.target.value))
+                  goToMonth(`${e.target.value}-01`, `${e.target.value}-01`)
               }}
             />
             <h2 className="cal-title">{formatMonth(month)}</h2>

@@ -40,12 +40,18 @@ export interface CalendarGridProps {
   onMonthStep: (delta: 1 | -1) => void
 }
 
+/** `dayIso`'s day of month inside `monthIso` (a first-of-month date), clamped to that
+ *  month's last day — the ONE rule for moving the cursor across a month boundary, shared
+ *  by PageUp/PageDown here and by the page's ‹ › buttons. */
+export function dayInMonth(monthIso: string, dayIso: string): string {
+  const lastDay = Number(addDays(addMonths(monthIso, 1), -1).slice(8, 10))
+  const day = Math.min(Number(dayIso.slice(8, 10)), lastDay)
+  return `${monthIso.slice(0, 7)}-${String(day).padStart(2, '0')}`
+}
+
 /** The same day of month one month over, clamped to that month's last day. */
 export function shiftMonth(dayIso: string, delta: number): string {
-  const target = addMonths(`${dayIso.slice(0, 7)}-01`, delta)
-  const lastDay = Number(addDays(addMonths(target, 1), -1).slice(8, 10))
-  const day = Math.min(Number(dayIso.slice(8, 10)), lastDay)
-  return `${target.slice(0, 7)}-${String(day).padStart(2, '0')}`
+  return dayInMonth(addMonths(`${dayIso.slice(0, 7)}-01`, delta), dayIso)
 }
 
 /** "+$6.8k / −$395" for the week gutter; an em dash when nothing moves. */

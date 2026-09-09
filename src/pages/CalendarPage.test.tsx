@@ -7,7 +7,8 @@ import ToastProvider from '../components/ToastProvider'
 import { calendarEvent } from '../testing/calendarFixtures'
 import type { CalendarEvent, CalendarResponse } from '../types/api'
 import { formatDate, formatMonth } from '../utils/format'
-import { addDays, addMonths, currentMonthIso } from '../utils/months'
+import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
+import { shiftMonth } from '../components/calendar/CalendarGrid'
 import CalendarPage from './CalendarPage'
 
 vi.mock('../api/calendar', async (importOriginal) => ({
@@ -143,6 +144,34 @@ describe('CalendarPage — month, views, grid', () => {
     expect(url()).toBe(`/calendar?month=${PREV.slice(0, 7)}`)
     fireEvent.click(screen.getByRole('button', { name: 'Today' }))
     expect(url()).toBe('/calendar')
+  })
+
+  it('mouse month navigation carries the keyboard cursor (2026-09-09 audit item 13)', async () => {
+    // Only the active day's cell is in the tab order. ‹ › / Today / Jump changed the month
+    // and left `activeDay` behind, so every month reached with the mouse had no tab stop at
+    // all — Tab fell straight past the grid.
+    renderPage()
+    await screen.findByRole('grid')
+    const cursor = () => {
+      const stops = Array.from(document.querySelectorAll('[role="gridcell"][data-day]')).filter(
+        (c) => c.getAttribute('tabindex') === '0',
+      )
+      expect(stops).toHaveLength(1)
+      return stops[0].getAttribute('data-day') as string
+    }
+    const today = todayIso()
+    expect(cursor()).toBe(today)
+    // ‹ › keep the day-of-month, clamped — the move PageUp/PageDown already make.
+    fireEvent.click(screen.getByRole('button', { name: 'Next month' }))
+    expect(cursor()).toBe(shiftMonth(today, 1))
+    expect(cursor().slice(0, 7)).toBe(NEXT.slice(0, 7))
+    fireEvent.click(screen.getByRole('button', { name: 'Previous month' }))
+    expect(cursor()).toBe(shiftMonth(shiftMonth(today, 1), -1))
+    // A jump lands on the first of the month it names; Today lands on today.
+    fireEvent.change(screen.getByLabelText('Jump to month'), { target: { value: '2027-03' } })
+    expect(cursor()).toBe('2027-03-01')
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }))
+    expect(cursor()).toBe(today)
   })
 
   it('accepts a legacy YYYY-MM-DD month link and the month input jumps', async () => {
