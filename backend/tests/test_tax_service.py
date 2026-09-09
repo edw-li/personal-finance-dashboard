@@ -34,7 +34,7 @@ from app.services.tax_service import (
     stack,
     walk,
 )
-from app.tax_keys import TAX_INPUT_DEFINITIONS
+from app.tax_keys import INPUT_UNITS, TAX_INPUT_DEFINITIONS, TAX_INPUT_UNITS, unit_for
 
 CENT = Decimal("0.01")
 YEARS = (2023, 2024, 2025, 2026)
@@ -849,6 +849,20 @@ def test_engine_keys_are_defined_tax_keys():
 
 def test_suggestion_keys_are_defined_tax_keys():
     assert set(SUGGESTION_KEYS) <= {key for key, *_ in TAX_INPUT_DEFINITIONS}
+
+
+def test_input_units_cover_defined_keys_and_default_to_money():
+    """The unit registry is an EXCEPTION list (2026-09-09 spec §2): every key it names is
+    a real definition, everything else is money, and a key added later is money until it
+    says otherwise."""
+    defined = {key for key, *_ in TAX_INPUT_DEFINITIONS}
+    assert set(TAX_INPUT_UNITS) <= defined
+    assert set(TAX_INPUT_UNITS.values()) <= set(INPUT_UNITS)
+    assert unit_for("pay_periods") == "count"
+    assert unit_for("unq_div_state_exempt_pct") == "percent"
+    assert unit_for("annual_salary") == "money"
+    assert unit_for("a_key_no_definition_has") == "money"
+    assert {key for key in defined if unit_for(key) != "money"} == set(TAX_INPUT_UNITS)
 
 
 def test_missing_inputs_warning():

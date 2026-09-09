@@ -20,6 +20,11 @@ from app.tax_keys import SINGLE
 # two together.
 FilingStatus = Literal["single", "married_joint", "married_separate"]
 
+# The wire spelling of tax_keys.INPUT_UNITS (2026-09-09 spec §2) — which BOX the form
+# renders this key through. `money` is the default and the overwhelming majority; `count`
+# is a whole number of paychecks; `percent` shows 97.53% over a stored 0.9753.
+InputUnit = Literal["money", "count", "percent"]
+
 
 class TaxYearOut(BaseModel):
     year: int
@@ -47,6 +52,10 @@ class TaxInputItemOut(BaseModel):
     label: str
     sort_order: int
     is_derived: bool
+    # The entry unit for this key (tax_keys.unit_for) — money unless the key says
+    # otherwise. Defaulted so a hand-built payload in a test stays valid; the router always
+    # stamps it.
+    unit: InputUnit = "money"
     # True for tax_keys.PER_PERSON_KEYS: this line renders one item per person column.
     is_per_person: bool = False
     # The column this item belongs to. Null for household keys — and also for per-person
@@ -56,6 +65,10 @@ class TaxInputItemOut(BaseModel):
     # The sheet's gray-cell formula for this key, when it has one, computed from THIS
     # column's own values. Advisory: the UI offers a chip, nothing is applied server-side.
     suggested: Decimal | None
+    # Where `suggested` came from, when it is NOT this key's sheet formula: "last year's"
+    # for the three deduction rows carried forward from the prior year (2026-09-09 spec
+    # §4e). Null means the formula — the chip's default wording.
+    suggestion_source: str | None = None
 
 
 class TaxInputSectionOut(BaseModel):

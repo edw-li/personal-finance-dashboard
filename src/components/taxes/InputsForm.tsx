@@ -3,16 +3,19 @@ import type { ClipboardEvent } from 'react'
 import { ApiError } from '../../api/client'
 import { putTaxInputs } from '../../api/taxes'
 import AmountInput from '../AmountInput'
+import type { AmountKind } from '../AmountInput'
 import InfoHint from '../InfoHint'
 import type {
   TaxInputItemOut,
   TaxInputRowIn,
   TaxInputSectionOut,
+  TaxInputUnit,
   TaxInputsOut,
   TaxPersonOut,
 } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
+import { isPlainDecimal, shiftPoint } from '../../utils/percent'
 import { classifyPaste, matchLabel } from '../../utils/paste'
 import { FeedBanner } from '../shell/Feed'
 import { MOTION_MS } from '../../theme/motion'
@@ -29,6 +32,51 @@ const SECTION_LABELS: Record<string, string> = {
 
 function sectionLabel(name: string): string {
   return SECTION_LABELS[name] ?? name.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase())
+}
+
+// --- units (2026-09-09 spec 2) --------------------------------------------------------
+// Three boxes, one wire. The server stamps every item with its unit and stores the same
+// Numeric(14,4) either way; what differs is the box the value is TYPED in and the point
+// shift between the two. Money is verbatim in both directions - its column is the one this
+// form was built for, and trimming it would rewrite every stored "200000.0000". A count is
+// shown without its trailing zeros. A percent is stored as the FRACTION the engine
+// multiplies by and shown x100, so "97.53%" saves 0.9753 - string math (shiftPoint), never
+// a float divide, because 9.3 / 100 is 0.09300000000000001 and that would be the number
+// saved (utils/percent.ts's whole reason for existing).
+const UNIT_KINDS: Record<TaxInputUnit, AmountKind> = {
+  money: 'money',
+  count: 'count',
+  percent: 'percent',
+}
+
+/**
+ * The wire's value as this unit's box shows it. Non-decimal text passes through for the
+ * validators to word, exactly as a money box's would.
+ */
+function toBox(unit: TaxInputUnit, stored: string | null): string {
+  if (stored === null) return '' // blank, never "0": blank is what unsets an input
+  if (unit === 'money' || !isPlainDecimal(stored)) return stored
+  return shiftPoint(stored, unit === 'percent' ? 2 : 0)
+}
+
+/**
+ * One box's text as the wire takes it. "=" arithmetic is money-only (AmountInput's rule:
+ * the evaluator quantizes to 2dp, which would round a share of dividends to a hundredth).
+ */
+function toWire(unit: TaxInputUnit, text: string): string {
+  const canonical = canonicalAmount(text, { expressions: unit === 'money' })
+  if (unit !== 'percent' || !isPlainDecimal(canonical)) return canonical
+  return shiftPoint(canonical, -2)
+}
+
+/**
+ * What a suggestion chip says. The engine's suggestions are wire values like everything
+ * else, so they are shown in the box's units too.
+ */
+function suggestionText(unit: TaxInputUnit, suggested: string): string {
+  if (unit === 'money') return formatCurrency(suggested)
+  const shown = toBox(unit, suggested)
+  return unit === 'percent' ? `${shown}%` : shown
 }
 
 /** One person's column, with the name it is headed by. */
@@ -48,6 +96,8 @@ interface Column {
 interface Cell {
   id: string
   key: string
+  /** The box this key is entered through - money unless the server says count/percent. */
+  unit: TaxInputUnit
   personId: number | null
   /** The item's own label: what an error sentence and a keyed paste match on. */
   itemLabel: string
@@ -55,6 +105,8 @@ interface Cell {
   personName: string | null
   value: string | null
   suggested: string | null
+  /** "last year's" when the suggestion is a carry-forward rather than a sheet formula. */
+  suggestionSource: string | null
 }
 
 /** One line of the grid: a key, and the one-or-two boxes it is edited through. */
@@ -105,11 +157,13 @@ function cellOf(item: TaxInputItemOut, names: Map<number, string>, split: boolea
   return {
     id: personId === null ? item.key : `${item.key}:${personId}`,
     key: item.key,
+    unit: item.unit,
     personId,
     itemLabel: item.label,
     personName: personId === null ? null : (names.get(personId) ?? null),
     value: item.value,
     suggested: item.suggested,
+    suggestionSource: item.suggestion_source,
   }
 }
 
@@ -159,7 +213,9 @@ function modelOf(inputs: TaxInputsOut): FormModel {
 function valuesOf(cells: Cell[]): Record<string, string> {
   const values: Record<string, string> = {}
   // A null stored value is a BLANK field, never "0": blank is exactly what unsets it.
-  for (const cell of cells) values[cell.id] = cell.value ?? ''
+  // Everything else arrives in the unit its own box is typed in, so `values` and `baseline`
+  // speak one vocabulary and an untouched percent row still diffs as unchanged.
+  for (const cell of cells) values[cell.id] = toBox(cell.unit, cell.value)
   return values
 }
 
@@ -196,7 +252,9 @@ export default function InputsForm({
     changed[cell.id] = next === '' ? null : next
     // The COLUMN is named too: on a married year two boxes wear the same item label, and
     // "Enter a number for: HSA Contributions" would not say which one.
-    if (next !== '' && !isAmount(next)) invalid.push(cellLabel(cell))
+    if (next !== '' && !isAmount(next, { expressions: cell.unit === 'money' })) {
+      invalid.push(cellLabel(cell))
+    }
   }
   const changedCount = Object.keys(changed).length
 
@@ -239,7 +297,7 @@ export default function InputsForm({
       // The wire gets CANONICAL text, the on-screen diff above keeps counting the raw: a save
       // reached without a blur (Ctrl+Enter, a jsdom click) must not ship "$1,600" or
       // "=1200+400" to a Decimal column.
-      const wire = text === null ? null : canonicalAmount(text)
+      const wire = text === null ? null : toWire(cell.unit, text)
       if (cell.personId === null) wireValues[cell.key] = wire
       else rows.push({ key: cell.key, person_id: cell.personId, value: wire })
     }
@@ -413,12 +471,20 @@ export default function InputsForm({
                 // person's (design §5.3), and the columns are ordered primary-first.
                 const suggestionCell = row.cells[0]
                 const shown = values[suggestionCell.id] ?? ''
-                // Offered only while it differs from what is in the box; the money form is
-                // computed once because the chip, its title and the button's all show it.
-                const suggestion =
-                  suggestionCell.suggested === null || suggestionCell.suggested === shown
+                // What Apply would write: the suggestion in BOX units, so a percent row
+                // whose stored 0.9753 is showing as 97.53 is not offered its own value
+                // back. The formatted form is computed once because the chip, its title and
+                // the button's title all show it.
+                const applies =
+                  suggestionCell.suggested === null
                     ? null
-                    : formatCurrency(suggestionCell.suggested)
+                    : toBox(suggestionCell.unit, suggestionCell.suggested)
+                const suggestion =
+                  suggestionCell.suggested === null || applies === shown
+                    ? null
+                    : suggestionText(suggestionCell.unit, suggestionCell.suggested)
+                // "last year's $15,750" for a carry-forward, "suggested ..." for a formula.
+                const suggestionWord = suggestionCell.suggestionSource ?? 'suggested'
                 return (
                   <div key={row.key} className="tax-input-row">
                     <span className="tax-input-label">
@@ -440,7 +506,10 @@ export default function InputsForm({
                     {row.cells.map((cell) => {
                       const value = values[cell.id] ?? ''
                       const classes = [
-                        value.trim() !== '' && !isAmount(value) ? 'invalid' : '',
+                        value.trim() !== '' &&
+                        !isAmount(value, { expressions: cell.unit === 'money' })
+                          ? 'invalid'
+                          : '',
                         flashIds.has(cell.id) ? 'pasted-flash' : '',
                         // A household line inside a split grid takes both person tracks
                         // rather than leaving a hole under one name.
@@ -454,6 +523,7 @@ export default function InputsForm({
                           id={`tax-input-${cell.id}`}
                           aria-label={row.cells.length === 1 ? undefined : cellLabel(cell)}
                           className={classes === '' ? undefined : classes}
+                          kind={UNIT_KINDS[cell.unit]}
                           value={value}
                           onValueChange={(next) =>
                             setValues((current) => ({ ...current, [cell.id]: next }))
@@ -468,7 +538,7 @@ export default function InputsForm({
                       {suggestion !== null && (
                         <>
                           <span className="tax-suggestion-value" title={suggestion}>
-                            suggested {suggestion}
+                            {suggestionWord} {suggestion}
                           </span>
                           <button
                             type="button"
@@ -478,7 +548,7 @@ export default function InputsForm({
                             onClick={() =>
                               setValues((current) => ({
                                 ...current,
-                                [suggestionCell.id]: suggestionCell.suggested ?? '',
+                                [suggestionCell.id]: applies ?? '',
                               }))
                             }
                           >

@@ -121,13 +121,18 @@ from app.services.tax_whatif import (
     decompose_espp,
 )
 from app.tax_keys import (
+    COUNT,
     JURISDICTIONS,
     MARRIED_JOINT,
     MARRIED_SEPARATE,
+    MAX_INPUT_COUNT,
+    MIN_INPUT_COUNT,
     PER_PERSON_KEYS,
+    PERCENT,
     SECTIONS,
     SINGLE,
     TAX_INPUT_DEFINITIONS,
+    unit_for,
 )
 
 router = APIRouter(prefix="/taxes", tags=["taxes"], dependencies=[Depends(get_current_user)])
@@ -423,6 +428,10 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
                     label=definition.label,
                     sort_order=definition.sort_order,
                     is_derived=definition.is_derived,
+                    # From tax_keys, not from the row: the unit is a property of the KEY,
+                    # so an older database that never migrated one still renders the right
+                    # box (see tax_keys.TAX_INPUT_UNITS).
+                    unit=unit_for(definition.key),
                     is_per_person=definition.is_per_person,
                     person_id=column if definition.is_per_person else None,
                     value=source.get(definition.key),
@@ -585,6 +594,29 @@ async def _require_known_input_keys(db: AsyncSession, keys: Iterable[str]) -> No
         raise HTTPException(status_code=422, detail=f"unknown input key(s): {unknown}")
 
 
+COUNT_MESSAGE = f"must be a whole number of checks between {MIN_INPUT_COUNT} and {MAX_INPUT_COUNT}"
+PERCENT_MESSAGE = "must be a fraction between 0 and 1 (the form enters it as a percent)"
+
+
+def _check_input_unit(key: str, value: Decimal) -> None:
+    """The per-UNIT fence (2026-09-09 spec §2), over the already-quantized value.
+
+    Money keys keep the column bound alone — every figure on a tax sheet is money and the
+    engine has no opinion about its size. The two non-money keys DO have one: `pay_periods`
+    counts checks received so far this year (a whole number; 53 is the most a weekly
+    payroll can pay), and a percent key stores the FRACTION the engine multiplies by, so a
+    stored 98 would have multiplied treasury dividends by ninety-eight. Same `values.{key}`
+    vocabulary as the quantizer above, so a rejected input reads the same wherever it
+    arrived.
+    """
+    unit = unit_for(key)
+    if unit == COUNT:
+        if value != value.to_integral_value() or not (MIN_INPUT_COUNT <= value <= MAX_INPUT_COUNT):
+            raise HTTPException(status_code=422, detail=f"values.{key} {COUNT_MESSAGE}")
+    elif unit == PERCENT and not (ZERO <= value <= Decimal("1")):
+        raise HTTPException(status_code=422, detail=f"values.{key} {PERCENT_MESSAGE}")
+
+
 def _validated_input_value(key: str, value: Decimal | None) -> Decimal | None:
     """One input value at the tax_inputs column scale, Numeric(14,4); null stays null.
 
@@ -597,7 +629,9 @@ def _validated_input_value(key: str, value: Decimal | None) -> Decimal | None:
     """
     if value is None:
         return None
-    return quantize_price(value, f"values.{key}", max_abs=MONEY_MAX_ABS_14_4) + ZERO
+    quantized = quantize_price(value, f"values.{key}", max_abs=MONEY_MAX_ABS_14_4) + ZERO
+    _check_input_unit(key, quantized)
+    return quantized
 
 
 @router.put("/years/{year}/inputs", response_model=TaxInputsOut)

@@ -689,11 +689,20 @@ export interface TaxPersonOut {
   name: string
 }
 
+/**
+ * Which BOX a tax input is entered through (the server's `tax_keys.unit_for`). Money is the
+ * default and all but two of the rows; a count is a whole number of paychecks; a percent shows
+ * 97.53% over a stored 0.9753 — the wire is always the fraction the engine multiplies by.
+ */
+export type TaxInputUnit = 'money' | 'count' | 'percent'
+
 export interface TaxInputItemOut {
   key: string
   label: string
   sort_order: number
   is_derived: boolean
+  // The entry unit for this key. Stamped on every item by the router, so it is never absent.
+  unit: TaxInputUnit
   // Definition flag (`tax_input_definitions.is_per_person`): this key is stored once per
   // PERSON — salary, the W-2 family, 401k, HSA, pre-tax deductions and the two tracker-only
   // withholding keys — so the payload repeats the item once per person column. Household
@@ -707,6 +716,10 @@ export interface TaxInputItemOut {
   // own values. Advisory: the UI offers a chip, nothing is ever applied server-side.
   // Present-ness (not is_derived) is what a chip renders on.
   suggested: string | null
+  // Where `suggested` came from when it is NOT this key's sheet formula — "last year's" for
+  // the deduction rows carried forward from the prior year. Null means the formula, and the
+  // chip keeps its default "suggested" wording.
+  suggestion_source: string | null
 }
 
 export interface TaxInputSectionOut {

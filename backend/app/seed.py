@@ -43,9 +43,19 @@ async def seed_people(db: AsyncSession) -> None:
 
 
 async def seed_tax_definitions(db: AsyncSession) -> None:
-    existing = set((await db.execute(select(TaxInputDefinition.key))).scalars().all())
+    # Runs on every boot (start.sh), so the LABEL is kept in step with tax_keys rather than
+    # frozen at the row's insert: a relabel (2026-09-09 spec §2 renames two rows) is a code
+    # change, and a seeded row that still said "Unq Div: State Exempt Percentage" would
+    # contradict the box it heads. Only the label is synced — sort_order/section/is_derived
+    # are structural and a migration owns them.
+    rows = {row.key: row for row in (await db.execute(select(TaxInputDefinition))).scalars()}
     for key, label, section, sort_order, is_derived in TAX_INPUT_DEFINITIONS:
-        if key not in existing:
+        stored = rows.get(key)
+        if stored is not None:
+            if stored.label != label:
+                stored.label = label
+                print(f"Relabelled tax input {key}")
+        else:
             db.add(
                 TaxInputDefinition(
                     key=key,

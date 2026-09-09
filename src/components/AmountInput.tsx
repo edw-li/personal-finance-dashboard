@@ -2,14 +2,20 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { canonicalAmount, isAmount, parseAmount } from '../utils/amount'
 import { formatCurrency, formatShares } from '../utils/format'
+import { isPlainDecimal, shiftPoint } from '../utils/percent'
 import './panels.css'
 
-export type AmountKind = 'money' | 'shares' | 'percent' | 'plain'
+export type AmountKind = 'money' | 'shares' | 'percent' | 'count' | 'plain'
 
 // The blurred echo per kind — display-only, never state, never the wire (spec §3.3).
 function echoOf(kind: AmountKind, canonical: string): string {
   if (kind === 'money') return formatCurrency(canonical)
   if (kind === 'shares') return formatShares(canonical)
+  // A COUNT is a whole number of things (paychecks so far this year), and its column is a
+  // Numeric(14,4) like every other: "20.0000" off the wire has to read as "20". shiftPoint
+  // by zero places is exactly "keep every digit, drop the trailing zeros" — the same string
+  // math the percent boxes convert with, so no float ever sees a count either.
+  if (kind === 'count') return isPlainDecimal(canonical) ? shiftPoint(canonical, 0) : canonical
   // A half-typed "13." would echo as "13.%"; the orphan point is display noise, so it is
   // dropped HERE only — parseAmount keeps "13." verbatim in state (idempotence contract).
   if (kind === 'percent') return `${canonical.replace(/\.$/, '')}%`

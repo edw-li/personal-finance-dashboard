@@ -230,6 +230,67 @@ async def test_get_inputs_echoes_values_and_suggestions(auth_client, definitions
     assert items["capital_loss_deductions"]["suggested"] == "0.0000"
 
 
+async def test_get_inputs_stamps_the_unit_and_the_two_relabelled_rows(auth_client, definitions):
+    """Item 2 (2026-09-09 spec §2): every item says which BOX it is entered through.
+
+    Money is the default for 43 of the 45 rows; `pay_periods` is a count of checks and
+    `unq_div_state_exempt_pct` a percent stored as a fraction. The unit rides the payload
+    from tax_keys rather than from the definition row, so a database seeded before units
+    existed still renders the right box — which is also why the two relabels are asserted
+    here: seed_tax_definitions syncs the label of a row it already has.
+    """
+    await put_inputs(auth_client, 2024, {})
+
+    items = items_by_key((await auth_client.get(f"{YEARS}/2024/inputs")).json())
+    assert items["pay_periods"]["unit"] == "count"
+    assert items["unq_div_state_exempt_pct"]["unit"] == "percent"
+    assert {key for key, item in items.items() if item["unit"] != "money"} == {
+        "pay_periods",
+        "unq_div_state_exempt_pct",
+    }
+    assert items["pay_periods"]["label"] == "Pay periods (checks received so far this year)"
+    assert (
+        items["unq_div_state_exempt_pct"]["label"]
+        == "Treasury-fund dividends — state-exempt share (%)"
+    )
+    # Nothing else about the item moved: `suggestion_source` is null for a sheet formula.
+    assert items["gross_paycheck"]["suggestion_source"] is None
+
+
+async def test_put_inputs_fences_the_count_and_percent_units(auth_client, definitions):
+    """A count is whole and 0..53; a percent key stores the FRACTION the engine multiplies.
+
+    A stored 98 on the exempt-share row would have multiplied treasury dividends by
+    ninety-eight, and a stored 20.5 checks is not a paycheck — both are refused at the
+    boundary in the PUT's own `values.{key}` vocabulary, with no partial write.
+    """
+    for value in ("54", "-1", "20.5"):
+        resp = await auth_client.put(
+            f"{YEARS}/2024/inputs", json={"values": {"pay_periods": value}}
+        )
+        assert resp.status_code == 422, value
+        assert "values.pay_periods" in resp.json()["detail"]
+    for value in ("98", "-0.5", "1.0001"):
+        resp = await auth_client.put(
+            f"{YEARS}/2024/inputs", json={"values": {"unq_div_state_exempt_pct": value}}
+        )
+        assert resp.status_code == 422, value
+        assert "values.unq_div_state_exempt_pct" in resp.json()["detail"]
+    assert (await auth_client.get(YEARS)).json() == []  # not even the year row
+
+    # The bounds are inclusive, and a legal pair still lands.
+    body = await put_inputs(
+        auth_client, 2024, {"pay_periods": "53", "unq_div_state_exempt_pct": "1"}
+    )
+    items = items_by_key(body)
+    assert items["pay_periods"]["value"] == "53.0000"
+    assert items["unq_div_state_exempt_pct"]["value"] == "1.0000"
+    zeroed = await put_inputs(
+        auth_client, 2024, {"pay_periods": "0", "unq_div_state_exempt_pct": "0"}
+    )
+    assert items_by_key(zeroed)["pay_periods"]["value"] == "0.0000"
+
+
 async def test_put_inputs_creates_year_upserts_and_deletes(auth_client, definitions):
     created = await put_inputs(auth_client, 2027, {"annual_salary": "150000", "pay_periods": 18})
     items = items_by_key(created)
@@ -670,18 +731,26 @@ async def test_all_years_summary_skips_input_less_years(auth_client, definitions
 async def test_summary_guards_absurd_but_legal_inputs(auth_client, definitions):
     """A GET must never 422/500 on values the API itself accepted (Task 1 review I3).
 
-    Both factors below are bound-legal (|v| < 10^10) yet their product is ~10^20, which
-    blows past every money column and — over a 0.0001 gross income — produces a ~10^23
-    effective rate. Money serializes anyway (plain quantize, never money.py's bounded
-    one); only the out-of-range rate degrades to null plus a warning.
+    MOVED 2026-09-09 (spec §2, units): this test used to build its absurdity from the
+    engine's one PRODUCT of two inputs, treasury dividends x a -9999999999.9999 exempt
+    share, for a ~10^20 state AGI. That share is now a percent key fenced to 0..1, so the
+    API no longer accepts the factor and the product is unreachable — the guard is proved
+    from money keys instead. Four bound-legal (|v| < 10^10) NEGATIVE pre-tax deductions
+    each ADD to AGI, none of them appears in gross income, and the result is a ~4x10^10
+    AGI over a 0.0001 gross income: money past the 10^10 column bound serializes anyway
+    (plain quantize, never money.py's bounded one), and only the ~10^14 totals rate
+    degrades to null plus a warning. Old figures: state AGI 99999999999998000000.00,
+    total tax 12299999999999735394.73.
     """
     await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
     await put_inputs(
         auth_client,
         2024,
         {
-            "unq_div_us_treasuries_etf": "9999999999.9999",
-            "unq_div_state_exempt_pct": "-9999999999.9999",
+            "trad_401k_contributions": "-9999999999.9999",
+            "hsa_contributions": "-9999999999.9999",
+            "hsa_contributions_employer": "-9999999999.9999",
+            "other_pretax_deductions": "-9999999999.9999",
             "unqualified_dividends": "0.0001",
         },
     )
@@ -689,12 +758,13 @@ async def test_summary_guards_absurd_but_legal_inputs(auth_client, definitions):
     resp = await auth_client.get(f"{YEARS}/2024/summary")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["state"]["agi"] == "99999999999998000000.00"
-    assert body["state"]["tax"] == "12299999999999735394.73"
-    assert body["totals"]["total_tax"] == "12299999999999735394.73"
-    assert body["totals"]["take_home"] == "-12299999999999735394.73"
-    assert body["state"]["effective_rate"] == "0.123000"  # in range: still served
-    assert body["totals"]["effective_rate"] is None  # ~10^23: nulled, not 500
+    assert body["federal"]["agi"] == "40000000000.00"
+    assert body["state"]["agi"] == "20000000000.00"  # the two HSA legs are added back
+    assert body["state"]["tax"] == "2459981394.73"
+    assert body["totals"]["total_tax"] == "17964950185.68"
+    assert body["totals"]["take_home"] == "-17964950185.68"
+    assert body["state"]["effective_rate"] == "0.122999"  # in range: still served
+    assert body["totals"]["effective_rate"] is None  # ~10^14 over 0.0001: nulled, not 500
     assert "totals effective rate out of range" in body["warnings"]
 
 

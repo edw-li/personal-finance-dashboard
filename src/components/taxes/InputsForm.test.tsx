@@ -29,11 +29,13 @@ function inputsFixture(): TaxInputsOut {
           {
             key: 'annual_salary', label: 'Annual Salary', sort_order: 10,
             is_derived: false, value: '200000.0000', suggested: null,
+            unit: 'money', suggestion_source: null,
             is_per_person: true, person_id: 1,
           },
           {
             key: 'gross_paycheck', label: 'Gross Paycheck', sort_order: 20,
             is_derived: true, value: '7000.0000', suggested: '8333.3333',
+            unit: 'money', suggestion_source: null,
             is_per_person: true, person_id: 1,
           },
         ],
@@ -44,6 +46,7 @@ function inputsFixture(): TaxInputsOut {
           {
             key: 'hsa_contributions', label: 'HSA Contributions', sort_order: 20,
             is_derived: false, value: '4150.0000', suggested: null,
+            unit: 'money', suggestion_source: null,
             is_per_person: true, person_id: 1,
           },
         ],
@@ -54,6 +57,7 @@ function inputsFixture(): TaxInputsOut {
           {
             key: 'qualified_dividends', label: 'Qualified Dividends', sort_order: 40,
             is_derived: false, value: null, suggested: null,
+            unit: 'money', suggestion_source: null,
             is_per_person: false, person_id: null,
           },
         ],
@@ -111,6 +115,34 @@ function marriedNoRoster(): TaxInputsOut {
       ...section,
       items: section.items.map((item) => ({ ...item, person_id: null })),
     })),
+  }
+}
+
+// The two non-money rows (2026-09-09 spec 2), on a fixture of their own so the positional
+// paste tests keep the exact cell order they assert against.
+function unitInputs(): TaxInputsOut {
+  return {
+    year: 2025,
+    filing_status: 'single',
+    people: [{ id: 1, name: 'Alex' }],
+    sections: [
+      {
+        section: 'ordinary_income',
+        items: [
+          {
+            key: 'pay_periods', label: 'Pay periods (checks received so far this year)',
+            sort_order: 30, is_derived: false, unit: 'count', suggestion_source: null,
+            value: '20.0000', suggested: null, is_per_person: true, person_id: 1,
+          },
+          {
+            key: 'unq_div_state_exempt_pct',
+            label: 'Treasury-fund dividends \u2014 state-exempt share (%)',
+            sort_order: 170, is_derived: false, unit: 'percent', suggestion_source: null,
+            value: '0.9753', suggested: null, is_per_person: false, person_id: null,
+          },
+        ],
+      },
+    ],
   }
 }
 
@@ -187,6 +219,44 @@ describe('InputsForm', () => {
     await waitFor(() =>
       expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2024, {
         values: { gross_paycheck: '8333.3333' },
+      }),
+    )
+  })
+
+  it('renders a count as an integer and a percent as a percent', () => {
+    render(<InputsForm inputs={unitInputs()} onSaved={vi.fn()} />)
+    const count = field('Pay periods (checks received so far this year)')
+    const percent = field('Treasury-fund dividends \u2014 state-exempt share (%)')
+
+    // Both columns are Numeric(14,4), so both arrive with four decimals; neither box is a
+    // money box, so neither wears a "$". The count drops the trailing zeros it can never
+    // use, and the percent shows the stored FRACTION times a hundred.
+    expect(count.value).toBe('20')
+    expect(percent.value).toBe('97.53%')
+    // Focused, the raw state is the box's own units - not the wire's 0.9753.
+    act(() => percent.focus())
+    expect(percent.value).toBe('97.53')
+    act(() => percent.blur())
+    // A focus and a blur of an untouched row must not dirty the form: the conversion is
+    // exact in both directions (string math), so the diff is still empty.
+    expect(saveButton().disabled).toBe(true)
+  })
+
+  it('saves a count verbatim and a percent as the fraction the engine multiplies', async () => {
+    render(<InputsForm inputs={unitInputs()} onSaved={vi.fn()} />)
+    fireEvent.change(field('Pay periods (checks received so far this year)'), {
+      target: { value: '21' },
+    })
+    fireEvent.change(field('Treasury-fund dividends \u2014 state-exempt share (%)'), {
+      target: { value: '98' },
+    })
+    fireEvent.click(saveButton())
+
+    // 98 in the box, 0.98 on the wire - the engine multiplies treasury dividends by it, so
+    // a stored 98 would have exempted ninety-eight times the dividend.
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2025, {
+        values: { pay_periods: '21', unq_div_state_exempt_pct: '0.98' },
       }),
     )
   })

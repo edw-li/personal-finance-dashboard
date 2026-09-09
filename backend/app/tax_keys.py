@@ -13,7 +13,7 @@ SECTIONS = (ORDINARY_INCOME, DEDUCTIONS, CAPITAL_GAINS)
 TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     ("annual_salary", "Annual Salary", ORDINARY_INCOME, 10, False),
     ("gross_paycheck", "Gross Paycheck", ORDINARY_INCOME, 20, True),
-    ("pay_periods", "Pay Periods", ORDINARY_INCOME, 30, False),
+    ("pay_periods", "Pay periods (checks received so far this year)", ORDINARY_INCOME, 30, False),
     ("latest_w2_income", "Latest W2 Income", ORDINARY_INCOME, 40, True),
     ("other_w2_income", "Other W2 Income", ORDINARY_INCOME, 50, True),
     ("w2_stock_rsus_sold", "W2: Stock/RSUs Sold", ORDINARY_INCOME, 60, False),
@@ -33,7 +33,13 @@ TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     ("stcg_espp_component", "STCG: ESPP Sale Component", ORDINARY_INCOME, 140, False),
     ("unqualified_dividends", "Unqualified Dividends", ORDINARY_INCOME, 150, True),
     ("unq_div_us_treasuries_etf", "Unq Div: US Treasuries ETF", ORDINARY_INCOME, 160, False),
-    ("unq_div_state_exempt_pct", "Unq Div: State Exempt Percentage", ORDINARY_INCOME, 170, False),
+    (
+        "unq_div_state_exempt_pct",
+        "Treasury-fund dividends — state-exempt share (%)",
+        ORDINARY_INCOME,
+        170,
+        False,
+    ),
     ("unq_div_other", "Unq Div: Other Dividends", ORDINARY_INCOME, 180, False),
     ("interest_total", "Interest", ORDINARY_INCOME, 190, True),
     ("interest_standard", "Interest: Standard", ORDINARY_INCOME, 200, False),
@@ -63,6 +69,36 @@ TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     ("qualified_dividends", "Qualified Dividends", CAPITAL_GAINS, 40, False),
     ("other_capital_gains", "Other Capital Gains", CAPITAL_GAINS, 50, False),
 ]
+
+# The UNIT each key is entered in (2026-09-09 spec §2). Money is the default and the
+# exceptions are listed, so a key added later is money until it says otherwise — which is
+# right for a tax sheet. Deliberately CODE, not a `tax_input_definitions` column: the unit
+# is a property of the key rather than of one database, so a stored column would only mean
+# a migration to tell an old database that `pay_periods` counts checks. The API stamps
+# every `TaxInputsOut` item with `unit_for(key)` and the form picks its box from it.
+MONEY = "money"
+COUNT = "count"
+PERCENT = "percent"
+INPUT_UNITS = (MONEY, COUNT, PERCENT)
+
+TAX_INPUT_UNITS: dict[str, str] = {
+    "pay_periods": COUNT,
+    # Stored as the FRACTION the engine multiplies by (0.9753); the form shows 97.53%.
+    "unq_div_state_exempt_pct": PERCENT,
+}
+
+
+def unit_for(key: str) -> str:
+    """This key's entry unit — `money` unless TAX_INPUT_UNITS says otherwise."""
+    return TAX_INPUT_UNITS.get(key, MONEY)
+
+
+# The ranges the PUT enforces per unit. A count of checks received so far this year is a
+# whole number, and 53 is the most a weekly payroll can pay in one calendar year; a percent
+# key stores a fraction, so 0..1 (the engine multiplies it directly).
+MIN_INPUT_COUNT = 0
+MAX_INPUT_COUNT = 53
+
 
 JURISDICTIONS = (
     "federal",
