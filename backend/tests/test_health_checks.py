@@ -11,6 +11,7 @@ from app.models import (
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
+    Person,
     Security,
     SpendingCategory,
     TaxInput,
@@ -294,17 +295,33 @@ LEGACY_TOTAL = Decimal("27213.282")
 NEW_TOTAL = Decimal("27207.06")  # the same sum without the §199A term
 
 
-async def tax_year(db, year: int, values: dict[str, Decimal]) -> None:
-    """One stored year. The definition rows are the tax_inputs FK's parents."""
+async def tax_year(
+    db,
+    year: int,
+    values: dict[str, Decimal],
+    *,
+    filing_status: str = "single",
+    owned: dict[str, Decimal] | None = None,
+    owner: int | None = None,
+) -> None:
+    """One stored year. The definition rows are the tax_inputs FK's parents.
+
+    `owned` is written against `owner` rather than the household NULL — the shape a person
+    column has, which is what tells a filing-separately return's own rows from its
+    partner's.
+    """
     if await db.get(TaxYear, year) is None:
-        db.add(TaxYear(year=year))
+        db.add(TaxYear(year=year, filing_status=filing_status))
     existing = set((await db.execute(select(TaxInputDefinition.key))).scalars().all())
-    for key in values:
+    for key in list(values) + list(owned or {}):
         if key not in existing:
             db.add(TaxInputDefinition(key=key, label=key, section="deductions", sort_order=0))
+            existing.add(key)
     await db.flush()
     for key, value in values.items():
         db.add(TaxInput(year=year, key=key, value=value))
+    for key, value in (owned or {}).items():
+        db.add(TaxInput(year=year, key=key, person_id=owner, value=value))
     await db.commit()
 
 
@@ -352,6 +369,38 @@ async def test_sec199a_zero_is_nothing_to_double_count(db):
 async def test_sec199a_says_nothing_about_a_year_with_no_itemized_row(db):
     await tax_year(db, 2025, {"itemized_sec199a_div": Decimal("6.222")})
     assert (await check_sec199a_in_itemized(db)).severity == "ok"
+
+
+async def test_sec199a_reads_only_the_rows_on_a_filing_separately_return(db):
+    """A partner's income is OFF an MFS return, and summing it in would miss a leftover.
+
+    MFS halves the SALT figures: the cap is 20000 and the phase-down starts at 250000 of
+    MAGI. This filer's own 100000 of wages is well under it, so their 24141.06 of SALT is
+    capped at 20000 and the legacy total is 20000 + 3050 + 16 + 6.222 = 23072.222 — which is
+    what is stored. Counting the partner's 600000 too would put MAGI at 700000, phase the
+    cap all the way to its 5000 floor, and produce a suggestion 15000 lower than the one the
+    page offers — no match, and a real double deduction left unnamed.
+    """
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Sam", is_primary=False)
+    db.add_all([me, partner])
+    await db.flush()
+    await tax_year(
+        db,
+        2025,
+        LEGACY_2025 | {"itemized_deduction": Decimal("23072.222")},
+        filing_status="married_separate",
+        owned={"latest_w2_income": Decimal("100000")},
+        owner=me.id,
+    )
+    db.add(
+        TaxInput(year=2025, key="latest_w2_income", person_id=partner.id, value=Decimal("600000"))
+    )
+    await db.commit()
+
+    check = await check_sec199a_in_itemized(db)
+    assert check.severity == "warn"
+    assert check.years == [2025]
 
 
 async def test_spending_gap_names_months_missing_inside_the_balances_window(db):

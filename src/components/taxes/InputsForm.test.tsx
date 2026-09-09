@@ -286,6 +286,34 @@ describe('InputsForm', () => {
     )
   })
 
+  it('refuses a fractional count in the form, not at the server', async () => {
+    // isAmount alone accepts "20.5": it is the MONEY rule. A count of paychecks is whole,
+    // and a shape the form can see must not travel to the server to come back as a raw 422.
+    render(<InputsForm inputs={unitInputs()} onSaved={vi.fn()} />)
+    const count = field('Pay periods (checks received so far this year)')
+    fireEvent.change(count, { target: { value: '20.5' } })
+
+    expect(count.className).toContain('invalid')
+    fireEvent.click(saveButton())
+    expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
+    // Its own sentence: "Enter a number" would be nonsense advice to someone who has.
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Enter a whole number of checks for: Pay periods (checks received so far this year)',
+    )
+
+    // A whole one clears both the style and the guard — RANGE stays the server's.
+    fireEvent.change(count, { target: { value: '21' } })
+    expect(field('Pay periods (checks received so far this year)').className).not.toContain(
+      'invalid',
+    )
+    fireEvent.click(saveButton())
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2025, {
+        values: { pay_periods: '21' },
+      }),
+    )
+  })
+
   it('evaluates an =-expression into the PUT body', async () => {
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
     fireEvent.change(field('Annual Salary'), { target: { value: '=1200+400' } })

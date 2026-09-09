@@ -26,6 +26,7 @@ from app.schemas.lifecycle import HealthCheckOut, HealthFixOut
 from app.schemas.system import BackupStatusOut
 from app.services import clock
 from app.services.coverage import Coverage, load_coverage
+from app.services.people import load_people
 from app.services.snapshot import SNAPSHOT_NAME_RE, snapshot_stamp, snapshots_dir
 from app.services.tax_service import derive_suggestions
 from app.tax_keys import SINGLE
@@ -355,30 +356,36 @@ async def check_sec199a_in_itemized(db: AsyncSession) -> HealthCheckOut:
     figure the old chip wrote. A hand-typed total, or a year whose §199A line is zero, is
     left alone — absent a positive §199A there is nothing double-counted to begin with.
 
-    Values are summed per key across every stored row of the year, which is what the engine
-    assembles for a single filer and for married-joint alike; only an MFS return with a
-    partner's rows on file could differ, and then only in the SALT phase-down's MAGI, which
-    cancels out of the comparison anyway (it is inside both sides).
+    Values are assembled through the taxes router's own `_assemble_inputs`, narrowed to the
+    people THIS year's return covers, so the suggestion compared against is exactly the one
+    the page offers. Summing every stored row instead would be wrong for a filing-separately
+    year with a partner's rows on file: their income is off that return, but it would still
+    raise the MAGI the SALT phase-down is judged on, shrink the suggestion, and let a real
+    leftover pass unnoticed. The import is function-local, the way `assistant_context`
+    borrows the routers it reads — a service must not import a router at module scope.
     """
+    from app.api.taxes import _assemble_inputs, _return_people
+
     check_id = "sec199a_in_itemized"
     title = "Itemized deductions exclude the §199A line"
     statuses = {
         row.year: row.filing_status for row in (await db.execute(select(TaxYear))).scalars()
     }
-    values: dict[int, dict[str, Decimal]] = {}
+    people = await load_people(db)
+    rows_by_year: dict[int, list[TaxInput]] = {}
     for row in (await db.execute(select(TaxInput))).scalars():
-        year_values = values.setdefault(row.year, {})
-        stored = year_values.get(row.key)
-        year_values[row.key] = row.value if stored is None else stored + row.value
+        rows_by_year.setdefault(row.year, []).append(row)
 
     years: list[int] = []
-    for year in sorted(values):
-        inputs = values[year]
+    for year in sorted(rows_by_year):
+        status = statuses.get(year, SINGLE)
+        columns = [person.id for person in _return_people(people, status)] or [None]
+        inputs = _assemble_inputs(rows_by_year[year], columns)
         sec199a = inputs.get(SEC199A_KEY)
         itemized = inputs.get(ITEMIZED_KEY)
         if sec199a is None or sec199a <= 0 or itemized is None:
             continue
-        suggested = derive_suggestions(year, inputs, statuses.get(year, SINGLE))[ITEMIZED_KEY]
+        suggested = derive_suggestions(year, inputs, status)[ITEMIZED_KEY]
         if abs(itemized - (suggested + sec199a)) <= LEGACY_ITEMIZED_TOLERANCE:
             years.append(year)
     if not years:

@@ -69,6 +69,25 @@ function toWire(unit: TaxInputUnit, text: string): string {
   return shiftPoint(canonical, -2)
 }
 
+/** A whole number of things, with no sign and no point: what a COUNT box can hold. */
+const WHOLE = /^\d+$/
+
+/**
+ * Whether one box's text is a SHAPE this unit can hold. `isAmount` alone is the money
+ * rule, and it accepts "20.5" for a count of paychecks — which the server then 422s, so the
+ * user reads a raw server sentence about a mistake the form could see. RANGE stays the
+ * server's (0..53 checks, a 0..1 fraction): that is a fact about the tax year, not about
+ * the shape of the text.
+ */
+function isWholeCount(unit: TaxInputUnit, text: string): boolean {
+  return unit !== 'count' || WHOLE.test(canonicalAmount(text, { expressions: false }))
+}
+
+/** Both rules, for the places that only care whether the cell is enterable at all. */
+function isEntry(unit: TaxInputUnit, text: string): boolean {
+  return isAmount(text, { expressions: unit === 'money' }) && isWholeCount(unit, text)
+}
+
 /**
  * What a suggestion chip says. The engine's suggestions are wire values like everything
  * else, so they are shown in the box's units too.
@@ -246,15 +265,18 @@ export default function InputsForm({
 
   const changed: Record<string, string | null> = {}
   const invalid: string[] = []
+  // A number, but not a WHOLE one, in a count box — its own list because "Enter a number
+  // for: Pay periods" would be nonsense advice to someone who just entered 20.5.
+  const notWhole: string[] = []
   for (const cell of flatCells) {
     const next = (values[cell.id] ?? '').trim()
     if (next === (baseline[cell.id] ?? '')) continue
     changed[cell.id] = next === '' ? null : next
     // The COLUMN is named too: on a married year two boxes wear the same item label, and
     // "Enter a number for: HSA Contributions" would not say which one.
-    if (next !== '' && !isAmount(next, { expressions: cell.unit === 'money' })) {
-      invalid.push(cellLabel(cell))
-    }
+    if (next === '') continue
+    if (!isAmount(next, { expressions: cell.unit === 'money' })) invalid.push(cellLabel(cell))
+    else if (!isWholeCount(cell.unit, next)) notWhole.push(cellLabel(cell))
   }
   const changedCount = Object.keys(changed).length
 
@@ -274,11 +296,16 @@ export default function InputsForm({
   }, [flashIds])
 
   const submit = () => {
-    if (invalid.length > 0) {
-      // "a number", not "a plain number": grouping, "$" and "=" arithmetic are all valid
-      // entry now (spec §3.1/§3.2), so the older wording named a stricter rule than this
-      // form enforces. Client-local sentence with no server twin, so it is ours to word.
-      setError(`Enter a number for: ${invalid.join(', ')}`)
+    // "a number", not "a plain number": grouping, "$" and "=" arithmetic are all valid
+    // entry now (spec §3.1/§3.2), so the older wording named a stricter rule than this
+    // form enforces. Client-local sentences with no server twin, so they are ours to word;
+    // the count rule gets its own, because it is asking for something different.
+    const problems = [
+      invalid.length > 0 ? `Enter a number for: ${invalid.join(', ')}` : '',
+      notWhole.length > 0 ? `Enter a whole number of checks for: ${notWhole.join(', ')}` : '',
+    ].filter((sentence) => sentence !== '')
+    if (problems.length > 0) {
+      setError(problems.join(' · '))
       return
     }
     if (changedCount === 0) return
@@ -506,10 +533,7 @@ export default function InputsForm({
                     {row.cells.map((cell) => {
                       const value = values[cell.id] ?? ''
                       const classes = [
-                        value.trim() !== '' &&
-                        !isAmount(value, { expressions: cell.unit === 'money' })
-                          ? 'invalid'
-                          : '',
+                        value.trim() !== '' && !isEntry(cell.unit, value) ? 'invalid' : '',
                         flashIds.has(cell.id) ? 'pasted-flash' : '',
                         // A household line inside a split grid takes both person tracks
                         // rather than leaving a hole under one name.
