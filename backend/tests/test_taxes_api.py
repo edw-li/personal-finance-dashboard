@@ -219,11 +219,11 @@ async def test_get_inputs_echoes_values_and_suggestions(auth_client, definitions
     assert items["unq_div_state_exempt_pct"]["value"] == "0.9514"
     # The sheet's own gray-cell formulas: the stored 2025 column agrees with the engine.
     assert items["gross_paycheck"]["suggested"] == items["gross_paycheck"]["value"] == "6750.0000"
-    assert (
-        items["itemized_deduction"]["suggested"]
-        == items["itemized_deduction"]["value"]
-        == "27213.2820"
-    )
+    # The ONE suggestion that no longer reproduces its stored cell: the sheet's itemized
+    # formula added the 6.2220 §199A line, which became a below-the-line deduction of its
+    # own on 2026-09-09 (spec 4h). Stored 27213.2820, suggested 27207.0600.
+    assert items["itemized_deduction"]["value"] == "27213.2820"
+    assert items["itemized_deduction"]["suggested"] == "27207.0600"
     # Chips follow the suggestions map, not is_derived: capital_loss_deductions is stored
     # with is_derived=False yet the sheet computes it (Plan 5 Workbook reference).
     assert items["capital_loss_deductions"]["is_derived"] is False
@@ -657,7 +657,9 @@ async def test_summary_2026_has_no_gains_so_no_capital_gains_rate(auth_client, d
     body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
     assert body["warnings"] == []
     assert body["capital_gains"] == {
-        "taxable_income": "250304.21",
+        # 250304.21 until 2026-09-09: §199A's 8 is a below-the-line deduction now (spec 4h),
+        # so the ordinary income the gains would stack on is 8 lower.
+        "taxable_income": "250296.21",
         "gains_amount": "0.00",
         "tax": "0.00",
         "effective_rate": None,
@@ -668,8 +670,10 @@ async def test_summary_2026_has_no_gains_so_no_capital_gains_rate(auth_client, d
         "tax": "0.00",
         "effective_rate": None,  # NII of 0 is the sheet's #DIV/0!
     }
-    assert body["federal"]["tax"] == "57160.35"
-    assert body["totals"]["total_tax"] == "98584.56"
+    # Both moved by the same §199A deduction: federal tax 57160.35 -> 57157.79 (8 × .32)
+    # and the total with it.
+    assert body["federal"]["tax"] == "57157.79"
+    assert body["totals"]["total_tax"] == "98582.00"
 
 
 async def test_summary_warns_on_stored_folded_niit_rates(auth_client, definitions):
@@ -1804,8 +1808,9 @@ async def test_brackets_missing_state_clears_once_the_tables_are_cloned(auth_cli
     )
     body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
     assert body["brackets_missing_for_status"] == []
-    # Cloned verbatim from the single tables, so the figures are the single goldens.
-    assert body["totals"]["total_tax"] == "98584.56"
+    # Cloned verbatim from the single tables, so the figures are the single goldens
+    # (98584.56 until §199A moved below the line on 2026-09-09, spec 4h).
+    assert body["totals"]["total_tax"] == "98582.00"
 
 
 async def test_married_year_reports_only_the_missing_tables(auth_client, definitions):

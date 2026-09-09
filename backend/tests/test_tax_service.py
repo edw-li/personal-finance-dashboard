@@ -173,9 +173,15 @@ YEAR_BRACKETS: dict[int, dict[str, list[tuple[Decimal, Decimal]]]] = {
 # The canonical model's expected outputs, at cents.
 _CANONICAL_TABLE: dict[str, tuple[str, str, str, str]] = {
     "fed_agi": ("117726.64", "211776.20", "259376.05", "280128.21"),
-    "fed_deduction": ("13850.00", "14600.00", "27213.28", "29824.00"),
-    "fed_ti": ("103876.64", "197176.20", "232162.77", "250304.21"),
-    "fed_tax": ("18330.39", "40782.88", "51355.09", "57160.35"),
+    # `fed_deduction` is the AGI-to-TI step, which since 2026-09-09 (spec 4h) carries
+    # §199A as well as max(standard, itemized): 2025 27213.28 -> 27219.50 (+6.222) and
+    # 2026 29824.00 -> 29832.00 (+8). 2023/2026 [sic 2023/2024] store no QBI dividends, so
+    # their columns are the unchanged controls. Taxable income and federal tax follow:
+    # 2025 TI 232162.77 -> 232156.55 and tax 51355.09 -> 51353.09; 2026 TI 250304.21 ->
+    # 250296.21 and tax 57160.35 -> 57157.79.
+    "fed_deduction": ("13850.00", "14600.00", "27219.50", "29832.00"),
+    "fed_ti": ("103876.64", "197176.20", "232156.55", "250296.21"),
+    "fed_tax": ("18330.39", "40782.88", "51353.09", "57157.79"),
     # 2023 moved 2026-09-09 (spec 4b): California does not tax interest on US Treasury
     # obligations, and state AGI subtracted only the exempt slice of treasury-FUND
     # dividends. 2023 is the only pinned year with a direct treasury-interest line
@@ -203,9 +209,11 @@ _CANONICAL_TABLE: dict[str, tuple[str, str, str, str]] = {
     # precision) + 75.59264 NIIT = 72824.61; take_home moves opposite. 2025: 90050.76
     # - 1267.19 x 0.038 (48.15322) + 418.88464 = 90421.49. 2026: unchanged control.
     # 2023 moved with its state tax (spec 4b): 34319.05 - 1922.124 = 32396.93, and
-    # take_home 92002.18 -> 93924.30 by the same amount in the other direction.
-    "total_tax": ("32396.93", "72824.61", "90421.49", "98584.56"),
-    "take_home": ("93924.30", "165148.56", "196787.57", "208109.47"),
+    # take_home 92002.18 -> 93924.30 by the same amount in the other direction. 2025/2026
+    # moved with §199A (spec 4h): total tax 90421.49 -> 90419.50 and 98584.56 -> 98582.00,
+    # take_home 196787.57 -> 196789.56 and 208109.47 -> 208112.03.
+    "total_tax": ("32396.93", "72824.61", "90419.50", "98582.00"),
+    "take_home": ("93924.30", "165148.56", "196789.56", "208112.03"),
 }
 
 CANONICAL: dict[int, dict[str, Decimal]] = {
@@ -426,7 +434,10 @@ def test_golden_2025():
 def test_golden_2026():
     breakdown = assert_canonical(2026)
     # Itemized (29824) beats the 16100 standard deduction; the sheet hardcoded 15750 (D3).
-    assert breakdown.federal.agi - breakdown.federal.taxable_income == Decimal("29824")
+    # The AGI-to-TI step is 29832 rather than 29824 since 2026-09-09 (spec 4h): §199A's 8
+    # of QBI dividends is a below-the-line deduction of its own, on top of the itemized
+    # total the sheet had already folded it into.
+    assert breakdown.federal.agi - breakdown.federal.taxable_income == Decimal("29832")
     assert breakdown.capital_gains.gains_amount == Decimal("0")
     assert breakdown.capital_gains.effective_rate is None
     assert breakdown.social_security.taxable_wages == Decimal("176100")
@@ -608,6 +619,49 @@ def test_gains_still_stack_on_ordinary_income_when_the_deduction_is_used_up():
     assert breakdown.capital_gains.tax == Decimal("55375") * Decimal("0.15")
 
 
+def test_sec199a_is_deducted_under_the_standard_deduction_too():
+    """4h (2026-09-09 spec): the QBI deduction is taken WHETHER OR NOT the filer itemizes.
+
+    The sheet modelled §199A as an itemized component, so it vanished for every year the
+    standard deduction won — which is most years, and every year in this workbook but two.
+    It is a below-the-line deduction of its own now: taxable income drops by it in both
+    branches, and by it exactly once in the itemizing one.
+    """
+    base = {
+        "latest_w2_income": Decimal("100000"),
+        "standard_deduction": Decimal("15000"),
+        "itemized_deduction": Decimal("0"),
+    }
+    qbi = {"itemized_sec199a_div": Decimal("1000")}
+
+    standard = compute_breakdown(2025, base, YEAR_BRACKETS[2025])
+    standard_qbi = compute_breakdown(2025, base | qbi, YEAR_BRACKETS[2025])
+    assert standard.federal.taxable_income == Decimal("85000")
+    assert standard_qbi.federal.taxable_income == Decimal("84000")
+    assert standard_qbi.federal.tax == walk(YEAR_BRACKETS[2025]["federal"], Decimal("84000"))
+
+    # Itemizing: the larger of the two deductions, then §199A once on top of it.
+    itemizing = compute_breakdown(
+        2025, base | qbi | {"itemized_deduction": Decimal("20000")}, YEAR_BRACKETS[2025]
+    )
+    assert itemizing.federal.taxable_income == Decimal("79000")
+
+
+def test_sec199a_left_the_itemized_suggestion():
+    """The other half of 4h: the sheet's itemized formula added the §199A line, and leaving
+    it there beside a below-the-line deduction would deduct the same dollars twice for
+    anyone who applies the chip."""
+    items = {
+        "itemized_salt": Decimal("5000"),
+        "itemized_donations": Decimal("1000"),
+        "itemized_vehicle_reg": Decimal("16"),
+        "itemized_other": Decimal("0"),
+    }
+    assert derive_suggestions(2025, items)["itemized_deduction"] == Decimal("6016")
+    with_qbi = derive_suggestions(2025, items | {"itemized_sec199a_div": Decimal("250")})
+    assert with_qbi["itemized_deduction"] == Decimal("6016")
+
+
 def test_state_agi_carries_cg_amount_every_year():
     """CA taxes capital gains and ALL dividends as ordinary income (2026-08-25 spec §1):
     state AGI = fed AGI - treasury slice - treasury interest + HSA addbacks + cg_amount, in
@@ -758,11 +812,16 @@ def test_sheet_drift_2025_cg_in_agi():
 
     drifted_agi = breakdown.federal.agi + doubled
     assert drifted_agi == Decimal("260643.24")  # sheet r96c5
-    drifted_ti = drifted_agi - (breakdown.federal.agi - breakdown.federal.taxable_income)
+    # The sheet's own deduction, read from the stored input rather than from the engine's
+    # AGI-to-TI step: since 2026-09-09 (spec 4h) that step also carries §199A, which the
+    # sheet's r97 never subtracted separately.
+    drifted_ti = drifted_agi - YEAR_INPUTS[2025]["itemized_deduction"]
     assert drifted_ti == Decimal("233429.958")  # sheet r97c5
     drifted_tax = walk(YEAR_BRACKETS[2025]["federal"], drifted_ti)
     assert drifted_tax == Decimal("51760.58656")  # sheet r98c5
-    assert cents(drifted_tax - breakdown.federal.tax) == Decimal("405.50")  # 1267.19 × .32
+    # 1267.19 of double-taxed gains + 6.222 of §199A the sheet never deducted, both in the
+    # 32% bracket: (1267.19 + 6.222) × .32 = 407.49 (was 405.50 before §199A moved).
+    assert cents(drifted_tax - breakdown.federal.tax) == Decimal("407.49")
 
     # The sheet's state chain, rebuilt from ITS drifted fed AGI, lands exactly on the
     # canonical one — both add the same 1267.19 (the sheet through fed AGI, the app
@@ -792,7 +851,9 @@ def test_sheet_drift_2026_stale_deduction():
     drifted_tax = walk(YEAR_BRACKETS[2026]["federal"], drifted_ti)
     assert abs(drifted_tax - Decimal("62079.27233")) < Decimal("0.001")
     assert cents(drifted_tax) == Decimal("62079.27")
-    assert cents(drifted_tax - breakdown.federal.tax) == Decimal("4918.93")
+    # 4918.93 before 2026-09-09: the canonical federal tax dropped by 8 × .32 when §199A
+    # became a deduction of its own (spec 4h), so the sheet's overstatement grew by 2.56.
+    assert cents(drifted_tax - breakdown.federal.tax) == Decimal("4921.49")
 
 
 # --------------------------------------------------------------------------------------
@@ -814,14 +875,23 @@ def test_suggestions_match_stored_2025():
         "interest_total": "62.87",
         "capital_loss_deductions": "0",
         "other_pretax_deductions": "300",
-        "itemized_deduction": "27213.282",
+        # 27213.282 until 2026-09-09 (spec 4h): the sheet's itemized formula added the
+        # 6.222 §199A line, which is now a below-the-line deduction the engine reads on its
+        # own — leaving it here would deduct it twice for anyone who applies the chip. It
+        # is therefore the ONE suggestion that no longer reproduces its stored 2025 cell.
+        "itemized_deduction": "27207.06",
         "ltcg_total": "536.38",
     }
     assert set(suggested) == set(expected)
     for key, value in expected.items():
         assert suggested[key] == Decimal(value), key
-        assert suggested[key] == YEAR_INPUTS[2025][key], key
+        if key != "itemized_deduction":
+            assert suggested[key] == YEAR_INPUTS[2025][key], key
         assert suggested[key].as_tuple().exponent == -4, key
+    assert (
+        YEAR_INPUTS[2025]["itemized_deduction"] - suggested["itemized_deduction"]
+        == YEAR_INPUTS[2025]["itemized_sec199a_div"]
+    )
 
 
 def test_suggestion_salt_cap_2024_vs_2025():

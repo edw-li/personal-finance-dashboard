@@ -304,10 +304,11 @@ function withholdingFor(year: number): WithholdingOut {
   }
 }
 
-// The engine's own sparse-year sentence: ENGINE_INPUT_KEYS in definition order, all 23 of
+// The engine's own sparse-year sentence: ENGINE_INPUT_KEYS in definition order, all 24 of
 // them, in ONE line (backend/app/services/tax_service.py MISSING_INPUTS_WARNING). It is
-// rendered verbatim — the list IS the message. interest_us_treasuries joined the engine's
-// keys on 2026-09-09 (spec 4b: California exempts it), which is why there are 23.
+// rendered verbatim — the list IS the message. Two keys joined the engine's on 2026-09-09:
+// interest_us_treasuries (spec 4b: California exempts it) and itemized_sec199a_div (spec
+// 4h: the QBI deduction is below the line), which is why there are 24.
 const MISSING_22 =
   'missing inputs defaulted to 0: latest_w2_income, other_w2_income, stcg_total, ' +
   'stcg_standard, unqualified_dividends, unq_div_us_treasuries_etf, ' +
@@ -315,6 +316,7 @@ const MISSING_22 =
   'trad_401k_contributions, ' +
   'hsa_contributions, hsa_contributions_employer, capital_loss_deductions, ' +
   'other_pretax_deductions, standard_deduction, itemized_deduction, ' +
+  'itemized_sec199a_div, ' +
   'state_standard_deduction, state_exemption_credits, ltcg_total, ltcg_brokerage, ' +
   'qualified_dividends, other_capital_gains'
 

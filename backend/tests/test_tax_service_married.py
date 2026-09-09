@@ -106,6 +106,9 @@ MFJ_HOUSEHOLD = {
     "other_income_1099": D("0"),
     "standard_deduction": D("30000"),
     "itemized_deduction": D("0"),
+    # Zero, so §199A's below-the-line deduction (2026-09-09 spec 4h) leaves the MFJ
+    # reference figures hand-checkable.
+    "itemized_sec199a_div": D("0"),
     "state_standard_deduction": D("11000"),
     "state_exemption_credits": D("300"),
     "ltcg_total": D("40000"),

@@ -57,7 +57,13 @@ TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     ("itemized_salt", "Itemized: SALT Amount", DEDUCTIONS, 100, False),
     ("itemized_donations", "Itemized: Donations/Tithes", DEDUCTIONS, 110, False),
     ("itemized_vehicle_reg", "Itemized: Vehicle Registration Fees", DEDUCTIONS, 120, False),
-    ("itemized_sec199a_div", "Itemized: Sec 199A Div (20%)", DEDUCTIONS, 130, False),
+    (
+        "itemized_sec199a_div",
+        "Sec 199A QBI deduction (20% of qualified REIT/PTP dividends)",
+        DEDUCTIONS,
+        130,
+        False,
+    ),
     ("itemized_other", "Itemized: Other Items", DEDUCTIONS, 140, False),
     # CA state-engine data rows from the sheet's STATE INCOME TAX INFO block — per-year
     # values the Plan 5 engine needs; they are inputs, not brackets.

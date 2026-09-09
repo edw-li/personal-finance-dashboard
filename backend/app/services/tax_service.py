@@ -124,6 +124,11 @@ ENGINE_INPUT_KEYS: tuple[str, ...] = (
     "other_pretax_deductions",
     "standard_deduction",
     "itemized_deduction",
+    # BELOW the line since 2026-09-09 (spec 4h): the QBI deduction is taken whether or not
+    # the filer itemizes, so the engine reads it directly rather than through the itemized
+    # total. It kept its `itemized_` key name — renaming a stored key is a data migration
+    # for a label the definition row already carries.
+    "itemized_sec199a_div",
     "state_standard_deduction",
     "state_exemption_credits",
     "ltcg_total",
@@ -462,7 +467,15 @@ def compute_breakdown(
                 )
             )
     fed_agi = _federal_agi(values.__getitem__)
-    fed_deduction = max(values["standard_deduction"], values["itemized_deduction"])
+    # §199A is BELOW the line (spec 4h): the QBI deduction on qualified REIT/PTP dividends
+    # is taken in addition to the standard OR the itemized deduction, and the sheet buried
+    # it inside the itemized total — where it vanished for every year the standard deduction
+    # won. It is added to the below-the-line total rather than to the itemized figure so a
+    # standard-deduction year gets it too.
+    fed_deduction = (
+        max(values["standard_deduction"], values["itemized_deduction"])
+        + values["itemized_sec199a_div"]
+    )
     # 4a (2026-09-09 spec): the deduction is spent on ordinary income FIRST, and whatever it
     # cannot use comes off the preferential income below rather than evaporating. `walk`
     # clamps a negative income to 0 and `stack` clamps a negative base to 0, so before this
@@ -720,11 +733,11 @@ def derive_suggestions(
     # formula never had the phase-down at all, so there is no sheet reading to preserve).
     cap = salt_cap(year, filing_status, _magi(value))
     salt = value("itemized_salt")
+    # itemized_sec199a_div is NOT a term here since 2026-09-09 (spec 4h): the QBI deduction
+    # is below the line and the engine reads it on its own, so leaving it in the itemized
+    # suggestion would deduct it twice for a filer who applies the chip.
     itemized = (salt if salt < cap else cap) + (
-        value("itemized_donations")
-        + value("itemized_vehicle_reg")
-        + value("itemized_sec199a_div")
-        + value("itemized_other")
+        value("itemized_donations") + value("itemized_vehicle_reg") + value("itemized_other")
     )
 
     suggestions = {
