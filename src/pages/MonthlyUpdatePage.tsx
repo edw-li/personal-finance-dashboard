@@ -1018,7 +1018,14 @@ export default function MonthlyUpdatePage() {
     setDeleteArm('')
     setRecordZero(false)
     setFlashIds(new Set())
-    setParams(() => new URLSearchParams({ month: m, step: 'balances' }))
+    // Item 18 (2026-09-09 audit): the step SURVIVES the month change. Entering the same
+    // step across several months in a row is the sheet ritual — catching up on five months
+    // of spending was five walks through Balances before this. The one exception is a month
+    // with no balances yet: its snapshot is the ritual's anchor and every later step reads
+    // from it, so an unanchored month opens where it has to start.
+    setParams(
+      () => new URLSearchParams({ month: m, step: coveredMonths.has(m) ? step : 'balances' }),
+    )
   }
 
   // The ribbon anchors one month PAST the latest covered month once the current month

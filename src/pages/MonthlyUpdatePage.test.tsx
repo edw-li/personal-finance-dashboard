@@ -1530,7 +1530,8 @@ it('forgets the $0 intent on a month switch — consent is about one save', asyn
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   fireEvent.click(await screen.findByLabelText('Record this month as $0'))
   fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
-  // A month switch always lands on the balances step; walk back to the checkbox.
+  // June has no balances yet, so the switch lands on Balances (item 18); walk back to
+  // the checkbox from there.
   await screen.findByLabelText('Checking')
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   expect(
@@ -2052,11 +2053,43 @@ describe('MonthlyUpdatePage — shell frame (2026-09-03 spec §5–§7)', () => 
   })
 
   it('a ribbon click goes through the wizard’s own handler (draft-safe) and lands on balances', async () => {
+    // August has no snapshot in the default fixture (the timeseries covers July alone), so
+    // there is nothing to keep the spending step for — the month has to be anchored first.
     renderPage('/update?month=2026-09-01&step=spending')
     fireEvent.click(await screen.findByRole('button', { name: /^Aug 2026/ }))
     await waitFor(() =>
       expect(screen.getByTestId('location').textContent).toBe(
         '/update?month=2026-08-01&step=balances',
+      ),
+    )
+  })
+
+  it('keeps the step when the month it moves to already has balances', async () => {
+    // Audit item 18: entering the same step across several months is the sheet ritual, and
+    // being thrown back to Balances every time made a five-month catch-up five walks long.
+    renderPage('/update?month=2026-08-01&step=spending')
+    await screen.findByLabelText('Food')
+    fireEvent.click(screen.getByRole('button', { name: /^Jul 2026/ }))
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe(
+        '/update?month=2026-07-01&step=spending',
+      ),
+    )
+  })
+
+  it('keeps the review step too, and still falls back for a month with no balances', async () => {
+    renderPage('/update?month=2026-08-01&step=review')
+    await screen.findByText(/review & save/i)
+    fireEvent.click(screen.getByRole('button', { name: /^Jul 2026/ }))
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe(
+        '/update?month=2026-07-01&step=review',
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe(
+        '/update?month=2026-06-01&step=balances',
       ),
     )
   })
