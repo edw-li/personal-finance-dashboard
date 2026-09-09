@@ -81,6 +81,25 @@ const rentCategory = {
   is_active: true,
   kind: 'living' as const,
 }
+// Money that STAYED yours (2026-09-04 honest-numbers spec §1): part of Total spend, and
+// not part of the cash savings rate — a brokerage deposit is saving, not spending.
+const transferCategory = {
+  id: 9,
+  name: 'Brokerage deposit',
+  slug: 'brokerage-deposit',
+  sort_order: 3,
+  is_active: true,
+  kind: 'transfer' as const,
+}
+// An income-tax payment made OUT of take-home (the April bill) — spend, like living.
+const taxCategory = {
+  id: 10,
+  name: 'Tax payment',
+  slug: 'tax-payment',
+  sort_order: 4,
+  is_active: true,
+  kind: 'tax' as const,
+}
 
 beforeEach(() => {
   // The ScopeBar caches /coverage under a shell:* snapshot key that outlives a test.
@@ -525,7 +544,7 @@ it('keeps the live spending footer in sync while entering amounts', async () => 
   // Same lesson as the balances footer: select the totals bar by its label, not by role.
   const footer = screen.getByRole('status', { name: /live totals/i })
   expect(within(footer).getByText('$250.00')).toBeDefined()
-  expect(within(footer).getByText(/savings rate: 75\.0%/i)).toBeDefined()
+  expect(within(footer).getByText(/savings rate \(cash\): 75\.0%/i)).toBeDefined()
 })
 
 it('clears a previously saved net pay when the box is blanked', async () => {
@@ -2106,4 +2125,43 @@ describe('MonthlyUpdatePage — shell frame (2026-09-03 spec §5–§7)', () => 
     // Exactly once — a nonce that changed twice would fetch coverage twice per save.
     await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBe(before + 1))
   })
+})
+
+// --- the live savings rate is the CASH rate (2026-09-09 audit item 20) --------------------
+
+it('leaves transfers out of the live savings rate and names it the cash rate', async () => {
+  // The wizard subtracted every category, so a month with a $1,000 brokerage deposit read
+  // ten points below the same month on the Spending page, whose rate is
+  // (net pay − living − tax) ÷ net pay. Same arithmetic here now.
+  vi.mocked(spendingApi.fetchCategories).mockResolvedValue([
+    category,
+    transferCategory,
+    taxCategory,
+  ])
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '2000.00' } })
+  fireEvent.change(screen.getByLabelText('Brokerage deposit'), { target: { value: '1000.00' } })
+  fireEvent.change(screen.getByLabelText('Tax payment'), { target: { value: '500.00' } })
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '10000.00' } })
+
+  const footer = screen.getByRole('status', { name: 'Live totals' })
+  // Total spend still means every category — it is the total the server's matrix prints.
+  expect(footer.textContent).toContain('Total spend (live): $3,500.00')
+  // (10000 − 2000 − 500) ÷ 10000 = 75.0%, not the 65.0% the old walk produced.
+  expect(footer.textContent).toContain('Savings rate (cash): 75.0%')
+
+  // The review step agrees, by construction — both read the same preview.
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  await screen.findByText(/review & save/i)
+  expect(screen.getByText('75.0%')).toBeTruthy()
+})
+
+it('shows no rate at all without a take-home to divide by', async () => {
+  vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category, transferCategory])
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '2000.00' } })
+  const footer = screen.getByRole('status', { name: 'Live totals' })
+  expect(footer.textContent).toContain('Savings rate (cash): —')
 })

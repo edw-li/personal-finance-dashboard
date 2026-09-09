@@ -664,6 +664,16 @@ export default function MonthlyUpdatePage() {
       (acc, c) => acc + (Number(canonicalAmount(amounts[c.id] ?? '')) || 0),
       0,
     )
+    // The CASH spend — living + tax, transfers excluded (2026-09-04 honest-numbers spec
+    // §2, and 2026-09-09 audit item 20). A brokerage deposit is money that STAYED yours, so
+    // counting it as spend made the wizard's rate disagree with the Spending page's
+    // `savings_rate` for the very month being typed. `kind` rides on every CategoryOut, so
+    // this reads the wire rather than guessing.
+    const cashSpend = categories.reduce(
+      (acc, c) =>
+        c.kind === 'transfer' ? acc : acc + (Number(canonicalAmount(amounts[c.id] ?? '')) || 0),
+      0,
+    )
     const pay = netPay.trim() === '' ? null : Number(canonicalAmount(netPay))
     // CENTS decide this delta, and it is load-bearing twice over: it feeds the sticky
     // footer AND the review step, where the ▲/▼ glyph is picked from `delta >= 0`. Both
@@ -675,7 +685,8 @@ export default function MonthlyUpdatePage() {
       netWorth,
       delta: deltaCents === null ? null : deltaCents === 0 ? 0 : deltaCents / 100,
       totalSpend,
-      savings: pay === null || pay === 0 ? null : (pay - totalSpend) / pay,
+      // (net pay − living − tax) ÷ net pay — the server's own cash rate, to the cent.
+      savings: pay === null || pay === 0 ? null : (pay - cashSpend) / pay,
     }
   }, [accounts, balances, categories, amounts, netPay, prevNetWorth])
 
@@ -1678,7 +1689,9 @@ export default function MonthlyUpdatePage() {
                 Total spend (live): <strong>{formatCurrency(preview.totalSpend)}</strong>
               </span>
               <span>
-                Savings rate:{' '}
+                {/* Named for what it IS: the footer's other figure is the ALL-kind total, so
+                    an unqualified "Savings rate" beside it reads as one minus the other. */}
+                Savings rate (cash):{' '}
                 {preview.savings === null ? '—' : formatPct(preview.savings, { signed: false })}
               </span>
             </div>
