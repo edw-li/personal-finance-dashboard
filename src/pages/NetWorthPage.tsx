@@ -4,11 +4,12 @@ import { PencilLine } from 'lucide-react'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import type { OwnerScope } from '../api/netWorth'
 import { fetchHousehold } from '../api/household'
-import { ApiError } from '../api/client'
+import { describeError } from '../api/client'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { useAssistantView } from '../components/assistant/viewState'
 import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
+import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar from '../components/shell/ScopeBar'
 import Segmented from '../components/shell/Segmented'
@@ -129,6 +130,9 @@ export default function NetWorthPage() {
   const shown = useRef<NetWorthSnapshot | null>(cached ?? null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // The SECOND feed's own failure (2026-09-09 audit item 10): the timeseries owns the frame,
+  // so a summary that 500s banners itself over charts and a table that are perfectly fine.
+  const [summaryError, setSummaryError] = useState<string | null>(null)
   // false once a revalidation actually CHANGES the data — charts may animate again.
   const [fromCache, setFromCache] = useState(cached !== undefined)
   // Drill-down: selection order assigns the lowest free palette slot; removing one
@@ -197,6 +201,7 @@ export default function NetWorthPage() {
     setDrill([])
     setLoading(true)
     setError(null)
+    setSummaryError(null)
     // Already-seen scope: paint it instantly and revalidate underneath (Overview's
     // showFlowYear seed). `shown` is deliberately NOT written here — a ref write belongs in
     // a promise continuation, and leaving it on the previous scope costs one extra repaint
@@ -218,6 +223,7 @@ export default function NetWorthPage() {
     setSeenMonth(scope.month)
     setLoading(true)
     setError(null)
+    setSummaryError(null)
   }
 
   if (scope.range !== range.preset) {
@@ -230,16 +236,35 @@ export default function NetWorthPage() {
   // body of the effect below (react-hooks/set-state-in-effect — the same constraint
   // AuthContext documents; the rule reads `await` continuations as synchronous).
   const load = useCallback(() => {
-    Promise.all([
+    // allSettled, never all: the two feeds answer INDEPENDENTLY (2026-09-09 audit item 10).
+    // One rejection used to reject the pair, so a 500 on the summary blanked charts and a
+    // table the server had already sent — and printed its own detail where the page belonged.
+    Promise.allSettled([
       fetchTimeseries(granularity, owner),
       // The viewed month, or undefined for "the latest" — the ribbon's click-to-view.
       fetchSummary(owner, scope.month ?? undefined),
     ])
-      .then(([ts, sum]) => {
-        const key = netWorthKey(granularity, owner, scope.month)
-        const snapshot: NetWorthSnapshot = { ts, summary: sum }
-        setSnapshot(key, snapshot)
-        setError(null)
+      .then(([tsResult, sumResult]) => {
+        // Both nouns are the page's own words: `errorDetail` keeps a 5xx body out of the UI.
+        setError(
+          tsResult.status === 'rejected' ? describeError(tsResult.reason, 'net worth') : null,
+        )
+        setSummaryError(
+          sumResult.status === 'rejected'
+            ? describeError(sumResult.reason, 'the month summary')
+            : null,
+        )
+        if (sumResult.status === 'rejected') {
+          // The tiles, the owner strip and the movers lede all speak FOR a summary the page
+          // no longer has, so they go quiet rather than stale beside fresh charts. `shown`
+          // goes with them: it records what is RENDERED, and half a snapshot is not — left
+          // standing, the identical-payload skip below would strand them hidden the next
+          // time the pair answers with exactly what the failed load never got to show.
+          setSummary(null)
+          shown.current = null
+        }
+        if (tsResult.status === 'rejected') return
+        const ts = tsResult.value
         // A new owner scope re-arms the drill seed: the previous scope's pick was cleared
         // during render, and this payload's biggest account is the right default. Ahead of
         // the skip below, so two scopes that happen to answer identically still re-arm.
@@ -259,6 +284,17 @@ export default function NetWorthPage() {
             setDrill((current) => (current.length > 0 ? current : seed))
           }
         }
+        if (sumResult.status === 'rejected') {
+          // Charts and table only — and nothing is cached, because half a pair is not a
+          // snapshot anything may be painted from later.
+          setFromCache(false)
+          setData(ts)
+          return
+        }
+        const sum = sumResult.value
+        const key = netWorthKey(granularity, owner, scope.month)
+        const snapshot: NetWorthSnapshot = { ts, summary: sum }
+        setSnapshot(key, snapshot)
         // Identical payload: nothing re-renders, the charts stay still (spec §1) — judged
         // against the RENDERED snapshot, never the cache (see `shown`).
         if (shown.current !== null && JSON.stringify(shown.current) === JSON.stringify(snapshot))
@@ -267,9 +303,6 @@ export default function NetWorthPage() {
         setFromCache(false)
         setData(ts)
         setSummary(sum)
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Failed to load net worth data')
       })
       .finally(() => setLoading(false))
   }, [granularity, owner, scope.month])
@@ -416,6 +449,7 @@ export default function NetWorthPage() {
           retry: () => {
             setLoading(true)
             setError(null)
+            setSummaryError(null)
             load()
           },
         }}
@@ -434,6 +468,18 @@ export default function NetWorthPage() {
           ],
         }}
       >
+        {/* The secondary feed's own alert (2026-09-09 audit item 10). Above the charts it
+            failed beside, because the tiles it feeds are what is missing from up here. */}
+        <FeedBanner
+          error={summaryError}
+          retry={() => {
+            setLoading(true)
+            setError(null)
+            setSummaryError(null)
+            load()
+          }}
+          retryLabel="Retry the month summary"
+        />
         {summary && summary.month && (
           <div className="kpi-row">
             <StatTile
@@ -553,6 +599,7 @@ export default function NetWorthPage() {
                     if (g === granularity) return
                     setLoading(true)
                     setError(null)
+                    setSummaryError(null)
                     // Same handler-side seed as the owner adoption above: a warm grain paints
                     // instantly, and the rendered-state guard in load() stays truthful. The
                     // ref write is fine HERE — an event handler, never a render.
@@ -588,7 +635,7 @@ export default function NetWorthPage() {
                 <Segmented variant="toggle" size="sm" ariaLabel="Break down by" options={MOVERS_MODES} value={moversBy} onChange={setMoversBy} />
               }
               lede={
-                moversLede === null ? undefined : (
+                moversLede === null || summary === null ? undefined : (
                   <>
                     {`${moversLede.fromLabel} `}<b>{moversLede.fromValue}</b>{` → ${moversLede.toLabel} `}
                     <b>{moversLede.toValue}</b>{' · '}

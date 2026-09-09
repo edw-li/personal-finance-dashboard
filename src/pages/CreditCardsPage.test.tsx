@@ -544,7 +544,7 @@ describe('CreditCardsPage', () => {
     vi.mocked(fetchCreditCards).mockRejectedValue(new Error('boom'))
     renderPage()
     await screen.findByRole('alert')
-    expect(screen.getByText('Failed to load credit cards')).toBeTruthy()
+    expect(screen.getByText("Couldn't load credit cards — boom")).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
   })
 })

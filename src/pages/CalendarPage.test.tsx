@@ -231,7 +231,9 @@ describe('CalendarPage — month, views, grid', () => {
       </MemoryRouter>,
     )
     // .error-banner, not role="alert": the toast region carries that role too, always.
-    expect((await screen.findByText(/calendar down/)).closest('.error-banner')).toBeTruthy()
+    expect(
+      (await screen.findByText(/Couldn't load the calendar/)).closest('.error-banner'),
+    ).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await screen.findByRole('grid')
   })

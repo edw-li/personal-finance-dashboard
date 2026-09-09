@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ApiError } from '../api/client'
+import { describeError } from '../api/client'
 import {
   fetchCreditCards,
   fetchRewardCategories,
@@ -150,7 +150,7 @@ export default function CreditCardsPage() {
         setAccounts(accountsData)
       })
       .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Failed to load credit cards')
+        setError(describeError(err, 'credit cards'))
       })
       .finally(() => setLoading(false))
   }, [])

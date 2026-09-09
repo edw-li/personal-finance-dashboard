@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../api/client'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type { HouseholdOut, NetWorthSummary, NetWorthTimeseries } from '../types/api'
 import NetWorthPage from './NetWorthPage'
@@ -603,5 +604,51 @@ describe('NetWorthPage — chart cards', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Share %' }))
     expect(stacked().getAttribute('data-series')).toBe('Cash|Pre-tax|Post-tax|Taxable|Equity|Other')
     expect(screen.getByLabelText(/share of assets per month/)).toBeTruthy()
+  })
+})
+
+// ── Independent feeds (2026-09-09 audit item 10) ─────────────────────────────────────────
+// The two requests used to ride one Promise.all whose catch stored the raw server detail,
+// so a 500 on the summary blanked the whole page down to the word "boom".
+describe('NetWorthPage — one failed feed never blanks the page', () => {
+  it('keeps the charts and the table up when the summary fails, and banners it', async () => {
+    vi.mocked(fetchSummary).mockRejectedValue(new ApiError('boom', 500))
+    renderPage()
+    // The timeseries answered, so everything IT draws is still on screen.
+    expect((await screen.findAllByText('My Checking')).length).toBeGreaterThan(0)
+    expect(screen.getAllByTestId('echart').length).toBeGreaterThan(0)
+
+    const banner = screen.getByRole('alert')
+    expect(banner.textContent).toContain(
+      "Couldn't load the month summary — the server had a problem (HTTP 500)",
+    )
+    expect(within(banner).getByRole('button', { name: 'Retry the month summary' })).toBeTruthy()
+    // The parts that speak FOR the summary go quiet rather than stale …
+    expect(screen.queryByText('Net worth — Aug 2026')).toBeNull()
+    expect(document.querySelector('.networth-owner-strip')).toBeNull()
+    expect(document.querySelector('.chart-lede')).toBeNull()
+    // … and the server's own words never reach the page.
+    expect(screen.queryByText('boom')).toBeNull()
+  })
+
+  it('restores the tiles when Retry answers with the very same pair', async () => {
+    vi.mocked(fetchSummary).mockRejectedValueOnce(new ApiError('boom', 500))
+    renderPage()
+    const banner = await screen.findByRole('alert')
+    fireEvent.click(within(banner).getByRole('button', { name: 'Retry the month summary' }))
+    // The identical-payload skip must not strand the tiles hidden behind a payload that
+    // equals the one the failed load never got to show.
+    expect(await screen.findByText('Net worth — Aug 2026')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('names the page in the frame alert when the timeseries fails', async () => {
+    vi.mocked(fetchTimeseries).mockRejectedValue(new ApiError('boom', 500))
+    renderPage()
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(
+      "Couldn't load net worth — the server had a problem (HTTP 500)",
+    )
+    expect(screen.queryByText('boom')).toBeNull()
   })
 })
