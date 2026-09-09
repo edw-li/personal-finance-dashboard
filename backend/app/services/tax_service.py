@@ -113,6 +113,9 @@ ENGINE_INPUT_KEYS: tuple[str, ...] = (
     "unq_div_us_treasuries_etf",
     "unq_div_state_exempt_pct",
     "interest_total",
+    # Read by the STATE chain alone (spec 4b): California exempts interest on US Treasury
+    # obligations, and the federal chain already has it inside interest_total.
+    "interest_us_treasuries",
     "other_income_1099",
     "trad_401k_contributions",
     "hsa_contributions",
@@ -481,9 +484,16 @@ def compute_breakdown(
     # cg_amount: California taxes capital gains and all dividends as ordinary income
     # (2026-08-25 spec §1). One definition of taxable gains, two consumers — this term and
     # the federal stack below.
+    #
+    # interest_us_treasuries is subtracted for the SAME statutory reason as the fund slice
+    # (2026-09-09 spec 4b): California does not tax interest on US Treasury obligations,
+    # whether it arrives through a fund or from the bond itself. The sheet backed out only
+    # the fund slice, so a year holding Treasuries directly paid CA tax on exempt interest.
+    # No exempt-percentage factor here — direct treasury interest is exempt in full.
     state_agi = (
         fed_agi
         - values["unq_div_us_treasuries_etf"] * values["unq_div_state_exempt_pct"]
+        - values["interest_us_treasuries"]
         + values["hsa_contributions"]
         + values["hsa_contributions_employer"]
         + cg_amount

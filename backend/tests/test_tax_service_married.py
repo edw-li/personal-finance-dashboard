@@ -100,6 +100,9 @@ MFJ_HOUSEHOLD = {
     "unq_div_us_treasuries_etf": D("0"),
     "unq_div_state_exempt_pct": D("0"),
     "interest_total": D("2000"),
+    # Zero, so the state chain's treasury-interest exemption (2026-09-09 spec 4b) has
+    # nothing to back out of this reference year: the MFJ figures below stay hand-checkable.
+    "interest_us_treasuries": D("0"),
     "other_income_1099": D("0"),
     "standard_deduction": D("30000"),
     "itemized_deduction": D("0"),

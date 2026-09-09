@@ -28,6 +28,7 @@ from app.services.tax_service import (
     JURISDICTION_WARN_MISSING,
     NEGATIVE_STATE_TAX_WARNING,
     SUGGESTION_KEYS,
+    ZERO,
     compute_breakdown,
     derive_suggestions,
     niit_advisory,
@@ -175,9 +176,14 @@ _CANONICAL_TABLE: dict[str, tuple[str, str, str, str]] = {
     "fed_deduction": ("13850.00", "14600.00", "27213.28", "29824.00"),
     "fed_ti": ("103876.64", "197176.20", "232162.77", "250304.21"),
     "fed_tax": ("18330.39", "40782.88", "51355.09", "57160.35"),
-    "state_agi": ("119875.28", "215301.15", "263400.08", "284428.21"),
-    "state_ti": ("114512.28", "209761.15", "257694.08", "278722.21"),
-    "state_tax": ("7158.49", "15901.12", "20257.19", "22206.80"),
+    # 2023 moved 2026-09-09 (spec 4b): California does not tax interest on US Treasury
+    # obligations, and state AGI subtracted only the exempt slice of treasury-FUND
+    # dividends. 2023 is the only pinned year with a direct treasury-interest line
+    # (20668.00), so it is the only column that moves: state AGI 119875.28 -> 99207.28,
+    # state TI 114512.28 -> 93844.28, state tax 7158.49 -> 5236.37.
+    "state_agi": ("99207.28", "215301.15", "263400.08", "284428.21"),
+    "state_ti": ("93844.28", "209761.15", "257694.08", "278722.21"),
+    "state_tax": ("5236.37", "15901.12", "20257.19", "22206.80"),
     "medicare_tax": ("1490.92", "3634.95", "4582.05", "5299.21"),
     "ss_tax": ("6374.99", "10453.20", "10918.20", "10918.20"),
     "sdi_tax": ("944.90", "1950.00", "2700.00", "3000.00"),
@@ -195,9 +201,11 @@ _CANONICAL_TABLE: dict[str, tuple[str, str, str, str]] = {
     "gross_income": ("126321.23", "237973.17", "287209.06", "306694.03"),
     # 2024: 72755.83 - (33.68 - 26.87 cg unfold, exactly 179.13 x 0.038 = 6.80694 at full
     # precision) + 75.59264 NIIT = 72824.61; take_home moves opposite. 2025: 90050.76
-    # - 1267.19 x 0.038 (48.15322) + 418.88464 = 90421.49. 2023/2026: unchanged controls.
-    "total_tax": ("34319.05", "72824.61", "90421.49", "98584.56"),
-    "take_home": ("92002.18", "165148.56", "196787.57", "208109.47"),
+    # - 1267.19 x 0.038 (48.15322) + 418.88464 = 90421.49. 2026: unchanged control.
+    # 2023 moved with its state tax (spec 4b): 34319.05 - 1922.124 = 32396.93, and
+    # take_home 92002.18 -> 93924.30 by the same amount in the other direction.
+    "total_tax": ("32396.93", "72824.61", "90421.49", "98584.56"),
+    "take_home": ("93924.30", "165148.56", "196787.57", "208109.47"),
 }
 
 CANONICAL: dict[int, dict[str, Decimal]] = {
@@ -602,19 +610,42 @@ def test_gains_still_stack_on_ordinary_income_when_the_deduction_is_used_up():
 
 def test_state_agi_carries_cg_amount_every_year():
     """CA taxes capital gains and ALL dividends as ordinary income (2026-08-25 spec §1):
-    state AGI = fed AGI - treasury slice + HSA addbacks + cg_amount, in EVERY year,
-    unconditionally — the same netted quantity the federal CG stack taxes, never a second
-    definition. 2026 rides along as the zero-gains control: its state chain must not move."""
+    state AGI = fed AGI - treasury slice - treasury interest + HSA addbacks + cg_amount, in
+    EVERY year, unconditionally — the same netted quantity the federal CG stack taxes, never
+    a second definition. 2026 rides along as the zero-gains control: its state chain must
+    not move. The treasury-INTEREST term joined on 2026-09-09 (spec 4b)."""
     for year in YEARS:
         breakdown = breakdown_for(year)
         values = YEAR_INPUTS[year]
         assert breakdown.state.agi == (
             breakdown.federal.agi
             - values["unq_div_us_treasuries_etf"] * values["unq_div_state_exempt_pct"]
+            - values["interest_us_treasuries"]
             + values["hsa_contributions"]
             + values["hsa_contributions_employer"]
             + breakdown.capital_gains.gains_amount
         ), year
+
+
+def test_state_agi_exempts_us_treasury_interest():
+    """4b (2026-09-09 spec): California does not tax interest on US Treasury obligations.
+
+    The state chain already backed out the exempt slice of treasury-FUND dividends and
+    stopped there, so a year holding Treasuries DIRECTLY — 2023's 20668.00 of the 20750.50
+    interest line — paid California income tax on federally-exempt interest. The line is a
+    stored input the sheet only ever used to derive interest_total; the engine reads it now.
+    """
+    values = YEAR_INPUTS[2023]
+    assert values["interest_us_treasuries"] == Decimal("20668")
+    breakdown = breakdown_for(2023)
+    # Federal is untouched: the exemption is California's alone.
+    assert cents(breakdown.federal.agi) == Decimal("117726.64")
+    exempted = compute_breakdown(
+        2023, dict(values) | {"interest_us_treasuries": ZERO}, YEAR_BRACKETS[2023]
+    )
+    assert exempted.state.agi - breakdown.state.agi == Decimal("20668")
+    # One 9.3%-bracket walk apart: no boundary is crossed between the two taxable incomes.
+    assert exempted.state.tax - breakdown.state.tax == Decimal("20668") * Decimal("0.093")
 
 
 def test_state_tax_walks_the_capital_gains_increment():
