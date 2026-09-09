@@ -9,6 +9,7 @@ the endpoint 500ing."""
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -67,6 +68,31 @@ def _decimate(values: list, step: int = 12) -> list:
 def _view_owner(view: dict) -> str | None:
     raw = view.get("owner")
     return str(raw) if raw not in (None, "", "null") else None
+
+
+# The shell writes the viewed month as `month=YYYY-MM` (src/components/shell/useScope.ts):
+# short by design, because the URL is a thing people read. `date.fromisoformat` refuses the
+# reduced form, so every builder that reads a month reads it through _view_month.
+_SHORT_MONTH = re.compile(r"^\d{4}-\d{2}$")
+
+
+def _view_month(search: dict, view: dict) -> date | None:
+    """The month ON SCREEN, or None when there is none to honor.
+
+    `YYYY-MM` is the shell's grammar; a full `YYYY-MM-DD` is the legacy link the shell
+    rewrites on arrival, and any day within it names its month. Anything else is None —
+    the page's own rule, which every caller here shares: a garbled month falls back to the
+    latest rather than answering about a month that does not exist."""
+    raw = search.get("month") or view.get("month") or view.get("focusMonth")
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    try:
+        if _SHORT_MONTH.match(text):
+            return date.fromisoformat(f"{text}-01")
+        return date.fromisoformat(text).replace(day=1)
+    except ValueError:
+        return None
 
 
 def _view_year(view: dict) -> int | None:
@@ -182,13 +208,8 @@ def _spending_builder(window: int):
         m = await spending_matrix(db=db)
         y = await spending_yearly(db=db)
         names = {c.id: c.name for c in m.categories}
-        month_param = search.get("month") or view.get("focusMonth")
-        focus_index = len(m.months) - 1
-        if isinstance(month_param, str):
-            try:
-                focus_index = m.months.index(date.fromisoformat(month_param))
-            except ValueError:
-                pass  # a garbled ?month falls back to the latest (the page's own rule)
+        month = _view_month(search, view)
+        focus_index = m.months.index(month) if month in m.months else len(m.months) - 1
         slice_from = len(m.months) - min(window, len(m.months))
         return {
             "months": _tail(m.months, window),
@@ -231,12 +252,20 @@ def _net_worth_builder(window: int):
         granularity = granularity if granularity in ("monthly", "quarterly") else "monthly"
         owner = _view_owner(view)
         ts = await net_worth_timeseries(granularity=granularity, owner=owner, db=db)
-        nw = await net_worth_summary(owner=owner, db=db)
-        last = len(ts.months) - 1
-        value_by_account = {s.account_id: s.values[last] for s in ts.series} if last >= 0 else {}
+        # The ribbon's month, when this axis actually carries it: net_worth_summary 404s a
+        # month with no snapshot, and the quarterly axis drops two months in three. An
+        # unmatched month falls back to the latest instead of taking the section down.
+        month = _view_month(search, view)
+        viewed = month if month in ts.months else None
+        index = ts.months.index(viewed) if viewed is not None else len(ts.months) - 1
+        nw = await net_worth_summary(owner=owner, month=viewed, db=db)
+        value_by_account = {s.account_id: s.values[index] for s in ts.series} if index >= 0 else {}
         return {
             "owner_scope": owner or "household",
             "granularity": granularity,
+            # WHICH month every figure below stands on — the summary, and each account's
+            # balance. Without it a month-scoped answer reads as if it were the latest.
+            "viewed_month": ts.months[index] if index >= 0 else None,
             "months": _tail(ts.months, window),
             "group_totals": {g: _tail(v, window) for g, v in ts.group_totals.items()},
             "net_worth": _tail(ts.net_worth, window),

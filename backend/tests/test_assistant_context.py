@@ -65,6 +65,60 @@ async def test_spending_focused_month_follows_the_search_param(db):
     assert context["spending"]["movers"][0]["value"] == "2000.00"
 
 
+async def test_spending_focused_month_accepts_the_shells_short_month_grammar(db):
+    """`useScope` writes `month=YYYY-MM` into the URL (src/components/shell/useScope.ts);
+    date.fromisoformat refuses the reduced form, so the builder used to fall through to the
+    latest month and answer about August while the reader was looking at March."""
+    cat = await _seed_two_spending_months(db)
+    db.add(MonthlySpending(month=date(2026, 3, 1), category_id=cat.id, amount=Decimal("1500.00")))
+    db.add(MonthlyCashflow(month=date(2026, 3, 1), net_pay=Decimal("7000.00")))
+    await db.commit()
+    context = await build_context(db, route="/spending", search={"month": "2026-03"}, view={})
+    assert context["spending"]["focused_month"] == "2026-03-01"
+    assert context["spending"]["movers"][0]["value"] == "1500.00"
+
+
+async def test_a_garbled_month_still_falls_back_to_the_latest(db):
+    await _seed_two_spending_months(db)
+    context = await build_context(db, route="/spending", search={"month": "last-tuesday"}, view={})
+    assert context["spending"]["focused_month"] == "2026-08-01"
+
+
+async def _seed_two_snapshots(db):
+    account = Account(name="Checking", slug="checking", group="cash", sort_order=1)
+    db.add(account)
+    await db.flush()
+    for month, balance in ((date(2026, 3, 1), "10.00"), (date(2026, 8, 1), "90.00")):
+        snap = NetWorthSnapshot(month=month)
+        db.add(snap)
+        await db.flush()
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal(balance)))
+    await db.commit()
+    return account
+
+
+async def test_net_worth_builder_follows_the_viewed_month(db):
+    """The ribbon's month is the whole point of the section: the summary, the per-account
+    values and the echoed `viewed_month` all stand on the month the reader clicked."""
+    await _seed_two_snapshots(db)
+    context = await build_context(db, route="/net-worth", search={"month": "2026-03"}, view={})
+    section = context["net_worth"]
+    assert section["viewed_month"] == "2026-03-01"
+    assert section["summary"]["month"] == "2026-03-01"
+    assert section["accounts"][0]["latest_balance"] == "10.00"
+
+
+async def test_net_worth_builder_falls_back_to_the_latest_month(db):
+    """A month with no snapshot would 404 inside net_worth_summary and take the whole
+    section down; the spending builder's rule — fall back to the latest — holds here too."""
+    await _seed_two_snapshots(db)
+    context = await build_context(db, route="/net-worth", search={"month": "2026-05"}, view={})
+    section = context["net_worth"]
+    assert section["viewed_month"] == "2026-08-01"
+    assert section["summary"]["month"] == "2026-08-01"
+    assert section["accounts"][0]["latest_balance"] == "90.00"
+
+
 async def test_net_worth_builder_honors_the_view_owner_and_granularity(db):
     account = Account(name="Checking", slug="checking", group="cash", sort_order=1)
     db.add(account)
