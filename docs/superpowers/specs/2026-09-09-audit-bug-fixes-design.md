@@ -85,7 +85,10 @@ into "W-4 line 4c".
   dividends. Decision: also subtract `interest_us_treasuries`.
 - **4c Bonus withholding leg** (built in the withholding lane). `w2_bonuses` raises the liability but
   the estimate has salary and vest legs only. Decision: a bonus leg at 22 % federal + 6.6 % California
-  + marginal FICA, overridden by the new optional input `w2_bonus_withholding` when entered.
+  + marginal FICA, overridden by the new optional input `w2_bonus_withholding` when entered. The leg
+  is the PRIMARY's alone — their `w2_bonuses` minus the partner's — because its marginal FICA stacks
+  on the primary's wage base and its supplemental tier is theirs, and a partner's withholding is
+  already counted once from their own two tracker keys.
 - **4d Supplemental rate tier** (withholding lane). Decision: federal supplemental switches from 22 %
   to 37 % for the portion of cumulative supplemental wages (vests + bonuses, in date order) above $1M
   in the calendar year; a warning names the crossing.

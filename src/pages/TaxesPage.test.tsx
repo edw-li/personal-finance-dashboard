@@ -298,6 +298,8 @@ function withholdingFor(year: number): WithholdingOut {
     partner_salary: null,
     additional_medicare_gap: '0.00',
     brackets_missing_for_status: [],
+    // No paystub rates entered, so no split — the panel's own file covers both states.
+    jurisdictions: null,
     safe_harbor: null,
     warnings: [],
   }

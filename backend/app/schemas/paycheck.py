@@ -12,10 +12,24 @@ back from the driver as Decimal("0E-9"), which no JS decimal parser reads as a n
 
 from datetime import date
 from decimal import Decimal
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
 
 from app.schemas.espp import Pct9
+
+# `Pct9`'s NULLABLE twin, for the two withholding-split columns: same plain-notation fix
+# (a stored zero comes back from the driver as Decimal("0E-9"), which no JS decimal parser
+# reads as a number), but a null has to stay a null — `format(None, "f")` raises, so the
+# serializer cannot be Pct9's.
+Pct9Opt = Annotated[
+    Decimal | None,
+    PlainSerializer(
+        lambda v: None if v is None else format(v, "f"),
+        return_type=str | None,
+        when_used="json",
+    ),
+]
 
 # The people PK is an int4: an out-of-range id would reach asyncpg as a bare DataError
 # (a 500 on a plain create), so it is fenced at the boundary — api/paycheck.py's IdPath
@@ -54,6 +68,11 @@ class ProfileIn(BaseModel):
     hsa_employer_annual: Decimal = Decimal("0")
     hsa_employer_per_dependent: Decimal = Decimal("0")
     hsa_dependents: int = 0
+    # The all-in rate above, split by jurisdiction (2026-09-09 audit item 3). OPTIONAL and
+    # None by default: absent is not zero — the withholding tracker splits its balance only
+    # when BOTH are entered, and prices neither jurisdiction at 0% when they are not.
+    fed_withholding_pct: Decimal | None = None
+    state_withholding_pct: Decimal | None = None
     notes: str | None = None
 
 
@@ -80,6 +99,11 @@ class ProfileUpdate(BaseModel):
     hsa_employer_annual: Decimal | None = None
     hsa_employer_per_dependent: Decimal | None = None
     hsa_dependents: int | None = None
+    # The one pair besides `notes` whose explicit null really CLEARS (they are nullable
+    # columns): a paystub figure the user no longer stands behind has to be removable, and
+    # the profile form sends the whole row on both verbs.
+    fed_withholding_pct: Decimal | None = None
+    state_withholding_pct: Decimal | None = None
     notes: str | None = None
 
 
@@ -108,6 +132,9 @@ class ProfileOut(BaseModel):
     hsa_employer_annual: Decimal
     hsa_employer_per_dependent: Decimal
     hsa_dependents: int
+    # NULL means "no figure from a paystub", never 0% (2026-09-09 audit item 3).
+    fed_withholding_pct: Pct9Opt
+    state_withholding_pct: Pct9Opt
     # Is THIS the row `_default_profile` would pick for its owner today (spec §2.3)? The
     # Settings summary and the Paycheck page must never disagree about whose policy is live,
     # so the server answers once instead of both clients re-deriving it.

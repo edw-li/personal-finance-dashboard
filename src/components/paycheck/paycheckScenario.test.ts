@@ -33,6 +33,8 @@ const profile: PaycheckProfileOut = {
   hsa_employer_annual: '2000.00',
   hsa_employer_per_dependent: '500.00',
   hsa_dependents: 0,
+  fed_withholding_pct: null,
+  state_withholding_pct: null,
   notes: null,
 }
 
@@ -238,6 +240,10 @@ describe('paycheck scenario codec', () => {
       hsa_employer_annual: '2000.00',
       hsa_employer_per_dependent: '500.00',
       hsa_dependents: '0',
+      // Same rule for the withholding split: no knob moves it, and an unentered rate seeds
+      // a BLANK box rather than a "0" the user never typed.
+      fed_withholding_pct: '',
+      state_withholding_pct: '',
       notes: '',
     })
   })

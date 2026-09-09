@@ -33,6 +33,8 @@ class Profile:
         trad=TRAD,
         dv=DENTAL_VISION,
         hsa=HSA,
+        fed=None,
+        state=None,
     ):
         self.effective_date = effective
         self.annual_salary = salary
@@ -44,6 +46,10 @@ class Profile:
         self.withholding_pct = withholding
         self.dental_vision_per_check = dv
         self.hsa_per_check = hsa
+        # The per-jurisdiction split (2026-09-09 audit item 3): None is the stored default,
+        # and it is what makes `jurisdictions` unavailable on every pre-split profile.
+        self.fed_withholding_pct = fed
+        self.state_withholding_pct = state
 
 
 def test_check_dates_grid_p24():
@@ -491,3 +497,307 @@ def test_no_partner_profile_leaves_the_entered_fallback_exactly_as_it_was():
     assert result.partner_checks_elapsed == 0
     assert result.partner_checks_total == 0
     assert result.warnings == []
+
+
+# --- the per-jurisdiction split (2026-09-09 audit item 3) and the bonus leg (4c/4d) ------
+#
+# The rates are deliberately 0.20 + 0.06 against an all-in 0.30: the payroll remainder is
+# then a real 4% of taxable rather than the zero an exactly-adding pair would hide.
+FED = D("0.20")
+STATE = D("0.06")
+
+
+def test_jurisdiction_legs_split_the_salary_checks():
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"), fed=FED, state=STATE)],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    legs = result.jurisdictions
+    assert legs is not None
+    # Taxable 9350 a check: federal 1870, state 561, and the all-in 2805 leaves 374 of
+    # payroll. 11 checks elapsed, 24 in the year.
+    assert legs.federal_ytd == D("20570.00")
+    assert legs.federal_projected == D("44880.00")
+    assert legs.state_ytd == D("6171.00")
+    assert legs.state_projected == D("13464.00")
+    assert legs.payroll_ytd == D("4114.00")
+    assert legs.payroll_projected == D("8976.00")
+    # The three legs are a PARTITION of the combined total, to the cent.
+    assert legs.federal_ytd + legs.state_ytd + legs.payroll_ytd == result.salary_ytd
+    assert (
+        legs.federal_projected + legs.state_projected + legs.payroll_projected
+        == result.salary_projected
+    )
+
+
+def test_vest_and_bonus_legs_land_in_their_own_jurisdictions():
+    # One past vest (100 sh @ 500 = 50000) and 20000 of W-2 bonuses.
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"), fed=FED, state=STATE)],
+        past_vests=[(date(2026, 6, 17), 100, D("500"))],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+        bonuses=D("20000"),
+    )
+    legs = result.jurisdictions
+    assert legs is not None
+    # Federal: salary 20570 + vest 22% of 50000 + bonus 22% of 20000.
+    assert legs.federal_ytd == D("20570.00") + D("11000.00") + D("4400.00")
+    # State: salary 6171 + vest 10.23% of 50000 + bonus 6.6% of 20000 (the CA bonus rate,
+    # not the 10.23% stock one).
+    assert legs.state_ytd == D("6171.00") + D("5115.00") + D("1320.00")
+    # Payroll gets what is left: the salary remainder plus BOTH marginal FICA legs.
+    assert legs.payroll_ytd == D("4114.00") + result.vest_fica_ytd + D("1750.00")
+
+
+def test_bonus_leg_is_22_and_6_6_plus_marginal_fica():
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"))],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+        bonuses=D("50000"),
+    )
+    assert result.bonus_income == D("50000.00")
+    # 22% federal + 6.6% CA = 14300, plus marginal FICA on top of the 110000 of salary
+    # gross behind today: 50000 x (0.0145 + 0.062 + 0.011) = 4375 (the SS cap is still
+    # ahead at 168600).
+    assert result.bonus_withheld_ytd == D("18675.00")
+    # The PROJECTION stacks the same bonus on the full year's 240000 of gross, where the
+    # SS wage base is already spent: medicare + SDI only, 50000 x 0.0255 = 1275.
+    assert result.bonus_withheld_projected == D("15575.00")
+    assert result.bonus_source == "estimated"
+
+
+def test_bonus_leg_stacks_under_the_vests_in_the_fica_walk():
+    # The vest leg's FICA is computed ON TOP of salary + bonuses, so the two legs still
+    # telescope to one year's FICA rather than both claiming the same wage-base room.
+    without = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"))],
+        past_vests=[(date(2026, 6, 17), 100, D("500"))],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    withb = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"))],
+        past_vests=[(date(2026, 6, 17), 100, D("500"))],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+        bonuses=D("50000"),
+    )
+    # gross 110000 + bonus 50000 + vest 50000 = 210000, so the vest leg crosses the SS cap
+    # and keeps only 8600 of base: 50000 x 0.0255 + 8600 x 0.062 = 1275 + 533.20.
+    assert withb.vest_fica_ytd == D("1808.20")
+    assert without.vest_fica_ytd == D("4375.00")
+    # Whoever claims which slice, the two legs telescope to ONE walk over the year's
+    # wages: FICA(110000 + 50000 + 50000) - FICA(110000) = 6183.20.
+    assert (withb.bonus_withheld_ytd - D("14300.00")) + withb.vest_fica_ytd == D("6183.20")
+
+
+def test_entered_bonus_withholding_overrides_the_computed_leg():
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"), fed=FED, state=STATE)],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+        bonuses=D("50000"),
+        bonus_withholding=D("20000"),
+    )
+    # The entered actual IS the leg, in both columns — a paystub is not a projection.
+    assert result.bonus_withheld_ytd == D("20000.00")
+    assert result.bonus_withheld_projected == D("20000.00")
+    assert result.bonus_source == "entered"
+    legs = result.jurisdictions
+    assert legs is not None
+    # It is split in the proportions the estimate would have used: 11000 : 3300 : 4375 of
+    # 18675 -> federal 11780.46 on top of the salary leg's 20570.
+    assert legs.federal_ytd == D("20570.00") + D("11780.46")
+    partition = legs.federal_ytd + legs.state_ytd + legs.payroll_ytd
+    assert partition == result.salary_ytd + D("20000.00")
+
+
+def test_supplemental_tier_switches_to_37_percent_above_a_million():
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"))],
+        # 1000 sh @ 200 = 200000 of vest income, on top of 900000 of bonuses.
+        past_vests=[(date(2026, 3, 16), 1000, D("200"))],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+        bonuses=D("900000"),
+    )
+    # Bonuses come first in the year's cumulative supplemental wages, so they are all under
+    # the line: 900000 x 0.22. The vest then splits 100000 at 22% and 100000 at 37%.
+    assert result.vest_supplemental_ytd == D("59000.00") + D("20460.00")
+    assert any("1,000,000" in w and "37%" in w for w in result.warnings)
+
+
+def test_supplemental_tier_is_silent_below_the_line():
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"))],
+        past_vests=[(date(2026, 6, 17), 100, D("500"))],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    # The pre-batch figure, unmoved: 50000 x (0.22 + 0.1023).
+    assert result.vest_supplemental_ytd == D("16115.00")
+    assert result.warnings == []
+    assert result.bonus_income == D("0.00")
+    assert result.bonus_withheld_ytd == D("0.00")
+
+
+def test_two_rates_bigger_than_the_all_in_one_warn_instead_of_clamping():
+    # 25% federal + 10% state against an all-in 30%: payroll is the REMAINDER, so it comes
+    # out negative — which is not a number to hide, it means one of the three rates is wrong.
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"), fed=D("0.25"), state=D("0.10"))],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    legs = result.jurisdictions
+    assert legs is not None
+    # 9350 taxable a check: 2337.50 federal + 935.00 state against 2805.00 all-in leaves
+    # -467.50 a check, x 11 elapsed.
+    assert legs.payroll_ytd == D("-5142.50")
+    assert legs.payroll_projected == D("-11220.00")  # x 24
+    assert any("payroll (FICA) leg is negative" in w for w in result.warnings)
+    # Still a partition, sign and all — the card shows what the rates actually say.
+    assert legs.federal_ytd + legs.state_ytd + legs.payroll_ytd == result.salary_ytd
+
+
+def test_no_split_when_either_rate_is_missing():
+    for fed, state in ((FED, None), (None, STATE), (None, None)):
+        result = estimate(
+            year=2026,
+            today=date(2026, 7, 1),
+            profiles=[Profile(date(2025, 1, 1), D("240000"), fed=fed, state=state)],
+            past_vests=[],
+            future_vests=[],
+            medicare=MEDICARE,
+            social_security=SS,
+            disability=SDI,
+        )
+        assert result.jurisdictions is None
+
+
+def test_no_split_without_a_paycheck_profile_at_all():
+    # Nobody has entered a rate, so there is nothing to split BY — and a federal tile built
+    # from the vest leg alone would look like an answer about the whole household.
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[],
+        past_vests=[(date(2026, 6, 17), 100, D("500"))],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    assert result.jurisdictions is None
+
+
+def test_one_unsplit_profile_on_the_grid_withdraws_the_whole_split():
+    # The July raise carries no rates, and it prices half the year's checks: a split that
+    # covered only the first eleven would be a federal figure for part of a year.
+    result = estimate(
+        year=2026,
+        today=date(2026, 12, 31),
+        profiles=[
+            Profile(date(2025, 1, 1), D("240000"), fed=FED, state=STATE),
+            Profile(date(2026, 7, 1), D("360000")),
+        ],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    assert result.jurisdictions is None
+
+
+def test_entered_partner_withholding_lands_in_its_own_jurisdiction():
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"), fed=FED, state=STATE)],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+        primary_wages=D("240000"),
+        partner_wages=D("150000"),
+        partner_withheld_fed=D("18000"),
+        partner_withheld_state=D("6000"),
+    )
+    legs = result.jurisdictions
+    assert legs is not None
+    # Their two figures are literally a federal one and a state one — nothing to model.
+    assert legs.federal_ytd == D("20570.00") + D("18000.00")
+    assert legs.state_ytd == D("6171.00") + D("6000.00")
+    assert legs.payroll_ytd == D("4114.00")
+
+
+def test_a_simulated_partner_must_carry_rates_too():
+    kwargs = dict(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"), fed=FED, state=STATE)],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+        partner_wages=D("150000"),
+    )
+    unsplit = estimate(**kwargs, partner_profiles=[Profile(date(2025, 1, 1), D("120000"))])
+    # Their whole all-in leg would otherwise fall into payroll and call it FICA.
+    assert unsplit.jurisdictions is None
+    split = estimate(
+        **kwargs,
+        partner_profiles=[Profile(date(2025, 1, 1), D("120000"), fed=FED, state=STATE)],
+    )
+    legs = split.jurisdictions
+    assert legs is not None
+    # Their gross is 5000 a check, taxable 4600: federal 920, state 276, all-in 1380.
+    assert legs.federal_ytd == D("20570.00") + D("10120.00")
+    assert legs.state_ytd == D("6171.00") + D("3036.00")
+    assert legs.payroll_ytd == D("4114.00") + D("2024.00")

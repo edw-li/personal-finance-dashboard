@@ -1029,18 +1029,44 @@ export interface WithholdingOut {
   // Null only when NEITHER statutory leg exists (no computable prior year AND the engine
   // refused this year). The prior-leg fields are null together when that leg is missing
   // (first year, refused prior year, or a prior total <= 0 — the last two warn).
-  safe_harbor: {
-    prior_year: number | null
-    prior_total_tax: string | null
-    prior_agi: string | null // the AGI the statutory gate was tested against
-    multiplier: string | null // 1.10 above the IRC 6654(d)(1)(C) AGI gate, 1.00 at/below
-    threshold: string | null // prior_total_tax x multiplier
-    prior_filing_status: string | null
-    current_year_threshold: string | null // 90% of this year's liability; null on refusal
-    effective_threshold: string // min of the legs that exist — `met` is judged on it
-    met: boolean // total.projected >= effective_threshold
+  safe_harbor: WithholdingSafeHarbor | null
+  // The per-jurisdiction split (2026-09-09 audit item 3). NULL when the profile in force on
+  // some check of the year's grid carries no federal or no state rate — half a year's
+  // federal figure is not a federal figure. Every field above keeps its combined meaning
+  // either way.
+  jurisdictions: {
+    federal: WithholdingJurisdiction // income tax incl. capital gains and NIIT
+    state: WithholdingJurisdiction // California
+    payroll: WithholdingJurisdiction // medicare + social security + SDI, informational
   } | null
   warnings: string[]
+}
+
+/** The statutory harbor: the LESSER of the two legs, and which of them exist. */
+export interface WithholdingSafeHarbor {
+  prior_year: number | null
+  prior_total_tax: string | null
+  prior_agi: string | null // the AGI the statutory gate was tested against
+  multiplier: string | null // 1.10 above the IRC 6654(d)(1)(C) AGI gate, 1.00 at/below
+  threshold: string | null // prior_total_tax x multiplier
+  prior_filing_status: string | null
+  current_year_threshold: string | null // 90% of this year's liability; null on refusal
+  effective_threshold: string // min of the legs that exist — `met` is judged on it
+  met: boolean // projected withholding >= effective_threshold
+}
+
+/** One jurisdiction of the split: what it will owe, what will be withheld, what to do. */
+export interface WithholdingJurisdiction {
+  // Null together, exactly when the engine refused the year — the withheld figures are
+  // still real, but there is nothing honest to compare them against.
+  liability: string | null
+  withheld_ytd: string
+  withheld_projected: string
+  balance: string | null // liability - withheld_projected; positive = will owe
+  // max(balance, 0) over the checks still to come — "0.00" on a refund. NULL on the PAYROLL
+  // leg always (FICA is not a W-4 line) and once the year's checks are spent.
+  remedy_per_check: string | null
+  safe_harbor: WithholdingSafeHarbor | null // null on payroll: FICA has no harbor
 }
 
 // --- espp ---
@@ -1294,6 +1320,11 @@ export interface PaycheckProfileOut {
   hsa_employer_annual: string
   hsa_employer_per_dependent: string
   hsa_dependents: number
+  // The all-in `withholding_pct` split by jurisdiction (2026-09-09 audit item 3), each a 9dp
+  // fraction of the same taxable base. NULL means "no figure from a paystub", NEVER 0%: the
+  // Taxes card splits its balance only when BOTH are entered.
+  fed_withholding_pct: string | null
+  state_withholding_pct: string | null
   notes: string | null
   /** In force today (spec §2.3), the server's one rule. Absent on a pre-batch snapshot. */
   in_force?: boolean
@@ -1336,6 +1367,11 @@ export interface PaycheckProfileCreate {
   hsa_employer_annual?: string
   hsa_employer_per_dependent?: string
   hsa_dependents?: number
+  // The withholding split (2026-09-09 audit item 3). These two are the only stored columns
+  // besides `notes` whose explicit NULL really clears — a blank box means "no paystub
+  // figure", and the form sends the whole row on both verbs.
+  fed_withholding_pct?: string | null
+  state_withholding_pct?: string | null
   notes?: string | null
 }
 

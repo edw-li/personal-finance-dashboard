@@ -89,6 +89,17 @@ class PaycheckProfile(Base):
         Numeric(8, 2), default=0, server_default="0"
     )
     hsa_dependents: Mapped[int] = mapped_column(default=0, server_default="0")
+    # The all-in `withholding_pct` above, split by jurisdiction (2026-09-09 audit item 3):
+    # what a paystub says was withheld for FEDERAL and for the STATE, each as a fraction of
+    # the SAME taxable base the all-in rate applies to. Read only by the Taxes page's
+    # withholding tracker — the per-check waterfall is still the all-in rate's, unchanged.
+    # NULLABLE, and the one pair on this row with no `default`/`server_default`: absent is
+    # not zero, because a profile nobody has split has no federal rate at all and the card
+    # must refuse to split rather than price a jurisdiction at 0%. NULL is therefore also
+    # the whole backfill, which is why `alembic check` needs no server_default repeated
+    # here (hsa_coverage's rule applies to columns that HAVE one).
+    fed_withholding_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 9))
+    state_withholding_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 9))
     notes: Mapped[str | None] = mapped_column(Text)
 
 
