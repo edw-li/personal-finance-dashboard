@@ -24,6 +24,7 @@ import { windowWords, ytdStats } from '../components/overview/ytd'
 import {
   netWorthTrendCsv,
   netWorthTrendOption,
+  notEnteredMonths,
   pickTaxSummary,
   RECENT_SPEND_MONTHS,
   recentSpendCsv,
@@ -36,7 +37,7 @@ import {
   portfolioHistoryOption,
 } from '../components/portfolio/historyChartOptions'
 import PageFrame from '../components/shell/PageFrame'
-import ScopeBar from '../components/shell/ScopeBar'
+import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import type {
@@ -45,6 +46,7 @@ import type {
   DividendOut,
   EsppLotsResponse,
   HoldingsResponse,
+  HouseholdOut,
   MoneyFlowOut,
   NetWorthSummary,
   NetWorthTimeseries,
@@ -114,6 +116,16 @@ function upNextKey(): string {
 
 function flowKey(year: number | null): string {
   return `overview:flow:${year ?? 'auto'}`
+}
+
+/** Whose view this is, in words (audit item 11). The scope row fetched the household for
+ *  its own chips and published it under the shell key, so the name costs no thirteenth
+ *  request — and a miss (the row still in flight, or a household fetch that failed) falls
+ *  back to words that are true of every person. */
+function scopeName(owner: Exclude<OwnerScope, null>): string {
+  if (owner === 'joint') return 'Joint'
+  const household = getSnapshot<HouseholdOut>(HOUSEHOLD_SNAPSHOT)
+  return household?.people.find((person) => person.id === owner)?.name ?? 'this person'
 }
 
 export default function OverviewPage() {
@@ -299,12 +311,33 @@ export default function OverviewPage() {
   // so a fresh object every render would redraw all three charts on every keystroke
   // elsewhere. Everything else below is a plain const.
   const nwTrend = useMemo(() => (data ? netWorthTrendOption(data.ts) : null), [data])
+  // The ping is derived from the OWNER-FILTERED holdings, but /portfolio/history is
+  // household-wide by design (see the fetch above), so under a person scope plotting their
+  // total at the end of the household series draws a fake cliff. PortfolioPage has carried
+  // this guard since 2026-08-31 (A3); this copy is the same rule, one page later — null
+  // also suppresses the dashed connector and the "Live" legend entry, both inside the
+  // builder's livePt branch.
   const perf = useMemo(
     () =>
-      data ? portfolioHistoryOption(data.history, liveFromHoldings(data.holdings)) : null,
+      data
+        ? portfolioHistoryOption(
+            data.history,
+            owner === null ? liveFromHoldings(data.holdings) : null,
+          )
+        : null,
+    [data, owner],
+  )
+  // The months whose "0.00" is an absence rather than a figure (audit item 14). Memoized
+  // beside the options it feeds, not recomputed per render: it rides INTO the bars' memo,
+  // and a fresh Set every render would redraw that chart on every keystroke elsewhere.
+  const notEntered = useMemo(
+    () => (data ? notEnteredMonths(data.matrix, data.coverage) : new Set<string>()),
     [data],
   )
-  const bars = useMemo(() => (data ? recentSpendOption(data.matrix) : null), [data])
+  const bars = useMemo(
+    () => (data ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered) : null),
+    [data, notEntered],
+  )
 
   // 2026-08-25 spec §2d: each chart clicks through to the page that owns its numbers;
   // the bars carry the clicked month into /spending's ?month= drill deep link, mapped
@@ -316,12 +349,31 @@ export default function OverviewPage() {
     if (month) navigate(`/spending?month=${month}`)
   }
 
+  // Audit item 11: the server answers an owner with no accounts with zero TOTALS, and a
+  // page of $0.00 tiles over a flat line reads as "you have nothing" rather than "there is
+  // nothing here to show" (the trend's all-zero series also makes ECharts pick a 0..1 axis
+  // and print a $0/$1 ladder). An owner scope only: a fresh database's own empty states
+  // already say what is missing, and the household is not "this person".
+  const emptyScope = data !== null && owner !== null && data.ts.accounts.length === 0
+  const emptyScopeNote =
+    emptyScope && owner !== null ? `No accounts for ${scopeName(owner)} yet` : null
+
   const summary = data?.summary
   // Rendered verbatim, never re-derived: these are the server's own totals fields (the
   // `totals.unrealized_gl` lesson).
   const totals = data?.holdings.totals
   const asOf = data?.holdings.as_of ?? null
-  const stats = data ? spendStats(data.matrix) : null
+  // Audit item 15: the day change is the newest quote's move against ITS prior close, so
+  // "today" is a claim about that quote and not about the moment the page is read — on a
+  // Sunday, or after a failed refresh, the tile was still calling Friday's move today's.
+  // latest_quote_at is the NEWEST stamp (as_of is the oldest, the staleness clock); the
+  // fallback is stale-tab armor only, since server-side both derive from one quote list.
+  const quoteDay = (data?.holdings.latest_quote_at ?? asOf)?.slice(0, 10) ?? null
+  // Carries its own leading space so a missing quote date omits the WORD rather than
+  // guessing "today" — with no quote on file there is no day to name (review round).
+  const dayChangeWhen =
+    quoteDay === null ? '' : quoteDay === todayIso() ? ' today' : ` on ${formatDate(quoteDay)}`
+  const stats = data ? spendStats(data.matrix, notEntered) : null
   const currentYear = new Date().getFullYear()
   const tax = data ? pickTaxSummary(data.taxes.years, currentYear) : null
   // Plain consts like their siblings (the memo rule below covers CHART options only) —
@@ -448,37 +500,46 @@ export default function OverviewPage() {
               <StatTile
                 hero
                 label={summary?.month ? `Net worth — ${formatMonth(summary.month)}` : 'Net worth'}
-                value={formatCurrency(summary?.net_worth)}
+                value={emptyScopeNote !== null ? '—' : formatCurrency(summary?.net_worth)}
                 // A FRESH-paint flourish only: a cached paint is a number the user has already
                 // seen, and re-counting it would fake newness. Money rides the wire as a decimal
                 // string, hence Number() for the easing math — the last frame drops the override
                 // and renders `value` itself, so the end state is the string above verbatim.
                 countUp={
-                  !fromCache && summary?.net_worth != null
+                  emptyScopeNote === null && !fromCache && summary?.net_worth != null
                     ? { value: Number(summary.net_worth), format: formatCurrency }
                     : undefined
                 }
-                // Both halves or neither: a bare amount with no rate reads as a total.
+                // Both halves or neither: a bare amount with no rate reads as a total. The
+                // empty scope takes the slot instead — a $0.00 MoM change is arithmetic
+                // over two numbers that were never there.
                 delta={
-                  summary?.mom_delta != null && summary.mom_pct != null
-                    ? `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)}) MoM`
-                    : undefined
+                  emptyScopeNote !== null
+                    ? emptyScopeNote
+                    : summary?.mom_delta != null && summary.mom_pct != null
+                      ? `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)}) MoM`
+                      : undefined
                 }
-                tone={toneOf(summary?.mom_delta)}
+                tone={emptyScopeNote !== null ? 'neutral' : toneOf(summary?.mom_delta)}
                 hint="Assets minus liabilities from the latest monthly snapshot, with its change from the month before."
               />
               <StatTile
                 label="Portfolio"
-                value={formatCurrency(totals?.market_value)}
+                // Holdings hang off accounts, so the scope with none has no portfolio
+                // either — the hero beside it carries the sentence, and a second copy of
+                // it in this row would be noise (audit item 11).
+                value={emptyScopeNote !== null ? '—' : formatCurrency(totals?.market_value)}
                 // Omitted before the first price refresh — there is no day to compare to.
                 delta={
-                  totals?.day_change_amount != null && totals.day_change_pct != null
+                  emptyScopeNote === null &&
+                  totals?.day_change_amount != null &&
+                  totals.day_change_pct != null
                     ? `${formatCurrency(totals.day_change_amount)} (${formatPct(
                         totals.day_change_pct,
-                      )}) today`
+                      )})${dayChangeWhen}`
                     : undefined
                 }
-                tone={toneOf(totals?.day_change_amount)}
+                tone={emptyScopeNote !== null ? 'neutral' : toneOf(totals?.day_change_amount)}
                 hint="Market value of every priced holding at the latest quotes, and today's move vs the prior close."
               />
               <StatTile
@@ -609,8 +670,8 @@ export default function OverviewPage() {
                 title="Net worth trend"
                 hint="Net worth at every monthly snapshot — the series the Net Worth page breaks down by group."
                 ariaLabel="Line chart of net worth at every monthly snapshot"
-                option={nwTrend}
-                empty="No snapshots yet."
+                option={emptyScopeNote !== null ? null : nwTrend}
+                empty={emptyScopeNote ?? 'No snapshots yet.'}
                 exportName="net-worth-trend"
                 csv={() => netWorthTrendCsv(data.ts)}
                 height={220}

@@ -822,6 +822,48 @@ it('leaves a fresh header untoned and still names the newest clock', async () =>
   )
 })
 
+// ── Empty-scope header (audit item 12) ───────────────────────────────────────────────────
+// as_of is the OLDEST quote among the SCOPED holdings, so it is null whenever the view
+// holds nothing priced — which is not the same claim as "the app has never fetched a
+// price". The old header said "prices never refreshed" directly above a line reporting a
+// run that had just happened.
+it('names an empty view instead of claiming prices were never refreshed', async () => {
+  vi.mocked(fetchHoldings).mockResolvedValue({
+    ...holdingsOut(),
+    as_of: null,
+    latest_quote_at: null,
+    holdings: [],
+  })
+  vi.mocked(fetchRefreshStatus).mockResolvedValue({
+    last: {
+      at: '2026-08-27T20:00:00Z',
+      trigger: 'scheduled',
+      updated: 3,
+      failed: {},
+      skipped_manual: 0,
+      history_appended: false,
+    },
+    next_run_at: null,
+  })
+  renderPage()
+  expect(await screen.findByText('no priced holdings in this view')).toBeTruthy()
+  expect(screen.queryByText('prices never refreshed')).toBeNull()
+  // The refresh line is still there — the two sentences no longer contradict each other.
+  expect(screen.getByText(/^Last refresh /)).toBeTruthy()
+})
+
+it('keeps "prices never refreshed" for a book that really has never run one', async () => {
+  // Holdings on file, no quotes on any of them, and no recorded run: the original claim
+  // is true here, and it is the only place it is made.
+  vi.mocked(fetchHoldings).mockResolvedValue({
+    ...holdingsOut(),
+    as_of: null,
+    latest_quote_at: null,
+  })
+  renderPage()
+  expect(await screen.findByText('prices never refreshed')).toBeTruthy()
+})
+
 // ── Shell scope (2026-09-03 shell spec §5–§6) ─────────────────────────────────────────────
 // The page no longer owns an owner row or its own range chips: both live in the frame's
 // sticky scope row, and the URL — not component state — is what they mean.

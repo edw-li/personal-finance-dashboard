@@ -248,9 +248,9 @@ describe('Layout — sidebar v2', () => {
 
   it('titles the document from the active destination', () => {
     renderShell()
-    expect(document.title).toBe('Overview · Finance')
+    expect(document.title).toBe('Overview · Personal finance')
     fireEvent.click(screen.getByRole('link', { name: 'Spending' }))
-    expect(document.title).toBe('Spending · Finance')
+    expect(document.title).toBe('Spending · Personal finance')
   })
 })
 

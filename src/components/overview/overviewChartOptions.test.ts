@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { GRID_VARIANTS } from '../../charts/grammar'
-import { INK, MUTED, PALETTE, SURFACE } from '../../charts/theme'
+import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
-import type { TaxSummaryOut } from '../../types/api'
+import type { CoverageOut, TaxSummaryOut } from '../../types/api'
 import {
   netWorthTrendCsv,
   netWorthTrendOption,
+  notEnteredMonths,
   pickTaxSummary,
   recentSpendCsv,
   recentSpendOption,
@@ -27,6 +28,20 @@ function monthsFrom(start: string, count: number): string[] {
 // Server money is a decimal STRING (pydantic v2): 100.00, 200.00, … one per month.
 function totalsFrom(count: number): string[] {
   return Array.from({ length: count }, (_, i) => `${(i + 1) * 100}.00`)
+}
+
+// /coverage as the page receives it — every list empty unless a case names one.
+function coverageOut(over: Partial<CoverageOut> = {}): CoverageOut {
+  return {
+    balances: [],
+    spending: [],
+    net_pay: [],
+    spending_empty: [],
+    spending_missing: [],
+    net_pay_missing: [],
+    latest: { balances: null, spending: null, net_pay: null },
+    ...over,
+  }
 }
 
 // The engine's per-year summary; pickTaxSummary reads `year` to choose and the page reads
@@ -76,6 +91,12 @@ function seriesOf(option: EChartsOption | null): SeriesLike[] {
 
 function categoriesOf(option: EChartsOption | null): string[] {
   return (option as unknown as { xAxis: { data: string[] } }).xAxis.data
+}
+
+/** The raw axis data — a plain label string, or the `{ value, textStyle }` datum a
+ *  not-entered month carries. */
+function axisDataOf(option: EChartsOption | null): unknown[] {
+  return (option as unknown as { xAxis: { data: unknown[] } }).xAxis.data
 }
 
 function xAxisOf(option: EChartsOption | null): { show?: boolean; boundaryGap?: boolean } {
@@ -227,6 +248,60 @@ describe('recentSpendOption', () => {
     expect(seriesOf(recentSpendOption(short, 12))[0].data).toEqual([100, 200])
   })
 
+  // Audit item 14: the matrix months are a UNION of spending rows and net-pay rows, so a
+  // month nobody entered arrives as an explicit "0.00". A solid bar at the baseline reads
+  // as a real zero-spend month.
+  it('draws a not-entered month hollow and says so in its tooltip row', () => {
+    const feed = { months: monthsFrom('2026-01-01', 3), totals: ['100.00', '0.00', '300.00'] }
+    const option = recentSpendOption(feed, 12, new Set(['2026-02-01']))
+    const [bars] = seriesOf(option)
+    // Border only, no fill — the ESPP anatomy's "not what it looks like" idiom. The
+    // entered months stay plain numbers, so the series still carries the palette fill.
+    expect(bars.data).toEqual([
+      100,
+      { value: 0, itemStyle: { color: 'transparent', borderColor: PALETTE[1], borderWidth: 1.5 } },
+      300,
+    ])
+    // The row keeps its figure and gains the word that makes the figure honest.
+    const suffixed = tooltipRows(
+      tooltipOf(option).formatter([
+        { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: 'Feb 2026', dataIndex: 1, value: 0, color: PALETTE[1] },
+      ]),
+    )
+    expect(suffixed.rows).toEqual([{ kind: 'row', label: 'Spend (not entered)', value: '$0.00' }])
+    // ...and an entered month is untouched.
+    const plain = tooltipRows(
+      tooltipOf(option).formatter([
+        { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: 'Jan 2026', dataIndex: 0, value: 100, color: PALETTE[1] },
+      ]),
+    )
+    expect(plain.rows).toEqual([{ kind: 'row', label: 'Spend', value: '$100.00' }])
+  })
+
+  it('recedes a not-entered month’s axis label instead of inventing a bar height', () => {
+    // Its total IS 0.00, so the hollow bar is a baseline tick — the cue has to ride the
+    // label. A per-datum object, never an axisLabel.color callback: recolor.ts passes
+    // functions through by identity, so a callback would stay dark under the light theme.
+    const feed = { months: monthsFrom('2026-01-01', 3), totals: ['100.00', '0.00', '300.00'] }
+    expect(axisDataOf(recentSpendOption(feed, 12, new Set(['2026-02-01'])))).toEqual([
+      'Jan 2026',
+      { value: 'Feb 2026', textStyle: { color: OTHER_SERIES_COLOR } },
+      'Mar 2026',
+    ])
+    // Nothing named: every label is a plain string on the theme's own axis colour.
+    expect(axisDataOf(recentSpendOption(feed))).toEqual(['Jan 2026', 'Feb 2026', 'Mar 2026'])
+  })
+
+  it('keeps the dashed reference on the average the tile prints, not-entered months out', () => {
+    const feed = { months: monthsFrom('2026-01-01', 3), totals: ['100.00', '0.00', '300.00'] }
+    const notEntered = new Set(['2026-02-01'])
+    // Priors 100 and (excluded) 0 → 100, the same figure the tile compares against.
+    expect((seriesOf(recentSpendOption(feed, 12, notEntered))[1].data as number[])[0]).toBe(100)
+    expect((seriesOf(recentSpendOption(feed, 12, notEntered))[1].data as number[])[0]).toBe(
+      spendStats(feed, notEntered).avg12,
+    )
+  })
+
   it('formats the axis compactly and the tooltip in full, and empties to null', () => {
     const option = recentSpendOption({ months: monthsFrom('2026-01-01', 2), totals: totalsFrom(2) })
     // Compact ticks, exact tooltip: the axis is a scale, the tooltip is a figure.
@@ -292,6 +367,72 @@ describe('spendStats', () => {
     expect(spendStats({ months: [], totals: [] })).toEqual({
       month: null, total: null, avg12: null, aboveAvg: null,
     })
+  })
+
+  // Audit item 14. Before /coverage existed this window counted a not-entered month at
+  // full weight (RATIFIED, Task 8 review) because the server could not tell an absence
+  // from a real zero. It can now, so the average no longer congratulates the household
+  // for a month it never typed.
+  it('leaves a not-entered month out of the average entirely', () => {
+    const months = monthsFrom('2026-01-01', 4)
+    const totals = ['300.00', '0.00', '500.00', '400.00']
+    // Untouched, the three priors average 266.67 and April reads as OVER; with February
+    // named as not-entered the priors are 300 and 500 — an average of 400, and April is
+    // exactly on it.
+    expect(spendStats({ months, totals }).avg12).toBeCloseTo(266.667, 3)
+    const stats = spendStats({ months, totals }, new Set(['2026-02-01']))
+    expect(stats.avg12).toBe(400)
+    expect(stats.aboveAvg).toBe(false)
+    // The tile month and its own total are untouched — the set only narrows the window.
+    expect(stats.month).toBe('2026-04-01')
+    expect(stats.total).toBe('400.00')
+  })
+
+  it('has no average when every month before the tile is not entered', () => {
+    const months = monthsFrom('2026-01-01', 2)
+    const stats = spendStats({ months, totals: ['0.00', '400.00'] }, new Set(['2026-01-01']))
+    // Not zero: an average of nothing is nothing, and the tile drops its delta.
+    expect(stats.avg12).toBeNull()
+    expect(stats.aboveAvg).toBeNull()
+  })
+})
+
+describe('notEnteredMonths', () => {
+  const matrix = {
+    months: monthsFrom('2026-01-01', 4),
+    totals: ['300.00', '0.00', '0.00', '0.00'],
+    net_pay: [null, null, '6000.00', null] as (string | null)[],
+  }
+
+  it('folds the server’s own not-entered lists together with the net-pay-only months', () => {
+    // February: rows saved, every one $0.00, no take-home — production's phantom month.
+    // March: take-home on file, spending never typed, so the union of spending and net-pay
+    // months puts it in the matrix at "0.00". /coverage cannot name March yet (the wire
+    // publishes `spending_empty` and `spending_missing`, not the service's
+    // `net_pay_without_spending`), so the matrix's own net-pay row is what names it.
+    const found = notEnteredMonths(matrix, coverageOut({ spending_empty: ['2026-02-01'] }))
+    expect([...found].sort()).toEqual(['2026-02-01', '2026-03-01'])
+  })
+
+  it('carries a missing month through even though the matrix never lists it', () => {
+    // `spending_missing` months have no rows at all, so they are not in the matrix — naming
+    // them costs nothing and keeps the set the server's definition rather than a subset.
+    const found = notEnteredMonths(matrix, coverageOut({ spending_missing: ['2025-12-01'] }))
+    expect(found.has('2025-12-01')).toBe(true)
+  })
+
+  it('leaves a real zero-spend month alone when no feed calls it absent', () => {
+    // April is $0.00 with no take-home row and no coverage list naming it: nothing here
+    // says it is an absence, so it stays a figure.
+    expect(notEnteredMonths(matrix, coverageOut()).has('2026-04-01')).toBe(false)
+    // A month with take-home AND spending is entered, whatever else is true of it.
+    const spent = { ...matrix, totals: ['300.00', '0.00', '2000.00', '0.00'] }
+    expect(notEnteredMonths(spent, coverageOut()).has('2026-03-01')).toBe(false)
+  })
+
+  it('survives a matrix whose net-pay column is short or absent', () => {
+    // The Overview's own fixture ships `net_pay: []`; an index past the end is not a row.
+    expect(notEnteredMonths({ ...matrix, net_pay: [] }, coverageOut()).size).toBe(0)
   })
 })
 

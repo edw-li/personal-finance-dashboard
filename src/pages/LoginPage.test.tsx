@@ -60,6 +60,14 @@ afterEach(() => {
 })
 
 describe('LoginPage', () => {
+  // ONE product name everywhere (audit item 60): the login card is the first thing a
+  // user ever reads, and it used to introduce the app under a name nothing else uses.
+  it('wears the product name in the heading and the tab title', () => {
+    renderPage()
+    expect(screen.getByRole('heading', { level: 1, name: 'Personal finance' })).toBeTruthy()
+    expect(document.title).toBe('Sign in · Personal finance')
+  })
+
   it('focuses the email box on arrival', () => {
     renderPage()
     expect(document.activeElement).toBe(screen.getByLabelText('Email'))

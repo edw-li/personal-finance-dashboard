@@ -36,7 +36,7 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
-    document.title = 'Sign in · Finance'
+    document.title = 'Sign in · Personal finance'
   }, [])
 
   // Spent only once a session actually exists — the other exit clears it in handleSubmit.
@@ -81,7 +81,9 @@ export default function LoginPage() {
   return (
     <div className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
-        <h1>Finance Dashboard</h1>
+        {/* The product's ONE name (audit item 60) — the same wordmark the sidebar and
+            the splash carry, so the first screen introduces the app the app calls itself. */}
+        <h1>Personal finance</h1>
         {expired && (
           <p className="login-notice" role="status">
             Your session expired — sign in to continue where you left off.

@@ -11,9 +11,9 @@ import type { EChartsOption } from '../../charts/echarts'
 import { BAR_MARKS, LINE, WASH, grid, moneyAxis, monthAxis } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { referenceLine } from '../../charts/reference'
-import { PALETTE } from '../../charts/theme'
+import { OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
-import type { NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
+import type { CoverageOut, NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatMonth } from '../../utils/format'
 
@@ -47,14 +47,69 @@ export function netWorthTrendCsv(ts: Pick<NetWorthTimeseries, 'months' | 'net_wo
 export const RECENT_SPEND_MONTHS = 12
 
 const AVERAGE_SERIES = '12-mo average'
+const SPEND_SERIES = 'Spend'
+
+/** Nothing to exclude — one shared empty set, so the default costs no allocation. */
+const NO_MONTHS: ReadonlySet<string> = new Set<string>()
+
+// Border only, no fill: the ESPP anatomy's "hollow means this is not what it looks like"
+// idiom (esppChartOptions.ts), here for a month nobody has entered.
+const HOLLOW_BAR = { color: 'transparent', borderColor: PALETTE[1], borderWidth: 1.5 } as const
+
+/** The months whose total is an ABSENCE rather than a figure (audit item 14).
+ *
+ *  The matrix months are a UNION of spending rows and net-pay rows, so a month with a
+ *  paycheck and no spending — or with rows that are all $0.00 — arrives as an explicit
+ *  "0.00" that the bars and the average would otherwise read as a real zero-spend month.
+ *  Two sources, because neither alone sees every case:
+ *
+ *    /coverage's `spending_empty` (rows saved, all zero, no take-home) and
+ *    `spending_missing` (nothing at all inside the balances window) — the server's own
+ *    classification (services/coverage.py), authoritative and already on this page.
+ *
+ *    The matrix's own net-pay column, for the month whose take-home IS on file: the
+ *    service calls that `net_pay_without_spending` but `GET /coverage` does not publish
+ *    it, and coverage counts such a month as ENTERED on its take-home row alone. A
+ *    take-home row plus a zero total is exactly that month, from data already in hand.
+ *
+ *  A $0.00 month with neither a take-home row nor a coverage list naming it stays a
+ *  figure: a household that really spent nothing is not corrected here. */
+export function notEnteredMonths(
+  matrix: Pick<SpendingMatrix, 'months' | 'totals' | 'net_pay'>,
+  coverage: Pick<CoverageOut, 'spending_empty' | 'spending_missing'>,
+): Set<string> {
+  const months = new Set<string>([
+    ...(coverage.spending_empty ?? []),
+    ...(coverage.spending_missing ?? []),
+  ])
+  matrix.months.forEach((month, i) => {
+    if (matrix.net_pay[i] != null && Number(matrix.totals[i]) === 0) months.add(month)
+  })
+  return months
+}
 
 export function recentSpendOption(
   matrix: Pick<SpendingMatrix, 'months' | 'totals'>,
   months = RECENT_SPEND_MONTHS,
+  notEntered: ReadonlySet<string> = NO_MONTHS,
 ): EChartsOption | null {
   if (matrix.months.length === 0) return null
   const start = Math.max(0, matrix.months.length - months)
+  const shown = matrix.months.slice(start)
   const totals = matrix.totals.slice(start).map(Number)
+  // Drawn hollow and labelled in the tooltip rather than dropped: the month happened, and
+  // an axis that skipped it would hide the gap this is meant to make visible.
+  const blank = new Set(shown.flatMap((month, i) => (notEntered.has(month) ? [i] : [])))
+  // A not-entered month's total IS 0.00, so its hollow bar is a baseline tick and the only
+  // place a CUE can live is the label. The month's name recedes to the "Other" neutral —
+  // dimmer than the axis's own muted in both palettes, and a token, so recolor.ts maps it.
+  // Per-datum objects rather than an `axisLabel.color` CALLBACK: recolor.ts walks plain
+  // objects but passes functions through by identity (its header rule), so a callback
+  // would bake dark-theme hexes into the light theme.
+  const axis = monthAxis(shown.map(formatMonth), { gap: true })
+  const labels = axis.data.map((label, i) =>
+    blank.has(i) ? { value: label, textStyle: { color: OTHER_SERIES_COLOR } } : label,
+  )
   // F14: the reference is spendStats' OWN avg12 — the mean of the twelve months STRICTLY
   // BEFORE the latest one — not the mean of the drawn window. The spend tile prints that
   // number under the same words ("over/under $X 12-mo avg"), and the label on this line
@@ -62,7 +117,7 @@ export function recentSpendOption(
   // judged drags its own baseline) would put two different numbers behind one name.
   // Taken from spendStats rather than recomputed so they cannot drift apart, and NOT
   // re-rounded through cents(): the tile formats this exact float.
-  const mean = spendStats(matrix).avg12
+  const mean = spendStats(matrix, notEntered).avg12
   // A single-month book has nothing before the latest to average: no line, no legend entry
   // for a comparison that does not exist yet (the tile suppresses its delta for the same
   // reason).
@@ -70,11 +125,28 @@ export function recentSpendOption(
   return {
     grid: grid(),
     legend: legendFor(1 + average.length),
-    xAxis: monthAxis(matrix.months.slice(start).map(formatMonth), { gap: true }),
+    xAxis: { ...axis, data: labels },
     yAxis: moneyAxis(),
-    tooltip: axisTooltip({ unit: 'money', references: [AVERAGE_SERIES], pointer: 'shadow' }),
+    tooltip: axisTooltip({
+      unit: 'money',
+      references: [AVERAGE_SERIES],
+      pointer: 'shadow',
+      // The figure stays (it is what the server sent); the suffix is what makes it honest.
+      rowSuffix: (param) =>
+        param.seriesName === SPEND_SERIES &&
+        typeof param.dataIndex === 'number' &&
+        blank.has(param.dataIndex)
+          ? '(not entered)'
+          : null,
+    }),
     series: [
-      { type: 'bar', name: 'Spend', ...BAR_MARKS, color: PALETTE[1], data: totals },
+      {
+        type: 'bar',
+        name: SPEND_SERIES,
+        ...BAR_MARKS,
+        color: PALETTE[1],
+        data: totals.map((value, i) => (blank.has(i) ? { value, itemStyle: HOLLOW_BAR } : value)),
+      },
       ...average,
     ],
   }
@@ -99,17 +171,23 @@ export interface SpendStats {
 // Presentation stats over server totals (SpendingPage's categoryTotals class) — the tile
 // month is the LATEST month present (hand-entered app: the current calendar month is
 // absent until the wizard runs; the tile label carries the month so it reads honestly).
-export function spendStats(matrix: Pick<SpendingMatrix, 'months' | 'totals'>): SpendStats {
+export function spendStats(
+  matrix: Pick<SpendingMatrix, 'months' | 'totals'>,
+  notEntered: ReadonlySet<string> = NO_MONTHS,
+): SpendStats {
   if (matrix.months.length === 0) return { month: null, total: null, avg12: null, aboveAvg: null }
   const idx = matrix.months.length - 1
-  // RATIFIED (Task 8 review): a cashflow-only month — net pay entered, spending not — comes
-  // back as an explicit "0.00" and counts here at FULL WEIGHT. The server cannot distinguish
-  // absent from genuinely zero, and filtering zeros would bias the average UP for households
-  // that really do have zero-spend months; the wizard also enters spending and net pay
-  // together, so persistent gaps are unlikely. The cashflowOnly guard on OverviewPage
-  // handles the DISPLAY case only (it suppresses the tile's delta, not this mean). A
-  // server-side absent/zero distinction is the real fix if it ever matters.
-  const prior = matrix.totals.slice(Math.max(0, idx - 12), idx).map(Number)
+  // The twelve months before the tile month, MINUS the ones nobody entered (audit item
+  // 14). The window is still twelve CALENDAR months — the not-entered ones drop out of
+  // the mean rather than pulling an older month in, so the label keeps meaning what it
+  // says. The earlier ratified rule counted them at full weight because the server could
+  // not tell an absence from a real zero; /coverage can (notEnteredMonths above), and a
+  // month the household never typed must not congratulate it for spending nothing.
+  const from = Math.max(0, idx - 12)
+  const prior = matrix.totals
+    .slice(from, idx)
+    .filter((_, i) => !notEntered.has(matrix.months[from + i]))
+    .map(Number)
   const avg12 = prior.length > 0 ? prior.reduce((a, b) => a + b, 0) / prior.length : null
   const total = matrix.totals[idx]
   return {

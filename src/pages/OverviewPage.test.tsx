@@ -194,10 +194,19 @@ function summaryOut(over: Partial<NetWorthSummary> = {}): NetWorthSummary {
 // tax-tile fixtures already guard against with CURRENT_YEAR).
 const NW_MONTHS = [-2, -1, 0].map((delta) => addMonths(currentMonthIso(), delta))
 
+// One account, because a scope the chips can reach HAS one: an empty `accounts` list is
+// the audit item 11 case (a person with nothing on file), and the tests about it say so
+// explicitly rather than inheriting it from the default fixture.
+const ONE_ACCOUNT = {
+  id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
+  sort_order: 1, is_active: true, is_component: false,
+  parent_account_id: null, person_id: null,
+}
+
 function timeseriesOut(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseries {
   return {
     months: [...NW_MONTHS],
-    accounts: [],
+    accounts: [ONE_ACCOUNT],
     series: [],
     group_totals: {
       cash: [], pre_tax: [], post_tax: [], taxable: [], equity: [], other: [], liability: [],
@@ -591,11 +600,15 @@ describe('OverviewPage tiles', () => {
     expect(deltaOf(hero)?.className).toContain('stat-delta-positive')
     expect(hero.className).toContain('stat-tile-hero')
 
-    // Down day on an up position: the delta describes TODAY, so the tone is negative even
-    // though unrealized gain is large. Both figures are the server's own totals fields.
+    // Down day on an up position: the tone is negative even though unrealized gain is
+    // large. Both figures are the server's own totals fields — and the day they belong to
+    // is the NEWEST quote's, which in this fixture is yesterday's, so the delta is dated
+    // rather than called "today" (audit item 15).
     const portfolio = tileFor('Portfolio')
     expect(valueOf(portfolio)).toBe('$812,345.67')
-    expect(deltaOf(portfolio)?.textContent).toBe('▼ -$2,500.00 (-0.3%) today')
+    expect(deltaOf(portfolio)?.textContent).toBe(
+      `▼ -$2,500.00 (-0.3%) on ${formatDate(daysAgo(1))}`,
+    )
     expect(deltaOf(portfolio)?.className).toContain('stat-delta-negative')
 
     // Spending up is BAD, and glyph and tone are DECOUPLED so that both can be true at once:
@@ -631,6 +644,35 @@ describe('OverviewPage tiles', () => {
     expect(screen.queryByText(/MoM/)).toBeNull()
   })
 
+  // Audit item 15: "today" is a claim about the quote, not about the tile.
+  it('says "today" only when the newest quote really is today’s', async () => {
+    const fresh = todayIso()
+    serve({ holdings: holdingsOut({ as_of: fresh, latest_quote_at: fresh }) })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe('▼ -$2,500.00 (-0.3%) today')
+  })
+
+  it('dates the portfolio delta from the NEWEST quote, not the oldest', async () => {
+    // as_of is the OLDEST quote across holdings (one manual-priced straggler pins it);
+    // latest_quote_at is the newest, and the day change belongs to that one.
+    serve({ holdings: holdingsOut({ as_of: daysAgo(30), latest_quote_at: daysAgo(3) }) })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe(
+      `▼ -$2,500.00 (-0.3%) on ${formatDate(daysAgo(3))}`,
+    )
+  })
+
+  it('names no day at all when there is no quote to date the change from', async () => {
+    serve({ holdings: holdingsOut({ as_of: null, latest_quote_at: null }) })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    // Not "today": with nothing quoted there is no day to name, so the word is omitted
+    // rather than guessed (review round).
+    expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe('▼ -$2,500.00 (-0.3%)')
+  })
+
   it('drops the portfolio delta when the day change has an amount but no rate', async () => {
     const totals = { ...holdingsOut().totals, day_change_amount: '-5.00', day_change_pct: null }
     serve({ holdings: holdingsOut({ totals }) })
@@ -654,6 +696,24 @@ describe('OverviewPage tiles', () => {
     // "under"). Same decoupling, opposite signs — here glyph and tone happen to agree.
     expect(deltaOf(tile)?.textContent).toBe('▼ under $5,000.00 12-mo avg')
     expect(deltaOf(tile)?.className).toContain('stat-delta-positive')
+  })
+
+  // Audit item 14: the matrix months are a UNION of spending rows and net-pay rows, so a
+  // month nobody entered comes back as an explicit "0.00" and used to drag the tile's own
+  // comparison average down. /coverage names those months, and the page already has it.
+  it('leaves a month nobody entered out of the tile’s 12-month average', async () => {
+    // Jun 2026 saved with every category $0.00; the ten months before it are 5,000 each.
+    const blank = SPEND_MONTHS[10]
+    serve({
+      matrix: matrixOut({ totals: [...Array<string>(10).fill('5000.00'), '0.00', '6000.00'] }),
+      coverage: coverageOut({ spending_empty: [blank] }),
+    })
+    renderPage()
+
+    const tile = (await screen.findByText('Spending — Jul 2026')).closest('.stat-tile') as HTMLElement
+    // Counted at full weight the eleven priors average $4,545.45; with June out they are
+    // the ten real months, and the comparison is the $5,000.00 the household actually spends.
+    expect(deltaOf(tile)?.textContent).toBe('▲ over $5,000.00 12-mo avg')
   })
 
   it('says nothing about a cashflow-only trailing month', async () => {
@@ -1534,6 +1594,67 @@ describe('OverviewPage — shell frame and owner scope', () => {
     // Instant, before any fetch resolves — and still revalidating underneath.
     expect(valueOf(tileFor('Portfolio'))).toBe('$99.00')
     expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+  })
+
+  // Audit item 11 (the Overview half): the summary returns zero totals for an owner with
+  // no accounts, and a page of $0.00 tiles over a flat line reads as "you have nothing"
+  // rather than "there is nothing here to show" — the chart's all-zero series also makes
+  // ECharts pick a 0..1 axis and print a $0/$1 ladder.
+  it('answers with a note, not zero walls, for an owner with no accounts', async () => {
+    serve({
+      ts: timeseriesOut({ accounts: [], net_worth: ['0.00', '0.00', '0.00'] }),
+      summary: summaryOut({ net_worth: '0.00', mom_delta: '0.00', mom_pct: '0.0' }),
+    })
+    renderPage('/?owner=2')
+
+    await screen.findByText('Net worth — Aug 2026')
+    const hero = tileFor('Net worth — Aug 2026')
+    expect(valueOf(hero)).toBe('—')
+    // The person by name, from the household the scope row already fetched.
+    expect(deltaOf(hero)?.textContent).toBe('No accounts for Grace yet')
+    // Not a $0.00 MoM delta beside it, and no flat line under it.
+    expect(screen.queryByText(/MoM/)).toBeNull()
+    expect(screen.queryByLabelText('Line chart of net worth at every monthly snapshot')).toBeNull()
+    expect(screen.getAllByText('No accounts for Grace yet')).toHaveLength(2)
+    // Holdings hang off accounts: the Portfolio tile is the same nothing, and it does not
+    // repeat the sentence its neighbour already carries.
+    const portfolio = tileFor('Portfolio')
+    expect(valueOf(portfolio)).toBe('—')
+    expect(deltaOf(portfolio)).toBeNull()
+  })
+
+  it('keeps the household view whole when the book itself is empty', async () => {
+    // Only an OWNER scope gets the note: a fresh database's own empty states already say
+    // what is missing, and "No accounts for this person yet" is not what the household is.
+    // Seeded so the paint is a CACHED one — the hero's count-up settles from $0.00 on a
+    // fresh paint, and a settling number is not a string this test can pin.
+    const payload = serve({ ts: timeseriesOut({ accounts: [] }) })
+    setSnapshot('overview:all', snapshotOf(payload))
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    expect(screen.queryByText(/No accounts for/)).toBeNull()
+  })
+
+  // Item 9: the ping is derived from the OWNER-FILTERED holdings, but /portfolio/history is
+  // household-wide — plotting one person's total at the end of the household series drew a
+  // fake cliff. PortfolioPage has guarded this since 2026-08-31; the Overview copy did not.
+  it('drops the live ping under an owner scope — the checkpoints are household-wide', async () => {
+    serve()
+    // The default holdings fixture quotes YESTERDAY, past the last weekly checkpoint, so a
+    // live point extends the axis by one category with its own date label.
+    const livePoint = formatDate(daysAgo(1))
+    const perfChart = () => screen.getByLabelText(/Line chart of portfolio value against cost basis/)
+
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(categoriesOf(perfChart())).toContain(livePoint)
+
+    cleanup()
+    renderPage('/?owner=2')
+    await screen.findByText('Net worth — Aug 2026')
+    // Same holdings payload, same history: only the scope changed, and the ping is gone.
+    expect(categoriesOf(perfChart())).not.toContain(livePoint)
   })
 
   it('says so on the two cards an owner scope cannot reach, and nothing when it is All', async () => {
