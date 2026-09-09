@@ -2217,6 +2217,19 @@ export interface PaceItem {
    *  Null/absent on a row the server did not walk — a pre-batch snapshot, or a pure caller —
    *  and the panel then draws exactly the one-figure meter it always drew. */
   so_far?: string | null
+  /** The window's TAIL (2026-09-09 audit item 5): the paychecks left this year and the gross
+   *  they pay. On every row the server walked, because it is one walk. */
+  remaining_checks?: number | null
+  remaining_gross?: string | null
+  /** 401(k) elective row: the TOTAL rate (traditional + Roth, a 9dp fraction) over those
+   *  remaining checks that lands exactly on the cap, given what has already gone in. 0 means
+   *  there is no room left; null means the question has no answer here — nothing walked, no
+   *  cap entered, or no paydays left. A client may SUBTRACT its own Roth rate from this; no
+   *  other arithmetic on a limit belongs on this side of the wire. */
+  to_cap_rate?: string | null
+  /** The HSA row's twin, in per-check dollars: the EMPLOYEE amount that lands on the cap,
+   *  with the employer's whole-year deposit already reserved out of it. */
+  to_cap_per_check?: string | null
 }
 
 // --- assistant (2026-09-01 spec §3–§5) ---

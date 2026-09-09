@@ -284,7 +284,11 @@ const MAX_HSA_DEPENDENTS = 20
 
 /** The employer's HSA policy in words, read back from the FORM's own state (matchWords'
  *  rule): typed input, never a server figure re-derived. Both amounts zero is the stored way
- *  to say "no employer deposit", so that is the one sentence with a full stop. */
+ *  to say "no employer deposit", so that is the one sentence with a full stop.
+ *
+ *  The COVERAGE box is part of the policy (2026-09-09 audit item 29): the per-head term is
+ *  earned under family coverage and nowhere else — `limit_check.employer_hsa`'s own rule —
+ *  so under self-only the clause described money the server pays to nobody. */
 function employerHsaWords(form: ProfileFormState): string {
   // The money boxes' own options, exactly as submit's belt reads them — parsing them any
   // other way would describe a figure that is not the one being saved. A half-typed "=5000+"
@@ -296,12 +300,20 @@ function employerHsaWords(form: ProfileFormState): string {
   const annual = num(form.hsa_employer_annual)
   const perHead = num(form.hsa_employer_per_dependent)
   if (annual <= 0 && perHead <= 0) return 'No employer HSA contribution entered.'
+  // No HDHP is no HSA, so NEITHER term arrives — `limit_check.employer_hsa` returns zero for
+  // this tier before it looks at the policy at all. Saying "$2,000.00 a year for your
+  // coverage" here would promise a deposit against an account the tier says does not exist.
+  if (form.hsa_coverage === 'none') {
+    return 'No employer HSA contribution applies without HSA coverage.'
+  }
   const typed = Number(form.hsa_dependents.trim() || '0')
   const covered = Number.isFinite(typed) ? Math.trunc(typed) : 0
   const own = `${formatCurrency(String(annual))} a year for your coverage`
-  // Nobody else covered, or nothing paid per head: the clause would describe money that does
-  // not exist (matchWords' rule for a band nobody funds).
-  if (perHead <= 0 || covered === 0) return own
+  // Self-only, nobody else covered, or nothing paid per head: the clause would describe
+  // money that does not exist (matchWords' rule for a band nobody funds). A count left
+  // behind on a row that has since dropped to self-only is ignored here exactly as the
+  // server ignores it — the sentence promises what the deposit will actually be.
+  if (form.hsa_coverage !== 'family' || perHead <= 0 || covered === 0) return own
   return `${own}, plus ${formatCurrency(String(perHead))} for each of ${covered} additional individual${covered === 1 ? '' : 's'}`
 }
 

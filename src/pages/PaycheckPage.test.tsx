@@ -942,6 +942,7 @@ describe('PaycheckPage — the profile form', () => {
   it('prints the per-head clause only when it is worth something', async () => {
     render(<PaycheckPage />, { wrapper: MemoryRouter })
     await screen.findByText('$3,384.16')
+    fireEvent.change(field('HSA coverage'), { target: { value: 'family' } })
     type('Additional individuals covered', '2')
     expect(
       screen.getByText(
@@ -951,6 +952,30 @@ describe('PaycheckPage — the profile form', () => {
     // A per-head amount of zero pays nothing for those two, so the clause goes.
     type('Per additional covered individual', '0')
     expect(screen.getByText('$2,000.00 a year for your coverage')).toBeTruthy()
+  })
+
+  it('drops the per-head clause under self-only coverage, whatever the count says', async () => {
+    // 2026-09-09 audit item 29: the sentence promised "$500.00 for each of 2 additional
+    // individuals" while `limit_check.employer_hsa` pays the per-head term under FAMILY
+    // coverage and nowhere else — the stored count is ignored the moment the tier drops.
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    expect(field('HSA coverage').value).toBe('self')
+    type('Additional individuals covered', '2')
+    expect(screen.getByText('$2,000.00 a year for your coverage')).toBeTruthy()
+    // Family pays for them, and the sentence says so...
+    fireEvent.change(field('HSA coverage'), { target: { value: 'family' } })
+    expect(
+      screen.getByText(
+        '$2,000.00 a year for your coverage, plus $500.00 for each of 2 additional individuals',
+      ),
+    ).toBeTruthy()
+    // ...and no HDHP at all is no deposit AND no account: neither term arrives, so the
+    // sentence names the tier rather than promising the employee's own line.
+    fireEvent.change(field('HSA coverage'), { target: { value: 'none' } })
+    expect(
+      screen.getByText('No employer HSA contribution applies without HSA coverage.'),
+    ).toBeTruthy()
   })
 
   it('says a household with no employer HSA deposit has none, rather than printing zeros', async () => {
@@ -966,6 +991,7 @@ describe('PaycheckPage — the profile form', () => {
     render(<PaycheckPage />, { wrapper: MemoryRouter })
     await screen.findByText('$3,384.16')
     type('Effective date', '2026-07-01')
+    fireEvent.change(field('HSA coverage'), { target: { value: 'family' } })
     type('Employer HSA per year', '2400')
     type('Additional individuals covered', '2')
     // The sentence reads back what is in the boxes, before the submit reseeds the form.

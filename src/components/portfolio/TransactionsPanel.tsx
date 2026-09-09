@@ -98,13 +98,44 @@ function focusFirstAmount(type: TransactionType): void {
   document.getElementById(type === 'split' ? 'txn-split-factor' : 'txn-shares')?.focus()
 }
 
+/** The note under an Account box (2026-09-09 audit item 27).
+ *
+ * `resolve_portfolio_account` GET-OR-CREATES on the exact string typed here and tags a new
+ * account to the PRIMARY person — an ownership decision made by a typo, invisible until the
+ * scope chips disagree with the holdings. The roster is the same list Settings edits: a
+ * label that is not on it is about to become a new account, and the form says so before the
+ * save rather than after. Trimmed and exact, because that is how the server matches.
+ *
+ * Null while the roster is unknown (still loading, or its fetch failed): this is a warning
+ * about creating something new, and an empty roster would raise it over every account the
+ * household already has. */
+function newAccountNote(
+  typed: string,
+  accounts: string[] | null,
+  primaryName: string | null,
+): string | null {
+  const label = typed.trim()
+  if (accounts === null || label === '' || accounts.includes(label)) return null
+  return `New account '${label}' will be created and assigned to ${primaryName ?? 'the primary member'} — re-tag it in Settings → Accounts`
+}
+
 export default function TransactionsPanel({
   securities,
   transactions,
+  accounts = null,
+  primaryName = null,
   onChanged,
 }: {
   securities: SecurityOut[]
   transactions: TransactionOut[]
+  /** The household's existing portfolio account labels, for the Account box's datalist and
+   *  its "this one is new" note (2026-09-09 audit item 27). Null — the default — is "the
+   *  roster is unknown", which offers no completions and warns about nothing; the page
+   *  passes it while its own fetch is in flight or after that fetch failed. */
+  accounts?: string[] | null
+  /** Who a NEW account would be assigned to, for that note; null falls back to a
+   *  description rather than inventing a name. */
+  primaryName?: string | null
   onChanged: () => void
 }) {
   const [form, setForm] = useState<FormState>(EMPTY)
@@ -116,6 +147,7 @@ export default function TransactionsPanel({
   const [busy, setBusy] = useState(false)
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
   const toast = useToast()
+  const accountNote = newAccountNote(form.account, accounts, primaryName)
 
   // 'type' is excluded: it is a union field with its own dedicated handler below.
   const set = (field: Exclude<keyof FormState, 'type'>) => (value: string) =>
@@ -304,9 +336,29 @@ export default function TransactionsPanel({
               which is now select-only — every plain text control in this form states it. */}
           <input
             className="field-input"
+            list={accounts === null ? undefined : 'txn-account-labels'}
+            // The box announces "Account" whatever the note below says: a describedby, never
+            // part of the name — a wrapping label would have read the whole sentence out.
+            aria-label="Account"
+            aria-describedby={accountNote === null ? undefined : 'txn-account-note'}
             value={form.account}
             onChange={(e) => set('account')(e.target.value)}
           />
+          {/* Completions, not a fence: a genuinely new account is a legal thing to type, so
+              the box stays free text and the note below owns the consequence. No roster, no
+              list at all — an empty one is a dropdown arrow that opens on nothing. */}
+          {accounts !== null && (
+            <datalist id="txn-account-labels">
+              {accounts.map((label) => (
+                <option key={label} value={label} />
+              ))}
+            </datalist>
+          )}
+          {accountNote !== null && (
+            <p className="hint" id="txn-account-note">
+              {accountNote}
+            </p>
+          )}
         </label>
         <label>
           Type

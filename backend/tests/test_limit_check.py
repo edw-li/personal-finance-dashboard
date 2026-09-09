@@ -20,11 +20,13 @@ from app.limit_keys import (
     LIMIT_HSA_SELF,
 )
 from app.services.limit_check import employer_hsa, employer_match, paycheck_pace
-from app.services.pace_walk import Walked
+from app.services.pace_walk import Walked, walk
 
 
 @dataclass
 class FakeProfile:
+    # Only the walk reads this (a timeline needs one); `paycheck_pace` never asks.
+    effective_date: date = date(2026, 1, 1)
     annual_salary: Decimal = Decimal("100000.00")
     pay_periods_per_year: int = 24
     trad_401k_pct: Decimal = Decimal("0.100000000")
@@ -374,6 +376,10 @@ WALKED = Walked(
     basis="paydays",
     backfilled_from=None,
     first_payday_passed=True,
+    # 8 of the 24 checks are still ahead on 2026-09-07, at 188,930 / 24 each. A Decimal
+    # because it is a DIVISOR — the month basis counts fractions of a check.
+    remaining_checks=Decimal("8"),
+    remaining_gross=Decimal("62976.67"),
 )
 
 
@@ -429,6 +435,8 @@ def test_the_deposit_waits_for_the_years_first_payday():
         basis="paydays",
         backfilled_from=None,
         first_payday_passed=False,
+        remaining_checks=Decimal("24"),
+        remaining_gross=Decimal("188930.00"),
     )
     profile = FakeProfile(hsa_per_check=Decimal("100.00"), **EMPLOYER_HSA)
     row = by_key(paycheck_pace(profile, {LIMIT_HSA_SELF: Decimal("4400.00")}, "self", early))[
@@ -454,6 +462,8 @@ def walked(**over) -> Walked:
         "basis": "paydays",
         "backfilled_from": None,
         "first_payday_passed": True,
+        "remaining_checks": WALKED.remaining_checks,
+        "remaining_gross": WALKED.remaining_gross,
     }
     fields.update(over)
     return Walked(**fields)
@@ -507,3 +517,201 @@ def test_without_a_base_the_row_prices_both_figures_from_the_profile_in_hand():
     assert by_key(paycheck_pace(profile, limits, "self", WALKED)) == by_key(
         paycheck_pace(profile, limits, "self", WALKED, profile)
     )
+
+
+# --- the elections that land exactly on the cap (2026-09-09 audit item 5) ---
+# The Try-it presets used to size themselves as `limit / salary` and `limit / periods`, which
+# asks for a WHOLE YEAR of contributions in the months that are left and lands the very strip
+# beside the chip on "over". The rate and the amount below are the server's answer instead.
+
+ELECTIVE_LIMIT = {LIMIT_401K_ELECTIVE: Decimal("24500.00")}
+EDWARD = {"annual_salary": Decimal("188930.00"), "trad_401k_pct": Decimal("0.130000000")}
+
+
+def test_the_401k_row_names_the_total_rate_that_lands_on_the_cap():
+    row = by_key(paycheck_pace(FakeProfile(**EDWARD), ELECTIVE_LIMIT, "none", WALKED))[
+        LIMIT_401K_ELECTIVE
+    ]
+    # (24,500 - 16,373.93) over the 62,976.67 the last eight checks pay, floored to 9 dp.
+    assert row.to_cap_rate == Decimal("0.129033021")
+    # The tail rides the row that names the target, so the sentence beside it can say how
+    # many checks the change has to fit into.
+    assert row.remaining_checks == 8
+    assert row.remaining_gross == Decimal("62976.67")
+
+
+def test_the_401k_target_is_the_whole_elective_rate_whatever_the_current_split():
+    """402(g) counts traditional and Roth together, so the target is their SUM — the client
+    subtracts its own Roth from it. A split-aware target would be a different number for the
+    same person and the same cap."""
+    split = FakeProfile(
+        **EDWARD | {"trad_401k_pct": Decimal("0.080000000"), "roth_401k_pct": Decimal("0.05")}
+    )
+    row = by_key(paycheck_pace(split, ELECTIVE_LIMIT, "none", WALKED))[LIMIT_401K_ELECTIVE]
+    assert row.to_cap_rate == Decimal("0.129033021")
+
+
+def test_the_target_rate_lands_the_projection_exactly_on_the_cap():
+    """The round trip the chip makes: read the rate, elect it, re-walk. The old arithmetic is
+    asserted beside it, because "it reads 100.25 %" is the bug this closes."""
+    today = date(2026, 9, 7)
+    year = (date(2026, 1, 1), date(2026, 12, 31))
+    profiles = [FakeProfile(**EDWARD)]
+    walked = walk(profiles, profiles[0], today, *year)
+    target = by_key(paycheck_pace(profiles[0], ELECTIVE_LIMIT, "none", walked))[
+        LIMIT_401K_ELECTIVE
+    ].to_cap_rate
+    elected = FakeProfile(**EDWARD | {"trad_401k_pct": target})
+    row = by_key(
+        paycheck_pace(elected, ELECTIVE_LIMIT, "none", walk(profiles, elected, today, *year))
+    )[LIMIT_401K_ELECTIVE]
+    assert row.annualized == Decimal("24500.00")
+    assert row.ratio == Decimal("1.0000")
+    assert row.tone != "over"
+
+    # limit / salary — the preset's old sizing, which ignores the sixteen checks already paid
+    # at 13 % and asks the last eight to carry a whole year.
+    naive = FakeProfile(**EDWARD | {"trad_401k_pct": Decimal("0.129672000")})
+    stale = by_key(
+        paycheck_pace(naive, ELECTIVE_LIMIT, "none", walk(profiles, naive, today, *year))
+    )[LIMIT_401K_ELECTIVE]
+    assert stale.ratio == Decimal("1.0016")
+    assert stale.tone == "over"
+
+
+def test_a_row_already_past_its_cap_has_no_room_rather_than_no_answer():
+    """Zero is a real answer — "stop" — and the chip that reads it says "already at the cap"
+    instead of aiming at a negative rate."""
+    limits = {LIMIT_401K_ELECTIVE: Decimal("10000.00"), LIMIT_HSA_SELF: Decimal("1000.00")}
+    items = by_key(
+        paycheck_pace(FakeProfile(hsa_per_check=Decimal("100.00")), limits, "self", WALKED)
+    )
+    assert items[LIMIT_401K_ELECTIVE].to_cap_rate == Decimal("0")
+    assert items[LIMIT_HSA_SELF].to_cap_per_check == Decimal("0")
+
+
+def test_a_row_with_no_cap_entered_names_no_target_but_still_counts_the_year():
+    row = by_key(paycheck_pace(FakeProfile(), {}, "none", WALKED))[LIMIT_401K_ELECTIVE]
+    assert row.to_cap_rate is None
+    assert row.limit is None
+    # The tail is the WALK's, not the cap's: it is there to be read even when nothing is.
+    assert row.remaining_checks == 8
+
+
+def test_a_year_with_no_paydays_left_can_name_no_election_at_all():
+    """Read on New Year's Eve after the last check: there is no rate that changes the year."""
+    spent = walked(remaining_checks=Decimal("0"), remaining_gross=Decimal("0.00"))
+    items = by_key(
+        paycheck_pace(
+            FakeProfile(hsa_per_check=Decimal("100.00")),
+            ELECTIVE_LIMIT | {LIMIT_HSA_SELF: Decimal("4400.00")},
+            "self",
+            spent,
+        )
+    )
+    assert items[LIMIT_401K_ELECTIVE].to_cap_rate is None
+    assert items[LIMIT_HSA_SELF].to_cap_per_check is None
+    assert items[LIMIT_401K_ELECTIVE].remaining_checks == 0
+
+
+def test_an_unwalked_row_has_neither_a_tail_nor_a_target():
+    """The pure callers have no window, so there is nothing to divide and nothing to say."""
+    items = paycheck_pace(FakeProfile(hsa_per_check=Decimal("100.00")), ELECTIVE_LIMIT, "self")
+    assert [item.remaining_checks for item in items] == [None, None, None]
+    assert [item.remaining_gross for item in items] == [None, None, None]
+    assert [item.to_cap_rate for item in items] == [None, None, None]
+    assert [item.to_cap_per_check for item in items] == [None, None, None]
+
+
+def test_the_hsa_target_leaves_the_employer_deposit_its_room():
+    """4,400 cap, 2,000 of it the employer's and 1,600 already deferred: 100 a check for the
+    eight that are left. `limit / periods` would have said 183.33 and blown the cap by 667."""
+    profile = FakeProfile(hsa_per_check=Decimal("100.00"), **EMPLOYER_HSA)
+    row = by_key(paycheck_pace(profile, {LIMIT_HSA_SELF: Decimal("4400.00")}, "self", WALKED))[
+        LIMIT_HSA_SELF
+    ]
+    assert row.to_cap_per_check == Decimal("100.00")
+
+
+def test_the_hsa_target_reserves_the_deposit_before_it_has_landed():
+    """Read on January 2nd the row's `so_far` is zero, but the employer's 2,000 is coming and
+    counts against the same cap — so the target is (4,400 - 2,000) / 24, not 4,400 / 24."""
+    early = Walked(
+        so_far=dict.fromkeys(WALKED.so_far, Decimal("0.00")),
+        projected=WALKED.projected,
+        basis="paydays",
+        backfilled_from=None,
+        first_payday_passed=False,
+        remaining_checks=Decimal("24"),
+        remaining_gross=Decimal("188930.00"),
+    )
+    profile = FakeProfile(hsa_per_check=Decimal("100.00"), **EMPLOYER_HSA)
+    row = by_key(paycheck_pace(profile, {LIMIT_HSA_SELF: Decimal("4400.00")}, "self", early))[
+        LIMIT_HSA_SELF
+    ]
+    assert row.so_far == Decimal("0.00")
+    assert row.to_cap_per_check == Decimal("100.00")
+
+
+def test_the_hsa_target_lands_on_the_cap_on_a_cadence_of_fractional_checks():
+    """The month basis is where a rounded check count breaks the promise: a biweekly profile
+    read on 2026-09-07 has four months and 26 x 4 / 12 = 8.67 checks left. Dividing by the 9
+    the wire prints leaves a whole check's worth of the cap unfilled — 4,400 landing at
+    99.44 %, "near the cap" beside a chip that said it would max it out."""
+    today = date(2026, 9, 7)
+    year = (date(2026, 1, 1), date(2026, 12, 31))
+    limits = {LIMIT_HSA_SELF: Decimal("4400.00")}
+    profiles = [
+        FakeProfile(
+            annual_salary=Decimal("188930.00"),
+            pay_periods_per_year=26,
+            hsa_per_check=Decimal("100.00"),
+            **EMPLOYER_HSA,
+        )
+    ]
+    walked = walk(profiles, profiles[0], today, *year)
+    assert walked.basis == "months"
+    # The count the SENTENCE prints is a whole number; the divisor behind it is not.
+    row = by_key(paycheck_pace(profiles[0], limits, "self", walked))[LIMIT_HSA_SELF]
+    assert row.remaining_checks == 9
+    assert row.to_cap_per_check == Decimal("76.92")
+
+    elected = FakeProfile(**vars(profiles[0]) | {"hsa_per_check": row.to_cap_per_check})
+    landed = by_key(paycheck_pace(elected, limits, "self", walk(profiles, elected, today, *year)))[
+        LIMIT_HSA_SELF
+    ]
+    assert landed.ratio == Decimal("1.0000")
+    assert landed.tone != "over"
+    # Under the cap, never over — the cents floor leaves at most a cent per check behind.
+    assert Decimal("4400.00") - landed.annualized <= Decimal("0.09")
+
+    # ...and again on 2026-12-01, where one month and 2.17 checks are all that is left: the
+    # smaller the tail, the louder a rounded divisor is.
+    december = date(2026, 12, 1)
+    late = by_key(
+        paycheck_pace(profiles[0], limits, "self", walk(profiles, profiles[0], december, *year))
+    )
+    last = FakeProfile(
+        **vars(profiles[0]) | {"hsa_per_check": late[LIMIT_HSA_SELF].to_cap_per_check}
+    )
+    assert by_key(paycheck_pace(last, limits, "self", walk(profiles, last, december, *year)))[
+        LIMIT_HSA_SELF
+    ].ratio == Decimal("1.0000")
+
+
+def test_the_401k_target_lands_on_the_cap_on_the_month_basis_too():
+    """The rate's divisor is a gross, not a count, so it never met the rounding trap — pinned
+    beside the HSA row so the pair can never drift apart."""
+    today = date(2026, 12, 1)
+    year = (date(2026, 1, 1), date(2026, 12, 31))
+    profiles = [FakeProfile(**EDWARD | {"pay_periods_per_year": 26})]
+    walked = walk(profiles, profiles[0], today, *year)
+    target = by_key(paycheck_pace(profiles[0], ELECTIVE_LIMIT, "none", walked))[
+        LIMIT_401K_ELECTIVE
+    ].to_cap_rate
+    elected = FakeProfile(**vars(profiles[0]) | {"trad_401k_pct": target})
+    row = by_key(
+        paycheck_pace(elected, ELECTIVE_LIMIT, "none", walk(profiles, elected, today, *year))
+    )[LIMIT_401K_ELECTIVE]
+    assert row.ratio == Decimal("1.0000")
+    assert row.tone != "over"
