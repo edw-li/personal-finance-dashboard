@@ -481,7 +481,12 @@ def estimate(
     )
 
     jurisdictions = None
-    if leg.split and partner_leg.split:
+    # `profiles`, not just `leg.split`: an EMPTY leg splits vacuously (it withholds nothing,
+    # so it has nothing to misattribute), which is right for a partner who has no profile
+    # and wrong for the PRIMARY — with no profile at all nobody has entered a rate, and
+    # three tiles built from vest legs alone would be a split of a household's whole
+    # withholding that never saw a paycheck.
+    if profiles and leg.split and partner_leg.split:
         # A SIMULATED partner splits by their own profile's rates; an ENTERED one already
         # gives the two figures by name. The modes are mutually exclusive upstream, so both
         # are added rather than branched on (the combined total's own rule).

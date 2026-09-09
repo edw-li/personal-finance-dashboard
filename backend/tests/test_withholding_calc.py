@@ -694,6 +694,22 @@ def test_no_split_when_either_rate_is_missing():
         assert result.jurisdictions is None
 
 
+def test_no_split_without_a_paycheck_profile_at_all():
+    # Nobody has entered a rate, so there is nothing to split BY — and a federal tile built
+    # from the vest leg alone would look like an answer about the whole household.
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[],
+        past_vests=[(date(2026, 6, 17), 100, D("500"))],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    assert result.jurisdictions is None
+
+
 def test_one_unsplit_profile_on_the_grid_withdraws_the_whole_split():
     # The July raise carries no rates, and it prices half the year's checks: a split that
     # covered only the first eleven would be a federal figure for part of a year.
