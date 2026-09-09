@@ -171,6 +171,15 @@ function renderPage(entry = '/credit-cards') {
   )
 }
 
+/** The Categories & weights row for one category name (not the matrix's own table). */
+function categoriesRow(name: string): HTMLElement {
+  const row = Array.from(document.querySelectorAll('.categories-table tbody tr')).find((tr) =>
+    Array.from(tr.querySelectorAll('td')).some((td) => td.textContent === name),
+  )
+  if (!row) throw new Error(`no categories row for ${name}`)
+  return row as HTMLElement
+}
+
 /** The matrix row <tr> whose first cell starts with the category name. */
 function matrixRow(name: string): HTMLElement {
   const cell = screen
@@ -468,6 +477,30 @@ describe('CreditCardsPage', () => {
     expect(
       screen.getByText(/fees, anniversaries and credit resets reach the calendar/),
     ).toBeTruthy()
+  })
+
+  it('an auto weight names the ENTERED months behind it (2026-09-09 audit item 6)', async () => {
+    // Three columns, February never entered. The weight is the TWO-month annualization
+    // ($300 × 12 / 2), and the caption says so — an unentered month is not a $0 month.
+    vi.mocked(fetchRewardCategories).mockResolvedValue([
+      { ...CATEGORIES[0], annual_spend: null, spending_category_id: 7 },
+    ])
+    vi.mocked(fetchCategories).mockResolvedValue([
+      { id: 7, name: 'Food', slug: 'food', sort_order: 0, is_active: true, kind: 'spending' },
+    ] as never)
+    vi.mocked(fetchMatrix).mockResolvedValue({
+      months: ['2026-01-01', '2026-02-01', '2026-03-01'],
+      categories: [],
+      series: [
+        { category_id: 7, values: ['100.00', null, '200.00'], budgets: [null, null, null] },
+      ],
+      totals: [], net_pay: [], savings_rate: [], four_pct_rule: [], total_budget: [],
+    } as unknown as SpendingMatrix)
+    renderPage()
+    await screen.findByText('Categories & weights')
+    const row = categoriesRow('Groceries')
+    expect(row.textContent).toContain('$1,800')
+    expect(row.textContent).toContain('auto · from 2 entered months')
   })
 
   it('reordering a category is optimistic and PATCHes only the rows that moved', async () => {
