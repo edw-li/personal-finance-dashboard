@@ -99,6 +99,22 @@ def unit_for(key: str) -> str:
     return TAX_INPUT_UNITS.get(key, MONEY)
 
 
+_LABELS: dict[str, str] = {key: label for key, label, *_ in TAX_INPUT_DEFINITIONS}
+
+
+def label_for(key: str, stored: str) -> str:
+    """The label to SHOW for a key: this file's, when this file knows the key.
+
+    `seed_tax_definitions` is insert-only by contract (test_seed.py pins it), so a row
+    written before a relabel keeps the old text forever — and a relabel is a code change,
+    like the unit above. Serving the label from here rather than from the row means a
+    rename ships with the code that motivated it, on every database, with no migration and
+    no boot-time rewrite of a table nothing else touches. `stored` is the fallback for a
+    key this file does not define, which only an importer could create.
+    """
+    return _LABELS.get(key, stored)
+
+
 # The ranges the PUT enforces per unit. A count of checks received so far this year is a
 # whole number, and 53 is the most a weekly payroll can pay in one calendar year; a percent
 # key stores a fraction, so 0..1 (the engine multiplies it directly).

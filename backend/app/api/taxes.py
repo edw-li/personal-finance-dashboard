@@ -132,6 +132,7 @@ from app.tax_keys import (
     SECTIONS,
     SINGLE,
     TAX_INPUT_DEFINITIONS,
+    label_for,
     unit_for,
 )
 
@@ -493,7 +494,9 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
             by_section.setdefault(definition.section, []).append(
                 TaxInputItemOut(
                     key=definition.key,
-                    label=definition.label,
+                    # From tax_keys when it knows the key: the seed is insert-only, so a row
+                    # written before a relabel still carries the old text.
+                    label=label_for(definition.key, definition.label),
                     sort_order=definition.sort_order,
                     is_derived=definition.is_derived,
                     # From tax_keys, not from the row: the unit is a property of the KEY,

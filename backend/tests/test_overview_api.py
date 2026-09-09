@@ -189,16 +189,21 @@ async def test_money_flow_defaults_to_the_current_product_year(auth_client, defi
 
 
 async def test_money_flow_unknown_year_is_200_with_a_reason(auth_client, definitions):
+    """A SETTLED empty year (was 2031): since 2026-09-09 (taxes spec 4g) a single year at
+    or after the current one refuses to compute without its bracket tables, and the
+    money-flow refusal names the tables first — deliberately, since the tax ribbons would
+    be zeros BECAUSE of them. The no-inputs sentence this test is about needs a year the
+    grandfather covers."""
     await seed_tax_year(auth_client, 2026)
-    resp = await auth_client.get(f"{MONEY_FLOW}?year=2031")
+    resp = await auth_client.get(f"{MONEY_FLOW}?year=2019")
     assert resp.status_code == 200  # GETs never reject: the payload explains instead
     body = resp.json()
     assert body["renderable"] is False
     assert body["reason"] == (
-        "No tax inputs are stored for 2031 — enter the year on the Taxes page to draw "
+        "No tax inputs are stored for 2019 — enter the year on the Taxes page to draw "
         "its money flow."
     )
-    assert "no tax inputs stored for 2031" in body["warnings"]
+    assert "no tax inputs stored for 2019" in body["warnings"]
     assert body["available_years"] == [2026]  # the selector still knows where data lives
     assert body["gross_income"] == "0.00"
 
