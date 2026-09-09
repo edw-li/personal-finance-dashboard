@@ -34,13 +34,13 @@ function sectionLabel(name: string): string {
   return SECTION_LABELS[name] ?? name.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase())
 }
 
-// --- units (2026-09-09 spec 2) --------------------------------------------------------
+// --- units (2026-09-09 spec §2) -------------------------------------------------------
 // Three boxes, one wire. The server stamps every item with its unit and stores the same
 // Numeric(14,4) either way; what differs is the box the value is TYPED in and the point
-// shift between the two. Money is verbatim in both directions - its column is the one this
+// shift between the two. Money is verbatim in both directions — its column is the one this
 // form was built for, and trimming it would rewrite every stored "200000.0000". A count is
 // shown without its trailing zeros. A percent is stored as the FRACTION the engine
-// multiplies by and shown x100, so "97.53%" saves 0.9753 - string math (shiftPoint), never
+// multiplies by and shown ×100, so "97.53%" saves 0.9753 — string math (shiftPoint), never
 // a float divide, because 9.3 / 100 is 0.09300000000000001 and that would be the number
 // saved (utils/percent.ts's whole reason for existing).
 const UNIT_KINDS: Record<TaxInputUnit, AmountKind> = {
@@ -96,7 +96,7 @@ interface Column {
 interface Cell {
   id: string
   key: string
-  /** The box this key is entered through - money unless the server says count/percent. */
+  /** The box this key is entered through — money unless the server says count/percent. */
   unit: TaxInputUnit
   personId: number | null
   /** The item's own label: what an error sentence and a keyed paste match on. */
@@ -483,7 +483,7 @@ export default function InputsForm({
                   suggestionCell.suggested === null || applies === shown
                     ? null
                     : suggestionText(suggestionCell.unit, suggestionCell.suggested)
-                // "last year's $15,750" for a carry-forward, "suggested ..." for a formula.
+                // "last year's $15,750" for a carry-forward, "suggested …" for a formula.
                 const suggestionWord = suggestionCell.suggestionSource ?? 'suggested'
                 return (
                   <div key={row.key} className="tax-input-row">

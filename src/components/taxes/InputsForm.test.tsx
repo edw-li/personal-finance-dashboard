@@ -118,7 +118,7 @@ function marriedNoRoster(): TaxInputsOut {
   }
 }
 
-// The two non-money rows (2026-09-09 spec 2), on a fixture of their own so the positional
+// The two non-money rows (2026-09-09 spec §2), on a fixture of their own so the positional
 // paste tests keep the exact cell order they assert against.
 function unitInputs(): TaxInputsOut {
   return {
