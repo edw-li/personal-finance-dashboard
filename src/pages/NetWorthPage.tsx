@@ -68,6 +68,17 @@ function netWorthKey(
   return `networth:${granularity}:${owner ?? 'all'}:${month ?? 'latest'}`
 }
 
+// The quarterly axis carries only quarter ends (timeseries drops every other month), so a
+// ribbon pick on any other month reads as "as OF that month": it snaps back to the last
+// quarter end at or before it — the column the charts and the table actually draw, and the
+// snapshot the server answers for at that grain (2026-09-09 audit item 23).
+function quarterEndOnOrBefore(month: string | null): string | null {
+  if (month === null) return null
+  const [year, index] = month.split('-').map(Number)
+  const end = Math.floor(index / 3) * 3
+  return end === 0 ? `${year - 1}-12-01` : `${year}-${String(end).padStart(2, '0')}-01`
+}
+
 interface NetWorthSnapshot {
   ts: NetWorthTimeseries
   summary: NetWorthSummary
@@ -93,7 +104,13 @@ export default function NetWorthPage() {
   const [granularity, setGranularity] = useState<'monthly' | 'quarterly'>('monthly')
   // The URL owns owner, range and the viewed month (2026-09-03 shell spec §6); the scope
   // row writes them and this page ADOPTS them below.
-  const { scope } = useScope({ owner: true, range: true, month: true })
+  const { scope, setScope } = useScope({ owner: true, range: true, month: true })
+  // The month this page is actually VIEWING: the URL's, snapped to its quarter end under the
+  // quarterly grain. Everything downstream reads this one value — the summary request, the
+  // accounts table's column and the movers pair — so the tiles can no longer name a month
+  // the charts beside them do not carry (2026-09-09 audit item 23).
+  const viewedMonth =
+    granularity === 'quarterly' ? quarterEndOnOrBefore(scope.month) : scope.month
   // The page's ownership scope: null = the whole household (and NO owner param at all, so
   // the request is byte-identical to the pre-ownership one). It scopes the tiles, both
   // charts and the accounts table. Local state, mirroring the URL, exists only so the
@@ -101,7 +118,7 @@ export default function NetWorthPage() {
   const [owner, setOwner] = useState<OwnerScope>(scope.owner)
   // Same job for the VIEWED month: a ribbon click swaps the table to that column instantly
   // while the summary is still in flight, so the dim is what admits the tiles are behind.
-  const [seenMonth, setSeenMonth] = useState<string | null>(scope.month)
+  const [seenMonth, setSeenMonth] = useState<string | null>(viewedMonth)
   // What the assistant must answer against: the scope and grain ON SCREEN (2026-09-01
   // spec §6). `owner` is stringified because the scope is a person id OR the literal
   // 'joint' — one type on the wire beats a union.
@@ -207,7 +224,7 @@ export default function NetWorthPage() {
     // a promise continuation, and leaving it on the previous scope costs one extra repaint
     // when the live payload lands, nothing more.
     const peeked = getSnapshot<NetWorthSnapshot>(
-      netWorthKey(granularity, scope.owner, scope.month),
+      netWorthKey(granularity, scope.owner, viewedMonth),
     )
     if (peeked !== undefined) {
       setFromCache(true)
@@ -218,9 +235,11 @@ export default function NetWorthPage() {
     setOwner(scope.owner)
   }
 
-  if (scope.month !== seenMonth) {
-    // Month only: the drill holds account ids, and those do not change with the month.
-    setSeenMonth(scope.month)
+  if (viewedMonth !== seenMonth) {
+    // Month only: the drill holds account ids, and those do not change with the month. Keyed
+    // on the SNAPPED month: under quarterly two picks inside one quarter are the same view,
+    // and dimming for them would leave the dim up with no refetch coming to lower it.
+    setSeenMonth(viewedMonth)
     setLoading(true)
     setError(null)
     setSummaryError(null)
@@ -242,7 +261,7 @@ export default function NetWorthPage() {
     Promise.allSettled([
       fetchTimeseries(granularity, owner),
       // The viewed month, or undefined for "the latest" — the ribbon's click-to-view.
-      fetchSummary(owner, scope.month ?? undefined),
+      fetchSummary(owner, viewedMonth ?? undefined, granularity),
     ])
       .then(([tsResult, sumResult]) => {
         // Both nouns are the page's own words: `errorDetail` keeps a 5xx body out of the UI.
@@ -292,7 +311,7 @@ export default function NetWorthPage() {
           return
         }
         const sum = sumResult.value
-        const key = netWorthKey(granularity, owner, scope.month)
+        const key = netWorthKey(granularity, owner, viewedMonth)
         const snapshot: NetWorthSnapshot = { ts, summary: sum }
         setSnapshot(key, snapshot)
         // Identical payload: nothing re-renders, the charts stay still (spec §1) — judged
@@ -305,11 +324,19 @@ export default function NetWorthPage() {
         setSummary(sum)
       })
       .finally(() => setLoading(false))
-  }, [granularity, owner, scope.month])
+  }, [granularity, owner, viewedMonth])
 
   useEffect(() => {
     load()
   }, [load])
+
+  // …and the ribbon follows the snap. A pick under quarterly is a pick of the quarter that
+  // month closes into, so the URL is rewritten to it rather than left highlighting a chip
+  // the page is not showing (2026-09-09 audit item 23). Idempotent — a quarter end snaps to
+  // itself — and `replace`, like every other scope write (useScope's drill-param convention).
+  useEffect(() => {
+    if (viewedMonth !== null && viewedMonth !== scope.month) setScope({ month: viewedMonth })
+  }, [viewedMonth, scope.month, setScope])
 
   // Once per visit, and deliberately not part of `load`: setState lives in the promise
   // continuations, never in the effect body (react-hooks/set-state-in-effect).
@@ -363,7 +390,7 @@ export default function NetWorthPage() {
   // The accounts table follows the VIEWED month (a ribbon click writes ?month=), and the
   // latest column when nothing is selected — or when the selection has no column in this
   // scope at all (a quarterly grain, a series that starts later).
-  const selectedIndex = scope.month === null ? -1 : months.indexOf(scope.month)
+  const selectedIndex = viewedMonth === null ? -1 : months.indexOf(viewedMonth)
   const viewedIndex = selectedIndex >= 0 ? selectedIndex : months.length - 1
   // …so the card heading names that month rather than claiming "latest" over it.
   const viewedLabel =
@@ -522,7 +549,7 @@ export default function NetWorthPage() {
                   delta={
                     summary.mom_delta === null
                       ? undefined
-                      : `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)}) vs prior month`
+                      : `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)}) vs prior ${summary.period === 'quarter' ? 'quarter' : 'month'}`
                   }
                   // Shared rule (src/utils/tone.ts): a flat month is NEUTRAL. This tile used to
                   // fold zero into positive; ratified Plan 6 Task 8 review — a green "▲ $0.00"
@@ -630,8 +657,14 @@ export default function NetWorthPage() {
                         // Same handler-side seed as the owner adoption above: a warm grain paints
                         // instantly, and the rendered-state guard in load() stays truthful. The
                         // ref write is fine HERE — an event handler, never a render.
+                        // The TARGET grain's key, so the month is snapped the way that
+                        // grain will read it — a quarterly peek must not look up a monthly one.
                         const peeked = getSnapshot<NetWorthSnapshot>(
-                          netWorthKey(g, owner, scope.month),
+                          netWorthKey(
+                            g,
+                            owner,
+                            g === 'quarterly' ? quarterEndOnOrBefore(scope.month) : scope.month,
+                          ),
                         )
                         if (peeked !== undefined) {
                           shown.current = peeked

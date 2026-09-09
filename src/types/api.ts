@@ -98,6 +98,11 @@ export interface NetWorthSummary {
   groups: GroupSummary[]
   /** The latest snapshot split by owner instead of by group; empty with no snapshots. */
   owner_totals: OwnerTotal[]
+  /** Which grain `mom_delta`/`mom_pct` compare (2026-09-09 audit item 23) — the tiles say
+   *  "vs prior month" or "vs prior quarter" from this and never from their own guess.
+   *  OPTIONAL for the reason `MoneyFlowTaxes.niit` documents: the live server always sends
+   *  it, and a fixture written before this program keeps compiling. Absent reads as month. */
+  period?: 'month' | 'quarter'
 }
 
 /** Which months each hand-entered feed covers — ascending first-of-month ISO dates

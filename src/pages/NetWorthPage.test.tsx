@@ -235,17 +235,17 @@ it('scopes BOTH fetches to the picked owner, and back to the household on All', 
   const chips = await screen.findByRole('group', { name: 'Whose' })
   fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
   await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('monthly', SAM.id))
-  expect(fetchSummary).toHaveBeenCalledWith(SAM.id, undefined)
+  expect(fetchSummary).toHaveBeenCalledWith(SAM.id, undefined, 'monthly')
   expect(screen.getByRole('button', { name: 'Sam' }).getAttribute('aria-pressed')).toBe('true')
 
   fireEvent.click(screen.getByRole('button', { name: 'Joint' }))
   await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('monthly', 'joint'))
-  expect(fetchSummary).toHaveBeenCalledWith('joint', undefined)
+  expect(fetchSummary).toHaveBeenCalledWith('joint', undefined, 'monthly')
 
   fireEvent.click(chips.querySelectorAll('button')[0])
   // null, not omitted: the client turns null into no param at all (netWorth.test.ts).
   await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('monthly', null))
-  expect(fetchSummary).toHaveBeenLastCalledWith(null, undefined)
+  expect(fetchSummary).toHaveBeenLastCalledWith(null, undefined, 'monthly')
 })
 
 it('keeps the page alive when the household endpoint fails', async () => {
@@ -479,7 +479,7 @@ describe('NetWorthPage — shell scope', () => {
     await waitFor(() =>
       expect(vi.mocked(fetchTimeseries)).toHaveBeenCalledWith('monthly', 'joint'),
     )
-    expect(vi.mocked(fetchSummary)).toHaveBeenCalledWith('joint', undefined)
+    expect(vi.mocked(fetchSummary)).toHaveBeenCalledWith('joint', undefined, 'monthly')
     expect(screen.getByRole('button', { name: 'YTD' }).getAttribute('aria-pressed')).toBe('true')
   })
 
@@ -499,7 +499,7 @@ describe('NetWorthPage — shell scope', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
     await waitFor(() =>
-      expect(vi.mocked(fetchSummary)).toHaveBeenLastCalledWith(null, '2026-07-01'),
+      expect(vi.mocked(fetchSummary)).toHaveBeenLastCalledWith(null, '2026-07-01', 'monthly'),
     )
     expect(screen.getByTestId('location').textContent).toContain('month=2026-07')
     expect(await screen.findByRole('button', { name: 'Back to latest' })).toBeTruthy()
@@ -700,5 +700,46 @@ describe('NetWorthPage — a scope with no accounts', () => {
     vi.mocked(fetchTimeseries).mockResolvedValue(noAccounts())
     renderPage('/net-worth')
     expect(await screen.findByText(/No accounts for this household yet/)).toBeTruthy()
+  })
+})
+
+// ── Quarterly tiles (2026-09-09 audit item 23) ───────────────────────────────────────────
+// The summary had no grain of its own, so tiles saying "vs prior month" sat beside a
+// quarterly chart and a ribbon pick landed on a column the quarterly series does not carry.
+describe('NetWorthPage — the tiles follow the grain on screen', () => {
+  it('asks for the summary at that grain and says "vs prior quarter"', async () => {
+    renderPage()
+    await screen.findByText('By group over time')
+    vi.mocked(fetchSummary).mockResolvedValue(summaryOut({ period: 'quarter' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+    await waitFor(() =>
+      expect(fetchSummary).toHaveBeenLastCalledWith(null, undefined, 'quarterly'),
+    )
+    expect(await screen.findByText(/vs prior quarter/)).toBeTruthy()
+  })
+
+  it('snaps a ribbon pick back to the quarter end it closes into', async () => {
+    const quarterly = timeseriesOut({ months: ['2026-03-01', '2026-06-01'] })
+    vi.mocked(fetchTimeseries).mockImplementation((g) =>
+      Promise.resolve(g === 'quarterly' ? quarterly : timeseriesOut()),
+    )
+    renderPage('/net-worth?month=2026-08')
+    await screen.findByText('By group over time')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+    // August is not a quarter end and the quarterly series has no column for it: the page
+    // asks for — and reads — the quarter that had closed by then.
+    await waitFor(() =>
+      expect(fetchSummary).toHaveBeenLastCalledWith(null, '2026-06-01', 'quarterly'),
+    )
+    expect(await screen.findByText('Accounts — Jun 2026')).toBeTruthy()
+    // The ribbon follows the snap rather than highlighting a chip the page is not showing.
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toContain('month=2026-06'),
+    )
+    expect(screen.getByText(/What moved — Jun 2026/)).toBeTruthy()
+    // …and the lede names the two quarter ends, not two months.
+    expect(document.querySelector('.chart-lede')?.textContent).toContain('Mar 2026')
   })
 })
