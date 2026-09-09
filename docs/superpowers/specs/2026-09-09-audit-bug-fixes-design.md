@@ -1,6 +1,6 @@
 # Audit bug fixes (2026-09-09) — design record
 
-**Status:** implementing, 2026-09-09. Source: the 2026-09-08 fresh-eyes audit (reports under the
+**Status:** implemented 2026-09-09 — all nine lanes merged to local main; every item below shipped as recorded (with the amendments noted inline in §4c and §4g); full vitest 2724/2724 green; backend suite recorded in the plan. Source: the 2026-09-08 fresh-eyes audit (reports under the
 gitignored `scratchpad/audit-2026-09-08/`). The user picked items 1–15, 18, 20, 23, 27, 29, 31, 39,
 53, 54 and 60 of the audit's bug list. Each item below records the verified root cause, the
 decision, and the behavior the end user should see. The plan that executes it is
