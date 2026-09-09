@@ -2149,7 +2149,7 @@ it('leaves transfers out of the live savings rate and names it the cash rate', a
   // Total spend still means every category — it is the total the server's matrix prints.
   expect(footer.textContent).toContain('Total spend (live): $3,500.00')
   // (10000 − 2000 − 500) ÷ 10000 = 75.0%, not the 65.0% the old walk produced.
-  expect(footer.textContent).toContain('Savings rate (cash): 75.0%')
+  expect(footer.textContent).toContain('Savings rate — cash: 75.0%')
 
   // The review step agrees, by construction — both read the same preview.
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
@@ -2163,5 +2163,5 @@ it('shows no rate at all without a take-home to divide by', async () => {
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '2000.00' } })
   const footer = screen.getByRole('status', { name: 'Live totals' })
-  expect(footer.textContent).toContain('Savings rate (cash): —')
+  expect(footer.textContent).toContain('Savings rate — cash: —')
 })

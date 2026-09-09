@@ -270,7 +270,7 @@ def _net_worth_builder(window: int):
         month = _view_month(search, view)
         viewed = month if month in ts.months else None
         index = ts.months.index(viewed) if viewed is not None else len(ts.months) - 1
-        nw = await net_worth_summary(owner=owner, month=viewed, db=db)
+        nw = await net_worth_summary(owner=owner, month=viewed, granularity=granularity, db=db)
         value_by_account = {s.account_id: s.values[index] for s in ts.series} if index >= 0 else {}
         return {
             "owner_scope": owner or "household",
@@ -367,6 +367,7 @@ async def _taxes(db: AsyncSession, search: dict, view: dict) -> dict:
             "label": item.label,
             "person_id": item.person_id,
             "value": item.value,
+            "unit": item.unit,
         }
         for section in inputs.sections
         for item in section.items

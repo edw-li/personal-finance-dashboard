@@ -1679,7 +1679,7 @@ export default function MonthlyUpdatePage() {
               <span>
                 {/* Named for what it IS: the footer's other figure is the ALL-kind total, so
                     an unqualified "Savings rate" beside it reads as one minus the other. */}
-                Savings rate (cash):{' '}
+                Savings rate — cash:{' '}
                 {preview.savings === null ? '—' : formatPct(preview.savings, { signed: false })}
               </span>
             </div>
@@ -1726,7 +1726,7 @@ export default function MonthlyUpdatePage() {
               <div>
                 {/* Same qualifier as the sticky footer's: the tile beside it is the
                     ALL-kind Total spend, so the unqualified name read as one minus the other. */}
-                <div className="stat-label">Savings rate (cash)</div>
+                <div className="stat-label">Savings rate — cash</div>
                 <div className="stat-value">
                   {preview.savings === null ? '—' : formatPct(preview.savings, { signed: false })}
                 </div>
