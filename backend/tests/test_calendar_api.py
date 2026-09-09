@@ -1042,7 +1042,7 @@ async def test_a_january_q4_payment_is_priced_from_the_prior_years_facts(
     that can price it. Before the fix `_tax_facts` returned the CURRENT year only, so the
     payment lost its amount for the first fortnight of every year (2026-09-09 audit item 7).
     It is also the LAST remaining 2025 date, so it carries the whole shortfall."""
-    monkeypatch.setattr("app.api.calendar.product_today", lambda: JANUARY)
+    monkeypatch.setattr("app.services.clock.product_today", lambda: JANUARY)
     await seed_priceable_year(db, 2025)  # no paycheck profile: nothing withheld
     await db.commit()
     body = (await auth_client.get(JANUARY_WINDOW)).json()
@@ -1067,7 +1067,7 @@ async def test_the_january_window_reads_the_prior_year_once(auth_client, db, mon
     """Both January dates want 2025: the Q4 payment (its facts) and — in a window wide
     enough — Apr 15 (its balance). That is still ONE withholding computation per year
     (the loader's standing rule), and the Q1 chip keeps its balance."""
-    monkeypatch.setattr("app.api.calendar.product_today", lambda: JANUARY)
+    monkeypatch.setattr("app.services.clock.product_today", lambda: JANUARY)
     await seed_priceable_year(db, 2025)
     await seed_priceable_year(db, 2026)
     await db.commit()
@@ -1092,7 +1092,7 @@ async def test_a_january_q4_payment_that_has_passed_keeps_its_bare_date(
 ):
     """Jan 20: Jan 15 is history. A past date is never priced (the generator's rule), and
     the prior year's facts are not fetched for it either."""
-    monkeypatch.setattr("app.api.calendar.product_today", lambda: date(2026, 1, 20))
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2026, 1, 20))
     await seed_priceable_year(db, 2025)
     await db.commit()
     body = (await auth_client.get(JANUARY_WINDOW)).json()
