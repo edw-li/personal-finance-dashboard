@@ -1,7 +1,8 @@
 """Data health (2026-09-03 data-lifecycle spec §11): one cheap query per check, each
 answering a HealthCheckOut with its severity and, when there is something to do, a fix —
 a link into the app or an action the Data-health card runs (`delete_spending_month` per
-month in `months`, `snapshot_now`). `now` is injected so the rules are clock-testable.
+month in `months`, `snapshot_now`). The instant `now` is injected so the AGE rules are
+clock-testable; the calendar-day rules read the product clock (services/clock.py).
 Thresholds are twins of src/utils/staleness.ts; test_health_checks pins them."""
 
 import asyncio

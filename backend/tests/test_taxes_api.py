@@ -28,6 +28,7 @@ from app.models import (
     TaxYear,
 )
 from app.seed import seed_tax_definitions
+from app.services import clock
 from app.services.tax_service import JURISDICTION_WARN_MISSING, SUGGESTION_KEYS
 from app.tax_keys import JURISDICTIONS, SECTIONS, TAX_INPUT_DEFINITIONS
 from tests.portfolio_factories import acct
@@ -1412,7 +1413,7 @@ async def test_annual_salary_suggests_each_persons_in_force_profile(
     paycheck profile has already told the app their salary, so the Taxes page offers it
     instead of asking twice (spec §4.1). One profile in force PER PERSON."""
     me, partner = household
-    today = date.today()
+    today = clock.product_today()
     db.add_all(
         [
             PaycheckProfile(
@@ -1457,7 +1458,7 @@ async def test_annual_salary_has_no_suggestion_without_a_profile(
     db.add(
         PaycheckProfile(
             person_id=me.id,
-            effective_date=date.today() - timedelta(days=30),
+            effective_date=clock.product_today() - timedelta(days=30),
             annual_salary=Decimal("188930.00"),
         )
     )

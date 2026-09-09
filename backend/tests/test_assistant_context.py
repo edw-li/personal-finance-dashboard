@@ -13,6 +13,7 @@ from app.models import (
     NetWorthSnapshot,
     SpendingCategory,
 )
+from app.services import clock
 from app.services.assistant_context import (
     CONTEXT_CHAR_CAP,
     MONTHS_WINDOW_TIGHT,
@@ -146,7 +147,7 @@ async def test_projection_section_decimates_to_year_grain_keeping_the_last_month
     account = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
     db.add(account)
     await db.flush()
-    snap = NetWorthSnapshot(month=date.today().replace(day=1))
+    snap = NetWorthSnapshot(month=clock.product_today().replace(day=1))
     db.add(snap)
     await db.flush()
     db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal("100000.00")))

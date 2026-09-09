@@ -9,7 +9,6 @@ running; all degrade to no-op/None/False when nothing is running."""
 
 import logging
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -17,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import AppSetting
+from app.services import clock
 from app.services.clock import PRODUCT_TIMEZONE, product_today
 
 logger = logging.getLogger(__name__)
@@ -188,7 +188,7 @@ async def start_scheduler() -> AsyncIOScheduler:
             last_run_at = datetime.fromisoformat(last["at"])
         except ValueError:
             last_run_at = None
-    now = datetime.now(ZoneInfo(SCHEDULER_TIMEZONE))
+    now = clock.product_now()
     if missed_todays_run(trigger, last_run_at, now):
         scheduler.add_job(
             _refresh_job,

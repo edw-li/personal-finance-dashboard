@@ -5,7 +5,6 @@ the day it is mounted. Each route is called with a valid body under `forbid_writ
 flush carrying new/dirty/deleted objects fails the test) and every table's row count must
 be unchanged afterwards."""
 
-from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -16,6 +15,7 @@ from app.database import Base
 from app.main import app
 from app.models import Account, AccountBalance, NetWorthSnapshot, Person
 from app.seed import seed_tax_definitions
+from app.services import clock
 from tests.test_tax_service import YEAR_BRACKETS, YEAR_INPUTS
 
 PROFILES = "/api/v1/paycheck/profiles"
@@ -109,7 +109,7 @@ async def seed_everything(auth_client, db) -> None:
     )
     assert resp.status_code == 200, resp.text
     taxable = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
-    snap = NetWorthSnapshot(month=date.today().replace(day=1))
+    snap = NetWorthSnapshot(month=clock.product_today().replace(day=1))
     db.add_all([taxable, snap])
     await db.flush()
     db.add(AccountBalance(snapshot_id=snap.id, account_id=taxable.id, balance=Decimal("100000.00")))

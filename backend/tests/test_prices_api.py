@@ -13,6 +13,7 @@ from app.models import (
     PriceHistory,
     Security,
 )
+from app.services import clock
 from app.services.price_provider import DailyBar
 from app.services.price_service import LAST_REFRESH_KEY
 from tests.portfolio_factories import acct
@@ -79,7 +80,7 @@ def freeze_service_today(monkeypatch, day: date) -> None:
 
 async def test_refresh_endpoint_runs_and_reports(auth_client, db, monkeypatch):
     security = await seed_security(db, "NVDA")
-    today = date.today()
+    today = clock.product_today()
     yesterday = today - timedelta(days=1)
     provider = FakeProvider({"NVDA": [bar(yesterday, "220"), bar(today, "225.5")]}, delay=0.05)
     monkeypatch.setattr("app.api.prices.get_provider", lambda: provider)
@@ -373,7 +374,7 @@ async def test_refresh_carries_the_baseline_flat_without_benchmark_bars(
 
 async def test_history_endpoint_window_and_404(auth_client, db):
     security = await seed_security(db, "NVDA")
-    today = date.today()
+    today = clock.product_today()
     db.add_all(
         [
             # Column-scale Decimals: the shared-session fixture serves these very ORM
@@ -431,7 +432,7 @@ async def test_sparklines_held_only_weekly_downsampled(auth_client, db):
             source="ui",
         )
     )
-    today = date.today()
+    today = clock.product_today()
     old_bar_date = today - timedelta(days=100)
     days = [today - timedelta(days=offset) for offset in reversed(range(30))]
     db.add(PriceHistory(security_id=held.id, price_date=old_bar_date, close=D("42.0000")))
@@ -482,7 +483,9 @@ async def test_sparklines_held_only_weekly_downsampled(auth_client, db):
 
 async def test_sparklines_empty_without_holdings(auth_client, db):
     security = await seed_security(db, "ZM")
-    db.add(PriceHistory(security_id=security.id, price_date=date.today(), close=D("50.0000")))
+    db.add(
+        PriceHistory(security_id=security.id, price_date=clock.product_today(), close=D("50.0000"))
+    )
     await db.commit()
     resp = await auth_client.get(SPARKLINES)
     assert resp.status_code == 200, resp.text
@@ -494,7 +497,7 @@ async def test_sparklines_empty_without_holdings(auth_client, db):
 
 async def test_manual_price_put_guard_and_write(auth_client, db):
     security = await seed_security(db, "NVDA")
-    today = date.today()
+    today = clock.product_today()
 
     guarded = await auth_client.put(f"{PRICES}/NVDA", json={"price": "31.89"})
     assert guarded.status_code == 409  # auto-priced securities are refresh-owned

@@ -16,6 +16,7 @@ from app.api.paycheck import (
     PAY_PERIODS_MESSAGE,
 )
 from app.models import ContributionLimit, Person
+from app.services import clock
 
 PROFILES = "/api/v1/paycheck/profiles"
 BREAKDOWN = "/api/v1/paycheck/breakdown"
@@ -155,7 +156,9 @@ async def test_preview_scenario_equals_a_real_profile_with_those_values(auth_cli
     # strip onward it no longer reaches behind that profile and nothing is borrowed.
     espp = {row["key"]: row for row in shown["pace"]}["limit_espp_423"]
     assert espp["backfilled_from"] is None
-    borrowed = "2026-01-01" if date(date.today().year - 1, 9, 1) < date(2026, 1, 1) else None
+    borrowed = (
+        "2026-01-01" if date(clock.product_today().year - 1, 9, 1) < date(2026, 1, 1) else None
+    )
     previewed = {row["key"]: row for row in body["pace"]["scenario"]}["limit_espp_423"]
     assert previewed["backfilled_from"] == borrowed
     assert (await auth_client.delete(f"{PROFILES}/{twin['id']}")).status_code == 204
@@ -293,7 +296,9 @@ async def test_preview_warnings_are_the_scenario_side(auth_client, me):
 
 async def test_preview_pace_scenario_reflects_the_overrides(auth_client, db, me):
     db.add(
-        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+        ContributionLimit(
+            year=clock.product_today().year, key="limit_401k_elective", value=D("24500.00")
+        )
     )
     await db.commit()
     await create_profile(
@@ -343,7 +348,11 @@ async def test_preview_monthly_matches_the_breakdowns_operation_order(auth_clien
 
 
 async def test_preview_espp_row_moves_with_the_rate_override(auth_client, db, me):
-    db.add(ContributionLimit(year=date.today().year, key="limit_espp_423", value=D("25000.00")))
+    db.add(
+        ContributionLimit(
+            year=clock.product_today().year, key="limit_espp_423", value=D("25000.00")
+        )
+    )
     await db.commit()
     await auth_client.post(PROFILES, json=profile_payload(effective_date="2020-01-01"))
     body = (await auth_client.post(PREVIEW, json={"overrides": {"espp_pct": "0.2"}})).json()
@@ -363,7 +372,9 @@ async def test_preview_pace_moves_the_projection_and_leaves_so_far_alone(auth_cl
     """A knob turned today cannot rewrite a check already cut (spec §2.6): the two halves
     agree about the past and differ about the rest of the year."""
     db.add(
-        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+        ContributionLimit(
+            year=clock.product_today().year, key="limit_401k_elective", value=D("24500.00")
+        )
     )
     await db.commit()
     await create_profile(auth_client)
@@ -388,7 +399,9 @@ async def test_preview_employer_legs_move_the_projection_and_never_the_past(auth
     """A match doubled today pays nothing on checks already cut (spec §2.5): every row's
     so-far figure is the baseline's, and only the projections move."""
     db.add(
-        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+        ContributionLimit(
+            year=clock.product_today().year, key="limit_401k_elective", value=D("24500.00")
+        )
     )
     await db.commit()
     await create_profile(
