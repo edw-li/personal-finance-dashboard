@@ -735,6 +735,17 @@ export default function MonthlyUpdatePage() {
       categories.map((c) => [c.id, canonicalAmount(amounts[c.id] ?? '')]),
     )
     const canonNetPay = netPay.trim() === '' ? '' : canonicalAmount(netPay)
+    // Spec 2026-09-09 item 1: what the body LISTS is what gets a row. Every category that
+    // already has one is listed whatever it holds (a correction to $0.00 must persist), plus
+    // every category carrying a figure. A blank box with no stored row is omitted — the
+    // wizard seeds all of them with "0.00", and sending those is what wrote nineteen phantom
+    // $0.00 records a month behind a single take-home figure. The $0 checkbox is the one
+    // consent that lists them all. Derived ONCE: the wire, the receipt's blank count and the
+    // post-save stored-row set all read this list, and computing it twice is how they drift.
+    const sentCategories = categories.filter(
+      (c) =>
+        recordZero || storedCategories.has(c.id) || (Number(canonAmounts[c.id]) || 0) !== 0,
+    )
     // Everything the balances PUT would ship, serialized — the "is this a PURE retry?"
     // comparison. Numeric keys serialize in ascending order (snapshotOf's law), so equal
     // values always compare equal.
@@ -775,20 +786,8 @@ export default function MonthlyUpdatePage() {
       leg = 'spending'
       let spendingLeg: NonNullable<SaveLegs['spending']>
       if (willWriteSpending) {
-        // Spec 2026-09-09 item 1: what the body LISTS is what gets a row. Every category
-        // that already has one is listed whatever it holds (a correction to $0.00 must
-        // persist), plus every category carrying a figure. A blank box with no stored row is
-        // omitted — the wizard seeds all of them with "0.00", and sending those is what wrote
-        // nineteen phantom $0.00 records a month behind a single take-home figure. The $0
-        // checkbox is the one consent that lists them all (see `recordZero` below).
-        const sent = categories.filter(
-          (c) =>
-            recordZero ||
-            storedCategories.has(c.id) ||
-            (Number(canonAmounts[c.id]) || 0) !== 0,
-        )
         const body: SpendingMonthUpsert = {
-          amounts: sent.map((c) => ({ category_id: c.id, amount: canonAmounts[c.id] })),
+          amounts: sentCategories.map((c) => ({ category_id: c.id, amount: canonAmounts[c.id] })),
         }
         if (canonNetPay !== '') {
           body.net_pay = canonNetPay
@@ -810,7 +809,7 @@ export default function MonthlyUpdatePage() {
           // The two are disjoint: one is what the client never sent, the other what the
           // server refused to insert. Normally the second is 0 — counting it anyway keeps
           // the sentence honest if the two ever disagree about what a blank is.
-          blank: categories.length - sent.length + result.skipped_blank,
+          blank: categories.length - sentCategories.length + result.skipped_blank,
         }
       } else {
         spendingLeg = { status: 'skipped', reason: 'nothing entered.' }
@@ -856,18 +855,7 @@ export default function MonthlyUpdatePage() {
         // for a category it had none for, which is exactly the set we did not list). A second
         // save in the same visit must therefore still carry them, or blanking one would
         // silently leave the stored figure standing.
-        setStoredCategories(
-          new Set(
-            categories
-              .filter(
-                (c) =>
-                  storedCategories.has(c.id) ||
-                  recordZero ||
-                  (Number(canonAmounts[c.id]) || 0) !== 0,
-              )
-              .map((c) => c.id),
-          ),
-        )
+        setStoredCategories(new Set(sentCategories.map((c) => c.id)))
         // A leg that wrote all zeros with no take-home leaves the month empty — but NOT when
         // the user just ticked the box to say so: the receipt is the answer to a deliberate
         // empty month, and repeating the repair prompt in the same breath would argue with
