@@ -341,6 +341,15 @@ export default function PortfolioPage() {
   // (one definition, two consumers — it also dates the live ping); the spec's original
   // as_of_newest twin was amended away 2026-08-31 once the audit surfaced this field.
   const newestQuote = holdings?.latest_quote_at ?? null
+  // Audit item 12: as_of is the OLDEST quote among the SCOPED holdings, so it is null
+  // whenever the view holds nothing priced — an owner with no securities, a Joint scope
+  // with none. "prices never refreshed" is a claim about the APP, and the refresh line
+  // right below it was already contradicting it. It is made only when the refresh status
+  // agrees; every other empty header describes the view instead.
+  const noPricesWords =
+    (holdings !== null && holdings.holdings.length === 0) || refreshStatus?.last != null
+      ? 'no priced holdings in this view'
+      : 'prices never refreshed'
 
   // The SERVER already scopes `failed` to tickers a future refresh would still attempt
   // (active, auto-priced) — one rule on one side of the wire, so a deactivation clears
@@ -440,7 +449,7 @@ export default function PortfolioPage() {
                 prices as of {formatDate(asOf)}
               </span>
             ) : (
-              <span className="as-of">prices never refreshed</span>
+              <span className="as-of">{noPricesWords}</span>
             )}
             {/* One element, always mounted: a live region added at announce-time is not
                 read. Partial failures are an alert, not a status — they need the user's
