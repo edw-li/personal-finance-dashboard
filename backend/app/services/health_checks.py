@@ -20,6 +20,7 @@ from app.models import (
 )
 from app.schemas.lifecycle import HealthCheckOut, HealthFixOut
 from app.schemas.system import BackupStatusOut
+from app.services import clock
 from app.services.coverage import Coverage, load_coverage
 from app.services.snapshot import SNAPSHOT_NAME_RE, snapshot_stamp, snapshots_dir
 
@@ -332,7 +333,11 @@ async def run_checks(
 ) -> list[HealthCheckOut]:
     # ONE coverage read for the three rules that share its definition.
     coverage = await load_coverage(db)
-    without_spending, without_balances = await check_coverage_gaps(db, today=now.date())
+    # `now` is UTC ON PURPOSE (check_stale_quotes' note) and stays that way for the
+    # AGE comparisons. The coverage window is a CALENDAR question — which months are
+    # complete — so it reads the product clock instead, or the last evening of a month
+    # would close that month's window early in Pacific eyes (audit item 31).
+    without_spending, without_balances = await check_coverage_gaps(db, today=clock.product_today())
     return [
         check_zero_filled_spending(coverage),
         check_spending_gap(coverage),

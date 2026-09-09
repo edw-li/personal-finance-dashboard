@@ -88,7 +88,7 @@ from app.schemas.taxes import (
     WithholdingPartnerLegOut,
     WithholdingVestOut,
 )
-from app.services import rsu_vesting, withholding_calc
+from app.services import clock, rsu_vesting, withholding_calc
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     MONEY_MAX_ABS_14_4,
@@ -100,7 +100,6 @@ from app.services.money import (
 )
 from app.services.people import load_people, primary_person
 from app.services.portfolio_calc import SHARE_Q, fold_transactions, load_portfolio
-from app.services.scheduler import product_today
 from app.services.tax_service import (
     JURISDICTION_WARN_MISSING,
     SUGGESTION_QUANTUM,
@@ -359,7 +358,7 @@ async def _profile_salaries(
     `_default_profile` is the paycheck router's own "profile in force" rule, borrowed
     rather than re-derived (this module's cross-router note): the Paycheck page and the
     Taxes page must never disagree about which profile is current, which is also why the
-    clock read here is `date.today()` — the same one that router reads. One query per
+    clock read here is the PRODUCT day — the same one that router reads. One query per
     person on a household of two or three.
     """
     salaries: dict[int, Decimal] = {}
@@ -410,7 +409,7 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
     # twice (2026-08-27 spec §4.1). Per column, from THAT person's profile: a column whose
     # person has none keeps today's empty suggestion, and nothing downstream moves, because
     # gross_paycheck still divides the STORED annual_salary.
-    for column, salary in (await _profile_salaries(db, columns, date.today())).items():
+    for column, salary in (await _profile_salaries(db, columns, clock.product_today())).items():
         suggestions[column][ANNUAL_SALARY_KEY] = salary
     by_section: dict[str, list[TaxInputItemOut]] = {}
     for definition in sorted(definitions, key=lambda d: (d.sort_order, d.key)):
@@ -1358,14 +1357,14 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
 async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) -> WithholdingOut:
     """Estimated all-in withholding for the CURRENT year vs the engine's liability.
 
-    `product_today` is the one clock this route reads (comp.py's note: the prod container runs
-    UTC, so date.today() is already tomorrow on a PT evening), and it is read ONCE — the
+    The product clock is the one clock this route reads (comp.py's note: the prod container
+    runs UTC, where a PT evening is already tomorrow), and it is read ONCE — the
     same day decides the year check, which checks have been received, and which vests are
     behind us. `withholding_calc` never re-reads a vest tuple's date, and neither does
     `withholding_estimate`, so that single value is what keeps the past/future split and the
     check grid consistent with each other.
     """
-    today = product_today()
+    today = clock.product_today()
     if year != today.year:
         # Before `_require_year`: a settled year may well be stored and summarizable, and the
         # reason this card cannot be drawn for it has nothing to do with whether it exists.
@@ -1381,7 +1380,7 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
     if not YEAR_MIN <= year <= YEAR_MAX:
         raise HTTPException(status_code=422, detail=YEAR_MESSAGE)
     await _require_year(db, year)
-    today = date.today()
+    today = clock.product_today()
 
     feed = await _engine_feed(db, year)
     if not feed.computable:

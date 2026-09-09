@@ -10,10 +10,12 @@ Plan 1 forward note, since `gross = annual_salary / pay_periods_per_year`.
 The read side never rejects stored data OVER ITS SCALE: `paycheck_calc` returns
 full-precision Decimals and `half_up2` is a plain quantize, never a bounded one. Its one
 refusal is the divide-by-zero itself — a hand-written 0 periods 422s rather than 500s,
-because there is no number the breakdown could show. `date.today()` is read HERE and
-only here — the calc module takes no clock — and it decides two things off that single
-read: which profile is current when no `profile_id` is given, and which year's
-contribution limits the pace rows are measured against.
+because there is no number the breakdown could show. The PRODUCT clock (services/clock.py,
+never the container's UTC day) is read HERE and only here — the calc module takes no
+clock — and it decides two things off that single read: which profile is current when no
+`profile_id` is given, and which year's contribution limits the pace rows are measured
+against. Both would be wrong for the PT evening hours the container already calls
+tomorrow, and on 31 December they would be a YEAR wrong (audit item 31).
 """
 
 from dataclasses import dataclass
@@ -44,6 +46,7 @@ from app.schemas.paycheck import (
     ProfileOverrides,
     ProfileUpdate,
 )
+from app.services import clock
 from app.services.espp_calc import StoredPeriod, plan_year_rows
 from app.services.espp_pace import espp_pace_item
 from app.services.limit_check import PaceItem, employer_match, paycheck_pace
@@ -339,7 +342,7 @@ async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[PaycheckProf
             )
         ).scalars()
     )
-    await _mark_in_force(db, rows, date.today())
+    await _mark_in_force(db, rows, clock.product_today())
     return rows
 
 
@@ -366,7 +369,7 @@ async def create_profile(body: ProfileIn, db: AsyncSession = Depends(get_db)) ->
     profile = PaycheckProfile(person_id=person_id, notes=body.notes, **fields)
     db.add(profile)
     await db.commit()
-    await _mark_in_force(db, [profile], date.today())
+    await _mark_in_force(db, [profile], clock.product_today())
     return profile
 
 
@@ -405,7 +408,7 @@ async def update_profile(
     if "notes" in provided:
         profile.notes = provided["notes"]  # nullable: an explicit null really clears it
     await db.commit()
-    await _mark_in_force(db, [profile], date.today())
+    await _mark_in_force(db, [profile], clock.product_today())
     return profile
 
 
@@ -767,7 +770,7 @@ async def get_breakdown(
     # and which year's contribution limits the pace rows are measured against. One read, so
     # a request that straddles midnight on 31 December cannot pair January's profile with
     # December's caps.
-    today = date.today()
+    today = clock.product_today()
     profile = await _resolve_breakdown_profile(db, profile_id, person_id, today)
     lines = {name: half_up2(value) for name, value in breakdown(profile).items()}
     warnings = _advisories(profile, lines["net_pay"])
@@ -801,7 +804,7 @@ async def preview(body: PreviewIn, db: AsyncSession = Depends(get_db)) -> Previe
     with `overrides` applied. NOTHING is stored: SELECTs only, no add/flush/commit anywhere
     in this call graph (tests/test_sandbox_purity.py proves it). `today` is read once for
     both the profile in force and the limits year, like the GET."""
-    today = date.today()
+    today = clock.product_today()
     base = await _resolve_breakdown_profile(db, body.profile_id, body.person_id, today)
     scenario = _scenario_profile(base, body.overrides)
 

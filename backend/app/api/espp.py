@@ -45,6 +45,7 @@ from app.schemas.espp import (
     PeriodUpdate,
     SoldTotalsOut,
 )
+from app.services import clock
 from app.services.espp_calc import (
     OfferingInfo,
     StoredPeriod,
@@ -279,9 +280,10 @@ async def _require_free_purchase_date(db: AsyncSession, purchase_date: date) -> 
 @router.get("/lots", response_model=LotsOut)
 async def list_lots(db: AsyncSession = Depends(get_db)) -> LotsOut:
     ticker, current_price, quoted_at = await _espp_quote(db)
-    # One of the module's two `date.today()` reads (the modeler's year default is the
-    # other); container-local by design (spec §9).
-    today = date.today()
+    # One of the module's two clock reads (the modeler's year default is the other);
+    # both are the PRODUCT day, so a PT evening cannot age a qualifying countdown a
+    # day ahead of the calendar (audit item 31).
+    today = clock.product_today()
     rows = await _ordered_lots(db)
     metrics = [lot_metrics(lot, current_price, today) for lot in rows]
     totals = position_totals(list(zip(rows, metrics, strict=True)))
@@ -321,7 +323,9 @@ async def create_lot(body: LotIn, db: AsyncSession = Depends(get_db)) -> LotOut:
     await db.commit()
     _ticker, current_price, _quoted_at = await _espp_quote(db)
     return _lot_out(
-        lot, lot_metrics(lot, current_price, date.today()), await _running_average_for(db, lot.id)
+        lot,
+        lot_metrics(lot, current_price, clock.product_today()),
+        await _running_average_for(db, lot.id),
     )
 
 
@@ -363,7 +367,9 @@ async def update_lot(lot_id: IdPath, body: LotUpdate, db: AsyncSession = Depends
     await db.commit()
     _ticker, current_price, _quoted_at = await _espp_quote(db)
     return _lot_out(
-        lot, lot_metrics(lot, current_price, date.today()), await _running_average_for(db, lot.id)
+        lot,
+        lot_metrics(lot, current_price, clock.product_today()),
+        await _running_average_for(db, lot.id),
     )
 
 
@@ -571,7 +577,7 @@ async def modeler(
     offerings = list(
         (await db.execute(select(EsppOffering).order_by(EsppOffering.offering_start))).scalars()
     )
-    today = date.today()
+    today = clock.product_today()
     discount = await read_espp_discount(db)
     target_year = year if year is not None else today.year
     ticker, latest_price, quoted_at = await _espp_quote(db)

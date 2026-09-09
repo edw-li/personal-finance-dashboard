@@ -2,7 +2,7 @@
 
 Vest rows are never stored — every echo recomputes `rsu_vesting.schedule`, so a PATCH that
 touches shares or the cliff must move vest_count/vested/unvested with it. The vested split is
-judged on `scheduler.product_today()` READ AT THE ROUTE (the container clock is UTC and a
+judged on the product clock READ AT THE ROUTE (the container clock is UTC and a
 PT-evening refresh is already tomorrow there), so the exact-number pins below freeze that day
 via monkeypatch and the rest assert only clock-independent invariants: a first vest far in the
 past keeps `vested_shares > 0` on any run day, and the split always sums to the grant.
@@ -33,8 +33,8 @@ PINNED_TODAY = date(2025, 1, 2)
 
 @pytest.fixture
 def frozen_today(monkeypatch):
-    """`product_today` as the ROUTE sees it (test_prices_api's patch target convention)."""
-    monkeypatch.setattr("app.api.comp.product_today", lambda: PINNED_TODAY)
+    """The one product clock (app/services/clock.py), which the route reads."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: PINNED_TODAY)
 
 
 def grant_payload(**overrides) -> dict:
@@ -366,7 +366,7 @@ NO_TICKER = "no ESPP/employer ticker configured — vest values are unavailable"
 
 @pytest.fixture
 def frozen_schedule_today(monkeypatch):
-    monkeypatch.setattr("app.api.comp.product_today", lambda: PINNED_SCHEDULE_TODAY)
+    monkeypatch.setattr("app.services.clock.product_today", lambda: PINNED_SCHEDULE_TODAY)
 
 
 @pytest.fixture

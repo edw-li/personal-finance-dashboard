@@ -8,7 +8,7 @@ saved cron and the status endpoints can name the next run and report whether it 
 running; all degrade to no-op/None/False when nothing is running."""
 
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -17,13 +17,38 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import AppSetting
+from app.services.clock import PRODUCT_TIMEZONE, product_today
 
 logger = logging.getLogger(__name__)
+
+# Re-exported so `from app.services.scheduler import product_today` keeps working; the
+# implementation lives in services/clock.py, which the rest of the app calls directly.
+__all__ = [
+    "CATCHUP_DELAY_SECONDS",
+    "CATCHUP_JOB_ID",
+    "DEFAULT_PRICE_REFRESH_CRON",
+    "JOB_ID",
+    "SCHEDULER_TIMEZONE",
+    "SNAPSHOT_CATCHUP_JOB_ID",
+    "SNAPSHOT_CRON",
+    "SNAPSHOT_JOB_ID",
+    "build_snapshot_trigger",
+    "build_trigger",
+    "get_next_run_time",
+    "is_scheduler_running",
+    "missed_todays_run",
+    "product_today",
+    "read_cron_setting",
+    "reschedule_price_refresh",
+    "start_scheduler",
+]
 
 # Day NAMES, never numbers: APScheduler's from_crontab numbers days 0=Mon (not UNIX
 # 0=Sun), so numeric "1-5" silently means Tue-Sat (Task 7 escalation, measured).
 DEFAULT_PRICE_REFRESH_CRON = "10 13 * * mon-fri"
-SCHEDULER_TIMEZONE = "America/Los_Angeles"
+# The scheduler fires in the PRODUCT zone: the fire time and the run's idea of "today"
+# must be the same clock (services/clock.py). The old name stays for the settings router.
+SCHEDULER_TIMEZONE = PRODUCT_TIMEZONE
 JOB_ID = "price_refresh"
 CATCHUP_JOB_ID = "price_refresh_catchup"
 CATCHUP_DELAY_SECONDS = 10
@@ -36,15 +61,6 @@ SNAPSHOT_CATCHUP_JOB_ID = "snapshot_nightly_catchup"
 
 # The running scheduler, if any — set by start_scheduler, read by the accessors below.
 _scheduler: AsyncIOScheduler | None = None
-
-
-def product_today() -> date:
-    """The calendar day in the scheduler's zone — the ONE clock the refresh ritual keeps
-    time by. The prod container runs UTC, where every evening from 16:00/17:00 PT is
-    already tomorrow: a Monday 18:00 PT refresh judged by date.today() would gate the
-    weekly value snapshot into Tuesday and silently end the series (branch review F1).
-    Fire time (APScheduler, this zone) and the run's idea of "today" must agree."""
-    return datetime.now(ZoneInfo(SCHEDULER_TIMEZONE)).date()
 
 
 async def read_cron_setting(db: AsyncSession) -> str:

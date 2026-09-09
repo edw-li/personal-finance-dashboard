@@ -64,14 +64,14 @@ async def seed_security(db, ticker, **fields) -> Security:
 
 
 # The live value series is Monday-gated (the sheet's weekly cadence). The refresh
-# endpoint has no date parameter — it runs on the scheduler-zone product_today() — so
-# tests that expect an appended row pin that clock to a fixed Monday; a real-clock test
-# would pass one day in seven.
+# endpoint has no date parameter — it runs on the product clock — so tests that expect
+# an appended row pin that clock to a fixed Monday; a real-clock test would pass one day
+# in seven.
 MONDAY = date(2026, 8, 17)
 
 
 def freeze_service_today(monkeypatch, day: date) -> None:
-    monkeypatch.setattr("app.services.price_service.product_today", lambda: day)
+    monkeypatch.setattr("app.services.clock.product_today", lambda: day)
 
 
 # --- refresh ---

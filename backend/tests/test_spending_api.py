@@ -857,7 +857,7 @@ async def _seed_budget_history(db) -> dict[str, int]:
 
 
 def _pin_today(monkeypatch, today: date) -> None:
-    monkeypatch.setattr("app.api.spending.product_today", lambda: today)
+    monkeypatch.setattr("app.services.clock.product_today", lambda: today)
 
 
 async def test_budget_suggestions_window_and_profiles(auth_client, db, monkeypatch):

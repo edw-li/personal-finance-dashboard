@@ -27,9 +27,9 @@ from app.schemas.overview import (
     MoneyFlowSourcesOut,
     MoneyFlowTaxesOut,
 )
+from app.services import clock
 from app.services.money_flow import SALARY_KEYS, MoneyFlow, compose_money_flow
 from app.services.people import load_people
-from app.services.scheduler import product_today
 
 router = APIRouter(prefix="/overview", tags=["overview"], dependencies=[Depends(get_current_user)])
 
@@ -121,9 +121,9 @@ def _money_flow_out(flow: MoneyFlow) -> MoneyFlowOut:
 @router.get("/money-flow", response_model=MoneyFlowOut)
 async def money_flow(year: YearQuery = None, db: AsyncSession = Depends(get_db)) -> MoneyFlowOut:
     if year is None:
-        # The product clock, not date.today(): the prod container runs UTC, where a PT
+        # The product clock, not the container's: the prod container runs UTC, where a PT
         # evening is already tomorrow — and on Dec 31 that would be next YEAR.
-        year = product_today().year
+        year = clock.product_today().year
 
     # The roster is loaded HERE and handed down, so the feed's own columns and the salary
     # split below are decided by one read of `people` rather than two that could straddle
