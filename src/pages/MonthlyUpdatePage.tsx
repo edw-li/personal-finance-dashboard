@@ -131,7 +131,7 @@ interface SaveLegs {
   month: string
   balances: { payload: string; result: MonthUpsertResult } | null
   spending:
-    | { status: 'saved'; result: SpendingUpsertResult }
+    | { status: 'saved'; result: SpendingUpsertResult; blank: number }
     | { status: 'skipped'; reason: string }
     | null
 }
@@ -155,7 +155,12 @@ function spendingSentence(leg: NonNullable<SaveLegs['spending']>): string {
   const { created, updated, unchanged } = leg.result
   return (
     `Spending: ${rowsWord(created + updated + unchanged)} (${created} added, ` +
-    `${updated} changed, ${unchanged} unchanged).` +
+    `${updated} changed, ${unchanged} unchanged)` +
+    // The categories that got NO row (2026-09-09 audit item 1). Without this clause the
+    // receipt reads as a full account of the month while nineteen boxes went unrecorded,
+    // and a user who meant to enter them has nothing on screen that says so.
+    (leg.blank > 0 ? ` · ${leg.blank} categor${leg.blank === 1 ? 'y' : 'ies'} left blank` : '') +
+    '.' +
     // A DELETION the user asked for by blanking a box: the counts never mention the cashflow
     // row that just went away, so the receipt says it — from the server's own flag, not from
     // what we hoped we sent.
@@ -313,6 +318,12 @@ export default function MonthlyUpdatePage() {
   // writes: a correction that zeroes a category must land rather than be skipped as "nothing
   // entered". Server-derived like `matrix` — deliberately NOT part of the draft snapshot.
   const [hadSpending, setHadSpending] = useState(false)
+  // The categories that ALREADY have a stored row for this month (2026-09-09 audit item 1).
+  // The save body carries these whatever they hold — a correction down to $0.00 is an edit
+  // and has to land — while a blank box for a category with no row is left off the wire
+  // entirely, because a zero nobody typed is what fabricated production's phantom rows.
+  // Server-derived like `matrix`, and deliberately NOT part of the draft snapshot.
+  const [storedCategories, setStoredCategories] = useState<Set<number>>(new Set())
   // Spec §4: the deliberate empty month. Unchecked by default and NOT part of the draft
   // snapshot — a draft is typed work, this is consent about the save in front of you, and a
   // week-old "yes" resurrecting over fresh data is exactly the failure the drafts avoid.
@@ -433,6 +444,7 @@ export default function MonthlyUpdatePage() {
         setMatrix(matrixData)
         setPeople(householdData?.people ?? [])
         setHadNetPay(spendMonth.net_pay !== null)
+        setStoredCategories(new Set(spendMonth.amounts.map((a) => a.category_id)))
         setHadSpending(
           spendMonth.net_pay !== null || spendMonth.amounts.some((a) => Number(a.amount) !== 0),
         )
@@ -752,8 +764,20 @@ export default function MonthlyUpdatePage() {
       leg = 'spending'
       let spendingLeg: NonNullable<SaveLegs['spending']>
       if (willWriteSpending) {
+        // Spec 2026-09-09 item 1: what the body LISTS is what gets a row. Every category
+        // that already has one is listed whatever it holds (a correction to $0.00 must
+        // persist), plus every category carrying a figure. A blank box with no stored row is
+        // omitted — the wizard seeds all of them with "0.00", and sending those is what wrote
+        // nineteen phantom $0.00 records a month behind a single take-home figure. The $0
+        // checkbox is the one consent that lists them all (see `recordZero` below).
+        const sent = categories.filter(
+          (c) =>
+            recordZero ||
+            storedCategories.has(c.id) ||
+            (Number(canonAmounts[c.id]) || 0) !== 0,
+        )
         const body: SpendingMonthUpsert = {
-          amounts: categories.map((c) => ({ category_id: c.id, amount: canonAmounts[c.id] })),
+          amounts: sent.map((c) => ({ category_id: c.id, amount: canonAmounts[c.id] })),
         }
         if (canonNetPay !== '') {
           body.net_pay = canonNetPay
@@ -768,7 +792,15 @@ export default function MonthlyUpdatePage() {
           // through by a client-side default.
           body.confirm_zero = true
         }
-        spendingLeg = { status: 'saved', result: await putSpendingMonth(month, body) }
+        const result = await putSpendingMonth(month, body)
+        spendingLeg = {
+          status: 'saved',
+          result,
+          // The two are disjoint: one is what the client never sent, the other what the
+          // server refused to insert. Normally the second is 0 — counting it anyway keeps
+          // the sentence honest if the two ever disagree about what a blank is.
+          blank: categories.length - sent.length + result.skipped_blank,
+        }
       } else {
         spendingLeg = { status: 'skipped', reason: 'nothing entered.' }
       }
@@ -809,6 +841,22 @@ export default function MonthlyUpdatePage() {
         // so a month that had a take-home still has it, and an empty month is still empty.
         setHadNetPay(canonNetPay !== '')
         setHadSpending(canonNetPay !== '' || anyAmountEntered)
+        // Every category the body listed now has a row (the server skips a listed zero only
+        // for a category it had none for, which is exactly the set we did not list). A second
+        // save in the same visit must therefore still carry them, or blanking one would
+        // silently leave the stored figure standing.
+        setStoredCategories(
+          new Set(
+            categories
+              .filter(
+                (c) =>
+                  storedCategories.has(c.id) ||
+                  recordZero ||
+                  (Number(canonAmounts[c.id]) || 0) !== 0,
+              )
+              .map((c) => c.id),
+          ),
+        )
         // A leg that wrote all zeros with no take-home leaves the month empty — but NOT when
         // the user just ticked the box to say so: the receipt is the answer to a deliberate
         // empty month, and repeating the repair prompt in the same breath would argue with

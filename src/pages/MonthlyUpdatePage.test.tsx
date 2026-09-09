@@ -71,6 +71,16 @@ const category = {
   is_active: true,
   kind: 'living' as const,
 }
+// A second LIVING category — the default fixture is one row, which cannot show which
+// categories a save body carries and which it leaves out.
+const rentCategory = {
+  id: 8,
+  name: 'Rent',
+  slug: 'rent',
+  sort_order: 2,
+  is_active: true,
+  kind: 'living' as const,
+}
 
 beforeEach(() => {
   // The ScopeBar caches /coverage under a shell:* snapshot key that outlives a test.
@@ -128,7 +138,7 @@ beforeEach(() => {
   })
   vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
     month: '2026-08-01', created: 1, updated: 0, unchanged: 0,
-    net_pay_set: true, net_pay_cleared: false,
+    net_pay_set: true, skipped_blank: 0, net_pay_cleared: false,
   })
 })
 
@@ -524,7 +534,7 @@ it('clears a previously saved net pay when the box is blanked', async () => {
   })
   vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
     month: '2026-08-01', created: 0, updated: 0, unchanged: 1,
-    net_pay_set: false, net_pay_cleared: true,
+    net_pay_set: false, skipped_blank: 0, net_pay_cleared: true,
   })
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
@@ -1077,7 +1087,7 @@ it('drops the stale saved card the moment a new save attempt begins', async () =
   vi.mocked(spendingApi.putSpendingMonth)
     .mockResolvedValueOnce({
       month: '2026-08-01', created: 1, updated: 0, unchanged: 0,
-      net_pay_set: true, net_pay_cleared: false,
+      net_pay_set: true, skipped_blank: 0, net_pay_cleared: false,
     })
     .mockRejectedValueOnce(new Error('boom'))
   renderWizard()
@@ -1246,7 +1256,7 @@ it('the save toast carries Undo when a batch was written, and fires spending the
     month: '2026-08-01', snapshot_created: true, created: 1, updated: 0, unchanged: 0, batch_id: 'b-nw2',
   })
   vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
-    month: '2026-08-01', created: 1, updated: 0, unchanged: 0, net_pay_set: true, net_pay_cleared: false, batch_id: 'b-sp2',
+    month: '2026-08-01', created: 1, updated: 0, unchanged: 0, net_pay_set: true, skipped_blank: 0, net_pay_cleared: false, batch_id: 'b-sp2',
   })
   vi.mocked(lifecycleApi.undoBatch).mockResolvedValue({
     type: 'batch', batch_id: 'u-2', at: '2026-09-04T09:00:00+00:00', source: 'undo', actor: null,
@@ -1271,7 +1281,7 @@ it('an all-unchanged save toasts nothing and offers no Undo', async () => {
     month: '2026-08-01', snapshot_created: false, created: 0, updated: 0, unchanged: 1, batch_id: null,
   })
   vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
-    month: '2026-08-01', created: 0, updated: 0, unchanged: 1, net_pay_set: false, net_pay_cleared: false, batch_id: null,
+    month: '2026-08-01', created: 0, updated: 0, unchanged: 1, net_pay_set: false, skipped_blank: 0, net_pay_cleared: false, batch_id: null,
   })
   renderWizardAt('/update?month=2026-08-01')
   await screen.findByLabelText('Checking')
@@ -1309,7 +1319,10 @@ it('writes balances only when nothing was entered on the spending step, and says
   expect(screen.getByText('Spending: skipped — nothing entered.')).toBeTruthy()
 })
 
-it('net pay alone saves the cashflow row, with every blank category as $0.00', async () => {
+it('net pay alone saves the cashflow row and not one blank category', async () => {
+  // The audit's item 1: a blank box is not an entry. The leg runs (a take-home IS content)
+  // and it carries nothing else — no category has a stored row or a figure in it.
+  vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category, rentCategory])
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   fireEvent.change(await screen.findByLabelText('Household take-home'), {
@@ -1317,14 +1330,88 @@ it('net pay alone saves the cashflow row, with every blank category as $0.00', a
   })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-  // Blank categories inside a SAVED step are still $0.00 — the gate decides whether the leg
-  // runs, never what it contains.
   await waitFor(() =>
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
       net_pay: '9000.00',
-      amounts: [{ category_id: 7, amount: '0.00' }],
+      amounts: [],
     }),
   )
+})
+
+it('carries the categories that already have a row, plus the ones with a figure', async () => {
+  // Rent was entered last time and is being corrected to zero — a real edit, which only
+  // survives if the body still lists it. Food is blank and has no row: it stays off the wire.
+  vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category, rentCategory])
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', exists: true, net_pay: null,
+    amounts: [{ category_id: 8, amount: '2100.00' }], budgets: [],
+  })
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Rent'), { target: { value: '0.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await waitFor(() =>
+    expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
+      amounts: [{ category_id: 8, amount: '0.00' }],
+    }),
+  )
+})
+
+it('adds a category the moment it carries a figure, stored row or not', async () => {
+  vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category, rentCategory])
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Rent'), { target: { value: '2100.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await waitFor(() =>
+    expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
+      amounts: [{ category_id: 8, amount: '2100.00' }],
+    }),
+  )
+})
+
+it('counts the blank categories in the receipt', async () => {
+  vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category, rentCategory])
+  vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', created: 1, updated: 0, unchanged: 0,
+    net_pay_set: true, skipped_blank: 0, net_pay_cleared: false,
+  })
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Rent'), { target: { value: '2100.00' } })
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '9000.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+  expect(
+    screen.getByText(
+      'Spending: 1 row (1 added, 0 changed, 0 unchanged) · 1 category left blank.',
+    ),
+  ).toBeTruthy()
+})
+
+it('the receipt counts a blank the SERVER skipped too', async () => {
+  // Belt and braces: the client omits a blank, the server refuses one it was sent anyway.
+  // The two sets are disjoint, so the sentence adds them.
+  vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category, rentCategory])
+  vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', created: 1, updated: 0, unchanged: 0,
+    net_pay_set: true, skipped_blank: 1, net_pay_cleared: false,
+  })
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Rent'), { target: { value: '2100.00' } })
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '9000.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+  expect(
+    screen.getByText(
+      'Spending: 1 row (1 added, 0 changed, 0 unchanged) · 2 categories left blank.',
+    ),
+  ).toBeTruthy()
 })
 
 it('an already-entered month always writes — zeroing a category is an edit, not a skip', async () => {
@@ -1367,7 +1454,7 @@ it('prints one sentence per leg after a full save, with the cleared take-home ap
   })
   vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
     month: '2026-08-01', created: 0, updated: 1, unchanged: 0,
-    net_pay_set: false, net_pay_cleared: true,
+    net_pay_set: false, skipped_blank: 0, net_pay_cleared: true,
   })
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
@@ -1415,6 +1502,24 @@ it('the $0 checkbox records an empty month on purpose, and is the only source of
   await waitFor(() =>
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
       amounts: [{ category_id: 7, amount: '0.00' }],
+      confirm_zero: true,
+    }),
+  )
+})
+
+it('the $0 box carries EVERY category, blank or not — that is what it consents to', async () => {
+  vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category, rentCategory])
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.click(await screen.findByLabelText('Record this month as $0'))
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await waitFor(() =>
+    expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
+      amounts: [
+        { category_id: 7, amount: '0.00' },
+        { category_id: 8, amount: '0.00' },
+      ],
       confirm_zero: true,
     }),
   )
