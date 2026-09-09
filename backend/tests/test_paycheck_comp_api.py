@@ -896,7 +896,8 @@ async def test_a_primary_only_database_answers_exactly_as_it_did_before_people(a
     assert {row["person_id"] for row in listed} == {me.id}
     assert {row["hsa_coverage"] for row in listed} == {"self"}
     # Additive ONLY: the row is the old row plus `person_id`, `hsa_coverage`, the four
-    # employer-match columns, the three employer-HSA columns and the derived `in_force` —
+    # employer-match columns, the three employer-HSA columns, the two withholding-split
+    # columns and the derived `in_force` —
     # nothing was ever taken away.
     assert set(listed[0]) == {
         "id",
@@ -919,6 +920,8 @@ async def test_a_primary_only_database_answers_exactly_as_it_did_before_people(a
         "hsa_employer_annual",
         "hsa_employer_per_dependent",
         "hsa_dependents",
+        "fed_withholding_pct",
+        "state_withholding_pct",
         "in_force",
         "notes",
     }
@@ -1327,6 +1330,64 @@ async def test_patch_validates_the_employer_hsa_as_a_whole_row(auth_client, me):
     assert good.json()["hsa_employer_annual"] == "2400.00"
     assert good.json()["hsa_dependents"] == 2  # untouched by the merge
     assert good.json()["hsa_employer_per_dependent"] == "500.00"
+
+
+# The per-jurisdiction withholding split (2026-09-09 audit item 3): two OPTIONAL rates read
+# off a paystub. Absent is not zero — a profile nobody has split stores NULL in both, and the
+# Taxes card refuses to split its balance rather than pricing a jurisdiction at 0%.
+SPLIT = {"fed_withholding_pct": "0.22", "state_withholding_pct": "0.08"}
+
+
+async def test_profile_round_trips_the_withholding_split(auth_client, me):
+    created = await auth_client.post(
+        PROFILES,
+        json={"effective_date": "2026-09-01", "annual_salary": "188930", **SPLIT},
+    )
+    assert created.status_code == 201, created.text
+    # 9dp, the pcts' own column scale, in plain notation (Pct9's rule).
+    assert created.json()["fed_withholding_pct"] == "0.220000000"
+    assert created.json()["state_withholding_pct"] == "0.080000000"
+    # The all-in rate is untouched by the split: it still drives the per-check waterfall.
+    assert created.json()["withholding_pct"] == "0.000000000"
+    bare = await auth_client.post(
+        PROFILES, json={"effective_date": "2026-09-02", "annual_salary": "100000"}
+    )
+    # NULL, not "0.000000000": an old client that never sends them has entered nothing.
+    assert bare.json()["fed_withholding_pct"] is None
+    assert bare.json()["state_withholding_pct"] is None
+
+
+async def test_patch_sets_and_clears_the_withholding_split(auth_client, me):
+    created = await auth_client.post(
+        PROFILES, json={"effective_date": "2026-09-03", "annual_salary": "100000", **SPLIT}
+    )
+    pid = created.json()["id"]
+    one = await auth_client.patch(f"{PROFILES}/{pid}", json={"fed_withholding_pct": "0.24"})
+    assert one.json()["fed_withholding_pct"] == "0.240000000"
+    assert one.json()["state_withholding_pct"] == "0.080000000"  # untouched by the merge
+    # An EXPLICIT null really clears these two (the `notes` rule, not the NOT NULL one):
+    # they are the only way to say "I no longer have a figure from a paystub".
+    cleared = await auth_client.patch(f"{PROFILES}/{pid}", json={"state_withholding_pct": None})
+    assert cleared.json()["state_withholding_pct"] is None
+    assert cleared.json()["fed_withholding_pct"] == "0.240000000"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("fed_withholding_pct", "1.5", "fed_withholding_pct must be between 0 and 1"),
+        # The Plan 1 mis-scale guard: a 22 meant as 22% must never reach the estimate.
+        ("fed_withholding_pct", "22", "fed_withholding_pct must be between 0 and 1"),
+        ("state_withholding_pct", "-0.01", "state_withholding_pct must be between 0 and 1"),
+    ],
+)
+async def test_profile_refuses_a_bad_withholding_split(auth_client, me, field, value, message):
+    resp = await auth_client.post(
+        PROFILES,
+        json={"effective_date": "2026-09-04", "annual_salary": "100000", field: value},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == message
 
 
 async def test_profiles_list_marks_the_one_in_force(auth_client, me):

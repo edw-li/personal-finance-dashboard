@@ -97,6 +97,11 @@ PCT_FIELDS = (
 )
 # Withholding is a tax, not a contribution — it is NOT part of the >100% check.
 CONTRIBUTION_FIELDS = ("trad_401k_pct", "roth_401k_pct", "after_tax_401k_pct", "espp_pct")
+# The all-in rate's per-jurisdiction split (2026-09-09 audit item 3), read off a paystub.
+# A SEPARATE tuple from PCT_FIELDS because these two are NULLABLE — absent is not zero, and
+# PCT_FIELDS' loop would turn a missing rate into a confident 0%. Same 0–1 fence and the
+# same 422 sentence, so the two read alike wherever they are entered.
+OPTIONAL_PCT_FIELDS = ("fed_withholding_pct", "state_withholding_pct")
 MATCH_RATE_FIELDS = ("match_rate_1", "match_rate_2")
 MATCH_BAND_FIELDS = ("match_band_1", "match_band_2")
 MATCH_FIELDS = (*MATCH_RATE_FIELDS, *MATCH_BAND_FIELDS)
@@ -151,6 +156,8 @@ FIELD_LABELS = {
     "match_band_1": "Match band 1",
     "match_rate_2": "Match rate (second band)",
     "match_band_2": "Match band 2",
+    "fed_withholding_pct": "Federal withholding %",
+    "state_withholding_pct": "State withholding %",
     "hsa_employer_annual": "Employer HSA (annual)",
     "hsa_employer_per_dependent": "Employer HSA per dependent",
     "hsa_dependents": "Covered dependents",
@@ -227,6 +234,7 @@ def _validated_profile(
     hsa_employer_per_dependent: Decimal,
     hsa_dependents: int,
     pcts: dict[str, Decimal],
+    optional_pcts: dict[str, Decimal | None],
     match: dict[str, Decimal],
 ) -> dict:
     """One profile's stored columns, validated as a WHOLE row (Plan 4 house law) so a
@@ -252,6 +260,14 @@ def _validated_profile(
         ),
         "hsa_dependents": _validated_dependents(hsa_dependents),
         **{name: _validated_pct(pcts[name], name) for name in PCT_FIELDS},
+        # None passes THROUGH the fence rather than around it: "nothing entered" is a
+        # legal value for these two, and only a value present has a range to be in.
+        **{
+            name: (
+                None if optional_pcts[name] is None else _validated_pct(optional_pcts[name], name)
+            )
+            for name in OPTIONAL_PCT_FIELDS
+        },
         **{name: _validated_match_rate(match[name], name) for name in MATCH_RATE_FIELDS},
         **{name: _validated_band(match[name], name) for name in MATCH_BAND_FIELDS},
     }
@@ -357,6 +373,7 @@ async def create_profile(body: ProfileIn, db: AsyncSession = Depends(get_db)) ->
         hsa_employer_per_dependent=body.hsa_employer_per_dependent,
         hsa_dependents=body.hsa_dependents,
         pcts={name: getattr(body, name) for name in PCT_FIELDS},
+        optional_pcts={name: getattr(body, name) for name in OPTIONAL_PCT_FIELDS},
         match={name: getattr(body, name) for name in MATCH_FIELDS},
     )
     # (person_id, effective_date) is the natural key. Plain check-then-409: two concurrent
@@ -393,6 +410,13 @@ async def update_profile(
         ),
         hsa_dependents=_merged(provided, "hsa_dependents", profile.hsa_dependents),
         pcts={name: _merged(provided, name, getattr(profile, name)) for name in PCT_FIELDS},
+        # NOT `_merged`: these two are nullable, so an explicit null CLEARS them (`notes`'
+        # rule) instead of meaning "leave it alone". Presence in the dump is the whole
+        # test — `exclude_unset` is what tells a sent null from an omitted field.
+        optional_pcts={
+            name: (provided[name] if name in provided else getattr(profile, name))
+            for name in OPTIONAL_PCT_FIELDS
+        },
         match={name: _merged(provided, name, getattr(profile, name)) for name in MATCH_FIELDS},
     )
     if fields["effective_date"] != profile.effective_date:
@@ -551,6 +575,11 @@ class ScenarioProfile:
     hsa_employer_annual: Decimal
     hsa_employer_per_dependent: Decimal
     hsa_dependents: int
+    # Carried from the base row, never overridden: the sandbox models one CHECK, and these
+    # two are read only by the year-scale withholding tracker. They are here so a scenario
+    # profile still answers for every column of the row it stands in for.
+    fed_withholding_pct: Decimal | None = None
+    state_withholding_pct: Decimal | None = None
 
 
 def _scenario_profile(base: PaycheckProfile, overrides: ProfileOverrides) -> ScenarioProfile:
@@ -621,6 +650,7 @@ def _scenario_profile(base: PaycheckProfile, overrides: ProfileOverrides) -> Sce
         ),
         **pcts,
         **match,
+        **{name: getattr(base, name) for name in OPTIONAL_PCT_FIELDS},
     )
 
 

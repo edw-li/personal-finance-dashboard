@@ -274,6 +274,11 @@ export interface ApplySeed {
   hsa_employer_annual: string
   hsa_employer_per_dependent: string
   hsa_dependents: string
+  // Same rule for the withholding split (2026-09-09 audit item 3): no knob moves it, so it
+  // rides the profile through. A stored NULL seeds a BLANK box — the form's spelling of
+  // "no figure from a paystub" — never a "0".
+  fed_withholding_pct: string
+  state_withholding_pct: string
   notes: string
 }
 
@@ -302,6 +307,10 @@ export function applySeedFor(
     hsa_employer_annual: profile.hsa_employer_annual,
     hsa_employer_per_dependent: profile.hsa_employer_per_dependent,
     hsa_dependents: String(profile.hsa_dependents),
+    fed_withholding_pct:
+      profile.fed_withholding_pct === null ? '' : shiftPoint(profile.fed_withholding_pct, 2),
+    state_withholding_pct:
+      profile.state_withholding_pct === null ? '' : shiftPoint(profile.state_withholding_pct, 2),
     notes: '',
   }
 }

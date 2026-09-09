@@ -89,6 +89,10 @@ const profile2026: PaycheckProfileListItem = {
   hsa_employer_annual: '2000.00',
   hsa_employer_per_dependent: '500.00',
   hsa_dependents: 0,
+  // Nothing entered: absent is not zero, so the Taxes card cannot split this household's
+  // balance until a paystub says otherwise.
+  fed_withholding_pct: null,
+  state_withholding_pct: null,
   notes: null,
   in_force: true,
 }
@@ -114,6 +118,8 @@ const profile2025: PaycheckProfileListItem = {
   hsa_employer_annual: '2000.00',
   hsa_employer_per_dependent: '500.00',
   hsa_dependents: 0,
+  fed_withholding_pct: null,
+  state_withholding_pct: null,
   notes: '2025 comp',
   in_force: false,
 }
@@ -214,6 +220,8 @@ const samProfile: PaycheckProfileListItem = {
   hsa_employer_annual: '2000.00',
   hsa_employer_per_dependent: '500.00',
   hsa_dependents: 0,
+  fed_withholding_pct: null,
+  state_withholding_pct: null,
   notes: 'Sam base',
   in_force: true,
 }
@@ -557,6 +565,8 @@ describe('PaycheckPage — the profile form', () => {
       hsa_employer_annual: '2000.00',
       hsa_employer_per_dependent: '500.00',
       hsa_dependents: 0,
+      fed_withholding_pct: null,
+      state_withholding_pct: null,
       notes: 'July raise',
     })
     // A new profile moves both halves of the page: the list, and which one is in force.
@@ -598,6 +608,8 @@ describe('PaycheckPage — the profile form', () => {
       hsa_employer_annual: '2000.00',
       hsa_employer_per_dependent: '500.00',
       hsa_dependents: 0,
+      fed_withholding_pct: null,
+      state_withholding_pct: null,
       notes: 'Jan 2026 comp',
     })
   })
@@ -969,6 +981,72 @@ describe('PaycheckPage — the profile form', () => {
     expect(body.hsa_employer_per_dependent).toBe('500.00') // untouched, carried forward
     // A count, not a money string: the wire wants the int the column stores.
     expect(body.hsa_dependents).toBe(2)
+  })
+
+  it('leaves an unentered withholding split blank and posts it as null, never a zero rate', async () => {
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    expect(field('Federal withholding %').value).toBe('')
+    expect(field('State withholding %').value).toBe('')
+    // The paystub hint is what says why the two boxes are there at all.
+    expect(
+      screen.getByText(
+        "From a paystub: federal (or state) withheld ÷ taxable wages. Optional — splits the Taxes page's balance by jurisdiction.",
+      ),
+    ).toBeTruthy()
+    type('Effective date', '2026-07-01')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    await waitFor(() => expect(vi.mocked(createProfile)).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(createProfile).mock.calls[0][0]
+    // NULL, not '0': a blank box is "no figure from a paystub", and a 0% federal rate is
+    // a claim nobody made.
+    expect(body.fed_withholding_pct).toBeNull()
+    expect(body.state_withholding_pct).toBeNull()
+  })
+
+  it('carries an entered withholding split forward and posts it as fractions', async () => {
+    vi.mocked(fetchProfiles).mockResolvedValue([
+      { ...profile2026, fed_withholding_pct: '0.220000000', state_withholding_pct: '0.080000000' },
+    ])
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    // Percent form in the box, fraction on the wire — the five pcts' own rule.
+    expect(field('Federal withholding %').value).toBe('22%')
+    expect(field('State withholding %').value).toBe('8%')
+    type('Effective date', '2026-07-01')
+    type('Federal withholding %', '24')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    await waitFor(() => expect(vi.mocked(createProfile)).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(createProfile).mock.calls[0][0]
+    expect(body.fed_withholding_pct).toBe('0.24')
+    expect(body.state_withholding_pct).toBe('0.08') // untouched, carried forward
+  })
+
+  it('shows the stored withholding split in the history table', async () => {
+    vi.mocked(fetchProfiles).mockResolvedValue([
+      { ...profile2026, fed_withholding_pct: '0.220000000', state_withholding_pct: '0.080000000' },
+      profile2025,
+    ])
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    const rows = screen.getAllByRole('row')
+    const split = rows.find((row) => row.textContent?.includes('22.0%'))
+    expect(split).toBeTruthy()
+    expect(split?.textContent).toContain('8.0%')
+    // The row that never split reads as an em dash — a "0%" would be a rate nobody entered.
+    const bare = rows.find((row) => row.textContent?.includes('2025 comp'))
+    expect(bare?.textContent).toContain('—')
+  })
+
+  it('refuses a withholding split outside 0–100', async () => {
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    type('Effective date', '2026-07-01')
+    // The BOX's vocabulary (percents), not the column's [0, 1] fraction.
+    type('Federal withholding %', '120')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    expect(await screen.findByText('Federal withholding % must be between 0 and 100')).toBeTruthy()
+    expect(vi.mocked(createProfile)).not.toHaveBeenCalled()
   })
 
   it('refuses a covered count that is not a whole number in range', async () => {
