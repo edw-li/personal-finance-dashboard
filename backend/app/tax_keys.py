@@ -28,6 +28,16 @@ TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     # the precedent here; it joined the engine's keys on 2026-08-31, spec C3.)
     ("w2_fed_withholding", "W2: Federal Withholding", ORDINARY_INCOME, 112, False),
     ("w2_state_withholding", "W2: State Withholding", ORDINARY_INCOME, 114, False),
+    # The third tracker-only key (2026-09-09 audit item 4c): what was ACTUALLY withheld on
+    # the year's bonuses, which replaces the withholding card's 22% / 6.6% / marginal-FICA
+    # model when it is entered. Like its two neighbours, the engine never reads it.
+    (
+        "w2_bonus_withholding",
+        "W-2: bonus withholding (actual, optional)",
+        ORDINARY_INCOME,
+        116,
+        False,
+    ),
     ("stcg_total", "Short Term Capital Gain/Loss", ORDINARY_INCOME, 120, True),
     ("stcg_standard", "STCG: Standard Gain/Loss", ORDINARY_INCOME, 130, False),
     ("stcg_espp_component", "STCG: ESPP Sale Component", ORDINARY_INCOME, 140, False),
@@ -159,6 +169,7 @@ PER_PERSON_KEYS: tuple[str, ...] = (
     "w2_other",
     "w2_fed_withholding",
     "w2_state_withholding",
+    "w2_bonus_withholding",
     "trad_401k_contributions",
     "hsa_contributions",
     "hsa_contributions_employer",

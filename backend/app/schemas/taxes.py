@@ -350,6 +350,37 @@ class SafeHarborOut(BaseModel):
     met: bool  # projected total withholding >= effective_threshold
 
 
+class WithholdingJurisdictionOut(BaseModel):
+    """One jurisdiction's whole story (2026-09-09 audit item 3): what it will owe, what
+    will be withheld for it, and what to do about the difference.
+
+    `liability` and `balance` are null together, exactly when the engine refused the year —
+    the withheld figures are still real (they come from profiles, grants and rates), but
+    there is nothing honest to compare them against. `remedy_per_check` is null on the
+    PAYROLL leg always (FICA is not a W-4 line) and whenever the year's checks are spent;
+    it is 0.00 on a refund, because the formula is max(balance, 0) over the checks left.
+    `safe_harbor` is null on payroll for the same reason it exists for the other two: the
+    statutory harbors are income-tax rules.
+    """
+
+    liability: Decimal | None
+    withheld_ytd: Decimal
+    withheld_projected: Decimal
+    balance: Decimal | None  # liability - withheld_projected; positive = will owe
+    remedy_per_check: Decimal | None
+    safe_harbor: SafeHarborOut | None
+
+
+class WithholdingJurisdictionsOut(BaseModel):
+    """The combined card, split three ways. The three withheld legs add back to
+    `WithholdingOut.total` to the cent (payroll is computed as the remainder), and the
+    three liabilities to `liability_total` — so no tile can contradict the line under it."""
+
+    federal: WithholdingJurisdictionOut  # income tax incl. capital gains and NIIT
+    state: WithholdingJurisdictionOut  # California
+    payroll: WithholdingJurisdictionOut  # medicare + social security + SDI, informational
+
+
 class WithholdingOut(BaseModel):
     year: int
     filing_status: str = SINGLE
@@ -387,4 +418,8 @@ class WithholdingOut(BaseModel):
     # table with no surtax tier.
     additional_medicare_gap: Decimal = Decimal("0.00")
     safe_harbor: SafeHarborOut | None
+    # NULL when the split is unavailable: the profile in force on some check of the grid
+    # carries no federal or no state rate (2026-09-09 audit item 3). Every field above keeps
+    # its combined meaning either way — the calendar and the assistant read those.
+    jurisdictions: WithholdingJurisdictionsOut | None = None
     warnings: list[str]

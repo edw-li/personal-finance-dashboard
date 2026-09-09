@@ -25,6 +25,7 @@ from app.schemas.net_worth import (
     SummaryOut,
     TimeseriesOut,
 )
+from app.services import clock
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.derived_accounts import derived_parent_balances
 from app.services.money import mom_pct, quantize_money, require_first_of_month
@@ -494,7 +495,7 @@ async def put_month(
             )
         snapshot = NetWorthSnapshot(
             month=month,
-            recorded_on=body.recorded_on or date.today(),
+            recorded_on=body.recorded_on or clock.product_today(),
             notes=body.notes,
         )
         db.add(snapshot)

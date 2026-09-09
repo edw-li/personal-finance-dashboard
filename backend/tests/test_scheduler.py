@@ -20,7 +20,9 @@ from app.services.scheduler import (
 def test_product_today_is_the_scheduler_zone_day(monkeypatch):
     # The review scenario verbatim: Monday 18:30 PT is already Tuesday 01:30 UTC — the
     # product day must still read Monday, or the weekly value snapshot gates itself off
-    # under any post-close-evening cron.
+    # under any post-close-evening cron. The implementation now lives in services/clock
+    # (audit item 31, tests/test_clock.py); this asserts the scheduler's re-exported name
+    # is still that one clock, so the FIRE zone and the run's "today" cannot drift apart.
     from datetime import UTC
 
     class _FixedDatetime(datetime):
@@ -28,7 +30,7 @@ def test_product_today_is_the_scheduler_zone_day(monkeypatch):
         def now(cls, tz=None):
             return datetime(2026, 8, 18, 1, 30, tzinfo=UTC).astimezone(tz)
 
-    monkeypatch.setattr("app.services.scheduler.datetime", _FixedDatetime)
+    monkeypatch.setattr("app.services.clock.datetime", _FixedDatetime)
     assert product_today() == date(2026, 8, 17)  # a Monday
     assert product_today().weekday() == 0
 

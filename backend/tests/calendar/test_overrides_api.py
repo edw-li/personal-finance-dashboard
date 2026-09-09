@@ -12,7 +12,7 @@ Q3 = "tax:2026-q3:2026-09-15"
 
 
 def freeze_today(monkeypatch):
-    monkeypatch.setattr("app.api.calendar.product_today", lambda: date(2026, 8, 24))
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2026, 8, 24))
 
 
 async def test_a_negative_override_amount_is_refused(auth_client):

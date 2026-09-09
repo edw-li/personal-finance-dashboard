@@ -31,6 +31,7 @@ from app.schemas.spending import (
     YearlyOut,
     YearRollup,
 )
+from app.services import clock
 from app.services.budgets import MIN_SEED_MONTHS, load_suggestions, resolve_budgets
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import (
@@ -46,7 +47,6 @@ from app.services.savings import (
     load_payroll_by_month,
     rollup,
 )
-from app.services.scheduler import product_today
 from app.services.spending_guard import EMPTY_MONTH_REFUSAL, records_something
 
 router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(get_current_user)])
@@ -279,9 +279,10 @@ def _window_out(window: list[date]) -> DerivedWindowOut | None:
 
 @router.get("/budgets/suggestions", response_model=BudgetSuggestionsOut)
 async def budget_suggestions(db: AsyncSession = Depends(get_db)) -> BudgetSuggestionsOut:
-    """The Budget card's figures (spec §2): read-only, no batch. `product_today`, never
-    date.today(): the window's "current month" must agree with the rest of the ritual's clock."""
-    window, suggestions = await load_suggestions(db, product_today())
+    """The Budget card's figures (spec §2): read-only, no batch. The product clock, never
+    the container's UTC day: the window's "current month" must agree with the rest of
+    the ritual's clock."""
+    window, suggestions = await load_suggestions(db, clock.product_today())
     return BudgetSuggestionsOut(
         window=_window_out(window),
         suggestions=[BudgetSuggestion.model_validate(s) for s in suggestions],
@@ -307,7 +308,7 @@ async def seed_budgets(
     `unchanged` rather than given a redundant history step. History before the month is
     never touched: that is what effective-dated rows are for."""
     require_first_of_month(body.effective_month)
-    window, suggestions = await load_suggestions(db, product_today())
+    window, suggestions = await load_suggestions(db, clock.product_today())
     if len(window) < MIN_SEED_MONTHS:
         raise HTTPException(status_code=422, detail=SEED_NEEDS_HISTORY)
     budget_rows = list((await db.execute(select(CategoryBudget))).scalars().all())

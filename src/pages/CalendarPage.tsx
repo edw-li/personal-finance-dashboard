@@ -12,7 +12,7 @@ import { ApiError } from '../api/client'
 import { fetchHousehold } from '../api/household'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
-import CalendarGrid from '../components/calendar/CalendarGrid'
+import CalendarGrid, { dayInMonth } from '../components/calendar/CalendarGrid'
 import CashflowStrip from '../components/calendar/CashflowStrip'
 import DayDrawer from '../components/calendar/DayDrawer'
 import EventDetails from '../components/calendar/EventDetails'
@@ -41,7 +41,7 @@ import type {
   PersonOut,
 } from '../types/api'
 import { canonicalAmount, isAmount } from '../utils/amount'
-import { formatDate, formatMonth } from '../utils/format'
+import { formatCurrency, formatDate, formatMonth } from '../utils/format'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import '../components/panels.css'
 import './CalendarPage.css'
@@ -108,10 +108,8 @@ export default function CalendarPage() {
   const [openKey, setOpenKey] = useState<string | null>(null) // the grid's anchored popover
   const [openListKey, setOpenListKey] = useState<string | null>(null) // the list's accordion
   const [drawerDay, setDrawerDay] = useState<string | null>(null)
-  const [activeDay, setActiveDay] = useState<string>(() => {
-    const today = todayIso()
-    return today.slice(0, 7) === month.slice(0, 7) ? today : month
-  })
+  // Where the user last pointed. The grid reads `cursorDay` below, not this — see there.
+  const [activeDay, setActiveDay] = useState<string>(todayIso)
   const [focusTick, setFocusTick] = useState(0)
   // Bumped whenever the form is opened, so the caret lands in it rather than wherever the
   // button that opened it used to be (the drawer's "Add event on …" unmounts with it).
@@ -187,6 +185,19 @@ export default function CalendarPage() {
   const busy = revalidating || data === null || data.month !== month
   const visible = shown === null ? [] : visibleEvents(shown.events)
   const byDate = groupByDate(visible)
+  // The roving tab stop, and the ONLY day the grid is told about. Derived from the month
+  // on screen, never seeded from an effect: the controls are not the only thing that
+  // changes the month — Back/Forward, a pasted ?month= link and the palette write the
+  // scope directly, and a cursor stranded in a month that is no longer shown leaves the
+  // grid with no tab stop at all (2026-09-09 audit item 13). Inside the shown month the
+  // user's own day wins, so ‹ ›'s same-day clamp and a Back to where they were both hold;
+  // outside it the cursor falls to today, else to the first of the month.
+  const cursorDay =
+    activeDay.slice(0, 7) === month.slice(0, 7)
+      ? activeDay
+      : todayIso().slice(0, 7) === month.slice(0, 7)
+        ? todayIso()
+        : month
 
   const revalidate = (monthIso: string) => {
     setRevalidating(true)
@@ -197,6 +208,22 @@ export default function CalendarPage() {
     setOpenKey(null)
     setDrawerDay(null)
     setScope({ month: next === currentMonthIso() ? null : next })
+  }
+
+  // Mouse navigation carries the keyboard cursor with it (2026-09-09 audit item 13): only
+  // the active day's cell is in the tab order, so a month reached by ‹ ›, Today or the
+  // month box used to have no tab stop at all — Tab fell straight past the grid. The
+  // keyboard's own month steps (PageUp/PageDown, an arrow off the edge) set the day
+  // themselves and still call `showMonth` directly, as does landing on a saved event.
+  const goToMonth = (next: string, day: string) => {
+    setActiveDay(day)
+    showMonth(next)
+  }
+
+  // ‹ › keep the day of month, clamped — the move PageUp/PageDown already make.
+  const stepMonth = (delta: 1 | -1) => {
+    const next = addMonths(month, delta)
+    goToMonth(next, dayInMonth(next, cursorDay))
   }
 
   // `view` is the page's own param, not the shell's scope, so it is written straight
@@ -495,18 +522,22 @@ export default function CalendarPage() {
               type="button"
               className="button"
               aria-label="Previous month"
-              onClick={() => showMonth(addMonths(month, -1))}
+              onClick={() => stepMonth(-1)}
             >
               ‹
             </button>
-            <button type="button" className="button" onClick={() => showMonth(currentMonthIso())}>
+            <button
+              type="button"
+              className="button"
+              onClick={() => goToMonth(currentMonthIso(), todayIso())}
+            >
               Today
             </button>
             <button
               type="button"
               className="button"
               aria-label="Next month"
-              onClick={() => showMonth(addMonths(month, 1))}
+              onClick={() => stepMonth(1)}
             >
               ›
             </button>
@@ -516,7 +547,9 @@ export default function CalendarPage() {
               aria-label="Jump to month"
               value={month.slice(0, 7)}
               onChange={(e) => {
-                if (ISO_MONTH.test(e.target.value)) showMonth(`${e.target.value}-01`)
+                // The box names a month, not a day, so the cursor lands on its first.
+                if (ISO_MONTH.test(e.target.value))
+                  goToMonth(`${e.target.value}-01`, `${e.target.value}-01`)
               }}
             />
             <h2 className="cal-title">{formatMonth(month)}</h2>
@@ -658,7 +691,7 @@ export default function CalendarPage() {
                     month={month}
                     events={visible}
                     today={todayIso()}
-                    activeDay={activeDay}
+                    activeDay={cursorDay}
                     focusTick={focusTick}
                     openKey={openKey}
                     popoverRef={popoverRef}
@@ -697,10 +730,7 @@ export default function CalendarPage() {
                                     <span className="cal-list-detail">
                                       {' — '}
                                       {event.items
-                                        .map(
-                                          (i) =>
-                                            `${i.label} ${i.amount === null ? '—' : `$${i.amount}`}`,
-                                        )
+                                        .map((i) => `${i.label} ${formatCurrency(i.amount)}`)
                                         .join(', ')}
                                     </span>
                                   )}

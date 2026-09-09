@@ -47,10 +47,10 @@ def test_sheet_tax_sequence_matches_tax_keys():
     sequence_keys = [key for _, entries in SHEET_TAX_INPUT_SEQUENCE for _, key in entries]
     definition_keys = [key for key, *_ in TAX_INPUT_DEFINITIONS]
     # The sheet block covers exactly the 41 original definitions: the 2 state keys from
-    # Task 2 are parsed out of the STATE bracket section instead, and the 2 withholding
-    # tracker keys (2026-08-26 spec §5.6) are dashboard-only — the workbook carries no
-    # column for them, so the parser must never expect them.
-    non_sheet_keys = {"w2_fed_withholding", "w2_state_withholding"}
+    # Task 2 are parsed out of the STATE bracket section instead, and the 3 withholding
+    # tracker keys (2026-08-26 spec §5.6, 2026-09-09 audit item 4c) are dashboard-only —
+    # the workbook carries no column for them, so the parser must never expect them.
+    non_sheet_keys = {"w2_fed_withholding", "w2_state_withholding", "w2_bonus_withholding"}
     assert sequence_keys == [
         key for key in definition_keys if not key.startswith("state_") and key not in non_sheet_keys
     ]

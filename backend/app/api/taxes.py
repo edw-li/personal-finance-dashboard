@@ -83,12 +83,14 @@ from app.schemas.taxes import (
     WhatIfDelta,
     WhatIfIn,
     WhatIfOut,
+    WithholdingJurisdictionOut,
+    WithholdingJurisdictionsOut,
     WithholdingLegOut,
     WithholdingOut,
     WithholdingPartnerLegOut,
     WithholdingVestOut,
 )
-from app.services import rsu_vesting, withholding_calc
+from app.services import clock, rsu_vesting, withholding_calc
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     MONEY_MAX_ABS_14_4,
@@ -100,7 +102,6 @@ from app.services.money import (
 )
 from app.services.people import load_people, primary_person
 from app.services.portfolio_calc import SHARE_Q, fold_transactions, load_portfolio
-from app.services.scheduler import product_today
 from app.services.tax_service import (
     JURISDICTION_WARN_MISSING,
     SUGGESTION_QUANTUM,
@@ -407,7 +408,7 @@ async def _profile_salaries(
     `_default_profile` is the paycheck router's own "profile in force" rule, borrowed
     rather than re-derived (this module's cross-router note): the Paycheck page and the
     Taxes page must never disagree about which profile is current, which is also why the
-    clock read here is `date.today()` — the same one that router reads. One query per
+    clock read here is the PRODUCT day — the same one that router reads. One query per
     person on a household of two or three.
     """
     salaries: dict[int, Decimal] = {}
@@ -478,7 +479,7 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
     # twice (2026-08-27 spec §4.1). Per column, from THAT person's profile: a column whose
     # person has none keeps today's empty suggestion, and nothing downstream moves, because
     # gross_paycheck still divides the STORED annual_salary.
-    for column, salary in (await _profile_salaries(db, columns, date.today())).items():
+    for column, salary in (await _profile_salaries(db, columns, clock.product_today())).items():
         suggestions[column][ANNUAL_SALARY_KEY] = salary
     # Household keys, so the same value in every column (a household row renders from the
     # first one) — and the only suggestions on this payload that are not a sheet formula,
@@ -1146,6 +1147,21 @@ FICA_JURISDICTIONS = ("medicare", "social_security", "disability")
 WAGE_KEYS = ("latest_w2_income", "other_w2_income")
 PARTNER_FED_WITHHOLDING_KEY = "w2_fed_withholding"
 PARTNER_STATE_WITHHOLDING_KEY = "w2_state_withholding"
+# The bonus leg (2026-09-09 audit item 4c): the year's bonus wages, and the tracker-only
+# actual that replaces the modelled 22% / 6.6% / marginal FICA when it is entered. Both are
+# read off `feed.inputs` — the SAME assembled dict the liability was computed on — so a
+# per-person row belonging to somebody this year's return does not cover is already gone.
+# Both are the PRIMARY's alone. The service stacks the bonus leg's marginal FICA on the
+# primary's wage base and prices it at their supplemental tier, and in the partner's ENTERED
+# mode their withholding is already counted from their own two tracker keys — so a partner's
+# bonus summed in here would be taxed on the wrong wage base and then counted twice.
+BONUS_KEY = "w2_bonuses"
+BONUS_WITHHOLDING_KEY = "w2_bonus_withholding"
+# California's own gate (R&TC 19136 / FTB 5805): a taxpayer whose CURRENT-year California
+# AGI reaches $1,000,000 cannot use the prior-year leg at all and must reach 90% of this
+# year's tax. Federal has no such ceiling — which is exactly why the two harbors are
+# computed separately rather than one figure being called "the safe harbor".
+CA_HARBOR_AGI_CEILING = Decimal("1000000")
 
 
 def _bucket_input_rows(rows: Iterable[TaxInput]) -> dict[int | None, dict[str, Decimal]]:
@@ -1162,6 +1178,70 @@ def _bucket_input_rows(rows: Iterable[TaxInput]) -> dict[int | None, dict[str, D
 
 def _wage_base(values: dict[str, Decimal]) -> Decimal:
     return sum((values.get(key, ZERO) for key in WAGE_KEYS), ZERO)
+
+
+def _primary_share(
+    inputs: dict[str, Decimal], partner_values: dict[str, Decimal], key: str
+) -> Decimal | None:
+    """The PRIMARY's own value of a per-person key: the return's total minus the partner's.
+
+    By SUBTRACTION, like `primary_wage_base` and for the same reason — a household-owned
+    (NULL) row from before the person migration, or a stray third bucket, lands on the
+    primary's side rather than disappearing, and the two halves always add back to the
+    figure the engine taxed.
+
+    None means "the primary has nothing stored for this key": either nobody does, or every
+    stored dollar of it is the partner's. Both are silences, and a computed 0 would read as
+    an entered zero — which for `w2_bonus_withholding` would replace the modelled leg with
+    a confident "nothing was withheld".
+    """
+    total = inputs.get(key)
+    if total is None:
+        return None
+    partner = partner_values.get(key)
+    if partner is not None and total == partner:
+        return None
+    return total - (partner or ZERO)
+
+
+def _harbor(
+    prior: dict | None, current_threshold: Decimal | None, projected: Decimal
+) -> SafeHarborOut | None:
+    """The LESSER of the two statutory legs, judged against `projected` withholding.
+
+    One helper for four harbors — the combined one and the two per-jurisdiction ones — so
+    the lesser-of rule, the "either leg stands alone" rule and the `met` comparison cannot
+    drift between the card's headline and its tiles. Neither leg -> no harbor at all.
+    """
+    legs = [leg for leg in ((prior or {}).get("threshold"), current_threshold) if leg is not None]
+    if not legs:
+        return None
+    effective = min(legs)
+    return SafeHarborOut(
+        **(prior or {}),
+        current_year_threshold=current_threshold,
+        effective_threshold=effective,
+        # Judged on the DISPLAYED figures (paycheck.py's negative-net posture), so the badge
+        # can never contradict the numbers rendered next to it.
+        met=projected >= effective,
+    )
+
+
+def _prior_leg(
+    prior_leg: dict | None, tax: Decimal | None, multiplier: Decimal | None
+) -> dict | None:
+    """The combined prior-year leg re-based on ONE jurisdiction's prior tax.
+
+    The reference year, its AGI, its status and the multiplier the statutory gate selected
+    are the RETURN's, not the jurisdiction's — one return, one gate — so only the tax and
+    the threshold move. A jurisdiction whose prior tax is zero or negative has no leg, the
+    same vacuous-comparison rule the combined figure applies, and silently: the combined
+    warning already named the year, and "your prior California tax was zero" is a fact
+    about the reference return the card can show rather than complain about.
+    """
+    if prior_leg is None or tax is None or multiplier is None or tax <= ZERO:
+        return None
+    return {**prior_leg, "prior_total_tax": tax, "threshold": _money(tax * multiplier)}
 
 
 async def withholding_estimate(db: AsyncSession, year: int, today: date) -> WithholdingOut:
@@ -1323,15 +1403,21 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         # Non-empty flips the partner's leg from ENTERED to SIMULATED, and the service
         # words the ignoring of the tracker rows above.
         partner_profiles=partner_profiles,
+        bonuses=_primary_share(feed.inputs, partner_values, BONUS_KEY) or ZERO,
+        # None really is "no row stored on the primary's side" — an entered 0 is a real
+        # answer (a bonus nobody withheld on) and must not be replaced by the model.
+        bonus_withholding=_primary_share(feed.inputs, partner_values, BONUS_WITHHOLDING_KEY),
     )
     warnings.extend(estimated.warnings)
 
-    # Salary withholding + vest supplemental + vest marginal FICA, plus the partner's ENTERED
-    # withholding. Salary-side FICA is NOT a term: the user's all-in withholding_pct already
-    # carries it (withholding_calc's note). The partner's figure counts once in EACH leg on
-    # purpose — their withholding inputs are a running snapshot of the same kind as their W-2
-    # wage inputs, which is what the liability above is computed on, so both legs describe the
-    # same household. The three partner_* fields below are what make that visible.
+    # Salary withholding + vest supplemental + vest marginal FICA + the BONUS leg (2026-09-09
+    # audit item 4c: `w2_bonuses` at 22% federal + 6.6% CA + marginal FICA, or the entered
+    # actual), plus the partner's ENTERED withholding. Salary-side FICA is NOT a term: the
+    # user's all-in withholding_pct already carries it (withholding_calc's note). The
+    # partner's figure counts once in EACH leg on purpose — their withholding inputs are a
+    # running snapshot of the same kind as their W-2 wage inputs, which is what the liability
+    # above is computed on, so both legs describe the same household. The three partner_*
+    # fields below are what make that visible.
     #
     # The two partner terms are MUTUALLY EXCLUSIVE by construction — the service zeroes
     # whichever mode did not win — so both are added unconditionally rather than branched
@@ -1340,6 +1426,7 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         estimated.salary_ytd
         + estimated.vest_supplemental_ytd
         + estimated.vest_fica_ytd
+        + estimated.bonus_withheld_ytd
         + estimated.partner_withheld_total
         + estimated.partner_salary_ytd
     )
@@ -1347,6 +1434,7 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         estimated.salary_projected
         + estimated.vest_supplemental_projected
         + estimated.vest_fica_projected
+        + estimated.bonus_withheld_projected
         + estimated.partner_withheld_total
         + estimated.partner_salary_projected
     )
@@ -1363,6 +1451,8 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         else _money(liability_total * SAFE_HARBOR_CURRENT_MULTIPLIER)
     )
     prior_leg: dict | None = None
+    prior_breakdown: TaxBreakdown | None = None
+    prior_multiplier: Decimal | None = None
     if await db.get(TaxYear, year - 1) is not None:
         prior_feed = await _engine_feed(db, year - 1)
         if not prior_feed.computable:
@@ -1399,20 +1489,118 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
                     "threshold": _money(prior_total * multiplier),
                     "prior_filing_status": prior_feed.filing_status,
                 }
+                # Kept for the per-jurisdiction harbors below: the same reference return,
+                # read one jurisdiction at a time.
+                prior_breakdown = prior
+                prior_multiplier = multiplier
 
-    legs = [
-        leg for leg in ((prior_leg or {}).get("threshold"), current_threshold) if leg is not None
-    ]
-    safe_harbor = None
-    if legs:
-        effective = min(legs)
-        safe_harbor = SafeHarborOut(
-            **(prior_leg or {}),
-            current_year_threshold=current_threshold,
-            effective_threshold=effective,
-            # Judged on the DISPLAYED figures (paycheck.py's negative-net posture), so
-            # the badge can never contradict the numbers rendered next to it.
-            met=total_projected >= effective,
+    safe_harbor = _harbor(prior_leg, current_threshold, total_projected)
+
+    # --- the per-jurisdiction split (2026-09-09 audit item 3). Present exactly when the
+    # service could build the legs: every profile pricing a check carries both paystub
+    # rates. Liabilities are the ENGINE's own lines — federal carries the preferential-rate
+    # capital-gains tax and the NIIT, because both are federal income tax paid on the same
+    # return — and the withheld legs are the service's, so the tiles are two halves of the
+    # figures already on the card rather than a second opinion about either.
+    jurisdictions = None
+    legs = estimated.jurisdictions
+    if legs is not None:
+        remaining = estimated.checks_total - estimated.checks_elapsed
+
+        def jurisdiction(
+            liability_tax: Decimal | None,
+            withheld_ytd: Decimal,
+            withheld_projected: Decimal,
+            harbor: SafeHarborOut | None,
+            *,
+            remedy: bool = True,
+        ) -> WithholdingJurisdictionOut:
+            balance = None if liability_tax is None else _money(liability_tax - withheld_projected)
+            return WithholdingJurisdictionOut(
+                liability=liability_tax,
+                withheld_ytd=withheld_ytd,
+                withheld_projected=withheld_projected,
+                balance=balance,
+                # A shortfall spread over the checks still to come — the shape a W-4 line
+                # 4(c) or a DE 4 extra-withholding amount actually takes. Nothing to aim at
+                # once the year's checks are spent, and nothing to aim on the payroll leg:
+                # FICA is not a line anybody can add to.
+                remedy_per_check=(
+                    None
+                    if not remedy or balance is None or remaining <= 0
+                    else _money(max(balance, ZERO) / remaining)
+                ),
+                safe_harbor=harbor,
+            )
+
+        federal_tax = (
+            None
+            if liability is None
+            else _money(liability.federal.tax + liability.capital_gains.tax + liability.niit.tax)
+        )
+        state_tax = None if liability is None else _money(liability.state.tax)
+        # The REMAINDER, not medicare + social security + SDI rounded a fourth time: the
+        # three cent-quantized liabilities have to add back to the cent-quantized total the
+        # card shows, and three independent roundings do not (the withheld side's payroll
+        # leg is a remainder for exactly the same reason). It IS that sum, to within the
+        # rounding this removes.
+        payroll_tax = (
+            None
+            if liability is None or liability_total is None
+            else liability_total - federal_tax - state_tax
+        )
+        federal_current = (
+            None if federal_tax is None else _money(federal_tax * SAFE_HARBOR_CURRENT_MULTIPLIER)
+        )
+        state_current = (
+            None if state_tax is None else _money(state_tax * SAFE_HARBOR_CURRENT_MULTIPLIER)
+        )
+        prior_federal = (
+            None
+            if prior_breakdown is None
+            else _money(
+                prior_breakdown.federal.tax
+                + prior_breakdown.capital_gains.tax
+                + prior_breakdown.niit.tax
+            )
+        )
+        prior_state = None if prior_breakdown is None else _money(prior_breakdown.state.tax)
+        # California above $1M of CURRENT-year state AGI has no prior-year leg at all.
+        ca_capped = (
+            liability is not None
+            and liability.state.agi is not None
+            and (liability.state.agi >= CA_HARBOR_AGI_CEILING)
+        )
+        jurisdictions = WithholdingJurisdictionsOut(
+            federal=jurisdiction(
+                federal_tax,
+                legs.federal_ytd,
+                legs.federal_projected,
+                _harbor(
+                    _prior_leg(prior_leg, prior_federal, prior_multiplier),
+                    federal_current,
+                    legs.federal_projected,
+                ),
+            ),
+            state=jurisdiction(
+                state_tax,
+                legs.state_ytd,
+                legs.state_projected,
+                _harbor(
+                    None if ca_capped else _prior_leg(prior_leg, prior_state, prior_multiplier),
+                    state_current,
+                    legs.state_projected,
+                ),
+            ),
+            payroll=jurisdiction(
+                payroll_tax,
+                legs.payroll_ytd,
+                legs.payroll_projected,
+                # FICA has no estimated-payment harbor: it is withheld by an employer at a
+                # statutory rate, and there is no quarterly payment to safe-harbor against.
+                None,
+                remedy=False,
+            ),
         )
 
     return WithholdingOut(
@@ -1456,6 +1644,7 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         ),
         additional_medicare_gap=_money(estimated.additional_medicare_gap),
         safe_harbor=safe_harbor,
+        jurisdictions=jurisdictions,
         warnings=warnings,
     )
 
@@ -1464,14 +1653,14 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
 async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) -> WithholdingOut:
     """Estimated all-in withholding for the CURRENT year vs the engine's liability.
 
-    `product_today` is the one clock this route reads (comp.py's note: the prod container runs
-    UTC, so date.today() is already tomorrow on a PT evening), and it is read ONCE — the
+    The product clock is the one clock this route reads (comp.py's note: the prod container
+    runs UTC, where a PT evening is already tomorrow), and it is read ONCE — the
     same day decides the year check, which checks have been received, and which vests are
     behind us. `withholding_calc` never re-reads a vest tuple's date, and neither does
     `withholding_estimate`, so that single value is what keeps the past/future split and the
     check grid consistent with each other.
     """
-    today = product_today()
+    today = clock.product_today()
     if year != today.year:
         # Before `_require_year`: a settled year may well be stored and summarizable, and the
         # reason this card cannot be drawn for it has nothing to do with whether it exists.
@@ -1487,7 +1676,7 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
     if not YEAR_MIN <= year <= YEAR_MAX:
         raise HTTPException(status_code=422, detail=YEAR_MESSAGE)
     await _require_year(db, year)
-    today = date.today()
+    today = clock.product_today()
 
     feed = await _engine_feed(db, year)
     if not feed.computable:

@@ -338,23 +338,45 @@ export function toMathRates(rates: RewardRateOut[]): MathRate[] {
   }))
 }
 
-/** Trailing-12-month ANNUALIZED spend per spending category from the matrix: sum of
- *  the last up-to-12 months, scaled by 12/n when fewer months exist — an honest
- *  suggestion, not a claim. Categories with no non-null value in the window are absent. */
-export function suggestedAnnualSpend(matrix: SpendingMatrix): Map<number, number> {
+/** The trailing-12 window: the last up-to-12 columns of the matrix. */
+function windowSize(matrix: SpendingMatrix): number {
+  return Math.min(12, matrix.months.length)
+}
+
+/** Per spending category, how many months of the trailing-12 window carry an ENTERED
+ *  value — the denominator behind `suggestedAnnualSpend` and the figure the weight
+ *  caption names. Categories with none are absent, exactly as they are there. */
+export function enteredMonthCounts(matrix: SpendingMatrix): Map<number, number> {
   const out = new Map<number, number>()
-  const n = Math.min(12, matrix.months.length)
+  const n = windowSize(matrix)
   if (n === 0) return out
   for (const series of matrix.series) {
-    const window = series.values.slice(-n)
+    let entered = 0
+    for (const value of series.values.slice(-n)) if (value !== null) entered += 1
+    if (entered > 0) out.set(series.category_id, entered)
+  }
+  return out
+}
+
+/** Trailing-12-month ANNUALIZED spend per spending category from the matrix: the sum of
+ *  the window's ENTERED months, scaled by 12/entered — an honest suggestion, not a claim.
+ *  The denominator is the entered count, not the window's width: a null cell is a month
+ *  nobody has typed, and dividing by it understated every weight on the page as if that
+ *  month had spent $0 (2026-09-09 audit item 6). Categories with no entered value in the
+ *  window are absent — unknown, not zero. */
+export function suggestedAnnualSpend(matrix: SpendingMatrix): Map<number, number> {
+  const out = new Map<number, number>()
+  const n = windowSize(matrix)
+  if (n === 0) return out
+  for (const series of matrix.series) {
     let sum = 0
-    let any = false
-    for (const value of window) {
+    let entered = 0
+    for (const value of series.values.slice(-n)) {
       if (value === null) continue
-      any = true
+      entered += 1
       sum += Number(value)
     }
-    if (any) out.set(series.category_id, (sum * 12) / n)
+    if (entered > 0) out.set(series.category_id, (sum * 12) / entered)
   }
   return out
 }

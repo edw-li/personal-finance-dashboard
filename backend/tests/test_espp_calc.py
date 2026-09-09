@@ -6,7 +6,7 @@ chain's whole risk is that a single mis-rounded cent propagates through unused_2
 carry_forward into the next period.
 
 `lot_metrics` takes `today` as a parameter so nothing here depends on the day the suite
-runs; only the endpoint reads `date.today()`.
+runs; only the endpoint reads the clock (`clock.product_today()`).
 """
 
 from datetime import date

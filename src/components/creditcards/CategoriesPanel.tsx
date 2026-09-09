@@ -53,21 +53,25 @@ function message(err: unknown, fallback: string): string {
 }
 
 /**
- * Matrix rows: name, annual-spend weight (manual override; blank = auto from the
- * mapped spending category's trailing-12 suggestion), mapping, pin. Deactivate keeps
- * the row out of the matrix without losing its cells.
+ * Matrix rows: name, annual-spend weight (manual override; blank = auto from the mapped
+ * spending category's spend over its ENTERED trailing-12 months), mapping, pin.
+ * Deactivate keeps the row out of the matrix without losing its cells.
  */
 export default function CategoriesPanel({
   categories,
   cards,
   spendingCategories,
   suggested,
+  enteredMonths,
   onChanged,
 }: {
   categories: RewardCategoryOut[]
   cards: CreditCardOut[]
   spendingCategories: CategoryOut[]
   suggested: Map<number, number>
+  /** Per spending category, how many trailing-12 months are entered — the denominator
+   *  behind `suggested`, named in the weight caption (rewardsMath.enteredMonthCounts). */
+  enteredMonths: Map<number, number>
   onChanged: () => void
 }) {
   const [form, setForm] = useState<CategoryFormState>(EMPTY_CATEGORY)
@@ -266,12 +270,15 @@ export default function CategoriesPanel({
       const auto = suggested.get(category.spending_category_id)
       if (auto !== undefined) {
         const pool = category.is_active ? (sharers.get(category.spending_category_id) ?? 1) : 1
+        // Both maps are one pass over one matrix, so a figure always has its count.
+        const entered = enteredMonths.get(category.spending_category_id) ?? 0
         return (
           <>
             {formatCurrency(auto / pool)}
             <span className="sub">
               {' '}
-              auto · {pool > 1 ? `1/${pool} of ` : ''}trailing 12 mo
+              auto · {pool > 1 ? `1/${pool} share · ` : ''}from {entered} entered month
+              {entered === 1 ? '' : 's'}
             </span>
           </>
         )
