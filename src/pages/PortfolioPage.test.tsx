@@ -641,7 +641,7 @@ it('shows the alert alone on a failed first load and retries back into the skele
   vi.mocked(fetchHoldings).mockRejectedValue(new ApiError('Portfolio service down', 503))
   const { container } = renderPage()
   // No data behind it, so the frame shows the alert instead of a page of empty tables.
-  expect((await screen.findByRole('alert')).textContent).toContain('Portfolio service down')
+  expect((await screen.findByRole('alert')).textContent).toContain("Couldn't load the portfolio — the server had a problem (HTTP 503)")
   expect(screen.queryByText('Portfolio value')).toBeNull()
 
   // A retry that leaves the error set would keep this alert on screen for its whole

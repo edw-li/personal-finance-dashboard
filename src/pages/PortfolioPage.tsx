@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
-import { ApiError } from '../api/client'
+import { ApiError, describeError } from '../api/client'
 import {
   fetchAllocation,
   fetchDividendEvents,
@@ -309,7 +309,7 @@ export default function PortfolioPage() {
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
-        setError(err instanceof ApiError ? err.message : 'Failed to load portfolio data')
+        setError(describeError(err, 'the portfolio'))
       })
   }, [owner, applySnapshotState])
 

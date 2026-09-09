@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../api/client'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type { HouseholdOut, NetWorthSummary, NetWorthTimeseries } from '../types/api'
 import NetWorthPage from './NetWorthPage'
@@ -234,17 +235,17 @@ it('scopes BOTH fetches to the picked owner, and back to the household on All', 
   const chips = await screen.findByRole('group', { name: 'Whose' })
   fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
   await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('monthly', SAM.id))
-  expect(fetchSummary).toHaveBeenCalledWith(SAM.id, undefined)
+  expect(fetchSummary).toHaveBeenCalledWith(SAM.id, undefined, 'monthly')
   expect(screen.getByRole('button', { name: 'Sam' }).getAttribute('aria-pressed')).toBe('true')
 
   fireEvent.click(screen.getByRole('button', { name: 'Joint' }))
   await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('monthly', 'joint'))
-  expect(fetchSummary).toHaveBeenCalledWith('joint', undefined)
+  expect(fetchSummary).toHaveBeenCalledWith('joint', undefined, 'monthly')
 
   fireEvent.click(chips.querySelectorAll('button')[0])
   // null, not omitted: the client turns null into no param at all (netWorth.test.ts).
   await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('monthly', null))
-  expect(fetchSummary).toHaveBeenLastCalledWith(null, undefined)
+  expect(fetchSummary).toHaveBeenLastCalledWith(null, undefined, 'monthly')
 })
 
 it('keeps the page alive when the household endpoint fails', async () => {
@@ -478,7 +479,7 @@ describe('NetWorthPage — shell scope', () => {
     await waitFor(() =>
       expect(vi.mocked(fetchTimeseries)).toHaveBeenCalledWith('monthly', 'joint'),
     )
-    expect(vi.mocked(fetchSummary)).toHaveBeenCalledWith('joint', undefined)
+    expect(vi.mocked(fetchSummary)).toHaveBeenCalledWith('joint', undefined, 'monthly')
     expect(screen.getByRole('button', { name: 'YTD' }).getAttribute('aria-pressed')).toBe('true')
   })
 
@@ -498,7 +499,7 @@ describe('NetWorthPage — shell scope', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
     await waitFor(() =>
-      expect(vi.mocked(fetchSummary)).toHaveBeenLastCalledWith(null, '2026-07-01'),
+      expect(vi.mocked(fetchSummary)).toHaveBeenLastCalledWith(null, '2026-07-01', 'monthly'),
     )
     expect(screen.getByTestId('location').textContent).toContain('month=2026-07')
     expect(await screen.findByRole('button', { name: 'Back to latest' })).toBeTruthy()
@@ -603,5 +604,200 @@ describe('NetWorthPage — chart cards', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Share %' }))
     expect(stacked().getAttribute('data-series')).toBe('Cash|Pre-tax|Post-tax|Taxable|Equity|Other')
     expect(screen.getByLabelText(/share of assets per month/)).toBeTruthy()
+  })
+})
+
+// ── Independent feeds (2026-09-09 audit item 10) ─────────────────────────────────────────
+// The two requests used to ride one Promise.all whose catch stored the raw server detail,
+// so a 500 on the summary blanked the whole page down to the word "boom".
+describe('NetWorthPage — one failed feed never blanks the page', () => {
+  it('keeps the charts and the table up when the summary fails, and banners it', async () => {
+    vi.mocked(fetchSummary).mockRejectedValue(new ApiError('boom', 500))
+    renderPage()
+    // The timeseries answered, so everything IT draws is still on screen.
+    expect((await screen.findAllByText('My Checking')).length).toBeGreaterThan(0)
+    expect(screen.getAllByTestId('echart').length).toBeGreaterThan(0)
+
+    const banner = screen.getByRole('alert')
+    expect(banner.textContent).toContain(
+      "Couldn't load the month summary — the server had a problem (HTTP 500)",
+    )
+    expect(within(banner).getByRole('button', { name: 'Retry the month summary' })).toBeTruthy()
+    // The parts that speak FOR the summary go quiet rather than stale …
+    expect(screen.queryByText('Net worth — Aug 2026')).toBeNull()
+    expect(document.querySelector('.networth-owner-strip')).toBeNull()
+    expect(document.querySelector('.chart-lede')).toBeNull()
+    // … and the server's own words never reach the page.
+    expect(screen.queryByText('boom')).toBeNull()
+  })
+
+  it('restores the tiles when Retry answers with the very same pair', async () => {
+    vi.mocked(fetchSummary).mockRejectedValueOnce(new ApiError('boom', 500))
+    renderPage()
+    const banner = await screen.findByRole('alert')
+    fireEvent.click(within(banner).getByRole('button', { name: 'Retry the month summary' }))
+    // The identical-payload skip must not strand the tiles hidden behind a payload that
+    // equals the one the failed load never got to show.
+    expect(await screen.findByText('Net worth — Aug 2026')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    // …and the feed that never failed was left alone: re-fetching it would repaint charts
+    // that are already right.
+    expect(fetchTimeseries).toHaveBeenCalledTimes(1)
+  })
+
+  it('names the page in the frame alert when the timeseries fails', async () => {
+    vi.mocked(fetchTimeseries).mockRejectedValue(new ApiError('boom', 500))
+    renderPage()
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(
+      "Couldn't load net worth — the server had a problem (HTTP 500)",
+    )
+    expect(screen.queryByText('boom')).toBeNull()
+  })
+})
+
+// ── An owner with no accounts (2026-09-09 audit item 11) ─────────────────────────────────
+// The summary answers zeros for a scope that owns nothing, so the page drew a wall of
+// $0.00 tiles over charts whose all-zero series made ECharts pick a 0..1 axis.
+describe('NetWorthPage — a scope with no accounts', () => {
+  const noAccounts = () =>
+    timeseriesOut({
+      accounts: [],
+      series: [],
+      group_totals: {
+        cash: ['0.00', '0.00'], pre_tax: ['0.00', '0.00'], post_tax: ['0.00', '0.00'],
+        taxable: ['0.00', '0.00'], equity: ['0.00', '0.00'], other: ['0.00', '0.00'],
+        liability: ['0.00', '0.00'],
+      },
+      net_worth: ['0.00', '0.00'],
+      mom_pct: [null, null],
+      owner_series: [],
+    })
+
+  it('names the person and points at Settings instead of drawing zeros', async () => {
+    vi.mocked(fetchTimeseries).mockResolvedValue(noAccounts())
+    vi.mocked(fetchSummary).mockResolvedValue(
+      summaryOut({ net_worth: '0.00', mom_delta: '0.00', mom_pct: null, owner_totals: [] }),
+    )
+    renderPage('/net-worth?owner=2')
+
+    expect(await screen.findByText(/No accounts for Sam yet/)).toBeTruthy()
+    expect(
+      screen.getByRole('link', { name: 'Settings → Accounts' }).getAttribute('href'),
+    ).toBe('/settings#accounts')
+    // Nothing that would have to invent a number is on screen.
+    expect(screen.queryAllByTestId('echart')).toHaveLength(0)
+    expect(screen.queryByText('Net worth — Aug 2026')).toBeNull()
+    expect(screen.queryByText('Accounts — latest month')).toBeNull()
+    expect(document.querySelector('.networth-owner-strip')).toBeNull()
+  })
+
+  it('falls back to "this person" while the household payload is missing', async () => {
+    vi.mocked(fetchTimeseries).mockResolvedValue(noAccounts())
+    vi.mocked(fetchHousehold).mockRejectedValue(new Error('household down'))
+    renderPage('/net-worth?owner=2')
+    expect(await screen.findByText(/No accounts for this person yet/)).toBeTruthy()
+  })
+
+  it('says so of the household itself when the whole book is empty', async () => {
+    vi.mocked(fetchTimeseries).mockResolvedValue(noAccounts())
+    renderPage('/net-worth')
+    expect(await screen.findByText(/No accounts for this household yet/)).toBeTruthy()
+  })
+})
+
+// ── Quarterly tiles (2026-09-09 audit item 23) ───────────────────────────────────────────
+// The summary had no grain of its own, so tiles saying "vs prior month" sat beside a
+// quarterly chart and a ribbon pick landed on a column the quarterly series does not carry.
+describe('NetWorthPage — the tiles follow the grain on screen', () => {
+  it('reads the last column at or before the pick when that quarter has no snapshot', async () => {
+    // March and September only: the client snaps August to June by the calendar, and June is
+    // not in the book — the table must land on March with the tiles rather than fall back to
+    // the latest quarter.
+    const gapped = timeseriesOut({ months: ['2026-03-01', '2026-09-01'] })
+    vi.mocked(fetchTimeseries).mockImplementation((g) =>
+      Promise.resolve(g === 'quarterly' ? gapped : timeseriesOut()),
+    )
+    vi.mocked(fetchSummary).mockResolvedValue(summaryOut({ month: '2026-03-01', period: 'quarter' }))
+    renderPage('/net-worth?month=2026-08')
+    await screen.findByText('By group over time')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+    expect(await screen.findByText('Accounts — Mar 2026')).toBeTruthy()
+    expect(screen.getByText('Net worth — Mar 2026')).toBeTruthy()
+  })
+
+  it('says so when no quarter has closed by the picked month', async () => {
+    vi.mocked(fetchSummary).mockResolvedValue(
+      summaryOut({ month: null, net_worth: null, mom_delta: null, mom_pct: null, groups: [], owner_totals: [], period: 'quarter' }),
+    )
+    renderPage('/net-worth?month=2026-08')
+    await screen.findByText('By group over time')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+    // The tiles have nothing to say, so the page says why instead of dropping them silently.
+    expect(await screen.findByText('No quarter has closed by Jun 2026 yet.')).toBeTruthy()
+  })
+
+  it('prints no figure on a ribbon chip for a scope that owns nothing', async () => {
+    vi.mocked(fetchTimeseries).mockResolvedValue(
+      timeseriesOut({ accounts: [], series: [], owner_series: [], net_worth: ['0.00', '0.00'] }),
+    )
+    renderPage('/net-worth?owner=2')
+    // The chip carries coverage alone — never a fabricated "$0.00" in its label or its aria.
+    expect(
+      await screen.findByRole('button', { name: 'Aug 2026 — balances entered, spending missing' }),
+    ).toBeTruthy()
+  })
+
+  it('names the grain in the movers card, not the month', async () => {
+    const quarterly = timeseriesOut({ months: ['2026-03-01', '2026-06-01'] })
+    vi.mocked(fetchTimeseries).mockImplementation((g) =>
+      Promise.resolve(g === 'quarterly' ? quarterly : timeseriesOut()),
+    )
+    renderPage()
+    await screen.findByText('By group over time')
+    expect(screen.getByLabelText(/moved net worth from the prior month to this one/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+    expect(
+      await screen.findByLabelText(/moved net worth from the prior quarter to this one/),
+    ).toBeTruthy()
+  })
+
+  it('asks for the summary at that grain and says "vs prior quarter"', async () => {
+    renderPage()
+    await screen.findByText('By group over time')
+    vi.mocked(fetchSummary).mockResolvedValue(summaryOut({ period: 'quarter' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+    await waitFor(() =>
+      expect(fetchSummary).toHaveBeenLastCalledWith(null, undefined, 'quarterly'),
+    )
+    expect(await screen.findByText(/vs prior quarter/)).toBeTruthy()
+  })
+
+  it('snaps a ribbon pick back to the quarter end it closes into', async () => {
+    const quarterly = timeseriesOut({ months: ['2026-03-01', '2026-06-01'] })
+    vi.mocked(fetchTimeseries).mockImplementation((g) =>
+      Promise.resolve(g === 'quarterly' ? quarterly : timeseriesOut()),
+    )
+    renderPage('/net-worth?month=2026-08')
+    await screen.findByText('By group over time')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+    // August is not a quarter end and the quarterly series has no column for it: the page
+    // asks for — and reads — the quarter that had closed by then.
+    await waitFor(() =>
+      expect(fetchSummary).toHaveBeenLastCalledWith(null, '2026-06-01', 'quarterly'),
+    )
+    expect(await screen.findByText('Accounts — Jun 2026')).toBeTruthy()
+    // The ribbon follows the snap rather than highlighting a chip the page is not showing.
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toContain('month=2026-06'),
+    )
+    expect(screen.getByText(/What moved — Jun 2026/)).toBeTruthy()
+    // …and the lede names the two quarter ends, not two months.
+    expect(document.querySelector('.chart-lede')?.textContent).toContain('Mar 2026')
   })
 })

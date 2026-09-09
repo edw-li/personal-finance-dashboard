@@ -8,7 +8,7 @@ import {
   updateCustomEvent,
 } from '../api/calendar'
 import { downloadCalendarIcs } from '../api/calendarFeed'
-import { ApiError } from '../api/client'
+import { ApiError, describeError } from '../api/client'
 import { fetchHousehold } from '../api/household'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
@@ -160,7 +160,7 @@ export default function CalendarPage() {
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
-        setError(err instanceof ApiError ? err.message : 'Could not load the calendar.')
+        setError(describeError(err, 'the calendar'))
       })
       .finally(() => {
         if (seq === seqRef.current) setRevalidating(false)

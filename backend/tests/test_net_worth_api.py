@@ -250,6 +250,7 @@ async def test_summary_empty_db(auth_client):
         "mom_pct": None,
         "groups": [],
         "owner_totals": [],
+        "period": "month",
     }
 
 
@@ -1096,3 +1097,111 @@ async def test_summary_month_param_404s_on_an_empty_book(auth_client):
     resp = await auth_client.get("/api/v1/net-worth/summary?month=2026-01-01")
     assert resp.status_code == 404
     assert resp.json()["detail"] == "no snapshot for 2026-01"
+
+
+# ── Quarterly summary (2026-09-09 audit item 23) ────────────────────────────────────────
+# The timeseries drops to quarter ends under ?granularity=quarterly while the summary had no
+# such parameter, so the tiles beside a quarterly chart compared two MONTHS and said so.
+
+
+async def _seed_quarterly(db):
+    """Mar / Jun / Aug / Sep at 100 / 130 / 180 / 200 — the two non-quarter-end months are
+    what a monthly answer would compare against, so every assertion below can only pass on
+    the quarter-end series."""
+    acct = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(acct)
+    await db.flush()
+    months = (date(2026, 3, 1), date(2026, 6, 1), date(2026, 8, 1), date(2026, 9, 1))
+    snaps = [NetWorthSnapshot(month=m) for m in months]
+    db.add_all(snaps)
+    await db.flush()
+    for snap, amount in zip(snaps, ("100.00", "130.00", "180.00", "200.00"), strict=True):
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=acct.id, balance=Decimal(amount)))
+    await db.commit()
+
+
+async def test_summary_quarterly_compares_two_quarter_ends(auth_client, db):
+    await _seed_quarterly(db)
+
+    monthly = (await auth_client.get("/api/v1/net-worth/summary")).json()
+    assert monthly["month"] == "2026-09-01"
+    assert monthly["mom_delta"] == "20.00"  # against August, the previous SNAPSHOT
+    assert monthly["period"] == "month"
+
+    quarterly = (await auth_client.get("/api/v1/net-worth/summary?granularity=quarterly")).json()
+    assert quarterly["month"] == "2026-09-01"  # the latest quarter END
+    assert quarterly["net_worth"] == "200.00"
+    assert quarterly["mom_delta"] == "70.00"  # against June, not August
+    assert quarterly["mom_pct"] == "0.538462"  # 70/130, 6dp HALF_UP
+    assert quarterly["period"] == "quarter"
+    assert quarterly["groups"]  # the viewed quarter still carries its group breakdown
+
+
+async def test_summary_quarterly_month_snaps_back_to_its_quarter_end(auth_client, db):
+    await _seed_quarterly(db)
+    # August is a real snapshot the quarterly SERIES does not carry: under this grain the
+    # month is an "as of", so it reads the last quarter that had closed by then.
+    viewed = (
+        await auth_client.get("/api/v1/net-worth/summary?granularity=quarterly&month=2026-08-01")
+    ).json()
+    assert viewed["month"] == "2026-06-01"
+    assert viewed["net_worth"] == "130.00"
+    assert viewed["mom_delta"] == "30.00"  # against March, the previous quarter end
+    assert viewed["period"] == "quarter"
+
+
+async def test_summary_quarterly_before_the_first_quarter_end_is_empty_not_404(auth_client, db):
+    await _seed_quarterly(db)
+    # Nothing had closed by January. That is an empty answer, not a missing resource: the
+    # month is an as-of under this grain, so there is no snapshot for it to fail to find.
+    body = (
+        await auth_client.get("/api/v1/net-worth/summary?granularity=quarterly&month=2026-01-01")
+    ).json()
+    assert body["month"] is None
+    assert body["net_worth"] is None
+    assert body["period"] == "quarter"
+
+
+async def test_summary_quarterly_skips_a_quarter_with_no_snapshot(auth_client, db):
+    """March and September, no June: "the previous quarter end" is the previous ROW, so
+    September compares against March — and an August as-of reads March too, since June is
+    not in the book for the client's calendar snap to land on."""
+    acct = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(acct)
+    await db.flush()
+    snaps = [NetWorthSnapshot(month=date(2026, m, 1)) for m in (3, 9)]
+    db.add_all(snaps)
+    await db.flush()
+    for snap, amount in zip(snaps, ("100.00", "200.00"), strict=True):
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=acct.id, balance=Decimal(amount)))
+    await db.commit()
+
+    latest = (await auth_client.get("/api/v1/net-worth/summary?granularity=quarterly")).json()
+    assert latest["month"] == "2026-09-01"
+    assert latest["mom_delta"] == "100.00"  # against March, the quarter end that IS there
+
+    august = (
+        await auth_client.get("/api/v1/net-worth/summary?granularity=quarterly&month=2026-08-01")
+    ).json()
+    assert august["month"] == "2026-03-01"
+    assert august["mom_delta"] is None  # nothing before it
+
+
+async def test_summary_quarterly_still_422s_a_mid_month_value_and_a_bad_grain(auth_client, db):
+    await _seed_quarterly(db)
+    resp = await auth_client.get("/api/v1/net-worth/summary?granularity=quarterly&month=2026-08-15")
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "month must be the first of the month (YYYY-MM-01)"
+    bad = await auth_client.get("/api/v1/net-worth/summary?granularity=weekly")
+    assert bad.status_code == 422
+
+
+async def test_summary_quarterly_scopes_by_owner_like_the_monthly_one(auth_client, db):
+    me, _partner = await _seed_owned_timeseries(db)
+    # The owned fixture is July + August: no quarter has closed inside it at all.
+    body = (
+        await auth_client.get(f"/api/v1/net-worth/summary?granularity=quarterly&owner={me.id}")
+    ).json()
+    assert body["month"] is None
+    assert body["groups"] == []
+    assert body["period"] == "quarter"

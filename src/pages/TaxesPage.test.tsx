@@ -536,7 +536,7 @@ describe('TaxesPage', () => {
     // The clone SUCCEEDED, so this failure belongs to the main banner — the one with a
     // Retry. Under the create form the only affordance left is a Create that now 409s.
     // Years ARE on screen (the optimistic chip), so this is the frame's stale line.
-    expect(await screen.findByText(/years unavailable/)).toBeTruthy()
+    expect(await screen.findByText(/Couldn't load the tax years/)).toBeTruthy()
     // And the year exists, so the page is on it: optimistically, with placeholder counts.
     const chip = await screen.findByRole('button', { name: '2025' })
     expect(chip.getAttribute('aria-pressed')).toBe('true')
@@ -545,11 +545,11 @@ describe('TaxesPage', () => {
     // 2025's payloads arriving must NOT clear the banner underneath them — the two
     // requests are in flight together, and only one of them failed.
     expect(await screen.findByText('$123,456.78')).toBeTruthy()
-    expect(screen.getByText(/years unavailable/)).toBeTruthy()
+    expect(screen.getByText(/Couldn't load the tax years/)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(3))
-    await waitFor(() => expect(screen.queryByText(/years unavailable/)).toBeNull())
+    await waitFor(() => expect(screen.queryByText(/Couldn't load the tax years/)).toBeNull())
     // Reconciled: the server's counts replace the placeholder.
     expect(screen.getByRole('button', { name: '2025' }).getAttribute('title')).toBe(
       '0 inputs · 42 brackets',
@@ -561,8 +561,8 @@ describe('TaxesPage', () => {
     renderPage()
 
     // No years, so the failure is the FRAME's: an assertive banner and nothing behind it.
-    expect(await screen.findByText('years unavailable')).toBeTruthy()
-    expect(screen.getByRole('alert').textContent).toContain('years unavailable')
+    expect(await screen.findByText("Couldn't load the tax years — the server had a problem (HTTP 503)")).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toContain("Couldn't load the tax years")
     expect(screen.queryByLabelText('New year')).toBeNull()
     // A load that never came back knows nothing about whether the database is empty.
     expect(screen.queryByText(/no tax years yet/i)).toBeNull()

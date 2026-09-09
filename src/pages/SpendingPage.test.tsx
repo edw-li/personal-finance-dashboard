@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../api/client'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
@@ -696,5 +697,51 @@ describe('SpendingPage — the honest rollup (spec §1/§2)', () => {
     renderPage()
     await screen.findByRole('heading', { name: /Month × category heatmap/ })
     expect(screen.queryByText(/Not living spend/)).toBeNull()
+  })
+})
+
+// ── Independent feeds (2026-09-09 audit item 10) ─────────────────────────────────────────
+// The matrix and the yearly rollup used to ride one Promise.all whose catch stored the raw
+// server detail, so a 500 on the rollup blanked the whole page down to the word "boom".
+describe('SpendingPage — one failed feed never blanks the page', () => {
+  it('keeps the charts up when the yearly rollup fails, banners it and drops the table', async () => {
+    vi.mocked(fetchYearly).mockRejectedValue(new ApiError('boom', 500))
+    renderPage()
+    // The matrix answered, so everything IT draws is still on screen.
+    expect((await screen.findAllByTestId('echart')).length).toBeGreaterThan(0)
+
+    const banner = screen.getByRole('alert')
+    expect(banner.textContent).toContain(
+      "Couldn't load the yearly rollup — the server had a problem (HTTP 500)",
+    )
+    expect(within(banner).getByRole('button', { name: 'Retry the yearly rollup' })).toBeTruthy()
+    // The one card that reads off the rollup goes quiet rather than empty-columned …
+    expect(screen.queryByText('Yearly rollups')).toBeNull()
+    // … and the server's own words never reach the page.
+    expect(screen.queryByText('boom')).toBeNull()
+  })
+
+  it('restores the table when Retry answers with the very same pair', async () => {
+    vi.mocked(fetchYearly).mockRejectedValueOnce(new ApiError('boom', 500))
+    renderPage()
+    const banner = await screen.findByRole('alert')
+    fireEvent.click(within(banner).getByRole('button', { name: 'Retry the yearly rollup' }))
+    // The identical-payload skip must not strand the table hidden behind a payload that
+    // equals the one the failed load never got to show.
+    expect(await screen.findByText('Yearly rollups')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    // …and the feed that never failed was left alone: re-fetching it would repaint charts
+    // that are already right.
+    expect(fetchMatrix).toHaveBeenCalledTimes(1)
+  })
+
+  it('names the page in the frame alert when the matrix fails', async () => {
+    vi.mocked(fetchMatrix).mockRejectedValue(new ApiError('boom', 500))
+    renderPage()
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(
+      "Couldn't load spending — the server had a problem (HTTP 500)",
+    )
+    expect(screen.queryByText('boom')).toBeNull()
   })
 })

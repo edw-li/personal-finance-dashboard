@@ -324,18 +324,32 @@ async def summary(
     # assistant_context calls this function directly, and a params.Query left sitting in the
     # default would sail past `is None` and reach the 404 formatter as a non-date.
     month: Annotated[date | None, Query()] = None,
+    granularity: Literal["monthly", "quarterly"] = "monthly",
     db: AsyncSession = Depends(get_db),
 ) -> SummaryOut:
     """The latest month by default; `month=YYYY-MM-01` views that snapshot (which may be the
     latest) with ITS month-over-month delta (against the snapshot immediately before it), for
     the ribbon's click-to-view (2026-09-03 shell spec §7). The charts are unaffected — they
-    span all months."""
+    span all months.
+
+    `granularity=quarterly` reads the same book at the grain /timeseries draws it at
+    (2026-09-09 audit item 23): only quarter ends are snapshots here, so the viewed one is
+    the latest quarter end and the delta is against the quarter before it — which is what the
+    tiles beside a quarterly chart have to be comparing. At that grain `month` is an AS OF,
+    not an identity: it reads the last quarter that had CLOSED by then, and a month before
+    any of them has an empty answer rather than a 404 — there is no snapshot for it to fail
+    to find. `period` tells the client which word its tiles may use."""
     if month is not None:
         # 422 like /months/{month}: a mid-month value must not read as "no snapshot for 2026-02".
         require_first_of_month(month)
     snapshots, accounts, balances = await load_balance_matrix(db, _owner_filter(owner))
+    quarterly = granularity == "quarterly"
+    if quarterly:
+        snapshots = [s for s in snapshots if s.month.month in QUARTER_END_MONTHS]
     if month is None:
         index = len(snapshots) - 1  # -1 on an empty book
+    elif quarterly:
+        index = max((i for i, snap in enumerate(snapshots) if snap.month <= month), default=-1)
     else:
         index = next((i for i, snap in enumerate(snapshots) if snap.month == month), -1)
         if index == -1:
@@ -348,6 +362,7 @@ async def summary(
             mom_pct=None,
             groups=[],
             owner_totals=[],
+            period="quarter" if quarterly else "month",
         )
     viewed = snapshots[index]
     previous = snapshots[index - 1] if index > 0 else None
@@ -376,6 +391,7 @@ async def summary(
             OwnerTotal(person_id=person_id, name=name, total=viewed_owners.get(person_id, ZERO))
             for person_id, name in owner_rows
         ],
+        period="quarter" if quarterly else "month",
     )
 
 

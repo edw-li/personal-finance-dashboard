@@ -1103,7 +1103,7 @@ describe('OverviewPage failures', () => {
 
     const banner = await screen.findByRole('alert')
     // The message alone: no stale cue, because there is nothing on screen to be stale.
-    expect(banner.textContent).toContain('overview unavailable')
+    expect(banner.textContent).toContain("Couldn't load the overview — the server had a problem (HTTP 500)")
     expect(banner.textContent).not.toContain('earlier data')
     // No tiles at all — a page of $0.00 would read as "you are broke", not as "load failed".
     expect(document.querySelectorAll('.stat-tile')).toHaveLength(0)
@@ -1134,7 +1134,7 @@ describe('OverviewPage failures', () => {
     failAll('overview unavailable')
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
 
-    await screen.findByText(/Showing earlier data — overview unavailable/)
+    await screen.findByText(/Showing earlier data — Couldn't load the overview/)
     // The previous snapshot survives the failure — a dashboard that blanks itself on a
     // dropped connection is worse than one that admits the numbers are a minute old.
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
@@ -1452,7 +1452,9 @@ describe('OverviewPage — shell frame and owner scope', () => {
     vi.mocked(fetchSummary).mockRejectedValueOnce(new ApiError('offline', 503))
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
 
-    expect(await screen.findByText(/Showing earlier data — offline/)).toBeTruthy()
+    expect(
+      await screen.findByText(/Showing earlier data — Couldn't load the overview/),
+    ).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
     expect(document.querySelector('.stat-tile')).toBeTruthy() // data stayed up
   })
@@ -1463,7 +1465,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
     renderPage()
 
     const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toContain('boom')
+    expect(alert.textContent).toContain("Couldn't load the overview — the server had a problem (HTTP 500)")
     // Not even the skeleton's ghost tiles: an error with no data is the banner alone.
     expect(document.querySelector('.stat-tile')).toBeNull()
   })

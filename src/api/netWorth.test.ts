@@ -46,6 +46,20 @@ it('sends owner and month together, month as a first-of-month ISO date', async (
   expect(path()).toBe('/net-worth/summary?month=2026-02-01')
 })
 
+// The summary reads the book at the grain the page is DRAWING (2026-09-09 audit item 23),
+// and only says so when that is not the monthly default — the household request stays
+// byte-identical to the pre-granularity one.
+it('names the grain only when it is not monthly', async () => {
+  await fetchSummary(null, undefined, 'quarterly')
+  expect(path()).toBe('/net-worth/summary?granularity=quarterly')
+  vi.clearAllMocks()
+  await fetchSummary('joint', '2026-06-01', 'quarterly')
+  expect(path()).toBe('/net-worth/summary?owner=joint&month=2026-06-01&granularity=quarterly')
+  vi.clearAllMocks()
+  await fetchSummary(null, '2026-06-01', 'monthly')
+  expect(path()).toBe('/net-worth/summary?month=2026-06-01')
+})
+
 // The DELETE answers 204 with the change batch in a header (2026-09-03 data-lifecycle spec
 // §9) — the wizard needs the id to offer Undo, and null when nothing was logged.
 it('deleteMonthBalances reads the change batch from the 204 header', async () => {
