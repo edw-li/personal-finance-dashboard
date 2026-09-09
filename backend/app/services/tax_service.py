@@ -606,9 +606,8 @@ def compute_breakdown(
     # smaller of net investment income and the MAGI excess over the status threshold.
     # MAGI is `_magi`'s definition, which is `true_agi` above (fed AGI + cg_amount,
     # capital_loss_deductions inside via _federal_agi). The clamps guard stored-negative
-    # edges: a short-term or netted
-    # CG loss reduces AGI, never investment income, and a net-negative NII must never
-    # surface as a negative surcharge.
+    # edges: a short-term or netted CG loss reduces AGI, never investment income, and a
+    # net-negative NII must never surface as a negative surcharge.
     nii = (
         values["interest_total"]
         + values["unqualified_dividends"]
