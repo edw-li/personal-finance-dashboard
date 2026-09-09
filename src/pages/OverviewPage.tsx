@@ -24,6 +24,7 @@ import { windowWords, ytdStats } from '../components/overview/ytd'
 import {
   netWorthTrendCsv,
   netWorthTrendOption,
+  notEnteredMonths,
   pickTaxSummary,
   RECENT_SPEND_MONTHS,
   recentSpendCsv,
@@ -315,7 +316,17 @@ export default function OverviewPage() {
         : null,
     [data, owner],
   )
-  const bars = useMemo(() => (data ? recentSpendOption(data.matrix) : null), [data])
+  // The months whose "0.00" is an absence rather than a figure (audit item 14). Memoized
+  // beside the options it feeds, not recomputed per render: it rides INTO the bars' memo,
+  // and a fresh Set every render would redraw that chart on every keystroke elsewhere.
+  const notEntered = useMemo(
+    () => (data ? notEnteredMonths(data.matrix, data.coverage) : new Set<string>()),
+    [data],
+  )
+  const bars = useMemo(
+    () => (data ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered) : null),
+    [data, notEntered],
+  )
 
   // 2026-08-25 spec §2d: each chart clicks through to the page that owns its numbers;
   // the bars carry the clicked month into /spending's ?month= drill deep link, mapped
@@ -332,7 +343,7 @@ export default function OverviewPage() {
   // `totals.unrealized_gl` lesson).
   const totals = data?.holdings.totals
   const asOf = data?.holdings.as_of ?? null
-  const stats = data ? spendStats(data.matrix) : null
+  const stats = data ? spendStats(data.matrix, notEntered) : null
   const currentYear = new Date().getFullYear()
   const tax = data ? pickTaxSummary(data.taxes.years, currentYear) : null
   // Plain consts like their siblings (the memo rule below covers CHART options only) —

@@ -656,6 +656,24 @@ describe('OverviewPage tiles', () => {
     expect(deltaOf(tile)?.className).toContain('stat-delta-positive')
   })
 
+  // Audit item 14: the matrix months are a UNION of spending rows and net-pay rows, so a
+  // month nobody entered comes back as an explicit "0.00" and used to drag the tile's own
+  // comparison average down. /coverage names those months, and the page already has it.
+  it('leaves a month nobody entered out of the tile’s 12-month average', async () => {
+    // Jun 2026 saved with every category $0.00; the ten months before it are 5,000 each.
+    const blank = SPEND_MONTHS[10]
+    serve({
+      matrix: matrixOut({ totals: [...Array<string>(10).fill('5000.00'), '0.00', '6000.00'] }),
+      coverage: coverageOut({ spending_empty: [blank] }),
+    })
+    renderPage()
+
+    const tile = (await screen.findByText('Spending — Jul 2026')).closest('.stat-tile') as HTMLElement
+    // Counted at full weight the eleven priors average $4,545.45; with June out they are
+    // the ten real months, and the comparison is the $5,000.00 the household actually spends.
+    expect(deltaOf(tile)?.textContent).toBe('▲ over $5,000.00 12-mo avg')
+  })
+
   it('says nothing about a cashflow-only trailing month', async () => {
     // The matrix months are a UNION of spending rows and net-pay rows, so a month whose
     // paycheck is entered but whose spending is not comes back with an explicit "0.00".
