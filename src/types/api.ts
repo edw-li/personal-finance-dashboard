@@ -2385,7 +2385,8 @@ export interface HealthFix {
   kind: 'link' | 'action'
   label: string
   to?: string | null
-  /** 'delete_spending_month' (one per month in the check's `months`) | 'snapshot_now'. */
+  /** 'delete_spending_month' (one per month in the check's `months`) | 'snapshot_now'
+   *  | 'rewrite_itemized_deduction' (one per year in the check's `years`). */
   action?: string | null
 }
 
@@ -2396,6 +2397,8 @@ export interface HealthCheck {
   detail: string
   count: number
   months: string[]
+  /** The TAX YEARS a check is about, where it is about years rather than months. */
+  years: number[]
   fix: HealthFix | null
 }
 

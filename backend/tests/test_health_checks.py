@@ -1,6 +1,8 @@
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 
+from sqlalchemy import select, update
+
 from app.models import (
     Account,
     AccountBalance,
@@ -11,6 +13,9 @@ from app.models import (
     NetWorthSnapshot,
     Security,
     SpendingCategory,
+    TaxInput,
+    TaxInputDefinition,
+    TaxYear,
 )
 from app.services.coverage import load_coverage
 from app.services.health_checks import (
@@ -22,6 +27,7 @@ from app.services.health_checks import (
     check_coverage_gaps,
     check_identical_snapshot,
     check_net_pay_without_spending,
+    check_sec199a_in_itemized,
     check_snapshot,
     check_spending_gap,
     check_stale_quotes,
@@ -242,7 +248,7 @@ def test_snapshot_check_reads_the_stored_files():
     assert check_snapshot(now=NOW, snapshot_enabled=True).severity == "ok"
 
 
-async def test_run_checks_returns_the_nine_in_order(db):
+async def test_run_checks_returns_the_ten_in_order(db):
     checks = await run_checks(db, now=NOW, environment="dev", snapshot_enabled=False)
     assert [c.id for c in checks] == [
         "zero_filled_spending",
@@ -250,6 +256,9 @@ async def test_run_checks_returns_the_nine_in_order(db):
         "net_pay_without_spending",
         "balances_without_spending",
         "spending_without_balances",
+        # §199A joined on 2026-09-09 (taxes spec 4h): it reads tax_inputs, so it sits with
+        # the data rules rather than with the age rules below it.
+        "sec199a_in_itemized",
         "stale_quotes",
         "identical_snapshot",
         "backup",
@@ -263,9 +272,86 @@ async def test_run_checks_returns_the_nine_in_order(db):
         "ok",
         "ok",
         "ok",
+        "ok",
         "info",
         "ok",
     ]
+
+
+# --- §199A left inside a stored itemized total (taxes spec 4h) ---
+
+# The workbook's 2025 column: the itemized components, and the total the OLD chip wrote
+# from them. 24141.06 of SALT is under the 40000 cap, so the legacy sum is the plain
+# addition 24141.06 + 3050 + 16 + 6.222 + 0.
+LEGACY_2025 = {
+    "itemized_salt": Decimal("24141.06"),
+    "itemized_donations": Decimal("3050"),
+    "itemized_vehicle_reg": Decimal("16"),
+    "itemized_sec199a_div": Decimal("6.222"),
+    "itemized_other": Decimal("0"),
+}
+LEGACY_TOTAL = Decimal("27213.282")
+NEW_TOTAL = Decimal("27207.06")  # the same sum without the §199A term
+
+
+async def tax_year(db, year: int, values: dict[str, Decimal]) -> None:
+    """One stored year. The definition rows are the tax_inputs FK's parents."""
+    if await db.get(TaxYear, year) is None:
+        db.add(TaxYear(year=year))
+    existing = set((await db.execute(select(TaxInputDefinition.key))).scalars().all())
+    for key in values:
+        if key not in existing:
+            db.add(TaxInputDefinition(key=key, label=key, section="deductions", sort_order=0))
+    await db.flush()
+    for key, value in values.items():
+        db.add(TaxInput(year=year, key=key, value=value))
+    await db.commit()
+
+
+async def test_sec199a_flags_a_total_the_old_chip_wrote(db):
+    """The stored total equals suggestion + §199A to the cent, and the §199A line is
+    positive: those dollars are deducted twice since the line moved below it."""
+    await tax_year(db, 2025, LEGACY_2025 | {"itemized_deduction": LEGACY_TOTAL})
+
+    check = await check_sec199a_in_itemized(db)
+    assert check.severity == "warn"
+    assert check.title == "Itemized deduction for 2025 still includes the §199A line"
+    assert check.years == [2025]
+    assert check.count == 1
+    assert check.fix is not None
+    assert (check.fix.kind, check.fix.action) == ("action", "rewrite_itemized_deduction")
+
+
+async def test_sec199a_leaves_a_hand_typed_total_alone(db):
+    """A figure that is not the legacy sum is the user's own number — the card names a
+    leftover it can prove, never a total it merely dislikes. The already-repaired value is
+    the case that must not re-flag."""
+    await tax_year(db, 2025, LEGACY_2025 | {"itemized_deduction": NEW_TOTAL})
+    assert (await check_sec199a_in_itemized(db)).severity == "ok"
+
+    await db.execute(
+        update(TaxInput)
+        .where(TaxInput.year == 2025, TaxInput.key == "itemized_deduction")
+        .values(value=Decimal("30000"))
+    )
+    await db.commit()
+    assert (await check_sec199a_in_itemized(db)).severity == "ok"
+
+
+async def test_sec199a_zero_is_nothing_to_double_count(db):
+    """No §199A line, no leftover: with the term at zero the two formulas agree, and
+    flagging on that equality would name every itemized year in the book."""
+    await tax_year(
+        db,
+        2024,
+        LEGACY_2025 | {"itemized_sec199a_div": Decimal("0"), "itemized_deduction": NEW_TOTAL},
+    )
+    assert (await check_sec199a_in_itemized(db)).severity == "ok"
+
+
+async def test_sec199a_says_nothing_about_a_year_with_no_itemized_row(db):
+    await tax_year(db, 2025, {"itemized_sec199a_div": Decimal("6.222")})
+    assert (await check_sec199a_in_itemized(db)).severity == "ok"
 
 
 async def test_spending_gap_names_months_missing_inside_the_balances_window(db):

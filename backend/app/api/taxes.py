@@ -91,6 +91,7 @@ from app.schemas.taxes import (
     WithholdingVestOut,
 )
 from app.services import clock, rsu_vesting, withholding_calc
+from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     MONEY_MAX_ABS_14_4,
@@ -709,7 +710,11 @@ def _validated_input_value(key: str, value: Decimal | None) -> Decimal | None:
 
 @router.put("/years/{year}/inputs", response_model=TaxInputsOut)
 async def put_inputs(
-    year: YearPath, body: TaxInputsIn, db: AsyncSession = Depends(get_db)
+    year: YearPath,
+    body: TaxInputsIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> TaxInputsOut:
     """Bulk upsert of the (key, person) slots in the body; a null value unsets one slot.
 
@@ -717,6 +722,12 @@ async def put_inputs(
     years it covers, so edits made here to an imported year are clobbered by the next
     re-import — for the PRIMARY person's sheet-tracked keys only, since the importer's
     sweeps are scoped to the sheet's own vocabulary and to that one person.
+
+    CHANGE-LOGGED since 2026-09-09: the Data-health card repairs a year's itemized total
+    through this route (the §199A leftover, taxes spec 4h), and a repair that rewrites
+    money has to be undoable like the zero-month delete beside it. The batch id rides the
+    `X-Change-Batch` header rather than the body — `TaxInputsOut` is the GET's shape too,
+    and the two payloads are pinned byte-for-byte.
     """
     submitted = [TaxInputRowIn(key=key, value=value) for key, value in body.values.items()]
     submitted += list(body.rows)
@@ -767,6 +778,7 @@ async def put_inputs(
         (row.key, row.person_id): row
         for row in (await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars()
     }
+    changed = 0
     for (key, owner), value in resolved.items():
         row = existing.get((key, owner))
         if row is None and owner is not None and owner == null_row_column:
@@ -784,13 +796,25 @@ async def put_inputs(
             row = existing.pop((key, None), None)
         if value is None:
             if row is not None:
+                batch.record_delete(row)  # the image is needed BEFORE the delete
                 await db.delete(row)  # null means "unset this line", not "store 0"
+                changed += 1
         elif row is None:
-            db.add(TaxInput(year=year, key=key, person_id=owner, value=value))
+            fresh = TaxInput(year=year, key=key, person_id=owner, value=value)
+            db.add(fresh)
+            await db.flush()  # the image needs the generated id
+            batch.record_insert(fresh)
+            changed += 1
         else:
+            before = row_image(row)
             row.person_id = owner
             row.value = value
-    await db.commit()
+            # An unchanged pair records nothing (ChangeBatch.record's rule), so a re-save of
+            # the same figures logs an empty batch and offers no Undo.
+            batch.record_update(row, before)
+            changed += 1
+    batch.label = f"Saved {year} tax inputs — {changed} slot{'' if changed == 1 else 's'}"
+    response.headers.update(batch_header(await batch.commit()))
     return await _inputs_payload(db, year)
 
 

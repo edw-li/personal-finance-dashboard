@@ -7,6 +7,7 @@ Thresholds are twins of src/utils/staleness.ts; test_health_checks pins them."""
 
 import asyncio
 from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,12 +19,16 @@ from app.models import (
     MonthlySpending,
     NetWorthSnapshot,
     Security,
+    TaxInput,
+    TaxYear,
 )
 from app.schemas.lifecycle import HealthCheckOut, HealthFixOut
 from app.schemas.system import BackupStatusOut
 from app.services import clock
 from app.services.coverage import Coverage, load_coverage
 from app.services.snapshot import SNAPSHOT_NAME_RE, snapshot_stamp, snapshots_dir
+from app.services.tax_service import derive_suggestions
+from app.tax_keys import SINGLE
 
 STALE_QUOTE_DAYS = 4  # staleness.ts STALE_AFTER_DAYS
 BACKUP_WARN_HOURS = 48  # staleness.ts BACKUP_STALE_HOURS
@@ -31,6 +36,13 @@ BACKUP_ERROR_DAYS = 7  # staleness.ts BACKUP_OVERDUE_DAYS
 SNAPSHOT_WARN_HOURS = 36
 COVERAGE_WINDOW_MONTHS = 12
 BACKUP_STATUS_KEY = "backup_status"  # app/api/system.py's key, read here without the router
+# One cent. The stored itemized figure is Numeric(14,4) and the workbook summed its
+# own formula at full precision, so the equality test has to tolerate the rounding
+# that happened on the way in — and no more than that, or a hand-typed figure that
+# happens to land near the legacy sum would be called a leftover.
+LEGACY_ITEMIZED_TOLERANCE = Decimal("0.01")
+SEC199A_KEY = "itemized_sec199a_div"
+ITEMIZED_KEY = "itemized_deduction"
 
 
 def _ok(check_id: str, title: str) -> HealthCheckOut:
@@ -329,6 +341,70 @@ def check_snapshot(*, now: datetime, snapshot_enabled: bool) -> HealthCheckOut:
     return _ok("snapshot", "A stored snapshot is recent")
 
 
+async def check_sec199a_in_itemized(db: AsyncSession) -> HealthCheckOut:
+    """Years whose stored itemized deduction still has the §199A line inside it.
+
+    §199A moved below the line on 2026-09-09 (taxes spec 4h): the engine deducts it in its
+    own right now, and `derive_suggestions` dropped it from the itemized formula. A year
+    whose `itemized_deduction` was APPLIED from the old chip therefore carries the same
+    dollars twice — once inside the itemized total, once below the line — and understates
+    the tax silently, which is the failure this card exists to name.
+
+    The test is exact rather than heuristic: the only difference between the two formulas
+    IS the §199A term, so a stored figure equal (to the cent) to `suggestion + §199A` is a
+    figure the old chip wrote. A hand-typed total, or a year whose §199A line is zero, is
+    left alone — absent a positive §199A there is nothing double-counted to begin with.
+
+    Values are summed per key across every stored row of the year, which is what the engine
+    assembles for a single filer and for married-joint alike; only an MFS return with a
+    partner's rows on file could differ, and then only in the SALT phase-down's MAGI, which
+    cancels out of the comparison anyway (it is inside both sides).
+    """
+    check_id = "sec199a_in_itemized"
+    title = "Itemized deductions exclude the §199A line"
+    statuses = {
+        row.year: row.filing_status for row in (await db.execute(select(TaxYear))).scalars()
+    }
+    values: dict[int, dict[str, Decimal]] = {}
+    for row in (await db.execute(select(TaxInput))).scalars():
+        year_values = values.setdefault(row.year, {})
+        stored = year_values.get(row.key)
+        year_values[row.key] = row.value if stored is None else stored + row.value
+
+    years: list[int] = []
+    for year in sorted(values):
+        inputs = values[year]
+        sec199a = inputs.get(SEC199A_KEY)
+        itemized = inputs.get(ITEMIZED_KEY)
+        if sec199a is None or sec199a <= 0 or itemized is None:
+            continue
+        suggested = derive_suggestions(year, inputs, statuses.get(year, SINGLE))[ITEMIZED_KEY]
+        if abs(itemized - (suggested + sec199a)) <= LEGACY_ITEMIZED_TOLERANCE:
+            years.append(year)
+    if not years:
+        return _ok(check_id, title)
+    plural = "s" if len(years) > 1 else ""
+    return HealthCheckOut(
+        id=check_id,
+        severity="warn",
+        title=f"Itemized deduction for {', '.join(str(y) for y in years)} still includes "
+        f"the §199A line",
+        detail=(
+            f"{', '.join(str(y) for y in years)}: the stored itemized total matches the OLD "
+            "formula, which added the §199A line the engine now deducts on its own — so those "
+            f"dollars are deducted twice and the year{plural} read{'' if plural else 's'} "
+            "under-taxed. The repair rewrites the total to the current suggestion."
+        ),
+        count=len(years),
+        years=years,
+        fix=HealthFixOut(
+            kind="action",
+            action="rewrite_itemized_deduction",
+            label="Rewrite the itemized total",
+        ),
+    )
+
+
 async def run_checks(
     db: AsyncSession, *, now: datetime, environment: str, snapshot_enabled: bool
 ) -> list[HealthCheckOut]:
@@ -345,6 +421,7 @@ async def run_checks(
         check_net_pay_without_spending(coverage),
         without_spending,
         without_balances,
+        await check_sec199a_in_itemized(db),
         await check_stale_quotes(db, now=now),
         await check_identical_snapshot(db),
         await check_backup(db, now=now, environment=environment),

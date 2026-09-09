@@ -355,6 +355,59 @@ async def test_summary_names_a_missing_deduction_on_its_own_line(auth_client, de
     assert body["federal"]["taxable_income"] == "100000.00"
 
 
+async def test_health_names_the_sec199a_leftover_and_the_repair_writes_the_new_total(
+    auth_client, definitions
+):
+    """The §199A repair, end to end (taxes spec 4h + the 2026-09-09 data-health follow-on).
+
+    The 2025 column as the OLD chip left it: an itemized total that still has the 6.2220
+    §199A line inside it, beside a §199A row the engine now deducts on its own. The card
+    names the year; the repair is a plain write of the CURRENT suggestion through this
+    router's own inputs PUT, which is change-logged — so the toast can offer Undo — and the
+    check goes quiet afterwards.
+    """
+    await put_inputs(auth_client, 2025, inputs_payload(2025))
+
+    check = next(
+        c
+        for c in (await auth_client.get("/api/v1/system/health")).json()["checks"]
+        if c["id"] == "sec199a_in_itemized"
+    )
+    assert check["severity"] == "warn"
+    assert check["years"] == [2025]
+    assert check["fix"]["action"] == "rewrite_itemized_deduction"
+
+    # What the card writes: the year's own suggestion, read back from this same router.
+    items = items_by_key((await auth_client.get(f"{YEARS}/2025/inputs")).json())
+    suggested = items["itemized_deduction"]["suggested"]
+    assert (items["itemized_deduction"]["value"], suggested) == ("27213.2820", "27207.0600")
+
+    resp = await auth_client.put(
+        f"{YEARS}/2025/inputs",
+        json={"values": {"itemized_deduction": suggested}},
+        headers={"X-Change-Source": "repair"},
+    )
+    assert resp.status_code == 200, resp.text
+    # Undoable: the batch id rides the header, not the body (TaxInputsOut is the GET's
+    # shape too, and the two payloads are pinned byte-for-byte).
+    batch_id = resp.headers.get("X-Change-Batch")
+    assert batch_id
+    assert items_by_key(resp.json())["itemized_deduction"]["value"] == "27207.0600"
+
+    repaired = next(
+        c
+        for c in (await auth_client.get("/api/v1/system/health")).json()["checks"]
+        if c["id"] == "sec199a_in_itemized"
+    )
+    assert repaired["severity"] == "ok"
+
+    # And the undo really puts the old figure back.
+    undo = await auth_client.post(f"/api/v1/activity/batches/{batch_id}/undo")
+    assert undo.status_code == 200, undo.text
+    restored = items_by_key((await auth_client.get(f"{YEARS}/2025/inputs")).json())
+    assert restored["itemized_deduction"]["value"] == "27213.2820"
+
+
 async def test_put_inputs_creates_year_upserts_and_deletes(auth_client, definitions):
     created = await put_inputs(auth_client, 2027, {"annual_salary": "150000", "pay_periods": 18})
     items = items_by_key(created)
