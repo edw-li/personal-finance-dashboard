@@ -83,12 +83,15 @@ from app.schemas.taxes import (
     WhatIfDelta,
     WhatIfIn,
     WhatIfOut,
+    WithholdingJurisdictionOut,
+    WithholdingJurisdictionsOut,
     WithholdingLegOut,
     WithholdingOut,
     WithholdingPartnerLegOut,
     WithholdingVestOut,
 )
 from app.services import clock, rsu_vesting, withholding_calc
+from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     MONEY_MAX_ABS_14_4,
@@ -120,13 +123,19 @@ from app.services.tax_whatif import (
     decompose_espp,
 )
 from app.tax_keys import (
+    COUNT,
     JURISDICTIONS,
     MARRIED_JOINT,
     MARRIED_SEPARATE,
+    MAX_INPUT_COUNT,
+    MIN_INPUT_COUNT,
     PER_PERSON_KEYS,
+    PERCENT,
     SECTIONS,
     SINGLE,
     TAX_INPUT_DEFINITIONS,
+    label_for,
+    unit_for,
 )
 
 router = APIRouter(prefix="/taxes", tags=["taxes"], dependencies=[Depends(get_current_user)])
@@ -152,6 +161,14 @@ ZERO = Decimal("0")
 RATE_MAX_ABS = Decimal("1e12")
 # Spelled once: the ONE per-person key whose suggestion comes from outside tax_inputs.
 ANNUAL_SALARY_KEY = "annual_salary"
+# The household rows that are a FIGURE OF THE YEAR rather than of the filer's own
+# behaviour: the IRS and the FTB publish them, they move a little every year, and a year
+# that never had them entered silently taxed AGI in full (2026-09-09 spec 4e). Absent one,
+# last year's stored value is the honest starting point — offered as a chip labelled for
+# what it is, never applied. `derive_suggestions` has no formula for any of the three, so
+# this is an addition to the map rather than an override of one.
+CARRY_FORWARD_KEYS = ("standard_deduction", "state_standard_deduction", "state_exemption_credits")
+CARRY_FORWARD_SOURCE = "last year's"
 
 
 async def _require_year(db: AsyncSession, year: int) -> None:
@@ -197,9 +214,12 @@ class EngineFeed:
 
     @property
     def computable(self) -> bool:
-        """'single' always computes (the grandfathered path every stored year uses); a
-        married status refuses rather than walk a single filer's thresholds."""
-        return self.filing_status == SINGLE or not self.brackets_missing_for_status
+        """One rule for every status: a year with a reported missing table refuses.
+
+        WHICH tables count is `_missing_for_status`' business — a married year needs all
+        six, and a single year is judged by the calendar (2026-09-09 spec 4g).
+        """
+        return not self.brackets_missing_for_status
 
     def warning(self) -> str:
         return BRACKETS_MISSING_WARNING.format(
@@ -308,12 +328,43 @@ async def _engine_tables(
     return tables
 
 
-def _missing_for_status(tables: dict[str, list[Bracket]], filing_status: str) -> list[str]:
-    """Jurisdictions with no table under this status, in tax_keys order. Always empty for
-    'single' — see EngineFeed.computable."""
-    if filing_status == SINGLE:
+CORE_JURISDICTIONS = ("federal", "state", "capital_gains")
+
+
+def _current_tax_year() -> int:
+    """This calendar year, by the product clock.
+
+    `clock.product_today()` (the module, not the name — clock.py's own instruction), so a
+    test moves the boundary by patching `app.services.clock.product_today` the way every
+    other dated decision in this app is moved. THE only place a tax year meets "now".
+    """
+    return clock.product_today().year
+
+
+def _missing_for_status(
+    tables: dict[str, list[Bracket]], filing_status: str, year: int
+) -> list[str]:
+    """Jurisdictions with no table under this status, in tax_keys order — the list that
+    makes a year refuse to compute (EngineFeed.computable).
+
+    A married status needs all six: the single-filer tables are right there and walking a
+    couple's income over them would produce a confident, wrong number.
+
+    'single' used to return [] unconditionally, so a single year NEVER refused (spec 4g).
+    That is right for imported history — a settled year whose payroll table was never
+    typed in still has real, checked figures — and wrong for the year being lived in: a
+    brand-new 2026 with no federal table reported a federal tax of 0.00 with a straight
+    face, next to a warning in the muted list. So a single year BEFORE this calendar year
+    is grandfathered, and the current or a future one is judged on the three CORE income
+    tables. Missing only a payroll table there still computes: that jurisdiction reports 0
+    with its own named warning, which is a gap the user can see rather than a wrong total.
+    """
+    missing = [name for name in JURISDICTIONS if not tables.get(name)]
+    if filing_status != SINGLE:
+        return missing
+    if year < _current_tax_year():
         return []
-    return [name for name in JURISDICTIONS if not tables.get(name)]
+    return missing if any(name in CORE_JURISDICTIONS for name in missing) else []
 
 
 async def _engine_feed(
@@ -334,7 +385,7 @@ async def _engine_feed(
         inputs=_assemble_inputs(rows, columns),
         earners=_assemble_earners(rows, columns),
         tables=tables,
-        brackets_missing_for_status=_missing_for_status(tables, filing_status),
+        brackets_missing_for_status=_missing_for_status(tables, filing_status, year),
         rows=rows,
     )
 
@@ -371,6 +422,26 @@ async def _profile_salaries(
                 SUGGESTION_QUANTUM, rounding=ROUND_HALF_UP
             )
     return salaries
+
+
+async def _carried_forward(
+    db: AsyncSession, year: int, household: dict[str, Decimal]
+) -> dict[str, Decimal]:
+    """Last year's value for each CARRY_FORWARD_KEYS row THIS year has not stored.
+
+    Absent, strictly: a key the user has already answered — even with a zero — is never
+    second-guessed by a chip. All three are household keys, so the prior year holds exactly
+    one row each and no person column is involved.
+    """
+    absent = [key for key in CARRY_FORWARD_KEYS if key not in household]
+    if not absent:
+        return {}
+    rows = (
+        await db.execute(
+            select(TaxInput).where(TaxInput.year == year - 1, TaxInput.key.in_(absent))
+        )
+    ).scalars()
+    return {row.key: row.value for row in rows}
 
 
 async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
@@ -411,6 +482,12 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
     # gross_paycheck still divides the STORED annual_salary.
     for column, salary in (await _profile_salaries(db, columns, clock.product_today())).items():
         suggestions[column][ANNUAL_SALARY_KEY] = salary
+    # Household keys, so the same value in every column (a household row renders from the
+    # first one) — and the only suggestions on this payload that are not a sheet formula,
+    # which is what `suggestion_source` tells the chip.
+    carried = await _carried_forward(db, year, household)
+    for values in suggestions.values():
+        values.update(carried)
     by_section: dict[str, list[TaxInputItemOut]] = {}
     for definition in sorted(definitions, key=lambda d: (d.sort_order, d.key)):
         item_columns = columns if definition.is_per_person else [None]
@@ -419,9 +496,15 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
             by_section.setdefault(definition.section, []).append(
                 TaxInputItemOut(
                     key=definition.key,
-                    label=definition.label,
+                    # From tax_keys when it knows the key: the seed is insert-only, so a row
+                    # written before a relabel still carries the old text.
+                    label=label_for(definition.key, definition.label),
                     sort_order=definition.sort_order,
                     is_derived=definition.is_derived,
+                    # From tax_keys, not from the row: the unit is a property of the KEY,
+                    # so an older database that never migrated one still renders the right
+                    # box (see tax_keys.TAX_INPUT_UNITS).
+                    unit=unit_for(definition.key),
                     is_per_person=definition.is_per_person,
                     person_id=column if definition.is_per_person else None,
                     value=source.get(definition.key),
@@ -431,6 +514,7 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
                     suggested=suggestions[column if definition.is_per_person else columns[0]].get(
                         definition.key
                     ),
+                    suggestion_source=(CARRY_FORWARD_SOURCE if definition.key in carried else None),
                 )
             )
     # tax_keys order first; a section seeded later still renders (appended, name order).
@@ -584,6 +668,29 @@ async def _require_known_input_keys(db: AsyncSession, keys: Iterable[str]) -> No
         raise HTTPException(status_code=422, detail=f"unknown input key(s): {unknown}")
 
 
+COUNT_MESSAGE = f"must be a whole number of checks between {MIN_INPUT_COUNT} and {MAX_INPUT_COUNT}"
+PERCENT_MESSAGE = "must be a fraction between 0 and 1 (the form enters it as a percent)"
+
+
+def _check_input_unit(key: str, value: Decimal) -> None:
+    """The per-UNIT fence (2026-09-09 spec §2), over the already-quantized value.
+
+    Money keys keep the column bound alone — every figure on a tax sheet is money and the
+    engine has no opinion about its size. The two non-money keys DO have one: `pay_periods`
+    counts checks received so far this year (a whole number; 53 is the most a weekly
+    payroll can pay), and a percent key stores the FRACTION the engine multiplies by, so a
+    stored 98 would have multiplied treasury dividends by ninety-eight. Same `values.{key}`
+    vocabulary as the quantizer above, so a rejected input reads the same wherever it
+    arrived.
+    """
+    unit = unit_for(key)
+    if unit == COUNT:
+        if value != value.to_integral_value() or not (MIN_INPUT_COUNT <= value <= MAX_INPUT_COUNT):
+            raise HTTPException(status_code=422, detail=f"values.{key} {COUNT_MESSAGE}")
+    elif unit == PERCENT and not (ZERO <= value <= Decimal("1")):
+        raise HTTPException(status_code=422, detail=f"values.{key} {PERCENT_MESSAGE}")
+
+
 def _validated_input_value(key: str, value: Decimal | None) -> Decimal | None:
     """One input value at the tax_inputs column scale, Numeric(14,4); null stays null.
 
@@ -596,12 +703,18 @@ def _validated_input_value(key: str, value: Decimal | None) -> Decimal | None:
     """
     if value is None:
         return None
-    return quantize_price(value, f"values.{key}", max_abs=MONEY_MAX_ABS_14_4) + ZERO
+    quantized = quantize_price(value, f"values.{key}", max_abs=MONEY_MAX_ABS_14_4) + ZERO
+    _check_input_unit(key, quantized)
+    return quantized
 
 
 @router.put("/years/{year}/inputs", response_model=TaxInputsOut)
 async def put_inputs(
-    year: YearPath, body: TaxInputsIn, db: AsyncSession = Depends(get_db)
+    year: YearPath,
+    body: TaxInputsIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> TaxInputsOut:
     """Bulk upsert of the (key, person) slots in the body; a null value unsets one slot.
 
@@ -609,6 +722,12 @@ async def put_inputs(
     years it covers, so edits made here to an imported year are clobbered by the next
     re-import — for the PRIMARY person's sheet-tracked keys only, since the importer's
     sweeps are scoped to the sheet's own vocabulary and to that one person.
+
+    CHANGE-LOGGED since 2026-09-09: the Data-health card repairs a year's itemized total
+    through this route (the §199A leftover, taxes spec 4h), and a repair that rewrites
+    money has to be undoable like the zero-month delete beside it. The batch id rides the
+    `X-Change-Batch` header rather than the body — `TaxInputsOut` is the GET's shape too,
+    and the two payloads are pinned byte-for-byte.
     """
     submitted = [TaxInputRowIn(key=key, value=value) for key, value in body.values.items()]
     submitted += list(body.rows)
@@ -659,6 +778,7 @@ async def put_inputs(
         (row.key, row.person_id): row
         for row in (await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars()
     }
+    changed = 0
     for (key, owner), value in resolved.items():
         row = existing.get((key, owner))
         if row is None and owner is not None and owner == null_row_column:
@@ -676,13 +796,25 @@ async def put_inputs(
             row = existing.pop((key, None), None)
         if value is None:
             if row is not None:
+                batch.record_delete(row)  # the image is needed BEFORE the delete
                 await db.delete(row)  # null means "unset this line", not "store 0"
+                changed += 1
         elif row is None:
-            db.add(TaxInput(year=year, key=key, person_id=owner, value=value))
+            fresh = TaxInput(year=year, key=key, person_id=owner, value=value)
+            db.add(fresh)
+            await db.flush()  # the image needs the generated id
+            batch.record_insert(fresh)
+            changed += 1
         else:
+            before = row_image(row)
             row.person_id = owner
             row.value = value
-    await db.commit()
+            # An unchanged pair records nothing (ChangeBatch.record's rule), so a re-save of
+            # the same figures logs an empty batch and offers no Undo.
+            batch.record_update(row, before)
+            changed += 1
+    batch.label = f"Saved {year} tax inputs — {changed} slot{'' if changed == 1 else 's'}"
+    response.headers.update(batch_header(await batch.commit()))
     return await _inputs_payload(db, year)
 
 
@@ -1039,6 +1171,21 @@ FICA_JURISDICTIONS = ("medicare", "social_security", "disability")
 WAGE_KEYS = ("latest_w2_income", "other_w2_income")
 PARTNER_FED_WITHHOLDING_KEY = "w2_fed_withholding"
 PARTNER_STATE_WITHHOLDING_KEY = "w2_state_withholding"
+# The bonus leg (2026-09-09 audit item 4c): the year's bonus wages, and the tracker-only
+# actual that replaces the modelled 22% / 6.6% / marginal FICA when it is entered. Both are
+# read off `feed.inputs` — the SAME assembled dict the liability was computed on — so a
+# per-person row belonging to somebody this year's return does not cover is already gone.
+# Both are the PRIMARY's alone. The service stacks the bonus leg's marginal FICA on the
+# primary's wage base and prices it at their supplemental tier, and in the partner's ENTERED
+# mode their withholding is already counted from their own two tracker keys — so a partner's
+# bonus summed in here would be taxed on the wrong wage base and then counted twice.
+BONUS_KEY = "w2_bonuses"
+BONUS_WITHHOLDING_KEY = "w2_bonus_withholding"
+# California's own gate (R&TC 19136 / FTB 5805): a taxpayer whose CURRENT-year California
+# AGI reaches $1,000,000 cannot use the prior-year leg at all and must reach 90% of this
+# year's tax. Federal has no such ceiling — which is exactly why the two harbors are
+# computed separately rather than one figure being called "the safe harbor".
+CA_HARBOR_AGI_CEILING = Decimal("1000000")
 
 
 def _bucket_input_rows(rows: Iterable[TaxInput]) -> dict[int | None, dict[str, Decimal]]:
@@ -1055,6 +1202,70 @@ def _bucket_input_rows(rows: Iterable[TaxInput]) -> dict[int | None, dict[str, D
 
 def _wage_base(values: dict[str, Decimal]) -> Decimal:
     return sum((values.get(key, ZERO) for key in WAGE_KEYS), ZERO)
+
+
+def _primary_share(
+    inputs: dict[str, Decimal], partner_values: dict[str, Decimal], key: str
+) -> Decimal | None:
+    """The PRIMARY's own value of a per-person key: the return's total minus the partner's.
+
+    By SUBTRACTION, like `primary_wage_base` and for the same reason — a household-owned
+    (NULL) row from before the person migration, or a stray third bucket, lands on the
+    primary's side rather than disappearing, and the two halves always add back to the
+    figure the engine taxed.
+
+    None means "the primary has nothing stored for this key": either nobody does, or every
+    stored dollar of it is the partner's. Both are silences, and a computed 0 would read as
+    an entered zero — which for `w2_bonus_withholding` would replace the modelled leg with
+    a confident "nothing was withheld".
+    """
+    total = inputs.get(key)
+    if total is None:
+        return None
+    partner = partner_values.get(key)
+    if partner is not None and total == partner:
+        return None
+    return total - (partner or ZERO)
+
+
+def _harbor(
+    prior: dict | None, current_threshold: Decimal | None, projected: Decimal
+) -> SafeHarborOut | None:
+    """The LESSER of the two statutory legs, judged against `projected` withholding.
+
+    One helper for four harbors — the combined one and the two per-jurisdiction ones — so
+    the lesser-of rule, the "either leg stands alone" rule and the `met` comparison cannot
+    drift between the card's headline and its tiles. Neither leg -> no harbor at all.
+    """
+    legs = [leg for leg in ((prior or {}).get("threshold"), current_threshold) if leg is not None]
+    if not legs:
+        return None
+    effective = min(legs)
+    return SafeHarborOut(
+        **(prior or {}),
+        current_year_threshold=current_threshold,
+        effective_threshold=effective,
+        # Judged on the DISPLAYED figures (paycheck.py's negative-net posture), so the badge
+        # can never contradict the numbers rendered next to it.
+        met=projected >= effective,
+    )
+
+
+def _prior_leg(
+    prior_leg: dict | None, tax: Decimal | None, multiplier: Decimal | None
+) -> dict | None:
+    """The combined prior-year leg re-based on ONE jurisdiction's prior tax.
+
+    The reference year, its AGI, its status and the multiplier the statutory gate selected
+    are the RETURN's, not the jurisdiction's — one return, one gate — so only the tax and
+    the threshold move. A jurisdiction whose prior tax is zero or negative has no leg, the
+    same vacuous-comparison rule the combined figure applies, and silently: the combined
+    warning already named the year, and "your prior California tax was zero" is a fact
+    about the reference return the card can show rather than complain about.
+    """
+    if prior_leg is None or tax is None or multiplier is None or tax <= ZERO:
+        return None
+    return {**prior_leg, "prior_total_tax": tax, "threshold": _money(tax * multiplier)}
 
 
 async def withholding_estimate(db: AsyncSession, year: int, today: date) -> WithholdingOut:
@@ -1216,15 +1427,21 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         # Non-empty flips the partner's leg from ENTERED to SIMULATED, and the service
         # words the ignoring of the tracker rows above.
         partner_profiles=partner_profiles,
+        bonuses=_primary_share(feed.inputs, partner_values, BONUS_KEY) or ZERO,
+        # None really is "no row stored on the primary's side" — an entered 0 is a real
+        # answer (a bonus nobody withheld on) and must not be replaced by the model.
+        bonus_withholding=_primary_share(feed.inputs, partner_values, BONUS_WITHHOLDING_KEY),
     )
     warnings.extend(estimated.warnings)
 
-    # Salary withholding + vest supplemental + vest marginal FICA, plus the partner's ENTERED
-    # withholding. Salary-side FICA is NOT a term: the user's all-in withholding_pct already
-    # carries it (withholding_calc's note). The partner's figure counts once in EACH leg on
-    # purpose — their withholding inputs are a running snapshot of the same kind as their W-2
-    # wage inputs, which is what the liability above is computed on, so both legs describe the
-    # same household. The three partner_* fields below are what make that visible.
+    # Salary withholding + vest supplemental + vest marginal FICA + the BONUS leg (2026-09-09
+    # audit item 4c: `w2_bonuses` at 22% federal + 6.6% CA + marginal FICA, or the entered
+    # actual), plus the partner's ENTERED withholding. Salary-side FICA is NOT a term: the
+    # user's all-in withholding_pct already carries it (withholding_calc's note). The
+    # partner's figure counts once in EACH leg on purpose — their withholding inputs are a
+    # running snapshot of the same kind as their W-2 wage inputs, which is what the liability
+    # above is computed on, so both legs describe the same household. The three partner_*
+    # fields below are what make that visible.
     #
     # The two partner terms are MUTUALLY EXCLUSIVE by construction — the service zeroes
     # whichever mode did not win — so both are added unconditionally rather than branched
@@ -1233,6 +1450,7 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         estimated.salary_ytd
         + estimated.vest_supplemental_ytd
         + estimated.vest_fica_ytd
+        + estimated.bonus_withheld_ytd
         + estimated.partner_withheld_total
         + estimated.partner_salary_ytd
     )
@@ -1240,6 +1458,7 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         estimated.salary_projected
         + estimated.vest_supplemental_projected
         + estimated.vest_fica_projected
+        + estimated.bonus_withheld_projected
         + estimated.partner_withheld_total
         + estimated.partner_salary_projected
     )
@@ -1256,6 +1475,8 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         else _money(liability_total * SAFE_HARBOR_CURRENT_MULTIPLIER)
     )
     prior_leg: dict | None = None
+    prior_breakdown: TaxBreakdown | None = None
+    prior_multiplier: Decimal | None = None
     if await db.get(TaxYear, year - 1) is not None:
         prior_feed = await _engine_feed(db, year - 1)
         if not prior_feed.computable:
@@ -1292,20 +1513,118 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
                     "threshold": _money(prior_total * multiplier),
                     "prior_filing_status": prior_feed.filing_status,
                 }
+                # Kept for the per-jurisdiction harbors below: the same reference return,
+                # read one jurisdiction at a time.
+                prior_breakdown = prior
+                prior_multiplier = multiplier
 
-    legs = [
-        leg for leg in ((prior_leg or {}).get("threshold"), current_threshold) if leg is not None
-    ]
-    safe_harbor = None
-    if legs:
-        effective = min(legs)
-        safe_harbor = SafeHarborOut(
-            **(prior_leg or {}),
-            current_year_threshold=current_threshold,
-            effective_threshold=effective,
-            # Judged on the DISPLAYED figures (paycheck.py's negative-net posture), so
-            # the badge can never contradict the numbers rendered next to it.
-            met=total_projected >= effective,
+    safe_harbor = _harbor(prior_leg, current_threshold, total_projected)
+
+    # --- the per-jurisdiction split (2026-09-09 audit item 3). Present exactly when the
+    # service could build the legs: every profile pricing a check carries both paystub
+    # rates. Liabilities are the ENGINE's own lines — federal carries the preferential-rate
+    # capital-gains tax and the NIIT, because both are federal income tax paid on the same
+    # return — and the withheld legs are the service's, so the tiles are two halves of the
+    # figures already on the card rather than a second opinion about either.
+    jurisdictions = None
+    legs = estimated.jurisdictions
+    if legs is not None:
+        remaining = estimated.checks_total - estimated.checks_elapsed
+
+        def jurisdiction(
+            liability_tax: Decimal | None,
+            withheld_ytd: Decimal,
+            withheld_projected: Decimal,
+            harbor: SafeHarborOut | None,
+            *,
+            remedy: bool = True,
+        ) -> WithholdingJurisdictionOut:
+            balance = None if liability_tax is None else _money(liability_tax - withheld_projected)
+            return WithholdingJurisdictionOut(
+                liability=liability_tax,
+                withheld_ytd=withheld_ytd,
+                withheld_projected=withheld_projected,
+                balance=balance,
+                # A shortfall spread over the checks still to come — the shape a W-4 line
+                # 4(c) or a DE 4 extra-withholding amount actually takes. Nothing to aim at
+                # once the year's checks are spent, and nothing to aim on the payroll leg:
+                # FICA is not a line anybody can add to.
+                remedy_per_check=(
+                    None
+                    if not remedy or balance is None or remaining <= 0
+                    else _money(max(balance, ZERO) / remaining)
+                ),
+                safe_harbor=harbor,
+            )
+
+        federal_tax = (
+            None
+            if liability is None
+            else _money(liability.federal.tax + liability.capital_gains.tax + liability.niit.tax)
+        )
+        state_tax = None if liability is None else _money(liability.state.tax)
+        # The REMAINDER, not medicare + social security + SDI rounded a fourth time: the
+        # three cent-quantized liabilities have to add back to the cent-quantized total the
+        # card shows, and three independent roundings do not (the withheld side's payroll
+        # leg is a remainder for exactly the same reason). It IS that sum, to within the
+        # rounding this removes.
+        payroll_tax = (
+            None
+            if liability is None or liability_total is None
+            else liability_total - federal_tax - state_tax
+        )
+        federal_current = (
+            None if federal_tax is None else _money(federal_tax * SAFE_HARBOR_CURRENT_MULTIPLIER)
+        )
+        state_current = (
+            None if state_tax is None else _money(state_tax * SAFE_HARBOR_CURRENT_MULTIPLIER)
+        )
+        prior_federal = (
+            None
+            if prior_breakdown is None
+            else _money(
+                prior_breakdown.federal.tax
+                + prior_breakdown.capital_gains.tax
+                + prior_breakdown.niit.tax
+            )
+        )
+        prior_state = None if prior_breakdown is None else _money(prior_breakdown.state.tax)
+        # California above $1M of CURRENT-year state AGI has no prior-year leg at all.
+        ca_capped = (
+            liability is not None
+            and liability.state.agi is not None
+            and (liability.state.agi >= CA_HARBOR_AGI_CEILING)
+        )
+        jurisdictions = WithholdingJurisdictionsOut(
+            federal=jurisdiction(
+                federal_tax,
+                legs.federal_ytd,
+                legs.federal_projected,
+                _harbor(
+                    _prior_leg(prior_leg, prior_federal, prior_multiplier),
+                    federal_current,
+                    legs.federal_projected,
+                ),
+            ),
+            state=jurisdiction(
+                state_tax,
+                legs.state_ytd,
+                legs.state_projected,
+                _harbor(
+                    None if ca_capped else _prior_leg(prior_leg, prior_state, prior_multiplier),
+                    state_current,
+                    legs.state_projected,
+                ),
+            ),
+            payroll=jurisdiction(
+                payroll_tax,
+                legs.payroll_ytd,
+                legs.payroll_projected,
+                # FICA has no estimated-payment harbor: it is withheld by an employer at a
+                # statutory rate, and there is no quarterly payment to safe-harbor against.
+                None,
+                remedy=False,
+            ),
         )
 
     return WithholdingOut(
@@ -1349,6 +1668,7 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         ),
         additional_medicare_gap=_money(estimated.additional_medicare_gap),
         safe_harbor=safe_harbor,
+        jurisdictions=jurisdictions,
         warnings=warnings,
     )
 

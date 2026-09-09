@@ -41,13 +41,19 @@ const profile: PaycheckProfileOut = {
   hsa_employer_annual: '2000.00',
   hsa_employer_per_dependent: '500.00',
   hsa_dependents: 0,
+  fed_withholding_pct: null,
+  state_withholding_pct: null,
   notes: null,
 }
 
+// Sixteen of the year's 24 checks are behind this fixture, so the two cap targets are the
+// server's mid-year answers — deliberately NOT limit/salary or limit/periods, which is the
+// arithmetic the chips used to do for themselves (2026-09-09 audit item 5).
+const walked = { remaining_checks: 8, remaining_gross: '33333.34' }
 const pace = (over: Partial<PaceItem>[] = []): PaceItem[] => [
-  { key: 'limit_401k_elective', label: '401(k) elective deferral', annualized: '13000.00', so_far: '8666.67', limit: '24500.00', ratio: '0.5306', tone: 'ok' },
-  { key: 'limit_415c_total', label: '415(c) total additions (excludes employer match)', annualized: '16000.00', so_far: '10666.67', limit: null, ratio: null, tone: 'ok' },
-  { key: 'limit_hsa_self', label: 'HSA — self-only', annualized: '2400.00', so_far: '1600.00', limit: '4300.00', ratio: '0.5581', tone: 'ok' },
+  { key: 'limit_401k_elective', label: '401(k) elective deferral', annualized: '13000.00', so_far: '8666.67', limit: '24500.00', ratio: '0.5306', tone: 'ok', ...walked, to_cap_rate: '0.475000000' },
+  { key: 'limit_415c_total', label: '415(c) total additions (excludes employer match)', annualized: '16000.00', so_far: '10666.67', limit: null, ratio: null, tone: 'ok', ...walked },
+  { key: 'limit_hsa_self', label: 'HSA — self-only', annualized: '2400.00', so_far: '1600.00', limit: '4300.00', ratio: '0.5581', tone: 'ok', ...walked, to_cap_per_check: '337.50' },
   { key: 'limit_espp_423', label: 'ESPP §423 annual', annualized: '11000.00', so_far: '5500.00', limit: '25000.00', ratio: '0.4400', tone: 'ok' },
   ...(over as PaceItem[]),
 ]
@@ -166,14 +172,16 @@ describe('TryItPanel', () => {
     }
   })
 
-  it('presets are sized from the pace rows and set knobs immediately; a missing limit disables its chip', async () => {
+  it('the cap chips apply the server’s targets; a missing limit or an unwalked payload disables one', async () => {
     mount()
     fireEvent.click(toggle())
     await waitFor(() => expect(previewPaycheck).toHaveBeenCalledTimes(1))
+    // Verbatim off the pace row — 24,500 / 100,000 and 4,300 / 24 would have been 0.245 and
+    // 179.16, the year-at-this-rate figures that land the strip beside the chip on "over".
     fireEvent.click(screen.getByRole('button', { name: 'Max 401(k)' }))
-    expect(url()).toBe('/paycheck?whatif=trad_401k_pct%3A0.245')
+    expect(url()).toBe('/paycheck?whatif=trad_401k_pct%3A0.475') // the Roth subtraction trims
     fireEvent.click(screen.getByRole('button', { name: 'Max HSA' }))
-    expect(url()).toBe('/paycheck?whatif=hsa_per_check%3A179.16&whatif=trad_401k_pct%3A0.245')
+    expect(url()).toBe('/paycheck?whatif=hsa_per_check%3A337.50&whatif=trad_401k_pct%3A0.475')
     fireEvent.click(screen.getByRole('button', { name: 'Max ESPP' }))
     expect(url()).toContain('whatif=espp_pct%3A0.15')
     fireEvent.click(screen.getByRole('button', { name: 'Stop ESPP' }))
@@ -190,6 +198,26 @@ describe('TryItPanel', () => {
     const chip = screen.getByRole('button', { name: 'Max ESPP' }) as HTMLButtonElement
     expect(chip.disabled).toBe(true)
     expect(chip.title).toContain("Enter this year's ESPP §423 limit in Settings › Limits")
+    cleanup()
+    // A payload nobody walked — a snapshot warm from before the server carried these figures.
+    // The chips wait for the real answer rather than dividing a limit by a salary again.
+    const unwalked = pace().map((row) => ({
+      ...row,
+      remaining_checks: null,
+      to_cap_rate: null,
+      to_cap_per_check: null,
+    }))
+    render(
+      <MemoryRouter initialEntries={['/paycheck']}>
+        <TryItPanel profileId={null} personId={null} breakdown={{ ...breakdown, pace: unwalked }} onApply={vi.fn()} />
+      </MemoryRouter>,
+    )
+    fireEvent.click(toggle())
+    for (const name of ['Max 401(k)', 'Max HSA']) {
+      const waiting = screen.getByRole('button', { name }) as HTMLButtonElement
+      expect(waiting.disabled).toBe(true)
+      expect(waiting.title).toBe("This year's paydays are still loading")
+    }
   })
 
   it('the unit toggle switches the compare to the monthly and annual blocks', async () => {

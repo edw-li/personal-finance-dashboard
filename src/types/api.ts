@@ -98,6 +98,11 @@ export interface NetWorthSummary {
   groups: GroupSummary[]
   /** The latest snapshot split by owner instead of by group; empty with no snapshots. */
   owner_totals: OwnerTotal[]
+  /** Which grain `mom_delta`/`mom_pct` compare (2026-09-09 audit item 23) — the tiles say
+   *  "vs prior month" or "vs prior quarter" from this and never from their own guess.
+   *  OPTIONAL for the reason `MoneyFlowTaxes.niit` documents: the live server always sends
+   *  it, and a fixture written before this program keeps compiling. Absent reads as month. */
+  period?: 'month' | 'quarter'
 }
 
 /** Which months each hand-entered feed covers — ascending first-of-month ISO dates
@@ -689,11 +694,20 @@ export interface TaxPersonOut {
   name: string
 }
 
+/**
+ * Which BOX a tax input is entered through (the server's `tax_keys.unit_for`). Money is the
+ * default and all but two of the rows; a count is a whole number of paychecks; a percent shows
+ * 97.53% over a stored 0.9753 — the wire is always the fraction the engine multiplies by.
+ */
+export type TaxInputUnit = 'money' | 'count' | 'percent'
+
 export interface TaxInputItemOut {
   key: string
   label: string
   sort_order: number
   is_derived: boolean
+  // The entry unit for this key. Stamped on every item by the router, so it is never absent.
+  unit: TaxInputUnit
   // Definition flag (`tax_input_definitions.is_per_person`): this key is stored once per
   // PERSON — salary, the W-2 family, 401k, HSA, pre-tax deductions and the two tracker-only
   // withholding keys — so the payload repeats the item once per person column. Household
@@ -707,6 +721,10 @@ export interface TaxInputItemOut {
   // own values. Advisory: the UI offers a chip, nothing is ever applied server-side.
   // Present-ness (not is_derived) is what a chip renders on.
   suggested: string | null
+  // Where `suggested` came from when it is NOT this key's sheet formula — "last year's" for
+  // the deduction rows carried forward from the prior year. Null means the formula, and the
+  // chip keeps its default "suggested" wording.
+  suggestion_source: string | null
 }
 
 export interface TaxInputSectionOut {
@@ -1029,18 +1047,44 @@ export interface WithholdingOut {
   // Null only when NEITHER statutory leg exists (no computable prior year AND the engine
   // refused this year). The prior-leg fields are null together when that leg is missing
   // (first year, refused prior year, or a prior total <= 0 — the last two warn).
-  safe_harbor: {
-    prior_year: number | null
-    prior_total_tax: string | null
-    prior_agi: string | null // the AGI the statutory gate was tested against
-    multiplier: string | null // 1.10 above the IRC 6654(d)(1)(C) AGI gate, 1.00 at/below
-    threshold: string | null // prior_total_tax x multiplier
-    prior_filing_status: string | null
-    current_year_threshold: string | null // 90% of this year's liability; null on refusal
-    effective_threshold: string // min of the legs that exist — `met` is judged on it
-    met: boolean // total.projected >= effective_threshold
+  safe_harbor: WithholdingSafeHarbor | null
+  // The per-jurisdiction split (2026-09-09 audit item 3). NULL when the profile in force on
+  // some check of the year's grid carries no federal or no state rate — half a year's
+  // federal figure is not a federal figure. Every field above keeps its combined meaning
+  // either way.
+  jurisdictions: {
+    federal: WithholdingJurisdiction // income tax incl. capital gains and NIIT
+    state: WithholdingJurisdiction // California
+    payroll: WithholdingJurisdiction // medicare + social security + SDI, informational
   } | null
   warnings: string[]
+}
+
+/** The statutory harbor: the LESSER of the two legs, and which of them exist. */
+export interface WithholdingSafeHarbor {
+  prior_year: number | null
+  prior_total_tax: string | null
+  prior_agi: string | null // the AGI the statutory gate was tested against
+  multiplier: string | null // 1.10 above the IRC 6654(d)(1)(C) AGI gate, 1.00 at/below
+  threshold: string | null // prior_total_tax x multiplier
+  prior_filing_status: string | null
+  current_year_threshold: string | null // 90% of this year's liability; null on refusal
+  effective_threshold: string // min of the legs that exist — `met` is judged on it
+  met: boolean // projected withholding >= effective_threshold
+}
+
+/** One jurisdiction of the split: what it will owe, what will be withheld, what to do. */
+export interface WithholdingJurisdiction {
+  // Null together, exactly when the engine refused the year — the withheld figures are
+  // still real, but there is nothing honest to compare them against.
+  liability: string | null
+  withheld_ytd: string
+  withheld_projected: string
+  balance: string | null // liability - withheld_projected; positive = will owe
+  // max(balance, 0) over the checks still to come — "0.00" on a refund. NULL on the PAYROLL
+  // leg always (FICA is not a W-4 line) and once the year's checks are spent.
+  remedy_per_check: string | null
+  safe_harbor: WithholdingSafeHarbor | null // null on payroll: FICA has no harbor
 }
 
 // --- espp ---
@@ -1294,6 +1338,11 @@ export interface PaycheckProfileOut {
   hsa_employer_annual: string
   hsa_employer_per_dependent: string
   hsa_dependents: number
+  // The all-in `withholding_pct` split by jurisdiction (2026-09-09 audit item 3), each a 9dp
+  // fraction of the same taxable base. NULL means "no figure from a paystub", NEVER 0%: the
+  // Taxes card splits its balance only when BOTH are entered.
+  fed_withholding_pct: string | null
+  state_withholding_pct: string | null
   notes: string | null
   /** In force today (spec §2.3), the server's one rule. Absent on a pre-batch snapshot. */
   in_force?: boolean
@@ -1336,6 +1385,11 @@ export interface PaycheckProfileCreate {
   hsa_employer_annual?: string
   hsa_employer_per_dependent?: string
   hsa_dependents?: number
+  // The withholding split (2026-09-09 audit item 3). These two are the only stored columns
+  // besides `notes` whose explicit NULL really clears — a blank box means "no paystub
+  // figure", and the form sends the whole row on both verbs.
+  fed_withholding_pct?: string | null
+  state_withholding_pct?: string | null
   notes?: string | null
 }
 
@@ -2176,6 +2230,19 @@ export interface PaceItem {
    *  Null/absent on a row the server did not walk — a pre-batch snapshot, or a pure caller —
    *  and the panel then draws exactly the one-figure meter it always drew. */
   so_far?: string | null
+  /** The window's TAIL (2026-09-09 audit item 5): the paychecks left this year and the gross
+   *  they pay. On every row the server walked, because it is one walk. */
+  remaining_checks?: number | null
+  remaining_gross?: string | null
+  /** 401(k) elective row: the TOTAL rate (traditional + Roth, a 9dp fraction) over those
+   *  remaining checks that lands exactly on the cap, given what has already gone in. 0 means
+   *  there is no room left; null means the question has no answer here — nothing walked, no
+   *  cap entered, or no paydays left. A client may SUBTRACT its own Roth rate from this; no
+   *  other arithmetic on a limit belongs on this side of the wire. */
+  to_cap_rate?: string | null
+  /** The HSA row's twin, in per-check dollars: the EMPLOYEE amount that lands on the cap,
+   *  with the employer's whole-year deposit already reserved out of it. */
+  to_cap_per_check?: string | null
 }
 
 // --- assistant (2026-09-01 spec §3–§5) ---
@@ -2223,7 +2290,9 @@ export interface AssistantModelsOut {
 export interface AssistantContextIn {
   route: string
   search: Record<string, string>
-  view: Record<string, string | number | null>
+  // A list value is a repeated url param (`?whatif=a&whatif=b`), which `search` cannot
+  // carry — URLSearchParams keeps only the last (2026-09-09 audit item 8).
+  view: Record<string, string | number | string[] | null>
 }
 
 export interface AssistantPreviewSection {
@@ -2334,7 +2403,8 @@ export interface HealthFix {
   kind: 'link' | 'action'
   label: string
   to?: string | null
-  /** 'delete_spending_month' (one per month in the check's `months`) | 'snapshot_now'. */
+  /** 'delete_spending_month' (one per month in the check's `months`) | 'snapshot_now'
+   *  | 'rewrite_itemized_deduction' (one per year in the check's `years`). */
   action?: string | null
 }
 
@@ -2345,6 +2415,8 @@ export interface HealthCheck {
   detail: string
   count: number
   months: string[]
+  /** The TAX YEARS a check is about, where it is about years rather than months. */
+  years: number[]
   fix: HealthFix | null
 }
 

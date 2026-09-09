@@ -3,6 +3,7 @@ import type { RewardCategoryOut, SpendingMatrix } from '../../types/api'
 import {
   autoWeightSharers,
   effectiveRate,
+  enteredMonthCounts,
   householdAdvantage,
   optimize,
   ownerMatches,
@@ -216,10 +217,19 @@ describe('weights', () => {
     total_budget: [],
   } as unknown as SpendingMatrix
 
-  it('annualizes a short window and skips all-null series', () => {
+  it('annualizes over the ENTERED months and skips all-null series', () => {
+    // February is null — nobody typed it. Counting it as a month divided $300 by three and
+    // understated every weight on the page (2026-09-09 audit item 6); a category with no
+    // entered month at all is still absent rather than $0.
     const suggested = suggestedAnnualSpend(matrix)
-    expect(suggested.get(7)).toBeCloseTo((300 * 12) / 3)
+    expect(suggested.get(7)).toBeCloseTo((300 * 12) / 2)
     expect(suggested.has(8)).toBe(false)
+  })
+
+  it('enteredMonthCounts is that denominator, which the weight caption names', () => {
+    const counts = enteredMonthCounts(matrix)
+    expect(counts.get(7)).toBe(2)
+    expect(counts.has(8)).toBe(false)
   })
 
   it('resolveWeight: override beats suggestion beats null', () => {

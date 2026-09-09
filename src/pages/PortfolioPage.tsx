@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
-import { ApiError } from '../api/client'
+import { ApiError, describeError } from '../api/client'
+import { fetchHousehold } from '../api/household'
 import {
   fetchAllocation,
   fetchDividendEvents,
   fetchDividends,
   fetchHistory,
   fetchHoldings,
+  fetchPortfolioAccounts,
   fetchRealized,
   fetchSecurities,
   fetchTransactions,
@@ -44,6 +46,7 @@ import type {
   DividendEventOut,
   DividendOut,
   HoldingsResponse,
+  PortfolioAccountOut,
   PortfolioHistory,
   RealizedResponse,
   RefreshStatus,
@@ -74,6 +77,11 @@ function portfolioKey(owner: OwnerScope): string {
 interface PortfolioSnapshot {
   holdings: HoldingsResponse
   securities: SecurityOut[]
+  // The account roster and the name a NEW account would be tagged with (2026-09-09 audit
+  // item 27) — the two ledgers' Account boxes complete from the first and warn with the
+  // second. Null is "unknown", which is a different thing from an empty household.
+  accounts: PortfolioAccountOut[] | null
+  primaryName: string | null
   transactions: TransactionOut[]
   dividends: DividendOut[]
   dividendEvents: DividendEventOut[]
@@ -95,6 +103,10 @@ export default function PortfolioPage() {
   const cached = getSnapshot<PortfolioSnapshot>(portfolioKey(scope.owner))
   const [holdings, setHoldings] = useState<HoldingsResponse | null>(cached?.holdings ?? null)
   const [securities, setSecurities] = useState<SecurityOut[]>(cached?.securities ?? [])
+  const [accounts, setAccounts] = useState<PortfolioAccountOut[] | null>(
+    cached?.accounts ?? null,
+  )
+  const [primaryName, setPrimaryName] = useState<string | null>(cached?.primaryName ?? null)
   const [transactions, setTransactions] = useState<TransactionOut[]>(cached?.transactions ?? [])
   const [dividends, setDividends] = useState<DividendOut[]>(cached?.dividends ?? [])
   const [dividendEvents, setDividendEvents] = useState<DividendEventOut[]>(
@@ -224,6 +236,8 @@ export default function PortfolioPage() {
     setFromCache(fromCache)
     setHoldings(snap.holdings)
     setSecurities(snap.securities)
+    setAccounts(snap.accounts)
+    setPrimaryName(snap.primaryName)
     setTransactions(snap.transactions)
     setDividends(snap.dividends)
     setDividendEvents(snap.dividendEvents)
@@ -283,12 +297,22 @@ export default function PortfolioPage() {
       fetchRealized(owner),
       fetchRefreshStatus(),
       fetchDividendEvents(),
+      // The two reads behind the Account boxes' datalist and their "this will create a new
+      // account" note (item 27). Both swallow their own failure: they decorate a form, and a
+      // roster hiccup must no more blank this page than a household one does (the ScopeBar's
+      // rule). A null roster offers no completions and warns about nothing.
+      fetchPortfolioAccounts().catch(() => null),
+      fetchHousehold().catch(() => null),
     ])
-      .then(([h, secs, txns, divs, typ, acct, spark, hist, real, status, divEvents]) => {
+      .then(([h, secs, txns, divs, typ, acct, spark, hist, real, status, divEvents, roster, people]) => {
         if (seq !== seqRef.current) return
         const snapshot: PortfolioSnapshot = {
           holdings: h,
           securities: secs,
+          accounts: roster,
+          // Resolved here rather than in the panels: the note names a PERSON, and the page
+          // is where the household is already in hand.
+          primaryName: people?.people.find((person) => person.is_primary)?.name ?? null,
           transactions: txns,
           dividends: divs,
           dividendEvents: divEvents,
@@ -309,7 +333,7 @@ export default function PortfolioPage() {
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
-        setError(err instanceof ApiError ? err.message : 'Failed to load portfolio data')
+        setError(describeError(err, 'the portfolio'))
       })
   }, [owner, applySnapshotState])
 
@@ -336,6 +360,9 @@ export default function PortfolioPage() {
   }
 
   const totals = holdings?.totals
+  // The labels the two ledgers' Account boxes complete from — null stays null, because "no
+  // roster yet" is not "no accounts".
+  const accountLabels = accounts === null ? null : accounts.map((account) => account.label)
   const asOf = holdings?.as_of ?? null
   // A4: the tooltip's second clock. latest_quote_at IS "the newest quote across holdings"
   // (one definition, two consumers — it also dates the live ping); the spec's original
@@ -696,13 +723,21 @@ export default function PortfolioPage() {
                 ))}
               </div>
               {tab === 'transactions' && (
-                <TransactionsPanel securities={securities} transactions={transactions} onChanged={reload} />
+                <TransactionsPanel
+                  securities={securities}
+                  transactions={transactions}
+                  accounts={accountLabels}
+                  primaryName={primaryName}
+                  onChanged={reload}
+                />
               )}
               {tab === 'dividends' && (
                 <DividendsPanel
                   securities={securities}
                   dividends={dividends}
                   annualIncome={totals?.annual_income ?? null}
+                  accounts={accountLabels}
+                  primaryName={primaryName}
                   onChanged={reload}
                 />
               )}

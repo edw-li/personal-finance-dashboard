@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { changePassword } from '../api/auth'
-import { ApiError } from '../api/client'
+import { ApiError, describeError } from '../api/client'
 import { importXlsx } from '../api/importer'
 import { fetchAppSettings } from '../api/settings'
 import InfoHint from '../components/InfoHint'
@@ -71,7 +71,7 @@ export default function SettingsPage() {
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
-        setError(err instanceof ApiError ? err.message : 'Could not load settings.')
+        setError(describeError(err, 'settings'))
       })
       .finally(() => {
         if (seq === seqRef.current) setLoading(false)

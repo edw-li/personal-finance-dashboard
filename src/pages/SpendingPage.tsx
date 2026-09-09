@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
-import { ApiError } from '../api/client'
+import { describeError } from '../api/client'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartCard from '../components/ChartCard'
 import type { EChartEventParams, EChartsInstance } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
+import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
@@ -88,6 +89,13 @@ export default function SpendingPage() {
   const [yearly, setYearly] = useState<SpendingYearly | null>(cached?.yearly ?? null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // The SECOND feed's own failure (2026-09-09 audit item 10): the matrix owns the frame, so
+  // a yearly rollup that 500s banners itself over charts that are perfectly fine.
+  const [yearlyError, setYearlyError] = useState<string | null>(null)
+  // What the page is actually SHOWING — the revalidation skip in load() is judged against
+  // this, never the cache, so a feed that failed cannot be stranded by an identical payload
+  // (NetWorthPage's `shown` precedent).
+  const shown = useRef<SpendingSnapshot | null>(cached ?? null)
   const [trend, setTrend] = useState<{ categoryId: number; slot: number }[]>(() =>
     cached ? defaultTrend(cached.matrix) : [],
   )
@@ -157,32 +165,84 @@ export default function SpendingPage() {
   // Promise callbacks, no setState in the effect's synchronous body
   // (react-hooks/set-state-in-effect) — same shape as NetWorthPage.
   const load = useCallback(() => {
-    Promise.all([fetchMatrix(), fetchYearly()])
-      .then(([m, y]) => {
-        const snapshot: SpendingSnapshot = { matrix: m, yearly: y }
-        const previous = getSnapshot<SpendingSnapshot>(SNAPSHOT_KEY)
-        setSnapshot(SNAPSHOT_KEY, snapshot)
-        setError(null)
-        // Identical payload: nothing re-renders, the charts stay still (spec §1).
-        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(snapshot))
+    // allSettled, never all: the two feeds answer INDEPENDENTLY (2026-09-09 audit item 10).
+    // One rejection used to reject the pair, so a 500 on the yearly rollup blanked every
+    // chart the matrix had already paid for — and printed the server's own detail instead.
+    Promise.allSettled([fetchMatrix(), fetchYearly()])
+      .then(([matrixResult, yearlyResult]) => {
+        // Both nouns are the page's own words: `errorDetail` keeps a 5xx body out of the UI.
+        setError(
+          matrixResult.status === 'rejected'
+            ? describeError(matrixResult.reason, 'spending')
+            : null,
+        )
+        setYearlyError(
+          yearlyResult.status === 'rejected'
+            ? describeError(yearlyResult.reason, 'the yearly rollup')
+            : null,
+        )
+        if (yearlyResult.status === 'rejected') {
+          // The rollup card goes quiet rather than standing there with empty columns, and
+          // `shown` goes with it: it records what is RENDERED, and half a snapshot is not —
+          // left standing, the identical-payload skip below would strand the card hidden the
+          // next time the pair answers with exactly what the failed load never got to show.
+          setYearly(null)
+          shown.current = null
+        }
+        if (matrixResult.status === 'rejected') return
+        const m = matrixResult.value
+        const seedTrend = () =>
+          setTrend((current) =>
+            current.length > 0 || m.categories.length === 0 ? current : defaultTrend(m),
+          )
+        if (yearlyResult.status === 'rejected') {
+          // Charts only — and nothing is cached, because half a pair is not a snapshot
+          // anything may be painted from later.
+          setFromCache(false)
+          setMatrix(m)
+          seedTrend()
           return
+        }
+        const snapshot: SpendingSnapshot = { matrix: m, yearly: yearlyResult.value }
+        setSnapshot(SNAPSHOT_KEY, snapshot)
+        // Identical payload: nothing re-renders, the charts stay still (spec §1) — judged
+        // against the RENDERED snapshot, never the cache (see `shown`).
+        if (shown.current !== null && JSON.stringify(shown.current) === JSON.stringify(snapshot))
+          return
+        shown.current = snapshot
         setFromCache(false)
         setMatrix(m)
-        setYearly(y)
-        setTrend((current) =>
-          current.length > 0 || m.categories.length === 0 ? current : defaultTrend(m),
-        )
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Failed to load spending data')
+        setYearly(yearlyResult.value)
+        seedTrend()
       })
       .finally(() => setLoading(false))
   }, [])
+
+  // The BANNER's retry, and deliberately not `load`: the matrix on screen answered, and
+  // re-fetching it would repaint charts that never failed (its payload is a fresh object, and
+  // `shown` is null while the pair is broken, so the identical-payload skip cannot catch it).
+  // On success the pair is whole again, so the cache and `shown` are written from the matrix
+  // already in hand.
+  const retryYearly = useCallback(() => {
+    setLoading(true)
+    setYearlyError(null)
+    fetchYearly()
+      .then((y) => {
+        setYearly(y)
+        if (matrix === null) return // nothing on screen to pair it with
+        const snapshot: SpendingSnapshot = { matrix, yearly: y }
+        setSnapshot(SNAPSHOT_KEY, snapshot)
+        shown.current = snapshot
+      })
+      .catch((err: unknown) => setYearlyError(describeError(err, 'the yearly rollup')))
+      .finally(() => setLoading(false))
+  }, [matrix])
 
   // Mount fetch is covered by useState's initial `true`; Retry flips these itself.
   const beginLoad = () => {
     setLoading(true)
     setError(null)
+    setYearlyError(null)
   }
 
   useEffect(() => {
@@ -440,6 +500,9 @@ export default function SpendingPage() {
           ],
         }}
       >
+        {/* The secondary feed's own alert (2026-09-09 audit item 10) — at the top of the
+            page, where the card it speaks for is missing from the bottom of it. */}
+        <FeedBanner error={yearlyError} retry={retryYearly} retryLabel="Retry the yearly rollup" />
         {kpis && (
           <div className="kpi-row">
             <StatTile
@@ -761,6 +824,9 @@ export default function SpendingPage() {
             }
           />
 
+          {/* Absent, never empty-columned: with no rollup on hand the card would be a
+              header over a table of dashes (2026-09-09 audit item 10). */}
+          {yearly !== null && (
           <div className="card span-12">
             <h2 className="eyebrow">
               Yearly rollups
@@ -872,6 +938,7 @@ export default function SpendingPage() {
               </table>
             </div>
           </div>
+          )}
         </div>
       </PageFrame>
     </div>

@@ -85,7 +85,10 @@ into "W-4 line 4c".
   dividends. Decision: also subtract `interest_us_treasuries`.
 - **4c Bonus withholding leg** (built in the withholding lane). `w2_bonuses` raises the liability but
   the estimate has salary and vest legs only. Decision: a bonus leg at 22 % federal + 6.6 % California
-  + marginal FICA, overridden by the new optional input `w2_bonus_withholding` when entered.
+  + marginal FICA, overridden by the new optional input `w2_bonus_withholding` when entered. The leg
+  is the PRIMARY's alone — their `w2_bonuses` minus the partner's — because its marginal FICA stacks
+  on the primary's wage base and its supplemental tier is theirs, and a partner's withholding is
+  already counted once from their own two tracker keys.
 - **4d Supplemental rate tier** (withholding lane). Decision: federal supplemental switches from 22 %
   to 37 % for the portion of cumulative supplemental wages (vests + bonuses, in date order) above $1M
   in the calendar year; a warning names the crossing.
@@ -100,6 +103,12 @@ into "W-4 line 4c".
 - **4g Single years never refuse.** `EngineFeed.computable` returns True for `single` regardless of
   tables. Decision: single years before the current calendar year keep computing (imported history);
   the current and future years refuse like married years do (tiles "—", the existing call to action).
+  Amended during implementation: a current-or-future single year refuses only when one of the three
+  CORE income tables (federal, state, capital gains) is missing — with those present it still computes
+  when a PAYROLL table (medicare, social security, disability) is absent, that jurisdiction reporting 0
+  beside its own named warning, which is a gap the reader can see rather than a whole year of
+  em-dashes. A married status is unchanged: any of the six missing refuses. The refusal list itself
+  still names every missing jurisdiction, so the call to action is complete either way.
 - **4h Section 199A.** Treated as an itemized component, so it vanishes under the standard deduction.
   Decision: a below-the-line deduction applied regardless of itemizing; removed from the itemized
   suggestion; relabelled "Sec 199A QBI deduction (20 % of qualified REIT/PTP dividends)".

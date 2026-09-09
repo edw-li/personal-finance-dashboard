@@ -43,6 +43,16 @@ Bracket = tuple[Decimal, Decimal]
 
 JURISDICTION_WARN_MISSING = "no {j} brackets for {year}: {j} tax computed as 0"
 MISSING_INPUTS_WARNING = "missing inputs defaulted to 0: {keys}"
+# Its own sentence, not a name inside the muted list above (2026-09-09 spec 4e): with
+# neither deduction stored the engine taxes AGI in full, which is the single largest way a
+# freshly created year can be wrong, and "standard_deduction" buried among twenty other key
+# names reads like housekeeping. The two keys are REMOVED from the muted list when this
+# fires, so nothing is said twice. `src/components/taxes/SummaryPanel.tsx` matches its
+# opening words to render it in the advisory register.
+DEDUCTION_KEYS = ("standard_deduction", "itemized_deduction")
+DEDUCTION_MISSING_WARNING = (
+    "No standard or itemized deduction entered for {year} — federal tax is overstated"
+)
 NEGATIVE_STATE_TAX_WARNING = "state tax negative after exemption credits"
 # Both are ADVISORY: a GET never rejects stored data, so the value is used verbatim
 # either way. `{value}`/`{cap}` arrive pre-formatted via `f"{d.normalize():f}"` — plain
@@ -113,6 +123,9 @@ ENGINE_INPUT_KEYS: tuple[str, ...] = (
     "unq_div_us_treasuries_etf",
     "unq_div_state_exempt_pct",
     "interest_total",
+    # Read by the STATE chain alone (spec 4b): California exempts interest on US Treasury
+    # obligations, and the federal chain already has it inside interest_total.
+    "interest_us_treasuries",
     "other_income_1099",
     "trad_401k_contributions",
     "hsa_contributions",
@@ -121,6 +134,11 @@ ENGINE_INPUT_KEYS: tuple[str, ...] = (
     "other_pretax_deductions",
     "standard_deduction",
     "itemized_deduction",
+    # BELOW the line since 2026-09-09 (spec 4h): the QBI deduction is taken whether or not
+    # the filer itemizes, so the engine reads it directly rather than through the itemized
+    # total. It kept its `itemized_` key name — renaming a stored key is a data migration
+    # for a label the definition row already carries.
+    "itemized_sec199a_div",
     "state_standard_deduction",
     "state_exemption_credits",
     "ltcg_total",
@@ -170,6 +188,10 @@ def stack(brackets: list[Bracket], base: Decimal, amount: Decimal) -> Decimal:
     space, so ordinary taxable income decides which CG rates they meet. Non-positive
     amount is 0; a negative base clamps to 0 rather than sliding the gains below the
     first bracket. Full precision.
+
+    `compute_breakdown` has passed a base clamped at 0 since 2026-09-09 (spec 4a) — an
+    unused deduction now reduces the AMOUNT instead — so the clamp here is a belt for
+    direct callers, not the engine's working path.
     """
     if amount <= 0:
         return ZERO
@@ -235,14 +257,29 @@ def _cg_amount(value: Callable[[str], Decimal]) -> Decimal:
     return value("qualified_dividends") + value("other_capital_gains")
 
 
-def _magi(value: Callable[[str], Decimal]) -> Decimal:
-    """Modified AGI: federal AGI plus the netted gains — the base the NIIT threshold test
-    and the SALT phase-down are statutorily judged on (2026-08-31 spec C1). One
-    definition, two consumers. It inherits capital_loss_deductions through `_federal_agi`
-    (spec C3): the §1211 deduction is inside AGI, so MAGI carries it — correct for both
-    consumers, and pinned by the capital-loss NIIT test.
+def _true_agi(value: Callable[[str], Decimal]) -> Decimal:
+    """AGI as a 1040 reports it: the ordinary chain plus the netted gains.
+
+    `_federal_agi` is deliberately ORDINARY AGI — the income the federal brackets are
+    walked over — because the sheet's chain keeps preferential income out of it and stacks
+    it separately. That is a bracket-walking device, not a definition of AGI: long-term
+    gains and qualified dividends are inside AGI on every real return. This is the figure
+    the summary reports as the federal Base and divides the federal effective rate by
+    (2026-09-09 spec 4f), and the same quantity the NIIT threshold and the SALT phase-down
+    are judged on. It inherits capital_loss_deductions through `_federal_agi` (spec C3).
     """
     return _federal_agi(value) + _cg_amount(value)
+
+
+def _magi(value: Callable[[str], Decimal]) -> Decimal:
+    """Modified AGI — the base the NIIT threshold test and the SALT phase-down are
+    statutorily judged on (2026-08-31 spec C1).
+
+    It IS `_true_agi` today: the app models no addback (no foreign earned income
+    exclusion, no excluded savings-bond interest) that would sit between the two. The name
+    is kept separate because the day one is modelled, only this function moves.
+    """
+    return _true_agi(value)
 
 
 @dataclass(frozen=True)
@@ -426,6 +463,12 @@ def compute_breakdown(
             values[key] = found
 
     warnings: list[str] = []
+    # Absent is not zero here, it is a headline: see DEDUCTION_MISSING_WARNING. Both, not
+    # either — a year that stores one of the pair has told the engine what it needs, and
+    # max(standard, itemized) reads the other as the zero it is.
+    if all(key in missing_inputs for key in DEDUCTION_KEYS):
+        warnings.append(DEDUCTION_MISSING_WARNING.format(year=year))
+        missing_inputs = [key for key in missing_inputs if key not in DEDUCTION_KEYS]
     if missing_inputs:
         warnings.append(MISSING_INPUTS_WARNING.format(keys=", ".join(missing_inputs)))
 
@@ -455,14 +498,35 @@ def compute_breakdown(
                 )
             )
     fed_agi = _federal_agi(values.__getitem__)
-    fed_deduction = max(values["standard_deduction"], values["itemized_deduction"])
-    fed_ti = fed_agi - fed_deduction
-    fed_tax = walk(tables["federal"], fed_ti)
+    # §199A is BELOW the line (spec 4h): the QBI deduction on qualified REIT/PTP dividends
+    # is taken in addition to the standard OR the itemized deduction, and the sheet buried
+    # it inside the itemized total — where it vanished for every year the standard deduction
+    # won. It is added to the below-the-line total rather than to the itemized figure so a
+    # standard-deduction year gets it too.
+    fed_deduction = (
+        max(values["standard_deduction"], values["itemized_deduction"])
+        + values["itemized_sec199a_div"]
+    )
+    # 4a (2026-09-09 spec): the deduction is spent on ordinary income FIRST, and whatever it
+    # cannot use comes off the preferential income below rather than evaporating. `walk`
+    # clamps a negative income to 0 and `stack` clamps a negative base to 0, so before this
+    # a filer whose deduction exceeded AGI paid capital-gains tax on gains the deduction had
+    # already covered — and the reported taxable income was a negative figure nothing
+    # consumed. Two names, one arithmetic: exactly one of them is ever non-zero.
+    ordinary_ti = max(fed_agi - fed_deduction, ZERO)
+    unused_deduction = max(fed_deduction - fed_agi, ZERO)
+    fed_tax = walk(tables["federal"], ordinary_ti)
 
     # Capital gains (rows 118-120): netted in `_cg_amount`, computed here — above the
     # state section — because state AGI consumes cg_amount too; the federal CG stack
     # itself is applied after FICA, where the sheet computes it.
     cg_amount = _cg_amount(values.__getitem__)
+    # True AGI: what the federal line REPORTS as its Base and divides its effective rate by
+    # (spec 4f), and the base the NIIT threshold below is judged on. `fed_agi` stays the
+    # ordinary income the brackets walk; reporting it as "AGI" understated the base by every
+    # dollar of long-term gain and qualified dividend the return actually carried, which
+    # flattered the effective rate on exactly the years with the most preferential income.
+    true_agi = _true_agi(values.__getitem__)
 
     # State (rows 100-103): CA exempts the treasury slice of unqualified dividends and
     # does NOT recognise the HSA deduction, so both are added back — and, deliberately
@@ -470,9 +534,16 @@ def compute_breakdown(
     # cg_amount: California taxes capital gains and all dividends as ordinary income
     # (2026-08-25 spec §1). One definition of taxable gains, two consumers — this term and
     # the federal stack below.
+    #
+    # interest_us_treasuries is subtracted for the SAME statutory reason as the fund slice
+    # (2026-09-09 spec 4b): California does not tax interest on US Treasury obligations,
+    # whether it arrives through a fund or from the bond itself. The sheet backed out only
+    # the fund slice, so a year holding Treasuries directly paid CA tax on exempt interest.
+    # No exempt-percentage factor here — direct treasury interest is exempt in full.
     state_agi = (
         fed_agi
         - values["unq_div_us_treasuries_etf"] * values["unq_div_state_exempt_pct"]
+        - values["interest_us_treasuries"]
         + values["hsa_contributions"]
         + values["hsa_contributions_employer"]
         + cg_amount
@@ -524,24 +595,27 @@ def compute_breakdown(
     sdi_tax = sum((walk(sdi_table, earner.sdi_wages) for earner in bundles), ZERO)
 
     # The federal CG stack (row 120): cg_amount was netted above the state section, which
-    # shares it; the gains stack on top of federal taxable income.
-    cg_tax = stack(tables["capital_gains"], fed_ti, cg_amount)
+    # shares it; the gains stack on top of ordinary taxable income, minus whatever the
+    # deduction could not spend there (4a). The netted gains LINE is untouched — state AGI,
+    # MAGI and the NIIT base all read it, and this is a federal stacking rule rather than a
+    # re-netting of the gains.
+    stacked_gains = max(cg_amount - unused_deduction, ZERO)
+    cg_tax = stack(tables["capital_gains"], ordinary_ti, stacked_gains)
 
     # NIIT (2026-08-31 spec C2) — its own line, never a folded bracket rate: 3.8% of the
     # smaller of net investment income and the MAGI excess over the status threshold.
-    # MAGI is `_magi`'s definition (fed AGI + cg_amount, capital_loss_deductions inside
-    # via _federal_agi). The clamps guard stored-negative edges: a short-term or netted
-    # CG loss reduces AGI, never investment income, and a net-negative NII must never
-    # surface as a negative surcharge.
+    # MAGI is `_magi`'s definition, which is `true_agi` above (fed AGI + cg_amount,
+    # capital_loss_deductions inside via _federal_agi). The clamps guard stored-negative
+    # edges: a short-term or netted CG loss reduces AGI, never investment income, and a
+    # net-negative NII must never surface as a negative surcharge.
     nii = (
         values["interest_total"]
         + values["unqualified_dividends"]
         + max(values["stcg_total"], ZERO)
         + max(cg_amount, ZERO)
     )
-    magi = _magi(values.__getitem__)
     niit_threshold = NIIT_AGI_THRESHOLDS.get(filing_status, NIIT_AGI_THRESHOLD)
-    niit_base = max(ZERO, min(nii, magi - niit_threshold))
+    niit_base = max(ZERO, min(nii, true_agi - niit_threshold))
     niit_tax = NIIT_RATE * niit_base
 
     # Totals (rows 121-125). Gross income sums the *_standard / *_brokerage COMPONENTS,
@@ -568,9 +642,9 @@ def compute_breakdown(
         year=year,
         federal=JurisdictionResult(
             tax=fed_tax,
-            effective_rate=_rate(fed_tax, fed_agi),
-            agi=fed_agi,
-            taxable_income=fed_ti,
+            effective_rate=_rate(fed_tax, true_agi),
+            agi=true_agi,
+            taxable_income=ordinary_ti,
         ),
         state=JurisdictionResult(
             tax=state_tax,
@@ -599,7 +673,7 @@ def compute_breakdown(
         capital_gains=JurisdictionResult(
             tax=cg_tax,
             effective_rate=_rate(cg_tax, cg_amount),
-            taxable_income=fed_ti,
+            taxable_income=ordinary_ti,
             gains_amount=cg_amount,
         ),
         niit=JurisdictionResult(
@@ -610,6 +684,9 @@ def compute_breakdown(
         ),
         totals=TaxTotals(
             gross_income=gross_income,
+            # The sheet's own "Total Income" row: ORDINARY AGI, the figure the federal
+            # brackets walk. It is deliberately not the federal line's Base, which carries
+            # the gains too (spec 4f) — the two differ by exactly cg_amount.
             total_income=fed_agi,
             total_tax=total_tax,
             take_home=gross_income - total_tax,
@@ -695,11 +772,11 @@ def derive_suggestions(
     # formula never had the phase-down at all, so there is no sheet reading to preserve).
     cap = salt_cap(year, filing_status, _magi(value))
     salt = value("itemized_salt")
+    # itemized_sec199a_div is NOT a term here since 2026-09-09 (spec 4h): the QBI deduction
+    # is below the line and the engine reads it on its own, so leaving it in the itemized
+    # suggestion would deduct it twice for a filer who applies the chip.
     itemized = (salt if salt < cap else cap) + (
-        value("itemized_donations")
-        + value("itemized_vehicle_reg")
-        + value("itemized_sec199a_div")
-        + value("itemized_other")
+        value("itemized_donations") + value("itemized_vehicle_reg") + value("itemized_other")
     )
 
     suggestions = {

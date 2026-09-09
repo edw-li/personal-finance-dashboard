@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ApiError } from '../api/client'
+import { describeError } from '../api/client'
 import { fetchHousehold } from '../api/household'
 import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
@@ -22,6 +22,7 @@ import {
   type ProjectionScenario,
 } from '../components/projection/projectionScenario'
 import ScenarioPanel from '../components/projection/ScenarioPanel'
+import { useAssistantView } from '../components/assistant/viewState'
 import StatTile from '../components/StatTile'
 import Segmented from '../components/shell/Segmented'
 import PageFrame from '../components/shell/PageFrame'
@@ -30,11 +31,6 @@ import type { HouseholdOut, NetWorthTimeseries, PersonOut, ProjectionOut } from 
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import '../components/panels.css'
 import './ProjectionPage.css'
-
-function message(err: unknown, fallback: string): string {
-  // 404/422 details are the server's own sentences — rendered verbatim (house note).
-  return err instanceof ApiError ? err.message : fallback
-}
 
 // The trend chart's own forward spans — deliberately DECOUPLED from the Horizon knob:
 // the trend chart's axis carries the whole history before it even starts projecting, so
@@ -82,6 +78,11 @@ export default function ProjectionPage() {
     [retryNonce, cachedProjection, roster],
   )
   const sandbox = useSandbox(spec)
+  // What the assistant must answer against: the scenario ON SCREEN (2026-09-01 spec §6).
+  // The canonical entries, which are the server's own wire grammar (services/sandbox_links.py)
+  // and what a pin stores — the drawer hands them straight back and the projection section
+  // runs THEM, instead of explaining the derived run to a reader looking at a what-if.
+  useAssistantView({ whatif: sandbox.entries })
   // What the tiles and charts draw: the live scenario, or the derived run while it is empty.
   const data = sandbox.result ?? sandbox.baseline
   // A 404 is "nothing to project from yet" (no snapshots): the wizard, not a Retry.
@@ -111,7 +112,7 @@ export default function ProjectionPage() {
         if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(res)) return
         setHistory(res)
       })
-      .catch((err: unknown) => setHistoryError(message(err, 'Failed to load net-worth history')))
+      .catch((err: unknown) => setHistoryError(describeError(err, 'the net-worth history')))
   }, [])
 
   useEffect(() => {

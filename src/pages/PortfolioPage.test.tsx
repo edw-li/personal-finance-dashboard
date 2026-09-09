@@ -10,6 +10,7 @@ import type {
   DividendOut,
   HoldingsResponse,
   HouseholdOut,
+  PortfolioAccountOut,
   PortfolioHistory,
   RealizedResponse,
   RefreshStatus,
@@ -27,6 +28,7 @@ vi.mock('../api/portfolio', async (importOriginal) => ({
   fetchDividends: vi.fn(),
   fetchHistory: vi.fn(),
   fetchHoldings: vi.fn(),
+  fetchPortfolioAccounts: vi.fn(),
   fetchRealized: vi.fn(),
   fetchSecurities: vi.fn(),
   fetchTransactions: vi.fn(),
@@ -72,12 +74,19 @@ import {
   fetchDividends,
   fetchHistory,
   fetchHoldings,
+  fetchPortfolioAccounts,
   fetchRealized,
   fetchSecurities,
   fetchTransactions,
 } from '../api/portfolio'
 import { fetchPriceHistory, fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
 import { formatDate } from '../utils/format'
+
+// The roster behind the two ledgers' Account boxes (2026-09-09 audit item 27).
+const ACCOUNTS: PortfolioAccountOut[] = [
+  { id: 1, label: 'Fidelity Brokerage', person_id: 1 },
+  { id: 2, label: 'Joint Taxable', person_id: null },
+]
 
 const ME = { id: 1, name: 'Me', is_primary: true }
 const SAM = { id: 2, name: 'Sam', is_primary: false }
@@ -247,6 +256,7 @@ beforeEach(() => {
   // the ?ticker= arrival now does straight from the URL.
   vi.mocked(fetchPriceHistory).mockResolvedValue({ ticker: 'VOO', points: [] })
   vi.mocked(fetchHousehold).mockResolvedValue(household())
+  vi.mocked(fetchPortfolioAccounts).mockResolvedValue(ACCOUNTS)
 })
 
 afterEach(() => {
@@ -404,6 +414,8 @@ it('paints instantly from a seeded snapshot under the household key and revalida
   setSnapshot('portfolio:all', {
     holdings: holdingsOut(),
     securities: SECURITIES,
+    accounts: ACCOUNTS,
+    primaryName: 'Me',
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
     dividendEvents: [],
@@ -432,6 +444,8 @@ it('leaves the charts still when the revalidation payload is identical', async (
   setSnapshot('portfolio:all', {
     holdings: holdingsOut(),
     securities: SECURITIES,
+    accounts: ACCOUNTS,
+    primaryName: 'Me',
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
     dividendEvents: [],
@@ -471,6 +485,8 @@ it('keys the snapshot by owner — a chip flip is a cache MISS that re-arms the 
   setSnapshot('portfolio:all', {
     holdings: holdingsOut(),
     securities: SECURITIES,
+    accounts: ACCOUNTS,
+    primaryName: 'Me',
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
     dividendEvents: [],
@@ -503,6 +519,8 @@ it('leaves the charts still when a chip flip returns to a warm scope', async () 
   setSnapshot('portfolio:all', {
     holdings: holdingsOut(),
     securities: SECURITIES,
+    accounts: ACCOUNTS,
+    primaryName: 'Me',
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
     dividendEvents: [],
@@ -580,6 +598,8 @@ it('applies a revalidation that matches the cache but not the screen', async () 
   setSnapshot('portfolio:all', {
     holdings: holdingsOut(),
     securities: SECURITIES,
+    accounts: ACCOUNTS,
+    primaryName: 'Me',
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
     dividendEvents: [],
@@ -605,6 +625,8 @@ it('applies a revalidation that matches the cache but not the screen', async () 
   setSnapshot('portfolio:all', {
     holdings: HOLDINGS_B,
     securities: SECURITIES,
+    accounts: ACCOUNTS,
+    primaryName: 'Me',
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
     dividendEvents: [],
@@ -641,7 +663,7 @@ it('shows the alert alone on a failed first load and retries back into the skele
   vi.mocked(fetchHoldings).mockRejectedValue(new ApiError('Portfolio service down', 503))
   const { container } = renderPage()
   // No data behind it, so the frame shows the alert instead of a page of empty tables.
-  expect((await screen.findByRole('alert')).textContent).toContain('Portfolio service down')
+  expect((await screen.findByRole('alert')).textContent).toContain("Couldn't load the portfolio — the server had a problem (HTTP 503)")
   expect(screen.queryByText('Portfolio value')).toBeNull()
 
   // A retry that leaves the error set would keep this alert on screen for its whole
@@ -878,6 +900,28 @@ describe('PortfolioPage — shell scope', () => {
     expect(document.querySelector('.page-header')).toBeNull()
     expect(
       screen.getByRole('button', { name: /Refresh prices/ }).closest('.page-frame-actions'),
+    ).toBeTruthy()
+  })
+
+  // 2026-09-09 audit item 27: the ledger forms are the only free-text doors into the account
+  // roster, and the server get-or-creates on the exact string, tagging a new account to the
+  // primary. The page is what knows the roster and who the primary is.
+  it('hands the ledger form the account roster and the primary’s name', async () => {
+    renderPage('/portfolio')
+    await waitFor(() => expect(document.getElementById('txn-account-labels')).not.toBeNull())
+    const options = Array.from(document.querySelectorAll('#txn-account-labels option'))
+    expect(options.map((o) => (o as HTMLOptionElement).value)).toEqual([
+      'Fidelity Brokerage',
+      'Joint Taxable',
+    ])
+    const box = screen.getByLabelText('Account')
+    fireEvent.change(box, { target: { value: 'Fidelity Brokerage' } })
+    expect(screen.queryByText(/will be created/)).toBeNull()
+    fireEvent.change(box, { target: { value: 'Fidelity Roth' } })
+    expect(
+      screen.getByText(
+        "New account 'Fidelity Roth' will be created and assigned to Me — re-tag it in Settings → Accounts",
+      ),
     ).toBeTruthy()
   })
 })

@@ -16,6 +16,9 @@ afterEach(cleanup)
 // create from an earlier test. clearAllMocks keeps the factory's mockResolvedValue.
 beforeEach(() => vi.clearAllMocks())
 
+const NEW_ACCOUNT_NOTE =
+  "New account 'Schwabb' will be created and assigned to Edward — re-tag it in Settings → Accounts"
+
 const securities: SecurityOut[] = [{
   id: 1, ticker: 'NVDA', name: 'NVIDIA', industry: 'Semis', holding_type: 'stock',
   is_manual_priced: false, is_active: true, annual_dividend: null, ex_div_date: null,
@@ -46,6 +49,59 @@ function change(el: HTMLElement, value: string): void {
 }
 
 describe('TransactionsPanel', () => {
+  // 2026-09-09 audit item 27: `resolve_portfolio_account` GET-OR-CREATES on the exact string
+  // typed here and tags the new row to the primary person. A typo used to mint a second
+  // account under one owner in silence, visible only when the scope chips stopped adding up.
+  it('offers the account roster and warns when a typed label would mint a new one', () => {
+    render(
+      <TransactionsPanel
+        securities={securities}
+        transactions={[]}
+        accounts={['Schwab', 'Joint Taxable']}
+        primaryName="Edward"
+        onChanged={() => {}}
+      />,
+    )
+    const options = Array.from(document.querySelectorAll('#txn-account-labels option'))
+    expect(options.map((o) => (o as HTMLOptionElement).value)).toEqual(['Schwab', 'Joint Taxable'])
+    const box = screen.getByLabelText('Account')
+    // The box announces itself, not the sentence under it.
+    expect(box.getAttribute('aria-describedby')).toBeNull()
+    fireEvent.change(box, { target: { value: 'Schwab' } })
+    expect(screen.queryByText(/will be created/)).toBeNull()
+    fireEvent.change(box, { target: { value: 'Schwabb' } })
+    expect(screen.getByText(NEW_ACCOUNT_NOTE)).toBeTruthy()
+    expect(box.getAttribute('aria-describedby')).toBe('txn-account-note')
+    // Trimmed and exact, the way the server matches.
+    fireEvent.change(box, { target: { value: '  Schwab  ' } })
+    expect(screen.queryByText(/will be created/)).toBeNull()
+  })
+
+  it('names the primary member when the household has no name to give', () => {
+    render(
+      <TransactionsPanel securities={securities} transactions={[]} accounts={[]} onChanged={() => {}} />,
+    )
+    fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'Schwab' } })
+    expect(
+      screen.getByText(
+        "New account 'Schwab' will be created and assigned to the primary member — re-tag it in Settings → Accounts",
+      ),
+    ).toBeTruthy()
+  })
+
+  it('warns about nothing while the roster is unknown', () => {
+    // No roster prop at all — the page's own fetch is still in flight, or it failed. An
+    // empty list would raise the warning over every account the household already has.
+    render(<TransactionsPanel securities={securities} transactions={[]} onChanged={() => {}} />)
+    const box = screen.getByLabelText('Account')
+    fireEvent.change(box, { target: { value: 'Schwab' } })
+    expect(screen.queryByText(/will be created/)).toBeNull()
+    // ...and no empty list either: a `list` pointing at an empty datalist is a dropdown
+    // arrow that opens on nothing.
+    expect(document.getElementById('txn-account-labels')).toBeNull()
+    expect(box.getAttribute('list')).toBeNull()
+  })
+
   it('marks import-owned rows and shows the re-import caveat', () => {
     render(
       <TransactionsPanel securities={securities} transactions={[importTxn]} onChanged={() => {}} />,

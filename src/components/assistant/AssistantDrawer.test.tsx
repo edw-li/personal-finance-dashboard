@@ -11,6 +11,11 @@ vi.mock('../../api/assistant', () => ({
   fetchContextPreview: (...a: unknown[]) => fetchContextPreview(...a),
 }))
 
+const fetchHousehold = vi.fn()
+vi.mock('../../api/household', () => ({
+  fetchHousehold: (...a: unknown[]) => fetchHousehold(...a),
+}))
+
 const streamChat = vi.fn()
 vi.mock('../../api/assistantStream', async () => {
   const actual = await vi.importActual<typeof import('../../api/assistantStream')>(
@@ -19,7 +24,7 @@ vi.mock('../../api/assistantStream', async () => {
   return { ...actual, streamChat: (...a: unknown[]) => streamChat(...a) }
 })
 
-import { requestAssistantOpen } from './viewState'
+import { requestAssistantOpen, useAssistantView } from './viewState'
 import AssistantDrawer from './AssistantDrawer'
 
 const MODELS = {
@@ -47,6 +52,22 @@ function mount(route = '/spending') {
   )
 }
 
+/** A page publishing its view state, which the drawer only ever reads through the module
+ *  singleton — the pages themselves are far too heavy to mount here. */
+function Publisher({ view }: { view: Record<string, string | number | string[] | null> }) {
+  useAssistantView(view)
+  return null
+}
+
+function mountWith(view: Record<string, string | number | string[] | null>, route: string) {
+  return render(
+    <MemoryRouter initialEntries={[route]}>
+      <Publisher view={view} />
+      <AssistantDrawer />
+    </MemoryRouter>,
+  )
+}
+
 beforeEach(() => {
   fetchAssistantSettings.mockResolvedValue({
     key: { configured: true, source: 'env' },
@@ -54,6 +75,10 @@ beforeEach(() => {
   })
   fetchAssistantModels.mockResolvedValue(MODELS)
   fetchContextPreview.mockResolvedValue({ sections: [{ name: 'household', rows: 1 }] })
+  fetchHousehold.mockResolvedValue({
+    people: [{ id: 2, name: 'Grace', is_primary: false }],
+    marriage_date: null,
+  })
   streamChat.mockReset()
 })
 
@@ -116,6 +141,28 @@ describe('AssistantDrawer', () => {
     fireEvent.keyDown(input, { key: 'Escape' })
     expect(screen.queryByRole('complementary', { name: 'Assistant' })).toBeNull()
     expect(document.activeElement).toBe(launcher)
+  })
+
+  it('says what it is looking at in words — page and month, never a raw key', async () => {
+    mount('/spending?month=2026-03')
+    await openDrawer()
+    const chip = screen.getByTitle('Spending · Mar 2026')
+    expect(chip.textContent).toBe('Seeing: Spending · Mar 2026')
+  })
+
+  it('resolves an owner id to a name through the household roster', async () => {
+    mountWith({ owner: '2' }, '/net-worth')
+    await openDrawer()
+    await waitFor(() => expect(screen.getByTitle('Net worth · Grace')).toBeTruthy())
+  })
+
+  it('leaves the owner out when the roster cannot name them', async () => {
+    // The roster is its own fetch and its own failure: an id in the chip would tell the
+    // reader nothing, so the segment goes rather than the drawer.
+    fetchHousehold.mockRejectedValue(new Error('nope'))
+    mountWith({ owner: '2' }, '/net-worth')
+    await openDrawer()
+    expect(screen.getByTitle('Net worth')).toBeTruthy()
   })
 
   it('opens on the palette bus event', async () => {

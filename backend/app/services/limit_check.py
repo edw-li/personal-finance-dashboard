@@ -21,7 +21,7 @@ router mirrors it with a 422, so a stored limit of zero is unrepresentable.
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 
 from app.limit_keys import (
     HSA_LIMIT_KEY_BY_COVERAGE,
@@ -35,6 +35,10 @@ from app.services.paycheck_calc import half_up2
 
 ZERO = Decimal("0")
 RATIO_QUANTUM = Decimal("0.0001")
+# The Pct9 columns' own scale, and the cent: the two grains a "land exactly on the cap"
+# target is floored to, so a projection built from one is never a hair OVER the cap.
+RATE_QUANTUM = Decimal("0.000000001")
+CENTS = Decimal("0.01")
 WARN_AT = Decimal("0.95")
 OVER_ABOVE = Decimal("1")
 # The 415(c) row names the one thing this app cannot see: employer match and profit
@@ -103,6 +107,53 @@ class PaceItem:
     # None on a row nobody walked — the pure callers, whose figure is still "a year at this
     # rate" and has no past to point at.
     so_far: Decimal | None = None
+    # The window's TAIL and the elections that land on the cap across it (2026-09-09 audit
+    # item 5). `remaining_checks` / `remaining_gross` ride every walked row, because the walk
+    # is one walk; the two targets ride the one row each answers for — a total elective RATE
+    # (traditional + Roth) on the 402(g) row, an employee per-check AMOUNT on the HSA row.
+    # Both are measured against what the walk has already counted, so a preset built from one
+    # cannot ask for a full year of contributions in the months that are left. Zero means
+    # "there is no room left"; null means the question has no answer here — nothing walked,
+    # no cap entered, or no paydays left this year.
+    remaining_checks: int | None = None
+    remaining_gross: Decimal | None = None
+    to_cap_rate: Decimal | None = None
+    to_cap_per_check: Decimal | None = None
+
+
+def _to_cap_rate(
+    limit: Decimal | None, so_far: Decimal | None, walked: Walked | None
+) -> Decimal | None:
+    """The TOTAL elective rate (traditional + Roth) over the window's remaining gross that
+    lands exactly on `limit`, given what the walk has already counted.
+
+    FLOORED to the columns' 9 dp, so the projection it builds is at or under the cap and the
+    4 dp ratio beside it reads 1.0000 rather than 1.0001. Zero when the cap is already met or
+    passed — "stop", which is a real answer and the one a chip needs to disable itself with.
+    None when there is nothing to answer with: no walk, no cap entered, or no paydays left.
+    """
+    if walked is None or so_far is None or limit is None:
+        return None
+    if walked.remaining_checks <= ZERO or walked.remaining_gross <= ZERO:
+        return None
+    room = max(limit - so_far, ZERO)
+    return (room / walked.remaining_gross).quantize(RATE_QUANTUM, rounding=ROUND_FLOOR)
+
+
+def _to_cap_per_check(
+    limit: Decimal | None, so_far: Decimal | None, walked: Walked | None
+) -> Decimal | None:
+    """`_to_cap_rate`'s twin in DOLLARS: the employee amount per remaining check that lands
+    on `limit`. Floored to cents, for the same reason and with the same three nulls.
+
+    The divisor is the walk's EXACT count, fractions and all — a month-basis window of 8.67
+    checks will credit 8.67 of them, and dividing by the 9 the wire prints would leave a
+    whole check's worth of the cap unfilled. The cents floor still leaves up to a cent per
+    check on the table, which is what keeps the projection at or under the cap."""
+    if walked is None or so_far is None or limit is None or walked.remaining_checks <= ZERO:
+        return None
+    room = max(limit - so_far, ZERO)
+    return (room / walked.remaining_checks).quantize(CENTS, rounding=ROUND_FLOOR)
 
 
 def _item(
@@ -114,6 +165,10 @@ def _item(
     employer_hsa: Decimal | None = None,
     so_far: Decimal | None = None,
     backfilled_from: date | None = None,
+    remaining_checks: int | None = None,
+    remaining_gross: Decimal | None = None,
+    to_cap_rate: Decimal | None = None,
+    to_cap_per_check: Decimal | None = None,
 ) -> PaceItem:
     money = half_up2(annualized)
     # Quantized HERE and only here, beside the projection it sits under, so the two figures
@@ -132,6 +187,10 @@ def _item(
             employer_hsa=employer_hsa,
             so_far=walked_so_far,
             backfilled_from=backfilled_from,
+            remaining_checks=remaining_checks,
+            remaining_gross=remaining_gross,
+            to_cap_rate=to_cap_rate,
+            to_cap_per_check=to_cap_per_check,
         )
     ratio = (money / limit).quantize(RATIO_QUANTUM, rounding=ROUND_HALF_UP)
     if ratio > OVER_ABOVE:
@@ -151,6 +210,10 @@ def _item(
         employer_hsa=employer_hsa,
         so_far=walked_so_far,
         backfilled_from=backfilled_from,
+        remaining_checks=remaining_checks,
+        remaining_gross=remaining_gross,
+        to_cap_rate=to_cap_rate,
+        to_cap_per_check=to_cap_per_check,
     )
 
 
@@ -240,14 +303,35 @@ def paycheck_pace(
     # exactly the addend behind the total and the two can never disagree by a cent.
     match = half_up2(employer_match(profile, elective, elective_cap))
     has_policy = profile.match_band_1 > ZERO or profile.match_band_2 > ZERO
+    # One walk, one tail: every row it feeds names the same paydays ahead, so no two rows can
+    # disagree about how much year is left to change.
+    tail = (
+        {}
+        if walked is None
+        else {
+            # Rounded UP here and only here: a count is what a sentence prints ("eight checks
+            # left"), and half a check is not a thing to say. The DIVISORS above keep the
+            # walk's exact figure.
+            "remaining_checks": int(
+                walked.remaining_checks.to_integral_value(rounding=ROUND_CEILING)
+            ),
+            "remaining_gross": walked.remaining_gross,
+        }
+    )
+    elective_so_far = None if walked is None else walked.so_far["elective"]
     items = [
         _item(
             LIMIT_401K_ELECTIVE,
             LIMIT_LABELS[LIMIT_401K_ELECTIVE],
             elective,
             limits,
-            so_far=None if walked is None else walked.so_far["elective"],
+            so_far=elective_so_far,
             backfilled_from=None if walked is None else walked.backfilled_from,
+            # The rate is the row's OWN cap against the row's OWN so-far: traditional and Roth
+            # together, because 402(g) counts them together and a preset that moved only one
+            # of them would aim at a cap the other half is already eating into.
+            to_cap_rate=_to_cap_rate(elective_cap, elective_so_far, walked),
+            **tail,
         ),
         _item(
             LIMIT_415C_TOTAL,
@@ -265,6 +349,7 @@ def paycheck_pace(
                 else _total_additions_so_far(policy_so_far, walked, elective_cap)
             ),
             backfilled_from=None if walked is None else walked.backfilled_from,
+            **tail,
         ),
     ]
     # 'none' is not a zero-dollar HSA — it is "no HDHP", so NEITHER cap applies. An
@@ -309,6 +394,18 @@ def paycheck_pace(
                     )
                 ),
                 backfilled_from=None if walked is None else walked.backfilled_from,
+                # The employee amount that lands on the cap. Measured against the deferrals
+                # already made PLUS the employer's whole year — the deposit arrives whatever
+                # the employee elects, so the room the remaining checks may fill is the cap
+                # less both. Never the row's own `so_far`, which counts the deposit only once
+                # the January check has been cut: a January reader would otherwise be told to
+                # fill room the employer is about to take.
+                to_cap_per_check=_to_cap_per_check(
+                    limits.get(hsa_key),
+                    None if walked is None else walked.so_far["hsa_employee"] + deposit,
+                    walked,
+                ),
+                **tail,
             )
         )
     # espp_pct 0 is "not enrolled", which is a different statement from "enrolled at 0 %".

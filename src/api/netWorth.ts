@@ -53,11 +53,22 @@ export function fetchTimeseries(
 }
 
 /** Latest month by default; `month` (a first-of-month ISO date) views that snapshot with its
- *  own month-over-month delta — the ribbon's click-to-view (2026-09-03 shell spec §7). */
-export function fetchSummary(owner: OwnerScope = null, month?: string): Promise<NetWorthSummary> {
+ *  own month-over-month delta — the ribbon's click-to-view (2026-09-03 shell spec §7).
+ *
+ *  `granularity` reads the same book at the grain the page is DRAWING (2026-09-09 audit item
+ *  23): under quarterly only quarter ends are snapshots, so the viewed one is the latest
+ *  quarter end, the delta is against the quarter before it, and `month` is an AS OF — the
+ *  server answers with the last quarter that had closed by then. Sent only when it is not
+ *  the monthly default, so an unscoped monthly request stays byte-identical to the old one. */
+export function fetchSummary(
+  owner: OwnerScope = null,
+  month?: string,
+  granularity: 'monthly' | 'quarterly' = 'monthly',
+): Promise<NetWorthSummary> {
   const params = new URLSearchParams()
   if (owner !== null) params.set('owner', String(owner))
   if (month !== undefined) params.set('month', month)
+  if (granularity !== 'monthly') params.set('granularity', granularity)
   const query = params.toString()
   return api<NetWorthSummary>(`/net-worth/summary${query === '' ? '' : `?${query}`}`)
 }

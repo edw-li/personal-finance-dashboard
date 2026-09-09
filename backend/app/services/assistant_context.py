@@ -9,9 +9,10 @@ the endpoint 500ing."""
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import BaseModel
@@ -29,6 +30,18 @@ CONTEXT_CHAR_CAP = 50_000
 MONTHS_WINDOW = 24
 MONTHS_WINDOW_TIGHT = 12
 UP_NEXT_DAYS = 60
+# The seven Decimal knobs `projection()` takes. `years` is an int and is handled beside
+# them; the vocabulary itself is the page's (src/components/projection/projectionScenario.ts
+# KNOBS) and the router's — this list only says which of them survive a URL.
+PROJECTION_KNOBS = (
+    "annual_return",
+    "annual_spend",
+    "contribution_growth",
+    "inflation",
+    "monthly_contribution",
+    "swr",
+    "volatility",
+)
 
 
 def jsonable(value: Any) -> Any:
@@ -67,6 +80,31 @@ def _decimate(values: list, step: int = 12) -> list:
 def _view_owner(view: dict) -> str | None:
     raw = view.get("owner")
     return str(raw) if raw not in (None, "", "null") else None
+
+
+# The shell writes the viewed month as `month=YYYY-MM` (src/components/shell/useScope.ts):
+# short by design, because the URL is a thing people read. `date.fromisoformat` refuses the
+# reduced form, so every builder that reads a month reads it through _view_month.
+_SHORT_MONTH = re.compile(r"^\d{4}-\d{2}$")
+
+
+def _view_month(search: dict, view: dict) -> date | None:
+    """The month ON SCREEN, or None when there is none to honor.
+
+    `YYYY-MM` is the shell's grammar; a full `YYYY-MM-DD` is the legacy link the shell
+    rewrites on arrival, and any day within it names its month. Anything else is None —
+    the page's own rule, which every caller here shares: a garbled month falls back to the
+    latest rather than answering about a month that does not exist."""
+    raw = search.get("month") or view.get("month") or view.get("focusMonth")
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    try:
+        if _SHORT_MONTH.match(text):
+            return date.fromisoformat(f"{text}-01")
+        return date.fromisoformat(text).replace(day=1)
+    except ValueError:
+        return None
 
 
 def _view_year(view: dict) -> int | None:
@@ -182,13 +220,8 @@ def _spending_builder(window: int):
         m = await spending_matrix(db=db)
         y = await spending_yearly(db=db)
         names = {c.id: c.name for c in m.categories}
-        month_param = search.get("month") or view.get("focusMonth")
-        focus_index = len(m.months) - 1
-        if isinstance(month_param, str):
-            try:
-                focus_index = m.months.index(date.fromisoformat(month_param))
-            except ValueError:
-                pass  # a garbled ?month falls back to the latest (the page's own rule)
+        month = _view_month(search, view)
+        focus_index = m.months.index(month) if month in m.months else len(m.months) - 1
         slice_from = len(m.months) - min(window, len(m.months))
         return {
             "months": _tail(m.months, window),
@@ -231,12 +264,20 @@ def _net_worth_builder(window: int):
         granularity = granularity if granularity in ("monthly", "quarterly") else "monthly"
         owner = _view_owner(view)
         ts = await net_worth_timeseries(granularity=granularity, owner=owner, db=db)
-        nw = await net_worth_summary(owner=owner, db=db)
-        last = len(ts.months) - 1
-        value_by_account = {s.account_id: s.values[last] for s in ts.series} if last >= 0 else {}
+        # The ribbon's month, when this axis actually carries it: net_worth_summary 404s a
+        # month with no snapshot, and the quarterly axis drops two months in three. An
+        # unmatched month falls back to the latest instead of taking the section down.
+        month = _view_month(search, view)
+        viewed = month if month in ts.months else None
+        index = ts.months.index(viewed) if viewed is not None else len(ts.months) - 1
+        nw = await net_worth_summary(owner=owner, month=viewed, db=db)
+        value_by_account = {s.account_id: s.values[index] for s in ts.series} if index >= 0 else {}
         return {
             "owner_scope": owner or "household",
             "granularity": granularity,
+            # WHICH month every figure below stands on — the summary, and each account's
+            # balance. Without it a month-scoped answer reads as if it were the latest.
+            "viewed_month": ts.months[index] if index >= 0 else None,
             "months": _tail(ts.months, window),
             "group_totals": {g: _tail(v, window) for g, v in ts.group_totals.items()},
             "net_worth": _tail(ts.net_worth, window),
@@ -408,27 +449,104 @@ async def _credit_cards(db: AsyncSession, search: dict, view: dict) -> dict:
     return {"cards": cards, "reward_categories": categories, "rates": rates}
 
 
+def _whatif_entries(search: dict, view: dict) -> list[str]:
+    """The Projection page's live scenario, in the server's OWN wire grammar
+    (services/sandbox_links.py): `<knob>:<value>` and `retire:<person_id>:<YYYY-MM>`.
+
+    The page publishes its canonical entry list through useAssistantView, so `view` is the
+    channel that carries all of them. `search` is a fallback and can only ever hold ONE:
+    the drawer builds it from URLSearchParams, which collapses repeated params to the last."""
+    raw = view.get("whatif")
+    if raw is None:
+        raw = search.get("whatif")
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, str)]
+    return []
+
+
+def _projection_scenario(entries: list[str]) -> tuple[dict[str, Any], list[str]]:
+    """Entries → `projection()` keyword arguments, plus the entries actually honored.
+
+    Every FENCE is the router's (api/projection.py raises 422 for a knob out of bounds,
+    exactly as it would for the query param the page sends): decoding here only refuses
+    what could never have arrived through a query string in the first place — a key outside
+    the vocabulary, a value no parser reads, a retirement that fails the router's own
+    RETIRE_PATTERN. Those are dropped rather than raised: a stale link must not blank the
+    section. Last mention of a knob wins, like a repeated query param."""
+    from app.api.projection import DEFAULT_YEARS, RETIRE_PATTERN, YEARS_MAX, YEARS_MIN
+
+    knobs: dict[str, Any] = {}
+    retire: list[str] = []
+    honored: dict[str, str] = {}
+    for entry in entries:
+        key, separator, value = entry.partition(":")
+        if separator == "":
+            continue
+        if key == "retire":
+            # `retire:2:2035-06` → the "2:2035-06" the router's own parser takes.
+            if RETIRE_PATTERN.match(value):
+                retire.append(value)
+                honored[entry] = entry
+            continue
+        if key == "years":
+            # YearsQuery's ge/le is FastAPI's, and FastAPI never runs on a direct call — so
+            # the horizon is fenced here, against the router's own numbers.
+            #
+            # isdecimal(), NOT isdigit(): "²" is a digit that int() refuses, and the
+            # length fence keeps int() clear of CPython's 4300-digit conversion limit, which
+            # refuses too. Everything in this loop must DROP a garbled entry, never raise
+            # one — a raised one would blank the whole section.
+            if value.isdecimal() and len(value) <= len(str(YEARS_MAX)):
+                if YEARS_MIN <= int(value) <= YEARS_MAX:
+                    knobs["years"] = int(value)
+                    honored[key] = entry
+            continue
+        if key not in PROJECTION_KNOBS:
+            continue
+        try:
+            parsed = Decimal(value)
+        except InvalidOperation:
+            continue
+        # NaN and Infinity parse as Decimals and would reach arithmetic the router only
+        # guards for four of the seven knobs.
+        if not parsed.is_finite():
+            continue
+        knobs[key] = parsed
+        honored[key] = entry
+    # The horizon is the one knob with a default: absent, the section reads the router's own.
+    knobs.setdefault("years", DEFAULT_YEARS)
+    return {**knobs, "retire": retire or None}, list(honored.values())
+
+
 async def _projection(db: AsyncSession, search: dict, view: dict) -> dict:
     from fastapi import HTTPException
 
     from app.api.projection import projection
 
+    scenario, honored = _projection_scenario(_whatif_entries(search, view))
     try:
         p = await projection(
-            annual_return=None,
-            monthly_contribution=None,
-            annual_spend=None,
-            swr=None,
-            years=30,
-            volatility=None,
-            inflation=None,
-            contribution_growth=None,
-            retire=None,
+            annual_return=scenario.get("annual_return"),
+            monthly_contribution=scenario.get("monthly_contribution"),
+            annual_spend=scenario.get("annual_spend"),
+            swr=scenario.get("swr"),
+            years=scenario["years"],
+            volatility=scenario.get("volatility"),
+            inflation=scenario.get("inflation"),
+            contribution_growth=scenario.get("contribution_growth"),
+            retire=scenario["retire"],
             db=db,
         )
     except HTTPException as exc:
-        return {"error": exc.detail}  # NO_SNAPSHOTS on a fresh database
+        # NO_SNAPSHOTS on a fresh database — or a knob the router refuses, which is the
+        # same sentence the PAGE is showing, since it sends these very params.
+        return {"error": exc.detail, "scenario_entries": honored}
     payload = p.model_dump()
+    # So the model knows a scenario is in play and can name it: without this every figure
+    # below reads as the household's derived plan rather than the what-if on screen.
+    payload["scenario_entries"] = honored
     # Decimate month-grain series to year-grain: the model reads trends, not 360 points.
     # Every series is sampled at the SAME indices, so index i still names one month across
     # all of them — and the horizon's last month survives (see _decimate).

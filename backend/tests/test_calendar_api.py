@@ -35,7 +35,10 @@ CALENDAR = "/api/v1/calendar"
 TODAY = date(2026, 8, 24)  # a Monday; the router's clock is the product clock
 # Feb 2026: every 2026 payment date AND the Apr 15 filing are still ahead.
 FEBRUARY = date(2026, 2, 2)
+# Jan 5 2026: the Jan 15 Q4 payment of tax year 2025 is still ahead of the clock.
+JANUARY = date(2026, 1, 5)
 APRIL = f"{CALENDAR}?start=2026-04-01&end=2026-04-30"
+JANUARY_WINDOW = f"{CALENDAR}?start=2026-01-01&end=2026-01-31"
 # Every 2dp figure a detail renders, in order — the sentence and the `amount` have to be
 # the same numbers, which is the wiring the two filing-balance tests are about.
 MONEY_RE = re.compile(r"\$([\d,]+\.\d{2})")
@@ -1030,6 +1033,72 @@ async def test_the_apr_15_filing_balance_survives_a_missing_current_year_row(
         "status": "partial",
         "note": "no 2026 tax year entered — dates only",
     }
+
+
+async def test_a_january_q4_payment_is_priced_from_the_prior_years_facts(
+    auth_client, db, monkeypatch
+):
+    """Jan 5 2026: the Jan 15 chip is tax year 2025's Q4, and 2025's facts are the only ones
+    that can price it. Before the fix `_tax_facts` returned the CURRENT year only, so the
+    payment lost its amount for the first fortnight of every year (2026-09-09 audit item 7).
+    It is also the LAST remaining 2025 date, so it carries the whole shortfall."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: JANUARY)
+    await seed_priceable_year(db, 2025)  # no paycheck profile: nothing withheld
+    await db.commit()
+    body = (await auth_client.get(JANUARY_WINDOW)).json()
+    q4 = next(e for e in body["events"] if e["key"] == "tax:2025-q4:2026-01-15")
+    shortfall, share = (money(m) for m in MONEY_RE.findall(q4["detail"]))
+    assert q4["detail"] == (
+        f"Shortfall ${shortfall:,.2f} to the current-year leg — ${share:,.2f} of it here"
+    )
+    assert share == shortfall > 0  # the only 2025 payment date still ahead
+    assert (money(q4["amount"]), q4["basis"]) == (share, "estimated")
+    # 2026 itself is not entered, and the footer still says so — the prior year's facts ride
+    # alongside the current year's, they do not replace them. "dates only" would now be a
+    # lie about the chip beside it, so the note names what IS priced.
+    assert next(s for s in body["sources"] if s["source"] == "tax") == {
+        "source": "tax",
+        "status": "partial",
+        "note": "no 2026 tax year entered — dates only; Jan 15 is priced from 2025",
+    }
+
+
+async def test_the_january_window_reads_the_prior_year_once(auth_client, db, monkeypatch):
+    """Both January dates want 2025: the Q4 payment (its facts) and — in a window wide
+    enough — Apr 15 (its balance). That is still ONE withholding computation per year
+    (the loader's standing rule), and the Q1 chip keeps its balance."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: JANUARY)
+    await seed_priceable_year(db, 2025)
+    await seed_priceable_year(db, 2026)
+    await db.commit()
+    calls: list[int] = []
+    real_estimate = calendar_api.withholding_estimate
+
+    async def counting_estimate(db_, year, today):
+        calls.append(year)
+        return await real_estimate(db_, year, today)
+
+    monkeypatch.setattr(calendar_api, "withholding_estimate", counting_estimate)
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-01-01&end=2026-04-30")).json()
+    assert sorted(calls) == [2025, 2026]
+    q4 = next(e for e in body["events"] if e["key"] == "tax:2025-q4:2026-01-15")
+    q1 = next(e for e in body["events"] if e["key"] == "tax:2026-q1:2026-04-15")
+    assert money(q4["amount"]) > 0
+    assert "files 2025: balance" in q1["detail"]
+
+
+async def test_a_january_q4_payment_that_has_passed_keeps_its_bare_date(
+    auth_client, db, monkeypatch
+):
+    """Jan 20: Jan 15 is history. A past date is never priced (the generator's rule), and
+    the prior year's facts are not fetched for it either."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2026, 1, 20))
+    await seed_priceable_year(db, 2025)
+    await db.commit()
+    body = (await auth_client.get(JANUARY_WINDOW)).json()
+    q4 = next(e for e in body["events"] if e["key"] == "tax:2025-q4:2026-01-15")
+    assert (q4["amount"], q4["basis"]) == (None, "scheduled")
+    assert q4["detail"] == "Q4 2025 estimated payment"
 
 
 async def test_apr_15_carries_the_prior_years_balance_beside_this_years_share(

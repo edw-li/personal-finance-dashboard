@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
@@ -7,7 +7,8 @@ import ToastProvider from '../components/ToastProvider'
 import { calendarEvent } from '../testing/calendarFixtures'
 import type { CalendarEvent, CalendarResponse } from '../types/api'
 import { formatDate, formatMonth } from '../utils/format'
-import { addDays, addMonths, currentMonthIso } from '../utils/months'
+import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
+import { shiftMonth } from '../components/calendar/CalendarGrid'
 import CalendarPage from './CalendarPage'
 
 vi.mock('../api/calendar', async (importOriginal) => ({
@@ -91,6 +92,15 @@ function renderPage(events: CalendarEvent[] = fixtureEvents(), entry = '/calenda
 const url = () => screen.getByTestId('url').textContent
 const cell = (day: string) =>
   document.querySelector(`[role="gridcell"][data-day="${day}"]`) as HTMLElement
+/** The grid's ONE roving tab stop, as a day string — there must be exactly one, or the
+ *  grid is unreachable by keyboard. */
+const cursor = () => {
+  const stops = Array.from(document.querySelectorAll('[role="gridcell"][data-day]')).filter(
+    (c) => c.getAttribute('tabindex') === '0',
+  )
+  expect(stops).toHaveLength(1)
+  return stops[0].getAttribute('data-day') as string
+}
 const chipIn = (day: string, prefix: string) =>
   Array.from(cell(day).querySelectorAll('button.cal-chip')).find((c) =>
     c.textContent?.startsWith(prefix),
@@ -122,7 +132,9 @@ describe('CalendarPage — month, views, grid', () => {
     renderPage()
     await screen.findByRole('grid')
     expect(fetchCalendar).toHaveBeenCalledWith(...windowFor(MONTH))
-    expect(chipIn(DAY_16, 'RSU vest').textContent).toBe('RSU vest · 4 grants ~+$41.2k')
+    const vest = chipIn(DAY_16, 'RSU vest')
+    expect(vest.querySelector('.cal-chip-label')?.textContent).toBe('RSU vest · 4 grants')
+    expect(vest.querySelector('.cal-chip-amount')?.textContent).toBe('~+$41.2k')
     expect(cell(DAY_15).querySelectorAll('button.cal-chip')).toHaveLength(2)
     expect(cell(DAY_15).querySelector('button.cal-more')?.textContent).toBe('+2 more')
     expect(screen.queryByText(/confirmed announcements only/)).toBeNull() // the caveat prose is gone
@@ -145,6 +157,74 @@ describe('CalendarPage — month, views, grid', () => {
     expect(url()).toBe('/calendar')
   })
 
+  it('mouse month navigation carries the keyboard cursor (2026-09-09 audit item 13)', async () => {
+    // Only the active day's cell is in the tab order. ‹ › / Today / Jump changed the month
+    // and left `activeDay` behind, so every month reached with the mouse had no tab stop at
+    // all — Tab fell straight past the grid.
+    renderPage()
+    await screen.findByRole('grid')
+    const today = todayIso()
+    expect(cursor()).toBe(today)
+    // ‹ › keep the day-of-month, clamped — the move PageUp/PageDown already make.
+    fireEvent.click(screen.getByRole('button', { name: 'Next month' }))
+    expect(cursor()).toBe(shiftMonth(today, 1))
+    expect(cursor().slice(0, 7)).toBe(NEXT.slice(0, 7))
+    fireEvent.click(screen.getByRole('button', { name: 'Previous month' }))
+    expect(cursor()).toBe(shiftMonth(shiftMonth(today, 1), -1))
+    // A jump lands on the first of the month it names; Today lands on today.
+    fireEvent.change(screen.getByLabelText('Jump to month'), { target: { value: '2027-03' } })
+    expect(cursor()).toBe('2027-03-01')
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }))
+    expect(cursor()).toBe(today)
+  })
+
+  it('the cursor follows a month changed from OUTSIDE the controls (item 13 follow-up)', async () => {
+    // Back/Forward, a pasted ?month= link and the palette write the scope without going
+    // through ‹ › / Today / Jump, so nothing there could move `activeDay` — and a cursor
+    // left in a month that is no longer shown is a grid with no tab stop at all.
+    const Jump = () => {
+      const navigate = useNavigate()
+      return (
+        <>
+          <button type="button" onClick={() => navigate('/calendar?month=2027-03')}>
+            router jump
+          </button>
+          <button type="button" onClick={() => navigate(-1)}>
+            router back
+          </button>
+        </>
+      )
+    }
+    vi.mocked(fetchCalendar).mockResolvedValue(payload())
+    render(
+      <MemoryRouter initialEntries={['/calendar']}>
+        <ToastProvider>
+          <Routes>
+            <Route
+              path="*"
+              element={
+                <>
+                  <CalendarPage />
+                  <Jump />
+                </>
+              }
+            />
+          </Routes>
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+    await screen.findByRole('grid')
+    expect(cursor()).toBe(todayIso())
+    fireEvent.click(screen.getByRole('button', { name: 'router jump' }))
+    await screen.findByRole('heading', { name: formatMonth('2027-03-01') })
+    // Today is not in March 2027, so the cursor is that month's first day.
+    expect(cursor()).toBe('2027-03-01')
+    // ...and Back is a month change too: today is in it, so the cursor is today.
+    fireEvent.click(screen.getByRole('button', { name: 'router back' }))
+    await screen.findByRole('heading', { name: formatMonth(MONTH) })
+    expect(cursor()).toBe(todayIso())
+  })
+
   it('accepts a legacy YYYY-MM-DD month link and the month input jumps', async () => {
     renderPage(fixtureEvents(), `/calendar?month=${PREV}`)
     await screen.findByRole('grid')
@@ -162,7 +242,10 @@ describe('CalendarPage — month, views, grid', () => {
     expect(screen.queryByRole('grid')).toBeNull()
     const list = document.querySelector('.cal-list') as HTMLElement
     expect(list.textContent).toContain('+$6.8k')
-    expect(list.textContent).toContain('2025 offer')
+    // A fold's parts carry FORMATTED money, not the wire's raw decimal string
+    // (2026-09-09 audit item 53).
+    expect(list.textContent).toContain('2025 offer $41,200.00')
+    expect(list.textContent).not.toContain('$41200.00')
     fireEvent.click(screen.getByRole('button', { name: 'Grid' }))
     expect(url()).toBe('/calendar')
     await screen.findByRole('grid')
@@ -231,7 +314,9 @@ describe('CalendarPage — month, views, grid', () => {
       </MemoryRouter>,
     )
     // .error-banner, not role="alert": the toast region carries that role too, always.
-    expect((await screen.findByText(/calendar down/)).closest('.error-banner')).toBeTruthy()
+    expect(
+      (await screen.findByText(/Couldn't load the calendar/)).closest('.error-banner'),
+    ).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await screen.findByRole('grid')
   })

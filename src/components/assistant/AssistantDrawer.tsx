@@ -17,6 +17,7 @@ import {
   writeAssistantTranscript,
 } from '../../api/assistantSession'
 import type { TranscriptItem } from '../../api/assistantSession'
+import { fetchHousehold } from '../../api/household'
 import { streamChat } from '../../api/assistantStream'
 import type { ChatStreamHandle } from '../../api/assistantStream'
 import type {
@@ -24,8 +25,9 @@ import type {
   AssistantModelsOut,
   AssistantPreviewSection,
   AssistantSettingsOut,
+  PersonOut,
 } from '../../types/api'
-import { NAV_ITEMS } from '../navItems'
+import { describeContext } from './contextLabel'
 import { isNavLink } from './navLink'
 import { renderMarkdown } from './markdown'
 import { INSIGHT_PRESETS, samplesFor } from './samples'
@@ -47,6 +49,10 @@ const SENT_CONTENT_CAP = 8000
  *  aria-controls target. */
 const PREVIEW_LIST_ID = 'assistant-context-sections'
 
+/** One frozen empty roster: the label memo takes `people` as a dep, and a fresh literal
+ *  each render would re-derive the sentence on every keystroke (ProjectionPage's idiom). */
+const NO_PEOPLE: PersonOut[] = []
+
 const MODEL_LABELS: Record<string, string> = {
   'kimi-k3': 'Kimi K3',
   'deepseek-v4-pro-0813': 'DeepSeek V4 Pro',
@@ -56,10 +62,6 @@ const MODEL_LABELS: Record<string, string> = {
 
 function modelLabel(key: string, models: AssistantModelsOut | null): string {
   return models?.models.find((m) => m.key === key)?.label ?? MODEL_LABELS[key] ?? key
-}
-
-function pageLabel(route: string): string {
-  return NAV_ITEMS.find((item) => item.to === route)?.label ?? route
 }
 
 /** Keeps the selection inside the catalog: a key the server has since retired — persisted
@@ -156,6 +158,12 @@ export default function AssistantDrawer() {
   const [streaming, setStreaming] = useState(false)
   const [previewSections, setPreviewSections] = useState<AssistantPreviewSection[] | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
+  // The roster the "Seeing:" chip names an owner through. Its own fetch and its own
+  // failure, on the pages' isolated-fetch posture: a household hiccup costs the chip one
+  // segment and nothing else. Asked once, and only after the drawer has been OPENED — the
+  // launcher rides every page, and an unopened drawer must cost no request at all.
+  const [people, setPeople] = useState<PersonOut[]>(NO_PEOPLE)
+  const rosterAsked = useRef(false)
   const launcherRef = useRef<HTMLButtonElement>(null)
   const drawerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -309,14 +317,28 @@ export default function AssistantDrawer() {
     view: readAssistantView(),
   })
 
+  useEffect(() => {
+    if (!open || rosterAsked.current) return
+    rosterAsked.current = true
+    fetchHousehold()
+      .then((household) => setPeople(household.people))
+      .catch(() => undefined) // no roster: the chip omits the owner rather than printing an id
+  }, [open])
+
+  // NOT buildContext(): that one snapshots at SEND time on purpose. This is the same three
+  // fields read for the chip, re-derived whenever the route, its params or the published
+  // view move.
   const contextLabel = useMemo(() => {
     void viewVersion // re-derive when a page republishes its view
-    const view = readAssistantView()
-    const extras = Object.entries(view)
-      .filter(([, value]) => value !== null && value !== '')
-      .map(([k, value]) => `${k}: ${String(value)}`)
-    return [pageLabel(location.pathname), ...extras].join(' · ')
-  }, [location.pathname, viewVersion])
+    return describeContext(
+      {
+        route: location.pathname,
+        search: Object.fromEntries(new URLSearchParams(location.search).entries()),
+        view: readAssistantView(),
+      },
+      people,
+    )
+  }, [location.pathname, location.search, viewVersion, people])
 
   const togglePreview = () => {
     const next = !previewOpen

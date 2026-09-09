@@ -13,7 +13,7 @@ SECTIONS = (ORDINARY_INCOME, DEDUCTIONS, CAPITAL_GAINS)
 TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     ("annual_salary", "Annual Salary", ORDINARY_INCOME, 10, False),
     ("gross_paycheck", "Gross Paycheck", ORDINARY_INCOME, 20, True),
-    ("pay_periods", "Pay Periods", ORDINARY_INCOME, 30, False),
+    ("pay_periods", "Pay periods (checks received so far this year)", ORDINARY_INCOME, 30, False),
     ("latest_w2_income", "Latest W2 Income", ORDINARY_INCOME, 40, True),
     ("other_w2_income", "Other W2 Income", ORDINARY_INCOME, 50, True),
     ("w2_stock_rsus_sold", "W2: Stock/RSUs Sold", ORDINARY_INCOME, 60, False),
@@ -28,12 +28,28 @@ TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     # the precedent here; it joined the engine's keys on 2026-08-31, spec C3.)
     ("w2_fed_withholding", "W2: Federal Withholding", ORDINARY_INCOME, 112, False),
     ("w2_state_withholding", "W2: State Withholding", ORDINARY_INCOME, 114, False),
+    # The third tracker-only key (2026-09-09 audit item 4c): what was ACTUALLY withheld on
+    # the year's bonuses, which replaces the withholding card's 22% / 6.6% / marginal-FICA
+    # model when it is entered. Like its two neighbours, the engine never reads it.
+    (
+        "w2_bonus_withholding",
+        "W-2: bonus withholding (actual, optional)",
+        ORDINARY_INCOME,
+        116,
+        False,
+    ),
     ("stcg_total", "Short Term Capital Gain/Loss", ORDINARY_INCOME, 120, True),
     ("stcg_standard", "STCG: Standard Gain/Loss", ORDINARY_INCOME, 130, False),
     ("stcg_espp_component", "STCG: ESPP Sale Component", ORDINARY_INCOME, 140, False),
     ("unqualified_dividends", "Unqualified Dividends", ORDINARY_INCOME, 150, True),
     ("unq_div_us_treasuries_etf", "Unq Div: US Treasuries ETF", ORDINARY_INCOME, 160, False),
-    ("unq_div_state_exempt_pct", "Unq Div: State Exempt Percentage", ORDINARY_INCOME, 170, False),
+    (
+        "unq_div_state_exempt_pct",
+        "Treasury-fund dividends — state-exempt share (%)",
+        ORDINARY_INCOME,
+        170,
+        False,
+    ),
     ("unq_div_other", "Unq Div: Other Dividends", ORDINARY_INCOME, 180, False),
     ("interest_total", "Interest", ORDINARY_INCOME, 190, True),
     ("interest_standard", "Interest: Standard", ORDINARY_INCOME, 200, False),
@@ -51,7 +67,13 @@ TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     ("itemized_salt", "Itemized: SALT Amount", DEDUCTIONS, 100, False),
     ("itemized_donations", "Itemized: Donations/Tithes", DEDUCTIONS, 110, False),
     ("itemized_vehicle_reg", "Itemized: Vehicle Registration Fees", DEDUCTIONS, 120, False),
-    ("itemized_sec199a_div", "Itemized: Sec 199A Div (20%)", DEDUCTIONS, 130, False),
+    (
+        "itemized_sec199a_div",
+        "Sec 199A QBI deduction (20% of qualified REIT/PTP dividends)",
+        DEDUCTIONS,
+        130,
+        False,
+    ),
     ("itemized_other", "Itemized: Other Items", DEDUCTIONS, 140, False),
     # CA state-engine data rows from the sheet's STATE INCOME TAX INFO block — per-year
     # values the Plan 5 engine needs; they are inputs, not brackets.
@@ -63,6 +85,52 @@ TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     ("qualified_dividends", "Qualified Dividends", CAPITAL_GAINS, 40, False),
     ("other_capital_gains", "Other Capital Gains", CAPITAL_GAINS, 50, False),
 ]
+
+# The UNIT each key is entered in (2026-09-09 spec §2). Money is the default and the
+# exceptions are listed, so a key added later is money until it says otherwise — which is
+# right for a tax sheet. Deliberately CODE, not a `tax_input_definitions` column: the unit
+# is a property of the key rather than of one database, so a stored column would only mean
+# a migration to tell an old database that `pay_periods` counts checks. The API stamps
+# every `TaxInputsOut` item with `unit_for(key)` and the form picks its box from it.
+MONEY = "money"
+COUNT = "count"
+PERCENT = "percent"
+INPUT_UNITS = (MONEY, COUNT, PERCENT)
+
+TAX_INPUT_UNITS: dict[str, str] = {
+    "pay_periods": COUNT,
+    # Stored as the FRACTION the engine multiplies by (0.9753); the form shows 97.53%.
+    "unq_div_state_exempt_pct": PERCENT,
+}
+
+
+def unit_for(key: str) -> str:
+    """This key's entry unit — `money` unless TAX_INPUT_UNITS says otherwise."""
+    return TAX_INPUT_UNITS.get(key, MONEY)
+
+
+_LABELS: dict[str, str] = {key: label for key, label, *_ in TAX_INPUT_DEFINITIONS}
+
+
+def label_for(key: str, stored: str) -> str:
+    """The label to SHOW for a key: this file's, when this file knows the key.
+
+    `seed_tax_definitions` is insert-only by contract (test_seed.py pins it), so a row
+    written before a relabel keeps the old text forever — and a relabel is a code change,
+    like the unit above. Serving the label from here rather than from the row means a
+    rename ships with the code that motivated it, on every database, with no migration and
+    no boot-time rewrite of a table nothing else touches. `stored` is the fallback for a
+    key this file does not define, which only an importer could create.
+    """
+    return _LABELS.get(key, stored)
+
+
+# The ranges the PUT enforces per unit. A count of checks received so far this year is a
+# whole number, and 53 is the most a weekly payroll can pay in one calendar year; a percent
+# key stores a fraction, so 0..1 (the engine multiplies it directly).
+MIN_INPUT_COUNT = 0
+MAX_INPUT_COUNT = 53
+
 
 JURISDICTIONS = (
     "federal",
@@ -101,6 +169,7 @@ PER_PERSON_KEYS: tuple[str, ...] = (
     "w2_other",
     "w2_fed_withholding",
     "w2_state_withholding",
+    "w2_bonus_withholding",
     "trad_401k_contributions",
     "hsa_contributions",
     "hsa_contributions_employer",

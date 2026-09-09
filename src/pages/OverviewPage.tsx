@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { fetchCalendar } from '../api/calendar'
-import { ApiError } from '../api/client'
+import { describeError } from '../api/client'
 import { fetchCoverage } from '../api/coverage'
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
@@ -262,7 +262,7 @@ export default function OverviewPage() {
       )
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
-        setError(err instanceof ApiError ? err.message : 'Could not load the overview.')
+        setError(describeError(err, 'the overview'))
       })
       .finally(() => {
         if (seq === seqRef.current) setBusy(false)

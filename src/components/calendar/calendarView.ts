@@ -107,9 +107,17 @@ export function chipAmount(event: CalendarEvent): string | null {
   return signedCompact(toCents(event.amount), event.direction, event.basis === 'estimated')
 }
 
+/** A chip's two pieces. They are rendered as separate spans (CalendarGrid): a narrow cell
+ *  ellipsizes the LABEL and never the money — a clipped label is a loss, a clipped amount
+ *  ("~+$41.2…") is a lie (2026-09-09 audit item 54). */
+export function chipParts(event: CalendarEvent): { label: string; amount: string | null } {
+  return { label: event.short_label, amount: chipAmount(event) }
+}
+
+/** The same chip as ONE string — for a `title`, an aria label or any single-node reader. */
 export function chipText(event: CalendarEvent): string {
-  const amount = chipAmount(event)
-  return amount === null ? event.short_label : `${event.short_label} ${amount}`
+  const { label, amount } = chipParts(event)
+  return amount === null ? label : `${label} ${amount}`
 }
 
 export function chipTitle(event: CalendarEvent): string {
