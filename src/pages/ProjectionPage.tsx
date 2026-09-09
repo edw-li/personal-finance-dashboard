@@ -22,6 +22,7 @@ import {
   type ProjectionScenario,
 } from '../components/projection/projectionScenario'
 import ScenarioPanel from '../components/projection/ScenarioPanel'
+import { useAssistantView } from '../components/assistant/viewState'
 import StatTile from '../components/StatTile'
 import Segmented from '../components/shell/Segmented'
 import PageFrame from '../components/shell/PageFrame'
@@ -82,6 +83,11 @@ export default function ProjectionPage() {
     [retryNonce, cachedProjection, roster],
   )
   const sandbox = useSandbox(spec)
+  // What the assistant must answer against: the scenario ON SCREEN (2026-09-01 spec §6).
+  // The canonical entries, which are the server's own wire grammar (services/sandbox_links.py)
+  // and what a pin stores — the drawer hands them straight back and the projection section
+  // runs THEM, instead of explaining the derived run to a reader looking at a what-if.
+  useAssistantView({ whatif: sandbox.entries })
   // What the tiles and charts draw: the live scenario, or the derived run while it is empty.
   const data = sandbox.result ?? sandbox.baseline
   // A 404 is "nothing to project from yet" (no snapshots): the wizard, not a Retry.

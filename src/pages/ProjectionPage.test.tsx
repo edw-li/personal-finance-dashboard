@@ -10,6 +10,7 @@ import {
 import type { NetWorthTimeseries, ProjectionOut } from '../types/api'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { PINS_VERSION, pinsKey } from '../sandbox/pins'
+import { readAssistantView } from '../components/assistant/viewState'
 import ProjectionPage from './ProjectionPage'
 
 vi.mock('../api/projection', async (importOriginal) => ({
@@ -369,6 +370,21 @@ describe('ProjectionPage', () => {
     )
     // What is left is the empty database's own 404, which has its own answer, not a Retry.
     expect(await screen.findByText(/enter a monthly update/)).toBeTruthy()
+  })
+
+  it('publishes its live scenario to the assistant, in the wire grammar the URL carries', async () => {
+    // Item 8: the drawer answered from the DERIVED run while the reader was looking at a
+    // what-if, because this page published nothing. The canonical entries are what a pin
+    // stores and what a link carries, so they are what the assistant is handed.
+    renderPage('/projection?whatif=annual_return%3A0.06&whatif=retire%3A2%3A2035-06')
+    await loaded()
+    expect(readAssistantView()).toEqual({ whatif: ['annual_return:0.06', 'retire:2:2035-06'] })
+  })
+
+  it('publishes an empty scenario when the page is showing the derived run', async () => {
+    renderPage()
+    await loaded()
+    expect(readAssistantView()).toEqual({ whatif: [] })
   })
 
   it('holds the frame skeleton — not a bare page — while the FIRST payload is in flight', async () => {

@@ -101,7 +101,12 @@ DEFAULT_CONTRIBUTION_GROWTH = Decimal("0.03")
 CONTRIBUTION_MAX_ABS = Decimal(10) ** 7
 SPEND_MAX_ABS = Decimal(10) ** 9
 
-YearsQuery = Annotated[int, Query(ge=1, le=60)]
+# Named, not inline: assistant_context decodes a `years` entry from the page's URL by
+# calling this router's function DIRECTLY, where FastAPI's Query validation never runs. It
+# fences the horizon against these two, so the sandbox and the assistant cannot drift.
+YEARS_MIN = 1
+YEARS_MAX = 60
+YearsQuery = Annotated[int, Query(ge=YEARS_MIN, le=YEARS_MAX)]
 
 # Repeated, order-free, and STRINGS: "<person_id>:<YYYY-MM>" is one value the user can see
 # in the URL, where two parallel int/date lists could arrive at different lengths. No count
