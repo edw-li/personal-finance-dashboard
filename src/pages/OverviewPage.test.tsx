@@ -591,11 +591,15 @@ describe('OverviewPage tiles', () => {
     expect(deltaOf(hero)?.className).toContain('stat-delta-positive')
     expect(hero.className).toContain('stat-tile-hero')
 
-    // Down day on an up position: the delta describes TODAY, so the tone is negative even
-    // though unrealized gain is large. Both figures are the server's own totals fields.
+    // Down day on an up position: the tone is negative even though unrealized gain is
+    // large. Both figures are the server's own totals fields — and the day they belong to
+    // is the NEWEST quote's, which in this fixture is yesterday's, so the delta is dated
+    // rather than called "today" (audit item 15).
     const portfolio = tileFor('Portfolio')
     expect(valueOf(portfolio)).toBe('$812,345.67')
-    expect(deltaOf(portfolio)?.textContent).toBe('▼ -$2,500.00 (-0.3%) today')
+    expect(deltaOf(portfolio)?.textContent).toBe(
+      `▼ -$2,500.00 (-0.3%) on ${formatDate(daysAgo(1))}`,
+    )
     expect(deltaOf(portfolio)?.className).toContain('stat-delta-negative')
 
     // Spending up is BAD, and glyph and tone are DECOUPLED so that both can be true at once:
@@ -629,6 +633,26 @@ describe('OverviewPage tiles', () => {
     expect(deltaOf(hero)).toBeNull()
     // Not the amount alone, either — the whole delta node is gone.
     expect(screen.queryByText(/MoM/)).toBeNull()
+  })
+
+  // Audit item 15: "today" is a claim about the quote, not about the tile.
+  it('says "today" only when the newest quote really is today’s', async () => {
+    const fresh = todayIso()
+    serve({ holdings: holdingsOut({ as_of: fresh, latest_quote_at: fresh }) })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe('▼ -$2,500.00 (-0.3%) today')
+  })
+
+  it('dates the portfolio delta from the NEWEST quote, not the oldest', async () => {
+    // as_of is the OLDEST quote across holdings (one manual-priced straggler pins it);
+    // latest_quote_at is the newest, and the day change belongs to that one.
+    serve({ holdings: holdingsOut({ as_of: daysAgo(30), latest_quote_at: daysAgo(3) }) })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe(
+      `▼ -$2,500.00 (-0.3%) on ${formatDate(daysAgo(3))}`,
+    )
   })
 
   it('drops the portfolio delta when the day change has an amount but no rate', async () => {

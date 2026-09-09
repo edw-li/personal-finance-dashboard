@@ -343,6 +343,14 @@ export default function OverviewPage() {
   // `totals.unrealized_gl` lesson).
   const totals = data?.holdings.totals
   const asOf = data?.holdings.as_of ?? null
+  // Audit item 15: the day change is the newest quote's move against ITS prior close, so
+  // "today" is a claim about that quote and not about the moment the page is read — on a
+  // Sunday, or after a failed refresh, the tile was still calling Friday's move today's.
+  // latest_quote_at is the NEWEST stamp (as_of is the oldest, the staleness clock); the
+  // fallback is stale-tab armor only, since server-side both derive from one quote list.
+  const quoteDay = (data?.holdings.latest_quote_at ?? asOf)?.slice(0, 10) ?? null
+  const dayChangeWhen =
+    quoteDay === null || quoteDay === todayIso() ? 'today' : `on ${formatDate(quoteDay)}`
   const stats = data ? spendStats(data.matrix, notEntered) : null
   const currentYear = new Date().getFullYear()
   const tax = data ? pickTaxSummary(data.taxes.years, currentYear) : null
@@ -497,7 +505,7 @@ export default function OverviewPage() {
                   totals?.day_change_amount != null && totals.day_change_pct != null
                     ? `${formatCurrency(totals.day_change_amount)} (${formatPct(
                         totals.day_change_pct,
-                      )}) today`
+                      )}) ${dayChangeWhen}`
                     : undefined
                 }
                 tone={toneOf(totals?.day_change_amount)}
