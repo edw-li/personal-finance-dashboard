@@ -121,7 +121,9 @@ class PaceItem:
     to_cap_per_check: Decimal | None = None
 
 
-def _to_cap_rate(limit: Decimal | None, so_far: Decimal | None, walked: Walked | None):
+def _to_cap_rate(
+    limit: Decimal | None, so_far: Decimal | None, walked: Walked | None
+) -> Decimal | None:
     """The TOTAL elective rate (traditional + Roth) over the window's remaining gross that
     lands exactly on `limit`, given what the walk has already counted.
 
@@ -138,7 +140,9 @@ def _to_cap_rate(limit: Decimal | None, so_far: Decimal | None, walked: Walked |
     return (room / walked.remaining_gross).quantize(RATE_QUANTUM, rounding=ROUND_FLOOR)
 
 
-def _to_cap_per_check(limit: Decimal | None, so_far: Decimal | None, walked: Walked | None):
+def _to_cap_per_check(
+    limit: Decimal | None, so_far: Decimal | None, walked: Walked | None
+) -> Decimal | None:
     """`_to_cap_rate`'s twin in DOLLARS: the employee amount per remaining check that lands
     on `limit`. Floored to cents, for the same reason and with the same three nulls."""
     if walked is None or so_far is None or limit is None or walked.remaining_checks <= 0:
