@@ -1576,6 +1576,41 @@ describe('OverviewPage — shell frame and owner scope', () => {
     expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
   })
 
+  // Audit item 11 (the Overview half): the summary returns zero totals for an owner with
+  // no accounts, and a page of $0.00 tiles over a flat line reads as "you have nothing"
+  // rather than "there is nothing here to show" — the chart's all-zero series also makes
+  // ECharts pick a 0..1 axis and print a $0/$1 ladder.
+  it('answers with a note, not zero walls, for an owner with no accounts', async () => {
+    serve({
+      ts: timeseriesOut({ accounts: [], net_worth: ['0.00', '0.00', '0.00'] }),
+      summary: summaryOut({ net_worth: '0.00', mom_delta: '0.00', mom_pct: '0.0' }),
+    })
+    renderPage('/?owner=2')
+
+    await screen.findByText('Net worth — Aug 2026')
+    const hero = tileFor('Net worth — Aug 2026')
+    expect(valueOf(hero)).toBe('—')
+    // The person by name, from the household the scope row already fetched.
+    expect(deltaOf(hero)?.textContent).toBe('No accounts for Grace yet')
+    // Not a $0.00 MoM delta beside it, and no flat line under it.
+    expect(screen.queryByText(/MoM/)).toBeNull()
+    expect(screen.queryByLabelText('Line chart of net worth at every monthly snapshot')).toBeNull()
+    expect(screen.getAllByText('No accounts for Grace yet')).toHaveLength(2)
+  })
+
+  it('keeps the household view whole when the book itself is empty', async () => {
+    // Only an OWNER scope gets the note: a fresh database's own empty states already say
+    // what is missing, and "No accounts for this person yet" is not what the household is.
+    // Seeded so the paint is a CACHED one — the hero's count-up settles from $0.00 on a
+    // fresh paint, and a settling number is not a string this test can pin.
+    const payload = serve({ ts: timeseriesOut({ accounts: [] }) })
+    setSnapshot('overview:all', snapshotOf(payload))
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    expect(screen.queryByText(/No accounts for/)).toBeNull()
+  })
+
   // Item 9: the ping is derived from the OWNER-FILTERED holdings, but /portfolio/history is
   // household-wide — plotting one person's total at the end of the household series drew a
   // fake cliff. PortfolioPage has guarded this since 2026-08-31; the Overview copy did not.
