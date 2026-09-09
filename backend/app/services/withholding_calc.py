@@ -41,7 +41,16 @@ from app.services.tax_service import Bracket, walk
 ZERO = Decimal("0")
 CENT = Decimal("0.01")
 FED_SUPPLEMENTAL = Decimal("0.22")  # federal supplemental rate (under $1M cumulative)
-CA_SUPPLEMENTAL = Decimal("0.1023")  # CA stock/bonus supplemental rate
+CA_SUPPLEMENTAL = Decimal("0.1023")  # CA stock-option/ESPP supplemental rate
+# The OTHER half of the tier (2026-09-09 audit item 4d): 37% on the portion of the year's
+# cumulative supplemental wages above $1,000,000 (Reg. 31.3402(g)-1). Statute, not data —
+# it is not a bracket table anyone enters, and withholding is not the return's tax.
+FED_SUPPLEMENTAL_HIGH = Decimal("0.37")
+SUPPLEMENTAL_TIER_THRESHOLD = Decimal("1000000")
+# California withholds BONUSES at 6.6% and stock at 10.23% (DE 44). Two rates, because the
+# bonus leg is not a vest — using the stock rate on a bonus overstates the state leg by
+# more than a third of it.
+CA_SUPPLEMENTAL_BONUS = Decimal("0.066")
 # Statute, not data: EVERY employer withholds the additional-Medicare surtax only above
 # $200,000 of ITS OWN wages, whatever the employee's filing status is (IRC 3102(f)(1)). The
 # THRESHOLD the return owes it at is data — it lives in the medicare bracket table, which
@@ -70,8 +79,44 @@ PARTNER_TRACKER_IGNORED_NOTE = (
 PARTNER_ENTERED = "entered"
 PARTNER_SIMULATED = "simulated"
 
+# The two spellings of `bonus_source`, the bonus leg's own version of the same idea: a
+# figure the user entered from a paystub always beats the 22 / 6.6 / marginal-FICA model.
+BONUS_ESTIMATED = "estimated"
+BONUS_ENTERED = "entered"
+SUPPLEMENTAL_TIER_WARNING = (
+    "supplemental wages (vests + bonuses) reach {total} this year — the federal supplemental "
+    "rate on the {excess} above $1,000,000 is 37%, not 22%"
+)
+# Payroll is a REMAINDER (see `_jurisdiction_legs`), so a negative one is not a number to
+# clamp away in silence: it means the all-in rate is smaller than the two entered rates add
+# up to, i.e. at least one of the three is wrong.
+NEGATIVE_PAYROLL_WARNING = (
+    "federal + state withholding exceeds the all-in withholding % — the payroll (FICA) "
+    "leg is negative; check the three rates on your paycheck profile"
+)
+
 # (vest date, shares, price) — past vests carry the vest-date FMV, future ones a quote.
 VestTuple = tuple[date, int, Decimal]
+
+
+@dataclass
+class JurisdictionLegs:
+    """The combined withholding total, split three ways (2026-09-09 audit item 3).
+
+    Federal and state are BUILT: each check's taxable base times the rate a paystub gave,
+    plus the supplemental rates on vests and bonuses. Payroll is the REMAINDER — what the
+    all-in `withholding_pct` carried that the two entered rates did not claim — so the
+    three always add back to the combined total to the cent, and no rounding lands
+    somewhere the card cannot show. That also makes payroll the only leg that can go
+    negative, which warns rather than clamping.
+    """
+
+    federal_ytd: Decimal
+    federal_projected: Decimal
+    state_ytd: Decimal
+    state_projected: Decimal
+    payroll_ytd: Decimal
+    payroll_projected: Decimal
 
 
 @dataclass
@@ -101,6 +146,18 @@ class WithholdingEstimate:
     partner_salary_projected: Decimal = ZERO
     partner_checks_elapsed: int = 0
     partner_checks_total: int = 0
+    # --- the BONUS leg (2026-09-09 audit item 4c). `w2_bonuses` raises the liability, so
+    # leaving it out of the withholding was a one-sided estimate. Treated as money already
+    # RECEIVED — the input is an actual, not a forecast — so the same income sits in both
+    # columns and only its marginal FICA differs between them.
+    bonus_income: Decimal = ZERO
+    bonus_withheld_ytd: Decimal = ZERO
+    bonus_withheld_projected: Decimal = ZERO
+    bonus_source: str = BONUS_ESTIMATED  # 'estimated' | 'entered'
+    # --- the per-jurisdiction split (2026-09-09 audit item 3). None means the split is
+    # UNAVAILABLE: at least one profile pricing a check on the grid carries no federal or
+    # no state rate, and half a year's federal figure is not a federal figure.
+    jurisdictions: JurisdictionLegs | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -169,6 +226,20 @@ def _additional_medicare_gap(
     return owed - withheld
 
 
+def tiered_federal_supplemental(prior: Decimal, amount: Decimal) -> Decimal:
+    """`amount` of supplemental wages withheld at 22% / 37%, stacked on `prior` of them.
+
+    The tier is on the YEAR's cumulative supplemental wages, so the total is the same
+    whatever order the vests and bonuses are walked in — order decides only which LEG
+    reports the 37% slice, and this module walks bonuses (already received) first, then
+    vests by date. Splitting a slice is exact for the same reason: t(p, a + b) equals
+    t(p, a) + t(p + a, b).
+    """
+    room = max(SUPPLEMENTAL_TIER_THRESHOLD - prior, ZERO)
+    under = min(amount, room)
+    return under * FED_SUPPLEMENTAL + (amount - under) * FED_SUPPLEMENTAL_HIGH
+
+
 @dataclass
 class _SalaryLeg:
     """One person's salary withholding over the year's check grid — the arithmetic only.
@@ -184,6 +255,15 @@ class _SalaryLeg:
     withheld_projected: Decimal
     gross_ytd: Decimal
     gross_projected: Decimal
+    # The same walk, split by jurisdiction: each check's TAXABLE base times the two rates
+    # the profile in force that day carries (2026-09-09 audit item 3).
+    fed_ytd: Decimal = ZERO
+    fed_projected: Decimal = ZERO
+    state_ytd: Decimal = ZERO
+    state_projected: Decimal = ZERO
+    # False as soon as ONE check is priced by a profile missing either rate. True on an
+    # EMPTY leg — a person with no profile withholds nothing and has nothing to veto.
+    split: bool = True
     # The grid's FIRST check predates the earliest profile, so those checks are priced with
     # a profile that was not yet in force.
     early_checks: bool = False
@@ -204,16 +284,34 @@ def _salary_leg(year: int, today: date, profiles: list) -> _SalaryLeg:
     current = [p for p in ordered if p.effective_date <= today] or [ordered[0]]
     grid = check_dates(year, current[-1].pay_periods_per_year)
     withheld_ytd = withheld_projected = gross_ytd = gross_projected = ZERO
+    fed_ytd = fed_projected = state_ytd = state_projected = ZERO
+    split = True
     elapsed = 0
     for check_day in grid:
         in_force = [p for p in ordered if p.effective_date <= check_day] or [ordered[0]]
-        lines = breakdown(in_force[-1])
+        profile = in_force[-1]
+        lines = breakdown(profile)
         withheld_projected += lines["withholding"]
         gross_projected += lines["gross"]
+        # getattr with a default, not an attribute read: this module takes "anything with
+        # the profile's columns" (the sandbox's ScenarioProfile, a test stub), and a
+        # missing pair is exactly the unavailable-split state rather than an AttributeError.
+        fed_rate = getattr(profile, "fed_withholding_pct", None)
+        state_rate = getattr(profile, "state_withholding_pct", None)
+        if fed_rate is None or state_rate is None:
+            split = False
+        else:
+            # The SAME base the all-in rate uses (gross minus pre-tax deductions), because
+            # that is the base a paystub's "federal withheld / taxable wages" divides by.
+            fed_projected += fed_rate * lines["taxable"]
+            state_projected += state_rate * lines["taxable"]
         if check_day <= today:
             elapsed += 1
             withheld_ytd += lines["withholding"]
             gross_ytd += lines["gross"]
+            if fed_rate is not None and state_rate is not None:
+                fed_ytd += fed_rate * lines["taxable"]
+                state_ytd += state_rate * lines["taxable"]
     return _SalaryLeg(
         checks_elapsed=elapsed,
         checks_total=len(grid),
@@ -221,6 +319,11 @@ def _salary_leg(year: int, today: date, profiles: list) -> _SalaryLeg:
         withheld_projected=withheld_projected,
         gross_ytd=gross_ytd,
         gross_projected=gross_projected,
+        fed_ytd=fed_ytd,
+        fed_projected=fed_projected,
+        state_ytd=state_ytd,
+        state_projected=state_projected,
+        split=split,
         early_checks=ordered[0].effective_date > grid[0],
     )
 
@@ -248,6 +351,12 @@ def estimate(
     # their leg is then simulated exactly like the primary's salary leg — no vest or ESPP
     # legs, which is the lean scope, not an oversight.
     partner_profiles: list | None = None,
+    # The BONUS leg (2026-09-09 audit item 4c): the year's `w2_bonuses` for this return,
+    # and the optional `w2_bonus_withholding` actual that replaces the model when entered.
+    # None is "no row stored" and Decimal("0") is "entered as zero" — the partner keys'
+    # own distinction, for the same reason.
+    bonuses: Decimal = ZERO,
+    bonus_withholding: Decimal | None = None,
 ) -> WithholdingEstimate:
     warnings: list[str] = []
     leg = _salary_leg(year, today, profiles)
@@ -261,12 +370,39 @@ def estimate(
 
     income_ytd = sum((Decimal(s) * price for _, s, price in past_vests), ZERO)
     income_projected = income_ytd + sum((Decimal(s) * price for _, s, price in future_vests), ZERO)
-    supplemental = FED_SUPPLEMENTAL + CA_SUPPLEMENTAL
-    # Vest FICA stacks on the PRIMARY's gross alone: the vests are the primary's grants,
-    # and the partner's checks are a separate employer's wage base whose own FICA their
-    # all-in withholding_pct already carries.
-    fica_ytd = fica(leg.gross_ytd + income_ytd) - fica(leg.gross_ytd)
-    fica_projected = fica(leg.gross_projected + income_projected) - fica(leg.gross_projected)
+
+    # --- the bonus leg (2026-09-09 audit item 4c), computed FIRST because everything below
+    # stacks on it: bonuses are money already received, so they take the year's first slice
+    # of both the supplemental tier and the FICA wage base, and the vests sit on top.
+    bonus_fed = tiered_federal_supplemental(ZERO, bonuses)
+    bonus_state = bonuses * CA_SUPPLEMENTAL_BONUS
+    bonus_fica_ytd = fica(leg.gross_ytd + bonuses) - fica(leg.gross_ytd)
+    bonus_fica_projected = fica(leg.gross_projected + bonuses) - fica(leg.gross_projected)
+
+    # Vest supplemental: the state rate is flat, the federal one is tiered ABOVE whatever
+    # the bonuses already used. Below $1M this is exactly the old income x 0.3223.
+    vest_fed_ytd = tiered_federal_supplemental(bonuses, income_ytd)
+    vest_fed_projected = tiered_federal_supplemental(bonuses, income_projected)
+    vest_state_ytd = income_ytd * CA_SUPPLEMENTAL
+    vest_state_projected = income_projected * CA_SUPPLEMENTAL
+    if bonuses + income_projected > SUPPLEMENTAL_TIER_THRESHOLD:
+        total = bonuses + income_projected
+        warnings.append(
+            SUPPLEMENTAL_TIER_WARNING.format(
+                total=f"${total:,.2f}",
+                excess=f"${total - SUPPLEMENTAL_TIER_THRESHOLD:,.2f}",
+            )
+        )
+
+    # Vest FICA stacks on the PRIMARY's gross plus the bonuses, and on nothing else: the
+    # vests are the primary's grants, and the partner's checks are a separate employer's
+    # wage base whose own FICA their all-in withholding_pct already carries. Stacking the
+    # bonus UNDER the vests keeps the two legs telescoping to one walk over the year's
+    # wages, so neither can claim the same slice of the SS wage base twice.
+    fica_ytd = fica(leg.gross_ytd + bonuses + income_ytd) - fica(leg.gross_ytd + bonuses)
+    fica_projected = fica(leg.gross_projected + bonuses + income_projected) - fica(
+        leg.gross_projected + bonuses
+    )
 
     simulated = bool(partner_profiles)
     partner_leg = _salary_leg(year, today, partner_profiles or [])
@@ -285,25 +421,126 @@ def estimate(
             # with no income tax, or a W-4 that zeroed it) and must not be nagged about.
             warnings.append(PARTNER_WITHHOLDING_MISSING_WARNING)
     gap = _additional_medicare_gap(medicare, primary_wages, partner_wages)
+
+    # The bonus leg's three parts, and the ENTERED actual that replaces them. The override
+    # is a single figure from a paystub, so it is spread across the three in the very
+    # proportions the model would have used — the split has to add back to what was
+    # entered, and no other rule keeps a total the user typed intact. With no bonus income
+    # behind it there is nothing to scale, so it falls back to the statutory 22 : 6.6.
+    computed_ytd = bonus_fed + bonus_state + bonus_fica_ytd
+    computed_projected = bonus_fed + bonus_state + bonus_fica_projected
+    bonus_source = BONUS_ESTIMATED if bonus_withholding is None else BONUS_ENTERED
+    if bonus_withholding is None:
+        bonus_ytd, bonus_projected = computed_ytd, computed_projected
+        bonus_fed_ytd = bonus_fed_projected = bonus_fed
+        bonus_state_ytd = bonus_state_projected = bonus_state
+    else:
+        bonus_ytd = bonus_projected = bonus_withholding
+        fed_share = (
+            bonus_fed / computed_ytd
+            if computed_ytd > 0
+            else FED_SUPPLEMENTAL / (FED_SUPPLEMENTAL + CA_SUPPLEMENTAL_BONUS)
+        )
+        state_share = (
+            bonus_state / computed_ytd
+            if computed_ytd > 0
+            else CA_SUPPLEMENTAL_BONUS / (FED_SUPPLEMENTAL + CA_SUPPLEMENTAL_BONUS)
+        )
+        bonus_fed_ytd = bonus_fed_projected = bonus_withholding * fed_share
+        bonus_state_ytd = bonus_state_projected = bonus_withholding * state_share
+
+    # Everything below is at CENTS, and deliberately: the combined total is the sum of the
+    # very fields this dataclass publishes, so the router's own sum of them and the split's
+    # remainder can never drift by a rounding step.
+    salary_ytd = _cents(leg.withheld_ytd)
+    salary_projected = _cents(leg.withheld_projected)
+    supplemental_ytd = _cents(vest_fed_ytd + vest_state_ytd)
+    supplemental_projected = _cents(vest_fed_projected + vest_state_projected)
+    vest_fica_ytd = _cents(fica_ytd)
+    vest_fica_projected = _cents(fica_projected)
+    partner_total = _cents(partner_withheld_total)
+    partner_ytd = _cents(partner_leg.withheld_ytd if simulated else ZERO)
+    partner_projected = _cents(partner_leg.withheld_projected if simulated else ZERO)
+    bonus_withheld_ytd = _cents(bonus_ytd)
+    bonus_withheld_projected = _cents(bonus_projected)
+    combined_ytd = (
+        salary_ytd
+        + supplemental_ytd
+        + vest_fica_ytd
+        + bonus_withheld_ytd
+        + partner_total
+        + partner_ytd
+    )
+    combined_projected = (
+        salary_projected
+        + supplemental_projected
+        + vest_fica_projected
+        + bonus_withheld_projected
+        + partner_total
+        + partner_projected
+    )
+
+    jurisdictions = None
+    if leg.split and partner_leg.split:
+        # A SIMULATED partner splits by their own profile's rates; an ENTERED one already
+        # gives the two figures by name. The modes are mutually exclusive upstream, so both
+        # are added rather than branched on (the combined total's own rule).
+        partner_fed = partner_leg.fed_ytd if simulated else (partner_withheld_fed or ZERO)
+        partner_fed_projected = (
+            partner_leg.fed_projected if simulated else (partner_withheld_fed or ZERO)
+        )
+        partner_state = partner_leg.state_ytd if simulated else (partner_withheld_state or ZERO)
+        partner_state_projected = (
+            partner_leg.state_projected if simulated else (partner_withheld_state or ZERO)
+        )
+        federal_ytd = _cents(leg.fed_ytd + vest_fed_ytd + bonus_fed_ytd + partner_fed)
+        federal_projected = _cents(
+            leg.fed_projected + vest_fed_projected + bonus_fed_projected + partner_fed_projected
+        )
+        state_ytd = _cents(leg.state_ytd + vest_state_ytd + bonus_state_ytd + partner_state)
+        state_projected = _cents(
+            leg.state_projected
+            + vest_state_projected
+            + bonus_state_projected
+            + partner_state_projected
+        )
+        payroll_ytd = combined_ytd - federal_ytd - state_ytd
+        payroll_projected = combined_projected - federal_projected - state_projected
+        if payroll_ytd < 0 or payroll_projected < 0:
+            warnings.append(NEGATIVE_PAYROLL_WARNING)
+        jurisdictions = JurisdictionLegs(
+            federal_ytd=federal_ytd,
+            federal_projected=federal_projected,
+            state_ytd=state_ytd,
+            state_projected=state_projected,
+            payroll_ytd=payroll_ytd,
+            payroll_projected=payroll_projected,
+        )
+
     return WithholdingEstimate(
         checks_elapsed=leg.checks_elapsed,
         checks_total=leg.checks_total,
-        salary_ytd=_cents(leg.withheld_ytd),
-        salary_projected=_cents(leg.withheld_projected),
+        salary_ytd=salary_ytd,
+        salary_projected=salary_projected,
         salary_gross_ytd=_cents(leg.gross_ytd),
         salary_gross_projected=_cents(leg.gross_projected),
         vest_income_ytd=_cents(income_ytd),
         vest_income_projected=_cents(income_projected),
-        vest_supplemental_ytd=_cents(income_ytd * supplemental),
-        vest_supplemental_projected=_cents(income_projected * supplemental),
-        vest_fica_ytd=_cents(fica_ytd),
-        vest_fica_projected=_cents(fica_projected),
-        partner_withheld_total=_cents(partner_withheld_total),
+        vest_supplemental_ytd=supplemental_ytd,
+        vest_supplemental_projected=supplemental_projected,
+        vest_fica_ytd=vest_fica_ytd,
+        vest_fica_projected=vest_fica_projected,
+        partner_withheld_total=partner_total,
         additional_medicare_gap=_cents(gap),
         partner_source=PARTNER_SIMULATED if simulated else PARTNER_ENTERED,
-        partner_salary_ytd=_cents(partner_leg.withheld_ytd if simulated else ZERO),
-        partner_salary_projected=_cents(partner_leg.withheld_projected if simulated else ZERO),
+        partner_salary_ytd=partner_ytd,
+        partner_salary_projected=partner_projected,
         partner_checks_elapsed=partner_leg.checks_elapsed if simulated else 0,
         partner_checks_total=partner_leg.checks_total if simulated else 0,
+        bonus_income=_cents(bonuses),
+        bonus_withheld_ytd=bonus_withheld_ytd,
+        bonus_withheld_projected=bonus_withheld_projected,
+        bonus_source=bonus_source,
+        jurisdictions=jurisdictions,
         warnings=warnings,
     )

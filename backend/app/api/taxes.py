@@ -1040,6 +1040,12 @@ FICA_JURISDICTIONS = ("medicare", "social_security", "disability")
 WAGE_KEYS = ("latest_w2_income", "other_w2_income")
 PARTNER_FED_WITHHOLDING_KEY = "w2_fed_withholding"
 PARTNER_STATE_WITHHOLDING_KEY = "w2_state_withholding"
+# The bonus leg (2026-09-09 audit item 4c): the year's bonus wages, and the tracker-only
+# actual that replaces the modelled 22% / 6.6% / marginal FICA when it is entered. Both are
+# read off `feed.inputs` — the SAME assembled dict the liability was computed on — so a
+# per-person row belonging to somebody this year's return does not cover is already gone.
+BONUS_KEY = "w2_bonuses"
+BONUS_WITHHOLDING_KEY = "w2_bonus_withholding"
 
 
 def _bucket_input_rows(rows: Iterable[TaxInput]) -> dict[int | None, dict[str, Decimal]]:
@@ -1217,15 +1223,21 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         # Non-empty flips the partner's leg from ENTERED to SIMULATED, and the service
         # words the ignoring of the tracker rows above.
         partner_profiles=partner_profiles,
+        bonuses=feed.inputs.get(BONUS_KEY, ZERO),
+        # `.get`, so None really is "no row stored" — an entered 0 is a real answer (a
+        # bonus nobody withheld on) and must not be replaced by the model.
+        bonus_withholding=feed.inputs.get(BONUS_WITHHOLDING_KEY),
     )
     warnings.extend(estimated.warnings)
 
-    # Salary withholding + vest supplemental + vest marginal FICA, plus the partner's ENTERED
-    # withholding. Salary-side FICA is NOT a term: the user's all-in withholding_pct already
-    # carries it (withholding_calc's note). The partner's figure counts once in EACH leg on
-    # purpose — their withholding inputs are a running snapshot of the same kind as their W-2
-    # wage inputs, which is what the liability above is computed on, so both legs describe the
-    # same household. The three partner_* fields below are what make that visible.
+    # Salary withholding + vest supplemental + vest marginal FICA + the BONUS leg (2026-09-09
+    # audit item 4c: `w2_bonuses` at 22% federal + 6.6% CA + marginal FICA, or the entered
+    # actual), plus the partner's ENTERED withholding. Salary-side FICA is NOT a term: the
+    # user's all-in withholding_pct already carries it (withholding_calc's note). The
+    # partner's figure counts once in EACH leg on purpose — their withholding inputs are a
+    # running snapshot of the same kind as their W-2 wage inputs, which is what the liability
+    # above is computed on, so both legs describe the same household. The three partner_*
+    # fields below are what make that visible.
     #
     # The two partner terms are MUTUALLY EXCLUSIVE by construction — the service zeroes
     # whichever mode did not win — so both are added unconditionally rather than branched
@@ -1234,6 +1246,7 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         estimated.salary_ytd
         + estimated.vest_supplemental_ytd
         + estimated.vest_fica_ytd
+        + estimated.bonus_withheld_ytd
         + estimated.partner_withheld_total
         + estimated.partner_salary_ytd
     )
@@ -1241,6 +1254,7 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         estimated.salary_projected
         + estimated.vest_supplemental_projected
         + estimated.vest_fica_projected
+        + estimated.bonus_withheld_projected
         + estimated.partner_withheld_total
         + estimated.partner_salary_projected
     )

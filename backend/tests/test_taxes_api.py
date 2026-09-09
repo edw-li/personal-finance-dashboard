@@ -195,7 +195,7 @@ async def test_get_inputs_lists_every_definition_with_null_values(auth_client, d
     assert body["year"] == 2024
     assert [section["section"] for section in body["sections"]] == list(SECTIONS)
     items = items_by_key(body)
-    assert len(items) == len(TAX_INPUT_DEFINITIONS) == 45
+    assert len(items) == len(TAX_INPUT_DEFINITIONS) == 46
     for section in body["sections"]:
         orders = [item["sort_order"] for item in section["items"]]
         assert orders == sorted(orders)
@@ -1291,7 +1291,7 @@ async def test_inputs_payload_shape_is_unchanged_without_a_roster(auth_client, d
     assert body["filing_status"] == "single"
     assert body["people"] == []
     items = items_by_key(body)
-    assert len(items) == len(TAX_INPUT_DEFINITIONS) == 45
+    assert len(items) == len(TAX_INPUT_DEFINITIONS) == 46
     assert items["annual_salary"]["value"] == "150000.0000"
     assert items["annual_salary"]["person_id"] is None
     assert items["annual_salary"]["is_per_person"] is True

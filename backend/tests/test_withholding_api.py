@@ -315,6 +315,54 @@ async def test_withholding_totals_sum_their_legs_and_balance_against_the_liabili
     assert body["balance_projected"] == "18870.20"
 
 
+# --- the bonus leg (2026-09-09 audit item 4c) and the supplemental tier (4d) ---
+
+
+async def test_bonus_input_adds_a_withholding_leg_to_the_combined_total(
+    auth_client, db, world, frozen_today
+):
+    # `w2_bonuses` is not an engine key (it feeds the derived W-2 suggestion), so the
+    # LIABILITY here is untouched and this pins the withholding side alone.
+    db.add(TaxInput(year=YEAR, key="w2_bonuses", value=Decimal("50000.0000")))
+    await db.commit()
+    body = await get_withholding(auth_client)
+
+    assert body["liability_total"] == "115753.20"
+    # 22% federal + 6.6% CA = 14300, plus marginal FICA over the 110000 of salary gross
+    # behind today (50000 x 0.0875 = 4375, the SS cap still ahead) = 18675; the PROJECTION
+    # stacks the same bonus on a full year's 240000, where only medicare + SDI are left.
+    # The bonus sits UNDER the vests in the FICA walk, so the vest leg's own marginal
+    # shrinks to what the wage base has left: 725 + 533.20 + 550.
+    assert body["vest"]["fica_ytd"] == "1808.20"
+    assert body["total"] == {"ytd": "67453.20", "projected": "112458.00"}
+
+
+async def test_entered_bonus_withholding_replaces_the_modelled_leg(
+    auth_client, db, world, frozen_today
+):
+    db.add(TaxInput(year=YEAR, key="w2_bonuses", value=Decimal("50000.0000")))
+    db.add(TaxInput(year=YEAR, key="w2_bonus_withholding", value=Decimal("20000.0000")))
+    await db.commit()
+    body = await get_withholding(auth_client)
+
+    # The entered actual is the whole leg, in both columns: 30855 + 16115 + 1808.20 + 20000
+    # and 67320 + 27395.50 + 2167.50 + 20000.
+    assert body["total"] == {"ytd": "68778.20", "projected": "116883.00"}
+
+
+async def test_supplemental_wages_past_a_million_warn_and_withhold_at_37_percent(
+    auth_client, db, world, frozen_today
+):
+    db.add(TaxInput(year=YEAR, key="w2_bonuses", value=Decimal("1000000.0000")))
+    await db.commit()
+    body = await get_withholding(auth_client)
+
+    # The bonus fills the $1M tier exactly, so every dollar of vest income above it is
+    # withheld at 37% federal (plus the flat 10.23% CA): 50000 x 0.4723.
+    assert body["vest"]["supplemental_ytd"] == "23615.00"
+    assert any("37%" in w and "1,000,000" in w for w in body["warnings"])
+
+
 # --- degradations ---
 
 
