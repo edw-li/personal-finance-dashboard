@@ -285,7 +285,7 @@ export interface SpendingUpsertResult {
   unchanged: number
   net_pay_set: boolean
   /** Categories the body listed at $0.00 that had NO stored row for the month, and were
-   *  therefore not written (2026-09-09 audit item 1) - a blank box, not an entry. Zero
+   *  therefore not written (2026-09-09 audit item 1) — a blank box, not an entry. Zero
    *  whenever `confirm_zero` is set, because that body means its zeros. */
   skipped_blank: number
   /** An explicit `net_pay: null` deleted the month's cashflow row (the blank-clears rider). */
