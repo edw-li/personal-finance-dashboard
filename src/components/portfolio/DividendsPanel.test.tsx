@@ -81,6 +81,41 @@ afterEach(() => {
 })
 
 describe('DividendsPanel ownership', () => {
+  // TransactionsPanel's twin (2026-09-09 audit item 27): the other free-text door into the
+  // account roster, with the same silent get-or-create behind it.
+  it('offers the account roster and warns when a typed label would mint a new one', () => {
+    render(
+      <DividendsPanel
+        securities={securities}
+        dividends={[]}
+        annualIncome={null}
+        accounts={['Schwab', 'Joint Taxable']}
+        primaryName="Edward"
+        onChanged={() => {}}
+      />,
+    )
+    const options = Array.from(document.querySelectorAll('#div-account-labels option'))
+    expect(options.map((o) => (o as HTMLOptionElement).value)).toEqual(['Schwab', 'Joint Taxable'])
+    const box = screen.getByLabelText('Account')
+    fireEvent.change(box, { target: { value: 'Schwab' } })
+    expect(screen.queryByText(/will be created/)).toBeNull()
+    fireEvent.change(box, { target: { value: 'Schwabb' } })
+    expect(
+      screen.getByText(
+        "New account 'Schwabb' will be created and assigned to Edward — re-tag it in Settings → Accounts",
+      ),
+    ).toBeTruthy()
+    expect(box.getAttribute('aria-describedby')).toBe('div-account-note')
+  })
+
+  it('warns about nothing while the roster is unknown', () => {
+    render(
+      <DividendsPanel securities={securities} dividends={[]} annualIncome={null} onChanged={() => {}} />,
+    )
+    fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'Schwab' } })
+    expect(screen.queryByText(/will be created/)).toBeNull()
+  })
+
   it('badges every row with its owner and spells out the resurrect rule', () => {
     renderPanel([dividend(), AUTO])
     // Scoped to the table: the hint's legend badge carries the same word, so an unscoped

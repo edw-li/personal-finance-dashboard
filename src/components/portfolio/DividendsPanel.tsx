@@ -50,16 +50,48 @@ function toBody(form: FormState) {
   }
 }
 
+/** The note under an Account box (2026-09-09 audit item 27) — TransactionsPanel's twin,
+ * because these two forms are the only free-text doors into the account roster.
+ *
+ * `resolve_portfolio_account` GET-OR-CREATES on the exact string typed here and tags a new
+ * account to the PRIMARY person — an ownership decision made by a typo, invisible until the
+ * scope chips disagree with the holdings. The roster is the same list Settings edits: a
+ * label that is not on it is about to become a new account, and the form says so before the
+ * save rather than after. Trimmed and exact, because that is how the server matches.
+ *
+ * Null while the roster is unknown (still loading, or its fetch failed): this is a warning
+ * about creating something new, and an empty roster would raise it over every account the
+ * household already has. */
+function newAccountNote(
+  typed: string,
+  accounts: string[] | null,
+  primaryName: string | null,
+): string | null {
+  const label = typed.trim()
+  if (accounts === null || label === '' || accounts.includes(label)) return null
+  return `New account '${label}' will be created and assigned to ${primaryName ?? 'the primary member'} — re-tag it in Settings → Accounts`
+}
+
 export default function DividendsPanel({
   securities,
   dividends,
   annualIncome,
+  accounts = null,
+  primaryName = null,
   onChanged,
 }: {
   securities: SecurityOut[]
   dividends: DividendOut[]
   /** `totals.annual_income` — a SERVER figure, rendered verbatim. */
   annualIncome: string | null
+  /** The household's existing portfolio account labels, for the Account box's datalist and
+   *  its "this one is new" note (2026-09-09 audit item 27). Null — the default — is "the
+   *  roster is unknown", which offers no completions and warns about nothing; the page
+   *  passes it while its own fetch is in flight or after that fetch failed. */
+  accounts?: string[] | null
+  /** Who a NEW account would be assigned to, for that note; null falls back to a
+   *  description rather than inventing a name. */
+  primaryName?: string | null
   onChanged: () => void
 }) {
   const [form, setForm] = useState<FormState>(EMPTY)
@@ -71,6 +103,7 @@ export default function DividendsPanel({
   const [busy, setBusy] = useState(false)
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
   const toast = useToast()
+  const accountNote = newAccountNote(form.account, accounts, primaryName)
   // Only the CHART option is memoized (EChart keys its notMerge setOption on [option], so
   // a fresh object per keystroke in the form below would redraw it); the tiles are plain
   // numbers and memoizing them would buy nothing.
@@ -275,7 +308,21 @@ export default function DividendsPanel({
           Account
           {/* .field-input by hand: the shared chrome used to arrive from `.entry-form input`,
               which is now select-only — every plain text control in this form states it. */}
-          <input className="field-input" value={form.account} onChange={(e) => setForm((f) => ({ ...f, account: e.target.value }))} />
+          {/* aria-label, not the wrapping label's text: the note below is a describedby, so
+              the box keeps announcing "Account" rather than the whole sentence. */}
+          <input className="field-input" list="div-account-labels" aria-label="Account" aria-describedby={accountNote === null ? undefined : 'div-account-note'} value={form.account} onChange={(e) => setForm((f) => ({ ...f, account: e.target.value }))} />
+          {/* Completions, not a fence: a genuinely new account is a legal thing to type, so
+              the box stays free text and the note below owns the consequence. */}
+          <datalist id="div-account-labels">
+            {(accounts ?? []).map((label) => (
+              <option key={label} value={label} />
+            ))}
+          </datalist>
+          {accountNote !== null && (
+            <p className="hint" id="div-account-note">
+              {accountNote}
+            </p>
+          )}
         </label>
         <label>
           Pay date
