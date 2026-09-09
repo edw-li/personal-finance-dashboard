@@ -1534,6 +1534,27 @@ describe('OverviewPage — shell frame and owner scope', () => {
     expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
   })
 
+  // Item 9: the ping is derived from the OWNER-FILTERED holdings, but /portfolio/history is
+  // household-wide — plotting one person's total at the end of the household series drew a
+  // fake cliff. PortfolioPage has guarded this since 2026-08-31; the Overview copy did not.
+  it('drops the live ping under an owner scope — the checkpoints are household-wide', async () => {
+    serve()
+    // The default holdings fixture quotes YESTERDAY, past the last weekly checkpoint, so a
+    // live point extends the axis by one category with its own date label.
+    const livePoint = formatDate(daysAgo(1))
+    const perfChart = () => screen.getByLabelText(/Line chart of portfolio value against cost basis/)
+
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(categoriesOf(perfChart())).toContain(livePoint)
+
+    cleanup()
+    renderPage('/?owner=2')
+    await screen.findByText('Net worth — Aug 2026')
+    // Same holdings payload, same history: only the scope changed, and the ping is gone.
+    expect(categoriesOf(perfChart())).not.toContain(livePoint)
+  })
+
   it('says so on the two cards an owner scope cannot reach, and nothing when it is All', async () => {
     serve()
     renderPage('/?owner=2')

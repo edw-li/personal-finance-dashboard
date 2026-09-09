@@ -299,10 +299,21 @@ export default function OverviewPage() {
   // so a fresh object every render would redraw all three charts on every keystroke
   // elsewhere. Everything else below is a plain const.
   const nwTrend = useMemo(() => (data ? netWorthTrendOption(data.ts) : null), [data])
+  // The ping is derived from the OWNER-FILTERED holdings, but /portfolio/history is
+  // household-wide by design (see the fetch above), so under a person scope plotting their
+  // total at the end of the household series draws a fake cliff. PortfolioPage has carried
+  // this guard since 2026-08-31 (A3); this copy is the same rule, one page later — null
+  // also suppresses the dashed connector and the "Live" legend entry, both inside the
+  // builder's livePt branch.
   const perf = useMemo(
     () =>
-      data ? portfolioHistoryOption(data.history, liveFromHoldings(data.holdings)) : null,
-    [data],
+      data
+        ? portfolioHistoryOption(
+            data.history,
+            owner === null ? liveFromHoldings(data.holdings) : null,
+          )
+        : null,
+    [data, owner],
   )
   const bars = useMemo(() => (data ? recentSpendOption(data.matrix) : null), [data])
 
