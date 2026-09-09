@@ -259,19 +259,44 @@ describe('WithholdingPanel', () => {
     expect(screen.queryByText(/to close the gap/)).toBeNull()
   })
 
+  it('names a positive federal shortfall on the W-4, not on the DE 4', async () => {
+    // The mirror of the case above: this household under-withheld federally, so the federal
+    // tile is the one with an instruction and it names the federal form.
+    const owing = withSplit()
+    owing.jurisdictions = {
+      ...owing.jurisdictions!,
+      federal: {
+        ...owing.jurisdictions!.federal,
+        balance: '6500.00',
+        remedy_per_check: '500.00',
+      },
+    }
+    vi.mocked(fetchWithholding).mockResolvedValue(owing)
+    render(<WithholdingPanel year={2026} />)
+
+    expect(
+      await screen.findByText('Add $500.00 per remaining paycheck on W-4 line 4c.'),
+    ).toBeTruthy()
+    // Both forms name themselves; neither borrows the other's.
+    expect(screen.getByText('Add $603.12 per remaining paycheck on DE 4.')).toBeTruthy()
+    expect(deltaOf('Federal balance').textContent).toContain('to pay at filing')
+  })
+
   it('gives each jurisdiction its own safe-harbor sentence instead of the combined one', async () => {
     vi.mocked(fetchWithholding).mockResolvedValue(withSplit())
     render(<WithholdingPanel year={2026} />)
 
     expect(
       await screen.findByText(
-        "Federal safe harbor: the lesser of 110% of 2025's total tax ($44,000.00) and 90% of " +
+        "Federal safe harbor: the lesser of 110% of 2025's federal tax ($44,000.00) and 90% of " +
           "this year's projected liability ($54,000.00) is $44,000.00 — the prior-year leg " +
           'binds; covered by projected withholding',
       ),
     ).toBeTruthy()
     // California here has only the current-year leg (a first year, or the $1M rule), so the
-    // survivor's own figure IS the threshold and is named once.
+    // survivor's own figure IS the threshold and is named once. Where the prior leg DOES
+    // exist, its noun is that jurisdiction's tax — "total tax" beside $44,000.00 of a
+    // $110,000.00 return would read as an arithmetic error.
     expect(
       screen.getByText(
         "California safe harbor: 90% of this year's projected liability is $27,000.00 — NOT " +

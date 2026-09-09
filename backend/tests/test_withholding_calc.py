@@ -679,6 +679,30 @@ def test_supplemental_tier_is_silent_below_the_line():
     assert result.bonus_withheld_ytd == D("0.00")
 
 
+def test_two_rates_bigger_than_the_all_in_one_warn_instead_of_clamping():
+    # 25% federal + 10% state against an all-in 30%: payroll is the REMAINDER, so it comes
+    # out negative — which is not a number to hide, it means one of the three rates is wrong.
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"), fed=D("0.25"), state=D("0.10"))],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    legs = result.jurisdictions
+    assert legs is not None
+    # 9350 taxable a check: 2337.50 federal + 935.00 state against 2805.00 all-in leaves
+    # -467.50 a check, x 11 elapsed.
+    assert legs.payroll_ytd == D("-5142.50")
+    assert legs.payroll_projected == D("-11220.00")  # x 24
+    assert any("payroll (FICA) leg is negative" in w for w in result.warnings)
+    # Still a partition, sign and all — the card shows what the rates actually say.
+    assert legs.federal_ytd + legs.state_ytd + legs.payroll_ytd == result.salary_ytd
+
+
 def test_no_split_when_either_rate_is_missing():
     for fed, state in ((FED, None), (None, STATE), (None, None)):
         result = estimate(

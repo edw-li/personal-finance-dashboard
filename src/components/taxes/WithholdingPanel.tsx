@@ -40,13 +40,20 @@ import './taxes.css'
 // supplemental-rates sentence below sets the precedent for statutory literals in copy).
 // `lead` is what the sentence is ABOUT: the combined figure is approximate by construction
 // (it compares all-in totals), while a per-jurisdiction one is the statutory rule itself —
-// so the two must not be introduced with the same words.
-function safeHarborSentence(harbor: WithholdingSafeHarbor, lead = 'Safe harbor (approx.)'): string {
+// so the two must not be introduced with the same words. `priorNoun` names the reference
+// figure for the same reason: under a split, `prior_total_tax` is that JURISDICTION's tax
+// on last year's return, and calling it "total tax" beside a figure a third the size of one
+// reads as an arithmetic error.
+function safeHarborSentence(
+  harbor: WithholdingSafeHarbor,
+  lead = 'Safe harbor (approx.)',
+  priorNoun = 'total tax',
+): string {
   const prior =
     harbor.prior_year === null || harbor.multiplier === null || harbor.threshold === null
       ? null
       : `${formatPct(harbor.multiplier, { signed: false, decimals: 0 })} of ` +
-        `${harbor.prior_year}'s total tax`
+        `${harbor.prior_year}'s ${priorNoun}`
   const current =
     harbor.current_year_threshold === null ? null : "90% of this year's projected liability"
   const met = harbor.met
@@ -510,13 +517,17 @@ export default function WithholdingPanel({
               approximate exactly what these two say properly. */}
           {split !== null && split.federal.safe_harbor !== null && (
             <p className="hint">
-              {safeHarborSentence(split.federal.safe_harbor, 'Federal safe harbor')}
+              {safeHarborSentence(split.federal.safe_harbor, 'Federal safe harbor', 'federal tax')}
               <InfoHint text="IRC 6654: the LESSER of 100/110% of last year's federal tax and 90% of this year's. Withhold at least that much and the underpayment penalty does not apply, however large the April bill is." />
             </p>
           )}
           {split !== null && split.state.safe_harbor !== null && (
             <p className="hint">
-              {safeHarborSentence(split.state.safe_harbor, 'California safe harbor')}
+              {safeHarborSentence(
+                split.state.safe_harbor,
+                'California safe harbor',
+                'California tax',
+              )}
               <InfoHint text="R&TC 19136, the federal rule with one extra clause: at $1,000,000 of California AGI the prior-year leg is gone and only 90% of this year's tax will do." />
             </p>
           )}

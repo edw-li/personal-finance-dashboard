@@ -1046,6 +1046,10 @@ PARTNER_STATE_WITHHOLDING_KEY = "w2_state_withholding"
 # actual that replaces the modelled 22% / 6.6% / marginal FICA when it is entered. Both are
 # read off `feed.inputs` — the SAME assembled dict the liability was computed on — so a
 # per-person row belonging to somebody this year's return does not cover is already gone.
+# Both are the PRIMARY's alone. The service stacks the bonus leg's marginal FICA on the
+# primary's wage base and prices it at their supplemental tier, and in the partner's ENTERED
+# mode their withholding is already counted from their own two tracker keys — so a partner's
+# bonus summed in here would be taxed on the wrong wage base and then counted twice.
 BONUS_KEY = "w2_bonuses"
 BONUS_WITHHOLDING_KEY = "w2_bonus_withholding"
 # California's own gate (R&TC 19136 / FTB 5805): a taxpayer whose CURRENT-year California
@@ -1069,6 +1073,30 @@ def _bucket_input_rows(rows: Iterable[TaxInput]) -> dict[int | None, dict[str, D
 
 def _wage_base(values: dict[str, Decimal]) -> Decimal:
     return sum((values.get(key, ZERO) for key in WAGE_KEYS), ZERO)
+
+
+def _primary_share(
+    inputs: dict[str, Decimal], partner_values: dict[str, Decimal], key: str
+) -> Decimal | None:
+    """The PRIMARY's own value of a per-person key: the return's total minus the partner's.
+
+    By SUBTRACTION, like `primary_wage_base` and for the same reason — a household-owned
+    (NULL) row from before the person migration, or a stray third bucket, lands on the
+    primary's side rather than disappearing, and the two halves always add back to the
+    figure the engine taxed.
+
+    None means "the primary has nothing stored for this key": either nobody does, or every
+    stored dollar of it is the partner's. Both are silences, and a computed 0 would read as
+    an entered zero — which for `w2_bonus_withholding` would replace the modelled leg with
+    a confident "nothing was withheld".
+    """
+    total = inputs.get(key)
+    if total is None:
+        return None
+    partner = partner_values.get(key)
+    if partner is not None and total == partner:
+        return None
+    return total - (partner or ZERO)
 
 
 def _harbor(
@@ -1270,10 +1298,10 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         # Non-empty flips the partner's leg from ENTERED to SIMULATED, and the service
         # words the ignoring of the tracker rows above.
         partner_profiles=partner_profiles,
-        bonuses=feed.inputs.get(BONUS_KEY, ZERO),
-        # `.get`, so None really is "no row stored" — an entered 0 is a real answer (a
-        # bonus nobody withheld on) and must not be replaced by the model.
-        bonus_withholding=feed.inputs.get(BONUS_WITHHOLDING_KEY),
+        bonuses=_primary_share(feed.inputs, partner_values, BONUS_KEY) or ZERO,
+        # None really is "no row stored on the primary's side" — an entered 0 is a real
+        # answer (a bonus nobody withheld on) and must not be replaced by the model.
+        bonus_withholding=_primary_share(feed.inputs, partner_values, BONUS_WITHHOLDING_KEY),
     )
     warnings.extend(estimated.warnings)
 
@@ -1406,12 +1434,15 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
             else _money(liability.federal.tax + liability.capital_gains.tax + liability.niit.tax)
         )
         state_tax = None if liability is None else _money(liability.state.tax)
+        # The REMAINDER, not medicare + social security + SDI rounded a fourth time: the
+        # three cent-quantized liabilities have to add back to the cent-quantized total the
+        # card shows, and three independent roundings do not (the withheld side's payroll
+        # leg is a remainder for exactly the same reason). It IS that sum, to within the
+        # rounding this removes.
         payroll_tax = (
             None
-            if liability is None
-            else _money(
-                liability.medicare.tax + liability.social_security.tax + liability.disability.tax
-            )
+            if liability is None or liability_total is None
+            else liability_total - federal_tax - state_tax
         )
         federal_current = (
             None if federal_tax is None else _money(federal_tax * SAFE_HARBOR_CURRENT_MULTIPLIER)

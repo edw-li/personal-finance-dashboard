@@ -495,6 +495,45 @@ async def test_entered_bonus_withholding_replaces_the_modelled_leg(
     assert body["total"] == {"ytd": "68778.20", "projected": "116883.00"}
 
 
+async def test_only_the_primarys_bonus_is_modelled(auth_client, db, married_world, frozen_today):
+    """The leg is the PRIMARY's: its marginal FICA stacks on THEIR wage base and its
+    supplemental tier is THEIRS, and in entered mode the partner's withholding is already
+    counted once from their own two tracker keys. A partner's bonus summed in here would be
+    taxed on the wrong wages and then counted twice."""
+    me_id, partner_id = married_world
+    db.add(TaxInput(year=YEAR, key="w2_bonuses", value=Decimal("50000.0000"), person_id=me_id))
+    db.add(TaxInput(year=YEAR, key="w2_bonuses", value=Decimal("30000.0000"), person_id=partner_id))
+    await db.commit()
+    body = await get_withholding(auth_client)
+
+    # 30855 salary + 24000 of the partner's entered withholding + a bonus leg on 50000
+    # ALONE: 22% + 6.6% = 14300 plus 4375 of marginal FICA over 110000 of salary gross.
+    # Summing the household's 80000 would have made the leg 28553.20 and the total 83408.20.
+    assert body["total"]["ytd"] == "73530.00"
+
+
+async def test_a_bonus_withholding_row_that_is_only_the_partners_does_not_zero_the_leg(
+    auth_client, db, married_world, frozen_today
+):
+    # Every stored dollar of the override is the partner's, so the PRIMARY has entered
+    # nothing — and a computed 0 would replace their modelled leg with "nothing was withheld
+    # on your bonus" (63855.00 here, or 54855.00 if their 9000 were adopted outright).
+    me_id, partner_id = married_world
+    db.add(TaxInput(year=YEAR, key="w2_bonuses", value=Decimal("50000.0000"), person_id=me_id))
+    db.add(
+        TaxInput(
+            year=YEAR,
+            key="w2_bonus_withholding",
+            value=Decimal("9000.0000"),
+            person_id=partner_id,
+        )
+    )
+    await db.commit()
+    body = await get_withholding(auth_client)
+
+    assert body["total"]["ytd"] == "73530.00"  # the model, not the partner's row
+
+
 async def test_supplemental_wages_past_a_million_warn_and_withhold_at_37_percent(
     auth_client, db, world, frozen_today
 ):
