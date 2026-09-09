@@ -55,7 +55,7 @@ async def test_health_names_a_zero_filled_month_with_the_repair(auth_client, db)
     assert check["severity"] == "error" and check["months"] == ["2026-09-01"]
     assert check["fix"] == {
         "kind": "action",
-        "label": "Delete the zero-filled month",
+        "label": "Delete the zero-filled rows",
         "to": None,
         "action": "delete_spending_month",
     }

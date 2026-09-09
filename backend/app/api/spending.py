@@ -611,11 +611,23 @@ async def put_month(
             await db.execute(select(MonthlySpending).where(MonthlySpending.month == month))
         ).scalars()
     }
-    created = updated = unchanged = 0
+    created = updated = unchanged = skipped_blank = 0
     new_rows: list[MonthlySpending] = []
     for category_id, value in quantized.items():
         row = existing.get(category_id)
         if row is None:
+            # A ZERO for a category this month has never stored is a blank box, not an
+            # entry (2026-09-09 audit item 1): the wizard seeds every active category with
+            # "0.00", so inserting these is what fabricated production's phantom rows —
+            # nineteen $0.00 records beside a take-home figure, which every average, mover,
+            # heatmap and budget seed then read as "spent nothing on housing". Only
+            # `confirm_zero` — the "Record this month as $0" checkbox — means them.
+            #
+            # A category that DOES have a stored row falls through to the update branch
+            # below, because correcting a figure down to zero is an edit and must persist.
+            if value == 0 and not body.confirm_zero:
+                skipped_blank += 1
+                continue
             row = MonthlySpending(month=month, category_id=category_id, amount=value)
             db.add(row)
             new_rows.append(row)
@@ -660,6 +672,7 @@ async def put_month(
         updated=updated,
         unchanged=unchanged,
         net_pay_set=net_pay_provided,
+        skipped_blank=skipped_blank,
         net_pay_cleared=net_pay_cleared,
         batch_id=batch_id,
     )
@@ -673,14 +686,26 @@ async def delete_month(
 ) -> Response:
     """Remove a month's spending wholesale (2026-08-31 spec §B2): every monthly_spending
     row AND the monthly_cashflow row. 404 only when NEITHER exists — a cashflow-only
-    month (net pay entered, no categories) still deletes cleanly, and vice versa."""
+    month (net pay entered, no categories) still deletes cleanly, and vice versa.
+
+    One exception, and it is the reason `X-Change-Source` is worth reading here: a REPAIR
+    (`source='repair'` — the Data-health card's zero-filled fix and the wizard's own empty-
+    month button) deletes the category rows ONLY and leaves the take-home standing. The
+    repair's whole subject is the phantom $0.00 rows (2026-09-09 audit item 1), and since
+    that check now also flags a month whose zeros sit BESIDE a real take-home figure, a
+    wholesale delete there would throw away the one figure the user did enter. For the
+    empty months the repair used to be offered on there is no cashflow row at all, so this
+    changes nothing about them; afterwards such a month reads as "take-home entered,
+    spending missing", which is exactly what it is.
+    """
     require_first_of_month(month)
+    rows_only = batch.source == "repair"
     rows = (
         (await db.execute(select(MonthlySpending).where(MonthlySpending.month == month)))
         .scalars()
         .all()
     )
-    cashflow = await db.get(MonthlyCashflow, month)
+    cashflow = None if rows_only else await db.get(MonthlyCashflow, month)
     if not rows and cashflow is None:
         raise HTTPException(
             status_code=404, detail="no spending or net pay recorded for this month"
@@ -691,6 +716,10 @@ async def delete_month(
     if cashflow is not None:
         batch.record_delete(cashflow, month=month)
         await db.delete(cashflow)
-    batch.label = f"Deleted {month:%b %Y} spending"
+    batch.label = (
+        f"Deleted {month:%b %Y} zero-filled spending rows"
+        if rows_only
+        else f"Deleted {month:%b %Y} spending"
+    )
     batch_id = await batch.commit()
     return Response(status_code=204, headers=batch_header(batch_id))

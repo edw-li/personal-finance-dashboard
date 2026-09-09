@@ -202,6 +202,7 @@ async def test_put_spending_month_upserts_and_net_pay_optional(auth_client, db):
         "updated": 0,
         "unchanged": 0,
         "net_pay_set": True,
+        "skipped_blank": 0,
         "net_pay_cleared": False,
         # Rows changed, so the PUT logged a change batch (2026-09-03 data-lifecycle spec 9).
         "batch_id": ANY,
@@ -224,6 +225,7 @@ async def test_put_spending_month_upserts_and_net_pay_optional(auth_client, db):
         "updated": 0,
         "unchanged": 1,
         "net_pay_set": False,
+        "skipped_blank": 0,
         "net_pay_cleared": False,
         "batch_id": None,
     }
@@ -1102,3 +1104,91 @@ async def test_living_budget_total_counts_only_active_living_budgets(db):
     )
     await db.commit()
     assert await living_budget_total(db, date(2026, 9, 1)) == Decimal("2000.00")
+
+
+# --- phantom $0.00 rows (2026-09-09 audit item 1) -----------------------------------------
+
+
+async def _nineteen_categories(db) -> list[SpendingCategory]:
+    """The wizard's real shape on production: nineteen active categories, every one of
+    which the old client seeded with "0.00" and shipped on every save."""
+    cats = [SpendingCategory(name=f"Cat {i}", slug=f"cat-{i}", sort_order=i) for i in range(1, 20)]
+    db.add_all(cats)
+    await db.commit()
+    return cats
+
+
+async def test_put_month_writes_no_row_for_a_blank_category(auth_client, db):
+    """Take-home alone: the cashflow row lands and NOT one of the nineteen zeros, because a
+    zero for a category with no stored row is a blank box, not an entry (audit item 1)."""
+    cats = await _nineteen_categories(db)
+    put = "/api/v1/spending/months/2026-05-01"
+    resp = await auth_client.put(
+        put,
+        json={
+            "net_pay": "9000.00",
+            "amounts": [{"category_id": c.id, "amount": "0.00"} for c in cats],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["created"] == 0
+    assert resp.json()["skipped_blank"] == 19
+    body = (await auth_client.get(put)).json()
+    assert body["net_pay"] == "9000.00"
+    assert body["amounts"] == []
+    assert (
+        await db.execute(select(MonthlySpending).where(MonthlySpending.month == date(2026, 5, 1)))
+    ).scalars().all() == []
+
+
+async def test_put_month_writes_only_the_category_that_carries_a_figure(auth_client, db):
+    cats = await _nineteen_categories(db)
+    put = "/api/v1/spending/months/2026-05-01"
+    amounts = [{"category_id": c.id, "amount": "0.00"} for c in cats]
+    amounts[3]["amount"] = "412.50"
+    resp = await auth_client.put(put, json={"net_pay": "9000.00", "amounts": amounts})
+    assert resp.status_code == 200, resp.text
+    assert (resp.json()["created"], resp.json()["skipped_blank"]) == (1, 18)
+    body = (await auth_client.get(put)).json()
+    assert body["amounts"] == [{"category_id": cats[3].id, "amount": "412.50"}]
+
+
+async def test_put_month_still_zeroes_a_category_that_already_has_a_row(auth_client, db):
+    """A correction to zero is an EDIT, not a blank: the stored row must follow it down."""
+    food, rent = await _seed_spending(db)
+    put = "/api/v1/spending/months/2026-02-01"  # food 0.00, rent 2100.00 already stored
+    resp = await auth_client.put(
+        put,
+        json={
+            "amounts": [
+                {"category_id": food.id, "amount": "0.00"},
+                {"category_id": rent.id, "amount": "0.00"},
+            ],
+            "net_pay": "5000.00",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert (resp.json()["updated"], resp.json()["unchanged"]) == (1, 1)
+    assert resp.json()["skipped_blank"] == 0
+    body = (await auth_client.get(put)).json()
+    assert {a["category_id"]: a["amount"] for a in body["amounts"]} == {
+        food.id: "0.00",
+        rent.id: "0.00",
+    }
+
+
+async def test_put_month_confirm_zero_writes_every_zero(auth_client, db):
+    """The "Record this month as $0" checkbox is the one consent that turns nineteen blanks
+    into nineteen deliberate rows."""
+    cats = await _nineteen_categories(db)
+    put = "/api/v1/spending/months/2026-05-01"
+    resp = await auth_client.put(
+        put,
+        json={
+            "amounts": [{"category_id": c.id, "amount": "0.00"} for c in cats],
+            "confirm_zero": True,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert (resp.json()["created"], resp.json()["skipped_blank"]) == (19, 0)
+    assert len((await auth_client.get(put)).json()["amounts"]) == 19

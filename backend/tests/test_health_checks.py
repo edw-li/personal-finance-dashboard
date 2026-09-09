@@ -26,6 +26,7 @@ from app.services.health_checks import (
     check_spending_gap,
     check_stale_quotes,
     check_zero_filled_spending,
+    load_zero_with_net_pay,
     run_checks,
 )
 from app.services.snapshot import snapshots_dir
@@ -59,16 +60,12 @@ async def test_zero_filled_spending_names_the_phantom_month_with_a_repair_action
         [
             MonthlySpending(month=date(2026, 9, 1), category_id=food.id, amount=Decimal("0.00")),
             MonthlySpending(month=date(2026, 9, 1), category_id=rent.id, amount=Decimal("0.00")),
-            # August: zeros but WITH a cashflow row - a real month of no spending, not a
-            # phantom.
-            MonthlySpending(month=date(2026, 8, 1), category_id=food.id, amount=Decimal("0.00")),
-            MonthlyCashflow(month=date(2026, 8, 1), net_pay=Decimal("5000.00")),
             # July: real amounts.
             MonthlySpending(month=date(2026, 7, 1), category_id=food.id, amount=Decimal("400.00")),
         ]
     )
     await db.commit()
-    check = check_zero_filled_spending(await load_coverage(db))
+    check = check_zero_filled_spending(await load_coverage(db), await load_zero_with_net_pay(db))
     assert check.severity == "error" and check.count == 1 and check.months == [date(2026, 9, 1)]
     assert check.title == "Zero-filled spending month"
     assert "Sep 2026" in check.detail
@@ -78,7 +75,41 @@ async def test_zero_filled_spending_names_the_phantom_month_with_a_repair_action
         MonthlySpending.__table__.delete().where(MonthlySpending.month == date(2026, 9, 1))
     )
     await db.commit()
-    assert check_zero_filled_spending(await load_coverage(db)).severity == "ok"
+    assert (
+        check_zero_filled_spending(
+            await load_coverage(db), await load_zero_with_net_pay(db)
+        ).severity
+        == "ok"
+    )
+
+
+async def test_zero_filled_spending_also_flags_zeros_beside_a_take_home(db):
+    """The wizard's real bug (2026-09-09 audit item 1): a take-home figure carried a page of
+    seeded $0.00 rows past the empty-month guard, so the month is "entered" and its zeros
+    read as a real month of spending nothing. Coverage calls it entered - correctly - which
+    is exactly why this card has to name it."""
+    food, rent = await categories(db)
+    db.add_all(
+        [
+            MonthlySpending(month=date(2026, 8, 1), category_id=food.id, amount=Decimal("0.00")),
+            MonthlySpending(month=date(2026, 8, 1), category_id=rent.id, amount=Decimal("0.00")),
+            MonthlyCashflow(month=date(2026, 8, 1), net_pay=Decimal("5000.00")),
+            # July: a real month beside a take-home - never flagged.
+            MonthlySpending(month=date(2026, 7, 1), category_id=food.id, amount=Decimal("400.00")),
+            MonthlyCashflow(month=date(2026, 7, 1), net_pay=Decimal("5000.00")),
+            # June: take-home alone, no rows at all - that is the net_pay_without_spending
+            # card's month, not this one.
+            MonthlyCashflow(month=date(2026, 6, 1), net_pay=Decimal("5000.00")),
+        ]
+    )
+    await db.commit()
+    coverage = await load_coverage(db)
+    assert coverage.empty == []  # August is ENTERED: it carries a take-home row
+    check = check_zero_filled_spending(coverage, await load_zero_with_net_pay(db))
+    assert check.severity == "error" and check.months == [date(2026, 8, 1)]
+    assert "Aug 2026" in check.detail and "take-home" in check.detail
+    assert check.fix is not None
+    assert (check.fix.kind, check.fix.action) == ("action", "delete_spending_month")
 
 
 async def test_coverage_gaps_look_back_twelve_months_and_skip_the_current(db):
@@ -287,7 +318,7 @@ async def test_spending_gap_names_months_missing_inside_the_balances_window(db):
     assert gap.months == [date(2026, 8, 1)]  # nothing at all on file, and inside the window
     assert gap.fix.to == "/update?month=2026-08-01&step=spending"
     # The empty September belongs to the zero-filled check; neither claims the other's month.
-    assert check_zero_filled_spending(coverage).months == [date(2026, 9, 1)]
+    assert check_zero_filled_spending(coverage, []).months == [date(2026, 9, 1)]
 
 
 async def test_spending_gap_is_ok_when_the_window_is_covered(db):
