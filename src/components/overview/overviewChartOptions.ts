@@ -11,7 +11,7 @@ import type { EChartsOption } from '../../charts/echarts'
 import { BAR_MARKS, LINE, WASH, grid, moneyAxis, monthAxis } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { referenceLine } from '../../charts/reference'
-import { PALETTE } from '../../charts/theme'
+import { OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
 import type { CoverageOut, NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
@@ -100,6 +100,16 @@ export function recentSpendOption(
   // Drawn hollow and labelled in the tooltip rather than dropped: the month happened, and
   // an axis that skipped it would hide the gap this is meant to make visible.
   const blank = new Set(shown.flatMap((month, i) => (notEntered.has(month) ? [i] : [])))
+  // A not-entered month's total IS 0.00, so its hollow bar is a baseline tick and the only
+  // place a CUE can live is the label. The month's name recedes to the "Other" neutral —
+  // dimmer than the axis's own muted in both palettes, and a token, so recolor.ts maps it.
+  // Per-datum objects rather than an `axisLabel.color` CALLBACK: recolor.ts walks plain
+  // objects but passes functions through by identity (its header rule), so a callback
+  // would bake dark-theme hexes into the light theme.
+  const axis = monthAxis(shown.map(formatMonth), { gap: true })
+  const labels = axis.data.map((label, i) =>
+    blank.has(i) ? { value: label, textStyle: { color: OTHER_SERIES_COLOR } } : label,
+  )
   // F14: the reference is spendStats' OWN avg12 — the mean of the twelve months STRICTLY
   // BEFORE the latest one — not the mean of the drawn window. The spend tile prints that
   // number under the same words ("over/under $X 12-mo avg"), and the label on this line
@@ -115,7 +125,7 @@ export function recentSpendOption(
   return {
     grid: grid(),
     legend: legendFor(1 + average.length),
-    xAxis: monthAxis(shown.map(formatMonth), { gap: true }),
+    xAxis: { ...axis, data: labels },
     yAxis: moneyAxis(),
     tooltip: axisTooltip({
       unit: 'money',

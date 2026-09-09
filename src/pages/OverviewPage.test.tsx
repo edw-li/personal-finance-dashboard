@@ -194,10 +194,19 @@ function summaryOut(over: Partial<NetWorthSummary> = {}): NetWorthSummary {
 // tax-tile fixtures already guard against with CURRENT_YEAR).
 const NW_MONTHS = [-2, -1, 0].map((delta) => addMonths(currentMonthIso(), delta))
 
+// One account, because a scope the chips can reach HAS one: an empty `accounts` list is
+// the audit item 11 case (a person with nothing on file), and the tests about it say so
+// explicitly rather than inheriting it from the default fixture.
+const ONE_ACCOUNT = {
+  id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
+  sort_order: 1, is_active: true, is_component: false,
+  parent_account_id: null, person_id: null,
+}
+
 function timeseriesOut(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseries {
   return {
     months: [...NW_MONTHS],
-    accounts: [],
+    accounts: [ONE_ACCOUNT],
     series: [],
     group_totals: {
       cash: [], pre_tax: [], post_tax: [], taxable: [], equity: [], other: [], liability: [],
@@ -653,6 +662,15 @@ describe('OverviewPage tiles', () => {
     expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe(
       `▼ -$2,500.00 (-0.3%) on ${formatDate(daysAgo(3))}`,
     )
+  })
+
+  it('names no day at all when there is no quote to date the change from', async () => {
+    serve({ holdings: holdingsOut({ as_of: null, latest_quote_at: null }) })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    // Not "today": with nothing quoted there is no day to name, so the word is omitted
+    // rather than guessed (review round).
+    expect(deltaOf(tileFor('Portfolio'))?.textContent).toBe('▼ -$2,500.00 (-0.3%)')
   })
 
   it('drops the portfolio delta when the day change has an amount but no rate', async () => {
@@ -1596,6 +1614,11 @@ describe('OverviewPage — shell frame and owner scope', () => {
     expect(screen.queryByText(/MoM/)).toBeNull()
     expect(screen.queryByLabelText('Line chart of net worth at every monthly snapshot')).toBeNull()
     expect(screen.getAllByText('No accounts for Grace yet')).toHaveLength(2)
+    // Holdings hang off accounts: the Portfolio tile is the same nothing, and it does not
+    // repeat the sentence its neighbour already carries.
+    const portfolio = tileFor('Portfolio')
+    expect(valueOf(portfolio)).toBe('—')
+    expect(deltaOf(portfolio)).toBeNull()
   })
 
   it('keeps the household view whole when the book itself is empty', async () => {

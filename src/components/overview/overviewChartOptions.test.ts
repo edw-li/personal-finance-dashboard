@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { GRID_VARIANTS } from '../../charts/grammar'
-import { INK, MUTED, PALETTE, SURFACE } from '../../charts/theme'
+import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
 import type { CoverageOut, TaxSummaryOut } from '../../types/api'
 import {
@@ -91,6 +91,12 @@ function seriesOf(option: EChartsOption | null): SeriesLike[] {
 
 function categoriesOf(option: EChartsOption | null): string[] {
   return (option as unknown as { xAxis: { data: string[] } }).xAxis.data
+}
+
+/** The raw axis data — a plain label string, or the `{ value, textStyle }` datum a
+ *  not-entered month carries. */
+function axisDataOf(option: EChartsOption | null): unknown[] {
+  return (option as unknown as { xAxis: { data: unknown[] } }).xAxis.data
 }
 
 function xAxisOf(option: EChartsOption | null): { show?: boolean; boundaryGap?: boolean } {
@@ -270,6 +276,20 @@ describe('recentSpendOption', () => {
       ]),
     )
     expect(plain.rows).toEqual([{ kind: 'row', label: 'Spend', value: '$100.00' }])
+  })
+
+  it('recedes a not-entered month’s axis label instead of inventing a bar height', () => {
+    // Its total IS 0.00, so the hollow bar is a baseline tick — the cue has to ride the
+    // label. A per-datum object, never an axisLabel.color callback: recolor.ts passes
+    // functions through by identity, so a callback would stay dark under the light theme.
+    const feed = { months: monthsFrom('2026-01-01', 3), totals: ['100.00', '0.00', '300.00'] }
+    expect(axisDataOf(recentSpendOption(feed, 12, new Set(['2026-02-01'])))).toEqual([
+      'Jan 2026',
+      { value: 'Feb 2026', textStyle: { color: OTHER_SERIES_COLOR } },
+      'Mar 2026',
+    ])
+    // Nothing named: every label is a plain string on the theme's own axis colour.
+    expect(axisDataOf(recentSpendOption(feed))).toEqual(['Jan 2026', 'Feb 2026', 'Mar 2026'])
   })
 
   it('keeps the dashed reference on the average the tile prints, not-entered months out', () => {

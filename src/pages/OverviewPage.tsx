@@ -369,8 +369,10 @@ export default function OverviewPage() {
   // latest_quote_at is the NEWEST stamp (as_of is the oldest, the staleness clock); the
   // fallback is stale-tab armor only, since server-side both derive from one quote list.
   const quoteDay = (data?.holdings.latest_quote_at ?? asOf)?.slice(0, 10) ?? null
+  // Carries its own leading space so a missing quote date omits the WORD rather than
+  // guessing "today" — with no quote on file there is no day to name (review round).
   const dayChangeWhen =
-    quoteDay === null || quoteDay === todayIso() ? 'today' : `on ${formatDate(quoteDay)}`
+    quoteDay === null ? '' : quoteDay === todayIso() ? ' today' : ` on ${formatDate(quoteDay)}`
   const stats = data ? spendStats(data.matrix, notEntered) : null
   const currentYear = new Date().getFullYear()
   const tax = data ? pickTaxSummary(data.taxes.years, currentYear) : null
@@ -523,16 +525,21 @@ export default function OverviewPage() {
               />
               <StatTile
                 label="Portfolio"
-                value={formatCurrency(totals?.market_value)}
+                // Holdings hang off accounts, so the scope with none has no portfolio
+                // either — the hero beside it carries the sentence, and a second copy of
+                // it in this row would be noise (audit item 11).
+                value={emptyScopeNote !== null ? '—' : formatCurrency(totals?.market_value)}
                 // Omitted before the first price refresh — there is no day to compare to.
                 delta={
-                  totals?.day_change_amount != null && totals.day_change_pct != null
+                  emptyScopeNote === null &&
+                  totals?.day_change_amount != null &&
+                  totals.day_change_pct != null
                     ? `${formatCurrency(totals.day_change_amount)} (${formatPct(
                         totals.day_change_pct,
-                      )}) ${dayChangeWhen}`
+                      )})${dayChangeWhen}`
                     : undefined
                 }
-                tone={toneOf(totals?.day_change_amount)}
+                tone={emptyScopeNote !== null ? 'neutral' : toneOf(totals?.day_change_amount)}
                 hint="Market value of every priced holding at the latest quotes, and today's move vs the prior close."
               />
               <StatTile
