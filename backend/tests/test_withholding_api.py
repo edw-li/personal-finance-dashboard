@@ -315,6 +315,151 @@ async def test_withholding_totals_sum_their_legs_and_balance_against_the_liabili
     assert body["balance_projected"] == "18870.20"
 
 
+# --- the per-jurisdiction split (2026-09-09 audit item 3) ---
+
+
+@pytest.fixture
+async def split_world(db, world):
+    """The world's profile with a paystub's two rates on it: 20% federal and 6% state of
+    the same taxable base the all-in 30% applies to, so the payroll remainder is a real 4%
+    rather than the zero an exactly-adding pair would hide."""
+    profile = (await db.execute(select(PaycheckProfile))).scalars().one()
+    profile.fed_withholding_pct = Decimal("0.200000000")
+    profile.state_withholding_pct = Decimal("0.060000000")
+    await db.commit()
+    return profile
+
+
+async def test_withholding_has_no_jurisdictions_without_both_rates(
+    auth_client, db, world, frozen_today
+):
+    # Nothing entered: the card keeps every combined figure and simply cannot split it.
+    assert (await get_withholding(auth_client))["jurisdictions"] is None
+    profile = (await db.execute(select(PaycheckProfile))).scalars().one()
+    profile.fed_withholding_pct = Decimal("0.200000000")
+    await db.commit()
+    # HALF entered is still nothing: a federal figure beside no state one would invite the
+    # reader to subtract, and the difference would be wrong.
+    assert (await get_withholding(auth_client))["jurisdictions"] is None
+
+
+async def test_withholding_splits_the_legs_and_the_liability_by_jurisdiction(
+    auth_client, split_world, frozen_today
+):
+    body = await get_withholding(auth_client)
+    split = body["jurisdictions"]
+
+    # Withheld: salary 11 x 1870 / 24 x 1870 federal and 11 x 561 / 24 x 561 state, plus the
+    # vests at 22% and 10.23% of 50000 (ytd) and 85000 (projected).
+    assert split["federal"]["withheld_ytd"] == "31570.00"
+    assert split["federal"]["withheld_projected"] == "63580.00"
+    assert split["state"]["withheld_ytd"] == "11286.00"
+    assert split["state"]["withheld_projected"] == "22159.50"
+    # Payroll is the REMAINDER of the all-in total — the FICA the profile's own rate carries
+    # plus the vests' marginal FICA — so the three legs add back to the combined figures.
+    assert split["payroll"]["withheld_ytd"] == "8489.00"
+    assert split["payroll"]["withheld_projected"] == "11143.50"
+    for column in ("ytd", "projected"):
+        assert sum(
+            Decimal(split[name][f"withheld_{column}"]) for name in ("federal", "state", "payroll")
+        ) == Decimal(body["total"][column])
+
+    # Liabilities are the engine's own lines: federal 60000 (plus capital gains and NIIT,
+    # both zero here), California 30000, payroll 8700 + 10453.20 + 6600.
+    assert split["federal"]["liability"] == "60000.00"
+    assert split["state"]["liability"] == "30000.00"
+    assert split["payroll"]["liability"] == "25753.20"
+    assert sum(
+        Decimal(split[name]["liability"]) for name in ("federal", "state", "payroll")
+    ) == Decimal(body["liability_total"])
+
+    # Balances, and the remedy each one implies over the 13 checks still to come.
+    assert split["federal"]["balance"] == "-3580.00"  # over-withheld federally
+    assert split["state"]["balance"] == "7840.50"
+    assert split["payroll"]["balance"] == "14609.70"
+    assert split["federal"]["remedy_per_check"] == "0.00"  # a refund needs no remedy
+    assert split["state"]["remedy_per_check"] == "603.12"  # 7840.50 / 13
+    # FICA is not a W-4 line, so the payroll tile never asks anyone to change a form.
+    assert split["payroll"]["remedy_per_check"] is None
+    assert split["payroll"]["safe_harbor"] is None
+
+
+async def test_each_jurisdiction_gets_its_own_safe_harbor(
+    auth_client, db, split_world, frozen_today
+):
+    await seed_tax_year(db, YEAR - 1, "400000.0000")
+    body = await get_withholding(auth_client)
+    split = body["jurisdictions"]
+
+    # The reference return is the same one the combined harbor uses — same year, same AGI
+    # gate, same 110% multiplier — read one jurisdiction at a time.
+    assert split["federal"]["safe_harbor"] == {
+        "prior_year": YEAR - 1,
+        "prior_total_tax": "40000.00",
+        "prior_agi": "400000.00",
+        "multiplier": "1.10",
+        "threshold": "44000.00",
+        "prior_filing_status": "single",
+        "current_year_threshold": "54000.00",  # 60000 x 0.90
+        "effective_threshold": "44000.00",
+        "met": True,  # 63580.00 projected federally
+    }
+    assert split["state"]["safe_harbor"]["prior_total_tax"] == "20000.00"
+    assert split["state"]["safe_harbor"]["threshold"] == "22000.00"
+    assert split["state"]["safe_harbor"]["current_year_threshold"] == "27000.00"
+    assert split["state"]["safe_harbor"]["effective_threshold"] == "22000.00"
+    assert split["state"]["safe_harbor"]["met"] is True  # 22159.50 clears 22000.00
+    # The combined harbor is untouched by any of it.
+    assert body["safe_harbor"]["threshold"] == "88718.52"
+
+
+async def test_california_harbor_drops_the_prior_year_leg_above_a_million_of_agi(
+    auth_client, db, split_world, frozen_today
+):
+    """R&TC 19136: at $1,000,000 of California AGI the prior-year leg is gone and only 90%
+    of the current year will do. Federal has no such ceiling, which is the whole reason the
+    two harbors are computed apart."""
+    await seed_tax_year(db, YEAR - 1, "400000.0000")
+    db.add(TaxInput(year=YEAR, key="other_w2_income", value=Decimal("600000.0000")))
+    await db.commit()
+    body = await get_withholding(auth_client)
+    split = body["jurisdictions"]
+
+    harbor = split["state"]["safe_harbor"]
+    assert harbor["prior_year"] is None
+    assert harbor["threshold"] is None
+    # 1.2M of state AGI at 5% is 60000; 90% of it is the whole harbor.
+    assert harbor["current_year_threshold"] == "54000.00"
+    assert harbor["effective_threshold"] == "54000.00"
+    # The federal leg still has its reference return.
+    assert split["federal"]["safe_harbor"]["prior_year"] == YEAR - 1
+
+
+async def test_jurisdictions_are_null_figures_when_the_engine_refuses_the_year(
+    auth_client, db, definitions, frozen_today
+):
+    """A married year with no bracket table for its status: the withheld legs are still
+    real (they come from profiles and rates), but there is nothing to compare them to."""
+    db.add_all([Person(name="Me", is_primary=True), Person(name="Sam", is_primary=False)])
+    await db.flush()
+    db.add(TaxYear(year=YEAR, filing_status="married_joint"))
+    await db.commit()
+    await seed_profile(
+        db,
+        fed_withholding_pct=Decimal("0.200000000"),
+        state_withholding_pct=Decimal("0.060000000"),
+    )
+    body = await get_withholding(auth_client)
+    split = body["jurisdictions"]
+
+    assert body["liability_total"] is None
+    assert split["federal"]["withheld_projected"] == "44880.00"
+    assert split["federal"]["liability"] is None
+    assert split["federal"]["balance"] is None
+    assert split["federal"]["remedy_per_check"] is None
+    assert split["federal"]["safe_harbor"] is None
+
+
 # --- the bonus leg (2026-09-09 audit item 4c) and the supplemental tier (4d) ---
 
 

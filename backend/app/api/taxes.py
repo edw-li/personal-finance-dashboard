@@ -83,6 +83,8 @@ from app.schemas.taxes import (
     WhatIfDelta,
     WhatIfIn,
     WhatIfOut,
+    WithholdingJurisdictionOut,
+    WithholdingJurisdictionsOut,
     WithholdingLegOut,
     WithholdingOut,
     WithholdingPartnerLegOut,
@@ -1046,6 +1048,11 @@ PARTNER_STATE_WITHHOLDING_KEY = "w2_state_withholding"
 # per-person row belonging to somebody this year's return does not cover is already gone.
 BONUS_KEY = "w2_bonuses"
 BONUS_WITHHOLDING_KEY = "w2_bonus_withholding"
+# California's own gate (R&TC 19136 / FTB 5805): a taxpayer whose CURRENT-year California
+# AGI reaches $1,000,000 cannot use the prior-year leg at all and must reach 90% of this
+# year's tax. Federal has no such ceiling — which is exactly why the two harbors are
+# computed separately rather than one figure being called "the safe harbor".
+CA_HARBOR_AGI_CEILING = Decimal("1000000")
 
 
 def _bucket_input_rows(rows: Iterable[TaxInput]) -> dict[int | None, dict[str, Decimal]]:
@@ -1062,6 +1069,46 @@ def _bucket_input_rows(rows: Iterable[TaxInput]) -> dict[int | None, dict[str, D
 
 def _wage_base(values: dict[str, Decimal]) -> Decimal:
     return sum((values.get(key, ZERO) for key in WAGE_KEYS), ZERO)
+
+
+def _harbor(
+    prior: dict | None, current_threshold: Decimal | None, projected: Decimal
+) -> SafeHarborOut | None:
+    """The LESSER of the two statutory legs, judged against `projected` withholding.
+
+    One helper for four harbors — the combined one and the two per-jurisdiction ones — so
+    the lesser-of rule, the "either leg stands alone" rule and the `met` comparison cannot
+    drift between the card's headline and its tiles. Neither leg -> no harbor at all.
+    """
+    legs = [leg for leg in ((prior or {}).get("threshold"), current_threshold) if leg is not None]
+    if not legs:
+        return None
+    effective = min(legs)
+    return SafeHarborOut(
+        **(prior or {}),
+        current_year_threshold=current_threshold,
+        effective_threshold=effective,
+        # Judged on the DISPLAYED figures (paycheck.py's negative-net posture), so the badge
+        # can never contradict the numbers rendered next to it.
+        met=projected >= effective,
+    )
+
+
+def _prior_leg(
+    prior_leg: dict | None, tax: Decimal | None, multiplier: Decimal | None
+) -> dict | None:
+    """The combined prior-year leg re-based on ONE jurisdiction's prior tax.
+
+    The reference year, its AGI, its status and the multiplier the statutory gate selected
+    are the RETURN's, not the jurisdiction's — one return, one gate — so only the tax and
+    the threshold move. A jurisdiction whose prior tax is zero or negative has no leg, the
+    same vacuous-comparison rule the combined figure applies, and silently: the combined
+    warning already named the year, and "your prior California tax was zero" is a fact
+    about the reference return the card can show rather than complain about.
+    """
+    if prior_leg is None or tax is None or multiplier is None or tax <= ZERO:
+        return None
+    return {**prior_leg, "prior_total_tax": tax, "threshold": _money(tax * multiplier)}
 
 
 async def withholding_estimate(db: AsyncSession, year: int, today: date) -> WithholdingOut:
@@ -1271,6 +1318,8 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         else _money(liability_total * SAFE_HARBOR_CURRENT_MULTIPLIER)
     )
     prior_leg: dict | None = None
+    prior_breakdown: TaxBreakdown | None = None
+    prior_multiplier: Decimal | None = None
     if await db.get(TaxYear, year - 1) is not None:
         prior_feed = await _engine_feed(db, year - 1)
         if not prior_feed.computable:
@@ -1307,20 +1356,115 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
                     "threshold": _money(prior_total * multiplier),
                     "prior_filing_status": prior_feed.filing_status,
                 }
+                # Kept for the per-jurisdiction harbors below: the same reference return,
+                # read one jurisdiction at a time.
+                prior_breakdown = prior
+                prior_multiplier = multiplier
 
-    legs = [
-        leg for leg in ((prior_leg or {}).get("threshold"), current_threshold) if leg is not None
-    ]
-    safe_harbor = None
-    if legs:
-        effective = min(legs)
-        safe_harbor = SafeHarborOut(
-            **(prior_leg or {}),
-            current_year_threshold=current_threshold,
-            effective_threshold=effective,
-            # Judged on the DISPLAYED figures (paycheck.py's negative-net posture), so
-            # the badge can never contradict the numbers rendered next to it.
-            met=total_projected >= effective,
+    safe_harbor = _harbor(prior_leg, current_threshold, total_projected)
+
+    # --- the per-jurisdiction split (2026-09-09 audit item 3). Present exactly when the
+    # service could build the legs: every profile pricing a check carries both paystub
+    # rates. Liabilities are the ENGINE's own lines — federal carries the preferential-rate
+    # capital-gains tax and the NIIT, because both are federal income tax paid on the same
+    # return — and the withheld legs are the service's, so the tiles are two halves of the
+    # figures already on the card rather than a second opinion about either.
+    jurisdictions = None
+    legs = estimated.jurisdictions
+    if legs is not None:
+        remaining = estimated.checks_total - estimated.checks_elapsed
+
+        def jurisdiction(
+            liability_tax: Decimal | None,
+            withheld_ytd: Decimal,
+            withheld_projected: Decimal,
+            harbor: SafeHarborOut | None,
+            *,
+            remedy: bool = True,
+        ) -> WithholdingJurisdictionOut:
+            balance = None if liability_tax is None else _money(liability_tax - withheld_projected)
+            return WithholdingJurisdictionOut(
+                liability=liability_tax,
+                withheld_ytd=withheld_ytd,
+                withheld_projected=withheld_projected,
+                balance=balance,
+                # A shortfall spread over the checks still to come — the shape a W-4 line
+                # 4(c) or a DE 4 extra-withholding amount actually takes. Nothing to aim at
+                # once the year's checks are spent, and nothing to aim on the payroll leg:
+                # FICA is not a line anybody can add to.
+                remedy_per_check=(
+                    None
+                    if not remedy or balance is None or remaining <= 0
+                    else _money(max(balance, ZERO) / remaining)
+                ),
+                safe_harbor=harbor,
+            )
+
+        federal_tax = (
+            None
+            if liability is None
+            else _money(liability.federal.tax + liability.capital_gains.tax + liability.niit.tax)
+        )
+        state_tax = None if liability is None else _money(liability.state.tax)
+        payroll_tax = (
+            None
+            if liability is None
+            else _money(
+                liability.medicare.tax + liability.social_security.tax + liability.disability.tax
+            )
+        )
+        federal_current = (
+            None if federal_tax is None else _money(federal_tax * SAFE_HARBOR_CURRENT_MULTIPLIER)
+        )
+        state_current = (
+            None if state_tax is None else _money(state_tax * SAFE_HARBOR_CURRENT_MULTIPLIER)
+        )
+        prior_federal = (
+            None
+            if prior_breakdown is None
+            else _money(
+                prior_breakdown.federal.tax
+                + prior_breakdown.capital_gains.tax
+                + prior_breakdown.niit.tax
+            )
+        )
+        prior_state = None if prior_breakdown is None else _money(prior_breakdown.state.tax)
+        # California above $1M of CURRENT-year state AGI has no prior-year leg at all.
+        ca_capped = (
+            liability is not None
+            and liability.state.agi is not None
+            and (liability.state.agi >= CA_HARBOR_AGI_CEILING)
+        )
+        jurisdictions = WithholdingJurisdictionsOut(
+            federal=jurisdiction(
+                federal_tax,
+                legs.federal_ytd,
+                legs.federal_projected,
+                _harbor(
+                    _prior_leg(prior_leg, prior_federal, prior_multiplier),
+                    federal_current,
+                    legs.federal_projected,
+                ),
+            ),
+            state=jurisdiction(
+                state_tax,
+                legs.state_ytd,
+                legs.state_projected,
+                _harbor(
+                    None if ca_capped else _prior_leg(prior_leg, prior_state, prior_multiplier),
+                    state_current,
+                    legs.state_projected,
+                ),
+            ),
+            payroll=jurisdiction(
+                payroll_tax,
+                legs.payroll_ytd,
+                legs.payroll_projected,
+                # FICA has no estimated-payment harbor: it is withheld by an employer at a
+                # statutory rate, and there is no quarterly payment to safe-harbor against.
+                None,
+                remedy=False,
+            ),
         )
 
     return WithholdingOut(
@@ -1364,6 +1508,7 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         ),
         additional_medicare_gap=_money(estimated.additional_medicare_gap),
         safe_harbor=safe_harbor,
+        jurisdictions=jurisdictions,
         warnings=warnings,
     )
 
