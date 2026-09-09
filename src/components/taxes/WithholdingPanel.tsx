@@ -318,7 +318,7 @@ export default function WithholdingPanel({
                 delta={`${formatCurrency(withholding.total.ytd)} so far`}
                 // A level with its own progress under it, not a movement: no glyph, no colour.
                 tone="neutral"
-                hint="Salary checks at your all-in withholding % plus RSU vests at 22% federal + 10.23% CA plus their FICA."
+                hint="Salary checks at your all-in withholding %, RSU vests at 22% federal + 10.23% CA and W-2 bonuses at 22% + 6.6%, plus the FICA on both."
               />
               <StatTile
                 label="Projected balance"
@@ -580,7 +580,9 @@ export default function WithholdingPanel({
           <p className="drill-hint">
             Checks are estimated on an even calendar grid, and vest FICA stacks on top of salary
             rather than by date — an approximation that tends to err toward owing more. Future
-            vests are valued at the latest quote. Supplemental rates: 22% federal + 10.23% CA.
+            vests are valued at the latest quote. Supplemental rates: 22% federal, rising to 37%
+            above $1,000,000 of vests and bonuses in a year; California 10.23% on vests and 6.6%
+            on bonuses.
           </p>
 
           {/* Advisory, never an error banner: the estimate CAME BACK — these are the honest

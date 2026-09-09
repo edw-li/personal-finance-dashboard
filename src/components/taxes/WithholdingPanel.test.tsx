@@ -501,10 +501,12 @@ describe('WithholdingPanel', () => {
     // Every assumption that moves the balance above it: the check grid, the FICA stacking, and
     // the quote the future half is valued at — the last one is why the balance moves with the
     // stock. The lean is worded as a tendency, not a promise (additional-Medicare convexity
-    // can run the other way, and an even grid is direction-neutral).
+    // can run the other way, and an even grid is direction-neutral). The supplemental rates
+    // name BOTH tiers and both California rates, because a card that only ever says 22% is
+    // wrong for anyone whose vests and bonuses pass a million.
     expect(
       await screen.findByText(
-        /Checks are estimated on an even calendar grid.*an approximation that tends to err toward owing more\. Future vests are valued at the latest quote\. Supplemental rates: 22% federal \+ 10\.23% CA\./,
+        /Checks are estimated on an even calendar grid.*an approximation that tends to err toward owing more\. Future vests are valued at the latest quote\. Supplemental rates: 22% federal, rising to 37% above \$1,000,000 of vests and bonuses in a year; California 10\.23% on vests and 6\.6% on bonuses\./,
       ),
     ).toBeTruthy()
   })
