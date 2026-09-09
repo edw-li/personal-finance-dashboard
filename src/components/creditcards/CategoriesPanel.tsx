@@ -53,9 +53,9 @@ function message(err: unknown, fallback: string): string {
 }
 
 /**
- * Matrix rows: name, annual-spend weight (manual override; blank = auto from the
- * mapped spending category's suggestion over its entered trailing-12 months), mapping, pin. Deactivate keeps
- * the row out of the matrix without losing its cells.
+ * Matrix rows: name, annual-spend weight (manual override; blank = auto from the mapped
+ * spending category's spend over its ENTERED trailing-12 months), mapping, pin.
+ * Deactivate keeps the row out of the matrix without losing its cells.
  */
 export default function CategoriesPanel({
   categories,
