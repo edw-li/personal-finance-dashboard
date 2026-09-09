@@ -331,13 +331,13 @@ CORE_JURISDICTIONS = ("federal", "state", "capital_gains")
 
 
 def _current_tax_year() -> int:
-    """This calendar year, by the app's one clock.
+    """This calendar year, by the product clock.
 
-    `product_today` is the scheduler's zone-aware day, which every other dated decision in
-    this app keeps time by; there is no `services.clock`. THE only place a tax year is
-    compared against "now", so a test can move the boundary by patching this name.
+    `clock.product_today()` (the module, not the name — clock.py's own instruction), so a
+    test moves the boundary by patching `app.services.clock.product_today` the way every
+    other dated decision in this app is moved. THE only place a tax year meets "now".
     """
-    return product_today().year
+    return clock.product_today().year
 
 
 def _missing_for_status(

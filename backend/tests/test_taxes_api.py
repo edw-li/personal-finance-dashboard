@@ -15,7 +15,6 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import func, select, text
 
-from app.api import taxes as taxes_api
 from app.models import (
     EsppLot,
     LatestPrice,
@@ -1413,9 +1412,9 @@ async def test_the_single_grandfather_boundary_is_this_calendar_year(
     auth_client, definitions, monkeypatch
 ):
     """One clock, one boundary: the year BEFORE the current one is grandfathered and the
-    current one is not. Patched rather than waited for — `_current_tax_year` is the only
-    place a tax year meets "now"."""
-    monkeypatch.setattr(taxes_api, "_current_tax_year", lambda: 2030)
+    current one is not. The PRODUCT clock is patched rather than the helper that reads it,
+    so `_current_tax_year` — the only place a tax year meets "now" — is exercised too."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2030, 6, 15))
     await put_inputs(auth_client, 2029, {"latest_w2_income": "1000"})
     await put_inputs(auth_client, 2030, {"latest_w2_income": "1000"})
 
