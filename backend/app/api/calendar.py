@@ -57,6 +57,7 @@ from app.schemas.calendar import (
     OverrideOut,
     SourceHealthOut,
 )
+from app.schemas.taxes import WithholdingOut
 from app.services.business_days import next_business_day
 from app.services.calendar import Sources, compose
 from app.services.calendar.generators.cards import CardCreditFacts, CardFacts
@@ -250,63 +251,88 @@ async def _card_facts(db: AsyncSession) -> tuple[list[CardFacts], SourceHealthOu
     return facts, _health("card", "ok")
 
 
-async def _tax_facts(
-    db: AsyncSession, window: Window, today: date
-) -> tuple[dict[int, TaxFacts], SourceHealthOut]:
-    """At most ONE withholding computation per year touching the window (spec §16, §20):
-    the current year's whenever the window still holds future dates, and the prior year's
-    whenever Apr 15 — the filing — is both ahead and inside the window.
-
-    The filing balance comes FIRST because it is a settled fact about LAST year: a missing
-    current-year row costs the estimated-payment split and nothing else, so Apr 15 still
-    carries what the return owes."""
-    if window.end < today:
-        return {}, _health(
-            "tax", "ok", "statutory dates; amounts are estimated for the current year only"
-        )
-    prior_balance: Decimal | None = None
-    filing = next_business_day(date(today.year, 4, 15))
-    if filing >= today and window.contains(filing):
-        try:
-            prior = await withholding_estimate(db, today.year - 1, today)
-        except HTTPException:
-            prior = None
-        if (
-            prior is not None
-            and prior.balance_projected is not None
-            and prior.balance_projected > 0
-        ):
-            prior_balance = prior.balance_projected
-    try:
-        current = await withholding_estimate(db, today.year, today)
-    except HTTPException:
-        # No current year: the shortfall split is unknowable, the filing balance is not.
-        facts = TaxFacts(today.year, None, None, None, prior_balance)
-        return {today.year: facts}, _health(
-            "tax", "partial", f"no {today.year} tax year entered — dates only"
-        )
-    harbor = current.safe_harbor
+def _harbor_facts(
+    year: int, estimate: WithholdingOut, prior_year_balance: Decimal | None = None
+) -> TaxFacts:
+    """One year's withholding estimate reduced to what the generator prices with. The
+    prior-year LEG won only if it is the lesser of the two, which is exactly when the
+    effective threshold is it — the sentence the detail then names."""
+    harbor = estimate.safe_harbor
     if harbor is None:
-        facts = TaxFacts(today.year, None, current.total.projected, None, prior_balance)
-        return {today.year: facts}, _health(
-            "tax", "partial", "no safe-harbor leg yet — estimated payments unknown"
-        )
-    # The prior-year leg WON only if it is the lesser of the two, which is exactly when the
-    # effective threshold is it — the sentence the detail then names.
+        return TaxFacts(year, None, estimate.total.projected, None, prior_year_balance)
     leg = (
         "prior-year"
         if harbor.threshold is not None and harbor.threshold == harbor.effective_threshold
         else "current-year"
     )
-    facts = TaxFacts(
-        today.year, harbor.effective_threshold, current.total.projected, leg, prior_balance
+    return TaxFacts(
+        year, harbor.effective_threshold, estimate.total.projected, leg, prior_year_balance
     )
+
+
+async def _tax_facts(
+    db: AsyncSession, window: Window, today: date
+) -> tuple[dict[int, TaxFacts], SourceHealthOut]:
+    """At most ONE withholding computation per year touching the window (spec §16, §20):
+    the current year's whenever the window still holds future dates, and the prior year's
+    whenever one of ITS dates is both ahead and inside the window — Apr 15, the filing, or
+    Jan 15, the prior year's Q4 estimated payment.
+
+    The filing balance comes FIRST because it is a settled fact about LAST year: a missing
+    current-year row costs the estimated-payment split and nothing else, so Apr 15 still
+    carries what the return owes.
+
+    Jan 15 is tax year `year - 1`'s Q4 (the generator's mapping), so only the PRIOR year's
+    harbor can price it. Returning the current year alone left that payment amountless from
+    Jan 1 to Jan 15 every year (2026-09-09 audit item 7) — the one date still able to close
+    last year's shortfall, and therefore the one carrying all of it."""
+    if window.end < today:
+        return {}, _health(
+            "tax", "ok", "statutory dates; amounts are estimated for the current year only"
+        )
+    prior_year = today.year - 1
+    prior_balance: Decimal | None = None
+    prior_facts: TaxFacts | None = None
+    filing = next_business_day(date(today.year, 4, 15))
+    # payment_dates(prior_year)[-1] — spelled here so the two dates read alike.
+    prior_q4 = next_business_day(date(today.year, 1, 15))
+    wants_filing = filing >= today and window.contains(filing)
+    wants_q4 = prior_q4 >= today and window.contains(prior_q4)
+    if wants_filing or wants_q4:
+        try:
+            prior = await withholding_estimate(db, prior_year, today)
+        except HTTPException:
+            prior = None
+        if prior is not None:
+            balance = prior.balance_projected
+            if wants_filing and balance is not None and balance > 0:
+                prior_balance = balance
+            if wants_q4:
+                # No prior-year balance on THIS one: that field is what the year's own
+                # filing owes, and 2024's return is nobody's business on 2025's Q4.
+                prior_facts = _harbor_facts(prior_year, prior)
+    facts_by_year: dict[int, TaxFacts] = {} if prior_facts is None else {prior_year: prior_facts}
+    try:
+        current = await withholding_estimate(db, today.year, today)
+    except HTTPException:
+        # No current year: the shortfall split is unknowable, the filing balance is not.
+        facts = TaxFacts(today.year, None, None, None, prior_balance)
+        return facts_by_year | {today.year: facts}, _health(
+            "tax", "partial", f"no {today.year} tax year entered — dates only"
+        )
+    harbor = current.safe_harbor
+    if harbor is None:
+        facts = TaxFacts(today.year, None, current.total.projected, None, prior_balance)
+        return facts_by_year | {today.year: facts}, _health(
+            "tax", "partial", "no safe-harbor leg yet — estimated payments unknown"
+        )
+    facts = _harbor_facts(today.year, current, prior_balance)
     note = (
         "safe harbor met"
         if harbor.met
         else f"safe-harbor shortfall split across the remaining {today.year} payments"
     )
-    return {today.year: facts}, _health("tax", "ok", note)
+    return facts_by_year | {today.year: facts}, _health("tax", "ok", note)
 
 
 async def _custom_rows(db: AsyncSession, window: Window, names: dict[int, str]) -> list[CustomRow]:
