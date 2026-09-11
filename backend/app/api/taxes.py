@@ -544,12 +544,15 @@ async def _carried_forward(
 
 
 async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
-    """Every definition, one item per PERSON COLUMN, each with its own suggestions.
+    """Every definition, one item per PERSON COLUMN, with that column's own figures.
 
     Columns are the people this year's return covers (`_return_people`): one — the
     primary — for single and MFS, everybody for married-joint, and a single NULL column on
     a database with no roster, which reproduces today's payload byte for byte. Household
     keys always render exactly once, with person_id null.
+
+    An ENTERED line carries what is stored; a COMPUTED line carries what the engine makes
+    of that column's components, a `formula` caption and no chip (2026-09-11 spec §1.6).
     """
     definitions = list((await db.execute(select(TaxInputDefinition))).scalars())
     filing_status = await _filing_status(db, year)
@@ -573,12 +576,12 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
     suggestions: dict[int | None, dict[str, Decimal]] = {
         column: dict(offered) for column in columns
     }
-    # The HEAD of the derived-W2 chain. `annual_salary` has no sheet formula, so
-    # derive_suggestions never offers one — but a person with a paycheck profile in force
-    # has already told the app their salary, and this page should offer it rather than ask
-    # twice (2026-08-27 spec §4.1). Per column, from THAT person's profile: a column whose
-    # person has none keeps today's empty suggestion, and nothing downstream moves, because
-    # gross_paycheck still divides the STORED annual_salary.
+    # The HEAD of the derived-W2 chain, and the last chip on it: `annual_salary` has no
+    # formula of its own, but a person with a paycheck profile in force has already told
+    # the app their salary, and this page should offer it rather than ask twice (2026-08-27
+    # spec §4.1). Per column, from THAT person's profile; a column whose person has none
+    # keeps an empty suggestion. Applying it now moves the two computed lines below it on
+    # the next preview, which is the chain doing what it says.
     for column, salary in (await _profile_salaries(db, columns, clock.product_today())).items():
         suggestions[column][ANNUAL_SALARY_KEY] = salary
     # Household keys, so the same value in every column (a household row renders from the

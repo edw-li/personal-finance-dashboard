@@ -82,13 +82,15 @@ async def test_run_tax_whatif_carries_a_sandbox_link_in_the_page_grammar(db):
     result = await execute_tool(
         db,
         "run_tax_whatif",
-        {"year": 2024, "overrides": {"qualified_dividends": "2500", "interest_total": None}},
+        # A COMPONENT: `interest_total` is computed since 2026-09-11 and overriding it is
+        # a 422 the tool would surface as an error.
+        {"year": 2024, "overrides": {"qualified_dividends": "2500", "interest_standard": None}},
     )
     assert "error" not in result, result
     # The year leads the query: a what-if is only true within the year it was run
     # against, so a link that dropped it would open the panel on the wrong one.
     assert result["sandbox_url"] == (
-        "/taxes?year=2024&whatif=interest_total%3Anull&whatif=qualified_dividends%3A2500"
+        "/taxes?year=2024&whatif=interest_standard%3Anull&whatif=qualified_dividends%3A2500"
     )
 
 

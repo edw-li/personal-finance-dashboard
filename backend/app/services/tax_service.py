@@ -457,6 +457,12 @@ def compute_breakdown(
     bracket list — yields 0 tax plus a warning. Effective rates are full-precision ratios,
     None when the denominator is 0; the schema layer quantizes.
 
+    The nine DERIVED totals in `inputs` are not read (2026-09-11 spec §1.3). Whatever a
+    caller put under them is discarded and rebuilt here from the components: the four
+    per-person ones inside each wage bundle, the five household ones over the summed dict.
+    That is why the order below is fixed — bundles, then wages, then the household pass,
+    then the first number anything reads.
+
     `filing_status` selects nothing here but the NIIT line's MAGI threshold: every OTHER
     status-dependent number lives in the bracket TABLES the caller selected, which is why
     a wrong-status table is refused upstream rather than compensated for down here.

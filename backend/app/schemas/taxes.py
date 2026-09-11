@@ -61,13 +61,18 @@ class TaxInputItemOut(BaseModel):
     # The column this item belongs to. Null for household keys — and also for per-person
     # keys on a database with no people roster, which is the pre-household spelling.
     person_id: int | None = None
+    # What this line reads on the form: the stored figure on an ENTERED line, the computed
+    # one on a derived line — or null when the line has nothing behind it in this column
+    # (no stored row, or, for a computed line, no stored component). Absent is not zero.
     value: Decimal | None
-    # The sheet's gray-cell formula for this key, when it has one, computed from THIS
-    # column's own values. Advisory: the UI offers a chip, nothing is applied server-side.
+    # An OFFER the user may apply, never applied server-side: the capital-loss carryforward,
+    # the salary from a paycheck profile, and the three carried-forward deduction rows.
+    # Always null on a computed line — there is nothing to offer when the figure IS the
+    # answer (2026-09-11 spec §1.6).
     suggested: Decimal | None
-    # Where `suggested` came from, when it is NOT this key's sheet formula: "last year's"
-    # for the three deduction rows carried forward from the prior year (2026-09-09 spec
-    # §4e). Null means the formula — the chip's default wording.
+    # Where `suggested` came from, when it is not this key's own formula: "last year's" for
+    # the three deduction rows carried forward from the prior year (2026-09-09 spec §4e).
+    # Null is the chip's default wording.
     suggestion_source: str | None = None
     # The human formula behind a COMPUTED line (tax_keys.FORMULA_CAPTIONS), null on every
     # entered one (2026-09-11 spec §1.6). It takes the chip's place in the form's third

@@ -49,12 +49,21 @@ def money(rendered: str) -> Decimal:
 
 
 async def seed_priceable_year(db, year: int, w2: str = "240000") -> None:
-    """A year the engine can price: the input definitions, one W-2 row and flat bracket
-    tables at column scale (test_withholding_api's shape)."""
+    """A year the engine can price: the input definitions, one W-2 wage and flat bracket
+    tables at column scale (test_withholding_api's shape).
+
+    The wage is its COMPONENTS since 2026-09-11 (taxes spec §1.1) — 24 checks against a
+    salary of `w2` materializes to exactly `w2` of `latest_w2_income`, which nothing stores.
+    """
     await seed_tax_definitions(db)
     db.add(TaxYear(year=year, filing_status="single"))
     await db.flush()
-    db.add(TaxInput(year=year, key="latest_w2_income", value=Decimal(w2)))
+    db.add_all(
+        [
+            TaxInput(year=year, key="pay_periods", value=Decimal("24")),
+            TaxInput(year=year, key="annual_salary", value=Decimal(w2)),
+        ]
+    )
     for name, table in {
         "federal": [("0.1000", "0.00")],
         "state": [("0.0500", "0.00")],

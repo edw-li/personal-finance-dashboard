@@ -16,6 +16,7 @@ from app.main import app
 from app.models import Account, AccountBalance, NetWorthSnapshot, Person
 from app.seed import seed_tax_definitions
 from app.services import clock
+from app.tax_keys import is_derived_key
 from tests.test_tax_service import YEAR_BRACKETS, YEAR_INPUTS
 
 PROFILES = "/api/v1/paycheck/profiles"
@@ -27,9 +28,25 @@ SANDBOX_BODIES: dict[tuple[str, str], dict | None] = {
     },
     ("POST", "/api/v1/taxes/what-if"): {
         "year": 2024,
-        "overrides": {"qualified_dividends": "2500", "interest_total": None},
+        # A COMPONENT: the totals are computed since 2026-09-11 (taxes spec §1.4) and an
+        # override of one is a 422.
+        "overrides": {"qualified_dividends": "2500", "interest_standard": None},
+    },
+    # The inputs preview: the form asks the server what the nine computed totals WOULD be
+    # as the user types, so it is a sandbox route by construction — body-in, figures-out,
+    # nothing written (taxes spec §1.6).
+    ("POST", "/api/v1/taxes/years/{year}/inputs/preview"): {
+        "values": {"w2_bonuses": "10000", "itemized_salt": "9000"}
     },
     ("GET", "/api/v1/projection"): None,
+}
+
+# The concrete URL to call for a route whose path carries a parameter. Discovery works on
+# the TEMPLATE (that is what the router registers), the client needs a real year.
+SANDBOX_URLS: dict[tuple[str, str], str] = {
+    ("POST", "/api/v1/taxes/years/{year}/inputs/preview"): (
+        "/api/v1/taxes/years/2024/inputs/preview"
+    ),
 }
 
 
@@ -97,7 +114,10 @@ async def seed_everything(auth_client, db) -> None:
     assert resp.status_code == 201, resp.text
     await seed_tax_definitions(db)
     await db.commit()
-    inputs = {key: str(value) for key, value in YEAR_INPUTS[2024].items()}
+    # ENTERED cells only: the nine computed totals are refused by the PUT (taxes spec §1.5).
+    inputs = {
+        key: str(value) for key, value in YEAR_INPUTS[2024].items() if not is_derived_key(key)
+    }
     resp = await auth_client.put("/api/v1/taxes/years/2024/inputs", json={"values": inputs})
     assert resp.status_code == 200, resp.text
     brackets = {
@@ -126,11 +146,12 @@ def test_every_sandbox_route_has_a_registered_body():
 async def test_sandbox_route_writes_nothing(auth_client, db, forbid_writes, method, path):
     await seed_everything(auth_client, db)
     before = await row_counts(db)
+    url = SANDBOX_URLS.get((method, path), path)
     with forbid_writes():
         if method == "GET":
-            resp = await auth_client.get(path)
+            resp = await auth_client.get(url)
         else:
-            resp = await auth_client.post(path, json=SANDBOX_BODIES[(method, path)])
+            resp = await auth_client.post(url, json=SANDBOX_BODIES[(method, path)])
     assert resp.status_code == 200, resp.text
     db.expire_all()  # re-read from Postgres, not from the identity map
     assert await row_counts(db) == before
