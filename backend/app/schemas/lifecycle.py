@@ -126,8 +126,7 @@ class HealthFixOut(BaseModel):
     kind: Literal["link", "action"]
     label: str
     to: str | None = None
-    # 'delete_spending_month' (per month in the check's `months`) | 'snapshot_now' |
-    # 'rewrite_itemized_deduction' (per year in the check's `years`).
+    # 'delete_spending_month' (per month in the check's `months`) | 'snapshot_now'.
     action: str | None = None
 
 

@@ -83,13 +83,22 @@ async def definitions(db):
 
 
 async def seed_tax_year(db, year: int, w2_income: str, jurisdictions: dict | None = None) -> None:
-    """A year the engine can price: one W2 input plus bracket tables at column scale.
+    """A year the engine can price: one W2 wage plus bracket tables at column scale.
+
+    The wage is stored as its COMPONENTS since 2026-09-11 (taxes spec §1.1): 24 checks
+    against a salary of `w2_income` materializes to exactly `w2_income` of
+    `latest_w2_income`, and nothing stores that total any more.
 
     The status is spelled out rather than left to the column default, so the single-year
     fixtures below are unambiguous next to the married ones (2026-08-26 spec §5.6)."""
     db.add(TaxYear(year=year, filing_status="single"))
     await db.flush()  # the inputs/brackets FK to it
-    db.add(TaxInput(year=year, key="latest_w2_income", value=Decimal(w2_income)))
+    db.add_all(
+        [
+            TaxInput(year=year, key="pay_periods", value=Decimal("24")),
+            TaxInput(year=year, key="annual_salary", value=Decimal(w2_income)),
+        ]
+    )
     for name, table in (BRACKETS if jurisdictions is None else jurisdictions).items():
         for index, (rate, threshold) in enumerate(table, start=1):
             db.add(
@@ -420,7 +429,7 @@ async def test_california_harbor_drops_the_prior_year_leg_above_a_million_of_agi
     of the current year will do. Federal has no such ceiling, which is the whole reason the
     two harbors are computed apart."""
     await seed_tax_year(db, YEAR - 1, "400000.0000")
-    db.add(TaxInput(year=YEAR, key="other_w2_income", value=Decimal("600000.0000")))
+    db.add(TaxInput(year=YEAR, key="w2_other", value=Decimal("600000.0000")))
     await db.commit()
     body = await get_withholding(auth_client)
     split = body["jurisdictions"]
@@ -466,13 +475,15 @@ async def test_jurisdictions_are_null_figures_when_the_engine_refuses_the_year(
 async def test_bonus_input_adds_a_withholding_leg_to_the_combined_total(
     auth_client, db, world, frozen_today
 ):
-    # `w2_bonuses` is not an engine key (it feeds the derived W-2 suggestion), so the
-    # LIABILITY here is untouched and this pins the withholding side alone.
     db.add(TaxInput(year=YEAR, key="w2_bonuses", value=Decimal("50000.0000")))
     await db.commit()
     body = await get_withholding(auth_client)
 
-    assert body["liability_total"] == "115753.20"
+    # `w2_bonuses` IS an engine input since 2026-09-11 (taxes spec §1.3): it is a component
+    # of the computed `other_w2_income`, so 50000 of bonus raises the liability by 8775.00
+    # as well as adding its withholding leg. Before the totals were computed it reached the
+    # engine only if the user applied a chip, and this line read 115753.20.
+    assert body["liability_total"] == "124528.20"
     # 22% federal + 6.6% CA = 14300, plus marginal FICA over the 110000 of salary gross
     # behind today (50000 x 0.0875 = 4375, the SS cap still ahead) = 18675; the PROJECTION
     # stacks the same bonus on a full year's 240000, where only medicare + SDI are left.
@@ -753,7 +764,7 @@ async def test_the_110_pct_gate_is_judged_on_true_agi(auth_client, db, world, fr
     gate was actually judged on rather than a smaller one beside a 1.10 nobody can derive.
     """
     await seed_tax_year(db, YEAR - 1, "140000.0000")
-    db.add(TaxInput(year=YEAR - 1, key="ltcg_total", value=Decimal("20000.0000")))
+    db.add(TaxInput(year=YEAR - 1, key="ltcg_brokerage", value=Decimal("20000.0000")))
     await db.commit()
 
     body = await get_withholding(auth_client)
@@ -940,12 +951,15 @@ async def seed_married_year(
     inputs PUT belongs to another plan and this file must not depend on its shape."""
     db.add(TaxYear(year=year, filing_status=status))
     await db.flush()
+    # Per PERSON, as components: each column materializes its own 24 x salary/24, which is
+    # the whole point of the assembly door (taxes spec §1.4) — the partner's wage base is
+    # their own rows rolled up, never a slice of the household's.
     db.add_all(
         [
-            TaxInput(year=year, key="latest_w2_income", value=Decimal("240000"), person_id=me_id),
-            TaxInput(
-                year=year, key="latest_w2_income", value=Decimal("150000"), person_id=partner_id
-            ),
+            TaxInput(year=year, key="pay_periods", value=Decimal("24"), person_id=me_id),
+            TaxInput(year=year, key="annual_salary", value=Decimal("240000"), person_id=me_id),
+            TaxInput(year=year, key="pay_periods", value=Decimal("24"), person_id=partner_id),
+            TaxInput(year=year, key="annual_salary", value=Decimal("150000"), person_id=partner_id),
         ]
     )
     if partner_withholding:
@@ -1001,6 +1015,26 @@ async def test_withholding_reports_the_partner_leg_from_their_own_input_rows(
     assert body["salary"] == {"ytd": "30855.00", "projected": "67320.00"}
     assert body["checks_elapsed"] == 11
     assert PARTNER_MISSING not in body["warnings"]
+
+
+async def test_partner_wage_base_is_computed_from_components(
+    auth_client, db, married_world, frozen_today
+):
+    """The partner's wage base is `latest_w2_income + other_w2_income` AS COMPUTED from
+    their own rows (2026-09-11 spec §1.4) — no total is stored for either of them, and one
+    extra W-2 component row on the partner's column moves their side alone.
+    """
+    _me_id, partner_id = married_world
+    db.add(
+        TaxInput(year=YEAR, key="w2_stock_rsus_sold", value=Decimal("40000"), person_id=partner_id)
+    )
+    await db.commit()
+
+    body = await get_withholding(auth_client)
+    # 150000 of salary wages (20 x 180000/24... entered as 24 x 150000/24) + 40000 of RSUs.
+    assert body["partner_wages"] == "190000.00"
+    # The primary's simulated side is untouched: their column has no RSU row.
+    assert body["salary"] == {"ytd": "30855.00", "projected": "67320.00"}
 
 
 async def test_withholding_total_is_simulated_primary_plus_entered_partner(
@@ -1128,7 +1162,12 @@ async def seed_prior_year(db, w2: str, status: str = "single") -> None:
     """A prior year the engine can price, at a chosen AGI and filing status."""
     db.add(TaxYear(year=YEAR - 1, filing_status=status))
     await db.flush()
-    db.add(TaxInput(year=YEAR - 1, key="latest_w2_income", value=Decimal(w2)))
+    db.add_all(
+        [
+            TaxInput(year=YEAR - 1, key="pay_periods", value=Decimal("24")),
+            TaxInput(year=YEAR - 1, key="annual_salary", value=Decimal(w2)),
+        ]
+    )
     for name, table in BRACKETS.items():
         for index, (rate, threshold) in enumerate(table, start=1):
             db.add(

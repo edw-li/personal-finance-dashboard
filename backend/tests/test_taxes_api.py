@@ -15,7 +15,9 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import func, select, text
 
+from app.api.taxes import COUNT_MESSAGE
 from app.models import (
+    ChangeLog,
     EsppLot,
     LatestPrice,
     PaycheckProfile,
@@ -30,7 +32,14 @@ from app.models import (
 from app.seed import seed_tax_definitions
 from app.services import clock
 from app.services.tax_service import JURISDICTION_WARN_MISSING, SUGGESTION_KEYS
-from app.tax_keys import JURISDICTIONS, SECTIONS, TAX_INPUT_DEFINITIONS
+from app.tax_keys import (
+    DERIVED_KEYS,
+    FORMULA_CAPTIONS,
+    JURISDICTIONS,
+    SECTIONS,
+    TAX_INPUT_DEFINITIONS,
+    is_derived_key,
+)
 from tests.portfolio_factories import acct
 from tests.test_tax_service import YEAR_BRACKETS, YEAR_INPUTS
 
@@ -47,7 +56,9 @@ async def definitions(db):
 
 
 def inputs_payload(year: int) -> dict[str, str]:
-    return {key: str(value) for key, value in YEAR_INPUTS[year].items()}
+    """The year's ENTERED cells — the nine computed totals are not in a PUT body since
+    2026-09-11 (spec §1.5): nothing stores them and the route refuses them."""
+    return {key: str(value) for key, value in YEAR_INPUTS[year].items() if not is_derived_key(key)}
 
 
 def brackets_payload(year: int) -> dict:
@@ -202,33 +213,68 @@ async def test_get_inputs_lists_every_definition_with_null_values(auth_client, d
         assert orders == sorted(orders)
     assert items["gross_paycheck"]["label"] == "Gross Paycheck"
     assert items["gross_paycheck"]["is_derived"] is True
+    # Null, computed lines included: a year with no components stored has no figure to
+    # show, and a computed 0 would read as an entered zero (2026-09-11 spec §1.6).
     assert all(item["value"] is None for item in items.values())
-    # Suggestions are offered for every key derive_suggestions returns — an empty year
-    # suggests zeros rather than nulls (an empty sheet cell IS a zero).
-    assert {key for key, item in items.items() if item["suggested"] is not None} == set(
-        SUGGESTION_KEYS
+    # One suggestion left, and it is offered even on an empty year — an empty sheet cell IS
+    # a zero, and this is the one key the user still types.
+    assert (
+        {key for key, item in items.items() if item["suggested"] is not None}
+        == set(SUGGESTION_KEYS)
+        == {"capital_loss_deductions"}
     )
-    assert items["gross_paycheck"]["suggested"] == "0.0000"
+    # A computed line carries its formula instead of a chip.
+    assert items["gross_paycheck"]["suggested"] is None
+    assert items["gross_paycheck"]["formula"] == "Annual Salary ÷ 24"
     assert items["annual_salary"]["suggested"] is None
+    assert items["annual_salary"]["formula"] is None
 
 
-async def test_get_inputs_echoes_values_and_suggestions(auth_client, definitions):
+async def test_get_inputs_serves_computed_values_and_captions(auth_client, definitions):
+    """The 2025 column, entered as COMPONENTS: every computed line comes back with the
+    figure the engine taxes, a caption instead of a chip, and no suggestion at all."""
     await put_inputs(auth_client, 2025, inputs_payload(2025))
 
     items = items_by_key((await auth_client.get(f"{YEARS}/2025/inputs")).json())
     assert items["annual_salary"]["value"] == "162000.0000"  # stored at Numeric(14,4)
     assert items["unq_div_state_exempt_pct"]["value"] == "0.9514"
-    # The sheet's own gray-cell formulas: the stored 2025 column agrees with the engine.
-    assert items["gross_paycheck"]["suggested"] == items["gross_paycheck"]["value"] == "6750.0000"
-    # The ONE suggestion that no longer reproduces its stored cell: the sheet's itemized
-    # formula added the 6.2220 §199A line, which became a below-the-line deduction of its
-    # own on 2026-09-09 (spec 4h). Stored 27213.2820, suggested 27207.0600.
-    assert items["itemized_deduction"]["value"] == "27213.2820"
-    assert items["itemized_deduction"]["suggested"] == "27207.0600"
+    # The sheet's own grey cells, now computed from the entered ones beside them.
+    assert items["gross_paycheck"]["value"] == "6750.0000"
+    assert items["gross_paycheck"]["suggested"] is None
+    assert items["gross_paycheck"]["formula"] == FORMULA_CAPTIONS["gross_paycheck"]
+    assert items["latest_w2_income"]["value"] == "135000.0000"
+    assert items["other_w2_income"]["value"] == "141176.7800"
+    # The ONE cell that no longer reproduces the sheet's cached figure: its formula dropped
+    # the 6.2220 §199A line on 2026-09-09 (spec 4h) and the stored total kept it until the
+    # total stopped being stored. 27213.2820 -> 27207.0600, and nothing carries the old one.
+    assert items["itemized_deduction"]["value"] == "27207.0600"
+    assert items["itemized_deduction"]["suggested"] is None
+    assert items["itemized_deduction"]["formula"] == FORMULA_CAPTIONS["itemized_deduction"]
+    # Every computed line, in one sweep: a figure, no chip, a caption.
+    for key in DERIVED_KEYS:
+        item = items[key]
+        assert item["is_derived"] is True, key
+        assert item["suggested"] is None, key
+        assert item["formula"] == FORMULA_CAPTIONS[key], key
     # Chips follow the suggestions map, not is_derived: capital_loss_deductions is stored
     # with is_derived=False yet the sheet computes it (Plan 5 Workbook reference).
     assert items["capital_loss_deductions"]["is_derived"] is False
     assert items["capital_loss_deductions"]["suggested"] == "0.0000"
+    assert items["capital_loss_deductions"]["formula"] is None
+
+
+async def test_get_inputs_nulls_a_computed_line_whose_components_are_all_absent(
+    auth_client, definitions
+):
+    """Absent is not zero, even for a total: a year with SOME components entered still
+    shows a dash on the lines nothing feeds."""
+    await put_inputs(auth_client, 2025, {"interest_standard": "62.87"})
+
+    items = items_by_key((await auth_client.get(f"{YEARS}/2025/inputs")).json())
+    assert items["interest_total"]["value"] == "62.8700"
+    assert items["ltcg_total"]["value"] is None  # no brokerage, no ESPP row
+    assert items["gross_paycheck"]["value"] is None  # no salary row
+    assert items["itemized_deduction"]["value"] is None
 
 
 async def test_get_inputs_stamps_the_unit_and_the_two_relabelled_rows(auth_client, definitions):
@@ -343,7 +389,7 @@ async def test_summary_names_a_missing_deduction_on_its_own_line(auth_client, de
     """The wire half of 4e: the sentence travels as its own warning, ahead of the muted
     defaulted-to-zero list, which no longer names either deduction key."""
     await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
-    await put_inputs(auth_client, 2024, {"latest_w2_income": "100000"})
+    await put_inputs(auth_client, 2024, {"w2_bonuses": "100000"})
 
     body = (await auth_client.get(f"{YEARS}/2024/summary")).json()
     assert body["warnings"][0] == (
@@ -353,59 +399,6 @@ async def test_summary_names_a_missing_deduction_on_its_own_line(auth_client, de
     assert "standard_deduction" not in muted  # split: it is a substring of the state key
     assert "itemized_deduction" not in muted
     assert body["federal"]["taxable_income"] == "100000.00"
-
-
-async def test_health_names_the_sec199a_leftover_and_the_repair_writes_the_new_total(
-    auth_client, definitions
-):
-    """The §199A repair, end to end (taxes spec 4h + the 2026-09-09 data-health follow-on).
-
-    The 2025 column as the OLD chip left it: an itemized total that still has the 6.2220
-    §199A line inside it, beside a §199A row the engine now deducts on its own. The card
-    names the year; the repair is a plain write of the CURRENT suggestion through this
-    router's own inputs PUT, which is change-logged — so the toast can offer Undo — and the
-    check goes quiet afterwards.
-    """
-    await put_inputs(auth_client, 2025, inputs_payload(2025))
-
-    check = next(
-        c
-        for c in (await auth_client.get("/api/v1/system/health")).json()["checks"]
-        if c["id"] == "sec199a_in_itemized"
-    )
-    assert check["severity"] == "warn"
-    assert check["years"] == [2025]
-    assert check["fix"]["action"] == "rewrite_itemized_deduction"
-
-    # What the card writes: the year's own suggestion, read back from this same router.
-    items = items_by_key((await auth_client.get(f"{YEARS}/2025/inputs")).json())
-    suggested = items["itemized_deduction"]["suggested"]
-    assert (items["itemized_deduction"]["value"], suggested) == ("27213.2820", "27207.0600")
-
-    resp = await auth_client.put(
-        f"{YEARS}/2025/inputs",
-        json={"values": {"itemized_deduction": suggested}},
-        headers={"X-Change-Source": "repair"},
-    )
-    assert resp.status_code == 200, resp.text
-    # Undoable: the batch id rides the header, not the body (TaxInputsOut is the GET's
-    # shape too, and the two payloads are pinned byte-for-byte).
-    batch_id = resp.headers.get("X-Change-Batch")
-    assert batch_id
-    assert items_by_key(resp.json())["itemized_deduction"]["value"] == "27207.0600"
-
-    repaired = next(
-        c
-        for c in (await auth_client.get("/api/v1/system/health")).json()["checks"]
-        if c["id"] == "sec199a_in_itemized"
-    )
-    assert repaired["severity"] == "ok"
-
-    # And the undo really puts the old figure back.
-    undo = await auth_client.post(f"/api/v1/activity/batches/{batch_id}/undo")
-    assert undo.status_code == 200, undo.text
-    restored = items_by_key((await auth_client.get(f"{YEARS}/2025/inputs")).json())
-    assert restored["itemized_deduction"]["value"] == "27213.2820"
 
 
 async def test_put_inputs_creates_year_upserts_and_deletes(auth_client, definitions):
@@ -476,6 +469,201 @@ async def test_put_inputs_rejects_out_of_range_and_non_numeric_values(auth_clien
     assert non_numeric.status_code == 422  # pydantic's own Decimal parse
     ok = await put_inputs(auth_client, 2024, {"annual_salary": "9999999999.9999"})
     assert items_by_key(ok)["annual_salary"]["value"] == "9999999999.9999"
+
+
+# --- computed totals: the write refusal and the live preview (2026-09-11 spec §1.5-1.6) ---
+
+
+async def test_put_inputs_refuses_a_derived_key_without_partial_write(auth_client, db, definitions):
+    """A computed total in the body is a 422 with a sentence that names the rows to edit
+    instead — and nothing beside it is written, the resolve-everything-first posture."""
+    await put_inputs(auth_client, 2024, {"w2_bonuses": "1000"})
+
+    resp = await auth_client.put(
+        f"{YEARS}/2024/inputs",
+        json={"values": {"other_w2_income": "1", "w2_other": "500"}},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == (
+        "Other W2 Income is computed from its components (W2: Stock/RSUs Sold, W2: Bonuses, "
+        "W2: Salary Checkpoint, W2: ESPP Sale Component, W2: Employer HSA Contribution, "
+        "W2: Other) — edit those instead"
+    )
+    # The valid key beside it was NOT written.
+    items = items_by_key((await auth_client.get(f"{YEARS}/2024/inputs")).json())
+    assert items["w2_other"]["value"] is None
+    assert items["w2_bonuses"]["value"] == "1000.0000"
+
+    # A derived key inside `rows` reads the same way.
+    resp = await auth_client.put(
+        f"{YEARS}/2024/inputs",
+        json={"rows": [{"key": "ltcg_total", "value": "5"}]},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == (
+        "Long Term Capital Gain/Loss is computed from its components (LTCG: Brokerage "
+        "Gain/Loss, LTCG: ESPP Sale Component) — edit those instead"
+    )
+
+
+async def test_the_refusal_sentence_agrees_with_a_single_component(auth_client, definitions):
+    """Gross Paycheck is built from exactly ONE row, so the sentence names one.
+
+    "edit those instead" beside a single label reads like an instruction to go and find the
+    rows it did not name — the plural is the shape of the list, not of the rule."""
+    resp = await auth_client.put(
+        f"{YEARS}/2024/inputs", json={"values": {"gross_paycheck": "5000"}}
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == (
+        "Gross Paycheck is computed from its component (Annual Salary) — edit that instead"
+    )
+
+
+async def test_preview_returns_derived_values_without_writing(auth_client, db, definitions):
+    """The form's live preview: the whole current body in, the computed lines out, and not
+    one row, batch or log entry written."""
+    await put_inputs(auth_client, 2024, inputs_payload(2024))
+    stored_payload = (await auth_client.get(f"{YEARS}/2024/inputs")).json()
+    before_rows = await db.scalar(select(func.count()).select_from(TaxInput))
+    before_log = await db.scalar(select(func.count()).select_from(ChangeLog))
+
+    body = dict(inputs_payload(2024))
+    body["w2_bonuses"] = "10000"  # 2024 stores 0 of bonuses
+    resp = await auth_client.post(f"{YEARS}/2024/inputs/preview", json={"values": body})
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["year"] == 2024
+    assert payload["filing_status"] == "single"
+    derived = {(item["key"], item["person_id"]): item["value"] for item in payload["derived"]}
+    # 122474.46 + the 10000 that is not stored anywhere.
+    assert derived[("other_w2_income", None)] == "132474.4600"
+    # The lines the edit did not touch come back unchanged.
+    assert derived[("latest_w2_income", None)] == "113250.0000"
+    assert derived[("interest_total", None)] == "24.7600"
+    assert set(FORMULA_CAPTIONS) == {key for key, _person in derived}
+
+    # A null previews the key as unset, exactly as the PUT would delete it.
+    cleared = dict(inputs_payload(2024))
+    cleared["interest_standard"] = None
+    cleared["interest_us_treasuries"] = None
+    resp = await auth_client.post(f"{YEARS}/2024/inputs/preview", json={"values": cleared})
+    cleared_out = {
+        (item["key"], item["person_id"]): item["value"] for item in resp.json()["derived"]
+    }
+    assert cleared_out[("interest_total", None)] is None
+
+    # Nothing moved.
+    assert await db.scalar(select(func.count()).select_from(TaxInput)) == before_rows
+    assert await db.scalar(select(func.count()).select_from(ChangeLog)) == before_log
+    assert (await auth_client.get(f"{YEARS}/2024/inputs")).json() == stored_payload
+
+
+async def test_preview_per_person_columns(auth_client, db, household, definitions):
+    """Each person's computed total carries their own column, the household's carries
+    none — the same shape the GET serves."""
+    me, partner = household
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "annual_salary", "person_id": me.id, "value": "240000"},
+                {"key": "pay_periods", "person_id": me.id, "value": "24"},
+                {"key": "annual_salary", "person_id": partner.id, "value": "120000"},
+                {"key": "pay_periods", "person_id": partner.id, "value": "24"},
+            ]
+        },
+    )
+    await set_status(auth_client, 2026, "married_joint")
+
+    resp = await auth_client.post(
+        f"{YEARS}/2026/inputs/preview",
+        json={
+            "rows": [
+                {"key": "w2_bonuses", "person_id": me.id, "value": "5000"},
+                {"key": "w2_bonuses", "person_id": partner.id, "value": "1000"},
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    derived = {(item["key"], item["person_id"]): item["value"] for item in resp.json()["derived"]}
+    assert derived[("other_w2_income", me.id)] == "5000.0000"
+    assert derived[("other_w2_income", partner.id)] == "1000.0000"
+    assert derived[("latest_w2_income", me.id)] == "240000.0000"
+    assert derived[("latest_w2_income", partner.id)] == "120000.0000"
+    assert ("ltcg_total", None) in derived
+    assert ("ltcg_total", me.id) not in derived
+
+
+async def test_preview_overlays_the_slot_the_put_would_write(
+    auth_client, db, household, definitions
+):
+    """A legacy person_id-NULL row is the PRIMARY's slot, and their line in the body rewrites
+    that row rather than adding a second one (`_stored_slot`, the PUT's adoption rule).
+
+    The preview has to overlay the same slot or it previews a body the Save contradicts: two
+    rows summed where one was replaced, and a live paycheck where a null emptied the line.
+    """
+    me, _partner = household
+
+    async def legacy_year(year: int) -> None:
+        """A year whose salary was stored before the roster existed — person_id NULL."""
+        db.add(TaxYear(year=year))
+        await db.flush()
+        db.add(TaxInput(year=year, key="annual_salary", value=Decimal("120000.0000")))
+        await db.commit()
+
+    async def previewed(year: int, value: str | None) -> str | None:
+        resp = await auth_client.post(
+            f"{YEARS}/{year}/inputs/preview", json={"values": {"annual_salary": value}}
+        )
+        assert resp.status_code == 200, resp.text
+        return {(item["key"], item["person_id"]): item["value"] for item in resp.json()["derived"]}[
+            ("gross_paycheck", me.id)
+        ]
+
+    # A value REPLACES the legacy row, so the paycheck is 240000/24 — not the 15000 the two
+    # rows summed would make.
+    await legacy_year(2026)
+    preview = await previewed(2026, "240000")
+    saved = await put_inputs(auth_client, 2026, {"annual_salary": "240000"})
+    assert preview == items_by_key(saved)["gross_paycheck"]["value"]
+    assert preview == "10000.0000"
+
+    # A null DELETES it, so the computed line goes empty — no component left in the column.
+    await legacy_year(2027)
+    preview = await previewed(2027, None)
+    saved = await put_inputs(auth_client, 2027, {"annual_salary": None})
+    assert preview == items_by_key(saved)["gross_paycheck"]["value"]
+    assert preview is None
+
+
+async def test_preview_404_matches_the_get_and_422s_match_the_put(auth_client, definitions):
+    await put_inputs(auth_client, 2024, {"w2_bonuses": "1000"})
+
+    missing = await auth_client.post(f"{YEARS}/2019/inputs/preview", json={"values": {}})
+    assert missing.status_code == 404
+    assert "2019" in missing.json()["detail"]
+
+    unknown = await auth_client.post(f"{YEARS}/2024/inputs/preview", json={"values": {"nope": "1"}})
+    assert unknown.status_code == 422
+    assert unknown.json()["detail"] == "unknown input key(s): ['nope']"
+
+    out_of_unit = await auth_client.post(
+        f"{YEARS}/2024/inputs/preview", json={"values": {"pay_periods": "60"}}
+    )
+    assert out_of_unit.status_code == 422
+    assert out_of_unit.json()["detail"] == f"values.pay_periods {COUNT_MESSAGE}"
+
+    derived = await auth_client.post(
+        f"{YEARS}/2024/inputs/preview", json={"values": {"stcg_total": "1"}}
+    )
+    assert derived.status_code == 422
+    assert derived.json()["detail"] == (
+        "Short Term Capital Gain/Loss is computed from its components (STCG: Standard "
+        "Gain/Loss, STCG: ESPP Sale Component, LTCG: Brokerage Gain/Loss, LTCG: ESPP Sale "
+        "Component) — edit those instead"
+    )
 
 
 # --- brackets ---
@@ -699,6 +887,28 @@ async def test_clone_brackets_from_a_partial_source(auth_client, definitions):
 # --- summaries ---
 
 
+async def test_summary_computes_totals_from_components_alone(auth_client, db, definitions):
+    """The 2024 golden with NOT ONE of the nine totals in the database (2026-09-11 §1.4).
+
+    `inputs_payload` sends the entered cells only; the summary below is the same figure the
+    stored-totals era produced, because the assembly door rebuilds every total from the
+    components on the way to the engine.
+    """
+    await put_inputs(auth_client, 2024, inputs_payload(2024))
+    await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
+
+    stored = set((await db.execute(select(TaxInput.key).where(TaxInput.year == 2024))).scalars())
+    assert stored, "the components really were written"
+    assert not stored & set(DERIVED_KEYS)
+
+    body = (await auth_client.get(f"{YEARS}/2024/summary")).json()
+    assert body["warnings"] == []
+    assert body["medicare"]["w2_income"] == "235724.46"  # 113250 + 122474.46, computed
+    assert body["totals"]["gross_income"] == "237973.17"
+    assert body["totals"]["total_tax"] == "72824.61"
+    assert body["federal"]["taxable_income"] == "197176.20"
+
+
 async def test_summary_2024_matches_the_sheet_except_the_state_chain(auth_client, definitions):
     """The 2024 wire golden. Sheet-exact everywhere but the state chain and the CG/NIIT
     split, which carry the deliberate CA capital-gains divergence (2026-08-25 spec §1) and
@@ -777,9 +987,10 @@ async def test_summary_2026_has_no_gains_so_no_capital_gains_rate(auth_client, d
     body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
     assert body["warnings"] == []
     assert body["capital_gains"] == {
-        # 250304.21 until 2026-09-09: §199A's 8 is a below-the-line deduction now (spec 4h),
-        # so the ordinary income the gains would stack on is 8 lower.
-        "taxable_income": "250296.21",
+        # 250296.21 between 2026-09-09 and 2026-09-11: §199A briefly counted twice, once
+        # inside the STORED itemized total and once below the line. The total is computed
+        # now (spec §1.3) and excludes it, so the line is deducted once and this is back.
+        "taxable_income": "250304.21",
         "gains_amount": "0.00",
         "tax": "0.00",
         "effective_rate": None,
@@ -790,10 +1001,11 @@ async def test_summary_2026_has_no_gains_so_no_capital_gains_rate(auth_client, d
         "tax": "0.00",
         "effective_rate": None,  # NII of 0 is the sheet's #DIV/0!
     }
-    # Both moved by the same §199A deduction: federal tax 57160.35 -> 57157.79 (8 × .32)
-    # and the total with it.
-    assert body["federal"]["tax"] == "57157.79"
-    assert body["totals"]["total_tax"] == "98582.00"
+    # Both moved with §199A and moved BACK when the itemized total stopped being stored
+    # (2026-09-11 spec §1.3): federal tax 57160.35 -> 57157.79 -> 57160.35, because the 8
+    # is deducted once rather than twice.
+    assert body["federal"]["tax"] == "57160.35"
+    assert body["totals"]["total_tax"] == "98584.56"
 
 
 async def test_summary_warns_on_stored_folded_niit_rates(auth_client, definitions):
@@ -878,8 +1090,8 @@ async def test_summary_guards_absurd_but_legal_inputs(auth_client, definitions):
             "trad_401k_contributions": "-9999999999.9999",
             "hsa_contributions": "-9999999999.9999",
             "hsa_contributions_employer": "-9999999999.9999",
-            "other_pretax_deductions": "-9999999999.9999",
-            "unqualified_dividends": "0.0001",
+            "pretax_dental": "-9999999999.9999",
+            "unq_div_other": "0.0001",
         },
     )
 
@@ -1045,17 +1257,13 @@ async def test_what_if_long_sale_moves_ltcg_and_delta(auth_client, db, definitio
             "warnings": ["NVDA: acquisition dates unknown — treated as long-term"],
         }
     ]
-    # The load-bearing pin: the COMPONENT key and the TOTAL the engine reads move together.
+    # The load-bearing pin: a leg moves the COMPONENT, and only the component. The total
+    # it rolls up into is computed (2026-09-11 spec §1.4), so there is no row to list and
+    # nothing the user could have typed under that name.
     assert body["changed_inputs"] == [
         {
             "key": "ltcg_brokerage",
             "label": "LTCG: Brokerage Gain/Loss",
-            "before": "0.00",
-            "after": "500.00",
-        },
-        {
-            "key": "ltcg_total",
-            "label": "Long Term Capital Gain/Loss",
             "before": "0.00",
             "after": "500.00",
         },
@@ -1115,18 +1323,6 @@ async def test_what_if_espp_disqualified_hits_w2_and_fica(auth_client, db, defin
             "after": "300.00",
         },
         {
-            "key": "ltcg_total",
-            "label": "Long Term Capital Gain/Loss",
-            "before": "0.00",
-            "after": "300.00",
-        },
-        {
-            "key": "other_w2_income",
-            "label": "Other W2 Income",
-            "before": "122474.46",
-            "after": "122824.46",
-        },
-        {
             "key": "w2_espp_sale_component",
             "label": "W2: ESPP Sale Component",
             "before": "0.00",
@@ -1139,6 +1335,12 @@ async def test_what_if_espp_disqualified_hits_w2_and_fica(auth_client, db, defin
         body["scenario"]["medicare"]["tax"]
     ) - Decimal(body["baseline"]["medicare"]["tax"])
     assert body["scenario"]["medicare"]["taxable_wages"] == "231624.46"  # 231274.46 + 350
+    # The proof that the ENGINE re-derived the total rather than the scenario carrying one:
+    # nothing in the body says `other_w2_income`, and the reported W-2 income moved by the
+    # leg anyway (2026-09-11 spec §1.4).
+    assert body["baseline"]["medicare"]["w2_income"] == "235724.46"
+    assert body["scenario"]["medicare"]["w2_income"] == "236074.46"  # + the 350 ordinary leg
+    assert not any(row["key"] == "other_w2_income" for row in body["changed_inputs"])
     # ...and does NOT move where the 2024 wage bases are already capped out.
     assert body["delta"]["social_security_tax"] == "0.00"  # capped at 168600
     assert body["delta"]["disability_tax"] == "0.00"  # 0-rate above 195000
@@ -1222,6 +1424,26 @@ async def test_what_if_no_price_paths_422(auth_client, db, definitions):
     assert resp.json()["detail"] == "no ESPP quote available — provide a sale_price"
 
 
+async def test_what_if_refuses_an_override_of_a_computed_total(auth_client, definitions):
+    """The what-if's own door (2026-09-11 spec §1.4): a scenario cannot set a figure the
+    engine is about to rebuild, so the sentence names the components to override instead."""
+    await seeded_2024(auth_client)
+
+    resp = await auth_client.post(
+        WHAT_IF, json={"year": 2024, "overrides": {"other_w2_income": "80000"}}
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == (
+        "Other W2 Income is computed from its components (W2: Stock/RSUs Sold, W2: Bonuses, "
+        "W2: Salary Checkpoint, W2: ESPP Sale Component, W2: Employer HSA Contribution, "
+        "W2: Other) — override those instead"
+    )
+    # The component it names is accepted, and moves the scenario.
+    ok = await auth_client.post(WHAT_IF, json={"year": 2024, "overrides": {"w2_other": "80000"}})
+    assert ok.status_code == 200, ok.text
+    assert [row["key"] for row in ok.json()["changed_inputs"]] == ["w2_other"]
+
+
 async def test_what_if_unknown_security_404(auth_client, definitions):
     await seeded_2024(auth_client)
 
@@ -1300,7 +1522,7 @@ async def test_what_if_writes_nothing(auth_client, db, definitions):
         auth_client,
         sales=[{"security_id": security_id, "shares": "40", "term": "short"}],
         espp_sales=[{"lot_id": lot_id, "sale_price": "150.0000"}],
-        overrides={"qualified_dividends": "2500", "interest_total": None},
+        overrides={"qualified_dividends": "2500", "interest_standard": None},
     )
     assert body["scenario"] != body["baseline"]  # the scenario really did move
 
@@ -1417,7 +1639,7 @@ async def test_settled_single_year_with_no_brackets_still_computes(auth_client, 
     typed in, and the per-jurisdiction warnings are how that gap is reported. (This test
     used to run on 2033 and assert that 'single' NEVER gates — see its sibling below.)
     """
-    await put_inputs(auth_client, 2020, {"latest_w2_income": "1000"})
+    await put_inputs(auth_client, 2020, {"w2_bonuses": "1000"})
 
     body = (await auth_client.get(f"{YEARS}/2020/summary")).json()
     assert body["brackets_missing_for_status"] == []
@@ -1432,7 +1654,7 @@ async def test_current_or_future_single_year_without_core_tables_refuses(auth_cl
     face. It now takes the same refusal path a married year does: no sections, the
     call-to-action warning, and the tiles read "—".
     """
-    await put_inputs(auth_client, 2033, {"latest_w2_income": "1000"})
+    await put_inputs(auth_client, 2033, {"w2_bonuses": "1000"})
 
     body = (await auth_client.get(f"{YEARS}/2033/summary")).json()
     assert body["brackets_missing_for_status"] == list(JURISDICTIONS)
@@ -1468,8 +1690,8 @@ async def test_the_single_grandfather_boundary_is_this_calendar_year(
     current one is not. The PRODUCT clock is patched rather than the helper that reads it,
     so `_current_tax_year` — the only place a tax year meets "now" — is exercised too."""
     monkeypatch.setattr("app.services.clock.product_today", lambda: date(2030, 6, 15))
-    await put_inputs(auth_client, 2029, {"latest_w2_income": "1000"})
-    await put_inputs(auth_client, 2030, {"latest_w2_income": "1000"})
+    await put_inputs(auth_client, 2029, {"w2_bonuses": "1000"})
+    await put_inputs(auth_client, 2030, {"w2_bonuses": "1000"})
 
     settled = (await auth_client.get(f"{YEARS}/2029/summary")).json()
     assert settled["brackets_missing_for_status"] == []
@@ -1551,7 +1773,7 @@ async def test_inputs_payload_shape_is_unchanged_without_a_roster(auth_client, d
     assert items["annual_salary"]["value"] == "150000.0000"
     assert items["annual_salary"]["person_id"] is None
     assert items["annual_salary"]["is_per_person"] is True
-    assert items["interest_total"]["is_per_person"] is False
+    assert items["interest_standard"]["is_per_person"] is False
     assert items["w2_fed_withholding"]["is_per_person"] is True
     assert items["w2_fed_withholding"]["suggested"] is None  # tracker-only, never derived
 
@@ -1582,7 +1804,7 @@ async def test_inputs_render_one_column_per_person_on_a_joint_year(
         item
         for section in body["sections"]
         for item in section["items"]
-        if item["key"] == "interest_total"
+        if item["key"] == "interest_standard"
     ]
     assert [item["person_id"] for item in interest] == [None]
 
@@ -1592,7 +1814,7 @@ async def test_person_qualified_write_round_trip(auth_client, db, household, def
     resp = await auth_client.put(
         f"{YEARS}/2026/inputs",
         json={
-            "values": {"interest_total": "2000"},
+            "values": {"interest_standard": "2000"},
             "rows": [
                 {"key": "annual_salary", "person_id": me.id, "value": "150000"},
                 {"key": "annual_salary", "person_id": partner.id, "value": "90000"},
@@ -1612,6 +1834,8 @@ async def test_person_qualified_write_round_trip(auth_client, db, household, def
     assert by_slot[("annual_salary", me.id)] == "150000.0000"
     assert by_slot[("annual_salary", partner.id)] == "90000.0000"
     assert by_slot[("w2_fed_withholding", partner.id)] == "12000.0000"
+    assert by_slot[("interest_standard", None)] == "2000.0000"
+    # ...and the line it feeds is computed from it, once, with no person column.
     assert by_slot[("interest_total", None)] == "2000.0000"
     # The PUT body IS the GET shape.
     assert (await auth_client.get(f"{YEARS}/2026/inputs")).json() == body
@@ -1631,18 +1855,19 @@ async def test_person_qualified_write_round_trip(auth_client, db, household, def
     assert remaining[("annual_salary", me.id)] == "150000.0000"
 
 
-async def test_suggestions_are_computed_per_column(auth_client, db, household, definitions):
+async def test_computed_totals_are_per_column(auth_client, db, household, definitions):
     """The derived-W2 chain is one PERSON's: the partner's pay_periods x gross_paycheck
-    must not be built from the primary's salary."""
+    must not be built from the primary's salary (2026-09-11 spec §1.2 — the sum of the
+    products, never the product of the sums)."""
     me, partner = household
     await auth_client.put(
         f"{YEARS}/2026/inputs",
         json={
             "rows": [
                 {"key": "pay_periods", "person_id": me.id, "value": "24"},
-                {"key": "gross_paycheck", "person_id": me.id, "value": "6000"},
+                {"key": "annual_salary", "person_id": me.id, "value": "144000"},
                 {"key": "pay_periods", "person_id": partner.id, "value": "24"},
-                {"key": "gross_paycheck", "person_id": partner.id, "value": "4000"},
+                {"key": "annual_salary", "person_id": partner.id, "value": "96000"},
                 {"key": "itemized_salt", "value": "9000"},
             ]
         },
@@ -1650,15 +1875,19 @@ async def test_suggestions_are_computed_per_column(auth_client, db, household, d
     await set_status(auth_client, 2026, "married_joint")
 
     body = (await auth_client.get(f"{YEARS}/2026/inputs")).json()
-    suggested = {
-        (item["key"], item["person_id"]): item["suggested"]
+    values = {
+        (item["key"], item["person_id"]): item["value"]
         for section in body["sections"]
         for item in section["items"]
     }
-    assert suggested[("latest_w2_income", me.id)] == "144000.0000"
-    assert suggested[("latest_w2_income", partner.id)] == "96000.0000"
-    # A household suggestion is column-invariant, so it renders once.
-    assert suggested[("itemized_deduction", None)] == "9000.0000"
+    assert values[("gross_paycheck", me.id)] == "6000.0000"
+    assert values[("gross_paycheck", partner.id)] == "4000.0000"
+    assert values[("latest_w2_income", me.id)] == "144000.0000"
+    assert values[("latest_w2_income", partner.id)] == "96000.0000"
+    # A household total is column-invariant, so it renders once with no person.
+    assert values[("itemized_deduction", None)] == "9000.0000"
+    # A column with no component of a line shows a dash there, not a computed zero.
+    assert values[("other_w2_income", me.id)] is None
 
 
 async def test_annual_salary_suggests_each_persons_in_force_profile(
@@ -1701,9 +1930,15 @@ async def test_annual_salary_suggests_each_persons_in_force_profile(
     # The LATER profile, at the suggestion scale (4dp) every other suggestion uses.
     assert suggested[("annual_salary", me.id)] == "188930.0000"
     assert suggested[("annual_salary", partner.id)] == "96000.0000"
-    # Downstream of the head is untouched: gross_paycheck still divides the STORED value,
-    # which is null here, so it keeps suggesting the empty-cell zero.
-    assert suggested[("gross_paycheck", me.id)] == "0.0000"
+    # Downstream of the head is a COMPUTED cell with no chip at all, and no salary row is
+    # stored here — so it shows a dash rather than a zero.
+    assert suggested[("gross_paycheck", me.id)] is None
+    values = {
+        (item["key"], item["person_id"]): item["value"]
+        for section in body["sections"]
+        for item in section["items"]
+    }
+    assert values[("gross_paycheck", me.id)] is None
 
 
 async def test_annual_salary_has_no_suggestion_without_a_profile(
@@ -1736,10 +1971,10 @@ async def test_put_inputs_rejects_person_on_a_household_key(auth_client, househo
     me, _partner = household
     resp = await auth_client.put(
         f"{YEARS}/2026/inputs",
-        json={"rows": [{"key": "interest_total", "person_id": me.id, "value": "5"}]},
+        json={"rows": [{"key": "interest_standard", "person_id": me.id, "value": "5"}]},
     )
     assert resp.status_code == 422
-    assert "interest_total" in resp.json()["detail"]
+    assert "interest_standard" in resp.json()["detail"]
     assert (await auth_client.get(YEARS)).json() == []  # not even the year row
 
 
@@ -1992,7 +2227,7 @@ async def test_brackets_missing_state_clears_once_the_tables_are_cloned(auth_cli
     assert body["brackets_missing_for_status"] == []
     # Cloned verbatim from the single tables, so the figures are the single goldens
     # (98584.56 until §199A moved below the line on 2026-09-09, spec 4h).
-    assert body["totals"]["total_tax"] == "98582.00"
+    assert body["totals"]["total_tax"] == "98584.56"
 
 
 async def test_married_year_reports_only_the_missing_tables(auth_client, definitions):
@@ -2024,8 +2259,10 @@ async def test_married_joint_sums_both_people_and_splits_the_wage_base(
         f"{YEARS}/2026/inputs",
         json={
             "rows": [
-                {"key": "latest_w2_income", "person_id": me.id, "value": "200000"},
-                {"key": "latest_w2_income", "person_id": partner.id, "value": "100000"},
+                {"key": "pay_periods", "person_id": me.id, "value": "20"},
+                {"key": "annual_salary", "person_id": me.id, "value": "240000"},
+                {"key": "pay_periods", "person_id": partner.id, "value": "20"},
+                {"key": "annual_salary", "person_id": partner.id, "value": "120000"},
             ]
         },
     )
@@ -2067,8 +2304,10 @@ async def test_married_separate_covers_the_primary_person_alone(
         f"{YEARS}/2026/inputs",
         json={
             "rows": [
-                {"key": "latest_w2_income", "person_id": me.id, "value": "200000"},
-                {"key": "latest_w2_income", "person_id": partner.id, "value": "100000"},
+                {"key": "pay_periods", "person_id": me.id, "value": "20"},
+                {"key": "annual_salary", "person_id": me.id, "value": "240000"},
+                {"key": "pay_periods", "person_id": partner.id, "value": "20"},
+                {"key": "annual_salary", "person_id": partner.id, "value": "120000"},
             ]
         },
     )
@@ -2112,8 +2351,10 @@ async def test_what_if_moves_the_primary_earners_fica_on_a_joint_year(
         f"{YEARS}/2026/inputs",
         json={
             "rows": [
-                {"key": "latest_w2_income", "person_id": me.id, "value": "100000"},
-                {"key": "latest_w2_income", "person_id": partner.id, "value": "100000"},
+                {"key": "pay_periods", "person_id": me.id, "value": "20"},
+                {"key": "annual_salary", "person_id": me.id, "value": "120000"},
+                {"key": "pay_periods", "person_id": partner.id, "value": "20"},
+                {"key": "annual_salary", "person_id": partner.id, "value": "120000"},
             ]
         },
     )
@@ -2134,7 +2375,7 @@ async def test_what_if_moves_the_primary_earners_fica_on_a_joint_year(
     body = (
         await auth_client.post(
             WHAT_IF,
-            json={"year": 2026, "overrides": {"other_w2_income": "80000"}},
+            json={"year": 2026, "overrides": {"w2_other": "80000"}},
         )
     ).json()
     # Baseline: 100000 + 100000, both under the 150000 base -> 200000 x .062 = 12400.
@@ -2187,8 +2428,10 @@ async def test_earner_bundles_follow_column_order_not_a_string_sort(auth_client,
         f"{YEARS}/2026/inputs",
         json={
             "rows": [
-                {"key": "latest_w2_income", "person_id": 2, "value": "100000"},
-                {"key": "latest_w2_income", "person_id": 10, "value": "40000"},
+                {"key": "pay_periods", "person_id": 2, "value": "20"},
+                {"key": "annual_salary", "person_id": 2, "value": "120000"},
+                {"key": "pay_periods", "person_id": 10, "value": "20"},
+                {"key": "annual_salary", "person_id": 10, "value": "48000"},
             ]
         },
     )
@@ -2213,9 +2456,7 @@ async def test_earner_bundles_follow_column_order_not_a_string_sort(auth_client,
     # ...and the money it decides. Baseline: 100000 + 40000, both under the 150000 base,
     # (140000) x .062 = 8680.
     body = (
-        await auth_client.post(
-            WHAT_IF, json={"year": 2026, "overrides": {"other_w2_income": "80000"}}
-        )
+        await auth_client.post(WHAT_IF, json={"year": 2026, "overrides": {"w2_other": "80000"}})
     ).json()
     assert body["baseline"]["social_security"]["tax"] == "8680.00"
     # The 80000 is the PRIMARY's leg: their bundle becomes 180000, capped at 150000, next
@@ -2244,18 +2485,22 @@ async def _seed_people(db):
 
 
 async def _seed_two_earner_year(db, year: int, status: str = "married_joint"):
-    """One married year: 240k of primary W-2 + 150k of partner W-2, flat MFJ tables."""
+    """One married year: 240k of primary W-2 + 150k of partner W-2, flat MFJ tables.
+
+    Wages as COMPONENTS (2026-09-11 spec §1.1): 20 checks against a 288000 salary is the
+    primary's 240000, 20 against 180000 is the partner's 150000, and each column
+    materializes its own product — which is the sum this test is about."""
     me_id, partner_id = await _seed_people(db)
     db.add(TaxYear(year=year, filing_status=status))
     await db.flush()
     db.add_all(
         [
-            TaxInput(year=year, key="latest_w2_income", value=Decimal("240000"), person_id=me_id),
-            TaxInput(
-                year=year, key="latest_w2_income", value=Decimal("150000"), person_id=partner_id
-            ),
+            TaxInput(year=year, key="pay_periods", value=Decimal("20"), person_id=me_id),
+            TaxInput(year=year, key="annual_salary", value=Decimal("288000"), person_id=me_id),
+            TaxInput(year=year, key="pay_periods", value=Decimal("20"), person_id=partner_id),
+            TaxInput(year=year, key="annual_salary", value=Decimal("180000"), person_id=partner_id),
             # A HOUSEHOLD key: one NULL row, which must survive the sum verbatim.
-            TaxInput(year=year, key="interest_total", value=Decimal("2500"), person_id=None),
+            TaxInput(year=year, key="interest_standard", value=Decimal("2500"), person_id=None),
         ]
     )
     for name, table in (
@@ -2318,8 +2563,9 @@ async def test_single_year_inputs_are_byte_identical_under_summing(auth_client, 
     await db.flush()
     db.add_all(
         [
-            TaxInput(year=2025, key="latest_w2_income", value=Decimal("240000"), person_id=me.id),
-            TaxInput(year=2025, key="interest_total", value=Decimal("2500"), person_id=None),
+            TaxInput(year=2025, key="pay_periods", value=Decimal("20"), person_id=me.id),
+            TaxInput(year=2025, key="annual_salary", value=Decimal("288000"), person_id=me.id),
+            TaxInput(year=2025, key="interest_standard", value=Decimal("2500"), person_id=None),
             TaxInput(
                 year=2025,
                 key="unq_div_state_exempt_pct",

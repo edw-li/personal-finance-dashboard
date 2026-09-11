@@ -48,7 +48,7 @@ from app.services.people import load_people, primary_person
 from app.services.portfolio_accounts import resolve_portfolio_account
 from app.services.spending_guard import records_something
 from app.services.tax_service import FOLDED_TO_BASE_CG
-from app.tax_keys import PER_PERSON_KEYS, SINGLE
+from app.tax_keys import DERIVED_KEYS, PER_PERSON_KEYS, SINGLE
 
 
 def _diff_update(obj, fields: dict, counts, report: SheetReport, sample_key: str) -> None:
@@ -536,9 +536,23 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
     # adds its person_id clause here.
     # Union across parsed years on purpose: a cell blanked in ONE year while the same sheet
     # row still carries another year is still a sheet key, and still sync-deletes as today.
-    sheet_input_keys = {item.key for item in parsed.inputs}
+    # The nine computed totals are invisible to this importer from end to end (2026-09-11
+    # taxes spec §1.5): the parser still reads the sheet's grey cells — they are how the
+    # workbook is shaped — and nothing is written from them, nothing is diffed against them,
+    # and the sweep below cannot delete a stored one either, because a key it never carries
+    # was never the sheet's to retire. That last clause matters on a database that has not
+    # run the deletion migration yet: the totals there are simply left alone.
+    skipped_derived = sum(1 for item in parsed.inputs if item.key in DERIVED_KEYS)
+    if skipped_derived:
+        report.add_sample(
+            f"tax_inputs: {skipped_derived} computed cells skipped "
+            "(derived totals are computed, never stored)"
+        )
+    sheet_input_keys = {item.key for item in parsed.inputs if item.key not in DERIVED_KEYS}
     incoming_input_keys: set[tuple[int, str, int | None]] = set()
     for item in parsed.inputs:
+        if item.key in DERIVED_KEYS:
+            continue
         key = (item.year, item.key, owner_of(item.key))
         incoming_input_keys.add(key)
         row = existing_inputs.get(key)

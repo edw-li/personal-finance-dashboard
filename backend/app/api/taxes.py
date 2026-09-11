@@ -16,7 +16,7 @@ all read through the routers that own them. It is a pure read with four soft lin
 degrades where the editors above raise — see its section comment.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date
@@ -62,6 +62,8 @@ from app.schemas.taxes import (
     CapitalGainsTaxOut,
     ChangedInput,
     ClonedBracketsOut,
+    DerivedPreviewItemOut,
+    DerivedPreviewOut,
     EsppSaleDetailOut,
     FilingStatus,
     IncomeTaxOut,
@@ -106,6 +108,7 @@ from app.services.portfolio_calc import SHARE_Q, fold_transactions, load_portfol
 from app.services.tax_service import (
     JURISDICTION_WARN_MISSING,
     SUGGESTION_QUANTUM,
+    W2_INCOME_KEY,
     Bracket,
     EarnerWages,
     JurisdictionResult,
@@ -113,6 +116,8 @@ from app.services.tax_service import (
     compute_breakdown,
     derive_suggestions,
     earner_from_inputs,
+    materialize_household,
+    materialize_person,
     shift_earners,
 )
 from app.services.tax_whatif import (
@@ -124,16 +129,22 @@ from app.services.tax_whatif import (
 )
 from app.tax_keys import (
     COUNT,
+    DERIVED_COMPONENTS,
+    DERIVED_KEYS,
+    FORMULA_CAPTIONS,
     JURISDICTIONS,
     MARRIED_JOINT,
     MARRIED_SEPARATE,
     MAX_INPUT_COUNT,
     MIN_INPUT_COUNT,
+    PER_PERSON_DERIVED_KEYS,
     PER_PERSON_KEYS,
     PERCENT,
     SECTIONS,
     SINGLE,
     TAX_INPUT_DEFINITIONS,
+    component_labels,
+    is_derived_key,
     label_for,
     unit_for,
 )
@@ -191,6 +202,21 @@ BRACKETS_MISSING_WARNING = (
 OFF_RETURN = object()
 
 
+@dataclass(frozen=True)
+class _InputRow:
+    """A (key, person, value) triple that is NOT a database row.
+
+    The preview overlays the form's current cells onto the stored ones IN MEMORY and hands
+    the result to the same assembly the GET uses, so that assembly has to accept something
+    row-shaped that the session has never seen. A detached `TaxInput` would work until the
+    day somebody's autoflush decided otherwise; this cannot be written by accident.
+    """
+
+    key: str
+    person_id: int | None
+    value: Decimal
+
+
 @dataclass
 class EngineFeed:
     """Everything `compute_breakdown` needs for one year, resolved ONCE.
@@ -205,12 +231,21 @@ class EngineFeed:
     inputs: dict[str, Decimal]
     earners: list[EarnerWages] | None
     tables: dict[str, list[Bracket]]
+    # The materialized per-person buckets in COLUMN order (2026-09-11 spec §1.4) — the one
+    # answer to "what are this person's figures", replacing every downstream re-bucketing of
+    # `rows`. A derived total re-derived from a bucket of one person's rows is that person's;
+    # re-derived from the household's summed rows it is nobody's.
+    person_inputs: dict[int | None, dict[str, Decimal]] = dataclass_field(default_factory=dict)
     brackets_missing_for_status: list[str] = dataclass_field(default_factory=list)
-    # The raw rows `inputs`/`earners` were assembled FROM, carried along so a caller that
-    # also needs "whose money is it" (the withholding card's partner block) re-reads this
-    # list rather than issuing a second query: two queries can straddle a concurrent write
-    # and disagree about the very rows the liability above was computed on.
-    rows: list[TaxInput] = dataclass_field(default_factory=list)
+
+    @property
+    def primary_column(self) -> int | None:
+        """The PRIMARY person's column — the first one, in `_return_people` order.
+
+        `person_inputs` is built from that list, so its first key is the primary's under
+        every filing status; a roster-less database spells the same column None.
+        """
+        return next(iter(self.person_inputs), None)
 
     @property
     def computable(self) -> bool:
@@ -259,24 +294,15 @@ def _owner_column(person_id: int | None, columns: list[int | None]):
     return OFF_RETURN
 
 
-def _assemble_inputs(rows: list[TaxInput], columns: list[int | None]) -> dict[str, Decimal]:
-    """The engine's flat input dict: household keys verbatim, per-person keys SUMMED
-    across the people on this return (spec §5.4)."""
-    values: dict[str, Decimal] = {}
-    for row in rows:
-        if row.key in PER_PERSON_KEYS and _owner_column(row.person_id, columns) is OFF_RETURN:
-            continue
-        existing = values.get(row.key)
-        values[row.key] = row.value if existing is None else existing + row.value
-    return values
+def _person_rows(
+    rows: Sequence[TaxInput | _InputRow], columns: list[int | None]
+) -> dict[int | None, dict[str, Decimal]]:
+    """The STORED per-person rows, bucketed by owner column — columns with rows only.
 
-
-def _assemble_earners(rows: list[TaxInput], columns: list[int | None]) -> list[EarnerWages] | None:
-    """One wage bundle per person on the return — or None when there is at most one.
-
-    None is not a fallback: it is the instruction to the engine to synthesize the single
-    bundle from `inputs` exactly as it always has, which is what keeps every single-filer
-    year byte-identical.
+    "Which columns have rows" is a real question with two askers: `_assemble_earners` reads
+    it to decide whether this is a two-earner return at all, and the inputs payload reads it
+    to tell an entered zero from an empty cell. Bucketed ONCE per request and passed on from
+    there (`_input_views`), because re-bucketing is where two readers start disagreeing.
     """
     per_person: dict[int | None, dict[str, Decimal]] = {}
     for row in rows:
@@ -288,6 +314,73 @@ def _assemble_earners(rows: list[TaxInput], columns: list[int | None]) -> list[E
         bucket = per_person.setdefault(column, {})
         existing = bucket.get(row.key)
         bucket[row.key] = row.value if existing is None else existing + row.value
+    return per_person
+
+
+def _materialized_buckets(
+    stored: dict[int | None, dict[str, Decimal]], columns: list[int | None]
+) -> dict[int | None, dict[str, Decimal]]:
+    """Each column's bucket with its four per-person totals rebuilt (2026-09-11 spec §1.4).
+
+    THE assembly door: every per-person figure this module serves — the engine's flat dict,
+    the wage bundles, the withholding card's partner side, the Overview's salary split —
+    comes through here, so a person's total can only ever be their own components rolled up.
+
+    It takes the ALREADY bucketed rows (`_person_rows`) rather than bucketing again: the
+    stored view is a real answer this module's callers need beside the computed one, and
+    two passes over the same rows is two chances to disagree about whose they are.
+
+    A column with no rows stays EMPTY rather than materializing to four computed zeros:
+    "this year has no inputs at all" is a state the money-flow card and the summary both
+    read, and four zeros would answer it wrongly.
+    """
+    return {
+        column: materialize_person(stored[column]) if column in stored else {} for column in columns
+    }
+
+
+def _assemble_inputs(
+    year: int,
+    household: dict[str, Decimal],
+    buckets: dict[int | None, dict[str, Decimal]],
+    filing_status: str,
+) -> dict[str, Decimal]:
+    """The engine's flat input dict: household keys verbatim, per-person keys SUMMED across
+    the people on this return (spec §5.4), every derived total COMPUTED (2026-09-11 §1.4).
+
+    Per-person totals come from the materialized buckets, so the summed `latest_w2_income`
+    is Σ pᵢ·sᵢ/24 rather than a product of household sums; the five household totals are
+    rebuilt over the summed dict, because their MAGI reads the return's wages. The engine
+    would rebuild both again — it trusts nobody — but every OTHER reader of this dict
+    (the money-flow card's investment-income node, the Overview's salary split) reads the
+    totals straight, and they must be the same figures the engine taxed.
+
+    A year with NOTHING stored stays empty: five computed zeros would answer "has this year
+    been filled in?" with a confident yes, and the money-flow card asks exactly that.
+    """
+    values: dict[str, Decimal] = dict(household)
+    for bucket in buckets.values():
+        for key, value in bucket.items():
+            existing = values.get(key)
+            values[key] = value if existing is None else existing + value
+    if not values:
+        return values
+    values = materialize_household(year, values, filing_status)
+    # The engine's synthetic wage key is plumbing, not an input: it has no definition row,
+    # no label and no form line, so it must not reach a payload, a what-if diff or a log.
+    values.pop(W2_INCOME_KEY, None)
+    return values
+
+
+def _assemble_earners(
+    per_person: dict[int | None, dict[str, Decimal]], columns: list[int | None]
+) -> list[EarnerWages] | None:
+    """One wage bundle per person on the return — or None when there is at most one.
+
+    None is not a fallback: it is the instruction to the engine to synthesize the single
+    bundle from `inputs` exactly as it always has, which is what keeps every single-filer
+    year byte-identical.
+    """
     if len(per_person) < 2:
         return None
     # In COLUMN order (primary first), not sorted: `shift_earners` re-bases the what-if on
@@ -296,6 +389,69 @@ def _assemble_earners(rows: list[TaxInput], columns: list[int | None]) -> list[E
     # key=str)` would even put person 10 ahead of person 2 — while `columns` already carries
     # the order `_return_people` established, and mixes None in safely.
     return [earner_from_inputs(per_person[column]) for column in columns if column in per_person]
+
+
+def _derived_value(
+    key: str, entered: Mapping[str, Decimal], source: Mapping[str, Decimal]
+) -> Decimal | None:
+    """One computed line's figure for one column — or null when NOTHING it is built from is
+    stored there.
+
+    A computed 0 beside a row nobody has touched reads as an entered zero, and absent is not
+    zero, even for a total. ONE spelling of the rule, because the GET serves it and the
+    preview answers with it while the user types: two would be a form previewing a figure
+    the Save does not show.
+    """
+    if not any(component in entered for component in DERIVED_COMPONENTS[key]):
+        return None
+    return source.get(key)
+
+
+@dataclass(frozen=True)
+class _InputViews:
+    """One year's rows in the four shapes the inputs payload and the preview both read.
+
+    What is STORED in each column (which tells an entered zero from an empty cell), what
+    each column COMPUTES from it, and the household's own pair — asked once, of one list of
+    rows. The preview's whole contract is that it answers as the GET will after Save, so it
+    reads the same views through the same builder rather than assembling its own.
+    """
+
+    stored: dict[int | None, dict[str, Decimal]]
+    buckets: dict[int | None, dict[str, Decimal]]
+    household: dict[str, Decimal]
+    computed: dict[str, Decimal]
+
+    def entered(self, column: int | None, per_person: bool) -> Mapping[str, Decimal]:
+        """The cells actually STORED against this line — the column's, or the household's."""
+        return self.stored.get(column, {}) if per_person else self.household
+
+    def derived(self, key: str, column: int | None, per_person: bool) -> Decimal | None:
+        """A computed total's figure for this line, under `_derived_value`'s null rule.
+
+        Per-person totals come from the column's own materialized bucket; the household five
+        come from the assembled dict, because their MAGI reads the return's summed wages.
+        """
+        source = self.buckets.get(column, {}) if per_person else self.computed
+        return _derived_value(key, self.entered(column, per_person), source)
+
+
+def _input_views(
+    year: int,
+    rows: Sequence[TaxInput | _InputRow],
+    columns: list[int | None],
+    filing_status: str,
+) -> _InputViews:
+    """Bucket, materialize and assemble one year's rows — the whole chain, once."""
+    stored = _person_rows(rows, columns)
+    buckets = _materialized_buckets(stored, columns)
+    household = {row.key: row.value for row in rows if row.key not in PER_PERSON_KEYS}
+    return _InputViews(
+        stored=stored,
+        buckets=buckets,
+        household=household,
+        computed=_assemble_inputs(year, household, buckets, filing_status),
+    )
 
 
 async def _filing_status(db: AsyncSession, year: int) -> str:
@@ -379,14 +535,15 @@ async def _engine_feed(
     columns = [person.id for person in _return_people(people, filing_status)] or [None]
     rows = list((await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars())
     tables = await _engine_tables(db, year, filing_status)
+    views = _input_views(year, rows, columns, filing_status)
     return EngineFeed(
         year=year,
         filing_status=filing_status,
-        inputs=_assemble_inputs(rows, columns),
-        earners=_assemble_earners(rows, columns),
+        inputs=views.computed,
+        earners=_assemble_earners(views.stored, columns),
         tables=tables,
+        person_inputs=views.buckets,
         brackets_missing_for_status=_missing_for_status(tables, filing_status, year),
-        rows=rows,
     )
 
 
@@ -445,12 +602,15 @@ async def _carried_forward(
 
 
 async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
-    """Every definition, one item per PERSON COLUMN, each with its own suggestions.
+    """Every definition, one item per PERSON COLUMN, with that column's own figures.
 
     Columns are the people this year's return covers (`_return_people`): one — the
     primary — for single and MFS, everybody for married-joint, and a single NULL column on
     a database with no roster, which reproduces today's payload byte for byte. Household
     keys always render exactly once, with person_id null.
+
+    An ENTERED line carries what is stored; a COMPUTED line carries what the engine makes
+    of that column's components, a `formula` caption and no chip (2026-09-11 spec §1.6).
     """
     definitions = list((await db.execute(select(TaxInputDefinition))).scalars())
     filing_status = await _filing_status(db, year)
@@ -458,63 +618,77 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
     columns: list[int | None] = [person.id for person in people] or [None]
 
     rows = list((await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars())
-    household = {row.key: row.value for row in rows if row.key not in PER_PERSON_KEYS}
-    owned: dict[int | None, dict[str, Decimal]] = {column: {} for column in columns}
-    for row in rows:
-        if row.key not in PER_PERSON_KEYS:
-            continue
-        column = _owner_column(row.person_id, columns)
-        if column is not OFF_RETURN:
-            owned[column][row.key] = row.value
+    # What is STORED in each column and what each column COMPUTES from it (spec §1.4), in
+    # the views the preview reads too — so a cell previewed while the user types is the cell
+    # this payload serves after Save.
+    views = _input_views(year, rows, columns, filing_status)
 
-    # One suggestion map per column: the derived-W2 chain is one PERSON's, and the
-    # household references it also reads are shared, so a household key's suggestion is
-    # the same in every column (which is why it can render once, from the first).
-    suggestions = {
-        column: derive_suggestions(year, household | values, filing_status)
-        for column, values in owned.items()
+    # ONE suggestion left (spec §1.2) and it is a household key, so it is the same in every
+    # column. The nine formulas it used to carry are computed values now, served as `value`
+    # with a `formula` caption instead of as a chip. Off the MATERIALIZED dict: the netting
+    # it suggests from reads the long-term line, and a stale total is what §1.1 removed.
+    offered = derive_suggestions(year, views.computed, filing_status)
+    suggestions: dict[int | None, dict[str, Decimal]] = {
+        column: dict(offered) for column in columns
     }
-    # The HEAD of the derived-W2 chain. `annual_salary` has no sheet formula, so
-    # derive_suggestions never offers one — but a person with a paycheck profile in force
-    # has already told the app their salary, and this page should offer it rather than ask
-    # twice (2026-08-27 spec §4.1). Per column, from THAT person's profile: a column whose
-    # person has none keeps today's empty suggestion, and nothing downstream moves, because
-    # gross_paycheck still divides the STORED annual_salary.
+    # The HEAD of the derived-W2 chain, and the last chip on it: `annual_salary` has no
+    # formula of its own, but a person with a paycheck profile in force has already told
+    # the app their salary, and this page should offer it rather than ask twice (2026-08-27
+    # spec §4.1). Per column, from THAT person's profile; a column whose person has none
+    # keeps an empty suggestion. Applying it now moves the two computed lines below it on
+    # the next preview, which is the chain doing what it says.
     for column, salary in (await _profile_salaries(db, columns, clock.product_today())).items():
         suggestions[column][ANNUAL_SALARY_KEY] = salary
     # Household keys, so the same value in every column (a household row renders from the
     # first one) — and the only suggestions on this payload that are not a sheet formula,
     # which is what `suggestion_source` tells the chip.
-    carried = await _carried_forward(db, year, household)
+    carried = await _carried_forward(db, year, views.household)
     for values in suggestions.values():
         values.update(carried)
     by_section: dict[str, list[TaxInputItemOut]] = {}
     for definition in sorted(definitions, key=lambda d: (d.sort_order, d.key)):
+        key = definition.key
+        derived = is_derived_key(key)
         item_columns = columns if definition.is_per_person else [None]
         for column in item_columns:
-            source = owned[column] if definition.is_per_person else household
+            per_person = definition.is_per_person
+            value = (
+                views.derived(key, column, per_person)
+                if derived
+                else views.entered(column, per_person).get(key)
+            )
             by_section.setdefault(definition.section, []).append(
                 TaxInputItemOut(
-                    key=definition.key,
+                    key=key,
                     # From tax_keys when it knows the key: the seed is insert-only, so a row
                     # written before a relabel still carries the old text.
-                    label=label_for(definition.key, definition.label),
+                    label=label_for(key, definition.label),
                     sort_order=definition.sort_order,
-                    is_derived=definition.is_derived,
+                    # From tax_keys, not from the row, for the same reason as the label and
+                    # the unit: the column records what an old database was told, this file
+                    # records what the engine does today (spec §1.1).
+                    is_derived=derived,
                     # From tax_keys, not from the row: the unit is a property of the KEY,
                     # so an older database that never migrated one still renders the right
                     # box (see tax_keys.TAX_INPUT_UNITS).
-                    unit=unit_for(definition.key),
+                    unit=unit_for(key),
                     is_per_person=definition.is_per_person,
                     person_id=column if definition.is_per_person else None,
-                    value=source.get(definition.key),
+                    value=value,
                     # Presence here — not is_derived — is what the UI shows a chip for: the
                     # sheet computes capital_loss_deductions although it seeds as a plain
-                    # input.
-                    suggested=suggestions[column if definition.is_per_person else columns[0]].get(
-                        definition.key
+                    # input. A DERIVED key never has one: there is nothing to offer when the
+                    # figure is already the answer.
+                    suggested=(
+                        None
+                        if derived
+                        else suggestions[column if definition.is_per_person else columns[0]].get(
+                            key
+                        )
                     ),
-                    suggestion_source=(CARRY_FORWARD_SOURCE if definition.key in carried else None),
+                    suggestion_source=(CARRY_FORWARD_SOURCE if key in carried else None),
+                    # The human formula, beside the figure, in place of the chip.
+                    formula=FORMULA_CAPTIONS.get(key),
                 )
             )
     # tax_keys order first; a section seeded later still renders (appended, name order).
@@ -668,6 +842,37 @@ async def _require_known_input_keys(db: AsyncSession, keys: Iterable[str]) -> No
         raise HTTPException(status_code=422, detail=f"unknown input key(s): {unknown}")
 
 
+# ONE sentence behind two doors (2026-09-11 spec §1.5-1.6): the write door tells the user
+# to edit the components, the what-if's override door tells them to override the components,
+# because the remedy is the only thing that differs. Labels, not keys — every one of the
+# named rows is a line the user can see on the form they are looking at.
+#
+# It has a singular, because one total has a single component (Gross Paycheck, from Annual
+# Salary): "edit those instead" beside one named row reads like an instruction to go and
+# find the rows the sentence did not name.
+DERIVED_KEY_MESSAGE = (
+    "{label} is computed from its components ({components}) — {remedy} those instead"
+)
+DERIVED_KEY_MESSAGE_ONE = (
+    "{label} is computed from its component ({components}) — {remedy} that instead"
+)
+EDIT_REMEDY = "edit"
+OVERRIDE_REMEDY = "override"
+
+
+def _refuse_derived_key(key: str, remedy: str) -> None:
+    """422 when `key` is one of the nine computed totals. Never a silent drop: a client that
+    sends one has a stale idea of what it may write, and a 200 would look like it landed."""
+    if is_derived_key(key):
+        one = len(DERIVED_COMPONENTS[key]) == 1
+        raise HTTPException(
+            status_code=422,
+            detail=(DERIVED_KEY_MESSAGE_ONE if one else DERIVED_KEY_MESSAGE).format(
+                label=label_for(key, key), components=component_labels(key), remedy=remedy
+            ),
+        )
+
+
 COUNT_MESSAGE = f"must be a whole number of checks between {MIN_INPUT_COUNT} and {MAX_INPUT_COUNT}"
 PERCENT_MESSAGE = "must be a fraction between 0 and 1 (the form enters it as a percent)"
 
@@ -708,26 +913,17 @@ def _validated_input_value(key: str, value: Decimal | None) -> Decimal | None:
     return quantized
 
 
-@router.put("/years/{year}/inputs", response_model=TaxInputsOut)
-async def put_inputs(
-    year: YearPath,
-    body: TaxInputsIn,
-    response: Response,
-    db: AsyncSession = Depends(get_db),
-    batch: ChangeBatch = Depends(change_batch),
-) -> TaxInputsOut:
-    """Bulk upsert of the (key, person) slots in the body; a null value unsets one slot.
+async def _resolve_input_rows(
+    db: AsyncSession, body: TaxInputsIn
+) -> tuple[dict[tuple[str, int | None], Decimal | None], list[Person]]:
+    """The body's (key, person) slots, resolved, refused or quantized — and the roster.
 
-    Re-import interplay (Plan 2 forward note): the taxes import is sheet-wins within the
-    years it covers, so edits made here to an imported year are clobbered by the next
-    re-import — for the PRIMARY person's sheet-tracked keys only, since the importer's
-    sweeps are scoped to the sheet's own vocabulary and to that one person.
-
-    CHANGE-LOGGED since 2026-09-09: the Data-health card repairs a year's itemized total
-    through this route (the §199A leftover, taxes spec 4h), and a repair that rewrites
-    money has to be undoable like the zero-month delete beside it. The batch id rides the
-    `X-Change-Batch` header rather than the body — `TaxInputsOut` is the GET's shape too,
-    and the two payloads are pinned byte-for-byte.
+    Everything that can say no says it HERE, before the caller writes anything: unknown
+    keys, a computed total, a household key with a person on it, an unknown person, the
+    same slot twice, a value outside its unit's range. The write path needs that
+    (a 422 halfway through a bulk upsert would leave the year half-edited — the portfolio
+    PATCH posture) and the PREVIEW needs the answers to be identical to the write's, or the
+    form would preview a body the Save would reject.
     """
     submitted = [TaxInputRowIn(key=key, value=value) for key, value in body.values.items()]
     submitted += list(body.rows)
@@ -740,15 +936,10 @@ async def put_inputs(
     people = await load_people(db)
     known_people = {person.id for person in people}
     primary = primary_person(people)
-    # Which column a legacy person_id-NULL row is ALREADY read as. `_owner_column` folds a
-    # per-person NULL onto columns[0], and `_return_people` only ever truncates the roster,
-    # so under every filing status that column is people[0] — the primary.
-    null_row_column = people[0].id if people else None
 
-    # Resolve and quantize EVERY row before the first write: a 422 raised halfway through
-    # a bulk upsert would otherwise leave the year half-edited (portfolio PATCH posture).
     resolved: dict[tuple[str, int | None], Decimal | None] = {}
     for row in submitted:
+        _refuse_derived_key(row.key, EDIT_REMEDY)
         definition = definitions[row.key]
         if not definition.is_per_person:
             if row.person_id is not None:
@@ -772,6 +963,64 @@ async def put_inputs(
                 status_code=422, detail=f"{row.key} appears twice for the same person"
             )
         resolved[slot] = _validated_input_value(row.key, row.value)
+    return resolved, people
+
+
+def _stored_slot(
+    existing: Mapping[tuple[str, int | None], object],
+    key: str,
+    owner: int | None,
+    null_row_column: int | None,
+) -> tuple[str, int | None]:
+    """Which STORED slot a write to (key, owner) lands on — the adoption rule, in one place.
+
+    A per-person row with person_id NULL is the pre-household spelling of the PRIMARY's
+    slot, so the primary's line in a body ADOPTS it rather than inserting a second row the
+    (year, key, person) unique key would rightly reject.
+
+    Only the PRIMARY may, because every read path already attributes that row to them:
+    letting a PARTNER write take it over would move a value out of the primary's column
+    without the primary's line being touched, and a partner `null` would DELETE money the
+    summary was counting as the primary's. A partner write of such a key therefore inserts
+    its own row and leaves the NULL one alone.
+
+    The PUT writes through this and the preview overlays through it, so the figure the form
+    shows as the user types is the figure Save produces — 240000 REPLACING a legacy 120000
+    rather than joining it, and a null emptying that line rather than uncovering it.
+    """
+    if (key, owner) in existing:
+        return key, owner
+    if owner is not None and owner == null_row_column and (key, None) in existing:
+        return key, None
+    return key, owner
+
+
+@router.put("/years/{year}/inputs", response_model=TaxInputsOut)
+async def put_inputs(
+    year: YearPath,
+    body: TaxInputsIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> TaxInputsOut:
+    """Bulk upsert of the (key, person) slots in the body; a null value unsets one slot.
+
+    Re-import interplay (Plan 2 forward note): the taxes import is sheet-wins within the
+    years it covers, so edits made here to an imported year are clobbered by the next
+    re-import — for the PRIMARY person's sheet-tracked keys only, since the importer's
+    sweeps are scoped to the sheet's own vocabulary and to that one person.
+
+    CHANGE-LOGGED since 2026-09-09: the Data-health card repairs a year's itemized total
+    through this route (the §199A leftover, taxes spec 4h), and a repair that rewrites
+    money has to be undoable like the zero-month delete beside it. The batch id rides the
+    `X-Change-Batch` header rather than the body — `TaxInputsOut` is the GET's shape too,
+    and the two payloads are pinned byte-for-byte.
+    """
+    resolved, people = await _resolve_input_rows(db, body)
+    # Which column a legacy person_id-NULL row is ALREADY read as (`_stored_slot` adopts it).
+    # `_owner_column` folds a per-person NULL onto columns[0], and `_return_people` only ever
+    # truncates the roster, so under every filing status that column is people[0].
+    null_row_column = people[0].id if people else None
 
     await _ensure_year(db, year)
     existing = {
@@ -780,20 +1029,9 @@ async def put_inputs(
     }
     changed = 0
     for (key, owner), value in resolved.items():
-        row = existing.get((key, owner))
-        if row is None and owner is not None and owner == null_row_column:
-            # The pre-household spelling of the same slot: a NULL row on a per-person key,
-            # written before the roster existed. ADOPT it rather than inserting a second
-            # row the (year, key, person) unique key would rightly reject.
-            #
-            # Only the PRIMARY may, because every read path already attributes that row to
-            # them: letting a PARTNER write take it over would move a value out of the
-            # primary's column without the primary's line being touched, and a partner
-            # `null` would DELETE money the summary was counting as the primary's. A
-            # partner write of such a key therefore inserts its own row and leaves the NULL
-            # one alone. POP, not get, belt-and-braces behind that guard: one legacy row
-            # can only ever become ONE person's.
-            row = existing.pop((key, None), None)
+        # POP, not get: one legacy row can only ever become ONE person's, and no slot is
+        # resolved twice, so a row taken here is out of every later slot's reach.
+        row = existing.pop(_stored_slot(existing, key, owner, null_row_column), None)
         if value is None:
             if row is not None:
                 batch.record_delete(row)  # the image is needed BEFORE the delete
@@ -816,6 +1054,57 @@ async def put_inputs(
     batch.label = f"Saved {year} tax inputs — {changed} slot{'' if changed == 1 else 's'}"
     response.headers.update(batch_header(await batch.commit()))
     return await _inputs_payload(db, year)
+
+
+@router.post("/years/{year}/inputs/preview", response_model=DerivedPreviewOut)
+async def preview_inputs(
+    year: YearPath, body: TaxInputsIn, db: AsyncSession = Depends(get_db)
+) -> DerivedPreviewOut:
+    """What the nine totals WOULD be for this body — no write, no batch, no log entry.
+
+    The browser owns no formula (2026-09-11 spec, decision 2), so the form asks the server
+    as the user types. The body is the PUT's, resolved through the PUT's own door, overlaid
+    on the stored rows in memory — a null unsets a slot, exactly as saving it would — and
+    run through the same assembly the GET serves, so the figure previewed is the figure that
+    will be there after Save.
+    """
+    await _require_year(db, year)
+    resolved, people = await _resolve_input_rows(db, body)
+    filing_status = await _filing_status(db, year)
+    columns: list[int | None] = [person.id for person in _return_people(people, filing_status)] or [
+        None
+    ]
+    # The PUT's own column, computed the PUT's way: a body line for the primary lands ON
+    # their legacy NULL row, so the overlay below has to take that row out rather than stack
+    # a second one beside it and preview the sum of both.
+    null_row_column = people[0].id if people else None
+
+    stored = list((await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars())
+    overlaid: dict[tuple[str, int | None], Decimal] = {
+        (row.key, row.person_id): row.value for row in stored
+    }
+    for (key, owner), value in resolved.items():
+        # Take out whichever slot the Save would rewrite, then put the body's value back
+        # under the slot the Save would leave behind — for an adopted row, the primary's.
+        overlaid.pop(_stored_slot(overlaid, key, owner, null_row_column), None)
+        if value is not None:  # null means "unset this line", not "store 0"
+            overlaid[(key, owner)] = value
+    rows = [
+        _InputRow(key=key, person_id=person_id, value=value)
+        for (key, person_id), value in overlaid.items()
+    ]
+
+    views = _input_views(year, rows, columns, filing_status)
+    items: list[DerivedPreviewItemOut] = []
+    for key in DERIVED_KEYS:
+        per_person = key in PER_PERSON_DERIVED_KEYS
+        for column in columns if per_person else [None]:
+            items.append(
+                DerivedPreviewItemOut(
+                    key=key, person_id=column, value=views.derived(key, column, per_person)
+                )
+            )
+    return DerivedPreviewOut(year=year, filing_status=filing_status, derived=items)
 
 
 def _validated_table(name: str, table: list[BracketIn]) -> list[Bracket]:
@@ -1188,18 +1477,6 @@ BONUS_WITHHOLDING_KEY = "w2_bonus_withholding"
 CA_HARBOR_AGI_CEILING = Decimal("1000000")
 
 
-def _bucket_input_rows(rows: Iterable[TaxInput]) -> dict[int | None, dict[str, Decimal]]:
-    """The year's stored inputs bucketed by OWNER — None is the household bucket.
-
-    The sibling of `_assemble_inputs`: that one answers "what does the engine see", this one
-    answers "whose money is it", and the withholding card is the only place that needs both.
-    """
-    buckets: dict[int | None, dict[str, Decimal]] = {}
-    for row in rows:
-        buckets.setdefault(row.person_id, {})[row.key] = row.value
-    return buckets
-
-
 def _wage_base(values: dict[str, Decimal]) -> Decimal:
     return sum((values.get(key, ZERO) for key in WAGE_KEYS), ZERO)
 
@@ -1301,9 +1578,11 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
     partner_ids = [
         person.id for person in _return_people(people, feed.filing_status) if not person.is_primary
     ]
-    # `feed.rows`, not a second query: the buckets below have to be the same rows the engine
-    # was fed, or the two halves of this card describe two different households.
-    buckets = _bucket_input_rows(feed.rows)
+    # `feed.person_inputs`, not a second query and not a second bucketing: the partner's
+    # wage base has to be the figure the engine taxed, and since 2026-09-11 that figure is
+    # COMPUTED — `latest_w2_income + other_w2_income` as materialized from the partner's own
+    # salary, checks and W-2 component rows, which no re-read of the raw rows could produce.
+    buckets = feed.person_inputs
     partner_values: dict[str, Decimal] = {}
     for person_id in partner_ids:
         for key, value in buckets.get(person_id, {}).items():
@@ -1711,8 +1990,12 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
     stored = feed.inputs
     brackets = feed.tables
 
-    # Overrides: the PUT-inputs vocabulary — unknown keys 422, values quantized 4dp.
+    # Overrides: the PUT-inputs vocabulary — unknown keys 422, computed totals 422, values
+    # quantized 4dp. A scenario that could set `other_w2_income` directly would be handing
+    # the engine a figure it is about to overwrite, and the user a delta that never happens.
     await _require_known_input_keys(db, body.overrides)
+    for key in body.overrides:
+        _refuse_derived_key(key, OVERRIDE_REMEDY)
     overrides: dict[str, Decimal | None] = {
         key: _validated_input_value(key, value) for key, value in body.overrides.items()
     }
@@ -1836,13 +2119,24 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
         ),
         feed,
     )
+    # The whole wage delta is the PRIMARY's (their lots, their ESPP — the app models no
+    # partner equity), so their bundle is re-materialized from their OWN component bucket
+    # with the scenario's per-person deltas folded in, and the partner's wage base is
+    # untouched beside it. Per-person keys only: a household delta is not anybody's wages.
+    primary_after = dict(feed.person_inputs.get(feed.primary_column, {}))
+    for key in PER_PERSON_KEYS:
+        if is_derived_key(key):
+            continue  # rebuilt from the components below, never carried as a delta
+        delta = scenario_inputs.get(key, ZERO) - stored.get(key, ZERO)
+        if delta:
+            primary_after[key] = primary_after.get(key, ZERO) + delta
     scenario = _summary_out(
         compute_breakdown(
             year,
             scenario_inputs,
             brackets,
             filing_status=feed.filing_status,
-            earners=shift_earners(feed.earners, stored, scenario_inputs),
+            earners=shift_earners(feed.earners, primary_after),
         ),
         feed,
     )
@@ -1850,6 +2144,10 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
     changed: list[ChangedInput] = []
     labels = {key: label for key, label, _s, _o, _d in TAX_INPUT_DEFINITIONS}
     for key in sorted(set(stored) | set(scenario_inputs)):
+        # Computed totals never appear: nothing typed them, nothing stores them, and the
+        # row the user would change is the component beside them (spec §1.4).
+        if is_derived_key(key):
+            continue
         before = stored.get(key, ZERO)
         after = scenario_inputs.get(key, ZERO)
         if before != after:

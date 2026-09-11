@@ -177,3 +177,103 @@ PER_PERSON_KEYS: tuple[str, ...] = (
     "pretax_dental",
     "pretax_vision",
 )
+
+# The nine totals the sheet's grey cells computed and this app now computes itself
+# (2026-09-11 spec §1.1): never stored, never accepted on a write, rebuilt by the engine
+# from the components below. ONE list, read off the definition tuples' `is_derived` flag
+# rather than typed again beside them, so a tenth total is added in exactly one place.
+DERIVED_KEYS: tuple[str, ...] = tuple(
+    key for key, _label, _section, _order, derived in TAX_INPUT_DEFINITIONS if derived
+)
+
+# The four that belong to a PERSON and the five that belong to the return. The split is
+# load-bearing, not cosmetic: a per-person product cannot be rebuilt from household sums
+# (Σ pᵢ·sᵢ/24 ≠ (Σpᵢ)(Σsᵢ)/24), so the per-person four are materialized per column and only
+# then summed, while the five below are rebuilt once over the summed dict.
+PER_PERSON_DERIVED_KEYS: tuple[str, ...] = tuple(k for k in DERIVED_KEYS if k in PER_PERSON_KEYS)
+# In DEPENDENCY order, which is why this one is spelled out rather than filtered from
+# DERIVED_KEYS: stcg_total nets against the REBUILT ltcg_total, and itemized_deduction
+# sizes its SALT cap on a MAGI that reads every total above it. `materialize_household`
+# ITERATES this tuple over a table of formulas, so the order below is the order the engine
+# runs — not a comment about it that a reordered function could silently contradict.
+HOUSEHOLD_DERIVED_KEYS: tuple[str, ...] = (
+    "ltcg_total",
+    "unqualified_dividends",
+    "interest_total",
+    "stcg_total",
+    "itemized_deduction",
+)
+
+# What each formula READS, expanded transitively so no entry is itself derived: the
+# question every consumer actually asks is "has the user entered anything this total could
+# be built from", and a derived component would make that question recursive. The keys MAGI
+# reads to size the SALT cap are deliberately NOT components of itemized_deduction — they
+# move the cap, they are not terms of the sum. Consumers: the two 422 sentences, the
+# importer's skip, the form's paste note and the engine's "all components absent" rule.
+DERIVED_COMPONENTS: dict[str, tuple[str, ...]] = {
+    "gross_paycheck": ("annual_salary",),
+    "latest_w2_income": ("pay_periods", "annual_salary"),
+    "other_w2_income": (
+        "w2_stock_rsus_sold",
+        "w2_bonuses",
+        "w2_salary_checkpoint",
+        "w2_espp_sale_component",
+        "w2_employer_hsa",
+        "w2_other",
+    ),
+    "stcg_total": (
+        "stcg_standard",
+        "stcg_espp_component",
+        # The long-term legs the netting rule nets against: ltcg_total is derived, so its
+        # own components stand in its place here.
+        "ltcg_brokerage",
+        "ltcg_espp_component",
+    ),
+    "unqualified_dividends": ("unq_div_us_treasuries_etf", "unq_div_other"),
+    "interest_total": ("interest_standard", "interest_us_treasuries"),
+    "other_pretax_deductions": ("pretax_dental", "pretax_vision"),
+    "itemized_deduction": (
+        "itemized_salt",
+        "itemized_donations",
+        "itemized_vehicle_reg",
+        "itemized_other",
+    ),
+    "ltcg_total": ("ltcg_brokerage", "ltcg_espp_component"),
+}
+
+# The human formula shown beside a computed cell, in place of the chip it replaced.
+# Presentation owned by the code that owns the formula — the `label_for` / `unit_for`
+# precedent — so a formula change ships its caption with it, on every database.
+FORMULA_CAPTIONS: dict[str, str] = {
+    "gross_paycheck": "Annual Salary ÷ 24",
+    "latest_w2_income": "Pay periods × Gross Paycheck",
+    "other_w2_income": (
+        "RSUs sold + Bonuses + Salary checkpoint + ESPP sale component + Employer HSA + Other"
+    ),
+    "stcg_total": "Standard + ESPP short-term, netted against a long-term loss",
+    "unqualified_dividends": "US Treasuries ETF + Other dividends",
+    "interest_total": "Standard + US Treasuries",
+    "other_pretax_deductions": "Dental + Vision",
+    "itemized_deduction": "SALT (capped) + Donations + Vehicle registration + Other",
+    "ltcg_total": "Brokerage + ESPP long-term",
+}
+
+
+_DERIVED_KEY_SET = frozenset(DERIVED_KEYS)
+
+
+def is_derived_key(key: str) -> bool:
+    """Is this total computed? The API stamps `is_derived` from HERE, not from the
+    `tax_input_definitions` column — the seed is insert-only, so the column is a record of
+    what an old database was told, while this file is what the engine does today."""
+    return key in _DERIVED_KEY_SET
+
+
+def component_labels(key: str) -> str:
+    """This total's components, by LABEL, in form order — the text the two refusal
+    sentences interpolate ("edit those instead" / "override those instead" — singular when
+    the total has exactly one component).
+
+    Labels rather than keys because the sentence is read by the person looking at the form,
+    where every one of these is a row they can see."""
+    return ", ".join(label_for(component, component) for component in DERIVED_COMPONENTS[key])

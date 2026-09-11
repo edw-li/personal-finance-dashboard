@@ -56,15 +56,17 @@ def _salary_by_person(feed: EngineFeed, people: list[Person]) -> list[tuple[str,
     columns = _return_people(people, feed.filing_status)
     if len(columns) < 2:
         return None
-    ids = [person.id for person in columns]
-    sums: dict[int, Decimal] = {}
-    for row in feed.rows:
-        if row.key not in SALARY_KEYS:
-            continue
-        owner = ids[0] if row.person_id is None else row.person_id
-        if owner not in ids:
-            continue  # a person this return does not cover — off it, like their inputs
-        sums[owner] = sums.get(owner, ZERO) + row.value
+    # `feed.person_inputs`, not `feed.rows`: `latest_w2_income` is a COMPUTED total since
+    # 2026-09-11 and no row carries it any more, so a partner who entered a salary and a
+    # check count would have contributed nothing here and the split would have collapsed to
+    # a lone plain node. The buckets are the same materialized figures the engine taxed,
+    # which is what keeps this split reconciling to the cent with the flat sum.
+    sums = {
+        person.id: sum(
+            (feed.person_inputs.get(person.id, {}).get(key, ZERO) for key in SALARY_KEYS), ZERO
+        )
+        for person in columns
+    }
     pairs = [(person.name, sums[person.id]) for person in columns if sums.get(person.id, ZERO) > 0]
     return pairs if len(pairs) > 1 else None
 

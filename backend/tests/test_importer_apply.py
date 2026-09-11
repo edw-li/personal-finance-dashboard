@@ -48,6 +48,7 @@ from app.models import (
     User,
 )
 from app.security import hash_password
+from app.tax_keys import DERIVED_KEYS
 from tests.portfolio_factories import acct
 from tests.workbook_builder import (
     build_workbook,
@@ -504,7 +505,9 @@ async def test_apply_taxes_years_inputs_brackets(db):
     await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report)
     await db.commit()
     assert report.entities["tax_years"].creates == 2
-    assert report.entities["tax_inputs"].creates == 86  # 43 keys x 2 years
+    # 34 ENTERED keys x 2 years: the parser still reads the sheet's nine grey cells, and
+    # the importer writes none of them (2026-09-11 taxes spec §1.5).
+    assert report.entities["tax_inputs"].creates == 68
     assert report.entities["tax_brackets"].creates == 14  # 7 x 2 years
     years = (await db.execute(select(TaxYear.year))).scalars().all()
     assert sorted(years) == [2023, 2024]
@@ -516,13 +519,49 @@ async def test_apply_taxes_years_inputs_brackets(db):
         )
     ).scalar_one()
     assert exempt == Decimal("0.9645")
+    stored = set((await db.execute(select(TaxInput.key))).scalars())
+    assert stored and not stored & set(DERIVED_KEYS)
+    assert (
+        "tax_inputs: 18 computed cells skipped (derived totals are computed, never stored)"
+        in report.samples
+    )
 
     report2 = SheetReport()
     await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report2)
     await db.commit()
     assert report2.entities["tax_inputs"].creates == 0
-    assert report2.entities["tax_inputs"].skips == 86
+    assert report2.entities["tax_inputs"].skips == 68
     assert report2.entities["tax_brackets"].skips == 14
+
+
+async def test_apply_taxes_leaves_a_stored_computed_total_alone(db):
+    """A database that has not run the deletion migration keeps its stored totals: a key
+    the sheet no longer carries is not the sync-delete sweep's to retire, and the engine
+    ignores the row either way."""
+    from app.importer.apply import apply_taxes
+    from app.importer.parsers import parse_taxes
+    from app.models import TaxInput, TaxInputDefinition, TaxYear
+    from app.seed import seed_tax_definitions
+
+    await seed_tax_definitions(db)
+    await db.flush()
+    assert (await db.get(TaxInputDefinition, "ltcg_total")) is not None
+    db.add(TaxYear(year=2023))
+    await db.flush()
+    db.add(TaxInput(year=2023, key="ltcg_total", value=Decimal("-670.0000")))
+    await db.commit()
+
+    report = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report)
+    await db.commit()
+
+    leftover = (
+        await db.execute(
+            select(TaxInput.value).where(TaxInput.year == 2023, TaxInput.key == "ltcg_total")
+        )
+    ).scalar_one()
+    assert leftover == Decimal("-670.0000")  # invisible: neither updated nor deleted
+    assert report.entities["tax_inputs"].deletes == 0
 
 
 async def test_apply_taxes_translates_folded_niit_cg_rates(db):
@@ -638,7 +677,7 @@ async def test_apply_taxes_keeps_inputs_for_keys_the_sheet_does_not_carry(db):
     report = SheetReport()
     await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report)
     await db.commit()
-    assert report.entities["tax_inputs"].creates == 86
+    assert report.entities["tax_inputs"].creates == 68  # 34 entered keys x 2 years
 
     hand_edited = (
         await db.execute(
@@ -660,7 +699,7 @@ async def test_apply_taxes_keeps_inputs_for_keys_the_sheet_does_not_carry(db):
 
     assert report2.entities["tax_inputs"].deletes == 0
     assert report2.entities["tax_inputs"].updates == 1  # annual_salary 2023 only
-    assert report2.entities["tax_inputs"].skips == 83  # 42 sheet keys x 2 years, minus that 1
+    assert report2.entities["tax_inputs"].skips == 65  # 33 entered sheet keys x 2 years, minus 1
     survivors = {
         row.year: row.value
         for row in (
@@ -757,7 +796,7 @@ async def test_apply_taxes_never_touches_partner_rows_or_married_brackets(db):
     assert salary.person_id == me.id
     interest = (
         await db.execute(
-            select(TaxInput).where(TaxInput.year == 2024, TaxInput.key == "interest_total")
+            select(TaxInput).where(TaxInput.year == 2024, TaxInput.key == "interest_standard")
         )
     ).scalar_one()
     assert interest.person_id is None
@@ -767,9 +806,7 @@ async def test_apply_taxes_never_touches_partner_rows_or_married_brackets(db):
     }
 
     # Now the marriage data, inside a year the sheet DOES cover.
-    db.add(
-        TaxInput(year=2024, key="latest_w2_income", person_id=partner.id, value=Decimal("90000"))
-    )
+    db.add(TaxInput(year=2024, key="annual_salary", person_id=partner.id, value=Decimal("90000")))
     db.add(
         TaxInput(year=2024, key="w2_fed_withholding", person_id=partner.id, value=Decimal("12000"))
     )
@@ -800,7 +837,7 @@ async def test_apply_taxes_never_touches_partner_rows_or_married_brackets(db):
         .scalars()
         .all()
     )
-    assert sorted(row.key for row in survivors) == ["latest_w2_income", "w2_fed_withholding"]
+    assert sorted(row.key for row in survivors) == ["annual_salary", "w2_fed_withholding"]
     assert sorted(row.value for row in survivors) == [
         Decimal("12000.0000"),
         Decimal("90000.0000"),
@@ -812,7 +849,7 @@ async def test_apply_taxes_never_touches_partner_rows_or_married_brackets(db):
     )
     assert len(joint) == 1
     # ...and the sheet-covered single data still synced exactly as before.
-    assert report2.entities["tax_inputs"].skips == 86
+    assert report2.entities["tax_inputs"].skips == 68
     assert report2.entities["tax_brackets"].skips == 14
 
 
@@ -833,11 +870,13 @@ async def test_apply_taxes_still_syncs_the_primary_persons_rows(db):
     # One YEAR's cell is blanked, not the label row: parse_taxes pins the whole label
     # sequence, so a removed row aborts the parse, and blanking EVERY column would take the
     # key out of the sheet's vocabulary entirely (the P0 immunity next door). Blanking 2023
-    # alone keeps `gross_paycheck` — a per-person key — sheet-carried, so its 2023 row is
+    # alone keeps `annual_salary` — a per-person key — sheet-carried, so its 2023 row is
     # squarely the sweep's to retire even though it belongs to the primary person.
+    # (`Gross Paycheck` until 2026-09-11: that line is computed now and the importer cannot
+    # see it at all, so the row above it does the job.)
     trimmed = default_taxes_rows()
     for row in trimmed:
-        if row[1] == "Gross Paycheck":
+        if row[1] == "Annual Salary":
             row[2] = None
     report2 = SheetReport()
     await apply_taxes(db, parse_taxes(sheets(taxes=trimmed)["Taxes"]), report2)
@@ -846,7 +885,7 @@ async def test_apply_taxes_still_syncs_the_primary_persons_rows(db):
     remaining = {
         row.year: row.person_id
         for row in (
-            await db.execute(select(TaxInput).where(TaxInput.key == "gross_paycheck"))
+            await db.execute(select(TaxInput).where(TaxInput.key == "annual_salary"))
         ).scalars()
     }
     assert remaining == {2024: (await db.execute(select(Person.id))).scalar_one()}

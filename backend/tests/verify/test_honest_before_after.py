@@ -208,7 +208,10 @@ async def seed_census(db) -> dict:
     await db.flush()
     db.add_all(
         [
-            TaxInput(year=2026, key="latest_w2_income", value=SALARY, person_id=person.id),
+            # Components: the W-2 total is computed (2026-09-11 taxes spec §1.1), and 24
+            # checks against a salary of SALARY is exactly SALARY of wages.
+            TaxInput(year=2026, key="pay_periods", value=Decimal("24"), person_id=person.id),
+            TaxInput(year=2026, key="annual_salary", value=SALARY, person_id=person.id),
             TaxInput(
                 year=2026,
                 key="trad_401k_contributions",

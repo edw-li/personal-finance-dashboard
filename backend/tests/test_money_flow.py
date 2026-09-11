@@ -38,6 +38,11 @@ BRACKETS = {
 # CG-free (every capital-gains key absent): the state-AGI capital-gains fold cannot move
 # these figures, whatever the engine does to CG years.
 INPUTS = {
+    # 20 checks against a 240000 salary IS the 200000 total beside it: since 2026-09-11 the
+    # totals are computed, and this dict is what `_assemble_inputs` hands the service —
+    # every derived line here equals what `materialize_*` makes of the components.
+    "annual_salary": D("240000"),
+    "pay_periods": D("20"),
     "latest_w2_income": D("200000"),
     "w2_bonuses": D("15000"),
     "w2_salary_checkpoint": D("5000"),
@@ -49,7 +54,9 @@ INPUTS = {
     "other_w2_income": D("104000"),
     "stcg_standard": D("1200"),
     "stcg_total": D("1200"),
+    "unq_div_other": D("800"),
     "unqualified_dividends": D("800"),
+    "interest_standard": D("500"),
     "interest_total": D("500"),
     "other_income_1099": D("1000"),
     "trad_401k_contributions": D("23000"),
@@ -203,9 +210,11 @@ def test_saved_goes_negative_as_a_drawdown_figure_not_a_refusal():
 
 
 def test_negative_other_income_refuses_with_reason_and_still_carries_figures():
-    # Dropping the stored other_w2_income total below its own components makes the named
-    # sources exceed engine gross — the classic stored-total-vs-component drift.
-    inputs = {**INPUTS, "other_w2_income": D("0")}
+    # A salary node 104000 above the wages the engine actually taxed. Since 2026-09-11 no
+    # STORED total can drift from its components (the engine rebuilds them), so the only way
+    # left to reach this branch is a caller handing the card a dict the assembly door never
+    # materialized — which is exactly what the guard is for.
+    inputs = {**INPUTS, "latest_w2_income": D("304000")}
     flow = compose(inputs=inputs)
     assert flow.renderable is False
     assert flow.sources.other_income == D("-103000")
@@ -241,7 +250,12 @@ def test_negative_total_tax_refuses():
     # walk WITHOUT clamping (it only warns), and total_tax sums that raw — so a large
     # enough credit really does drive the total negative. Engine-derived, so the figure in
     # the sentence is taken FROM the engine.
-    inputs = {"latest_w2_income": D("100000"), "state_exemption_credits": D("500000")}
+    inputs = {
+        "pay_periods": D("20"),
+        "annual_salary": D("120000"),
+        "latest_w2_income": D("100000"),
+        "state_exemption_credits": D("500000"),
+    }
     flow = compose(inputs=inputs)
     breakdown = compute_breakdown(2026, inputs, BRACKETS)
     assert flow.renderable is False
@@ -272,7 +286,13 @@ def test_negative_residual_refuses():
 
 
 def test_non_positive_gross_with_data_present_refuses():
-    flow = compose(inputs={"latest_w2_income": D("-50000")})
+    flow = compose(
+        inputs={
+            "pay_periods": D("24"),
+            "annual_salary": D("-50000"),
+            "latest_w2_income": D("-50000"),
+        }
+    )
     assert flow.renderable is False
     assert flow.reason == (
         "Gross income for 2026 is -50000.00 — the flow needs a positive gross to draw."
@@ -338,7 +358,17 @@ def test_filing_status_and_earners_reach_the_engine():
 
     earners = [EarnerWages(w2_wages=D("120000")), EarnerWages(w2_wages=D("110000"))]
     brackets = dict(BRACKETS) | {"social_security": [(D("0.062"), D("0")), (D("0"), D("150000"))]}
-    inputs = dict(INPUTS) | {"latest_w2_income": D("230000"), "other_w2_income": D("0")}
+    inputs = dict(INPUTS) | {
+        # One salary line for the two bundles below, and no other W-2 income: the engine
+        # takes its wages from the bundles, the card takes its salary node from here.
+        "annual_salary": D("276000"),
+        "latest_w2_income": D("230000"),
+        "w2_bonuses": D("0"),
+        "w2_salary_checkpoint": D("0"),
+        "w2_stock_rsus_sold": D("0"),
+        "w2_espp_sale_component": D("0"),
+        "other_w2_income": D("0"),
+    }
 
     shared = compose_money_flow(
         year=2026,

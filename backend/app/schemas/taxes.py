@@ -61,14 +61,24 @@ class TaxInputItemOut(BaseModel):
     # The column this item belongs to. Null for household keys — and also for per-person
     # keys on a database with no people roster, which is the pre-household spelling.
     person_id: int | None = None
+    # What this line reads on the form: the stored figure on an ENTERED line, the computed
+    # one on a derived line — or null when the line has nothing behind it in this column
+    # (no stored row, or, for a computed line, no stored component). Absent is not zero.
     value: Decimal | None
-    # The sheet's gray-cell formula for this key, when it has one, computed from THIS
-    # column's own values. Advisory: the UI offers a chip, nothing is applied server-side.
+    # An OFFER the user may apply, never applied server-side: the capital-loss carryforward,
+    # the salary from a paycheck profile, and the three carried-forward deduction rows.
+    # Always null on a computed line — there is nothing to offer when the figure IS the
+    # answer (2026-09-11 spec §1.6).
     suggested: Decimal | None
-    # Where `suggested` came from, when it is NOT this key's sheet formula: "last year's"
-    # for the three deduction rows carried forward from the prior year (2026-09-09 spec
-    # §4e). Null means the formula — the chip's default wording.
+    # Where `suggested` came from, when it is not this key's own formula: "last year's" for
+    # the three deduction rows carried forward from the prior year (2026-09-09 spec §4e).
+    # Null is the chip's default wording.
     suggestion_source: str | None = None
+    # The human formula behind a COMPUTED line (tax_keys.FORMULA_CAPTIONS), null on every
+    # entered one (2026-09-11 spec §1.6). It takes the chip's place in the form's third
+    # track: a derived row has no offer to apply, it has an explanation of where its figure
+    # came from. Defaulted so a hand-built payload in a test stays valid.
+    formula: str | None = None
 
 
 class TaxInputSectionOut(BaseModel):
@@ -81,6 +91,30 @@ class TaxInputsOut(BaseModel):
     filing_status: str = SINGLE
     people: list[TaxPersonOut] = Field(default_factory=list)
     sections: list[TaxInputSectionOut]
+
+
+class DerivedPreviewItemOut(BaseModel):
+    """One computed total, for one column, as the current form body would make it."""
+
+    key: str
+    # The person this figure belongs to — null for the five household totals, and for the
+    # per-person four on a database with no roster (the pre-household spelling).
+    person_id: int | None = None
+    # Null when this column has stored none of the key's components: absent is not zero,
+    # even for a total (2026-09-11 spec §1.6).
+    value: Decimal | None
+
+
+class DerivedPreviewOut(BaseModel):
+    """POST /taxes/years/{year}/inputs/preview — the nine totals, nothing written.
+
+    The computed lines ONLY: the entered cells are already on the client's screen, and
+    echoing them back would invite the form to overwrite what the user is typing.
+    """
+
+    year: int
+    filing_status: str = SINGLE
+    derived: list[DerivedPreviewItemOut]
 
 
 class TaxInputRowIn(BaseModel):

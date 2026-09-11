@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development (one
 > implementer for this lane in its own worktree, TDD per task, then a spec-compliance review and a
-> code-quality review, then merge to local main — never pushed). Steps use `- [ ]` checkboxes.
+> code-quality review, then merge to local main — never pushed). Steps use `- [x]` checkboxes.
 
 **Spec:** `docs/superpowers/specs/2026-09-11-computed-tax-totals-and-per-person-payroll-tables-design.md`
 — this lane implements **Part 1 §1.1–1.6 and §1.8 (backend)**. Read §0 and §1 of the spec before
@@ -67,7 +67,7 @@ POST /taxes/what-if — a derived override key -> 422:
 
 **Files:** modify `backend/app/tax_keys.py`; create `backend/tests/test_tax_keys.py`.
 
-- [ ] Add, after `PER_PERSON_KEYS`:
+- [x] Add, after `PER_PERSON_KEYS`:
   - `DERIVED_KEYS: tuple[str, ...]` = keys whose definition tuple has `is_derived=True`, in
     definition order (a comprehension over `TAX_INPUT_DEFINITIONS`, not a hand list).
   - `PER_PERSON_DERIVED_KEYS: tuple[str, ...]` = `tuple(k for k in DERIVED_KEYS if k in PER_PERSON_KEYS)`
@@ -87,17 +87,17 @@ POST /taxes/what-if — a derived override key -> 422:
   - `FORMULA_CAPTIONS: dict[str, str]` — the nine captions in spec §1.1, verbatim.
   - `def is_derived_key(key: str) -> bool` and `def component_labels(key: str) -> str` (the
     components' labels via `_LABELS`, joined by ", " — the text the 422 sentences interpolate).
-- [ ] Tests (`test_tax_keys.py`): `DERIVED_KEYS` is exactly the nine; `PER_PERSON_DERIVED_KEYS` is
+- [x] Tests (`test_tax_keys.py`): `DERIVED_KEYS` is exactly the nine; `PER_PERSON_DERIVED_KEYS` is
   the four; every component key exists in `TAX_INPUT_DEFINITIONS` and none is derived; every
   derived key has a caption; `component_labels("other_w2_income")` starts with "W2: Stock/RSUs Sold".
-- [ ] Commit: `feat(taxes): derived-key vocabulary — DERIVED_KEYS, components, formula captions`.
+- [x] Commit: `feat(taxes): derived-key vocabulary — DERIVED_KEYS, components, formula captions`.
 
 ## Task 2 — `materialize_person` / `materialize_household` (spec §1.2)
 
 **Files:** modify `backend/app/services/tax_service.py` (the `derive_suggestions` region, ~l.720–830);
 modify `backend/tests/test_tax_service.py` (the `derive_suggestions()` test block, ~l.900–1010).
 
-- [ ] Write the failing tests first, in a new block `# materialize_*()` placed where the
+- [x] Write the failing tests first, in a new block `# materialize_*()` placed where the
   `derive_suggestions()` block is:
   - `test_materialize_reproduces_every_derived_fixture_cell` — parametrized over `YEARS`: build the
     person dict from `YEAR_INPUTS[year]`, run `materialize_person` then `materialize_household`, and
@@ -119,7 +119,7 @@ modify `backend/tests/test_tax_service.py` (the `derive_suggestions()` test bloc
     `161441.6667`, and materializing the SUMMED components instead would give `24 × 212930/24`; assert
     the former.
   - Every returned derived value has exponent −4 (`as_tuple().exponent == -4`).
-- [ ] Implement. `materialize_person(values)`: copy; compute `gross = annual_salary / PAYCHECKS_PER_YEAR`
+- [x] Implement. `materialize_person(values)`: copy; compute `gross = annual_salary / PAYCHECKS_PER_YEAR`
   at full precision; write `gross_paycheck = q4(gross)`, `latest_w2_income = q4(pay_periods × gross)`,
   `other_w2_income = q4(sum of six)`, `other_pretax_deductions = q4(dental + vision)`. Missing keys
   read 0. `materialize_household(year, values, filing_status)`: copy; `ltcg_total`,
@@ -129,15 +129,15 @@ modify `backend/tests/test_tax_service.py` (the `derive_suggestions()` test bloc
   set it already); `itemized_deduction` via the existing `salt_cap(year, status, _magi(value))` +
   donations + vehicle + other. Quantize each derived value 4dp HALF_UP as its last step
   (`SUGGESTION_QUANTUM`). `q4` is a module helper.
-- [ ] Shrink `derive_suggestions` to `capital_loss_deductions` only (it still reads
+- [x] Shrink `derive_suggestions` to `capital_loss_deductions` only (it still reads
   `stcg_standard + stcg_espp_component` and the REBUILT `ltcg_total`: call `materialize_household`
   internally, or take the materialized dict — pick one and document it). `SUGGESTION_KEYS` becomes
   `("capital_loss_deductions",)`. Update the old `derive_suggestions` tests: the nine-key
   reproduction tests move to the `materialize_*` block above; `test_suggestion_gross_paycheck_always_divides_by_24`
   becomes a `materialize_person` test; `test_capital_loss_*` and `test_derive_suggestions_defaults_to_single`
   stay on `derive_suggestions`.
-- [ ] Run `tests/test_tax_service.py` and `tests/test_tax_service_married.py`; goldens untouched.
-- [ ] Commit: `feat(taxes): materialize_person/materialize_household own the nine derived formulas`.
+- [x] Run `tests/test_tax_service.py` and `tests/test_tax_service_married.py`; goldens untouched.
+- [x] Commit: `feat(taxes): materialize_person/materialize_household own the nine derived formulas`.
 
 ## Task 3 — the engine rebuilds household totals and reads wages from the bundles (spec §1.3)
 
@@ -145,7 +145,7 @@ modify `backend/tests/test_tax_service.py` (the `derive_suggestions()` test bloc
 `_federal_agi`, `shift_earners`, the warnings block); tests in `backend/tests/test_tax_service.py`
 and `backend/tests/test_tax_service_married.py`.
 
-- [ ] Failing tests:
+- [x] Failing tests:
   - `test_engine_overwrites_a_stale_household_total` — 2024 inputs with `ltcg_total` replaced by
     `999999`: `compute_breakdown` equals the golden breakdown field-for-field.
   - `test_engine_rebuilds_a_stale_per_person_total_on_the_single_path` — 2024 inputs with
@@ -159,7 +159,7 @@ and `backend/tests/test_tax_service_married.py`.
   - `test_deduction_warning_reads_components` — no `standard_deduction`, one `itemized_salt` row: the
     deduction warning does NOT fire; with neither: it fires.
   - Existing goldens unchanged (`assert_canonical` for all four years, `warnings == []`).
-- [ ] Implement in `compute_breakdown`, in this order:
+- [x] Implement in `compute_breakdown`, in this order:
   1. missing-key sweep as today, but a derived member of `ENGINE_INPUT_KEYS` is "missing" only when
      every key in `DERIVED_COMPONENTS[key]` is absent from `inputs` (then it is named by key as now);
      a derived key with any component present is neither named nor defaulted here (materialization
@@ -175,12 +175,12 @@ and `backend/tests/test_tax_service_married.py`.
      `gross_income` uses `values["w2_income"]` likewise. `w2_income` is a synthetic key — never in
      `ENGINE_INPUT_KEYS`, never in the definitions, never serialized.
   6. The FICA section reuses `bundles` (no second construction).
-- [ ] `shift_earners(earners, before, after)` → `shift_earners(earners, primary_before, primary_after)`:
+- [x] `shift_earners(earners, before, after)` → `shift_earners(earners, primary_before, primary_after)`:
   the head bundle is `earner_from_inputs(primary_after)`; `primary_after` is built by the caller
   (Task 6) as the primary's component bucket plus the scenario's per-person deltas. Keep the
   `None`/empty passthrough. Update `test_tax_service_married.py`'s shift tests accordingly.
-- [ ] Run both engine test files + `tests/test_money_flow.py` (it calls `compute_breakdown`).
-- [ ] Commit: `feat(taxes): engine materializes household totals and reads wages from the earner bundles`.
+- [x] Run both engine test files + `tests/test_money_flow.py` (it calls `compute_breakdown`).
+- [x] Commit: `feat(taxes): engine materializes household totals and reads wages from the earner bundles`.
 
 ## Task 4 — the assembly door (spec §1.4): `_assemble_*`, `EngineFeed.person_inputs`, withholding
 
@@ -188,7 +188,7 @@ and `backend/tests/test_tax_service_married.py`.
 `_engine_feed`, `_inputs_payload`, the withholding block around `_bucket_input_rows`/`_wage_base`);
 tests in `backend/tests/test_taxes_api.py`, `backend/tests/test_withholding_api.py`.
 
-- [ ] Failing tests:
+- [x] Failing tests:
   - `test_summary_computes_totals_from_components_alone` (taxes API): PUT only COMPONENT keys of the
     2024 fixture (drop the nine); the summary equals the 2024 golden cents.
   - `test_partner_wage_base_is_computed_from_components` (withholding API): a joint year where the
@@ -200,7 +200,7 @@ tests in `backend/tests/test_taxes_api.py`, `backend/tests/test_withholding_api.
   - Update `test_get_inputs_echoes_values_and_suggestions`, `test_suggestions_are_computed_per_column`
     and any test asserting a chip on a derived key: chips remain only for `capital_loss_deductions`,
     `annual_salary` (profile) and the three carry-forward keys.
-- [ ] Implement: a helper `_materialized_buckets(rows, columns) -> dict[int | None, dict]` that
+- [x] Implement: a helper `_materialized_buckets(rows, columns) -> dict[int | None, dict]` that
   buckets rows by `_owner_column`, drops OFF_RETURN, applies `materialize_person` to each per-person
   bucket; `_assemble_inputs` sums per-person keys from those buckets (household keys verbatim) —
   NOTE: only per-person keys are summed; household keys are not bucketed; `_assemble_earners` builds
@@ -215,7 +215,7 @@ tests in `backend/tests/test_taxes_api.py`, `backend/tests/test_withholding_api.
   `feed.person_inputs` (test in `backend/tests/test_overview_api.py`: a two-earner year whose
   partner has only components still splits the salary node). Any other reader of `feed.rows` for
   money stays only if it reads tracker-only keys.
-- [ ] Commit: `feat(taxes): assembly door materializes per-person buckets; payload serves computed totals`.
+- [x] Commit: `feat(taxes): assembly door materializes per-person buckets; payload serves computed totals`.
 
 ## Task 5 — PUT refusal + preview endpoint (spec §1.5–1.6)
 
@@ -223,7 +223,7 @@ tests in `backend/tests/test_taxes_api.py`, `backend/tests/test_withholding_api.
 `DerivedPreviewItemOut`, `DerivedPreviewOut`), `backend/app/api/taxes.py` (`put_inputs`, new
 `preview_inputs`); tests in `backend/tests/test_taxes_api.py`.
 
-- [ ] Failing tests:
+- [x] Failing tests:
   - `test_put_inputs_refuses_a_derived_key_without_partial_write` — body `{other_w2_income: 1}` plus a
     valid key: 422 with the exact sentence (label + component labels), and the valid key was NOT
     written; also a derived key inside `rows`.
@@ -235,13 +235,13 @@ tests in `backend/tests/test_taxes_api.py`, `backend/tests/test_withholding_api.
     carries their own `person_id`.
   - `test_preview_404_and_422_match_the_put` — unknown year 404; unknown key / out-of-unit / derived
     key → the PUT's own sentences.
-- [ ] Implement `preview_inputs`: `@router.post("/years/{year}/inputs/preview", response_model=DerivedPreviewOut)`;
+- [x] Implement `preview_inputs`: `@router.post("/years/{year}/inputs/preview", response_model=DerivedPreviewOut)`;
   `_require_year`; resolve the body exactly as `put_inputs` does (factor the resolve-and-validate
   loop into `_resolve_input_rows(db, body, people) -> dict[slot, Decimal | None]` shared by both);
   overlay onto the stored rows in memory (a `None` removes the slot); run `_materialized_buckets`;
   emit one item per derived key per column (household derived once, `person_id=None`) using the
   same null rule as the GET. No `ChangeBatch` dependency, no commit.
-- [ ] Commit: `feat(taxes): PUT refuses derived keys; POST inputs/preview serves live computed totals`.
+- [x] Commit: `feat(taxes): PUT refuses derived keys; POST inputs/preview serves live computed totals`.
 
 ## Task 6 — what-if on components only (spec §1.4)
 
@@ -249,16 +249,16 @@ tests in `backend/tests/test_taxes_api.py`, `backend/tests/test_withholding_api.
 `backend/app/api/taxes.py` (the what-if route: override validation, `shift_earners` call, the
 `changed` list); tests in `backend/tests/test_tax_whatif.py`, `backend/tests/test_taxes_api.py`.
 
-- [ ] Failing tests: `apply_scenario` bumps `ltcg_brokerage` and leaves `ltcg_total` untouched in the
+- [x] Failing tests: `apply_scenario` bumps `ltcg_brokerage` and leaves `ltcg_total` untouched in the
   returned dict (update the l.252/254/256 assertions: totals are the engine's now); a what-if with an
   ESPP ordinary leg moves the SCENARIO summary's Medicare `w2_income` by the leg (proves the engine
   re-derived); a derived override key → 422 with the sentence; `changed` never lists a derived key;
   a joint year's what-if leaves the partner's wage base untouched (the existing rule).
-- [ ] Implement: `DELTA_KEYS: dict[str, str]` component-only; `apply_scenario` bumps the component
+- [x] Implement: `DELTA_KEYS: dict[str, str]` component-only; `apply_scenario` bumps the component
   alone; the route 422s derived overrides (after `_require_known_input_keys`); the route builds
   `primary_after = feed.person_inputs[columns[0]] + (scenario − stored) for PER_PERSON_KEYS` and calls
   `shift_earners(feed.earners, primary_before, primary_after)`; `changed` iterates non-derived keys.
-- [ ] Commit: `feat(taxes): what-if legs bump components; derived overrides refused`.
+- [x] Commit: `feat(taxes): what-if legs bump components; derived overrides refused`.
 
 ## Task 7 — storage: migration, importer skip, health check removal (spec §1.4–1.5)
 
@@ -269,28 +269,167 @@ tests in `backend/tests/test_taxes_api.py`, `backend/tests/test_withholding_api.
 `backend/tests/test_importer_apply.py`, `backend/tests/test_health_checks.py`,
 `backend/tests/test_system_health_api.py` (if it lists check ids).
 
-- [ ] Migration: `op.execute("DELETE FROM tax_inputs WHERE key IN (...)")` with the nine keys as
+- [x] Migration: `op.execute("DELETE FROM tax_inputs WHERE key IN (...)")` with the nine keys as
   literals; print the deleted count (`result.rowcount`). Downgrade: no-op with a docstring saying why.
   Drill: create `finance_test_taxa_mig` —
   `$PY -c "import asyncio,asyncpg; asyncio.run(asyncpg.connect('postgresql://finance:finance@127.0.0.1:5433/postgres')).execute('CREATE DATABASE finance_test_taxa_mig')"`
   (wrap properly as an async function) — then `upgrade head`, `downgrade -1`, `upgrade head` against
   it with `DATABASE_URL` pointing at it. Do not drop it (morning list).
-- [ ] Importer: `apply_taxes` skips items whose key is in `DERIVED_KEYS` for create/update and
+- [x] Importer: `apply_taxes` skips items whose key is in `DERIVED_KEYS` for create/update and
   removes them from `sheet_input_keys` so the sweep ignores stored ones; one `report.add_sample(...)`
   line `tax_inputs: {n} computed cells skipped (derived totals are computed, never stored)`.
   Tests: `test_apply_taxes_years_inputs_brackets` expects no derived rows; a stored derived row is
   NOT deleted by the sweep (it is invisible); the sample line appears.
-- [ ] Health: delete `check_sec199a_in_itemized`, `LEGACY_ITEMIZED_TOLERANCE`, `SEC199A_KEY`,
+- [x] Health: delete `check_sec199a_in_itemized`, `LEGACY_ITEMIZED_TOLERANCE`, `SEC199A_KEY`,
   `ITEMIZED_KEY`, its `run_checks` line and its tests (`test_sec199a_*`, the fixture block at
   l.334–380); remove `'rewrite_itemized_deduction'` from the lifecycle comment. Any test listing the
   full check-id sequence is updated.
-- [ ] Commit: `feat(taxes): computed totals leave storage — data migration, importer skip, §199A check retired`.
+- [x] Commit: `feat(taxes): computed totals leave storage — data migration, importer skip, §199A check retired`.
 
 ## Task 8 — full gates
 
-- [ ] `$PY -m ruff check app tests && $PY -m ruff format --check app tests` — clean.
-- [ ] `FINANCE_TEST_DB=finance_test_taxa $PY -m pytest -q` — full suite green; record counts in the
+- [x] `$PY -m ruff check app tests && $PY -m ruff format --check app tests` — clean.
+- [x] `FINANCE_TEST_DB=finance_test_taxa $PY -m pytest -q` — full suite green; record counts in the
   final report. `tests/test_tax_service.py::test_golden_2024_equals_sheet_cached_values` explicitly
   named as passing.
-- [ ] Final report to the orchestrator: commits, test counts, anything the spec did not anticipate,
+- [x] Final report to the orchestrator: commits, test counts, anything the spec did not anticipate,
   and the exact wire shapes shipped (they must match the contracts block above).
+
+---
+
+## What actually happened (lane A implementer, 2026-09-11)
+
+**Status: implemented.** Nine commits on `tax/a-computed-totals-backend`; full backend suite
+**1930 passed / 1 skipped**, ruff clean, migration drill green.
+`test_golden_2024_equals_sheet_cached_values` passes, as do all four `test_golden_*` years.
+
+### The one golden that moved — and why it had to
+
+`test_golden_2023/2024` and `test_golden_2024_equals_sheet_cached_values` are byte-identical,
+fixtures AND expected values. **2025 and 2026 moved, in the expected values only** (the
+`_INPUT_TABLE` fixtures did not change), by exactly their §199A line:
+
+| year | quantity | was | now |
+|------|----------|-----|-----|
+| 2025 | fed_deduction | 27219.50 | 27213.28 |
+| 2025 | fed_ti / fed_tax | 232156.55 / 51353.09 | 232162.77 / 51355.09 |
+| 2025 | total_tax / take_home | 90419.50 / 196789.56 | 90421.49 / 196787.57 |
+| 2026 | fed_deduction | 29832.00 | 29824.00 |
+| 2026 | fed_ti / fed_tax | 250296.21 / 57157.79 | 250304.21 / 57160.35 |
+| 2026 | total_tax / take_home | 98582.00 / 208112.03 | 98584.56 / 208109.47 |
+
+The plan's "unchanged expected values" gate cannot hold for those two years, because the
+spec itself requires both halves of the contradiction: §199A is BELOW the line (spec 4h,
+2026-09-09) *and* the itemized total is now COMPUTED without it (spec §1.2, Task 2's own
+test asserts `fixture − itemized_sec199a_div`). While the total was still stored — carrying
+the §199A line the formula had dropped — those years deducted the same dollars twice. They
+now deduct them once, and every figure above returns to its pre-4h value. This is the exact
+drift §0's production census found (+6.22 / +8.00) and the retired `sec199a_in_itemized`
+health check existed to name. **Production effect: 2025 and 2026 federal tax rise by 2.00
+and 2.56 when this deploys.**
+
+### Deviations from the plan text
+
+1. `shift_earners(earners, primary_after)` takes TWO arguments, not three: once the head
+   bundle is re-materialized from `primary_after`, `primary_before` has no reader.
+2. `_assemble_inputs(year, rows, buckets, filing_status)` materializes the HOUSEHOLD dict
+   too (spec §1.4's "then the household dict"), not only the per-person buckets — money
+   flow reads `feed.inputs` for `unqualified_dividends` / `interest_total` and no row
+   carries them any more. It returns `{}` unchanged for a year with no stored rows (the
+   money-flow card asks "has this year been filled in?" of exactly this dict) and drops the
+   synthetic `w2_income` key on the way out.
+3. `tax_service.W2_INCOME_KEY` names the synthetic wage key the engine carries bundle sums
+   under; it is in no definition, no `ENGINE_INPUT_KEYS` and no payload.
+4. `TaxInputItemOut.formula` shipped in Task 4 (the plan filed it under Task 5): the GET
+   payload needs it, and Task 4's own test asserts it.
+5. The §199A health check retired inside the Task 4 commit rather than Task 7's: the
+   shrunken `derive_suggestions` and the new `_assemble_inputs` signature had already made
+   `check_sec199a_in_itemized` dead code, and a commit that leaves an import raising is
+   worse than one that lands the deletion early.
+6. `derive_suggestions` calls `materialize_household` internally (the plan offered the
+   choice) — a caller cannot hand it a stale `ltcg_total`.
+7. `itemized_deduction` IS named in the muted missing-inputs list when every itemized
+   component is absent, and leaves it only when `DEDUCTION_MISSING_WARNING` fires (today's
+   rule). The plan's "never in the muted list" contradicts spec §1.3's "named by its key
+   like every other" and an existing pin; the spec won.
+
+### Pre-existing tests whose pinned behavior the spec changed
+
+- `test_empty_earner_list_is_not_a_bundle` — with no bundles the INCOME chain loses the
+  wages too, not just FICA (spec §1.3 makes AGI's wage term a bundle sum): 2024's
+  `total_income` 211776.20 → −23648.26.
+- `test_bonus_input_adds_a_withholding_leg_to_the_combined_total` — `w2_bonuses` is an
+  engine input now (a component of the computed `other_w2_income`), so the liability moves
+  with it: 115753.20 → 124528.20.
+- `test_apply_taxes_*` — 86 → 68 created rows (34 entered keys x 2 years).
+- `test_run_checks_returns_the_ten_in_order` → `…_the_nine_…`.
+- `test_negative_other_income_refuses…` (money flow) — a stored total can no longer drift
+  from its components, so the guard is driven from an unmaterialized salary node instead.
+- Fixtures throughout `test_tax_service_married.py`, `test_money_flow.py`,
+  `test_taxes_api.py`, `test_withholding_api.py` and `test_overview_api.py` re-expressed in
+  COMPONENTS at identical arithmetic (24 checks x salary/24, `w2_other`, `interest_standard`,
+  `ltcg_brokerage`, …).
+
+### Review round (2026-09-11, both reviewers' fixes applied)
+
+Approved subject to ten fixes; all ten are in, one commit.
+
+**The bug, and it was a real one.** The preview keyed its overlay by the RAW stored
+(key, person_id) while the PUT ADOPTS a legacy per-person row stored with `person_id`
+NULL for the primary. With a roster present and a NULL `annual_salary` of 120000 on
+file, a body of `{"annual_salary": "240000"}` previewed a gross paycheck of 15000 — both
+rows summed — where Save stored 10000; a body of `{"annual_salary": null}` previewed 5000
+where Save deleted the line. The adoption rule is now `_stored_slot(existing, key, owner,
+null_row_column)`, written once and read by both doors: the PUT pops whichever slot it
+lands on, the preview pops that same slot and writes the body's value back under the slot
+Save would leave behind. `test_preview_overlays_the_slot_the_put_would_write` seeds a
+legacy NULL row in two years and asserts, for a value body AND a null body, that the
+previewed figure is the figure the subsequent PUT's echo carries.
+
+**The five PUT pins deleted in 6a73e0a are back**, verbatim from main, in the section they
+were in (`…creates_year_upserts_and_deletes`, `…rejects_unknown_key_without_partial_write`,
+`…never_stores_a_signed_zero`, `…bounds_the_year`,
+`…rejects_out_of_range_and_non_numeric_values`). They pass as written: none of them speaks
+a derived key. Deleting them was collateral from re-expressing the fixtures around them,
+and they pin the year row, the upsert/delete, the signed zero and the column bounds —
+nothing else in the file does.
+
+**Cleanups in the same commit.**
+
+- `EngineFeed.rows` had no reader left once `person_inputs` landed — the withholding
+  card's partner block reads `feed.person_inputs`, which is the whole point of it: field,
+  argument and comment deleted. (The spec's §1.4 parenthetical "`feed.rows` stays for the
+  change-log and tracker-only keys" is therefore stale: the change log is written from the
+  PUT's own rows and the tracker-only keys are per-person, so they ride the buckets.)
+- `_inputs_payload` and `preview_inputs` asked the same questions of the same rows in two
+  spellings. Now `_input_views(year, rows, columns, filing_status)` builds all four views —
+  the stored buckets, the materialized buckets, the household dict and the assembled dict —
+  and `_derived_value(key, entered, source)` owns the "computed when any component is
+  entered, else None" rule for both doors. `_materialized_buckets` takes the already
+  bucketed rows, `_assemble_earners` too, and `_assemble_inputs` takes the household dict,
+  so a year's rows are bucketed ONCE per request where the payload, the preview and the
+  engine feed each used to bucket them two or three times over.
+- `HOUSEHOLD_DERIVED_KEYS` was documentation. `materialize_household` now ITERATES it over
+  a table of builders, so the tuple drives the dependency order it claims to pin. The
+  synthetic W-2 key is filled in before the loop (`itemized_deduction` reads it through
+  `_magi`; nothing in the loop moves it) and `q4` still lands at the assignment, so every
+  figure is unchanged.
+- The migration logs through `logging.getLogger("alembic.runtime.migration")` instead of
+  `print`, and `test_the_data_migration_deletes_exactly_the_nine_this_file_names` loads it
+  by path and pins its spelled-out key list against `tax_keys.DERIVED_KEYS`.
+- `derive_suggestions` is handed the MATERIALIZED household dict, not the raw one (same
+  answer today — the capital-loss suggestion reads household keys either way — but a stale
+  total is exactly what this lane removed).
+- `_DERIVED_KEY_SET` sits above `is_derived_key`; the preview's status test is
+  `test_preview_404_matches_the_get_and_422s_match_the_put`.
+- The refusal sentence agrees in number. Gross Paycheck has ONE component, and "edit those
+  instead" beside a single named row reads like an instruction to go and find the others:
+  `DERIVED_KEY_MESSAGE_ONE` says "is computed from its component (Annual Salary) — edit
+  that instead". Pinned by `test_the_refusal_sentence_agrees_with_a_single_component`; the
+  eight plural sentences are byte-identical to before.
+
+### Left for the morning list
+
+- Scratch database `finance_test_taxa_mig` was created for the migration drill and left in
+  place (upgrade → downgrade → upgrade, 3 of 4 seeded rows deleted, definitions kept,
+  `alembic check` clean). Nothing was run against the dev `finance` database.

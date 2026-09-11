@@ -18,7 +18,9 @@ from app.services.tax_service import (
     compute_breakdown,
     derive_suggestions,
     earner_from_inputs,
+    materialize_household,
     salt_cap,
+    shift_earners,
 )
 from app.tax_keys import MARRIED_JOINT, MARRIED_SEPARATE, SINGLE
 from tests.test_tax_service import YEAR_BRACKETS, YEAR_INPUTS, YEARS, actuals
@@ -62,13 +64,20 @@ def test_explicit_single_earner_equals_the_default_path(year):
 
 def test_empty_earner_list_is_not_a_bundle():
     """An empty list is not "one earner with nothing" — it is no wage data at all, and it
-    must read like a year with no W-2 rather than crash a sum."""
+    must read like a year with no W-2 rather than crash a sum.
+
+    It now reads that way in the INCOME chain too (2026-09-11 spec §1.3): the engine takes
+    its wage and other-pre-tax terms from the bundles, so no bundles means no wages
+    anywhere, not wages in AGI and none in FICA. 2024's 211776.20 of ordinary AGI less the
+    235724.46 of W-2 income and plus the 300 of dental/vision that left with it.
+    """
     breakdown = compute_breakdown(2024, YEAR_INPUTS[2024], YEAR_BRACKETS[2024], earners=[])
     assert breakdown.medicare.w2_income == Decimal("0")
     assert breakdown.social_security.tax == Decimal("0")
     assert breakdown.disability.tax == Decimal("0")
-    # The income chains are untouched: FICA is the only thing earners describe.
-    assert breakdown.totals.total_income == Decimal("211776.2")
+    assert breakdown.totals.total_income == Decimal("211776.2") - Decimal("235724.46") + Decimal(
+        "300"
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -91,27 +100,30 @@ MFJ_BRACKETS: dict[str, list[tuple[Decimal, Decimal]]] = {
     "capital_gains": [(D("0"), D("0")), (D("0.15"), D("100000")), (D("0.20"), D("600000"))],
 }
 
-# Household-level lines (one row each in the DB, person_id NULL).
+# Household-level lines (one row each in the DB, person_id NULL). COMPONENTS only since
+# 2026-09-11: the five household totals are computed by `materialize_household`, so a
+# fixture that typed one would be pinning a figure nothing stores.
 MFJ_HOUSEHOLD = {
-    "stcg_total": D("0"),
     "stcg_standard": D("0"),
     "capital_loss_deductions": D("0"),
-    "unqualified_dividends": D("1000"),
     "unq_div_us_treasuries_etf": D("0"),
     "unq_div_state_exempt_pct": D("0"),
-    "interest_total": D("2000"),
+    "unq_div_other": D("1000"),
     # Zero, so the state chain's treasury-interest exemption (2026-09-09 spec 4b) has
     # nothing to back out of this reference year: the MFJ figures below stay hand-checkable.
     "interest_us_treasuries": D("0"),
+    "interest_standard": D("2000"),
     "other_income_1099": D("0"),
     "standard_deduction": D("30000"),
-    "itemized_deduction": D("0"),
+    # An entered ZERO, which is how a year says "no itemized deductions" now that the total
+    # is computed: an absent component reads as absent and names the total in the muted
+    # missing-inputs list (spec 1.3's rule).
+    "itemized_salt": D("0"),
     # Zero, so §199A's below-the-line deduction (2026-09-09 spec 4h) leaves the MFJ
     # reference figures hand-checkable.
     "itemized_sec199a_div": D("0"),
     "state_standard_deduction": D("11000"),
     "state_exemption_credits": D("300"),
-    "ltcg_total": D("40000"),
     "ltcg_brokerage": D("40000"),
     "qualified_dividends": D("5000"),
     "other_capital_gains": D("0"),
@@ -119,21 +131,27 @@ MFJ_HOUSEHOLD = {
 
 # Per-person lines. A is over the 180000 SS wage base, B is well under it — the two cases
 # the aggregate model could not tell apart.
+# Their four derived totals are COMPONENTS here for the same reason: `earner_from_inputs`
+# materializes each bucket, so A's 150000 of salary wages is 20 checks against a 180000
+# salary and their 300 of other pre-tax is dental + vision.
 EARNER_A = {
-    "latest_w2_income": D("150000"),
-    "other_w2_income": D("50000"),
+    "annual_salary": D("180000"),  # -> latest_w2_income 20 x 7500 = 150000
+    "pay_periods": D("20"),
+    "w2_bonuses": D("50000"),  # -> other_w2_income 50000
     "trad_401k_contributions": D("20000"),
     "hsa_contributions": D("5000"),
     "hsa_contributions_employer": D("1000"),
-    "other_pretax_deductions": D("300"),
+    "pretax_dental": D("228"),  # -> other_pretax_deductions 300
+    "pretax_vision": D("72"),
 }
 EARNER_B = {
-    "latest_w2_income": D("100000"),
-    "other_w2_income": D("0"),
+    "annual_salary": D("120000"),  # -> latest_w2_income 20 x 5000 = 100000
+    "pay_periods": D("20"),
     "trad_401k_contributions": D("10000"),
     "hsa_contributions": D("0"),
     "hsa_contributions_employer": D("0"),
-    "other_pretax_deductions": D("200"),
+    "pretax_dental": D("200"),  # -> other_pretax_deductions 200
+    "pretax_vision": D("0"),
 }
 
 
@@ -219,9 +237,13 @@ def test_mfj_reference_year_to_the_cent():
 def test_one_shared_wage_base_would_understate_social_security():
     """The wrong-money bug this parameter exists to kill (audit §3.2).
 
-    Same inputs, same tables, no earner bundles: the aggregate path caps 293500 of
-    combined wages ONCE at 180000 and loses B's entire contribution."""
-    aggregate = compute_breakdown(MFJ_YEAR, MFJ_INPUTS, MFJ_BRACKETS, filing_status=MARRIED_JOINT)
+    The old aggregate path was ONE bundle for the whole household — spelled out here,
+    because the flat dict can no longer express it: per-person components are summed into
+    it, and 24 checks against two salaries is not a person."""
+    household = [EarnerWages(w2_wages=D("300000"), pretax_hsa=D("6000"), other_pretax=D("500"))]
+    aggregate = compute_breakdown(
+        MFJ_YEAR, MFJ_INPUTS, MFJ_BRACKETS, filing_status=MARRIED_JOINT, earners=household
+    )
     assert cents(aggregate.social_security.tax) == D("11160.00")
     assert cents(mfj_breakdown().social_security.tax - aggregate.social_security.tax) == D(
         "6187.60"
@@ -245,13 +267,12 @@ def test_single_tables_would_fire_the_medicare_surtax_too_early():
 def test_both_earners_under_the_wage_base_pay_two_full_caps():
     """Neither earner reaches 180000, so nothing is capped and the whole combined wage is
     taxed — 230000x.062, not the aggregate model's 180000x.062."""
+    # No W-2 rows in the flat dict at all: the wages below are the bundles', which is the
+    # only place the engine reads them from.
     inputs = dict(MFJ_HOUSEHOLD) | {
-        "latest_w2_income": D("230000"),
-        "other_w2_income": D("0"),
         "trad_401k_contributions": D("0"),
         "hsa_contributions": D("0"),
         "hsa_contributions_employer": D("0"),
-        "other_pretax_deductions": D("0"),
     }
     earners = [EarnerWages(w2_wages=D("120000")), EarnerWages(w2_wages=D("110000"))]
     breakdown = compute_breakdown(
@@ -263,13 +284,12 @@ def test_both_earners_under_the_wage_base_pay_two_full_caps():
 
 
 def test_one_earner_over_the_wage_base_caps_only_that_earner():
+    # No W-2 rows in the flat dict at all: the wages below are the bundles', which is the
+    # only place the engine reads them from.
     inputs = dict(MFJ_HOUSEHOLD) | {
-        "latest_w2_income": D("260000"),
-        "other_w2_income": D("0"),
         "trad_401k_contributions": D("0"),
         "hsa_contributions": D("0"),
         "hsa_contributions_employer": D("0"),
-        "other_pretax_deductions": D("0"),
     }
     earners = [EarnerWages(w2_wages=D("200000")), EarnerWages(w2_wages=D("60000"))]
     breakdown = compute_breakdown(
@@ -290,6 +310,50 @@ def test_sdi_subtracts_dental_and_vision_but_not_hsa_per_earner():
     assert breakdown.disability.taxable_wages == D("199700") + D("99800")
     # A: 200000 - (6000 + 300); B: 100000 - (0 + 200).
     assert breakdown.medicare.taxable_wages == D("193700") + D("99800")
+
+
+def test_two_earner_wages_come_from_the_bundles():
+    """The four per-person totals are NEVER read from the flat dict (spec §1.3).
+
+    Strip every W-2 and pre-tax-benefit row out of it — salary, checks, bonuses, dental,
+    vision — and the reference year is unchanged, because the wages and the other-pre-tax
+    leg both come from the bundles. This is what makes the API's partner column real: a
+    person's figures follow their own rows, not the household's sum.
+    """
+    wageless = {
+        key: value
+        for key, value in MFJ_INPUTS.items()
+        if key
+        not in ("annual_salary", "pay_periods", "w2_bonuses", "pretax_dental", "pretax_vision")
+    }
+    breakdown = compute_breakdown(
+        MFJ_YEAR, wageless, MFJ_BRACKETS, filing_status=MARRIED_JOINT, earners=MFJ_EARNERS
+    )
+    assert breakdown.medicare.w2_income == D("300000")
+    assert breakdown.totals.gross_income == D("348000")
+    assert breakdown.federal.agi == D("311500")
+    assert actuals(breakdown) == actuals(mfj_breakdown())
+    # ...and the three totals whose components really are absent are named as missing,
+    # which is the honest reading of a dict with no W-2 rows in it.
+    muted = breakdown.warnings[0].removeprefix("missing inputs defaulted to 0: ").split(", ")
+    assert muted == ["latest_w2_income", "other_w2_income", "other_pretax_deductions"]
+
+
+def test_shift_earners_rebuilds_the_primary_bundle_from_components():
+    """A what-if leg lands on the PRIMARY's bundle, and lands there by re-materializing
+    their component bucket rather than by adding deltas of derived keys — the partner's
+    wage base is untouched beside it (2026-08-26 spec §5.3's rule, spec §1.4's mechanism).
+    """
+    after = dict(EARNER_A) | {"w2_bonuses": D("60000")}  # a 10000 ESPP ordinary leg
+    shifted = shift_earners(MFJ_EARNERS, after)
+    assert shifted[0].w2_wages == MFJ_EARNERS[0].w2_wages + D("10000")
+    assert shifted[0].pretax_hsa == MFJ_EARNERS[0].pretax_hsa
+    assert shifted[0].other_pretax == MFJ_EARNERS[0].other_pretax
+    assert shifted[1:] == MFJ_EARNERS[1:]
+    # None and the empty list pass straight through: a single-earner year keeps taking the
+    # engine's own synthesis path and stays byte-identical.
+    assert shift_earners(None, after) is None
+    assert shift_earners([], after) == []
 
 
 # --------------------------------------------------------------------------------------
@@ -313,14 +377,20 @@ def test_niit_threshold_follows_the_filing_status(w2, status, base, tax):
     """The engine's own NIIT line selects the status threshold (the map the old advisory
     read); an unknown status degrades to single's constant — a pure read over stored
     data must never raise on it."""
-    inputs = {"latest_w2_income": D(w2), "interest_total": D("10000")}
+    # Components, not totals: 24 checks against a salary of `w2` IS `w2` of wages.
+    inputs = {
+        "pay_periods": D("24"),
+        "annual_salary": D(w2),
+        "interest_standard": D("10000"),
+    }
     breakdown = compute_breakdown(2025, inputs, YEAR_BRACKETS[2025], filing_status=status)
     assert breakdown.niit.taxable_income == D(base)
     assert breakdown.niit.tax == D(tax)
 
 
 # --------------------------------------------------------------------------------------
-# derive_suggestions: SALT cap by status + the OBBBA phase-down, capital-loss clamp
+# materialize_household: SALT cap by status + the OBBBA phase-down
+# derive_suggestions: the capital-loss clamp
 # --------------------------------------------------------------------------------------
 
 SALT_ITEMS = {
@@ -333,10 +403,10 @@ SALT_ITEMS = {
 
 
 def salt_year(year: int, status: str, magi: Decimal) -> Decimal:
-    """The itemized suggestion with 50000 of SALT and one W-2 line carrying the MAGI, so
-    the answer IS the applied cap."""
+    """The itemized TOTAL with 50000 of SALT and one W-2 line carrying the MAGI, so the
+    answer IS the applied cap."""
     inputs = dict(SALT_ITEMS) | {"latest_w2_income": magi}
-    return derive_suggestions(year, inputs, status)["itemized_deduction"]
+    return materialize_household(year, inputs, status)["itemized_deduction"]
 
 
 def test_salt_cap_halves_for_married_filing_separately():
@@ -369,15 +439,19 @@ def test_salt_phase_down_boundaries():
 def test_salt_phase_down_magi_includes_capital_gains():
     """C1's third consumer: the phase-down MAGI is `_magi` (fed AGI + cg_amount), so a
     CG-heavy year sheds cap even when ordinary AGI alone sits under 500000. Approved
-    behavior change (spec C1): CG-year SALT suggestions may shrink toward the floor."""
+    behavior change (spec C1): CG-year SALT totals may shrink toward the floor.
+
+    The gains arrive as their COMPONENT since 2026-09-11: `ltcg_total` is rebuilt inside
+    the same call, which is what makes the dependency order load-bearing rather than tidy.
+    """
     # fed AGI 450000; cg_amount 100000 (a pure LTCG gain nets whole); MAGI 550000 ->
     # phased cap = 40000 - 0.30 x 50000 = 25000. SALT_ITEMS stores 50000 of SALT and no
-    # other itemized lines, so the suggestion IS the applied cap.
-    inputs = dict(SALT_ITEMS) | {"latest_w2_income": D("450000"), "ltcg_total": D("100000")}
-    assert derive_suggestions(2025, inputs, SINGLE)["itemized_deduction"] == D("25000")
+    # other itemized lines, so the total IS the applied cap.
+    inputs = dict(SALT_ITEMS) | {"latest_w2_income": D("450000"), "ltcg_brokerage": D("100000")}
+    assert materialize_household(2025, inputs, SINGLE)["itemized_deduction"] == D("25000")
     # Without the gains the same wages stay under the threshold: the full 40000 cap.
     no_cg = dict(SALT_ITEMS) | {"latest_w2_income": D("450000")}
-    assert derive_suggestions(2025, no_cg, SINGLE)["itemized_deduction"] == D("40000")
+    assert materialize_household(2025, no_cg, SINGLE)["itemized_deduction"] == D("40000")
 
 
 def test_salt_cap_reads_the_engine_definition_of_agi():
@@ -390,36 +464,40 @@ def test_salt_cap_reads_the_engine_definition_of_agi():
         "trad_401k_contributions": D("60000"),
     }
     # AGI 500000 -> no phase-down at all.
-    assert derive_suggestions(2025, inputs, SINGLE)["itemized_deduction"] == D("40000")
+    assert materialize_household(2025, inputs, SINGLE)["itemized_deduction"] == D("40000")
 
 
-def test_salt_cap_never_raises_the_suggestion_above_the_entered_amount():
+def test_salt_cap_never_raises_the_total_above_the_entered_amount():
     """The cap is a ceiling, not a floor: 3000 of SALT stays 3000 under a 40000 cap."""
     items = dict(SALT_ITEMS) | {"itemized_salt": D("3000"), "itemized_donations": D("250")}
-    assert derive_suggestions(2025, items, SINGLE)["itemized_deduction"] == D("3250")
+    assert materialize_household(2025, items, SINGLE)["itemized_deduction"] == D("3250")
 
 
 def test_capital_loss_suggestion_is_clamped_by_status():
     """The deductible loss per return: 3000, or 1500 filing separately (spec §5.3). This
     is the SUGGESTION's clamp; since 2026-08-31 (spec C3) the engine reads the stored key
-    too, but it never clamps — it warns, and the two share this one statutory figure."""
-    big = {"ltcg_total": D("-5000"), "stcg_standard": D("1000")}  # nets to -4000
+    too, but it never clamps — it warns, and the two share this one statutory figure.
+
+    The loss is entered as `ltcg_brokerage` since 2026-09-11: the long-term TOTAL it feeds
+    is computed, so a test that typed it would be testing a figure nothing stores.
+    """
+    big = {"ltcg_brokerage": D("-5000"), "stcg_standard": D("1000")}  # nets to -4000
     assert derive_suggestions(2025, big, SINGLE)["capital_loss_deductions"] == D("-3000")
     assert derive_suggestions(2025, big, MARRIED_JOINT)["capital_loss_deductions"] == D("-3000")
     assert derive_suggestions(2025, big, MARRIED_SEPARATE)["capital_loss_deductions"] == D("-1500")
 
     # A loss under the cap is untouched, and MFS clamps it only once it passes 1500.
-    small = {"ltcg_total": D("-1000")}
+    small = {"ltcg_brokerage": D("-1000")}
     assert derive_suggestions(2025, small, SINGLE)["capital_loss_deductions"] == D("-1000")
     assert derive_suggestions(2025, small, MARRIED_SEPARATE)["capital_loss_deductions"] == D(
         "-1000"
     )
-    mid = {"ltcg_total": D("-2000")}
+    mid = {"ltcg_brokerage": D("-2000")}
     assert derive_suggestions(2025, mid, SINGLE)["capital_loss_deductions"] == D("-2000")
     assert derive_suggestions(2025, mid, MARRIED_SEPARATE)["capital_loss_deductions"] == D("-1500")
 
     # A gain still suggests 0, not a clamp.
-    assert derive_suggestions(2025, {"ltcg_total": D("500")}, SINGLE)[
+    assert derive_suggestions(2025, {"ltcg_brokerage": D("500")}, SINGLE)[
         "capital_loss_deductions"
     ] == D("0")
 
@@ -454,5 +532,6 @@ def test_capital_loss_cap_warning_halves_for_married_filing_separately():
 def test_derive_suggestions_defaults_to_single():
     """No status argument is single's answer — the shipped call sites (and the golden
     suite) pass two arguments and must keep meaning what they meant."""
-    items = dict(SALT_ITEMS) | {"itemized_salt": D("50000")}
+    items = {"ltcg_brokerage": D("-5000")}
     assert derive_suggestions(2025, items) == derive_suggestions(2025, items, SINGLE)
+    assert derive_suggestions(2025, items) != derive_suggestions(2025, items, MARRIED_SEPARATE)

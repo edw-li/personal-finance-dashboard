@@ -36,16 +36,18 @@ async def definitions(db):
 
 
 INPUT_VALUES = {
-    "latest_w2_income": "200000",
+    # 20 checks against a 240000 salary IS 200000 of latest_w2_income, and the five W-2
+    # component rows below ARE the 104000 of other_w2_income: the nine totals are computed
+    # since 2026-09-11 (taxes spec §1.5) and the PUT refuses them.
+    "annual_salary": "240000",
+    "pay_periods": "20",
     "w2_bonuses": "15000",
     "w2_salary_checkpoint": "5000",
     "w2_stock_rsus_sold": "80000",
     "w2_espp_sale_component": "4000",
-    "other_w2_income": "104000",
     "stcg_standard": "1200",
-    "stcg_total": "1200",
-    "unqualified_dividends": "800",
-    "interest_total": "500",
+    "unq_div_other": "800",
+    "interest_standard": "500",
     "other_income_1099": "1000",
     "trad_401k_contributions": "23000",
     "hsa_contributions": "4000",
@@ -246,9 +248,14 @@ async def test_money_flow_refuses_a_married_year_without_its_tables(auth_client,
     await seed_tax_definitions(db)
     db.add(TaxYear(year=2026, filing_status="married_joint"))
     await db.flush()
-    db.add(TaxInput(year=2026, key="latest_w2_income", value=Decimal("200000.0000")))
+    db.add_all(
+        [
+            TaxInput(year=2026, key="pay_periods", value=Decimal("20")),
+            TaxInput(year=2026, key="annual_salary", value=Decimal("240000.0000")),
+        ]
+    )
     await db.commit()
-    assert (await db.get(TaxInputDefinition, "latest_w2_income")) is not None
+    assert (await db.get(TaxInputDefinition, "annual_salary")) is not None
 
     body = (await auth_client.get("/api/v1/overview/money-flow", params={"year": 2026})).json()
     assert body["renderable"] is False
@@ -285,10 +292,11 @@ async def _seed_married_flow_year(db, year: int, with_brackets: bool = True) -> 
     await db.flush()
     db.add_all(
         [
-            TaxInput(year=year, key="latest_w2_income", value=Decimal("200000"), person_id=me.id),
-            TaxInput(
-                year=year, key="latest_w2_income", value=Decimal("150000"), person_id=partner.id
-            ),
+            # Per person, as components: each column materializes its own wages.
+            TaxInput(year=year, key="pay_periods", value=Decimal("20"), person_id=me.id),
+            TaxInput(year=year, key="annual_salary", value=Decimal("240000"), person_id=me.id),
+            TaxInput(year=year, key="pay_periods", value=Decimal("20"), person_id=partner.id),
+            TaxInput(year=year, key="annual_salary", value=Decimal("180000"), person_id=partner.id),
             TaxInput(
                 year=year,
                 key="trad_401k_contributions",
@@ -388,6 +396,10 @@ async def test_money_flow_single_year_is_unchanged_by_summing(auth_client, db, d
 
 
 async def test_money_flow_splits_the_salary_node_per_earner(auth_client, db, definitions):
+    """Neither person stores a `latest_w2_income` row — that line is computed since
+    2026-09-11 — so this split can only come from `feed.person_inputs`, the same
+    materialized buckets the engine taxed. Reading the raw rows would have found nothing
+    and collapsed the two nodes back into one."""
     year = product_today().year
     await _seed_married_flow_year(db, year)
     body = (await auth_client.get(MONEY_FLOW)).json()
@@ -427,7 +439,12 @@ async def test_money_flow_does_not_split_when_only_one_earner_has_w2_rows(
     await db.flush()
     db.add(TaxYear(year=year, filing_status="married_joint"))
     await db.flush()
-    db.add(TaxInput(year=year, key="latest_w2_income", value=Decimal("200000"), person_id=me.id))
+    db.add_all(
+        [
+            TaxInput(year=year, key="pay_periods", value=Decimal("20"), person_id=me.id),
+            TaxInput(year=year, key="annual_salary", value=Decimal("240000"), person_id=me.id),
+        ]
+    )
     for name, table in MFJ_BRACKETS:
         for index, (rate, threshold) in enumerate(table, start=1):
             db.add(
