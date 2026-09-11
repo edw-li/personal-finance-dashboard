@@ -69,6 +69,11 @@ class TaxInputItemOut(BaseModel):
     # for the three deduction rows carried forward from the prior year (2026-09-09 spec
     # §4e). Null means the formula — the chip's default wording.
     suggestion_source: str | None = None
+    # The human formula behind a COMPUTED line (tax_keys.FORMULA_CAPTIONS), null on every
+    # entered one (2026-09-11 spec §1.6). It takes the chip's place in the form's third
+    # track: a derived row has no offer to apply, it has an explanation of where its figure
+    # came from. Defaulted so a hand-built payload in a test stays valid.
+    formula: str | None = None
 
 
 class TaxInputSectionOut(BaseModel):
