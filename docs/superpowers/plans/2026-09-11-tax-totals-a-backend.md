@@ -299,8 +299,9 @@ tests in `backend/tests/test_taxes_api.py`, `backend/tests/test_withholding_api.
 
 ## What actually happened (lane A implementer, 2026-09-11)
 
-**Status: implemented.** Seven commits on `tax/a-computed-totals-backend`; full backend
-suite, ruff and the migration drill green.
+**Status: implemented.** Nine commits on `tax/a-computed-totals-backend`; full backend suite
+**1930 passed / 1 skipped**, ruff clean, migration drill green.
+`test_golden_2024_equals_sheet_cached_values` passes, as do all four `test_golden_*` years.
 
 ### The one golden that moved — and why it had to
 
