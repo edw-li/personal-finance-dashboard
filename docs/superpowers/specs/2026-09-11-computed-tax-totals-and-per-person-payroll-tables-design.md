@@ -167,9 +167,17 @@ paycheck profile) and the three carry-forward chips are the API's, unchanged.
 - `DEDUCTION_MISSING_WARNING` fires when `standard_deduction` is absent AND no itemized component
   is present (the pair rule, restated over components).
 - Golden gate: `test_golden_2023..2026`, `test_golden_2024_equals_sheet_cached_values` and the
-  drift pins pass with **unchanged fixtures and unchanged expected values**. `_INPUT_TABLE` keeps
-  its derived rows (they are the sheet's cached cells and now serve as the materialization oracle:
-  a new test asserts `materialize_*` reproduces every derived fixture cell of every year).
+  drift pins pass with **unchanged fixtures**. `_INPUT_TABLE` keeps its derived rows (they are the
+  sheet's cached cells and now serve as the materialization oracle: a new test asserts
+  `materialize_*` reproduces every derived fixture cell of every year).
+  **Amended 2026-09-11 at lane A (recorded, not a defect):** 2023 and 2024 outputs are byte-identical;
+  the 2025 and 2026 expected OUTPUTS move by exactly the §199A double-count that §0's census found in
+  production — the stored itemized totals still carried the 6.222 / 8.00 §199A line that spec 4h
+  (2026-09-09) moved below the line, so those years deducted it twice. The computed total excludes
+  it by construction: fed_deduction 27,219.50 → 27,213.28 (2025) and 29,832.00 → 29,824.00 (2026);
+  federal tax +2.00 and +2.56 at the 32% band. **Production effect on deploy:** 2025 and 2026
+  federal tax rise by those amounts; the retired `sec199a_in_itemized` health check existed to name
+  exactly this.
 
 ### 1.4 The assembly door (`backend/app/api/taxes.py`)
 
