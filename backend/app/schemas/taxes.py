@@ -88,6 +88,30 @@ class TaxInputsOut(BaseModel):
     sections: list[TaxInputSectionOut]
 
 
+class DerivedPreviewItemOut(BaseModel):
+    """One computed total, for one column, as the current form body would make it."""
+
+    key: str
+    # The person this figure belongs to — null for the five household totals, and for the
+    # per-person four on a database with no roster (the pre-household spelling).
+    person_id: int | None = None
+    # Null when this column has stored none of the key's components: absent is not zero,
+    # even for a total (2026-09-11 spec §1.6).
+    value: Decimal | None
+
+
+class DerivedPreviewOut(BaseModel):
+    """POST /taxes/years/{year}/inputs/preview — the nine totals, nothing written.
+
+    The computed lines ONLY: the entered cells are already on the client's screen, and
+    echoing them back would invite the form to overwrite what the user is typing.
+    """
+
+    year: int
+    filing_status: str = SINGLE
+    derived: list[DerivedPreviewItemOut]
+
+
 class TaxInputRowIn(BaseModel):
     key: str
     # Null on a per-person key means "the primary person" — which is what every client

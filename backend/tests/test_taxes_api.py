@@ -15,7 +15,9 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import func, select, text
 
+from app.api.taxes import COUNT_MESSAGE
 from app.models import (
+    ChangeLog,
     EsppLot,
     LatestPrice,
     PaycheckProfile,
@@ -397,6 +399,144 @@ async def test_summary_names_a_missing_deduction_on_its_own_line(auth_client, de
     assert "standard_deduction" not in muted  # split: it is a substring of the state key
     assert "itemized_deduction" not in muted
     assert body["federal"]["taxable_income"] == "100000.00"
+
+
+# --- computed totals: the write refusal and the live preview (2026-09-11 spec §1.5-1.6) ---
+
+
+async def test_put_inputs_refuses_a_derived_key_without_partial_write(auth_client, db, definitions):
+    """A computed total in the body is a 422 with a sentence that names the rows to edit
+    instead — and nothing beside it is written, the resolve-everything-first posture."""
+    await put_inputs(auth_client, 2024, {"w2_bonuses": "1000"})
+
+    resp = await auth_client.put(
+        f"{YEARS}/2024/inputs",
+        json={"values": {"other_w2_income": "1", "w2_other": "500"}},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == (
+        "Other W2 Income is computed from its components (W2: Stock/RSUs Sold, W2: Bonuses, "
+        "W2: Salary Checkpoint, W2: ESPP Sale Component, W2: Employer HSA Contribution, "
+        "W2: Other) — edit those instead"
+    )
+    # The valid key beside it was NOT written.
+    items = items_by_key((await auth_client.get(f"{YEARS}/2024/inputs")).json())
+    assert items["w2_other"]["value"] is None
+    assert items["w2_bonuses"]["value"] == "1000.0000"
+
+    # A derived key inside `rows` reads the same way.
+    resp = await auth_client.put(
+        f"{YEARS}/2024/inputs",
+        json={"rows": [{"key": "ltcg_total", "value": "5"}]},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == (
+        "Long Term Capital Gain/Loss is computed from its components (LTCG: Brokerage "
+        "Gain/Loss, LTCG: ESPP Sale Component) — edit those instead"
+    )
+
+
+async def test_preview_returns_derived_values_without_writing(auth_client, db, definitions):
+    """The form's live preview: the whole current body in, the computed lines out, and not
+    one row, batch or log entry written."""
+    await put_inputs(auth_client, 2024, inputs_payload(2024))
+    stored_payload = (await auth_client.get(f"{YEARS}/2024/inputs")).json()
+    before_rows = await db.scalar(select(func.count()).select_from(TaxInput))
+    before_log = await db.scalar(select(func.count()).select_from(ChangeLog))
+
+    body = dict(inputs_payload(2024))
+    body["w2_bonuses"] = "10000"  # 2024 stores 0 of bonuses
+    resp = await auth_client.post(f"{YEARS}/2024/inputs/preview", json={"values": body})
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["year"] == 2024
+    assert payload["filing_status"] == "single"
+    derived = {(item["key"], item["person_id"]): item["value"] for item in payload["derived"]}
+    # 122474.46 + the 10000 that is not stored anywhere.
+    assert derived[("other_w2_income", None)] == "132474.4600"
+    # The lines the edit did not touch come back unchanged.
+    assert derived[("latest_w2_income", None)] == "113250.0000"
+    assert derived[("interest_total", None)] == "24.7600"
+    assert set(FORMULA_CAPTIONS) == {key for key, _person in derived}
+
+    # A null previews the key as unset, exactly as the PUT would delete it.
+    cleared = dict(inputs_payload(2024))
+    cleared["interest_standard"] = None
+    cleared["interest_us_treasuries"] = None
+    resp = await auth_client.post(f"{YEARS}/2024/inputs/preview", json={"values": cleared})
+    cleared_out = {
+        (item["key"], item["person_id"]): item["value"] for item in resp.json()["derived"]
+    }
+    assert cleared_out[("interest_total", None)] is None
+
+    # Nothing moved.
+    assert await db.scalar(select(func.count()).select_from(TaxInput)) == before_rows
+    assert await db.scalar(select(func.count()).select_from(ChangeLog)) == before_log
+    assert (await auth_client.get(f"{YEARS}/2024/inputs")).json() == stored_payload
+
+
+async def test_preview_per_person_columns(auth_client, db, household, definitions):
+    """Each person's computed total carries their own column, the household's carries
+    none — the same shape the GET serves."""
+    me, partner = household
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "annual_salary", "person_id": me.id, "value": "240000"},
+                {"key": "pay_periods", "person_id": me.id, "value": "24"},
+                {"key": "annual_salary", "person_id": partner.id, "value": "120000"},
+                {"key": "pay_periods", "person_id": partner.id, "value": "24"},
+            ]
+        },
+    )
+    await set_status(auth_client, 2026, "married_joint")
+
+    resp = await auth_client.post(
+        f"{YEARS}/2026/inputs/preview",
+        json={
+            "rows": [
+                {"key": "w2_bonuses", "person_id": me.id, "value": "5000"},
+                {"key": "w2_bonuses", "person_id": partner.id, "value": "1000"},
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    derived = {(item["key"], item["person_id"]): item["value"] for item in resp.json()["derived"]}
+    assert derived[("other_w2_income", me.id)] == "5000.0000"
+    assert derived[("other_w2_income", partner.id)] == "1000.0000"
+    assert derived[("latest_w2_income", me.id)] == "240000.0000"
+    assert derived[("latest_w2_income", partner.id)] == "120000.0000"
+    assert ("ltcg_total", None) in derived
+    assert ("ltcg_total", me.id) not in derived
+
+
+async def test_preview_404_and_422_match_the_put(auth_client, definitions):
+    await put_inputs(auth_client, 2024, {"w2_bonuses": "1000"})
+
+    missing = await auth_client.post(f"{YEARS}/2019/inputs/preview", json={"values": {}})
+    assert missing.status_code == 404
+    assert "2019" in missing.json()["detail"]
+
+    unknown = await auth_client.post(f"{YEARS}/2024/inputs/preview", json={"values": {"nope": "1"}})
+    assert unknown.status_code == 422
+    assert unknown.json()["detail"] == "unknown input key(s): ['nope']"
+
+    out_of_unit = await auth_client.post(
+        f"{YEARS}/2024/inputs/preview", json={"values": {"pay_periods": "60"}}
+    )
+    assert out_of_unit.status_code == 422
+    assert out_of_unit.json()["detail"] == f"values.pay_periods {COUNT_MESSAGE}"
+
+    derived = await auth_client.post(
+        f"{YEARS}/2024/inputs/preview", json={"values": {"stcg_total": "1"}}
+    )
+    assert derived.status_code == 422
+    assert derived.json()["detail"] == (
+        "Short Term Capital Gain/Loss is computed from its components (STCG: Standard "
+        "Gain/Loss, STCG: ESPP Sale Component, LTCG: Brokerage Gain/Loss, LTCG: ESPP Sale "
+        "Component) — edit those instead"
+    )
 
 
 # --- brackets ---
