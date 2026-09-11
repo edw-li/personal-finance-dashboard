@@ -248,9 +248,10 @@ class EngineFeed:
     person_tables: dict[int, dict[str, list[Bracket]]] = dataclass_field(default_factory=dict)
     # WHOSE bundle is whose: (person id, name) per entry of `earners`, in bundle order —
     # the summary's per-earner payroll lines are labelled from it (2026-09-11 spec §2.5).
-    # Not `person_inputs`' key order: a bundle list skips the columns with no rows at all,
-    # so a joint return where only the partner has W-2 rows is one bundle, and it is
-    # theirs. (None, None) is a database with no roster.
+    # Built from the same list as `earners` (`_assemble_earners` returns the pairs), never
+    # from `columns` positionally: on the SYNTHESIS path there is no bundle per column at
+    # all, just the one the engine sums out of whichever column has rows. (None, None) is a
+    # database with no roster.
     earner_people: list[tuple[int | None, str | None]] = dataclass_field(default_factory=list)
     brackets_missing_for_status: list[str] = dataclass_field(default_factory=list)
 
@@ -278,9 +279,14 @@ class EngineFeed:
         The withholding card's marginal-FICA legs are the primary's supplemental income, so
         they meet the primary's schedule; `_payroll_line`'s rule, spelled once more here
         because that walk happens in `withholding_calc` rather than in the engine.
+
+        PER-WORKER names only. Medicare's additional tier is assessed on COMBINED wages by
+        statute, so nobody can hold a Medicare table of their own — asking for one here
+        would always answer with the year's table, under a name that promises a person's.
         """
+        assert name in PER_WORKER_JURISDICTIONS, f"{name} is not a per-worker jurisdiction"
         own = self.person_tables.get(self.primary_column, {}).get(name)
-        return list(own) if own else self.tables.get(name, [])
+        return own if own else self.tables.get(name, [])
 
     def warning(self) -> str:
         return BRACKETS_MISSING_WARNING.format(
@@ -303,6 +309,11 @@ def _return_people(people: list[Person], filing_status: str) -> list[Person]:
     if not people:
         return []
     return list(people) if filing_status == MARRIED_JOINT else people[:1]
+
+
+# One spelling of "that id is on nobody's roster", shared by the two editors on the
+# Taxes page: PUT inputs resolves a row's owner with it, PUT brackets a table's.
+UNKNOWN_PERSON_MESSAGE = "unknown person {id}"
 
 
 def _owner_column(person_id: int | None, columns: list[int | None]):
@@ -402,26 +413,28 @@ def _assemble_earners(
     per_person: dict[int | None, dict[str, Decimal]],
     columns: list[int | None],
     person_tables: dict[int, dict[str, list[Bracket]]] | None = None,
-) -> list[EarnerWages] | None:
-    """One wage bundle per person on the return — or None when there is at most one and
-    nobody on it has a per-worker table of their own.
+) -> list[tuple[int | None, EarnerWages]] | None:
+    """One wage bundle per person on the return, each labelled with WHOSE it is — or None
+    when one column holds the rows and nobody on the return has a table of their own.
 
     None is not a fallback: it is the instruction to the engine to synthesize the single
     bundle from `inputs` exactly as it always has, which is what keeps every single-filer
     year byte-identical.
 
-    The exception is a return where somebody HAS their own table (2026-09-11 spec §2.3):
-    the engine's synthesized bundle carries no tables, so the one spouse on an employer
-    Voluntary Plan would silently be taxed on the year's default. That is production's 2026
-    — the PRIMARY alone has rows, and the table to walk is theirs — so a one-bundle LIST is
-    the answer there. It computes what the synthesis would have for everything else, which
-    is why no household without person tables can tell the difference.
+    The exception is a return where ANY column has its own per-worker table (2026-09-11
+    spec §2.3): the engine's synthesized bundle carries no tables, so the spouse on an
+    employer Voluntary Plan would silently be taxed on the year's default. Production's
+    2026 is the primary alone with rows; a joint year whose only W-2 rows are the PARTNER's
+    is the same statement about the same return, and both answer with a LIST.
 
-    That exception is deliberately narrowed to the primary's own column. A joint return
-    where only the PARTNER has rows keeps taking the synthesis path, because a one-bundle
-    list there would be a list whose head is not the primary — and `shift_earners` re-bases
-    the what-if on the head. Their own table is ignored in that state, exactly as it was
-    before this existed; a wrong scenario is worse than a missing overlay.
+    The list then covers EVERY column, in column order, and a column with no rows gets a
+    zero-wage bundle. The two things it has to be are true together or not at all: the head
+    is the PRIMARY's — the invariant `shift_earners` re-bases a what-if on, where a list
+    headed by the partner would move the primary's sale onto the partner's wage base and
+    cap it there — and every person walks their own table. A zero-wage bundle moves no
+    money: every aggregate is a sum over the bundles and zero wages add zero, so a
+    household with no person tables still cannot tell this path from the synthesis. What it
+    adds is an honest zero LINE in `per_person` for the person with nothing entered.
     """
     person_tables = person_tables or {}
     # In COLUMN order (primary first), not sorted: `shift_earners` re-bases the what-if on
@@ -429,15 +442,13 @@ def _assemble_earners(
     # their sale onto the partner's wage base. A plain sort cannot express this — `sorted(…,
     # key=str)` would even put person 10 ahead of person 2 — while `columns` already carries
     # the order `_return_people` established, and mixes None in safely.
-    present = [column for column in columns if column in per_person]
-    bundles = [
-        earner_from_inputs(per_person[column], person_tables.get(column)) for column in present
+    with_rows = [column for column in columns if column in per_person]
+    if len(with_rows) < 2 and not any(column in person_tables for column in columns):
+        return None
+    return [
+        (column, earner_from_inputs(per_person.get(column, {}), person_tables.get(column)))
+        for column in columns
     ]
-    if len(bundles) >= 2:
-        return bundles
-    if present == columns[:1] and any(column in person_tables for column in columns):
-        return bundles
-    return None
 
 
 def _derived_value(
@@ -512,63 +523,39 @@ async def _filing_status(db: AsyncSession, year: int) -> str:
 
 async def _engine_tables(
     db: AsyncSession, year: int, filing_status: str = SINGLE
-) -> dict[str, list[Bracket]]:
-    """One year+status's DEFAULT bracket tables in the shape `compute_breakdown` (and
-    `walk`) take — the tables everyone on the return walks unless they have their own.
+) -> tuple[dict[str, list[Bracket]], dict[int, dict[str, list[Bracket]]]]:
+    """One year+status's bracket tables in the shape `compute_breakdown` (and `walk`) take:
+    the DEFAULTS everyone on the return walks, then the per-worker tables stored AGAINST A
+    PERSON (2026-09-11 spec §2.3), by person and then jurisdiction.
 
     ONE loader for every engine caller — the summary, the what-if and the withholding card
-    — so they can never disagree about which rows the engine saw. The full key order, not
-    just bracket_index: `walk`/`stack` sort defensively, so this pins one table order
-    across all of them rather than leaving it to whatever the planner returns.
+    — so they can never disagree about which rows the engine saw, and ONE query for both
+    halves, because every caller wants both: two round trips were two per YEAR in the
+    all-years summary and two more on the withholding card. The full key order, not just
+    bracket_index: `walk`/`stack` sort defensively, so this pins one table order across all
+    of them rather than leaving it to whatever the planner returns.
 
-    `person_id IS NULL` is load-bearing, not tidiness: a person's own Disability table is
-    the same (year, jurisdiction, status, index) as the default it overrides, so without the
-    filter both rows land in one list and every earner walks a table that is the union of
-    two different rate schedules.
+    The `person_id is None` partition is load-bearing, not tidiness: a person's own
+    Disability table is the same (year, jurisdiction, status, index) as the default it
+    overrides, so rows allowed to land in one list would have every earner walking a table
+    that is the union of two different rate schedules.
     """
     rows = (
         await db.execute(
             select(TaxBracket)
-            .where(
-                TaxBracket.year == year,
-                TaxBracket.filing_status == filing_status,
-                TaxBracket.person_id.is_(None),
-            )
-            .order_by(TaxBracket.jurisdiction, TaxBracket.bracket_index)
-        )
-    ).scalars()
-    tables: dict[str, list[Bracket]] = {}
-    for row in rows:
-        tables.setdefault(row.jurisdiction, []).append((row.rate, row.threshold))
-    return tables
-
-
-async def _person_tables(
-    db: AsyncSession, year: int, filing_status: str = SINGLE
-) -> dict[int, dict[str, list[Bracket]]]:
-    """The per-worker tables stored AGAINST A PERSON for one year+status, by person then
-    jurisdiction (2026-09-11 spec §2.3).
-
-    The other half of the loader above, and deliberately a second query rather than one
-    pass partitioned in Python: every caller of `_engine_tables` wants the defaults alone,
-    and only the feed wants these.
-    """
-    rows = (
-        await db.execute(
-            select(TaxBracket)
-            .where(
-                TaxBracket.year == year,
-                TaxBracket.filing_status == filing_status,
-                TaxBracket.person_id.is_not(None),
-            )
+            .where(TaxBracket.year == year, TaxBracket.filing_status == filing_status)
             .order_by(TaxBracket.person_id, TaxBracket.jurisdiction, TaxBracket.bracket_index)
         )
     ).scalars()
-    tables: dict[int, dict[str, list[Bracket]]] = {}
+    tables: dict[str, list[Bracket]] = {}
+    person_tables: dict[int, dict[str, list[Bracket]]] = {}
     for row in rows:
-        person = tables.setdefault(row.person_id, {})
-        person.setdefault(row.jurisdiction, []).append((row.rate, row.threshold))
-    return tables
+        if row.person_id is None:
+            tables.setdefault(row.jurisdiction, []).append((row.rate, row.threshold))
+        else:
+            owned = person_tables.setdefault(row.person_id, {})
+            owned.setdefault(row.jurisdiction, []).append((row.rate, row.threshold))
+    return tables, person_tables
 
 
 CORE_JURISDICTIONS = ("federal", "state", "capital_gains")
@@ -622,17 +609,21 @@ async def _engine_feed(
     on_return = _return_people(people, filing_status)
     columns = [person.id for person in on_return] or [None]
     rows = list((await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars())
-    tables = await _engine_tables(db, year, filing_status)
-    person_tables = await _person_tables(db, year, filing_status)
+    tables, person_tables = await _engine_tables(db, year, filing_status)
     views = _input_views(year, rows, columns, filing_status)
-    earners = _assemble_earners(views.stored, columns, person_tables)
+    assembled = _assemble_earners(views.stored, columns, person_tables)
     names = {person.id: person.name for person in on_return}
-    # Whose wages each bundle carries. The columns WITH ROWS, in column order, because that
-    # is the list `_assemble_earners` builds from — and it is the right answer on the
-    # synthesis path too, where the engine's one bundle is the sum of every stored row and
-    # at most one column has any. A year with nothing stored falls back to the primary's
-    # column, which is the only column its empty bundle could belong to.
-    earner_columns = [c for c in columns if c in views.stored] or columns[:1]
+    # The bundles and the names beside them are ONE list read twice, so a summary can never
+    # put the primary's name on somebody else's wages. On the SYNTHESIS path there is no
+    # list to read: the engine builds its own single bundle out of every stored row, and at
+    # most one column can have any, so that column is whose it is — the primary's when
+    # nothing is stored at all, the only column an empty bundle could belong to.
+    if assembled is None:
+        earners = None
+        earner_columns = [next((c for c in columns if c in views.stored), columns[0])]
+    else:
+        earners = [bundle for _column, bundle in assembled]
+        earner_columns = [column for column, _bundle in assembled]
     return EngineFeed(
         year=year,
         filing_status=filing_status,
@@ -1072,7 +1063,9 @@ async def _resolve_input_rows(
             # migration. On a roster-less database that is still NULL.
             owner = primary.id if primary is not None else None
         elif row.person_id not in known_people:
-            raise HTTPException(status_code=422, detail=f"unknown person {row.person_id}")
+            raise HTTPException(
+                status_code=422, detail=UNKNOWN_PERSON_MESSAGE.format(id=row.person_id)
+            )
         else:
             owner = row.person_id
         slot = (row.key, owner)
@@ -1289,18 +1282,28 @@ PERSON_OFF_RETURN_MESSAGE = "person {id} is not on a {status} return"
 async def _validated_person(db: AsyncSession, body: BracketsIn) -> None:
     """Refuse a per-person body this API cannot honour, BEFORE anything is written.
 
-    Two rules, and both are about meaning rather than shape: a per-RETURN threshold has no
-    per-person reading at all (Medicare's additional tier is assessed on combined wages by
-    statute), and a table for somebody the body's status does not cover would be a row no
-    engine feed ever loads — entered, stored, and silently inert.
+    Three rules, and all of them are about meaning rather than shape: a per-RETURN
+    threshold has no per-person reading at all (Medicare's additional tier is assessed on
+    combined wages by statute), an id nobody on the roster has is a client bug, and a real
+    person the body's status does not cover would be a row no engine feed ever loads —
+    entered, stored, and silently inert.
+
+    The last two are DIFFERENT sentences because they are different fixes: a stale id is
+    for the developer console, while "not on a single return" tells the user to switch
+    tabs. The unknown one is PUT inputs' own wording (`UNKNOWN_PERSON_MESSAGE`) — the same
+    complaint about the same roster, made by the other editor on this page.
     """
     if body.person_id is None:
         return
     for name in body.jurisdictions:
         if name not in PER_WORKER_JURISDICTIONS:
             raise HTTPException(status_code=422, detail=PER_WORKER_ONLY_MESSAGE.format(name=name))
-    people = _return_people(await load_people(db), body.filing_status)
+    people = await load_people(db)
     if body.person_id not in {person.id for person in people}:
+        raise HTTPException(
+            status_code=422, detail=UNKNOWN_PERSON_MESSAGE.format(id=body.person_id)
+        )
+    if body.person_id not in {person.id for person in _return_people(people, body.filing_status)}:
         raise HTTPException(
             status_code=422,
             detail=PERSON_OFF_RETURN_MESSAGE.format(id=body.person_id, status=body.filing_status),
@@ -1896,9 +1899,11 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         past_vests=past_vests,
         future_vests=future_vests,
         # The PRIMARY's effective tables (2026-09-11 spec §2.3): these legs are their own
-        # supplemental income, so they meet their own schedule. The partner leg below is
-        # unchanged — it is ENTERED withholding, never a walk.
-        medicare=feed.primary_payroll_table("medicare"),
+        # supplemental income, so they meet their own schedule. Medicare is the year's
+        # table flat — its additional tier is a combined-wage rule, so no person has one of
+        # their own. The partner leg below is unchanged — it is ENTERED withholding, never
+        # a walk.
+        medicare=feed.tables.get("medicare", []),
         social_security=feed.primary_payroll_table("social_security"),
         disability=feed.primary_payroll_table("disability"),
         primary_wages=primary_wage_base,

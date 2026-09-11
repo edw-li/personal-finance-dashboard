@@ -35,7 +35,7 @@ either guard skipped, a GET raises on data the API itself accepted.
 """
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.tax_keys import (
@@ -323,7 +323,14 @@ class EarnerWages:
     # module mutates the mapping it is handed. Empty — the default — means "walk the year's
     # tables", which is what every bundle the engine synthesizes carries, so the golden path
     # never reads a `payroll_tables` that is not `{}`.
-    payroll_tables: Mapping[str, list[Bracket]] = field(default_factory=dict)
+    #
+    # Out of `__eq__` and `__hash__` both: a frozen dataclass is hashable, and a dict field
+    # inside the hash would make every bundle raise TypeError in a set or a dict key. Two
+    # bundles are the same WAGES; which schedule they walk is the year's business, not the
+    # person's identity.
+    payroll_tables: Mapping[str, list[Bracket]] = field(
+        default_factory=dict, hash=False, compare=False
+    )
 
     @property
     def fica_wages(self) -> Decimal:
@@ -386,12 +393,14 @@ def shift_earners(
     bundle; there are no stored totals to take a delta of any more, and re-running the one
     definition of "what a W-2 is" cannot drift from it.
 
-    `replace`, not a fresh bundle: a what-if moves WAGES, and everything about the primary
-    that is not a wage — their own per-worker tables (spec §2.2) — survives the rebuild.
+    The head is built through `earner_from_inputs` with the primary's OWN per-worker
+    tables handed back to it: a what-if moves WAGES, and everything about the primary that
+    is not a wage — their own tables (spec §2.2) — survives the rebuild. One door, so the
+    scenario's bundle cannot be composed any differently from the baseline's.
     """
     if not earners:
         return earners
-    rebased = replace(earner_from_inputs(primary_after), payroll_tables=earners[0].payroll_tables)
+    rebased = earner_from_inputs(primary_after, earners[0].payroll_tables)
     return [rebased, *earners[1:]]
 
 
@@ -517,12 +526,18 @@ def _payroll_line(
     `capped` is the reporting convention, not a fact about the table: Social Security
     reports the capped base it taxed, while SDI reports the earner's whole wage and lets the
     table's own terminal 0-rate row do the capping inside the walk (the 2024 golden's
-    235424.46). A table whose every rate is 0 is neither — it is a job outside the tax
+    235424.46). An OWN table whose every rate is 0 is neither — it is a job outside the tax
     (an SS-exempt employer), so there is no wage base to report at all.
+
+    That exemption is a statement somebody made about ONE person, which is why it reads
+    `own` rather than the table in force: an all-zero DEFAULT table is a jurisdiction the
+    whole household is simply not charged by, and it has always reported the full wage base
+    beside a 0 tax. Reading it as an exemption would erase the reported wages of every
+    earner on the return, which is the promise the FIRST paragraph makes.
     """
     own = earner.payroll_tables.get(name)
-    table = list(own) if own else default_table
-    if table and all(rate == 0 for rate, _threshold in table):
+    table = own if own else default_table
+    if own and all(rate == 0 for rate, _threshold in own):
         base = ZERO
     elif capped:
         cap = _wage_cap(table)

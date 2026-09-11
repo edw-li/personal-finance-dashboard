@@ -609,6 +609,29 @@ def test_all_zero_table_taxes_nothing_and_reports_nothing_taxable():
     assert cents(breakdown.social_security.tax) == cents(D("120000") * D("0.062"))
 
 
+def test_an_all_zero_default_table_is_not_an_exemption():
+    """The exempt rule reads an earner's OWN table, never the year's default.
+
+    A default table of nothing but 0-rate rows is a jurisdiction this household is simply
+    not charged by — and what shipped before per-person tables is the whole UNCAPPED wage
+    base beside a 0 tax, which is what `_payroll_line`'s "walks exactly what it walked
+    before" promises. Read as an exemption it would erase the reported wage base of every
+    earner on the return.
+    """
+    tables = dict(MFJ_BRACKETS) | {"social_security": [(D("0"), D("0"))]}
+    breakdown = compute_breakdown(
+        MFJ_YEAR, MFJ_INPUTS, tables, filing_status=MARRIED_JOINT, earners=MFJ_EARNERS
+    )
+    assert breakdown.social_security.tax == D("0")
+    # 193700 + 99800: both earners' FICA wages, uncapped and reported in full.
+    assert breakdown.social_security.taxable_wages == D("293500")
+    assert [line.taxable_wages for line in breakdown.social_security.per_person] == [
+        D("193700"),
+        D("99800"),
+    ]
+    assert [line.own_table for line in breakdown.social_security.per_person] == [False, False]
+
+
 def test_empty_mapping_is_the_default_path():
     """No person tables anywhere is byte-identical to the two-earner engine that shipped
     before them — and an EMPTY list for a jurisdiction still means "no table"."""

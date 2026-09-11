@@ -2623,8 +2623,8 @@ async def test_single_year_inputs_are_byte_identical_under_summing(auth_client, 
 # The motive, from production: the household's Disability table is one spouse's employer
 # Voluntary Plan (1% to a ceiling) while the other spouse's payroll withholds California
 # statutory SDI (1.3%, no ceiling). One table cannot hold both, so a table may carry a
-# person — and `_engine_tables` has to keep serving the DEFAULT one alone, or every person
-# row would merge into the table everybody walks.
+# person — and `_engine_tables` has to keep the DEFAULT table apart from the person rows
+# it loads beside it, or every person row would merge into the table everybody walks.
 
 
 def person_rows(
@@ -2743,6 +2743,7 @@ async def test_clone_copies_person_rows(auth_client, db, definitions):
 
 PER_WORKER_ONLY = "{name}: per-person tables exist only for social_security and disability"
 OFF_THE_RETURN = "person {id} is not on a {status} return"
+UNKNOWN_PERSON = "unknown person {id}"  # the PUT-inputs sentence, shared
 
 
 async def put_person_brackets(auth_client, year, person_id, jurisdictions, status="single"):
@@ -2895,9 +2896,11 @@ async def test_put_brackets_refuses_a_person_who_is_not_on_that_return(
 
 
 async def test_put_brackets_refuses_an_unknown_person(auth_client, household, definitions):
+    """An id nobody has is not "off this return" — it is the PUT-inputs sentence, because
+    the two editors are answering the same question about the same roster."""
     resp = await put_person_brackets(auth_client, 2026, 4242, {"disability": rows(("0.013", "0"))})
     assert resp.status_code == 422
-    assert resp.json()["detail"] == OFF_THE_RETURN.format(id=4242, status="single")
+    assert resp.json()["detail"] == UNKNOWN_PERSON.format(id=4242)
 
 
 async def test_a_persons_table_belongs_to_one_status(auth_client, household, definitions):
@@ -3019,14 +3022,15 @@ async def test_the_wage_sections_of_a_refused_year_carry_no_lines(auth_client, d
     assert body["social_security"] is None
 
 
-async def test_only_the_partners_rows_keeps_the_synthesized_bundle(auth_client, db, definitions):
-    """The narrow fallback: a joint return whose only W-2 rows are the PARTNER's stays on
-    the engine's synthesis path even when a person table exists.
+async def test_the_partners_own_table_is_walked_without_the_primarys_rows(
+    auth_client, db, definitions
+):
+    """The one-bundle rule is a question about the RETURN, not about the primary's column.
 
-    A one-bundle list there would be a list whose head is not the primary, and the what-if
-    re-bases the primary's sale onto the head. So the partner's own table is ignored in that
-    state — the behaviour that shipped before person tables existed — and the year's default
-    is walked. Data entry closes it: give the primary their rows and both earners appear.
+    A joint year whose only W-2 rows are the PARTNER's, and whose partner holds their own
+    Disability table: every column gets a bundle, so their table is really walked, and the
+    head is still the primary's — a zero-wage line that says so out loud rather than a
+    silent omission.
     """
     me_id, partner_id = await _seed_people(db)
     db.add(TaxYear(year=2026, filing_status="married_joint"))
@@ -3062,10 +3066,85 @@ async def test_only_the_partners_rows_keeps_the_synthesized_bundle(auth_client, 
     await db.commit()
 
     body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
-    assert body["disability"]["tax"] == "1650.00"  # 150000 x .011, the DEFAULT table
-    # One line, and it is labelled with the column whose rows the bundle actually carries.
-    assert [
-        (line["person_id"], line["name"], line["table"])
-        for line in body["disability"]["per_person"]
-    ] == [(partner_id, "Partner", "default")]
-    assert me_id not in [line["person_id"] for line in body["disability"]["per_person"]]
+    assert body["disability"]["tax"] == "7500.00"  # 150000 x .05, the partner's OWN table
+    assert body["disability"]["per_person"] == [
+        {
+            "person_id": me_id,
+            "name": "Me",
+            "w2_income": "0.00",
+            "taxable_wages": "0.00",
+            "tax": "0.00",
+            "effective_rate": None,
+            "table": "default",
+        },
+        {
+            "person_id": partner_id,
+            "name": "Partner",
+            "w2_income": "150000.00",
+            "taxable_wages": "150000.00",
+            "tax": "7500.00",
+            "effective_rate": "0.050000",
+            "table": "own",
+        },
+    ]
+    # The jurisdiction nobody has a table of their own for is unmoved: the primary's empty
+    # bundle contributes a zero line and the partner walks the year's default.
+    assert body["social_security"]["tax"] == "9300.00"  # 150000 x .062
+    assert [line["table"] for line in body["social_security"]["per_person"]] == [
+        "default",
+        "default",
+    ]
+
+
+async def test_what_if_keeps_the_partners_wage_base_when_only_they_have_rows(
+    auth_client, household, definitions
+):
+    """The scenario's leg is the PRIMARY's on that same year — the head really is theirs.
+
+    This is what the one-bundle rule has to protect: `shift_earners` re-bases the what-if
+    on bundle[0], so a list whose head was the partner would move the primary's sale onto
+    the partner's wage base and cap it there.
+    """
+    _me, partner = household
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "pay_periods", "person_id": partner.id, "value": "20"},
+                {"key": "annual_salary", "person_id": partner.id, "value": "120000"},
+            ]
+        },
+    )
+    tables = {
+        "federal": rows(("0.10", "0")),
+        "state": rows(("0.05", "0")),
+        "medicare": rows(("0.0145", "0")),
+        "social_security": rows(("0.062", "0"), ("0", "150000")),
+        "disability": rows(("0.01", "0")),
+        "capital_gains": rows(("0.15", "0")),
+    }
+    for status in ("single", "married_joint"):
+        await auth_client.put(
+            f"{YEARS}/2026/brackets", json={"filing_status": status, "jurisdictions": tables}
+        )
+    # The partner's own SDI schedule — what makes this return a bundle list at all.
+    own = await put_person_brackets(
+        auth_client, 2026, partner.id, {"disability": rows(("0.013", "0"))}, status="married_joint"
+    )
+    assert own.status_code == 200, own.text
+    await set_status(auth_client, 2026, "married_joint")
+
+    body = (
+        await auth_client.post(WHAT_IF, json={"year": 2026, "overrides": {"w2_other": "80000"}})
+    ).json()
+    # Baseline: the partner's 100000 alone. 100000 x .062, and their own 1.3% SDI table.
+    assert body["baseline"]["social_security"]["tax"] == "6200.00"
+    assert body["baseline"]["disability"]["tax"] == "1300.00"
+    # Scenario: the 80000 lands on the PRIMARY's empty bundle, under the 150000 base.
+    # (80000 + 100000) x .062 = 11160, and SDI is 80000 x .01 — the default, because the
+    # primary has no table of their own — plus the partner's untouched 1300. Landing on the
+    # PARTNER's base instead, SS would cap at 150000 (9300) and the whole 180000 would meet
+    # their own 1.3% (2340).
+    assert body["scenario"]["social_security"]["tax"] == "11160.00"
+    assert body["scenario"]["disability"]["tax"] == "2100.00"
+    assert body["delta"]["social_security_tax"] == "4960.00"

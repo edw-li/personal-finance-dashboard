@@ -257,7 +257,7 @@ async def test_the_same_key_may_repeat_across_people(db):
 # --- per-person bracket tables (2026-09-11 spec §2.1) ---
 
 
-async def _bracket(db, **overrides) -> TaxBracket:
+def _bracket(db, **overrides) -> TaxBracket:
     row = TaxBracket(
         year=2026,
         jurisdiction="disability",
@@ -278,9 +278,9 @@ async def test_two_default_rows_still_collide_on_the_partial_index(db):
     index) among the rows with no person."""
     db.add(TaxYear(year=2026))
     await db.flush()
-    await _bracket(db)
+    _bracket(db)
     await db.commit()
-    await _bracket(db, rate=Decimal("0.013"))
+    _bracket(db, rate=Decimal("0.013"))
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()
@@ -293,9 +293,9 @@ async def test_two_rows_for_one_person_collide_too(db):
     db.add(me)
     db.add(TaxYear(year=2026))
     await db.flush()
-    await _bracket(db, person_id=me.id)
+    _bracket(db, person_id=me.id)
     await db.commit()
-    await _bracket(db, person_id=me.id, rate=Decimal("0.013"))
+    _bracket(db, person_id=me.id, rate=Decimal("0.013"))
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()
@@ -311,9 +311,9 @@ async def test_a_default_row_and_a_person_row_share_one_index(db):
     db.add_all([me, partner])
     db.add(TaxYear(year=2026))
     await db.flush()
-    await _bracket(db)
-    await _bracket(db, person_id=me.id, rate=Decimal("0.013"))
-    await _bracket(db, person_id=partner.id, rate=Decimal("0.009"))
+    _bracket(db)
+    _bracket(db, person_id=me.id, rate=Decimal("0.013"))
+    _bracket(db, person_id=partner.id, rate=Decimal("0.009"))
     await db.commit()
     stored = (await db.execute(select(TaxBracket))).scalars().all()
     assert sorted(row.rate for row in stored) == [
@@ -326,7 +326,7 @@ async def test_a_default_row_and_a_person_row_share_one_index(db):
 async def test_an_unknown_person_is_refused_by_the_foreign_key(db):
     db.add(TaxYear(year=2026))
     await db.flush()
-    await _bracket(db, person_id=4242)
+    _bracket(db, person_id=4242)
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()

@@ -212,7 +212,8 @@ Exactly the contracts block, with these details pinned:
    positional read of `columns` can put the primary's name on somebody else's wages. The
    feed now carries `earner_people: list[tuple[int | None, str | None]]` — (id, name) per
    bundle, in bundle order, built from the columns that actually have rows — and `_wage_out`
-   reads that. See deviation 9.
+   reads that. See deviation 9. *(Revised: the pairs now come off the assembly itself —
+   Review round item 2.)*
 2. **`_payroll_line(earner, name, default_table, base, *, capped)`** is the engine's new
    helper (with `_wage_cap`), rather than a `table_for` closure inside `compute_breakdown`.
    `capped` is the REPORTING convention, not a fact about the table: Social Security reports
@@ -222,10 +223,13 @@ Exactly the contracts block, with these details pinned:
 3. **`earner_from_inputs(values, payroll_tables=None)`** gained the optional second argument
    so the assembly can build a bundle with its person's tables; `shift_earners` uses
    `dataclasses.replace` as the spec says, so anything about the primary that is not a wage
-   survives a what-if rebuild.
+   survives a what-if rebuild. *(Superseded: `shift_earners` now composes its head through
+   `earner_from_inputs` — Review round item 5.)*
 4. **The all-zero rule ignores an EMPTY table.** `all(rate == 0 for …)` is vacuously true for
    `[]`, and an empty DEFAULT table (a missing jurisdiction) must keep reporting uncapped
-   wages with 0 tax, as it does today. The guard is `if table and all(…)`.
+   wages with 0 tax, as it does today. The guard is `if table and all(…)`. *(Narrowed
+   further: the guard is `if own and all(…)`, so no DEFAULT table is ever read as an
+   exemption — Review round item 4.)*
 5. **`PUT /brackets` now scopes its DELETE by person in BOTH directions** (`_person_scope`).
    The plan only asked for the person branch; without the `person_id IS NULL` term on the
    default branch, saving a default table would silently delete every earner's own copy of it.
@@ -235,7 +239,9 @@ Exactly the contracts block, with these details pinned:
    (`person_tables.get(primary_id, {}).get(name) or tables.get(name, [])`) as a method on the
    feed rather than inline at the call site — the marginal-FICA walk happens in
    `withholding_calc`, outside the engine, so the rule needed a second home.
-8. **The one-bundle rule is narrowed to the PRIMARY's column** (`present == columns[:1]`).
+8. **REVOKED by the review round (item 1) — the rule is the RETURN's, and every column
+   gets a bundle. The paragraph below is kept for the reasoning it records.**
+   **The one-bundle rule is narrowed to the PRIMARY's column** (`present == columns[:1]`).
    The plan's "`len(per_person) < 2` but some column has a person table" also fires on a
    joint return whose only W-2 rows are the PARTNER's — and there the one bundle's head is
    not the primary, which is precisely the invariant `shift_earners` re-bases a what-if on.
@@ -246,10 +252,14 @@ Exactly the contracts block, with these details pinned:
    single, MFS, and joint with the primary's rows — is unaffected.
 9. `earner_people` is labelled from the columns WITH ROWS (`present or columns[:1]`) on both
    paths, not from `columns` positionally: on the synthesis path at most one column can have
-   rows, and the engine's single bundle is that column's, whoever they are.
+   rows, and the engine's single bundle is that column's, whoever they are. *(Revised: on the
+   LIST path the labels are the assembly's own pairs — Review round items 1 and 2.)*
 
 ### Pre-existing tests whose pinned behaviour the spec changed
 
+- `test_only_the_partners_rows_keeps_the_synthesized_bundle` — written by deviation 8,
+  deleted by the review round (item 1) and replaced by
+  `test_the_partners_own_table_is_walked_without_the_primarys_rows`.
 - `test_summary_2024_matches_the_sheet_except_the_state_chain` — the `medicare` and
   `disability` wire dicts are compared whole, so both grew their new `per_person` key:
   Medicare's is `[]` and Disability's is the one nameless line for the synthesized bundle
@@ -266,3 +276,66 @@ additive, and with no person table anywhere the engine is byte-identical.
   downgrade deleted the seeded person row and kept the default one). Nothing was run against
   the dev `finance` database.
 - Head is now `d5f2b7c8e390` (chained after lane A's `b8e1c5f7a204`).
+
+### Review round (2026-09-11, both reviewers' items applied in one commit)
+
+Two reviews approved the lane subject to ten items; all ten are in
+`fix(taxes): lane C review round — every column gets a bundle when any person holds a
+table, one table query per feed, own-table-only zero rule`.
+
+1. **The one-bundle rule is the RETURN's, not the primary's column — deviation 8 above is
+   REVOKED.** Spec §2.3 says "whenever any person on the return has a person table", and
+   the narrowed version silently walked the DEFAULT on a joint year whose only W-2 rows are
+   the PARTNER's while they held their own Disability table. `_assemble_earners` now
+   returns `(column, bundle)` PAIRS and builds one for EVERY column in `columns` order
+   whenever any column holds a table (or two columns have rows, as before); a column with
+   no rows gets a zero-wage bundle. Both halves then hold together: the head is always the
+   primary's — the invariant `shift_earners` re-bases a what-if on — and every person walks
+   their own table. A zero-wage bundle moves no money (every aggregate is a sum over the
+   bundles) and adds an honest zero LINE to `per_person` for the person with nothing
+   entered. `test_only_the_partners_rows_keeps_the_synthesized_bundle` is replaced by
+   `test_the_partners_own_table_is_walked_without_the_primarys_rows`, plus an API-level
+   what-if pin, `test_what_if_keeps_the_partners_wage_base_when_only_they_have_rows`
+   (baseline/scenario money differs under either failure: a partner head would cap the
+   scenario's leg on their base and meet their own SDI rate).
+2. **`earners` and `earner_people` come off that ONE list** — deviations 1 and 9 had two
+   derivations of "which columns are these bundles", and `_engine_feed` now unpacks the
+   pairs. On the synthesis path, where there is no list, the single bundle is still
+   labelled with the one column that has rows (the primary's when nothing is stored).
+3. **One query per feed for the year's tables.** `_engine_tables` returns
+   `(defaults, person_tables)` from a single `select(TaxBracket).where(year, status)`,
+   partitioned on `row.person_id is None`; `_person_tables` is gone. It was two round trips
+   per YEAR in the all-years summary and two more on the withholding card. Both stale
+   docstrings ("every engine caller", "every caller wants the defaults alone") are rewritten.
+4. **The all-zero rule reads an earner's OWN table only** (`if own and all(rate == 0 …)`).
+   An all-zero DEFAULT table is a jurisdiction the whole household is not charged by, and
+   what shipped before this lane is the full UNCAPPED wage base beside a 0 tax — the
+   promise in `_payroll_line`'s own docstring. New golden
+   `test_an_all_zero_default_table_is_not_an_exemption`; the own-table exemption test is
+   unchanged. Deviation 4's empty-table note is subsumed: `own` is falsy for `[]`.
+5. `shift_earners` builds its head through
+   `earner_from_inputs(primary_after, earners[0].payroll_tables)` — one door for composing
+   a bundle — and `dataclasses.replace` is no longer imported. Deviation 3's last sentence
+   is superseded.
+6. The two needless `list(own)` copies are gone (nothing mutates a bracket list; `walk`
+   sorts a copy of its own).
+7. `_validated_person` answers `"unknown person {id}"` — PUT inputs' own sentence, now
+   shared as `UNKNOWN_PERSON_MESSAGE` — for an id on NO roster, and keeps
+   `"person {id} is not on a {status} return"` for a real person off this status' return.
+   Two different fixes deserve two sentences; both are pinned. This revises the wire-shapes
+   note above, which said one sentence covered both.
+8. `EngineFeed.primary_payroll_table` asserts `name in PER_WORKER_JURISDICTIONS`, and the
+   withholding call site reads `feed.tables.get("medicare", [])`: Medicare's additional
+   tier is assessed on COMBINED wages, so no person can hold one (deviation 7 stands for
+   the two per-worker names).
+9. `EarnerWages.payroll_tables` is `field(default_factory=dict, hash=False, compare=False)`
+   — a frozen dataclass is hashable, and a dict field inside the hash makes every bundle
+   raise `TypeError` in a set or a dict key. Nothing hashes a bundle today; this keeps the
+   property true before something does.
+10. `tests/test_models_taxes.py`'s `_bracket` helper is sync — it never awaited anything.
+
+**Accepted as-is:** `_statuses_with_rows` and the clone's 409 guard count person rows along
+with defaults, so a status holding ONLY a person table reads as "this status has rows".
+That state is not reachable through the editor — a person's table is entered on a tab whose
+default tables are already there — and both readers are asking "has this year+status been
+started", which the count still answers honestly.
