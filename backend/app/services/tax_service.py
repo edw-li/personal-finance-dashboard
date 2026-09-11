@@ -147,18 +147,18 @@ ENGINE_INPUT_KEYS: tuple[str, ...] = (
     "other_capital_gains",
 )
 
-SUGGESTION_KEYS: tuple[str, ...] = (
-    "gross_paycheck",
-    "latest_w2_income",
-    "other_w2_income",
-    "stcg_total",
-    "unqualified_dividends",
-    "interest_total",
-    "capital_loss_deductions",
-    "other_pretax_deductions",
-    "itemized_deduction",
-    "ltcg_total",
-)
+# What is left ADVISORY once the nine totals are computed (2026-09-11 spec §1.2): a
+# prior-year capital-loss carryforward is a real number no formula knows, so it keeps its
+# chip and stays typeable. The other nine moved to `materialize_person` /
+# `materialize_household`, which own them outright.
+SUGGESTION_KEYS: tuple[str, ...] = ("capital_loss_deductions",)
+
+# The synthetic key the engine carries its earner-summed W-2 wages under (spec §1.3). It is
+# deliberately NOT a tax_keys definition and never in ENGINE_INPUT_KEYS: nothing stores it,
+# nothing serializes it, and no form row offers it. It exists so `_federal_agi` and MAGI can
+# read ONE wage figure that came from the per-person bundles rather than re-summing two
+# per-person totals the flat dict may not even carry.
+W2_INCOME_KEY = "w2_income"
 
 
 def walk(brackets: list[Bracket], income: Decimal) -> Decimal:
@@ -717,35 +717,82 @@ def salt_cap(year: int, filing_status: str, magi: Decimal) -> Decimal:
     return cap
 
 
-def derive_suggestions(
-    year: int, inputs: dict[str, Decimal], filing_status: str = SINGLE
-) -> dict[str, Decimal]:
-    """Advisory values for the sheet's gray (formula) input cells, quantized 4dp HALF_UP.
+def q4(value: Decimal) -> Decimal:
+    """The tax_inputs column scale, Numeric(14,4), HALF_UP.
 
-    Computed from the STORED values of the referenced keys — sheet-faithful, because the
-    gray formulas reference cells rather than recursing. Missing references default to 0
-    (an empty cell is a zero), so all ten suggestions are always offered; the caller
-    decides whether to surface a chip. Never applied automatically.
+    Every derived formula's LAST step (2026-09-11 spec §1.2) and nothing else's: a chained
+    value multiplies the UNQUANTIZED intermediate, which is how `latest_w2_income`
+    reproduces 2023's stored 54375.0000 where multiplying the rounded paycheck gives
+    54375.0003.
+    """
+    return value.quantize(SUGGESTION_QUANTUM, rounding=ROUND_HALF_UP)
 
-    Two of the ten are status-aware (spec §5.3): the SALT slice of the itemized total, and
-    the capital-loss line, which the statute caps per RETURN at 3000 (1500 filing
-    separately) however large the netted loss is. Both are SUGGESTIONS — the engine's own
-    arithmetic is status-neutral and unchanged, so a status flip never silently rewrites a
-    stored number. The SALT slice's phase-down tests true MAGI (`_magi`), so a CG-heavy
-    year's itemized suggestion may shrink toward the floor — approved and documented
-    (spec C1).
 
-    The derived-W2 chain (gross_paycheck / latest_w2_income / other_w2_income) is one
-    PERSON's, so the caller feeds one person's rows at a time (api/taxes.py builds a
-    suggestion map per column); the household keys it also reads are shared and give the
-    same answer in every column.
+def materialize_person(values: Mapping[str, Decimal]) -> dict[str, Decimal]:
+    """One person's bucket with the four per-person totals rebuilt from THEIR components.
+
+    A copy: whatever came in under a derived key is discarded, never trusted (spec §1.1's
+    decision 1 — the nine totals are computed, never stored). Missing components read as 0,
+    exactly as the sheet's grey cells did, so a bucket with nothing in it materializes to
+    four zeros rather than raising.
+
+    Person before household is not a style choice: `latest_w2_income` is a per-person
+    PRODUCT, and Σ pᵢ·sᵢ/24 is not (Σpᵢ)(Σsᵢ)/24, so a two-earner return whose columns were
+    summed first would report wages neither earner has.
     """
 
     def value(key: str) -> Decimal:
-        found = inputs.get(key)
+        found = values.get(key)
         return ZERO if found is None else found
 
-    # `s` is the short-term line the sheet nets the long-term loss against.
+    materialized = dict(values)
+    # The sheet divides by a hardcoded 24 and multiplies the FULL-PRECISION quotient; only
+    # the cells themselves round.
+    gross = value("annual_salary") / PAYCHECKS_PER_YEAR
+    materialized["gross_paycheck"] = q4(gross)
+    materialized["latest_w2_income"] = q4(value("pay_periods") * gross)
+    materialized["other_w2_income"] = q4(
+        value("w2_stock_rsus_sold")
+        + value("w2_bonuses")
+        + value("w2_salary_checkpoint")
+        + value("w2_espp_sale_component")
+        + value("w2_employer_hsa")
+        + value("w2_other")
+    )
+    materialized["other_pretax_deductions"] = q4(value("pretax_dental") + value("pretax_vision"))
+    return materialized
+
+
+def materialize_household(
+    year: int, values: Mapping[str, Decimal], filing_status: str = SINGLE
+) -> dict[str, Decimal]:
+    """The summed household dict with the five household totals rebuilt, in DEPENDENCY
+    order (spec §1.2).
+
+    `ltcg_total`, `unqualified_dividends` and `interest_total` are plain sums; `stcg_total`
+    nets against the long-term line THIS function just rebuilt, never a stored one; and
+    `itemized_deduction` sizes its SALT cap on a MAGI that reads everything above it. The
+    four per-person totals are left alone — they arrive already materialized per column and
+    summed, which is the only order that is arithmetically right.
+
+    Idempotent, so a caller that already materialized pays nothing but the arithmetic.
+    """
+    materialized = dict(values)
+
+    def value(key: str) -> Decimal:
+        found = materialized.get(key)
+        return ZERO if found is None else found
+
+    materialized["ltcg_total"] = q4(value("ltcg_brokerage") + value("ltcg_espp_component"))
+    materialized["unqualified_dividends"] = q4(
+        value("unq_div_us_treasuries_etf") + value("unq_div_other")
+    )
+    materialized["interest_total"] = q4(
+        value("interest_standard") + value("interest_us_treasuries")
+    )
+
+    # `s` is the short-term line the sheet nets the long-term loss against — reading the
+    # REBUILT ltcg_total above, which is the whole point of the order.
     short_term = value("stcg_standard") + value("stcg_espp_component")
     ltcg = value("ltcg_total")
     netted = short_term + ltcg
@@ -755,6 +802,60 @@ def derive_suggestions(
         stcg_total = short_term
     else:
         stcg_total = ZERO
+    materialized["stcg_total"] = q4(stcg_total)
+
+    # MAGI reads the return's W-2 wages, and on a two-earner year those are the SUM of the
+    # per-person bundles rather than anything this dict can rebuild — so `compute_breakdown`
+    # sets the synthetic key from its bundles before calling and this only fills it in for a
+    # standalone caller (the API's preview, the suggestion map) working from one dict.
+    if W2_INCOME_KEY not in materialized:
+        materialized[W2_INCOME_KEY] = value("latest_w2_income") + value("other_w2_income")
+
+    # The SALT cap is hardcoded per column in the sheet (10000 through 2024, 40000 after);
+    # `salt_cap` adds the MFS halving and the >500k-MAGI phase-down. MAGI is `_magi` — fed
+    # AGI plus the engine's own netted cg_amount (2026-08-31 spec C1; the sheet's formula
+    # never had the phase-down at all, so there is no sheet reading to preserve).
+    # itemized_sec199a_div is NOT a term since 2026-09-09 (spec 4h): the QBI deduction is
+    # below the line and the engine reads it on its own.
+    cap = salt_cap(year, filing_status, _magi(value))
+    salt = value("itemized_salt")
+    materialized["itemized_deduction"] = q4(
+        (salt if salt < cap else cap)
+        + value("itemized_donations")
+        + value("itemized_vehicle_reg")
+        + value("itemized_other")
+    )
+    return materialized
+
+
+def derive_suggestions(
+    year: int, inputs: dict[str, Decimal], filing_status: str = SINGLE
+) -> dict[str, Decimal]:
+    """The one advisory value left: the deductible slice of a netted capital loss, 4dp.
+
+    The other nine grey cells became computed totals on 2026-09-11 (spec §1.2) and live in
+    `materialize_household` / `materialize_person`. This one is NOT derived — a prior-year
+    carryforward is a real number no formula knows — so the sheet's netting rule only ever
+    suggests it, the user types it, and the engine reads what they typed.
+
+    Status-aware: the statute caps the deductible loss per RETURN at 3000, 1500 filing
+    separately, however large the netted loss is. A SUGGESTION — the engine's own arithmetic
+    is status-neutral and unchanged, so a status flip never silently rewrites a stored
+    number; it warns over the same constant instead (CAPITAL_LOSS_LIMIT's two consumers).
+
+    It materializes the dict ITSELF rather than trusting the caller to have done it: the
+    netting reads the long-term line, and a stale `ltcg_total` handed in is exactly the
+    drift Part 1 exists to remove.
+    """
+    values = materialize_household(year, inputs, filing_status)
+
+    def value(key: str) -> Decimal:
+        found = values.get(key)
+        return ZERO if found is None else found
+
+    # `s` is the short-term line; the long-term line it nets against is the rebuilt one.
+    short_term = value("stcg_standard") + value("stcg_espp_component")
+    netted = short_term + values["ltcg_total"]
 
     # r27 carries the un-nettable remainder of the loss, so it is negative or zero — and
     # only the deductible slice of it is worth suggesting.
@@ -765,40 +866,4 @@ def derive_suggestions(
         capital_loss = netted if netted > -loss_limit else -loss_limit
     else:
         capital_loss = ZERO
-
-    # The SALT cap is hardcoded per column in the sheet (10000 through 2024, 40000 after);
-    # `salt_cap` adds the MFS halving and the >500k-MAGI phase-down. MAGI is `_magi` —
-    # fed AGI plus the engine's own netted cg_amount (2026-08-31 spec C1; the sheet's
-    # formula never had the phase-down at all, so there is no sheet reading to preserve).
-    cap = salt_cap(year, filing_status, _magi(value))
-    salt = value("itemized_salt")
-    # itemized_sec199a_div is NOT a term here since 2026-09-09 (spec 4h): the QBI deduction
-    # is below the line and the engine reads it on its own, so leaving it in the itemized
-    # suggestion would deduct it twice for a filer who applies the chip.
-    itemized = (salt if salt < cap else cap) + (
-        value("itemized_donations") + value("itemized_vehicle_reg") + value("itemized_other")
-    )
-
-    suggestions = {
-        "gross_paycheck": value("annual_salary") / PAYCHECKS_PER_YEAR,
-        "latest_w2_income": value("pay_periods") * value("gross_paycheck"),
-        "other_w2_income": (
-            value("w2_stock_rsus_sold")
-            + value("w2_bonuses")
-            + value("w2_salary_checkpoint")
-            + value("w2_espp_sale_component")
-            + value("w2_employer_hsa")
-            + value("w2_other")
-        ),
-        "stcg_total": stcg_total,
-        "unqualified_dividends": value("unq_div_us_treasuries_etf") + value("unq_div_other"),
-        "interest_total": value("interest_standard") + value("interest_us_treasuries"),
-        "capital_loss_deductions": capital_loss,
-        "other_pretax_deductions": value("pretax_dental") + value("pretax_vision"),
-        "itemized_deduction": itemized,
-        "ltcg_total": value("ltcg_brokerage") + value("ltcg_espp_component"),
-    }
-    return {
-        key: suggestions[key].quantize(SUGGESTION_QUANTUM, rounding=ROUND_HALF_UP)
-        for key in SUGGESTION_KEYS
-    }
+    return {"capital_loss_deductions": q4(capital_loss)}

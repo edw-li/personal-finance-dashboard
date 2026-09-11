@@ -18,6 +18,7 @@ from app.services.tax_service import (
     compute_breakdown,
     derive_suggestions,
     earner_from_inputs,
+    materialize_household,
     salt_cap,
 )
 from app.tax_keys import MARRIED_JOINT, MARRIED_SEPARATE, SINGLE
@@ -320,7 +321,8 @@ def test_niit_threshold_follows_the_filing_status(w2, status, base, tax):
 
 
 # --------------------------------------------------------------------------------------
-# derive_suggestions: SALT cap by status + the OBBBA phase-down, capital-loss clamp
+# materialize_household: SALT cap by status + the OBBBA phase-down
+# derive_suggestions: the capital-loss clamp
 # --------------------------------------------------------------------------------------
 
 SALT_ITEMS = {
@@ -333,10 +335,10 @@ SALT_ITEMS = {
 
 
 def salt_year(year: int, status: str, magi: Decimal) -> Decimal:
-    """The itemized suggestion with 50000 of SALT and one W-2 line carrying the MAGI, so
-    the answer IS the applied cap."""
+    """The itemized TOTAL with 50000 of SALT and one W-2 line carrying the MAGI, so the
+    answer IS the applied cap."""
     inputs = dict(SALT_ITEMS) | {"latest_w2_income": magi}
-    return derive_suggestions(year, inputs, status)["itemized_deduction"]
+    return materialize_household(year, inputs, status)["itemized_deduction"]
 
 
 def test_salt_cap_halves_for_married_filing_separately():
@@ -369,15 +371,19 @@ def test_salt_phase_down_boundaries():
 def test_salt_phase_down_magi_includes_capital_gains():
     """C1's third consumer: the phase-down MAGI is `_magi` (fed AGI + cg_amount), so a
     CG-heavy year sheds cap even when ordinary AGI alone sits under 500000. Approved
-    behavior change (spec C1): CG-year SALT suggestions may shrink toward the floor."""
+    behavior change (spec C1): CG-year SALT totals may shrink toward the floor.
+
+    The gains arrive as their COMPONENT since 2026-09-11: `ltcg_total` is rebuilt inside
+    the same call, which is what makes the dependency order load-bearing rather than tidy.
+    """
     # fed AGI 450000; cg_amount 100000 (a pure LTCG gain nets whole); MAGI 550000 ->
     # phased cap = 40000 - 0.30 x 50000 = 25000. SALT_ITEMS stores 50000 of SALT and no
-    # other itemized lines, so the suggestion IS the applied cap.
-    inputs = dict(SALT_ITEMS) | {"latest_w2_income": D("450000"), "ltcg_total": D("100000")}
-    assert derive_suggestions(2025, inputs, SINGLE)["itemized_deduction"] == D("25000")
+    # other itemized lines, so the total IS the applied cap.
+    inputs = dict(SALT_ITEMS) | {"latest_w2_income": D("450000"), "ltcg_brokerage": D("100000")}
+    assert materialize_household(2025, inputs, SINGLE)["itemized_deduction"] == D("25000")
     # Without the gains the same wages stay under the threshold: the full 40000 cap.
     no_cg = dict(SALT_ITEMS) | {"latest_w2_income": D("450000")}
-    assert derive_suggestions(2025, no_cg, SINGLE)["itemized_deduction"] == D("40000")
+    assert materialize_household(2025, no_cg, SINGLE)["itemized_deduction"] == D("40000")
 
 
 def test_salt_cap_reads_the_engine_definition_of_agi():
@@ -390,36 +396,40 @@ def test_salt_cap_reads_the_engine_definition_of_agi():
         "trad_401k_contributions": D("60000"),
     }
     # AGI 500000 -> no phase-down at all.
-    assert derive_suggestions(2025, inputs, SINGLE)["itemized_deduction"] == D("40000")
+    assert materialize_household(2025, inputs, SINGLE)["itemized_deduction"] == D("40000")
 
 
-def test_salt_cap_never_raises_the_suggestion_above_the_entered_amount():
+def test_salt_cap_never_raises_the_total_above_the_entered_amount():
     """The cap is a ceiling, not a floor: 3000 of SALT stays 3000 under a 40000 cap."""
     items = dict(SALT_ITEMS) | {"itemized_salt": D("3000"), "itemized_donations": D("250")}
-    assert derive_suggestions(2025, items, SINGLE)["itemized_deduction"] == D("3250")
+    assert materialize_household(2025, items, SINGLE)["itemized_deduction"] == D("3250")
 
 
 def test_capital_loss_suggestion_is_clamped_by_status():
     """The deductible loss per return: 3000, or 1500 filing separately (spec §5.3). This
     is the SUGGESTION's clamp; since 2026-08-31 (spec C3) the engine reads the stored key
-    too, but it never clamps — it warns, and the two share this one statutory figure."""
-    big = {"ltcg_total": D("-5000"), "stcg_standard": D("1000")}  # nets to -4000
+    too, but it never clamps — it warns, and the two share this one statutory figure.
+
+    The loss is entered as `ltcg_brokerage` since 2026-09-11: the long-term TOTAL it feeds
+    is computed, so a test that typed it would be testing a figure nothing stores.
+    """
+    big = {"ltcg_brokerage": D("-5000"), "stcg_standard": D("1000")}  # nets to -4000
     assert derive_suggestions(2025, big, SINGLE)["capital_loss_deductions"] == D("-3000")
     assert derive_suggestions(2025, big, MARRIED_JOINT)["capital_loss_deductions"] == D("-3000")
     assert derive_suggestions(2025, big, MARRIED_SEPARATE)["capital_loss_deductions"] == D("-1500")
 
     # A loss under the cap is untouched, and MFS clamps it only once it passes 1500.
-    small = {"ltcg_total": D("-1000")}
+    small = {"ltcg_brokerage": D("-1000")}
     assert derive_suggestions(2025, small, SINGLE)["capital_loss_deductions"] == D("-1000")
     assert derive_suggestions(2025, small, MARRIED_SEPARATE)["capital_loss_deductions"] == D(
         "-1000"
     )
-    mid = {"ltcg_total": D("-2000")}
+    mid = {"ltcg_brokerage": D("-2000")}
     assert derive_suggestions(2025, mid, SINGLE)["capital_loss_deductions"] == D("-2000")
     assert derive_suggestions(2025, mid, MARRIED_SEPARATE)["capital_loss_deductions"] == D("-1500")
 
     # A gain still suggests 0, not a clamp.
-    assert derive_suggestions(2025, {"ltcg_total": D("500")}, SINGLE)[
+    assert derive_suggestions(2025, {"ltcg_brokerage": D("500")}, SINGLE)[
         "capital_loss_deductions"
     ] == D("0")
 
@@ -454,5 +464,6 @@ def test_capital_loss_cap_warning_halves_for_married_filing_separately():
 def test_derive_suggestions_defaults_to_single():
     """No status argument is single's answer — the shipped call sites (and the golden
     suite) pass two arguments and must keep meaning what they meant."""
-    items = dict(SALT_ITEMS) | {"itemized_salt": D("50000")}
+    items = {"ltcg_brokerage": D("-5000")}
     assert derive_suggestions(2025, items) == derive_suggestions(2025, items, SINGLE)
+    assert derive_suggestions(2025, items) != derive_suggestions(2025, items, MARRIED_SEPARATE)

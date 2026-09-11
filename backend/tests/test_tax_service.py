@@ -31,11 +31,20 @@ from app.services.tax_service import (
     ZERO,
     compute_breakdown,
     derive_suggestions,
+    materialize_household,
+    materialize_person,
     niit_advisory,
     stack,
     walk,
 )
-from app.tax_keys import INPUT_UNITS, TAX_INPUT_DEFINITIONS, TAX_INPUT_UNITS, unit_for
+from app.tax_keys import (
+    DERIVED_KEYS,
+    INPUT_UNITS,
+    PER_PERSON_DERIVED_KEYS,
+    TAX_INPUT_DEFINITIONS,
+    TAX_INPUT_UNITS,
+    unit_for,
+)
 
 CENT = Decimal("0.01")
 YEARS = (2023, 2024, 2025, 2026)
@@ -686,18 +695,17 @@ def test_sec199a_is_deducted_under_the_standard_deduction_too():
     assert itemizing.federal.taxable_income == Decimal("79000")
 
 
-def test_sec199a_left_the_itemized_suggestion():
+def test_sec199a_left_the_itemized_total():
     """The other half of 4h: the sheet's itemized formula added the §199A line, and leaving
-    it there beside a below-the-line deduction would deduct the same dollars twice for
-    anyone who applies the chip."""
+    it there beside a below-the-line deduction would deduct the same dollars twice."""
     items = {
         "itemized_salt": Decimal("5000"),
         "itemized_donations": Decimal("1000"),
         "itemized_vehicle_reg": Decimal("16"),
         "itemized_other": Decimal("0"),
     }
-    assert derive_suggestions(2025, items)["itemized_deduction"] == Decimal("6016")
-    with_qbi = derive_suggestions(2025, items | {"itemized_sec199a_div": Decimal("250")})
+    assert materialize_household(2025, items)["itemized_deduction"] == Decimal("6016")
+    with_qbi = materialize_household(2025, items | {"itemized_sec199a_div": Decimal("250")})
     assert with_qbi["itemized_deduction"] == Decimal("6016")
 
 
@@ -901,44 +909,104 @@ def test_sheet_drift_2026_stale_deduction():
 
 
 # --------------------------------------------------------------------------------------
-# derive_suggestions()
+# materialize_person() / materialize_household()
 # --------------------------------------------------------------------------------------
 
 
-def test_suggestions_match_stored_2025():
-    """2025 is the year whose stored derived cells are all exactly reproducible (its
-    gross_paycheck, 162000/24, is exact at 4dp — 2023/2026 store a rounded paycheck that
-    the sheet multiplies at full precision)."""
-    suggested = derive_suggestions(2025, YEAR_INPUTS[2025])
-    expected = {
-        "gross_paycheck": "6750",
-        "latest_w2_income": "135000",
-        "other_w2_income": "141176.78",
-        "stcg_total": "8040.08",
-        "unqualified_dividends": "1653.14",
-        "interest_total": "62.87",
-        "capital_loss_deductions": "0",
-        "other_pretax_deductions": "300",
-        # 27213.282 until 2026-09-09 (spec 4h): the sheet's itemized formula added the
-        # 6.222 §199A line, which is now a below-the-line deduction the engine reads on its
-        # own — leaving it here would deduct it twice for anyone who applies the chip. It
-        # is therefore the ONE suggestion that no longer reproduces its stored 2025 cell.
-        "itemized_deduction": "27207.06",
-        "ltcg_total": "536.38",
-    }
-    assert set(suggested) == set(expected)
-    for key, value in expected.items():
-        assert suggested[key] == Decimal(value), key
-        if key != "itemized_deduction":
-            assert suggested[key] == YEAR_INPUTS[2025][key], key
-        assert suggested[key].as_tuple().exponent == -4, key
-    assert (
-        YEAR_INPUTS[2025]["itemized_deduction"] - suggested["itemized_deduction"]
-        == YEAR_INPUTS[2025]["itemized_sec199a_div"]
+@pytest.mark.parametrize("year", YEARS)
+def test_materialize_reproduces_every_derived_fixture_cell(year):
+    """The sheet's own cached grey cells are the ORACLE (2026-09-11 spec §1.3): the two
+    materializers reproduce every derived cell of every golden year from its components.
+
+    `_INPUT_TABLE` keeps those rows for exactly this reason even though nothing stores them
+    any more. The one subtraction is 2025/2026's itemized total, which still carries the
+    §199A line the formula dropped on 2026-09-09 (spec 4h) — the only drift production ever
+    showed, and precisely the hazard that ends when the figure is never stored again. It is
+    unconditional because the other two years' §199A line is zero.
+    """
+    values = materialize_household(year, materialize_person(YEAR_INPUTS[year]))
+    for key in DERIVED_KEYS:
+        expected = YEAR_INPUTS[year][key] - (
+            YEAR_INPUTS[year]["itemized_sec199a_div"] if key == "itemized_deduction" else ZERO
+        )
+        assert values[key] == expected, f"{year} {key}"
+        # Numeric(14,4): every formula quantizes 4dp HALF_UP as its LAST step.
+        assert values[key].as_tuple().exponent == -4, f"{year} {key}"
+
+
+def test_materialize_person_multiplies_the_unquantized_paycheck():
+    """The precision rule (spec §1.2): the chain multiplies the UNQUANTIZED quotient.
+
+    2023 is the pin — 9 x (145000/24) is 54375 exactly, while 9 x the 4dp paycheck the
+    sheet cached is 54375.0003. `derive_suggestions` multiplied the stored cell and missed
+    the stored year by three ten-thousandths; this chain reproduces it.
+    """
+    person = materialize_person({"annual_salary": Decimal("145000"), "pay_periods": Decimal("9")})
+    assert person["gross_paycheck"] == Decimal("6041.6667")
+    assert person["latest_w2_income"] == Decimal("54375.0000")
+    assert Decimal("9") * person["gross_paycheck"] == Decimal("54375.0003")  # the old chain
+    # pay_periods is the year-to-date count of checks received, NOT the annual cadence:
+    # the divisor is the sheet's hardcoded 24 in every year.
+    assert materialize_person({"annual_salary": Decimal("188930"), "pay_periods": Decimal("20")})[
+        "latest_w2_income"
+    ] == Decimal("157441.6667")
+
+
+def test_materialize_replaces_whatever_came_in_under_a_derived_key():
+    """A total handed in is DISCARDED, not trusted — the whole point of Part 1."""
+    person = materialize_person(
+        {
+            "other_w2_income": Decimal("999999"),
+            "w2_bonuses": Decimal("30"),
+            "w2_other": Decimal("20"),
+        }
     )
+    assert person["other_w2_income"] == Decimal("50.0000")
+    household = materialize_household(2025, {"ltcg_total": Decimal("999999")})
+    assert household["ltcg_total"] == Decimal("0.0000")
 
 
-def test_suggestion_salt_cap_2024_vs_2025():
+def test_materialize_defaults_missing_components_to_zero():
+    """An empty sheet cell IS a zero, so every total is always computable — and always
+    lands at the column's own scale."""
+    values = materialize_household(2027, materialize_person({}))
+    for key in DERIVED_KEYS:
+        assert values[key] == ZERO, key
+        assert values[key].as_tuple().exponent == -4, key
+
+
+def test_materialize_household_order():
+    """`stcg_total` nets against the REBUILT long-term line, not a stale stored one."""
+    values = materialize_household(
+        2025,
+        {
+            "ltcg_total": Decimal("0"),  # stale: the netting would find nothing to net
+            "ltcg_brokerage": Decimal("-670"),
+            "stcg_standard": Decimal("1000"),
+        },
+    )
+    assert values["ltcg_total"] == Decimal("-670.0000")
+    assert values["stcg_total"] == Decimal("330.0000")
+
+
+def test_materialize_household_itemized_reads_magi_from_the_rebuilt_totals():
+    """The SALT phase-down is judged on MAGI, and MAGI reads the totals above it — so the
+    cap only bites once `ltcg_total` has been rebuilt (spec §1.2's dependency order)."""
+    lots = {
+        "itemized_salt": Decimal("24141.06"),
+        "ltcg_total": Decimal("0"),  # stale again
+        "ltcg_brokerage": Decimal("600000"),
+    }
+    values = materialize_household(2025, lots)
+    # MAGI 600000 -> 40000 - 30% x 100000 = 10000, exactly the floor.
+    assert values["itemized_deduction"] == Decimal("10000.0000")
+    # Without the gains the same SALT is under the full cap and passes through whole —
+    # which is the answer a stale `ltcg_total: 0` would have produced above.
+    flat = materialize_household(2025, {"itemized_salt": Decimal("24141.06")})
+    assert flat["itemized_deduction"] == Decimal("24141.0600")
+
+
+def test_materialize_salt_cap_2024_vs_2025():
     """The SALT cap is 10000 through 2024 and 40000 from 2025 (the sheet hardcodes it per
     column). Same items, different year, different answer."""
     items = {
@@ -949,14 +1017,14 @@ def test_suggestion_salt_cap_2024_vs_2025():
         "itemized_other": Decimal("0"),
     }
     # Capped: 10000 + 16. Matches the stored 2024 itemized_deduction exactly.
-    assert derive_suggestions(2024, items)["itemized_deduction"] == Decimal("10016")
+    assert materialize_household(2024, items)["itemized_deduction"] == Decimal("10016")
     assert (
-        derive_suggestions(2024, items)["itemized_deduction"]
+        materialize_household(2024, items)["itemized_deduction"]
         == YEAR_INPUTS[2024]["itemized_deduction"]
     )
     # Uncapped under 40000: the full 17488.59 + 16.
-    assert derive_suggestions(2025, items)["itemized_deduction"] == Decimal("17504.59")
-    assert derive_suggestions(2023, items)["itemized_deduction"] == Decimal("10016")
+    assert materialize_household(2025, items)["itemized_deduction"] == Decimal("17504.59")
+    assert materialize_household(2023, items)["itemized_deduction"] == Decimal("10016")
 
 
 @pytest.mark.parametrize(
@@ -971,38 +1039,85 @@ def test_suggestion_salt_cap_2024_vs_2025():
         ("600", "154", "-670", "84"),  # the ESPP component joins `s`
     ],
 )
-def test_suggestion_stcg_netting_branches(standard, espp, ltcg, expected):
+def test_materialize_stcg_netting_branches(standard, espp, ltcg, expected):
+    """The long-term leg arrives as its COMPONENT now — `ltcg_total` is rebuilt, so the
+    netting rule can only ever read a figure it computed itself."""
     inputs = {
         "stcg_standard": Decimal(standard),
         "stcg_espp_component": Decimal(espp),
-        "ltcg_total": Decimal(ltcg),
+        "ltcg_brokerage": Decimal(ltcg),
     }
-    assert derive_suggestions(2025, inputs)["stcg_total"] == Decimal(expected)
+    assert materialize_household(2025, inputs)["stcg_total"] == Decimal(expected)
+
+
+def test_materialize_household_leaves_the_per_person_four_alone():
+    """Person before household: the household pass must not touch a per-person total, or a
+    two-earner return's summed wages would be rebuilt from summed components."""
+    summed = {
+        "latest_w2_income": Decimal("161441.6667"),
+        "other_w2_income": Decimal("50.0000"),
+        "gross_paycheck": Decimal("8872.0833"),
+        "other_pretax_deductions": Decimal("300.0000"),
+        "annual_salary": Decimal("212930"),
+        "pay_periods": Decimal("24"),
+    }
+    values = materialize_household(2025, summed)
+    for key in PER_PERSON_DERIVED_KEYS:
+        assert values[key] == summed[key], key
+
+
+def test_per_person_before_household_sum():
+    """A per-person product cannot be rebuilt from household sums, which is why every
+    column is materialized before the per-person keys are summed (spec §1.2)."""
+    primary = {"pay_periods": Decimal("20"), "annual_salary": Decimal("188930")}
+    partner = {"pay_periods": Decimal("4"), "annual_salary": Decimal("24000")}
+    per_person = (
+        materialize_person(primary)["latest_w2_income"]
+        + materialize_person(partner)["latest_w2_income"]
+    )
+    assert per_person == Decimal("161441.6667")
+    # Materializing the SUMMED components instead: 24 x 212930/24, a different return.
+    summed_first = materialize_person(
+        {"pay_periods": Decimal("24"), "annual_salary": Decimal("212930")}
+    )
+    assert summed_first["latest_w2_income"] == Decimal("212930.0000")
+    assert summed_first["latest_w2_income"] != per_person
+
+
+# --------------------------------------------------------------------------------------
+# derive_suggestions()
+# --------------------------------------------------------------------------------------
+
+
+def test_derive_suggestions_is_the_capital_loss_line_alone():
+    """What remains advisory once the nine totals are computed: a prior-year carryforward
+    is a real number no formula knows, so the chip stays and the key stays typeable."""
+    assert SUGGESTION_KEYS == ("capital_loss_deductions",)
+    assert set(derive_suggestions(2025, YEAR_INPUTS[2025])) == {"capital_loss_deductions"}
 
 
 def test_suggestion_capital_loss_negative():
-    """The netting rule is unchanged; the SUGGESTION is now clamped to the statutory
-    3000 per return (2026-08-26 spec §5.3 — an approved behavior change, not a bug fix:
-    the sheet offered the whole un-nettable remainder). The engine still never reads this
-    key, so no breakdown moved."""
-    inputs = {"ltcg_total": Decimal("-5000"), "stcg_standard": Decimal("1000")}
-    suggested = derive_suggestions(2025, inputs)
+    """The netting rule is unchanged; the SUGGESTION is clamped to the statutory 3000 per
+    return (2026-08-26 spec §5.3). The engine still never reads this key, so no breakdown
+    moved. The loss arrives as its COMPONENT — the total it feeds is computed."""
+    inputs = {"ltcg_brokerage": Decimal("-5000"), "stcg_standard": Decimal("1000")}
+    assert derive_suggestions(2025, inputs)["capital_loss_deductions"] == Decimal("-3000")
     # The un-nettable remainder is still -4000 — the STCG line proves the netting ran.
-    assert suggested["stcg_total"] == Decimal("0")  # the loss lands on r27, not the STCG line
-    assert suggested["capital_loss_deductions"] == Decimal("-3000")
+    assert materialize_household(2025, inputs)["stcg_total"] == Decimal("0")
+
+
+def test_suggestion_reads_the_rebuilt_long_term_line():
+    """A stale `ltcg_total` handed in cannot move the suggestion: `derive_suggestions`
+    materializes the household dict itself before reading it."""
+    stale = {"ltcg_total": Decimal("0"), "ltcg_brokerage": Decimal("-5000")}
+    assert derive_suggestions(2025, stale)["capital_loss_deductions"] == Decimal("-3000")
 
 
 def test_suggestions_default_missing_references_to_zero():
-    """Empty sheet cells are zeros, so every suggestion is always offered."""
+    """Empty sheet cells are zeros, so the one suggestion is always offered."""
     suggested = derive_suggestions(2027, {})
-    assert len(suggested) == 10
+    assert len(suggested) == 1
     assert all(value == Decimal("0") for value in suggested.values())
-
-
-def test_suggestion_gross_paycheck_always_divides_by_24():
-    # pay_periods is the year-to-date count, NOT the annual cadence the sheet divides by.
-    inputs = {"annual_salary": Decimal("145000"), "pay_periods": Decimal("9")}
-    assert derive_suggestions(2023, inputs)["gross_paycheck"] == Decimal("6041.6667")
 
 
 def test_social_security_cap_needs_a_zero_rate_top_bracket():
