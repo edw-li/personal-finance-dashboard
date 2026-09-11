@@ -188,7 +188,8 @@ paycheck profile) and the three carry-forward chips are the API's, unchanged.
   per-person buckets in column order — replacing every downstream re-bucketing of `feed.rows`:
   the withholding card's `_bucket_input_rows` / `_wage_base` read `feed.person_inputs`, so the
   partner's wage base is `latest_w2_income + other_w2_income` **as computed from their
-  components**. (`feed.rows` stays for the change-log and tracker-only keys.)
+  components**. (As built: `feed.rows` was removed — nothing read it; the change log is written from
+  the PUT's own rows and the tracker-only keys are per-person, so they ride the buckets.)
 - What-if (`tax_whatif.apply_scenario`): `DELTA_KEYS` become component-only
   (`"brokerage_long": "ltcg_brokerage"`, …); a sale bumps the component and the engine's
   materialization carries the total. `shift_earners` re-bases the primary's bundle by re-running
