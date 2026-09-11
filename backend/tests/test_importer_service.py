@@ -19,7 +19,9 @@ async def test_dry_run_reports_without_writing(db):
     assert report.dry_run is True and report.applied is False
     assert not report.has_errors
     assert report.sheets["net_worth"].entities["accounts"].creates == 3
-    assert report.sheets["taxes"].entities["tax_inputs"].creates == 86
+    # 34 ENTERED keys x 2 years: the nine computed totals are parsed and skipped
+    # (2026-09-11 taxes spec §1.5).
+    assert report.sheets["taxes"].entities["tax_inputs"].creates == 68
     assert report.sheets["portfolio"].entities["portfolio_value_history"].creates == 3
     assert await _count(db, Account) == 0
     assert await _count(db, Security) == 0
@@ -76,10 +78,15 @@ async def test_dry_run_after_apply_reports_no_tax_drift(db):
 
     diff = await run_import(build_workbook(), db, dry_run=True)
     taxes = diff.sheets["taxes"].entities
-    assert taxes["tax_inputs"] == EntityCounts(creates=0, updates=0, skips=86, deletes=0)
+    assert taxes["tax_inputs"] == EntityCounts(creates=0, updates=0, skips=68, deletes=0)
     assert taxes["tax_brackets"] == EntityCounts(creates=0, updates=0, skips=14, deletes=0)
     assert taxes["tax_years"] == EntityCounts(creates=0, updates=0, skips=2, deletes=0)
-    assert diff.sheets["taxes"].samples == []
+    # The one sample is not drift, it is a standing statement about the sheet's grey cells:
+    # the parser reads all nine of them in both year columns and the importer writes none
+    # (2026-09-11 taxes spec §1.5). Anything else appearing here still means drift.
+    assert diff.sheets["taxes"].samples == [
+        "tax_inputs: 18 computed cells skipped (derived totals are computed, never stored)"
+    ]
 
 
 async def test_parse_errors_block_apply_entirely(db):
