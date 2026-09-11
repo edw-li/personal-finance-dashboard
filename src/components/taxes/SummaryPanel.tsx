@@ -1,9 +1,14 @@
-import { useMemo } from 'react'
+import { Fragment, useMemo } from 'react'
 import { FILING_STATUS_LABELS, jurisdictionLabel } from '../../api/taxes'
 import ChartCard from '../ChartCard'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
-import type { FilingStatus, TaxSummaryOut } from '../../types/api'
+import type {
+  FilingStatus,
+  PersonWageTaxOut,
+  TaxSummaryOut,
+  WageTaxOut,
+} from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
 import { waterfallCsv, waterfallOption } from './taxChartOptions'
 // Only this component's own sheet, like its two siblings: the app-wide vocabulary
@@ -30,6 +35,28 @@ interface DetailRow {
   taxable: string | null
   tax: string | null
   rate: string | null
+  // The earners behind a PER-WORKER row, indented under it. Only Social Security and
+  // Disability ever carry any (Medicare is household-wide by statute), and only when they
+  // say something the row above cannot — see `earnerRows`.
+  people?: PersonWageTaxOut[]
+  // Whether a taxable base BELOW the earner's wages is explained as a cap. True for Social
+  // Security alone: its shortfall is the statutory wage base the walk stopped at, while an
+  // SDI base can differ from W-2 wages for reasons that are not a cap at all.
+  capNote?: boolean
+}
+
+/**
+ * The earners to draw under a per-worker row — and, just as often, none.
+ *
+ * A sub-row is an EXPLANATION: it exists because the row above is a sum of bases, caps and
+ * tables that differ. One earner walking the year's own table explains nothing, so that year
+ * renders exactly as it did before per-person tables existed (spec §2.7). `per_person` is
+ * optional on the wire — stored summaries predate it — and absence reads the same as a
+ * single default earner.
+ */
+function earnerRows(section: WageTaxOut): PersonWageTaxOut[] {
+  const people = section.per_person ?? []
+  return people.length >= 2 || people.some((person) => person.table === 'own') ? people : []
 }
 
 function jurisdictionRows(summary: TaxSummaryOut): DetailRow[] {
@@ -40,8 +67,8 @@ function jurisdictionRows(summary: TaxSummaryOut): DetailRow[] {
     { label: 'State', base: state.agi, taxable: state.taxable_income, tax: state.tax, rate: state.effective_rate },
     { label: 'NIIT', base: niit?.gains_amount ?? null, taxable: niit?.taxable_income ?? null, tax: niit?.tax ?? null, rate: niit?.effective_rate ?? null },
     { label: 'Medicare', base: medicare.w2_income, taxable: medicare.taxable_wages, tax: medicare.tax, rate: medicare.effective_rate },
-    { label: 'Social Security', base: social_security.w2_income, taxable: social_security.taxable_wages, tax: social_security.tax, rate: social_security.effective_rate },
-    { label: 'Disability', base: disability.w2_income, taxable: disability.taxable_wages, tax: disability.tax, rate: disability.effective_rate },
+    { label: 'Social Security', base: social_security.w2_income, taxable: social_security.taxable_wages, tax: social_security.tax, rate: social_security.effective_rate, people: earnerRows(social_security), capNote: true },
+    { label: 'Disability', base: disability.w2_income, taxable: disability.taxable_wages, tax: disability.tax, rate: disability.effective_rate, people: earnerRows(disability) },
     { label: 'Capital gains', base: capital_gains.gains_amount, taxable: capital_gains.taxable_income, tax: capital_gains.tax, rate: capital_gains.effective_rate },
   ]
 }
@@ -122,7 +149,7 @@ export default function SummaryPanel({
           <div className="tax-section tax-jurisdiction-detail">
             <h3 className="eyebrow">
               By jurisdiction
-              <InfoHint text="Base is each jurisdiction&apos;s income context — AGI for the income taxes, W-2 wages for the payroll taxes, gains or net investment income for capital gains and NIIT. The federal AGI includes long-term gains and qualified dividends, which the brackets do not walk: those are taxed by the capital-gains row instead. Taxable is what each row&apos;s rates are actually walked over: for federal, ordinary income after the deduction; for capital gains, the ordinary income the gains stack on top of; for NIIT, the surcharged base." />
+              <InfoHint text="Base is each jurisdiction&apos;s income context — AGI for the income taxes, W-2 wages for the payroll taxes, gains or net investment income for capital gains and NIIT. The federal AGI includes long-term gains and qualified dividends, which the brackets do not walk: those are taxed by the capital-gains row instead. Taxable is what each row&apos;s rates are actually walked over: for federal, ordinary income after the deduction; for capital gains, the ordinary income the gains stack on top of; for NIIT, the surcharged base. Social Security and Disability are per worker: each earner&apos;s row shows their own wage base, cap and table." />
             </h3>
             <table className="data-table">
               <thead>
@@ -139,13 +166,44 @@ export default function SummaryPanel({
               </thead>
               <tbody>
                 {jurisdictionRows(summary).map((row) => (
-                  <tr key={row.label}>
-                    <td>{row.label}</td>
-                    <td className="num">{formatCurrency(row.base)}</td>
-                    <td className="num">{formatCurrency(row.taxable)}</td>
-                    <td className="num">{formatCurrency(row.tax)}</td>
-                    <td className="num">{formatPct(row.rate, { signed: false })}</td>
-                  </tr>
+                  <Fragment key={row.label}>
+                    <tr>
+                      <td>{row.label}</td>
+                      <td className="num">{formatCurrency(row.base)}</td>
+                      <td className="num">{formatCurrency(row.taxable)}</td>
+                      <td className="num">{formatCurrency(row.tax)}</td>
+                      <td className="num">{formatPct(row.rate, { signed: false })}</td>
+                    </tr>
+                    {/* One line per earner, in the engine's column order. Index key: a fixed,
+                        non-reordered list rendered straight from the payload (the warnings
+                        note above), and `person_id` is null on a roster-less database. */}
+                    {(row.people ?? []).map((person, index) => (
+                      <tr key={index} className="tax-person-row">
+                        <td className="tax-person-name">
+                          {/* Null names mean the engine synthesized the earner from household
+                              inputs with no roster behind them — it is still the return's
+                              own line, so it says so rather than inventing a person. */}
+                          <span>{person.name ?? 'This return'}</span>
+                          {/* A comparison, not money math: both figures are still the
+                              engine's own strings, rendered as they arrived (global rule 9).
+                              The note names the base the walk stopped at, which IS the cap. */}
+                          {row.capNote === true &&
+                            Number(person.taxable_wages) < Number(person.w2_income) && (
+                              <span className="drill-hint">
+                                capped at {formatCurrency(person.taxable_wages)}
+                              </span>
+                            )}
+                          <span className="badge">
+                            {person.table === 'own' ? 'own table' : 'default'}
+                          </span>
+                        </td>
+                        <td className="num">{formatCurrency(person.w2_income)}</td>
+                        <td className="num">{formatCurrency(person.taxable_wages)}</td>
+                        <td className="num">{formatCurrency(person.tax)}</td>
+                        <td className="num">{formatPct(person.effective_rate, { signed: false })}</td>
+                      </tr>
+                    ))}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

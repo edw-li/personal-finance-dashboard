@@ -448,6 +448,27 @@
   color: var(--text);
 }
 
+/* One earner's line under a per-worker jurisdiction row: a qualification of the row above,
+   not a row of its own. Indented and quieted so the seven jurisdiction figures stay the
+   table's spine, and the name cell stacks its note and tag under the name. */
+.tax-person-row > td {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.tax-person-name {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding-left: 1.1rem;
+}
+
+.tax-person-name .drill-hint {
+  margin: 0;
+  font-size: 0.7rem;
+}
+
 /* --- marginal panel --- */
 
 /* The headline answer, not a caveat: body ink above the ladder it summarizes. */
