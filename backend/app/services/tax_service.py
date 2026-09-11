@@ -40,6 +40,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from app.tax_keys import (
     DERIVED_COMPONENTS,
+    HOUSEHOLD_DERIVED_KEYS,
     JURISDICTIONS,
     MARRIED_JOINT,
     MARRIED_SEPARATE,
@@ -817,6 +818,11 @@ def materialize_household(
     four per-person totals are left alone — they arrive already materialized per column and
     summed, which is the only order that is arithmetically right.
 
+    `HOUSEHOLD_DERIVED_KEYS` DRIVES the loop rather than describing it: that tuple is the
+    one place the dependency order is stated, so the sixth household total is a formula
+    here and a name there, and neither can quietly disagree with the other about when it
+    runs. A key the table below has no builder for raises rather than passing through.
+
     Idempotent, so a caller that already materialized pays nothing but the arithmetic.
     """
     materialized = dict(values)
@@ -825,48 +831,64 @@ def materialize_household(
         found = materialized.get(key)
         return ZERO if found is None else found
 
-    materialized["ltcg_total"] = q4(value("ltcg_brokerage") + value("ltcg_espp_component"))
-    materialized["unqualified_dividends"] = q4(
-        value("unq_div_us_treasuries_etf") + value("unq_div_other")
-    )
-    materialized["interest_total"] = q4(
-        value("interest_standard") + value("interest_us_treasuries")
-    )
+    def ltcg_total() -> Decimal:
+        return value("ltcg_brokerage") + value("ltcg_espp_component")
 
-    # `s` is the short-term line the sheet nets the long-term loss against — reading the
-    # REBUILT ltcg_total above, which is the whole point of the order.
-    short_term = value("stcg_standard") + value("stcg_espp_component")
-    ltcg = value("ltcg_total")
-    netted = short_term + ltcg
-    if short_term >= 0 and ltcg < 0 and netted >= 0:
-        stcg_total = netted
-    elif short_term >= 0 and netted >= 0:
-        stcg_total = short_term
-    else:
-        stcg_total = ZERO
-    materialized["stcg_total"] = q4(stcg_total)
+    def unqualified_dividends() -> Decimal:
+        return value("unq_div_us_treasuries_etf") + value("unq_div_other")
+
+    def interest_total() -> Decimal:
+        return value("interest_standard") + value("interest_us_treasuries")
+
+    def stcg_total() -> Decimal:
+        # `s` is the short-term line the sheet nets the long-term loss against — reading the
+        # REBUILT ltcg_total, which the loop below has already assigned. That is the whole
+        # point of running these in HOUSEHOLD_DERIVED_KEYS order.
+        short_term = value("stcg_standard") + value("stcg_espp_component")
+        ltcg = value("ltcg_total")
+        netted = short_term + ltcg
+        if short_term >= 0 and ltcg < 0 and netted >= 0:
+            return netted
+        if short_term >= 0 and netted >= 0:
+            return short_term
+        return ZERO
+
+    def itemized_deduction() -> Decimal:
+        # The SALT cap is hardcoded per column in the sheet (10000 through 2024, 40000
+        # after); `salt_cap` adds the MFS halving and the >500k-MAGI phase-down. MAGI is
+        # `_magi` — fed AGI plus the engine's own netted cg_amount (2026-08-31 spec C1; the
+        # sheet's formula never had the phase-down at all, so there is no sheet reading to
+        # preserve). itemized_sec199a_div is NOT a term since 2026-09-09 (spec 4h): the QBI
+        # deduction is below the line and the engine reads it on its own.
+        cap = salt_cap(year, filing_status, _magi(value))
+        salt = value("itemized_salt")
+        return (
+            (salt if salt < cap else cap)
+            + value("itemized_donations")
+            + value("itemized_vehicle_reg")
+            + value("itemized_other")
+        )
 
     # MAGI reads the return's W-2 wages, and on a two-earner year those are the SUM of the
     # per-person bundles rather than anything this dict can rebuild — so `compute_breakdown`
     # sets the synthetic key from its bundles before calling and this only fills it in for a
     # standalone caller (the API's preview, the suggestion map) working from one dict.
+    # Before the loop, because `itemized_deduction` reads it and nothing in the loop moves it.
     if W2_INCOME_KEY not in materialized:
         materialized[W2_INCOME_KEY] = value("latest_w2_income") + value("other_w2_income")
 
-    # The SALT cap is hardcoded per column in the sheet (10000 through 2024, 40000 after);
-    # `salt_cap` adds the MFS halving and the >500k-MAGI phase-down. MAGI is `_magi` — fed
-    # AGI plus the engine's own netted cg_amount (2026-08-31 spec C1; the sheet's formula
-    # never had the phase-down at all, so there is no sheet reading to preserve).
-    # itemized_sec199a_div is NOT a term since 2026-09-09 (spec 4h): the QBI deduction is
-    # below the line and the engine reads it on its own.
-    cap = salt_cap(year, filing_status, _magi(value))
-    salt = value("itemized_salt")
-    materialized["itemized_deduction"] = q4(
-        (salt if salt < cap else cap)
-        + value("itemized_donations")
-        + value("itemized_vehicle_reg")
-        + value("itemized_other")
-    )
+    builders: dict[str, Callable[[], Decimal]] = {
+        "ltcg_total": ltcg_total,
+        "unqualified_dividends": unqualified_dividends,
+        "interest_total": interest_total,
+        "stcg_total": stcg_total,
+        "itemized_deduction": itemized_deduction,
+    }
+    for key in HOUSEHOLD_DERIVED_KEYS:
+        # q4 at the assignment, where it has always been: a total lands at column scale and
+        # the formula below it reads that figure, exactly as the next cell down the sheet
+        # reads the rounded one above it.
+        materialized[key] = q4(builders[key]())
     return materialized
 
 

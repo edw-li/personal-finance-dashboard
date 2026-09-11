@@ -7,6 +7,9 @@ key — the PUT's 422, the what-if's, the importer's skip, the form's caption �
 here, so there is exactly one place a tenth total would be added.
 """
 
+import importlib.util
+from pathlib import Path
+
 from app.tax_keys import (
     DERIVED_COMPONENTS,
     DERIVED_KEYS,
@@ -109,3 +112,30 @@ def test_component_labels_reads_the_labels_the_422_sentences_interpolate():
     assert labels.startswith("W2: Stock/RSUs Sold")
     assert labels == ", ".join(label_for(key, key) for key in DERIVED_COMPONENTS["other_w2_income"])
     assert component_labels("other_pretax_deductions") == "Pre-tax: Dental, Pre-tax: Vision"
+
+
+def test_the_data_migration_deletes_exactly_the_nine_this_file_names():
+    """b8e1c5f7a204 SPELLS OUT the keys it deletes rather than importing them — a migration
+    is a record of what ran against a database on a day, and it must keep meaning the same
+    thing after the code it was written beside moves on (the f7d3b2a91c40 precedent).
+
+    Spelled out is not free to drift, though: the rows it deleted have to be the rows this
+    file calls computed, or the migration left stored totals behind that nothing will ever
+    read again — which is the exact trap it exists to clear. So the copy is pinned here,
+    where a tenth total would break the test instead of the data.
+    """
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "20260911_0900_b8e1c5f7a204_computed_tax_totals.py"
+    )
+    spec = importlib.util.spec_from_file_location("_computed_tax_totals_migration", path)
+    assert spec is not None and spec.loader is not None, path
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    # As a SET, and separately as a count: a DELETE ... IN (...) has no order, while this
+    # file's tuple is in FORM order, which a re-ordered form must stay free to change.
+    assert set(migration._DERIVED_KEYS) == set(DERIVED_KEYS)
+    assert len(migration._DERIVED_KEYS) == len(DERIVED_KEYS)

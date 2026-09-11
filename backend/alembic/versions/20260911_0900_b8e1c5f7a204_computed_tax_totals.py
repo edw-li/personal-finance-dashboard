@@ -17,11 +17,17 @@ Create Date: 2026-09-11 09:00:00.000000
 
 """
 
+import logging
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 
 from alembic import op
+
+# Alembic's own logger, so the count lands in whatever handler the operator is already
+# watching (`alembic upgrade` prints it, the deploy script's log file keeps it) instead of
+# on a stdout a migration has no business writing to.
+logger = logging.getLogger("alembic.runtime.migration")
 
 # revision identifiers, used by Alembic.
 revision: str = "b8e1c5f7a204"
@@ -52,7 +58,7 @@ def upgrade() -> None:
             sa.bindparam("keys", value=_DERIVED_KEYS, expanding=True)
         )
     )
-    print(f"computed tax totals: deleted {result.rowcount} stored rows")
+    logger.info("computed tax totals: deleted %s stored rows", result.rowcount)
 
 
 def downgrade() -> None:

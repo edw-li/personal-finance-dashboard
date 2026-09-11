@@ -370,6 +370,64 @@ and 2.56 when this deploys.**
   COMPONENTS at identical arithmetic (24 checks x salary/24, `w2_other`, `interest_standard`,
   `ltcg_brokerage`, …).
 
+### Review round (2026-09-11, both reviewers' fixes applied)
+
+Approved subject to ten fixes; all ten are in, one commit.
+
+**The bug, and it was a real one.** The preview keyed its overlay by the RAW stored
+(key, person_id) while the PUT ADOPTS a legacy per-person row stored with `person_id`
+NULL for the primary. With a roster present and a NULL `annual_salary` of 120000 on
+file, a body of `{"annual_salary": "240000"}` previewed a gross paycheck of 15000 — both
+rows summed — where Save stored 10000; a body of `{"annual_salary": null}` previewed 5000
+where Save deleted the line. The adoption rule is now `_stored_slot(existing, key, owner,
+null_row_column)`, written once and read by both doors: the PUT pops whichever slot it
+lands on, the preview pops that same slot and writes the body's value back under the slot
+Save would leave behind. `test_preview_overlays_the_slot_the_put_would_write` seeds a
+legacy NULL row in two years and asserts, for a value body AND a null body, that the
+previewed figure is the figure the subsequent PUT's echo carries.
+
+**The five PUT pins deleted in 6a73e0a are back**, verbatim from main, in the section they
+were in (`…creates_year_upserts_and_deletes`, `…rejects_unknown_key_without_partial_write`,
+`…never_stores_a_signed_zero`, `…bounds_the_year`,
+`…rejects_out_of_range_and_non_numeric_values`). They pass as written: none of them speaks
+a derived key. Deleting them was collateral from re-expressing the fixtures around them,
+and they pin the year row, the upsert/delete, the signed zero and the column bounds —
+nothing else in the file does.
+
+**Cleanups in the same commit.**
+
+- `EngineFeed.rows` had no reader left once `person_inputs` landed — the withholding
+  card's partner block reads `feed.person_inputs`, which is the whole point of it: field,
+  argument and comment deleted. (The spec's §1.4 parenthetical "`feed.rows` stays for the
+  change-log and tracker-only keys" is therefore stale: the change log is written from the
+  PUT's own rows and the tracker-only keys are per-person, so they ride the buckets.)
+- `_inputs_payload` and `preview_inputs` asked the same questions of the same rows in two
+  spellings. Now `_input_views(year, rows, columns, filing_status)` builds all four views —
+  the stored buckets, the materialized buckets, the household dict and the assembled dict —
+  and `_derived_value(key, entered, source)` owns the "computed when any component is
+  entered, else None" rule for both doors. `_materialized_buckets` takes the already
+  bucketed rows, `_assemble_earners` too, and `_assemble_inputs` takes the household dict,
+  so a year's rows are bucketed ONCE per request where the payload, the preview and the
+  engine feed each used to bucket them two or three times over.
+- `HOUSEHOLD_DERIVED_KEYS` was documentation. `materialize_household` now ITERATES it over
+  a table of builders, so the tuple drives the dependency order it claims to pin. The
+  synthetic W-2 key is filled in before the loop (`itemized_deduction` reads it through
+  `_magi`; nothing in the loop moves it) and `q4` still lands at the assignment, so every
+  figure is unchanged.
+- The migration logs through `logging.getLogger("alembic.runtime.migration")` instead of
+  `print`, and `test_the_data_migration_deletes_exactly_the_nine_this_file_names` loads it
+  by path and pins its spelled-out key list against `tax_keys.DERIVED_KEYS`.
+- `derive_suggestions` is handed the MATERIALIZED household dict, not the raw one (same
+  answer today — the capital-loss suggestion reads household keys either way — but a stale
+  total is exactly what this lane removed).
+- `_DERIVED_KEY_SET` sits above `is_derived_key`; the preview's status test is
+  `test_preview_404_matches_the_get_and_422s_match_the_put`.
+- The refusal sentence agrees in number. Gross Paycheck has ONE component, and "edit those
+  instead" beside a single named row reads like an instruction to go and find the others:
+  `DERIVED_KEY_MESSAGE_ONE` says "is computed from its component (Annual Salary) — edit
+  that instead". Pinned by `test_the_refusal_sentence_agrees_with_a_single_component`; the
+  eight plural sentences are byte-identical to before.
+
 ### Left for the morning list
 
 - Scratch database `finance_test_taxa_mig` was created for the migration drill and left in

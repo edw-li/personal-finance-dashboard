@@ -401,6 +401,76 @@ async def test_summary_names_a_missing_deduction_on_its_own_line(auth_client, de
     assert body["federal"]["taxable_income"] == "100000.00"
 
 
+async def test_put_inputs_creates_year_upserts_and_deletes(auth_client, definitions):
+    created = await put_inputs(auth_client, 2027, {"annual_salary": "150000", "pay_periods": 18})
+    items = items_by_key(created)
+    assert items["annual_salary"]["value"] == "150000.0000"
+    assert items["pay_periods"]["value"] == "18.0000"  # a JSON number is legal too
+    years = (await auth_client.get(YEARS)).json()
+    assert [(y["year"], y["input_count"]) for y in years] == [(2027, 2)]
+
+    updated = await put_inputs(
+        auth_client, 2027, {"annual_salary": "160000.12345", "pay_periods": None}
+    )
+    items = items_by_key(updated)
+    assert items["annual_salary"]["value"] == "160000.1235"  # 4dp HALF_UP
+    assert items["pay_periods"]["value"] is None  # null deletes the row
+    assert (await auth_client.get(YEARS)).json()[0]["input_count"] == 1
+    # Keys absent from the body are untouched, and the PUT body IS the GET shape.
+    assert (await auth_client.get(f"{YEARS}/2027/inputs")).json() == updated
+
+
+async def test_put_inputs_rejects_unknown_key_without_partial_write(auth_client, definitions):
+    resp = await auth_client.put(
+        f"{YEARS}/2024/inputs", json={"values": {"annual_salary": "1", "nope": "2"}}
+    )
+    assert resp.status_code == 422
+    assert "nope" in resp.json()["detail"]
+    assert (await auth_client.get(YEARS)).json() == []  # not even the year row
+
+
+async def test_put_inputs_never_stores_a_signed_zero(auth_client, definitions):
+    """A value that rounds to -0.0000 must echo as "0.0000", the way a later GET reads it.
+
+    The UPDATE path is where it showed: the session keeps the written object
+    (expire_on_commit=False), so the PUT echoes the API's own Decimal rather than
+    Postgres's, and Postgres has no signed zero to hand back.
+    """
+    await put_inputs(auth_client, 2032, {"annual_salary": "1000"})  # seed, then UPDATE it
+    body = await put_inputs(
+        auth_client, 2032, {"annual_salary": "-0.00004", "pay_periods": "-0.00004"}
+    )
+    items = items_by_key(body)
+    assert items["annual_salary"]["value"] == "0.0000"  # updated row
+    assert items["pay_periods"]["value"] == "0.0000"  # inserted row
+    assert (await auth_client.get(f"{YEARS}/2032/inputs")).json() == body  # byte-for-byte
+
+
+async def test_put_inputs_bounds_the_year(auth_client, definitions):
+    for year in (1800, 2200):
+        resp = await auth_client.put(f"{YEARS}/{year}/inputs", json={"values": {}})
+        assert resp.status_code == 422, year
+    # Reads carry the same century guard (an int4 column would otherwise DataError).
+    assert (await auth_client.get(f"{YEARS}/1800/inputs")).status_code == 422
+    assert (await put_inputs(auth_client, 1900, {}))["year"] == 1900  # bounds are inclusive
+    assert (await put_inputs(auth_client, 2100, {}))["year"] == 2100
+
+
+async def test_put_inputs_rejects_out_of_range_and_non_numeric_values(auth_client, definitions):
+    for value in ("10000000000", "-10000000000"):
+        resp = await auth_client.put(
+            f"{YEARS}/2024/inputs", json={"values": {"annual_salary": value}}
+        )
+        assert resp.status_code == 422, value  # Numeric(14,4) holds 10 integer digits
+        assert "annual_salary" in resp.json()["detail"]
+    non_numeric = await auth_client.put(
+        f"{YEARS}/2024/inputs", json={"values": {"annual_salary": "abc"}}
+    )
+    assert non_numeric.status_code == 422  # pydantic's own Decimal parse
+    ok = await put_inputs(auth_client, 2024, {"annual_salary": "9999999999.9999"})
+    assert items_by_key(ok)["annual_salary"]["value"] == "9999999999.9999"
+
+
 # --- computed totals: the write refusal and the live preview (2026-09-11 spec §1.5-1.6) ---
 
 
@@ -433,6 +503,20 @@ async def test_put_inputs_refuses_a_derived_key_without_partial_write(auth_clien
     assert resp.json()["detail"] == (
         "Long Term Capital Gain/Loss is computed from its components (LTCG: Brokerage "
         "Gain/Loss, LTCG: ESPP Sale Component) — edit those instead"
+    )
+
+
+async def test_the_refusal_sentence_agrees_with_a_single_component(auth_client, definitions):
+    """Gross Paycheck is built from exactly ONE row, so the sentence names one.
+
+    "edit those instead" beside a single label reads like an instruction to go and find the
+    rows it did not name — the plural is the shape of the list, not of the rule."""
+    resp = await auth_client.put(
+        f"{YEARS}/2024/inputs", json={"values": {"gross_paycheck": "5000"}}
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == (
+        "Gross Paycheck is computed from its component (Annual Salary) — edit that instead"
     )
 
 
@@ -511,7 +595,50 @@ async def test_preview_per_person_columns(auth_client, db, household, definition
     assert ("ltcg_total", me.id) not in derived
 
 
-async def test_preview_404_and_422_match_the_put(auth_client, definitions):
+async def test_preview_overlays_the_slot_the_put_would_write(
+    auth_client, db, household, definitions
+):
+    """A legacy person_id-NULL row is the PRIMARY's slot, and their line in the body rewrites
+    that row rather than adding a second one (`_stored_slot`, the PUT's adoption rule).
+
+    The preview has to overlay the same slot or it previews a body the Save contradicts: two
+    rows summed where one was replaced, and a live paycheck where a null emptied the line.
+    """
+    me, _partner = household
+
+    async def legacy_year(year: int) -> None:
+        """A year whose salary was stored before the roster existed — person_id NULL."""
+        db.add(TaxYear(year=year))
+        await db.flush()
+        db.add(TaxInput(year=year, key="annual_salary", value=Decimal("120000.0000")))
+        await db.commit()
+
+    async def previewed(year: int, value: str | None) -> str | None:
+        resp = await auth_client.post(
+            f"{YEARS}/{year}/inputs/preview", json={"values": {"annual_salary": value}}
+        )
+        assert resp.status_code == 200, resp.text
+        return {(item["key"], item["person_id"]): item["value"] for item in resp.json()["derived"]}[
+            ("gross_paycheck", me.id)
+        ]
+
+    # A value REPLACES the legacy row, so the paycheck is 240000/24 — not the 15000 the two
+    # rows summed would make.
+    await legacy_year(2026)
+    preview = await previewed(2026, "240000")
+    saved = await put_inputs(auth_client, 2026, {"annual_salary": "240000"})
+    assert preview == items_by_key(saved)["gross_paycheck"]["value"]
+    assert preview == "10000.0000"
+
+    # A null DELETES it, so the computed line goes empty — no component left in the column.
+    await legacy_year(2027)
+    preview = await previewed(2027, None)
+    saved = await put_inputs(auth_client, 2027, {"annual_salary": None})
+    assert preview == items_by_key(saved)["gross_paycheck"]["value"]
+    assert preview is None
+
+
+async def test_preview_404_matches_the_get_and_422s_match_the_put(auth_client, definitions):
     await put_inputs(auth_client, 2024, {"w2_bonuses": "1000"})
 
     missing = await auth_client.post(f"{YEARS}/2019/inputs/preview", json={"values": {}})

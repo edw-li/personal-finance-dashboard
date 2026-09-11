@@ -193,7 +193,9 @@ DERIVED_KEYS: tuple[str, ...] = tuple(
 PER_PERSON_DERIVED_KEYS: tuple[str, ...] = tuple(k for k in DERIVED_KEYS if k in PER_PERSON_KEYS)
 # In DEPENDENCY order, which is why this one is spelled out rather than filtered from
 # DERIVED_KEYS: stcg_total nets against the REBUILT ltcg_total, and itemized_deduction
-# sizes its SALT cap on a MAGI that reads every total above it.
+# sizes its SALT cap on a MAGI that reads every total above it. `materialize_household`
+# ITERATES this tuple over a table of formulas, so the order below is the order the engine
+# runs — not a comment about it that a reordered function could silently contradict.
 HOUSEHOLD_DERIVED_KEYS: tuple[str, ...] = (
     "ltcg_total",
     "unqualified_dividends",
@@ -257,6 +259,9 @@ FORMULA_CAPTIONS: dict[str, str] = {
 }
 
 
+_DERIVED_KEY_SET = frozenset(DERIVED_KEYS)
+
+
 def is_derived_key(key: str) -> bool:
     """Is this total computed? The API stamps `is_derived` from HERE, not from the
     `tax_input_definitions` column — the seed is insert-only, so the column is a record of
@@ -264,12 +269,10 @@ def is_derived_key(key: str) -> bool:
     return key in _DERIVED_KEY_SET
 
 
-_DERIVED_KEY_SET = frozenset(DERIVED_KEYS)
-
-
 def component_labels(key: str) -> str:
     """This total's components, by LABEL, in form order — the text the two refusal
-    sentences interpolate ("edit those instead" / "override those instead").
+    sentences interpolate ("edit those instead" / "override those instead" — singular when
+    the total has exactly one component).
 
     Labels rather than keys because the sentence is read by the person looking at the form,
     where every one of these is a row they can see."""
