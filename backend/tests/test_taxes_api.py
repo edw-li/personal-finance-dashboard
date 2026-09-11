@@ -2720,3 +2720,194 @@ async def test_clone_copies_person_rows(auth_client, db, definitions):
         (None, Decimal("0.0100")),
         (me_id, Decimal("0.0130")),
     ]
+
+
+# --- the brackets editor's per-person strip (2026-09-11 spec §2.4) ---
+
+
+PER_WORKER_ONLY = "{name}: per-person tables exist only for social_security and disability"
+OFF_THE_RETURN = "person {id} is not on a {status} return"
+
+
+async def put_person_brackets(auth_client, year, person_id, jurisdictions, status="single"):
+    return await auth_client.put(
+        f"{YEARS}/{year}/brackets",
+        json={
+            "filing_status": status,
+            "person_id": person_id,
+            "jurisdictions": jurisdictions,
+        },
+    )
+
+
+async def test_brackets_payload_is_unchanged_without_a_roster(auth_client, definitions):
+    """`create_all` seeds no people, and a database older than the household migration is
+    the same state: the two new fields are empty rather than absent."""
+    body = await put_brackets(auth_client, 2026, {"disability": rows(("0.01", "0"))})
+    assert body["people"] == []
+    assert body["per_person"] == []
+
+
+async def test_get_brackets_carries_the_roster_of_the_tab_status(
+    auth_client, db, household, definitions
+):
+    me, partner = household
+    await put_brackets(auth_client, 2026, {"disability": rows(("0.01", "0"))})
+    resp = await put_person_brackets(auth_client, 2026, me.id, {"disability": rows(("0.013", "0"))})
+    assert resp.status_code == 200, resp.text
+
+    single = (await auth_client.get(f"{YEARS}/2026/brackets")).json()
+    # Single is one return for ONE person, so the strip offers one card.
+    assert single["people"] == [{"id": me.id, "name": "Me"}]
+    assert single["per_person"] == [
+        {
+            "person_id": me.id,
+            "name": "Me",
+            "jurisdictions": {
+                "social_security": [],
+                "disability": [{"bracket_index": 1, "rate": "0.0130", "threshold": "0.00"}],
+            },
+        }
+    ]
+    # ...and the DEFAULT table is still everyone's, untouched by the person's copy.
+    assert single["jurisdictions"]["disability"] == [
+        {"bracket_index": 1, "rate": "0.0100", "threshold": "0.00"}
+    ]
+
+    joint = (
+        await auth_client.get(f"{YEARS}/2026/brackets", params={"filing_status": "married_joint"})
+    ).json()
+    assert joint["people"] == [{"id": me.id, "name": "Me"}, {"id": partner.id, "name": "Partner"}]
+    # One entry per person either way; the MFJ tab has no person rows of its own yet.
+    assert [entry["person_id"] for entry in joint["per_person"]] == [me.id, partner.id]
+    assert all(
+        entry["jurisdictions"] == {"social_security": [], "disability": []}
+        for entry in joint["per_person"]
+    )
+
+
+async def test_put_brackets_writes_replaces_and_deletes_one_persons_table(
+    auth_client, db, household, definitions
+):
+    """A full replace is per (year, jurisdiction, status, PERSON) — never wider. The joint
+    tab, because that is the return whose roster has two earners on it."""
+    me, partner = household
+    joint = {"filing_status": "married_joint", "jurisdictions": {"disability": rows(("0.01", "0"))}}
+    assert (await auth_client.put(f"{YEARS}/2026/brackets", json=joint)).status_code == 200
+    for person, rate in ((me, "0.013"), (partner, "0.009")):
+        resp = await put_person_brackets(
+            auth_client, 2026, person.id, {"disability": rows((rate, "0"))}, status="married_joint"
+        )
+        assert resp.status_code == 200, resp.text
+
+    # The echo IS the editor's re-read (it re-syncs the saved table from `per_person`).
+    echo = (
+        await put_person_brackets(
+            auth_client,
+            2026,
+            me.id,
+            {"disability": rows(("0.014", "0"), ("0", "200000"))},
+            status="married_joint",
+        )
+    ).json()
+    mine, theirs = echo["per_person"]
+    assert (mine["person_id"], theirs["person_id"]) == (me.id, partner.id)
+    assert mine["jurisdictions"]["disability"] == [
+        {"bracket_index": 1, "rate": "0.0140", "threshold": "0.00"},
+        {"bracket_index": 2, "rate": "0.0000", "threshold": "200000.00"},
+    ]
+    assert theirs["jurisdictions"]["disability"] == [
+        {"bracket_index": 1, "rate": "0.0090", "threshold": "0.00"}
+    ]
+    assert echo["jurisdictions"]["disability"] == [
+        {"bracket_index": 1, "rate": "0.0100", "threshold": "0.00"}
+    ]
+
+    # An empty list is "use the default": that person's table goes, nobody else's does.
+    gone = (
+        await put_person_brackets(
+            auth_client, 2026, me.id, {"disability": []}, status="married_joint"
+        )
+    ).json()
+    assert gone["per_person"][0]["jurisdictions"]["disability"] == []
+    assert gone["per_person"][1]["jurisdictions"]["disability"] == [
+        {"bracket_index": 1, "rate": "0.0090", "threshold": "0.00"}
+    ]
+    assert gone["jurisdictions"]["disability"] == [
+        {"bracket_index": 1, "rate": "0.0100", "threshold": "0.00"}
+    ]
+
+    # ...and a DEFAULT replace leaves the person tables standing, the other direction of
+    # the same rule.
+    after = await auth_client.put(
+        f"{YEARS}/2026/brackets",
+        json={
+            "filing_status": "married_joint",
+            "jurisdictions": {"disability": rows(("0.011", "0"))},
+        },
+    )
+    assert after.json()["per_person"][1]["jurisdictions"]["disability"] == [
+        {"bracket_index": 1, "rate": "0.0090", "threshold": "0.00"}
+    ]
+
+
+async def test_put_brackets_refuses_a_person_on_a_per_return_jurisdiction(
+    auth_client, household, definitions
+):
+    me, _partner = household
+    resp = await put_person_brackets(auth_client, 2026, me.id, {"federal": rows(("0.10", "0"))})
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == PER_WORKER_ONLY.format(name="federal")
+    # ...and nothing was written on the way to refusing.
+    assert (await auth_client.get(f"{YEARS}/2026/brackets")).status_code == 404
+
+
+async def test_put_brackets_refuses_a_person_who_is_not_on_that_return(
+    auth_client, household, definitions
+):
+    _me, partner = household
+    resp = await put_person_brackets(
+        auth_client, 2026, partner.id, {"disability": rows(("0.013", "0"))}
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == OFF_THE_RETURN.format(id=partner.id, status="single")
+    # The same body under the status whose return DOES cover them is fine.
+    ok = await put_person_brackets(
+        auth_client, 2026, partner.id, {"disability": rows(("0.013", "0"))}, status="married_joint"
+    )
+    assert ok.status_code == 200, ok.text
+
+
+async def test_put_brackets_refuses_an_unknown_person(auth_client, household, definitions):
+    resp = await put_person_brackets(auth_client, 2026, 4242, {"disability": rows(("0.013", "0"))})
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == OFF_THE_RETURN.format(id=4242, status="single")
+
+
+async def test_a_persons_table_belongs_to_one_status(auth_client, household, definitions):
+    """Person rows carry a status like every other bracket row, and a tab shows its own."""
+    me, _partner = household
+    await put_person_brackets(
+        auth_client, 2026, me.id, {"social_security": rows(("0.062", "0"), ("0", "100000"))}
+    )
+    joint = (
+        await auth_client.get(f"{YEARS}/2026/brackets", params={"filing_status": "married_joint"})
+    ).json()
+    assert joint["per_person"][0]["jurisdictions"]["social_security"] == []
+    single = (await auth_client.get(f"{YEARS}/2026/brackets")).json()
+    assert len(single["per_person"][0]["jurisdictions"]["social_security"]) == 2
+
+
+async def test_person_tables_obey_the_same_table_rules(auth_client, household, definitions):
+    """`_validated_table` is unchanged: a person's copy is a bracket table like any other."""
+    me, _partner = household
+    ascending = await put_person_brackets(
+        auth_client, 2026, me.id, {"disability": rows(("0.01", "0"), ("0.02", "0"))}
+    )
+    assert ascending.status_code == 422
+    assert ascending.json()["detail"] == "disability: thresholds must be strictly ascending"
+    floored = await put_person_brackets(
+        auth_client, 2026, me.id, {"disability": rows(("0.01", "1000"))}
+    )
+    assert floored.status_code == 422
+    assert floored.json()["detail"] == "disability: the first bracket threshold must be 0"

@@ -146,6 +146,20 @@ class BracketIn(BaseModel):
     threshold: Decimal
 
 
+class PersonBracketsOut(BaseModel):
+    """One earner's own per-worker tables (2026-09-11 spec §2.4).
+
+    Only `tax_keys.PER_WORKER_JURISDICTIONS` may appear, and both names are always present:
+    a jurisdiction this person has no table for is an EMPTY list, which is also the body
+    that deletes one. "No table" and "a table with no rows" are the same statement, and the
+    strip renders the difference between having one and not.
+    """
+
+    person_id: int
+    name: str
+    jurisdictions: dict[str, list[BracketOut]]
+
+
 class BracketsOut(BaseModel):
     # All six jurisdictions always present, possibly with empty tables.
     year: int
@@ -153,7 +167,15 @@ class BracketsOut(BaseModel):
     # The statuses this YEAR has at least one stored bracket row for, sorted. The status
     # tabs read it: an empty tab is a setup state the page has to be able to show.
     statuses_with_rows: list[str]
+    # The DEFAULT tables — what everyone on the return walks unless they have their own.
     jurisdictions: dict[str, list[BracketOut]]
+    # The roster a return under THIS payload's status covers, in column order: everybody
+    # under married-joint, the primary alone under single and MFS. Empty on a database with
+    # no people, which is every database older than the household migration.
+    people: list[TaxPersonOut]
+    # One entry per person above, always — a person with no table of their own is an entry
+    # of empty lists rather than an absence, so the editor can offer to add one.
+    per_person: list[PersonBracketsOut]
 
 
 class BracketsIn(BaseModel):
@@ -161,6 +183,10 @@ class BracketsIn(BaseModel):
     # are untouched, and so is every other status's copy of them.
     filing_status: FilingStatus = "single"
     jurisdictions: dict[str, list[BracketIn]]
+    # WHOSE tables this body replaces: null (or omitted) is the year+status default, for
+    # everyone; a person id is that earner's own copy, and then the body may name only the
+    # two per-worker jurisdictions and only a person the status' return covers.
+    person_id: int | None = None
 
 
 class BracketReviewFlags(BaseModel):

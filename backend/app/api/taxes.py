@@ -68,6 +68,7 @@ from app.schemas.taxes import (
     FilingStatus,
     IncomeTaxOut,
     IncompleteYearOut,
+    PersonBracketsOut,
     SafeHarborOut,
     SaleDetailOut,
     TaxInputItemOut,
@@ -806,17 +807,36 @@ async def _brackets_payload(
         )
     ).scalars()
     tables: dict[str, list[BracketOut]] = {name: [] for name in JURISDICTIONS}
+    owned: dict[int, dict[str, list[BracketOut]]] = {}
     for row in rows:
-        # setdefault, not [...]: the importer could carry a jurisdiction this API cannot
-        # write, and a GET must still show it rather than silently drop it.
-        tables.setdefault(row.jurisdiction, []).append(
-            BracketOut(bracket_index=row.bracket_index, rate=row.rate, threshold=row.threshold)
-        )
+        out = BracketOut(bracket_index=row.bracket_index, rate=row.rate, threshold=row.threshold)
+        if row.person_id is None:
+            # setdefault, not [...]: the importer could carry a jurisdiction this API cannot
+            # write, and a GET must still show it rather than silently drop it.
+            tables.setdefault(row.jurisdiction, []).append(out)
+        else:
+            owned.setdefault(row.person_id, {}).setdefault(row.jurisdiction, []).append(out)
+    # The roster THIS TAB's return covers (spec §2.4) — the same `_return_people` the engine
+    # feed builds its columns from, so the strip shows exactly the earners whose tables that
+    # status would walk. A person with rows under another status is not one of them.
+    people = _return_people(await load_people(db), filing_status)
     return BracketsOut(
         year=year,
         filing_status=filing_status,
         statuses_with_rows=await _statuses_with_rows(db, year),
         jurisdictions=tables,
+        people=[TaxPersonOut(id=person.id, name=person.name) for person in people],
+        per_person=[
+            PersonBracketsOut(
+                person_id=person.id,
+                name=person.name,
+                jurisdictions={
+                    name: owned.get(person.id, {}).get(name, [])
+                    for name in PER_WORKER_JURISDICTIONS
+                },
+            )
+            for person in people
+        ],
     )
 
 
@@ -1234,6 +1254,48 @@ async def get_brackets(
     return await _brackets_payload(db, year, filing_status)
 
 
+# The two per-person refusals (spec §2.4), quoted verbatim by the editor. " and ", not
+# ", ": the tuple IS the sentence's list, so a third per-worker jurisdiction would rewrite
+# the copy rather than leave it lying.
+PER_WORKER_ONLY_MESSAGE = "{name}: per-person tables exist only for " + " and ".join(
+    PER_WORKER_JURISDICTIONS
+)
+PERSON_OFF_RETURN_MESSAGE = "person {id} is not on a {status} return"
+
+
+async def _validated_person(db: AsyncSession, body: BracketsIn) -> None:
+    """Refuse a per-person body this API cannot honour, BEFORE anything is written.
+
+    Two rules, and both are about meaning rather than shape: a per-RETURN threshold has no
+    per-person reading at all (Medicare's additional tier is assessed on combined wages by
+    statute), and a table for somebody the body's status does not cover would be a row no
+    engine feed ever loads — entered, stored, and silently inert.
+    """
+    if body.person_id is None:
+        return
+    for name in body.jurisdictions:
+        if name not in PER_WORKER_JURISDICTIONS:
+            raise HTTPException(status_code=422, detail=PER_WORKER_ONLY_MESSAGE.format(name=name))
+    people = _return_people(await load_people(db), body.filing_status)
+    if body.person_id not in {person.id for person in people}:
+        raise HTTPException(
+            status_code=422,
+            detail=PERSON_OFF_RETURN_MESSAGE.format(id=body.person_id, status=body.filing_status),
+        )
+
+
+def _person_scope(person_id: int | None):
+    """The WHERE term that pins a replace to ONE table: the default, or one person's.
+
+    Both directions matter. Without it a default save would take every earner's own table
+    with it, and a person's save would take the default — the full replace is per
+    (year, jurisdiction, status, PERSON), never per (year, jurisdiction, status).
+    """
+    if person_id is None:
+        return TaxBracket.person_id.is_(None)
+    return TaxBracket.person_id == person_id
+
+
 @router.put("/years/{year}/brackets", response_model=BracketsOut)
 async def put_brackets(
     year: YearPath, body: BracketsIn, db: AsyncSession = Depends(get_db)
@@ -1244,6 +1306,7 @@ async def put_brackets(
     unknown = sorted(set(body.jurisdictions) - set(JURISDICTIONS))
     if unknown:
         raise HTTPException(status_code=422, detail=f"unknown jurisdiction(s): {unknown}")
+    await _validated_person(db, body)
     # Validate every jurisdiction before touching any of them: a mixed body must write all
     # of its tables or none.
     validated = {name: _validated_table(name, table) for name, table in body.jurisdictions.items()}
@@ -1251,13 +1314,14 @@ async def put_brackets(
     await _ensure_year(db, year)
     for name, table in validated.items():
         # Core DELETE rather than ORM deletes: the unit of work flushes INSERTs before
-        # DELETEs, so replacing a table in place would trip the
-        # (year, jurisdiction, filing_status, bracket_index) unique constraint.
+        # DELETEs, so replacing a table in place would trip the partial unique index on
+        # (year, jurisdiction, filing_status[, person_id], bracket_index).
         await db.execute(
             delete(TaxBracket).where(
                 TaxBracket.year == year,
                 TaxBracket.jurisdiction == name,
                 TaxBracket.filing_status == body.filing_status,
+                _person_scope(body.person_id),
             )
         )
         for index, (rate, threshold) in enumerate(table, start=1):
@@ -1266,6 +1330,7 @@ async def put_brackets(
                     year=year,
                     jurisdiction=name,
                     filing_status=body.filing_status,
+                    person_id=body.person_id,
                     bracket_index=index,  # 1-based array order, renumbered on every replace
                     rate=rate,
                     threshold=threshold,
@@ -1341,6 +1406,8 @@ async def clone_brackets(
         filing_status=payload.filing_status,
         statuses_with_rows=payload.statuses_with_rows,
         jurisdictions=payload.jurisdictions,
+        people=payload.people,
+        per_person=payload.per_person,
         # The FIXED six-table classification, not "what happened to be in the source": the
         # flags describe which tables are status-SENSITIVE, which is a property of the tax
         # code rather than of this particular clone.
