@@ -401,7 +401,12 @@ rules live in the client (§2.7).
 
 - Under the Social Security and Disability rows, indented sub-rows — one per `per_person` entry:
   name · wages · taxable · tax · rate, a `capped at {threshold}` note when `taxable_wages <
-  w2_income` on Social Security, and a small tag `own table` / `default`.
+  w2_income` **and `taxable_wages > 0`** on Social Security (an exempt earner on an all-zero table
+  has nothing capped — amended 2026-09-11 at lane D's review), and a small tag `own table` /
+  `default`.
+- As built (lane D): a seeded-but-unsaved person table also offers `Discard draft` (client-side, no
+  request); saving an empty unstored draft discards it rather than confirming a delete; the status
+  tabs are disabled while any table's save is in flight.
 - Render rule: sub-rows appear when the list has two or more entries OR any entry is `own`. A
   single-earner default-table year renders exactly as today.
 - "By jurisdiction" hint gains: "Social Security and Disability are per worker: each earner's row
