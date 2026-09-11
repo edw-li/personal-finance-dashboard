@@ -12,26 +12,25 @@
 
 ## Integration checks (the contracts, end to end)
 
-- [ ] Lane B's `previewTaxInputs` body/response matches lane A's `preview_inputs`; lane B's
-  `formula` field is what lane A serializes.
-- [ ] Lane D's `TaxBracketsOut.people/per_person` and `TaxBracketsUpdate.person_id` match lane C's
-  schemas; `WageTaxOut.per_person` items carry `table: 'own' | 'default'`.
-- [ ] Grep for leftovers: `rewrite_itemized_deduction`, `putTaxInputsForRepair`,
+- [x] Lane B's `previewTaxInputs` body/response matches lane A's `preview_inputs`; lane B's
+  `formula` field is what lane A serializes. (Lane A verified the merged types byte-for-byte; smoke: partner Other W2 Income moved $1,000 → $6,000 before Save, echo kept it.)
+- [x] Lane D's `TaxBracketsOut.people/per_person` and `TaxBracketsUpdate.person_id` match lane C's
+  schemas; `WageTaxOut.per_person` items carry `table: 'own' | 'default'`. (Lane C verified against the merged fixtures; smoke: per_person Me:default / Partner:own rendered as sub-rows.)
+- [x] Grep for leftovers (only a historical comment in src/types/api.ts names the retired action): `rewrite_itemized_deduction`, `putTaxInputsForRepair`,
   `check_sec199a_in_itemized`, the old ten-key `SUGGESTION_KEYS`, `_bucket_input_rows` readers of
   money, `DELTA_KEYS` tuples with a total.
 
 ## Gates on merged main
 
-- [ ] Backend: `ruff check app tests`, `ruff format --check app tests`, full pytest
-  (`FINANCE_TEST_DB=finance_test_v`), counts recorded.
-- [ ] Dev DB: `alembic upgrade head` against the dev `finance` DB (5433), then `alembic check` clean.
-  Record the new head.
-- [ ] Frontend: `npx eslint .`, `npx tsc -b`, `npm test`, `npm run build` (chunk size within the
-  existing budget noted in the last batch).
+- [x] Backend: `ruff check app tests` clean, `ruff format --check` clean (250 files), full pytest
+  (`FINANCE_TEST_DB=finance_test_v`): **1971 passed, 1 skipped in 18:02**, exit 0 (log: `scratchpad/tax-smoke-2026-09-11/pytest-main-full.log`).
+- [x] Dev DB: `alembic upgrade head` against the dev `finance` DB (5433), then `alembic check` clean.
+  New head `d5f2b7c8e390` (c4a7e2b9d13f → b8e1c5f7a204 → d5f2b7c8e390); check: "No new upgrade operations detected."
+- [x] Frontend: `npx eslint .` 0 errors (19 pre-existing warnings), `npx tsc -b` clean, `npm test` 2753 passed / 193 files, `npm run build` ok (tooltip chunk 748 kB unchanged).
 
 ## Browser smoke (real stack)
 
-- [ ] Start `uvicorn app.main:app --port 8000` (scheduler off, the house flag) from `backend/` against
+- [x] Start `uvicorn app.main:app --port 8000` (scheduler off, the house flag) from `backend/` against
   the migrated dev DB and `npm run dev` (5173). Puppeteer/Playwright script under `scratchpad/`:
   1. Create scratch year 2099 as married_joint with the two dev people; clone brackets as MFJ.
   2. Inputs: type a partner `w2_bonuses` and watch `Other W2 Income` change before saving; Save;
@@ -42,14 +41,12 @@
   5. Screenshots to `scratchpad/tax-smoke-2026-09-11/`; zero console/page errors.
   6. Delete the scratch year through the API (it is scratch data, not user data) — or leave it for
      the morning list if the delete route is considered human-flaggable.
-- [ ] Stop the servers you started unless the user's morning list wants them up.
+- [x] Servers LEFT RUNNING (uvicorn 8000 scheduler-off + vite 5173) for the morning eyeball, house practice. Smoke: `scratchpad/tax-smoke-2026-09-11/{run_smoke.sh,ui_smoke.mjs}` → UI SMOKE OK, 6 screenshots; scratch year 2099 deleted via the API at teardown.
 
 ## Documentation and memory
 
-- [ ] Spec `**Status:**` line → "implemented 2026-09-12 — lanes A–D merged to local main @<sha>";
-  tick every plan checkbox that shipped; note deviations inline in the spec section they touch.
-- [ ] Memory: update `payroll-taxes-per-person-2026-09-11.md` + `MEMORY.md` with the batch outcome,
-  gates, dev-DB head, and the morning list.
+- [x] Spec `**Status:**` line → implemented 2026-09-12 (lane shas inside); lane plans ticked by their lanes with as-built + review-round notes; spec amendments inline (§1.3 goldens, §1.4 feed.rows, §2.2 zero rule, §2.3 bundles/loader, §2.7 capped note).
+- [x] Memory: `tax-batch-2026-09-11.md` + `MEMORY.md` carry the outcome, gates, dev-DB head and the morning list.
 
 ## Morning list (human-flaggable, deferred — NOT run overnight)
 

@@ -1,6 +1,11 @@
 # Computed tax totals and per-person payroll tables (2026-09-11) — design record
 
-**Status:** approved design, awaiting `writing-plans`. Source: the 2026-09-11 conversation — the
+**Status:** implemented 2026-09-12 — lanes A (56429a5), B (2cd216e), C (acc5063) and D (d588dd2) merged
+to local main, NOT pushed; every lane passed a spec-compliance and a code-quality review with a fix
+round; merged-main gates: backend 1971 passed / 1 skipped + ruff clean, frontend tsc / eslint 0 errors /
+vitest 2753 / build; dev DB migrated to `d5f2b7c8e390` with `alembic check` clean; real-browser smoke
+green (`scratchpad/tax-smoke-2026-09-11/`). Amendments made during review are marked inline
+("Amended 2026-09-11" / "As built"). Source: the 2026-09-11 conversation — the
 user asked whether Social Security is modelled per worker on a married-joint year, how a
 household with one spouse on an employer Voluntary Plan and the other on California SDI is
 represented, and why the derived tax-input totals are editable. Two read-only production censuses
