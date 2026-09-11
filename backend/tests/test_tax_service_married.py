@@ -535,3 +535,133 @@ def test_derive_suggestions_defaults_to_single():
     items = {"ltcg_brokerage": D("-5000")}
     assert derive_suggestions(2025, items) == derive_suggestions(2025, items, SINGLE)
     assert derive_suggestions(2025, items) != derive_suggestions(2025, items, MARRIED_SEPARATE)
+
+
+# --------------------------------------------------------------------------------------
+# Per-worker tables per earner (2026-09-11 spec §2.2)
+# --------------------------------------------------------------------------------------
+
+# The production shape this exists for: the household's DEFAULT Disability table is one
+# spouse's employer Voluntary Plan (1% to a 300000 ceiling), while the other spouse's
+# payroll withholds California statutory SDI (1.3%, no ceiling since SB 951). One table
+# cannot hold both.
+VP_BRACKETS = dict(MFJ_BRACKETS) | {"disability": [(D("0.01"), D("0")), (D("0"), D("300000"))]}
+CA_SDI = [(D("0.013"), D("0"))]
+
+
+def bundles(*earners: EarnerWages) -> list[EarnerWages]:
+    return list(earners)
+
+
+def test_own_disability_table_replaces_the_default_for_that_earner():
+    """A's Voluntary Plan is the year's default; B walks their own statutory SDI table."""
+    a, b = (
+        MFJ_EARNERS[0],
+        MFJ_EARNERS[1].__class__(
+            w2_wages=MFJ_EARNERS[1].w2_wages,
+            pretax_hsa=MFJ_EARNERS[1].pretax_hsa,
+            other_pretax=MFJ_EARNERS[1].other_pretax,
+            payroll_tables={"disability": CA_SDI},
+        ),
+    )
+    breakdown = compute_breakdown(
+        MFJ_YEAR, MFJ_INPUTS, VP_BRACKETS, filing_status=MARRIED_JOINT, earners=[a, b]
+    )
+    # A: 199700 x .01 under the VP's 300000 ceiling. B: 99800 x .013, no ceiling at all.
+    assert cents(breakdown.disability.tax) == D("1997.00") + D("1297.40")
+    assert breakdown.disability.taxable_wages == D("299500")  # uncapped, as today
+    first, second = breakdown.disability.per_person
+    assert (first.own_table, cents(first.tax)) == (False, D("1997.00"))
+    assert (second.own_table, cents(second.tax)) == (True, D("1297.40"))
+
+
+def test_own_social_security_cap_is_per_table():
+    """Two earners, two wage bases, two DIFFERENT ceilings — the cap is a property of the
+    table each of them walks, not of the year."""
+    tables = dict(MFJ_BRACKETS) | {"social_security": [(D("0.062"), D("0")), (D("0"), D("184500"))]}
+    a = EarnerWages(w2_wages=D("250000"))
+    b = EarnerWages(
+        w2_wages=D("150000"),
+        payroll_tables={"social_security": [(D("0.062"), D("0")), (D("0"), D("100000"))]},
+    )
+    breakdown = compute_breakdown(
+        MFJ_YEAR, MFJ_HOUSEHOLD, tables, filing_status=MARRIED_JOINT, earners=[a, b]
+    )
+    first, second = breakdown.social_security.per_person
+    assert first.taxable_wages == D("184500")
+    assert second.taxable_wages == D("100000")
+    assert breakdown.social_security.taxable_wages == D("284500")
+    assert cents(breakdown.social_security.tax) == cents(D("284500") * D("0.062"))
+
+
+def test_all_zero_table_taxes_nothing_and_reports_nothing_taxable():
+    """The SS-exempt job: a table whose every rate is 0 is not a 0% walk over real wages,
+    it is a person with no wage base at all — so the aggregate excludes them too."""
+    a = EarnerWages(w2_wages=D("120000"))
+    b = EarnerWages(w2_wages=D("90000"), payroll_tables={"social_security": [(D("0"), D("0"))]})
+    breakdown = compute_breakdown(
+        MFJ_YEAR, MFJ_HOUSEHOLD, MFJ_BRACKETS, filing_status=MARRIED_JOINT, earners=[a, b]
+    )
+    exempt = breakdown.social_security.per_person[1]
+    assert (exempt.tax, exempt.taxable_wages, exempt.own_table) == (D("0"), D("0"), True)
+    assert exempt.w2_income == D("90000")  # their W-2 is real; their wage base is not
+    assert breakdown.social_security.taxable_wages == D("120000")
+    assert cents(breakdown.social_security.tax) == cents(D("120000") * D("0.062"))
+
+
+def test_empty_mapping_is_the_default_path():
+    """No person tables anywhere is byte-identical to the two-earner engine that shipped
+    before them — and an EMPTY list for a jurisdiction still means "no table"."""
+    reference = mfj_breakdown()
+    assert all(earner.payroll_tables == {} for earner in MFJ_EARNERS)
+    assert cents(reference.social_security.tax) == D("17347.60")
+    assert cents(reference.disability.tax) == D("2995.00")
+
+    blank = [
+        EarnerWages(
+            w2_wages=earner.w2_wages,
+            pretax_hsa=earner.pretax_hsa,
+            other_pretax=earner.other_pretax,
+            payroll_tables={"social_security": [], "disability": []},
+        )
+        for earner in MFJ_EARNERS
+    ]
+    fallen_back = compute_breakdown(
+        MFJ_YEAR, MFJ_INPUTS, MFJ_BRACKETS, filing_status=MARRIED_JOINT, earners=blank
+    )
+    assert actuals(fallen_back) == actuals(reference)
+    assert [line.own_table for line in fallen_back.social_security.per_person] == [False, False]
+
+
+def test_per_person_results_follow_bundle_order():
+    breakdown = mfj_breakdown()
+    assert breakdown.medicare.per_person == []  # combined by statute, never split
+    for family, expected in (
+        ("social_security", [D("180000"), D("99800")]),
+        ("disability", [D("199700"), D("99800")]),
+    ):
+        result = getattr(breakdown, family)
+        assert len(result.per_person) == len(MFJ_EARNERS), family
+        for line, earner, taxable in zip(result.per_person, MFJ_EARNERS, expected, strict=True):
+            assert line.w2_income == earner.w2_wages, family
+            assert line.taxable_wages == taxable, family
+            assert line.own_table is False, family
+            assert line.effective_rate == line.tax / earner.w2_wages, family
+        assert sum(line.tax for line in result.per_person) == result.tax, family
+        assert sum(line.taxable_wages for line in result.per_person) == result.taxable_wages
+
+
+def test_shift_earners_preserves_payroll_tables():
+    """A what-if re-bases the primary's WAGES from their components; their own per-worker
+    tables are not a wage and must survive the rebuild."""
+    head = EarnerWages(
+        w2_wages=MFJ_EARNERS[0].w2_wages,
+        pretax_hsa=MFJ_EARNERS[0].pretax_hsa,
+        other_pretax=MFJ_EARNERS[0].other_pretax,
+        payroll_tables={"disability": CA_SDI},
+    )
+    after = dict(EARNER_A) | {"w2_bonuses": D("60000")}
+    shifted = shift_earners([head, MFJ_EARNERS[1]], after)
+    assert shifted[0].w2_wages == head.w2_wages + D("10000")
+    assert shifted[0].payroll_tables == {"disability": CA_SDI}
+    assert shifted[1] == MFJ_EARNERS[1]
