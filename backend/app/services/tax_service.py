@@ -20,8 +20,12 @@ drifted/divergent sheet value to the cent, so no difference is accidental. Prece
 Plan 3's savings-rate line and Plan 4's Unrealized column shipped the principled formula
 over the sheet's the same way.
 
-Stored input values are authoritative for the breakdown; `derive_suggestions` is advisory
-only (the UI offers a chip, nothing is ever auto-applied server-side).
+Stored input values are authoritative for the breakdown with ONE class of exception
+(2026-09-11 spec §1.3): the nine derived totals are never read from storage at all. The
+engine rebuilds them from their components through `materialize_person` /
+`materialize_household`, so a stale or fabricated total handed in by any caller is
+overwritten rather than taxed. `derive_suggestions` is what remains advisory — one
+chip, the capital-loss carryforward, and nothing is ever auto-applied server-side.
 
 Outputs are full-precision and UNBOUNDED: a product of two API-bounded inputs (treasuries ×
 exempt-pct, each up to 10^10) reaches ~10^20, and an effective rate over a near-zero base
@@ -34,7 +38,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.tax_keys import JURISDICTIONS, MARRIED_JOINT, MARRIED_SEPARATE, SINGLE
+from app.tax_keys import (
+    DERIVED_COMPONENTS,
+    JURISDICTIONS,
+    MARRIED_JOINT,
+    MARRIED_SEPARATE,
+    SINGLE,
+    is_derived_key,
+)
 
 ZERO = Decimal("0")
 
@@ -214,6 +225,12 @@ def _federal_agi(value: Callable[[str], Decimal]) -> Decimal:
     ONE definition with two direct consumers — `compute_breakdown`'s income chain and
     `_magi` — and through them the state chain, the NIIT threshold test and the SALT
     phase-down. Term order is the canonical formula's, so the goldens pin it to the cent.
+    The wage term is the SYNTHETIC `w2_income` key since 2026-09-11 (spec §1.3): it is the
+    sum of the earner bundles' `w2_wages`, each of which was rebuilt from that person's own
+    components, because latest+other summed across a household is not a figure any person
+    has. `compute_breakdown` sets it before this is ever called; `materialize_household`
+    fills it in for a standalone caller working from one dict.
+
     capital_loss_deductions joined AGI on 2026-08-31 (spec C3): the sheet modelled the
     line but no output formula ever read it — a modelled deduction the workbook silently
     dropped. Stored <= 0 by the suggestion's convention and used verbatim either way
@@ -223,8 +240,7 @@ def _federal_agi(value: Callable[[str], Decimal]) -> Decimal:
     """
     return (
         (
-            value("latest_w2_income")
-            + value("other_w2_income")
+            value(W2_INCOME_KEY)
             + value("stcg_total")
             + value("unqualified_dividends")
             + value("interest_total")
@@ -312,10 +328,18 @@ class EarnerWages:
 def earner_from_inputs(values: Mapping[str, Decimal]) -> EarnerWages:
     """One person's bundle from THEIR OWN input rows — the exact composition
     `compute_breakdown` synthesizes when `earners` is None, so the API can build a
-    two-earner list without a second definition of "what a W-2 is"."""
+    two-earner list without a second definition of "what a W-2 is".
+
+    It materializes the bucket FIRST (2026-09-11 spec §1.3), so `w2_wages` and
+    `other_pretax` can only ever be this person's own components rolled up. That is what
+    closes the last door: on the single-earner path the engine synthesizes its one bundle
+    through here, so no caller — not even a direct one — can hand the payroll walks a
+    typed W-2 total.
+    """
+    materialized = materialize_person(values)
 
     def value(key: str) -> Decimal:
-        found = values.get(key)
+        found = materialized.get(key)
         return ZERO if found is None else found
 
     return EarnerWages(
@@ -327,8 +351,7 @@ def earner_from_inputs(values: Mapping[str, Decimal]) -> EarnerWages:
 
 def shift_earners(
     earners: list[EarnerWages] | None,
-    before: dict[str, Decimal],
-    after: dict[str, Decimal],
+    primary_after: Mapping[str, Decimal],
 ) -> list[EarnerWages] | None:
     """Re-base a wage-bundle list onto a what-if scenario's inputs.
 
@@ -337,24 +360,16 @@ def shift_earners(
     the partner's own wage base is untouched beside it. `None` (and an empty list) passes
     straight through, so a single-earner year keeps taking the engine's own synthesis
     path and stays byte-identical.
+
+    `primary_after` is the primary's own COMPONENT bucket with the scenario's deltas
+    already in it (the caller builds it), and the head bundle is simply re-materialized
+    from it. Before 2026-09-11 this added deltas of the derived totals onto the old
+    bundle; there are no stored totals to take a delta of any more, and re-running the one
+    definition of "what a W-2 is" cannot drift from it.
     """
     if not earners:
         return earners
-
-    def delta(key: str) -> Decimal:
-        return after.get(key, ZERO) - before.get(key, ZERO)
-
-    head = earners[0]
-    return [
-        EarnerWages(
-            w2_wages=head.w2_wages + delta("latest_w2_income") + delta("other_w2_income"),
-            pretax_hsa=head.pretax_hsa
-            + delta("hsa_contributions")
-            + delta("hsa_contributions_employer"),
-            other_pretax=head.other_pretax + delta("other_pretax_deductions"),
-        ),
-        *earners[1:],
-    ]
+    return [earner_from_inputs(primary_after), *earners[1:]]
 
 
 @dataclass
@@ -452,25 +467,48 @@ def compute_breakdown(
     list is not "one earner with nothing": it means no wage data at all, and reads like a
     year with no W-2.
     """
-    values: dict[str, Decimal] = {}
+    # A copy of the WHOLE dict, not just the engine's keys: materialization below reads
+    # the components (annual_salary, pretax_dental, itemized_salt, ...), which are inputs
+    # the engine itself never walks.
+    values: dict[str, Decimal] = dict(inputs)
     missing_inputs: list[str] = []
     for key in ENGINE_INPUT_KEYS:
-        found = inputs.get(key)
-        if found is None:
-            missing_inputs.append(key)
-            values[key] = ZERO
-        else:
-            values[key] = found
+        if is_derived_key(key):
+            # A computed total is missing only when EVERY component of it is absent
+            # (2026-09-11 spec §1.3) — what is or is not stored under the total itself is
+            # irrelevant, because materialization is about to overwrite it. A total with
+            # one entered component is not missing, it is computed; a total with none is
+            # named by its own key, exactly as before, so the sentence keeps reading at
+            # the form's granularity.
+            if any(inputs.get(component) is not None for component in DERIVED_COMPONENTS[key]):
+                continue
+        elif inputs.get(key) is not None:
+            continue
+        missing_inputs.append(key)
+        values[key] = ZERO
 
     warnings: list[str] = []
     # Absent is not zero here, it is a headline: see DEDUCTION_MISSING_WARNING. Both, not
     # either — a year that stores one of the pair has told the engine what it needs, and
-    # max(standard, itemized) reads the other as the zero it is.
+    # max(standard, itemized) reads the other as the zero it is. The pair rule now reads
+    # over COMPONENTS for free: `itemized_deduction` is in this list precisely when no
+    # itemized component was entered.
     if all(key in missing_inputs for key in DEDUCTION_KEYS):
         warnings.append(DEDUCTION_MISSING_WARNING.format(year=year))
         missing_inputs = [key for key in missing_inputs if key not in DEDUCTION_KEYS]
     if missing_inputs:
         warnings.append(MISSING_INPUTS_WARNING.format(keys=", ".join(missing_inputs)))
+
+    # The wage bundles come FIRST (spec §1.3), before anything reads a number: each one is
+    # rebuilt from its person's own components inside `earner_from_inputs`, and the engine
+    # then takes its W-2 and other-pre-tax terms from the bundles rather than from the flat
+    # dict — which cannot hold a per-person product. The five HOUSEHOLD totals are rebuilt
+    # straight after, over a dict that already carries the right wages, so the SALT
+    # phase-down's MAGI sees them.
+    bundles = [earner_from_inputs(values)] if earners is None else list(earners)
+    values[W2_INCOME_KEY] = sum((earner.w2_wages for earner in bundles), ZERO)
+    values["other_pretax_deductions"] = sum((earner.other_pretax for earner in bundles), ZERO)
+    values = materialize_household(year, values, filing_status)
 
     tables: dict[str, list[Bracket]] = {}
     for name in JURISDICTIONS:
@@ -557,8 +595,7 @@ def compute_breakdown(
     # for income tax only. SDI subtracts dental/vision alone, not HSA (the CA quirk).
     # One earner or many, the REPORTED aggregates are identical sums; what changes is
     # where the per-person caps bite (2026-08-26 spec §5.3).
-    bundles = [earner_from_inputs(values)] if earners is None else list(earners)
-    w2_income = sum((earner.w2_wages for earner in bundles), ZERO)
+    w2_income = values[W2_INCOME_KEY]
     # Medicare is a COMBINED-wage walk on purpose, and its shape is unchanged: the 1.45%
     # base is linear, and the 0.9% additional tier is legally assessed on COMBINED wages
     # above the status threshold (Form 8959). Correctness therefore comes from the
@@ -622,8 +659,7 @@ def compute_breakdown(
     # not the netted totals, so a netted-away loss still shows up in the top line; total
     # income repeats the clean AGI formula.
     gross_income = (
-        values["latest_w2_income"]
-        + values["other_w2_income"]
+        values[W2_INCOME_KEY]
         + values["stcg_standard"]
         + values["unqualified_dividends"]
         + values["interest_total"]

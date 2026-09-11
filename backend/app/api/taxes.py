@@ -1842,7 +1842,7 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
             scenario_inputs,
             brackets,
             filing_status=feed.filing_status,
-            earners=shift_earners(feed.earners, stored, scenario_inputs),
+            earners=shift_earners(feed.earners, scenario_inputs),
         ),
         feed,
     )
