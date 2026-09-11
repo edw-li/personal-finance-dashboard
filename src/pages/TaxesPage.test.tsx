@@ -1329,6 +1329,25 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(panel.getAttribute('data-defs')).toBe('annual_salary'))
   })
 
+  it('keeps computed keys out of the what-if override list', async () => {
+    // A derived total is computed from its components (2026-09-11 spec §1.4) and the PUT
+    // 422s a write to one, so offering it here would be a menu entry whose only possible
+    // outcome is a server sentence. Override the components instead.
+    vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => {
+      const inputs = inputsFor(year)
+      inputs.sections[0].items.push({
+        key: 'gross_paycheck', label: 'Gross Paycheck', sort_order: 20,
+        is_derived: true, value: '8333.3333', suggested: null,
+        unit: 'money', suggestion_source: null, formula: 'Annual Salary ÷ 24',
+        is_per_person: true, person_id: 1,
+      })
+      return inputs
+    })
+    renderPage()
+    const panel = await screen.findByTestId('whatif-panel')
+    await waitFor(() => expect(panel.getAttribute('data-defs')).toBe('annual_salary'))
+  })
+
   // --- the withholding card (Task 9) ----------------------------------------------------
   // Clock-relative years throughout, never a pinned 2026: the card is the CURRENT year's or
   // nothing at all, and a hard-coded fixture year would rot on a New Year's Day.

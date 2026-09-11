@@ -606,11 +606,14 @@ export default function InputsForm({
     <section className="card">
       <h2 className="eyebrow">
         Tax inputs — {inputs.year}
-        <InfoHint text="The year&apos;s income and deduction line items — the old sheet&apos;s white cells. Grey suggestions derive from other lines and never auto-apply." />
+        {/* The sheet's white/grey split is no longer the distinction that matters: a grey
+            cell is now a COMPUTED line rather than an offer, so the copy names the two kinds
+            of row the form actually has (2026-09-11 spec §1.7). */}
+        <InfoHint text="The year&apos;s income and deduction line items. Computed lines total their components as you type; grey chips are offers you apply." />
       </h2>
       <p className="drill-hint">
-        Stored values feed the engine; the chips are the sheet&apos;s formulas, offered and
-        never applied for you. Clearing a field unsets that input.
+        Stored values feed the engine; computed lines follow their components. Clearing a
+        field unsets that input.
       </p>
       {/* Married-JOINT alone: an MFS return is one person's by design (the CA caveat in the
           year card is exactly about what that does not model), so its single column is the

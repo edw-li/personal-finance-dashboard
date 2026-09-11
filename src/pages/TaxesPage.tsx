@@ -94,7 +94,11 @@ function overrideDefinitions(inputs: TaxInputsOut): OverrideDefinition[] {
   const definitions: OverrideDefinition[] = []
   for (const section of inputs.sections)
     for (const item of section.items) {
-      if (seen.has(item.key)) continue
+      // A computed total is not an overridable key (2026-09-11 spec §1.4): the engine
+      // rebuilds it from its components whatever it is handed, and the scenario endpoint
+      // 422s one by name. Offering it here would be a menu entry whose only outcome is a
+      // server sentence — the components are what a what-if moves.
+      if (item.is_derived || seen.has(item.key)) continue
       seen.add(item.key)
       definitions.push({ key: item.key, label: item.label })
     }
