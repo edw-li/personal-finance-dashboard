@@ -50,6 +50,8 @@ function bracketsFixture(
       capital_gains: [],
       ...over,
     },
+    people: [],
+    per_person: [],
   }
 }
 

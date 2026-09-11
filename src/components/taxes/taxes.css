@@ -221,6 +221,56 @@
   font-size: 0.8rem;
 }
 
+/* A per-worker block that carries a strip keeps its own group tight: the person cards below
+   belong to IT, not to the next jurisdiction, so the air goes under the strip instead. */
+.bracket-block.has-person-strip {
+  margin-bottom: 0.55rem;
+}
+
+/* The per-person strip: one card per earner under a per-worker default table. Indented,
+   with a rule down the side, because these tables are exceptions TO the table above them —
+   at the same left edge they would read as two more defaults. */
+.bracket-person-strip {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0 0 1.25rem 0.2rem;
+  padding-left: 0.9rem;
+  border-left: 2px solid var(--border);
+}
+
+.bracket-person {
+  display: grid;
+  /* justify-items, not a width: the add/discard card is one button wide and must not
+     stretch across the card the way a table does. */
+  justify-items: start;
+  gap: 0.35rem;
+}
+
+.bracket-person-head {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* justify-items: start above sizes every child to its content, which left a 422 sentence as
+   wide as its longest word. The banner is the one child that speaks for the whole card. */
+.bracket-person > .error-banner {
+  justify-self: stretch;
+}
+
+/* The strip's own buttons wear the compact size the bracket tables' do. */
+.bracket-person .button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+}
+
+.bracket-person-strip > .drill-hint {
+  margin: 0;
+  max-width: 62ch;
+}
+
 /* --- what-if panel --- */
 
 /* One leg per row, in TaxesPage.css's .new-year-form row treatment — copied by design, not
@@ -402,6 +452,38 @@
 
 .tax-brackets-missing-list {
   color: var(--text);
+}
+
+/* One earner's line under a per-worker jurisdiction row: a qualification of the row above,
+   not a row of its own. Indented and quieted so the seven jurisdiction figures stay the
+   table's spine, and the name cell stacks its note and tag under the name. */
+.tax-person-row > td {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+/* The indent lives on the CELL, and the flex row inside it: a <td> with display:flex stops
+   being a table cell to a screen reader (it leaves the table's accessibility tree), so the
+   name, its cap note and its table tag are laid out by a span the cell wraps. */
+.tax-person-row > td:first-child {
+  padding-left: 1.1rem;
+}
+
+.tax-person-name {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.tax-person-name .drill-hint {
+  margin: 0;
+  font-size: 0.7rem;
+}
+
+/* The row's gap already spaces the tag; panels.css' badge margin would double it. */
+.tax-person-name .badge {
+  margin-left: 0;
 }
 
 /* --- marginal panel --- */

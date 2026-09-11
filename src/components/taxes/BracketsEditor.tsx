@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import {
   cloneBrackets,
@@ -7,6 +7,7 @@ import {
   FILING_STATUSES,
   JURISDICTIONS,
   jurisdictionLabel,
+  PER_WORKER_JURISDICTIONS,
   putTaxBrackets,
 } from '../../api/taxes'
 import type { Jurisdiction } from '../../api/taxes'
@@ -17,6 +18,7 @@ import type {
   FilingStatus,
   TaxBracketOut,
   TaxBracketsOut,
+  TaxPersonOut,
 } from '../../types/api'
 import { canonicalAmount, parseAmount, quantize } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
@@ -41,10 +43,128 @@ function rowsOf(rows: TaxBracketOut[]): RowState[] {
   return rows.map((row) => ({ rate: shiftPoint(row.rate, 2), threshold: row.threshold }))
 }
 
+/**
+ * The key a table's rows, its error and its in-flight save are all filed under: the
+ * jurisdiction ALONE for the default table everyone walks, and jurisdiction + person for one
+ * earner's own copy. One vocabulary across the three maps, so a person's 422 can never
+ * surface under the default table beside it.
+ */
+function tableKey(name: string, personId?: number): string {
+  return personId === undefined ? name : `${name}:${personId}`
+}
+
 function tablesOf(brackets: TaxBracketsOut): Record<string, RowState[]> {
   const tables: Record<string, RowState[]> = {}
   for (const [name, rows] of Object.entries(brackets.jurisdictions)) tables[name] = rowsOf(rows)
+  // A person's own tables ride beside the defaults under their own keys. An EMPTY list is
+  // NOT a table — that earner simply falls back to the default — so it gets no slot at all,
+  // which is what keeps "Add a table for …" on screen for them.
+  //
+  // `people` and `per_person` are REQUIRED on TaxBracketsOut — that is the contract — and
+  // the `?? []` here and at the three other read sites below covers ONE window: this lane
+  // merges before the server lane, so a browser held open against a server that predates
+  // them would hand this file an absent field rather than an empty list.
+  for (const person of brackets.per_person ?? []) {
+    for (const [name, rows] of Object.entries(person.jurisdictions)) {
+      if (rows.length > 0) tables[tableKey(name, person.person_id)] = rowsOf(rows)
+    }
+  }
   return tables
+}
+
+// Dirty is a text comparison of the tables on screen against the payload they came from, and
+// a seeded draft is APPENDED to them while the payload lists it in roster order — so the two
+// are serialized key-sorted. Identical rows must not read as unsaved work merely because
+// they were built in a different order.
+function serialize(tables: Record<string, RowState[]>): string {
+  return JSON.stringify(
+    Object.entries(tables).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  )
+}
+
+/**
+ * One editable rate table: the grid, and nothing around it. A default block and a person's
+ * card wear different heads and different buttons, but the rows between them are the same
+ * rows — and `title` is what every accessible name in here is built from, so a person's
+ * cells are never confused with the default's by a reader or by a query.
+ */
+function BracketRows({
+  title,
+  rows,
+  onCell,
+  onRemoveRow,
+}: {
+  title: string
+  rows: RowState[]
+  onCell: (index: number, field: keyof RowState, value: string) => void
+  onRemoveRow: (index: number) => void
+}) {
+  if (rows.length === 0) return <p className="empty-note">No brackets for {title}.</p>
+  return (
+    <table className="data-table bracket-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th className="num">Rate %</th>
+          <th className="num">Threshold</th>
+          <th />
+        </tr>
+      </thead>
+      <tbody>
+        {/* Position IS the identity here — the server renumbers bracket_index on every
+            replace — and both inputs are controlled from this array, so an index key cannot
+            strand a typed value in a reused row. */}
+        {rows.map((row, index) => {
+          // Parsed for the live echo below, which is the one thing on screen that reads the
+          // threshold MID-KEYSTROKE — so it has to speak every form the box accepts, not
+          // just the plain decimals the wire ends up carrying.
+          const parsedThreshold = parseAmount(row.threshold)
+          return (
+            <tr key={index}>
+              <td>{index + 1}</td>
+              <td className="num">
+                {/* The column header carries the visible label; a per-cell one would repeat
+                    it on every row, so the accessible name is an aria-label — and with no
+                    <label htmlFor> to point at it, an id here would be dead weight. */}
+                <AmountInput
+                  aria-label={`${title} bracket ${index + 1} rate (%)`}
+                  kind="percent"
+                  value={row.rate}
+                  onValueChange={(next) => onCell(index, 'rate', next)}
+                />
+              </td>
+              <td className="num">
+                <AmountInput
+                  aria-label={`${title} bracket ${index + 1} threshold`}
+                  value={row.threshold}
+                  onValueChange={(next) => onCell(index, 'threshold', next)}
+                />
+                {/* Money echo of what is being typed, in any accepted NON-EXPRESSION form
+                    ("$1,234" reads back "$1,234.00" before any blur); skipped while the text
+                    is not a number yet, so a half-typed value never reads "$NaN", and an "="
+                    entry echoes nothing until it commits — nothing evaluates live anywhere
+                    in this layer. The blurred in-input echo does not cover this: it only
+                    appears once the cell is left. */}
+                <span className="drill-hint">
+                  {parsedThreshold ? formatCurrency(parsedThreshold.canonical) : ''}
+                </span>
+              </td>
+              <td>
+                <button
+                  type="button"
+                  className="button"
+                  aria-label={`Remove ${title} bracket ${index + 1}`}
+                  onClick={() => onRemoveRow(index)}
+                >
+                  Remove
+                </button>
+              </td>
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
+  )
 }
 
 /**
@@ -112,8 +232,10 @@ export default function BracketsEditor({
   const [payload, setPayload] = useState<TaxBracketsOut>(brackets)
   const [tables, setTables] = useState<Record<string, RowState[]>>(() => tablesOf(brackets))
   // Single-flight across the whole editor: one jurisdiction saves at a time, and the
-  // in-flight name is what disables the others' buttons.
-  const [saving, setSaving] = useState<string | null>(null)
+  // in-flight table's key is what disables the others' buttons — the tabs included, since a
+  // tab switch replaces the very tables a save is about to re-sync. `removing` is which
+  // button started it, so only that one wears the progress word.
+  const [saving, setSaving] = useState<{ key: string; removing: boolean } | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
   // The tab machinery's own flight and banner — a failed tab load is not a jurisdiction's
   // error, and putting it in `errors` would file it under a table nobody asked about.
@@ -133,6 +255,10 @@ export default function BracketsEditor({
     .filter((name) => !JURISDICTIONS.includes(name as Jurisdiction))
     .sort()
 
+  // The roster a return under THIS tab's status covers, and therefore the strip under each
+  // per-worker table: everybody on a married-joint tab, the primary alone on a single one.
+  const people = payload.people ?? []
+
   // The tab set: 'single' ALWAYS (the column default, the only status the importer writes and
   // the source every clone copies from), the year's own status (the one the engine walks,
   // even before it has tables), and any status that already has rows — so an MFJ table
@@ -145,16 +271,19 @@ export default function BracketsEditor({
   // Unsaved work = the editable tables no longer read like the payload they came from.
   // Compared as text because that IS what is in the boxes ("10." is not yet "10"), and the
   // page turns this into the confirm that guards a year switch.
-  const dirty = JSON.stringify(tables) !== JSON.stringify(tablesOf(payload))
+  const dirty = serialize(tables) !== serialize(tablesOf(payload))
   useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
 
   // Switching tabs replaces every table on screen, so it asks the same question the page's
   // reload doors ask — and it asks it BEFORE the request, so a declined confirm cannot leave
-  // a fetch in flight against a tab nobody opened.
+  // a fetch in flight against a tab nobody opened. A save in flight closes the door too (the
+  // buttons are disabled, and this is the keyboard's half of that): its echo re-syncs the
+  // table it wrote and re-seats `payload`, which would land on — and mislabel — whichever
+  // status' tables the tab switch had meanwhile put on screen.
   const openStatus = (status: FilingStatus) => {
-    if (status === activeStatus || tabBusy) return
+    if (status === activeStatus || tabBusy || saving !== null) return
     if (
       dirty &&
       !window.confirm(
@@ -235,75 +364,113 @@ export default function BracketsEditor({
     return null
   }
 
-  // A jurisdiction's error describes the table as it was when Save was pressed; the first
-  // keystroke anywhere in it may be the fix, so the stale sentence goes then and there.
-  const clearError = (name: string) =>
-    setErrors((current) => (current[name] ? { ...current, [name]: '' } : current))
+  // A table's error describes it as it was when Save was pressed; the first keystroke
+  // anywhere in it may be the fix, so the stale sentence goes then and there. Every helper
+  // below takes a table KEY (see tableKey): the default's is the jurisdiction name itself.
+  const clearError = (key: string) =>
+    setErrors((current) => (current[key] ? { ...current, [key]: '' } : current))
 
-  const setRow = (name: string, index: number, field: keyof RowState, value: string) => {
-    clearError(name)
+  const setRow = (key: string, index: number, field: keyof RowState, value: string) => {
+    clearError(key)
     setTables((current) => ({
       ...current,
-      [name]: (current[name] ?? []).map((row, i) => (i === index ? { ...row, [field]: value } : row)),
+      [key]: (current[key] ?? []).map((row, i) => (i === index ? { ...row, [field]: value } : row)),
     }))
   }
 
-  const addRow = (name: string) => {
-    clearError(name)
+  const addRow = (key: string) => {
+    clearError(key)
     setTables((current) => {
-      const rows = current[name] ?? []
+      const rows = current[key] ?? []
       // The API demands a 0 first threshold, so the first row is seeded with one.
-      return { ...current, [name]: [...rows, { rate: '', threshold: rows.length === 0 ? '0' : '' }] }
+      return { ...current, [key]: [...rows, { rate: '', threshold: rows.length === 0 ? '0' : '' }] }
     })
   }
 
-  const removeRow = (name: string, index: number) => {
-    clearError(name)
+  const removeRow = (key: string, index: number) => {
+    clearError(key)
     setTables((current) => ({
       ...current,
-      [name]: (current[name] ?? []).filter((_, i) => i !== index),
+      [key]: (current[key] ?? []).filter((_, i) => i !== index),
     }))
   }
 
-  const save = (name: string) => {
-    // Canonicalize BEFORE validating: a save reached without a blur (Ctrl+Enter, a jsdom
-    // click) would otherwise hand "$100,000" to isPlainDecimal and be refused for a shape
-    // the entry layer accepts. Garbage comes back verbatim, so it still trips the same
-    // worded errors below, and the PUT ships exactly what validate() judged.
-    // The rate cell is kind="percent", whose component refuses "=" outright, so the save
-    // must not evaluate what the cell itself marked invalid — left to the money default,
-    // "=1/8" would quantize to 0.13 and store a 0.13% rate nobody typed. The threshold IS a
-    // money cell, so an expression there is legitimate and keeps the default.
-    const rows = (tables[name] ?? []).map((row) => ({
-      rate: canonicalAmount(row.rate, { expressions: false }),
-      threshold: canonicalAmount(row.threshold),
+  // Seeds a DRAFT of one person's table from the default rows AS THEY STAND on screen: a
+  // person's table is nearly always the default with one number moved, so a blank grid would
+  // be a transcription job. Client-side only — nothing is written until its own Save.
+  const addPersonTable = (name: string, personId: number) => {
+    setTables((current) => ({
+      ...current,
+      [tableKey(name, personId)]: (current[name] ?? []).map((row) => ({ ...row })),
     }))
-    const message = validate(name, rows)
-    if (message !== null) {
-      setErrors((current) => ({ ...current, [name]: message }))
+  }
+
+  // The draft's own way out. No request and no confirm: the server was never told about it,
+  // so there is nothing to delete and nothing to warn about.
+  const discardPersonTable = (key: string) => {
+    clearError(key)
+    setTables((current) => {
+      const next = { ...current }
+      delete next[key]
+      return next
+    })
+  }
+
+  /**
+   * Does the SERVER hold this person's table? A draft exists only on screen — `Add a table
+   * for …` seeds one from the default rows and nothing is written until its own Save — so
+   * its way out is a discard rather than a delete nobody has been told to do. `submit` and
+   * the card's buttons ask the same question, from the same place.
+   */
+  const hasStoredTable = (name: string, personId: number) =>
+    (payload.per_person ?? []).some(
+      (entry) => entry.person_id === personId && (entry.jurisdictions[name] ?? []).length > 0,
+    )
+
+  /**
+   * The write itself, and the confirm that guards an empty one. An empty table is a
+   * DELETE-ALL — the PUT replaces the (jurisdiction, status, person) wholesale — and removing
+   * the last row leaves Save one stray click from dropping a year's table; `Remove — use the
+   * default` comes through here with `[]` on purpose, so there is ONE delete path. The status
+   * is named in the question because the same jurisdiction has one table per status, and a
+   * person is named because it is THEIR table, not the year's, that is about to go.
+   *
+   * `removing` says which BUTTON is in flight, and nothing else: the request is the same one
+   * either way, but a Save that reads "Saving…" while the user pressed Remove names the
+   * wrong act.
+   */
+  const submit = (
+    name: string,
+    person: TaxPersonOut | undefined,
+    rows: RowState[],
+    removing = false,
+  ) => {
+    const key = tableKey(name, person?.id)
+    // An empty DRAFT is not a deletion: the server was never told about this table, so there
+    // is nothing to ask about and nothing to write — Save does here exactly what `Discard
+    // draft` does. Reachable from a person's Save under a default table that has no rows
+    // itself, where the seeded draft opens empty.
+    if (person !== undefined && rows.length === 0 && !hasStoredTable(name, person.id)) {
+      discardPersonTable(key)
       return
     }
-    // An empty table is a DELETE-ALL — the PUT replaces the (jurisdiction, status) wholesale
-    // — and removing the last row leaves Save one stray click from dropping a year's table.
-    // The status is named because the same jurisdiction has one table PER status.
-    if (
-      rows.length === 0 &&
-      !window.confirm(
-        `Delete all ${label(name)} brackets for ${brackets.year} (${
-          FILING_STATUS_LABELS[activeStatus]
-        })?`,
-      )
-    ) {
-      return
-    }
-    setSaving(name)
-    setErrors((current) => ({ ...current, [name]: '' }))
-    // ONLY this jurisdiction, and only this STATUS: the PUT is a full replace per
-    // (jurisdiction, status) present in the body, so shipping all six — or leaving the status
-    // off, which the server would read as 'single' — would rewrite tables the user never
-    // opened.
+    const status = FILING_STATUS_LABELS[activeStatus]
+    const question =
+      person === undefined
+        ? `Delete all ${label(name)} brackets for ${brackets.year} (${status})?`
+        : `Delete ${person.name}'s ${label(name)} table for ${brackets.year} (${status})? ` +
+          'They fall back to the default.'
+    if (rows.length === 0 && !window.confirm(question)) return
+    setSaving({ key, removing })
+    setErrors((current) => ({ ...current, [key]: '' }))
+    // ONLY this jurisdiction, only this STATUS, and only this table: the PUT is a full
+    // replace per (jurisdiction, status, person) present in the body, so shipping all six —
+    // or leaving the status off, which the server would read as 'single' — would rewrite
+    // tables the user never opened. `person_id` is OMITTED for a default save, so that wire
+    // is byte-identical to the one that shipped before person tables existed.
     putTaxBrackets(brackets.year, {
       filing_status: activeStatus,
+      ...(person === undefined ? {} : { person_id: person.id }),
       jurisdictions: {
         [name]: rows.map((row) => ({
           rate: shiftPoint(row.rate, -2),
@@ -315,33 +482,165 @@ export default function BracketsEditor({
         // Re-sync THIS table only (the server renumbered and quantized it); another
         // jurisdiction may be half-edited and must not be thrown away. The payload moves with
         // it so the dirty baseline stays the server's answer rather than the pre-save one.
-        setTables((current) => ({ ...current, [name]: rowsOf(echo.jurisdictions[name] ?? []) }))
+        setTables((current) => {
+          const next = { ...current }
+          const echoed =
+            person === undefined
+              ? (echo.jurisdictions[name] ?? [])
+              : ((echo.per_person ?? []).find((entry) => entry.person_id === person.id)
+                  ?.jurisdictions[name] ?? [])
+          // No rows for a person is no TABLE: the slot goes, and the strip offers to add one
+          // again. A default table keeps its (empty) slot — the six always exist.
+          if (person !== undefined && echoed.length === 0) delete next[key]
+          else next[key] = rowsOf(echoed)
+          return next
+        })
         setPayload(echo)
-        // The badge asked for a review; this save IS the review.
-        setReviewFlags((current) =>
-          current === null
-            ? null
-            : {
-                verbatim_ok: current.verbatim_ok.filter((j) => j !== name),
-                review: current.review.filter((j) => j !== name),
-              },
-        )
+        // The badge asked for a review of the DEFAULT table; a person's copy of it is not
+        // that review, so it leaves the badge standing.
+        if (person === undefined) {
+          setReviewFlags((current) =>
+            current === null
+              ? null
+              : {
+                  verbatim_ok: current.verbatim_ok.filter((j) => j !== name),
+                  review: current.review.filter((j) => j !== name),
+                },
+          )
+        }
         onSaved(echo)
       })
       .catch((err: unknown) => {
         setErrors((current) => ({
           ...current,
-          [name]: err instanceof ApiError ? err.message : 'Save failed',
+          [key]: err instanceof ApiError ? err.message : 'Save failed',
         }))
       })
       .finally(() => setSaving(null))
+  }
+
+  const save = (name: string, person?: TaxPersonOut) => {
+    // Canonicalize BEFORE validating: a save reached without a blur (Ctrl+Enter, a jsdom
+    // click) would otherwise hand "$100,000" to isPlainDecimal and be refused for a shape
+    // the entry layer accepts. Garbage comes back verbatim, so it still trips the same
+    // worded errors below, and the PUT ships exactly what validate() judged.
+    // The rate cell is kind="percent", whose component refuses "=" outright, so the save
+    // must not evaluate what the cell itself marked invalid — left to the money default,
+    // "=1/8" would quantize to 0.13 and store a 0.13% rate nobody typed. The threshold IS a
+    // money cell, so an expression there is legitimate and keeps the default.
+    const key = tableKey(name, person?.id)
+    const rows = (tables[key] ?? []).map((row) => ({
+      rate: canonicalAmount(row.rate, { expressions: false }),
+      threshold: canonicalAmount(row.threshold),
+    }))
+    // The sentence names the JURISDICTION whichever table it came from, because the server's
+    // twin does: one table per person does not make a second vocabulary.
+    const message = validate(name, rows)
+    if (message !== null) {
+      setErrors((current) => ({ ...current, [key]: message }))
+      return
+    }
+    submit(name, person, rows)
+  }
+
+  /**
+   * One earner's card in the strip under a per-worker table: their own rows editor when they
+   * have a table (stored or a draft), and the offer to start one when they do not.
+   */
+  const personCard = (name: string, person: TaxPersonOut) => {
+    const key = tableKey(name, person.id)
+    const rows = tables[key]
+    const title = `${label(name)} — ${person.name}`
+    const stored = hasStoredTable(name, person.id)
+    if (rows === undefined) {
+      return (
+        <div key={person.id} className="bracket-person">
+          {/* The visible text is short because the same words sit under both per-worker
+              tables, so the jurisdiction is APPENDED to it for a reader rather than
+              replacing it in an aria-label: a spoken name that does not contain the words
+              on the button is a name voice control cannot be told (WCAG 2.5.3). The three
+              strip buttons all carry their context the same way. */}
+          <button
+            type="button"
+            className="button"
+            onClick={() => addPersonTable(name, person.id)}
+          >
+            Add a table for {person.name}
+            <span className="visually-hidden"> — {label(name)}</span>
+          </button>
+        </div>
+      )
+    }
+    return (
+      <form
+        key={person.id}
+        className="bracket-person"
+        data-entry-scope=""
+        onSubmit={(e) => {
+          e.preventDefault()
+          save(name, person)
+        }}
+      >
+        <h4 className="bracket-person-head">{title}</h4>
+        <FeedBanner error={errors[key]} />
+        <BracketRows
+          title={title}
+          rows={rows}
+          onCell={(index, field, value) => setRow(key, index, field, value)}
+          onRemoveRow={(index) => removeRow(key, index)}
+        />
+        <div className="bracket-actions">
+          <button
+            type="button"
+            className="button"
+            aria-label={`Add ${title} bracket`}
+            disabled={rows.length >= MAX_BRACKETS}
+            onClick={() => addRow(key)}
+          >
+            Add bracket
+          </button>
+          <button
+            type="submit"
+            data-entry-primary=""
+            className="button button-primary"
+            aria-label={`Save ${title} brackets`}
+            disabled={saving !== null}
+          >
+            {/* Whose flight this is: the Remove button beside it starts the same request,
+                and only the button that was pressed says what is happening. */}
+            {saving?.key === key && !saving.removing ? 'Saving…' : 'Save'}
+          </button>
+          {stored ? (
+            <button
+              type="button"
+              className="button"
+              disabled={saving !== null}
+              onClick={() => submit(name, person, [], /* removing */ true)}
+            >
+              {saving?.key === key && saving.removing ? 'Removing…' : 'Remove — use the default'}
+              <span className="visually-hidden"> — {title}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="button"
+              disabled={saving !== null}
+              onClick={() => discardPersonTable(key)}
+            >
+              Discard draft
+              <span className="visually-hidden"> — {title}</span>
+            </button>
+          )}
+        </div>
+      </form>
+    )
   }
 
   return (
     <section className="card">
       <h2 className="eyebrow">
         Bracket tables — {brackets.year}
-        <InfoHint text="The rate tables the engine walks, one per jurisdiction; thresholds are inclusive floors and must ascend from 0." />
+        <InfoHint text="The rate tables the engine walks, one per jurisdiction; thresholds are inclusive floors and must ascend from 0. Social Security and Disability may also carry a table per person." />
       </h2>
       <p className="drill-hint">
         Rates are entered as percents (37 = 37%) and stored as fractions with 4 decimal
@@ -363,7 +662,7 @@ export default function BracketsEditor({
             type="button"
             className={status === activeStatus ? 'active' : ''}
             aria-pressed={status === activeStatus}
-            disabled={tabBusy}
+            disabled={tabBusy || saving !== null}
             onClick={() => openStatus(status)}
           >
             {FILING_STATUS_LABELS[status]}
@@ -377,7 +676,8 @@ export default function BracketsEditor({
             No {FILING_STATUS_LABELS[activeStatus]} tables for {brackets.year} yet. Copying
             this year&apos;s single-filer tables gives every jurisdiction the right shape —
             Social Security and Disability are per-person parameters and come across correct,
-            while the thresholds that move with filing status are then edited below.
+            including any per-person tables, while the thresholds that move with filing status
+            are then edited below.
           </p>
           <button type="button" className="button button-primary" disabled={tabBusy} onClick={clone}>
             {tabBusy ? 'Cloning…' : `Clone from ${brackets.year} single tables`}
@@ -387,114 +687,68 @@ export default function BracketsEditor({
       {JURISDICTIONS.map((name) => {
         const rows = tables[name] ?? []
         const message = errors[name]
+        const perWorker = PER_WORKER_JURISDICTIONS.includes(name)
+        // Social Security and SDI are per-WORKER taxes: the table here is the default, and
+        // each earner the return covers may carry their own beneath it.
+        const strip = perWorker && people.length > 0
         // One scope PER jurisdiction, matching the one Save each table has: Enter walks
         // this table's rate/threshold cells and stops at its own Save, never wandering into
-        // the next jurisdiction's rows.
+        // the next jurisdiction's rows. A person's card is a scope of its own for the same
+        // reason — and a SIBLING of this form rather than a child, because forms do not nest.
         return (
-          <form
-            key={name}
-            className="bracket-block"
-            data-entry-scope=""
-            onSubmit={(e) => {
-              e.preventDefault()
-              save(name)
-            }}
-          >
-            <h3 className="eyebrow">
-              {label(name)} brackets
-              {badgeFor(name)}
-            </h3>
-            <FeedBanner error={message} />
-            {rows.length === 0 ? (
-              <p className="empty-note">No brackets for {label(name)}.</p>
-            ) : (
-              <table className="data-table bracket-table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th className="num">Rate %</th>
-                    <th className="num">Threshold</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {/* Position IS the identity here — the server renumbers bracket_index on
-                      every replace — and both inputs are controlled from this array, so an
-                      index key cannot strand a typed value in a reused row. */}
-                  {rows.map((row, index) => {
-                    // Parsed for the live echo below, which is the one thing on screen that
-                    // reads the threshold MID-KEYSTROKE — so it has to speak every form the
-                    // box accepts, not just the plain decimals the wire ends up carrying.
-                    const parsedThreshold = parseAmount(row.threshold)
-                    return (
-                      <tr key={index}>
-                        <td>{index + 1}</td>
-                        <td className="num">
-                          {/* The column header carries the visible label; a per-cell one
-                              would repeat it on every row, so the accessible name is an
-                              aria-label — and with no <label htmlFor> to point at it, an id
-                              here would be dead weight. */}
-                          <AmountInput
-                            aria-label={`${label(name)} bracket ${index + 1} rate (%)`}
-                            kind="percent"
-                            value={row.rate}
-                            onValueChange={(next) => setRow(name, index, 'rate', next)}
-                          />
-                        </td>
-                        <td className="num">
-                          <AmountInput
-                            aria-label={`${label(name)} bracket ${index + 1} threshold`}
-                            value={row.threshold}
-                            onValueChange={(next) => setRow(name, index, 'threshold', next)}
-                          />
-                          {/* Money echo of what is being typed, in any accepted
-                              NON-EXPRESSION form ("$1,234" reads back "$1,234.00" before
-                              any blur); skipped while the text is not a number yet, so a
-                              half-typed value never reads "$NaN", and an "=" entry echoes
-                              nothing until it commits — nothing evaluates live anywhere in
-                              this layer. The blurred in-input echo does not cover this: it
-                              only appears once the cell is left. */}
-                          <span className="drill-hint">
-                            {parsedThreshold ? formatCurrency(parsedThreshold.canonical) : ''}
-                          </span>
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="button"
-                            aria-label={`Remove ${label(name)} bracket ${index + 1}`}
-                            onClick={() => removeRow(name, index)}
-                          >
-                            Remove
-                          </button>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+          <Fragment key={name}>
+            <form
+              className={strip ? 'bracket-block has-person-strip' : 'bracket-block'}
+              data-entry-scope=""
+              onSubmit={(e) => {
+                e.preventDefault()
+                save(name)
+              }}
+            >
+              <h3 className="eyebrow">
+                {label(name)} brackets
+                {perWorker ? ' — default for everyone' : ''}
+                {badgeFor(name)}
+              </h3>
+              <FeedBanner error={message} />
+              <BracketRows
+                title={label(name)}
+                rows={rows}
+                onCell={(index, field, value) => setRow(name, index, field, value)}
+                onRemoveRow={(index) => removeRow(name, index)}
+              />
+              <div className="bracket-actions">
+                <button
+                  type="button"
+                  className="button"
+                  aria-label={`Add ${label(name)} bracket`}
+                  disabled={rows.length >= MAX_BRACKETS}
+                  onClick={() => addRow(name)}
+                >
+                  Add bracket
+                </button>
+                <button
+                  type="submit"
+                  data-entry-primary=""
+                  className="button button-primary"
+                  aria-label={`Save ${label(name)} brackets`}
+                  disabled={saving !== null}
+                >
+                  {saving?.key === name ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </form>
+            {strip && (
+              <div className="bracket-person-strip">
+                {people.map((person) => personCard(name, person))}
+                <p className="drill-hint">
+                  Per-worker tax: the default applies to anyone without their own table. Add
+                  one for an earner on an employer&apos;s voluntary plan, or in a job exempt
+                  from Social Security.
+                </p>
+              </div>
             )}
-            <div className="bracket-actions">
-              <button
-                type="button"
-                className="button"
-                aria-label={`Add ${label(name)} bracket`}
-                disabled={rows.length >= MAX_BRACKETS}
-                onClick={() => addRow(name)}
-              >
-                Add bracket
-              </button>
-              <button
-                type="submit"
-                data-entry-primary=""
-                className="button button-primary"
-                aria-label={`Save ${label(name)} brackets`}
-                disabled={saving !== null}
-              >
-                {saving === name ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-          </form>
+          </Fragment>
         )
       })}
       {extras.map((name) => (
