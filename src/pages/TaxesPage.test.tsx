@@ -158,7 +158,7 @@ function inputsFor(year: number): TaxInputsOut {
           {
             key: 'annual_salary', label: 'Annual Salary', sort_order: 10,
             is_derived: false, value: '200000.0000', suggested: null,
-            unit: 'money', suggestion_source: null,
+            unit: 'money', suggestion_source: null, formula: null,
             is_per_person: true, person_id: 1,
           },
         ],

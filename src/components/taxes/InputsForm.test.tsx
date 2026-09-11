@@ -29,13 +29,13 @@ function inputsFixture(): TaxInputsOut {
           {
             key: 'annual_salary', label: 'Annual Salary', sort_order: 10,
             is_derived: false, value: '200000.0000', suggested: null,
-            unit: 'money', suggestion_source: null,
+            unit: 'money', suggestion_source: null, formula: null,
             is_per_person: true, person_id: 1,
           },
           {
             key: 'gross_paycheck', label: 'Gross Paycheck', sort_order: 20,
             is_derived: true, value: '7000.0000', suggested: '8333.3333',
-            unit: 'money', suggestion_source: null,
+            unit: 'money', suggestion_source: null, formula: null,
             is_per_person: true, person_id: 1,
           },
         ],
@@ -46,7 +46,7 @@ function inputsFixture(): TaxInputsOut {
           {
             key: 'hsa_contributions', label: 'HSA Contributions', sort_order: 20,
             is_derived: false, value: '4150.0000', suggested: null,
-            unit: 'money', suggestion_source: null,
+            unit: 'money', suggestion_source: null, formula: null,
             is_per_person: true, person_id: 1,
           },
         ],
@@ -57,7 +57,7 @@ function inputsFixture(): TaxInputsOut {
           {
             key: 'qualified_dividends', label: 'Qualified Dividends', sort_order: 40,
             is_derived: false, value: null, suggested: null,
-            unit: 'money', suggestion_source: null,
+            unit: 'money', suggestion_source: null, formula: null,
             is_per_person: false, person_id: null,
           },
         ],
@@ -131,13 +131,13 @@ function unitInputs(): TaxInputsOut {
         items: [
           {
             key: 'pay_periods', label: 'Pay periods (checks received so far this year)',
-            sort_order: 30, is_derived: false, unit: 'count', suggestion_source: null,
+            sort_order: 30, is_derived: false, unit: 'count', suggestion_source: null, formula: null,
             value: '20.0000', suggested: null, is_per_person: true, person_id: 1,
           },
           {
             key: 'unq_div_state_exempt_pct',
             label: 'Treasury-fund dividends — state-exempt share (%)',
-            sort_order: 170, is_derived: false, unit: 'percent', suggestion_source: null,
+            sort_order: 170, is_derived: false, unit: 'percent', suggestion_source: null, formula: null,
             value: '0.9753', suggested: null, is_per_person: false, person_id: null,
           },
         ],
@@ -267,7 +267,7 @@ describe('InputsForm', () => {
     const carried = inputsFixture()
     carried.sections[1].items.push({
       key: 'standard_deduction', label: 'Standard Deduction', sort_order: 80,
-      is_derived: false, unit: 'money', value: null,
+      is_derived: false, unit: 'money', value: null, formula: null,
       suggested: '14600.0000', suggestion_source: "last year's",
       is_per_person: false, person_id: null,
     })

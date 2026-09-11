@@ -6,6 +6,7 @@ import {
   FILING_STATUS_LABELS,
   jurisdictionLabel,
   patchTaxYear,
+  previewTaxInputs,
   putTaxBrackets,
   putTaxInputs,
 } from './taxes'
@@ -100,6 +101,24 @@ describe('taxes client', () => {
       rows: [{ key: 'annual_salary', person_id: 4, value: '90000' }],
     })
     expect(vi.mocked(api).mock.calls[0][1]?.body).toBe(
+      '{"values":{"qualified_dividends":"100"},' +
+        '"rows":[{"key":"annual_salary","person_id":4,"value":"90000"}]}',
+    )
+  })
+
+  it('asks the preview endpoint for the computed totals with the PUT body shape', async () => {
+    // POST to a SUB-path of the inputs resource, not the PUT itself: the body is byte-for-byte
+    // what a save would send (2026-09-11 spec §1.6), and the only thing separating "what would
+    // this be" from "store this" is the URL. Nothing is written, so nothing is echoed back but
+    // the nine computed totals.
+    await previewTaxInputs(2026, {
+      values: { qualified_dividends: '100' },
+      rows: [{ key: 'annual_salary', person_id: 4, value: '90000' }],
+    })
+    const [path, options] = vi.mocked(api).mock.calls[0]
+    expect(path).toBe('/taxes/years/2026/inputs/preview')
+    expect(options?.method).toBe('POST')
+    expect(options?.body).toBe(
       '{"values":{"qualified_dividends":"100"},' +
         '"rows":[{"key":"annual_salary","person_id":4,"value":"90000"}]}',
     )

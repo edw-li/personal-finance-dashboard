@@ -16,14 +16,8 @@ vi.mock('../../api/spending', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/spending')>()),
   deleteSpendingMonth: vi.fn(),
 }))
-vi.mock('../../api/taxes', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../api/taxes')>()),
-  fetchTaxInputs: vi.fn(),
-  putTaxInputsForRepair: vi.fn(),
-}))
 import { createSnapshot, fetchHealth, undoBatch } from '../../api/lifecycle'
 import { deleteSpendingMonth } from '../../api/spending'
-import { fetchTaxInputs, putTaxInputsForRepair } from '../../api/taxes'
 
 const OK: HealthCheck = { id: 'stale_quotes', severity: 'ok', title: 'Quotes are fresh', detail: '', count: 0, months: [], years: [], fix: null }
 const ZERO: HealthCheck = {
@@ -40,29 +34,6 @@ const GAP: HealthCheck = {
 const SNAP: HealthCheck = {
   id: 'snapshot', severity: 'warn', title: 'No stored snapshot yet', detail: 'The nightly snapshot has not written a file to the data volume.',
   count: 1, months: [], years: [], fix: { kind: 'action', action: 'snapshot_now', label: 'Snapshot now' },
-}
-
-// The §199A leftover (taxes spec 4h): a check about a YEAR, repaired by rewriting one
-// stored figure through the ordinary inputs PUT.
-const SEC199A: HealthCheck = {
-  id: 'sec199a_in_itemized', severity: 'warn',
-  title: 'Itemized deduction for 2025 still includes the §199A line',
-  detail: '2025: the stored itemized total matches the OLD formula.',
-  count: 1, months: [], years: [2025],
-  fix: { kind: 'action', action: 'rewrite_itemized_deduction', label: 'Rewrite the itemized total' },
-}
-
-// Only the one row the card reads: the year's own itemized suggestion.
-const ITEMIZED_INPUTS = {
-  year: 2025, filing_status: 'single' as const, people: [],
-  sections: [{
-    section: 'deductions',
-    items: [{
-      key: 'itemized_deduction', label: 'Itemized Deduction', sort_order: 90, is_derived: true,
-      unit: 'money' as const, is_per_person: false, person_id: null,
-      value: '27213.2820', suggested: '27207.0600', suggestion_source: null,
-    }],
-  }],
 }
 
 function health(checks: HealthCheck[]): HealthOut {
@@ -82,11 +53,6 @@ function mount() {
 beforeEach(() => {
   vi.mocked(fetchHealth).mockResolvedValue(health([OK, ZERO, GAP, SNAP]))
   vi.mocked(deleteSpendingMonth).mockResolvedValue({ batchId: 'b-repair' })
-  vi.mocked(fetchTaxInputs).mockResolvedValue(ITEMIZED_INPUTS)
-  vi.mocked(putTaxInputsForRepair).mockResolvedValue({
-    data: ITEMIZED_INPUTS,
-    batchId: 'b-itemized',
-  })
   vi.mocked(createSnapshot).mockResolvedValue({ name: 'finance-export-20260904-091500.zip', at: '2026-09-04T09:15:00+00:00', size_bytes: 1, alembic_head: null, restorable: true })
   vi.mocked(undoBatch).mockResolvedValue({
     type: 'batch', batch_id: 'u-1', at: '2026-09-04T09:00:00+00:00', source: 'undo', actor: null,
@@ -132,47 +98,6 @@ describe('HealthCard', () => {
     await waitFor(() => expect(createSnapshot).toHaveBeenCalledTimes(1))
     expect(await screen.findByText('Snapshot written — finance-export-20260904-091500.zip')).toBeTruthy()
     await waitFor(() => expect(fetchHealth).toHaveBeenCalledTimes(2))
-  })
-
-  it('rewrites one year\'s itemized total from the server\'s own suggestion', async () => {
-    // The number is never computed here: the card reads the suggestion the inputs payload
-    // already carries, so there is one definition of the itemized formula.
-    vi.mocked(fetchHealth).mockResolvedValue(health([OK, SEC199A]))
-    mount()
-    fireEvent.click(await screen.findByRole('button', { name: 'Rewrite 2025' }))
-    expect(putTaxInputsForRepair).not.toHaveBeenCalled() // armed, not fired
-
-    fireEvent.click(screen.getByRole('button', { name: 'Rewrite 2025?' }))
-    await waitFor(() =>
-      expect(putTaxInputsForRepair).toHaveBeenCalledWith(2025, {
-        values: { itemized_deduction: '27207.0600' },
-      }),
-    )
-    expect(fetchTaxInputs).toHaveBeenCalledWith(2025)
-    expect(
-      await screen.findByText("Rewrote 2025's itemized deduction without the §199A line"),
-    ).toBeTruthy()
-    await waitFor(() => expect(fetchHealth).toHaveBeenCalledTimes(2))
-
-    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
-    await waitFor(() => expect(undoBatch).toHaveBeenCalledWith('b-itemized'))
-    await waitFor(() => expect(fetchHealth).toHaveBeenCalledTimes(3))
-  })
-
-  it('refuses to guess when the year has no itemized suggestion', async () => {
-    vi.mocked(fetchHealth).mockResolvedValue(health([OK, SEC199A]))
-    vi.mocked(fetchTaxInputs).mockResolvedValue({
-      ...ITEMIZED_INPUTS,
-      sections: [{ section: 'deductions', items: [] }],
-    })
-    mount()
-    fireEvent.click(await screen.findByRole('button', { name: 'Rewrite 2025' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Rewrite 2025?' }))
-
-    expect(
-      await screen.findByText('No itemized suggestion for 2025 — open the year and check it.'),
-    ).toBeTruthy()
-    expect(putTaxInputsForRepair).not.toHaveBeenCalled()
   })
 
   it('shows a failed repair verbatim and says when everything passes', async () => {

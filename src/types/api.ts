@@ -720,15 +720,24 @@ export interface TaxInputItemOut {
   // WHICH column this item belongs to. Null for a household key, and also for a per-person
   // key on a database with no people roster — the pre-household spelling of "the primary".
   person_id: number | null
+  // On a DERIVED key this is the computed figure for this column — the engine's own total,
+  // never a stored row (2026-09-11 spec §1.5: the nine derived keys have no `tax_inputs`
+  // rows at all) — and null when none of its components is entered in that column.
   value: string | null
   // The sheet's gray-cell formula for this key, when it has one, computed from THIS column's
   // own values. Advisory: the UI offers a chip, nothing is ever applied server-side.
-  // Present-ness (not is_derived) is what a chip renders on.
+  // Present-ness (not is_derived) is what a chip renders on. Always null on a derived key:
+  // a computed total is shown, not offered.
   suggested: string | null
   // Where `suggested` came from when it is NOT this key's sheet formula — "last year's" for
   // the deduction rows carried forward from the prior year. Null means the formula, and the
   // chip keeps its default "suggested" wording.
   suggestion_source: string | null
+  // The server's human caption for a computed line ("Annual Salary ÷ 24"), null on an
+  // editable one. Presentation owned by the code that owns the formula (tax_keys'
+  // FORMULA_CAPTIONS), exactly as `label` and `unit` are — the browser never spells a
+  // formula of its own, because it never runs one.
+  formula: string | null
 }
 
 export interface TaxInputSectionOut {
@@ -745,6 +754,25 @@ export interface TaxInputsOut {
   // the pre-household payload exactly.
   people: TaxPersonOut[]
   sections: TaxInputSectionOut[]
+}
+
+// One computed total, for one column. `person_id` is null on a household key and on a
+// per-person key of a roster-less database — the same spelling `TaxInputItemOut` uses, so a
+// response item addresses exactly one rendered cell.
+export interface DerivedPreviewItemOut {
+  key: string
+  person_id: number | null
+  value: string | null
+}
+
+// POST /taxes/years/{year}/inputs/preview — what the nine derived totals WOULD be if the
+// body were saved. The body is the PUT's own shape, overlaid on the stored rows in memory:
+// no write, no ChangeBatch, no change-log entry. Only the derived items come back, because
+// everything else on the payload is what the caller just sent.
+export interface DerivedPreviewOut {
+  year: number
+  filing_status: FilingStatus
+  derived: DerivedPreviewItemOut[]
 }
 
 // One person-qualified write. `person_id` null on a per-person key means "the primary
@@ -2407,8 +2435,9 @@ export interface HealthFix {
   kind: 'link' | 'action'
   label: string
   to?: string | null
-  /** 'delete_spending_month' (one per month in the check's `months`) | 'snapshot_now'
-   *  | 'rewrite_itemized_deduction' (one per year in the check's `years`). */
+  /** 'delete_spending_month' (one per month in the check's `months`) | 'snapshot_now'.
+   *  ('rewrite_itemized_deduction' went with the stored itemized total — 2026-09-11 spec
+   *  §1.4: a computed line has nothing to rewrite.) */
   action?: string | null
 }
 

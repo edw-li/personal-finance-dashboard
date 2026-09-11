@@ -79,6 +79,7 @@ const inputsFor = (year: number): TaxInputsOut => ({
           value: '200000.0000',
           suggested: null,
           suggestion_source: null,
+          formula: null,
           is_per_person: true,
           person_id: 1,
         },
