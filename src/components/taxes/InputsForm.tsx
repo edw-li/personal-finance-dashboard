@@ -500,16 +500,20 @@ export default function InputsForm({
     const targetCell =
       target === null
         ? null
-        : (flatCells.find((cell) => `tax-input-${cell.id}` === target.id) ?? null)
+        : (allCells.find((cell) => `tax-input-${cell.id}` === target.id) ?? null)
     // The COLUMN a paste fills: the cells that share the pasted-into cell's person. A sheet
     // column is ONE person's numbers, so a paste into their box must walk THEIR rows and skip
     // the other column entirely. With no resolvable target (a paste onto the card rather than
     // into a box) the whole rendered order is the target, as it always was — and on a
     // one-column year every cell has a null person, so the two are the same list.
+    //
+    // COMPUTED cells are in this list (spec §1.7). The clipboard came from a sheet whose grey
+    // cells occupy those rows, so the slots have to line up one for one; leaving them out
+    // would shift every value below a total onto the wrong line.
     const column =
       targetCell === null
-        ? flatCells
-        : flatCells.filter((cell) => cell.personId === targetCell.personId)
+        ? allCells
+        : allCells.filter((cell) => cell.personId === targetCell.personId)
     const fills: Record<string, string> = {}
     const flashed = new Set<string>()
     const unmatched: string[] = []
@@ -517,8 +521,13 @@ export default function InputsForm({
     // An empty pasted cell SKIPS its target instead of blanking it: a blank here is the
     // wire's "unset this input", and a stray trailing tab must never delete a stored value.
     let blank = 0
+    // Values that landed on a computed line. Counted rather than dropped in silence: the
+    // grey cells travel with any copied sheet column, and a value that just vanished would
+    // read like the paste lost it.
+    let computedSkipped = 0
     // How many cells this paste could have reached — the denominator of the note below.
-    let reachable = column.length
+    // EDITABLE ones only: a computed cell is a slot to step over, never a target.
+    let reachable = column.filter((cell) => !cell.computed).length
     if (plan.mode === 'positional') {
       // Fill from the pasted-into cell onward, down the column — across section boundaries,
       // the way Enter walks it.
@@ -529,7 +538,12 @@ export default function InputsForm({
           overflow += 1
           return
         }
-        // The slot is consumed either way — a skipped blank must not shift the rest up.
+        // The slot is consumed whatever is in it — a skipped blank, and a total nobody may
+        // write, must not shift the rest of the column up a row.
+        if (column[slot].computed) {
+          computedSkipped += 1
+          return
+        }
         if (value === '') {
           blank += 1
           return
@@ -544,20 +558,26 @@ export default function InputsForm({
       // one-column year both lists are the same cells, so the dedupe leaves exactly the flat
       // list this form matched against before columns existed.
       const seen = new Set<string>()
-      const candidates = [...column, ...flatCells.filter((cell) => cell.personId === null)].filter(
+      const candidates = [...column, ...allCells.filter((cell) => cell.personId === null)].filter(
         (cell) => {
           if (seen.has(cell.id)) return false
           seen.add(cell.id)
           return true
         },
       )
-      reachable = candidates.length
+      reachable = candidates.filter((cell) => !cell.computed).length
       // matchLabel keys on numeric ids, so the INDEX into candidates serves as one.
       const labelled = candidates.map((cell, i) => ({ id: i, name: cell.itemLabel }))
       for (const { label, value } of plan.rows) {
         const index = matchLabel(labelled, label)
         if (index === null) {
           unmatched.push(label)
+        } else if (candidates[index].computed) {
+          // Matched, and still not filled. Computed rows stay MATCHABLE so a line naming one
+          // is answered by its own row rather than fuzzy-matching a neighbour, and it is
+          // counted as skipped rather than unmatched: the label was right, the cell is
+          // simply not one anybody may write.
+          computedSkipped += 1
         } else if (value === '') {
           blank += 1
         } else {
@@ -577,6 +597,8 @@ export default function InputsForm({
     }
     if (overflow > 0) parts.push(`${overflow} value${overflow === 1 ? '' : 's'} didn't fit`)
     if (blank > 0) parts.push(`${blank} blank${blank === 1 ? '' : 's'} skipped`)
+    if (computedSkipped > 0)
+      parts.push(`${computedSkipped} computed cell${computedSkipped === 1 ? '' : 's'} skipped`)
     setPasteNote(parts.join(' · '))
   }
 

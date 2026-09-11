@@ -609,18 +609,53 @@ describe('InputsForm', () => {
   it('column paste fills down the flattened sections from the pasted-into cell', () => {
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
     fireEvent.paste(field('Annual Salary'), {
-      clipboardData: { getData: () => '200000\n8333.33' },
+      clipboardData: { getData: () => '200000\n8333.33\n4300' },
     })
 
     // Positional order is the RENDERED one — the fill walks out of Ordinary income into the
-    // next section exactly as Enter does. Blurred, so both read as their echo (nothing is
-    // focused in jsdom).
+    // next section exactly as Enter does, past the computed line between them. Blurred, so
+    // both read as their echo (nothing is focused in jsdom).
     expect(field('Annual Salary').value).toBe('$200,000.00')
-    expect(field('HSA Contributions').value).toBe('$8,333.33')
+    expect(field('HSA Contributions').value).toBe('$4,300.00')
     expect(screen.getByText(/pasted 2 of 3 values/i)).toBeDefined()
     // Pasted text lands in state exactly like typed text, so it counts into the changed-key
     // diff: the save is armed with no further interaction.
     expect(saveButton().disabled).toBe(false)
+  })
+
+  it('column paste skips computed slots and keeps alignment', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.paste(field('Annual Salary'), {
+      clipboardData: { getData: () => '200000\n99999\n4300' },
+    })
+
+    // A copied sheet column carries the grey cells too. The computed slot CONSUMES its value
+    // and throws it away: shifting the rest up instead would silently move every number
+    // below it onto the wrong row, which is the one paste bug nobody would notice.
+    expect(field('Annual Salary').value).toBe('$200,000.00')
+    expect(field('HSA Contributions').value).toBe('$4,300.00')
+    // Untouched: the figure is still the server's, not the 99,999 that landed on it.
+    expect(computed('Gross Paycheck').textContent).toBe('$8,333.33')
+    // Named rather than dropped silently — two of three editable cells were filled, and
+    // the third value went somewhere the note can account for.
+    expect(
+      screen.getByText(/pasted 2 of 3 values · 1 computed cell skipped/i),
+    ).toBeDefined()
+  })
+
+  it('keyed paste ignores a computed label', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.paste(field('Annual Salary'), {
+      clipboardData: { getData: () => 'Gross Paycheck\t9999\nHSA Contributions\t4300' },
+    })
+
+    // Named or positioned, a computed line is never filled. It is counted as SKIPPED rather
+    // than unmatched: the label was perfectly good, it just names a cell nobody may write.
+    expect(computed('Gross Paycheck').textContent).toBe('$8,333.33')
+    expect(field('HSA Contributions').value).toBe('$4,300.00')
+    expect(
+      screen.getByText(/pasted 1 of 3 values · 1 computed cell skipped/i),
+    ).toBeDefined()
   })
 
   it('reports values that run off the end instead of dropping them silently', () => {
@@ -791,12 +826,15 @@ describe('InputsForm', () => {
     // A sheet column is ONE person's numbers, so the fill walks Sam's per-person lines in
     // render order — across the section boundary — and stops there.
     expect(field('Annual Salary — Sam').value).toBe('$95,000.00')
-    expect(field('HSA Contributions — Sam').value).toBe('$4,000.00')
+    expect(field('HSA Contributions — Sam').value).toBe('$2,000.00')
     // Alex's column and the shared line are untouched.
     expect(field('Annual Salary — Alex').value).toBe('$200,000.00')
     expect(field('Qualified Dividends').value).toBe('')
-    // The denominator is the COLUMN, not the whole form: two editable cells were reachable.
-    expect(screen.getByText(/pasted 2 of 2 values · 1 value didn't fit/i)).toBeDefined()
+    // The denominator is the COLUMN, not the whole form: two editable cells were reachable,
+    // and the third pasted value landed on Sam's computed line and stopped there.
+    expect(
+      screen.getByText(/pasted 2 of 2 values · 1 computed cell skipped/i),
+    ).toBeDefined()
   })
 
   it('keyed paste fills the pasted-into column and the shared lines, never the other person', () => {
