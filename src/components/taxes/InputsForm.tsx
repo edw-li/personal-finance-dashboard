@@ -151,7 +151,7 @@ interface Cell {
 interface Row {
   key: string
   label: string
-  isDerived: boolean
+  computed: boolean
   /** The server's caption for a computed line ("Annual Salary ÷ 24"), null on an editable
    *  one. The row's, not the cell's: both columns of a per-person total share one formula. */
   formula: string | null
@@ -241,7 +241,7 @@ function rowsOf(section: TaxInputSectionOut, names: Map<number, string>, split: 
       row = {
         key: item.key,
         label: item.label,
-        isDerived: item.is_derived,
+        computed: item.is_derived,
         formula: item.formula,
         cells: [],
       }
@@ -298,6 +298,45 @@ function figuresOf(cells: Cell[]): Record<string, string | null> {
   return figures
 }
 
+/**
+ * A list of (cell, wire value) pairs as the body both writes take. Split by COLUMN: household
+ * cells — and every cell of a one-column year — ride the `values` map the server resolves
+ * itself (a per-person key with no owner is the primary's); person cells name their row. With
+ * no person rows the list is left off entirely, so a one-column year ships EXACTLY the body
+ * this form shipped before columns existed. One function for both callers, because a save and
+ * a preview that split their cells differently would quietly be asking about different forms.
+ */
+function bodyOf(entries: Array<[Cell, string | null]>): TaxInputsUpdate {
+  const values: Record<string, string | null> = {}
+  const rows: TaxInputRowIn[] = []
+  for (const [cell, wire] of entries) {
+    if (cell.personId === null) values[cell.key] = wire
+    else rows.push({ key: cell.key, person_id: cell.personId, value: wire })
+  }
+  return rows.length === 0 ? { values } : { values, rows }
+}
+
+/**
+ * The whole form as a PUT body. The preview endpoint takes exactly the save's shape and
+ * overlays it on the stored rows, so it has to hear about EVERY editable cell rather than the
+ * diff: a cell left out would be read at its stored value, and the totals would follow a form
+ * that is no longer on screen. A cell whose text is not a valid entry is left out instead —
+ * the server would 422 the whole call over one half-typed number, and the figures would freeze
+ * until it was finished. Pure and module-level, so the save echo can build the body its own
+ * values will render into and compare the two texts.
+ */
+function previewBodyOf(cells: Cell[], values: Record<string, string>): TaxInputsUpdate {
+  return bodyOf(
+    cells.flatMap((cell): Array<[Cell, string | null]> => {
+      const text = (values[cell.id] ?? '').trim()
+      if (text !== '' && !isEntry(cell.unit, text)) return []
+      // Blank rides as null, exactly as it would in a save: the overlay unsets that input
+      // for the length of the calculation, because absent is not zero.
+      return [[cell, text === '' ? null : toWire(cell.unit, text)]]
+    }),
+  )
+}
+
 export default function InputsForm({
   inputs,
   onSaved,
@@ -329,12 +368,16 @@ export default function InputsForm({
   // by every save echo, so "is this still the newest thing the server said?" is one
   // comparison — an out-of-order preview and a preview overtaken by a save are the same bug.
   const figureSeq = useRef(0)
-  // The `values` object the SERVER handed us: the mount seed, then each save echo. A form
-  // that still holds exactly that object already agrees with its figures, so previewing it
-  // would spend a request to be told what we were just told. Compared by IDENTITY rather
-  // than consumed as a one-shot flag, because StrictMode mounts effects twice in dev and a
-  // flag would be spent on the first pass and let the second one ask.
-  const serverValues = useRef(values)
+  // This render's form, as the wire would carry it. The TEXT is what the preview below is
+  // keyed on: two renders that would send the same bytes are the same question, so a blur
+  // that only canonicalizes "$216,000" into "216000" asks nothing new.
+  const bodyJson = JSON.stringify(previewBodyOf(flatCells, values))
+  // The body the SERVER last agreed with: the mount seed, then each save echo. A form that
+  // still serializes to exactly that already agrees with its figures, so previewing it would
+  // spend a request to be told what we were just told. A ref rather than a one-shot flag,
+  // because StrictMode mounts effects twice in dev and a flag would be spent on the first
+  // pass and let the second one ask.
+  const serverBody = useRef(bodyJson)
 
   const changed: Record<string, string | null> = {}
   const invalid: string[] = []
@@ -360,38 +403,17 @@ export default function InputsForm({
     onDirtyChange?.(changedCount > 0)
   }, [changedCount, onDirtyChange])
 
-  /**
-   * The whole form as a PUT body. The preview endpoint takes exactly the save's shape and
-   * overlays it on the stored rows, so it has to hear about EVERY editable cell rather than
-   * the diff: a cell left out would be read at its stored value, and the totals would follow
-   * a form that is no longer on screen. A cell whose text is not a valid entry is left out
-   * instead — the server would 422 the whole call over one half-typed number, and the
-   * figures would freeze until it was finished.
-   */
-  const previewBody = (): TaxInputsUpdate => {
-    const wireValues: Record<string, string | null> = {}
-    const rows: TaxInputRowIn[] = []
-    for (const cell of flatCells) {
-      const text = (values[cell.id] ?? '').trim()
-      if (text !== '' && !isEntry(cell.unit, text)) continue
-      // Blank rides as null, exactly as it would in a save: the overlay unsets that input
-      // for the length of the calculation, because absent is not zero.
-      const wire = text === '' ? null : toWire(cell.unit, text)
-      if (cell.personId === null) wireValues[cell.key] = wire
-      else rows.push({ key: cell.key, person_id: cell.personId, value: wire })
-    }
-    return rows.length === 0 ? { values: wireValues } : { values: wireValues, rows }
-  }
-
   // Live totals (spec §1.7): a computed line follows its components as they are typed, and
   // the browser owns no formula — so every edit ASKS what the totals would be. Debounced
   // because a keystroke is not a question, and sequenced because the answers can arrive out
   // of order.
   useEffect(() => {
-    if (serverValues.current === values) return
+    if (serverBody.current === bodyJson) return
     const timer = setTimeout(() => {
       const seq = ++figureSeq.current
-      previewTaxInputs(inputs.year, previewBody())
+      // Parsed back from the very text the effect was keyed on: what was compared is what
+      // gets asked, with no second walk of the form to disagree with the first.
+      previewTaxInputs(inputs.year, JSON.parse(bodyJson) as TaxInputsUpdate)
         .then((preview) => {
           // Stale, or overtaken by a save echo: the newest answer owns the screen, and an
           // older one describes a form that no longer exists.
@@ -410,11 +432,12 @@ export default function InputsForm({
         })
     }, PREVIEW_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-    // Keyed on the typed cells ALONE. `previewBody` is rebuilt every render, so listing it
-    // would re-arm the debounce on any state change at all — a paste note clearing itself
-    // would cost a request — and `inputs.year`/`split` cannot move without a remount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [values])
+    // Keyed on the BODY's text rather than on the values map. An object rebuilt every render
+    // would re-arm the debounce on any state change at all (a paste note clearing itself
+    // would cost a request), and its identity would also count a canonicalizing blur as a
+    // new question. `inputs.year` and `split` cannot move without a remount, so naming them
+    // costs nothing and leaves the dep list honest.
+  }, [bodyJson, inputs.year, split])
 
   // The flash is a one-shot: the timer callback clears it, so the effect body itself never
   // sets state (a set here would re-run the effect on its own write).
@@ -440,38 +463,34 @@ export default function InputsForm({
     if (changedCount === 0) return
     setSaving(true)
     setError(null)
-    // Split by COLUMN. Household cells — and every cell of a one-column year — ride the
-    // `values` map the server resolves itself (a per-person key with no owner is the
-    // primary's); person cells name their row. A one-column save therefore ships EXACTLY the
-    // body this form shipped before columns existed.
-    const wireValues: Record<string, string | null> = {}
-    const rows: TaxInputRowIn[] = []
-    for (const cell of flatCells) {
-      const text = changed[cell.id]
-      // A changed cell is a string or an explicit null (blanked); undefined means untouched.
-      if (text === undefined) continue
-      // The wire gets CANONICAL text, the on-screen diff above keeps counting the raw: a save
-      // reached without a blur (Ctrl+Enter, a jsdom click) must not ship "$1,600" or
-      // "=1200+400" to a Decimal column.
-      const wire = text === null ? null : toWire(cell.unit, text)
-      if (cell.personId === null) wireValues[cell.key] = wire
-      else rows.push({ key: cell.key, person_id: cell.personId, value: wire })
-    }
+    // The DIFF, through the same column splitter the preview builds its whole-form body
+    // with: an untouched cell is never sent, because sending one blank would DELETE a stored
+    // input the user never looked at.
     putTaxInputs(
       inputs.year,
-      rows.length === 0 ? { values: wireValues } : { values: wireValues, rows },
+      bodyOf(
+        flatCells.flatMap((cell): Array<[Cell, string | null]> => {
+          // A changed cell is a string or an explicit null (blanked); undefined = untouched.
+          const text = changed[cell.id]
+          if (text === undefined) return []
+          // The wire gets CANONICAL text, the on-screen diff above keeps counting the raw: a
+          // save reached without a blur (Ctrl+Enter, a jsdom click) must not ship "$1,600"
+          // or "=1200+400" to a Decimal column.
+          return [[cell, text === null ? null : toWire(cell.unit, text)]]
+        }),
+      ),
     )
       .then((echo) => {
         // The echo is authoritative (4dp, fresh suggestions, and the totals recomputed from
         // what was just stored): adopt it as the shown value, the new baseline and the
         // figures, so a second save sends nothing. Bumping the sequence retires any preview
         // still in flight — it is an answer about a form the server has since been told
-        // about — and adopting the echo's map as `serverValues` stops the echo's own write
-        // from asking the same question again.
+        // about — and adopting the body the echo's own values serialize to stops the echo's
+        // write from asking the same question again.
         const { flatCells: echoCells, allCells: echoAll } = modelOf(echo)
         const echoValues = valuesOf(echoCells)
         figureSeq.current += 1
-        serverValues.current = echoValues
+        serverBody.current = JSON.stringify(previewBodyOf(echoCells, echoValues))
         setFigures(figuresOf(echoAll))
         setValues(echoValues)
         setBaseline(valuesOf(echoCells))
@@ -686,7 +705,7 @@ export default function InputsForm({
                           takes the same plain-text branch: its figure names itself
                           "… (computed)", and a <label> pointing at it would hand the bare
                           label back to a query looking for a box that no longer exists. */}
-                      {row.cells.length === 1 && !row.isDerived ? (
+                      {row.cells.length === 1 && !row.computed ? (
                         <label htmlFor={`tax-input-${row.cells[0].id}`} title={row.label}>
                           {row.label}
                         </label>
@@ -695,7 +714,7 @@ export default function InputsForm({
                           {row.label}
                         </span>
                       )}
-                      {row.isDerived && <span className="badge">derived</span>}
+                      {row.computed && <span className="badge">derived</span>}
                     </span>
                     {row.cells.map((cell) => {
                       // A household line inside a split grid takes both person tracks
@@ -714,7 +733,6 @@ export default function InputsForm({
                           <output
                             key={cell.id}
                             id={`tax-input-${cell.id}`}
-                            data-computed={cell.id}
                             className={`tax-computed${wide === '' ? '' : ` ${wide}`}`}
                             aria-label={`${cellLabel(cell)} (computed)`}
                             title={
@@ -755,12 +773,12 @@ export default function InputsForm({
                         is what a chip would have been — the row's explanation of its own
                         number — minus the button, because there is nothing to apply. */}
                     <span className="tax-suggestion">
-                      {row.isDerived && row.formula !== null && (
+                      {row.computed && row.formula !== null && (
                         <span className="tax-suggestion-value" title={row.formula}>
                           {row.formula}
                         </span>
                       )}
-                      {!row.isDerived && suggestion !== null && (
+                      {!row.computed && suggestion !== null && (
                         <>
                           <span className="tax-suggestion-value" title={suggestion}>
                             {suggestionWord} {suggestion}

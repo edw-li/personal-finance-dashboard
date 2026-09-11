@@ -135,6 +135,12 @@ and its comment), `src/api/taxes.test.ts` (if it lists exported functions).
   and consume the value; `reachable` counts editable cells; keyed candidates exclude computed cells
   and a label match against a computed row counts as skipped. Note grammar:
   `${n} computed cell${n === 1 ? '' : 's'} skipped`.
+- As built: the KEYED candidate list includes computed cells rather than excluding them. A
+  pasted line naming a computed row has to be answered by its own row — dropped from the list,
+  `matchLabel` would fuzzy-match "Gross Paycheck" onto a neighbouring editable line and fill the
+  wrong cell — so the match is made and then refused: counted as skipped, never filled, never
+  reported as unmatched. `reachable` still counts editable cells only, so the note's denominator
+  is the one this task specified, and so is the observable behaviour.
 - [x] Commit: `feat(taxes): pasted sheet columns skip computed slots without losing alignment`.
 
 ## Task 5 — page, copy, health card

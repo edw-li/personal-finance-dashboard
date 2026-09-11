@@ -390,11 +390,14 @@ describe('InputsForm', () => {
   // --- computed totals (2026-09-11 spec §1.7) ---
 
   it('renders a derived row as a read-only figure with its formula and no chip', () => {
-    const { container } = render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
 
     // An <output>, not an input: the house rule is that the browser never recomputes an
     // engine figure, so the only thing a derived row can do is SHOW what the server sent.
-    const figure = container.querySelector('output[data-computed="gross_paycheck"]')
+    // Reached by the two handles the form actually gives it — the cell id a paste resolves
+    // against, and the accessible name a person reads.
+    const figure = document.getElementById('tax-input-gross_paycheck')
+    expect(figure?.tagName).toBe('OUTPUT')
     expect(figure?.textContent).toBe('$8,333.33')
     expect(computed('Gross Paycheck')).toBe(figure)
     // The formula is the row's whole explanation, so it rides both the third track and the
@@ -546,6 +549,102 @@ describe('InputsForm', () => {
     expect(computed('Gross Paycheck').textContent).toBe('$11,000.00')
     // And the echo does not ask the same question again: its figures ARE the server's.
     expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+  })
+
+  it('previews a married year as two columns of rows, and answers both', async () => {
+    vi.useFakeTimers()
+    vi.mocked(previewTaxInputs).mockResolvedValue({
+      year: 2024,
+      filing_status: 'married_joint',
+      derived: [
+        { key: 'gross_paycheck', person_id: 1, value: '8333.3333' },
+        { key: 'gross_paycheck', person_id: 4, value: '3958.3333' },
+      ],
+    })
+    render(<InputsForm inputs={marriedInputs()} onSaved={vi.fn()} />)
+
+    fireEvent.change(field('Annual Salary — Sam'), { target: { value: '95000' } })
+    await settle(300)
+
+    // The preview body is the SAVE's shape, for every editable cell: person cells name their
+    // row with the roster's own id — non-contiguous on purpose, so nothing can be working by
+    // array position — and the household cell rides `values` unqualified, blank as null. A
+    // computed cell is in neither half: it has no stored row, and the server 422s a write.
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledWith(2024, {
+      values: { qualified_dividends: null },
+      rows: [
+        { key: 'annual_salary', person_id: 1, value: '200000.0000' },
+        { key: 'annual_salary', person_id: 4, value: '95000' },
+        { key: 'hsa_contributions', person_id: 1, value: '4150.0000' },
+        { key: 'hsa_contributions', person_id: 4, value: null },
+      ],
+    })
+    // One answer, two columns: each figure lands on the cell its own person_id addresses,
+    // by the same ownership rule the GET's items are read with.
+    expect(computed('Gross Paycheck — Alex').textContent).toBe('$8,333.33')
+    expect(computed('Gross Paycheck — Sam').textContent).toBe('$3,958.33')
+  })
+
+  it('leaves a half-typed cell out of the preview body rather than freezing the figures', async () => {
+    vi.useFakeTimers()
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    fireEvent.change(field('HSA Contributions'), { target: { value: 'abc' } })
+    await settle(300)
+
+    // Text that is not an entry is OMITTED, not sent: the server would 422 the whole call
+    // over one half-typed number, and every figure on screen would freeze until it was
+    // finished. The rest of the form still rides — a cell left out of the overlay is read at
+    // its stored value, which for this one is exactly what the user has not changed yet.
+    const [, body] = vi.mocked(previewTaxInputs).mock.calls[0]
+    expect(body).toEqual({
+      values: { annual_salary: '200000.0000', qualified_dividends: null },
+    })
+    expect(body.values).not.toHaveProperty('hsa_contributions')
+  })
+
+  it('asks nothing more when a blur only canonicalizes text it already sent', async () => {
+    vi.useFakeTimers()
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    // Typed with a sheet's grouping and a '$', both of which are valid entry (spec §3.1).
+    fireEvent.change(field('Annual Salary'), { target: { value: '$216,000' } })
+    await settle(300)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledWith(2024, {
+      values: {
+        annual_salary: '216000',
+        hsa_contributions: '4150.0000',
+        qualified_dividends: null,
+      },
+    })
+
+    // The blur rewrites the STATE '$216,000' → '216000' (AmountInput's commit). The wire was
+    // already '216000', so this is not a new question — the debounce is keyed on the body's
+    // text, not on the identity of the values map, and a canonicalization costs no request.
+    act(() => field('Annual Salary').focus())
+    act(() => field('Annual Salary').blur())
+    await settle(400)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+  })
+
+  it('an applied suggestion asks for the totals like any other edit', async () => {
+    vi.useFakeTimers()
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply suggestion for Annual Salary' }))
+    await settle(300)
+
+    // Apply writes the cell exactly as a keystroke does, so the computed line follows it:
+    // ONE preview, carrying the applied figure in wire units.
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledWith(2024, {
+      values: {
+        annual_salary: '210000.0000',
+        hsa_contributions: '4150.0000',
+        qualified_dividends: null,
+      },
+    })
   })
 
   it('sends null for a blanked value', async () => {
