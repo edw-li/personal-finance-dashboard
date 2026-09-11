@@ -599,7 +599,13 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
         for b in (
             await db.execute(
                 select(TaxBracket).where(
-                    TaxBracket.year.in_(imported_years), TaxBracket.filing_status == SINGLE
+                    TaxBracket.year.in_(imported_years),
+                    TaxBracket.filing_status == SINGLE,
+                    # ...and DEFAULT rows only: a per-worker table entered against a person
+                    # (2026-09-11 spec §2.3) shares its (year, jurisdiction, index) with the
+                    # default it overrides, so without this the diff below would read the
+                    # sheet's rate against the wrong row and rewrite an earner's own table.
+                    TaxBracket.person_id.is_(None),
                 )
             )
         ).scalars()

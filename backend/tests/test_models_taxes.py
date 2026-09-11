@@ -252,3 +252,92 @@ async def test_the_same_key_may_repeat_across_people(db):
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()
+
+
+# --- per-person bracket tables (2026-09-11 spec §2.1) ---
+
+
+def _bracket(db, **overrides) -> TaxBracket:
+    row = TaxBracket(
+        year=2026,
+        jurisdiction="disability",
+        filing_status="single",
+        bracket_index=1,
+        rate=Decimal("0.01"),
+        threshold=Decimal("0"),
+    )
+    for name, value in overrides.items():
+        setattr(row, name, value)
+    db.add(row)
+    return row
+
+
+async def test_two_default_rows_still_collide_on_the_partial_index(db):
+    """The single unique CONSTRAINT became two partial unique INDEXES, and the default one
+    has to keep meaning what the constraint meant: one row per (year, jurisdiction, status,
+    index) among the rows with no person."""
+    db.add(TaxYear(year=2026))
+    await db.flush()
+    _bracket(db)
+    await db.commit()
+    _bracket(db, rate=Decimal("0.013"))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+
+async def test_two_rows_for_one_person_collide_too(db):
+    from app.models import Person
+
+    me = Person(name="Me", is_primary=True)
+    db.add(me)
+    db.add(TaxYear(year=2026))
+    await db.flush()
+    _bracket(db, person_id=me.id)
+    await db.commit()
+    _bracket(db, person_id=me.id, rate=Decimal("0.013"))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+
+async def test_a_default_row_and_a_person_row_share_one_index(db):
+    """The whole point of the split: the year's default table and one earner's own copy of
+    it are the same (year, jurisdiction, status, index) and must coexist."""
+    from app.models import Person
+
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Partner", is_primary=False)
+    db.add_all([me, partner])
+    db.add(TaxYear(year=2026))
+    await db.flush()
+    _bracket(db)
+    _bracket(db, person_id=me.id, rate=Decimal("0.013"))
+    _bracket(db, person_id=partner.id, rate=Decimal("0.009"))
+    await db.commit()
+    stored = (await db.execute(select(TaxBracket))).scalars().all()
+    assert sorted(row.rate for row in stored) == [
+        Decimal("0.0090"),
+        Decimal("0.0100"),
+        Decimal("0.0130"),
+    ]
+
+
+async def test_an_unknown_person_is_refused_by_the_foreign_key(db):
+    db.add(TaxYear(year=2026))
+    await db.flush()
+    _bracket(db, person_id=4242)
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+
+async def test_per_worker_jurisdictions_is_the_one_tuple(db):
+    """`VERBATIM_OK_JURISDICTIONS` (the clone's review flags) and the per-person tables are
+    the SAME fact — which jurisdictions are per worker — so there is one tuple."""
+    from app.api.taxes import VERBATIM_OK_JURISDICTIONS
+    from app.tax_keys import JURISDICTIONS, PER_WORKER_JURISDICTIONS
+
+    assert PER_WORKER_JURISDICTIONS == ("social_security", "disability")
+    assert VERBATIM_OK_JURISDICTIONS is PER_WORKER_JURISDICTIONS
+    assert set(PER_WORKER_JURISDICTIONS) <= set(JURISDICTIONS)

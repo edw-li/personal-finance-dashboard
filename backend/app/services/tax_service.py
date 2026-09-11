@@ -314,6 +314,23 @@ class EarnerWages:
     w2_wages: Decimal
     pretax_hsa: Decimal = ZERO
     other_pretax: Decimal = ZERO
+    # The per-worker tables THIS earner walks instead of the year's defaults (2026-09-11
+    # spec §2.2), keyed by jurisdiction — only ever `tax_keys.PER_WORKER_JURISDICTIONS`,
+    # because Social Security's wage base and California's SDI (or the employer Voluntary
+    # Plan standing in for it) are levied per worker while every other table is per return.
+    #
+    # A plain dict on a frozen dataclass: the field cannot be rebound, and nothing in this
+    # module mutates the mapping it is handed. Empty — the default — means "walk the year's
+    # tables", which is what every bundle the engine synthesizes carries, so the golden path
+    # never reads a `payroll_tables` that is not `{}`.
+    #
+    # Out of `__eq__` and `__hash__` both: a frozen dataclass is hashable, and a dict field
+    # inside the hash would make every bundle raise TypeError in a set or a dict key. Two
+    # bundles are the same WAGES; which schedule they walk is the year's business, not the
+    # person's identity.
+    payroll_tables: Mapping[str, list[Bracket]] = field(
+        default_factory=dict, hash=False, compare=False
+    )
 
     @property
     def fica_wages(self) -> Decimal:
@@ -326,7 +343,10 @@ class EarnerWages:
         return self.w2_wages - self.other_pretax
 
 
-def earner_from_inputs(values: Mapping[str, Decimal]) -> EarnerWages:
+def earner_from_inputs(
+    values: Mapping[str, Decimal],
+    payroll_tables: Mapping[str, list[Bracket]] | None = None,
+) -> EarnerWages:
     """One person's bundle from THEIR OWN input rows — the exact composition
     `compute_breakdown` synthesizes when `earners` is None, so the API can build a
     two-earner list without a second definition of "what a W-2 is".
@@ -336,6 +356,10 @@ def earner_from_inputs(values: Mapping[str, Decimal]) -> EarnerWages:
     closes the last door: on the single-earner path the engine synthesizes its one bundle
     through here, so no caller — not even a direct one — can hand the payroll walks a
     typed W-2 total.
+
+    `payroll_tables` is this person's own per-worker tables (spec §2.2), which are not
+    built from their rows at all — they are bracket data the assembly looks up beside
+    them. None and `{}` are the same instruction: walk the year's defaults.
     """
     materialized = materialize_person(values)
 
@@ -347,6 +371,7 @@ def earner_from_inputs(values: Mapping[str, Decimal]) -> EarnerWages:
         w2_wages=value("latest_w2_income") + value("other_w2_income"),
         pretax_hsa=value("hsa_contributions") + value("hsa_contributions_employer"),
         other_pretax=value("other_pretax_deductions"),
+        payroll_tables=payroll_tables or {},
     )
 
 
@@ -367,10 +392,33 @@ def shift_earners(
     from it. Before 2026-09-11 this added deltas of the derived totals onto the old
     bundle; there are no stored totals to take a delta of any more, and re-running the one
     definition of "what a W-2 is" cannot drift from it.
+
+    The head is built through `earner_from_inputs` with the primary's OWN per-worker
+    tables handed back to it: a what-if moves WAGES, and everything about the primary that
+    is not a wage — their own tables (spec §2.2) — survives the rebuild. One door, so the
+    scenario's bundle cannot be composed any differently from the baseline's.
     """
     if not earners:
         return earners
-    return [earner_from_inputs(primary_after), *earners[1:]]
+    rebased = earner_from_inputs(primary_after, earners[0].payroll_tables)
+    return [rebased, *earners[1:]]
+
+
+@dataclass(frozen=True)
+class EarnerPayroll:
+    """One earner's line of ONE per-worker payroll tax (2026-09-11 spec §2.2).
+
+    The same four figures the aggregate reports, for one person, plus which table produced
+    them. `taxable_wages` follows that jurisdiction's aggregate convention applied per
+    earner — Social Security's capped base, SDI's uncapped one — so the aggregate really is
+    the sum of these rather than a second, differently-shaped walk.
+    """
+
+    w2_income: Decimal
+    taxable_wages: Decimal
+    tax: Decimal
+    effective_rate: Decimal | None
+    own_table: bool
 
 
 @dataclass
@@ -390,6 +438,10 @@ class JurisdictionResult:
     w2_income: Decimal | None = None
     taxable_wages: Decimal | None = None
     gains_amount: Decimal | None = None
+    # The earners behind a PER-WORKER total, in bundle (column) order — social_security and
+    # disability only. Medicare is a combined-wage walk by statute and keeps the empty list,
+    # which is also what every non-wage family carries.
+    per_person: list[EarnerPayroll] = field(default_factory=list)
 
 
 @dataclass
@@ -441,6 +493,66 @@ def niit_advisory(cg_brackets: list[Bracket]) -> str | None:
     if not folded:
         return None
     return NIIT_WARNING.format(rates="/".join(str(rate) for rate in folded))
+
+
+def _wage_cap(table: list[Bracket]) -> Decimal | None:
+    """The wage base a per-worker table stops at, or None when it does not stop.
+
+    The sheet models a cap as a terminal 0-rate bracket, so this reads it back out: it is
+    tax-neutral either way (income inside a 0-rate bracket contributes nothing), and it is
+    only a cap when that top rate really is 0 — a table without the terminal row, or with a
+    genuinely progressive top tier, has no cap and reports its wages uncapped.
+    """
+    if len(table) <= 1:
+        return None
+    top_rate, top_threshold = max(table, key=lambda bracket: bracket[1])
+    return top_threshold if top_rate == 0 else None
+
+
+def _payroll_line(
+    earner: EarnerWages,
+    name: str,
+    default_table: list[Bracket],
+    base: Decimal,
+    *,
+    capped: bool,
+) -> EarnerPayroll:
+    """One earner's line of one per-worker payroll tax (2026-09-11 spec §2.2).
+
+    The earner's OWN table wins over the year's default; an absent one — and an empty one,
+    which is the same statement — falls through, so a household with no person tables walks
+    exactly what it walked before.
+
+    `capped` is the reporting convention, not a fact about the table: Social Security
+    reports the capped base it taxed, while SDI reports the earner's whole wage and lets the
+    table's own terminal 0-rate row do the capping inside the walk (the 2024 golden's
+    235424.46). An OWN table whose every rate is 0 is neither — it is a job outside the tax
+    (an SS-exempt employer), so there is no wage base to report at all.
+
+    That exemption is a statement somebody made about ONE person, which is why it reads
+    `own` rather than the table in force: an all-zero DEFAULT table is a jurisdiction the
+    whole household is simply not charged by, and it has always reported the full wage base
+    beside a 0 tax. Reading it as an exemption would erase the reported wages of every
+    earner on the return, which is the promise the FIRST paragraph makes.
+    """
+    own = earner.payroll_tables.get(name)
+    table = own if own else default_table
+    if own and all(rate == 0 for rate, _threshold in own):
+        base = ZERO
+    elif capped:
+        cap = _wage_cap(table)
+        if cap is not None:
+            base = min(base, cap)
+    tax = walk(table, base)
+    return EarnerPayroll(
+        w2_income=earner.w2_wages,
+        taxable_wages=base,
+        tax=tax,
+        # Over their W-2, the denominator the aggregate line divides by — one convention, so
+        # a person's rate and the household's are the same kind of number.
+        effective_rate=_rate(tax, earner.w2_wages),
+        own_table=bool(own),
+    )
 
 
 def compute_breakdown(
@@ -611,32 +723,35 @@ def compute_breakdown(
     medicare_wages = sum((earner.fica_wages for earner in bundles), ZERO)
     medicare_tax = walk(tables["medicare"], medicare_wages)
 
-    # The SS wage base is modelled as a terminal 0-rate bracket; r109's min() makes the cap
-    # explicit so taxable_wages reads as the capped figure the sheet displays. It is
-    # tax-neutral by construction (income inside a 0-rate bracket contributes nothing), and
-    # it is only a cap when that top rate really is 0 — a table without the terminal row,
-    # or with a genuinely progressive top tier, reports (and taxes) uncapped wages. The cap
-    # is PER PERSON: two earners get two wage bases, which is the single worst wrong-money
+    # The SS wage base is modelled as a terminal 0-rate bracket, read back by `_wage_cap`, so
+    # taxable_wages is the capped figure the sheet displays (r109's min()). The cap is PER
+    # PERSON: two earners get two wage bases, which is the single worst wrong-money
     # consequence of the old shared figure (audit §3.2).
+    #
+    # ...and so is the TABLE, since 2026-09-11 (spec §2.2): an earner on an employer
+    # Voluntary Plan and an earner on statutory SDI are two different rate schedules in one
+    # household, and the wage base a job is exempt from is a property of the job. Both walks
+    # below therefore run per bundle through `_payroll_line`, and the aggregates are the sums
+    # of the per-person lines rather than a second walk of their own.
     ss_table = tables["social_security"]
-    ss_cap: Decimal | None = None
-    if len(ss_table) > 1:
-        top_rate, top_threshold = max(ss_table, key=lambda bracket: bracket[1])
-        if top_rate == 0:
-            ss_cap = top_threshold
-    ss_bases = [
-        earner.fica_wages if ss_cap is None else min(earner.fica_wages, ss_cap)
+    ss_lines = [
+        _payroll_line(earner, "social_security", ss_table, earner.fica_wages, capped=True)
         for earner in bundles
     ]
-    ss_wages = sum(ss_bases, ZERO)
-    ss_tax = sum((walk(ss_table, base) for base in ss_bases), ZERO)
+    ss_wages = sum((line.taxable_wages for line in ss_lines), ZERO)
+    ss_tax = sum((line.tax for line in ss_lines), ZERO)
 
     # SDI likewise walks per earner (the sheet-derived data carries a pseudo-cap row, and a
     # cap is a per-person parameter), while the REPORTED taxable_wages stays the uncapped
-    # aggregate the sheet displays — pinned by the 2024 golden's 235424.46.
+    # aggregate the sheet displays — pinned by the 2024 golden's 235424.46. That is why the
+    # `capped` flag exists: the two jurisdictions report different bases for the same walk.
     sdi_table = tables["disability"]
-    sdi_wages = sum((earner.sdi_wages for earner in bundles), ZERO)
-    sdi_tax = sum((walk(sdi_table, earner.sdi_wages) for earner in bundles), ZERO)
+    sdi_lines = [
+        _payroll_line(earner, "disability", sdi_table, earner.sdi_wages, capped=False)
+        for earner in bundles
+    ]
+    sdi_wages = sum((line.taxable_wages for line in sdi_lines), ZERO)
+    sdi_tax = sum((line.tax for line in sdi_lines), ZERO)
 
     # The federal CG stack (row 120): cg_amount was netted above the state section, which
     # shares it; the gains stack on top of ordinary taxable income, minus whatever the
@@ -706,12 +821,14 @@ def compute_breakdown(
             effective_rate=_rate(ss_tax, w2_income),
             w2_income=w2_income,
             taxable_wages=ss_wages,
+            per_person=ss_lines,
         ),
         disability=JurisdictionResult(
             tax=sdi_tax,
             effective_rate=_rate(sdi_tax, w2_income),
             w2_income=w2_income,
             taxable_wages=sdi_wages,
+            per_person=sdi_lines,
         ),
         capital_gains=JurisdictionResult(
             tax=cg_tax,

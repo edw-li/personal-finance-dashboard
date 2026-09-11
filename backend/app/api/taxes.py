@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
+from itertools import zip_longest
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
@@ -68,6 +69,8 @@ from app.schemas.taxes import (
     FilingStatus,
     IncomeTaxOut,
     IncompleteYearOut,
+    PersonBracketsOut,
+    PersonWageTaxOut,
     SafeHarborOut,
     SaleDetailOut,
     TaxInputItemOut,
@@ -139,6 +142,7 @@ from app.tax_keys import (
     MIN_INPUT_COUNT,
     PER_PERSON_DERIVED_KEYS,
     PER_PERSON_KEYS,
+    PER_WORKER_JURISDICTIONS,
     PERCENT,
     SECTIONS,
     SINGLE,
@@ -164,7 +168,8 @@ YEAR_MESSAGE = f"year must be between {YEAR_MIN} and {YEAR_MAX}"
 MAX_BRACKETS = 12
 FilingStatusQuery = Annotated[FilingStatus, Query()]
 # See BracketReviewFlags: per-PERSON parameters clone verbatim, per-RETURN thresholds do not.
-VERBATIM_OK_JURISDICTIONS = ("social_security", "disability")
+# The SAME tuple the per-person tables are gated on (spec §2.1) — one fact, one spelling.
+VERBATIM_OK_JURISDICTIONS = PER_WORKER_JURISDICTIONS
 REVIEW_JURISDICTIONS = ("federal", "state", "capital_gains", "medicare")
 ZERO = Decimal("0")
 # Above this the ratio is nonsense anyway (near-zero denominator), and quantize_pct would
@@ -236,6 +241,18 @@ class EngineFeed:
     # `rows`. A derived total re-derived from a bucket of one person's rows is that person's;
     # re-derived from the household's summed rows it is nobody's.
     person_inputs: dict[int | None, dict[str, Decimal]] = dataclass_field(default_factory=dict)
+    # The per-worker tables stored against a PERSON, by person id (2026-09-11 spec §2.3).
+    # `tables` above stays the year's defaults; these are the overlays, already attached to
+    # the bundles in `earners` — the field is here for the withholding card, which walks the
+    # primary's tables outside the engine.
+    person_tables: dict[int, dict[str, list[Bracket]]] = dataclass_field(default_factory=dict)
+    # WHOSE bundle is whose: (person id, name) per entry of `earners`, in bundle order —
+    # the summary's per-earner payroll lines are labelled from it (2026-09-11 spec §2.5).
+    # Built from the same list as `earners` (`_assemble_earners` returns the pairs), never
+    # from `columns` positionally: on the SYNTHESIS path there is no bundle per column at
+    # all, just the one the engine sums out of whichever column has rows. (None, None) is a
+    # database with no roster.
+    earner_people: list[tuple[int | None, str | None]] = dataclass_field(default_factory=list)
     brackets_missing_for_status: list[str] = dataclass_field(default_factory=list)
 
     @property
@@ -255,6 +272,21 @@ class EngineFeed:
         six, and a single year is judged by the calendar (2026-09-09 spec 4g).
         """
         return not self.brackets_missing_for_status
+
+    def primary_payroll_table(self, name: str) -> list[Bracket]:
+        """The table the PRIMARY person's own payroll walks use — theirs, else the year's.
+
+        The withholding card's marginal-FICA legs are the primary's supplemental income, so
+        they meet the primary's schedule; `_payroll_line`'s rule, spelled once more here
+        because that walk happens in `withholding_calc` rather than in the engine.
+
+        PER-WORKER names only. Medicare's additional tier is assessed on COMBINED wages by
+        statute, so nobody can hold a Medicare table of their own — asking for one here
+        would always answer with the year's table, under a name that promises a person's.
+        """
+        assert name in PER_WORKER_JURISDICTIONS, f"{name} is not a per-worker jurisdiction"
+        own = self.person_tables.get(self.primary_column, {}).get(name)
+        return own if own else self.tables.get(name, [])
 
     def warning(self) -> str:
         return BRACKETS_MISSING_WARNING.format(
@@ -277,6 +309,11 @@ def _return_people(people: list[Person], filing_status: str) -> list[Person]:
     if not people:
         return []
     return list(people) if filing_status == MARRIED_JOINT else people[:1]
+
+
+# One spelling of "that id is on nobody's roster", shared by the two editors on the
+# Taxes page: PUT inputs resolves a row's owner with it, PUT brackets a table's.
+UNKNOWN_PERSON_MESSAGE = "unknown person {id}"
 
 
 def _owner_column(person_id: int | None, columns: list[int | None]):
@@ -373,22 +410,45 @@ def _assemble_inputs(
 
 
 def _assemble_earners(
-    per_person: dict[int | None, dict[str, Decimal]], columns: list[int | None]
-) -> list[EarnerWages] | None:
-    """One wage bundle per person on the return — or None when there is at most one.
+    per_person: dict[int | None, dict[str, Decimal]],
+    columns: list[int | None],
+    person_tables: dict[int, dict[str, list[Bracket]]] | None = None,
+) -> list[tuple[int | None, EarnerWages]] | None:
+    """One wage bundle per person on the return, each labelled with WHOSE it is — or None
+    when one column holds the rows and nobody on the return has a table of their own.
 
     None is not a fallback: it is the instruction to the engine to synthesize the single
     bundle from `inputs` exactly as it always has, which is what keeps every single-filer
     year byte-identical.
+
+    The exception is a return where ANY column has its own per-worker table (2026-09-11
+    spec §2.3): the engine's synthesized bundle carries no tables, so the spouse on an
+    employer Voluntary Plan would silently be taxed on the year's default. Production's
+    2026 is the primary alone with rows; a joint year whose only W-2 rows are the PARTNER's
+    is the same statement about the same return, and both answer with a LIST.
+
+    The list then covers EVERY column, in column order, and a column with no rows gets a
+    zero-wage bundle. The two things it has to be are true together or not at all: the head
+    is the PRIMARY's — the invariant `shift_earners` re-bases a what-if on, where a list
+    headed by the partner would move the primary's sale onto the partner's wage base and
+    cap it there — and every person walks their own table. A zero-wage bundle moves no
+    money: every aggregate is a sum over the bundles and zero wages add zero, so a
+    household with no person tables still cannot tell this path from the synthesis. What it
+    adds is an honest zero LINE in `per_person` for the person with nothing entered.
     """
-    if len(per_person) < 2:
-        return None
+    person_tables = person_tables or {}
     # In COLUMN order (primary first), not sorted: `shift_earners` re-bases the what-if on
     # bundle[0] because that is the primary person's, and any other ordering silently moves
     # their sale onto the partner's wage base. A plain sort cannot express this — `sorted(…,
     # key=str)` would even put person 10 ahead of person 2 — while `columns` already carries
     # the order `_return_people` established, and mixes None in safely.
-    return [earner_from_inputs(per_person[column]) for column in columns if column in per_person]
+    with_rows = [column for column in columns if column in per_person]
+    if len(with_rows) < 2 and not any(column in person_tables for column in columns):
+        return None
+    return [
+        (column, earner_from_inputs(per_person.get(column, {}), person_tables.get(column)))
+        for column in columns
+    ]
 
 
 def _derived_value(
@@ -463,25 +523,39 @@ async def _filing_status(db: AsyncSession, year: int) -> str:
 
 async def _engine_tables(
     db: AsyncSession, year: int, filing_status: str = SINGLE
-) -> dict[str, list[Bracket]]:
-    """One year+status's bracket tables in the shape `compute_breakdown` (and `walk`) take.
+) -> tuple[dict[str, list[Bracket]], dict[int, dict[str, list[Bracket]]]]:
+    """One year+status's bracket tables in the shape `compute_breakdown` (and `walk`) take:
+    the DEFAULTS everyone on the return walks, then the per-worker tables stored AGAINST A
+    PERSON (2026-09-11 spec §2.3), by person and then jurisdiction.
 
     ONE loader for every engine caller — the summary, the what-if and the withholding card
-    — so they can never disagree about which rows the engine saw. The full key order, not
-    just bracket_index: `walk`/`stack` sort defensively, so this pins one table order
-    across all of them rather than leaving it to whatever the planner returns.
+    — so they can never disagree about which rows the engine saw, and ONE query for both
+    halves, because every caller wants both: two round trips were two per YEAR in the
+    all-years summary and two more on the withholding card. The full key order, not just
+    bracket_index: `walk`/`stack` sort defensively, so this pins one table order across all
+    of them rather than leaving it to whatever the planner returns.
+
+    The `person_id is None` partition is load-bearing, not tidiness: a person's own
+    Disability table is the same (year, jurisdiction, status, index) as the default it
+    overrides, so rows allowed to land in one list would have every earner walking a table
+    that is the union of two different rate schedules.
     """
     rows = (
         await db.execute(
             select(TaxBracket)
             .where(TaxBracket.year == year, TaxBracket.filing_status == filing_status)
-            .order_by(TaxBracket.jurisdiction, TaxBracket.bracket_index)
+            .order_by(TaxBracket.person_id, TaxBracket.jurisdiction, TaxBracket.bracket_index)
         )
     ).scalars()
     tables: dict[str, list[Bracket]] = {}
+    person_tables: dict[int, dict[str, list[Bracket]]] = {}
     for row in rows:
-        tables.setdefault(row.jurisdiction, []).append((row.rate, row.threshold))
-    return tables
+        if row.person_id is None:
+            tables.setdefault(row.jurisdiction, []).append((row.rate, row.threshold))
+        else:
+            owned = person_tables.setdefault(row.person_id, {})
+            owned.setdefault(row.jurisdiction, []).append((row.rate, row.threshold))
+    return tables, person_tables
 
 
 CORE_JURISDICTIONS = ("federal", "state", "capital_gains")
@@ -532,17 +606,33 @@ async def _engine_feed(
     filing_status = await _filing_status(db, year)
     if people is None:
         people = await load_people(db)
-    columns = [person.id for person in _return_people(people, filing_status)] or [None]
+    on_return = _return_people(people, filing_status)
+    columns = [person.id for person in on_return] or [None]
     rows = list((await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars())
-    tables = await _engine_tables(db, year, filing_status)
+    tables, person_tables = await _engine_tables(db, year, filing_status)
     views = _input_views(year, rows, columns, filing_status)
+    assembled = _assemble_earners(views.stored, columns, person_tables)
+    names = {person.id: person.name for person in on_return}
+    # The bundles and the names beside them are ONE list read twice, so a summary can never
+    # put the primary's name on somebody else's wages. On the SYNTHESIS path there is no
+    # list to read: the engine builds its own single bundle out of every stored row, and at
+    # most one column can have any, so that column is whose it is — the primary's when
+    # nothing is stored at all, the only column an empty bundle could belong to.
+    if assembled is None:
+        earners = None
+        earner_columns = [next((c for c in columns if c in views.stored), columns[0])]
+    else:
+        earners = [bundle for _column, bundle in assembled]
+        earner_columns = [column for column, _bundle in assembled]
     return EngineFeed(
         year=year,
         filing_status=filing_status,
         inputs=views.computed,
-        earners=_assemble_earners(views.stored, columns),
+        earners=earners,
         tables=tables,
         person_inputs=views.buckets,
+        person_tables=person_tables,
+        earner_people=[(column, names.get(column)) for column in earner_columns],
         brackets_missing_for_status=_missing_for_status(tables, filing_status, year),
     )
 
@@ -731,17 +821,36 @@ async def _brackets_payload(
         )
     ).scalars()
     tables: dict[str, list[BracketOut]] = {name: [] for name in JURISDICTIONS}
+    owned: dict[int, dict[str, list[BracketOut]]] = {}
     for row in rows:
-        # setdefault, not [...]: the importer could carry a jurisdiction this API cannot
-        # write, and a GET must still show it rather than silently drop it.
-        tables.setdefault(row.jurisdiction, []).append(
-            BracketOut(bracket_index=row.bracket_index, rate=row.rate, threshold=row.threshold)
-        )
+        out = BracketOut(bracket_index=row.bracket_index, rate=row.rate, threshold=row.threshold)
+        if row.person_id is None:
+            # setdefault, not [...]: the importer could carry a jurisdiction this API cannot
+            # write, and a GET must still show it rather than silently drop it.
+            tables.setdefault(row.jurisdiction, []).append(out)
+        else:
+            owned.setdefault(row.person_id, {}).setdefault(row.jurisdiction, []).append(out)
+    # The roster THIS TAB's return covers (spec §2.4) — the same `_return_people` the engine
+    # feed builds its columns from, so the strip shows exactly the earners whose tables that
+    # status would walk. A person with rows under another status is not one of them.
+    people = _return_people(await load_people(db), filing_status)
     return BracketsOut(
         year=year,
         filing_status=filing_status,
         statuses_with_rows=await _statuses_with_rows(db, year),
         jurisdictions=tables,
+        people=[TaxPersonOut(id=person.id, name=person.name) for person in people],
+        per_person=[
+            PersonBracketsOut(
+                person_id=person.id,
+                name=person.name,
+                jurisdictions={
+                    name: owned.get(person.id, {}).get(name, [])
+                    for name in PER_WORKER_JURISDICTIONS
+                },
+            )
+            for person in people
+        ],
     )
 
 
@@ -954,7 +1063,9 @@ async def _resolve_input_rows(
             # migration. On a roster-less database that is still NULL.
             owner = primary.id if primary is not None else None
         elif row.person_id not in known_people:
-            raise HTTPException(status_code=422, detail=f"unknown person {row.person_id}")
+            raise HTTPException(
+                status_code=422, detail=UNKNOWN_PERSON_MESSAGE.format(id=row.person_id)
+            )
         else:
             owner = row.person_id
         slot = (row.key, owner)
@@ -1159,6 +1270,58 @@ async def get_brackets(
     return await _brackets_payload(db, year, filing_status)
 
 
+# The two per-person refusals (spec §2.4), quoted verbatim by the editor. " and ", not
+# ", ": the tuple IS the sentence's list, so a third per-worker jurisdiction would rewrite
+# the copy rather than leave it lying.
+PER_WORKER_ONLY_MESSAGE = "{name}: per-person tables exist only for " + " and ".join(
+    PER_WORKER_JURISDICTIONS
+)
+PERSON_OFF_RETURN_MESSAGE = "person {id} is not on a {status} return"
+
+
+async def _validated_person(db: AsyncSession, body: BracketsIn) -> None:
+    """Refuse a per-person body this API cannot honour, BEFORE anything is written.
+
+    Three rules, and all of them are about meaning rather than shape: a per-RETURN
+    threshold has no per-person reading at all (Medicare's additional tier is assessed on
+    combined wages by statute), an id nobody on the roster has is a client bug, and a real
+    person the body's status does not cover would be a row no engine feed ever loads —
+    entered, stored, and silently inert.
+
+    The last two are DIFFERENT sentences because they are different fixes: a stale id is
+    for the developer console, while "not on a single return" tells the user to switch
+    tabs. The unknown one is PUT inputs' own wording (`UNKNOWN_PERSON_MESSAGE`) — the same
+    complaint about the same roster, made by the other editor on this page.
+    """
+    if body.person_id is None:
+        return
+    for name in body.jurisdictions:
+        if name not in PER_WORKER_JURISDICTIONS:
+            raise HTTPException(status_code=422, detail=PER_WORKER_ONLY_MESSAGE.format(name=name))
+    people = await load_people(db)
+    if body.person_id not in {person.id for person in people}:
+        raise HTTPException(
+            status_code=422, detail=UNKNOWN_PERSON_MESSAGE.format(id=body.person_id)
+        )
+    if body.person_id not in {person.id for person in _return_people(people, body.filing_status)}:
+        raise HTTPException(
+            status_code=422,
+            detail=PERSON_OFF_RETURN_MESSAGE.format(id=body.person_id, status=body.filing_status),
+        )
+
+
+def _person_scope(person_id: int | None):
+    """The WHERE term that pins a replace to ONE table: the default, or one person's.
+
+    Both directions matter. Without it a default save would take every earner's own table
+    with it, and a person's save would take the default — the full replace is per
+    (year, jurisdiction, status, PERSON), never per (year, jurisdiction, status).
+    """
+    if person_id is None:
+        return TaxBracket.person_id.is_(None)
+    return TaxBracket.person_id == person_id
+
+
 @router.put("/years/{year}/brackets", response_model=BracketsOut)
 async def put_brackets(
     year: YearPath, body: BracketsIn, db: AsyncSession = Depends(get_db)
@@ -1169,6 +1332,7 @@ async def put_brackets(
     unknown = sorted(set(body.jurisdictions) - set(JURISDICTIONS))
     if unknown:
         raise HTTPException(status_code=422, detail=f"unknown jurisdiction(s): {unknown}")
+    await _validated_person(db, body)
     # Validate every jurisdiction before touching any of them: a mixed body must write all
     # of its tables or none.
     validated = {name: _validated_table(name, table) for name, table in body.jurisdictions.items()}
@@ -1176,13 +1340,14 @@ async def put_brackets(
     await _ensure_year(db, year)
     for name, table in validated.items():
         # Core DELETE rather than ORM deletes: the unit of work flushes INSERTs before
-        # DELETEs, so replacing a table in place would trip the
-        # (year, jurisdiction, filing_status, bracket_index) unique constraint.
+        # DELETEs, so replacing a table in place would trip the partial unique index on
+        # (year, jurisdiction, filing_status[, person_id], bracket_index).
         await db.execute(
             delete(TaxBracket).where(
                 TaxBracket.year == year,
                 TaxBracket.jurisdiction == name,
                 TaxBracket.filing_status == body.filing_status,
+                _person_scope(body.person_id),
             )
         )
         for index, (rate, threshold) in enumerate(table, start=1):
@@ -1191,6 +1356,7 @@ async def put_brackets(
                     year=year,
                     jurisdiction=name,
                     filing_status=body.filing_status,
+                    person_id=body.person_id,
                     bracket_index=index,  # 1-based array order, renumbered on every replace
                     rate=rate,
                     threshold=threshold,
@@ -1249,6 +1415,11 @@ async def clone_brackets(
                 year=year,
                 jurisdiction=row.jurisdiction,
                 filing_status=target_status,
+                # Person rows come across WITH their person (spec §2.3): a per-worker table
+                # is a property of the job rather than of the return it is reported on, so
+                # the copy is right — and a household that clones its single tables as MFJ
+                # would otherwise silently lose every table it had entered per earner.
+                person_id=row.person_id,
                 bracket_index=row.bracket_index,
                 rate=row.rate,
                 threshold=row.threshold,
@@ -1261,6 +1432,8 @@ async def clone_brackets(
         filing_status=payload.filing_status,
         statuses_with_rows=payload.statuses_with_rows,
         jurisdictions=payload.jurisdictions,
+        people=payload.people,
+        per_person=payload.per_person,
         # The FIXED six-table classification, not "what happened to be in the source": the
         # flags describe which tables are status-SENSITIVE, which is a property of the tax
         # code rather than of this particular clone.
@@ -1310,22 +1483,51 @@ def _income_out(result: JurisdictionResult, name: str, warnings: list[str]) -> I
     )
 
 
-def _wage_out(result: JurisdictionResult, name: str, warnings: list[str]) -> WageTaxOut:
+def _wage_out(
+    result: JurisdictionResult,
+    name: str,
+    warnings: list[str],
+    owners: Sequence[tuple[int | None, str | None]] = (),
+) -> WageTaxOut:
+    """One wage family's line, plus the earners behind it when the caller knows who they
+    are (2026-09-11 spec §2.5).
+
+    `owners` is the feed's `earner_people`, positional against the engine's bundles. A
+    caller with no feed — and Medicare, whose result carries no lines — serves the empty
+    list, which is the field's default and renders as today's single row.
+    """
     return WageTaxOut(
         w2_income=_money(result.w2_income),
         taxable_wages=_money(result.taxable_wages),
         tax=_money(result.tax),
         effective_rate=_effective_rate(result.effective_rate, name, warnings),
+        per_person=[
+            PersonWageTaxOut(
+                person_id=owner[0],
+                name=owner[1],
+                w2_income=_money(line.w2_income),
+                taxable_wages=_money(line.taxable_wages),
+                tax=_money(line.tax),
+                effective_rate=_effective_rate(line.effective_rate, name, warnings),
+                table="own" if line.own_table else "default",
+            )
+            for line, owner in zip_longest(
+                result.per_person, owners[: len(result.per_person)], fillvalue=(None, None)
+            )
+        ],
     )
 
 
 def _summary_out(breakdown: TaxBreakdown, feed: EngineFeed | None = None) -> TaxSummaryOut:
     warnings = list(breakdown.warnings)  # engine warnings first, serializer's appended after
+    # The roster the engine's bundles belong to; empty without a feed, which is the only
+    # state in which this module cannot say whose wages it just taxed.
+    owners = () if feed is None else feed.earner_people
     federal = _income_out(breakdown.federal, "federal", warnings)
     state = _income_out(breakdown.state, "state", warnings)
     medicare = _wage_out(breakdown.medicare, "medicare", warnings)
-    social_security = _wage_out(breakdown.social_security, "social_security", warnings)
-    disability = _wage_out(breakdown.disability, "disability", warnings)
+    social_security = _wage_out(breakdown.social_security, "social_security", warnings, owners)
+    disability = _wage_out(breakdown.disability, "disability", warnings, owners)
     gains = breakdown.capital_gains
     capital_gains = CapitalGainsTaxOut(
         taxable_income=_money(gains.taxable_income),
@@ -1696,9 +1898,14 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         profiles=primary_profiles,
         past_vests=past_vests,
         future_vests=future_vests,
-        medicare=tables.get("medicare", []),
-        social_security=tables.get("social_security", []),
-        disability=tables.get("disability", []),
+        # The PRIMARY's effective tables (2026-09-11 spec §2.3): these legs are their own
+        # supplemental income, so they meet their own schedule. Medicare is the year's
+        # table flat — its additional tier is a combined-wage rule, so no person has one of
+        # their own. The partner leg below is unchanged — it is ENTERED withholding, never
+        # a walk.
+        medicare=feed.tables.get("medicare", []),
+        social_security=feed.primary_payroll_table("social_security"),
+        disability=feed.primary_payroll_table("disability"),
         primary_wages=primary_wage_base,
         partner_wages=partner_wage_base if has_partner else ZERO,
         partner_withheld_fed=partner_fed,
