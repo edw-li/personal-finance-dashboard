@@ -180,8 +180,8 @@ summary shape.
 
 ## What actually happened (lane C implementer, 2026-09-11)
 
-**Status: implemented.** Five commits on `tax/c-payroll-tables-backend`, one per task, plus the
-gates. The four golden years in `tests/test_tax_service.py` and every test in
+**Status: implemented.** Six commits on `tax/c-payroll-tables-backend` — one per task, plus a
+self-review round. The four golden years in `tests/test_tax_service.py` and every test in
 `tests/test_tax_service_married.py` pass with UNCHANGED fixtures and values.
 
 ### Wire shapes shipped
@@ -197,8 +197,8 @@ Exactly the contracts block, with these details pinned:
   `" and ".join(PER_WORKER_JURISDICTIONS)`, so the tuple owns the copy) and
   `"person {id} is not on a {status} return"` — the same sentence for a person off the
   return and for an id nobody has.
-- `WageTaxOut.per_person: list[PersonWageTaxOut] = []` (defaulted, so the stored golden
-  fixtures parse); `PersonWageTaxOut` is
+- `WageTaxOut.per_person: list[PersonWageTaxOut] = Field(default_factory=list)` (defaulted,
+  so the stored golden fixtures parse); `PersonWageTaxOut` is
   `{person_id, name, w2_income, taxable_wages, tax, effective_rate, table}` with
   `table: Literal['own', 'default']`.
 - `ClonedBracketsOut` inherits both new fields and the clone copies person rows with their
@@ -207,12 +207,12 @@ Exactly the contracts block, with these details pinned:
 ### Deviations from the plan text
 
 1. **`_wage_out(result, name, warnings, owners=())`**, not `(…, columns=None, names=None)`.
-   The plan's `columns` would be `[p.id for p in _return_people(...)]`, which is the wrong
-   list to index bundles by: `_assemble_earners` skips columns with no stored rows, so on a
-   joint return where only the partner has W-2 rows, bundle 0 is the PARTNER and a positional
-   read of `columns` would label it with the primary's name. The feed now carries
-   `earner_people: list[tuple[int | None, str | None]]` — (id, name) per bundle, in bundle
-   order — and `_wage_out` reads that.
+   The plan's `columns` is `[p.id for p in _return_people(...)]`, which is not the list the
+   bundles are indexed by: `_assemble_earners` skips columns with no stored rows, so a
+   positional read of `columns` can put the primary's name on somebody else's wages. The
+   feed now carries `earner_people: list[tuple[int | None, str | None]]` — (id, name) per
+   bundle, in bundle order, built from the columns that actually have rows — and `_wage_out`
+   reads that. See deviation 9.
 2. **`_payroll_line(earner, name, default_table, base, *, capped)`** is the engine's new
    helper (with `_wage_cap`), rather than a `table_for` closure inside `compute_breakdown`.
    `capped` is the REPORTING convention, not a fact about the table: Social Security reports
@@ -235,6 +235,18 @@ Exactly the contracts block, with these details pinned:
    (`person_tables.get(primary_id, {}).get(name) or tables.get(name, [])`) as a method on the
    feed rather than inline at the call site — the marginal-FICA walk happens in
    `withholding_calc`, outside the engine, so the rule needed a second home.
+8. **The one-bundle rule is narrowed to the PRIMARY's column** (`present == columns[:1]`).
+   The plan's "`len(per_person) < 2` but some column has a person table" also fires on a
+   joint return whose only W-2 rows are the PARTNER's — and there the one bundle's head is
+   not the primary, which is precisely the invariant `shift_earners` re-bases a what-if on.
+   The scenario would have rebuilt that head from the primary's empty bucket and reported a
+   liability with the partner's whole wage missing. That state keeps taking the synthesis
+   path instead (their own table is ignored, exactly as before this lane), pinned by
+   `test_only_the_partners_rows_keeps_the_synthesized_bundle`. Every case the spec names —
+   single, MFS, and joint with the primary's rows — is unaffected.
+9. `earner_people` is labelled from the columns WITH ROWS (`present or columns[:1]`) on both
+   paths, not from `columns` positionally: on the synthesis path at most one column can have
+   rows, and the engine's single bundle is that column's, whoever they are.
 
 ### Pre-existing tests whose pinned behaviour the spec changed
 
