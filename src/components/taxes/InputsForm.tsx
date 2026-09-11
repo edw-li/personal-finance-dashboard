@@ -89,14 +89,18 @@ function isEntry(unit: TaxInputUnit, text: string): boolean {
 }
 
 /**
- * What a suggestion chip says. The engine's suggestions are wire values like everything
- * else, so they are shown in the box's units too.
+ * One wire figure as this unit reads it OUTSIDE a box: what a suggestion chip says, and what
+ * a computed row shows. Suggestions and computed totals are both wire values like everything
+ * else, so both are shown in the box's units.
  */
-function suggestionText(unit: TaxInputUnit, suggested: string): string {
-  if (unit === 'money') return formatCurrency(suggested)
-  const shown = toBox(unit, suggested)
+function figureText(unit: TaxInputUnit, wire: string): string {
+  if (unit === 'money') return formatCurrency(wire)
+  const shown = toBox(unit, wire)
   return unit === 'percent' ? `${shown}%` : shown
 }
+
+/** A computed line with no component entered: absent is not zero, so it shows neither. */
+const NO_FIGURE = '—'
 
 /** One person's column, with the name it is headed by. */
 interface Column {
@@ -105,7 +109,7 @@ interface Column {
 }
 
 /**
- * ONE editable box: a key on the household row, or a key on one person's row. `id` is the
+ * ONE cell: a key on the household row, or a key on one person's row. `id` is the
  * bare key for a household cell — byte-identical to the id a single-status year rendered
  * before columns existed — and `key:personId` for a person cell. Tax keys are snake_case
  * identifiers and can never contain a colon, so the scheme stays unambiguous; nothing may
@@ -122,17 +126,27 @@ interface Cell {
   itemLabel: string
   /** null on a household cell; the column's name on a person cell. */
   personName: string | null
+  /**
+   * A DERIVED total (2026-09-11 spec §1.6): the engine's own figure for this column, which
+   * has no stored row and cannot be typed over. It is rendered and pasted past, but it is
+   * not an entry cell — it never enters `values`, the walk, the change count or the PUT
+   * body, and the server 422s a write to it.
+   */
+  computed: boolean
   value: string | null
   suggested: string | null
   /** "last year's" when the suggestion is a carry-forward rather than a sheet formula. */
   suggestionSource: string | null
 }
 
-/** One line of the grid: a key, and the one-or-two boxes it is edited through. */
+/** One line of the grid: a key, and the one-or-two cells it is shown through. */
 interface Row {
   key: string
   label: string
   isDerived: boolean
+  /** The server's caption for a computed line ("Annual Salary ÷ 24"), null on an editable
+   *  one. The row's, not the cell's: both columns of a per-person total share one formula. */
+  formula: string | null
   cells: Cell[]
 }
 
@@ -148,8 +162,12 @@ interface FormModel {
   /** Two named columns, rather than the one every single-status year has always had. */
   split: boolean
   sections: Section[]
-  /** Every box in RENDER order — what Enter walks and what a positional paste fills. */
+  /** Every EDITABLE box in render order — what Enter walks, what the diff counts and what
+   *  the PUT body is built from. A computed cell is none of those things. */
   flatCells: Cell[]
+  /** Every cell, computed ones included, in render order — the sheet's own column, which a
+   *  positional paste has to line up against slot for slot. */
+  allCells: Cell[]
 }
 
 /** The accessible name of one box. Two boxes carry the same item label, so they need more. */
@@ -180,6 +198,7 @@ function cellOf(item: TaxInputItemOut, names: Map<number, string>, split: boolea
     personId,
     itemLabel: item.label,
     personName: personId === null ? null : (names.get(personId) ?? null),
+    computed: item.is_derived,
     value: item.value,
     suggested: item.suggested,
     suggestionSource: item.suggestion_source,
@@ -197,7 +216,13 @@ function rowsOf(section: TaxInputSectionOut, names: Map<number, string>, split: 
   for (const item of section.items) {
     let row = byKey.get(item.key)
     if (row === undefined) {
-      row = { key: item.key, label: item.label, isDerived: item.is_derived, cells: [] }
+      row = {
+        key: item.key,
+        label: item.label,
+        isDerived: item.is_derived,
+        formula: item.formula,
+        cells: [],
+      }
       byKey.set(item.key, row)
       rows.push(row)
     }
@@ -221,11 +246,13 @@ function modelOf(inputs: TaxInputsOut): FormModel {
     headed: split && section.items.some((item) => item.is_per_person),
     rows: rowsOf(section, names, split),
   }))
+  const allCells = sections.flatMap((section) => section.rows.flatMap((row) => row.cells))
   return {
     columns,
     split,
     sections,
-    flatCells: sections.flatMap((section) => section.rows.flatMap((row) => row.cells)),
+    flatCells: allCells.filter((cell) => !cell.computed),
+    allCells,
   }
 }
 
@@ -495,7 +522,9 @@ export default function InputsForm({
               )}
               {section.rows.map((row) => {
                 // The chip belongs to ONE cell: derived suggestions are the primary
-                // person's (design §5.3), and the columns are ordered primary-first.
+                // person's (design §5.3), and the columns are ordered primary-first. A
+                // computed row has no chip at all — the server sends it no suggestion,
+                // because there is nothing an Apply could write.
                 const suggestionCell = row.cells[0]
                 const shown = values[suggestionCell.id] ?? ''
                 // What Apply would write: the suggestion in BOX units, so a percent row
@@ -509,7 +538,7 @@ export default function InputsForm({
                 const suggestion =
                   suggestionCell.suggested === null || applies === shown
                     ? null
-                    : suggestionText(suggestionCell.unit, suggestionCell.suggested)
+                    : figureText(suggestionCell.unit, suggestionCell.suggested)
                 // "last year's $15,750" for a carry-forward, "suggested …" for a formula.
                 const suggestionWord = suggestionCell.suggestionSource ?? 'suggested'
                 return (
@@ -518,8 +547,11 @@ export default function InputsForm({
                       {/* The grid gives the label a wide track, but a long key can still
                           ellipsize — the title recovers the full text on hover. With two
                           boxes there is no single control for a <label> to point at, so the
-                          name becomes plain text and each box names itself. */}
-                      {row.cells.length === 1 ? (
+                          name becomes plain text and each box names itself. A computed row
+                          takes the same plain-text branch: its figure names itself
+                          "… (computed)", and a <label> pointing at it would hand the bare
+                          label back to a query looking for a box that no longer exists. */}
+                      {row.cells.length === 1 && !row.isDerived ? (
                         <label htmlFor={`tax-input-${row.cells[0].id}`} title={row.label}>
                           {row.label}
                         </label>
@@ -531,13 +563,37 @@ export default function InputsForm({
                       {row.isDerived && <span className="badge">derived</span>}
                     </span>
                     {row.cells.map((cell) => {
+                      // A household line inside a split grid takes both person tracks
+                      // rather than leaving a hole under one name.
+                      const wide = split && row.cells.length === 1 ? 'tax-input-wide' : ''
+                      if (cell.computed) {
+                        // <output>, in the input's own track and with its metrics: the row
+                        // reads as one line of the same grid whether its figure is typed or
+                        // derived. The title says where the number comes from AND where to
+                        // change it, because this cell is the one place in the form that
+                        // cannot answer an edit.
+                        return (
+                          <output
+                            key={cell.id}
+                            id={`tax-input-${cell.id}`}
+                            data-computed={cell.id}
+                            className={`tax-computed${wide === '' ? '' : ` ${wide}`}`}
+                            aria-label={`${cellLabel(cell)} (computed)`}
+                            title={
+                              row.formula === null
+                                ? undefined
+                                : `${row.formula} — edit the components`
+                            }
+                          >
+                            {cell.value === null ? NO_FIGURE : figureText(cell.unit, cell.value)}
+                          </output>
+                        )
+                      }
                       const value = values[cell.id] ?? ''
                       const classes = [
                         value.trim() !== '' && !isEntry(cell.unit, value) ? 'invalid' : '',
                         flashIds.has(cell.id) ? 'pasted-flash' : '',
-                        // A household line inside a split grid takes both person tracks
-                        // rather than leaving a hole under one name.
-                        split && row.cells.length === 1 ? 'tax-input-wide' : '',
+                        wide,
                       ]
                         .filter((name) => name !== '')
                         .join(' ')
@@ -557,9 +613,16 @@ export default function InputsForm({
                     })}
                     {/* The track is reserved whether or not a suggestion is showing, so a
                         chip appearing mid-keystroke never shifts the input under the
-                        cursor. */}
+                        cursor. On a computed row it holds the formula instead: the caption
+                        is what a chip would have been — the row's explanation of its own
+                        number — minus the button, because there is nothing to apply. */}
                     <span className="tax-suggestion">
-                      {suggestion !== null && (
+                      {row.isDerived && row.formula !== null && (
+                        <span className="tax-suggestion-value" title={row.formula}>
+                          {row.formula}
+                        </span>
+                      )}
+                      {!row.isDerived && suggestion !== null && (
                         <>
                           <span className="tax-suggestion-value" title={suggestion}>
                             {suggestionWord} {suggestion}
