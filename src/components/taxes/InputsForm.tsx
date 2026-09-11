@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ClipboardEvent } from 'react'
 import { ApiError } from '../../api/client'
-import { putTaxInputs } from '../../api/taxes'
+import { previewTaxInputs, putTaxInputs } from '../../api/taxes'
 import AmountInput from '../AmountInput'
 import type { AmountKind } from '../AmountInput'
 import InfoHint from '../InfoHint'
@@ -11,6 +11,7 @@ import type {
   TaxInputSectionOut,
   TaxInputUnit,
   TaxInputsOut,
+  TaxInputsUpdate,
   TaxPersonOut,
 } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
@@ -102,6 +103,13 @@ function figureText(unit: TaxInputUnit, wire: string): string {
 /** A computed line with no component entered: absent is not zero, so it shows neither. */
 const NO_FIGURE = '—'
 
+/**
+ * How long after the last keystroke the computed totals are re-asked for. The answer to a
+ * half-typed number is noise, and a request per character would be noise on the wire; 300 ms
+ * is the pause that says "that's the number" without the figure ever feeling stale.
+ */
+const PREVIEW_DEBOUNCE_MS = 300
+
 /** One person's column, with the name it is headed by. */
 interface Column {
   id: number
@@ -183,6 +191,20 @@ function columnName(person: TaxPersonOut, index: number): string {
 }
 
 /**
+ * WHICH column a payload item addresses: its own person on a split year, the one unqualified
+ * column otherwise. The GET's items and the preview's answer are read by the same rule, so a
+ * preview figure can never land on a cell the GET would have spelled differently.
+ */
+function ownerOf(personId: number | null, split: boolean): number | null {
+  return split && personId !== null ? personId : null
+}
+
+/** The id of the cell an item addresses, once its owner is resolved. */
+function cellIdOf(key: string, owner: number | null): string {
+  return owner === null ? key : `${key}:${owner}`
+}
+
+/**
  * One item's box. The server already narrowed the payload to the columns THIS year's status
  * covers and stamped each item with its `person_id`, so the only decision left here is
  * whether to QUALIFY it: with a single column — a single-status year, an MFS return, or a
@@ -190,9 +212,9 @@ function columnName(person: TaxPersonOut, index: number): string {
  * what keeps that year's DOM, paste targets and PUT body identical to today's.
  */
 function cellOf(item: TaxInputItemOut, names: Map<number, string>, split: boolean): Cell {
-  const personId = split && item.person_id !== null ? item.person_id : null
+  const personId = ownerOf(item.person_id, split)
   return {
-    id: personId === null ? item.key : `${item.key}:${personId}`,
+    id: cellIdOf(item.key, personId),
     key: item.key,
     unit: item.unit,
     personId,
@@ -265,6 +287,17 @@ function valuesOf(cells: Cell[]): Record<string, string> {
   return values
 }
 
+/**
+ * The computed figures, in WIRE units, keyed by the cell that shows them. Kept apart from
+ * `values` because these are not entries: nothing diffs them, nothing saves them, and the
+ * only thing that ever writes one is the server — the payload, a preview, or a save echo.
+ */
+function figuresOf(cells: Cell[]): Record<string, string | null> {
+  const figures: Record<string, string | null> = {}
+  for (const cell of cells) if (cell.computed) figures[cell.id] = cell.value
+  return figures
+}
+
 export default function InputsForm({
   inputs,
   onSaved,
@@ -274,7 +307,7 @@ export default function InputsForm({
   onSaved: (updated: TaxInputsOut) => void
   onDirtyChange?: (dirty: boolean) => void
 }) {
-  const { columns, split, sections, flatCells } = modelOf(inputs)
+  const { columns, split, sections, flatCells, allCells } = modelOf(inputs)
 
   // `values` is what the user sees, `baseline` what the server last confirmed — the PUT
   // body is their diff, so an untouched cell is never sent (sending one blank would DELETE
@@ -283,12 +316,23 @@ export default function InputsForm({
   // only a save echo, or a remount on a real year/status switch, re-adopts a baseline.
   const [values, setValues] = useState<Record<string, string>>(() => valuesOf(flatCells))
   const [baseline, setBaseline] = useState<Record<string, string>>(() => valuesOf(flatCells))
+  // The computed totals on screen, seeded from the payload and replaced only by the server:
+  // a preview answer while typing, the echo when a save lands.
+  const [figures, setFigures] = useState<Record<string, string | null>>(() => figuresOf(allCells))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // What the last paste did, narrated for everyone (spec §4.1) — one line, replaced by the
   // next paste and dropped by the save echo. The flashed ids are the cells it wrote.
   const [pasteNote, setPasteNote] = useState<string | null>(null)
   const [flashIds, setFlashIds] = useState<Set<string>>(new Set())
+  // Which answer about the computed totals is the current one. Bumped by every preview AND
+  // by every save echo, so "is this still the newest thing the server said?" is one
+  // comparison — an out-of-order preview and a preview overtaken by a save are the same bug.
+  const figureSeq = useRef(0)
+  // The next `values` change is the SERVER's, not the user's — the mount seed and the save
+  // echo both write a form that already agrees with its figures, so asking for a preview of
+  // it would spend a request to be told what we were just told.
+  const previewSeeded = useRef(true)
 
   const changed: Record<string, string | null> = {}
   const invalid: string[] = []
@@ -313,6 +357,65 @@ export default function InputsForm({
   useEffect(() => {
     onDirtyChange?.(changedCount > 0)
   }, [changedCount, onDirtyChange])
+
+  /**
+   * The whole form as a PUT body. The preview endpoint takes exactly the save's shape and
+   * overlays it on the stored rows, so it has to hear about EVERY editable cell rather than
+   * the diff: a cell left out would be read at its stored value, and the totals would follow
+   * a form that is no longer on screen. A cell whose text is not a valid entry is left out
+   * instead — the server would 422 the whole call over one half-typed number, and the
+   * figures would freeze until it was finished.
+   */
+  const previewBody = (): TaxInputsUpdate => {
+    const wireValues: Record<string, string | null> = {}
+    const rows: TaxInputRowIn[] = []
+    for (const cell of flatCells) {
+      const text = (values[cell.id] ?? '').trim()
+      if (text !== '' && !isEntry(cell.unit, text)) continue
+      // Blank rides as null, exactly as it would in a save: the overlay unsets that input
+      // for the length of the calculation, because absent is not zero.
+      const wire = text === '' ? null : toWire(cell.unit, text)
+      if (cell.personId === null) wireValues[cell.key] = wire
+      else rows.push({ key: cell.key, person_id: cell.personId, value: wire })
+    }
+    return rows.length === 0 ? { values: wireValues } : { values: wireValues, rows }
+  }
+
+  // Live totals (spec §1.7): a computed line follows its components as they are typed, and
+  // the browser owns no formula — so every edit ASKS what the totals would be. Debounced
+  // because a keystroke is not a question, and sequenced because the answers can arrive out
+  // of order.
+  useEffect(() => {
+    if (previewSeeded.current) {
+      previewSeeded.current = false
+      return
+    }
+    const timer = setTimeout(() => {
+      const seq = ++figureSeq.current
+      previewTaxInputs(inputs.year, previewBody())
+        .then((preview) => {
+          // Stale, or overtaken by a save echo: the newest answer owns the screen, and an
+          // older one describes a form that no longer exists.
+          if (seq !== figureSeq.current) return
+          setFigures((current) => {
+            const next = { ...current }
+            for (const item of preview.derived)
+              next[cellIdOf(item.key, ownerOf(item.person_id, split))] = item.value
+            return next
+          })
+        })
+        .catch(() => {
+          // Silent by design: the figures keep the last thing the server said. A preview is
+          // a courtesy — the Save path reports real failures, and a banner on every dropped
+          // keystroke of a flaky connection would say nothing anyone can act on.
+        })
+    }, PREVIEW_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+    // Keyed on the typed cells ALONE. `previewBody` is rebuilt every render, so listing it
+    // would re-arm the debounce on any state change at all — a paste note clearing itself
+    // would cost a request — and `inputs.year`/`split` cannot move without a remount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [values])
 
   // The flash is a one-shot: the timer callback clears it, so the effect body itself never
   // sets state (a set here would re-run the effect on its own write).
@@ -360,9 +463,15 @@ export default function InputsForm({
       rows.length === 0 ? { values: wireValues } : { values: wireValues, rows },
     )
       .then((echo) => {
-        // The echo is authoritative (4dp, and fresh suggestions): adopt it as both the
-        // shown value and the new baseline, so a second save sends nothing.
-        const echoCells = modelOf(echo).flatCells
+        // The echo is authoritative (4dp, fresh suggestions, and the totals recomputed from
+        // what was just stored): adopt it as the shown value, the new baseline and the
+        // figures, so a second save sends nothing. Bumping the sequence retires any preview
+        // still in flight — it is an answer about a form the server has since been told
+        // about — and `previewSeeded` stops the echo's own write from asking again.
+        const { flatCells: echoCells, allCells: echoAll } = modelOf(echo)
+        figureSeq.current += 1
+        previewSeeded.current = true
+        setFigures(figuresOf(echoAll))
         setValues(valuesOf(echoCells))
         setBaseline(valuesOf(echoCells))
         // The note described a pending fill that the echo just replaced — it would be
@@ -567,6 +676,9 @@ export default function InputsForm({
                       // rather than leaving a hole under one name.
                       const wide = split && row.cells.length === 1 ? 'tax-input-wide' : ''
                       if (cell.computed) {
+                        // The server's figure and nothing else: the payload's, then whatever
+                        // the last preview or save echo replaced it with.
+                        const figure = figures[cell.id] ?? null
                         // <output>, in the input's own track and with its metrics: the row
                         // reads as one line of the same grid whether its figure is typed or
                         // derived. The title says where the number comes from AND where to
@@ -585,7 +697,7 @@ export default function InputsForm({
                                 : `${row.formula} — edit the components`
                             }
                           >
-                            {cell.value === null ? NO_FIGURE : figureText(cell.unit, cell.value)}
+                            {figure === null ? NO_FIGURE : figureText(cell.unit, figure)}
                           </output>
                         )
                       }

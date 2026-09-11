@@ -1,16 +1,18 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
-import type { TaxInputsOut } from '../../types/api'
+import type { DerivedPreviewOut, TaxInputsOut } from '../../types/api'
 import InputsForm from './InputsForm'
 
-// Only the writer is stubbed — JURISDICTIONS and the readers stay real so a rename in
+// Only the two writes are stubbed — JURISDICTIONS and the readers stay real so a rename in
 // src/api/taxes.ts breaks this file rather than silently passing against a hand-written mock.
+// The preview is a POST that writes nothing, but it is still a call this form makes.
 vi.mock('../../api/taxes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/taxes')>()),
   putTaxInputs: vi.fn(),
+  previewTaxInputs: vi.fn(),
 }))
-import { putTaxInputs } from '../../api/taxes'
+import { previewTaxInputs, putTaxInputs } from '../../api/taxes'
 
 // A fresh object per call: two tests mutate their copy into the PUT echo. Three of the four
 // keys are per-person (the real definitions flag salary, the W-2 family, 401k, HSA and
@@ -158,13 +160,42 @@ const field = (label: string) => screen.getByLabelText(label) as HTMLInputElemen
 // getByLabelText('Gross Paycheck') finds NOTHING - there is no box by that name any more.
 const computed = (label: string) => screen.getByLabelText(label + ' (computed)')
 
+// What the server answers a preview with: the nine derived totals and nothing else, because
+// every other cell on the payload is what the caller just sent it.
+function previewOut(grossPaycheck: string | null): DerivedPreviewOut {
+  return {
+    year: 2024,
+    filing_status: 'single',
+    derived: [{ key: 'gross_paycheck', person_id: 1, value: grossPaycheck }],
+  }
+}
+
+// A promise this test resolves by hand, so a response can be made to land AFTER a later one.
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((r) => {
+    resolve = r
+  })
+  return { promise, resolve }
+}
+
+// RTL's waitFor only knows how to drive JEST's fake clock, so it would hang on vitest's:
+// these tests step the timers themselves. advanceTimersByTimeAsync drains the microtask
+// queue between timers, which is what lets a stubbed response land inside the same act().
+const settle = (ms = 0) =>
+  act(async () => {
+    await vi.advanceTimersByTimeAsync(ms)
+  })
+
 beforeEach(() => {
   vi.mocked(putTaxInputs).mockResolvedValue(inputsFixture())
+  vi.mocked(previewTaxInputs).mockResolvedValue(previewOut('8333.3333'))
 })
 
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  vi.useRealTimers()
 })
 
 describe('InputsForm', () => {
@@ -401,6 +432,103 @@ describe('InputsForm', () => {
         values: { annual_salary: '240000' },
       }),
     )
+  })
+
+  // --- live preview (2026-09-11 spec §1.7) ---
+
+  it('previews computed totals 300 ms after the last keystroke, with the whole form as the body', async () => {
+    vi.useFakeTimers()
+    vi.mocked(previewTaxInputs).mockResolvedValue(previewOut('9000.0000'))
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    // Two keystrokes inside the window are ONE question: the answer to a half-typed number
+    // is noise, and a request per character would be noise on the wire too.
+    fireEvent.change(field('Annual Salary'), { target: { value: '216' } })
+    await settle(200)
+    fireEvent.change(field('Annual Salary'), { target: { value: '216000' } })
+    await settle(300)
+
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+    // The WHOLE form, not the save's diff: the server overlays this body on the stored rows,
+    // so a cell left out would be read at its stored value rather than the one on screen.
+    // A blank cell rides as null, exactly as it would in a save.
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledWith(2024, {
+      values: {
+        annual_salary: '216000',
+        hsa_contributions: '4150.0000',
+        qualified_dividends: null,
+      },
+    })
+    // The figure is the SERVER's answer. The browser owns no formula, so nothing here could
+    // have produced 9,000 on its own.
+    expect(computed('Gross Paycheck').textContent).toBe('$9,000.00')
+  })
+
+  it('drops a stale preview response', async () => {
+    vi.useFakeTimers()
+    const first = deferred<DerivedPreviewOut>()
+    const second = deferred<DerivedPreviewOut>()
+    vi.mocked(previewTaxInputs)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    fireEvent.change(field('Annual Salary'), { target: { value: '216000' } })
+    await settle(400)
+    fireEvent.change(field('Annual Salary'), { target: { value: '240000' } })
+    await settle(400)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(2)
+
+    // The answers come back out of order, which a slow first request makes ordinary. The
+    // NEWEST question owns the screen: an older answer describes a form that no longer
+    // exists, and showing it would flip the total back under the cursor.
+    second.resolve(previewOut('10000.0000'))
+    await settle()
+    first.resolve(previewOut('9000.0000'))
+    await settle()
+
+    expect(computed('Gross Paycheck').textContent).toBe('$10,000.00')
+  })
+
+  it('keeps the last figure when a preview fails', async () => {
+    vi.useFakeTimers()
+    vi.mocked(previewTaxInputs).mockRejectedValue(new ApiError('upstream is down', 500))
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    fireEvent.change(field('Annual Salary'), { target: { value: '216000' } })
+    await settle(300)
+
+    // A preview is a courtesy: the figure keeps the last thing the server said, and nothing
+    // is announced. The SAVE path is what reports a real failure — a banner on every dropped
+    // keystroke of a flaky connection would say nothing the user can act on.
+    expect(computed('Gross Paycheck').textContent).toBe('$8,333.33')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('the save echo wins over a pending preview', async () => {
+    vi.useFakeTimers()
+    const pending = deferred<DerivedPreviewOut>()
+    vi.mocked(previewTaxInputs).mockReturnValue(pending.promise)
+    const echo = inputsFixture()
+    echo.sections[0].items[0].value = '264000.0000'
+    echo.sections[0].items[1].value = '11000.0000'
+    vi.mocked(putTaxInputs).mockResolvedValue(echo)
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    fireEvent.change(field('Annual Salary'), { target: { value: '264000' } })
+    await settle(300)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(saveButton())
+    await settle()
+    // The echo is the stored truth, not a what-if: it outranks any preview, in flight or not.
+    expect(computed('Gross Paycheck').textContent).toBe('$11,000.00')
+
+    pending.resolve(previewOut('9000.0000'))
+    await settle()
+    expect(computed('Gross Paycheck').textContent).toBe('$11,000.00')
+    // And the echo does not ask the same question again: its figures ARE the server's.
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
   })
 
   it('sends null for a blanked value', async () => {
