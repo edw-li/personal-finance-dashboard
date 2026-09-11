@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
+from itertools import zip_longest
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
@@ -69,6 +70,7 @@ from app.schemas.taxes import (
     IncomeTaxOut,
     IncompleteYearOut,
     PersonBracketsOut,
+    PersonWageTaxOut,
     SafeHarborOut,
     SaleDetailOut,
     TaxInputItemOut,
@@ -244,6 +246,12 @@ class EngineFeed:
     # the bundles in `earners` — the field is here for the withholding card, which walks the
     # primary's tables outside the engine.
     person_tables: dict[int, dict[str, list[Bracket]]] = dataclass_field(default_factory=dict)
+    # WHOSE bundle is whose: (person id, name) per entry of `earners`, in bundle order —
+    # the summary's per-earner payroll lines are labelled from it (2026-09-11 spec §2.5).
+    # Not `person_inputs`' key order: a bundle list skips the columns with no rows at all,
+    # so a joint return where only the partner has W-2 rows is one bundle, and it is
+    # theirs. (None, None) is a database with no roster.
+    earner_people: list[tuple[int | None, str | None]] = dataclass_field(default_factory=list)
     brackets_missing_for_status: list[str] = dataclass_field(default_factory=list)
 
     @property
@@ -611,14 +619,20 @@ async def _engine_feed(
     tables = await _engine_tables(db, year, filing_status)
     person_tables = await _person_tables(db, year, filing_status)
     views = _input_views(year, rows, columns, filing_status)
+    earners = _assemble_earners(views.stored, columns, person_tables)
+    names = {person.id: person.name for person in _return_people(people, filing_status)}
+    # With no bundle list the engine synthesizes ONE bundle for the whole return, and that
+    # bundle is the return's own — the primary's column.
+    earner_columns = columns[:1] if earners is None else [c for c in columns if c in views.stored]
     return EngineFeed(
         year=year,
         filing_status=filing_status,
         inputs=views.computed,
-        earners=_assemble_earners(views.stored, columns, person_tables),
+        earners=earners,
         tables=tables,
         person_inputs=views.buckets,
         person_tables=person_tables,
+        earner_people=[(column, names.get(column)) for column in earner_columns],
         brackets_missing_for_status=_missing_for_status(tables, filing_status, year),
     )
 
@@ -1457,22 +1471,51 @@ def _income_out(result: JurisdictionResult, name: str, warnings: list[str]) -> I
     )
 
 
-def _wage_out(result: JurisdictionResult, name: str, warnings: list[str]) -> WageTaxOut:
+def _wage_out(
+    result: JurisdictionResult,
+    name: str,
+    warnings: list[str],
+    owners: Sequence[tuple[int | None, str | None]] = (),
+) -> WageTaxOut:
+    """One wage family's line, plus the earners behind it when the caller knows who they
+    are (2026-09-11 spec §2.5).
+
+    `owners` is the feed's `earner_people`, positional against the engine's bundles. A
+    caller with no feed — and Medicare, whose result carries no lines — serves the empty
+    list, which is the field's default and renders as today's single row.
+    """
     return WageTaxOut(
         w2_income=_money(result.w2_income),
         taxable_wages=_money(result.taxable_wages),
         tax=_money(result.tax),
         effective_rate=_effective_rate(result.effective_rate, name, warnings),
+        per_person=[
+            PersonWageTaxOut(
+                person_id=owner[0],
+                name=owner[1],
+                w2_income=_money(line.w2_income),
+                taxable_wages=_money(line.taxable_wages),
+                tax=_money(line.tax),
+                effective_rate=_effective_rate(line.effective_rate, name, warnings),
+                table="own" if line.own_table else "default",
+            )
+            for line, owner in zip_longest(
+                result.per_person, owners[: len(result.per_person)], fillvalue=(None, None)
+            )
+        ],
     )
 
 
 def _summary_out(breakdown: TaxBreakdown, feed: EngineFeed | None = None) -> TaxSummaryOut:
     warnings = list(breakdown.warnings)  # engine warnings first, serializer's appended after
+    # The roster the engine's bundles belong to; empty without a feed, which is the only
+    # state in which this module cannot say whose wages it just taxed.
+    owners = () if feed is None else feed.earner_people
     federal = _income_out(breakdown.federal, "federal", warnings)
     state = _income_out(breakdown.state, "state", warnings)
     medicare = _wage_out(breakdown.medicare, "medicare", warnings)
-    social_security = _wage_out(breakdown.social_security, "social_security", warnings)
-    disability = _wage_out(breakdown.disability, "disability", warnings)
+    social_security = _wage_out(breakdown.social_security, "social_security", warnings, owners)
+    disability = _wage_out(breakdown.disability, "disability", warnings, owners)
     gains = breakdown.capital_gains
     capital_gains = CapitalGainsTaxOut(
         taxable_income=_money(gains.taxable_income),

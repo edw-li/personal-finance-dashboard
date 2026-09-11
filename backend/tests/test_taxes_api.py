@@ -941,6 +941,8 @@ async def test_summary_2024_matches_the_sheet_except_the_state_chain(auth_client
         "taxable_wages": "231274.46",
         "tax": "3634.95",
         "effective_rate": "0.015420",
+        # Combined by statute, so Medicare names no earners (2026-09-11 spec §2.5).
+        "per_person": [],
     }
     assert body["social_security"]["taxable_wages"] == "168600.00"  # capped at the wage base
     assert body["social_security"]["tax"] == "10453.20"
@@ -949,6 +951,20 @@ async def test_summary_2024_matches_the_sheet_except_the_state_chain(auth_client
         "taxable_wages": "235424.46",
         "tax": "1950.00",
         "effective_rate": "0.008272",
+        # The per-worker families DO name them — one line here, for the single bundle the
+        # engine synthesized, nameless because `create_all` seeds no people. Its figures
+        # are the aggregate's, which is what an earner list of one has to mean.
+        "per_person": [
+            {
+                "person_id": None,
+                "name": None,
+                "w2_income": "235724.46",
+                "taxable_wages": "235424.46",
+                "tax": "1950.00",
+                "effective_rate": "0.008272",
+                "table": "default",
+            }
+        ],
     }
     # CG unfolded to the 15% base + the explicit NIIT line: derivations in
     # test_tax_service.py's _CANONICAL_TABLE.
@@ -2911,3 +2927,93 @@ async def test_person_tables_obey_the_same_table_rules(auth_client, household, d
     )
     assert floored.status_code == 422
     assert floored.json()["detail"] == "disability: the first bracket threshold must be 0"
+
+
+# --- the summary's per-earner payroll lines (2026-09-11 spec §2.5) ---
+
+
+async def test_summary_reports_each_earners_payroll_line(auth_client, db, definitions):
+    """Two earners, two wage bases, two tables — and the summary says whose is whose."""
+    me_id, partner_id = await _seed_two_earner_year(db, 2026)
+    db.add_all(
+        person_rows(2026, partner_id, "disability", [("0.0130", "0")], status="married_joint")
+    )
+    await db.commit()
+
+    body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
+    assert body["social_security"]["per_person"] == [
+        {
+            "person_id": me_id,
+            "name": "Me",
+            "w2_income": "240000.00",
+            "taxable_wages": "168600.00",  # capped by the year's default table
+            "tax": "10453.20",
+            "effective_rate": "0.043555",
+            "table": "default",
+        },
+        {
+            "person_id": partner_id,
+            "name": "Partner",
+            "w2_income": "150000.00",
+            "taxable_wages": "150000.00",  # under the cap, so the whole wage
+            "tax": "9300.00",
+            "effective_rate": "0.062000",
+            "table": "default",
+        },
+    ]
+    disability = body["disability"]["per_person"]
+    assert [(line["name"], line["tax"], line["table"]) for line in disability] == [
+        ("Me", "2640.00", "default"),  # 240000 x .011
+        ("Partner", "1950.00", "own"),  # 150000 x .013
+    ]
+    # Medicare is a combined walk by statute and carries no earner lines at all.
+    assert body["medicare"]["per_person"] == []
+    # The aggregates the sub-rows sit under are still their sums.
+    assert body["disability"]["tax"] == "4590.00"
+
+
+async def test_summary_per_person_is_nameless_without_a_roster(auth_client, definitions):
+    """A database with no people still reports the single bundle the engine synthesized —
+    it just cannot say whose it is. The client renders no sub-row for it (one entry, and
+    it is the default table), which is what keeps every single-filer year looking the same.
+    """
+    await put_inputs(auth_client, 2024, inputs_payload(2024))
+    await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
+    body = (await auth_client.get(f"{YEARS}/2024/summary")).json()
+    line = body["social_security"]["per_person"]
+    assert [(entry["person_id"], entry["name"], entry["table"]) for entry in line] == [
+        (None, None, "default")
+    ]
+    assert line[0]["taxable_wages"] == body["social_security"]["taxable_wages"]
+    assert line[0]["tax"] == body["social_security"]["tax"]
+
+
+async def test_a_single_earner_with_their_own_table_is_named(auth_client, db, definitions):
+    """Production's 2026: one person with rows, and the table walked is theirs."""
+    me_id, _partner_id = await _seed_two_earner_year(db, 2026, status="single")
+    db.add_all(person_rows(2026, me_id, "disability", [("0.0130", "0")]))
+    await db.commit()
+
+    body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
+    assert body["disability"]["per_person"] == [
+        {
+            "person_id": me_id,
+            "name": "Me",
+            "w2_income": "240000.00",
+            "taxable_wages": "240000.00",
+            "tax": "3120.00",
+            "effective_rate": "0.013000",
+            "table": "own",
+        }
+    ]
+
+
+async def test_the_wage_sections_of_a_refused_year_carry_no_lines(auth_client, db, definitions):
+    """A year waiting for its tables reports no numbers at all, per_person included."""
+    await _seed_people(db)
+    db.add(TaxYear(year=2026, filing_status="married_joint"))
+    await db.flush()
+    await db.commit()
+    body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
+    assert body["brackets_missing_for_status"] == list(JURISDICTIONS)
+    assert body["social_security"] is None

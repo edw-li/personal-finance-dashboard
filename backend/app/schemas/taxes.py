@@ -214,11 +214,35 @@ class IncomeTaxOut(BaseModel):
     effective_rate: Decimal | None
 
 
+class PersonWageTaxOut(BaseModel):
+    """One earner's line of a per-worker payroll tax (2026-09-11 spec §2.5).
+
+    `taxable_wages` is that jurisdiction's own convention applied to this person: Social
+    Security's CAPPED base (so `taxable_wages < w2_income` is where their cap bit), SDI's
+    uncapped one. `table` says which schedule produced the figures — their own stored one,
+    or the year's default. Both names are null on a database with no people roster, where
+    the engine still reports the single bundle it synthesized for the whole return.
+    """
+
+    person_id: int | None
+    name: str | None
+    w2_income: Decimal
+    taxable_wages: Decimal
+    tax: Decimal
+    effective_rate: Decimal | None
+    table: Literal["own", "default"]
+
+
 class WageTaxOut(BaseModel):
     w2_income: Decimal
     taxable_wages: Decimal
     tax: Decimal
     effective_rate: Decimal | None
+    # The earners behind the total, in the engine's column order — social_security and
+    # disability only (Medicare is a combined-wage walk by statute and carries none).
+    # DEFAULTED: the stored golden summaries other tests parse predate the field, and an
+    # older client reads the payload unchanged.
+    per_person: list[PersonWageTaxOut] = []
 
 
 class CapitalGainsTaxOut(BaseModel):
