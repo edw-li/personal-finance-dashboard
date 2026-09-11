@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development (one
 > implementer for this lane in its own worktree, TDD per task, then a spec-compliance review and a
-> code-quality review, then merge to local main — never pushed). Steps use `- [ ]` checkboxes.
+> code-quality review, then merge to local main — never pushed). Steps use `- [x]` checkboxes.
 
 **Spec:** `docs/superpowers/specs/2026-09-11-computed-tax-totals-and-per-person-payroll-tables-design.md`
 — this lane implements **Part 2 §2.6–2.7 and §2.8 (frontend)**. Read §2.4–2.7 before Task 1. Lane C
@@ -54,10 +54,10 @@ and disability"`, `"person {id} is not on a {status} return"`.
 **Files:** modify `src/types/api.ts` (`TaxBracketsOut` ~l.784, `TaxBracketsUpdate` ~l.799,
 `WageTaxOut` ~l.825; add `PersonBracketsOut`, `PersonWageTaxOut`).
 
-- [ ] Add the fields above with one-line comments (default = everyone; person table = that earner's).
+- [x] Add the fields above with one-line comments (default = everyone; person table = that earner's).
   `per_person` on `WageTaxOut` is OPTIONAL so the golden `TaxSummaryOut` fixtures in
   `taxChartOptions.test.ts` / `overviewChartOptions.test.ts` stay valid. `npx tsc -b` clean.
-- [ ] Commit: `feat(taxes): per-person bracket and payroll wire types`.
+- [x] Commit: `feat(taxes): per-person bracket and payroll wire types`.
 
 ## Task 2 — the per-person strip in `BracketsEditor` (spec §2.6)
 
@@ -66,7 +66,7 @@ tests in `src/components/taxes/BracketsEditor.test.tsx` (extend `bracketsFixture
 `people: [{ id: 1, name: 'Alex' }]` and `per_person: [{ person_id: 1, name: 'Alex', jurisdictions: { social_security: [], disability: [] } }]`;
 add a married fixture with two people and a stored Disability table for person 4).
 
-- [ ] Failing tests:
+- [x] Failing tests:
   - `heads the two per-worker blocks as the default for everyone` — `Social Security brackets — default for everyone`
     and `Disability brackets — default for everyone`; the other four headings unchanged.
   - `offers to add a person table under each per-worker block` — `Add a table for Alex` appears twice
@@ -80,7 +80,7 @@ add a married fixture with two people and a stored Disability table for person 4
   - `keys errors and saving per table and person` — a 422 on Alex's table renders under Alex's
     table only; the default's Save is disabled while Alex's is in flight (single-flight).
   - `reports dirty work from a draft person table` — a seeded draft makes `onDirtyChange(true)`.
-- [ ] Implement: table state keyed `${name}` for defaults and `${name}:${personId}` for person
+- [x] Implement: table state keyed `${name}` for defaults and `${name}:${personId}` for person
   tables (`tablesOf` reads `per_person`); `errors`/`saving` use the same keys; `save(name, personId?)`
   sends `person_id` when set; `remove(name, personId)` is `save` with `[]` behind the existing
   delete-all confirm worded `Delete Alex's Disability table for 2024 (Single)? They fall back to the default.`;
@@ -89,9 +89,9 @@ add a married fixture with two people and a stored Disability table for person 4
   `drill-hint` under the strip: "Per-worker tax: the default applies to anyone without their own
   table. Add one for an earner on an employer's voluntary plan, or in a job exempt from Social Security."
   CSS: `.bracket-person` (indented block, subtle left rule) and `.bracket-person-head`.
-- [ ] Copy: card `InfoHint` gains "Social Security and Disability may also carry a table per person.";
+- [x] Copy: card `InfoHint` gains "Social Security and Disability may also carry a table per person.";
   the empty-tab clone note gains ", including any per-person tables" after "come across correct".
-- [ ] Commit: `feat(taxes): per-person Social Security and Disability tables in the bracket editor`.
+- [x] Commit: `feat(taxes): per-person Social Security and Disability tables in the bracket editor`.
 
 ## Task 3 — per-earner sub-rows in `SummaryPanel` (spec §2.7)
 
@@ -99,21 +99,48 @@ add a married fixture with two people and a stored Disability table for person 4
 tests: create `src/components/taxes/SummaryPanel.test.tsx` (render with a `TaxSummaryOut` fixture;
 mirror the harness of `MarginalPanel.test.tsx`).
 
-- [ ] Failing tests:
+- [x] Failing tests:
   - `renders one sub-row per earner under Social Security and Disability on a two-earner year` —
     names, wages, taxable, tax, rate; `capped at $184,500` on the earner whose SS taxable < wages;
     `own table` / `default` tags.
   - `renders a sub-row for a single earner who uses their own table`.
   - `renders no sub-rows for a single earner on the default table`, and none when `per_person` is
     absent (stored fixture shape).
-- [ ] Implement: after each of the two rows, map `per_person` when `rows.length >= 2 || rows.some(r => r.table === 'own')`;
+- [x] Implement: after each of the two rows, map `per_person` when `rows.length >= 2 || rows.some(r => r.table === 'own')`;
   sub-row `<tr className="tax-person-row">` with the name cell indented; the capped note is derived
   by comparing the two strings as numbers (display only — no money math); tags are small `badge`s.
   "By jurisdiction" hint gains "Social Security and Disability are per worker: each earner's row shows
   their own wage base, cap and table."
-- [ ] Commit: `feat(taxes): summary shows each earner's Social Security and Disability line`.
+- [x] Commit: `feat(taxes): summary shows each earner's Social Security and Disability line`.
 
 ## Task 4 — gates
 
-- [ ] `npx eslint .` (0 errors), `npx tsc -b`, `npm test` — green.
-- [ ] Final report: commits, counts, any contract assumption to check against lane C's shipped shapes.
+- [x] `npx eslint .` (0 errors), `npx tsc -b`, `npm test` — green.
+- [x] Final report: commits, counts, any contract assumption to check against lane C's shipped shapes.
+
+---
+
+## As built (lane D, 2026-09-11)
+
+Three commits on `tax/d-payroll-tables-ui`: wire types, the editor strip, the summary
+sub-rows. `npx eslint .` 0 errors, `npx tsc -b` clean, `npm test` 2734 passed / 193 files
+(2724 / 192 before). Departures from the text above, all spec-faithful:
+
+- **`0.013`, not `0.0130`.** `shiftPoint` trims trailing zeros, and the PUT ships the typed
+  text for the server to quantize — the same pins the file already carries (`0.1`, `0.37`,
+  `0.093`). The saved-rate test asserts `0.013`.
+- **`capped at $184,500.00`.** `formatCurrency` is the house money renderer and keeps cents;
+  the only cents-free variant is `formatCurrencyCompact`, which would read `$184.5K`.
+- **`people` / `per_person` are REQUIRED on `TaxBracketsOut`** (the contract block's shape);
+  the five existing `TaxBracketsOut` fixtures gained `people: []`, `per_person: []`. Only
+  `WageTaxOut.per_person` is optional, as instructed.
+- **A person card is a sibling `<form>` of its jurisdiction's block, not a child** — forms do
+  not nest — so the two share a `<Fragment>` and the rows editor is a local `BracketRows`
+  component both render. Person heads are `<h4>`, leaving the six `<h3>` headings the
+  editor's spine.
+- **`Discard draft`** beside Save on a seeded-but-unsaved person table: client-side, no
+  request. Without it a mis-clicked `Add a table for …` had no way back but a tab switch.
+- **Dirty compares the tables key-SORTED** (`serialize`), because a seeded draft is appended
+  while the payload lists it in roster order.
+- The existing heading pin (`Social Security brackets`) and the clone-note pin were updated:
+  the spec changes both sentences.
