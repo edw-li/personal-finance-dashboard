@@ -778,6 +778,15 @@ export interface TaxBracketIn {
   threshold: string
 }
 
+// One earner's own per-worker tables. Only social_security and disability may carry a person
+// (the server's `tax_keys.PER_WORKER_JURISDICTIONS`), and a jurisdiction that person has no
+// table for arrives as an EMPTY list — which is also what deletes one on the way back.
+export interface PersonBracketsOut {
+  person_id: number
+  name: string
+  jurisdictions: Record<string, TaxBracketOut[]>
+}
+
 // A Record, not a fixed key set: the six known jurisdictions are always present, and an
 // importer-written extra one survives a read. Drive render order from `JURISDICTIONS`
 // (src/api/taxes.ts) and append whatever else came back.
@@ -790,7 +799,15 @@ export interface TaxBracketsOut {
   // tab set, so an MFJ table entered ahead of the wedding stays reachable from a year still
   // filed single.
   statuses_with_rows: FilingStatus[]
+  // The DEFAULT tables: what everyone on the return walks unless they have their own.
   jurisdictions: Record<string, TaxBracketOut[]>
+  // The roster a return under THIS payload's status covers — everybody under married-joint,
+  // the primary alone under single and MFS. Empty on a roster-less database.
+  people: TaxPersonOut[]
+  // One entry per person above: the per-worker tables that earner walks INSTEAD of the
+  // defaults. Always present, so a person with no table of their own is an entry of empty
+  // lists rather than an absence.
+  per_person: PersonBracketsOut[]
 }
 
 // Per-jurisdiction FULL REPLACE within ONE status: a jurisdiction absent from the body is
@@ -799,6 +816,10 @@ export interface TaxBracketsOut {
 export interface TaxBracketsUpdate {
   filing_status: FilingStatus
   jurisdictions: Record<string, TaxBracketIn[]>
+  // WHOSE tables the body replaces: omitted or null is the year+status default, for everyone;
+  // a person id is that earner's own copy, and then the body may name only social_security
+  // and disability (422 otherwise, as is a person who is not on that status' return).
+  person_id?: number | null
 }
 
 // Which cloned tables are usually right as they landed, and which need edits. Social
@@ -822,11 +843,30 @@ export interface IncomeTaxOut {
   effective_rate: string | null
 }
 
+// One earner's line of a per-worker payroll tax: their own wage base, their own cap (the
+// capped base IS `taxable_wages` for Social Security) and which table they walked — 'own' is
+// that person's stored table, 'default' the year's. Both names are null on a roster-less
+// database, where the engine still reports the single bundle it synthesized.
+export interface PersonWageTaxOut {
+  person_id: number | null
+  name: string | null
+  w2_income: string
+  taxable_wages: string
+  tax: string
+  effective_rate: string | null
+  table: 'own' | 'default'
+}
+
 export interface WageTaxOut {
   w2_income: string
   taxable_wages: string
   tax: string
   effective_rate: string | null
+  // The earners behind the total, in the engine's column order — social_security and
+  // disability only (Medicare is household-wide by statute and carries none). OPTIONAL for
+  // `brackets_missing_for_status`'s reason below: the pinned golden TaxSummaryOut fixtures
+  // predate it, so a reader takes `?? []`.
+  per_person?: PersonWageTaxOut[]
 }
 
 export interface CapitalGainsTaxOut {

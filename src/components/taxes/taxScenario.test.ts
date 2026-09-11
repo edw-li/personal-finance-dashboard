@@ -139,6 +139,8 @@ describe('tax scenario codec', () => {
           { bracket_index: 3, rate: '0.2000', threshold: '518900.00' },
         ],
       },
+      people: [],
+      per_person: [],
     }
     const holdings = [holding(7, 'VTI', '100.0000', '62.50'), holding(9, 'QQQ', '10.0000', null), holding(11, 'BND', '50.0000', '40.00', '45.0000')]
     const lowSummary: TaxSummaryOut = { ...summary, capital_gains: { taxable_income: '30000.00', gains_amount: '2000.00', tax: '0.00', effective_rate: null } }

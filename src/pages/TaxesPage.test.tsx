@@ -180,6 +180,8 @@ function bracketsFor(year: number): TaxBracketsOut {
       disability: [],
       capital_gains: [],
     },
+    people: [],
+    per_person: [],
   }
 }
 

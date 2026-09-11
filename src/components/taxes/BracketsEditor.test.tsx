@@ -30,6 +30,8 @@ function bracketsFixture(): TaxBracketsOut {
       disability: [],
       capital_gains: [],
     },
+    people: [],
+    per_person: [],
   }
 }
 
