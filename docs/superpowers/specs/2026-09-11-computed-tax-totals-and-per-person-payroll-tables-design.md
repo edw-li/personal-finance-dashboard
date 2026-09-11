@@ -330,9 +330,10 @@ select excludes derived; HealthCard branch gone; TaxesPage tests updated for the
 
 ### 2.3 Assembly
 
-- `_engine_tables(db, year, status)` returns default (NULL-person) tables — same signature. New
-  `_person_tables(db, year, status) -> dict[int, dict[str, list[Bracket]]]` loads person rows.
-  `EngineFeed` gains `person_tables`.
+- `_engine_tables(db, year, status)` loads the year+status rows ONCE and partitions them on
+  `person_id is None` into the default tables and `person_tables: dict[int, dict[str, list[Bracket]]]`
+  (as built at lane C's review — the first draft had a second loader and a second round trip per
+  feed). `EngineFeed` gains `person_tables`.
 - `_assemble_earners` attaches `person_tables[column]` to each bundle. Whenever any person on the
   return has a person table (or two or more columns have rows) it returns **one bundle per column in
   column order** — a column with no rows gets a zero-wage bundle carrying its tables — so the head is
