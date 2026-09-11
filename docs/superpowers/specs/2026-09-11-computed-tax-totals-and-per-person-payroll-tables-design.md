@@ -314,9 +314,10 @@ select excludes derived; HealthCard branch gone; TaxesPage tests updated for the
   this earner walks **instead of** the year's default. The SS and SDI walks read
   `earner.payroll_tables.get(name) or tables[name]`. Cap detection (terminal 0-rate row) runs per
   table, so one earner may be capped by a different base than another.
-- **All-zero rule**: a table whose every rate is 0 taxes nothing and reports 0 taxable wages for
-  that earner (the SS-exempt job). A table that is merely EMPTY still means "no table": it falls
-  through to the default.
+- **All-zero rule**: an earner's OWN table whose every rate is 0 taxes nothing and reports 0 taxable
+  wages for that earner (the SS-exempt job). A table that is merely EMPTY still means "no table": it
+  falls through to the default. (Amended 2026-09-11 at lane C's review: the rule applies to a
+  person's own table only, so a household with no person tables walks exactly what it walked before.)
 - `JurisdictionResult` for `social_security` and `disability` gains
   `per_person: list[EarnerPayroll]` in bundle (column) order —
   `EarnerPayroll(w2_income, taxable_wages, tax, effective_rate, own_table: bool)`. Conventions per
@@ -332,10 +333,16 @@ select excludes derived; HealthCard branch gone; TaxesPage tests updated for the
 - `_engine_tables(db, year, status)` returns default (NULL-person) tables — same signature. New
   `_person_tables(db, year, status) -> dict[int, dict[str, list[Bracket]]]` loads person rows.
   `EngineFeed` gains `person_tables`.
-- `_assemble_earners` attaches `person_tables[column]` to each bundle, and returns a **one-bundle
-  list** (rather than `None`) whenever any person on the return has a person table — the 2026
-  single-status case where Edward alone has a Voluntary-Plan table. `None` (engine synthesis) stays
-  the answer when nobody has one, which keeps every stored single year byte-identical.
+- `_assemble_earners` attaches `person_tables[column]` to each bundle. Whenever any person on the
+  return has a person table (or two or more columns have rows) it returns **one bundle per column in
+  column order** — a column with no rows gets a zero-wage bundle carrying its tables — so the head is
+  always the primary (the invariant the what-if's `shift_earners` re-bases on) and a partner's own
+  table is walked even when the primary has no W-2 rows; `per_person` then carries an honest zero
+  line for the row-less earner. `None` (engine synthesis) stays the answer when nobody has a table
+  and at most one column has rows, which keeps every stored single year byte-identical. (Amended
+  2026-09-11 at lane C's review: the first draft said "a one-bundle list", which a partner-headed
+  list would have made unsafe for the what-if.) `earner_people` on the feed is derived from the same
+  list, so labels and bundles cannot disagree.
 - `shift_earners` (what-if) preserves `payroll_tables` on the re-based head bundle
   (`dataclasses.replace`).
 - Withholding card (`withholding_estimate`): the bonus/vest FICA legs walk the PRIMARY's effective
