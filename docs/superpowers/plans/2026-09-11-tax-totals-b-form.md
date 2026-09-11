@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development (one
 > implementer for this lane in its own worktree, TDD per task, then a spec-compliance review and a
-> code-quality review, then merge to local main — never pushed). Steps use `- [ ]` checkboxes.
+> code-quality review, then merge to local main — never pushed). Steps use `- [x]` checkboxes.
 
 **Spec:** `docs/superpowers/specs/2026-09-11-computed-tax-totals-and-per-person-payroll-tables-design.md`
 — this lane implements **Part 1 §1.6 (client side), §1.7 and §1.8 (frontend)**. Read §1.6–1.7
@@ -58,12 +58,12 @@ instead"`; the form never sends one, so this is only ever seen through a stale c
 beside `TaxInputsOut`), `src/api/taxes.ts` (add `previewTaxInputs`; delete `putTaxInputsForRepair`
 and its comment), `src/api/taxes.test.ts` (if it lists exported functions).
 
-- [ ] Add `formula: string | null` with a comment: the server's caption for a computed line, null
+- [x] Add `formula: string | null` with a comment: the server's caption for a computed line, null
   for an editable one. Add `DerivedPreviewItemOut` / `DerivedPreviewOut`.
-- [ ] `previewTaxInputs(year, body)` → `api<DerivedPreviewOut>(\`/taxes/years/${year}/inputs/preview\`, { method: 'POST', body: JSON.stringify(body) })`.
-- [ ] Remove `putTaxInputsForRepair` (Task 5 removes its only caller first if you prefer order; both
+- [x] `previewTaxInputs(year, body)` → `api<DerivedPreviewOut>(\`/taxes/years/${year}/inputs/preview\`, { method: 'POST', body: JSON.stringify(body) })`.
+- [x] Remove `putTaxInputsForRepair` (Task 5 removes its only caller first if you prefer order; both
   land in this lane). `npx tsc -b` clean.
-- [ ] Commit: `feat(taxes): preview client + formula field; repair writer retired`.
+- [x] Commit: `feat(taxes): preview client + formula field; repair writer retired`.
 
 ## Task 2 — computed cells in `InputsForm` (spec §1.7)
 
@@ -71,7 +71,7 @@ and its comment), `src/api/taxes.test.ts` (if it lists exported functions).
 `src/components/taxes/InputsForm.test.tsx` (extend `inputsFixture()`: every item gains
 `formula: null`, and `gross_paycheck` becomes `value: '8333.3333', suggested: null, formula: 'Annual Salary ÷ 24'`).
 
-- [ ] Failing tests:
+- [x] Failing tests:
   - `renders a derived row as a read-only figure with its formula and no chip` — the Gross Paycheck
     row shows `$8,333.33` in an `<output>` (query `screen.getByRole('status', …)` is wrong for
     `<output>`; use `container.querySelector('output[data-computed="gross_paycheck"]')` or give it
@@ -85,7 +85,7 @@ and its comment), `src/api/taxes.test.ts` (if it lists exported functions).
     `gross_paycheck`; `changedCount` counts editable cells only.
   - Existing `offers the derived suggestion once, over the primary person's column` is retired (no
     chip on derived rows); replace with `renders one computed figure per person column on a married year`.
-- [ ] Implement: `Cell` gains `computed: boolean` and `formula: string | null` (from
+- [x] Implement: `Cell` gains `computed: boolean` and `formula: string | null` (from
   `item.is_derived` / `item.formula`); `flatCells` (walk + paste + save) contains editable cells
   only; rows keep every cell for rendering. A computed cell renders
   `<output id={…} className="tax-computed" aria-label={\`${row.label} (computed)\`} title={\`${formula} — edit the components\`}>{figure}</output>`
@@ -93,7 +93,7 @@ and its comment), `src/api/taxes.test.ts` (if it lists exported functions).
   shows `<span className="tax-suggestion-value">{row.formula}</span>` when `row.isDerived`. CSS:
   `.tax-computed` mirrors the input's box metrics (height, padding, right alignment, `var(--muted)`
   colour, no border or a dashed one), so the grid does not jump between editable and computed rows.
-- [ ] Commit: `feat(taxes): derived rows render as computed figures with a formula caption`.
+- [x] Commit: `feat(taxes): derived rows render as computed figures with a formula caption`.
 
 ## Task 3 — live preview (spec §1.7)
 
@@ -101,7 +101,7 @@ and its comment), `src/api/taxes.test.ts` (if it lists exported functions).
 `previewTaxInputs` in the existing `vi.mock('../../api/taxes', …)` alongside `putTaxInputs`; use
 `vi.useFakeTimers()` for the debounce).
 
-- [ ] Failing tests:
+- [x] Failing tests:
   - `previews computed totals 300 ms after the last keystroke, with the whole form as the body` —
     type into Annual Salary twice within 300 ms: ONE preview call, body = the PUT shape of the current
     form (values map / rows exactly as `submit()` would build them, but for ALL editable cells, not
@@ -112,30 +112,36 @@ and its comment), `src/api/taxes.test.ts` (if it lists exported functions).
   - `keeps the last figure when a preview fails` — reject → the previous figure stays, no banner.
   - `the save echo wins over a pending preview` — save resolves while a preview is in flight: the
     echo's value shows and the late preview is ignored.
-- [ ] Implement: `computedValues` state keyed by cell id, seeded from the payload and re-seeded by
+- [x] Implement: `computedValues` state keyed by cell id, seeded from the payload and re-seeded by
   the save echo; a `previewSeq` ref; an effect on `values` (editable cells) that `setTimeout`s 300 ms
   (`MOTION_MS`-style constant `PREVIEW_DEBOUNCE_MS = 300`), builds the body with the same
   `toWire` canonicalization `submit()` uses (skip cells whose text is not a valid entry — send
   nothing for them rather than garbage), calls `previewTaxInputs`, and applies the response only when
   its sequence is current and no save landed since. A blank editable cell is sent as `null`.
-- [ ] Commit: `feat(taxes): computed totals re-derive live through the preview endpoint`.
+- [x] Commit: `feat(taxes): computed totals re-derive live through the preview endpoint`.
 
 ## Task 4 — paste keeps sheet alignment (spec §1.7)
 
 **Files:** modify `src/components/taxes/InputsForm.tsx` (`handlePaste`); tests in `InputsForm.test.tsx`.
 
-- [ ] Failing tests: `column paste skips computed slots and keeps alignment` — paste three values
+- [x] Failing tests: `column paste skips computed slots and keeps alignment` — paste three values
   into Annual Salary on the single fixture (Annual Salary, Gross Paycheck [computed], HSA
   Contributions in walk order): Annual Salary gets value 1, HSA gets value 3, value 2 is discarded,
   the note ends with `· 1 computed cell skipped`; `keyed paste ignores a computed label` — a keyed
   block naming Gross Paycheck: not filled, note counts it as skipped. Update the existing paste tests'
   expected `Pasted N of M values` denominators (editable cells only).
-- [ ] Implement: build the positional `column` from ALL cells (editable and computed, in render
+- [x] Implement: build the positional `column` from ALL cells (editable and computed, in render
   order) so slots line up with the sheet; when a slot's cell is computed, count `computedSkipped`
   and consume the value; `reachable` counts editable cells; keyed candidates exclude computed cells
   and a label match against a computed row counts as skipped. Note grammar:
   `${n} computed cell${n === 1 ? '' : 's'} skipped`.
-- [ ] Commit: `feat(taxes): pasted sheet columns skip computed slots without losing alignment`.
+- As built: the KEYED candidate list includes computed cells rather than excluding them. A
+  pasted line naming a computed row has to be answered by its own row — dropped from the list,
+  `matchLabel` would fuzzy-match "Gross Paycheck" onto a neighbouring editable line and fill the
+  wrong cell — so the match is made and then refused: counted as skipped, never filled, never
+  reported as unmatched. `reachable` still counts editable cells only, so the note's denominator
+  is the one this task specified, and so is the observable behaviour.
+- [x] Commit: `feat(taxes): pasted sheet columns skip computed slots without losing alignment`.
 
 ## Task 5 — page, copy, health card
 
@@ -144,16 +150,16 @@ and its comment), `src/api/taxes.test.ts` (if it lists exported functions).
 `putTaxInputsForRepair` imports if unused), `src/components/taxes/InputsForm.tsx` (copy);
 tests in `src/pages/TaxesPage.test.tsx`, `src/components/settings/HealthCard.test.tsx`.
 
-- [ ] `overrideDefinitions` skips items with `is_derived`. Test: the what-if select offers no
+- [x] `overrideDefinitions` skips items with `is_derived`. Test: the what-if select offers no
   derived key.
-- [ ] Copy: card hint → "The year's income and deduction line items. Computed lines total their
+- [x] Copy: card hint → "The year's income and deduction line items. Computed lines total their
   components as you type; grey chips are offers you apply."; intro paragraph → "Stored values feed
   the engine; computed lines follow their components. Clearing a field unsets that input."
-- [ ] HealthCard: remove the branch and its test(s); any `types/api.ts` comment naming the action.
-- [ ] Commit: `feat(taxes): override list excludes computed keys; §199A repair branch retired`.
+- [x] HealthCard: remove the branch and its test(s); any `types/api.ts` comment naming the action.
+- [x] Commit: `feat(taxes): override list excludes computed keys; §199A repair branch retired`.
 
 ## Task 6 — gates
 
-- [ ] `npx eslint .` (0 errors), `npx tsc -b`, `npm test` (full vitest) — green.
-- [ ] Final report: commits, test counts, and any contract mismatch you had to assume (name it so the
+- [x] `npx eslint .` (0 errors), `npx tsc -b`, `npm test` (full vitest) — green.
+- [x] Final report: commits, test counts, and any contract mismatch you had to assume (name it so the
   integration pass checks it against lane A's shipped shapes).

@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ClipboardEvent } from 'react'
 import { ApiError } from '../../api/client'
-import { putTaxInputs } from '../../api/taxes'
+import { previewTaxInputs, putTaxInputs } from '../../api/taxes'
 import AmountInput from '../AmountInput'
 import type { AmountKind } from '../AmountInput'
 import InfoHint from '../InfoHint'
@@ -11,6 +11,7 @@ import type {
   TaxInputSectionOut,
   TaxInputUnit,
   TaxInputsOut,
+  TaxInputsUpdate,
   TaxPersonOut,
 } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
@@ -89,14 +90,25 @@ function isEntry(unit: TaxInputUnit, text: string): boolean {
 }
 
 /**
- * What a suggestion chip says. The engine's suggestions are wire values like everything
- * else, so they are shown in the box's units too.
+ * One wire figure as this unit reads it OUTSIDE a box: what a suggestion chip says, and what
+ * a computed row shows. Suggestions and computed totals are both wire values like everything
+ * else, so both are shown in the box's units.
  */
-function suggestionText(unit: TaxInputUnit, suggested: string): string {
-  if (unit === 'money') return formatCurrency(suggested)
-  const shown = toBox(unit, suggested)
+function figureText(unit: TaxInputUnit, wire: string): string {
+  if (unit === 'money') return formatCurrency(wire)
+  const shown = toBox(unit, wire)
   return unit === 'percent' ? `${shown}%` : shown
 }
+
+/** A computed line with no component entered: absent is not zero, so it shows neither. */
+const NO_FIGURE = '—'
+
+/**
+ * How long after the last keystroke the computed totals are re-asked for. The answer to a
+ * half-typed number is noise, and a request per character would be noise on the wire; 300 ms
+ * is the pause that says "that's the number" without the figure ever feeling stale.
+ */
+const PREVIEW_DEBOUNCE_MS = 300
 
 /** One person's column, with the name it is headed by. */
 interface Column {
@@ -105,7 +117,7 @@ interface Column {
 }
 
 /**
- * ONE editable box: a key on the household row, or a key on one person's row. `id` is the
+ * ONE cell: a key on the household row, or a key on one person's row. `id` is the
  * bare key for a household cell — byte-identical to the id a single-status year rendered
  * before columns existed — and `key:personId` for a person cell. Tax keys are snake_case
  * identifiers and can never contain a colon, so the scheme stays unambiguous; nothing may
@@ -122,17 +134,27 @@ interface Cell {
   itemLabel: string
   /** null on a household cell; the column's name on a person cell. */
   personName: string | null
+  /**
+   * A DERIVED total (2026-09-11 spec §1.6): the engine's own figure for this column, which
+   * has no stored row and cannot be typed over. It is rendered and pasted past, but it is
+   * not an entry cell — it never enters `values`, the walk, the change count or the PUT
+   * body, and the server 422s a write to it.
+   */
+  computed: boolean
   value: string | null
   suggested: string | null
   /** "last year's" when the suggestion is a carry-forward rather than a sheet formula. */
   suggestionSource: string | null
 }
 
-/** One line of the grid: a key, and the one-or-two boxes it is edited through. */
+/** One line of the grid: a key, and the one-or-two cells it is shown through. */
 interface Row {
   key: string
   label: string
-  isDerived: boolean
+  computed: boolean
+  /** The server's caption for a computed line ("Annual Salary ÷ 24"), null on an editable
+   *  one. The row's, not the cell's: both columns of a per-person total share one formula. */
+  formula: string | null
   cells: Cell[]
 }
 
@@ -148,8 +170,12 @@ interface FormModel {
   /** Two named columns, rather than the one every single-status year has always had. */
   split: boolean
   sections: Section[]
-  /** Every box in RENDER order — what Enter walks and what a positional paste fills. */
+  /** Every EDITABLE box in render order — what Enter walks, what the diff counts and what
+   *  the PUT body is built from. A computed cell is none of those things. */
   flatCells: Cell[]
+  /** Every cell, computed ones included, in render order — the sheet's own column, which a
+   *  positional paste has to line up against slot for slot. */
+  allCells: Cell[]
 }
 
 /** The accessible name of one box. Two boxes carry the same item label, so they need more. */
@@ -165,6 +191,20 @@ function columnName(person: TaxPersonOut, index: number): string {
 }
 
 /**
+ * WHICH column a payload item addresses: its own person on a split year, the one unqualified
+ * column otherwise. The GET's items and the preview's answer are read by the same rule, so a
+ * preview figure can never land on a cell the GET would have spelled differently.
+ */
+function ownerOf(personId: number | null, split: boolean): number | null {
+  return split && personId !== null ? personId : null
+}
+
+/** The id of the cell an item addresses, once its owner is resolved. */
+function cellIdOf(key: string, owner: number | null): string {
+  return owner === null ? key : `${key}:${owner}`
+}
+
+/**
  * One item's box. The server already narrowed the payload to the columns THIS year's status
  * covers and stamped each item with its `person_id`, so the only decision left here is
  * whether to QUALIFY it: with a single column — a single-status year, an MFS return, or a
@@ -172,14 +212,15 @@ function columnName(person: TaxPersonOut, index: number): string {
  * what keeps that year's DOM, paste targets and PUT body identical to today's.
  */
 function cellOf(item: TaxInputItemOut, names: Map<number, string>, split: boolean): Cell {
-  const personId = split && item.person_id !== null ? item.person_id : null
+  const personId = ownerOf(item.person_id, split)
   return {
-    id: personId === null ? item.key : `${item.key}:${personId}`,
+    id: cellIdOf(item.key, personId),
     key: item.key,
     unit: item.unit,
     personId,
     itemLabel: item.label,
     personName: personId === null ? null : (names.get(personId) ?? null),
+    computed: item.is_derived,
     value: item.value,
     suggested: item.suggested,
     suggestionSource: item.suggestion_source,
@@ -197,7 +238,13 @@ function rowsOf(section: TaxInputSectionOut, names: Map<number, string>, split: 
   for (const item of section.items) {
     let row = byKey.get(item.key)
     if (row === undefined) {
-      row = { key: item.key, label: item.label, isDerived: item.is_derived, cells: [] }
+      row = {
+        key: item.key,
+        label: item.label,
+        computed: item.is_derived,
+        formula: item.formula,
+        cells: [],
+      }
       byKey.set(item.key, row)
       rows.push(row)
     }
@@ -221,11 +268,13 @@ function modelOf(inputs: TaxInputsOut): FormModel {
     headed: split && section.items.some((item) => item.is_per_person),
     rows: rowsOf(section, names, split),
   }))
+  const allCells = sections.flatMap((section) => section.rows.flatMap((row) => row.cells))
   return {
     columns,
     split,
     sections,
-    flatCells: sections.flatMap((section) => section.rows.flatMap((row) => row.cells)),
+    flatCells: allCells.filter((cell) => !cell.computed),
+    allCells,
   }
 }
 
@@ -238,6 +287,56 @@ function valuesOf(cells: Cell[]): Record<string, string> {
   return values
 }
 
+/**
+ * The computed figures, in WIRE units, keyed by the cell that shows them. Kept apart from
+ * `values` because these are not entries: nothing diffs them, nothing saves them, and the
+ * only thing that ever writes one is the server — the payload, a preview, or a save echo.
+ */
+function figuresOf(cells: Cell[]): Record<string, string | null> {
+  const figures: Record<string, string | null> = {}
+  for (const cell of cells) if (cell.computed) figures[cell.id] = cell.value
+  return figures
+}
+
+/**
+ * A list of (cell, wire value) pairs as the body both writes take. Split by COLUMN: household
+ * cells — and every cell of a one-column year — ride the `values` map the server resolves
+ * itself (a per-person key with no owner is the primary's); person cells name their row. With
+ * no person rows the list is left off entirely, so a one-column year ships EXACTLY the body
+ * this form shipped before columns existed. One function for both callers, because a save and
+ * a preview that split their cells differently would quietly be asking about different forms.
+ */
+function bodyOf(entries: Array<[Cell, string | null]>): TaxInputsUpdate {
+  const values: Record<string, string | null> = {}
+  const rows: TaxInputRowIn[] = []
+  for (const [cell, wire] of entries) {
+    if (cell.personId === null) values[cell.key] = wire
+    else rows.push({ key: cell.key, person_id: cell.personId, value: wire })
+  }
+  return rows.length === 0 ? { values } : { values, rows }
+}
+
+/**
+ * The whole form as a PUT body. The preview endpoint takes exactly the save's shape and
+ * overlays it on the stored rows, so it has to hear about EVERY editable cell rather than the
+ * diff: a cell left out would be read at its stored value, and the totals would follow a form
+ * that is no longer on screen. A cell whose text is not a valid entry is left out instead —
+ * the server would 422 the whole call over one half-typed number, and the figures would freeze
+ * until it was finished. Pure and module-level, so the save echo can build the body its own
+ * values will render into and compare the two texts.
+ */
+function previewBodyOf(cells: Cell[], values: Record<string, string>): TaxInputsUpdate {
+  return bodyOf(
+    cells.flatMap((cell): Array<[Cell, string | null]> => {
+      const text = (values[cell.id] ?? '').trim()
+      if (text !== '' && !isEntry(cell.unit, text)) return []
+      // Blank rides as null, exactly as it would in a save: the overlay unsets that input
+      // for the length of the calculation, because absent is not zero.
+      return [[cell, text === '' ? null : toWire(cell.unit, text)]]
+    }),
+  )
+}
+
 export default function InputsForm({
   inputs,
   onSaved,
@@ -247,7 +346,7 @@ export default function InputsForm({
   onSaved: (updated: TaxInputsOut) => void
   onDirtyChange?: (dirty: boolean) => void
 }) {
-  const { columns, split, sections, flatCells } = modelOf(inputs)
+  const { columns, split, sections, flatCells, allCells } = modelOf(inputs)
 
   // `values` is what the user sees, `baseline` what the server last confirmed — the PUT
   // body is their diff, so an untouched cell is never sent (sending one blank would DELETE
@@ -256,12 +355,29 @@ export default function InputsForm({
   // only a save echo, or a remount on a real year/status switch, re-adopts a baseline.
   const [values, setValues] = useState<Record<string, string>>(() => valuesOf(flatCells))
   const [baseline, setBaseline] = useState<Record<string, string>>(() => valuesOf(flatCells))
+  // The computed totals on screen, seeded from the payload and replaced only by the server:
+  // a preview answer while typing, the echo when a save lands.
+  const [figures, setFigures] = useState<Record<string, string | null>>(() => figuresOf(allCells))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // What the last paste did, narrated for everyone (spec §4.1) — one line, replaced by the
   // next paste and dropped by the save echo. The flashed ids are the cells it wrote.
   const [pasteNote, setPasteNote] = useState<string | null>(null)
   const [flashIds, setFlashIds] = useState<Set<string>>(new Set())
+  // Which answer about the computed totals is the current one. Bumped by every preview AND
+  // by every save echo, so "is this still the newest thing the server said?" is one
+  // comparison — an out-of-order preview and a preview overtaken by a save are the same bug.
+  const figureSeq = useRef(0)
+  // This render's form, as the wire would carry it. The TEXT is what the preview below is
+  // keyed on: two renders that would send the same bytes are the same question, so a blur
+  // that only canonicalizes "$216,000" into "216000" asks nothing new.
+  const bodyJson = JSON.stringify(previewBodyOf(flatCells, values))
+  // The body the SERVER last agreed with: the mount seed, then each save echo. A form that
+  // still serializes to exactly that already agrees with its figures, so previewing it would
+  // spend a request to be told what we were just told. A ref rather than a one-shot flag,
+  // because StrictMode mounts effects twice in dev and a flag would be spent on the first
+  // pass and let the second one ask.
+  const serverBody = useRef(bodyJson)
 
   const changed: Record<string, string | null> = {}
   const invalid: string[] = []
@@ -287,6 +403,42 @@ export default function InputsForm({
     onDirtyChange?.(changedCount > 0)
   }, [changedCount, onDirtyChange])
 
+  // Live totals (spec §1.7): a computed line follows its components as they are typed, and
+  // the browser owns no formula — so every edit ASKS what the totals would be. Debounced
+  // because a keystroke is not a question, and sequenced because the answers can arrive out
+  // of order.
+  useEffect(() => {
+    if (serverBody.current === bodyJson) return
+    const timer = setTimeout(() => {
+      const seq = ++figureSeq.current
+      // Parsed back from the very text the effect was keyed on: what was compared is what
+      // gets asked, with no second walk of the form to disagree with the first.
+      previewTaxInputs(inputs.year, JSON.parse(bodyJson) as TaxInputsUpdate)
+        .then((preview) => {
+          // Stale, or overtaken by a save echo: the newest answer owns the screen, and an
+          // older one describes a form that no longer exists.
+          if (seq !== figureSeq.current) return
+          setFigures((current) => {
+            const next = { ...current }
+            for (const item of preview.derived)
+              next[cellIdOf(item.key, ownerOf(item.person_id, split))] = item.value
+            return next
+          })
+        })
+        .catch(() => {
+          // Silent by design: the figures keep the last thing the server said. A preview is
+          // a courtesy — the Save path reports real failures, and a banner on every dropped
+          // keystroke of a flaky connection would say nothing anyone can act on.
+        })
+    }, PREVIEW_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+    // Keyed on the BODY's text rather than on the values map. An object rebuilt every render
+    // would re-arm the debounce on any state change at all (a paste note clearing itself
+    // would cost a request), and its identity would also count a canonicalizing blur as a
+    // new question. `inputs.year` and `split` cannot move without a remount, so naming them
+    // costs nothing and leaves the dep list honest.
+  }, [bodyJson, inputs.year, split])
+
   // The flash is a one-shot: the timer callback clears it, so the effect body itself never
   // sets state (a set here would re-run the effect on its own write).
   useEffect(() => {
@@ -311,32 +463,36 @@ export default function InputsForm({
     if (changedCount === 0) return
     setSaving(true)
     setError(null)
-    // Split by COLUMN. Household cells — and every cell of a one-column year — ride the
-    // `values` map the server resolves itself (a per-person key with no owner is the
-    // primary's); person cells name their row. A one-column save therefore ships EXACTLY the
-    // body this form shipped before columns existed.
-    const wireValues: Record<string, string | null> = {}
-    const rows: TaxInputRowIn[] = []
-    for (const cell of flatCells) {
-      const text = changed[cell.id]
-      // A changed cell is a string or an explicit null (blanked); undefined means untouched.
-      if (text === undefined) continue
-      // The wire gets CANONICAL text, the on-screen diff above keeps counting the raw: a save
-      // reached without a blur (Ctrl+Enter, a jsdom click) must not ship "$1,600" or
-      // "=1200+400" to a Decimal column.
-      const wire = text === null ? null : toWire(cell.unit, text)
-      if (cell.personId === null) wireValues[cell.key] = wire
-      else rows.push({ key: cell.key, person_id: cell.personId, value: wire })
-    }
+    // The DIFF, through the same column splitter the preview builds its whole-form body
+    // with: an untouched cell is never sent, because sending one blank would DELETE a stored
+    // input the user never looked at.
     putTaxInputs(
       inputs.year,
-      rows.length === 0 ? { values: wireValues } : { values: wireValues, rows },
+      bodyOf(
+        flatCells.flatMap((cell): Array<[Cell, string | null]> => {
+          // A changed cell is a string or an explicit null (blanked); undefined = untouched.
+          const text = changed[cell.id]
+          if (text === undefined) return []
+          // The wire gets CANONICAL text, the on-screen diff above keeps counting the raw: a
+          // save reached without a blur (Ctrl+Enter, a jsdom click) must not ship "$1,600"
+          // or "=1200+400" to a Decimal column.
+          return [[cell, text === null ? null : toWire(cell.unit, text)]]
+        }),
+      ),
     )
       .then((echo) => {
-        // The echo is authoritative (4dp, and fresh suggestions): adopt it as both the
-        // shown value and the new baseline, so a second save sends nothing.
-        const echoCells = modelOf(echo).flatCells
-        setValues(valuesOf(echoCells))
+        // The echo is authoritative (4dp, fresh suggestions, and the totals recomputed from
+        // what was just stored): adopt it as the shown value, the new baseline and the
+        // figures, so a second save sends nothing. Bumping the sequence retires any preview
+        // still in flight — it is an answer about a form the server has since been told
+        // about — and adopting the body the echo's own values serialize to stops the echo's
+        // write from asking the same question again.
+        const { flatCells: echoCells, allCells: echoAll } = modelOf(echo)
+        const echoValues = valuesOf(echoCells)
+        figureSeq.current += 1
+        serverBody.current = JSON.stringify(previewBodyOf(echoCells, echoValues))
+        setFigures(figuresOf(echoAll))
+        setValues(echoValues)
         setBaseline(valuesOf(echoCells))
         // The note described a pending fill that the echo just replaced — it would be
         // narrating values that are no longer on screen.
@@ -364,16 +520,20 @@ export default function InputsForm({
     const targetCell =
       target === null
         ? null
-        : (flatCells.find((cell) => `tax-input-${cell.id}` === target.id) ?? null)
+        : (allCells.find((cell) => `tax-input-${cell.id}` === target.id) ?? null)
     // The COLUMN a paste fills: the cells that share the pasted-into cell's person. A sheet
     // column is ONE person's numbers, so a paste into their box must walk THEIR rows and skip
     // the other column entirely. With no resolvable target (a paste onto the card rather than
     // into a box) the whole rendered order is the target, as it always was — and on a
     // one-column year every cell has a null person, so the two are the same list.
+    //
+    // COMPUTED cells are in this list (spec §1.7). The clipboard came from a sheet whose grey
+    // cells occupy those rows, so the slots have to line up one for one; leaving them out
+    // would shift every value below a total onto the wrong line.
     const column =
       targetCell === null
-        ? flatCells
-        : flatCells.filter((cell) => cell.personId === targetCell.personId)
+        ? allCells
+        : allCells.filter((cell) => cell.personId === targetCell.personId)
     const fills: Record<string, string> = {}
     const flashed = new Set<string>()
     const unmatched: string[] = []
@@ -381,8 +541,13 @@ export default function InputsForm({
     // An empty pasted cell SKIPS its target instead of blanking it: a blank here is the
     // wire's "unset this input", and a stray trailing tab must never delete a stored value.
     let blank = 0
+    // Values that landed on a computed line. Counted rather than dropped in silence: the
+    // grey cells travel with any copied sheet column, and a value that just vanished would
+    // read like the paste lost it.
+    let computedSkipped = 0
     // How many cells this paste could have reached — the denominator of the note below.
-    let reachable = column.length
+    // EDITABLE ones only: a computed cell is a slot to step over, never a target.
+    let reachable = column.filter((cell) => !cell.computed).length
     if (plan.mode === 'positional') {
       // Fill from the pasted-into cell onward, down the column — across section boundaries,
       // the way Enter walks it.
@@ -393,7 +558,12 @@ export default function InputsForm({
           overflow += 1
           return
         }
-        // The slot is consumed either way — a skipped blank must not shift the rest up.
+        // The slot is consumed whatever is in it — a skipped blank, and a total nobody may
+        // write, must not shift the rest of the column up a row.
+        if (column[slot].computed) {
+          computedSkipped += 1
+          return
+        }
         if (value === '') {
           blank += 1
           return
@@ -408,20 +578,26 @@ export default function InputsForm({
       // one-column year both lists are the same cells, so the dedupe leaves exactly the flat
       // list this form matched against before columns existed.
       const seen = new Set<string>()
-      const candidates = [...column, ...flatCells.filter((cell) => cell.personId === null)].filter(
+      const candidates = [...column, ...allCells.filter((cell) => cell.personId === null)].filter(
         (cell) => {
           if (seen.has(cell.id)) return false
           seen.add(cell.id)
           return true
         },
       )
-      reachable = candidates.length
+      reachable = candidates.filter((cell) => !cell.computed).length
       // matchLabel keys on numeric ids, so the INDEX into candidates serves as one.
       const labelled = candidates.map((cell, i) => ({ id: i, name: cell.itemLabel }))
       for (const { label, value } of plan.rows) {
         const index = matchLabel(labelled, label)
         if (index === null) {
           unmatched.push(label)
+        } else if (candidates[index].computed) {
+          // Matched, and still not filled. Computed rows stay MATCHABLE so a line naming one
+          // is answered by its own row rather than fuzzy-matching a neighbour, and it is
+          // counted as skipped rather than unmatched: the label was right, the cell is
+          // simply not one anybody may write.
+          computedSkipped += 1
         } else if (value === '') {
           blank += 1
         } else {
@@ -441,6 +617,8 @@ export default function InputsForm({
     }
     if (overflow > 0) parts.push(`${overflow} value${overflow === 1 ? '' : 's'} didn't fit`)
     if (blank > 0) parts.push(`${blank} blank${blank === 1 ? '' : 's'} skipped`)
+    if (computedSkipped > 0)
+      parts.push(`${computedSkipped} computed cell${computedSkipped === 1 ? '' : 's'} skipped`)
     setPasteNote(parts.join(' · '))
   }
 
@@ -448,11 +626,14 @@ export default function InputsForm({
     <section className="card">
       <h2 className="eyebrow">
         Tax inputs — {inputs.year}
-        <InfoHint text="The year&apos;s income and deduction line items — the old sheet&apos;s white cells. Grey suggestions derive from other lines and never auto-apply." />
+        {/* The sheet's white/grey split is no longer the distinction that matters: a grey
+            cell is now a COMPUTED line rather than an offer, so the copy names the two kinds
+            of row the form actually has (2026-09-11 spec §1.7). */}
+        <InfoHint text="The year&apos;s income and deduction line items. Computed lines total their components as you type; grey chips are offers you apply." />
       </h2>
       <p className="drill-hint">
-        Stored values feed the engine; the chips are the sheet&apos;s formulas, offered and
-        never applied for you. Clearing a field unsets that input.
+        Stored values feed the engine; computed lines follow their components. Clearing a
+        field unsets that input.
       </p>
       {/* Married-JOINT alone: an MFS return is one person's by design (the CA caveat in the
           year card is exactly about what that does not model), so its single column is the
@@ -495,7 +676,9 @@ export default function InputsForm({
               )}
               {section.rows.map((row) => {
                 // The chip belongs to ONE cell: derived suggestions are the primary
-                // person's (design §5.3), and the columns are ordered primary-first.
+                // person's (design §5.3), and the columns are ordered primary-first. A
+                // computed row has no chip at all — the server sends it no suggestion,
+                // because there is nothing an Apply could write.
                 const suggestionCell = row.cells[0]
                 const shown = values[suggestionCell.id] ?? ''
                 // What Apply would write: the suggestion in BOX units, so a percent row
@@ -509,7 +692,7 @@ export default function InputsForm({
                 const suggestion =
                   suggestionCell.suggested === null || applies === shown
                     ? null
-                    : suggestionText(suggestionCell.unit, suggestionCell.suggested)
+                    : figureText(suggestionCell.unit, suggestionCell.suggested)
                 // "last year's $15,750" for a carry-forward, "suggested …" for a formula.
                 const suggestionWord = suggestionCell.suggestionSource ?? 'suggested'
                 return (
@@ -518,8 +701,11 @@ export default function InputsForm({
                       {/* The grid gives the label a wide track, but a long key can still
                           ellipsize — the title recovers the full text on hover. With two
                           boxes there is no single control for a <label> to point at, so the
-                          name becomes plain text and each box names itself. */}
-                      {row.cells.length === 1 ? (
+                          name becomes plain text and each box names itself. A computed row
+                          takes the same plain-text branch: its figure names itself
+                          "… (computed)", and a <label> pointing at it would hand the bare
+                          label back to a query looking for a box that no longer exists. */}
+                      {row.cells.length === 1 && !row.computed ? (
                         <label htmlFor={`tax-input-${row.cells[0].id}`} title={row.label}>
                           {row.label}
                         </label>
@@ -528,16 +714,42 @@ export default function InputsForm({
                           {row.label}
                         </span>
                       )}
-                      {row.isDerived && <span className="badge">derived</span>}
+                      {row.computed && <span className="badge">derived</span>}
                     </span>
                     {row.cells.map((cell) => {
+                      // A household line inside a split grid takes both person tracks
+                      // rather than leaving a hole under one name.
+                      const wide = split && row.cells.length === 1 ? 'tax-input-wide' : ''
+                      if (cell.computed) {
+                        // The server's figure and nothing else: the payload's, then whatever
+                        // the last preview or save echo replaced it with.
+                        const figure = figures[cell.id] ?? null
+                        // <output>, in the input's own track and with its metrics: the row
+                        // reads as one line of the same grid whether its figure is typed or
+                        // derived. The title says where the number comes from AND where to
+                        // change it, because this cell is the one place in the form that
+                        // cannot answer an edit.
+                        return (
+                          <output
+                            key={cell.id}
+                            id={`tax-input-${cell.id}`}
+                            className={`tax-computed${wide === '' ? '' : ` ${wide}`}`}
+                            aria-label={`${cellLabel(cell)} (computed)`}
+                            title={
+                              row.formula === null
+                                ? undefined
+                                : `${row.formula} — edit the components`
+                            }
+                          >
+                            {figure === null ? NO_FIGURE : figureText(cell.unit, figure)}
+                          </output>
+                        )
+                      }
                       const value = values[cell.id] ?? ''
                       const classes = [
                         value.trim() !== '' && !isEntry(cell.unit, value) ? 'invalid' : '',
                         flashIds.has(cell.id) ? 'pasted-flash' : '',
-                        // A household line inside a split grid takes both person tracks
-                        // rather than leaving a hole under one name.
-                        split && row.cells.length === 1 ? 'tax-input-wide' : '',
+                        wide,
                       ]
                         .filter((name) => name !== '')
                         .join(' ')
@@ -557,9 +769,16 @@ export default function InputsForm({
                     })}
                     {/* The track is reserved whether or not a suggestion is showing, so a
                         chip appearing mid-keystroke never shifts the input under the
-                        cursor. */}
+                        cursor. On a computed row it holds the formula instead: the caption
+                        is what a chip would have been — the row's explanation of its own
+                        number — minus the button, because there is nothing to apply. */}
                     <span className="tax-suggestion">
-                      {suggestion !== null && (
+                      {row.computed && row.formula !== null && (
+                        <span className="tax-suggestion-value" title={row.formula}>
+                          {row.formula}
+                        </span>
+                      )}
+                      {!row.computed && suggestion !== null && (
                         <>
                           <span className="tax-suggestion-value" title={suggestion}>
                             {suggestionWord} {suggestion}

@@ -1,5 +1,6 @@
-import { api, apiWithHeaders } from './client'
+import { api } from './client'
 import type {
+  DerivedPreviewOut,
   FilingStatus,
   TaxBracketsCloneOut,
   TaxBracketsOut,
@@ -98,21 +99,17 @@ export function putTaxInputs(year: number, body: TaxInputsUpdate): Promise<TaxIn
   })
 }
 
-// The same write, with the change batch its response header carries (spec §9) — the shape
-// `deleteSpendingMonth` established for the Data-health card's repairs. `source: 'repair'`
-// logs the batch as a repair rather than a UI edit; it is still undoable, which is the
-// whole point of routing the §199A fix through the ordinary inputs PUT instead of a
-// bespoke endpoint that would need its own logging.
-export async function putTaxInputsForRepair(
-  year: number,
-  body: TaxInputsUpdate,
-): Promise<{ data: TaxInputsOut; batchId: string | null }> {
-  const { data, headers } = await apiWithHeaders<TaxInputsOut>(`/taxes/years/${year}/inputs`, {
-    method: 'PUT',
+// What the nine derived totals WOULD be if this body were saved (2026-09-11 spec §1.6). The
+// body is the PUT's own shape, so the form can hand over its current cells verbatim; the
+// server overlays them on the stored rows in memory and runs the same assembly the GET does.
+// No write, no ChangeBatch, no change-log entry — which is why this is a POST to a sub-path
+// rather than a flag on the PUT. The house rule holds: the browser never recomputes an engine
+// figure, it asks for one.
+export function previewTaxInputs(year: number, body: TaxInputsUpdate): Promise<DerivedPreviewOut> {
+  return api<DerivedPreviewOut>(`/taxes/years/${year}/inputs/preview`, {
+    method: 'POST',
     body: JSON.stringify(body),
-    headers: { 'X-Change-Source': 'repair' },
   })
-  return { data, batchId: headers.get('x-change-batch') }
 }
 
 // The tables of ONE filing status. The status is REQUIRED because the server's own default

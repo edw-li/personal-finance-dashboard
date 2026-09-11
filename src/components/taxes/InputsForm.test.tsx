@@ -1,16 +1,19 @@
+import { StrictMode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
-import type { TaxInputsOut } from '../../types/api'
+import type { DerivedPreviewOut, TaxInputsOut } from '../../types/api'
 import InputsForm from './InputsForm'
 
-// Only the writer is stubbed — JURISDICTIONS and the readers stay real so a rename in
+// Only the two writes are stubbed — JURISDICTIONS and the readers stay real so a rename in
 // src/api/taxes.ts breaks this file rather than silently passing against a hand-written mock.
+// The preview is a POST that writes nothing, but it is still a call this form makes.
 vi.mock('../../api/taxes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/taxes')>()),
   putTaxInputs: vi.fn(),
+  previewTaxInputs: vi.fn(),
 }))
-import { putTaxInputs } from '../../api/taxes'
+import { previewTaxInputs, putTaxInputs } from '../../api/taxes'
 
 // A fresh object per call: two tests mutate their copy into the PUT echo. Three of the four
 // keys are per-person (the real definitions flag salary, the W-2 family, 401k, HSA and
@@ -27,15 +30,21 @@ function inputsFixture(): TaxInputsOut {
         section: 'ordinary_income',
         items: [
           {
+            // The salary chip is the paycheck profile's offer (2026-09-11 spec §1.7 keeps
+            // it): an ENTERED key may still be suggested, which is what separates a chip
+            // from the computed line below it.
             key: 'annual_salary', label: 'Annual Salary', sort_order: 10,
-            is_derived: false, value: '200000.0000', suggested: null,
-            unit: 'money', suggestion_source: null,
+            is_derived: false, value: '200000.0000', suggested: '210000.0000',
+            unit: 'money', suggestion_source: null, formula: null,
             is_per_person: true, person_id: 1,
           },
           {
+            // A COMPUTED line (spec §1.6): the server sends the figure it derived from THIS
+            // column's components plus the caption for the formula, and never a suggestion —
+            // there is nothing to apply, because there is nothing to type.
             key: 'gross_paycheck', label: 'Gross Paycheck', sort_order: 20,
-            is_derived: true, value: '7000.0000', suggested: '8333.3333',
-            unit: 'money', suggestion_source: null,
+            is_derived: true, value: '8333.3333', suggested: null,
+            unit: 'money', suggestion_source: null, formula: 'Annual Salary ÷ 24',
             is_per_person: true, person_id: 1,
           },
         ],
@@ -46,7 +55,7 @@ function inputsFixture(): TaxInputsOut {
           {
             key: 'hsa_contributions', label: 'HSA Contributions', sort_order: 20,
             is_derived: false, value: '4150.0000', suggested: null,
-            unit: 'money', suggestion_source: null,
+            unit: 'money', suggestion_source: null, formula: null,
             is_per_person: true, person_id: 1,
           },
         ],
@@ -57,7 +66,7 @@ function inputsFixture(): TaxInputsOut {
           {
             key: 'qualified_dividends', label: 'Qualified Dividends', sort_order: 40,
             is_derived: false, value: null, suggested: null,
-            unit: 'money', suggestion_source: null,
+            unit: 'money', suggestion_source: null, formula: null,
             is_per_person: false, person_id: null,
           },
         ],
@@ -70,9 +79,9 @@ function inputsFixture(): TaxInputsOut {
 // with no row yet must render BLANK, never "0" — blank is what unsets an input.
 const PARTNER_ROWS: Record<string, { value: string | null; suggested: string | null }> = {
   annual_salary: { value: '90000.0000', suggested: null },
-  // The server derives suggestions PER COLUMN, so the partner has one of their own. Only the
-  // primary's is offered (design §5.3), which is what the chip test below pins.
-  gross_paycheck: { value: null, suggested: '7500.0000' },
+  // A per-person total is computed from THAT person's components (spec §1.3), so a
+  // partner with nothing entered gets a NULL figure rather than a zero nobody typed.
+  gross_paycheck: { value: null, suggested: null },
   hsa_contributions: { value: null, suggested: null },
 }
 
@@ -131,13 +140,13 @@ function unitInputs(): TaxInputsOut {
         items: [
           {
             key: 'pay_periods', label: 'Pay periods (checks received so far this year)',
-            sort_order: 30, is_derived: false, unit: 'count', suggestion_source: null,
+            sort_order: 30, is_derived: false, unit: 'count', suggestion_source: null, formula: null,
             value: '20.0000', suggested: null, is_per_person: true, person_id: 1,
           },
           {
             key: 'unq_div_state_exempt_pct',
             label: 'Treasury-fund dividends — state-exempt share (%)',
-            sort_order: 170, is_derived: false, unit: 'percent', suggestion_source: null,
+            sort_order: 170, is_derived: false, unit: 'percent', suggestion_source: null, formula: null,
             value: '0.9753', suggested: null, is_per_person: false, person_id: null,
           },
         ],
@@ -148,14 +157,46 @@ function unitInputs(): TaxInputsOut {
 
 const saveButton = () => screen.getByRole('button', { name: /save inputs/i }) as HTMLButtonElement
 const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement
+// A computed line is an <output>, not an input, and names itself "(computed)" so that
+// getByLabelText('Gross Paycheck') finds NOTHING - there is no box by that name any more.
+const computed = (label: string) => screen.getByLabelText(label + ' (computed)')
+
+// What the server answers a preview with: the nine derived totals and nothing else, because
+// every other cell on the payload is what the caller just sent it.
+function previewOut(grossPaycheck: string | null): DerivedPreviewOut {
+  return {
+    year: 2024,
+    filing_status: 'single',
+    derived: [{ key: 'gross_paycheck', person_id: 1, value: grossPaycheck }],
+  }
+}
+
+// A promise this test resolves by hand, so a response can be made to land AFTER a later one.
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((r) => {
+    resolve = r
+  })
+  return { promise, resolve }
+}
+
+// RTL's waitFor only knows how to drive JEST's fake clock, so it would hang on vitest's:
+// these tests step the timers themselves. advanceTimersByTimeAsync drains the microtask
+// queue between timers, which is what lets a stubbed response land inside the same act().
+const settle = (ms = 0) =>
+  act(async () => {
+    await vi.advanceTimersByTimeAsync(ms)
+  })
 
 beforeEach(() => {
   vi.mocked(putTaxInputs).mockResolvedValue(inputsFixture())
+  vi.mocked(previewTaxInputs).mockResolvedValue(previewOut('8333.3333'))
 })
 
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  vi.useRealTimers()
 })
 
 describe('InputsForm', () => {
@@ -166,7 +207,8 @@ describe('InputsForm', () => {
     expect(headings).toEqual(['Ordinary income', 'Deductions', 'Capital gains'])
     // A BLURRED box reads AmountInput's formatted echo (spec §3.3), which is display only.
     expect(field('Annual Salary').value).toBe('$200,000.00')
-    expect(field('Gross Paycheck').value).toBe('$7,000.00')
+    // The derived line is the server's own total, shown rather than typed.
+    expect(computed('Gross Paycheck').textContent).toBe('$8,333.33')
     // The STATE underneath is still the server's 4dp string, which a real focus reveals —
     // and blurring it back writes nothing, because canonicalizing a server seed is a no-op
     // (utils/amount's idempotence guarantee) and the Save below is still disabled.
@@ -207,18 +249,18 @@ describe('InputsForm', () => {
 
   it('Apply fills the input locally without saving', async () => {
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Apply suggestion for Gross Paycheck' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply suggestion for Annual Salary' }))
 
     // Blurred, so the applied value shows as its echo; the PUT body below is what pins the
     // full 4dp suggestion reaching the wire intact.
-    expect(field('Gross Paycheck').value).toBe('$8,333.33')
+    expect(field('Annual Salary').value).toBe('$210,000.00')
     // Advisory, never auto-applied: the save stays explicit (suggestions contract).
     expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
 
     fireEvent.click(saveButton())
     await waitFor(() =>
       expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2024, {
-        values: { gross_paycheck: '8333.3333' },
+        values: { annual_salary: '210000.0000' },
       }),
     )
   })
@@ -267,15 +309,15 @@ describe('InputsForm', () => {
     const carried = inputsFixture()
     carried.sections[1].items.push({
       key: 'standard_deduction', label: 'Standard Deduction', sort_order: 80,
-      is_derived: false, unit: 'money', value: null,
+      is_derived: false, unit: 'money', value: null, formula: null,
       suggested: '14600.0000', suggestion_source: "last year's",
       is_per_person: false, person_id: null,
     })
     render(<InputsForm inputs={carried} onSaved={vi.fn()} />)
 
     expect(screen.getByText("last year's $14,600.00")).toBeTruthy()
-    // A sheet formula keeps the default word.
-    expect(screen.getByText('suggested $8,333.33')).toBeTruthy()
+    // A profile offer keeps the default word.
+    expect(screen.getByText('suggested $210,000.00')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply suggestion for Standard Deduction' }))
     fireEvent.click(saveButton())
@@ -331,16 +373,278 @@ describe('InputsForm', () => {
     )
   })
 
-  it('walks the column on Enter, across the section boundaries', () => {
+  it('walks the column on Enter, across the sections and past the computed rows', () => {
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
     act(() => field('Annual Salary').focus())
 
     // ONE scope for the whole form, so the walk follows cell order rather than section
-    // structure: the second Enter steps out of Ordinary income and into Deductions.
+    // structure: this Enter steps out of Ordinary income and into Deductions. Gross Paycheck
+    // sits BETWEEN the two in render order and is COMPUTED - nothing to type there, so the
+    // walk lands on the next editable cell rather than stalling on a figure.
     fireEvent.keyDown(field('Annual Salary'), { key: 'Enter' })
-    expect(document.activeElement).toBe(field('Gross Paycheck'))
-    fireEvent.keyDown(field('Gross Paycheck'), { key: 'Enter' })
     expect(document.activeElement).toBe(field('HSA Contributions'))
+    fireEvent.keyDown(field('HSA Contributions'), { key: 'Enter' })
+    expect(document.activeElement).toBe(field('Qualified Dividends'))
+  })
+
+  // --- computed totals (2026-09-11 spec §1.7) ---
+
+  it('renders a derived row as a read-only figure with its formula and no chip', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    // An <output>, not an input: the house rule is that the browser never recomputes an
+    // engine figure, so the only thing a derived row can do is SHOW what the server sent.
+    // Reached by the two handles the form actually gives it — the cell id a paste resolves
+    // against, and the accessible name a person reads.
+    const figure = document.getElementById('tax-input-gross_paycheck')
+    expect(figure?.tagName).toBe('OUTPUT')
+    expect(figure?.textContent).toBe('$8,333.33')
+    expect(computed('Gross Paycheck')).toBe(figure)
+    // The formula is the row's whole explanation, so it rides both the third track and the
+    // tooltip - the cell says where its number came from and where to go to change it.
+    expect(screen.getByText('Annual Salary ÷ 24')).toBeTruthy()
+    expect(figure?.getAttribute('title')).toBe('Annual Salary ÷ 24 — edit the components')
+    // No chip (nothing to apply) and no box by that name (nothing to type).
+    expect(
+      screen.queryByRole('button', { name: 'Apply suggestion for Gross Paycheck' }),
+    ).toBeNull()
+    expect(screen.queryByLabelText('Gross Paycheck')).toBeNull()
+    // The badge stays: it is what names the row's kind in the label track.
+    expect(screen.getByText('derived')).toBeTruthy()
+  })
+
+  it('renders a muted dash for a computed line with no components entered', () => {
+    const blank = inputsFixture()
+    blank.sections[0].items[1].value = null
+    render(<InputsForm inputs={blank} onSaved={vi.fn()} />)
+
+    // Absent is not zero. With no component stored the server sends null, and a "$0.00"
+    // here would be the form asserting a total nobody's numbers add up to.
+    expect(computed('Gross Paycheck').textContent).toBe('—')
+  })
+
+  it('never puts a computed cell in the PUT body', async () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.change(field('Annual Salary'), { target: { value: '240000' } })
+
+    // ONE change to save: the total that follows from it is the server's to rebuild, so it
+    // is not a cell the user changed and not a key this form may write (the PUT 422s it).
+    expect(screen.getByText('1 change to save')).toBeTruthy()
+    fireEvent.click(saveButton())
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2024, {
+        values: { annual_salary: '240000' },
+      }),
+    )
+  })
+
+  // --- live preview (2026-09-11 spec §1.7) ---
+
+  it('previews computed totals 300 ms after the last keystroke, with the whole form as the body', async () => {
+    vi.useFakeTimers()
+    vi.mocked(previewTaxInputs).mockResolvedValue(previewOut('9000.0000'))
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    // Two keystrokes inside the window are ONE question: the answer to a half-typed number
+    // is noise, and a request per character would be noise on the wire too.
+    fireEvent.change(field('Annual Salary'), { target: { value: '216' } })
+    await settle(200)
+    fireEvent.change(field('Annual Salary'), { target: { value: '216000' } })
+    await settle(300)
+
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+    // The WHOLE form, not the save's diff: the server overlays this body on the stored rows,
+    // so a cell left out would be read at its stored value rather than the one on screen.
+    // A blank cell rides as null, exactly as it would in a save.
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledWith(2024, {
+      values: {
+        annual_salary: '216000',
+        hsa_contributions: '4150.0000',
+        qualified_dividends: null,
+      },
+    })
+    // The figure is the SERVER's answer. The browser owns no formula, so nothing here could
+    // have produced 9,000 on its own.
+    expect(computed('Gross Paycheck').textContent).toBe('$9,000.00')
+  })
+
+  it('asks nothing on mount, even with StrictMode running every effect twice', async () => {
+    vi.useFakeTimers()
+    render(
+      <StrictMode>
+        <InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />
+      </StrictMode>,
+    )
+    await settle(400)
+
+    // The payload's figures already ARE the server's answer for the form as rendered, so
+    // opening the year costs no preview at all. StrictMode mounts every effect twice in
+    // dev, which is why the guard compares the values map the server handed us rather than
+    // spending a one-shot flag the second pass would find already spent.
+    expect(vi.mocked(previewTaxInputs)).not.toHaveBeenCalled()
+  })
+
+  it('drops a stale preview response', async () => {
+    vi.useFakeTimers()
+    const first = deferred<DerivedPreviewOut>()
+    const second = deferred<DerivedPreviewOut>()
+    vi.mocked(previewTaxInputs)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    fireEvent.change(field('Annual Salary'), { target: { value: '216000' } })
+    await settle(400)
+    fireEvent.change(field('Annual Salary'), { target: { value: '240000' } })
+    await settle(400)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(2)
+
+    // The answers come back out of order, which a slow first request makes ordinary. The
+    // NEWEST question owns the screen: an older answer describes a form that no longer
+    // exists, and showing it would flip the total back under the cursor.
+    second.resolve(previewOut('10000.0000'))
+    await settle()
+    first.resolve(previewOut('9000.0000'))
+    await settle()
+
+    expect(computed('Gross Paycheck').textContent).toBe('$10,000.00')
+  })
+
+  it('keeps the last figure when a preview fails', async () => {
+    vi.useFakeTimers()
+    vi.mocked(previewTaxInputs).mockRejectedValue(new ApiError('upstream is down', 500))
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    fireEvent.change(field('Annual Salary'), { target: { value: '216000' } })
+    await settle(300)
+
+    // A preview is a courtesy: the figure keeps the last thing the server said, and nothing
+    // is announced. The SAVE path is what reports a real failure — a banner on every dropped
+    // keystroke of a flaky connection would say nothing the user can act on.
+    expect(computed('Gross Paycheck').textContent).toBe('$8,333.33')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('the save echo wins over a pending preview', async () => {
+    vi.useFakeTimers()
+    const pending = deferred<DerivedPreviewOut>()
+    vi.mocked(previewTaxInputs).mockReturnValue(pending.promise)
+    const echo = inputsFixture()
+    echo.sections[0].items[0].value = '264000.0000'
+    echo.sections[0].items[1].value = '11000.0000'
+    vi.mocked(putTaxInputs).mockResolvedValue(echo)
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    fireEvent.change(field('Annual Salary'), { target: { value: '264000' } })
+    await settle(300)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(saveButton())
+    await settle()
+    // The echo is the stored truth, not a what-if: it outranks any preview, in flight or not.
+    expect(computed('Gross Paycheck').textContent).toBe('$11,000.00')
+
+    pending.resolve(previewOut('9000.0000'))
+    await settle()
+    expect(computed('Gross Paycheck').textContent).toBe('$11,000.00')
+    // And the echo does not ask the same question again: its figures ARE the server's.
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+  })
+
+  it('previews a married year as two columns of rows, and answers both', async () => {
+    vi.useFakeTimers()
+    vi.mocked(previewTaxInputs).mockResolvedValue({
+      year: 2024,
+      filing_status: 'married_joint',
+      derived: [
+        { key: 'gross_paycheck', person_id: 1, value: '8333.3333' },
+        { key: 'gross_paycheck', person_id: 4, value: '3958.3333' },
+      ],
+    })
+    render(<InputsForm inputs={marriedInputs()} onSaved={vi.fn()} />)
+
+    fireEvent.change(field('Annual Salary — Sam'), { target: { value: '95000' } })
+    await settle(300)
+
+    // The preview body is the SAVE's shape, for every editable cell: person cells name their
+    // row with the roster's own id — non-contiguous on purpose, so nothing can be working by
+    // array position — and the household cell rides `values` unqualified, blank as null. A
+    // computed cell is in neither half: it has no stored row, and the server 422s a write.
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledWith(2024, {
+      values: { qualified_dividends: null },
+      rows: [
+        { key: 'annual_salary', person_id: 1, value: '200000.0000' },
+        { key: 'annual_salary', person_id: 4, value: '95000' },
+        { key: 'hsa_contributions', person_id: 1, value: '4150.0000' },
+        { key: 'hsa_contributions', person_id: 4, value: null },
+      ],
+    })
+    // One answer, two columns: each figure lands on the cell its own person_id addresses,
+    // by the same ownership rule the GET's items are read with.
+    expect(computed('Gross Paycheck — Alex').textContent).toBe('$8,333.33')
+    expect(computed('Gross Paycheck — Sam').textContent).toBe('$3,958.33')
+  })
+
+  it('leaves a half-typed cell out of the preview body rather than freezing the figures', async () => {
+    vi.useFakeTimers()
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    fireEvent.change(field('HSA Contributions'), { target: { value: 'abc' } })
+    await settle(300)
+
+    // Text that is not an entry is OMITTED, not sent: the server would 422 the whole call
+    // over one half-typed number, and every figure on screen would freeze until it was
+    // finished. The rest of the form still rides — a cell left out of the overlay is read at
+    // its stored value, which for this one is exactly what the user has not changed yet.
+    const [, body] = vi.mocked(previewTaxInputs).mock.calls[0]
+    expect(body).toEqual({
+      values: { annual_salary: '200000.0000', qualified_dividends: null },
+    })
+    expect(body.values).not.toHaveProperty('hsa_contributions')
+  })
+
+  it('asks nothing more when a blur only canonicalizes text it already sent', async () => {
+    vi.useFakeTimers()
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    // Typed with a sheet's grouping and a '$', both of which are valid entry (spec §3.1).
+    fireEvent.change(field('Annual Salary'), { target: { value: '$216,000' } })
+    await settle(300)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledWith(2024, {
+      values: {
+        annual_salary: '216000',
+        hsa_contributions: '4150.0000',
+        qualified_dividends: null,
+      },
+    })
+
+    // The blur rewrites the STATE '$216,000' → '216000' (AmountInput's commit). The wire was
+    // already '216000', so this is not a new question — the debounce is keyed on the body's
+    // text, not on the identity of the values map, and a canonicalization costs no request.
+    act(() => field('Annual Salary').focus())
+    act(() => field('Annual Salary').blur())
+    await settle(400)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+  })
+
+  it('an applied suggestion asks for the totals like any other edit', async () => {
+    vi.useFakeTimers()
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply suggestion for Annual Salary' }))
+    await settle(300)
+
+    // Apply writes the cell exactly as a keystroke does, so the computed line follows it:
+    // ONE preview, carrying the applied figure in wire units.
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenCalledWith(2024, {
+      values: {
+        annual_salary: '210000.0000',
+        hsa_contributions: '4150.0000',
+        qualified_dividends: null,
+      },
+    })
   })
 
   it('sends null for a blanked value', async () => {
@@ -359,16 +663,16 @@ describe('InputsForm', () => {
     // A suggestion is an unbounded engine output, so applying one can exceed the input
     // bound — the inline note is the only thing standing between that and a silent failure.
     vi.mocked(putTaxInputs).mockRejectedValue(
-      new ApiError('values.gross_paycheck must be at most 10000000000', 422),
+      new ApiError('values.annual_salary must be at most 10000000000', 422),
     )
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Apply suggestion for Gross Paycheck' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply suggestion for Annual Salary' }))
     fireEvent.click(saveButton())
 
     const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toContain('values.gross_paycheck must be at most 10000000000')
+    expect(alert.textContent).toContain('values.annual_salary must be at most 10000000000')
     // The edit survives the rejection: re-enabled, still holding the applied value.
-    expect(field('Gross Paycheck').value).toBe('$8,333.33')
+    expect(field('Annual Salary').value).toBe('$210,000.00')
     await waitFor(() => expect(saveButton().disabled).toBe(false))
   })
 
@@ -389,15 +693,15 @@ describe('InputsForm', () => {
   it('keeps a squeezed label and a suggested amount readable on hover', () => {
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
     // The label track is wide, but a long key can still ellipsize — the title recovers it.
-    expect(field('Gross Paycheck').labels?.[0].getAttribute('title')).toBe('Gross Paycheck')
+    expect(field('Annual Salary').labels?.[0].getAttribute('title')).toBe('Annual Salary')
     // The chip wraps rather than clips, and the amount rides the button's tooltip too, so
     // "Apply" is never a button whose value the user cannot read.
     expect(
       screen
-        .getByRole('button', { name: 'Apply suggestion for Gross Paycheck' })
+        .getByRole('button', { name: 'Apply suggestion for Annual Salary' })
         .getAttribute('title'),
-    ).toBe('Apply $8,333.33')
-    expect(screen.getByTitle('$8,333.33').textContent).toBe('suggested $8,333.33')
+    ).toBe('Apply $210,000.00')
+    expect(screen.getByTitle('$210,000.00').textContent).toBe('suggested $210,000.00')
   })
 
   it('blocks a non-numeric entry before calling the API', () => {
@@ -421,18 +725,53 @@ describe('InputsForm', () => {
   it('column paste fills down the flattened sections from the pasted-into cell', () => {
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
     fireEvent.paste(field('Annual Salary'), {
-      clipboardData: { getData: () => '200000\n8333.33' },
+      clipboardData: { getData: () => '200000\n8333.33\n4300' },
     })
 
     // Positional order is the RENDERED one — the fill walks out of Ordinary income into the
-    // next section exactly as Enter does. Blurred, so both read as their echo (nothing is
-    // focused in jsdom).
+    // next section exactly as Enter does, past the computed line between them. Blurred, so
+    // both read as their echo (nothing is focused in jsdom).
     expect(field('Annual Salary').value).toBe('$200,000.00')
-    expect(field('Gross Paycheck').value).toBe('$8,333.33')
-    expect(screen.getByText(/pasted 2 of 4 values/i)).toBeDefined()
+    expect(field('HSA Contributions').value).toBe('$4,300.00')
+    expect(screen.getByText(/pasted 2 of 3 values/i)).toBeDefined()
     // Pasted text lands in state exactly like typed text, so it counts into the changed-key
     // diff: the save is armed with no further interaction.
     expect(saveButton().disabled).toBe(false)
+  })
+
+  it('column paste skips computed slots and keeps alignment', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.paste(field('Annual Salary'), {
+      clipboardData: { getData: () => '200000\n99999\n4300' },
+    })
+
+    // A copied sheet column carries the grey cells too. The computed slot CONSUMES its value
+    // and throws it away: shifting the rest up instead would silently move every number
+    // below it onto the wrong row, which is the one paste bug nobody would notice.
+    expect(field('Annual Salary').value).toBe('$200,000.00')
+    expect(field('HSA Contributions').value).toBe('$4,300.00')
+    // Untouched: the figure is still the server's, not the 99,999 that landed on it.
+    expect(computed('Gross Paycheck').textContent).toBe('$8,333.33')
+    // Named rather than dropped silently — two of three editable cells were filled, and
+    // the third value went somewhere the note can account for.
+    expect(
+      screen.getByText(/pasted 2 of 3 values · 1 computed cell skipped/i),
+    ).toBeDefined()
+  })
+
+  it('keyed paste ignores a computed label', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.paste(field('Annual Salary'), {
+      clipboardData: { getData: () => 'Gross Paycheck\t9999\nHSA Contributions\t4300' },
+    })
+
+    // Named or positioned, a computed line is never filled. It is counted as SKIPPED rather
+    // than unmatched: the label was perfectly good, it just names a cell nobody may write.
+    expect(computed('Gross Paycheck').textContent).toBe('$8,333.33')
+    expect(field('HSA Contributions').value).toBe('$4,300.00')
+    expect(
+      screen.getByText(/pasted 1 of 3 values · 1 computed cell skipped/i),
+    ).toBeDefined()
   })
 
   it('reports values that run off the end instead of dropping them silently', () => {
@@ -444,7 +783,7 @@ describe('InputsForm', () => {
     // Started at item 3 of 4: one lands, two have nowhere to go.
     expect(field('HSA Contributions').value).toBe('$1.00')
     expect(field('Qualified Dividends').value).toBe('$2.00')
-    expect(screen.getByText(/pasted 2 of 4 values · 1 value didn't fit/i)).toBeDefined()
+    expect(screen.getByText(/pasted 2 of 3 values · 1 value didn't fit/i)).toBeDefined()
   })
 
   it('keyed paste matches item labels regardless of where it was pasted', () => {
@@ -457,7 +796,7 @@ describe('InputsForm', () => {
     expect(field('HSA Contributions').value).toBe('$4,300.00')
     expect(field('Annual Salary').value).toBe('$200,000.00')
     // A miss is named, never guessed at: "Not A Line" fills nothing.
-    expect(screen.getByText(/pasted 1 of 4 values · 1 unmatched: Not A Line/i)).toBeDefined()
+    expect(screen.getByText(/pasted 1 of 3 values · 1 unmatched: Not A Line/i)).toBeDefined()
   })
 
   it('skips an empty pasted value rather than blanking the field', () => {
@@ -473,7 +812,7 @@ describe('InputsForm', () => {
     // empty cell leaves the stored value alone and says so.
     expect(field('Annual Salary').value).toBe('$200,000.00')
     expect(field('HSA Contributions').value).toBe('$4,300.00')
-    expect(screen.getByText(/pasted 1 of 4 values · 1 blank skipped/i)).toBeDefined()
+    expect(screen.getByText(/pasted 1 of 3 values · 1 blank skipped/i)).toBeDefined()
   })
 
   it('leaves a single-cell paste to the browser', () => {
@@ -497,7 +836,11 @@ describe('InputsForm', () => {
 
     // The zero-diff pin. Every other test in this file is the rest of it: a single-status
     // year must render, request and PUT exactly what it did before columns existed.
-    expect(container.querySelectorAll('.tax-input-row .field-input')).toHaveLength(4)
+    expect(container.querySelectorAll('.tax-input-row .field-input')).toHaveLength(3)
+    // The fourth line is the computed one. It keeps its slot in the input track, so the grid
+    // does not jump a pixel between an editable row and a derived one.
+    expect(container.querySelectorAll('.tax-input-row .tax-computed')).toHaveLength(1)
+    expect(document.getElementById('tax-input-gross_paycheck')?.tagName).toBe('OUTPUT')
     expect(document.getElementById('tax-input-annual_salary')).not.toBeNull()
     expect(document.getElementById('tax-input-qualified_dividends')).not.toBeNull()
     expect(container.querySelector('.tax-input-grid.is-split')).toBeNull()
@@ -513,7 +856,7 @@ describe('InputsForm', () => {
     expect(field('Annual Salary — Alex').value).toBe('$200,000.00')
     expect(field('Annual Salary — Sam').value).toBe('$90,000.00')
     // A person with no row yet is BLANK, never "0" — blank is what unsets an input.
-    expect(field('Gross Paycheck — Sam').value).toBe('')
+    expect(field('HSA Contributions — Sam').value).toBe('')
     // A household key keeps ONE box, spanning both person tracks rather than leaving a hole.
     expect(screen.getByLabelText('Qualified Dividends').className).toContain('tax-input-wide')
     expect(screen.queryByLabelText('Qualified Dividends — Alex')).toBeNull()
@@ -555,16 +898,19 @@ describe('InputsForm', () => {
     )
   })
 
-  it('offers the derived suggestion once, over the primary person’s column', () => {
+  it('renders one computed figure per person column on a married year', () => {
     render(<InputsForm inputs={marriedInputs()} onSaved={vi.fn()} />)
-    // Derived suggestions are the primary person's (design §5.3) — one chip per row, not two,
-    // even though the payload carries the partner's own suggestion too.
-    const applies = screen.getAllByRole('button', { name: 'Apply suggestion for Gross Paycheck' })
-    expect(applies).toHaveLength(1)
 
-    fireEvent.click(applies[0])
-    expect(field('Gross Paycheck — Alex').value).toBe('$8,333.33')
-    expect(field('Gross Paycheck — Sam').value).toBe('')
+    // A per-person total is computed from THAT person's components (spec §1.3), so each
+    // column carries its own figure rather than one shared number over the primary's box.
+    expect(computed('Gross Paycheck — Alex').textContent).toBe('$8,333.33')
+    // Sam has no components entered, so Sam's total is a dash, not a zero.
+    expect(computed('Gross Paycheck — Sam').textContent).toBe('—')
+    // One caption for the row, not one per column: the formula is the same either side.
+    expect(screen.getAllByText('Annual Salary ÷ 24')).toHaveLength(1)
+    expect(
+      screen.queryByRole('button', { name: 'Apply suggestion for Gross Paycheck' }),
+    ).toBeNull()
   })
 
   it('keeps one column when the roster has fewer than two people, and says where to fix it', () => {
@@ -593,16 +939,18 @@ describe('InputsForm', () => {
       clipboardData: { getData: () => '95000\n4000\n2000' },
     })
 
-    // A sheet column is ONE person's numbers, so the fill walks Sam's three per-person lines
-    // in render order — across the section boundary — and stops there.
+    // A sheet column is ONE person's numbers, so the fill walks Sam's per-person lines in
+    // render order — across the section boundary — and stops there.
     expect(field('Annual Salary — Sam').value).toBe('$95,000.00')
-    expect(field('Gross Paycheck — Sam').value).toBe('$4,000.00')
     expect(field('HSA Contributions — Sam').value).toBe('$2,000.00')
     // Alex's column and the shared line are untouched.
     expect(field('Annual Salary — Alex').value).toBe('$200,000.00')
     expect(field('Qualified Dividends').value).toBe('')
-    // The denominator is the COLUMN, not the whole form: three cells were reachable.
-    expect(screen.getByText(/pasted 3 of 3 values/i)).toBeDefined()
+    // The denominator is the COLUMN, not the whole form: two editable cells were reachable,
+    // and the third pasted value landed on Sam's computed line and stopped there.
+    expect(
+      screen.getByText(/pasted 2 of 2 values · 1 computed cell skipped/i),
+    ).toBeDefined()
   })
 
   it('keyed paste fills the pasted-into column and the shared lines, never the other person', () => {
@@ -618,7 +966,7 @@ describe('InputsForm', () => {
     expect(field('Qualified Dividends').value).toBe('$150.00')
     // And never the other person's.
     expect(field('HSA Contributions — Alex').value).toBe('$4,150.00')
-    // Sam's three lines plus the one shared line: four cells a keyed block may reach here.
-    expect(screen.getByText(/pasted 2 of 4 values · 1 unmatched: Not A Line/i)).toBeDefined()
+    // Sam's two editable lines plus the one shared line: three cells a keyed block may reach.
+    expect(screen.getByText(/pasted 2 of 3 values · 1 unmatched: Not A Line/i)).toBeDefined()
   })
 })

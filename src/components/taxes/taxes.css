@@ -106,8 +106,29 @@
   grid-template-columns: minmax(0, 1fr) 120px 120px 170px;
 }
 
-.tax-input-grid.is-split .field-input.tax-input-wide {
+.tax-input-grid.is-split .field-input.tax-input-wide,
+.tax-input-grid.is-split .tax-computed.tax-input-wide {
   grid-column: span 2;
+}
+
+/* A computed total (2026-09-11 spec §1.7) sits in the input's track and must fill exactly
+   the input's box, or the grid would step sideways and half a line up between an editable
+   row and a derived one. Same metrics as .field-input in panels.css — width, padding, the
+   mono face, the size, the right alignment — with a TRANSPARENT border rather than none, so
+   the two boxes are the same height to the pixel. Muted and borderless-looking is the whole
+   message: there is nothing here to click into, because there is nothing to type. */
+.tax-computed {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Names, not data: the row is aria-hidden and must not read like a line item. */
