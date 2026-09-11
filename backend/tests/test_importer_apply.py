@@ -1750,3 +1750,48 @@ async def test_importer_never_writes_calendar_feed_tokens(db):
     }
     assert after == before
     assert all("calendar_feed_tokens" not in sheet.entities for sheet in report.sheets.values())
+
+
+async def test_importer_sweep_leaves_person_rows_alone(db):
+    """A per-worker table that carries a PERSON is dashboard data the workbook has never
+    heard of (2026-09-11 spec §2.3). It shares its (year, jurisdiction, index) with the
+    default row the sheet does own, so a query that does not filter `person_id IS NULL`
+    would diff the sheet's rate against the wrong row and rewrite it."""
+    from app.importer.apply import apply_taxes
+    from app.importer.parsers import parse_taxes
+    from app.models import Person, TaxBracket
+
+    me = Person(name="Me", is_primary=True)
+    db.add(me)
+    await db.commit()
+
+    report = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report)
+    await db.commit()
+    assert report.entities["tax_brackets"].creates == 14
+
+    sheet_row = ((await db.execute(select(TaxBracket).order_by(TaxBracket.id))).scalars().all())[0]
+    db.add(
+        TaxBracket(
+            year=sheet_row.year,
+            jurisdiction=sheet_row.jurisdiction,
+            filing_status="single",
+            person_id=me.id,
+            bracket_index=sheet_row.bracket_index,
+            rate=sheet_row.rate + Decimal("0.0100"),
+            threshold=sheet_row.threshold,
+        )
+    )
+    await db.commit()
+
+    report2 = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report2)
+    await db.commit()
+
+    assert report2.entities["tax_brackets"].skips == 14
+    assert report2.entities["tax_brackets"].updates == 0
+    assert report2.entities["tax_brackets"].deletes == 0
+    survivor = (
+        await db.execute(select(TaxBracket).where(TaxBracket.person_id == me.id))
+    ).scalar_one()
+    assert survivor.rate == sheet_row.rate + Decimal("0.0100")

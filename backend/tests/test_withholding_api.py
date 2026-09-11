@@ -1339,3 +1339,43 @@ async def test_single_year_carries_the_source_flag_as_entered(
     body = await get_withholding(auth_client)
     assert body["partner_source"] == "entered"
     assert body["partner_salary"] is None
+
+
+async def test_withholding_fica_legs_walk_the_primarys_own_tables(
+    auth_client, db, world, frozen_today
+):
+    """The bonus/vest marginal-FICA legs are the PRIMARY person's, so they walk the primary
+    person's own per-worker tables when they have any (2026-09-11 spec §2.3).
+
+    The year's default Disability table steepens above 130000 — an employer Voluntary Plan
+    shape nobody else's payroll uses — while the primary is on a flat statutory 1.3%. The
+    vest leg's marginal SDI is theirs: 650 on 50000 of vest income, not the default's 1720.
+    """
+    primary = (await db.execute(select(Person).where(Person.is_primary))).scalar_one()
+    db.add(
+        TaxBracket(
+            year=YEAR,
+            jurisdiction="disability",
+            filing_status="single",
+            bracket_index=2,
+            rate=Decimal("0.0500"),
+            threshold=Decimal("130000.00"),
+        )
+    )
+    db.add(
+        TaxBracket(
+            year=YEAR,
+            jurisdiction="disability",
+            filing_status="single",
+            person_id=primary.id,
+            bracket_index=1,
+            rate=Decimal("0.0130"),
+            threshold=Decimal("0.00"),
+        )
+    )
+    await db.commit()
+
+    body = await get_withholding(auth_client)
+    # 725 medicare + 3100 ss, unchanged, plus 50000 x .013 of SDI over the 110000 of salary
+    # gross — where the default table would have charged 20000 x .011 + 30000 x .05.
+    assert body["vest"]["fica_ytd"] == "4475.00"
