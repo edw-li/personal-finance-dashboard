@@ -221,6 +221,50 @@
   font-size: 0.8rem;
 }
 
+/* A per-worker block that carries a strip keeps its own group tight: the person cards below
+   belong to IT, not to the next jurisdiction, so the air goes under the strip instead. */
+.bracket-block.has-person-strip {
+  margin-bottom: 0.55rem;
+}
+
+/* The per-person strip: one card per earner under a per-worker default table. Indented,
+   with a rule down the side, because these tables are exceptions TO the table above them —
+   at the same left edge they would read as two more defaults. */
+.bracket-person-strip {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0 0 1.25rem 0.2rem;
+  padding-left: 0.9rem;
+  border-left: 2px solid var(--border);
+}
+
+.bracket-person {
+  display: grid;
+  /* justify-items, not a width: the add/discard card is one button wide and must not
+     stretch across the card the way a table does. */
+  justify-items: start;
+  gap: 0.35rem;
+}
+
+.bracket-person-head {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The strip's own buttons wear the compact size the bracket tables' do. */
+.bracket-person .button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+}
+
+.bracket-person-strip > .drill-hint {
+  margin: 0;
+  max-width: 62ch;
+}
+
 /* --- what-if panel --- */
 
 /* One leg per row, in TaxesPage.css's .new-year-form row treatment — copied by design, not

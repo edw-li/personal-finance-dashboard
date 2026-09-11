@@ -27,11 +27,16 @@ function bracketsFixture(): TaxBracketsOut {
       state: [{ bracket_index: 1, rate: '0.0930', threshold: '0.00' }],
       medicare: [{ bracket_index: 1, rate: '0.0145', threshold: '0.00' }],
       social_security: [],
-      disability: [],
+      // A default SDI table, because the per-person strip SEEDS its drafts from it.
+      disability: [{ bracket_index: 1, rate: '0.0100', threshold: '0.00' }],
       capital_gains: [],
     },
-    people: [],
-    per_person: [],
+    // The roster this status' return covers, and one per-person slot per member: empty
+    // lists, i.e. "no table of their own — they walk the default".
+    people: [{ id: 1, name: 'Alex' }],
+    per_person: [
+      { person_id: 1, name: 'Alex', jurisdictions: { social_security: [], disability: [] } },
+    ],
   }
 }
 
@@ -42,6 +47,32 @@ function statusFixture(
   withRows: FilingStatus[] = ['single'],
 ): TaxBracketsOut {
   return { ...bracketsFixture(), filing_status: status, statuses_with_rows: withRows }
+}
+
+// The same year on a married-joint return: two people, and Sam already carries a Disability
+// table of their own — the employer voluntary plan the strip exists for (1% to 300k, then 0).
+function marriedFixture(): TaxBracketsOut {
+  return {
+    ...statusFixture('married_joint', ['single', 'married_joint']),
+    people: [
+      { id: 1, name: 'Alex' },
+      { id: 4, name: 'Sam' },
+    ],
+    per_person: [
+      { person_id: 1, name: 'Alex', jurisdictions: { social_security: [], disability: [] } },
+      {
+        person_id: 4,
+        name: 'Sam',
+        jurisdictions: {
+          social_security: [],
+          disability: [
+            { bracket_index: 1, rate: '0.0100', threshold: '0.00' },
+            { bracket_index: 2, rate: '0.0000', threshold: '300000.00' },
+          ],
+        },
+      },
+    ],
+  }
 }
 
 const EMPTY_TABLES = {
@@ -83,8 +114,8 @@ describe('BracketsEditor', () => {
       'Federal brackets',
       'State brackets',
       'Medicare brackets',
-      'Social Security brackets',
-      'Disability brackets',
+      'Social Security brackets — default for everyone',
+      'Disability brackets — default for everyone',
       'Capital gains brackets',
     ])
     // rate * 100, trimmed — the stored fraction is never shown to the user. A blurred cell
@@ -498,6 +529,10 @@ describe('BracketsEditor — filing-status tabs', () => {
     // Not "fill in 42 rows by hand": the year's own single tables are the right SHAPE for
     // every jurisdiction and the right VALUES for the two per-person ones.
     expect(screen.getByRole('button', { name: 'Clone from 2024 single tables' })).toBeTruthy()
+    // Person tables are per-worker parameters too: the clone carries them with the defaults.
+    expect(
+      screen.getByText(/come across correct, including any per-person tables/),
+    ).toBeTruthy()
   })
 
   it('never offers the clone on the single tab, empty or not', () => {
@@ -594,5 +629,175 @@ describe('BracketsEditor — filing-status tabs', () => {
     fireEvent.click(tab('Single'))
     await waitFor(() => expect(tab('Single').getAttribute('aria-pressed')).toBe('true'))
     expect(screen.queryByText('review thresholds')).toBeNull()
+  })
+})
+
+describe('BracketsEditor — per-person tables', () => {
+  // The strip's two buttons carry the jurisdiction in their accessible name — the visible
+  // text is short on purpose, and the SAME short text sits under both per-worker blocks.
+  const addFor = (jurisdiction: string, person: string) =>
+    screen.getByRole('button', { name: `Add a ${jurisdiction} table for ${person}` })
+
+  it('heads the two per-worker blocks as the default for everyone', () => {
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    // Social Security and SDI are the only tables a person may override, so theirs are the
+    // only headings that have to say whose they are; the other four are the return's.
+    expect(screen.getByText('Social Security brackets — default for everyone')).toBeTruthy()
+    expect(screen.getByText('Disability brackets — default for everyone')).toBeTruthy()
+    expect(screen.getByText('Federal brackets')).toBeTruthy()
+    expect(screen.queryByText('Federal brackets — default for everyone')).toBeNull()
+  })
+
+  it('offers to add a person table under each per-worker block', () => {
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    // Once under Social Security and once under Disability — and nowhere else: a person
+    // cannot carry a federal, state, Medicare or capital-gains table.
+    expect(screen.getAllByText('Add a table for Alex')).toHaveLength(2)
+    expect(addFor('Social Security', 'Alex')).toBeTruthy()
+    expect(addFor('Disability', 'Alex')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Add a Federal table for Alex' })).toBeNull()
+    expect(
+      screen.getAllByText(/the default applies to anyone without their own table/),
+    ).toHaveLength(2)
+  })
+
+  it('seeds a draft from the default table and saves it with the person', async () => {
+    const echo: TaxBracketsOut = {
+      ...bracketsFixture(),
+      per_person: [
+        {
+          person_id: 1,
+          name: 'Alex',
+          jurisdictions: {
+            social_security: [],
+            disability: [{ bracket_index: 1, rate: '0.0130', threshold: '0.00' }],
+          },
+        },
+      ],
+    }
+    vi.mocked(putTaxBrackets).mockResolvedValue(echo)
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+
+    fireEvent.click(addFor('Disability', 'Alex'))
+    // The draft opens pre-filled with the default's rows — a person's table is almost always
+    // the default with one number moved, so starting from blank would be a transcription job.
+    expect(screen.getByText('Disability — Alex')).toBeTruthy()
+    expect(rate('Disability — Alex', 1).value).toBe('1%')
+    expect(threshold('Disability — Alex', 1).value).toBe('$0.00')
+
+    fireEvent.change(rate('Disability — Alex', 1), { target: { value: '1.3' } })
+    fireEvent.click(save('Disability — Alex'))
+    // The PUT names the person, and ONLY the jurisdiction whose table was edited: a person's
+    // save never touches the default's rows.
+    await waitFor(() =>
+      expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        filing_status: 'single',
+        person_id: 1,
+        jurisdictions: { disability: [{ rate: '0.013', threshold: '0.00' }] },
+      }),
+    )
+    // The echo is authoritative here too, and the strip keeps the table rather than
+    // re-offering to add one.
+    await waitFor(() => expect(rate('Disability — Alex', 1).value).toBe('1.3%'))
+    expect(screen.queryByRole('button', { name: 'Add a Disability table for Alex' })).toBeNull()
+    // The DEFAULT table is still the default's: one row at 1%, as it was.
+    expect(rate('Disability', 1).value).toBe('1%')
+  })
+
+  it('renders a stored person table and removes it with an empty PUT', async () => {
+    const echo: TaxBracketsOut = {
+      ...marriedFixture(),
+      per_person: [
+        { person_id: 1, name: 'Alex', jurisdictions: { social_security: [], disability: [] } },
+        { person_id: 4, name: 'Sam', jurisdictions: { social_security: [], disability: [] } },
+      ],
+    }
+    vi.mocked(putTaxBrackets).mockResolvedValue(echo)
+    render(
+      <BracketsEditor
+        brackets={marriedFixture()}
+        yearStatus="married_joint"
+        onSaved={vi.fn()}
+      />,
+    )
+
+    // Sam's own table is on screen with its own cap; Alex, who has none, is only offered one.
+    expect(rate('Disability — Sam', 2).value).toBe('0%')
+    expect(threshold('Disability — Sam', 2).value).toBe('$300,000.00')
+    expect(addFor('Disability', 'Alex')).toBeTruthy()
+    expect(screen.getByText('Remove — use the default')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: "Remove Sam's Disability table" }))
+    // The same delete-all question the default tables ask, worded for a person — and it says
+    // what happens next, because deleting a table is not deleting the tax.
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Delete Sam's Disability table for 2024 (Married filing jointly)? They fall back to the default.",
+    )
+    await waitFor(() =>
+      expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        filing_status: 'married_joint',
+        person_id: 4,
+        jurisdictions: { disability: [] },
+      }),
+    )
+    // An empty list on the echo is not an empty table: it is NO table, so the strip goes back
+    // to offering one.
+    await waitFor(() => expect(addFor('Disability', 'Sam')).toBeTruthy())
+    expect(screen.queryByText('Disability — Sam')).toBeNull()
+  })
+
+  it('keys errors and saving per table and person', async () => {
+    // A flight that stays open: single-flight is a state only observable mid-request.
+    let settle: (echo: TaxBracketsOut) => void = () => {}
+    vi.mocked(putTaxBrackets).mockReturnValue(
+      new Promise<TaxBracketsOut>((resolve) => {
+        settle = resolve
+      }),
+    )
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+
+    fireEvent.click(addFor('Disability', 'Alex'))
+    fireEvent.click(save('Disability — Alex'))
+    expect(save('Disability — Alex').textContent).toBe('Saving…')
+    // One save at a time across the WHOLE editor: the person's flight disables the default's
+    // Save beside it, and every other jurisdiction's too.
+    expect((save('Disability') as HTMLButtonElement).disabled).toBe(true)
+    expect((save('Federal') as HTMLButtonElement).disabled).toBe(true)
+    settle(bracketsFixture())
+    await waitFor(() => expect((save('Federal') as HTMLButtonElement).disabled).toBe(false))
+
+    vi.mocked(putTaxBrackets).mockRejectedValue(
+      new ApiError('disability: thresholds must be strictly ascending', 422),
+    )
+    fireEvent.click(addFor('Disability', 'Alex'))
+    fireEvent.click(save('Disability — Alex'))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('disability: thresholds must be strictly ascending')
+    // Under ALEX's table and nowhere else — the default below it was not the table refused.
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(alert.closest('.bracket-person')).not.toBeNull()
+  })
+
+  it('reports dirty work from a draft person table', () => {
+    const onDirtyChange = vi.fn()
+    render(
+      <BracketsEditor
+        brackets={bracketsFixture()}
+        onSaved={vi.fn()}
+        onDirtyChange={onDirtyChange}
+      />,
+    )
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+
+    // A seeded draft is unsaved work like any typed cell: the page's year-switch confirm has
+    // to know about it, or the rows vanish without a question.
+    fireEvent.click(addFor('Disability', 'Alex'))
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+
+    // And the way back out of a draft nobody meant to start: client-side, no request.
+    fireEvent.click(screen.getByRole('button', { name: 'Discard the Disability draft for Alex' }))
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+    expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
+    expect(addFor('Disability', 'Alex')).toBeTruthy()
   })
 })
