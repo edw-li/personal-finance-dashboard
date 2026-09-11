@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -25,12 +25,46 @@ class TaxBracket(Base):
     # The status dimension sits INSIDE the natural key: one year carries a single-filer
     # table and an MFJ table for the same jurisdiction, and `_engine_tables` selects
     # exactly one of them for the engine.
-    __table_args__ = (UniqueConstraint("year", "jurisdiction", "filing_status", "bracket_index"),)
+    #
+    # TWO partial unique indexes rather than one constraint (2026-09-11 spec §2.1), because
+    # Postgres treats NULLs as distinct: a plain unique key over the four columns plus
+    # person_id would let two default rows share an index, and the engine's table would
+    # silently carry both. The default index therefore constrains the person-less rows and
+    # the person index constrains the rest — the `people` one-primary idiom, mirrored HERE
+    # as well as in the migration because the test database is built by create_all.
+    __table_args__ = (
+        Index(
+            "ux_tax_brackets_default",
+            "year",
+            "jurisdiction",
+            "filing_status",
+            "bracket_index",
+            unique=True,
+            postgresql_where=text("person_id IS NULL"),
+        ),
+        Index(
+            "ux_tax_brackets_person",
+            "year",
+            "jurisdiction",
+            "filing_status",
+            "person_id",
+            "bracket_index",
+            unique=True,
+            postgresql_where=text("person_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     year: Mapped[int] = mapped_column(ForeignKey("tax_years.year", ondelete="CASCADE"))
     jurisdiction: Mapped[str] = mapped_column(String(20))  # one of tax_keys.JURISDICTIONS
     filing_status: Mapped[str] = mapped_column(String(20), default=SINGLE, server_default=SINGLE)
+    # NULL means THE YEAR'S DEFAULT TABLE — what every earner on the return walks unless
+    # they have their own — which is every row that exists today. A person is only ever set
+    # for tax_keys.PER_WORKER_JURISDICTIONS; RESTRICT matches tax_inputs.person_id, since no
+    # person-delete endpoint exists and a roster edit must not drop a stored table.
+    person_id: Mapped[int | None] = mapped_column(
+        ForeignKey("people.id", ondelete="RESTRICT"), default=None
+    )
     bracket_index: Mapped[int] = mapped_column()
     rate: Mapped[Decimal] = mapped_column(Numeric(7, 4))
     threshold: Mapped[Decimal] = mapped_column(Numeric(12, 2))

@@ -139,6 +139,7 @@ from app.tax_keys import (
     MIN_INPUT_COUNT,
     PER_PERSON_DERIVED_KEYS,
     PER_PERSON_KEYS,
+    PER_WORKER_JURISDICTIONS,
     PERCENT,
     SECTIONS,
     SINGLE,
@@ -164,7 +165,8 @@ YEAR_MESSAGE = f"year must be between {YEAR_MIN} and {YEAR_MAX}"
 MAX_BRACKETS = 12
 FilingStatusQuery = Annotated[FilingStatus, Query()]
 # See BracketReviewFlags: per-PERSON parameters clone verbatim, per-RETURN thresholds do not.
-VERBATIM_OK_JURISDICTIONS = ("social_security", "disability")
+# The SAME tuple the per-person tables are gated on (spec §2.1) — one fact, one spelling.
+VERBATIM_OK_JURISDICTIONS = PER_WORKER_JURISDICTIONS
 REVIEW_JURISDICTIONS = ("federal", "state", "capital_gains", "medicare")
 ZERO = Decimal("0")
 # Above this the ratio is nonsense anyway (near-zero denominator), and quantize_pct would

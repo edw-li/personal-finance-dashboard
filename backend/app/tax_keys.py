@@ -141,6 +141,16 @@ JURISDICTIONS = (
     "capital_gains",
 )
 
+# The two that are levied PER WORKER (2026-09-11 spec §2.1): Social Security's wage base is
+# per employee and California's SDI — or an employer's Voluntary Plan in its place — is per
+# worker and per employer, so one household can need two different tables for the same year.
+# Medicare, federal, state and capital gains are per RETURN and never carry a person.
+#
+# ONE tuple, because this is one fact with two readers: `tax_brackets.person_id` may only be
+# set for these, and the clone helper's `verbatim_ok` flags name exactly these for exactly
+# the same reason (a per-worker parameter does not move with filing status).
+PER_WORKER_JURISDICTIONS: tuple[str, ...] = ("social_security", "disability")
+
 # Filing status (2026-08-26 spec §4). Python-validated like `accounts.group`, and stored
 # as a plain String(20) so a future status (head_of_household) is a one-line change plus
 # data, never a migration. `single` is the default everywhere: every stored year predates
