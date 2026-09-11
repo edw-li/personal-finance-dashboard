@@ -1,11 +1,12 @@
 """What-if scenario math over the tax engine's input vocabulary.
 
-Pure module — no DB, no HTTP (tax_service's posture). The engine reads the TOTAL keys
-(stcg_total / ltcg_total / other_w2_income); the component keys feed only gross_income
-and the suggestion formulas. Every scenario delta therefore lands on BOTH the component
-key and the total the engine consumes — exactly how the sheet's own gray formulas roll
-components up. Overrides apply LAST, as absolute replacements, so an override of a key a
-sale also touched wins (the response's changed_inputs makes that visible).
+Pure module — no DB, no HTTP (tax_service's posture). Every scenario delta lands on ONE
+key, the COMPONENT (2026-09-11 spec §1.4): the totals the engine reads are computed from
+the components now, so a sale that also bumped `ltcg_total` would either be discarded (the
+engine rebuilds it) or, worse, read as a figure some other reader could trust. One leg, one
+row, exactly the row the user would have typed. Overrides apply LAST, as absolute
+replacements, so an override of a key a sale also touched wins (the response's
+changed_inputs makes that visible); an override OF a computed total is a 422 upstream.
 
 ESPP decomposition restores the sheet's importer-ignored "ESPP Taxation Calculator":
 disposition from the stored qualifying_date, the disqualified bargain element from the
@@ -59,13 +60,14 @@ def qualified_discount_ratio(discount: Decimal) -> Decimal:
 DATELESS_TERM_WARNING = "{ticker}: acquisition dates unknown — treated as long-term"
 QUALIFIED_FMV_WARNING = "lot {lot_id}: grant-date FMV approximated from the subscription price"
 
-# delta kind -> (component key, engine total key). None = the engine reads it directly.
-DELTA_KEYS: dict[str, tuple[str, str | None]] = {
-    "brokerage_long": ("ltcg_brokerage", "ltcg_total"),
-    "brokerage_short": ("stcg_standard", "stcg_total"),
-    "espp_ordinary": ("w2_espp_sale_component", "other_w2_income"),
-    "espp_long": ("ltcg_espp_component", "ltcg_total"),
-    "espp_short": ("stcg_espp_component", "stcg_total"),
+# delta kind -> the COMPONENT key it moves. The total each one rolls up into is the
+# engine's business (tax_service.materialize_*), which is why it is not named here.
+DELTA_KEYS: dict[str, str] = {
+    "brokerage_long": "ltcg_brokerage",
+    "brokerage_short": "stcg_standard",
+    "espp_ordinary": "w2_espp_sale_component",
+    "espp_long": "ltcg_espp_component",
+    "espp_short": "stcg_espp_component",
 }
 
 
@@ -183,18 +185,21 @@ def apply_scenario(
     espp_sales: list[EsppSaleDetail],
     overrides: dict[str, Decimal | None],
 ) -> tuple[dict[str, Decimal], list[str]]:
-    """(scenario inputs, aggregated warnings). Deltas first (component + engine total in
-    lockstep), overrides last as replacements; a null override sets the key to 0 —
-    'absent' semantics without churning the engine's missing-key warning."""
+    """(scenario inputs, aggregated warnings). Deltas first (one component per leg),
+    overrides last as replacements; a null override sets the key to 0 — 'absent' semantics
+    without churning the engine's missing-key warning.
+
+    The totals in `stored` ride along untouched and stale, which is safe and deliberate:
+    `compute_breakdown` rebuilds every one of them from the components this function just
+    moved, so the scenario's tax follows the leg without this module owning a formula.
+    """
     scenario = dict(stored)
 
     def bump(kind: str, amount: Decimal) -> None:
         if amount == 0:
             return
-        component, total = DELTA_KEYS[kind]
+        component = DELTA_KEYS[kind]
         scenario[component] = scenario.get(component, ZERO) + amount
-        if total is not None:
-            scenario[total] = scenario.get(total, ZERO) + amount
 
     warnings: list[str] = []
     for sale in sales:

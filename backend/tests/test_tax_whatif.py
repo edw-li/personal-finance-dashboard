@@ -216,8 +216,9 @@ def test_decompose_qualified_loss_has_no_ordinary():
 # --- key mapping ---
 
 
-def test_apply_scenario_dual_key_mapping():
-    """Every delta lands on BOTH the component key and the total the engine reads."""
+def test_apply_scenario_bumps_the_component_and_leaves_the_total_to_the_engine():
+    """Every delta lands on ONE key — the component. The totals beside it are the engine's
+    to rebuild (2026-09-11 spec §1.4), so this module must not touch them."""
     stored = {
         "ltcg_brokerage": D("1000.00"),
         "ltcg_total": D("1000.00"),
@@ -249,11 +250,13 @@ def test_apply_scenario_dual_key_mapping():
     scenario, warnings = apply_scenario(stored, [sale], [lot], {})
 
     assert str(scenario["ltcg_brokerage"]) == "1500.00"  # component += 500
-    assert str(scenario["ltcg_total"]) == "1500.00"  # AND the engine's total
     assert str(scenario["w2_espp_sale_component"]) == "350.00"  # absent key starts at 0
-    assert str(scenario["other_w2_income"]) == "2350.00"
     assert str(scenario["stcg_espp_component"]) == "300.00"
-    assert str(scenario["stcg_total"]) == "300.00"
+    # The totals ride along stale and are rebuilt downstream — proving the leg did not
+    # write them is the point of this test.
+    assert scenario["ltcg_total"] == D("1000.00")
+    assert scenario["other_w2_income"] == D("2000.00")
+    assert "stcg_total" not in scenario
     assert scenario["annual_salary"] == D("150000.00")
     assert warnings == []
     assert stored["ltcg_total"] == D("1000.00")  # the caller's dict is never mutated
@@ -279,11 +282,11 @@ def test_apply_scenario_overrides_win_and_null_zeroes():
         stored,
         [sale],
         [],
-        {"ltcg_total": D("42.00"), "qualified_dividends": None},
+        {"ltcg_brokerage": D("42.00"), "qualified_dividends": None},
     )
 
-    assert str(scenario["ltcg_total"]) == "42.00"  # the override, not 1500.00
-    assert str(scenario["ltcg_brokerage"]) == "500.00"  # the component still carries it
+    assert str(scenario["ltcg_brokerage"]) == "42.00"  # the override, not the bumped 500
+    assert str(scenario["ltcg_total"]) == "1000.00"  # untouched: the engine rebuilds it
     assert scenario["qualified_dividends"] == ZERO
     assert warnings == ["NVDA: acquisition dates unknown — treated as long-term"]
 

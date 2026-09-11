@@ -244,6 +244,15 @@ class EngineFeed:
     rows: list[TaxInput] = dataclass_field(default_factory=list)
 
     @property
+    def primary_column(self) -> int | None:
+        """The PRIMARY person's column — the first one, in `_return_people` order.
+
+        `person_inputs` is built from that list, so its first key is the primary's under
+        every filing status; a roster-less database spells the same column None.
+        """
+        return next(iter(self.person_inputs), None)
+
+    @property
     def computable(self) -> bool:
         """One rule for every status: a year with a reported missing table refuses.
 
@@ -1907,8 +1916,12 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
     stored = feed.inputs
     brackets = feed.tables
 
-    # Overrides: the PUT-inputs vocabulary — unknown keys 422, values quantized 4dp.
+    # Overrides: the PUT-inputs vocabulary — unknown keys 422, computed totals 422, values
+    # quantized 4dp. A scenario that could set `other_w2_income` directly would be handing
+    # the engine a figure it is about to overwrite, and the user a delta that never happens.
     await _require_known_input_keys(db, body.overrides)
+    for key in body.overrides:
+        _refuse_derived_key(key, OVERRIDE_REMEDY)
     overrides: dict[str, Decimal | None] = {
         key: _validated_input_value(key, value) for key, value in body.overrides.items()
     }
@@ -2032,13 +2045,24 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
         ),
         feed,
     )
+    # The whole wage delta is the PRIMARY's (their lots, their ESPP — the app models no
+    # partner equity), so their bundle is re-materialized from their OWN component bucket
+    # with the scenario's per-person deltas folded in, and the partner's wage base is
+    # untouched beside it. Per-person keys only: a household delta is not anybody's wages.
+    primary_after = dict(feed.person_inputs.get(feed.primary_column, {}))
+    for key in PER_PERSON_KEYS:
+        if is_derived_key(key):
+            continue  # rebuilt from the components below, never carried as a delta
+        delta = scenario_inputs.get(key, ZERO) - stored.get(key, ZERO)
+        if delta:
+            primary_after[key] = primary_after.get(key, ZERO) + delta
     scenario = _summary_out(
         compute_breakdown(
             year,
             scenario_inputs,
             brackets,
             filing_status=feed.filing_status,
-            earners=shift_earners(feed.earners, scenario_inputs),
+            earners=shift_earners(feed.earners, primary_after),
         ),
         feed,
     )
@@ -2046,6 +2070,10 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
     changed: list[ChangedInput] = []
     labels = {key: label for key, label, _s, _o, _d in TAX_INPUT_DEFINITIONS}
     for key in sorted(set(stored) | set(scenario_inputs)):
+        # Computed totals never appear: nothing typed them, nothing stores them, and the
+        # row the user would change is the component beside them (spec §1.4).
+        if is_derived_key(key):
+            continue
         before = stored.get(key, ZERO)
         after = scenario_inputs.get(key, ZERO)
         if before != after:

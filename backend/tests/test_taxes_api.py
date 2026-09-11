@@ -1130,17 +1130,13 @@ async def test_what_if_long_sale_moves_ltcg_and_delta(auth_client, db, definitio
             "warnings": ["NVDA: acquisition dates unknown — treated as long-term"],
         }
     ]
-    # The load-bearing pin: the COMPONENT key and the TOTAL the engine reads move together.
+    # The load-bearing pin: a leg moves the COMPONENT, and only the component. The total
+    # it rolls up into is computed (2026-09-11 spec §1.4), so there is no row to list and
+    # nothing the user could have typed under that name.
     assert body["changed_inputs"] == [
         {
             "key": "ltcg_brokerage",
             "label": "LTCG: Brokerage Gain/Loss",
-            "before": "0.00",
-            "after": "500.00",
-        },
-        {
-            "key": "ltcg_total",
-            "label": "Long Term Capital Gain/Loss",
             "before": "0.00",
             "after": "500.00",
         },
@@ -1200,18 +1196,6 @@ async def test_what_if_espp_disqualified_hits_w2_and_fica(auth_client, db, defin
             "after": "300.00",
         },
         {
-            "key": "ltcg_total",
-            "label": "Long Term Capital Gain/Loss",
-            "before": "0.00",
-            "after": "300.00",
-        },
-        {
-            "key": "other_w2_income",
-            "label": "Other W2 Income",
-            "before": "122474.46",
-            "after": "122824.46",
-        },
-        {
             "key": "w2_espp_sale_component",
             "label": "W2: ESPP Sale Component",
             "before": "0.00",
@@ -1224,6 +1208,12 @@ async def test_what_if_espp_disqualified_hits_w2_and_fica(auth_client, db, defin
         body["scenario"]["medicare"]["tax"]
     ) - Decimal(body["baseline"]["medicare"]["tax"])
     assert body["scenario"]["medicare"]["taxable_wages"] == "231624.46"  # 231274.46 + 350
+    # The proof that the ENGINE re-derived the total rather than the scenario carrying one:
+    # nothing in the body says `other_w2_income`, and the reported W-2 income moved by the
+    # leg anyway (2026-09-11 spec §1.4).
+    assert body["baseline"]["medicare"]["w2_income"] == "235724.46"
+    assert body["scenario"]["medicare"]["w2_income"] == "236074.46"  # + the 350 ordinary leg
+    assert not any(row["key"] == "other_w2_income" for row in body["changed_inputs"])
     # ...and does NOT move where the 2024 wage bases are already capped out.
     assert body["delta"]["social_security_tax"] == "0.00"  # capped at 168600
     assert body["delta"]["disability_tax"] == "0.00"  # 0-rate above 195000
@@ -1307,6 +1297,26 @@ async def test_what_if_no_price_paths_422(auth_client, db, definitions):
     assert resp.json()["detail"] == "no ESPP quote available — provide a sale_price"
 
 
+async def test_what_if_refuses_an_override_of_a_computed_total(auth_client, definitions):
+    """The what-if's own door (2026-09-11 spec §1.4): a scenario cannot set a figure the
+    engine is about to rebuild, so the sentence names the components to override instead."""
+    await seeded_2024(auth_client)
+
+    resp = await auth_client.post(
+        WHAT_IF, json={"year": 2024, "overrides": {"other_w2_income": "80000"}}
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == (
+        "Other W2 Income is computed from its components (W2: Stock/RSUs Sold, W2: Bonuses, "
+        "W2: Salary Checkpoint, W2: ESPP Sale Component, W2: Employer HSA Contribution, "
+        "W2: Other) — override those instead"
+    )
+    # The component it names is accepted, and moves the scenario.
+    ok = await auth_client.post(WHAT_IF, json={"year": 2024, "overrides": {"w2_other": "80000"}})
+    assert ok.status_code == 200, ok.text
+    assert [row["key"] for row in ok.json()["changed_inputs"]] == ["w2_other"]
+
+
 async def test_what_if_unknown_security_404(auth_client, definitions):
     await seeded_2024(auth_client)
 
@@ -1385,7 +1395,7 @@ async def test_what_if_writes_nothing(auth_client, db, definitions):
         auth_client,
         sales=[{"security_id": security_id, "shares": "40", "term": "short"}],
         espp_sales=[{"lot_id": lot_id, "sale_price": "150.0000"}],
-        overrides={"qualified_dividends": "2500", "interest_total": None},
+        overrides={"qualified_dividends": "2500", "interest_standard": None},
     )
     assert body["scenario"] != body["baseline"]  # the scenario really did move
 
@@ -2238,7 +2248,7 @@ async def test_what_if_moves_the_primary_earners_fica_on_a_joint_year(
     body = (
         await auth_client.post(
             WHAT_IF,
-            json={"year": 2026, "overrides": {"other_w2_income": "80000"}},
+            json={"year": 2026, "overrides": {"w2_other": "80000"}},
         )
     ).json()
     # Baseline: 100000 + 100000, both under the 150000 base -> 200000 x .062 = 12400.
@@ -2319,9 +2329,7 @@ async def test_earner_bundles_follow_column_order_not_a_string_sort(auth_client,
     # ...and the money it decides. Baseline: 100000 + 40000, both under the 150000 base,
     # (140000) x .062 = 8680.
     body = (
-        await auth_client.post(
-            WHAT_IF, json={"year": 2026, "overrides": {"other_w2_income": "80000"}}
-        )
+        await auth_client.post(WHAT_IF, json={"year": 2026, "overrides": {"w2_other": "80000"}})
     ).json()
     assert body["baseline"]["social_security"]["tax"] == "8680.00"
     # The 80000 is the PRIMARY's leg: their bundle becomes 180000, capped at 150000, next
