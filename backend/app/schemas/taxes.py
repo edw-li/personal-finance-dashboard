@@ -242,7 +242,7 @@ class WageTaxOut(BaseModel):
     # disability only (Medicare is a combined-wage walk by statute and carries none).
     # DEFAULTED: the stored golden summaries other tests parse predate the field, and an
     # older client reads the payload unchanged.
-    per_person: list[PersonWageTaxOut] = []
+    per_person: list[PersonWageTaxOut] = Field(default_factory=list)
 
 
 class CapitalGainsTaxOut(BaseModel):

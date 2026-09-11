@@ -413,9 +413,15 @@ def _assemble_earners(
     The exception is a return where somebody HAS their own table (2026-09-11 spec §2.3):
     the engine's synthesized bundle carries no tables, so the one spouse on an employer
     Voluntary Plan would silently be taxed on the year's default. That is production's 2026
-    — one person with rows, and the table to walk is theirs — so a one-bundle LIST is the
-    answer there. It computes what the synthesis would have for everything else, which is
-    why no household without person tables can tell the difference.
+    — the PRIMARY alone has rows, and the table to walk is theirs — so a one-bundle LIST is
+    the answer there. It computes what the synthesis would have for everything else, which
+    is why no household without person tables can tell the difference.
+
+    That exception is deliberately narrowed to the primary's own column. A joint return
+    where only the PARTNER has rows keeps taking the synthesis path, because a one-bundle
+    list there would be a list whose head is not the primary — and `shift_earners` re-bases
+    the what-if on the head. Their own table is ignored in that state, exactly as it was
+    before this existed; a wrong scenario is worse than a missing overlay.
     """
     person_tables = person_tables or {}
     # In COLUMN order (primary first), not sorted: `shift_earners` re-bases the what-if on
@@ -423,14 +429,13 @@ def _assemble_earners(
     # their sale onto the partner's wage base. A plain sort cannot express this — `sorted(…,
     # key=str)` would even put person 10 ahead of person 2 — while `columns` already carries
     # the order `_return_people` established, and mixes None in safely.
+    present = [column for column in columns if column in per_person]
     bundles = [
-        earner_from_inputs(per_person[column], person_tables.get(column))
-        for column in columns
-        if column in per_person
+        earner_from_inputs(per_person[column], person_tables.get(column)) for column in present
     ]
     if len(bundles) >= 2:
         return bundles
-    if bundles and any(column in person_tables for column in columns):
+    if present == columns[:1] and any(column in person_tables for column in columns):
         return bundles
     return None
 
@@ -614,16 +619,20 @@ async def _engine_feed(
     filing_status = await _filing_status(db, year)
     if people is None:
         people = await load_people(db)
-    columns = [person.id for person in _return_people(people, filing_status)] or [None]
+    on_return = _return_people(people, filing_status)
+    columns = [person.id for person in on_return] or [None]
     rows = list((await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars())
     tables = await _engine_tables(db, year, filing_status)
     person_tables = await _person_tables(db, year, filing_status)
     views = _input_views(year, rows, columns, filing_status)
     earners = _assemble_earners(views.stored, columns, person_tables)
-    names = {person.id: person.name for person in _return_people(people, filing_status)}
-    # With no bundle list the engine synthesizes ONE bundle for the whole return, and that
-    # bundle is the return's own — the primary's column.
-    earner_columns = columns[:1] if earners is None else [c for c in columns if c in views.stored]
+    names = {person.id: person.name for person in on_return}
+    # Whose wages each bundle carries. The columns WITH ROWS, in column order, because that
+    # is the list `_assemble_earners` builds from — and it is the right answer on the
+    # synthesis path too, where the engine's one bundle is the sum of every stored row and
+    # at most one column has any. A year with nothing stored falls back to the primary's
+    # column, which is the only column its empty bundle could belong to.
+    earner_columns = [c for c in columns if c in views.stored] or columns[:1]
     return EngineFeed(
         year=year,
         filing_status=filing_status,

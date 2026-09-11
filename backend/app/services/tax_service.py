@@ -532,10 +532,10 @@ def _payroll_line(
     return EarnerPayroll(
         w2_income=earner.w2_wages,
         taxable_wages=base,
-        # Against their W-2, the denominator the aggregate line divides by — one convention,
-        # so a person's rate and the household's are the same kind of number.
-        effective_rate=_rate(tax, earner.w2_wages),
         tax=tax,
+        # Over their W-2, the denominator the aggregate line divides by — one convention, so
+        # a person's rate and the household's are the same kind of number.
+        effective_rate=_rate(tax, earner.w2_wages),
         own_table=bool(own),
     )
 
@@ -708,19 +708,16 @@ def compute_breakdown(
     medicare_wages = sum((earner.fica_wages for earner in bundles), ZERO)
     medicare_tax = walk(tables["medicare"], medicare_wages)
 
-    # The SS wage base is modelled as a terminal 0-rate bracket; r109's min() makes the cap
-    # explicit so taxable_wages reads as the capped figure the sheet displays. It is
-    # tax-neutral by construction (income inside a 0-rate bracket contributes nothing), and
-    # it is only a cap when that top rate really is 0 — a table without the terminal row,
-    # or with a genuinely progressive top tier, reports (and taxes) uncapped wages. The cap
-    # is PER PERSON: two earners get two wage bases, which is the single worst wrong-money
+    # The SS wage base is modelled as a terminal 0-rate bracket, read back by `_wage_cap`, so
+    # taxable_wages is the capped figure the sheet displays (r109's min()). The cap is PER
+    # PERSON: two earners get two wage bases, which is the single worst wrong-money
     # consequence of the old shared figure (audit §3.2).
     #
     # ...and so is the TABLE, since 2026-09-11 (spec §2.2): an earner on an employer
     # Voluntary Plan and an earner on statutory SDI are two different rate schedules in one
-    # household, and the wage base a job is exempt from is a property of the job. Everything
-    # below therefore runs per bundle over `_payroll_line`'s answer, and the aggregates are
-    # the sums of the per-person lines rather than a second walk of their own.
+    # household, and the wage base a job is exempt from is a property of the job. Both walks
+    # below therefore run per bundle through `_payroll_line`, and the aggregates are the sums
+    # of the per-person lines rather than a second walk of their own.
     ss_table = tables["social_security"]
     ss_lines = [
         _payroll_line(earner, "social_security", ss_table, earner.fica_wages, capped=True)

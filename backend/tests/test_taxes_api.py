@@ -3017,3 +3017,55 @@ async def test_the_wage_sections_of_a_refused_year_carry_no_lines(auth_client, d
     body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
     assert body["brackets_missing_for_status"] == list(JURISDICTIONS)
     assert body["social_security"] is None
+
+
+async def test_only_the_partners_rows_keeps_the_synthesized_bundle(auth_client, db, definitions):
+    """The narrow fallback: a joint return whose only W-2 rows are the PARTNER's stays on
+    the engine's synthesis path even when a person table exists.
+
+    A one-bundle list there would be a list whose head is not the primary, and the what-if
+    re-bases the primary's sale onto the head. So the partner's own table is ignored in that
+    state — the behaviour that shipped before person tables existed — and the year's default
+    is walked. Data entry closes it: give the primary their rows and both earners appear.
+    """
+    me_id, partner_id = await _seed_people(db)
+    db.add(TaxYear(year=2026, filing_status="married_joint"))
+    await db.flush()
+    db.add_all(
+        [
+            TaxInput(year=2026, key="pay_periods", value=Decimal("20"), person_id=partner_id),
+            TaxInput(year=2026, key="annual_salary", value=Decimal("180000"), person_id=partner_id),
+        ]
+    )
+    for name, table in (
+        ("federal", [("0.1000", "0.00")]),
+        ("state", [("0.0500", "0.00")]),
+        ("medicare", [("0.0145", "0.00")]),
+        ("social_security", [("0.0620", "0.00")]),
+        ("disability", [("0.0110", "0.00")]),
+        ("capital_gains", [("0.1500", "0.00")]),
+    ):
+        for index, (rate, threshold) in enumerate(table, start=1):
+            db.add(
+                TaxBracket(
+                    year=2026,
+                    jurisdiction=name,
+                    filing_status="married_joint",
+                    bracket_index=index,
+                    rate=Decimal(rate),
+                    threshold=Decimal(threshold),
+                )
+            )
+    db.add_all(
+        person_rows(2026, partner_id, "disability", [("0.0500", "0")], status="married_joint")
+    )
+    await db.commit()
+
+    body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
+    assert body["disability"]["tax"] == "1650.00"  # 150000 x .011, the DEFAULT table
+    # One line, and it is labelled with the column whose rows the bundle actually carries.
+    assert [
+        (line["person_id"], line["name"], line["table"])
+        for line in body["disability"]["per_person"]
+    ] == [(partner_id, "Partner", "default")]
+    assert me_id not in [line["person_id"] for line in body["disability"]["per_person"]]
