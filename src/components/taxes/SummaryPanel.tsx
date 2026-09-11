@@ -179,22 +179,33 @@ export default function SummaryPanel({
                         note above), and `person_id` is null on a roster-less database. */}
                     {(row.people ?? []).map((person, index) => (
                       <tr key={index} className="tax-person-row">
-                        <td className="tax-person-name">
-                          {/* Null names mean the engine synthesized the earner from household
-                              inputs with no roster behind them — it is still the return's
-                              own line, so it says so rather than inventing a person. */}
-                          <span>{person.name ?? 'This return'}</span>
-                          {/* A comparison, not money math: both figures are still the
-                              engine's own strings, rendered as they arrived (global rule 9).
-                              The note names the base the walk stopped at, which IS the cap. */}
-                          {row.capNote === true &&
-                            Number(person.taxable_wages) < Number(person.w2_income) && (
-                              <span className="drill-hint">
-                                capped at {formatCurrency(person.taxable_wages)}
-                              </span>
-                            )}
-                          <span className="badge">
-                            {person.table === 'own' ? 'own table' : 'default'}
+                        {/* The cell stays a plain <td> — a display:flex table cell drops out
+                            of the accessibility tree — so the name, its note and its tag are
+                            laid out by a span inside it, and the indent is the cell's own
+                            padding (taxes.css). */}
+                        <td>
+                          <span className="tax-person-name">
+                            {/* A null name is unreachable today: a person line only exists
+                                when the engine had a roster to build it from, and a
+                                roster-less database cannot hold a person's table. Rendered
+                                as nothing rather than invented if that ever changes. */}
+                            <span>{person.name ?? ''}</span>
+                            {/* A comparison, not money math: both figures are still the
+                                engine's own strings, rendered as they arrived (global rule
+                                9). The note names the base the walk stopped at, which IS the
+                                cap — and a taxable base of 0 is not a cap at all but the
+                                all-zero table of an exempt job (spec §2.2), which would
+                                otherwise read "capped at $0.00". */}
+                            {row.capNote === true &&
+                              Number(person.taxable_wages) > 0 &&
+                              Number(person.taxable_wages) < Number(person.w2_income) && (
+                                <span className="drill-hint">
+                                  capped at {formatCurrency(person.taxable_wages)}
+                                </span>
+                              )}
+                            <span className="badge">
+                              {person.table === 'own' ? 'own table' : 'default'}
+                            </span>
                           </span>
                         </td>
                         <td className="num">{formatCurrency(person.w2_income)}</td>

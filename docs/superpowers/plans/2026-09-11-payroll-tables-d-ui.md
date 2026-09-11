@@ -144,3 +144,38 @@ sub-rows. `npx eslint .` 0 errors, `npx tsc -b` clean, `npm test` 2734 passed / 
   while the payload lists it in roster order.
 - The existing heading pin (`Social Security brackets`) and the clone-note pin were updated:
   the spec changes both sentences.
+
+### Review round (both reviews applied, same branch)
+
+One commit. `npx eslint .` 0 errors, `npx tsc -b` clean, `npm test` 2739 passed / 193 files
+(2734 before; five new tests). What changed:
+
+- **No `capped at $0.00`.** The note now also requires `Number(taxable_wages) > 0`: an
+  SS-exempt earner on an all-zero own table (spec §2.2) reports 0 taxable wages, which is
+  not a wage base the walk stopped at. New `SummaryPanel.test.tsx` case.
+- **An EMPTY draft saved is discarded, not deleted.** `Add a table for X` under a per-worker
+  default that has no rows itself seeds a draft with zero rows; its Save used to ask the
+  delete-all question and PUT `[]` for a table the server never stored. The `stored`
+  predicate is now `hasStoredTable(name, personId)`, shared by `submit` and `personCard`, and
+  an unstored empty save does what `Discard draft` does — no confirm, no request.
+- **A tab switch cannot race a save.** The tab buttons are `disabled={tabBusy || saving !==
+  null}` and `openStatus` returns early on an in-flight save: the echo re-seats `payload`,
+  which would otherwise land on whichever status' tables the switch had put on screen.
+- **The person name cell is a plain `<td>` again** — `display: flex` on a cell drops it from
+  the accessibility tree. The flex row is a `.tax-person-name` span inside it, and the indent
+  is `.tax-person-row > td:first-child`'s padding.
+- **Label in name (WCAG 2.5.3)** on the three strip buttons: the aria-labels are gone; each
+  keeps its visible text and appends its context in a `visually-hidden` span, so the spoken
+  name contains the words on the button (`Add a table for Alex — Disability`,
+  `Remove — use the default — Disability — Sam`, `Discard draft — Disability — Alex`). The
+  tests query by role with those names.
+- **`Removing…`** on the Remove button while its own PUT is in flight (`saving` is now
+  `{ key, removing }`), rather than `Saving…` on the Save button beside it.
+- Smaller: the spec §2.8 **tab-switch test** (the strip reloads with the tab's roster and
+  stays clean); the seed test's echo carries a DIFFERENT default rate (1.1%) so "the default
+  was untouched" discriminates; `.bracket-person > .error-banner { justify-self: stretch }`;
+  `.tax-person-name .badge { margin-left: 0 }`; the `PER_WORKER_JURISDICTIONS` comment says
+  what is true of its type; ONE comment at the first read site explains every `?? []` (the
+  fields stay REQUIRED on the type — the reads cover the window where this lane is merged and
+  the server lane is not); the `'This return'` fallback is gone (a roster-less DB cannot hold
+  a person table, so a null name is unreachable — it renders as nothing if that changes).

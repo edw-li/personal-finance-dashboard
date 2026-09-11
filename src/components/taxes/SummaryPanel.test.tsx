@@ -154,6 +154,35 @@ describe('SummaryPanel — per-earner payroll rows', () => {
     expect(within(rows[0]).getByText('own table')).toBeTruthy()
   })
 
+  it('says nothing about a cap for an earner whose own table taxes nothing', () => {
+    const { container } = render(
+      <SummaryPanel
+        summary={summaryFixture({
+          social_security: {
+            w2_income: '420000.00', taxable_wages: '0.00', tax: '0.00',
+            effective_rate: '0.000000',
+            per_person: [
+              {
+                person_id: 1, name: 'Edward', w2_income: '420000.00',
+                taxable_wages: '0.00', tax: '0.00', effective_rate: '0.000000',
+                table: 'own',
+              },
+            ],
+          },
+        })}
+        filingStatus="single"
+      />,
+    )
+    // An all-zero table is the SS-EXEMPT job (spec §2.2): it taxes nothing and reports no
+    // taxable wages at all. A base of 0 is below the earner's wages, but it is not a wage
+    // base the walk stopped at — "capped at $0.00" would name a cap that does not exist.
+    const rows = subRows(container)
+    expect(rows).toHaveLength(1)
+    expect(within(rows[0]).getByText('Edward')).toBeTruthy()
+    expect(within(rows[0]).getByText('own table')).toBeTruthy()
+    expect(rows[0].textContent).not.toContain('capped at')
+  })
+
   it('renders no sub-rows for a single earner on the default table', () => {
     const { container } = render(
       <SummaryPanel

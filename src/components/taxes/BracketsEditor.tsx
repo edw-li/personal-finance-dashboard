@@ -59,6 +59,11 @@ function tablesOf(brackets: TaxBracketsOut): Record<string, RowState[]> {
   // A person's own tables ride beside the defaults under their own keys. An EMPTY list is
   // NOT a table — that earner simply falls back to the default — so it gets no slot at all,
   // which is what keeps "Add a table for …" on screen for them.
+  //
+  // `people` and `per_person` are REQUIRED on TaxBracketsOut — that is the contract — and
+  // the `?? []` here and at the three other read sites below covers ONE window: this lane
+  // merges before the server lane, so a browser held open against a server that predates
+  // them would hand this file an absent field rather than an empty list.
   for (const person of brackets.per_person ?? []) {
     for (const [name, rows] of Object.entries(person.jurisdictions)) {
       if (rows.length > 0) tables[tableKey(name, person.person_id)] = rowsOf(rows)
@@ -227,8 +232,10 @@ export default function BracketsEditor({
   const [payload, setPayload] = useState<TaxBracketsOut>(brackets)
   const [tables, setTables] = useState<Record<string, RowState[]>>(() => tablesOf(brackets))
   // Single-flight across the whole editor: one jurisdiction saves at a time, and the
-  // in-flight name is what disables the others' buttons.
-  const [saving, setSaving] = useState<string | null>(null)
+  // in-flight table's key is what disables the others' buttons — the tabs included, since a
+  // tab switch replaces the very tables a save is about to re-sync. `removing` is which
+  // button started it, so only that one wears the progress word.
+  const [saving, setSaving] = useState<{ key: string; removing: boolean } | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
   // The tab machinery's own flight and banner — a failed tab load is not a jurisdiction's
   // error, and putting it in `errors` would file it under a table nobody asked about.
@@ -250,7 +257,6 @@ export default function BracketsEditor({
 
   // The roster a return under THIS tab's status covers, and therefore the strip under each
   // per-worker table: everybody on a married-joint tab, the primary alone on a single one.
-  // `?? []` because a client that is ahead of its server has no roster to draw one from.
   const people = payload.people ?? []
 
   // The tab set: 'single' ALWAYS (the column default, the only status the importer writes and
@@ -272,9 +278,12 @@ export default function BracketsEditor({
 
   // Switching tabs replaces every table on screen, so it asks the same question the page's
   // reload doors ask — and it asks it BEFORE the request, so a declined confirm cannot leave
-  // a fetch in flight against a tab nobody opened.
+  // a fetch in flight against a tab nobody opened. A save in flight closes the door too (the
+  // buttons are disabled, and this is the keyboard's half of that): its echo re-syncs the
+  // table it wrote and re-seats `payload`, which would land on — and mislabel — whichever
+  // status' tables the tab switch had meanwhile put on screen.
   const openStatus = (status: FilingStatus) => {
-    if (status === activeStatus || tabBusy) return
+    if (status === activeStatus || tabBusy || saving !== null) return
     if (
       dirty &&
       !window.confirm(
@@ -408,15 +417,43 @@ export default function BracketsEditor({
   }
 
   /**
+   * Does the SERVER hold this person's table? A draft exists only on screen — `Add a table
+   * for …` seeds one from the default rows and nothing is written until its own Save — so
+   * its way out is a discard rather than a delete nobody has been told to do. `submit` and
+   * the card's buttons ask the same question, from the same place.
+   */
+  const hasStoredTable = (name: string, personId: number) =>
+    (payload.per_person ?? []).some(
+      (entry) => entry.person_id === personId && (entry.jurisdictions[name] ?? []).length > 0,
+    )
+
+  /**
    * The write itself, and the confirm that guards an empty one. An empty table is a
    * DELETE-ALL — the PUT replaces the (jurisdiction, status, person) wholesale — and removing
    * the last row leaves Save one stray click from dropping a year's table; `Remove — use the
    * default` comes through here with `[]` on purpose, so there is ONE delete path. The status
    * is named in the question because the same jurisdiction has one table per status, and a
    * person is named because it is THEIR table, not the year's, that is about to go.
+   *
+   * `removing` says which BUTTON is in flight, and nothing else: the request is the same one
+   * either way, but a Save that reads "Saving…" while the user pressed Remove names the
+   * wrong act.
    */
-  const submit = (name: string, person: TaxPersonOut | undefined, rows: RowState[]) => {
+  const submit = (
+    name: string,
+    person: TaxPersonOut | undefined,
+    rows: RowState[],
+    removing = false,
+  ) => {
     const key = tableKey(name, person?.id)
+    // An empty DRAFT is not a deletion: the server was never told about this table, so there
+    // is nothing to ask about and nothing to write — Save does here exactly what `Discard
+    // draft` does. Reachable from a person's Save under a default table that has no rows
+    // itself, where the seeded draft opens empty.
+    if (person !== undefined && rows.length === 0 && !hasStoredTable(name, person.id)) {
+      discardPersonTable(key)
+      return
+    }
     const status = FILING_STATUS_LABELS[activeStatus]
     const question =
       person === undefined
@@ -424,7 +461,7 @@ export default function BracketsEditor({
         : `Delete ${person.name}'s ${label(name)} table for ${brackets.year} (${status})? ` +
           'They fall back to the default.'
     if (rows.length === 0 && !window.confirm(question)) return
-    setSaving(key)
+    setSaving({ key, removing })
     setErrors((current) => ({ ...current, [key]: '' }))
     // ONLY this jurisdiction, only this STATUS, and only this table: the PUT is a full
     // replace per (jurisdiction, status, person) present in the body, so shipping all six —
@@ -514,23 +551,22 @@ export default function BracketsEditor({
     const key = tableKey(name, person.id)
     const rows = tables[key]
     const title = `${label(name)} — ${person.name}`
-    // Stored means the SERVER holds this table; a draft exists only on screen, so its way out
-    // is a discard rather than a delete nobody has been told to do.
-    const stored = (payload.per_person ?? []).some(
-      (entry) => entry.person_id === person.id && (entry.jurisdictions[name] ?? []).length > 0,
-    )
+    const stored = hasStoredTable(name, person.id)
     if (rows === undefined) {
       return (
         <div key={person.id} className="bracket-person">
           {/* The visible text is short because the same words sit under both per-worker
-              tables; the jurisdiction rides in the accessible name. */}
+              tables, so the jurisdiction is APPENDED to it for a reader rather than
+              replacing it in an aria-label: a spoken name that does not contain the words
+              on the button is a name voice control cannot be told (WCAG 2.5.3). The three
+              strip buttons all carry their context the same way. */}
           <button
             type="button"
             className="button"
-            aria-label={`Add a ${label(name)} table for ${person.name}`}
             onClick={() => addPersonTable(name, person.id)}
           >
             Add a table for {person.name}
+            <span className="visually-hidden"> — {label(name)}</span>
           </button>
         </div>
       )
@@ -570,27 +606,29 @@ export default function BracketsEditor({
             aria-label={`Save ${title} brackets`}
             disabled={saving !== null}
           >
-            {saving === key ? 'Saving…' : 'Save'}
+            {/* Whose flight this is: the Remove button beside it starts the same request,
+                and only the button that was pressed says what is happening. */}
+            {saving?.key === key && !saving.removing ? 'Saving…' : 'Save'}
           </button>
           {stored ? (
             <button
               type="button"
               className="button"
-              aria-label={`Remove ${person.name}'s ${label(name)} table`}
               disabled={saving !== null}
-              onClick={() => submit(name, person, [])}
+              onClick={() => submit(name, person, [], /* removing */ true)}
             >
-              Remove — use the default
+              {saving?.key === key && saving.removing ? 'Removing…' : 'Remove — use the default'}
+              <span className="visually-hidden"> — {title}</span>
             </button>
           ) : (
             <button
               type="button"
               className="button"
-              aria-label={`Discard the ${label(name)} draft for ${person.name}`}
               disabled={saving !== null}
               onClick={() => discardPersonTable(key)}
             >
               Discard draft
+              <span className="visually-hidden"> — {title}</span>
             </button>
           )}
         </div>
@@ -624,7 +662,7 @@ export default function BracketsEditor({
             type="button"
             className={status === activeStatus ? 'active' : ''}
             aria-pressed={status === activeStatus}
-            disabled={tabBusy}
+            disabled={tabBusy || saving !== null}
             onClick={() => openStatus(status)}
           >
             {FILING_STATUS_LABELS[status]}
@@ -696,7 +734,7 @@ export default function BracketsEditor({
                   aria-label={`Save ${label(name)} brackets`}
                   disabled={saving !== null}
                 >
-                  {saving === name ? 'Saving…' : 'Save'}
+                  {saving?.key === name ? 'Saving…' : 'Save'}
                 </button>
               </div>
             </form>

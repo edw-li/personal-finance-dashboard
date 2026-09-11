@@ -633,10 +633,15 @@ describe('BracketsEditor — filing-status tabs', () => {
 })
 
 describe('BracketsEditor — per-person tables', () => {
-  // The strip's two buttons carry the jurisdiction in their accessible name — the visible
-  // text is short on purpose, and the SAME short text sits under both per-worker blocks.
+  // The strip's buttons wear short visible text — the SAME short text sits under both
+  // per-worker blocks — and APPEND their context for a reader, so the accessible name still
+  // contains the words on the button (WCAG 2.5.3, label in name).
   const addFor = (jurisdiction: string, person: string) =>
-    screen.getByRole('button', { name: `Add a ${jurisdiction} table for ${person}` })
+    screen.getByRole('button', { name: `Add a table for ${person} — ${jurisdiction}` })
+  const removeFor = (jurisdiction: string, person: string) =>
+    screen.getByRole('button', {
+      name: `Remove — use the default — ${jurisdiction} — ${person}`,
+    })
 
   it('heads the two per-worker blocks as the default for everyone', () => {
     render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
@@ -652,10 +657,10 @@ describe('BracketsEditor — per-person tables', () => {
     render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
     // Once under Social Security and once under Disability — and nowhere else: a person
     // cannot carry a federal, state, Medicare or capital-gains table.
-    expect(screen.getAllByText('Add a table for Alex')).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: /^Add a table for Alex/ })).toHaveLength(2)
     expect(addFor('Social Security', 'Alex')).toBeTruthy()
     expect(addFor('Disability', 'Alex')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Add a Federal table for Alex' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Add a table for Alex — Federal/ })).toBeNull()
     expect(
       screen.getAllByText(/the default applies to anyone without their own table/),
     ).toHaveLength(2)
@@ -664,6 +669,13 @@ describe('BracketsEditor — per-person tables', () => {
   it('seeds a draft from the default table and saves it with the person', async () => {
     const echo: TaxBracketsOut = {
       ...bracketsFixture(),
+      jurisdictions: {
+        ...bracketsFixture().jurisdictions,
+        // A DIFFERENT default rate than the one on screen (1%), so the last assertion below
+        // is a real one: a save that re-synced every table from its echo would move the
+        // default to 1.1%, and only a save that re-syncs the table it wrote leaves it at 1%.
+        disability: [{ bracket_index: 1, rate: '0.0110', threshold: '0.00' }],
+      },
       per_person: [
         {
           person_id: 1,
@@ -699,8 +711,11 @@ describe('BracketsEditor — per-person tables', () => {
     // The echo is authoritative here too, and the strip keeps the table rather than
     // re-offering to add one.
     await waitFor(() => expect(rate('Disability — Alex', 1).value).toBe('1.3%'))
-    expect(screen.queryByRole('button', { name: 'Add a Disability table for Alex' })).toBeNull()
-    // The DEFAULT table is still the default's: one row at 1%, as it was.
+    expect(
+      screen.queryByRole('button', { name: 'Add a table for Alex — Disability' }),
+    ).toBeNull()
+    // The DEFAULT table is still the one being edited: one row at 1%, as it was — NOT the
+    // 1.1% the echo carries for it.
     expect(rate('Disability', 1).value).toBe('1%')
   })
 
@@ -725,9 +740,9 @@ describe('BracketsEditor — per-person tables', () => {
     expect(rate('Disability — Sam', 2).value).toBe('0%')
     expect(threshold('Disability — Sam', 2).value).toBe('$300,000.00')
     expect(addFor('Disability', 'Alex')).toBeTruthy()
-    expect(screen.getByText('Remove — use the default')).toBeTruthy()
+    expect(removeFor('Disability', 'Sam')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: "Remove Sam's Disability table" }))
+    fireEvent.click(removeFor('Disability', 'Sam'))
     // The same delete-all question the default tables ask, worded for a person — and it says
     // what happens next, because deleting a table is not deleting the tax.
     expect(confirmSpy).toHaveBeenCalledWith(
@@ -795,9 +810,102 @@ describe('BracketsEditor — per-person tables', () => {
     expect(onDirtyChange).toHaveBeenLastCalledWith(true)
 
     // And the way back out of a draft nobody meant to start: client-side, no request.
-    fireEvent.click(screen.getByRole('button', { name: 'Discard the Disability draft for Alex' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Discard draft — Disability — Alex' }),
+    )
     expect(onDirtyChange).toHaveBeenLastCalledWith(false)
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
+    expect(addFor('Disability', 'Alex')).toBeTruthy()
+  })
+
+  it('discards an EMPTY draft on Save instead of deleting a table nobody stored', () => {
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+
+    // The Social Security default has no rows, so the draft seeded from it opens empty —
+    // and its Save is a save of nothing.
+    fireEvent.click(addFor('Social Security', 'Alex'))
+    fireEvent.click(save('Social Security — Alex'))
+
+    // Empty rows are a DELETE-ALL only for a table the server actually holds. This one was
+    // never written, so there is nothing to warn about and nothing to send: Save does here
+    // exactly what Discard draft does, and the offer to add one comes back.
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
+    expect(addFor('Social Security', 'Alex')).toBeTruthy()
+  })
+
+  it('closes the status tabs while a person save is in flight', () => {
+    // A flight that never settles: single-flight is a state only observable mid-request.
+    vi.mocked(putTaxBrackets).mockReturnValue(new Promise<TaxBracketsOut>(() => {}))
+    const tab = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement
+    render(
+      <BracketsEditor
+        brackets={statusFixture('single', ['single', 'married_joint'])}
+        yearStatus="single"
+        onSaved={vi.fn()}
+      />,
+    )
+    expect(tab('Married filing jointly').disabled).toBe(false)
+
+    fireEvent.click(addFor('Disability', 'Alex'))
+    fireEvent.click(save('Disability — Alex'))
+
+    // A tab switch replaces every table on screen; the echo of this save re-syncs the table
+    // it wrote and re-seats the payload. Landing that on another status' tables would file
+    // one status' rows under another's name, so the tabs wait for the flight.
+    expect(tab('Married filing jointly').disabled).toBe(true)
+    expect(tab('Single').disabled).toBe(true)
+    expect(vi.mocked(fetchTaxBrackets)).not.toHaveBeenCalled()
+  })
+
+  it('names the act on the button that started it while a removal is in flight', () => {
+    vi.mocked(putTaxBrackets).mockReturnValue(new Promise<TaxBracketsOut>(() => {}))
+    render(
+      <BracketsEditor
+        brackets={marriedFixture()}
+        yearStatus="married_joint"
+        onSaved={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(removeFor('Disability', 'Sam'))
+    // Remove and Save send the same request, so the progress word has to say WHICH was
+    // pressed: a Save reading "Saving…" under a Remove click names the wrong act.
+    expect(screen.getByRole('button', { name: /^Removing…/ })).toBeTruthy()
+    expect(save('Disability — Sam').textContent).toBe('Save')
+  })
+
+  it('reloads the roster and its tables when another status tab is opened', async () => {
+    const onDirtyChange = vi.fn()
+    vi.mocked(fetchTaxBrackets).mockImplementation(async (_year: number, status: FilingStatus) =>
+      status === 'married_joint'
+        ? marriedFixture()
+        : statusFixture('single', ['single', 'married_joint']),
+    )
+    render(
+      <BracketsEditor
+        brackets={statusFixture('single', ['single', 'married_joint'])}
+        yearStatus="single"
+        onSaved={vi.fn()}
+        onDirtyChange={onDirtyChange}
+      />,
+    )
+    // A single return covers one person, and they have no table of their own.
+    expect(screen.queryByText('Disability — Sam')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Married filing jointly' }))
+    // The strip belongs to the TAB, not to the year: a joint return covers two people, and
+    // Sam's stored voluntary-plan table arrives with them.
+    await waitFor(() => expect(screen.getByText('Disability — Sam')).toBeTruthy())
+    expect(rate('Disability — Sam', 2).value).toBe('0%')
+    expect(addFor('Disability', 'Alex')).toBeTruthy()
+    // Tables that ARRIVED are not unsaved work — a person table appended by a tab load has
+    // to read as clean, or the next tab press asks to discard the server's own rows.
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Single' }))
+    // And back: Sam is not on a single return at all, so neither is their table.
+    await waitFor(() => expect(screen.queryByText('Disability — Sam')).toBeNull())
     expect(addFor('Disability', 'Alex')).toBeTruthy()
   })
 })

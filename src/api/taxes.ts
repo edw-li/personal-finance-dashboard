@@ -33,9 +33,11 @@ export type Jurisdiction = (typeof JURISDICTIONS)[number]
 // The two a PERSON may carry their own table for, mirroring backend `tax_keys.py`'s
 // PER_WORKER_JURISDICTIONS: Social Security and SDI are per-worker taxes, so one earner can
 // sit on an employer's voluntary plan (or in a job exempt from Social Security) while
-// everyone else on the return walks the year's default. Plain strings rather than a const
-// tuple: every caller tests a jurisdiction name that arrived off the wire against it, and a
-// readonly tuple's .includes() would take the literal union instead.
+// everyone else on the return walks the year's default. Typed `readonly string[]` rather
+// than an `as const` tuple: today's one caller hands it a literal `Jurisdiction`, which
+// either shape accepts — but a tuple's `.includes()` narrows its argument to those two
+// names, so a caller holding a jurisdiction that arrived off the wire would need the house
+// cast the editor makes against JURISDICTIONS above (`name as Jurisdiction`). None does.
 export const PER_WORKER_JURISDICTIONS: readonly string[] = ['social_security', 'disability']
 
 // The human name of a jurisdiction, kept HERE rather than in the editor that used to own it:

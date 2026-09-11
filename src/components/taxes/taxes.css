@@ -254,6 +254,12 @@
   color: var(--muted);
 }
 
+/* justify-items: start above sizes every child to its content, which left a 422 sentence as
+   wide as its longest word. The banner is the one child that speaks for the whole card. */
+.bracket-person > .error-banner {
+  justify-self: stretch;
+}
+
 /* The strip's own buttons wear the compact size the bracket tables' do. */
 .bracket-person .button {
   padding: 0.3rem 0.7rem;
@@ -456,17 +462,28 @@
   font-size: 0.78rem;
 }
 
+/* The indent lives on the CELL, and the flex row inside it: a <td> with display:flex stops
+   being a table cell to a screen reader (it leaves the table's accessibility tree), so the
+   name, its cap note and its table tag are laid out by a span the cell wraps. */
+.tax-person-row > td:first-child {
+  padding-left: 1.1rem;
+}
+
 .tax-person-name {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
   gap: 0.35rem;
-  padding-left: 1.1rem;
 }
 
 .tax-person-name .drill-hint {
   margin: 0;
   font-size: 0.7rem;
+}
+
+/* The row's gap already spaces the tag; panels.css' badge margin would double it. */
+.tax-person-name .badge {
+  margin-left: 0;
 }
 
 /* --- marginal panel --- */
