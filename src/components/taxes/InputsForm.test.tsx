@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
@@ -462,6 +463,22 @@ describe('InputsForm', () => {
     // The figure is the SERVER's answer. The browser owns no formula, so nothing here could
     // have produced 9,000 on its own.
     expect(computed('Gross Paycheck').textContent).toBe('$9,000.00')
+  })
+
+  it('asks nothing on mount, even with StrictMode running every effect twice', async () => {
+    vi.useFakeTimers()
+    render(
+      <StrictMode>
+        <InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />
+      </StrictMode>,
+    )
+    await settle(400)
+
+    // The payload's figures already ARE the server's answer for the form as rendered, so
+    // opening the year costs no preview at all. StrictMode mounts every effect twice in
+    // dev, which is why the guard compares the values map the server handed us rather than
+    // spending a one-shot flag the second pass would find already spent.
+    expect(vi.mocked(previewTaxInputs)).not.toHaveBeenCalled()
   })
 
   it('drops a stale preview response', async () => {

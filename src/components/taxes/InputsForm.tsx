@@ -329,10 +329,12 @@ export default function InputsForm({
   // by every save echo, so "is this still the newest thing the server said?" is one
   // comparison — an out-of-order preview and a preview overtaken by a save are the same bug.
   const figureSeq = useRef(0)
-  // The next `values` change is the SERVER's, not the user's — the mount seed and the save
-  // echo both write a form that already agrees with its figures, so asking for a preview of
-  // it would spend a request to be told what we were just told.
-  const previewSeeded = useRef(true)
+  // The `values` object the SERVER handed us: the mount seed, then each save echo. A form
+  // that still holds exactly that object already agrees with its figures, so previewing it
+  // would spend a request to be told what we were just told. Compared by IDENTITY rather
+  // than consumed as a one-shot flag, because StrictMode mounts effects twice in dev and a
+  // flag would be spent on the first pass and let the second one ask.
+  const serverValues = useRef(values)
 
   const changed: Record<string, string | null> = {}
   const invalid: string[] = []
@@ -386,10 +388,7 @@ export default function InputsForm({
   // because a keystroke is not a question, and sequenced because the answers can arrive out
   // of order.
   useEffect(() => {
-    if (previewSeeded.current) {
-      previewSeeded.current = false
-      return
-    }
+    if (serverValues.current === values) return
     const timer = setTimeout(() => {
       const seq = ++figureSeq.current
       previewTaxInputs(inputs.year, previewBody())
@@ -467,12 +466,14 @@ export default function InputsForm({
         // what was just stored): adopt it as the shown value, the new baseline and the
         // figures, so a second save sends nothing. Bumping the sequence retires any preview
         // still in flight — it is an answer about a form the server has since been told
-        // about — and `previewSeeded` stops the echo's own write from asking again.
+        // about — and adopting the echo's map as `serverValues` stops the echo's own write
+        // from asking the same question again.
         const { flatCells: echoCells, allCells: echoAll } = modelOf(echo)
+        const echoValues = valuesOf(echoCells)
         figureSeq.current += 1
-        previewSeeded.current = true
+        serverValues.current = echoValues
         setFigures(figuresOf(echoAll))
-        setValues(valuesOf(echoCells))
+        setValues(echoValues)
         setBaseline(valuesOf(echoCells))
         // The note described a pending fill that the echo just replaced — it would be
         // narrating values that are no longer on screen.
