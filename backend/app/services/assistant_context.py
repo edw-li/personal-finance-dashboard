@@ -82,6 +82,23 @@ def _view_owner(view: dict) -> str | None:
     return str(raw) if raw not in (None, "", "null") else None
 
 
+def _selected_id(context: dict, key: str) -> int | None:
+    """A selected database ID follows the live page first, then its URL."""
+    from app.services.ownership import INT32_MAX
+
+    view = context.get("view") or {}
+    # Explicit null means the page has not adopted a URL profile, or selected its default.
+    # A stale query parameter must not override that live state during an owner switch.
+    raw = view[key] if key in view else (context.get("search") or {}).get(key)
+    if not isinstance(raw, (str, int)) or isinstance(raw, bool):
+        return None
+    value = str(raw)
+    if not value.isascii() or not value.isdecimal() or len(value) > 10:
+        return None
+    selected = int(value)
+    return selected if 1 <= selected <= INT32_MAX else None
+
+
 # The shell writes the viewed month as `month=YYYY-MM` (src/components/shell/useScope.ts):
 # short by design, because the URL is a thing people read. `date.fromisoformat` refuses the
 # reduced form, so every builder that reads a month reads it through _view_month.
@@ -190,22 +207,26 @@ async def _overview(db: AsyncSession, search: dict, view: dict) -> dict:
 
 
 def _movers(months: list, series: list, categories_by_id: dict, focus_index: int) -> list[dict]:
-    """The spending page's what-changed table, server-side: value, Δ vs prior month,
-    Δ vs the trailing-12 average of ENTERED months (absent ≠ zero — the A6 rule)."""
+    """Use the matrix's computed prior-calendar baseline; missing is never zero."""
+    from app.services.month_review import month_shift
+
+    previous = month_shift(months[focus_index], -1)
+    prior_index = months.index(previous) if previous in months else None
     movers: list[dict] = []
     for s in series:
         value = s.values[focus_index]
         if value is None:
             continue
-        prior = s.values[focus_index - 1] if focus_index >= 1 else None
-        window = [v for v in s.values[max(0, focus_index - 11) : focus_index + 1] if v is not None]
-        average = sum(window, Decimal("0")) / len(window) if window else None
+        prior = s.values[prior_index] if prior_index is not None else None
+        average = s.comparison_average[focus_index] if s.comparison_average else None
         movers.append(
             {
                 "category": categories_by_id.get(s.category_id, str(s.category_id)),
                 "value": value,
                 "delta_prior": None if prior is None else value - prior,
                 "delta_12mo_avg": None if average is None else value - average,
+                "comparison_average": average,
+                "comparison_count": s.comparison_count[focus_index] if s.comparison_count else 0,
             }
         )
     movers.sort(key=lambda m: abs(m["delta_prior"] or 0), reverse=True)
@@ -220,7 +241,7 @@ def _spending_builder(window: int):
         m = await spending_matrix(db=db)
         y = await spending_yearly(db=db)
         names = {c.id: c.name for c in m.categories}
-        month = _view_month(search, view)
+        month = _view_month(search, view) or m.default_month
         focus_index = m.months.index(month) if month in m.months else len(m.months) - 1
         slice_from = len(m.months) - min(window, len(m.months))
         return {
@@ -231,10 +252,19 @@ def _spending_builder(window: int):
                     "category": names.get(s.category_id, str(s.category_id)),
                     "values": _tail(s.values, window),
                     "budgets": _tail(s.budgets, window),
+                    "comparison_average": _tail(s.comparison_average, window),
+                    "comparison_count": _tail(s.comparison_count, window),
                 }
                 for s in m.series
             ],
             "totals": _tail(m.totals, window),
+            "totals_definition": "All category entries including living, tax and transfers",
+            "comparison_definition": "Previous 12 calendar months, excluding the focus month; "
+            "only eligible completed months and entered category cells participate",
+            "default_completed_month": m.default_month,
+            "review_state": _tail(m.review_state, window),
+            "eligible_spending": _tail(m.eligible_spending, window),
+            "eligible_savings": _tail(m.eligible_savings, window),
             "net_pay": _tail(m.net_pay, window),
             "savings_rate": _tail(m.savings_rate, window),
             "living_total": _tail(m.living_total, window),
@@ -311,7 +341,14 @@ async def _portfolio(db: AsyncSession, search: dict, view: dict) -> dict:
     # list_dividends orders pay_date DESC (api/portfolio.py:427), so the RECENT dozen is
     # the HEAD of that list, not its tail.
     dividend_rows = await list_dividends(security_id=None, owner=owner, db=db)
-    dividends = [DividendOut.model_validate(r, from_attributes=True) for r in dividend_rows[:12]]
+    dividends = [
+        {
+            **DividendOut.model_validate(row, from_attributes=True).model_dump(),
+            "date_kind": "ex_dividend_date" if row.source == "auto" else "payment_date",
+            "amount_kind": "estimate" if row.source == "auto" else "recorded",
+        }
+        for row in dividend_rows[:12]
+    ]
     status = await compose_refresh_status(db)
     return {
         "owner_scope": owner or "household",
@@ -426,12 +463,13 @@ async def _paycheck(db: AsyncSession, search: dict, view: dict) -> dict:
 
     from app.api.paycheck import get_breakdown
 
-    person_raw = view.get("person")
-    person_id = (
-        int(person_raw) if isinstance(person_raw, int | str) and str(person_raw).isdigit() else None
-    )
+    context = {"search": search, "view": view}
     try:
-        breakdown = await get_breakdown(profile_id=None, person_id=person_id, db=db)
+        breakdown = await get_breakdown(
+            profile_id=_selected_id(context, "profile"),
+            person_id=_selected_id(context, "person") or _selected_id(context, "owner"),
+            db=db,
+        )
     except HTTPException as exc:
         return {"error": exc.detail}  # "no paycheck profiles" is an answer, not a failure
     return {"breakdown": breakdown}

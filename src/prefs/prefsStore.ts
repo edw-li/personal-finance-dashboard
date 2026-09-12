@@ -2,6 +2,8 @@ import { getToken } from '../api/client'
 import { fetchPrefs, patchPrefs } from '../api/prefs'
 import { setSnapshot } from '../api/snapshotCache'
 import type { PrefsOut } from '../types/api'
+import { isOverviewLayout } from './overviewLayout'
+import type { OverviewLayout } from './overviewLayout'
 
 // Preferences that follow the account (2026-09-03 data-lifecycle spec §10), reconciled with
 // the browser's copy by ONE rule: first paint from localStorage exactly as before; after
@@ -14,7 +16,7 @@ import type { PrefsOut } from '../types/api'
 // their old spellings so nothing is lost on deploy; `endSession` drops the sync state (never
 // the values) when the account goes away.
 
-export type PrefKey = 'theme' | 'density' | 'scope' | 'palette_recents' | 'landing_page'
+export type PrefKey = 'theme' | 'density' | 'scope' | 'palette_recents' | 'landing_page' | 'overview_layout'
 export type ThemeChoice = 'system' | 'dark' | 'light'
 export type Density = 'comfortable' | 'compact'
 export type RangePreset = 'all' | '1y' | 'ytd'
@@ -24,6 +26,7 @@ export interface ScopeMemory {
   range?: RangePreset
 }
 export interface PrefValues {
+  overview_layout: OverviewLayout
   theme: ThemeChoice
   density: Density
   scope: ScopeMemory
@@ -32,6 +35,7 @@ export interface PrefValues {
 }
 
 export const STORAGE_KEYS: Record<PrefKey, string> = {
+  overview_layout: 'finance.overviewLayout',
   theme: 'finance.theme',
   density: 'finance.density',
   scope: 'finance.scope',
@@ -83,6 +87,11 @@ const enumCodec = <V extends string>(guard: (v: unknown) => v is V): Codec<V> =>
 })
 
 const codecs: { [K in PrefKey]: Codec<PrefValues[K]> } = {
+  overview_layout: {
+    read: raw => { const value = parseJson(raw); return isOverviewLayout(value) ? value : undefined },
+    write: value => JSON.stringify(value), toServer: value => value,
+    fromServer: value => isOverviewLayout(value) ? value : undefined,
+  },
   theme: enumCodec(isTheme),
   density: enumCodec(isDensity),
   scope: {

@@ -15,6 +15,7 @@ import {
 import { referenceLine } from '../../charts/reference'
 import { MUTED, PALETTE } from '../../charts/theme'
 import { timeZoom } from '../../charts/timeZoom'
+import type { ZoomWindow } from '../../charts/timeZoom'
 import { axisTooltip, swatch } from '../../charts/tooltip'
 import type { NetWorthTimeseries, ProjectionOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
@@ -94,7 +95,9 @@ export interface ProjectionOptionInput
         ProjectionOut,
         'retirements' | 'fi_month' | 'coast_fi_month' | 'fi_month_p10' | 'fi_month_p50' | 'fi_month_p90'
       >
-    > {}
+    > {
+  target_values?: string[] | null
+}
 
 /** A pinned scenario's deterministic line, drawn as a reference series (chart grammar §10):
  *  dashed MUTED, end-labelled with the pin's name. The fan stays the live scenario's. */
@@ -107,14 +110,16 @@ export interface ProjectionExtras {
   log?: boolean
   selected?: Record<string, boolean>
   references?: ProjectionReference[]
+  window?: ZoomWindow
 }
 
 export function projectionOption(
   data: ProjectionOptionInput,
-  { log = false, selected, references: pinned = [] }: ProjectionExtras = {},
+  { log = false, selected, references: pinned = [], window }: ProjectionExtras = {},
 ): EChartsOption | null {
   if (data.months.length < 2) return null
   const target = data.fi_target === null ? null : Number(data.fi_target)
+  const targetValues = data.target_values ?? (target === null ? null : data.months.map(() => String(target)))
   const bands = data.bands ?? null
   const labels = data.months.map(formatMonth)
   const lastLabel = labels[labels.length - 1]
@@ -142,7 +147,7 @@ export function projectionOption(
           ] as const
         ).flatMap(([name, iso]) => {
           const label = anchorMonthLabel(data.months, iso ?? null)
-          return label === undefined ? [] : [{ name, label, value: target }]
+          return label === undefined ? [] : [{ name, label, value: Number(targetValues?.[labels.indexOf(label)] ?? target) }]
         })
 
   const bandSeries =
@@ -248,7 +253,7 @@ export function projectionOption(
           {
             ...referenceLine(
               PROJECTION_SERIES[2],
-              data.months.map(() => target),
+              onScale(targetValues!.map(Number)),
             ),
             ...(marks.length > 0 ? { markPoint: percentileMarks(marks) } : {}),
           },
@@ -265,7 +270,7 @@ export function projectionOption(
   ]
   return {
     // ctrl+wheel / drag-pan over a 30-year axis; the horizon knob changes the window.
-    dataZoom: timeZoom(data.months, 'all'),
+    dataZoom: window ? [{ ...timeZoom(data.months, 'all')[0], ...window }] : timeZoom(data.months, 'all'),
     // A NAMED variant either way (conformance checks grids by variant, never by literal):
     // the fan, or the fan with room for the pin names past the last month.
     grid: grid(references.length === 0 ? 'fan' : 'fanEndLabel'),
@@ -379,16 +384,28 @@ export function netWorthProjectionCsv(
 /** The projection as a table (2026-08-25 spec §2a): month rows × projected/coast, plus
  * p10/p50/p90 when the Monte Carlo fan is on — verbatim server strings. */
 export function projectionCsv(
-  data: Pick<ProjectionOut, 'months' | 'projected' | 'coast' | 'bands'>,
+  data: Pick<ProjectionOut, 'months' | 'projected' | 'coast' | 'bands'> & {
+    target_values?: string[] | null
+    display_dollars?: 'today' | 'future'
+    start_month?: string
+  },
+  references: ProjectionReference[] = [],
 ): ExportTable {
   const bands = data.bands ?? null
+  const percentiles = data.display_dollars ? ['p10', 'p25', 'p50', 'p75', 'p90'] : ['p10', 'p50', 'p90']
+  const hasTarget = data.target_values !== undefined
+  const unit = data.display_dollars === 'future' ? 'USD · future dollars'
+    : `USD · ${data.start_month?.slice(0, 7) ?? 'today'} dollars`
+  const name = (label: string) => data.display_dollars ? `${label} (${unit})` : label
   return {
-    headers: ['Month', 'Projected', 'Growth only', ...(bands ? ['p10', 'p50', 'p90'] : [])],
+    headers: ['Month', name('Projected'), name('Growth only'), ...(hasTarget ? [name('FI target')] : []), ...(bands ? percentiles.map(name) : []), ...references.map((ref) => name(ref.name))],
     rows: data.months.map((month, i) => [
       month,
       data.projected[i],
       data.coast[i],
-      ...(bands ? [bands.p10?.[i] ?? '', bands.p50?.[i] ?? '', bands.p90?.[i] ?? ''] : []),
+      ...(hasTarget ? [data.target_values?.[i] ?? ''] : []),
+      ...(bands ? percentiles.map((key) => bands[key]?.[i] ?? '') : []),
+      ...references.map((ref) => ref.data[i] && Number.isFinite(Number(ref.data[i])) ? ref.data[i] : ''),
     ]),
   }
 }

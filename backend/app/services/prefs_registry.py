@@ -35,6 +35,23 @@ THEMES = ("system", "dark", "light")
 DENSITIES = ("comfortable", "compact")
 RANGES = ("all", "1y", "ytd")
 PALETTE_RECENTS_MAX = 8
+OVERVIEW_TILES = ("net_worth", "portfolio", "living_spending", "tax")
+OVERVIEW_CARDS = ("ytd", "performance", "spending", "money_flow")
+
+
+def _overview_layout(value: Any) -> Any:
+    if not isinstance(value, dict) or set(value) != {"tiles", "cards"}:
+        raise PrefValueError("must contain tiles and cards")
+    for key, allowed in (("tiles", OVERVIEW_TILES), ("cards", OVERVIEW_CARDS)):
+        items = value[key]
+        if (
+            not isinstance(items, list)
+            or not all(isinstance(item, str) and item in allowed for item in items)
+            or len(set(items)) != len(items)
+            or (key == "tiles" and not items)
+        ):
+            raise PrefValueError(f"{key} must be unique allowed items; keep at least one tile")
+    return value
 
 
 def _one_of(allowed: tuple[str, ...]) -> Callable[[Any], Any]:
@@ -88,6 +105,11 @@ PREF_REGISTRY: dict[str, PrefSpec] = {
         PrefSpec("scope", {"owner": "all", "range": "1y"}, _scope),
         PrefSpec("palette_recents", [], _recents),
         PrefSpec("landing_page", "/", _one_of(NAV_PATHS)),
+        PrefSpec(
+            "overview_layout",
+            {"tiles": list(OVERVIEW_TILES), "cards": list(OVERVIEW_CARDS)},
+            _overview_layout,
+        ),
     )
 }
 

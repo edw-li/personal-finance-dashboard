@@ -1,7 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 import { fetchCalendar } from '../api/calendar'
-import { describeError } from '../api/client'
 import { fetchCoverage } from '../api/coverage'
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
@@ -13,7 +12,6 @@ import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartCard from '../components/ChartCard'
-import type { EChartEventParams } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { chipAmount, eventKey } from '../components/calendar/calendarView'
 import { attentionItems } from '../components/overview/attention'
@@ -40,6 +38,16 @@ import PageFrame from '../components/shell/PageFrame'
 import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
+import useOverviewResource from '../components/overview/useOverviewResource'
+import useSpendingEvidence from '../components/metrics/useSpendingEvidence'
+import { FeedBanner } from '../components/shell/Feed'
+import { metricReceipt } from '../utils/metricReceipt'
+import { REVIEW_LABELS } from '../api/monthReview'
+import OverviewChanges from '../components/overview/OverviewChanges'
+import OverviewCustomize from '../components/overview/OverviewCustomize'
+import { useAssistantView } from '../components/assistant/viewState'
+import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
+import { getLocal, setLocal, subscribe } from '../prefs/prefsStore'
 import type {
   CalendarEvent,
   CoverageOut,
@@ -64,8 +72,9 @@ import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './OverviewPage.css'
 
-// One payload object, never eleven pieces of state: the page is a SNAPSHOT, and a tile
-// that belongs to a newer fetch than the chart beside it is a lie about the same instant.
+// The complete data shape is assembled from four independent coherent groups:
+// wealth, investments, spending/review, and planning. Each group updates its related
+// figures together; the render uses Partial<OverviewData> as other groups arrive or fail.
 interface OverviewData {
   summary: NetWorthSummary
   ts: NetWorthTimeseries
@@ -73,18 +82,15 @@ interface OverviewData {
   history: PortfolioHistory
   matrix: SpendingMatrix
   taxes: TaxSummariesOut
-  // The attention strip's feeds (ESPP countdowns, tax-year input counts, the system
-  // status — last refresh run, backup marker, environment) and the YTD card's (yearly
-  // rollup, dividend log) ride the same all-or-nothing snapshot: per-slot degradation
-  // stays the documented v2 shape.
+  // Planning sources feed attention checks. The YTD rollup joins the independently
+  // loaded wealth, spending and investment groups only when its inputs are present.
   lots: EsppLotsResponse
   taxYears: TaxYearOut[]
   yearly: SpendingYearly
   dividends: DividendOut[]
   system: SystemStatus
-  // /coverage rides it too (2026-09-04 honest-numbers spec §3): the footer, the strip and
-  // the YTD card's windows all read it, and a footer standing on a different instant from
-  // the spending tile beside it is precisely the dishonesty this program removes.
+  // Coverage updates with the spending matrix and yearly rollup, so spending figures
+  // and their completeness/window labels come from the same group refresh.
   coverage: CoverageOut
 }
 
@@ -97,14 +103,13 @@ function rateTone(rate: string): string {
 
 // Keyed by the fetch parameters, like every other page's: an owner scope is a DIFFERENT
 // snapshot, and one key for all of them would paint the wrong person's numbers.
-function overviewKey(owner: OwnerScope): string {
-  return `overview:${owner ?? 'all'}`
-}
+const loadSpending = async () => { const [matrix, yearly, coverage] = await Promise.all([fetchMatrix(), fetchYearly(), fetchCoverage()]); return { matrix, yearly, coverage } }
+const loadPlanning = async () => { const [taxes, lots, taxYears, system] = await Promise.all([fetchAllTaxSummaries(), fetchLots(), fetchTaxYears(), fetchSystemStatus()]); return { taxes, lots, taxYears, system } }
 
 // The two feeds with no owner dimension server-side. Under an owner scope their cards say
 // so, rather than letting the chip imply a filter that never ran.
 const SPENDING_HINT =
-  "The latest entered month's total spend against your trailing 12-month average."
+  "Living spending for the latest eligible month, compared with eligible months within the previous 12 calendar months. Tax paid from take-home and transfers are separate."
 const PERFORMANCE_HINT =
   "Portfolio value vs cost basis, checkpointed weekly after Monday's close; the pinging dot is live. The S&P 500 line invests only the starting balance; VOO (your contributions) invests every inferred contribution instead."
 
@@ -129,31 +134,32 @@ function scopeName(owner: Exclude<OwnerScope, null>): string {
 }
 
 export default function OverviewPage() {
-  const navigate = useNavigate()
+  const [layout, setLayout] = useState(() => getLocal('overview_layout') ?? DEFAULT_OVERVIEW_LAYOUT)
+  useEffect(() => subscribe('overview_layout', setLayout), [])
   // The URL owns the scope (2026-09-03 shell spec §6) and the scope row writes it; this
   // page only reads it, so there is no local owner state to keep in step.
   const { scope } = useScope({ owner: true })
   const owner = scope.owner
-  const snapshotKey = overviewKey(owner)
-  const cachedData = getSnapshot<OverviewData>(snapshotKey)
-  const [data, setData] = useState<OverviewData | null>(cachedData ?? null)
-  const [busy, setBusy] = useState(true)
-  // false once a revalidation actually CHANGES the data — charts may animate again.
-  const [fromCache, setFromCache] = useState(cachedData !== undefined)
-  const [error, setError] = useState<string | null>(null)
-  const seqRef = useRef(0)
-  // What the page is actually SHOWING. The identical-payload skip in load() is judged
-  // against this, never against the snapshot cache: render and cache diverge across owner
-  // switches (the previous scope's tiles are still up while the next scope's key is warm),
-  // and skipping on the cache would strand the page on the previous scope — NetWorthPage's
-  // 2026-08-28 bug, which this page inherits the moment its key grows an owner.
-  const shownRef = useRef<OverviewData | null>(cachedData ?? null)
+  useAssistantView({ owner: owner === null ? null : String(owner) })
+  const wealthLoader = useCallback(async () => {
+    const [summary, ts] = await Promise.all([fetchSummary(owner), fetchTimeseries('monthly', owner)])
+    return { summary, ts }
+  }, [owner])
+  const investmentsLoader = useCallback(async () => {
+    const [holdings, history, dividends] = await Promise.all([fetchHoldings(owner), fetchHistory(), fetchDividends()])
+    return { holdings, history, dividends }
+  }, [owner])
+  const wealth = useOverviewResource(`overview:wealth:${owner ?? 'all'}`, 'wealth', wealthLoader)
+  const investments = useOverviewResource(`overview:investments:${owner ?? 'all'}`, 'investments', investmentsLoader)
+  const spending = useOverviewResource('overview:spending', 'spending and review', loadSpending)
+  const planning = useOverviewResource('overview:planning', 'planning', loadPlanning)
+  const data = useMemo<Partial<OverviewData>>(() => ({ ...wealth.data, ...investments.data, ...spending.data, ...planning.data }), [wealth.data, investments.data, spending.data, planning.data])
+  const fromCache = wealth.fromCache
+  const spendingEvidence = useSpendingEvidence(data.matrix?.default_month ?? undefined, data.matrix)
 
-  // The forward-looking strip is a SEPARATE fetch with its own tiny error state: the
-  // snapshot Promise.all above stays untouched (its all-or-nothing contract is the
-  // page's point), and a calendar hiccup must not take the overview down — or the
-  // reverse. It renders inside the snapshot branch because it SITS with the freshness
-  // footer; a failed first snapshot shows the banner alone, house posture.
+  // The agenda has its own day-keyed cache and failure state, independent of the four
+  // groups above. A failed refresh keeps the last loaded schedule with a notice;
+  // without a previous answer, the card reports that upcoming events are unavailable.
   const [upNext, setUpNext] = useState<CalendarEvent[] | null>(
     () => getSnapshot<CalendarEvent[]>(upNextKey()) ?? null,
   )
@@ -180,9 +186,8 @@ export default function OverviewPage() {
       })
   }
 
-  // The money-flow card is the SECOND isolated fetch (spec §5, the Up-next pattern):
-  // its own state, its own seq, its own inline error — a tax-engine hiccup dents one
-  // card and never the snapshot, and vice versa.
+  // Money flow is independently keyed by year, with its own sequence and inline error.
+  // Its failure leaves the agenda and other data groups available.
   const [flow, setFlow] = useState<MoneyFlowOut | null>(
     () => getSnapshot<MoneyFlowOut>(flowKey(null)) ?? null,
   )
@@ -214,95 +219,29 @@ export default function OverviewPage() {
   const showFlowYear = (year: number | null) => {
     setFlowYear(year)
     const peeked = getSnapshot<MoneyFlowOut>(flowKey(year))
-    if (peeked !== undefined) setFlow(peeked)
+    setFlow(peeked ?? null)
     loadFlow(year)
   }
-
-  // Memoized over the scope, so the effect below refetches when — and only when — the
-  // owner changes. Promise.all is deliberate: the page renders one coherent snapshot, and
-  // a partial refresh would let the tiles disagree with the charts. On failure the previous
-  // payload stays on screen with the frame's staleness line (EsppPage class).
-  const load = useCallback(() => {
-    const seq = ++seqRef.current
-    Promise.all([
-      fetchSummary(owner),
-      fetchTimeseries('monthly', owner),
-      fetchHoldings(owner),
-      // Household-wide until the history endpoint grows an owner param; /spending has no
-      // owner dimension at all. Both cards say so under a scope (see the hints below).
-      fetchHistory(),
-      fetchMatrix(),
-      fetchAllTaxSummaries(),
-      fetchLots(),
-      fetchTaxYears(),
-      fetchYearly(),
-      fetchDividends(),
-      fetchSystemStatus(),
-      fetchCoverage(),
-    ])
-      .then(
-        ([summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, system, coverage]) => {
-          if (seq !== seqRef.current) return
-          const snapshot: OverviewData = {
-            summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, system, coverage,
-          }
-          setSnapshot(snapshotKey, snapshot)
-          setError(null)
-          // Identical payload: nothing re-renders, the charts stay still (spec §1) — judged
-          // against the RENDERED snapshot, never the cache (see `shownRef`).
-          if (
-            shownRef.current !== null &&
-            JSON.stringify(shownRef.current) === JSON.stringify(snapshot)
-          )
-            return
-          shownRef.current = snapshot
-          setFromCache(false)
-          setData(snapshot)
-        },
-      )
-      .catch((err: unknown) => {
-        if (seq !== seqRef.current) return
-        setError(describeError(err, 'the overview'))
-      })
-      .finally(() => {
-        if (seq === seqRef.current) setBusy(false)
-      })
-  }, [owner, snapshotKey])
-
-  // Adopting an owner change, adjust-during-render (CategoriesPanel's precedent, and the
-  // shape Net worth uses): the effect below must not refetch silently — the body dims, and
-  // an already-seen scope paints instantly and revalidates underneath. `shownRef` stays out
-  // of this: a ref write belongs in a promise continuation, and leaving it on the previous
-  // scope only costs one extra repaint when the live payload lands. It sits HERE, after
-  // load(), because a render-phase setState ahead of that useCallback costs the React
-  // Compiler its stable-setter inference (react-hooks/preserve-manual-memoization).
-  const [seenOwner, setSeenOwner] = useState<OwnerScope>(owner)
-  if (owner !== seenOwner) {
-    setSeenOwner(owner)
-    setBusy(true)
-    const peeked = getSnapshot<OverviewData>(snapshotKey)
-    if (peeked !== undefined) {
-      setFromCache(true)
-      setData(peeked)
-    }
-  }
-
-  useEffect(() => {
-    load()
-  }, [load])
 
   useEffect(() => {
     loadUpNext()
     loadFlow(null)
     // mount-only: these two are household-wide and never re-run on a scope change; both
     // are plain functions over stable setters (house idiom).
+    return () => {
+      // A response after logout must not repopulate the cleared session cache.
+      upNextSeq.current += 1
+      flowSeq.current += 1
+    }
   }, [])
 
   // The busy flag is raised by the CALLERS, never inside load(): load() runs in the mount
   // effect's synchronous body, where a setState is a house react-hooks violation.
   const reload = () => {
-    setBusy(true)
-    load()
+    wealth.retry()
+    investments.retry()
+    spending.retry()
+    planning.retry()
     loadUpNext()
     loadFlow(flowYear)
   }
@@ -310,7 +249,7 @@ export default function OverviewPage() {
   // The only memoized values on the page — EChart keys its setOption effect on [option],
   // so a fresh object every render would redraw all three charts on every keystroke
   // elsewhere. Everything else below is a plain const.
-  const nwTrend = useMemo(() => (data ? netWorthTrendOption(data.ts) : null), [data])
+  const nwTrend = useMemo(() => (data.ts ? netWorthTrendOption(data.ts) : null), [data])
   // The ping is derived from the OWNER-FILTERED holdings, but /portfolio/history is
   // household-wide by design (see the fetch above), so under a person scope plotting their
   // total at the end of the household series draws a fake cliff. PortfolioPage has carried
@@ -319,7 +258,7 @@ export default function OverviewPage() {
   // builder's livePt branch.
   const perf = useMemo(
     () =>
-      data
+      data.history && data.holdings
         ? portfolioHistoryOption(
             data.history,
             owner === null ? liveFromHoldings(data.holdings) : null,
@@ -331,84 +270,61 @@ export default function OverviewPage() {
   // beside the options it feeds, not recomputed per render: it rides INTO the bars' memo,
   // and a fresh Set every render would redraw that chart on every keystroke elsewhere.
   const notEntered = useMemo(
-    () => (data ? notEnteredMonths(data.matrix, data.coverage) : new Set<string>()),
+    () => (data.matrix && data.coverage ? notEnteredMonths(data.matrix, data.coverage) : new Set<string>()),
     [data],
   )
   const bars = useMemo(
-    () => (data ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered) : null),
+    () => (data.matrix ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered) : null),
     [data, notEntered],
   )
-
-  // 2026-08-25 spec §2d: each chart clicks through to the page that owns its numbers;
-  // the bars carry the clicked month into /spending's ?month= drill deep link, mapped
-  // back through the option's own trailing-12 slice.
-  const openSpendingMonth = (params: EChartEventParams) => {
-    if (!data || typeof params.dataIndex !== 'number') return
-    const months = data.matrix.months
-    const month = months[Math.max(0, months.length - RECENT_SPEND_MONTHS) + params.dataIndex]
-    if (month) navigate(`/spending?month=${month}`)
-  }
 
   // Audit item 11: the server answers an owner with no accounts with zero TOTALS, and a
   // page of $0.00 tiles over a flat line reads as "you have nothing" rather than "there is
   // nothing here to show" (the trend's all-zero series also makes ECharts pick a 0..1 axis
   // and print a $0/$1 ladder). An owner scope only: a fresh database's own empty states
   // already say what is missing, and the household is not "this person".
-  const emptyScope = data !== null && owner !== null && data.ts.accounts.length === 0
+  const emptyScope = data.ts !== undefined && owner !== null && data.ts.accounts.length === 0
   const emptyScopeNote =
     emptyScope && owner !== null ? `No accounts for ${scopeName(owner)} yet` : null
 
   const summary = data?.summary
   // Rendered verbatim, never re-derived: these are the server's own totals fields (the
   // `totals.unrealized_gl` lesson).
-  const totals = data?.holdings.totals
-  const asOf = data?.holdings.as_of ?? null
+  const totals = data.holdings?.totals
+  const asOf = data.holdings?.as_of ?? null
   // Audit item 15: the day change is the newest quote's move against ITS prior close, so
   // "today" is a claim about that quote and not about the moment the page is read — on a
   // Sunday, or after a failed refresh, the tile was still calling Friday's move today's.
   // latest_quote_at is the NEWEST stamp (as_of is the oldest, the staleness clock); the
   // fallback is stale-tab armor only, since server-side both derive from one quote list.
-  const quoteDay = (data?.holdings.latest_quote_at ?? asOf)?.slice(0, 10) ?? null
+  const quoteDay = (data.holdings?.latest_quote_at ?? asOf)?.slice(0, 10) ?? null
   // Carries its own leading space so a missing quote date omits the WORD rather than
   // guessing "today" — with no quote on file there is no day to name (review round).
   const dayChangeWhen =
     quoteDay === null ? '' : quoteDay === todayIso() ? ' today' : ` on ${formatDate(quoteDay)}`
-  const stats = data ? spendStats(data.matrix, notEntered) : null
+  const stats = data.matrix ? spendStats(data.matrix, notEntered) : null
   const currentYear = new Date().getFullYear()
-  const tax = data ? pickTaxSummary(data.taxes.years, currentYear) : null
+  const tax = data.taxes ? pickTaxSummary(data.taxes.years, currentYear) : null
   // Plain consts like their siblings (the memo rule below covers CHART options only) —
   // the strip's and the YTD card's rules are cheap math over the snapshot.
-  const attention = data
-    ? attentionItems(
-        {
-          months: data.ts.months,
-          holdings: data.holdings,
-          lots: data.lots,
-          taxYears: data.taxYears,
-          system: data.system,
-          coverage: data.coverage,
-        },
-        todayIso(),
-      )
-    : []
-  const ytd = data ? ytdStats(data.ts, data.yearly, data.dividends, data.coverage, todayIso()) : null
+  const attention = attentionItems({
+    months: data.ts?.months, holdings: data.holdings, lots: data.lots,
+    taxYears: data.taxYears, system: data.system, coverage: data.coverage,
+  }, todayIso()).filter(item => item.key !== 'espp-qualifying')
+  const ytd = data.ts && data.yearly && data.dividends && data.coverage ? ytdStats(data.ts, data.yearly, data.dividends, data.coverage, todayIso()) : null
   // Shown once ANY feed has history — on a fresh database the empty states below carry
   // the message, and a card of five dashes would just restate them.
   const showYtd =
     ytd !== null &&
     data !== null &&
-    (data.ts.months.length > 0 || data.yearly.years.length > 0 || data.dividends.length > 0)
+    ((data.ts?.months.length ?? 0) > 0 || (data.yearly?.years.length ?? 0) > 0 || (data.dividends?.length ?? 0) > 0)
 
   // The matrix months are a UNION of spending rows and net-pay rows, so a month whose
   // paycheck is entered but whose spending is not comes back with an explicit "0.00". A
   // green "▼ under $5,000.00 12-mo avg" would congratulate the user for a month they have
   // not entered yet, so the tile keeps its label and says nothing else.
   const cashflowOnly =
-    stats !== null &&
-    stats.total !== null &&
-    Number(stats.total) === 0 &&
-    stats.avg12 !== null &&
-    stats.avg12 > 0
+    stats?.total === null
 
   // ONE object, three channels: the words, the colour and the glyph are either all present
   // or all absent, which is the invariant a comment used to assert across three separate
@@ -421,9 +337,9 @@ export default function OverviewPage() {
   const spendDelta =
     stats && stats.avg12 !== null && stats.aboveAvg !== null && !cashflowOnly
       ? {
-          text: `${stats.aboveAvg ? 'over' : 'under'} ${formatCurrency(stats.avg12)} 12-mo avg`,
-          tone: stats.aboveAvg ? ('negative' as const) : ('positive' as const),
-          direction: stats.aboveAvg ? ('up' as const) : ('down' as const),
+          text: `${Number(stats.total) === stats.avg12 ? 'at' : stats.aboveAvg ? 'over' : 'under'} ${formatCurrency(stats.avg12)} previous 12-mo average`,
+          tone: Number(stats.total) === stats.avg12 ? ('neutral' as const) : stats.aboveAvg ? ('negative' as const) : ('positive' as const),
+          direction: Number(stats.total) === stats.avg12 ? undefined : stats.aboveAvg ? ('up' as const) : ('down' as const),
         }
       : null
 
@@ -439,8 +355,8 @@ export default function OverviewPage() {
 
   const taxLabel =
     tax === null
-      ? 'Effective tax'
-      : `Effective tax — ${tax.year}${
+      ? 'Estimated tax'
+      : `Estimated tax — ${tax.year}${
           tax.year < currentYear
             ? ' (latest)'
             : tax.year > currentYear
@@ -448,55 +364,9 @@ export default function OverviewPage() {
               : ' (est.)'
         }`
 
-  return (
-    <div className="page overview-page">
-      <PageFrame
-        title="Overview"
-        actions={
-          /* Nothing but idempotent GETs and no mutation anywhere on this page, so the
-             button stays live while a load is in flight: an impatient second click is
-             harmless, the body dims to show the work, and seqRef decides which answer
-             lands. */
-          <button type="button" className="button" onClick={reload}>
-            Refresh
-          </button>
-        }
-        scopeRow={<ScopeBar owner />}
-        resource={{
-          // A failed FIRST load is the frame's alert alone rather than a page of $0.00
-          // tiles that reads as "you are broke" (PortfolioPage posture); a failed RELOAD
-          // keeps the previous payload up under the frame's stale line.
-          status: data === null ? (error !== null ? 'error' : 'loading') : 'ready',
-          error,
-          busy,
-          fromCache,
-          retry: reload,
-        }}
-        skeleton={{
-          tiles: 4,
-          cards: [
-            { span: 12, height: 220 },
-            { span: 12, height: 280 },
-            { span: 12, height: 240 },
-            { span: 12, height: 200 },
-          ],
-        }}
-      >
-        {data !== null && (
-          <>
-            {/* The dashboard's to-do list: each line is a condition the snapshot itself
-                proves and a link to where it gets fixed. Absent when nothing needs doing —
-                an "all clear" badge would be one more thing to read every morning. */}
-            {attention.length > 0 && (
-              <nav className="attention-strip" aria-label="Needs attention">
-                {attention.map((item) => (
-                  <NavLink key={item.key} className="attention-item" to={item.to}>
-                    {item.text} →
-                  </NavLink>
-                ))}
-              </nav>
-            )}
-            <div className="kpi-row">
+  const reviewAttention = (data.coverage?.review_months ?? []).filter(review => review.state === 'needs_review' || review.state === 'ready_to_review' || review.state === 'in_progress').sort((a, b) => b.month.localeCompare(a.month)).slice(0, 2)
+  const tileElements = {
+    net_worth: (
               <StatTile
                 hero
                 label={summary?.month ? `Net worth — ${formatMonth(summary.month)}` : 'Net worth'}
@@ -522,7 +392,10 @@ export default function OverviewPage() {
                 }
                 tone={emptyScopeNote !== null ? 'neutral' : toneOf(summary?.mom_delta)}
                 hint="Assets minus liabilities from the latest monthly snapshot, with its change from the month before."
+                evidence={summary ? metricReceipt({ id: 'net_worth', label: 'Net worth', value: summary.net_worth, definition: 'Sum of non-component account balances, including signed liabilities, at the recorded monthly snapshot.', scope: owner ?? 'Household', as_of: summary.month, source_link: `/net-worth${owner === null ? '' : `?owner=${owner}`}`, components: summary.groups.map(group => ({ label: group.group.replaceAll('_', ' '), value: group.total, unit: 'USD' })) }) : undefined}
               />
+    ),
+    portfolio: (
               <StatTile
                 label="Portfolio"
                 // Holdings hang off accounts, so the scope with none has no portfolio
@@ -541,27 +414,36 @@ export default function OverviewPage() {
                 }
                 tone={emptyScopeNote !== null ? 'neutral' : toneOf(totals?.day_change_amount)}
                 hint="Market value of every priced holding at the latest quotes, and today's move vs the prior close."
+                evidence={data.holdings ? metricReceipt({ id: 'portfolio_value', label: 'Portfolio value', value: totals?.market_value ?? null, definition: 'Shares held multiplied by available prices. Missing quotes are excluded from priced value; quote dates can differ from refresh time.', scope: owner ?? 'Household', as_of: asOf, source_link: `/portfolio${owner === null ? '' : `?owner=${owner}`}`, completeness: (totals?.unpriced_count ?? 0) > 0 ? 'mixed' : 'complete', warnings: (totals?.unpriced_count ?? 0) > 0 ? [`${totals!.unpriced_count} holdings have no price.`] : [], components: [{ label: 'Unpriced holdings', value: totals?.unpriced_count ?? 0, unit: 'count' }] }) : undefined}
               />
+    ),
+    living_spending: (
               <StatTile
-                label={stats?.month ? `Spending — ${formatMonth(stats.month)}` : 'Spending'}
+                label={stats?.month ? `Living spending — ${formatMonth(stats.month)}` : 'Living spending'}
                 value={cashflowOnly ? '—' : formatCurrency(stats?.total)}
                 delta={spendDelta?.text}
                 tone={spendDelta?.tone}
                 direction={spendDelta?.direction}
                 hint={spendingHint}
+                evidence={spendingEvidence.metric('living_spending')}
               />
-              {/* A rate is a level, not a movement: no delta, no arrow. */}
+    ),
+    tax: (
               <StatTile
                 label={taxLabel}
-                value={tax === null ? '—' : formatPct(tax.totals.effective_rate, { signed: false })}
-                hint="Total tax ÷ gross income from the tax engine, for the year named in the label."
+                value={tax === null ? '—' : formatCurrency(tax.totals.total_tax)}
+                delta={tax ? `${formatPct(tax.totals.effective_rate, { signed: false })} effective rate · Household` : undefined}
+                hint="Estimated tax liability from the existing tax engine, for the year named in the label."
+                evidence={tax ? metricReceipt({ id: 'estimated_tax', label: `Estimated tax for ${tax.year}`, value: tax.totals.total_tax, definition: 'Tax-engine estimate using the saved income, deductions, filing status and tax tables for this year.', source_link: `/taxes?year=${tax.year}`, as_of: null, completeness: 'estimate', components: [{ label: 'Gross income', value: tax.totals.gross_income, unit: 'USD' }, { label: 'Effective tax rate', value: tax.totals.effective_rate, unit: 'ratio' }] }) : undefined}
               />
-            </div>
-            {showYtd && ytd && (
+    )
+  }
+  const deeperCards = {
+    ytd: (showYtd && ytd && (
               <section className="card ytd-card">
                 <h2 className="eyebrow">
                   Year to date — {ytd.year}
-                  <InfoHint text="The year so far, each figure over the window it was measured on: net-worth change since the last pre-January snapshot, living spend (tax payments and transfers are counted apart), net pay, savings with payroll deductions counted in, and dividends collected." />
+                  <InfoHint text="The year so far, each figure over the window it was measured on: net-worth change since the last pre-January snapshot, living spend (tax payments and transfers are counted apart), net pay, savings with payroll deductions counted in, and dividend entries (automatic records use ex-date)." />
                 </h2>
                 <dl className="ytd-facts">
                   <div className="ytd-fact">
@@ -600,7 +482,7 @@ export default function OverviewPage() {
                   </div>
                   <div className="ytd-fact">
                     <dt>
-                      Spend
+                      Living spending
                       {ytd.spendWindow && (
                         <span className="ytd-sub"> {windowWords(ytd.spendWindow)}</span>
                       )}
@@ -659,29 +541,13 @@ export default function OverviewPage() {
                     </dd>
                   </div>
                   <div className="ytd-fact">
-                    <dt>Dividends collected</dt>
+                    <dt>Dividend entries · ex-date for automatic records</dt>
                     <dd>{ytd.dividends === null ? '—' : formatCurrency(ytd.dividends)}</dd>
                   </div>
                 </dl>
               </section>
-            )}
-            <div className="card-grid">
-              <ChartCard
-                title="Net worth trend"
-                hint="Net worth at every monthly snapshot — the series the Net Worth page breaks down by group."
-                ariaLabel="Line chart of net worth at every monthly snapshot"
-                option={emptyScopeNote !== null ? null : nwTrend}
-                empty={emptyScopeNote ?? 'No snapshots yet.'}
-                exportName="net-worth-trend"
-                csv={() => netWorthTrendCsv(data.ts)}
-                height={220}
-                onClick={() => navigate('/net-worth')}
-                footer={
-                  <NavLink className="drill-hint" to="/net-worth">
-                    Open net worth →
-                  </NavLink>
-                }
-              />
+            )),
+    performance: (
               <ChartCard
                 title="Portfolio performance"
                 hint={performanceHint}
@@ -689,52 +555,128 @@ export default function OverviewPage() {
                 option={perf}
                 empty="No performance history yet."
                 exportName="portfolio-performance"
-                csv={() => portfolioHistoryCsv(data.history)}
+                csv={data.history ? () => portfolioHistoryCsv(data.history!) : undefined}
                 height={280}
-                onClick={() => navigate('/portfolio')}
+                busy={investments.busy} error={investments.error} selectionScopeKey={String(owner)}
                 footer={
                   <NavLink className="drill-hint" to="/portfolio">
                     Open portfolio →
                   </NavLink>
                 }
               />
+    ),
+    spending: (
               <ChartCard
                 title="Recent spending"
                 // The dashed line is spendStats.avg12 (the twelve months BEFORE the
                 // latest), which is also the figure the spend tile compares against — the
                 // hint has to name that window, not "their average", or one label reads as
                 // two numbers (F14).
-                hint="Total spend for each of the last 12 entered months. The dashed line is the average of the 12 months before the latest — the same figure the spend tile compares this month against."
-                ariaLabel="Bar chart of total spending for each of the last 12 entered months, with the 12-month average"
+                hint="Living spending in the recent recorded months. The reference is the previous 12-calendar-month eligible average for the latest reviewed or adopted historical month."
+                ariaLabel="Bar chart of living spending with the previous 12-month eligible average"
                 option={bars}
                 empty="No spending months yet."
                 exportName="recent-spending"
-                csv={() => recentSpendCsv(data.matrix)}
+                csv={data.matrix ? () => recentSpendCsv(data.matrix!) : undefined}
                 height={240}
-                onClick={openSpendingMonth}
+                busy={spending.busy} error={spending.error}
+                selectionAdapter={params => {
+                  if (!data.matrix || typeof params.dataIndex !== 'number') return null
+                  const index = Math.max(0, data.matrix.months.length - RECENT_SPEND_MONTHS) + params.dataIndex
+                  const month = data.matrix.months[index]
+                  return month ? { kind: 'period', id: `living:${month}`, period: month, label: formatMonth(month), scope: 'Household', values: [{ label: 'Living spending', value: data.matrix.living_total?.[index] ?? null, unit: 'USD' }], source: { href: `/spending?month=${month}`, label: 'Open spending' } } : null
+                }}
                 footer={
                   <NavLink className="drill-hint" to="/spending">
                     Open spending →
                   </NavLink>
                 }
               />
+    ),
+    money_flow: (
               <MoneyFlowCard
                 flow={flow}
                 failed={flowFailed}
                 onRetry={() => loadFlow(flowYear)}
                 onYearChange={showFlowYear}
               />
-            </div>
-            <div className="up-next">
+    ),
+  }
+
+  return (
+    <div className="page overview-page">
+      <PageFrame
+        title="Overview"
+        actions={
+          /* Nothing but idempotent GETs and no mutation anywhere on this page, so the
+             button stays live while a load is in flight: an impatient second click is
+             harmless, the body dims to show the work, and seqRef decides which answer
+             lands. */
+          <><OverviewCustomize value={layout} onChange={next => { setLayout(next); setLocal('overview_layout', next) }} /><button type="button" className="button" onClick={reload}>
+            Refresh
+          </button></>
+        }
+        scopeRow={<ScopeBar owner />}
+        resource={{ status: 'ready', fromCache }}
+        skeleton={{
+          tiles: 4,
+          cards: [
+            { span: 12, height: 220 },
+            { span: 12, height: 280 },
+            { span: 12, height: 240 },
+            { span: 12, height: 200 },
+          ],
+        }}
+      >
+        <div className="overview-feed-notices">
+          {[wealth, investments, spending, planning].map((resource, index) => <FeedBanner key={index} error={resource.error ? `${resource.error}${resource.stale ? '. Showing earlier data for this section.' : ''}` : null} retry={resource.retry} />)}
+        </div>
+        {data !== null && (
+          <>
+            <div className="kpi-row">{layout.tiles.map(id => <Fragment key={id}>{tileElements[id]}</Fragment>)}</div>
+            <div className="overview-primary">
+              <div className="overview-wealth-column">
+              <ChartCard
+                title="Net worth trend"
+                hint="Net worth at every monthly snapshot — the series the Net Worth page breaks down by group."
+                ariaLabel="Line chart of net worth at every monthly snapshot"
+                option={emptyScopeNote !== null ? null : nwTrend}
+                empty={emptyScopeNote ?? 'No snapshots yet.'}
+                exportName="net-worth-trend"
+                csv={data.ts ? () => netWorthTrendCsv(data.ts!) : undefined}
+                height={220}
+                selectionAdapter={params => {
+                  const index = params.dataIndex
+                  if (!data.ts || typeof index !== 'number' || !data.ts.months[index]) return null
+                  const month = data.ts.months[index]
+                  return { kind: 'period', id: `net-worth:${owner}:${month}`, period: month, label: formatMonth(month), scope: owner ?? 'Household', values: [{ label: 'Net worth', value: data.ts.net_worth[index], unit: 'USD' }], source: { href: `/net-worth?month=${month}${owner === null ? '' : `&owner=${owner}`}`, label: 'Open net worth records' } }
+                }}
+                busy={wealth.busy} error={wealth.error} selectionScopeKey={String(owner)}
+                footer={
+                  <NavLink className="drill-hint" to="/net-worth">
+                    Open net worth →
+                  </NavLink>
+                }
+              />
+                <OverviewChanges data={data.ts} />
+              </div>
+              <aside className="overview-agenda-column">
+            <div className="card up-next overview-agenda">
               <h2 className="eyebrow">
                 Up next
                 <InfoHint text="The next few dated events — vests, ESPP dates, ex-dividends, paydays, deadlines — from the calendar." />
               </h2>
-              {upNextFailed ? (
-                <p className="drill-hint">Couldn&apos;t load upcoming events.</p>
-              ) : upNext === null ? null : rankUpNext(upNext, todayIso()).length === 0 ? (
+              {upNextFailed && (
+                <p className="drill-hint" role="status">
+                  {upNext === null ? "Couldn't load upcoming events." : "Couldn't refresh upcoming events. Showing the last loaded schedule."}{' '}
+                  <button type="button" className="button" onClick={loadUpNext}>Retry upcoming events</button>
+                </p>
+              )}
+              {upNext === null ? !upNextFailed && <p className="drill-hint">Loading upcoming events...</p> : rankUpNext(upNext, todayIso()).length === 0 ? (
                 <p className="drill-hint">
-                  Nothing scheduled in the next {UP_NEXT_WINDOW_DAYS} days.
+                  {upNextFailed
+                    ? `The last loaded schedule had no events in the next ${UP_NEXT_WINDOW_DAYS} days.`
+                    : `Nothing scheduled in the next ${UP_NEXT_WINDOW_DAYS} days.`}
                 </p>
               ) : (
                 <>
@@ -770,6 +712,28 @@ export default function OverviewPage() {
                 Open calendar →
               </NavLink>
             </div>
+
+                <section className="card overview-attention"><h2 className="eyebrow">Needs attention</h2>
+                  {reviewAttention.map(item => <NavLink key={item.month} className="attention-item" to={`/update?month=${item.month}&step=review`}>{formatMonth(item.month)}: {REVIEW_LABELS[item.state]}</NavLink>)}
+            {/* The dashboard's to-do list: each line is a condition the snapshot itself
+                proves and a link to where it gets fixed. Absent when nothing needs doing —
+                an "all clear" badge would be one more thing to read every morning. */}
+            {attention.length > 0 && (
+              <nav className="attention-strip" aria-label="Needs attention">
+                {attention.map((item) => (
+                  <NavLink key={item.key} className="attention-item" to={item.to}>
+                    {item.text} →
+                  </NavLink>
+                ))}
+              </nav>
+            )}
+
+                  {attention.length === 0 && reviewAttention.length === 0 && <p className="drill-hint">{wealth.data && investments.data && spending.data && planning.data ? 'No outstanding data checks.' : 'Additional checks are waiting for their data feeds.'}</p>}
+                </section>
+              </aside>
+            </div>
+            {spendingEvidence.data?.review && <p className="drill-hint">Living spending: {REVIEW_LABELS[spendingEvidence.data.review.state]} for {formatMonth(spendingEvidence.data.review.month)}. Comparison includes {spendingEvidence.data.comparison.window?.included.length ?? 0} eligible months.</p>}
+            <div className="overview-deeper">{layout.cards.map(id => <Fragment key={id}>{deeperCards[id]}</Fragment>)}</div>
             {/* Four clocks: quotes move daily, while balances, spending and net pay are
                 hand-entered and each stands on its OWN month (honest-numbers spec §3). A
                 feed a month or more behind the balances wears the same amber a stale quote
@@ -782,7 +746,7 @@ export default function OverviewPage() {
                     the others capitalize; a lowercase one would read as a fragment. */}
                 {asOf ? `Prices as of ${formatDate(asOf)}` : 'Prices never refreshed'}
               </span>
-              {freshnessClauses(data.coverage).map((clause) => (
+              {(data.coverage ? freshnessClauses(data.coverage) : []).map((clause) => (
                 <Fragment key={clause.key}>
                   <span aria-hidden="true">·</span>
                   <span className={clause.lagging ? 'freshness stale' : 'freshness'}>

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import InfoHint from './InfoHint'
+import { MetricInfoButton } from './details/MetricInspector'
+import type { MetricEvidence } from '../types/metrics'
 import { prefersReducedMotion } from './useReducedMotion'
 import './panels.css'
 
@@ -42,6 +44,7 @@ export default function StatTile({
   hint,
   hero = false,
   countUp,
+  evidence,
 }: {
   label: string
   value: string
@@ -50,6 +53,7 @@ export default function StatTile({
   direction?: 'up' | 'down'
   hint?: string
   hero?: boolean
+  evidence?: MetricEvidence
   /** Settle the value from 0 over ~450ms on a FRESH first paint (2026-08-27 spec §8).
    *  Callers gate it themselves (never on cached paints); the final frame renders
    *  `value` exactly. Additive — omitted means today's static render. */
@@ -102,7 +106,8 @@ export default function StatTile({
     <div className={hero ? 'stat-tile stat-tile-hero' : 'stat-tile'}>
       <div className="stat-label">
         {label}
-        {hint !== undefined && <InfoHint text={hint} />}
+        {hint !== undefined && evidence === undefined && <InfoHint text={hint} />}
+        {evidence !== undefined && <MetricInfoButton evidence={evidence} />}
       </div>
       <div className="stat-value">{display ?? value}</div>
       {delta !== undefined && (

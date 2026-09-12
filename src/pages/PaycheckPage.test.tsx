@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { Link, MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
@@ -10,6 +10,7 @@ import type {
 } from '../types/api'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import PaycheckPage from './PaycheckPage'
+import { readAssistantView } from '../components/assistant/viewState'
 
 // Every request is stubbed.
 vi.mock('../api/paycheck', () => ({
@@ -331,13 +332,62 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+describe('Paycheck source-link arrivals', () => {
+  it('waits for ownership validation and opens the exact historical profile without painting the current check first', async () => {
+    const people = deferred<HouseholdOut>()
+    const rows = deferred<PaycheckProfileListItem[]>()
+    vi.mocked(fetchHousehold).mockReturnValue(people.promise)
+    vi.mocked(fetchProfiles).mockReturnValue(rows.promise)
+    routeBreakdowns()
+    setSnapshot('paycheck:breakdown:current', breakdownOf(profile2026))
+    renderPage('/paycheck?owner=1&profile=2')
+    expect(fetchBreakdown).not.toHaveBeenCalled()
+    expect(screen.queryByText('$3,384.16')).toBeNull()
+    expect(readAssistantView().profile).toBeNull()
+    await act(async () => { people.resolve(household()); rows.resolve(PROFILES) })
+    expect(await screen.findByText('Per-check breakdown — effective Jan 1, 2025')).toBeTruthy()
+    expect(fetchBreakdown).toHaveBeenCalledExactlyOnceWith(2, undefined)
+    expect(screen.getByRole('tab', { name: 'Summary' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('location').textContent).toContain('owner=1')
+    expect(screen.getByTestId('location').textContent).not.toContain('profile=')
+    expect(readAssistantView()).toMatchObject({ owner: 1, person: 1, profile: 2 })
+  })
+
+  it('rejects a profile belonging to a different owner and explains the fallback', async () => {
+    twoEarners()
+    renderPage('/paycheck?owner=2&section=summary&profile=2')
+    expect(await screen.findByText('That profile is not available for the selected person. Showing the current profile.')).toBeTruthy()
+    expect(await screen.findByText('Per-check breakdown — effective Mar 1, 2026')).toBeTruthy()
+    expect(vi.mocked(fetchBreakdown).mock.calls.some(([profile]) => profile === 2)).toBe(false)
+  })
+
+  it('applies a new historical source link while the page is already open', async () => {
+    routeBreakdowns()
+    render(<MemoryRouter initialEntries={['/paycheck?owner=1&section=summary']}><PaycheckPage /><Link to="/paycheck?owner=1&section=summary&profile=2">Open prior check</Link></MemoryRouter>)
+    await screen.findByText('Per-check breakdown — effective Jan 1, 2026')
+    fireEvent.click(screen.getByRole('link', { name: 'Open prior check' }))
+    expect(await screen.findByText('Per-check breakdown — effective Jan 1, 2025')).toBeTruthy()
+    expect(fetchBreakdown).toHaveBeenLastCalledWith(2, undefined)
+  })
+
+  it('returns to the current profile when an invalid arrival follows a historical check', async () => {
+    routeBreakdowns()
+    render(<MemoryRouter initialEntries={['/paycheck?owner=1&profile=2']}><PaycheckPage /><Link to="/paycheck?owner=1&profile=missing">Open unavailable check</Link></MemoryRouter>)
+    await screen.findByText('Per-check breakdown — effective Jan 1, 2025')
+    fireEvent.click(screen.getByRole('link', { name: 'Open unavailable check' }))
+    expect(await screen.findByText('That profile link is invalid. Showing the current profile.')).toBeTruthy()
+    expect(await screen.findByText('Per-check breakdown — effective Jan 1, 2026')).toBeTruthy()
+    expect(fetchBreakdown).toHaveBeenLastCalledWith(undefined, undefined)
+  })
+})
+
 describe('PaycheckPage — the waterfall', () => {
   it('renders the eleven golden lines and the monthly tile, nothing re-derived', async () => {
     // Seeded so the paint is a CACHED one: the Monthly-net hero counts up on fresh paints
     // only (spec §8), and a settling number is not a string this test can pin. The
     // revalidation below still goes out — and lands the identical payload.
     setSnapshot('paycheck:breakdown:current', breakdownOf(profile2026))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
 
     expect(await screen.findByText('$3,384.16')).toBeTruthy()
     expect(line('Gross')).toBe('$7,872.08')
@@ -365,18 +415,18 @@ describe('PaycheckPage — the waterfall', () => {
 
   it('names the employer match under the waterfall, outside the pay it adds up', async () => {
     vi.mocked(fetchBreakdown).mockResolvedValue(breakdownOf(profile2026, { employer_match: '479.17' }))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     expect(await screen.findByText('Employer match +$479.17 per check, not part of your pay.')).toBeTruthy()
     cleanup()
     // No policy, no line — "+$0.00" would be a deduction-shaped nothing.
     vi.mocked(fetchBreakdown).mockResolvedValue(breakdownOf(profile2026, { employer_match: '0.00' }))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('$3,384.16')
     expect(screen.queryByText(/Employer match/)).toBeNull()
   })
 
   it('marks the net-pay line as the one that counts', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('$3,384.16')
 
     const net = screen.getAllByText('Net pay').find((el) => el.tagName === 'DT')
@@ -390,7 +440,7 @@ describe('PaycheckPage — the waterfall', () => {
         warnings: ['contribution percentages exceed 100%', 'net pay is negative'],
       }),
     )
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
 
     expect(await screen.findByText('contribution percentages exceed 100%')).toBeTruthy()
     expect(screen.getByText('net pay is negative')).toBeTruthy()
@@ -403,8 +453,8 @@ describe('PaycheckPage — the waterfall', () => {
     vi.mocked(fetchBreakdown)
       .mockResolvedValueOnce(breakdownOf(profile2026))
       .mockResolvedValueOnce(breakdown2025)
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     fireEvent.click(screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' }))
 
@@ -416,10 +466,12 @@ describe('PaycheckPage — the waterfall', () => {
     // The profiles list is a separate load: choosing a profile never refetches it.
     expect(vi.mocked(fetchProfiles)).toHaveBeenCalledTimes(1)
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
     // Re-clicking the row that is already shown must not spend another request.
     fireEvent.click(screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' }))
     expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(2)
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
     // ...and there is a way back to whichever profile is in force today.
     fireEvent.click(screen.getByRole('button', { name: 'Show the current profile' }))
     await waitFor(() => expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(3))
@@ -432,10 +484,11 @@ describe('PaycheckPage — the waterfall', () => {
     // profile at all, which is exactly the case a `pinnedId` highlight would get wrong
     // (it would light nothing up, or light up the wrong row after a delete).
     vi.mocked(fetchBreakdown).mockResolvedValue(breakdown2025)
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('$2,984.91')
 
     expect(vi.mocked(fetchBreakdown).mock.calls[0][0]).toBeUndefined()
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
     const pressed = (label: string) =>
       screen.getByRole('button', { name: label }).getAttribute('aria-pressed')
     expect(pressed('Show the breakdown for Jan 1, 2025')).toBe('true')
@@ -445,10 +498,10 @@ describe('PaycheckPage — the waterfall', () => {
   it('points at the form when there are no profiles at all', async () => {
     vi.mocked(fetchProfiles).mockResolvedValue([])
     vi.mocked(fetchBreakdown).mockRejectedValue(new ApiError('no paycheck profiles', 404))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
 
     expect(
-      await screen.findByText('no paycheck profiles — add one below to see the waterfall.'),
+      await screen.findByText('no paycheck profiles — add a profile to see the breakdown.'),
     ).toBeTruthy()
     // An empty state, not a failure: no banner and no half-drawn waterfall.
     expect(screen.queryByRole('alert')).toBeNull()
@@ -462,17 +515,17 @@ describe('PaycheckPage — the waterfall', () => {
     // The other 404 on this route: the row was deleted from somewhere else, so the answer
     // is the table, not the form.
     vi.mocked(fetchBreakdown).mockRejectedValue(new ApiError('paycheck profile not found', 404))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
 
     expect(
-      await screen.findByText('paycheck profile not found — choose a profile below.'),
+      await screen.findByText('paycheck profile not found — choose an available row in Profiles.'),
     ).toBeTruthy()
     expect(screen.getByText('$188,930.00')).toBeTruthy()
   })
 
   it('keeps a breakdown failure off the profiles table', async () => {
     vi.mocked(fetchBreakdown).mockRejectedValue(new ApiError('breakdown unavailable', 503))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
 
     // A FIRST-load failure: the bare sentence, with no stale cue, because there is no
     // earlier waterfall for one to be about.
@@ -485,9 +538,10 @@ describe('PaycheckPage — the waterfall', () => {
     vi.mocked(fetchBreakdown)
       .mockResolvedValueOnce(breakdownOf(profile2026))
       .mockRejectedValueOnce(new ApiError('breakdown unavailable', 503))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('$3,384.16')
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
     fireEvent.click(screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' }))
 
     // The other branch of the same banner: something IS still on screen, so the sentence
@@ -505,8 +559,8 @@ describe('PaycheckPage — the waterfall', () => {
 
 describe('PaycheckPage — the profile form', () => {
   it('prefills the new-profile form from the latest profile, percents in percent form', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     // The comp-change ritual: everything carries over except the date it takes effect on.
     // Every figure box is an AmountInput, so a BLURRED one shows its formatted echo
@@ -533,8 +587,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('posts the full profile with every percent shifted, never divided', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     type('Effective date', '2026-07-01')
     type('Traditional 401(k) %', '13')
@@ -575,8 +629,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('PATCHes the FULL profile shape, never a delta', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     fireEvent.click(
       screen.getByRole('button', { name: 'Edit the profile effective Jan 1, 2026' }),
@@ -615,8 +669,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('treats a blanked optional money box as a real zero', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     fireEvent.click(
       screen.getByRole('button', { name: 'Edit the profile effective Jan 1, 2026' }),
@@ -636,8 +690,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('deletes a profile only after the confirm is accepted', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     confirmSpy.mockReturnValue(false)
     fireEvent.click(
@@ -654,12 +708,13 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('falls back to the server default when the profile on screen is deleted', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     fireEvent.click(screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' }))
     await waitFor(() => expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(2))
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
     fireEvent.click(
       screen.getByRole('button', { name: 'Delete the profile effective Jan 1, 2025' }),
     )
@@ -670,8 +725,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('requires the three NOT NULL columns before spending a request', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
 
@@ -682,8 +737,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('answers a zero pay-period count in the server’s own sentence', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     type('Effective date', '2026-07-01')
     type('Pay periods per year', '0')
@@ -697,8 +752,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('bounds a percent in the box’s own vocabulary, not the stored fraction’s', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     type('Effective date', '2026-07-01')
     type('ESPP %', '110')
@@ -718,8 +773,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('refuses exponent notation in a percent box, client-side', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     type('Effective date', '2026-07-01')
     type('Traditional 401(k) %', '1e-3')
@@ -739,8 +794,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('canonicalizes a grouped salary at the wire boundary, with no blur', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     type('Effective date', '2026-07-01')
     type('Annual salary', '$150,000')
@@ -758,8 +813,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('refuses an =-expression in a percent box, which the box itself will not evaluate', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     type('Effective date', '2026-07-01')
     type('Traditional 401(k) %', '=13')
@@ -779,8 +834,8 @@ describe('PaycheckPage — the profile form', () => {
     // the newest thing in the table, so the next new profile must copy the 2025 row —
     // seeding from the echo would carry a salary that is no longer the current one.
     vi.mocked(updateProfile).mockResolvedValue({ ...profile2026, effective_date: '2024-06-01' })
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     fireEvent.click(
       screen.getByRole('button', { name: 'Edit the profile effective Jan 1, 2026' }),
@@ -801,8 +856,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('puts the caret back on the effective date after a save', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     type('Effective date', '2026-07-01')
     fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
@@ -820,8 +875,8 @@ describe('PaycheckPage — the profile form', () => {
     vi.mocked(createProfile).mockRejectedValue(
       new ApiError('a paycheck profile for 2026-07-01 already exists', 409),
     )
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     type('Effective date', '2026-07-01')
     fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
@@ -837,8 +892,8 @@ describe('PaycheckPage — the profile form', () => {
     vi.mocked(createProfile).mockRejectedValue(
       new ApiError('annual_salary must be positive', 422),
     )
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     type('Effective date', '2026-07-01')
     type('Annual salary', '0.001')
@@ -848,8 +903,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('carries the HSA coverage tier on a save and shows it in the history', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     // Carried forward from the latest row like every other box (the comp-change ritual) —
     // the tier changes when the plan does, not when the salary does.
@@ -872,8 +927,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('carries the match policy forward into the next profile, in the box’s own words', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     // The stored fraction is 1.000000000; the box holds a percent, like every other rate.
     expect(field('First match rate %').value).toBe('100%')
     expect(field('First match band').value).toBe('$6,000.00')
@@ -886,14 +941,14 @@ describe('PaycheckPage — the profile form', () => {
     vi.mocked(fetchProfiles).mockResolvedValue([
       { ...profile2026, match_rate_1: '0.000000000', match_band_1: '0.00', match_rate_2: '0.000000000', match_band_2: '0.00' },
     ])
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     expect(await screen.findByText('No employer match entered.')).toBeTruthy()
   })
 
   it('reads a band box the way SUBMIT will, and never prints a $NaN', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     // A money box evaluates "=" arithmetic, so the sentence has to parse with the same
     // options the wire body does — otherwise it describes a figure that is not the one
     // being saved.
@@ -912,8 +967,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('posts the match rates as fractions and the bands as money', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     type('Effective date', '2026-07-01')
     type('First match rate %', '75')
     type('Second match band', '9000')
@@ -927,8 +982,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('carries the employer HSA policy forward into the next profile', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     expect(field('Employer HSA per year').value).toBe('$2,000.00')
     expect(field('Per additional covered individual').value).toBe('$500.00')
     // A count, not money: the box shows what was stored, unformatted.
@@ -940,8 +995,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('prints the per-head clause only when it is worth something', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     fireEvent.change(field('HSA coverage'), { target: { value: 'family' } })
     type('Additional individuals covered', '2')
     expect(
@@ -958,8 +1013,8 @@ describe('PaycheckPage — the profile form', () => {
     // 2026-09-09 audit item 29: the sentence promised "$500.00 for each of 2 additional
     // individuals" while `limit_check.employer_hsa` pays the per-head term under FAMILY
     // coverage and nowhere else — the stored count is ignored the moment the tier drops.
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     expect(field('HSA coverage').value).toBe('self')
     type('Additional individuals covered', '2')
     expect(screen.getByText('$2,000.00 a year for your coverage')).toBeTruthy()
@@ -982,14 +1037,14 @@ describe('PaycheckPage — the profile form', () => {
     vi.mocked(fetchProfiles).mockResolvedValue([
       { ...profile2026, hsa_employer_annual: '0.00', hsa_employer_per_dependent: '0.00' },
     ])
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     expect(await screen.findByText('No employer HSA contribution entered.')).toBeTruthy()
   })
 
   it('posts the employer HSA deposit as money and the covered count as a whole number', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     type('Effective date', '2026-07-01')
     fireEvent.change(field('HSA coverage'), { target: { value: 'family' } })
     type('Employer HSA per year', '2400')
@@ -1010,8 +1065,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('leaves an unentered withholding split blank and posts it as null, never a zero rate', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     expect(field('Federal withholding %').value).toBe('')
     expect(field('State withholding %').value).toBe('')
     // The paystub hint is what says why the two boxes are there at all.
@@ -1034,8 +1089,8 @@ describe('PaycheckPage — the profile form', () => {
     vi.mocked(fetchProfiles).mockResolvedValue([
       { ...profile2026, fed_withholding_pct: '0.220000000', state_withholding_pct: '0.080000000' },
     ])
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     // Percent form in the box, fraction on the wire — the five pcts' own rule.
     expect(field('Federal withholding %').value).toBe('22%')
     expect(field('State withholding %').value).toBe('8%')
@@ -1053,8 +1108,8 @@ describe('PaycheckPage — the profile form', () => {
       { ...profile2026, fed_withholding_pct: '0.220000000', state_withholding_pct: '0.080000000' },
       profile2025,
     ])
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     const rows = screen.getAllByRole('row')
     const split = rows.find((row) => row.textContent?.includes('22.0%'))
     expect(split).toBeTruthy()
@@ -1065,8 +1120,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('refuses a withholding split outside 0–100', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     type('Effective date', '2026-07-01')
     // The BOX's vocabulary (percents), not the column's [0, 1] fraction.
     type('Federal withholding %', '120')
@@ -1076,8 +1131,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('refuses a covered count that is not a whole number in range', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     type('Effective date', '2026-07-01')
     // 25 is a typo, not a household: the box says so in its own vocabulary rather than
     // quoting the column's `hsa_dependents`.
@@ -1096,8 +1151,8 @@ describe('PaycheckPage — the profile form', () => {
   })
 
   it('bounds a match rate at a full doubling, in the box’s vocabulary', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     type('Effective date', '2026-07-01')
     // The server's fence is the stored fraction's [0, 2]; this box says percents, so its
     // sentence says 200 — quoting the column's would call a legal 100 out of range.
@@ -1116,7 +1171,7 @@ describe('PaycheckPage — the profile form', () => {
 describe('PaycheckPage — loading', () => {
   it('offers a retry when the profiles load fails, with no stale cue behind it', async () => {
     vi.mocked(fetchProfiles).mockRejectedValueOnce(new ApiError('profiles unavailable', 503))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
 
     expect(await screen.findByText("Couldn't load the profiles — the server had a problem (HTTP 503)")).toBeTruthy()
     // One banner for the page needs no disambiguating label (motion spec §9).
@@ -1129,8 +1184,8 @@ describe('PaycheckPage — loading', () => {
     vi.mocked(fetchProfiles)
       .mockResolvedValueOnce(PROFILES)
       .mockRejectedValueOnce(new ApiError('profiles unavailable', 503))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     type('Notes', 'half-typed profile')
     fireEvent.click(
@@ -1154,8 +1209,8 @@ describe('PaycheckPage — loading', () => {
       .mockResolvedValueOnce(breakdownOf(profile2026)) // the mount
       .mockResolvedValueOnce(breakdown2025) // the row pressed mid-save
       .mockResolvedValueOnce(breakdown2025) // the write's own refetch
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     type('Effective date', '2026-07-01')
     fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
@@ -1184,11 +1239,12 @@ describe('PaycheckPage — loading', () => {
       .mockResolvedValueOnce(breakdownOf(profile2026)) // the mount
       .mockReturnValueOnce(slow.promise) // the 2025 row
       .mockReturnValueOnce(fast.promise) // back to the current one
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
 
     fireEvent.click(screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' }))
     await waitFor(() => expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(2))
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
     fireEvent.click(screen.getByRole('button', { name: 'Show the current profile' }))
     await waitFor(() => expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(3))
 
@@ -1207,7 +1263,7 @@ describe('PaycheckPage — loading', () => {
 
 describe('PaycheckPage — the flow card', () => {
   it('draws the flow beside the waterfall from the same payload, zero branches omitted', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('$3,384.16')
 
     expect(screen.getByText('Where each check goes')).toBeTruthy()
@@ -1222,7 +1278,7 @@ describe('PaycheckPage — the flow card', () => {
     vi.mocked(fetchBreakdown).mockResolvedValue(
       breakdownOf(profile2026, { net_pay: '-120.00' }),
     )
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('-$120.00')
 
     // The table (which handles negatives fine) stays; the sankey steps aside (spec §4).
@@ -1236,7 +1292,7 @@ describe('PaycheckPage — the flow card', () => {
   })
 
   it("names the sankey for assistive tech and offers the card's export row", async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('Where each check goes')
     expect(screen.getByLabelText('Sankey flow of one paycheck from gross to net')).toBeTruthy()
     // Mounted through ChartCard: PNG/Copy/CSV/Table (F12).
@@ -1249,7 +1305,7 @@ describe('PaycheckPage — snapshot cache (2026-08-27 spec §1)', () => {
     setSnapshot('paycheck:breakdown:current', breakdownOf(profile2026))
     // Never-resolving fetch: whatever is on screen came from the seed alone.
     vi.mocked(fetchBreakdown).mockReturnValue(new Promise(() => {}))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     expect(line('Gross')).toBe('$7,872.08')
     expect(screen.queryByText('Loading the breakdown…')).toBeNull()
     // The flow card rides the same payload and renders still on a cached paint.
@@ -1261,7 +1317,7 @@ describe('PaycheckPage — snapshot cache (2026-08-27 spec §1)', () => {
     setSnapshot('paycheck:profiles', PROFILES)
     vi.mocked(fetchProfiles).mockReturnValue(new Promise(() => {}))
     vi.mocked(fetchBreakdown).mockReturnValue(new Promise(() => {}))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
     // Both effective dates are on screen before either request answers.
     expect(screen.getByText('Jan 1, 2026')).toBeTruthy()
     expect(screen.getByText('Jan 1, 2025')).toBeTruthy()
@@ -1270,7 +1326,7 @@ describe('PaycheckPage — snapshot cache (2026-08-27 spec §1)', () => {
   it('a changed revalidation payload updates the waterfall and re-arms the flow', async () => {
     setSnapshot('paycheck:breakdown:current', breakdownOf(profile2026))
     vi.mocked(fetchBreakdown).mockResolvedValue(breakdown2025)
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     expect(line('Gross')).toBe('$7,872.08')
     await waitFor(() => expect(line('Gross')).toBe('$6,750.00'))
     expect(screen.getByTestId('echart').getAttribute('data-animate')).toBe('true')
@@ -1278,7 +1334,7 @@ describe('PaycheckPage — snapshot cache (2026-08-27 spec §1)', () => {
 
   it('leaves the flow still when the revalidation payload is identical', async () => {
     setSnapshot('paycheck:breakdown:current', breakdownOf(profile2026))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await waitFor(() => expect(fetchBreakdown).toHaveBeenCalledTimes(1))
     await act(async () => {})
     expect(screen.getByTestId('echart').getAttribute('data-animate')).toBe('false')
@@ -1288,7 +1344,7 @@ describe('PaycheckPage — snapshot cache (2026-08-27 spec §1)', () => {
 describe('PaycheckPage — shell scope', () => {
   it('the scope row shows the two people without All or Joint, primary pressed by default', async () => {
     twoEarners()
-    renderPage()
+    renderPage('/paycheck?section=summary')
 
     await screen.findByRole('group', { name: 'Whose' })
     // A paycheck belongs to ONE person (spec §6): there is no household paycheck to add up
@@ -1350,7 +1406,7 @@ describe('PaycheckPage — shell scope', () => {
     expect(scrollIntoView).toHaveBeenCalledTimes(1)
 
     fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
-    await screen.findByText('Per-check breakdown — effective Mar 1, 2026')
+    await waitFor(() => expect(((screen.getAllByLabelText('Traditional 401(k) %'))[0] as HTMLInputElement).value).toBe('6%'))
     // Sam's own latest row seeds Sam's carry-forward form — 6%, never the 20% modelled for
     // the primary — and the seeded-mount scroll/focus does not run again.
     const trad = (await screen.findAllByLabelText('Traditional 401(k) %'))[0] as HTMLInputElement
@@ -1405,8 +1461,8 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     vi.mocked(fetchHousehold).mockReturnValue(gate.promise)
     vi.mocked(fetchProfiles).mockResolvedValue(TWO_PERSON_PROFILES)
     routeBreakdowns()
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$3,384.16')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
     // The profiles are on screen and the household is still in flight.
     expect(screen.queryByRole('button', { name: 'Sam' })).toBeNull()
 
@@ -1420,7 +1476,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
   })
 
   it('shows no switcher at all for a one-person household', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('$3,384.16')
     await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
     // Nothing to switch between: a one-option control is not an affordance, it is noise.
@@ -1429,7 +1485,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
 
   it('renders one chip per person, primary first, with the primary lit', async () => {
     twoEarners()
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     const chips = await screen.findByRole('group', { name: 'Whose' })
     // Primary first, then everyone else by id — the same order NetWorthPage's owner chips
     // use, so a person sits in the same place on both pages.
@@ -1443,11 +1499,12 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
 
   it('switches the waterfall to the chip’s person and drops the pinned row', async () => {
     twoEarners()
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByRole('group', { name: 'Whose' })
 
     // Pin a row of MY history first: the switch has to abandon it, or the next request
     // would ask for one person's profile id under another person's scope.
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
     fireEvent.click(screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' }))
     await screen.findByText('$2,984.91')
 
@@ -1465,7 +1522,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
 
   it('filters the history to the chip’s person and reseeds the form from THEIR latest row', async () => {
     twoEarners()
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
     await screen.findByRole('group', { name: 'Whose' })
 
     // My two rows, and no sign of Sam's — one list on the wire, grouped here.
@@ -1485,7 +1542,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
 
   it('carries the picked person on a create, and nothing at all on the primary’s', async () => {
     twoEarners()
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
     await screen.findByRole('group', { name: 'Whose' })
 
     type('Effective date', '2026-09-01')
@@ -1506,7 +1563,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
   it('keeps the whole page when the household endpoint fails', async () => {
     vi.mocked(fetchHousehold).mockRejectedValue(new ApiError('household down', 503))
     vi.mocked(fetchProfiles).mockResolvedValue(TWO_PERSON_PROFILES)
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('$3,384.16')
     await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
 
@@ -1515,13 +1572,15 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     expect(screen.queryByRole('alert')).toBeNull()
     // The history degrades to today's WHOLE list rather than an empty table: with no
     // household there is no person to filter by, and an empty table would be a lie.
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
     expect(screen.getByText('Mar 1, 2026')).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
     expect(screen.getByText('Jan 1, 2026')).toBeTruthy()
   })
 
   it('adds the two in-force nets into a household take-home tile', async () => {
     twoEarners()
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
 
     expect(await screen.findByText('Household take-home')).toBeTruthy()
     // 6768.33 + 5231.34. Each leg is the AUTHORITATIVE monthly figure of one person's
@@ -1538,7 +1597,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
 
   it('leaves the tile out when the partner has no profile in force', async () => {
     twoEarners(new ApiError('no paycheck profiles', 404))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByRole('group', { name: 'Whose' })
     await waitFor(() =>
       expect(vi.mocked(fetchBreakdown).mock.calls).toContainEqual([undefined, SAM.id]),
@@ -1553,7 +1612,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
   })
 
   it('leaves the tile out for a one-person household', async () => {
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('$3,384.16')
     await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
     expect(screen.queryByText('Household take-home')).toBeNull()
@@ -1564,8 +1623,9 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
 
   it('refreshes the household tile after a profile write', async () => {
     twoEarners()
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByText('$11,999.67')
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
+    await waitFor(() => expect(fetchBreakdown).toHaveBeenCalledTimes(3))
     vi.mocked(fetchBreakdown).mockClear()
 
     type('Effective date', '2026-09-01')
@@ -1581,7 +1641,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     // The default arrangement IS the one-person one, which is the point of this file: every
     // test above is the pre-batch page, unedited. This one states the invariant outright so
     // a future change to the chips cannot leak into the single-earner page unnoticed.
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('$3,384.16')
     await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
 
@@ -1598,6 +1658,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     //    suffix exists only for an explicitly-picked partner.
     expect(getSnapshot<PaycheckBreakdownOut>('paycheck:breakdown:current')).toBeTruthy()
     // 4. The history is unfiltered and the form is the carry-forward one, as before.
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }))
     expect(screen.getByText('Jan 1, 2026')).toBeTruthy()
     expect(screen.getByText('Jan 1, 2025')).toBeTruthy()
     expect(field('Annual salary').value).toBe('$188,930.00')
@@ -1621,7 +1682,7 @@ it('renders the pace strip under the waterfall', async () => {
       ],
     }),
   )
-  render(<PaycheckPage />, { wrapper: MemoryRouter })
+  render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
 
   expect(await screen.findByRole('region', { name: 'Contribution pace' })).toBeTruthy()
   expect(screen.getByRole('meter')).toBeTruthy()
@@ -1634,9 +1695,31 @@ it('renders the pace strip under the waterfall', async () => {
 // waterfall forever, and a warm partner key kept the PREVIOUS person's check on screen.
 
 describe('person switching keeps the rendered check truthful', () => {
+  it('publishes the displayed historical profile and clears it immediately when the owner changes', async () => {
+    twoEarners()
+    renderPage('/paycheck?section=profiles')
+    await screen.findByRole('button', { name: 'Show the breakdown for Jan 1, 2025' })
+    await waitFor(() => expect(readAssistantView()).toMatchObject({ owner: 1, person: 1, profile: 1 }))
+    const historical = deferred<PaycheckBreakdownOut>()
+    vi.mocked(fetchBreakdown).mockReturnValueOnce(historical.promise)
+    fireEvent.click(screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' }))
+    // The current check is still visibly retained until the requested history arrives.
+    expect(readAssistantView().profile).toBe(1)
+    await act(async () => historical.resolve(breakdown2025))
+    expect(screen.getByText('Per-check breakdown — effective Jan 1, 2025')).toBeTruthy()
+    expect(readAssistantView()).toMatchObject({ owner: 1, person: 1, profile: 2, profileEffectiveDate: '2025-01-01' })
+    const partner = deferred<PaycheckBreakdownOut>()
+    vi.mocked(fetchBreakdown).mockReturnValueOnce(partner.promise)
+    fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
+    expect(readAssistantView()).toMatchObject({ owner: 2, person: 2, profile: null, profileEffectiveDate: null })
+    await act(async () => partner.resolve(samBreakdown))
+    expect(screen.getByText('Per-check breakdown — effective Mar 1, 2026')).toBeTruthy()
+    expect(readAssistantView()).toMatchObject({ owner: 2, person: 2, profile: 3, profileEffectiveDate: '2026-03-01' })
+  })
+
   it('recovers the waterfall after visiting a person with no profile', async () => {
     twoEarners(new ApiError('no paycheck profiles', 404))
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('Per-check breakdown — effective Jan 1, 2026')
 
     fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
@@ -1658,7 +1741,7 @@ describe('person switching keeps the rendered check truthful', () => {
     // Sam has been seen before, and the revalidation answers with exactly what the cache
     // holds — the peeked paint IS the live payload.
     setSnapshot('paycheck:breakdown:current:person:2', samBreakdown)
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('Per-check breakdown — effective Jan 1, 2026')
 
     fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
@@ -1675,7 +1758,7 @@ describe('person switching keeps the rendered check truthful', () => {
     // Sam’s key is already warm (an earlier visit), and the revalidation will answer with
     // a payload identical to it.
     setSnapshot('paycheck:breakdown:current:person:2', samBreakdown)
-    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     await screen.findByText('Per-check breakdown — effective Jan 1, 2026')
 
     fireEvent.click(screen.getByRole('button', { name: 'Sam' }))

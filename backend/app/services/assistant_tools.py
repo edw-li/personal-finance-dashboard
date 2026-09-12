@@ -20,6 +20,43 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "get_metrics",
+            "description": (
+                "Get application-calculated living spending, tax, transfers, cash outflow, "
+                "savings, previous-12-calendar-month average and inclusive rolling average. "
+                "Use these values and [[metric:id]] references instead of doing arithmetic. "
+                "An omitted month selects the latest eligible reviewed/historical month. "
+                "topic=contribution_pace returns Paycheck's per-person contribution "
+                "projection, entered limits and exact target elections instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "month": {"type": "string", "description": "YYYY-MM-01"},
+                    "topic": {"type": "string", "enum": ["spending", "contribution_pace"]},
+                    "person": {"type": "integer", "minimum": 1},
+                    "profile": {"type": "integer", "minimum": 1},
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_month_review",
+            "description": "Get a deterministic month review with metric evidence, category "
+            "changes and dated balance snapshot values. Never invent averages from page history.",
+            "parameters": {
+                "type": "object",
+                "properties": {"month": {"type": "string", "description": "YYYY-MM-01"}},
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_page_data",
             "description": (
                 "Fetch another dashboard page's data bundle for cross-page questions. "
@@ -189,6 +226,22 @@ async def _run_tax_whatif(db: AsyncSession, args: dict) -> dict:
 
 async def execute_tool(db: AsyncSession, name: str, args: dict) -> dict:
     try:
+        if name in {"get_metrics", "get_month_review"}:
+            from app.services.assistant_evidence import (
+                contribution_pace_bundle,
+                month_review_bundle,
+            )
+            from app.services.money import require_first_of_month
+
+            month = date.fromisoformat(str(args["month"])) if args.get("month") else None
+            if month is not None:
+                require_first_of_month(month)
+            if name == "get_metrics" and args.get("topic") == "contribution_pace":
+                bundle = await contribution_pace_bundle(db, {"view": args}, None)
+            else:
+                bundle = await month_review_bundle(db, {}, None, month=month)
+            # Signature/context are request-owned; _converse mints the user-bound bundle.
+            return bundle.model_dump(mode="json", by_alias=True, exclude={"receipt", "context"})
         if name == "get_page_data":
             return await _get_page_data(db, args)
         if name == "get_month_detail":

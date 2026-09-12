@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
 import ChartCard from '../ChartCard'
+import SelectionDetail from '../details/SelectionDetail'
 import Segmented from '../shell/Segmented'
 import type { EsppLotsResponse } from '../../types/api'
+import type { ChartSelection } from '../../types/metrics'
 import { formatCurrency, formatDate } from '../../utils/format'
 import { hasAnatomy, lotAnatomyCsv, lotAnatomyOption, sortLots } from './esppChartOptions'
 import type { AnatomyView } from './esppChartOptions'
@@ -47,6 +49,16 @@ export default function LotAnatomyCard({
     index === undefined ? null : (chain[index]?.id ?? null)
   const held = data.totals?.held
   const soldAny = data.totals !== undefined && data.totals.sold.lots > 0
+  const selectLot = (index: number | undefined): ChartSelection | null => {
+    const lot = index === undefined ? undefined : chain[index]
+    return lot ? {
+      kind: 'entity', id: `espp-lot:${lot.id}`, entityType: 'espp-lot', entityId: lot.id,
+      label: `Purchase ${formatDate(lot.purchase_date)}`, scope: 'household',
+      values: [{ label: 'Shares', value: lot.shares, unit: 'count' }, { label: 'Lot amount paid', value: lot.cost_basis, unit: 'USD' }, { label: 'Lot bargain element', value: lot.bargain_element ?? null, unit: 'USD' }, { label: 'Lot appreciation', value: lot.appreciation ?? null, unit: 'USD' }, { label: 'Lot market value', value: lot.market_value, unit: 'USD' }],
+      source: { href: `/espp?section=lots&lot=${lot.id}`, label: 'Open lot records' },
+      context: { purchase_date: lot.purchase_date, quoted_at: data.quoted_at, view },
+    } : null
+  }
 
   return (
     <ChartCard
@@ -54,7 +66,7 @@ export default function LotAnatomyCard({
       hint="Each purchase split three ways: what you paid, the bargain element at purchase (the plan discount, plus the lookback when the price had risen above the subscription price), and the market's move since. Unsold lots at the current quote; sold lots at their sale price, drawn hollow."
       ariaLabel={ANATOMY_ARIA}
       option={option}
-      empty="No lots yet — add your first purchase in the Lots card below."
+      empty="No lots yet — add your first purchase in Lots."
       exportName="espp-lot-anatomy"
       csv={ready ? () => lotAnatomyCsv(data) : undefined}
       height={300}
@@ -73,10 +85,12 @@ export default function LotAnatomyCard({
       onLegendChange={(selected) => setLegend((current) => ({ ...current, ...selected }))}
       onHover={(p) => onHoverLot?.(lotAt(p.dataIndex))}
       onHoverEnd={() => onHoverLot?.(null)}
-      onClick={(p) => {
-        const id = lotAt(p.dataIndex)
-        if (id !== null) onSelectLot?.(id)
-      }}
+      selectionAdapter={(p) => selectLot(p.dataIndex)}
+      renderSelection={(selection) => <SelectionDetail selection={selection} chartTitle="Lot anatomy" onOpenSource={() => {
+        if (selection.kind === 'entity') onSelectLot?.(Number(selection.entityId))
+      }} />}
+      rowSelection={(_row, index) => selectLot(index)}
+      selectionScopeKey={`${data.espp_ticker ?? 'unset'}:${view}`}
       footer={
         // The fragment stays mounted while the card is not ready, so the caption row keeps its
         // reserved height (panels.css --m-caption-row) — but it says NOTHING: a skeleton must not

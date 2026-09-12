@@ -11,6 +11,8 @@ from app.models import (
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
+    PaycheckProfile,
+    Person,
     SpendingCategory,
 )
 from app.services import clock
@@ -19,6 +21,7 @@ from app.services.assistant_context import (
     MONTHS_WINDOW_TIGHT,
     _decimate,
     _projection_scenario,
+    _selected_id,
     build_context,
     jsonable,
     preview_sections,
@@ -29,6 +32,61 @@ def test_jsonable_covers_the_wire_types():
     assert jsonable(Decimal("12.50")) == "12.50"
     assert jsonable(date(2026, 9, 1)) == "2026-09-01"
     assert jsonable({"a": [Decimal("1"), None]}) == {"a": ["1", None]}
+
+
+def test_captured_paycheck_ids_obey_the_same_positive_integer_bounds_as_the_page():
+    for invalid in (0, -1, True, 1.5, "garbled", "\u00b2", "9" * 5000, 2**31):
+        assert _selected_id({"view": {"profile": invalid}}, "profile") is None
+    assert _selected_id({"search": {"profile": "23"}}, "profile") == 23
+    assert _selected_id({"view": {"profile": 7}, "search": {"profile": "23"}}, "profile") == 7
+    assert _selected_id({"view": {"profile": None}, "search": {"profile": "23"}}, "profile") is None
+
+
+async def test_paycheck_context_matches_the_selected_historical_profile_and_owner(db):
+    from app.api.paycheck import get_breakdown
+
+    primary = Person(name="Primary", is_primary=True)
+    partner = Person(name="Partner", is_primary=False)
+    db.add_all([primary, partner])
+    await db.flush()
+    primary_profile = PaycheckProfile(
+        person_id=primary.id, effective_date=date(2025, 1, 1), annual_salary=Decimal("120000")
+    )
+    historical = PaycheckProfile(
+        person_id=partner.id, effective_date=date(2024, 1, 1), annual_salary=Decimal("72000")
+    )
+    current = PaycheckProfile(
+        person_id=partner.id, effective_date=date(2025, 1, 1), annual_salary=Decimal("96000")
+    )
+    db.add_all([primary_profile, historical, current])
+    await db.commit()
+    for profile in (primary_profile, historical, current):
+        await db.refresh(profile)  # Numeric defaults must match a fresh API session's Decimals.
+    expected = jsonable(await get_breakdown(profile_id=historical.id, person_id=partner.id, db=db))
+    selected = await build_context(
+        db,
+        route="/paycheck",
+        search={"profile": str(primary_profile.id), "owner": str(primary.id)},
+        view={"profile": historical.id, "owner": partner.id},
+    )
+    assert selected["paycheck"]["breakdown"] == expected
+    linked = await build_context(
+        db,
+        route="/paycheck",
+        search={"profile": str(historical.id), "owner": str(partner.id)},
+        view={},
+    )
+    assert linked["paycheck"]["breakdown"] == expected
+    for owner_view in ({"owner": partner.id}, {"person": partner.id}):
+        fallback = await build_context(db, route="/paycheck", search={}, view=owner_view)
+        assert fallback["paycheck"]["breakdown"]["profile"]["id"] == current.id
+    pending = await build_context(
+        db,
+        route="/paycheck",
+        search={"profile": str(historical.id)},
+        view={"owner": partner.id, "profile": None},
+    )
+    assert pending["paycheck"]["breakdown"]["profile"]["id"] == current.id
 
 
 async def _seed_two_spending_months(db):

@@ -1,4 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 // Aliased, the palette's idiom: the window-level Escape listener below needs the DOM's
 // KeyboardEvent, which React's same-named type would otherwise shadow.
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
@@ -29,7 +30,11 @@ import type {
 } from '../../types/api'
 import { describeContext } from './contextLabel'
 import { isNavLink } from './navLink'
-import { renderMarkdown } from './markdown'
+import { AssistantMessageBody, ComputedSummary, SaveFindingButton, SavedFindings } from './AssistantEvidence'
+import AssistantDockMount from './AssistantDockMount'
+import { useDetailPanel } from '../details/DetailPanelProvider'
+import { onExplainSelection } from '../details/explainSelection'
+import type { AssistantIntent } from '../../types/assistantEvidence'
 import { INSIGHT_PRESETS, samplesFor } from './samples'
 import { ASSISTANT_OPEN_EVENT, readAssistantView, useAssistantViewVersion } from './viewState'
 import '../panels.css'
@@ -81,10 +86,6 @@ function resolveModel(key: string, models: AssistantModelsOut | null): string {
  *  transcript on every token, and an inline renderMarkdown() call in the map would
  *  re-parse every finished message each time. Defined here, not inside the drawer, so the
  *  component identity is stable across renders (react/no-unstable-nested-components). */
-const MessageBody = memo(function MessageBody({ text }: { text: string }) {
-  return <>{renderMarkdown(text)}</>
-})
-
 /** The retry affordance, with the rate-limit countdown spec §9 asks for: a 429 that came
  *  with a `retry_after` hint holds the button shut until the wait is actually over, so the
  *  obvious next click cannot earn a second 429.
@@ -140,8 +141,20 @@ function RetryCountdown({
 
 export default function AssistantDrawer() {
   const location = useLocation()
+  const panel = useDetailPanel()
+  const openPanel = panel?.open
+  const closePanel = panel?.close
+  const [portalHost] = useState(() => document.createElement('div'))
   const viewVersion = useAssistantViewVersion()
   const [open, setOpen] = useState(false)
+  const [openRequest, setOpenRequest] = useState(0)
+  const requestOpen = useCallback(() => { setOpen(true); setOpenRequest((n) => n + 1) }, [])
+  const visible = open && (!panel || panel.activeId === 'assistant')
+  const [tab, setTab] = useState<'chat' | 'findings'>('chat')
+  const [findingsRevision, setFindingsRevision] = useState(0)
+  const [pendingSelection, setPendingSelection] = useState<{ prompt: string; context: AssistantContextIn } | null>(null)
+  const selectionSent = useRef<unknown>(null)
+  const lastRequest = useRef<{ context: AssistantContextIn; intent?: AssistantIntent } | null>(null)
   const [settings, setSettings] = useState<AssistantSettingsOut | null>(null)
   const [settingsFailed, setSettingsFailed] = useState(false)
   const [models, setModels] = useState<AssistantModelsOut | null>(null)
@@ -176,6 +189,7 @@ export default function AssistantDrawer() {
   // Guards a late stream event after New chat wiped the transcript: each send bumps it,
   // and handlers compare before touching state (the pages' seqRef idiom).
   const sendSeq = useRef(0)
+  useEffect(() => () => { sendSeq.current += 1; handleRef.current?.abort() }, [])
   // The same idiom for the context preview: open/close/reopen must not paint sections
   // fetched for a page the user has since left.
   const previewSeq = useRef(0)
@@ -194,13 +208,11 @@ export default function AssistantDrawer() {
     writeAssistantModel(model)
   }, [model])
 
-  // Open-bus subscription (palette's "Ask assistant"). Subscribed once: setOpen is a
-  // useState setter, and React guarantees those are stable for the component's lifetime.
+  // An explicit open also raises a retained assistant from beneath its evidence panel.
   useEffect(() => {
-    const onOpen = () => setOpen(true)
-    window.addEventListener(ASSISTANT_OPEN_EVENT, onOpen)
-    return () => window.removeEventListener(ASSISTANT_OPEN_EVENT, onOpen)
-  }, [])
+    window.addEventListener(ASSISTANT_OPEN_EVENT, requestOpen)
+    return () => window.removeEventListener(ASSISTANT_OPEN_EVENT, requestOpen)
+  }, [requestOpen])
 
   // `html { scrollbar-gutter: stable }` (index.css) permanently reserves the scrollbar's
   // column, and a fixed element's `right` is measured INSIDE it — so the launcher's
@@ -289,6 +301,7 @@ export default function AssistantDrawer() {
 
   const close = () => {
     setOpen(false)
+    closePanel?.('assistant')
     setPreviewOpen(false)
     launcherRef.current?.focus()
   }
@@ -299,7 +312,7 @@ export default function AssistantDrawer() {
   // drawer keyboard-uncloseable. Window-level and unkeyed (the palette's idiom): the
   // listener re-registers each render, so `close` is never a stale closure.
   useEffect(() => {
-    if (!open) return
+    if (!open || panel) return
     const onKey = (event: KeyboardEvent) => {
       // defaultPrevented means something on top already answered this Escape — the palette
       // (z 20, above the drawer), the drawer's own root handler, a page's dialog. Closing
@@ -357,23 +370,24 @@ export default function AssistantDrawer() {
       })
   }
 
-  const nextModelAfter = (current: string): string | undefined =>
-    models?.models.find((m) => m.available && m.key !== current)?.key
+  const nextModelAfter = (current: string, catalog = models): string | undefined =>
+    catalog?.models.find((m) => m.available && m.key !== current)?.key
 
   /** `base` lets a retry hand in the transcript it just pruned: this commits a whole array,
    *  so a functional update queued by the caller would be clobbered by the stale closure. */
-  const send = (text: string, withModel?: string, base?: TranscriptItem[]) => {
+  const send = (text: string, withModel?: string, base?: TranscriptItem[], request?: { context: AssistantContextIn; intent?: AssistantIntent }) => {
     const chosenModel = withModel ?? model
     const content = text.trim()
-    if (content === '' || streaming || settings === null || !settings.key.configured) return
+    if (content === '' || streaming || (request?.intent === undefined && (settings === null || !settings.key.configured))) return
     // Below the guard: a rejected send must not leave the model picker showing a model that
     // was never asked anything.
     if (withModel !== undefined) setModel(withModel)
     const seq = ++sendSeq.current
-    const asked = buildContext()
+    const asked = JSON.parse(JSON.stringify(request?.context ?? buildContext())) as AssistantContextIn
+    lastRequest.current = { context: asked, intent: request?.intent }
     lastQuestion.current = content
     stickToBottom.current = true
-    const userItem: TranscriptItem = { role: 'user', content, contextLabel }
+    const userItem: TranscriptItem = { role: 'user', content, contextLabel: describeContext(asked, people), contextSnapshot: asked, intent: request?.intent }
     // Seeded WITH a status, not empty: with a real key the first token can be twenty
     // seconds out, and an empty bubble for twenty seconds reads as broken. This one word
     // is on screen from the keystroke — before the request has even left — and the server's
@@ -410,6 +424,7 @@ export default function AssistantDrawer() {
       {
         model: chosenModel,
         context: asked,
+        ...(request?.intent ? { intent: request.intent } : {}),
         // Empty-content items (error stubs, stopped placeholders) never ride upstream —
         // some completion endpoints reject empty assistant messages outright.
         messages: history
@@ -418,10 +433,15 @@ export default function AssistantDrawer() {
           .map(({ role, content: c }) => ({ role, content: c.slice(0, SENT_CONTENT_CAP) })),
       },
       {
+        onComputedSummary: (evidence) => {
+          receivedTokens = true
+          patchAnswer((item) => ({ ...item, evidence, status: 'Writing an explanation…' }))
+        },
+        onEvidence: (evidence) => patchAnswer((item) => ({ ...item, evidence })),
         onNotice: (notice) =>
           patchAnswer((item) => ({
             ...item,
-            notice: `Answered by ${modelLabel(notice.to, models)} — ${modelLabel(notice.from, models)} was unavailable.`,
+            notice: `Trying ${modelLabel(notice.to, models)} after ${modelLabel(notice.from, models)} was unavailable.`,
             // A failover restarts the answer on a different model, so whatever reasoning is
             // on screen belongs to one that is no longer running. Dropped rather than left
             // to be read as the new model's.
@@ -461,11 +481,14 @@ export default function AssistantDrawer() {
         },
         onDone: (done) => {
           if (seq !== sendSeq.current) return
-          patchAnswer((item) => ({ ...item, model: done.model_used, status: undefined }))
+          patchAnswer((item) => ({ ...item, model: done.model_used, status: undefined,
+            notice: item.notice?.replace(/^Trying (.+) after (.+) was unavailable\.$/, 'Answered by $1 — $2 was unavailable.'),
+          }))
           setStreaming(false)
         },
         onError: (error) => {
           if (seq !== sendSeq.current) return
+          const retryModel = nextModelAfter(chosenModel, modelsRef.current)
           setStreaming(false)
           if (!receivedTokens) {
             // Nothing arrived: drop the pair and give the question back (spec §9).
@@ -476,7 +499,7 @@ export default function AssistantDrawer() {
               {
                 role: 'assistant',
                 content: '',
-                error: { ...error, retryModel: nextModelAfter(chosenModel) },
+                error: { ...error, retryModel },
               },
             ])
             return
@@ -484,7 +507,7 @@ export default function AssistantDrawer() {
           patchAnswer((item) => ({
             ...item,
             status: undefined,
-            error: { ...error, retryModel: nextModelAfter(chosenModel) },
+            error: { ...error, retryModel },
           }))
         },
       },
@@ -499,6 +522,7 @@ export default function AssistantDrawer() {
   }
 
   const stop = () => {
+    sendSeq.current += 1
     handleRef.current?.abort()
     setStreaming(false)
     setTranscript((current) => {
@@ -525,7 +549,7 @@ export default function AssistantDrawer() {
     // can no longer name it — the send that failed remembered it instead.
     const question = asked?.content ?? lastQuestion.current
     if (question === '') return
-    send(question, retryModel, base)
+    send(question, retryModel, base, asked?.contextSnapshot ? { context: asked.contextSnapshot, intent: asked.intent } : lastRequest.current ?? undefined)
   }
 
   const newChat = () => {
@@ -533,6 +557,7 @@ export default function AssistantDrawer() {
     handleRef.current?.abort()
     setStreaming(false)
     setTranscript([])
+    setTab('chat')
   }
 
   const onComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -547,22 +572,36 @@ export default function AssistantDrawer() {
 
   const configured = settings?.key.configured === true
 
-  return (
-    <>
-      <button
-        ref={launcherRef}
-        type="button"
-        className="assistant-launcher"
-        aria-label="Open assistant"
-        aria-expanded={open}
-        onClick={() => (open ? close() : setOpen(true))}
-      >
-        <Sparkles size={18} aria-hidden="true" />
-      </button>
-      {open && (
+  useEffect(() => {
+    if (!open || !openPanel) return
+    openPanel({ id: 'assistant', title: 'Assistant', content: <AssistantDockMount host={portalHost} />, onClose: () => setOpen(false) })
+  }, [open, openRequest, openPanel, portalHost])
+  useEffect(() => () => closePanel?.('assistant'), [closePanel])
+
+  useEffect(() => onExplainSelection((selection) => {
+    const source = new URL(selection.sourceRoute, window.location.origin)
+    setPendingSelection({
+      prompt: `Explain ${selection.selection.label} in ${selection.chartTitle}. Use the captured selection and distinguish recorded facts from interpretation.`,
+      context: { route: source.pathname, search: Object.fromEntries(source.searchParams.entries()), view: JSON.parse(JSON.stringify(readAssistantView())), selection },
+    })
+    setTab('chat')
+    requestOpen()
+  }), [requestOpen])
+  const sendRef = useRef(send)
+  useEffect(() => { sendRef.current = send })
+  useEffect(() => {
+    if (!pendingSelection || streaming || selectionSent.current === pendingSelection) return
+    selectionSent.current = pendingSelection
+    void Promise.resolve().then(() => {
+      sendRef.current(pendingSelection.prompt, undefined, undefined, { context: pendingSelection.context, intent: 'selection' })
+      setPendingSelection(null)
+    })
+  }, [pendingSelection, streaming])
+
+  const drawer = open && (
         <div
           ref={drawerRef}
-          className="assistant-drawer"
+          className={`assistant-drawer${panel ? ' assistant-drawer-coordinated' : ''}`}
           role="complementary"
           aria-label="Assistant"
           // Focusable by the open effect above only — never a tab stop of its own (the
@@ -576,9 +615,9 @@ export default function AssistantDrawer() {
           }}
         >
           <div className="assistant-header">
-            <span className="assistant-title">
+            {!panel && <span className="assistant-title">
               <span aria-hidden="true">✦</span> Assistant
-            </span>
+            </span>}
             <select
               className="assistant-model-select"
               aria-label="Model"
@@ -607,16 +646,21 @@ export default function AssistantDrawer() {
             <button type="button" className="assistant-icon-button" onClick={newChat}>
               New chat
             </button>
-            <button
+            {!panel && <button
               type="button"
               className="assistant-icon-button"
               aria-label="Close assistant"
               onClick={close}
             >
               <X size={14} aria-hidden="true" />
-            </button>
+            </button>}
           </div>
-          <div className="assistant-context">
+          <div className="assistant-tabs" role="tablist" aria-label="Assistant views">
+            <button type="button" role="tab" aria-selected={tab === 'chat'} onClick={() => setTab('chat')}>Conversation</button>
+            <button type="button" role="tab" aria-selected={tab === 'findings'} onClick={() => setTab('findings')}>Saved findings</button>
+          </div>
+          {tab === 'findings' && <SavedFindings revision={findingsRevision} />}
+          <div className="assistant-context" hidden={tab !== 'chat'}>
             {/* Ellipsised rather than wrapped: on Taxes this reads "Taxes · year: 2026 ·
                 filingStatus: single", which pushed the toggle onto a second line and shoved
                 the whole conversation down. The full text stays reachable as the tooltip. */}
@@ -650,6 +694,7 @@ export default function AssistantDrawer() {
           </div>
           <div
             className="assistant-messages"
+            hidden={tab !== 'chat'}
             role="log"
             aria-label="Conversation"
             // Busy while tokens stream: a live log would otherwise announce every
@@ -666,11 +711,13 @@ export default function AssistantDrawer() {
             )}
             {settings !== null && !configured && (
               <p className="assistant-setup-note">
-                No NVIDIA API key configured. Set <code>NVIDIA_API_KEY</code> in the server&apos;s{' '}
-                <code>.env</code>, or save a key in <Link to="/settings">Settings</Link>, and the
-                assistant lights up.
+                Computed month reviews are available. Add a provider key in <Link to="/settings?section=integrations#assistant">Settings</Link> to enable written explanations and other questions.
               </p>
             )}
+            <div className="assistant-review-action">
+              <button type="button" className="button" disabled={streaming} onClick={() => send('Review the latest completed month.', undefined, undefined, { context: buildContext(), intent: 'month_review' })}>Review latest completed month</button>
+              {pendingSelection && streaming && <p role="status">Your selected chart point is queued. Finish or stop this answer to continue.</p>}
+            </div>
             {configured && transcript.length === 0 && (
               <div className="assistant-samples">
                 {[...INSIGHT_PRESETS, ...samplesFor(location.pathname)].map((sample) => (
@@ -678,7 +725,7 @@ export default function AssistantDrawer() {
                     key={sample.label}
                     type="button"
                     className="assistant-sample-chip"
-                    onClick={() => send(sample.prompt)}
+                    onClick={() => send(sample.prompt, undefined, undefined, sample.intent ? { context: buildContext(), intent: sample.intent } : undefined)}
                   >
                     {sample.label}
                   </button>
@@ -689,10 +736,12 @@ export default function AssistantDrawer() {
               item.role === 'user' ? (
                 <div key={index} className="assistant-msg assistant-msg-user">
                   {item.content}
+                  {item.contextLabel && <small className="assistant-question-context">{item.contextLabel}</small>}
                 </div>
               ) : (
                 <div key={index} className="assistant-msg assistant-msg-assistant">
                   {item.notice && <p className="assistant-notice">{item.notice}</p>}
+                  {item.evidence && <ComputedSummary bundle={item.evidence} />}
                   {(item.tools ?? []).length > 0 && (
                     // Wrapped so the chips are their own wrapping flex row: as bare inline
                     // elements they shared a line box with the answer's first paragraph and
@@ -741,36 +790,41 @@ export default function AssistantDrawer() {
                       <div className="assistant-thinking-body">{item.thinking}</div>
                     </details>
                   )}
-                  {item.content !== '' && <MessageBody text={item.content} />}
+                  {item.content !== '' && <AssistantMessageBody text={item.content} metrics={item.evidence?.metrics} />}
                   {item.stopped && <p className="assistant-meta">Stopped.</p>}
                   {item.model && !item.error && (
                     <p className="assistant-meta">{modelLabel(item.model, models)}</p>
                   )}
                   {item.error && (
                     <div className="assistant-error" role="alert">
+                      {item.content !== '' && <strong>Partial answer. </strong>}
                       {item.error.message}
                       {item.error.kind === 'bad_key' && (
                         <p>
-                          <Link to="/settings">Fix the key in Settings →</Link>
+                          <Link to="/settings?section=integrations#assistant">Fix the key in Settings →</Link>
                         </p>
                       )}
-                      {item.error.kind !== 'bad_key' && item.error.retryModel && (
+                      {item.error.kind !== 'bad_key' && (item.error.retryModel ?? nextModelAfter(item.model ?? model)) && (
                         // No `key` needed to restart the count after a second failure:
                         // retrying always passes through a no-error transcript state, which
                         // unmounts this and takes its state with it.
                         <RetryCountdown
                           seconds={item.error.retry_after}
-                          label={modelLabel(item.error.retryModel, models)}
-                          onRetry={() => retryWith(item.error?.retryModel ?? model)}
+                          label={modelLabel(item.error.retryModel ?? nextModelAfter(item.model ?? model) ?? model, models)}
+                          onRetry={() => retryWith(item.error?.retryModel ?? nextModelAfter(item.model ?? model) ?? model)}
                         />
                       )}
                     </div>
                   )}
+                  {item.evidence && !(streaming && index === transcript.length - 1) && <SaveFindingButton
+                    question={transcript[index - 1]?.role === 'user' ? transcript[index - 1].content : item.evidence.title}
+                    content={item.content} model={item.model} bundle={item.evidence}
+                    onSaved={() => setFindingsRevision((n) => n + 1)} />}
                 </div>
               ),
             )}
           </div>
-          {configured && (
+          {(configured || streaming) && tab === 'chat' && (
             <div className="assistant-composer">
               <textarea
                 ref={inputRef}
@@ -798,7 +852,12 @@ export default function AssistantDrawer() {
             </div>
           )}
         </div>
-      )}
+  )
+  return (
+    <>
+      <button ref={launcherRef} type="button" className="assistant-launcher" aria-label="Open assistant" aria-expanded={visible}
+        onClick={() => (visible ? close() : requestOpen())}><Sparkles size={18} aria-hidden="true" /></button>
+      {panel && drawer ? createPortal(drawer, portalHost) : drawer}
     </>
   )
 }

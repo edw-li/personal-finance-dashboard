@@ -201,7 +201,12 @@ function typeKnob(label: string, value: string) {
 // The payload has landed: the frame swapped its skeleton for the page, whose tail is the
 // knobs card. Every earlier "wait for a figure" anchor is now ambiguous — the compare table
 // prints the same headline figures as the tiles.
-const loaded = () => screen.findByRole('button', { name: 'Hide knobs' })
+const loaded = () => screen.findByRole('button', { name: 'Hide assumptions' })
+async function openTrend() {
+  fireEvent.click(await screen.findByRole('tab', { name: 'Historical trend' }))
+  await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledTimes(1))
+}
+function openPlanning() { fireEvent.click(screen.getByRole('tab', { name: 'Planning workspace' })) }
 
 // A tile is addressed through its label (OverviewPage's idiom), inside the tile row: the
 // compare table repeats those labels down its first column.
@@ -211,7 +216,7 @@ const tileFor = (label: string) =>
     .closest('.stat-tile') as HTMLElement
 const valueOf = (tile: HTMLElement) => tile.querySelector('.stat-value')?.textContent ?? ''
 const deltaOf = (tile: HTMLElement) => tile.querySelector('.stat-delta')?.textContent ?? null
-// DOM order is card order: [0] is the net-worth trend, [1] the investable chart.
+// Planning mounts first; history mounts only after its section is first opened.
 const seriesOf = (chart: Element) => (chart.getAttribute('data-series') ?? '').split(',')
 
 beforeEach(() => {
@@ -228,6 +233,31 @@ afterEach(() => {
 })
 
 describe('ProjectionPage', () => {
+  it('changes chart dollars and table values without changing assumptions or recalculating the model', async () => {
+    renderPage()
+    await loaded()
+    const target = valueOf(tileFor('FI target'))
+    const probability = valueOf(tileFor('Reach FI target within 30 years'))
+    const requests = vi.mocked(fetchProjection).mock.calls.length
+
+    fireEvent.click(screen.getByRole('button', { name: 'Future dollars' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    expect(await screen.findByRole('columnheader', { name: 'Projected (USD · future dollars)' })).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: 'FI target (USD · future dollars)' })).toBeTruthy()
+    for (const band of ['p10', 'p25', 'p50', 'p75', 'p90']) {
+      expect(screen.getByRole('columnheader', { name: `${band} (USD · future dollars)` })).toBeTruthy()
+    }
+    expect(box('Inflation').placeholder).toBe('3')
+    expect(valueOf(tileFor('FI target'))).toBe(target)
+    expect(valueOf(tileFor('Reach FI target within 30 years'))).toBe(probability)
+    expect(vi.mocked(fetchProjection)).toHaveBeenCalledTimes(requests)
+    expect(url()).toBe('/projection')
+
+    fireEvent.click(screen.getByRole('button', { name: "Today's dollars" }))
+    expect(screen.getByRole('columnheader', { name: 'Projected (USD · 2026-08 dollars)' })).toBeTruthy()
+    expect(vi.mocked(fetchProjection)).toHaveBeenCalledTimes(requests)
+  })
+
   it('states the FI figures from the echo and names their derivations', async () => {
     renderPage()
     await loaded()
@@ -237,7 +267,7 @@ describe('ProjectionPage', () => {
     expect(valueOf(tileFor('Investable balance'))).toBe('$100,000.00')
     expect(deltaOf(tileFor('Investable balance'))).toBe('as of Aug 2026')
     expect(valueOf(tileFor('Projected FI date'))).toBe('Oct 2055')
-    expect(await screen.findAllByTestId('echart')).toHaveLength(2)
+    expect(await screen.findAllByTestId('echart')).toHaveLength(1)
   })
 
   it('spells out how a derived contribution was built', async () => {
@@ -257,7 +287,7 @@ describe('ProjectionPage', () => {
       }),
     )
     renderPage()
-    const note = await screen.findByText(/derived: \$4,000\.00 cash savings \+ \$400\.00 payroll/)
+    const note = await screen.findByText(/From records: \$4,000\.00 cash savings \+ \$400\.00 payroll/)
     // No policy, no leg — but the sum is still spelled out, so the reader can check it.
     expect(note.textContent).toContain('= $4,400.00 (Me $250.00 · Alex $150.00)')
     expect(note.textContent).not.toContain('employer match')
@@ -282,8 +312,10 @@ describe('ProjectionPage', () => {
     expect(box('Withdrawal rate').placeholder).toBe('4')
     expect(box('Horizon (years)').placeholder).toBe('30')
     // Blank means derived: the badge says so, and the caption resets the knob to it.
-    expect(screen.getByRole('button', { name: 'actual 5%' })).toBeTruthy()
-    expect(screen.getAllByText('derived')).toHaveLength(8)
+    expect(screen.getByRole('button', { name: 'Baseline 5%' })).toBeTruthy()
+    expect(screen.getAllByText('Planning default')).toHaveLength(5)
+    expect(screen.getAllByText('From your records')).toHaveLength(2)
+    expect(screen.getByText('Settings', { selector: '.sandbox-badge' })).toBeTruthy()
   })
 
   it('writes a typed knob to the URL as a fraction and fetches it; blank knobs stay omitted', async () => {
@@ -414,25 +446,27 @@ describe('ProjectionPage', () => {
     ).toBeTruthy()
   })
 
-  it('draws the net-worth history chart above the investable one, hint naming the model', async () => {
+  it('opens on the planning model and loads historical exploration only when requested', async () => {
     renderPage()
-    const charts = await screen.findAllByTestId('echart')
-    expect(charts).toHaveLength(2)
-    // DOM order IS the card order: the net-worth chart's axis starts at the history
-    // (Jun 2026); the investable chart's starts at the projection t0 (Aug 2026).
-    expect(charts[0].getAttribute('data-categories')).toContain('Jun 2026')
-    expect(charts[1].getAttribute('data-categories')?.startsWith('Aug 2026')).toBe(true)
-    expect(screen.getByText('Net worth over time (projected)')).toBeTruthy()
-    expect(screen.getByText(/Second-degree polynomial best-fit/)).toBeTruthy()
+    await loaded()
+    expect(fetchTimeseries).not.toHaveBeenCalled()
+    expect(screen.getAllByTestId('echart')).toHaveLength(1)
+    await openTrend()
+    expect(await screen.findByText(/Second-degree polynomial best-fit/)).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Historical trend' }).getAttribute('aria-selected')).toBe('true')
+    openPlanning()
+    expect(screen.getByLabelText(/Projected investable balance over the next/)).toBeTruthy()
   })
 
   it('keeps the page alive when the history fetch alone fails', async () => {
     vi.mocked(fetchTimeseries).mockRejectedValue(new ApiError('history unavailable', 500))
     renderPage()
+    await openTrend()
 
     expect(
       await screen.findByText("Couldn't load the net-worth history — the server had a problem (HTTP 500)"),
     ).toBeTruthy()
+    openPlanning()
     await loaded()
     expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00') // tiles still stand
     expect(screen.getAllByTestId('echart')).toHaveLength(1) // the investable chart
@@ -442,6 +476,8 @@ describe('ProjectionPage', () => {
   it('does not refetch the history when a knob moves', async () => {
     renderPage()
     await loaded()
+    await openTrend()
+    openPlanning()
 
     typeKnob('Annual return', '6')
 
@@ -454,6 +490,7 @@ describe('ProjectionPage', () => {
       timeseries({ net_worth: ['0.00', '101000.00', '102010.00'] }),
     )
     renderPage()
+    await openTrend()
 
     expect(await screen.findByText(/Second-degree polynomial best-fit/)).toBeTruthy()
     expect(screen.getAllByTestId('echart')).toHaveLength(2)
@@ -469,6 +506,7 @@ describe('ProjectionPage', () => {
       }),
     )
     renderPage()
+    await openTrend()
 
     expect(await screen.findByText(/needs at least three snapshots/)).toBeTruthy()
     expect(screen.getAllByTestId('echart')).toHaveLength(2) // the dots still chart
@@ -479,10 +517,11 @@ describe('ProjectionPage', () => {
 
   it('gives the trend its own span chips — 10y default, 40y on demand', async () => {
     renderPage()
+    await openTrend()
     const charts = await screen.findAllByTestId('echart')
     // Fixture history ends Aug 2026; the DEFAULT 10y span ends Aug 2036 — NOT the
     // knob's 30-year echo (that would read Aug 2056): the spans are decoupled.
-    expect(charts[0].getAttribute('data-categories')?.endsWith('Aug 2036')).toBe(true)
+    expect(charts[1].getAttribute('data-categories')?.endsWith('Aug 2036')).toBe(true)
 
     const group = screen.getByRole('group', { name: /trend span/i })
     expect(within(group).getByRole('button', { name: '10Y' }).getAttribute('aria-pressed')).toBe(
@@ -491,7 +530,7 @@ describe('ProjectionPage', () => {
     fireEvent.click(within(group).getByRole('button', { name: '40Y' }))
 
     expect(
-      screen.getAllByTestId('echart')[0].getAttribute('data-categories')?.endsWith('Aug 2066'),
+      screen.getAllByTestId('echart')[1].getAttribute('data-categories')?.endsWith('Aug 2066'),
     ).toBe(true)
     expect(fetchProjection).toHaveBeenCalledTimes(1) // a chip is a redraw, not a request
     expect(fetchTimeseries).toHaveBeenCalledTimes(1)
@@ -500,12 +539,14 @@ describe('ProjectionPage', () => {
   it('keeps the trend span fixed while the Horizon knob reshapes the chart below', async () => {
     renderPage()
     await loaded()
+    await openTrend()
+    openPlanning()
 
     typeKnob('Horizon (years)', '10')
 
     await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
     expect(
-      screen.getAllByTestId('echart')[0].getAttribute('data-categories')?.endsWith('Aug 2036'),
+      screen.getAllByTestId('echart')[1].getAttribute('data-categories')?.endsWith('Aug 2036'),
     ).toBe(true)
   })
 
@@ -519,6 +560,7 @@ describe('ProjectionPage', () => {
       }),
     )
     renderPage()
+    await openTrend()
 
     expect(await screen.findByText('Not enough monthly snapshots to chart yet.')).toBeTruthy()
     expect(screen.getAllByTestId('echart')).toHaveLength(1)
@@ -549,19 +591,12 @@ describe('ProjectionPage', () => {
     }
   })
 
-  it('says in both hints that blank is what the server derives', async () => {
+  it('distinguishes recorded inputs from planning defaults and explains display dollars', async () => {
     renderPage()
     await loaded()
-
-    expect(
-      screen.getByText(/reads in today's dollars by default \(inflation is modelled\)/),
-    ).toBeTruthy()
-    // The knobs card's own hint rides in the ⓘ's BUBBLE: the button is named by its first
-    // four words so a reader hears the sentence once (motion spec §8).
-    fireEvent.click(screen.getByRole('button', { name: /^About Every knob the projection/ }))
-    expect(screen.getByRole('tooltip').textContent).toMatch(
-      /Blank knobs are derived from your data/,
-    )
+    expect(screen.getByText(/express buying power at Aug 2026/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /^About Inputs from your records/ }))
+    expect(screen.getByRole('tooltip').textContent).toContain('scenario override')
   })
 
   it('runs the Monte Carlo knobs shifted back to fractions', async () => {
@@ -621,7 +656,7 @@ describe('ProjectionPage', () => {
     renderPage()
     await loaded()
 
-    const tile = tileFor('FI probability')
+    const tile = tileFor('Reach FI target within 30 years')
     expect(valueOf(tile)).toBe('—')
     expect(deltaOf(tile)).toBeNull() // no percentile months to name
   })
@@ -630,16 +665,16 @@ describe('ProjectionPage', () => {
     renderPage()
 
     await loaded()
-    const tile = tileFor('FI probability')
+    const tile = tileFor('Reach FI target within 30 years')
     expect(valueOf(tile)).toBe('62.0%')
-    expect(deltaOf(tile)).toBe('p10 Jan 2050 · p50 Oct 2055 · p90 Mar 2061')
+    expect(deltaOf(tile)).toBe('Median reach: Oct 2055')
   })
 
   it('leaves p10 out when a stale backend omits it', async () => {
     vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_month_p10: null }))
     renderPage()
     await loaded()
-    expect(deltaOf(tileFor('FI probability'))).toBe('p50 Oct 2055 · p90 Mar 2061')
+    expect(deltaOf(tileFor('Reach FI target within 30 years'))).toBe('Median reach: Oct 2055')
   })
 
   it('draws the fan under the lines when the payload carries bands', async () => {
@@ -647,7 +682,7 @@ describe('ProjectionPage', () => {
 
     const charts = await screen.findAllByTestId('echart')
     // Band series FIRST (paint order), the three real lines on top of them.
-    expect(seriesOf(charts[1])).toEqual([
+    expect(seriesOf(charts[0])).toEqual([
       'mc-base',
       BAND_SERIES[0],
       BAND_SERIES[1],
@@ -663,22 +698,22 @@ describe('ProjectionPage', () => {
     renderPage()
 
     const charts = await screen.findAllByTestId('echart')
-    expect(seriesOf(charts[1])).toEqual([...PROJECTION_SERIES])
+    expect(seriesOf(charts[0])).toEqual([...PROJECTION_SERIES])
   })
 
   // The app-wide ⓘ transcription's canary (spec §5): the copy is only a deliverable if it
   // actually reaches the DOM, and this page carries both shapes — a tile label and two
   // chart-card headings. The authored words ride in aria-label, which is what a screen
   // reader hears; the bubble itself renders the same words when the hint opens.
-  it('mounts both charts through ChartCard with house labels, export rows and the trend-span / axis-scale controls', async () => {
+  it('keeps chart actions and view-specific controls reachable in both sections', async () => {
     renderPage()
-    await screen.findByText('Projected investable balance')
-    expect(screen.getByLabelText(/Projected investable balance over the next/)).toBeTruthy()
-    expect(screen.getByLabelText(/Net worth history with a fitted trend/)).toBeTruthy()
-    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(2)
-    expect(screen.getByRole('group', { name: 'Trend span' })).toBeTruthy()
+    await loaded()
     expect(screen.getByRole('group', { name: 'Axis scale' })).toBeTruthy()
-    expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: /^Expand/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Table' })).toBeTruthy()
+    await openTrend()
+    expect(screen.getByRole('group', { name: 'Trend span' })).toBeTruthy()
+    expect(screen.getByLabelText(/Net worth history with a fitted trend/)).toBeTruthy()
   })
 
   it('Log flips the fan’s axis and the pick survives a recalculation', async () => {
@@ -744,12 +779,28 @@ describe('ProjectionPage', () => {
     expect(url()).toBe('/projection')
   })
 
+  it('never labels a pin with unknown inflation as future dollars', async () => {
+    localStorage.setItem(pinsKey('projection'), JSON.stringify({ version: PINS_VERSION, pins: [{
+      id: 'legacy', label: 'Legacy assumptions', createdAt: '2026-09-01T00:00:00.000Z', entries: ['annual_return:0.06'],
+    }] }))
+    vi.mocked(fetchProjection).mockImplementation(params => Promise.resolve(params?.annualReturn === '0.06' ? staleEchoes({ annual_return: '0.06' }) : projectionOut()))
+    renderPage()
+    await loaded()
+    const chart = screen.getByLabelText(/Projected investable balance over the next/)
+    await waitFor(() => expect(seriesOf(chart)).toContain('Legacy assumptions'))
+    fireEvent.click(screen.getByRole('button', { name: 'Future dollars' }))
+    expect(seriesOf(chart)).not.toContain('Legacy assumptions')
+    expect(screen.getByText(/A pinned scenario has no inflation assumption/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: "Today's dollars" }))
+    expect(seriesOf(chart)).toContain('Legacy assumptions')
+  })
+
   it('hangs a hint on the FI-target tile and on both chart headings', async () => {
     renderPage()
     await loaded()
 
-    const fiHint = tileFor('FI target').querySelector('.stat-label button.info-hint')
-    expect(fiHint?.getAttribute('aria-label')).toMatch(/^About Annual spend ÷ withdrawal/)
+    expect(within(tileFor('FI target')).getByRole('button', { name: 'About this number: FI target' })).toBeTruthy()
+    await openTrend()
     expect(
       screen.getByText('Net worth over time (projected)').querySelector('button.info-hint'),
     ).toBeTruthy()
@@ -769,7 +820,7 @@ describe('ProjectionPage — snapshot cache (2026-08-27 spec §1)', () => {
     renderPage()
     expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00')
     // Both cards are up: the trend chart needs the history seed, the projection the other.
-    expect(screen.getAllByTestId('echart')).toHaveLength(2)
+    expect(screen.getAllByTestId('echart')).toHaveLength(1)
     expect(screen.queryByText('Loading net-worth history…')).toBeNull()
     // The knob boxes carry the echo of the CACHED run: it seeds the sandbox's baseline.
     expect(box('Annual return').placeholder).toBe('5')
@@ -799,7 +850,7 @@ describe('ProjectionPage — snapshot cache (2026-08-27 spec §1)', () => {
     setSnapshot('projection:history', timeseries())
     renderPage()
     await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledTimes(1))
+    expect(fetchTimeseries).not.toHaveBeenCalled()
     expect(
       screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'false'),
     ).toBe(true)
@@ -901,9 +952,10 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
 
     const charts = await screen.findAllByTestId('echart')
     // [1] is the investable chart (DOM order is card order).
-    expect(charts[1].getAttribute('data-marks')).toBe('Sep 2026=Alex')
-    // The net-worth trend above it is untouched by retirements.
-    expect(charts[0].getAttribute('data-marks')).toBe('')
+    expect(charts[0].getAttribute('data-marks')).toBe('Sep 2026=Alex')
+    // Historical exploration is separate and does not acquire retirement annotations.
+    await openTrend()
+    expect(screen.getAllByTestId('echart')[1].getAttribute('data-marks')).toBe('')
   })
 
   it('renders the server refusal verbatim — nothing invented, nothing translated', async () => {

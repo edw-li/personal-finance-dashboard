@@ -11,6 +11,7 @@ from app.api import (
     activity,
     app_settings,
     assistant,
+    assistant_findings,
     auth,
     calendar,
     comp,
@@ -21,6 +22,8 @@ from app.api import (
     household,
     import_,
     limits,
+    metrics,
+    month_review,
     net_worth,
     overview,
     paycheck,
@@ -91,6 +94,8 @@ app.include_router(activity.router, prefix="/api/v1")
 app.include_router(net_worth.router, prefix="/api/v1")
 app.include_router(household.router, prefix="/api/v1")
 app.include_router(spending.router, prefix="/api/v1")
+app.include_router(month_review.router, prefix="/api/v1")
+app.include_router(metrics.router, prefix="/api/v1")
 app.include_router(portfolio.router, prefix="/api/v1")
 app.include_router(prices.router, prefix="/api/v1")
 app.include_router(taxes.router, prefix="/api/v1")
@@ -111,6 +116,7 @@ app.include_router(health_api.router, prefix="/api/v1")
 app.include_router(export.router, prefix="/api/v1")
 app.include_router(overview.router, prefix="/api/v1")
 app.include_router(assistant.router, prefix="/api/v1")
+app.include_router(assistant_findings.router, prefix="/api/v1")
 
 
 @app.get("/api/v1/health")

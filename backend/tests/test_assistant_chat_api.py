@@ -433,8 +433,11 @@ async def test_400_is_internal_not_bad_key(monkeypatch):
     ]
 
 
-async def test_every_model_down_names_them_all(monkeypatch):
+async def test_provider_outage_stops_after_one_automatic_fallback(monkeypatch):
+    models = []
+
     def responder(request: httpx.Request) -> httpx.Response:
+        models.append(json.loads(request.content)["model"])
         return httpx.Response(503, text="down")
 
     monkeypatch.setattr(assistant_models, "TRANSPORT_OVERRIDE", _transport(responder))
@@ -448,7 +451,8 @@ async def test_every_model_down_names_them_all(monkeypatch):
         )
     )
     kinds = [e for e, _ in events]
-    assert kinds.count("notice") == 3  # three failovers across the four-model ladder
+    assert kinds.count("notice") == 1
+    assert len(set(models)) == 2
     assert events[-1][0] == "error" and events[-1][1]["kind"] == "unavailable"
 
 

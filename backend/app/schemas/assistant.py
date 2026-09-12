@@ -1,9 +1,10 @@
 """Assistant vertical schemas (2026-09-01 spec §3–§5)."""
 
+import json
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class AssistantKeyStatus(BaseModel):
@@ -56,6 +57,34 @@ class ChatContextIn(BaseModel):
     view: dict[str, str | int | Annotated[list[str], Field(max_length=40)] | None] = Field(
         default_factory=dict, max_length=40
     )
+    selection: dict[str, Any] | None = None
+
+    @field_validator("selection")
+    @classmethod
+    def bounded_selection(cls, value: dict | None) -> dict | None:
+        if value is None:
+            return None
+        if len(json.dumps(value, allow_nan=False)) > 24000:
+            raise ValueError("captured selection is too large")
+        selection = value.get("selection")
+        if not isinstance(selection, dict) or selection.get("kind") not in {
+            "period",
+            "entity",
+            "heatmap",
+            "flow",
+            "projection",
+            "point",
+        }:
+            raise ValueError("a typed chart selection is required")
+        from app.services.assistant_evidence import valid_source_link
+
+        route = value.get("sourceRoute")
+        source = selection.get("source")
+        if not isinstance(route, str) or not valid_source_link(route):
+            raise ValueError("selection source must be a dashboard page")
+        if isinstance(source, dict) and not valid_source_link(str(source.get("href", ""))):
+            raise ValueError("selection source must be a dashboard page")
+        return value
 
 
 class ChatMessageIn(BaseModel):
@@ -71,6 +100,9 @@ class ChatIn(BaseModel):
     # The client sends its transcript tail; 20 × 8k chars bounds the upstream bill. An
     # empty transcript has nothing to answer — reject it here, not one layer deeper.
     messages: list[ChatMessageIn] = Field(min_length=1, max_length=20)
+    intent: Literal["month_review", "spending_changes", "contribution_pace", "selection"] | None = (
+        None
+    )
 
 
 class PreviewIn(BaseModel):

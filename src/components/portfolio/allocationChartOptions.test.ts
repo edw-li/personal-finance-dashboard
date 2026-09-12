@@ -217,7 +217,7 @@ describe('heatTreemapOption', () => {
       visualMax: HEAT_CLAMP,
     })
     expect(series.levels[2].color).toBeUndefined()
-    expect(series.data.map((g) => g.name)).toEqual(['Semis', 'ETF']) // biggest industry first
+    expect(series.data.map((g) => g.name)).toEqual(['Semis', 'Unknown fund industry'])
     const semis = series.data[0]
     expect(semis.children!.map((l) => l.name)).toEqual(['NVDA', 'AMD', 'Other'])
     expect(semis.children![0].value).toEqual([600000, HEAT_CLAMP]) // +80% clamps to +50%

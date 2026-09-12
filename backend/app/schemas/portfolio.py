@@ -2,10 +2,110 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 HoldingTypeLiteral = Literal["etf", "mutual_fund", "stock", "private"]
 TransactionTypeLiteral = Literal["buy", "sell", "split"]
+AllocationDimension = Literal["asset_class", "industry", "geography", "account", "type"]
+AssetClass = Literal["equity", "bonds", "cash", "real_assets", "mixed", "other"]
+Geography = Literal["us", "international", "global"]
+
+
+class ClassificationUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_class: AssetClass | None = None
+    industry: str | None = Field(default=None, max_length=80)
+    geography: Geography | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("industry", "note")
+    @classmethod
+    def trim_text(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+
+class ClassificationOut(BaseModel):
+    security_id: int
+    ticker: str
+    name: str
+    holding_type: str
+    asset_class: str | None
+    industry: str | None
+    geography: str | None
+    source: str
+    note: str | None
+    reviewed_at: datetime | None
+    industry_available: bool
+
+
+class AllocationTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1, max_length=100)
+    # These are percentages (0..100), unlike allocation weights (0..1).
+    target_pct: Decimal = Field(ge=0, le=100, max_digits=7, decimal_places=4)
+    tolerance_pp: Decimal = Field(
+        default=Decimal("0"), ge=0, le=100, max_digits=7, decimal_places=4
+    )
+
+    @field_validator("key")
+    @classmethod
+    def valid_key(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Target category must not be blank")
+        return value
+
+
+class AllocationTargetSave(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: Literal["draft", "active"]
+    targets: list[AllocationTarget] = Field(max_length=100)
+
+    @model_validator(mode="after")
+    def valid_total(self):
+        if len({target.key for target in self.targets}) != len(self.targets):
+            raise ValueError("Each target category must appear once")
+        if self.state == "active" and sum(t.target_pct for t in self.targets) != Decimal("100"):
+            raise ValueError("Active allocation targets must total exactly 100%")
+        return self
+
+
+class AllocationTargetSetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    scope_key: str
+    dimension: AllocationDimension
+    state: Literal["draft", "active"]
+    targets: list[AllocationTarget]
+    updated_at: datetime
+
+
+class AllocationMember(BaseModel):
+    security_id: int
+    ticker: str
+    name: str
+    account: str | None = None
+    shares: Decimal
+    market_value: Decimal | None
+    quoted_at: datetime | None
+    classification_source: str
+    classification_reviewed_at: datetime | None
+
+
+class AllocationCoverage(BaseModel):
+    holding_count: int
+    priced_count: int
+    unpriced_count: int
+    classified_count: int
+    classified_market_value: Decimal
+    unknown_market_value: Decimal
+    classified_weight_pct: Decimal | None
+    unpriced_holdings: list[AllocationMember]
+    warnings: list[str]
 
 
 class SecurityCreate(BaseModel):
@@ -183,12 +283,52 @@ class AllocationSlice(BaseModel):
     market_value: Decimal
     weight_pct: Decimal
     holdings: int
+    label: str = ""
+    is_unknown: bool = False
+    members: list[AllocationMember] = Field(default_factory=list)
+
+
+class AllocationDrift(BaseModel):
+    key: str
+    label: str
+    market_value: Decimal
+    weight_pct: Decimal | None
+    target_pct: Decimal
+    tolerance_pp: Decimal
+    drift_pp: Decimal | None
+    drift_amount: Decimal | None
+    outside_tolerance: bool | None
+    has_unpriced: bool
 
 
 class AllocationOut(BaseModel):
-    by: Literal["industry", "type", "account"]
+    by: AllocationDimension
     total_market_value: Decimal
     slices: list[AllocationSlice]
+    scope_key: str = "household"
+    as_of: datetime | None = None
+    latest_quote_at: datetime | None = None
+    coverage: AllocationCoverage | None = None
+    target_set: AllocationTargetSetOut | None = None
+    draft_target_set: AllocationTargetSetOut | None = None
+    drift: list[AllocationDrift] = Field(default_factory=list)
+    source_href: str = "/portfolio?section=holdings"
+
+
+class EmployerExposureOut(BaseModel):
+    ticker: str | None
+    scope_key: str
+    as_of: date
+    quoted_at: datetime | None
+    held_shares: Decimal
+    held_value: Decimal | None
+    held_weight_pct: Decimal | None
+    priced_portfolio_value: Decimal
+    unvested_shares: int
+    unvested_value: Decimal | None
+    # Existing Comp grants have no person ownership. Never imply a person filter applies.
+    unvested_scope: str = "Household Comp grants (not owner-tagged)"
+    warnings: list[str]
 
 
 class PortfolioAccountOut(BaseModel):

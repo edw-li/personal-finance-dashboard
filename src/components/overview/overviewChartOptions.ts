@@ -48,6 +48,7 @@ export const RECENT_SPEND_MONTHS = 12
 
 const AVERAGE_SERIES = '12-mo average'
 const SPEND_SERIES = 'Spend'
+type SpendingDisplay = Pick<SpendingMatrix, 'months' | 'totals'> & Partial<Pick<SpendingMatrix, 'living_total' | 'comparison_average' | 'default_month' | 'review_state' | 'eligible_spending'>>
 
 /** Nothing to exclude — one shared empty set, so the default costs no allocation. */
 const NO_MONTHS: ReadonlySet<string> = new Set<string>()
@@ -75,7 +76,7 @@ const HOLLOW_BAR = { color: 'transparent', borderColor: PALETTE[1], borderWidth:
  *  A $0.00 month with neither a take-home row nor a coverage list naming it stays a
  *  figure: a household that really spent nothing is not corrected here. */
 export function notEnteredMonths(
-  matrix: Pick<SpendingMatrix, 'months' | 'totals' | 'net_pay'>,
+  matrix: Pick<SpendingMatrix, 'months' | 'totals' | 'net_pay' | 'review_state' | 'eligible_spending'>,
   coverage: Pick<CoverageOut, 'spending_empty' | 'spending_missing'>,
 ): Set<string> {
   const months = new Set<string>([
@@ -83,20 +84,25 @@ export function notEnteredMonths(
     ...(coverage.spending_missing ?? []),
   ])
   matrix.months.forEach((month, i) => {
+    if (matrix.eligible_spending?.[i] === true || matrix.review_state?.[i] === 'closed') {
+      months.delete(month)
+      return
+    }
+    if (matrix.review_state !== undefined) return
     if (matrix.net_pay[i] != null && Number(matrix.totals[i]) === 0) months.add(month)
   })
   return months
 }
 
 export function recentSpendOption(
-  matrix: Pick<SpendingMatrix, 'months' | 'totals'>,
+  matrix: SpendingDisplay,
   months = RECENT_SPEND_MONTHS,
   notEntered: ReadonlySet<string> = NO_MONTHS,
 ): EChartsOption | null {
   if (matrix.months.length === 0) return null
   const start = Math.max(0, matrix.months.length - months)
   const shown = matrix.months.slice(start)
-  const totals = matrix.totals.slice(start).map(Number)
+  const totals = (matrix.living_total ?? matrix.totals).slice(start).map(Number)
   // Drawn hollow and labelled in the tooltip rather than dropped: the month happened, and
   // an axis that skipped it would hide the gap this is meant to make visible.
   const blank = new Set(shown.flatMap((month, i) => (notEntered.has(month) ? [i] : [])))
@@ -154,11 +160,11 @@ export function recentSpendOption(
 
 /** The shown months as a table (F12) — the same trailing window the bars draw. */
 export function recentSpendCsv(
-  matrix: Pick<SpendingMatrix, 'months' | 'totals'>,
+  matrix: SpendingDisplay,
   months = RECENT_SPEND_MONTHS,
 ): ExportTable {
   const start = Math.max(0, matrix.months.length - months)
-  return { headers: ['Month', 'Spend'], rows: matrix.months.slice(start).map((m, i) => [m, matrix.totals[start + i]]) }
+  return { headers: ['Month', matrix.living_total ? 'Living spending (USD)' : 'Spend', ...(matrix.review_state ? ['Review status'] : [])], rows: matrix.months.slice(start).map((m, i) => [m, (matrix.living_total ?? matrix.totals)[start + i], ...(matrix.review_state ? [matrix.review_state[start + i]] : [])]) }
 }
 
 export interface SpendStats {
@@ -172,10 +178,18 @@ export interface SpendStats {
 // month is the LATEST month present (hand-entered app: the current calendar month is
 // absent until the wizard runs; the tile label carries the month so it reads honestly).
 export function spendStats(
-  matrix: Pick<SpendingMatrix, 'months' | 'totals'>,
+  matrix: SpendingDisplay,
   notEntered: ReadonlySet<string> = NO_MONTHS,
 ): SpendStats {
   if (matrix.months.length === 0) return { month: null, total: null, avg12: null, aboveAvg: null }
+  if (matrix.default_month !== undefined || matrix.comparison_average !== undefined) {
+    const index = matrix.default_month !== undefined ? matrix.months.indexOf(matrix.default_month ?? '') : matrix.months.length - 1
+    if (index < 0) return { month: null, total: null, avg12: null, aboveAvg: null }
+    const total = matrix.living_total?.[index] ?? null
+    const rawAverage = matrix.comparison_average?.[index]
+    const avg12 = rawAverage == null ? null : Number(rawAverage)
+    return { month: matrix.months[index], total, avg12, aboveAvg: total === null || avg12 === null ? null : Number(total) > avg12 }
+  }
   const idx = matrix.months.length - 1
   // The twelve months before the tile month, MINUS the ones nobody entered (audit item
   // 14). The window is still twelve CALENDAR months — the not-entered ones drop out of

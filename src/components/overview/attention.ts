@@ -21,14 +21,14 @@ export interface AttentionItem {
 
 export interface AttentionInputs {
   /** Net-worth coverage (the wizard writes it) — the canonical "which months exist". */
-  months: string[]
-  holdings: HoldingsResponse
-  lots: EsppLotsResponse
-  taxYears: TaxYearOut[]
+  months?: string[]
+  holdings?: HoldingsResponse
+  lots?: EsppLotsResponse
+  taxYears?: TaxYearOut[]
   /** GET /system/status — the last refresh outcome, backup marker and environment. */
-  system: SystemStatus
+  system?: SystemStatus
   /** GET /coverage — which months each hand-entered feed actually has (spec §3). */
-  coverage: CoverageOut
+  coverage?: CoverageOut
 }
 
 // The ritual runs in the month's first days (recorded_on evidence), so the nudge waits a
@@ -48,7 +48,7 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
 
   // Monthly update — only once a first month exists: a fresh database's empty states
   // already say "enter your first month", and a reminder on top would double-message.
-  if (data.months.length > 0) {
+  if (data.months && data.months.length > 0) {
     const prevMonth = addMonths(currentMonth, -1)
     const haveCurrent = data.months.includes(currentMonth)
     const havePrev = data.months.includes(prevMonth)
@@ -79,7 +79,7 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
   const older = (count: number) =>
     count > 0 ? ` (+${count} earlier ${plural(count, 'month', 'months')})` : ''
 
-  const missing = [...(data.coverage.spending_missing ?? [])].sort()
+  const missing = [...(data.coverage?.spending_missing ?? [])].sort()
   if (missing.length > 0) {
     const newest = missing[missing.length - 1]
     items.push({
@@ -91,9 +91,10 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
 
   // Windowed here, not on the wire: the server lists every zero-filled month on file, and
   // one saved outside the balances window was never part of the book to begin with.
-  const empty = (data.coverage.spending_empty ?? [])
+  const empty = data.coverage ? (data.coverage.spending_empty ?? [])
     .filter(insideBalancesWindow(data.coverage))
-    .sort()
+    .filter(month => !data.coverage?.review_months?.some(review => review.month === month && review.state === 'closed'))
+    .sort() : []
   if (empty.length > 0) {
     const newest = empty[empty.length - 1]
     items.push({
@@ -103,6 +104,7 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
     })
   }
 
+  if (data.holdings) {
   const { as_of, totals, holdings } = data.holdings
   if (as_of === null && holdings.length > 0) {
     items.push({
@@ -136,11 +138,13 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
     })
   }
 
+  }
+
   // The last refresh run's failures — persisted whichever way it ran (the scheduled
   // job's outcome used to be log-only). The Portfolio header carries the per-ticker
   // detail and the one-click deactivate.
   const failedTickers =
-    data.system.prices.last === null ? [] : Object.keys(data.system.prices.last.failed)
+    Object.keys(data.system?.prices.last?.failed ?? {})
   if (failedTickers.length > 0) {
     const shown = failedTickers.slice(0, 3).join(', ')
     const more = failedTickers.length - Math.min(3, failedTickers.length)
@@ -158,7 +162,7 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
   // evaluated at today's midnight UTC exactly as prices-stale above. The verify phase
   // (2026-09-03 data-lifecycle spec §8) adds its verdict: a stale nag says both; a fresh
   // dump that did not restore gets its own line. `verified` absent = an older marker, silent.
-  if (data.system.environment === 'prod') {
+  if (data.system?.environment === 'prod') {
     const { backup } = data.system
     const stale =
       backup === null ||
@@ -181,7 +185,7 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
 
   // ESPP — days_until_qualified is the SERVER's countdown (null on sold rows), so there
   // is no date math to get wrong here; `qualified` rows are already through the window.
-  const qualifying = data.lots.lots
+  const qualifying = (data.lots?.lots ?? [])
     .filter(
       (lot) =>
         !lot.is_sold &&
@@ -207,10 +211,10 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
 
   // Taxes — the current year should exist (brackets clone in one click) and have inputs.
   const year = Number(todayIso.slice(0, 4))
-  const taxYear = data.taxYears.find((y) => y.year === year)
-  if (taxYear === undefined) {
+  const taxYear = data.taxYears?.find((y) => y.year === year)
+  if (data.taxYears && taxYear === undefined) {
     items.push({ key: 'tax-year-missing', text: `No ${year} tax year set up yet`, to: '/taxes' })
-  } else if (taxYear.input_count === 0) {
+  } else if (taxYear?.input_count === 0) {
     items.push({
       key: 'tax-inputs-empty',
       text: `${year}'s tax inputs are empty`,

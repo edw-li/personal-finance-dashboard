@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { Link, MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import { hintLabel } from '../components/InfoHint'
@@ -42,6 +42,10 @@ vi.mock('../api/prices', async (importOriginal) => ({
   refreshPrices: vi.fn(),
 }))
 vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
+vi.mock('../api/allocation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/allocation')>()),
+  fetchAllocationData: vi.fn(), fetchClassifications: vi.fn(), fetchEmployerExposure: vi.fn(),
+}))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what each chart
 // DRAWS is pinned in historyChartOptions.test.ts and allocationChartOptions.test.ts; this
 // marker exposes only what this page owns: the series names and the entrance flag.
@@ -68,6 +72,7 @@ vi.mock('../components/EChart', async () => {
 })
 
 import { fetchHousehold } from '../api/household'
+import { fetchAllocationData, fetchClassifications, fetchEmployerExposure } from '../api/allocation'
 import {
   fetchAllocation,
   fetchDividendEvents,
@@ -235,9 +240,18 @@ const HISTORY: PortfolioHistory = {
 const REALIZED: RealizedResponse = { total: '0.00', rows: [] }
 const STATUS: RefreshStatus = { last: null, next_run_at: null }
 
-const NO_HOLDINGS_NOTE = 'No holdings yet — add transactions below.'
+const NO_HOLDINGS_NOTE = 'No holdings yet — add transactions in Manage.'
 
 beforeEach(() => {
+  vi.mocked(fetchAllocationData).mockImplementation(async (by, owner) => ({
+    by, scope_key: String(owner ?? 'household'), total_market_value: owner === SAM.id ? '0.00' : '4500.00',
+    as_of: '2026-08-27T20:00:00Z', latest_quote_at: '2026-08-27T20:00:00Z',
+    slices: owner === SAM.id ? [] : [{ key: 'equity', label: 'Equity', market_value: '4500.00', weight_pct: '1.0', holdings: 1, is_unknown: false, members: [] }],
+    coverage: { holding_count: 1, priced_count: 1, unpriced_count: 0, classified_count: 1, classified_market_value: '4500.00', unknown_market_value: '0.00', classified_weight_pct: '1.0', unpriced_holdings: [], warnings: [] },
+    target_set: null, draft_target_set: null, drift: [], source_href: '/portfolio?section=holdings',
+  }))
+  vi.mocked(fetchClassifications).mockResolvedValue([])
+  vi.mocked(fetchEmployerExposure).mockResolvedValue({ ticker: null, scope_key: 'household', as_of: '2026-08-27', quoted_at: null, held_shares: '0', held_value: null, held_weight_pct: null, priced_portfolio_value: '4500.00', unvested_shares: 0, unvested_value: null, unvested_scope: 'primary', warnings: [] })
   clearSnapshots()
   // The shared scope remembers owner/range in localStorage, so one test's chip would
   // otherwise become the next test's default (useScope's memory fallback).
@@ -323,6 +337,28 @@ const chip = (label: string) =>
   [...ownerChips().querySelectorAll('button')].find(
     (b) => b.textContent === label,
   ) as HTMLButtonElement
+
+it('focuses the visible record editor and preserves its draft through other views', async () => {
+  render(<MemoryRouter initialEntries={['/portfolio?tab=securities']}><PortfolioPage /><Link to="/portfolio?tab=transactions">Open transaction editor</Link></MemoryRouter>)
+  const ticker = await screen.findByRole('textbox', { name: 'Ticker' })
+  await waitFor(() => expect(document.activeElement).toBe(ticker))
+  fireEvent.change(ticker, { target: { value: 'DRAFT' } })
+  fireEvent.click(screen.getByRole('link', { name: 'Open transaction editor' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Show transactions' }).getAttribute('aria-pressed')).toBe('true'))
+  expect(document.activeElement?.closest('[hidden]')).toBeNull()
+  fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Show securities' }))
+  expect((screen.getByRole('textbox', { name: 'Ticker' }) as HTMLInputElement).value).toBe('DRAFT')
+})
+
+it('opens the transaction editor when Manage follows a dividend arrival', async () => {
+  renderPage('/portfolio?tab=dividends')
+  await screen.findByRole('tab', { name: 'Income', selected: true })
+  fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
+  expect(await screen.findByRole('button', { name: 'Show transactions', pressed: true })).toBeTruthy()
+  expect(screen.getByRole('combobox', { name: 'Account' }).closest('[hidden]')).toBeNull()
+})
 
 it('hides the owner chips for a one-person household', async () => {
   vi.mocked(fetchHousehold).mockResolvedValue(household({ people: [ME] }))
@@ -567,7 +603,7 @@ it('restores the household view after visiting an owner with no positions', asyn
   vi.mocked(fetchDividends).mockImplementation((scope) =>
     Promise.resolve(scope === SAM.id ? [] : DIVIDENDS),
   )
-  renderPage()
+  renderPage('/portfolio?section=holdings')
   await screen.findByRole('group', { name: 'Whose' })
   await waitFor(() => expect(screen.queryByText(NO_HOLDINGS_NOTE)).toBeNull())
 
@@ -688,16 +724,18 @@ const HOUSEHOLD_HINT =
   '— not this chart, the sparklines or price refresh, which always cover the whole ' +
   'household. Person views omit the live price dot because the history is household-wide.'
 
-it('mounts performance, the heat-treemap, the donut and dividends through ChartCard', async () => {
+it('opens allocation charts from their task view while retaining performance', async () => {
   renderPage()
   await screen.findByText('Performance')
   expect(screen.getByLabelText(/Line chart of portfolio value against cost basis/)).toBeTruthy()
-  expect(screen.getByLabelText(/Treemap of holdings by industry and ticker/)).toBeTruthy()
-  expect(screen.getByLabelText(/Donut chart of portfolio share by holding type/)).toBeTruthy()
-  expect(screen.getByRole('group', { name: 'Export portfolio-performance' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('tab', { name: 'Allocation' }))
+  await screen.findByLabelText('Portfolio allocation by asset class')
+  expect(screen.getByLabelText(/Holdings grouped by known industry/)).toBeTruthy()
+  expect(screen.getByLabelText(/Portfolio allocation by asset class/)).toBeTruthy()
+  expect(screen.getByRole('group', { name: 'Export portfolio-performance', hidden: true })).toBeTruthy()
   expect(screen.getByRole('group', { name: 'Heat metric' })).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Day change' }))
-  expect(screen.getByLabelText(/shaded by day change/)).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Day change' }).getAttribute('aria-pressed')).toBe('true')
 })
 
 it("overrides the shell's default answer to Whose with the portfolio one", async () => {
@@ -734,18 +772,21 @@ it('renders the panels real empty notes for an owner who holds nothing', async (
   vi.mocked(fetchAllocation).mockImplementation((by, scope) =>
     Promise.resolve(scope === SAM.id ? emptyAllocation(by) : allocationOut(by)),
   )
-  renderPage()
+  renderPage('/portfolio?section=holdings')
   await screen.findByRole('group', { name: 'Whose' })
   await waitFor(() => expect(screen.queryByText(NO_HOLDINGS_NOTE)).toBeNull())
 
   fireEvent.click(chip('Sam'))
   // HoldingsTable's OWN note, not an empty table that reads as a rendering bug.
   expect(await screen.findByText(NO_HOLDINGS_NOTE)).toBeTruthy()
+  fireEvent.click(screen.getByRole('tab', { name: 'Allocation' }))
+  await waitFor(() => expect(fetchAllocationData).toHaveBeenCalledWith('asset_class', SAM.id))
   // The treemap and the donut both fall back to their notes rather than empty canvases.
-  expect(screen.getAllByText('No priced holdings yet.').length).toBe(2)
+  await waitFor(() => expect(screen.getAllByText('No priced holdings yet.').length).toBe(2))
   // …and the heat-treemap's colour legend goes with the cells it describes: "Orange =
   // loss, blue = gain; the deeper the tone…" under an empty note is a key to nothing.
   expect(screen.queryByText(/Orange = loss, blue = gain/)).toBeNull()
+  fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
   // And the performance chart is still up: it is household-wide, and the hint says so.
   expect(screen.getByText(HOUSEHOLD_HINT)).toBeTruthy()
   expect(screen.getAllByTestId('echart').length).toBeGreaterThan(0)
@@ -907,7 +948,7 @@ describe('PortfolioPage — shell scope', () => {
   // roster, and the server get-or-creates on the exact string, tagging a new account to the
   // primary. The page is what knows the roster and who the primary is.
   it('hands the ledger form the account roster and the primary’s name', async () => {
-    renderPage('/portfolio')
+    renderPage('/portfolio?section=manage')
     await waitFor(() => expect(document.getElementById('txn-account-labels')).not.toBeNull())
     const options = Array.from(document.querySelectorAll('#txn-account-labels option'))
     expect(options.map((o) => (o as HTMLOptionElement).value)).toEqual([

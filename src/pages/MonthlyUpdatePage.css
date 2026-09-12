@@ -157,6 +157,7 @@
 }
 
 .wizard-footer {
+  padding-inline-end: 3.5rem;
   display: flex;
   justify-content: space-between;
   margin-top: 1.25rem;
@@ -265,3 +266,19 @@
   border-color: var(--negative);
   color: var(--negative);
 }
+.review-change-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1.25rem 0; }
+.review-change-group { min-width: 0; }
+.review-change-group table { width: 100%; font-size: .85rem; }
+.review-save-summary { color: var(--muted); font-size: .9rem; margin-top: 1.5rem; }
+.review-confirmations { border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; margin: 1.5rem 0 .75rem; }
+.review-confirmations legend { font-size: .9rem; font-weight: 600; padding: 0 .4rem; }
+.review-confirmations label { display: flex; align-items: baseline; gap: .65rem; margin: .5rem 0; font-size: .9rem; }
+.month-review-status { display: inline-flex; padding: .3rem .7rem; border-radius: 100px; background: var(--surface-raised, var(--bg-card)); border: 1px solid var(--border); font-size: .8rem; margin-bottom: 1rem; }
+.month-review-status-closed { color: var(--positive); }
+.month-review-status-needs_review { color: var(--warn); }
+.month-actions { margin-top: 1.5rem; padding-top: .8rem; border-top: 1px solid var(--border); }
+.month-actions summary, .historical-review summary { cursor: pointer; font-weight: 600; font-size: .85rem; }
+.month-actions[open] summary { margin-bottom: .75rem; }
+.historical-review { margin-top: 1rem; padding: 1.25rem; }
+.history-review-list { max-height: 20rem; overflow: auto; margin: 1rem 0; }
+.history-review-row { display: grid; grid-template-columns: 1.25rem 1fr 1fr auto; align-items: center; gap: .75rem; padding: .6rem 0; border-bottom: 1px solid var(--border); font-size: .85rem; }

@@ -319,7 +319,7 @@ describe('NetWorthPage — snapshot cache (2026-08-27 spec §1)', () => {
     setSnapshot('networth:monthly:all:latest', { ts: timeseriesOut(), summary: summaryOut() })
     vi.mocked(fetchTimeseries).mockReturnValue(new Promise(() => {}))
     vi.mocked(fetchSummary).mockReturnValue(new Promise(() => {}))
-    renderPage()
+    renderPage('/net-worth?section=accounts')
     // My Checking (150) beats Joint Savings (80) at the latest month — slot 1.
     expect(drilled().getAttribute('data-series')).toBe('My Checking')
     expect(screen.queryByText('No accounts selected.')).toBeNull()
@@ -390,7 +390,7 @@ it('restores the household view after visiting an owner with no data', async () 
   vi.mocked(fetchSummary).mockImplementation((owner) =>
     Promise.resolve(owner === SAM.id ? emptySummary : summaryOut()),
   )
-  renderPage()
+  renderPage('/net-worth?section=accounts')
   // findAll: the account renders in the table AND as a drill chip once seeded.
   await screen.findAllByText('My Checking')
 
@@ -416,7 +416,7 @@ it('restores the household view after visiting an owner with no data', async () 
 // refill it — leaving the card reading "No accounts selected." until a manual pick.
 it('re-seeds the drill for a new scope whose payload is IDENTICAL to the one on screen', async () => {
   // Every owner answers with the same fixture here (the beforeEach mocks) — which is the trap.
-  renderPage()
+  renderPage('/net-worth?section=accounts')
   expect(
     (await screen.findAllByRole('button', { name: 'My Checking', pressed: true })).length,
   ).toBeGreaterThan(0)
@@ -452,6 +452,7 @@ it('keeps a drill toggle on an account named "Cash" out of the stacked chart', a
   )
   renderPage()
   await screen.findByRole('group', { name: 'Whose' })
+  fireEvent.click(screen.getByRole('tab', { name: 'Accounts' }))
   // The drill seeds to the biggest account — the one wearing the colliding name, which
   // therefore draws under the CLAIMED spelling. The suffix is visible on purpose: the
   // legend has to admit that this entry is the account, not the group.
@@ -494,7 +495,7 @@ describe('NetWorthPage — shell scope', () => {
   })
 
   it('viewing a month through the ribbon fetches that month\u2019s summary and shows its balances', async () => {
-    renderPage('/net-worth')
+    renderPage('/net-worth?section=accounts')
     await screen.findByRole('heading', { level: 1, name: 'Net worth' })
 
     fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
@@ -553,7 +554,7 @@ describe('NetWorthPage — shell scope', () => {
   })
 
   it('keeps the drill chips in one labelled group that adds rather than replaces', async () => {
-    renderPage('/net-worth')
+    renderPage('/net-worth?section=accounts')
     const group = await screen.findByRole('group', { name: 'Accounts to compare' })
     expect([...group.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
       'My Checking',
@@ -576,13 +577,15 @@ describe('NetWorthPage — chart cards', () => {
     renderPage()
     await screen.findByText('By group over time')
     expect(screen.getByLabelText(/Stacked area chart of asset groups over time/)).toBeTruthy()
-    expect(screen.getByLabelText(/Line chart of the selected accounts/)).toBeTruthy()
+
     expect(screen.getByText(/What moved — Aug 2026/)).toBeTruthy()
     expect(screen.getByLabelText(/Horizontal bar chart of how each account group moved/)).toBeTruthy()
-    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(3)
-    expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(2)
     expect(screen.getByRole('button', { name: 'Share %' })).toBeTruthy()
-  })
+    fireEvent.click(screen.getByRole('tab', { name: 'Accounts' }))
+    expect(screen.getByLabelText(/Line chart of the selected accounts/)).toBeTruthy()
+    expect(screen.getAllByRole('group', { name: /Export/, hidden: true })).toHaveLength(3)
+    expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(2)
+      })
 
   it('breaks the movers down by group, then by account, with the lede and the table twin', async () => {
     renderPage()
@@ -595,7 +598,7 @@ describe('NetWorthPage — chart cards', () => {
     expect(within(card).getByLabelText(/Horizontal bar chart of how each account moved/)).toBeTruthy()
     fireEvent.click(within(card).getByRole('button', { name: 'Table' }))
     const rows = [...card.querySelectorAll('tbody tr')].map((r) => [...r.querySelectorAll('td')].map((td) => td.textContent))
-    expect(rows).toEqual([['My Checking', 'Cash', '50.00', '83%'], ['Joint Savings', 'Cash', '10.00', '17%']])
+    expect(rows).toEqual([['My Checking', 'Cash', '50.00', '83%', 'Inspect'], ['Joint Savings', 'Cash', '10.00', '17%', 'Inspect']])
   })
 
   it('Share % swaps the stack to composition and drops the net-worth line', async () => {
@@ -613,7 +616,7 @@ describe('NetWorthPage — chart cards', () => {
 describe('NetWorthPage — one failed feed never blanks the page', () => {
   it('keeps the charts and the table up when the summary fails, and banners it', async () => {
     vi.mocked(fetchSummary).mockRejectedValue(new ApiError('boom', 500))
-    renderPage()
+    renderPage('/net-worth?section=accounts')
     // The timeseries answered, so everything IT draws is still on screen.
     expect((await screen.findAllByText('My Checking')).length).toBeGreaterThan(0)
     expect(screen.getAllByTestId('echart').length).toBeGreaterThan(0)
@@ -719,8 +722,8 @@ describe('NetWorthPage — the tiles follow the grain on screen', () => {
       Promise.resolve(g === 'quarterly' ? gapped : timeseriesOut()),
     )
     vi.mocked(fetchSummary).mockResolvedValue(summaryOut({ month: '2026-03-01', period: 'quarter' }))
-    renderPage('/net-worth?month=2026-08')
-    await screen.findByText('By group over time')
+    renderPage('/net-worth?month=2026-08&section=accounts')
+    await screen.findByRole('group', { name: 'Accounts to compare' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
     expect(await screen.findByText('Accounts — Mar 2026')).toBeTruthy()
@@ -782,8 +785,8 @@ describe('NetWorthPage — the tiles follow the grain on screen', () => {
     vi.mocked(fetchTimeseries).mockImplementation((g) =>
       Promise.resolve(g === 'quarterly' ? quarterly : timeseriesOut()),
     )
-    renderPage('/net-worth?month=2026-08')
-    await screen.findByText('By group over time')
+    renderPage('/net-worth?month=2026-08&section=accounts')
+    await screen.findByRole('group', { name: 'Accounts to compare' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
     // August is not a quarter end and the quarterly series has no column for it: the page
@@ -796,6 +799,7 @@ describe('NetWorthPage — the tiles follow the grain on screen', () => {
     await waitFor(() =>
       expect(screen.getByTestId('location').textContent).toContain('month=2026-06'),
     )
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
     expect(screen.getByText(/What moved — Jun 2026/)).toBeTruthy()
     // …and the lede names the two quarter ends, not two months.
     expect(document.querySelector('.chart-lede')?.textContent).toContain('Mar 2026')

@@ -57,14 +57,16 @@ afterEach(() => {
 })
 
 describe('ScenarioPanel', () => {
-  it('opens by default with every knob derived: badge, placeholder and caption from the echo; no Apply', async () => {
+  it('opens with the records, defaults and settings identified beside each baseline value', async () => {
     mount()
-    expect(screen.getByRole('button', { name: 'Hide knobs' }).getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Hide assumptions' }).getAttribute('aria-expanded')).toBe('true')
     await waitFor(() => expect(preview).toHaveBeenCalledWith({ knobs: {}, retirements: {} }))
-    await waitFor(() => expect(screen.getAllByText('derived')).toHaveLength(8))
+    await waitFor(() => expect(screen.getAllByText('Planning default')).toHaveLength(5))
+    expect(screen.getAllByText('From your records')).toHaveLength(2)
+    expect(screen.getByText('Settings', { selector: '.sandbox-badge' })).toBeTruthy()
     expect((screen.getByLabelText('Annual return') as HTMLInputElement).placeholder).toBe('5')
-    expect(screen.getByRole('button', { name: 'actual 5%' })).toBeTruthy()
-    expect((screen.getByRole('button', { name: 'Reset to derived' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Baseline 5%' })).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Reset to baseline' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByText(/^Apply/)).toBeNull()
   })
 
@@ -78,14 +80,14 @@ describe('ScenarioPanel', () => {
     expect(url()).toBe('/projection?whatif=annual_return%3A0.06')
     await waitFor(() => expect(preview).toHaveBeenLastCalledWith({ knobs: { annual_return: '0.06' }, retirements: {} }))
     expect(screen.getByText('+1.0 pp')).toBeTruthy()
-    expect(screen.getAllByText('derived')).toHaveLength(7)
+    expect(screen.getAllByText('Planning default')).toHaveLength(4)
   })
 
   it('a retirement month is an immediate retire entry; blank removes it', async () => {
     mount()
     // Wait for the derived run to LAND: a non-empty scenario asked for before it does
     // makes the hook fetch the baseline too, and that empty run would be the last call.
-    await waitFor(() => expect(screen.getAllByText('derived')).toHaveLength(8))
+    await waitFor(() => expect(screen.getAllByText('Planning default')).toHaveLength(5))
     const grace = screen.getByLabelText('Retires — Grace') as HTMLInputElement
     fireEvent.change(grace, { target: { value: '2035-06' } })
     expect(url()).toBe('/projection?whatif=retire%3A2%3A2035-06')
@@ -126,7 +128,7 @@ describe('ScenarioPanel', () => {
 
   it('Enter commits a typed month, and Reset clears both the draft and the refusal', async () => {
     mount()
-    await waitFor(() => expect(screen.getAllByText('derived')).toHaveLength(8))
+    await waitFor(() => expect(screen.getAllByText('Planning default')).toHaveLength(5))
     const grace = screen.getByLabelText('Retires — Grace') as HTMLInputElement
     // See the test above: type="month" is re-applied by React on every update.
     const asPlainText = () => {
@@ -142,7 +144,7 @@ describe('ScenarioPanel', () => {
     // Reset drops the URL, and with it the drafts and the refusal they earned: a later
     // blur still carrying the old text would write back a scenario just cleared.
     fireEvent.change(asPlainText(), { target: { value: '2035-1' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Reset to derived' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to baseline' }))
     expect(url()).toBe('/projection')
     fireEvent.blur(grace)
     expect(screen.queryByRole('alert')).toBeNull()
@@ -193,10 +195,10 @@ describe('ScenarioPanel', () => {
     await waitFor(() => expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toContain('Return 6%Unpin'))
   })
 
-  it('Reset to derived empties the URL', async () => {
+  it('Reset to baseline empties the URL', async () => {
     mount('/projection?whatif=years%3A40&whatif=retire%3A2%3A2035-06')
     await waitFor(() => expect(preview).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: 'Reset to derived' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to baseline' }))
     expect(url()).toBe('/projection')
   })
 
@@ -215,11 +217,11 @@ describe('ScenarioPanel', () => {
     // Both the contribution and the annual spend derive from the SAME matched window, and
     // each says so under its own knob.
     await waitFor(() =>
-      expect(screen.getAllByText('derived over Aug 2025–Jul 2026 (12 months)')).toHaveLength(2),
+      expect(screen.getAllByText('Records from Aug 2025–Jul 2026 (12 months)')).toHaveLength(2),
     )
     expect(
       screen.getByText(
-        'derived: $1,200.00 cash savings + $2,800.00 payroll deductions + $500.00 employer match = $4,500.00 (Edward $2,400.00 + $500.00 match)',
+        'From records: $1,200.00 cash savings + $2,800.00 payroll deductions + $500.00 employer match = $4,500.00 (Edward $2,400.00 + $500.00 match)',
       ),
     ).toBeTruthy()
   })
@@ -228,12 +230,12 @@ describe('ScenarioPanel', () => {
     preview.mockImplementation(async () => ({ ...echo, derived_window: null }))
     mount()
     await waitFor(() => expect(preview).toHaveBeenCalled())
-    expect(screen.queryByText(/derived over/)).toBeNull()
+    expect(screen.queryByText(/Records from/)).toBeNull()
   })
 
   it('states that the seed is fixed and points the withdrawal rate at Settings', () => {
     mount()
-    expect(screen.getByText(/seed-stable/)).toBeTruthy()
+    expect(screen.getByText(/same random samples/)).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/settings')
   })
 
@@ -259,7 +261,7 @@ describe('ScenarioPanel', () => {
     mount()
     // BOTH windowed knobs print the window, so this wait is a findAll — it only has to prove
     // the derived run landed before the preset's absence is asserted.
-    await screen.findAllByText(/derived over/)
+    await screen.findAllByText(/Records from/)
     expect(screen.queryByRole('button', { name: /Use my budgets|using your budgets/ })).toBeNull()
   })
 })

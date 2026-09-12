@@ -1,3 +1,4 @@
+import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ApiError, describeError } from '../api/client'
@@ -130,7 +131,10 @@ function detailKey(year: number, filingStatus: FilingStatus): string {
   return `taxes:detail:${year}:${filingStatus}`
 }
 
+const PAGE_SECTIONS = [{"id":"summary","label":"Summary"},{"id":"whatif","label":"What-if"},{"id":"inputs","label":"Inputs"},{"id":"tables","label":"Tax tables"}] as const
+
 export default function TaxesPage() {
+  const views = useLocalSections(PAGE_SECTIONS, 'summary', { resolveLegacy: ({ searchParams, hash }) => searchParams.has('whatif') || searchParams.has('whatif-lot') || searchParams.has('sale_ticker') || searchParams.has('espp_lot') ? 'whatif' : hash.includes('bracket') ? 'tables' : hash.includes('input') ? 'inputs' : null })
   // The selected tax year lives in the URL (2026-09-03 sandbox lane T). Every card on this
   // page answers for ONE year — the what-if card most of all, whose entries mean nothing
   // against the wrong one — so a shared address has to name it, and the assistant's
@@ -533,8 +537,8 @@ export default function TaxesPage() {
       const named = split.map((key) => perPerson.get(key) ?? key).join(', ')
       setYearError(
         `${named} ${split.length === 1 ? 'is' : 'are'} stored per person, and ${year} is filed with ` +
-          `${inputs.people.length} columns — the scenario ran against their total. Edit ` +
-          `${split.length === 1 ? 'it' : 'them'} in Tax inputs — ${year}, which says which person.`,
+        `${inputs.people.length} columns — the scenario ran against their total. Edit ` +
+        `${split.length === 1 ? 'it' : 'them'} in Tax inputs — ${year}, which says which person.`,
       )
       return
     }
@@ -543,9 +547,9 @@ export default function TaxesPage() {
     const lines = changed
       .filter((row) => keys.includes(row.key))
       .map((row) => `${row.label}: ${formatCurrency(row.before)} → ${formatCurrency(row.after)}`)
-    const sentence = `This writes ${keys.length} input${keys.length === 1 ? '' : 's'} to ${year}'s stored return and reloads the form below${
+    const sentence = `This writes ${keys.length} input${keys.length === 1 ? '' : 's'} to ${year}'s stored return and reloads the Inputs view${
       inputsDirty ? ', discarding its unsaved edits' : ''
-    }. Continue?`
+      }. Continue?`
     if (!window.confirm([sentence, ...lines].join('\n'))) return
     setYearError(null)
     putTaxInputs(year, { values: overrides })
@@ -560,12 +564,12 @@ export default function TaxesPage() {
   const onBracketsSaved = (echo: TaxBracketsOut) => {
     setDetail((current) =>
       current !== null &&
-      current.brackets.year === echo.year &&
-      // `detail.brackets` is the tables the ENGINE reads — the year's own status'. The editor
-      // has status TABS, so a save (or a clone) can legitimately answer for another status:
-      // adopting that here would put tables the engine never walks under the year's heading
-      // AND change bracketsKey mid-edit, remounting the editor over its own work.
-      current.brackets.filing_status === echo.filing_status
+        current.brackets.year === echo.year &&
+        // `detail.brackets` is the tables the ENGINE reads — the year's own status'. The editor
+        // has status TABS, so a save (or a clone) can legitimately answer for another status:
+        // adopting that here would put tables the engine never walks under the year's heading
+        // AND change bracketsKey mid-edit, remounting the editor over its own work.
+        current.brackets.filing_status === echo.filing_status
         ? { ...current, brackets: echo }
         : current,
     )
@@ -606,19 +610,19 @@ export default function TaxesPage() {
           current.some((y) => y.year === year)
             ? current
             : [
-                ...current,
-                // 'single' is the column's own default, so the placeholder cannot claim a
-                // status the row does not have; the reconcile below replaces it either way.
-                // `satisfies`, not a bare literal: inside the array the status would widen
-                // to plain `string` and stop being a FilingStatus.
-                {
-                  year,
-                  notes: null,
-                  input_count: 0,
-                  bracket_count: 0,
-                  filing_status: 'single',
-                } satisfies TaxYearOut,
-              ].sort((a, b) => a.year - b.year),
+              ...current,
+              // 'single' is the column's own default, so the placeholder cannot claim a
+              // status the row does not have; the reconcile below replaces it either way.
+              // `satisfies`, not a bare literal: inside the array the status would widen
+              // to plain `string` and stop being a FilingStatus.
+              {
+                year,
+                notes: null,
+                input_count: 0,
+                bracket_count: 0,
+                filing_status: 'single',
+              } satisfies TaxYearOut,
+            ].sort((a, b) => a.year - b.year),
         )
         loadYear(year)
         // The main banner owns this one, because the main banner is the thing with Retry.
@@ -748,6 +752,8 @@ export default function TaxesPage() {
           ],
         }}
       >
+        <LocalSectionNav state={views} label="Taxes views" />
+
         <section className="card">
           <h2 className="eyebrow">
             Tax year
@@ -807,51 +813,53 @@ export default function TaxesPage() {
           {loadedOnce && years.length === 0 && (
             <p className="empty-note">No tax years yet — create one to start.</p>
           )}
-          <form
-            className="new-year-form"
-            // The bounds are enforced (and worded) by createYear. Left to the browser, the
-            // message is a native bubble that differs per engine and blocks submit before
-            // this page ever sees it.
-            noValidate
-            onSubmit={(e) => {
-              e.preventDefault()
-              createYear()
-            }}
-          >
-            <label htmlFor="new-tax-year">New year</label>
-            <input
-              id="new-tax-year"
-              className="field-input"
-              type="number"
-              inputMode="numeric"
-              min={YEAR_MIN}
-              max={YEAR_MAX}
-              value={newYear}
-              onChange={(e) => {
-                setNewYear(e.target.value)
-                // The sentence below describes the year that WAS in the box.
-                setCreateError(null)
+          <details className="tax-year-management" open={years.length === 0 || undefined}><summary>Manage tax years</summary>
+            <form
+              className="new-year-form"
+              // The bounds are enforced (and worded) by createYear. Left to the browser, the
+              // message is a native bubble that differs per engine and blocks submit before
+              // this page ever sees it.
+              noValidate
+              onSubmit={(e) => {
+                e.preventDefault()
+                createYear()
               }}
-            />
-            <button type="submit" className="button" disabled={creating || loading}>
-              {creating ? 'Creating…' : 'Create year'}
-            </button>
-            {/* The other end of this row's job — Create makes the year in the box, Delete
+            >
+              <label htmlFor="new-tax-year">New year</label>
+              <input
+                id="new-tax-year"
+                className="field-input"
+                type="number"
+                inputMode="numeric"
+                min={YEAR_MIN}
+                max={YEAR_MAX}
+                value={newYear}
+                onChange={(e) => {
+                  setNewYear(e.target.value)
+                  // The sentence below describes the year that WAS in the box.
+                  setCreateError(null)
+                }}
+              />
+              <button type="submit" className="button" disabled={creating || loading}>
+                {creating ? 'Creating…' : 'Create year'}
+              </button>
+              {/* The other end of this row's job — Create makes the year in the box, Delete
                 throws away the SELECTED one — and the one control row that renders even with
                 no years, so its shut state is visible rather than absent. type="button", so
                 the form's submit stays the create path's alone. */}
-            <button
-              type="button"
-              className="button"
-              disabled={selectedYear === null || busy || creating}
-              onClick={deleteYear}
-            >
-              Delete year…
-            </button>
-            <span className="drill-hint">
-              Copies the newest year&apos;s bracket tables; the values are then edited below.
-            </span>
-          </form>
+              <button
+                type="button"
+                className="button"
+                disabled={selectedYear === null || busy || creating}
+                onClick={deleteYear}
+              >
+                Delete year…
+              </button>
+              <span className="drill-hint">
+                Copies the newest year&apos;s bracket tables; the values are then edited below.
+              </span>
+            </form>
+          </details>
           <FeedBanner error={createError} />
         </section>
 
@@ -877,71 +885,48 @@ export default function TaxesPage() {
         >
           {(d) => (
             <>
-              {/* Year-scoped answers read contiguously (2026-08-31 audit): totals, then the
-                  withholding outlook, the marginal ladder and the sandbox; the all-years
-                  composition trend closes the answers half below, and entry comes last. */}
-              <SummaryPanel summary={d.summary} filingStatus={filingStatus} />
-              {/* The CURRENT year only, mirroring the endpoint's own 422 (a settled year may well
-                  be stored and summarizable, and this card still cannot be drawn for it) — asked
-                  here rather than spending a request on the refusal. Keyed by year like the
-                  what-if card, so a switch INTO this year mounts it fresh rather than leaving
-                  another year's estimate under this heading. */}
-              {d.summary.year === new Date().getFullYear() && (
-                <WithholdingPanel
-                  key={`withholding-${d.summary.year}`}
+              <LocalSectionPanel state={views} section="summary">
+                <SummaryPanel summary={d.summary} filingStatus={filingStatus} />
+                {d.summary.year === new Date().getFullYear() && (
+                  <WithholdingPanel
+                    key={`withholding-${d.summary.year}`}
+                    year={d.summary.year}
+                    storedVestW2={vestW2Stored(d.inputs)}
+                    inputsDirty={inputsDirty}
+                    onVestApplied={onVestApplied}
+                  />
+                )}
+                <MarginalPanel summary={d.summary} brackets={d.brackets} />
+                <CompositionPanel refreshKey={trendRefresh} />
+              </LocalSectionPanel>
+              <LocalSectionPanel state={views} section="whatif">
+                <WhatIfPanel
+                  key={`whatif-${d.summary.year}`}
                   year={d.summary.year}
-                  storedVestW2={vestW2Stored(d.inputs)}
-                  inputsDirty={inputsDirty}
-                  onVestApplied={onVestApplied}
+                  definitions={overrideDefinitions(d.inputs)}
+                  inputs={d.inputs}
+                  brackets={d.brackets}
+                  summary={d.summary}
+                  onApplyOverrides={applyOverrides}
                 />
-              )}
-              {/* D3 (2026-08-31): client-side ladder over the SAME two payloads the panels
-                  around it read — the summary and the year's own status' tables. Not keyed:
-                  both props are per-year payloads the load effect already replaces whole. */}
-              <MarginalPanel summary={d.summary} brackets={d.brackets} />
-              {/* Keyed by year for the editors' own reason: a real switch remounts it, so the
-                  typed legs and any scenario on screen go with the year they were run against
-                  (a stale scenario under a new year's heading would lie), while a same-year
-                  reload leaves half-typed legs alone. It owns its two feeds and loads them
-                  lazily on first open, so the remount costs nothing until the card is used.
-                  The panel reads the URL's `whatif` family itself — entries and the legacy
-                  ticker/lot aliases alike — and re-runs it against the year now on screen: a
-                  scenario is a property of the URL, not of the year. The three year payloads
-                  ride down for the presets, which are sized from data already on this page. */}
-              <WhatIfPanel
-                key={`whatif-${d.summary.year}`}
-                year={d.summary.year}
-                definitions={overrideDefinitions(d.inputs)}
-                inputs={d.inputs}
-                brackets={d.brackets}
-                summary={d.summary}
-                onApplyOverrides={applyOverrides}
-              />
-              {/* Deliberately NOT keyed: this panel's feed is the all-years trend, which a
-                  year switch does not move — remounting it would spend a request to redraw
-                  the same chart. It closes the answers half; entry follows. */}
-              <CompositionPanel refreshKey={trendRefresh} />
-              {/* Keyed by the payloads' own identity (see inputsKey/bracketsKey), not by load:
-                  a real year or status switch remounts the editors — 2023's typed rows must not
-                  carry into 2024, and a one-column year's cell ids are not a two-column year's —
-                  while a same-year same-status reload (Retry, or the refresh after a save) leaves
-                  them mounted. Their state seeds from useState initializers, so the replaced
-                  props cannot clobber typed work either.
-                  :epoch — remounts on an EXTERNAL inputs write (D4 Apply), never on the form's
-                  own save. */}
-              <InputsForm
-                key={`${inputsKey(d.inputs)}:${inputsEpoch}`}
-                inputs={d.inputs}
-                onSaved={onInputsSaved}
-                onDirtyChange={setInputsDirty}
-              />
-              <BracketsEditor
-                key={bracketsKey(d.brackets)}
-                brackets={d.brackets}
-                yearStatus={filingStatus}
-                onSaved={onBracketsSaved}
-                onDirtyChange={setBracketsDirty}
-              />
+              </LocalSectionPanel>
+              <LocalSectionPanel state={views} section="inputs">
+                <InputsForm
+                  key={`${inputsKey(d.inputs)}:${inputsEpoch}`}
+                  inputs={d.inputs}
+                  onSaved={onInputsSaved}
+                  onDirtyChange={setInputsDirty}
+                />
+              </LocalSectionPanel>
+              <LocalSectionPanel state={views} section="tables">
+                <BracketsEditor
+                  key={bracketsKey(d.brackets)}
+                  brackets={d.brackets}
+                  yearStatus={filingStatus}
+                  onSaved={onBracketsSaved}
+                  onDirtyChange={setBracketsDirty}
+                />
+              </LocalSectionPanel>
             </>
           )}
         </Feed>

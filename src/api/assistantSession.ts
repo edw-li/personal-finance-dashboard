@@ -3,6 +3,10 @@
 // Deliberately React-free: the SSE client's 401 path and AuthContext's logout both clear
 // it, and the former has no component tree to hang a hook on.
 
+import type { AssistantContextIn } from '../types/api'
+import type { AssistantEvidenceBundle, AssistantIntent } from '../types/assistantEvidence'
+import { isEvidenceBundle } from '../types/assistantEvidence'
+
 export interface TranscriptTool {
   name: string
   summary: string
@@ -27,6 +31,9 @@ export interface TranscriptError {
 export interface TranscriptItem {
   role: 'user' | 'assistant'
   content: string
+  evidence?: AssistantEvidenceBundle
+  contextSnapshot?: AssistantContextIn
+  intent?: AssistantIntent
   /** Which model actually answered (done.model_used). */
   model?: string
   /** Failover line ("answered by X — Y was unavailable"). */
@@ -93,6 +100,7 @@ function isTranscriptItem(value: unknown): value is TranscriptItem {
   const item = value as TranscriptItem
   if (item.role !== 'user' && item.role !== 'assistant') return false
   if (typeof item.content !== 'string') return false
+  if (item.evidence !== undefined && !isEvidenceBundle(item.evidence)) return false
   if (item.tools === undefined) return true
   return Array.isArray(item.tools) && item.tools.every(hasRenderableLink)
 }

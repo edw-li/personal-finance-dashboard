@@ -1,3 +1,4 @@
+import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { changePassword } from '../api/auth'
@@ -19,7 +20,6 @@ import LimitsCard from '../components/settings/LimitsCard'
 import PlanAssumptionsCard from '../components/settings/PlanAssumptionsCard'
 import PriceRefreshCard from '../components/settings/PriceRefreshCard'
 import RestoreCard from '../components/settings/RestoreCard'
-import SettingsRail from '../components/settings/SettingsRail'
 import SystemCard from '../components/settings/SystemCard'
 import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
@@ -30,7 +30,10 @@ import '../components/panels.css'
 import '../components/settings/settings.css'
 import './SettingsPage.css'
 
+const PAGE_SECTIONS = [{"id":"household","label":"Household"},{"id":"planning","label":"Planning"},{"id":"account","label":"Account"},{"id":"integrations","label":"Integrations"},{"id":"data","label":"Data"}] as const
+
 export default function SettingsPage() {
+  const views = useLocalSections(PAGE_SECTIONS, 'household', { resolveLegacy: ({ hash, searchParams }) => { const target = hash.slice(1); if (searchParams.has('restore')) return { section: 'data', targetId: 'restore' }; if (['limits', 'plan-assumptions', 'sec-planning'].includes(target)) return { section: 'planning', targetId: target }; if (['appearance', 'password', 'sec-account'].includes(target)) return { section: 'account', targetId: target }; if (['price-refresh', 'assistant', 'calendar', 'sec-integrations'].includes(target)) return { section: 'integrations', targetId: target }; if (['import', 'backups', 'restore', 'health', 'system', 'activity', 'sec-data'].includes(target)) return { section: 'data', targetId: target }; return target ? { section: 'household', targetId: target } : null } })
   // Load state (the house recipe: plain function, inline chain, seqRef).
   const [loading, setLoading] = useState(true)
   // A FIRST load that failed must not also offer a form seeded with blanks — it would
@@ -234,7 +237,7 @@ export default function SettingsPage() {
           // NOT `loadedOnce`. A first load that failed still renders the ungated Account band,
           // and the rail has to find it: keyed on loadedOnce alone its effect would never
           // re-run, and the chip would stay lit on a Household section that is not coming.
-          <SettingsRail sectionsReady={loadedOnce || error !== null} />
+          <LocalSectionNav state={views} label="Settings views" />
         }
         resource={{
           // Ready as soon as the first load SETTLES, either way: the Appearance card below
@@ -268,32 +271,21 @@ export default function SettingsPage() {
           retryLabel="Retry loading settings"
         />
         <div className="card-grid">
-          {loadedOnce && (
-            <>
-              <h2 className="settings-section" id="sec-household">Household</h2>
-              {/* people is lifted out of HouseholdCard so the Accounts owner select is never a
-                  render behind the roster: a partner added above is selectable below without
-                  a reload. Unchanged relay, new seat. */}
-              <HouseholdCard onPeopleChange={setPeople} />
-              <CategoriesCard />
-              <AccountsCard people={people} />
-
-              <h2 className="settings-section" id="sec-planning">Planning</h2>
-              <LimitsCard />
-              <PlanAssumptionsCard />
-            </>
-          )}
-
-          {/* Account: the pair about this browser and this login. The BAND is ungated with the
-              card under it — Appearance owns no fetch, so theme, density and the palette's
-              #appearance jump still work when the API is unreachable, which is one of the
-              moments a reader most wants the light theme back. */}
-          <h2 className="settings-section" id="sec-account">Account</h2>
-          <AppearanceCard />
-
-          {loadedOnce && (
-            <>
-              <section className="card span-6" id="password">
+<LocalSectionPanel state={views} section="household" className="span-12 card-grid">
+{loadedOnce && <><h2 className="settings-section" id="sec-household">Household</h2>
+<HouseholdCard onPeopleChange={setPeople} />
+<CategoriesCard />
+<AccountsCard people={people} /></>}
+</LocalSectionPanel>
+<LocalSectionPanel state={views} section="planning" className="span-12 card-grid">
+{loadedOnce && <><h2 className="settings-section" id="sec-planning">Planning</h2>
+<LimitsCard />
+<PlanAssumptionsCard /></>}
+</LocalSectionPanel>
+<LocalSectionPanel state={views} section="account" className="span-12 card-grid">
+<h2 className="settings-section" id="sec-account">Account</h2>
+<AppearanceCard />
+{loadedOnce && <section className="card span-6" id="password">
                 <h2 className="eyebrow">
                   Password
                   <InfoHint text="Changes your login password and signs out every other device; this one stays signed in." />
@@ -353,15 +345,17 @@ export default function SettingsPage() {
                     Other devices are signed out; this one stays signed in.
                   </p>
                 </form>
-              </section>
-
-              <h2 className="settings-section" id="sec-integrations">Integrations</h2>
-              <PriceRefreshCard />
-              <AssistantCard />
-              <CalendarFeedCard />
-
-              <h2 className="settings-section" id="sec-data">Data</h2>
-              <section className="card span-12" id="import">
+              </section>}
+</LocalSectionPanel>
+<LocalSectionPanel state={views} section="integrations" className="span-12 card-grid">
+{loadedOnce && <><h2 className="settings-section" id="sec-integrations">Integrations</h2>
+<PriceRefreshCard />
+<AssistantCard />
+<CalendarFeedCard /></>}
+</LocalSectionPanel>
+<LocalSectionPanel state={views} section="data" className="span-12 card-grid">
+{loadedOnce && <><h2 className="settings-section" id="sec-data">Data</h2>
+<section className="card span-12" id="import">
                 <h2 className="eyebrow">
                   Import workbook
                   <InfoHint text="Dry run shows the diff without writing. Apply overwrites sheet-owned rows — dividends are never touched; taxes inside sheet-covered years reset to the sheet." />
@@ -425,14 +419,13 @@ export default function SettingsPage() {
                   </p>
                 )}
               </section>
-              <BackupsCard />
-              <RestoreCard />
-              <HealthCard />
-              <SystemCard />
-              <ActivityCard />
-            </>
-          )}
-        </div>
+<BackupsCard />
+<RestoreCard />
+<HealthCard />
+<SystemCard />
+<ActivityCard /></>}
+</LocalSectionPanel>
+</div>
       </PageFrame>
     </div>
   )

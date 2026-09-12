@@ -1,9 +1,10 @@
 import re
+from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -17,13 +18,19 @@ from app.models import (
     Security,
     SecurityDividendEvent,
 )
+from app.models.portfolio import AllocationTargetSet
 from app.schemas.portfolio import (
+    AllocationDimension,
     AllocationOut,
-    AllocationSlice,
+    AllocationTargetSave,
+    AllocationTargetSetOut,
+    ClassificationOut,
+    ClassificationUpdate,
     DividendCreate,
     DividendEventOut,
     DividendOut,
     DividendUpdate,
+    EmployerExposureOut,
     HoldingOut,
     HoldingsOut,
     HoldingsTotals,
@@ -40,6 +47,7 @@ from app.schemas.portfolio import (
     TransactionUpdate,
 )
 from app.services import clock
+from app.services.changelog import CHANGE_BATCH_HEADER, ChangeBatch, change_batch, row_image
 from app.services.money import (
     MONEY_MAX_ABS_10_2,
     MONEY_MAX_ABS_10_4,
@@ -51,8 +59,19 @@ from app.services.money import (
     require_reasonable_date,
 )
 from app.services.portfolio_accounts import portfolio_owner_clause, resolve_portfolio_account
+from app.services.portfolio_allocation import (
+    ASSET_LABELS,
+    GEO_LABELS,
+    TYPE_LABELS,
+    UNKNOWN,
+    WRAPPERS,
+    build_allocation,
+    classification,
+    load_targets,
+    money,
+    scope_key,
+)
 from app.services.portfolio_calc import (
-    allocation,
     build_holdings,
     fold_transactions,
     load_portfolio,
@@ -637,28 +656,155 @@ async def holdings(owner: OwnerQuery = None, db: AsyncSession = Depends(get_db))
 
 @router.get("/allocation", response_model=AllocationOut)
 async def allocation_view(
-    by: Literal["industry", "type", "account"] = "industry",
+    by: AllocationDimension = "industry",
     owner: OwnerQuery = None,
     db: AsyncSession = Depends(get_db),
 ) -> AllocationOut:
     securities, txns, latest, _history, _dividends = await load_portfolio(
         db, with_history=False, with_dividends=False, owner_filter=_owner_filter(owner)
     )
-    positions = fold_transactions(txns)
-    buckets = allocation(positions, securities, latest, by)
-    total = sum((value for _key, value, _count in buckets), Decimal("0"))
-    return AllocationOut(
-        by=by,
-        total_market_value=total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
-        slices=[
-            AllocationSlice(
-                key=key,
-                market_value=value,
-                weight_pct=quantize_pct(value / total) if total > 0 else quantize_pct(Decimal("0")),
-                holdings=count,
+    return build_allocation(
+        fold_transactions(txns), securities, latest, by, owner, await load_targets(db, by, owner)
+    )
+
+
+@router.get("/classifications", response_model=list[ClassificationOut])
+async def allocation_classifications(db: AsyncSession = Depends(get_db)) -> list[ClassificationOut]:
+    securities = (await db.execute(select(Security).order_by(Security.ticker))).scalars()
+    return [classification(security) for security in securities]
+
+
+@router.patch("/securities/{security_id}/classification", response_model=ClassificationOut)
+async def update_classification(
+    security_id: int,
+    body: ClassificationUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> ClassificationOut:
+    security = await _get_security(db, security_id)
+    if body.industry:
+        if security.holding_type in {"etf", "mutual_fund"}:
+            raise HTTPException(
+                422, "Fund industry is unavailable until constituent data is loaded"
             )
-            for key, value, count in buckets
-        ],
+        if body.industry.lower() in WRAPPERS:
+            raise HTTPException(422, "A holding type is not an industry")
+    before = row_image(security)
+    # The editor submits a full classification receipt. Deliberate unknowns are stored.
+    security.asset_class = body.asset_class
+    security.allocation_industry = body.industry
+    security.geography = body.geography
+    security.classification_note = body.note
+    security.classification_source = "manual"
+    security.classification_reviewed_at = datetime.now(UTC)
+    await db.flush()
+    batch.label = f"Reviewed {security.ticker} allocation classification"
+    batch.record_update(security, before)
+    batch_id = await batch.commit()
+    if batch_id:
+        response.headers[CHANGE_BATCH_HEADER] = str(batch_id)
+    return classification(security)
+
+
+@router.put("/allocation/targets", response_model=AllocationTargetSetOut)
+async def save_allocation_targets(
+    body: AllocationTargetSave,
+    response: Response,
+    by: AllocationDimension = "asset_class",
+    owner: OwnerQuery = None,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> AllocationTargetSet:
+    _owner_filter(owner)  # validate before any write
+    key = scope_key(owner)
+    if key.startswith("person:") and await db.get(Person, int(key.split(":")[1])) is None:
+        raise HTTPException(422, "The selected owner no longer exists")
+    allowed = {"asset_class": ASSET_LABELS, "geography": GEO_LABELS, "type": TYPE_LABELS}.get(by)
+    for target in body.targets:
+        if allowed is not None and target.key not in allowed and target.key != UNKNOWN:
+            raise HTTPException(422, f"Unknown {by} target category: {target.key}")
+        if by == "industry" and target.key.lower() in WRAPPERS:
+            raise HTTPException(422, "A holding type is not an industry target")
+    # Serialize first saves too: SELECT FOR UPDATE alone cannot lock a missing row.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+        {
+            "key": f"allocation-target:{key}:{by}",
+        },
+    )
+    plans = await load_targets(db, by, owner)
+    existing = next((row for row in plans if row.state == body.state), None)
+    before = row_image(existing) if existing is not None else None
+    if existing is None:
+        existing = AllocationTargetSet(scope_key=key, dimension=by, state=body.state)
+        db.add(existing)
+    existing.targets = [target.model_dump(mode="json") for target in body.targets]
+    existing.updated_at = datetime.now(UTC)
+    await db.flush()
+    verb = "Activated" if body.state == "active" else "Saved draft"
+    batch.label = f"{verb} {by.replace('_', ' ')} targets ({key})"
+    if before is None:
+        batch.record_insert(existing)
+    else:
+        batch.record_update(existing, before)
+    if body.state == "active":
+        for draft in plans:
+            if draft.state == "draft":
+                batch.record_delete(draft)
+                await db.delete(draft)
+    batch_id = await batch.commit()
+    if batch_id:
+        response.headers[CHANGE_BATCH_HEADER] = str(batch_id)
+    return existing
+
+
+@router.get("/employer-exposure", response_model=EmployerExposureOut)
+async def employer_exposure(
+    owner: OwnerQuery = None,
+    db: AsyncSession = Depends(get_db),
+) -> EmployerExposureOut:
+    from app.api.espp import _espp_quote
+    from app.models.comp import RsuGrant
+    from app.services import rsu_vesting
+
+    today = clock.product_today()
+    securities, txns, latest, _, _ = await load_portfolio(
+        db, with_history=False, with_dividends=False, owner_filter=_owner_filter(owner)
+    )
+    positions = fold_transactions(txns)
+    priced = build_allocation(positions, securities, latest, "type", owner)
+    ticker, quote, quoted_at = await _espp_quote(db)
+    employer_ids = {sec.id for sec in securities.values() if sec.ticker == ticker}
+    held = sum(
+        (pos.shares for pos in positions.values() if pos.security_id in employer_ids), Decimal("0")
+    )
+    held_value = money(held * quote) if quote is not None else None
+    warnings = []
+    if ticker is None:
+        warnings.append("Set an employer ticker in Settings to identify held employer shares.")
+    elif quote is None:
+        warnings.append(f"No current quote for {ticker}; employer share values are unavailable.")
+    unvested = 0
+    for grant in (await db.execute(select(RsuGrant))).scalars():
+        try:
+            unvested += sum(shares for day, shares in rsu_vesting.schedule(grant) if day > today)
+        except (ValueError, OverflowError):
+            warnings.append(f"Grant {grant.label} has an invalid schedule and is excluded.")
+    return EmployerExposureOut(
+        ticker=ticker,
+        scope_key=scope_key(owner),
+        as_of=today,
+        quoted_at=quoted_at,
+        held_shares=held,
+        held_value=held_value,
+        held_weight_pct=quantize_pct(held_value / priced.total_market_value)
+        if held_value is not None and priced.total_market_value > 0
+        else None,
+        priced_portfolio_value=priced.total_market_value,
+        unvested_shares=unvested,
+        unvested_value=money(unvested * quote) if quote is not None else None,
+        warnings=warnings,
     )
 
 

@@ -19,6 +19,11 @@ async def test_coverage_is_empty_on_an_empty_book(auth_client):
         "spending_missing": [],
         "net_pay_missing": [],
         "latest": {"balances": None, "spending": None, "net_pay": None},
+        "review_months": [],
+        "default_month": None,
+        "adopted_on": None,
+        "eligible_spending": [],
+        "eligible_savings": [],
     }
 
 
@@ -42,7 +47,7 @@ async def test_coverage_lists_each_feed_ascending_and_deduplicated(auth_client, 
     await db.commit()
 
     body = (await auth_client.get("/api/v1/coverage")).json()
-    assert body == {
+    expected = {
         "balances": ["2026-01-01", "2026-03-01"],
         # ENTERED, not "has rows" (spec §3): February's amounts are non-zero, and January
         # is entered on its take-home row alone even though no category was ever typed.
@@ -58,6 +63,14 @@ async def test_coverage_lists_each_feed_ascending_and_deduplicated(auth_client, 
             "net_pay": "2026-01-01",
         },
     }
+    assert {key: body[key] for key in expected} == expected
+    assert body["default_month"] is None  # Enteredness does not certify review.
+    assert body["eligible_spending"] == []
+    assert [row["month"] for row in body["review_months"]] == [
+        "2026-01-01",
+        "2026-02-01",
+        "2026-03-01",
+    ]
 
 
 async def test_coverage_lists_entered_empty_and_missing_spending_months(auth_client, db):

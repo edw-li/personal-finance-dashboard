@@ -28,6 +28,7 @@ from sqlalchemy.orm import aliased
 from app.api.deps import get_current_user
 from app.database import Base, get_db
 from app.models import ChangeLog, LifecycleRun, User
+from app.services.month_review import REVIEW_INPUT_TABLES, lock_review_inputs
 from app.services.snapshot import json_cell, json_row, parse_cell
 
 logger = logging.getLogger(__name__)
@@ -310,6 +311,11 @@ async def undo_batch(db: AsyncSession, batch_id: UUID, *, actor: str | None) -> 
     row_level = [row for row in rows if row.op != "batch"]
     if rows[0].source not in UNDOABLE_SOURCES or not row_level:
         raise UndoRefused(409, SUMMARY_REFUSAL)
+    if any(row.table_name in REVIEW_INPUT_TABLES for row in row_level):
+        # Reverse replay starts with child tables. Coordinate before reading the current
+        # undo eligibility, so an atomic month save cannot hold the parents while undo
+        # holds their children, and any completed concurrent save is included in the guard.
+        await lock_review_inputs(db)
     if batch_id in await undone_by(db, [batch_id]):
         raise UndoRefused(409, ALREADY_UNDONE)
     # Same predicate the Activity listing greys the button with, so a visible Undo that the

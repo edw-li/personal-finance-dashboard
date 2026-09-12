@@ -32,3 +32,25 @@
   line-height: 1.4;
   color: var(--muted);
 }
+
+.projection-page { container-type: inline-size; }
+.projection-outcomes { position: sticky; top: var(--sticky-inset, 0px); z-index: 6; background: var(--bg); padding-block: 8px; }
+.projection-workspace { display: grid; grid-template-columns: minmax(480px, 1fr) 350px; align-items: start; gap: 18px; }
+.projection-chart-area { min-width: 0; }
+.projection-chart-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.projection-assumptions { max-height: min(780px, calc(100vh - 210px)); min-height: 460px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border-radius: 10px; }
+.projection-assumptions .sandbox-card { padding: 16px; }
+.projection-assumptions .sandbox-header { align-items: flex-start; flex-direction: column; }
+.projection-assumptions .sandbox-header-actions { flex-wrap: wrap; }
+.projection-assumptions .sandbox-controls { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+.projection-assumptions .slider-box-head { align-items: flex-start; }
+.projection-assumptions .sandbox-badge { font-size: 0.63rem; white-space: nowrap; }
+.projection-assumptions .drill-hint { font-size: 0.75rem; line-height: 1.5; }
+.projection-assumptions:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.projection-method-note, .projection-view-intro { font-size: 0.84rem; line-height: 1.55; color: var(--muted); }
+.projection-comparisons { margin-top: 20px; }
+@container (max-width: 900px) {
+  .projection-workspace { grid-template-columns: 1fr; }
+  .projection-assumptions { max-height: none; }
+  .projection-assumptions .sandbox-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

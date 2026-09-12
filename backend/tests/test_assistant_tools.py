@@ -8,8 +8,10 @@ from app.models import MonthlyCashflow, MonthlySpending, SpendingCategory, TaxYe
 from app.services.assistant_tools import TOOL_SCHEMAS, execute_tool
 
 
-def test_tool_schemas_are_openai_shaped_and_exactly_three():
+def test_tool_schemas_include_computed_metrics_and_existing_read_only_tools():
     assert [t["function"]["name"] for t in TOOL_SCHEMAS] == [
+        "get_metrics",
+        "get_month_review",
         "get_page_data",
         "get_month_detail",
         "run_tax_whatif",

@@ -81,6 +81,20 @@ function lastChart(): FakeChartLike {
 
 const OPTION = {} as EChartsOption
 
+describe('uncontrolled interaction retention', () => {
+  it('keeps legend and manual zoom on a data refresh while honoring a new page range', () => {
+    const option: EChartsOption = { legend: {}, xAxis: { type: 'category', data: ['a', 'b', 'c'] }, dataZoom: [{ type: 'inside', startValue: 0 }], series: [{ type: 'line', name: 'Assets', data: [1, 2, 3] }] }
+    const { rerender } = render(<EChart option={option} ariaLabel="Retained chart" />)
+    const chart = lastChart()
+    chart.handlers.legendselectchanged({ selected: { Assets: false } })
+    chart.handlers.datazoom()
+    rerender(<EChart option={{ ...option, series: [{ type: 'line', name: 'Assets', data: [2, 3, 4] }] }} ariaLabel="Retained chart" />)
+    expect(chart.setOption.mock.calls.at(-1)?.[0]).toMatchObject({ legend: [{ selected: { Assets: false } }], dataZoom: [{ startValue: 3, endValue: 9 }] })
+    rerender(<EChart option={{ ...option, legend: { selected: { Assets: true } }, dataZoom: [{ type: 'inside', startValue: 1 }] }} ariaLabel="Retained chart" />)
+    expect(chart.setOption.mock.calls.at(-1)?.[0]).toMatchObject({ legend: [{ selected: { Assets: true } }], dataZoom: [{ startValue: 1 }] })
+  })
+})
+
 // The browser fires a ResizeObserver's callback the moment observe() is called; these are
 // the captured callbacks, so a test can fire that notification itself.
 let resizeNotify: (() => void)[] = []

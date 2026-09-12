@@ -6,6 +6,8 @@ import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
+import { fetchSpendingEvidence } from '../api/monthReview'
+vi.mock('../api/monthReview', async importOriginal => ({ ...await importOriginal<typeof import('../api/monthReview')>(), fetchSpendingEvidence: vi.fn() }))
 
 vi.mock('../api/spending', () => ({
   fetchMatrix: vi.fn(),
@@ -118,6 +120,9 @@ function matrixFixture(over: Partial<SpendingMatrix> = {}): SpendingMatrix {
       { category_id: 3, values: ['150.00', '0.00'], budgets: [null, null] },
     ],
     totals: ['2750.00', '2580.00'],
+    living_total: ['2750.00', '2580.00'],
+    tax_total: ['0.00', '0.00'], transfer_total: ['0.00', '0.00'], cash_outflow: ['2750.00', '2580.00'],
+    comparison_average: [null, '2750.00'], comparison_count: [0, 1],
     net_pay: ['6000.00', '6000.00'],
     savings_rate: ['0.541666667', '0.57'],
     four_pct_rule: [null, null],
@@ -151,6 +156,11 @@ const YEARLY: SpendingYearly = {
 }
 
 // The flow marker is the one whose option carries sankey links.
+const openView = async (name: 'Overview' | 'Trends' | 'Budgets' | 'History') => {
+  fireEvent.click(await screen.findByRole('tab', { name }))
+  await waitFor(() => expect(screen.getByRole('tab', { name }).getAttribute('aria-selected')).toBe('true'))
+}
+
 const flowMarker = () =>
   screen.getAllByTestId('echart').find((el) => (el.getAttribute('data-links') ?? '') !== '')
 
@@ -190,6 +200,9 @@ it('ignores a ?trend= slug no category answers to', async () => {
 })
 
 beforeEach(() => {
+  vi.mocked(fetchSpendingEvidence).mockResolvedValue({ month: '2026-07-01', review: null, metrics: [],
+    comparison: { id: 'living_spending_comparison_average', definition_version: 'spending-v1', label: 'Previous 12 months', definition: 'Eligible prior months', value: '2750', unit: 'USD', scope: 'household', completeness: 'complete', components: [], source_link: '/spending', source_label: 'Entries', as_of: '2026-09-12', warnings: [] },
+    rolling: { id: 'living_spending_rolling_average', definition_version: 'spending-v1', label: 'Rolling average', definition: 'Inclusive eligible months', value: '2665', unit: 'USD', scope: 'household', completeness: 'complete', components: [], source_link: '/spending', source_label: 'Entries', as_of: '2026-09-12', warnings: [] } })
   clearSnapshots()
   // The shared scope remembers range in localStorage, so one test's chip would otherwise
   // become the next test's default (useScope's memory fallback).
@@ -264,6 +277,7 @@ describe('SpendingPage — chart aria', () => {
   it('names the heatmap and the sankey for assistive tech', async () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
+    await openView('History')
     expect(
       document.querySelector('[aria-label="Heatmap of spend per category per month"]'),
     ).not.toBeNull()
@@ -279,6 +293,7 @@ describe('SpendingPage — tooltip fixes', () => {
   it('prints the savings-rate tooltip unsigned — a rate is a level, not a movement', async () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
+    await openView('Trends')
     const samples = screen
       .getAllByTestId('echart')
       .map((el) => el.getAttribute('data-pct-sample'))
@@ -296,20 +311,30 @@ describe('SpendingPage — tooltip fixes', () => {
   it('captions every inside-zoom chart — bars, savings rate, trends — and nothing else', async () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
+    expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(1)
+    await openView('Trends')
     expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(3)
   })
 })
 
 describe('SpendingPage — the grammar mounts (charts C3)', () => {
-  it('mounts all six charts through ChartCard with labels and export rows', async () => {
+  it('mounts each task view on demand with chart labels and export rows', async () => {
     renderPage()
-    await screen.findByText(/Monthly spend vs net pay/)
-    // bars, savings, trends, heatmap, flow — the pie shares the bars' card and shows only
-    // when a month is drilled.
-    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(5)
-    expect(screen.getByLabelText(/Stacked bar chart of monthly spending/)).toBeTruthy()
+    await screen.findByText(/Monthly entries vs take-home/)
+    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(2)
+    expect(screen.getByLabelText(/Stacked bar chart of all monthly category entries/)).toBeTruthy()
+    expect(screen.queryByLabelText(/Heatmap of spend per category per month/)).toBeNull()
+    expect(fetchBudgetSuggestions).not.toHaveBeenCalled()
+    await openView('Trends')
+    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(2)
+    expect(screen.getByLabelText(/Line chart of the selected categories/)).toBeTruthy()
+    await openView('History')
+    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(1)
     expect(screen.getByLabelText(/Heatmap of spend per category per month/)).toBeTruthy()
-    expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(3)
+    await openView('Budgets')
+    await waitFor(() => expect(fetchBudgetSuggestions).toHaveBeenCalledTimes(1))
+    await openView('Overview')
+    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(2)
   })
 
   it('F1: the heatmap opens on Row, switches modes, and hides dormant rows behind a toggle', async () => {
@@ -334,6 +359,7 @@ describe('SpendingPage — the grammar mounts (charts C3)', () => {
       }),
     )
     renderPage()
+    await openView('History')
     await screen.findByText(/Month × category heatmap/)
     expect(screen.getByRole('button', { name: 'Row' }).getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: 'vs average' }))
@@ -346,6 +372,7 @@ describe('SpendingPage — the grammar mounts (charts C3)', () => {
 
   it('§18: the trends card swaps to small multiples on All categories', async () => {
     renderPage()
+    await openView('Trends')
     await screen.findByText(/Category trends/)
     expect(screen.getByLabelText(/Line chart of the selected categories/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'All categories' }))
@@ -357,14 +384,14 @@ describe('SpendingPage — the grammar mounts (charts C3)', () => {
 
   it('the hero tiles follow the VIEWED month, not the latest one', async () => {
     renderPage()
-    await screen.findByText(/Monthly spend vs net pay/)
+    await screen.findByText(/Monthly entries vs take-home/)
     const spendTile = (label: string) =>
       screen.getByText(label).closest('.stat-tile')?.querySelector('.stat-value')?.textContent
-    expect(spendTile('Spend — Jul 2026')).toBe('$2,580.00')
+    expect(spendTile('Living spending — Jul 2026')).toBe('$2,580.00')
     expect(screen.getByText('57.0%')).toBeTruthy() // July's rate
     fireEvent.click(screen.getAllByTestId('echart')[0]) // drill June (dataIndex 0)
-    await screen.findByText('Spend — Jun 2026')
-    expect(spendTile('Spend — Jun 2026')).toBe('$2,750.00') // June's total, not July's
+    await screen.findByText('Living spending — Jun 2026')
+    expect(spendTile('Living spending — Jun 2026')).toBe('$2,750.00') // June's total, not July's
     expect(screen.getByText('54.2%')).toBeTruthy()
     expect(screen.queryByText('57.0%')).toBeNull()
   })
@@ -373,26 +400,26 @@ describe('SpendingPage — the grammar mounts (charts C3)', () => {
 describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {
   it('opens the month drill-in straight from the URL', async () => {
     renderPage('/spending?month=2026-06')
-    expect(await screen.findByText('Spending breakdown — Jun 2026')).toBeTruthy()
+    expect(await screen.findByText('Jun 2026 breakdown')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'All months' })).toBeTruthy()
   })
 
   it('ignores a month the matrix does not carry — no drill, no crash', async () => {
     renderPage('/spending?month=banana')
-    expect(await screen.findByText(/Monthly spend vs net pay/)).toBeTruthy()
-    expect(screen.queryByText(/Spending breakdown/)).toBeNull()
+    expect(await screen.findByText(/Monthly entries vs take-home/)).toBeTruthy()
+    expect(screen.queryByLabelText(/Donut chart of/)).toBeNull()
   })
 
   it('mirrors a bar-click drill into the URL and clears it on the way back', async () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
     fireEvent.click(screen.getAllByTestId('echart')[0]) // the bars chart, dataIndex 0
-    expect(await screen.findByText('Spending breakdown — Jun 2026')).toBeTruthy()
+    expect(await screen.findByText('Jun 2026 breakdown')).toBeTruthy()
     // The drill matches matrix.months entries (YYYY-MM-01, the wire's date grammar) but
     // the URL carries the shared scope's short month.
     expect(screen.getByTestId('location').textContent).toContain('month=2026-06')
     fireEvent.click(screen.getByRole('button', { name: 'All months' }))
-    await screen.findByText(/Monthly spend vs net pay/)
+    await screen.findByText(/Monthly entries vs take-home/)
     expect(screen.getByTestId('location').textContent).not.toContain('month=')
   })
 })
@@ -479,6 +506,7 @@ describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', ()
   it('merges a sibling chart’s picks instead of clobbering — no series resurrects', async () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
+    await openView('Trends')
     // The two charts that mirror legend picks are exactly the ones carrying a
     // legend.selected map: [0] the stacked bars, [1] the category trends.
     const legendCharts = () =>
@@ -502,6 +530,7 @@ describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', ()
     renderPage()
     await screen.findByText('Where Jul 2026 went')
     fireEvent.mouseLeave(screen.getAllByTestId('echart')[0]) // datazoom {startValue:1, endValue:1}
+    await openView('Trends')
     const zoomed = screen
       .getAllByTestId('echart')
       .filter((el) => (el.getAttribute('data-zoom') ?? 'null') !== 'null')
@@ -539,6 +568,10 @@ describe('SpendingPage — absent ≠ zero and axis honesty (2026-08-31 tier-1 A
         { category_id: 3, values: ['150.00', '0.00', null], budgets: [null, null, null] },
       ],
       totals: ['2750.00', '2580.00', '0.00'],
+      living_total: ['2750.00', '2580.00', '0.00'],
+      tax_total: ['0.00', '0.00', '0.00'], transfer_total: ['0.00', '0.00', '0.00'],
+      cash_outflow: ['2750.00', '2580.00', '0.00'],
+      comparison_average: [null, '2750.00', '2665.00'], comparison_count: [0, 1, 2],
       net_pay: ['6000.00', '6000.00', '6000.00'],
       savings_rate: ['0.541666667', '0.57', '1.000000'],
       four_pct_rule: [null, null, null],
@@ -569,6 +602,7 @@ describe('SpendingPage — absent ≠ zero and axis honesty (2026-08-31 tier-1 A
   it('lets the savings-rate floor follow the data below −100%, ceiling capped (A7)', async () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
+    await openView('Trends')
     const savings = screen
       .getAllByTestId('echart')
       .find((el) => (el.getAttribute('data-y-floor') ?? '') !== '')
@@ -579,18 +613,95 @@ describe('SpendingPage — absent ≠ zero and axis honesty (2026-08-31 tier-1 A
   })
 })
 
-describe('SpendingPage — section order (2026-08-31 audit)', () => {
-  it('long-run half reads summary-first: budgets, savings+trends, heatmap, yearly', async () => {
+describe('SpendingPage — task views', () => {
+  it('pins keyboard-accessible table details while keeping the chart and month context across views', async () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
-    const budgets = screen.getByRole('heading', { name: /Budgets — / })
+    const bars = screen.getByLabelText(/Stacked bar chart of all monthly category entries/)
+    const card = bars.closest('.chart-card') as HTMLElement
+    fireEvent.click(within(card).getByRole('button', { name: 'Table' }))
+    fireEvent.click(within(card).getByRole('button', { name: 'Inspect Jun 2026' }))
+    expect(await screen.findByText('Jun 2026 breakdown')).toBeTruthy()
+    expect(screen.getByText('Pinned: Jun 2026')).toBeTruthy()
+    expect(screen.getByLabelText(/Stacked bar chart of all monthly category entries/)).toBe(bars)
+    const values = screen.getByRole('article', { name: 'Jun 2026 selected values' })
+    expect(within(values).getByRole('link', { name: 'Open monthly entries' }).getAttribute('href')).toBe('/update?month=2026-06-01&step=spending')
+    expect(screen.getByTestId('location').textContent).toContain('month=2026-06')
+    await openView('Trends')
+    await openView('Overview')
+    expect(screen.getByText('Pinned: Jun 2026')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Inspect Jun 2026', pressed: true })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }))
+    expect(screen.queryByText('Jun 2026 breakdown')).toBeNull()
+    expect(screen.getByTestId('location').textContent).not.toContain('month=')
+    expect(screen.getByLabelText(/Stacked bar chart of all monthly category entries/)).toBe(bars)
+  })
+
+  it('groups trends, budgets and full history into focused sections and preserves their order', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Overview', 'Trends', 'Budgets', 'History'])
+    expect(screen.queryByRole('heading', { name: /Budgets — / })).toBeNull()
+    await openView('Trends')
     const savings = screen.getByRole('heading', { name: /^Savings rate$/ })
     const trends = screen.getByRole('heading', { name: /Category trends/ })
+    expectInDocumentOrder(savings, trends)
+    expect(screen.queryByRole('heading', { name: /Yearly rollups/ })).toBeNull()
+    await openView('Budgets')
+    expect(screen.getByRole('heading', { name: /Budgets — / })).toBeTruthy()
+    await openView('History')
     const heatmap = screen.getByRole('heading', { name: /Month × category heatmap/ })
     const yearly = screen.getByRole('heading', { name: /Yearly rollups/ })
-    // The windowed pair sits with the other windowed charts; the never-windowed
-    // full-history pair (heatmap, yearly) closes the page.
-    expectInDocumentOrder(budgets, savings, trends, heatmap, yearly)
+    expectInDocumentOrder(heatmap, yearly)
+    expect(screen.getByText('Full recorded history')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: /^Savings rate$/ })).toBeNull()
+  })
+})
+
+describe('SpendingPage — reviewed-month metrics', () => {
+  const tileValue = (label: string) => screen.getByText(label).closest('.stat-tile')?.querySelector('.stat-value')?.textContent
+
+  it('defaults to the eligible month supplied by the server and lets a user inspect a newer incomplete month', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ default_month: '2026-06-01', review_state: ['closed', 'in_progress'] }))
+    renderPage()
+    expect(await screen.findByText('Where Jun 2026 went')).toBeTruthy()
+    expect(tileValue('Living spending — Jun 2026')).toBe('$2,750.00')
+    expect(screen.getByText(/Closed · Tax paid from take-home/)).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
+    expect(await screen.findByText('Where Jul 2026 went')).toBeTruthy()
+    expect(tileValue('Living spending — Jul 2026')).toBe('$2,580.00')
+    expect(screen.getByText(/In progress · Tax paid from take-home/)).toBeTruthy()
+    await waitFor(() => expect(fetchSpendingEvidence).toHaveBeenLastCalledWith('2026-07-01'))
+  })
+
+  it('shows no invented default headline when there is no eligible month', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ default_month: null }))
+    renderPage()
+    expect(await screen.findByLabelText(/Stacked bar chart of all monthly category entries/)).toBeTruthy()
+    expect(screen.queryByText('Living spending — Jul 2026')).toBeNull()
+    fireEvent.click(screen.getByLabelText(/Stacked bar chart of all monthly category entries/))
+    expect(await screen.findByText('Living spending — Jun 2026')).toBeTruthy()
+  })
+
+  it('uses the server comparison window and counts eligible months instead of averaging the displayed history', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ comparison_average: [null, '1234.56'], comparison_count: [0, 4] }))
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(tileValue('Previous 12 months')).toBe('$1,234.56')
+    expect(screen.getByText('4 eligible months')).toBeTruthy()
+  })
+
+  it('keeps a measured zero visible and does not substitute all-category totals for unavailable living spending', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ living_total: ['0.00', '0.00'] }))
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(tileValue('Living spending — Jul 2026')).toBe('$0.00')
+    cleanup()
+    clearSnapshots()
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ living_total: undefined }))
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(tileValue('Living spending — Jul 2026')).toBe('—')
   })
 })
 
@@ -603,14 +714,14 @@ describe('SpendingPage — shell scope', () => {
     await screen.findByText('Spending')
     fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
     expect(screen.getByTestId('location').textContent).toContain('month=2026-07')
-    expect(await screen.findByText(/Spending breakdown — Jul 2026/)).toBeTruthy()
+    expect(await screen.findByText(/Jul 2026 breakdown/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'All months' }))
     expect(screen.getByTestId('location').textContent).not.toContain('month=')
   })
 
   it('accepts a legacy ?month=YYYY-MM-01 link (Overview\u2019s deep link) and normalizes it', async () => {
     renderPage('/spending?month=2026-07-01')
-    expect(await screen.findByText(/Spending breakdown — Jul 2026/)).toBeTruthy()
+    expect(await screen.findByText(/Jul 2026 breakdown/)).toBeTruthy()
     await waitFor(() =>
       expect(screen.getByTestId('location').textContent).toContain('month=2026-07'),
     )
@@ -627,9 +738,9 @@ describe('SpendingPage — shell scope', () => {
 
   it('prints each month\u2019s total on its ribbon chip', async () => {
     renderPage('/spending')
-    // The figures the page hands the ribbon are matrix.totals, formatted.
+    // The ribbon names its living-only figure rather than an all-category total.
     expect(
-      await screen.findByRole('button', { name: /^Jul 2026 — \$2,580\.00 — / }),
+      await screen.findByRole('button', { name: /^Jul 2026 — \$2,580\.00 living — / }),
     ).toBeTruthy()
   })
 })
@@ -637,7 +748,7 @@ describe('SpendingPage — shell scope', () => {
 describe('SpendingPage — the ribbon\u2019s edit link', () => {
   it('points the wizard at the drilled month in the wizard\u2019s own grammar', async () => {
     renderPage('/spending?month=2026-06')
-    await screen.findByText(/Spending breakdown — Jun 2026/)
+    await screen.findByText(/Jun 2026 breakdown/)
     const edit = await screen.findByRole('link', { name: 'Edit Jun 2026 in the wizard' })
     expect(edit.getAttribute('href')).toBe('/update?month=2026-06-01&step=spending')
   })
@@ -660,6 +771,7 @@ describe('SpendingPage — the honest rollup (spec §1/§2)', () => {
 
   it('breaks the year into living, tax and transfers, with both rates over the matched months', async () => {
     renderPage()
+    await openView('History')
     await screen.findByRole('heading', { name: /Yearly rollups/ })
     const row = (label: string) => within(rollup()).getByText(label).closest('tr')
     expect(row('Living spend')?.textContent).toContain('$4,000.00')
@@ -675,6 +787,7 @@ describe('SpendingPage — the honest rollup (spec §1/§2)', () => {
   it('badges every non-living category so its exclusion is visible, never silent', async () => {
     vi.mocked(fetchMatrix).mockResolvedValue(withKinds())
     renderPage()
+    await openView('History')
     await screen.findByRole('heading', { name: /Yearly rollups/ })
     expect(within(rollup()).getByText('Taxes').closest('tr')?.textContent).toContain('tax')
     expect(within(rollup()).getByText('Investments').closest('tr')?.textContent).toContain(
@@ -687,6 +800,7 @@ describe('SpendingPage — the honest rollup (spec §1/§2)', () => {
   it('names the non-living categories under the heatmap too', async () => {
     vi.mocked(fetchMatrix).mockResolvedValue(withKinds())
     renderPage()
+    await openView('History')
     await screen.findByRole('heading', { name: /Month × category heatmap/ })
     expect(
       screen.getByText(/Not living spend: Taxes \(tax\) · Investments \(transfer\)/),
@@ -695,6 +809,7 @@ describe('SpendingPage — the honest rollup (spec §1/§2)', () => {
 
   it('says nothing under the heatmap when every category is living', async () => {
     renderPage()
+    await openView('History')
     await screen.findByRole('heading', { name: /Month × category heatmap/ })
     expect(screen.queryByText(/Not living spend/)).toBeNull()
   })
@@ -728,6 +843,7 @@ describe('SpendingPage — one failed feed never blanks the page', () => {
     fireEvent.click(within(banner).getByRole('button', { name: 'Retry the yearly rollup' }))
     // The identical-payload skip must not strand the table hidden behind a payload that
     // equals the one the failed load never got to show.
+    await openView('History')
     expect(await screen.findByText('Yearly rollups')).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
     // …and the feed that never failed was left alone: re-fetching it would repaint charts

@@ -14,10 +14,17 @@ from app.services.prefs_registry import (
 NAV_ITEMS_TS = Path(__file__).resolve().parents[2] / "src" / "components" / "navItems.ts"
 
 
-def test_registry_lists_exactly_the_five_keys_with_consumers():
+def test_registry_lists_exactly_the_keys_with_consumers():
     # Only keys with a consumer are registered (spec §10); the audit's other candidates
     # (currency style, liability sign, fiscal-year start) wait for theirs.
-    assert set(PREF_REGISTRY) == {"theme", "density", "scope", "palette_recents", "landing_page"}
+    assert set(PREF_REGISTRY) == {
+        "theme",
+        "density",
+        "scope",
+        "palette_recents",
+        "landing_page",
+        "overview_layout",
+    }
     assert PREF_REGISTRY["theme"].default == "dark"
     assert PREF_REGISTRY["density"].default == "comfortable"
     assert PREF_REGISTRY["scope"].default == {"owner": "all", "range": "1y"}

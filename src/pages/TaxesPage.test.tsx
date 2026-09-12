@@ -335,8 +335,7 @@ const DEDUCTION_WARNING =
 // echo IS what the user sees — while the wire-body pins stay canonical plain decimals.
 const salary = () => screen.getByLabelText('Annual Salary') as HTMLInputElement
 const saveInputs = () => screen.getByRole('button', { name: /save inputs/i }) as HTMLButtonElement
-const deleteYearButton = () =>
-  screen.getByRole('button', { name: /delete year/i }) as HTMLButtonElement
+const deleteYearButton = () => { openYearManagement(); return screen.getByRole('button', { name: /delete year/i }) as HTMLButtonElement }
 // The one question the delete door asks — worded for a row of tables nobody can get back.
 const DELETE_2024_CONFIRM =
   'Delete tax year 2024 and all of its inputs and brackets? This cannot be undone.'
@@ -346,9 +345,9 @@ const DELETE_2024_CONFIRM =
 // the matcher accepts both faces of the same card.
 const trendCard = () =>
   screen
-    .getByText(/Tax composition by year|Tax breakdown — /)
+    .getByText('Tax composition by year')
     .closest('.card') as HTMLElement
-const trendChart = () => within(trendCard()).getByTestId('echart')
+const trendChart = () => within(trendCard()).getAllByTestId('echart')[0]
 const trendCategories = () => trendChart().getAttribute('data-categories')
 
 // The per-jurisdiction table's OWN scope. Several cards on this page render a node that
@@ -422,8 +421,8 @@ afterEach(() => {
 
 describe('TaxesPage — frame', () => {
   it('renders its title row through PageFrame, not a hand-rolled page header', async () => {
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=summary')
+    await readyInputs()
 
     expect(screen.getByRole('heading', { level: 1, name: 'Taxes' })).toBeTruthy()
     // The shell owns the title row now — the page's own header markup is gone.
@@ -435,7 +434,7 @@ describe('TaxesPage — frame', () => {
     // Never answers: the first list load is the page's own lifecycle, and it is the only
     // thing this page ever paints a full-page ghost for.
     vi.mocked(fetchTaxYears).mockReturnValue(new Promise(() => {}))
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     expect(screen.getByText('Loading…')).toBeTruthy()
     // tiles: 0 — this page has no KPI row to ghost, so it must not draw one.
@@ -450,8 +449,8 @@ describe('TaxesPage — frame', () => {
     vi.mocked(fetchTaxInputs)
       .mockResolvedValueOnce(inputsFor(2024))
       .mockReturnValueOnce(pending.promise)
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=summary')
+    await readyInputs()
 
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(2))
@@ -464,13 +463,13 @@ describe('TaxesPage — frame', () => {
     expect(
       screen.getByRole('button', { name: '2024' }).closest('.loading-dim.is-loading'),
     ).toBeNull()
-    expect(screen.getByLabelText('New year').closest('.loading-dim.is-loading')).toBeNull()
+    expect(newYearInput().closest('.loading-dim.is-loading')).toBeNull()
   })
 })
 
 describe('TaxesPage', () => {
   it('renders a chip per tax year and loads the latest', async () => {
-    renderPage()
+    renderPage('/taxes?section=summary')
     await screen.findByRole('button', { name: '2024' })
     expect(screen.getByRole('button', { name: '2023' })).toBeTruthy()
     // Latest year wins on arrival — the sheet's rightmost column.
@@ -486,7 +485,7 @@ describe('TaxesPage', () => {
   })
 
   it('reloads inputs, brackets and summary on a year switch — and not on a re-click', async () => {
-    renderPage()
+    renderPage('/taxes?section=summary')
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
@@ -506,12 +505,12 @@ describe('TaxesPage', () => {
     vi.mocked(fetchTaxYears)
       .mockResolvedValueOnce([year2023, year2024])
       .mockResolvedValueOnce([year2023, year2024, year2025])
-    renderPage()
+    renderPage('/taxes?section=summary')
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
     // Default = latest + 1.
     expect((screen.getByLabelText('New year') as HTMLInputElement).value).toBe('2025')
-    fireEvent.click(screen.getByRole('button', { name: /create year/i }))
+    fireEvent.click(createYearButton())
 
     await waitFor(() => expect(vi.mocked(cloneBrackets)).toHaveBeenCalledWith(2025, 2024))
     // Reload the year list, then jump to the new year.
@@ -524,10 +523,10 @@ describe('TaxesPage', () => {
     vi.mocked(cloneBrackets).mockRejectedValue(
       new ApiError('tax year 2025 already has 42 brackets', 409),
     )
-    renderPage()
+    renderPage('/taxes?section=summary')
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
-    fireEvent.click(screen.getByRole('button', { name: /create year/i }))
+    fireEvent.click(createYearButton())
     expect(await screen.findByText('tax year 2025 already has 42 brackets')).toBeTruthy()
     // No jump: the year list never changed.
     expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(1)
@@ -539,10 +538,10 @@ describe('TaxesPage', () => {
       .mockResolvedValueOnce([year2023, year2024])
       .mockRejectedValueOnce(new ApiError('years unavailable', 503))
       .mockResolvedValue([year2023, year2024, year2025])
-    renderPage()
+    renderPage('/taxes?section=summary')
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
-    fireEvent.click(screen.getByRole('button', { name: /create year/i }))
+    fireEvent.click(createYearButton())
     await waitFor(() => expect(vi.mocked(cloneBrackets)).toHaveBeenCalledWith(2025, 2024))
 
     // The clone SUCCEEDED, so this failure belongs to the main banner — the one with a
@@ -570,7 +569,7 @@ describe('TaxesPage', () => {
 
   it('shows ONLY the banner when the first year-list load fails', async () => {
     vi.mocked(fetchTaxYears).mockRejectedValueOnce(new ApiError('years unavailable', 503))
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     // No years, so the failure is the FRAME's: an assertive banner and nothing behind it.
     expect(await screen.findByText("Couldn't load the tax years — the server had a problem (HTTP 503)")).toBeTruthy()
@@ -586,8 +585,8 @@ describe('TaxesPage', () => {
 
   it('asks before a year switch that would discard typed work', async () => {
     confirmSpy.mockReturnValue(false)
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
     fireEvent.change(salary(), { target: { value: '999' } })
 
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
@@ -605,12 +604,12 @@ describe('TaxesPage', () => {
 
   it('asks before creating a year that would discard typed work', async () => {
     confirmSpy.mockReturnValue(false)
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
     fireEvent.change(salary(), { target: { value: '999' } })
 
     fireEvent.change(screen.getByLabelText('New year'), { target: { value: '2026' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Create year' }))
+    fireEvent.click(createYearButton())
     expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved changes for 2024?')
     // Declined BEFORE the request: no year was created, nothing was lost.
     expect(vi.mocked(cloneBrackets)).not.toHaveBeenCalled()
@@ -622,12 +621,13 @@ describe('TaxesPage', () => {
     vi.mocked(fetchTaxSummary)
       .mockResolvedValueOnce(summaryFor(2024))
       .mockRejectedValueOnce(new ApiError('totals unavailable', 500))
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
     fireEvent.change(salary(), { target: { value: '4242' } })
 
     // A BRACKETS save moves the totals; that refresh failing is what puts a Retry on
     // screen without touching the inputs form.
+    fireEvent.click(screen.getByRole('tab', { name: 'Tax tables' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
     expect(await screen.findByText('totals unavailable')).toBeTruthy()
 
@@ -636,6 +636,7 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(2))
     // Same year, so the editors were never remounted and their state seeds from a
     // useState initializer — the replaced payload cannot reach into it.
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
     expect(salary().value).toBe('$4,242.00')
   })
 
@@ -650,8 +651,8 @@ describe('TaxesPage', () => {
       .mockResolvedValueOnce(summaryFor(2024)) // the initial load
       .mockReturnValueOnce(slow.promise) // the first save's refresh
       .mockReturnValueOnce(fast.promise) // the second save's
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
 
     fireEvent.change(salary(), { target: { value: '210000' } })
     fireEvent.click(saveInputs())
@@ -663,6 +664,7 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(3))
 
     fast.resolve(newer)
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
     expect(await screen.findByText('$22.22')).toBeTruthy()
     // The older refresh answers LAST and must not roll the totals back to its snapshot.
     await act(async () => {
@@ -677,8 +679,8 @@ describe('TaxesPage', () => {
     vi.mocked(fetchTaxSummary)
       .mockResolvedValueOnce(summaryFor(2024))
       .mockReturnValueOnce(pending.promise)
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
 
     fireEvent.change(salary(), { target: { value: '210000' } })
     fireEvent.click(saveInputs())
@@ -695,8 +697,8 @@ describe('TaxesPage', () => {
   })
 
   it('refreshes the totals AND the chip counts after a save', async () => {
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(1)
 
@@ -714,7 +716,7 @@ describe('TaxesPage', () => {
   it('drops a bracket save that echoes after a year switch', async () => {
     const pending = deferred<TaxBracketsOut>()
     vi.mocked(putTaxBrackets).mockReturnValueOnce(pending.promise)
-    renderPage()
+    renderPage('/taxes?section=tables')
     await screen.findByLabelText('Federal bracket 1 rate (%)')
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
@@ -737,7 +739,7 @@ describe('TaxesPage', () => {
   })
 
   it('answers an out-of-range year itself rather than leaving it to the browser', async () => {
-    renderPage()
+    renderPage('/taxes?section=summary')
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
     const input = screen.getByLabelText('New year')
@@ -746,7 +748,7 @@ describe('TaxesPage', () => {
     expect(input.closest('form')?.hasAttribute('novalidate')).toBe(true)
 
     fireEvent.change(input, { target: { value: '3025' } })
-    fireEvent.click(screen.getByRole('button', { name: /create year/i }))
+    fireEvent.click(createYearButton())
     expect(screen.getByText('Enter a year between 1900 and 2100')).toBeTruthy()
     expect(vi.mocked(cloneBrackets)).not.toHaveBeenCalled()
   })
@@ -755,17 +757,17 @@ describe('TaxesPage', () => {
     vi.mocked(cloneBrackets).mockRejectedValue(
       new ApiError('tax year 2025 already has 42 brackets', 409),
     )
-    renderPage()
+    renderPage('/taxes?section=summary')
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
-    fireEvent.click(screen.getByRole('button', { name: /create year/i }))
+    fireEvent.click(createYearButton())
     expect(await screen.findByText('tax year 2025 already has 42 brackets')).toBeTruthy()
 
     // The sentence is about the year that WAS in the box.
     fireEvent.change(screen.getByLabelText('New year'), { target: { value: '2026' } })
     expect(screen.queryByText('tax year 2025 already has 42 brackets')).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: /create year/i }))
+    fireEvent.click(createYearButton())
     expect(await screen.findByText('tax year 2025 already has 42 brackets')).toBeTruthy()
     // Navigating away answers it too — it has nothing to say about 2023.
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
@@ -781,13 +783,13 @@ describe('TaxesPage', () => {
       .mockResolvedValueOnce([
         { year: thisYear, notes: null, input_count: 0, bracket_count: 0, filing_status: 'single' },
       ])
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     expect(await screen.findByText(/no tax years yet/i)).toBeTruthy()
     expect((screen.getByLabelText('New year') as HTMLInputElement).value).toBe(String(thisYear))
     expect(vi.mocked(fetchTaxInputs)).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: /create year/i }))
+    fireEvent.click(createYearButton())
     // Nothing to clone FROM: the empty inputs PUT is what auto-creates the tax_years row.
     await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(thisYear, { values: {} }))
     expect(vi.mocked(cloneBrackets)).not.toHaveBeenCalled()
@@ -797,8 +799,8 @@ describe('TaxesPage', () => {
   // --- AmountInput adoption: entry scopes and the wire boundary -------------------------
 
   it('canonicalizes spreadsheet-formatted entry into both PUT bodies', async () => {
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
 
     // A jsdom click never blurs, so the blur-time canonicalization never runs here: the
     // wire boundary in submit() is the only thing between "$210,000" and a Decimal column.
@@ -812,6 +814,7 @@ describe('TaxesPage', () => {
 
     // Same boundary in the bracket editor, which canonicalizes BEFORE it validates — so
     // "$0" is judged as the 0 first threshold the API demands, not refused as a shape.
+    fireEvent.click(screen.getByRole('tab', { name: 'Tax tables' }))
     fireEvent.change(screen.getByLabelText('Federal bracket 1 threshold'), {
       target: { value: '$0' },
     })
@@ -828,8 +831,8 @@ describe('TaxesPage', () => {
   })
 
   it('lands on the form primary from the last cell, and saves on Ctrl+Enter', async () => {
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
     fireEvent.change(salary(), { target: { value: '210000' } })
 
     // The scope preventDefaults Enter, so it never implicit-submits; on the LAST cell it
@@ -848,7 +851,7 @@ describe('TaxesPage', () => {
   })
 
   it('walks a bracket row on Enter and stops at the Save of that jurisdiction', async () => {
-    renderPage()
+    renderPage('/taxes?section=tables')
     const rate = await screen.findByLabelText('Federal bracket 1 rate (%)')
     const threshold = screen.getByLabelText('Federal bracket 1 threshold')
 
@@ -871,7 +874,7 @@ describe('TaxesPage', () => {
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
       years: [summaryFor(2023), summaryFor(2024)],
     })
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     expect(await screen.findByText('$123,456.78')).toBeTruthy() // total tax
     expect(screen.getByText('Gross income')).toBeTruthy()
@@ -910,7 +913,7 @@ describe('TaxesPage', () => {
       taxable_income: '10000.00', gains_amount: '25000.00', tax: '380.00', effective_rate: '0.015200',
     }
     vi.mocked(fetchTaxSummary).mockResolvedValue(detailed)
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     await screen.findByText('By jurisdiction')
     // Every cell is the payload's own figure formatted — Base, Taxable, Tax, Eff. rate.
@@ -938,7 +941,7 @@ describe('TaxesPage', () => {
     const preC = { ...summaryFor(2024) }
     delete preC.niit
     vi.mocked(fetchTaxSummary).mockResolvedValue(preC)
-    renderPage()
+    renderPage('/taxes?section=summary')
     await screen.findByText('By jurisdiction')
     const niit = jurisdictionTable().getByText('NIIT').closest('tr')!
     expect(niit.textContent?.match(/—/g)).toHaveLength(4)
@@ -946,7 +949,7 @@ describe('TaxesPage', () => {
   })
 
   it('mounts the marginal card from the year’s own summary and tables', async () => {
-    renderPage()
+    renderPage('/taxes?section=summary')
     // bracketsFor carries one federal bracket (10% at $0) and no state table, and the
     // fixture year's taxable income is 0: the sentence prices the bottom bracket while the
     // ladder itself is undrawable. The default beforeEach leaves the trend feed EMPTY, so
@@ -963,7 +966,7 @@ describe('TaxesPage', () => {
     const sparse = summaryFor(2024)
     sparse.warnings = [MISSING_KEYS_LINE, 'no state brackets for 2024: state tax computed as 0']
     vi.mocked(fetchTaxSummary).mockResolvedValue(sparse)
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     // One text node, wrapped by CSS — not truncated, not summarised, not re-worded.
     expect(await screen.findByText(MISSING_KEYS_LINE)).toBeTruthy()
@@ -977,7 +980,7 @@ describe('TaxesPage', () => {
     const sparse = summaryFor(2024)
     sparse.warnings = [DEDUCTION_WARNING, MISSING_KEYS_LINE]
     vi.mocked(fetchTaxSummary).mockResolvedValue(sparse)
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toBe(DEDUCTION_WARNING)
@@ -994,7 +997,7 @@ describe('TaxesPage', () => {
       take_home: '0.00', effective_rate: null,
     }
     vi.mocked(fetchTaxSummary).mockResolvedValue(zeros)
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     expect(await screen.findByText(/nothing to chart yet/i)).toBeTruthy()
     // And an empty feed is an answer of its own, distinct from "still loading".
@@ -1003,8 +1006,10 @@ describe('TaxesPage', () => {
   })
 
   it('loads the trend feed once per visit, and again after a save lands', async () => {
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
     await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(1))
 
     // A year switch cannot move an ALL-years feed, so it must not spend a request on it.
@@ -1031,8 +1036,10 @@ describe('TaxesPage', () => {
     vi.mocked(fetchAllTaxSummaries)
       .mockReturnValueOnce(slow.promise) // the mount feed
       .mockReturnValueOnce(fast.promise) // the one the save's refreshKey bump starts
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
     await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(1))
 
     // A save bumps refreshKey while the mount feed is still open — two feeds in flight.
@@ -1052,38 +1059,33 @@ describe('TaxesPage', () => {
     expect(trendCategories()).toBe('2025,2026')
   })
 
-  it('drills into a year on a trend click and returns on the next click', async () => {
+  it('pins a year beside the unchanged trend and clears it explicitly', async () => {
     // The shared fixture computes every jurisdiction to zero; give 2023 a federal tax so
     // its pie has something to draw. (Replace the object — summaryFor aliases federal
     // and state to ONE `income` literal, so writing through it would tax both.)
     const taxed2023 = summaryFor(2023)
     taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
-    renderPage()
+    renderPage('/taxes?section=summary')
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
 
     // The mock forwards the first category: 2023.
     fireEvent.click(trendChart())
     expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
-    // Same mount, now a pie — no x axis — and the way back is written beside it, with
-    // the SERVER's totals for the year (the pie itself only draws positive slices).
-    expect(trendCategories()).toBe('')
-    expect(screen.getByLabelText(/Donut chart of 2023’s tax by jurisdiction/)).toBeTruthy()
-    expect(screen.getByText(/click the chart to go back/i)).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'All years' })).toBeTruthy()
-
-    // Any click in detail mode returns to all years.
-    fireEvent.click(trendChart())
-    await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
+    // The historical canvas remains mounted while the year is pinned beside it.
+    expect(trendCategories()).toBe('2023,2024')
+    expect(screen.getByLabelText(/Donut chart of 2023.s tax by jurisdiction/)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Open 2023 return' }).getAttribute('href')).toBe('/taxes?section=summary&year=2023')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Clear selection' })[0])
+    expect(trendCategories()).toBe('2023,2024')
     expect(screen.queryByText('Tax breakdown — 2023')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'All years' })).toBeNull()
   })
 
-  it('offers a note and the All years button for a year whose pie has nothing to draw', async () => {
+  it('offers an explicit clear action when the selected year has no drawable tax', async () => {
     // Every jurisdiction is zero in the shared fixture: the drill-in opens on a year
     // with no drawable slice, and the button is the only chart-free way back.
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [summaryFor(2023)] })
-    renderPage()
+    renderPage('/taxes?section=summary')
     await waitFor(() => expect(trendCategories()).toBe('2023'))
 
     fireEvent.click(trendChart())
@@ -1094,14 +1096,14 @@ describe('TaxesPage', () => {
     // the actions row already offers it.
     expect(screen.queryByText(/click the chart to go back/i)).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: 'All years' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Clear selection' })[0])
     await waitFor(() => expect(trendCategories()).toBe('2023'))
     expect(screen.queryByText('No tax computed for 2023.')).toBeNull()
   })
 
   it('notes a trend-feed failure without disturbing the selected year', async () => {
     vi.mocked(fetchAllTaxSummaries).mockRejectedValue(new ApiError('trend unavailable', 503))
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     expect(await screen.findByText('trend unavailable')).toBeTruthy()
     // Different request, still on screen: the year's own totals are unaffected.
@@ -1115,7 +1117,7 @@ describe('TaxesPage', () => {
     // A fresh database has nothing to delete — and the button still has to be THERE, or
     // its disabled state would be indistinguishable from a missing feature.
     vi.mocked(fetchTaxYears).mockResolvedValue([])
-    renderPage()
+    renderPage('/taxes?section=summary')
     await screen.findByText(/no tax years yet/i)
 
     // The exact label, pinned once: every other test here finds it by pattern.
@@ -1129,8 +1131,8 @@ describe('TaxesPage', () => {
 
   it('asks ONE question before deleting — the delete confirm subsumes the discard one', async () => {
     confirmSpy.mockReturnValue(false)
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
     // Unsaved work, so the discard gate would fire too if the page stacked them.
     fireEvent.change(salary(), { target: { value: '999' } })
 
@@ -1151,8 +1153,8 @@ describe('TaxesPage', () => {
     vi.mocked(fetchTaxYears)
       .mockResolvedValueOnce([year2023, year2024])
       .mockResolvedValueOnce([year2023])
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=summary')
+    await readyInputs()
     await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
 
     fireEvent.click(deleteYearButton())
@@ -1183,8 +1185,8 @@ describe('TaxesPage', () => {
     vi.mocked(fetchTaxYears)
       .mockResolvedValueOnce([year2023, year2024])
       .mockResolvedValue([year2023])
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
 
     // A save against 2024 is still open when the year is deleted out from under it.
     fireEvent.change(salary(), { target: { value: '210000' } })
@@ -1219,8 +1221,8 @@ describe('TaxesPage', () => {
 
   it('surfaces a delete failure verbatim and keeps the year on screen', async () => {
     vi.mocked(deleteTaxYear).mockRejectedValue(new ApiError('tax year 2024 not found', 404))
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
 
     fireEvent.click(deleteYearButton())
     expect(await screen.findByText('tax year 2024 not found')).toBeTruthy()
@@ -1235,7 +1237,7 @@ describe('TaxesPage', () => {
 
   it('leaves the whatif family in the URL for the card to read, and re-keys it on a year switch', async () => {
     renderPage('/taxes?whatif=sale%3A7%3A40')
-    await screen.findByLabelText('Annual Salary')
+    await screen.findByTestId('whatif-panel')
     // Deliberately NOT read or cleared here: the entries are the PANEL's state now
     // (WhatIfPanel.test.tsx owns that grammar), and this page only re-keys the card by year.
     expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=sale%3A7%3A40')
@@ -1264,13 +1266,14 @@ describe('TaxesPage', () => {
     const echo = inputsFor(2024)
     echo.sections[0].items[0].value = '210000.0000'
     vi.mocked(putTaxInputs).mockResolvedValue(echo)
-    renderPage()
-    await screen.findByTestId('whatif-panel')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
+    fireEvent.click(screen.getByRole('tab', { name: 'What-if' }))
     fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
     expect(confirmSpy).toHaveBeenCalledTimes(1)
     // The server's own before → after, and only for the key actually being WRITTEN.
     expect(confirmSpy.mock.calls[0][0]).toBe(
-      "This writes 1 input to 2024's stored return and reloads the form below. Continue?\nAnnual Salary: $188,930.00 → $210,000.00",
+      "This writes 1 input to 2024's stored return and reloads the Inputs view. Continue?\nAnnual Salary: $188,930.00 → $210,000.00",
     )
     await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
     expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2024, {
@@ -1282,14 +1285,15 @@ describe('TaxesPage', () => {
   })
 
   it('names the unsaved edits Apply is about to discard', async () => {
-    renderPage()
-    await screen.findByTestId('whatif-panel')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
     fireEvent.change(salary(), { target: { value: '$999,000' } })
+    fireEvent.click(screen.getByRole('tab', { name: 'What-if' }))
     fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
     // ONE question, not two: the write and the discard are the same decision.
     expect(confirmSpy).toHaveBeenCalledTimes(1)
     expect(confirmSpy.mock.calls[0][0]).toContain(
-      "reloads the form below, discarding its unsaved edits. Continue?",
+      "reloads the Inputs view, discarding its unsaved edits. Continue?",
     )
     // The epoch remount threw the typed value away with the form that held it.
     await waitFor(() => expect(salary().value).toBe('$200,000.00'))
@@ -1297,7 +1301,7 @@ describe('TaxesPage', () => {
 
   it('a declined confirm writes nothing', async () => {
     confirmSpy.mockReturnValue(false)
-    renderPage()
+    renderPage('/taxes?section=whatif')
     await screen.findByTestId('whatif-panel')
     fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
     expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
@@ -1305,7 +1309,7 @@ describe('TaxesPage', () => {
 
   it('refuses Apply for a per-person key on a multi-column year, naming the form that can split it', async () => {
     vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => marriedInputsFor(year))
-    renderPage()
+    renderPage('/taxes?section=whatif')
     await screen.findByTestId('whatif-panel')
     fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
 
@@ -1326,7 +1330,7 @@ describe('TaxesPage', () => {
     // A married payload repeats annual_salary once per person column; the override list
     // must carry the KEY once — overrides are household-level.
     vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => marriedInputsFor(year))
-    renderPage()
+    renderPage('/taxes?section=whatif')
     const panel = await screen.findByTestId('whatif-panel')
     await waitFor(() => expect(panel.getAttribute('data-defs')).toBe('annual_salary'))
   })
@@ -1345,7 +1349,7 @@ describe('TaxesPage', () => {
       })
       return inputs
     })
-    renderPage()
+    renderPage('/taxes?section=whatif')
     const panel = await screen.findByTestId('whatif-panel')
     await waitFor(() => expect(panel.getAttribute('data-defs')).toBe('annual_salary'))
   })
@@ -1361,7 +1365,7 @@ describe('TaxesPage', () => {
   it('mounts the will-I-owe card on the current year and loads it for that year', async () => {
     const thisYear = new Date().getFullYear()
     vi.mocked(fetchTaxYears).mockResolvedValue([yearRow(thisYear - 1), yearRow(thisYear)])
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     // The latest year wins on arrival, and it is this one.
     expect(await screen.findByText(`Will I owe? — ${thisYear}`)).toBeTruthy()
@@ -1372,8 +1376,8 @@ describe('TaxesPage', () => {
 
   it('leaves the card off a past year rather than spending a request on the 422', async () => {
     vi.mocked(fetchTaxYears).mockResolvedValue([yearRow(new Date().getFullYear() - 1)])
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=summary')
+    await readyInputs()
 
     // The endpoint refuses any year but the current one; the page asks the same question here
     // rather than drawing a card whose only possible content is that refusal.
@@ -1384,7 +1388,7 @@ describe('TaxesPage', () => {
   it('takes the card away when the user switches off the current year', async () => {
     const thisYear = new Date().getFullYear()
     vi.mocked(fetchTaxYears).mockResolvedValue([yearRow(thisYear - 1), yearRow(thisYear)])
-    renderPage()
+    renderPage('/taxes?section=summary')
     await screen.findByText(`Will I owe? — ${thisYear}`)
 
     fireEvent.click(screen.getByRole('button', { name: String(thisYear - 1) }))
@@ -1410,7 +1414,7 @@ describe('TaxesPage', () => {
     const echo = inputsFor(thisYear)
     echo.sections[0].items[0].value = '333000.0000'
     vi.mocked(putTaxInputs).mockResolvedValue(echo)
-    renderPage()
+    renderPage('/taxes?section=summary')
     await screen.findByText(`Will I owe? — ${thisYear}`)
 
     fireEvent.click(
@@ -1421,6 +1425,7 @@ describe('TaxesPage', () => {
         values: { w2_stock_rsus_sold: '48000.00' },
       }),
     )
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
     // Remounted from the echo (a blurred AmountInput reads its formatted echo).
     await waitFor(() => expect(salary().value).toBe('$333,000.00'))
     // The page's save chain ran: totals refetched, and this card reloaded its own feed.
@@ -1450,9 +1455,9 @@ describe('?year= selected tax year', () => {
   })
 
   it('falls back to the latest year when the param is absent, garbled or unknown', async () => {
-    renderPage()
+    renderPage('/taxes')
     await waitFor(() =>
-      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024'),
+      expect(screen.getByRole('button', { name: '2024' }).getAttribute('aria-pressed')).toBe('true'),
     )
     // A bare /taxes is left bare: this page writes the param from its own doors only, so it
     // never races the what-if card for the search string on arrival.
@@ -1461,21 +1466,21 @@ describe('?year= selected tax year', () => {
 
     renderPage('/taxes?year=banana')
     await waitFor(() =>
-      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024'),
+      expect(screen.getByRole('button', { name: '2024' }).getAttribute('aria-pressed')).toBe('true'),
     )
     cleanup()
 
     // A year the list does not carry: the latest, the way a bare /taxes goes.
     renderPage('/taxes?year=1999')
     await waitFor(() =>
-      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024'),
+      expect(screen.getByRole('button', { name: '2024' }).getAttribute('aria-pressed')).toBe('true'),
     )
     expect(vi.mocked(fetchTaxInputs)).not.toHaveBeenCalledWith(1999)
   })
 
   it('mirrors a chip pick into the URL, replace-style, beside the sibling params', async () => {
     renderPage('/taxes?whatif=sale%3A7%3A40')
-    await screen.findByLabelText('Annual Salary')
+    await screen.findByTestId('whatif-panel')
 
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
     await waitFor(() =>
@@ -1494,14 +1499,14 @@ describe('?year= selected tax year', () => {
 
     fireEvent.click(screen.getByRole('link', { name: 'go 2024' }))
     await waitFor(() =>
-      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024'),
+      expect(screen.getByRole('button', { name: '2024' }).getAttribute('aria-pressed')).toBe('true'),
     )
     expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024)
   })
 
   it('drops the param with the year a delete removed', async () => {
     renderPage('/taxes?year=2024')
-    await screen.findByLabelText('Annual Salary')
+    await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
     fireEvent.click(deleteYearButton())
     await waitFor(() => expect(vi.mocked(deleteTaxYear)).toHaveBeenCalledWith(2024))
     // Nothing is selected any more, so the URL must stop naming a year that is gone.
@@ -1529,7 +1534,7 @@ describe('?comp= composition drill (2026-08-25 spec §2d)', () => {
     // The pie is 2023's while the page — and the what-if card it hands the year to — is
     // still on the latest year. One param each, so neither can drag the other.
     expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
-    expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024')
+    expect(screen.getByRole('button', { name: '2024' }).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('ignores a garbled or unknown year — the trend renders as usual', async () => {
@@ -1549,16 +1554,16 @@ describe('?comp= composition drill (2026-08-25 spec §2d)', () => {
     const taxed2023 = summaryFor(2023)
     taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
-    renderPage('/taxes?whatif=sale%3A7%3A40')
+    renderPage('/taxes?whatif=sale%3A7%3A40&section=summary')
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
     fireEvent.click(trendChart()) // the trend; the mock clicks 2023
     await screen.findByText('Tax breakdown — 2023')
     expect(screen.getByTestId('location').textContent).toBe(
-      '/taxes?whatif=sale%3A7%3A40&comp=2023',
+      '/taxes?whatif=sale%3A7%3A40&section=summary&comp=2023',
     )
-    fireEvent.click(trendChart()) // any click in detail mode returns
+    fireEvent.click(screen.getAllByRole('button', { name: 'Clear selection' })[0])
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
-    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=sale%3A7%3A40')
+    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=sale%3A7%3A40&section=summary')
   })
 })
 
@@ -1575,8 +1580,8 @@ describe('filing status (2026-08-26 design §6)', () => {
     'splitting (Form 8958), which this calculator does not model.'
 
   it('renders the selected year status as a segmented control', async () => {
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=summary')
+    await readyInputs()
 
     expect(statusButton('Single').getAttribute('aria-pressed')).toBe('true')
     expect(statusButton('Married filing jointly').getAttribute('aria-pressed')).toBe('false')
@@ -1588,14 +1593,14 @@ describe('filing status (2026-08-26 design §6)', () => {
 
   it('keeps the control off a page with no year selected', async () => {
     vi.mocked(fetchTaxYears).mockResolvedValue([])
-    renderPage()
+    renderPage('/taxes?section=summary')
     await screen.findByText(/no tax years yet/i)
     expect(screen.queryByRole('button', { name: 'Single' })).toBeNull()
   })
 
   it('PATCHes the new status and reloads the year under it', async () => {
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1))
 
     fireEvent.click(statusButton('Married filing jointly'))
@@ -1623,8 +1628,8 @@ describe('filing status (2026-08-26 design §6)', () => {
   })
 
   it('a status flip refetches the all-years trend — the composition follows the new status', async () => {
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=summary')
+    await readyInputs()
     await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(1))
 
     fireEvent.click(statusButton('Married filing jointly'))
@@ -1636,8 +1641,8 @@ describe('filing status (2026-08-26 design §6)', () => {
   })
 
   it('neither asks nor sends when the pressed status is already the year’s', async () => {
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=summary')
+    await readyInputs()
 
     fireEvent.click(statusButton('Single'))
     expect(confirmSpy).not.toHaveBeenCalled()
@@ -1647,8 +1652,8 @@ describe('filing status (2026-08-26 design §6)', () => {
 
   it('asks before a status change that would discard typed work', async () => {
     confirmSpy.mockReturnValue(false)
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
     fireEvent.change(salary(), { target: { value: '999' } })
 
     fireEvent.click(statusButton('Married filing jointly'))
@@ -1663,8 +1668,8 @@ describe('filing status (2026-08-26 design §6)', () => {
     vi.mocked(patchTaxYear).mockRejectedValue(
       new ApiError('filing_status must be one of single, married_joint, married_separate', 422),
     )
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=summary')
+    await readyInputs()
 
     fireEvent.click(statusButton('Married filing separately'))
     expect(
@@ -1679,8 +1684,8 @@ describe('filing status (2026-08-26 design §6)', () => {
 
   it('keeps a status refusal an ALERT beside the year, not the frame stale line', async () => {
     vi.mocked(patchTaxYear).mockRejectedValue(new ApiError('filing_status is not settable', 422))
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
 
     fireEvent.click(statusButton('Married filing jointly'))
 
@@ -1697,8 +1702,8 @@ describe('filing status (2026-08-26 design §6)', () => {
     vi.mocked(fetchTaxYears).mockResolvedValue([
       { ...year2024, filing_status: 'married_separate' },
     ])
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=summary')
+    await readyInputs()
 
     // Verbatim, and not dismissible: an MFS calculation without Form-8958 community-income
     // splitting is wrong in California, so the sentence stays wherever the number is.
@@ -1711,7 +1716,7 @@ describe('filing status (2026-08-26 design §6)', () => {
   it('splits the per-person inputs into named columns on a married year', async () => {
     vi.mocked(fetchTaxYears).mockResolvedValue([{ ...year2024, filing_status: 'married_joint' }])
     vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => marriedInputsFor(year))
-    renderPage()
+    renderPage('/taxes?section=inputs')
 
     expect(await screen.findByLabelText('Annual Salary — Alex')).toBeTruthy()
     expect(screen.getByLabelText('Annual Salary — Sam')).toBeTruthy()
@@ -1723,11 +1728,11 @@ describe('filing status (2026-08-26 design §6)', () => {
   it('keeps one column when the year payload carries fewer than two people', async () => {
     vi.mocked(fetchTaxYears).mockResolvedValue([{ ...year2024, filing_status: 'married_joint' }])
     vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => marriedNoRosterFor(year))
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     // The honest degrade is today's layout — whose unqualified per-person writes the server
     // still resolves onto the primary person — and it is not an error.
-    expect(await screen.findByLabelText('Annual Salary')).toBeTruthy()
+    expect(await readyInputs()).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
@@ -1735,8 +1740,8 @@ describe('filing status (2026-08-26 design §6)', () => {
     vi.mocked(fetchTaxInputs)
       .mockResolvedValueOnce(inputsFor(2024))
       .mockResolvedValueOnce(marriedInputsFor(2024))
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
 
     fireEvent.click(statusButton('Married filing jointly'))
 
@@ -1773,8 +1778,8 @@ describe('filing status (2026-08-26 design §6)', () => {
         medicare: [], social_security: [], disability: [], capital_gains: [],
       },
     }))
-    renderPage()
-    await screen.findByLabelText('Annual Salary')
+    renderPage('/taxes?section=tables')
+    await readyInputs()
 
     // Scoped: the YEAR card carries a control with the same three names.
     const tabs = within(screen.getByRole('group', { name: 'Bracket filing status' }))
@@ -1800,7 +1805,7 @@ describe('filing status (2026-08-26 design §6)', () => {
     vi.mocked(fetchTaxSummary).mockResolvedValue(
       missingSummaryFor(2024, ['federal', 'state', 'capital_gains']),
     )
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     expect(
       await screen.findByText('No Married filing jointly bracket tables for 2024'),
@@ -1826,7 +1831,7 @@ describe('filing status (2026-08-26 design §6)', () => {
     vi.mocked(fetchTaxSummary).mockResolvedValue(
       missingSummaryFor(2024, ['federal', 'state', 'capital_gains']),
     )
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     expect(await screen.findByText('No Single bracket tables for 2024')).toBeTruthy()
     expect(screen.getByText(/the IRS and the Franchise Tax Board publish them/)).toBeTruthy()
@@ -1840,7 +1845,7 @@ describe('filing status (2026-08-26 design §6)', () => {
     const complete = summaryFor(2024)
     complete.brackets_missing_for_status = []
     vi.mocked(fetchTaxSummary).mockResolvedValue(complete)
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     // An empty list is a COMPLETE year, not a missing one. (The heading's &apos; entity is
     // an apostrophe in the DOM, so the pin is written with a plain one.)
@@ -1855,7 +1860,7 @@ describe('filing status (2026-08-26 design §6)', () => {
         { year: 2026, filing_status: 'married_joint', brackets_missing_for_status: ['federal'] },
       ],
     })
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     // The feed keeps a refusal year OUT of `years` — it carries no sections at all, so a
     // column for it would be a lie the chart builder could not even draw — and names it in
@@ -1871,7 +1876,7 @@ describe('filing status (2026-08-26 design §6)', () => {
         { year: 2024, filing_status: 'married_joint', brackets_missing_for_status: ['federal'] },
       ],
     })
-    renderPage()
+    renderPage('/taxes?section=summary')
 
     // Distinct from "no years with stored inputs": there ARE years, they simply cannot be
     // compared yet.
@@ -1913,12 +1918,13 @@ describe('TaxesPage — snapshot cache (2026-08-27 spec §1)', () => {
   it('paints the year chips AND the detail panel before any fetch resolves', () => {
     seedBoth()
     pendAll()
-    renderPage()
+    renderPage('/taxes?section=inputs')
     // Both chips are up from the list seed...
     expect(screen.getByRole('button', { name: '2024' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '2023' })).toBeTruthy()
     // ...and the latest year's editors and totals from the detail seed.
     expect(salary().value).toBe('$200,000.00')
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
     expect(screen.getByText('$77,777.77')).toBeTruthy()
     // The new-year box is seeded off the cached latest year, not left blank.
     expect((screen.getByLabelText('New year') as HTMLInputElement).value).toBe('2025')
@@ -1932,7 +1938,7 @@ describe('TaxesPage — snapshot cache (2026-08-27 spec §1)', () => {
     const fresher = summaryFor(2024)
     fresher.totals.total_tax = '88888.88'
     vi.mocked(fetchTaxSummary).mockResolvedValue(fresher)
-    renderPage()
+    renderPage('/taxes?section=summary')
     expect(screen.getByText('$77,777.77')).toBeTruthy()
     expect(await screen.findByText('$88,888.88')).toBeTruthy()
   })
@@ -1940,7 +1946,7 @@ describe('TaxesPage — snapshot cache (2026-08-27 spec §1)', () => {
   it('flips to a seeded second year and paints its detail before its fetch resolves', async () => {
     seedBoth()
     setSnapshot('taxes:detail:2023:single', detailFor(2023, '11111.11'))
-    renderPage()
+    renderPage('/taxes?section=summary')
     await waitFor(() => expect(fetchTaxSummary).toHaveBeenCalledWith(2024))
     // The 2023 requests never answer, so only the seed can put its number on screen.
     pendAll()
@@ -1951,7 +1957,7 @@ describe('TaxesPage — snapshot cache (2026-08-27 spec §1)', () => {
   it('settles a byte-identical EMPTY year list instead of waiting forever', async () => {
     setSnapshot('taxes:years', [])
     vi.mocked(fetchTaxYears).mockResolvedValue([])
-    renderPage()
+    renderPage('/taxes?section=summary')
     await waitFor(() => expect(fetchTaxYears).toHaveBeenCalledTimes(1))
     await act(async () => {})
     // Nothing to select and nothing to load — the new-year form IS the page, and the
@@ -1962,19 +1968,31 @@ describe('TaxesPage — snapshot cache (2026-08-27 spec §1)', () => {
 })
 
 describe('TaxesPage — section order (2026-08-31 audit)', () => {
-  it('year-scoped answers read contiguously; the all-years trend closes the answers half', async () => {
+  it('groups the year answers in Summary and preserves input drafts through task views', async () => {
     const thisYear = new Date().getFullYear()
     vi.mocked(fetchTaxYears).mockResolvedValue([
       { year: thisYear, notes: null, input_count: 21, bracket_count: 42, filing_status: 'single' },
     ])
-    renderPage()
+    renderPage('/taxes?section=summary')
     const willIOwe = await screen.findByText(`Will I owe? — ${thisYear}`)
     const totals = screen.getByText(`Totals — ${thisYear}`)
     const marginal = screen.getByText(`Marginal rates — ${thisYear}`)
-    const whatIf = screen.getByTestId('whatif-panel')
     const trend = screen.getByText('Tax composition by year')
-    const inputs = screen.getByText(`Tax inputs — ${thisYear}`)
-    const brackets = screen.getByText(`Bracket tables — ${thisYear}`)
-    expectInDocumentOrder(totals, willIOwe, marginal, whatIf, trend, inputs, brackets)
+    expectInDocumentOrder(totals, willIOwe, marginal, trend)
+    expect(screen.queryByTestId('whatif-panel')).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'What-if' }))
+    expect(await screen.findByTestId('whatif-panel')).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
+    fireEvent.change(await screen.findByLabelText('Annual Salary'), { target: { value: '432100' } })
+    fireEvent.click(screen.getByRole('tab', { name: 'Tax tables' }))
+    expect(await screen.findByLabelText('Federal bracket 1 rate (%)')).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
+    expect(salary().value).toBe('$432,100.00')
   })
 })
+
+function openYearManagement() { const disclosure = document.querySelector('.tax-year-management') as HTMLDetailsElement | null; if (disclosure && !disclosure.open) fireEvent.click(disclosure.querySelector('summary')!) }
+function newYearInput() { openYearManagement(); return screen.getByLabelText('New year') as HTMLInputElement }
+function createYearButton() { openYearManagement(); return screen.getByRole('button', { name: /create year/i }) }
+async function readyInputs() { const current = (await screen.findByRole('tab', { selected: true })).textContent!; fireEvent.click(screen.getByRole('tab', { name: 'Inputs' })); const field = await screen.findByLabelText('Annual Salary'); fireEvent.click(screen.getByRole('tab', { name: current })); return field }

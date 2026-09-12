@@ -2,24 +2,30 @@
 // every route; route samples add page-specific starters. All of them run through the
 // normal chat pipeline — nothing here is a second code path.
 
+import type { AssistantIntent } from '../../types/assistantEvidence'
+
 export interface SamplePrompt {
   label: string
   prompt: string
+  intent?: AssistantIntent
 }
 
 export const INSIGHT_PRESETS: SamplePrompt[] = [
   {
     label: 'Month in review',
+    intent: 'month_review',
     prompt:
-      'Give me a month-in-review of my latest fully entered month: total spend vs my 12-month average, the biggest category movers, savings rate, net-worth change, and anything unusual worth a look. Cite the figures you used.',
+      'Review my latest completed month: living spending versus the previous 12-calendar-month eligible average, category changes, savings, and dated balance changes. Explain the computed evidence and its completeness.',
   },
   {
     label: 'What changed in my spending?',
+    intent: 'spending_changes',
     prompt:
       'Compare my latest entered month of spending to the month before and to my 12-month averages. Which categories moved the most, and how do they sit against their budgets where budgets exist?',
   },
   {
     label: 'Contribution-limit pace',
+    intent: 'contribution_pace',
     prompt:
       'Am I on pace to hit, exceed, or undershoot my 401(k), HSA, and ESPP contribution limits this year? Use my paycheck contribution pace and the limits I have entered, and flag any limit I have not entered.',
   },

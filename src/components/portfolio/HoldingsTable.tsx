@@ -77,7 +77,7 @@ export default function HoldingsTable({
   }
 
   if (holdings.length === 0) {
-    return <p className="empty-note">No holdings yet — add transactions below.</p>
+    return <p className="empty-note">No holdings yet — add transactions in Manage.</p>
   }
   return (
     <div className="holdings-scroll">

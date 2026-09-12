@@ -38,7 +38,7 @@ export function monthlyIncomeSums(
 /** Month/amount rows for the ⤓ menu — empty when the chart itself would be absent. */
 export function monthlyIncomeCsv(dividends: DividendOut[], todayIso: string): ExportTable {
   const rows = monthlyIncomeSums(dividends, todayIso) ?? []
-  return { headers: ['Month', 'Dividends'], rows: rows.map((r) => [r.month, r.amount.toFixed(2)]) }
+  return { headers: ['Month', 'DividendEntriesUSD', 'DateBasis'], rows: rows.map((r) => [r.month, r.amount.toFixed(2), 'Automatic: ex-date estimate; manual: entered pay date']) }
 }
 
 /** Sums of `amount` by pay-date month over the trailing window, zero-filled so quiet

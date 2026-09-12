@@ -35,7 +35,7 @@ import { buildMonthSlices } from '../../utils/spending'
  * is not zero.
  */
 export function spendingCsv(
-  matrix: Pick<SpendingMatrix, 'months' | 'series' | 'totals' | 'net_pay'>,
+  matrix: Pick<SpendingMatrix, 'months' | 'series' | 'totals' | 'net_pay' | 'cash_outflow' | 'living_total' | 'tax_total' | 'transfer_total' | 'review_state'>,
   topIds: number[],
   nameById: Map<number, string>,
 ): ExportTable {
@@ -46,8 +46,9 @@ export function spendingCsv(
       'Month',
       ...topIds.map((id) => nameById.get(id) ?? String(id)),
       'Other',
-      'Total',
+      'All category entries',
       'Net pay',
+      ...(matrix.cash_outflow ? ['Living spending', 'Tax paid from take-home', 'Transfers', 'Cash outflow', 'Review status'] : []),
     ],
     rows: matrix.months.map((month, i) => [
       month,
@@ -60,6 +61,7 @@ export function spendingCsv(
         .toFixed(2),
       matrix.totals[i],
       matrix.net_pay[i] ?? '',
+      ...(matrix.cash_outflow ? [matrix.living_total?.[i] ?? '', matrix.tax_total?.[i] ?? '', matrix.transfer_total?.[i] ?? '', matrix.cash_outflow[i], matrix.review_state?.[i] ?? ''] : []),
     ]),
   }
 }
@@ -271,7 +273,17 @@ export function heatmapOption({
 }: HeatmapInput): EChartsOption | null {
   if (matrix.months.length === 0 || order.length === 0) return null
   const raw = heatmapMatrix(matrix, order)
-  const values = mode === 'absolute' ? raw : mode === 'row' ? rowNormalize(raw) : vsAverage(raw)
+  const legacyAverage = mode === 'vsAverage' ? vsAverage(raw) : []
+  const comparison = mode === 'vsAverage' ? order.map((categoryId, row) => {
+    const source = matrix.series.find(series => series.category_id === categoryId)
+    if (source?.comparison_average === undefined) return legacyAverage[row]
+    return raw[row].map((value, column) => {
+      const base = source.comparison_average?.[column]
+      if (value === null || base == null || Number(base) <= 0 || (source.comparison_count?.[column] ?? 0) < 6) return null
+      return (value - Number(base)) / Number(base)
+    })
+  }) : []
+  const values = mode === 'absolute' ? raw : mode === 'row' ? rowNormalize(raw) : comparison
   const cells: [number, number, number][] = []
   values.forEach((row, r) =>
     row.forEach((v, c) => {
@@ -381,14 +393,14 @@ export function savingsRateOption({ matrix, monthLabels, range }: SavingsRateInp
   }
 }
 
-/** The chart as a table (F12): both rates the lines draw, with the two spend figures that
- *  explain the gap between them. Verbatim server strings; blanks for absent, never '0.00'. */
+/** Rates and their source amounts, retaining the raw category sum separately from
+ *  cash outflow. Verbatim server strings; blanks for absent, never '0.00'. */
 export function savingsRateCsv(
   matrix: Pick<SpendingMatrix, 'months' | 'net_pay' | 'totals' | 'savings_rate'> &
-    Partial<Pick<SpendingMatrix, 'living_total' | 'total_savings_rate'>>,
+    Partial<Pick<SpendingMatrix, 'living_total' | 'total_savings_rate' | 'cash_outflow' | 'review_state'>>,
 ): ExportTable {
   return {
-    headers: ['Month', 'Net pay', 'Living spend', 'Total spend', 'Cash rate', 'Total rate'],
+    headers: ['Month', 'Net pay', 'Living spending', 'All category entries', 'Cash rate', 'Total rate', ...(matrix.cash_outflow ? ['Cash outflow', 'Review status'] : [])],
     rows: matrix.months.map((m, i) => [
       m,
       matrix.net_pay[i] ?? '',
@@ -396,6 +408,7 @@ export function savingsRateCsv(
       matrix.totals[i],
       matrix.savings_rate[i] ?? '',
       matrix.total_savings_rate?.[i] ?? '',
+      ...(matrix.cash_outflow ? [matrix.cash_outflow[i], matrix.review_state?.[i] ?? ''] : []),
     ]),
   }
 }

@@ -379,7 +379,7 @@ describe('CreditCardsPage', () => {
       SAVOR,
       RH,
     ])
-    renderPage()
+    renderPage('/credit-cards?section=manage')
     await screen.findByText('Card roster')
     fireEvent.click(screen.getByRole('button', { name: 'Edit Venture X' }))
     fireEvent.change(screen.getByLabelText('Card name'), { target: { value: 'Venture X Prime' } })
@@ -393,7 +393,7 @@ describe('CreditCardsPage', () => {
 
   it('roster add flow POSTs the full card body with defaults filled', async () => {
     vi.mocked(createCreditCard).mockResolvedValue(vx())
-    renderPage()
+    renderPage('/credit-cards?section=manage')
     await screen.findByText('Card roster')
     fireEvent.change(screen.getByLabelText('Card name'), { target: { value: 'BILT' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add card' }))
@@ -470,7 +470,7 @@ describe('CreditCardsPage', () => {
   })
 
   it('the roster nudges for active cards without an opened date', async () => {
-    renderPage()
+    renderPage('/credit-cards?section=manage')
     await screen.findByText('Card roster')
     // SavorOne and RH Gold both carry opened_on: null in the fixtures; Venture X is dated.
     expect(screen.getByText(/2 active cards have no opened date/)).toBeTruthy()
@@ -497,7 +497,7 @@ describe('CreditCardsPage', () => {
       ],
       totals: [], net_pay: [], savings_rate: [], four_pct_rule: [], total_budget: [],
     } as unknown as SpendingMatrix)
-    renderPage()
+    renderPage('/credit-cards?section=manage')
     await screen.findByText('Categories & weights')
     // Two rows share the one pool of Food dollars, so each carries half of it — and the
     // caption keeps the share and the denominator as separate clauses.
@@ -508,7 +508,7 @@ describe('CreditCardsPage', () => {
       { ...CATEGORIES[0], annual_spend: null, spending_category_id: 7 },
     ])
     cleanup()
-    renderPage()
+    renderPage('/credit-cards?section=manage')
     await screen.findByText('Categories & weights')
     expect(categoriesRow('Groceries').textContent).toContain('$1,800.00')
     expect(categoriesRow('Groceries').textContent).toContain('auto · from 2 entered months')
@@ -516,7 +516,7 @@ describe('CreditCardsPage', () => {
 
   it('reordering a category is optimistic and PATCHes only the rows that moved', async () => {
     vi.mocked(updateRewardCategory).mockResolvedValue(CATEGORIES[0])
-    renderPage()
+    renderPage('/credit-cards?section=manage')
     await screen.findByText('Categories & weights')
     // Groceries (index 0) moves down one via the keyboard path of the drag handle.
     fireEvent.keyDown(
@@ -554,18 +554,18 @@ describe('CreditCardsPage', () => {
     vi.mocked(fetchCreditCards).mockResolvedValue([])
     vi.mocked(fetchRewardCategories).mockResolvedValue([])
     vi.mocked(fetchRewardRates).mockResolvedValue([])
-    renderPage()
+    renderPage('/credit-cards?section=manage')
     await screen.findByText("Start with the spreadsheet's categories")
     expect(screen.getByText(/No cards yet/)).toBeTruthy()
   })
 
   it('credit line history draws per-card steps plus the total', async () => {
-    renderPage()
+    renderPage('/credit-cards?section=lines')
     await screen.findByText('Credit line history')
-    // Both cards mount through ChartCard: the house sentence (F11) and an export row each (F12).
-    expect(screen.getByLabelText(/Horizontal bars of each card/)).toBeTruthy()
+    // The selected task carries its own chart description and export controls.
+    expect(screen.queryByLabelText(/Horizontal bars of each card/)).toBeNull()
     expect(screen.getByLabelText(/Step chart of credit limits/)).toBeTruthy()
-    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(2)
+    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(1)
     const charts = screen.getAllByTestId('echart')
     const line = charts.find((el) =>
       (el.getAttribute('data-series-names') ?? '').includes('Total line'),
@@ -661,7 +661,7 @@ describe('CreditCardsPage — card ownership', () => {
   })
 
   it('shows the owner per row and defaults a NEW card to the primary person', async () => {
-    renderPage()
+    renderPage('/credit-cards?section=manage')
     await screen.findByText('Card roster')
     const roster = document.querySelector('.roster-table') as HTMLElement
     const owners = Array.from(roster.querySelectorAll('tbody tr')).map(
@@ -677,7 +677,7 @@ describe('CreditCardsPage — card ownership', () => {
 
   it('sends person_id on create and leaves primary_holder alone', async () => {
     vi.mocked(createCreditCard).mockResolvedValue(vx())
-    renderPage()
+    renderPage('/credit-cards?section=manage')
     await screen.findByText('Card roster')
     fireEvent.change(screen.getByLabelText('Card name'), { target: { value: 'Blue Cash' } })
     fireEvent.change(screen.getByLabelText('Owner', { selector: 'select' }), {
@@ -693,7 +693,7 @@ describe('CreditCardsPage — card ownership', () => {
 
   it('ARCHIVE rebuilds the whole card verbatim — person_id must survive', async () => {
     vi.mocked(updateCreditCard).mockResolvedValue(RH)
-    renderPage()
+    renderPage('/credit-cards?section=manage')
     await screen.findByText('Card roster')
     fireEvent.click(screen.getByRole('button', { name: 'Archive RH Gold' }))
     await waitFor(() => expect(updateCreditCard).toHaveBeenCalled())
@@ -710,7 +710,7 @@ describe('CreditCardsPage — card ownership', () => {
     vi.mocked(deleteCreditCard).mockResolvedValue(undefined)
     vi.mocked(createCreditCard).mockResolvedValue(RH)
     render(
-      <MemoryRouter initialEntries={['/credit-cards']}>
+      <MemoryRouter initialEntries={['/credit-cards?section=manage']}>
         <ToastProvider>
           <CreditCardsPage />
         </ToastProvider>
@@ -744,7 +744,12 @@ describe('CreditCardsPage — owner chips and the household advantage', () => {
     expect(activeTile.querySelector('.stat-value')?.textContent).toBe('1')
     // The credit-line chart only has series for cards in scope (RH Gold has no events at
     // all, so the card falls back to its empty note).
+    fireEvent.click(screen.getByRole('tab', { name: 'Credit lines' }))
     expect(screen.getByText(/No limit history yet/)).toBeTruthy()
+    expect(screen.getByTestId('location').textContent).toContain('owner=2')
+    fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
+    expect(screen.getByRole('button', { name: 'Edit SavorOne' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Rewards' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Joint' }))
     await waitFor(() =>
@@ -758,7 +763,7 @@ describe('CreditCardsPage — owner chips and the household advantage', () => {
       marriage_date: null,
     })
     renderPage()
-    await screen.findByText('Card roster')
+    await screen.findByRole('heading', { name: /Rewards matrix/ })
     expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
   })
 
@@ -772,7 +777,7 @@ describe('CreditCardsPage — owner chips and the household advantage', () => {
 
   it('shows the advantage tile only when merging genuinely wins', async () => {
     renderPage()
-    await screen.findByText('Card roster')
+    await screen.findByRole('heading', { name: /Rewards matrix/ })
     // The fixture: Ed holds VX + SavorOne, Sam holds RH Gold (3x Dining, no fee). Ed alone
     // already wins Dining with SavorOne's 3x, so RH Gold adds nothing — no tile.
     expect(screen.queryByText('Household wallet advantage')).toBeNull()
@@ -786,7 +791,7 @@ describe('CreditCardsPage — owner chips and the household advantage', () => {
       { id: 36, card_id: 4, category_id: 10, multiplier: '5.00', note: null, monthly_cap: null },
     ])
     renderPage()
-    await screen.findByText('Card roster')
+    await screen.findByRole('heading', { name: /Rewards matrix/ })
     const tile = (await screen.findByText('Household wallet advantage')).closest(
       '.stat-tile',
     ) as HTMLElement
@@ -804,16 +809,35 @@ describe('CreditCardsPage — owner chips and the household advantage', () => {
   })
 })
 
-describe('CreditCardsPage — section order (2026-08-31 audit)', () => {
-  it('consult before manage: matrix, worth-keeping, line history, then the CRUD panels', async () => {
+describe('CreditCardsPage — task views', () => {
+  it('opens rewards first and makes line history and management reachable', async () => {
     seedHappyPath()
     renderPage()
     const matrix = await screen.findByRole('heading', { name: /Rewards matrix/ })
     const value = screen.getByRole('heading', { name: /worth keeping/i })
-    const line = screen.getByRole('heading', { name: /Credit line history/ })
+    expectInDocumentOrder(matrix, value)
+    expect(screen.queryByRole('heading', { name: /Card roster/ })).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Credit lines' }))
+    expect(screen.getByRole('heading', { name: /Credit line history/ })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: /Rewards matrix/ })).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
     const roster = screen.getByRole('heading', { name: /Card roster/ })
     const categories = screen.getByRole('heading', { name: /Categories & weights/ })
-    expectInDocumentOrder(matrix, value, line, roster, categories)
+    expectInDocumentOrder(roster, categories)
+    expect(screen.getAllByRole('tabpanel')).toHaveLength(1)
+  })
+
+  it('retains an unfinished card edit across tasks and Add card opens management', async () => {
+    renderPage()
+    await screen.findByRole('heading', { name: /Rewards matrix/ })
+    fireEvent.click(screen.getByRole('button', { name: '+ Add card' }))
+    const name = await screen.findByLabelText('Card name')
+    fireEvent.change(name, { target: { value: 'Travel card draft' } })
+    fireEvent.click(screen.getByRole('tab', { name: 'Rewards' }))
+    expect(screen.queryByRole('heading', { name: /Card roster/ })).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
+    expect((screen.getByLabelText('Card name') as HTMLInputElement).value).toBe('Travel card draft')
+    expect(createCreditCard).not.toHaveBeenCalled()
   })
 })
 

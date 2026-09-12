@@ -103,10 +103,10 @@ describe('projection scenario codec', () => {
 
   it('maps the compare rows onto the payload', () => {
     expect(COMPARE_ROWS.map((r) => r.key)).toEqual([
-      'fi_target', 'fi_ratio', 'fi_month', 'coast_fi_month', 'fi_probability', 'fi_month_p10', 'fi_month_p50', 'fi_month_p90', 'monthly_contribution',
+      'years', 'fi_target', 'fi_ratio', 'fi_month', 'coast_fi_month', 'fi_probability', 'fi_month_p10', 'fi_month_p50', 'fi_month_p90', 'monthly_contribution',
     ])
     expect(projectionValue(echo, 'fi_target')).toBe('1500000.00')
     expect(projectionValue(echo, 'coast_fi_month')).toBeNull()
-    expect(projectionValue(echo, 'years')).toBeNull()
+    expect(projectionValue(echo, 'years')).toBe('30')
   })
 })

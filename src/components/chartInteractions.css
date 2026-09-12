@@ -1,0 +1,21 @@
+.chart-card-slot { min-width: 0; }
+.chart-expanded-dialog { position: fixed; inset: 24px; width: calc(100vw - 48px); max-width: none; height: calc(100vh - 48px); max-height: none; margin: 0; padding: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; overflow: auto; }
+.chart-expanded-dialog::backdrop { background: #0009; }
+.chart-expanded-dialog .chart-card { border: 0; border-radius: 0; }
+.chart-expanded-dialog .chart-card-header { position: sticky; top: 0; z-index: 1; background: var(--surface); padding-bottom: .5rem; }
+.chart-card-utility { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; width: 100%; }
+.chart-card-utility .button { padding: .25rem .55rem; font-size: .75rem; }
+.chart-card-utility .chart-export { margin-left: auto; }
+.chart-independent-range { color: var(--muted); font-size: .75rem; }
+.chart-selection-summary { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; padding: .55rem .7rem; margin-top: .6rem; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); font-size: .8rem; }
+.chart-selection-summary > span { flex: 1; }
+.chart-selection-summary .button { padding: .2rem .4rem; font-size: .75rem; }
+.chart-inline-selection { margin-top: .7rem; padding: .8rem; border: 1px solid var(--border); border-radius: 8px; }
+.chart-inline-selection .metric-receipt-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 1.4rem; }
+.chart-export-menu { position: relative; }
+.chart-export-popover { position: absolute; top: calc(100% + 5px); right: 0; z-index: 10; display: flex; flex-direction: column; min-width: 155px; padding: .3rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px #0003; }
+.chart-export-popover button { background: none; color: var(--text); border: 0; text-align: left; padding: .5rem .6rem; border-radius: 4px; font-size: .8rem; cursor: pointer; }
+.chart-export-popover button:hover, .chart-export-popover button:focus-visible { background: var(--surface); outline: 2px solid var(--accent); outline-offset: -2px; }
+.chart-table tr.is-selected { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.chart-row-actions { display: flex; gap: .4rem; }
+.chart-row-actions button { font-size: .75rem; padding: .2rem .45rem; }

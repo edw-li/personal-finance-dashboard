@@ -10,6 +10,7 @@ import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
 import LandingRedirect from './prefs/LandingRedirect'
 import SessionPrefs from './prefs/SessionPrefs'
+import DetailPanelProvider from './components/details/DetailPanelProvider'
 
 // Route-level splitting (Plans 3-5 deferred it here): echarts + each page leave the entry
 // chunk; Login and the 404 stay eager (first paint must not wait on a chunk). The import
@@ -39,7 +40,9 @@ export default function App() {
             <Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route element={<ProtectedRoute />}>
-                <Route element={<Layout />}>
+                {/* Detail history belongs to the signed-in shell. Unmount the whole
+                    stack on logout, including evidence opened from another panel. */}
+                <Route element={<DetailPanelProvider><Layout /></DetailPanelProvider>}>
                   <Route
                     path="/"
                     element={

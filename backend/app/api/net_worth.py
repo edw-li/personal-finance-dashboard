@@ -1,5 +1,4 @@
 from datetime import date
-from decimal import Decimal
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -25,10 +24,9 @@ from app.schemas.net_worth import (
     SummaryOut,
     TimeseriesOut,
 )
-from app.services import clock
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
-from app.services.derived_accounts import derived_parent_balances
-from app.services.money import mom_pct, quantize_money, require_first_of_month
+from app.services.money import mom_pct, require_first_of_month
+from app.services.month_writes import write_balances
 from app.services.net_worth_calc import (
     ZERO,
     group_totals_for,
@@ -432,137 +430,9 @@ async def put_month(
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> MonthUpsertResult:
-    """Upsert a month's balances, deriving every parent-with-components as it writes.
-
-    Note for readers of the counts and the change log: ANY put on a month that holds
-    components re-derives its parents, so a meta-only or single-row save can report extra
-    `updated` rows (and log them) for parents nobody typed. That is deliberate — a month
-    you touch is left consistent — and it is why a save's row count can exceed the
-    payload's length.
-    """
-    require_first_of_month(month)
-    ids = [entry.account_id for entry in body.balances]
-    if len(set(ids)) != len(ids):
-        raise HTTPException(status_code=422, detail="duplicate account_id in balances")
-    # Validate everything BEFORE any write so a rejected body creates no snapshot.
-    quantized: dict[int, Decimal] = {
-        entry.account_id: quantize_money(entry.balance, f"balance[account_id={entry.account_id}]")
-        for entry in body.balances
-    }
-    # The whole table, not just the submitted ids: derivation needs every account's
-    # is_component/parent_account_id, and the refusal sentence needs the parent's NAME.
-    accounts = list((await db.execute(select(Account))).scalars().all())
-    by_id = {account.id: account for account in accounts}
-    missing = sorted(set(ids) - set(by_id))
-    if missing:
-        raise HTTPException(status_code=422, detail=f"unknown account_id(s): {missing}")
-
-    snapshot = (
-        await db.execute(select(NetWorthSnapshot).where(NetWorthSnapshot.month == month))
-    ).scalar_one_or_none()
-    # The month's stored rows are read BEFORE the snapshot is created: a derivation refusal
-    # must not leave a flushed snapshot behind, and the tests share one session with the app,
-    # so even an uncommitted insert would be visible to the next request.
-    existing = (
-        {}
-        if snapshot is None
-        else {
-            row.account_id: row
-            for row in (
-                await db.execute(
-                    select(AccountBalance).where(AccountBalance.snapshot_id == snapshot.id)
-                )
-            ).scalars()
-        }
-    )
-    # Spec §5: a parent with components has no balance of its own — it IS the sum of its
-    # components this month. The payload wins; a component the payload leaves out falls back
-    # to what the month already stores, and one absent from both contributes nothing. Every
-    # flagged+linked component with a value counts, ACTIVE OR NOT: deactivation stops future
-    # entry, it does not remove the money a closed bucket still holds this month.
-    merged = {account_id: row.balance for account_id, row in existing.items()} | quantized
-    derived = derived_parent_balances(accounts, merged)
-    for parent_id, total in sorted(derived.items()):
-        submitted = quantized.get(parent_id)
-        if submitted is not None and submitted != total:
-            # Storing a typed total that contradicts the components on the same screen is
-            # exactly the drift this program removes — name the value the server would keep.
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"{by_id[parent_id].name} is derived from its components ({total}); "
-                    "leave it out or send the components"
-                ),
-            )
-    # A parent submitted EQUAL to the sum is accepted and ignored: the union below simply
-    # writes the derived value, which is the same number.
-    to_write = quantized | derived
-
-    snapshot_created = snapshot is None
-    if snapshot is None:
-        if not body.balances:
-            # An empty month would poison the summary KPI and the coverage ribbon.
-            # DELETE /months/{month} exists now (2026-08-31 spec §B2), but the refusal
-            # stays: an accidental empty create should not need an undo. Meta-only
-            # PUTs remain legal on months that already exist.
-            raise HTTPException(
-                status_code=422,
-                detail="refusing to create an empty month — include at least one balance",
-            )
-        snapshot = NetWorthSnapshot(
-            month=month,
-            recorded_on=body.recorded_on or clock.product_today(),
-            notes=body.notes,
-        )
-        db.add(snapshot)
-        await db.flush()
-        batch.record_insert(snapshot, month=month)
-    else:
-        provided = body.model_fields_set
-        if "recorded_on" in provided:
-            snapshot.recorded_on = body.recorded_on
-        if "notes" in provided:
-            snapshot.notes = body.notes
-
-    created = updated = unchanged = 0
-    new_rows: list[AccountBalance] = []
-    for account_id, value in to_write.items():
-        row = existing.get(account_id)
-        if row is None:
-            row = AccountBalance(snapshot_id=snapshot.id, account_id=account_id, balance=value)
-            db.add(row)
-            new_rows.append(row)
-            created += 1
-        elif row.balance != value:
-            before = row_image(row)
-            row.balance = value
-            batch.record_update(row, before, month=month)
-            updated += 1
-        else:
-            unchanged += 1
-    if new_rows:
-        await db.flush()  # ids for the insert images
-        for row in new_rows:
-            batch.record_insert(row, month=month)
-    # Meta-only edits (recorded_on, notes) are deliberately not logged (spec section 9).
-    batch.label = (
-        f"Entered {month:%b %Y} balances — {created} accounts"
-        if snapshot_created
-        else f"Saved {month:%b %Y} balances — {created + updated} updated"
-    )
-    batch_id = await batch.commit()
-    return MonthUpsertResult(
-        month=month,
-        snapshot_created=snapshot_created,
-        created=created,
-        updated=updated,
-        unchanged=unchanged,
-        derived=[
-            BalanceEntry(account_id=account_id, balance=value)
-            for account_id, value in sorted(derived.items())
-        ],
-        batch_id=batch_id,
-    )
+    result = await write_balances(month, body, db, batch)
+    result.batch_id = await batch.commit()
+    return result
 
 
 @router.delete("/months/{month}", status_code=204)

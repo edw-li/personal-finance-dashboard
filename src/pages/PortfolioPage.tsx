@@ -1,3 +1,5 @@
+import { useDetailPanel } from '../components/details/DetailPanelProvider'
+import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { ApiError, describeError } from '../api/client'
@@ -37,6 +39,7 @@ import PageFrame from '../components/shell/PageFrame'
 import ScopeBar from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
+import { metricReceipt } from '../utils/metricReceipt'
 import { useArrivalParam, useArrivalValue } from '../components/useArrivalParam'
 import { usePriceRefresh } from '../components/usePriceRefresh'
 import { rangeZoom, resolvedWindow } from '../charts/timeZoom'
@@ -63,9 +66,8 @@ import './PortfolioPage.css'
 
 type Tab = 'transactions' | 'dividends' | 'securities' | 'realized'
 
-// The ?tab= arrival vocabulary: the three non-default tabs (arriving at the default
-// needs no command). Module-level so the hook's deps stay identity-stable.
-const TAB_ARRIVALS: readonly Tab[] = ['dividends', 'securities', 'realized']
+// Explicit arrivals also reopen Transactions after another record editor was visited.
+const TAB_ARRIVALS: readonly Tab[] = ['transactions', 'dividends', 'securities', 'realized']
 
 // Keyed by the fetch parameters, exactly like NetWorthPage's netWorthKey: an owner switch
 // is a DIFFERENT snapshot. 'all' spells the household view so the key can never collide
@@ -93,7 +95,13 @@ interface PortfolioSnapshot {
   refreshStatus: RefreshStatus
 }
 
+const PAGE_SECTIONS = [{"id":"overview","label":"Overview"},{"id":"holdings","label":"Holdings"},{"id":"allocation","label":"Allocation"},{"id":"income","label":"Income"},{"id":"manage","label":"Manage"}] as const
+
 export default function PortfolioPage() {
+  const detailPanel = useDetailPanel()
+  const openDetailPanel = detailPanel?.open
+  const closeDetailPanel = detailPanel?.close
+  const views = useLocalSections(PAGE_SECTIONS, 'overview', { resolveLegacy: ({ searchParams }) => searchParams.has('ticker') ? 'holdings' : searchParams.get('tab') === 'dividends' ? 'income' : ['transactions', 'securities', 'realized'].includes(searchParams.get('tab') ?? '') ? 'manage' : null })
   // The page's ownership scope and performance window both come from the URL now
   // (2026-09-03 shell spec §6); the sticky ScopeBar below writes them.
   const { scope } = useScope({ owner: true, range: true })
@@ -138,7 +146,7 @@ export default function PortfolioPage() {
   const pendingRecordsArrival = useRef(false)
   const recordsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const arriveOnTab = useCallback((value: Tab) => {
-    setTab(value)
+    setTab(value === 'dividends' ? 'transactions' : value)
     pendingRecordsArrival.current = true
   }, [])
   useArrivalParam('tab', TAB_ARRIVALS, arriveOnTab)
@@ -155,8 +163,12 @@ export default function PortfolioPage() {
     // caret straight back out of the form.
     recordsTimer.current = setTimeout(() => {
       // Optional-call, like HoldingDetailPanel: jsdom has no scrollIntoView.
-      strip.scrollIntoView?.({ block: 'start' })
-      strip.querySelector<HTMLElement>('form input, form select')?.focus()
+      const field = Array.from(strip.querySelectorAll<HTMLElement>('form input:not([type="hidden"]):not([disabled]), form select:not([disabled])'))
+        .find((element) => !element.closest('[hidden]'))
+      if (field) {
+        strip.scrollIntoView?.({ block: 'start' })
+        field.focus()
+      }
     }, 0)
   })
   useEffect(() => () => clearTimeout(recordsTimer.current), [])
@@ -196,7 +208,7 @@ export default function PortfolioPage() {
   // 'joint' — one type on the wire beats a union.
   useAssistantView({
     owner: owner === null ? null : String(owner),
-    tab,
+    tab: views.section === 'income' ? 'dividends' : tab,
     ticker: detailTicker,
   })
   // (The household fetch that fed the old owner row belongs to the ScopeBar now, and it
@@ -421,11 +433,11 @@ export default function PortfolioPage() {
     return base === null
       ? null
       : {
-          ...base,
-          // startValue indexes history.dates; the appended live category sits at the
-          // END, so the indices are unshifted and the window runs out to the ping.
-          dataZoom: rangeZoom(history.dates, range),
-        }
+        ...base,
+        // startValue indexes history.dates; the appended live category sits at the
+        // END, so the indices are unshifted and the window runs out to the ping.
+        dataZoom: rangeZoom(history.dates, range),
+      }
   }, [history, holdings, securities, transactions, dividends, dividendEvents, range, legendSelected, owner])
 
   // Resolved target for EChart's animated zoom path — memoized so the wrapper's
@@ -445,6 +457,12 @@ export default function PortfolioPage() {
     () => holdings?.holdings.find((h) => h.ticker === detailTicker) ?? null,
     [holdings, detailTicker],
   )
+
+  useEffect(() => {
+    if (detailHolding === null || views.section !== 'holdings') { closeDetailPanel?.('portfolio-holding'); return }
+    openDetailPanel?.({ id: 'portfolio-holding', title: detailHolding.ticker, subtitle: 'Holding details', content: <HoldingDetailPanel key={detailHolding.security_id} holding={detailHolding} transactions={transactions} dividends={dividends} />, onClose: () => setDetailTicker(null) })
+  }, [detailHolding, transactions, dividends, views.section, openDetailPanel, closeDetailPanel])
+  useEffect(() => () => closeDetailPanel?.('portfolio-holding'), [closeDetailPanel, scope.owner])
 
   return (
     <div className="page portfolio-page">
@@ -558,6 +576,8 @@ export default function PortfolioPage() {
           ],
         }}
       >
+        <LocalSectionNav state={views} label="Portfolio views" />
+
         {holdings !== null && (
           <>
             {totals && (
@@ -565,6 +585,12 @@ export default function PortfolioPage() {
                 <StatTile
                   label="Portfolio value"
                   value={formatCurrency(totals.market_value)}
+                  evidence={metricReceipt({ id: 'portfolio_market_value', label: 'Portfolio value', value: totals.market_value,
+                    definition: 'Sum of current shares multiplied by each holding’s latest available quote. Holdings without a price remain unpriced; quote dates may differ from the refresh time.',
+                    scope: owner ?? 'Household', as_of: holdings?.as_of ?? null, completeness: totals.unpriced_count ? 'partial' : 'complete',
+                    source_link: `/portfolio?section=holdings${owner === null ? '' : `&owner=${owner}`}`,
+                    components: [{ label: 'Unpriced holdings', value: totals.unpriced_count, unit: 'count' }],
+                    warnings: holdings?.latest_quote_at ? [`Newest quote: ${holdings.latest_quote_at}. The as-of date above is the oldest available quote.`] : ['No quote dates are available.'] })}
                   // Fresh paints only (spec §8); a decimal-string amount, so Number() for the ease.
                   countUp={
                     !fromCache
@@ -583,6 +609,10 @@ export default function PortfolioPage() {
                 <StatTile
                   label="Unrealized gain"
                   value={formatCurrency(totals.unrealized_gl)}
+                  evidence={metricReceipt({ id: 'portfolio_unrealized_gain', label: 'Unrealized gain', value: totals.unrealized_gl,
+                    definition: 'The portfolio service’s current market value less the matched remaining average-cost basis. Missing prices reduce coverage.',
+                    scope: owner ?? 'Household', as_of: holdings?.as_of ?? null, completeness: totals.unpriced_count ? 'partial' : 'complete',
+                    source_link: `/portfolio?section=holdings${owner === null ? '' : `&owner=${owner}`}` })}
                   delta={totals.unrealized_gl_pct !== null ? formatPct(totals.unrealized_gl_pct) : undefined}
                   tone={toneOf(totals.unrealized_gl)}
                   hint="Market value minus cost basis across current holdings."
@@ -598,152 +628,166 @@ export default function PortfolioPage() {
                 <StatTile
                   label="Cost basis"
                   value={formatCurrency(totals.cost_basis)}
+                  evidence={metricReceipt({ id: 'portfolio_cost_basis', label: 'Cost basis', value: totals.cost_basis,
+                    definition: 'Remaining acquisition cost of current holdings, including recorded fees, using the existing average-cost calculation.',
+                    scope: owner ?? 'Household', source_link: `/portfolio?section=manage${owner === null ? '' : `&owner=${owner}`}` })}
                   hint="What the current holdings cost to acquire, fees included, average-cost method."
                 />
                 <StatTile
-                  label="Dividends collected"
+                  label="Dividend entries"
                   value={formatCurrency(totals.dividends_collected)}
+                  evidence={metricReceipt({ id: 'dividend_entries', label: 'Dividend entries', value: totals.dividends_collected,
+                    definition: 'Total of recorded manual and automatic dividend entries. Automatic records use the ex-dividend date and an estimated amount; they do not confirm payment or receipt.',
+                    scope: owner ?? 'Household', source_link: `/portfolio?section=income${owner === null ? '' : `&owner=${owner}`}`,
+                    completeness: 'mixed', components: [{ label: 'Expected annual income at current rates', value: totals.annual_income, unit: 'USD' }],
+                    warnings: ['Expected annual income is a forward estimate and is separate from the total of recorded entries.'] })}
                   delta={`${formatCurrency(totals.annual_income)}/yr expected`}
                   tone="neutral"
                   hint="Every dividend logged — auto-ingested and manual — with the expected annual income at current rates."
                 />
               </div>
             )}
-            <ChartCard
-              title="Performance"
-              hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance; VOO (your contributions) invests every inferred contribution instead. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Event markers annotate dated buys and sells, logged dividends, and older ex-dividend dates (per-share only — dollar amounts that old are unknowable from undated imports)."
-              ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
-              option={performanceOption}
-              empty="No performance history yet — import your workbook in Settings to load it."
-              exportName="portfolio-performance"
-              csv={history === null ? undefined : () => portfolioHistoryCsv(history)}
-              height={300}
-              zoomable
-              onLegendChange={onLegendChange}
-              onDataZoom={onZoomWindow}
-              zoomWindow={zoomWindow}
-              footer={
-                <>
-                  {/* True whether or not there is a history to draw, and only once a chip has
+            <LocalSectionPanel state={views} section="overview">
+              <ChartCard
+                title="Performance"
+                hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance; VOO (your contributions) invests every inferred contribution instead. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Event markers annotate dated buys and sells, logged dividends, and older ex-dividend dates (per-share only — dollar amounts that old are unknowable from undated imports)."
+                ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
+                option={performanceOption}
+                empty="No performance history yet — import your workbook in Settings to load it."
+                exportName="portfolio-performance"
+                csv={history === null ? undefined : () => portfolioHistoryCsv(history)}
+                height={300}
+                zoomable
+                onLegendChange={onLegendChange}
+                onDataZoom={onZoomWindow}
+                zoomWindow={zoomWindow}
+                footer={
+                  <>
+                    {/* True whether or not there is a history to draw, and only once a chip has
                       actually narrowed the rest of the page (spec §5 — on All it would be
                       noise). What the scope row's ⓘ already says is not repeated; what is left
                       is the part that only makes sense standing on this card — which panels the
                       chips DO scope, and the dot that goes missing. */}
-                  {owner !== null && (
-                    <p className="hint">
-                      The owner chips scope holdings, allocation, dividends, transactions and
-                      realized gains — not this chart, the sparklines or price refresh, which
-                      always cover the whole household. Person views omit the live price dot
-                      because the history is household-wide.
-                    </p>
-                  )}
-                  {/* Two benchmark legs, one distinction: the baseline invests only the
+                    {owner !== null && (
+                      <p className="hint">
+                        The owner chips scope holdings, allocation, dividends, transactions and
+                        realized gains — not this chart, the sparklines or price refresh, which
+                        always cover the whole household. Person views omit the live price dot
+                        because the history is household-wide.
+                      </p>
+                    )}
+                    {/* Two benchmark legs, one distinction: the baseline invests only the
                       STARTING balance; the contribution-matched line adds every inferred
                       flow. Said here so neither gap reads as outperformance. */}
-                  <p className="hint">
-                    S&amp;P 500 baseline tracks the starting balance invested in VOO — later
-                    contributions are not added to it. VOO (your contributions) adds each
-                    inferred contribution as it lands.
-                  </p>
-                </>
-              }
-            />
-            <section className="panel">
-              <div className="panel-title-row">
-                <h2 className="panel-title">
-                  {/* The section keeps its NAME while drilled — "where am I" survives the
-                      swap (SpendingPage's header does the same dance). */}
-                  {detailHolding ? `Holdings — ${detailHolding.ticker}` : 'Holdings'}
-                  <InfoHint text="One row per held security: price, value, weight, gains, yields, and money-weighted return. XIRR needs dated transactions — imported rows have none until backfilled." />
-                </h2>
-                {detailHolding && (
-                  <button type="button" className="button" onClick={() => setDetailTicker(null)}>
-                    All holdings
-                  </button>
-                )}
-              </div>
-              {detailHolding ? (
-                // IN PLACE of the table, not below it: a panel appended under ~25 rows was
-                // born off-screen. Keyed by SECURITY so a remount resets the span to 1Y and
-                // starts a fresh history feed (the taxes editors' keying lesson) — moot
-                // while the table is hidden, load-bearing again the day the detail gains an
-                // in-place way to switch tickers.
-                <HoldingDetailPanel
-                  key={detailHolding.security_id}
-                  holding={detailHolding}
-                  transactions={transactions}
-                  dividends={dividends}
-                />
-              ) : (
-                <>
-                  {totals && totals.unpriced_count > 0 && (
                     <p className="hint">
-                      {totals.unpriced_count} holding(s) have no price yet — run a refresh or
-                      set a manual price in Securities.
+                      S&amp;P 500 baseline tracks the starting balance invested in VOO — later
+                      contributions are not added to it. VOO (your contributions) adds each
+                      inferred contribution as it lands.
                     </p>
+                  </>
+                }
+              />
+            </LocalSectionPanel>
+            <LocalSectionPanel state={views} section="holdings">
+              <section className="panel">
+                <div className="panel-title-row">
+                  <h2 className="panel-title">
+                    {/* The section keeps its NAME while drilled — "where am I" survives the
+                      swap (SpendingPage's header does the same dance). */}
+                    {detailHolding ? `Holdings — ${detailHolding.ticker}` : 'Holdings'}
+                    <InfoHint text="One row per held security: price, value, weight, gains, yields, and money-weighted return. XIRR needs dated transactions — imported rows have none until backfilled." />
+                  </h2>
+                  {detailHolding && (
+                    <button type="button" className="button" onClick={() => setDetailTicker(null)}>
+                      All holdings
+                    </button>
                   )}
-                  <p className="drill-hint">Click a holding to expand its detail.</p>
-                  <HoldingsTable
-                    holdings={holdings.holdings}
-                    sparklines={sparklines}
-                    selectedTicker={detailTicker}
-                    // Functional toggle: normally the swap hides the table the moment a row
-                    // is picked, but a vanished ticker leaves the table up with a stale
-                    // selection — re-clicking that row must close, not reopen.
-                    onSelect={(ticker) =>
-                      setDetailTicker((current) => (current === ticker ? null : ticker))
-                    }
+                </div>
+                {!detailPanel && detailHolding && (
+                  // Standalone embeds retain an inline inspector; the application uses the
+                  // shared detail surface while leaving the selected holding in view.
+                  <HoldingDetailPanel
+                    key={detailHolding.security_id}
+                    holding={detailHolding}
+                    transactions={transactions}
+                    dividends={dividends}
                   />
-                </>
-              )}
-            </section>
-            <AllocationPanel
-              holdings={holdings.holdings}
-              byType={byType}
-              byAccount={byAccount}
-              onSelectTicker={setDetailTicker}
-            />
+                )}
+                {(
+                  <>
+                    {totals && totals.unpriced_count > 0 && (
+                      <p className="hint">
+                        {totals.unpriced_count} holding(s) have no price yet — run a refresh or
+                        set a manual price in Securities.
+                      </p>
+                    )}
+                    <p className="drill-hint">Select a holding to inspect its history and income.</p>
+                    <HoldingsTable
+                      holdings={holdings.holdings}
+                      sparklines={sparklines}
+                      selectedTicker={detailTicker}
+                      // Functional toggle: normally the swap hides the table the moment a row
+                      // is picked, but a vanished ticker leaves the table up with a stale
+                      // selection — re-clicking that row must close, not reopen.
+                      onSelect={(ticker) =>
+                        setDetailTicker((current) => (current === ticker ? null : ticker))
+                      }
+                    />
+                  </>
+                )}
+              </section>
+            </LocalSectionPanel>
+            <LocalSectionPanel state={views} section="allocation">
+              <AllocationPanel
+                holdings={holdings.holdings}
+                owner={scope.owner}
+                byType={byType}
+                byAccount={byAccount}
+                onSelectTicker={(ticker) => { setDetailTicker(ticker); views.setSection('holdings') }}
+              />
+            </LocalSectionPanel>
             {/* The ?tab= arrival's scroll-and-focus target: the strip alone would leave the
                 panel it selects (and that panel's form) off-screen below it. */}
-            <div id="portfolio-records">
-              {/* group, not tablist: these buttons toggle panels below rather than owning
+            <div id="portfolio-records"><LocalSectionPanel state={views} section="income">
+              <DividendsPanel
+                securities={securities}
+                dividends={dividends}
+                annualIncome={totals?.annual_income ?? null}
+                accounts={accountLabels}
+                primaryName={primaryName}
+                onChanged={reload}
+              />
+            </LocalSectionPanel><LocalSectionPanel state={views} section="manage">
+                <div className="portfolio-manage">
+                  {/* group, not tablist: these buttons toggle panels below rather than owning
                   tabpanels, and the aria-labels keep "Dividends" from colliding with the
                   holdings table's sort header of the same name. */}
-              <div className="tab-row" role="group" aria-label="Portfolio records">
-                {(['transactions', 'dividends', 'securities', 'realized'] as const).map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    aria-label={`Show ${t}`}
-                    aria-pressed={tab === t}
-                    onClick={() => setTab(t)}
-                  >
-                    {t[0].toUpperCase() + t.slice(1)}
-                  </button>
-                ))}
-              </div>
-              {tab === 'transactions' && (
-                <TransactionsPanel
-                  securities={securities}
-                  transactions={transactions}
-                  accounts={accountLabels}
-                  primaryName={primaryName}
-                  onChanged={reload}
-                />
-              )}
-              {tab === 'dividends' && (
-                <DividendsPanel
-                  securities={securities}
-                  dividends={dividends}
-                  annualIncome={totals?.annual_income ?? null}
-                  accounts={accountLabels}
-                  primaryName={primaryName}
-                  onChanged={reload}
-                />
-              )}
-              {tab === 'securities' && <SecuritiesPanel securities={securities} onChanged={reload} />}
-              {tab === 'realized' && realized && <RealizedPanel realized={realized} />}
-            </div>
+                  <div className="tab-row" role="group" aria-label="Portfolio records">
+                    {(['transactions', 'securities', 'realized'] as const).map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        aria-label={`Show ${t}`}
+                        aria-pressed={tab === t}
+                        onClick={() => setTab(t)}
+                      >
+                        {t[0].toUpperCase() + t.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                  <div hidden={tab !== 'transactions'}>
+                    <TransactionsPanel
+                      securities={securities}
+                      transactions={transactions}
+                      accounts={accountLabels}
+                      primaryName={primaryName}
+                      onChanged={reload}
+                    />
+                  </div>
+                  <div hidden={tab !== 'securities'}><SecuritiesPanel securities={securities} onChanged={reload} /></div>
+                  <div hidden={tab !== 'realized'}>{realized && <RealizedPanel realized={realized} />}</div>
+                </div>
+              </LocalSectionPanel></div>
           </>
         )}
       </PageFrame>

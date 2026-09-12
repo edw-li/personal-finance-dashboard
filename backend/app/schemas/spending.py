@@ -90,13 +90,17 @@ class CategorySeries(BaseModel):
     # aligned with MatrixOut.months; None = unbudgeted that month (no row on/before it,
     # or a NULL end-marker).
     budgets: list[Decimal | None]
+    # Previous 12 calendar months, excluding the focus month and ineligible/missing
+    # category entries. An explicitly entered zero participates.
+    comparison_average: list[Decimal | None] = []
+    comparison_count: list[int] = []
 
 
 class MatrixOut(BaseModel):
     months: list[date]
     categories: list[CategoryOut]
     series: list[CategorySeries]
-    # EVERY category, every kind — the spending page's total line, unchanged.
+    # Raw entry total across every category kind, retained for reconciliation.
     totals: list[Decimal]
     net_pay: list[Decimal | None]
     # The CASH savings rate (2026-09-04 honest-numbers spec §2): this field keeps its name
@@ -119,6 +123,14 @@ class MatrixOut(BaseModel):
     payroll_savings: list[Decimal | None]
     total_savings: list[Decimal | None]
     total_savings_rate: list[Decimal | None]
+    # Approved living-spending presentation and explicit completed-month policy.
+    cash_outflow: list[Decimal] = []
+    comparison_average: list[Decimal | None] = []
+    comparison_count: list[int] = []
+    review_state: list[str] = []
+    eligible_spending: list[bool] = []
+    eligible_savings: list[bool] = []
+    default_month: date | None = None
 
 
 class YearCategoryTotal(BaseModel):

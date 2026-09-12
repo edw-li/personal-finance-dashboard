@@ -2,6 +2,8 @@ from datetime import date
 
 from pydantic import BaseModel
 
+from app.schemas.month_review import MonthReviewOut
+
 
 class CoverageLatestOut(BaseModel):
     """The newest month each feed covers — None when the feed has nothing. `spending` is
@@ -29,3 +31,8 @@ class CoverageOut(BaseModel):
     spending_missing: list[date]
     net_pay_missing: list[date]
     latest: CoverageLatestOut
+    review_months: list[MonthReviewOut] = []
+    default_month: date | None = None
+    adopted_on: date | None = None
+    eligible_spending: list[date] = []
+    eligible_savings: list[date] = []

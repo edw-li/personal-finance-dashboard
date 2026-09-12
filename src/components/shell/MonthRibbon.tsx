@@ -3,6 +3,8 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { formatMonth } from '../../utils/format'
 import { addMonths, lastNMonths } from '../../utils/months'
+import { REVIEW_LABELS } from '../../api/monthReview'
+import type { ReviewState } from '../../api/monthReview'
 import './shell.css'
 
 // The app's signature device, second edition (2026-09-03 shell spec §7): a twelve-month
@@ -14,6 +16,7 @@ import './shell.css'
 export interface RibbonCoverage {
   balances: ReadonlySet<string>
   spending: ReadonlySet<string>
+  reviews?: Record<string, ReviewState>
 }
 
 export const RIBBON_PAGE = 12
@@ -114,13 +117,15 @@ export default function MonthRibbon({
                   ? 'spending entered, balances missing'
                   : 'nothing entered'
         const figure = figures?.[month]
-        const label = `${formatMonth(month)} — ${figure ? `${figure} — ` : ''}${state}`
+        const reviewState = coverage?.reviews?.[month]
+        const label = `${formatMonth(month)} — ${figure ? `${figure} — ` : ''}${reviewState ? `${REVIEW_LABELS[reviewState]} · ` : ''}${state}`
         const classes = [
           'month-chip2',
           hasBalances ? 'has-balances' : '',
           hasSpending ? 'has-spending' : '',
           month === todayMonth ? 'is-today' : '',
           month === selected ? 'selected' : '',
+          reviewState ? `review-${reviewState}` : '',
         ]
           .filter(Boolean)
           .join(' ')

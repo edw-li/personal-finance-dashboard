@@ -1,3 +1,4 @@
+import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { describeError } from '../api/client'
@@ -63,7 +64,10 @@ interface CreditCardsSnapshot {
   accounts: AccountOut[]
 }
 
+const PAGE_SECTIONS = [{"id":"rewards","label":"Rewards"},{"id":"lines","label":"Credit lines"},{"id":"manage","label":"Manage"}] as const
+
 export default function CreditCardsPage() {
+  const views = useLocalSections(PAGE_SECTIONS, 'rewards', { resolveLegacy: ({ searchParams, hash }) => searchParams.get('add') === '1' || hash.includes('card-name') || hash.includes('categories') ? 'manage' : hash.includes('credit-line') ? 'lines' : null })
   const cached = getSnapshot<CreditCardsSnapshot>(SNAPSHOT_KEY)
   const [cards, setCards] = useState<CreditCardOut[] | null>(cached?.cards ?? null)
   const [categories, setCategories] = useState<RewardCategoryOut[] | null>(
@@ -324,7 +328,7 @@ export default function CreditCardsPage() {
         actions={
           <button
             className="button button-primary"
-            onClick={() => document.getElementById('card-name')?.focus()}
+            onClick={() => { views.setSection('manage', { removeParams: ['card'] }); requestAnimationFrame(() => document.getElementById('card-name')?.focus()) }}
           >
             + Add card
           </button>
@@ -336,7 +340,7 @@ export default function CreditCardsPage() {
           // default explanation of its own.
           <ScopeBar
             owner
-            ownerHint="A person's view is their own cards plus the joint ones — either of you can hold a joint card. Joint shows only the shared cards. The matrix, the tiles and the credit-line chart follow this; the roster below always lists every card, since it is where ownership is edited."
+            ownerHint="A person's view is their own cards plus the joint ones — either of you can hold a joint card. Joint shows only the shared cards. The matrix, the tiles and the credit-line chart follow this; Manage always lists every card, since it is where ownership is edited."
           />
         }
         resource={{
@@ -353,6 +357,8 @@ export default function CreditCardsPage() {
         }}
         skeleton={{ tiles: 3, cards: [{ span: 12, height: 320 }, { span: 12, height: 260 }] }}
       >
+        <LocalSectionNav state={views} label="CreditCards views" onChange={(section) => views.setSection(section, { removeParams: ['card'] })} />
+
         {activeCard ? (
           <CardDetail
             key={activeCard.id}
@@ -383,7 +389,7 @@ export default function CreditCardsPage() {
                   hint={
                     hasWeights
                       ? "What the whole lineup earns per year if every weighted category goes on its best card. An estimate from your spend weights — actual card usage isn't tracked."
-                      : 'No category has a spend weight yet, so there is nothing to add up. Map each reward category to a spending category or type an annual spend in Categories & weights below.'
+                      : 'No category has a spend weight yet, so there is nothing to add up. In Manage, map each reward category to a spending category or type an annual spend in Categories & weights.'
                   }
                 />
                 <StatTile
@@ -417,10 +423,8 @@ export default function CreditCardsPage() {
 
             {/* No `loading-dim` here any more — the frame dims the whole body while it revalidates. */}
             <div className="card-grid">
-              {/* Consult before manage (2026-08-31 audit): the matrix and the keep/drop and
-                  line-history answers lead; the roster and weights that parameterize them
-                  follow. The header's "+ Add card" still jumps straight to the roster form. */}
-              {activeCards.length > 0 && activeCategories.length > 0 ? (
+<LocalSectionPanel state={views} section="rewards" className="span-12 card-grid">
+{activeCards.length > 0 && activeCategories.length > 0 ? (
                 <RewardsMatrix
                   cards={activeCards}
                   categories={activeCategories}
@@ -439,17 +443,17 @@ export default function CreditCardsPage() {
                     <h2 className="eyebrow">Rewards matrix</h2>
                     <div className="empty-note">
                       The matrix appears once there is at least one active card and one category —
-                      add a card below
+                      add a card in Manage
                       {cards !== null && (categories ?? []).length === 0
                         ? ' and seed the categories'
                         : ''}
                       .
+                      {' '}<button type="button" className="button" onClick={() => views.setSection('manage')}>Manage cards and categories</button>
                     </div>
                   </div>
                 )
               )}
-
-              <ChartCard
+<ChartCard
                 title="Is each card worth keeping? (est.)"
                 hint="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. A $0 bar means the rest of the lineup already catches that spend. Needs at least one weighted category to say anything."
                 ariaLabel="Horizontal bars of each card's estimated net annual value"
@@ -457,7 +461,7 @@ export default function CreditCardsPage() {
                 empty={
                   hasWeights
                     ? 'No cards to value yet.'
-                    : 'No spend weights yet, so the optimizer values every card at $0 and nothing on this page is a verdict. In Categories & weights below, edit each reward category and either pick its spending category — its trailing 12-month spend becomes the weight, split evenly when several rows share one — or type an annual spend override. Rows with neither stay out of the $ math.'
+                    : 'No spend weights yet, so the optimizer values every card at $0 and nothing on this page is a verdict. Open Manage → Categories & weights to edit each reward category and either pick its spending category — its trailing 12-month spend becomes the weight, split evenly when several rows share one — or type an annual spend override. Rows with neither stay out of the $ math.'
                 }
                 exportName="card-value"
                 csv={() => cardValueCsv(valueRows)}
@@ -475,7 +479,9 @@ export default function CreditCardsPage() {
                   ) : undefined
                 }
               />
-              <ChartCard
+</LocalSectionPanel>
+<LocalSectionPanel state={views} section="lines" className="span-12 card-grid">
+<ChartCard
                 title="Credit line history"
                 hint="Each card's limit as a step line — level between changes, stepping at each dated event — plus the total line across active cards."
                 ariaLabel="Step chart of credit limits over time per card, with the total"
@@ -488,8 +494,9 @@ export default function CreditCardsPage() {
                   setLineLegend((current) => ({ ...current, ...selected }))
                 }
               />
-
-              {cards !== null && (
+</LocalSectionPanel>
+<LocalSectionPanel state={views} section="manage" className="span-12 card-grid">
+{cards !== null && (
                 <CardsPanel
                   cards={cards}
                   accounts={accounts}
@@ -497,8 +504,7 @@ export default function CreditCardsPage() {
                   onChanged={load}
                 />
               )}
-
-              {categories !== null && (
+{categories !== null && (
                 <CategoriesPanel
                   categories={categories}
                   cards={cards ?? []}
@@ -508,7 +514,8 @@ export default function CreditCardsPage() {
                   onChanged={load}
                 />
               )}
-            </div>
+</LocalSectionPanel>
+</div>
           </>
         )}
       </PageFrame>

@@ -20,9 +20,10 @@ import json
 import logging
 import zipfile
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
 from sqlalchemy import insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -209,13 +210,113 @@ def parse_tables(snapshot: LoadedSnapshot, *, user_id: int | None) -> ParsedTabl
                 raise SnapshotError(422, f"Snapshot value in {exc}") from None
         if name == "user_preferences":
             out = _rewrite_preferences(out, user_id, parsed.warnings)
+        elif name == "assistant_findings":
+            out = _rewrite_findings(out, user_id, parsed.warnings)
         parsed.rows[name] = out
+    _validate_allocation_metadata(parsed.rows)
     if snapshot.environment is not None and snapshot.environment != settings.environment:
         parsed.warnings.append(
             f"Snapshot was exported from a '{snapshot.environment}' environment; "
             f"this server is '{settings.environment}'"
         )
     return parsed
+
+
+def _rewrite_findings(
+    rows: list[dict[str, object]],
+    user_id: int | None,
+    warnings: list[str],
+) -> list[dict[str, object]]:
+    """Restore explicitly retained evidence verbatim, assigning it to the restoring user."""
+    from app.schemas.assistant_findings import FindingOut
+    from app.services.assistant_evidence import valid_source_link
+
+    if not rows:
+        return rows
+    if user_id is None:
+        warnings.append("assistant_findings skipped — no user to attach them to")
+        return []
+    out = []
+    for row in rows:
+        try:
+            checked = FindingOut.model_validate(
+                {
+                    **row,
+                    "created_at": row.get("created_at") or datetime.now(UTC),
+                }
+            )
+            if len(checked.title) > 160 or len(checked.content) > 32000:
+                raise ValueError("saved finding text exceeds its limit")
+            if len(checked.evidence) > 100 or len(json.dumps(checked.context)) > 32000:
+                raise ValueError("saved finding context exceeds its limit")
+            if any(not valid_source_link(metric.source_link) for metric in checked.evidence):
+                raise ValueError("saved evidence has an invalid application source")
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise SnapshotError(
+                422, "Saved finding evidence does not match the current schema"
+            ) from exc
+        out.append({**row, "user_id": user_id})
+    return out
+
+
+def _validate_allocation_metadata(tables: dict[str, list[dict[str, object]]]) -> None:
+    """JSON-backed target plans obey the same rules on restore and in their editor."""
+    from app.schemas.portfolio import AllocationTargetSave, ClassificationUpdate
+    from app.services.portfolio_allocation import (
+        ASSET_LABELS,
+        GEO_LABELS,
+        TYPE_LABELS,
+        UNKNOWN,
+        WRAPPERS,
+    )
+
+    people = {row["id"] for row in tables.get("people", [])}
+    for row in tables.get("allocation_target_sets", []):
+        try:
+            plan = AllocationTargetSave.model_validate(
+                {"state": row["state"], "targets": row["targets"]}
+            )
+            dimension = row["dimension"]
+            if dimension not in {"asset_class", "industry", "geography", "account", "type"}:
+                raise ValueError("unknown allocation dimension")
+            scope = row["scope_key"]
+            if scope not in {"household", "joint"}:
+                if (
+                    not isinstance(scope, str)
+                    or not scope.startswith("person:")
+                    or int(scope[7:]) not in people
+                ):
+                    raise ValueError("allocation owner is missing")
+            allowed = {
+                "asset_class": ASSET_LABELS,
+                "geography": GEO_LABELS,
+                "type": TYPE_LABELS,
+            }.get(dimension)
+            for target in plan.targets:
+                if allowed is not None and target.key not in allowed and target.key != UNKNOWN:
+                    raise ValueError("unknown allocation target category")
+                if dimension == "industry" and target.key.lower() in WRAPPERS:
+                    raise ValueError("a holding wrapper is not an industry")
+        except (ValidationError, ValueError, TypeError, KeyError) as exc:
+            raise SnapshotError(
+                422, "Allocation target plan is invalid or its owner is missing"
+            ) from exc
+    for row in tables.get("securities", []):
+        try:
+            ClassificationUpdate.model_validate(
+                {
+                    "asset_class": row.get("asset_class"),
+                    "industry": row.get("allocation_industry"),
+                    "geography": row.get("geography"),
+                    "note": row.get("classification_note"),
+                }
+            )
+            if row.get("classification_source") not in {None, "existing", "manual"}:
+                raise ValueError("unknown classification source")
+            if row.get("holding_type") in {"etf", "mutual_fund"} and row.get("allocation_industry"):
+                raise ValueError("fund industry requires constituent look-through")
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise SnapshotError(422, "Security allocation classification is invalid") from exc
 
 
 def _rewrite_preferences(

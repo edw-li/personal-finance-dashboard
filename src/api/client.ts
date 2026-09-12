@@ -7,6 +7,8 @@ const TOKEN_KEY = 'finance_token'
 // 15s: generous for a self-hosted API; without it a hung backend left token-bearing
 // users on a permanently blank page (Plan 1 forward note).
 const DEFAULT_TIMEOUT_MS = 15_000
+const pendingReads = new Map<string, Promise<unknown>>()
+let readGeneration = 0
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
@@ -111,6 +113,7 @@ function joinNouns(nouns: string[]): string {
 // /net-worth/accounts; and both the ESPP lots and the comp vesting schedule are valued at the
 // portfolio's latest quote, so a price refresh moves them.
 const MUTATION_FAMILIES: [prefix: string, families: string[]][] = [
+  ['/month-review', ['net-worth', 'spending', 'overview', 'projection', 'shell', 'credit-cards']],
   ['/spending', ['spending', 'overview', 'projection', 'shell', 'credit-cards']],
   ['/net-worth', ['net-worth', 'overview', 'projection', 'shell', 'spending', 'credit-cards']],
   ['/portfolio', ['portfolio', 'overview', 'calendar', 'espp', 'comp']],
@@ -134,6 +137,7 @@ const MUTATION_FAMILIES: [prefix: string, families: string[]][] = [
  *  old posture and wipes the whole cache: a new endpoint is stale-by-default, never
  *  silently wrong, and gets listed here only once someone reasons about its blast radius. */
 export function invalidateForMutation(path: string): void {
+  readGeneration += 1
   const hit = MUTATION_FAMILIES.find(([prefix]) => path.startsWith(prefix))
   if (hit === undefined) {
     clearSnapshots() // unknown path: correct beats clever
@@ -147,6 +151,17 @@ export function invalidateForMutation(path: string): void {
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const method = (options.method ?? 'GET').toUpperCase()
+  // Only identical default GETs share work. Caller-owned abort signals and headers keep
+  // their own request; auth and mutation generations prevent cross-session/stale joins.
+  if (method === 'GET' && Object.keys(options).length === 0) {
+    const key = `${getToken() ?? ''}:${readGeneration}:${path}`
+    const existing = pendingReads.get(key)
+    if (existing) return existing as Promise<T>
+    const pending = request<T>(path, options)
+    pendingReads.set(key, pending)
+    try { return await pending }
+    finally { if (pendingReads.get(key) === pending) pendingReads.delete(key) }
+  }
   try {
     return await request<T>(path, options)
   } finally {

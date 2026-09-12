@@ -4,6 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MonthlyUpdatePage from './MonthlyUpdatePage'
 import ToastProvider from '../components/ToastProvider'
 import { ApiError } from '../api/client'
+import * as monthReviewApi from '../api/monthReview'
+import type { MonthReview, MonthSaveResult } from '../api/monthReview'
+
+vi.mock('../api/monthReview', async importOriginal => ({
+  ...await importOriginal<typeof import('../api/monthReview')>(),
+  fetchMonthReview: vi.fn(), fetchMonthReviews: vi.fn(), saveMonthReview: vi.fn(), batchCloseMonths: vi.fn(),
+}))
+
+const reviewFixture = (month: string): MonthReview => ({
+  month, state: 'in_progress', input_revision: 'a'.repeat(64),
+  reviewed: { balances: false, spending: false, take_home: false },
+  coverage: { balances: true, spending: true, take_home: true, spending_nonzero: true, missing_account_ids: [], missing_category_ids: [] },
+  can_close: true, blockers: [], eligible_spending: false, eligible_savings: false, legacy_eligible: false,
+  closed_at: null, closed_by: null, source_link: `/update?month=${month}&step=review`,
+})
 
 vi.mock('../api/netWorth', () => ({
   deleteMonthBalances: vi.fn(),
@@ -102,6 +117,16 @@ const taxCategory = {
 }
 
 beforeEach(() => {
+  vi.mocked(monthReviewApi.fetchMonthReview).mockImplementation(async month => reviewFixture(month))
+  vi.mocked(monthReviewApi.fetchMonthReviews).mockResolvedValue({ adopted_on: '2026-09-01', default_month: '2026-08-01', months: [] })
+  // Existing entry-contract assertions inspect each section of the single coordinated body.
+  // These two spies are a mock-server adapter; the page only calls saveMonthReview.
+  vi.mocked(monthReviewApi.saveMonthReview).mockImplementation(async (month, body) => {
+    const balances = body.balances ? await netWorthApi.putMonthBalances(month, body.balances) : null
+    const spending = body.spending ? await spendingApi.putSpendingMonth(month, body.spending) : null
+    return { month, balances, spending, batch_id: balances?.batch_id ?? spending?.batch_id ?? null,
+      review: { ...reviewFixture(month), reviewed: body.reviewed, state: body.close ? 'closed' : 'in_progress' } }
+  })
   // The ScopeBar caches /coverage under a shell:* snapshot key that outlives a test.
   clearSnapshots()
   vi.mocked(fetchCoverage).mockResolvedValue({
@@ -214,8 +239,8 @@ it('walks balances -> spending -> review and submits both PUTs', async () => {
 
   // Step 3: preview totals, then save.
   await screen.findByText(/review & save/i)
-  expect(screen.getByText('$1,600.00')).toBeDefined() // net worth preview
-  fireEvent.click(screen.getByRole('button', { name: /save month/i }))
+  expect(screen.getAllByText('$1,600.00')[0]).toBeDefined() // net worth preview
+  fireEvent.click(screen.getByRole('button', { name: /save progress/i }))
 
   await waitFor(() => {
     expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
@@ -231,7 +256,7 @@ it('walks balances -> spending -> review and submits both PUTs', async () => {
       amounts: [{ category_id: 7, amount: '250.00' }],
     })
   })
-  await screen.findByText(/month saved/i)
+  await screen.findByText(/progress saved/i)
 })
 
 it('blocks Next while a balance is not a number', async () => {
@@ -294,8 +319,8 @@ it('forgets the draft once the month is saved', async () => {
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await screen.findByLabelText('Food')
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-  await screen.findByText(/month saved/i)
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
   first.unmount()
 
   renderWizard()
@@ -370,7 +395,7 @@ it('canonicalizes tolerant and =-expression entries into the PUT bodies', async 
   fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '=200+50' } })
   fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '9,000' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await waitFor(() => {
     // No blur ever fired (jsdom clicks do not blur): canonicalAmount at the wire
     // boundary is what keeps "$1,600.00" off a Decimal column.
@@ -560,7 +585,7 @@ it('clears a previously saved net pay when the box is blanked', async () => {
   const netPayBox = await screen.findByLabelText('Household take-home')
   fireEvent.change(netPayBox, { target: { value: '' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await waitFor(() => {
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith(
       '2026-08-01',
@@ -582,10 +607,10 @@ it('keeps sending the clear on the retry after a failed save', async () => {
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   fireEvent.change(await screen.findByLabelText('Household take-home'), { target: { value: '' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await screen.findByRole('alert')
 
-  fireEvent.click(screen.getByRole('button', { name: /retry spending/i }))
+  fireEvent.click(screen.getByRole('button', { name: /save progress/i }))
   await waitFor(() => {
     expect(vi.mocked(spendingApi.putSpendingMonth).mock.calls.length).toBe(2)
   })
@@ -606,7 +631,7 @@ it('never sends net_pay for a month that had none and stays blank', async () => 
   // key, so the server is never asked to clear a row that does not exist.
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await waitFor(() => {
     const body = vi.mocked(spendingApi.putSpendingMonth).mock.calls[0][1]
     expect('net_pay' in body).toBe(false)
@@ -622,8 +647,8 @@ it('a post-save blur never resurrects a phantom draft', async () => {
   const netPay = await screen.findByLabelText('Household take-home')
   fireEvent.change(netPay, { target: { value: '9,000' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-  await screen.findByText(/month saved/i)
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
 
   // Back to the cell and through it once. A blur here canonicalizes state to '9000';
   // if the post-save baseline still held the RAW '9,000' the snapshot would differ from
@@ -863,7 +888,7 @@ it('shows the budget subtext, tones it when over, and never blocks the save', as
   const next = screen.getByRole('button', { name: /next: review/i }) as HTMLButtonElement
   expect(next.disabled).toBe(false)
   fireEvent.click(next)
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await waitFor(() => {
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith(
       '2026-08-01',
@@ -993,7 +1018,7 @@ it('a positive liability is advisory only — Next and Save stay enabled and the
   fireEvent.click(next)
   await screen.findByLabelText('Food')
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await waitFor(() => {
     expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
       '2026-08-01',
@@ -1033,55 +1058,56 @@ it('renders the cue for a server-seeded positive liability and Flip marks the dr
 
 // --- split-save truth (2026-08-31 tier-1 A8) -----------------------------------------------
 
-it('names the half-landed save and retries only the spending leg', async () => {
+it('retries a coordinated save with the same request id after an unconfirmed response', async () => {
   vi.mocked(spendingApi.putSpendingMonth).mockRejectedValueOnce(new Error('boom'))
   renderWizard()
   fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
 
   // The balances PUT COMMITTED before the failure — "nothing was lost" would be a lie in
   // both directions, so the banner names the split.
   const alert = await screen.findByRole('alert')
-  expect(alert.textContent).toBe('Balances saved. Spending failed — Retry saves only spending.')
+  expect(alert.textContent).toBe('The save could not be confirmed. Your entries are preserved; retry to check the same save.')
   expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(1)
 
   // The primary is now the honest retry: only the failed leg goes out again.
-  fireEvent.click(screen.getByRole('button', { name: /retry spending/i }))
-  await screen.findByText(/month saved/i)
-  expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(1) // never re-sent
+  fireEvent.click(screen.getByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
+  expect(vi.mocked(monthReviewApi.saveMonthReview).mock.calls.length).toBe(2)
+  expect(vi.mocked(monthReviewApi.saveMonthReview).mock.calls[1][1].request_id).toBe(vi.mocked(monthReviewApi.saveMonthReview).mock.calls[0][1].request_id)
   expect(vi.mocked(spendingApi.putSpendingMonth).mock.calls.length).toBe(2)
 })
 
-it('keeps the accurate old message when the balances leg itself fails', async () => {
+it('preserves the draft and reports an unconfirmed save honestly', async () => {
   vi.mocked(netWorthApi.putMonthBalances).mockRejectedValueOnce(new Error('db down'))
   renderWizard()
   await screen.findByLabelText('Checking')
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
 
   const alert = await screen.findByRole('alert')
-  expect(alert.textContent).toBe('Saving failed — nothing was lost, retry')
+  expect(alert.textContent).toBe('The save could not be confirmed. Your entries are preserved; retry to check the same save.')
   // Nothing committed: the spending PUT was never attempted, the primary stays a full save.
   expect(spendingApi.putSpendingMonth).not.toHaveBeenCalled()
-  fireEvent.click(screen.getByRole('button', { name: /save month/i }))
-  await screen.findByText(/month saved/i)
+  fireEvent.click(screen.getByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
   expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(2)
   expect(vi.mocked(spendingApi.putSpendingMonth).mock.calls.length).toBe(1)
 })
 
-it('re-sends balances on retry when they were edited after the partial failure', async () => {
+it('sends updated entries with a new request id after an edit following failure', async () => {
   vi.mocked(spendingApi.putSpendingMonth).mockRejectedValueOnce(new Error('boom'))
   renderWizard()
   fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await screen.findByRole('alert')
 
   // Back to balances, change a figure: the remembered leg no longer describes the boxes,
@@ -1091,8 +1117,8 @@ it('re-sends balances on retry when they were edited after the partial failure',
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /retry spending/i }))
-  await screen.findByText(/month saved/i)
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
   expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(2)
   expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls[1][1]).toEqual(
     expect.objectContaining({ balances: [{ account_id: 1, balance: '1700.00' }] }),
@@ -1114,8 +1140,8 @@ it('drops the stale saved card the moment a new save attempt begins', async () =
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-  await screen.findByText(/month saved/i)
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
 
   // Back for one more edit, then save again — this attempt's spending leg fails.
   fireEvent.click(screen.getByRole('button', { name: /^1\s*balances$/i }))
@@ -1123,10 +1149,10 @@ it('drops the stale saved card the moment a new save attempt begins', async () =
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(screen.getByRole('button', { name: /save month/i }))
+  fireEvent.click(screen.getByRole('button', { name: /save progress/i }))
 
   await screen.findByRole('alert')
-  expect(screen.queryByText(/month saved/i)).toBeNull()
+  expect(screen.queryByText(/progress saved/i)).toBeNull()
 })
 
 // --- delete month (2026-08-31 spec §B2) ----------------------------------------------------
@@ -1146,7 +1172,7 @@ function renderWizardAt(entry: string) {
 
 it('offers no delete on a month the server has never seen', async () => {
   renderWizardAt('/update?month=2026-08-01&step=review')
-  await screen.findByRole('button', { name: 'Save month' })
+  await screen.findByRole('button', { name: 'Save progress' })
   expect(screen.queryByRole('button', { name: 'Delete this month' })).toBeNull()
 })
 
@@ -1270,7 +1296,7 @@ it('a partial undo still reloads — leg 1 landed even though leg 2 was refused'
   )
 })
 
-it('the save toast carries Undo when a batch was written, and fires spending then balances', async () => {
+it('the save toast carries the coordinated batch Undo', async () => {
   vi.mocked(netWorthApi.putMonthBalances).mockResolvedValue({
     month: '2026-08-01', snapshot_created: true, created: 1, updated: 0, unchanged: 0, batch_id: 'b-nw2',
   })
@@ -1286,12 +1312,12 @@ it('the save toast carries Undo when a batch was written, and fires spending the
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-  await screen.findByText(/month saved/i)
-  expect(screen.getByText('Saved Aug 2026 — 1 balances updated')).toBeTruthy()
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
+  expect(screen.getByText('Saved progress for Aug 2026 — balances and spending saved together')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
-  await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledTimes(2))
-  expect(vi.mocked(lifecycleApi.undoBatch).mock.calls.map((c) => c[0])).toEqual(['b-sp2', 'b-nw2'])
+  await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledTimes(1))
+  expect(vi.mocked(lifecycleApi.undoBatch).mock.calls.map((c) => c[0])).toEqual(['b-nw2'])
   await screen.findByText('Undone — Aug 2026 is back to how it was.')
 })
 
@@ -1307,8 +1333,8 @@ it('an all-unchanged save toasts nothing and offers no Undo', async () => {
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-  await screen.findByText(/month saved/i)
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
   expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
 })
 
@@ -1328,9 +1354,9 @@ it('writes balances only when nothing was entered on the spending step, and says
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   // The pre-save note: the user learns the spending half will be skipped BEFORE clicking.
   await screen.findByText('Spending: nothing entered — this save writes balances only.')
-  fireEvent.click(screen.getByRole('button', { name: /save month/i }))
+  fireEvent.click(screen.getByRole('button', { name: /save progress/i }))
 
-  await screen.findByText(/month saved/i)
+  await screen.findByText(/progress saved/i)
   expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(1)
   // The whole point of the lane: 19 rows of $0.00 are NOT a month of spending nothing.
   expect(spendingApi.putSpendingMonth).not.toHaveBeenCalled()
@@ -1348,7 +1374,7 @@ it('net pay alone saves the cashflow row and not one blank category', async () =
     target: { value: '9000.00' },
   })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await waitFor(() =>
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
       net_pay: '9000.00',
@@ -1369,7 +1395,7 @@ it('carries the categories that already have a row, plus the ones with a figure'
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   fireEvent.change(await screen.findByLabelText('Rent'), { target: { value: '0.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await waitFor(() =>
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
       amounts: [{ category_id: 8, amount: '0.00' }],
@@ -1383,7 +1409,7 @@ it('adds a category the moment it carries a figure, stored row or not', async ()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   fireEvent.change(await screen.findByLabelText('Rent'), { target: { value: '2100.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await waitFor(() =>
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
       amounts: [{ category_id: 8, amount: '2100.00' }],
@@ -1402,8 +1428,8 @@ it('counts the blank categories in the receipt', async () => {
   fireEvent.change(await screen.findByLabelText('Rent'), { target: { value: '2100.00' } })
   fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '9000.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-  await screen.findByText(/month saved/i)
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
   expect(
     screen.getByText(
       'Spending: 1 row (1 added, 0 changed, 0 unchanged) · 1 category left blank.',
@@ -1424,8 +1450,8 @@ it('the receipt counts a blank the SERVER skipped too', async () => {
   fireEvent.change(await screen.findByLabelText('Rent'), { target: { value: '2100.00' } })
   fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '9000.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-  await screen.findByText(/month saved/i)
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
   expect(
     screen.getByText(
       'Spending: 1 row (1 added, 0 changed, 0 unchanged) · 2 categories left blank.',
@@ -1442,7 +1468,7 @@ it('an already-entered month always writes — zeroing a category is an edit, no
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '0.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await waitFor(() =>
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
       amounts: [{ category_id: 7, amount: '0.00' }],
@@ -1461,7 +1487,7 @@ it('leaves an empty month on the server alone when the visit enters nothing', as
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   await screen.findByLabelText('Food')
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await screen.findByText('Spending: skipped — nothing entered.')
   expect(spendingApi.putSpendingMonth).not.toHaveBeenCalled()
 })
@@ -1479,8 +1505,8 @@ it('prints one sentence per leg after a full save, with the cleared take-home ap
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   fireEvent.change(await screen.findByLabelText('Household take-home'), { target: { value: '' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-  await screen.findByText(/month saved/i)
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
   expect(screen.getByText('Balances: 1 row (1 added, 0 changed, 0 unchanged).')).toBeTruthy()
   expect(
     screen.getByText(
@@ -1495,20 +1521,20 @@ it('the receipt belongs to the visit — switching months clears it', async () =
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-  await screen.findByText(/month saved/i)
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
   fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
-  await waitFor(() => expect(screen.queryByText(/month saved/i)).toBeNull())
+  await waitFor(() => expect(screen.queryByText(/progress saved/i)).toBeNull())
 })
 
 it('the $0 checkbox records an empty month on purpose, and is the only source of confirm_zero', async () => {
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
-  const box = (await screen.findByLabelText('Record this month as $0')) as HTMLInputElement
+  const box = (await screen.findByLabelText('Confirm remaining categories as $0')) as HTMLInputElement
   expect(box.checked).toBe(false)
   expect(
     screen.getByText(
-      'Writes $0.00 for every category — use it for a month you truly spent nothing.',
+      'Records untouched categories as $0.00. Amounts you entered stay as entered.',
     ),
   ).toBeTruthy()
   fireEvent.click(box)
@@ -1517,7 +1543,7 @@ it('the $0 checkbox records an empty month on purpose, and is the only source of
   expect(
     screen.queryByText('Spending: nothing entered — this save writes balances only.'),
   ).toBeNull()
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await waitFor(() =>
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
       amounts: [{ category_id: 7, amount: '0.00' }],
@@ -1530,9 +1556,9 @@ it('the $0 box carries EVERY category, blank or not — that is what it consents
   vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category, rentCategory])
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
-  fireEvent.click(await screen.findByLabelText('Record this month as $0'))
+  fireEvent.click(await screen.findByLabelText('Confirm remaining categories as $0'))
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await waitFor(() =>
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
       amounts: [
@@ -1547,14 +1573,14 @@ it('the $0 box carries EVERY category, blank or not — that is what it consents
 it('forgets the $0 intent on a month switch — consent is about one save', async () => {
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
-  fireEvent.click(await screen.findByLabelText('Record this month as $0'))
+  fireEvent.click(await screen.findByLabelText('Confirm remaining categories as $0'))
   fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
   // June has no balances yet, so the switch lands on Balances (item 18); walk back to
   // the checkbox from there.
   await screen.findByLabelText('Checking')
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   expect(
-    ((await screen.findByLabelText('Record this month as $0')) as HTMLInputElement).checked,
+    ((await screen.findByLabelText('Confirm remaining categories as $0')) as HTMLInputElement).checked,
   ).toBe(false)
 })
 
@@ -1574,12 +1600,12 @@ it('shows the server refusal verbatim when an emptying save skips the box', asyn
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   fireEvent.change(await screen.findByLabelText('Household take-home'), { target: { value: '' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).toBe(
-    'Balances saved. Spending failed — Retry saves only spending. Nothing to record: every category is $0.00 and no take-home was entered — set confirm_zero to write an empty month on purpose',
+    'Nothing to record: every category is $0.00 and no take-home was entered — set confirm_zero to write an empty month on purpose',
   )
-  expect(screen.getByRole('button', { name: 'Retry spending' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Save progress' })).toBeTruthy()
 })
 
 // --- the empty-month repair (2026-09-04 honest-numbers spec §4) ---------------------------
@@ -1661,8 +1687,8 @@ it('drops the banner the moment the month is given real spending', async () => {
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-  await screen.findByText(/month saved/i)
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
   expect(screen.queryByText(/saved with no spending/)).toBeNull()
 })
 
@@ -1728,7 +1754,7 @@ it('never sends a derived parent — the server computes it from the components'
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await screen.findByLabelText('Food')
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
   await waitFor(() =>
     expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
       '2026-08-01',
@@ -1789,7 +1815,7 @@ async function saveTheMonth() {
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   await screen.findByLabelText('Food')
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
 }
 
 it('keeps a parent TYPED on an existing month that stores no component rows', async () => {
@@ -2027,10 +2053,10 @@ it('counts a retired component that still has a row, and never sends it back', a
 it('does not flag the month it just recorded as $0 on purpose', async () => {
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
-  fireEvent.click(await screen.findByLabelText('Record this month as $0'))
+  fireEvent.click(await screen.findByLabelText('Confirm remaining categories as $0'))
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-  await screen.findByText(/month saved/i)
+  fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+  await screen.findByText(/progress saved/i)
   // The receipt is the answer to a deliberate empty month; repeating the repair prompt in
   // the same breath would argue with the choice just made. The next VISIT still flags it —
   // the month really is empty, and by then the receipt is gone.
@@ -2051,12 +2077,12 @@ it('lands the caret on the first cell after the repair instead of on the body', 
 it('ties the $0 checkbox to the sentence that explains it', async () => {
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
-  const box = await screen.findByLabelText('Record this month as $0')
+  const box = await screen.findByLabelText('Confirm remaining categories as $0')
   // The sentence is the control's whole explanation, so it has to reach a screen reader as
   // the control's description, not as a paragraph that happens to sit nearby.
   const hint = document.getElementById(box.getAttribute('aria-describedby') ?? '')
   expect(hint?.textContent).toBe(
-    'Writes $0.00 for every category — use it for a month you truly spent nothing.',
+    'Records untouched categories as $0.00. Amounts you entered stay as entered.',
   )
 })
 
@@ -2120,8 +2146,8 @@ describe('MonthlyUpdatePage — shell frame (2026-09-03 spec §5–§7)', () => 
     await screen.findByLabelText('Food')
     fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
     const before = vi.mocked(fetchCoverage).mock.calls.length
-    fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
-    await screen.findByText(/month saved/i)
+    fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
+    await screen.findByText(/progress saved/i)
     // Exactly once — a nonce that changed twice would fetch coverage twice per save.
     await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBe(before + 1))
   })
@@ -2147,7 +2173,7 @@ it('leaves transfers out of the live savings rate and names it the cash rate', a
 
   const footer = screen.getByRole('status', { name: 'Live totals' })
   // Total spend still means every category — it is the total the server's matrix prints.
-  expect(footer.textContent).toContain('Total spend (live): $3,500.00')
+  expect(footer.textContent).toContain('Living spending (live): $2,000.00')
   // (10000 − 2000 − 500) ÷ 10000 = 75.0%, not the 65.0% the old walk produced.
   expect(footer.textContent).toContain('Savings rate — cash: 75.0%')
 
@@ -2164,4 +2190,180 @@ it('shows no rate at all without a take-home to divide by', async () => {
   fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '2000.00' } })
   const footer = screen.getByRole('status', { name: 'Live totals' })
   expect(footer.textContent).toContain('Savings rate — cash: —')
+})
+
+it('saves progress without closing, then closes only after feed confirmations', async () => {
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await enterSpending()
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '9000' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  const close = await screen.findByRole('button', { name: 'Save and close month' }) as HTMLButtonElement
+  expect(close.disabled).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Save progress' }))
+  await screen.findByRole('heading', { name: 'Progress saved' })
+  expect(vi.mocked(monthReviewApi.saveMonthReview).mock.calls[0][1]).toMatchObject({ close: false, expected_revision: 'a'.repeat(64) })
+  fireEvent.click(screen.getByLabelText('I checked every account balance.'))
+  fireEvent.click(screen.getByLabelText('I checked spending, tax, and transfers for the whole month.'))
+  fireEvent.click(screen.getByLabelText('I checked household take-home for the whole month.'))
+  expect(close.disabled).toBe(false)
+  fireEvent.click(close)
+  await screen.findByRole('heading', { name: 'Month closed' })
+  expect(vi.mocked(monthReviewApi.saveMonthReview).mock.calls[1][1]).toMatchObject({ close: true, reviewed: { balances: true, spending: true, take_home: true } })
+})
+
+it('clears a spending confirmation when its entries change', async () => {
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await enterSpending()
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByLabelText('I checked spending, tax, and transfers for the whole month.'))
+  fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
+  fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '275' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  expect((await screen.findByLabelText('I checked spending, tax, and transfers for the whole month.') as HTMLInputElement).checked).toBe(false)
+})
+
+it('keeps the draft and prevents silent overwrite when the server revision changes', async () => {
+  vi.mocked(monthReviewApi.saveMonthReview).mockRejectedValueOnce(new ApiError('This month changed since it was loaded. Reload before saving.', 409))
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1900' } })
+  fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
+  expect((await screen.findByRole('alert')).textContent).toContain('changed since it was loaded')
+  expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).toContain('1900')
+  expect(screen.queryByRole('heading', { name: 'Progress saved' })).toBeNull()
+})
+
+function pendingMonthSave() {
+  let resolve!: (result: MonthSaveResult) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<MonthSaveResult>((accept, refuse) => { resolve = accept; reject = refuse })
+  return { promise, resolve, reject }
+}
+
+function savedMonthResult(month: string, revision = 'b'): MonthSaveResult {
+  return {
+    month, batch_id: null, spending: null,
+    balances: { month, snapshot_created: true, created: 1, updated: 0, unchanged: 0 },
+    review: { ...reviewFixture(month), input_revision: revision.repeat(64) },
+  }
+}
+
+it('keeps the new month and its pending save intact when the prior month finishes saving', async () => {
+  const august = pendingMonthSave()
+  const june = pendingMonthSave()
+  vi.mocked(monthReviewApi.saveMonthReview)
+    .mockImplementationOnce(() => august.promise)
+    .mockImplementationOnce(() => june.promise)
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600' } })
+  fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
+  await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
+
+  fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '2200' } })
+  fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'June draft' } })
+  fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
+  await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(2))
+
+  await act(async () => { august.resolve(savedMonthResult('2026-08-01')) })
+  expect(screen.getByRole('heading', { name: 'Monthly update — Jun 2026' })).toBeTruthy()
+  expect((screen.getByRole('button', { name: 'Saving…' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.queryByRole('heading', { name: 'Progress saved' })).toBeNull()
+  expect(JSON.parse(sessionStorage.getItem('finance-update-draft:2026-06-01')!)).toMatchObject({
+    balances: { 1: '2200' }, notes: 'June draft',
+  })
+
+  await act(async () => { june.resolve(savedMonthResult('2026-06-01', 'c')) })
+  await screen.findByRole('heading', { name: 'Progress saved' })
+  fireEvent.click(screen.getByRole('button', { name: /^1\s*balances$/i }))
+  expect((await screen.findByLabelText('Checking') as HTMLInputElement).value).toBe('2200')
+  expect((screen.getByLabelText('Notes') as HTMLInputElement).value).toBe('June draft')
+  expect(sessionStorage.getItem('finance-update-draft:2026-06-01')).toBeNull()
+})
+
+it('preserves entries typed during a save and submits them against the returned revision', async () => {
+  const pending = pendingMonthSave()
+  vi.mocked(monthReviewApi.saveMonthReview).mockImplementationOnce(() => pending.promise)
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600' } })
+  fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
+
+  fireEvent.click(screen.getByRole('button', { name: /^1\s*balances$/i }))
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1900' } })
+  fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'Entered while saving' } })
+  fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
+  fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '275' } })
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '9100' } })
+  fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+
+  await act(async () => { pending.resolve(savedMonthResult('2026-08-01')) })
+  await screen.findByText('You have new unsaved changes. Save again to include them.')
+  expect(JSON.parse(sessionStorage.getItem('finance-update-draft:2026-08-01')!)).toMatchObject({
+    balances: { 1: '1900' }, amounts: { 7: '275' }, netPay: '9100', notes: 'Entered while saving',
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Save progress' }))
+  await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(2))
+  expect(vi.mocked(monthReviewApi.saveMonthReview).mock.calls[1]).toEqual([
+    '2026-08-01', expect.objectContaining({
+      expected_revision: 'b'.repeat(64),
+      balances: expect.objectContaining({ balances: [{ account_id: 1, balance: '1900' }], notes: 'Entered while saving' }),
+      spending: { amounts: [{ category_id: 7, amount: '275' }], net_pay: '9100' },
+    }),
+  ])
+  await waitFor(() => expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).toBeNull())
+  expect(screen.queryByText('You have new unsaved changes. Save again to include them.')).toBeNull()
+})
+
+it('rejects a response from an earlier load even after returning to the same month', async () => {
+  const pending = pendingMonthSave()
+  let augustLoads = 0
+  vi.mocked(monthReviewApi.fetchMonthReview).mockImplementation(async month => ({
+    ...reviewFixture(month),
+    input_revision: (month === '2026-08-01' && ++augustLoads > 1 ? 'c' : 'a').repeat(64),
+  }))
+  vi.mocked(monthReviewApi.saveMonthReview).mockImplementationOnce(() => pending.promise)
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600' } })
+  fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /^Aug 2026/ }))
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1950' } })
+
+  await act(async () => { pending.resolve(savedMonthResult('2026-08-01')) })
+  expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('1950')
+  expect(screen.queryByRole('heading', { name: 'Progress saved' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
+  await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(2))
+  expect(vi.mocked(monthReviewApi.saveMonthReview).mock.calls[1][1]).toMatchObject({
+    expected_revision: 'c'.repeat(64), balances: { balances: [{ account_id: 1, balance: '1950' }] },
+  })
+})
+
+it('keeps a late save conflict out of the newly loaded month', async () => {
+  const pending = pendingMonthSave()
+  vi.mocked(monthReviewApi.saveMonthReview).mockImplementationOnce(() => pending.promise)
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600' } })
+  fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '2300' } })
+
+  await act(async () => { pending.reject(new ApiError('August changed during the save.', 409)) })
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Reload latest and compare draft' })).toBeNull()
+  expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('2300')
+  expect(JSON.parse(sessionStorage.getItem('finance-update-draft:2026-06-01')!)).toMatchObject({ balances: { 1: '2300' } })
+  fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+  expect((await screen.findByRole('button', { name: 'Save progress' }) as HTMLButtonElement).disabled).toBe(false)
 })

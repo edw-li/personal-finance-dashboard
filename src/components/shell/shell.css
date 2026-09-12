@@ -444,3 +444,5 @@
     }
   }
 }
+.month-chip2.review-closed .month-chip2-dot { outline: 1px solid var(--positive); outline-offset: 2px; }
+.month-chip2.review-needs_review { border-style: dashed; }

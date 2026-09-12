@@ -15,6 +15,7 @@ from app.models import (
     SpendingCategory,
 )
 from app.services import clock
+from app.services.month_review import adopt_existing_history
 from app.services.projection import drop_schedule, project
 
 # The projection anchors on the product clock (the router's one clock read), so the seeds
@@ -27,7 +28,7 @@ def month_add(start: date, delta: int) -> date:
     return date(base // 12, base % 12 + 1, 1)
 
 
-async def _seed_book(db, *, with_history: bool = True) -> date:
+async def _seed_book(db, *, with_history: bool = True, adopt: bool = True) -> date:
     """One snapshot of the four group flavours + (optionally) two months of spend/pay.
 
     Investable = the taxable account alone (cash, the component and the liability are all
@@ -66,6 +67,9 @@ async def _seed_book(db, *, with_history: bool = True) -> date:
             ]
         )
     await db.commit()
+    if adopt:
+        await adopt_existing_history(db, clock.product_today())
+        await db.commit()
     return this_month
 
 
@@ -82,7 +86,7 @@ async def _seed_profile(db, person: Person, **overrides) -> PaycheckProfile:
     0 nets 1,000.00 a check, i.e. a monthly_net of exactly 2,000.00 — so the drop the
     endpoint applies is checkable by eye against the 4,000 derived contribution."""
     fields = {
-        "effective_date": clock.product_today() - timedelta(days=30),
+        "effective_date": clock.product_today().replace(day=1),
         "annual_salary": Decimal("24000.00"),
         "pay_periods_per_year": 24,
     }
@@ -123,7 +127,11 @@ async def test_projection_defaults_derive_from_the_data(auth_client, db):
     assert body["annual_spend"] == "60000.00"  # mean(6000, 4000) x 12
     assert body["swr_pct"] == "0.04"
     assert body["years"] == 30
-    assert body["warnings"] == []
+    assert body["warnings"] == [
+        "Planning inputs include 2 unreviewed historical months.",
+        "10 months in the 12-calendar-month planning window are excluded; "
+        "older months do not replace them.",
+    ]
 
     # FI figures: 60,000 / 0.04 and the ratio at 6dp HALF_UP.
     assert body["fi_target"] == "1500000.00"
@@ -159,7 +167,11 @@ async def test_projection_zero_return_is_an_exact_chain(auth_client, db):
     # 100,000 + 4,000 x i >= 1,500,000 first at i = 350.
     assert body["fi_month"] == month_add(this_month, 350).isoformat()
     assert body["coast_fi_month"] is None
-    assert body["warnings"] == []
+    assert body["warnings"] == [
+        "Planning inputs include 2 unreviewed historical months.",
+        "10 months in the 12-calendar-month planning window are excluded; "
+        "older months do not replace them.",
+    ]
 
 
 async def test_projection_echoes_and_applies_every_knob(auth_client, db):
@@ -680,7 +692,11 @@ async def test_projection_derived_contribution_adds_payroll_savings(auth_client,
             }
         ],
     }
-    assert body["warnings"] == []
+    assert body["warnings"] == [
+        "Planning inputs include 2 unreviewed historical months.",
+        "10 months in the 12-calendar-month planning window are excluded; "
+        "older months do not replace them.",
+    ]
 
 
 async def test_projection_derived_contribution_sums_every_earner(auth_client, db):
@@ -895,7 +911,7 @@ def test_project_ignores_a_drop_past_the_horizon():
 
 
 async def test_projection_annual_spend_is_living_spend_over_the_matched_window(auth_client, db):
-    this_month = await _seed_book(db)
+    this_month = await _seed_book(db, adopt=False)
     taxes = SpendingCategory(name="Taxes", slug="taxes", sort_order=2, kind="tax")
     db.add(taxes)
     await db.flush()
@@ -905,13 +921,15 @@ async def test_projection_annual_spend_is_living_spend_over_the_matched_window(a
         )
     )
     await db.commit()
+    await adopt_existing_history(db, clock.product_today())
+    await db.commit()
     body = (await auth_client.get("/api/v1/projection")).json()
     # An income-tax payment is not living cost, so the FI target does not grow by it...
     assert body["annual_spend"] == "60000.00"  # mean(6000, 4000) x 12, unchanged
     # ...but it WAS paid out of take-home, so cash savings fall: mean(1800, 5000).
     assert body["monthly_contribution"] == "3400.00"
     assert body["derived_window"] == {
-        "from": month_add(this_month, -2).isoformat(),
+        "from": month_add(this_month, -12).isoformat(),
         "to": month_add(this_month, -1).isoformat(),
         "months": 2,
     }
@@ -951,8 +969,8 @@ async def test_projection_says_so_when_no_month_has_both_halves(auth_client, db)
     assert body["monthly_contribution"] == "0.00"
     assert body["annual_spend"] is None
     assert (
-        "no month has both spending and take-home on file — the contribution and annual "
-        "spend could not be derived"
+        "no eligible completed month has both spending and take-home on file — "
+        "the contribution and annual spend could not be derived"
     ) in body["warnings"]
 
 

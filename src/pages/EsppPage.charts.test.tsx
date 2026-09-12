@@ -52,20 +52,20 @@ afterEach(() => {
 })
 
 describe('EsppPage — the two chart cards', () => {
-  it('mounts both cards side by side in a card-grid above the lots card', async () => {
+  it('mounts both chart cards in Summary and keeps Lots in its own task view', async () => {
     renderPage()
-    await screen.findByText('$10,720.49')
+    await screen.findByLabelText(anatomyAria)
     const grid = document.querySelector('.card-grid') as HTMLElement
     expect(grid).not.toBeNull()
-    const cards = grid.querySelectorAll(':scope > .chart-card')
+    const cards = grid.querySelectorAll('.chart-card')
     expect(cards.length).toBe(2)
     expect(cards[0].className).toContain('span-6')
     expect(cards[1].className).toContain('span-6')
     expect(screen.getByLabelText(anatomyAria)).toBeTruthy()
     expect(await screen.findByLabelText(/Line chart of NVDA's daily closes/)).toBeTruthy()
-    // The grid comes BEFORE the lots card in the document.
-    const lots = screen.getByRole('heading', { name: /^Lots/ }).closest('section') as HTMLElement
-    expect(grid.compareDocumentPosition(lots) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: /^Lots/ })).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Lots' }))
+    expect(await screen.findByRole('heading', { name: /^Lots/ })).toBeTruthy()
   })
 
   it('fetches ten years of bars once and hands them to the price card', async () => {
@@ -76,18 +76,19 @@ describe('EsppPage — the two chart cards', () => {
     expect(screen.getByLabelText(/Line chart of NVDA's daily closes/).getAttribute('data-categories')?.split('|').length).toBe(5)
   })
 
-  it('lights the hovered lot’s row and scrolls to the clicked one', async () => {
+  it('pins a lot without replacing the chart and opens its exact record on request', async () => {
     renderPage()
-    await screen.findByText('$10,720.49')
-    const scroll = vi.fn()
-    ;(document.getElementById('lot-row-1') as HTMLElement).scrollIntoView = scroll
-    fireEvent.click(screen.getByText(`${anatomyAria}::hover-0`))
-    expect(document.getElementById('lot-row-1')?.className).toContain('is-highlighted')
-    fireEvent.click(screen.getByText(`${anatomyAria}::hover-end`))
-    expect(document.getElementById('lot-row-1')?.className ?? '').not.toContain('is-highlighted')
+    const canvas = await screen.findByLabelText(anatomyAria)
     fireEvent.click(screen.getByText(`${anatomyAria}::click-0`))
-    expect(scroll).toHaveBeenCalledWith({ block: 'nearest' })
-    expect(document.getElementById('lot-row-1')?.className).toContain('is-highlighted')
+    expect(screen.getByLabelText(anatomyAria)).toBe(canvas)
+    expect(screen.queryByRole('heading', { name: /^Lots/ })).toBeNull()
+    const source = screen.getByRole('link', { name: 'Open lot records' })
+    expect(source.getAttribute('href')).toBe('/espp?section=lots&lot=1')
+    fireEvent.click(source)
+    expect(await screen.findByRole('heading', { name: /^Lots/ })).toBeTruthy()
+    await waitFor(() => expect(document.getElementById('lot-row-1')?.className).toContain('is-highlighted'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
+    expect(screen.getByLabelText(anatomyAria)).toBe(canvas)
   })
 
   it('shows the price card’s empty sentence when the bars fetch fails, never a skeleton forever', async () => {

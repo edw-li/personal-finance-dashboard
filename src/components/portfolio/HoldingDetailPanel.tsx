@@ -209,7 +209,7 @@ export default function HoldingDetailPanel({
           <dd className={tone(holding.realized_gl)}>{formatCurrency(holding.realized_gl)}</dd>
         </div>
         <div className="holding-fact">
-          <dt>Dividends collected</dt>
+          <dt>Dividend entries</dt>
           <dd>{formatCurrency(holding.dividends_collected)}</dd>
         </div>
         <div className="holding-fact">
@@ -358,7 +358,7 @@ export default function HoldingDetailPanel({
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Pay date</th>
+                  <th>Recorded date</th>
                   <th>Account</th>
                   <th className="num">Amount</th>
                   <th>Notes</th>
@@ -367,7 +367,7 @@ export default function HoldingDetailPanel({
               <tbody>
                 {paid.map((d) => (
                   <tr key={d.id}>
-                    <td>{formatDate(d.pay_date)}</td>
+                    <td>{formatDate(d.pay_date)}<span className="sub">{d.source === 'auto' ? ' · ex-date' : ' · entered pay date'}</span></td>
                     <td>{d.account ?? '—'}</td>
                     <td className="num">{formatCurrency(d.amount)}</td>
                     <td className="notes-cell" title={d.notes ?? undefined}>

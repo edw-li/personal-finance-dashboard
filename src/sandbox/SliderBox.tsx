@@ -30,6 +30,9 @@ export interface SliderBoxProps {
   step: string
   onChange: (next: string, commit: boolean) => void
   disabled?: boolean
+  /** Domain-specific source wording; defaults preserve other sandboxes. */
+  sourceLabel?: string
+  baselineLabel?: string
 }
 
 /** A range input's float ("0.15500000000000003") back onto the step's grid, as a wire string. */
@@ -50,6 +53,8 @@ export default function SliderBox({
   step,
   onChange,
   disabled,
+  sourceLabel = 'derived',
+  baselineLabel = 'actual',
 }: SliderBoxProps) {
   // Drag text while the pointer is down (or a key is held) — cleared on release.
   const [drag, setDrag] = useState<string | null>(null)
@@ -121,7 +126,7 @@ export default function SliderBox({
           {hint !== undefined && <InfoHint text={hint} />}
         </label>
         {value === '' ? (
-          <span className="sandbox-badge">{actual === null ? 'not set' : 'derived'}</span>
+          <span className="sandbox-badge">{actual === null ? 'not set' : sourceLabel}</span>
         ) : (
           <DeltaChip
             value={delta === null ? null : kind === 'percent' ? shiftPoint(delta, 2) : delta}
@@ -185,7 +190,7 @@ export default function SliderBox({
               onChange(actual, true)
             }}
           >
-            actual {display(actual)}
+            {baselineLabel} {display(actual)}
           </button>
         )}
       </div>

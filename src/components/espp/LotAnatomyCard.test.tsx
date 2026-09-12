@@ -50,7 +50,7 @@ describe('LotAnatomyCard', () => {
     expect(screen.getByRole('button', { name: 'Per share' }).getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('reports the hovered and clicked lot by id, in chain order', () => {
+  it('pins the clicked lot and opens its record only through the explicit source action', () => {
     const onHoverLot = vi.fn()
     const onSelectLot = vi.fn()
     render(<LotAnatomyCard data={esppLotsResponse()} onHoverLot={onHoverLot} onSelectLot={onSelectLot} />)
@@ -59,12 +59,16 @@ describe('LotAnatomyCard', () => {
     fireEvent.click(screen.getByText('hover-end'))
     expect(onHoverLot).toHaveBeenLastCalledWith(null)
     fireEvent.click(screen.getByText('click-3'))
+    expect(onSelectLot).not.toHaveBeenCalled()
+    const source = screen.getByRole('link', { name: 'Open lot records' })
+    expect(source.getAttribute('href')).toBe('/espp?section=lots&lot=4')
+    fireEvent.click(source)
     expect(onSelectLot).toHaveBeenCalledWith(4)
   })
 
   it('shows the empty sentence with no lots, and a skeleton on a pre-batch payload', () => {
     const { rerender } = render(<LotAnatomyCard data={esppLotsResponse({ lots: [], totals: undefined })} />)
-    expect(screen.getByText('No lots yet — add your first purchase in the Lots card below.')).toBeTruthy()
+    expect(screen.getByText('No lots yet — add your first purchase in Lots.')).toBeTruthy()
     const stale = { ...esppLot() } as Record<string, unknown>
     delete stale.fmv_value
     rerender(<LotAnatomyCard data={esppLotsResponse({ lots: [stale as unknown as ReturnType<typeof esppLot>], totals: undefined })} />)

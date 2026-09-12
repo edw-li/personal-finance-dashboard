@@ -3,9 +3,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { fetchAllTaxSummaries } from '../../api/taxes'
 import ChartCard from '../ChartCard'
-import type { EChartEventParams } from '../EChart'
+import type { ChartSelection } from '../../types/metrics'
+import SelectionDetail from '../details/SelectionDetail'
 import type { TaxSummaryOut } from '../../types/api'
-import { formatCurrency, formatPct } from '../../utils/format'
 import { taxTrendCsv, trendOption, yearPieCsv, yearPieOption } from './taxChartOptions'
 // Only this component's own sheet, like its siblings: the app-wide vocabulary
 // (.card/.eyebrow/.empty-note/.error-banner) is panels.css, which the PAGE imports.
@@ -124,91 +124,54 @@ export default function CompositionPanel({
     [detailSummary],
   )
 
-  const handleTrendClick = (params: EChartEventParams) => {
-    if (detailSummary !== null) {
-      setDetailYear(null) // any chart click in detail mode returns to all years
-      return
-    }
-    // The category NAME is the year on every clickable series (bars and rate line
-    // alike) — a dataIndex would have to re-derive trendOption's own ascending sort.
-    const year = Number(params.name)
-    if (chartable !== null && chartable.some((y) => y.year === year)) setDetailYear(year)
-  }
+  const selectYear = (summary: TaxSummaryOut): ChartSelection => ({
+    kind: 'period', id: `tax-year:${summary.year}`, period: String(summary.year), label: `Tax year ${summary.year}`, scope: 'household',
+    values: [{ label: 'Total tax', value: summary.totals.total_tax, unit: 'USD' }, { label: 'Gross income', value: summary.totals.gross_income, unit: 'USD' }, { label: 'Effective rate', value: summary.totals.effective_rate, unit: 'ratio' }],
+    source: { href: `/taxes?section=summary&year=${summary.year}`, label: `Open ${summary.year} return` },
+    context: { year: summary.year },
+  })
 
   return (
     <ChartCard
-      title={
-        detailSummary ? `Tax breakdown — ${detailSummary.year}` : 'Tax composition by year'
-      }
-      hint="Tax composition per year stacked by jurisdiction, with the year's effective rate on each cap. Click a year for its breakdown."
-      ariaLabel={
-        detailSummary
-          ? `Donut chart of ${detailSummary.year}’s tax by jurisdiction`
-          : 'Stacked bar chart of tax by jurisdiction per year, with the effective rate on each cap'
-      }
-      option={detailSummary ? detailPie : trend}
-      empty={
-        detailSummary
-          ? `No tax computed for ${detailSummary.year}.`
-          : flaggedYears.length > 0
-            ? 'No comparable years yet — every year with stored inputs is missing bracket tables for its filing status.'
-            : 'No years with stored inputs to compare yet.'
-      }
-      exportName={detailSummary ? `tax-breakdown-${detailSummary.year}` : 'tax-trend'}
-      csv={
-        detailSummary
-          ? () => yearPieCsv(detailSummary)
-          : chartable === null
-            ? undefined
-            : () => taxTrendCsv(chartable)
-      }
+      title="Tax composition by year"
+      hint="Tax composition per year stacked by jurisdiction, with the year's effective rate on each cap. Select a year to inspect its breakdown beside this history."
+      ariaLabel="Stacked bar chart of tax by jurisdiction per year, with the effective rate on each cap"
+      option={trend}
+      empty={flaggedYears.length > 0 ? 'No comparable years yet — every year with stored inputs is missing bracket tables for its filing status.' : 'No years with stored inputs to compare yet.'}
+      exportName="tax-trend"
+      csv={chartable === null ? undefined : () => taxTrendCsv(chartable)}
+      independentRangeLabel="All recorded years"
       height={320}
       busy={years === null && error === null}
       error={error}
-      onClick={handleTrendClick}
-      onLegendChange={(selected) =>
-        setLegendSelected((current) => ({ ...current, ...selected }))
-      }
-      actions={
-        detailSummary ? (
-          <button className="button" onClick={() => setDetailYear(null)}>
-            All years
-          </button>
-        ) : undefined
-      }
-      // Footer prose that describes INTERACTING with the chart is conditioned on there
-      // being one: under an empty sentence, "click the chart to go back" and "click a
-      // year's bar" point at marks that were never drawn (the All years button is the
-      // way back in the first case). Prose that EXPLAINS the emptiness — the flagged
-      // years — stays, because that is what a reader wants under an empty card.
-      footer={
-        detailSummary ? (
-          detailPie === null ? undefined : (
-            <p className="drill-hint">
-              {/* The SERVER's totals, negatives and all — the pie can only draw the
-                  positive slices (yearPieOption's note). */}
-              Total tax {formatCurrency(detailSummary.totals.total_tax)} · Gross{' '}
-              {formatCurrency(detailSummary.totals.gross_income)} · Effective rate{' '}
-              {detailSummary.totals.effective_rate === null
-                ? '—'
-                : formatPct(detailSummary.totals.effective_rate, { signed: false })}{' '}
-              — click the chart to go back.
-            </p>
-          )
-        ) : (
-          <>
-            {trend !== null && (
-              <p className="drill-hint">Click a year&apos;s bar to expand its tax breakdown.</p>
-            )}
-            {flaggedYears.length > 0 && (
-              <p className="drill-hint">
-                Not charted: {flaggedYears.join(', ')} — no bracket tables for that
-                year&apos;s filing status.
-              </p>
-            )}
-          </>
-        )
-      }
+      selection={detailSummary ? selectYear(detailSummary) : null}
+      onSelectionChange={(selection) => setDetailYear(selection?.kind === 'period' ? Number(selection.period) : null)}
+      selectionAdapter={(params) => {
+        const summary = chartable?.find((year) => year.year === Number(params.name))
+        return summary ? selectYear(summary) : null
+      }}
+      rowSelection={(row) => {
+        const summary = chartable?.find((year) => year.year === Number(row[0]))
+        return summary ? selectYear(summary) : null
+      }}
+      renderSelection={(selection) => <>
+        <SelectionDetail selection={selection} chartTitle="Tax composition by year" onClear={() => setDetailYear(null)} />
+        {detailSummary && <ChartCard
+          title={`Tax breakdown — ${detailSummary.year}`}
+          hint="The positive tax components for the selected year. The receipt above includes any negative components in the total."
+          ariaLabel={`Donut chart of ${detailSummary.year}'s tax by jurisdiction`}
+          option={detailPie}
+          empty={`No tax computed for ${detailSummary.year}.`}
+          exportName={`tax-breakdown-${detailSummary.year}`}
+          csv={() => yearPieCsv(detailSummary)}
+          height={260}
+        />}
+      </>}
+      onLegendChange={(selected) => setLegendSelected((current) => ({ ...current, ...selected }))}
+      footer={<>
+        {trend !== null && <p className="drill-hint">Select a year to pin its values and inspect the calculation.</p>}
+        {flaggedYears.length > 0 && <p className="drill-hint">Not charted: {flaggedYears.join(', ')} — no bracket tables for that year's filing status.</p>}
+      </>}
     />
   )
 }

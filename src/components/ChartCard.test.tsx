@@ -7,8 +7,8 @@ import { hintLabel } from './InfoHint'
 vi.mock('./EChart', async () => {
   const { createElement } = await import('react')
   return {
-    default: ({ ariaLabel, animateEntrance = true, group, height }: { ariaLabel?: string; animateEntrance?: boolean; group?: string; height?: number }) =>
-      createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel, 'data-animate': String(animateEntrance), 'data-group': group ?? '', 'data-height': String(height), style: { height } }),
+    default: ({ ariaLabel, animateEntrance = true, group, height, onClick, onDataZoom }: { ariaLabel?: string; animateEntrance?: boolean; group?: string; height?: number; onClick?: (params: { dataIndex: number; seriesIndex: number }) => void; onDataZoom?: (window: { startValue: number; endValue: number }) => void }) =>
+      createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel, 'data-animate': String(animateEntrance), 'data-group': group ?? '', 'data-height': String(height), style: { height }, onClick: () => onClick?.({ dataIndex: 1, seriesIndex: 0 }), onDoubleClick: () => onDataZoom?.({ startValue: 1, endValue: 2 }) }),
   }
 })
 vi.mock('../utils/download', () => ({ toCsv: vi.fn(() => 'CSV'), downloadDataUrl: vi.fn(), downloadText: vi.fn() }))
@@ -16,6 +16,8 @@ vi.mock('../utils/download', () => ({ toCsv: vi.fn(() => 'CSV'), downloadDataUrl
 import ChartCard from './ChartCard'
 import PageFrame from './shell/PageFrame'
 import { CHART_CARD_ROWS } from './skeletonMetrics'
+import DetailPanelProvider, { useDetailPanel } from './details/DetailPanelProvider'
+import type { ChartSelection } from '../types/metrics'
 
 const OPTION = { series: [] } as EChartsOption
 const base = { title: 'Net worth', hint: 'What it shows.', ariaLabel: 'Line chart of net worth', empty: 'No snapshots yet.', exportName: 'net-worth' }
@@ -137,5 +139,87 @@ describe('ChartCard reserved rows (motion spec §7)', () => {
   it('reserves only the rows the card actually declares', () => {
     render(<ChartCard {...base} option={null} busy />) // no zoom, no footer
     expect(rows()).toEqual(['chart-card-row chart-card-row-export'])
+  })
+})
+
+describe('ChartCard persistent interactions', () => {
+  const history = { xAxis: { type: 'category', data: ['Jul', 'Aug', 'Sep'] }, series: [{ type: 'line', name: 'Net worth', data: [100, 200, 300] }], dataZoom: [{ type: 'inside', startValue: 0 }] } as EChartsOption
+  const selection: ChartSelection = { kind: 'period', id: 'aug', period: '2026-08-01', label: 'August', values: [{ label: 'Net worth', value: 200, unit: 'USD' }], source: { href: '/net-worth?month=2026-08', label: 'Open August records' } }
+  it('pins a source-backed selection and expands the same live canvas and connection group', () => {
+    render(<DetailPanelProvider><ChartCard {...base} option={history} group="wealth" selectionAdapter={() => selection} /></DetailPanelProvider>)
+    const canvas = screen.getByTestId('echart')
+    fireEvent.click(canvas)
+    expect(screen.getByText('Pinned: August')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Open August records' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Net worth' }))
+    expect(screen.getByTestId('echart')).toBe(canvas)
+    expect(document.querySelector('.detail-panel')).toBeNull()
+    expect(canvas.getAttribute('data-group')).toBe('wealth')
+    fireEvent.click(screen.getByRole('button', { name: 'Close expanded Net worth' }))
+    expect(screen.getByTestId('echart')).toBe(canvas)
+    expect(screen.getByText('Pinned: August')).toBeTruthy()
+    expect(document.querySelector('.detail-panel')).toBeTruthy()
+  })
+  it('keeps legacy click handlers until a page supplies its typed selection adapter', () => {
+    const legacy = vi.fn()
+    render(<ChartCard {...base} option={history} onClick={legacy} />)
+    fireEvent.click(screen.getByTestId('echart'))
+    expect(legacy).toHaveBeenCalledWith({ dataIndex: 1, seriesIndex: 0 })
+    expect(screen.queryByText('Pinned: Aug')).toBeNull()
+  })
+  it('keeps a dismissed custom selection closed across panel-context updates', () => {
+    let renders = 0
+    function PageWithDetails() {
+      const details = useDetailPanel()
+      if (++renders > 12) throw new Error('Selection caused a panel render loop')
+      return <><span>{details?.activeId ?? 'No open details'}</span><ChartCard {...base} option={history} selectionAdapter={() => selection} renderSelection={(selected) => <p>Details for {selected.label}</p>} /></>
+    }
+    render(<DetailPanelProvider><PageWithDetails /></DetailPanelProvider>)
+    fireEvent.click(screen.getByTestId('echart'))
+    expect(screen.getByText('Details for August')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
+    expect(screen.queryByRole('dialog', { name: 'Net worth' })).toBeNull()
+    expect(screen.getByText('Pinned: August')).toBeTruthy()
+    expect(screen.getByText('No open details')).toBeTruthy()
+  })
+  it('shows one chart detail at a time and restores its live content with Back', () => {
+    render(<DetailPanelProvider>
+      <ChartCard {...base} option={history} selectionAdapter={() => selection} renderSelection={() => <p>First chart details</p>} />
+      <ChartCard {...base} title="Second chart" exportName="second-chart" option={history} selectionAdapter={() => selection} renderSelection={() => <p>Second chart details</p>} />
+    </DetailPanelProvider>)
+    const charts = screen.getAllByTestId('echart')
+    fireEvent.click(charts[0])
+    expect(screen.getByText('First chart details')).toBeTruthy()
+    fireEvent.click(charts[1])
+    expect(screen.queryByText('First chart details')).toBeNull()
+    expect(screen.getByText('Second chart details')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.getByText('First chart details')).toBeTruthy()
+    expect(screen.queryByText('Second chart details')).toBeNull()
+  })
+  it('resets a manually narrowed window to the initial range', () => {
+    const changed = vi.fn()
+    render(<ChartCard {...base} option={history} zoomable onDataZoom={changed} />)
+    expect(screen.queryByRole('button', { name: 'Reset zoom' })).toBeNull()
+    fireEvent.doubleClick(screen.getByTestId('echart'))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset zoom' }))
+    expect(changed).toHaveBeenLastCalledWith({ startValue: 0, endValue: 2 })
+    expect(screen.queryByRole('button', { name: 'Reset zoom' })).toBeNull()
+  })
+  it('offers the same source action from keyboard-reachable table inspection', () => {
+    render(<ChartCard {...base} option={history} csv={() => ({ headers: ['Month', 'Net worth'], rows: [['August', 200]] })} rowSelection={() => selection} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect August' }))
+    expect(screen.getByText('Pinned: August')).toBeTruthy()
+    expect(screen.getAllByRole('link', { name: 'Open August records' })).toHaveLength(2)
+  })
+  it('immediately removes a stale owner selection and its panel on scope change', () => {
+    const changed = vi.fn()
+    const { rerender } = render(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} onSelectionChange={changed} selectionScopeKey="owner:1" /></DetailPanelProvider>)
+    expect(screen.getByText('Pinned: August')).toBeTruthy()
+    rerender(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} onSelectionChange={changed} selectionScopeKey="owner:2" /></DetailPanelProvider>)
+    expect(screen.queryByText('Pinned: August')).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'Net worth' })).toBeNull()
+    expect(changed).toHaveBeenCalledWith(null)
   })
 })

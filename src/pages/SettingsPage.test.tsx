@@ -335,9 +335,9 @@ afterEach(() => {
 
 // A router, always: the page reads location.hash to answer the palette's anchored arrivals
 // (/settings#limits), and the app never renders it outside one.
-const renderPage = () =>
+const renderPage = (section = 'household') =>
   render(
-    <MemoryRouter initialEntries={['/settings']}>
+    <MemoryRouter initialEntries={[`/settings?section=${section}`]}>
       <SettingsPage />
     </MemoryRouter>,
   )
@@ -346,14 +346,20 @@ const renderPage = () =>
 // and their PUT moved to PlanAssumptionsCard (2026-09-06 spec §3.3) and are pinned there;
 // this page reads /settings for one reason only — it is the gate the cards mount behind.
 describe('SettingsPage — lifecycle', () => {
-  it('reads /settings once per card that owns one of its fields', async () => {
+  it('loads each task only when first opened and retains visited cards', async () => {
     renderPage()
+    await waitFor(() => expect(document.getElementById('accounts')).not.toBeNull())
+    expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchProfiles)).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
     await screen.findByRole('region', { name: 'Plan assumptions' })
-    // The page's own gate, then Plan assumptions, Price refresh and Calendar feed reading
-    // for themselves — the price of three cards saving independently under the partial PUT.
-    // `waitFor`, not a bare expect: a card mounts in the `loadedOnce` commit and its passive
-    // effect (and so its fetch) can land a microtask later.
+    await waitFor(() => expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(2))
+    fireEvent.click(screen.getByRole('tab', { name: 'Integrations' }))
+    await screen.findByRole('region', { name: 'Assistant' })
     await waitFor(() => expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(4))
+    fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
+    expect(screen.getByRole('region', { name: 'Plan assumptions' })).toBeTruthy()
+    expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(4)
     // The balance-suggestions mapping card was removed end to end (spec §5.2 amendment).
     expect(screen.queryByText(/Balance suggestions/)).toBeNull()
   })
@@ -361,7 +367,7 @@ describe('SettingsPage — lifecycle', () => {
   it('ghosts the page through the frame while the FIRST load is in flight', async () => {
     const gate = deferred<AppSettingsOut>()
     vi.mocked(fetchAppSettings).mockReturnValue(gate.promise)
-    renderPage()
+    renderPage('planning')
 
     // The frame owns the title row and the lifecycle now: what used to be a lone "Loading…"
     // paragraph is the skeleton's visually-hidden status line over three ghost cards.
@@ -397,7 +403,7 @@ describe('SettingsPage — lifecycle', () => {
     vi.mocked(fetchAppSettings)
       .mockRejectedValueOnce(new ApiError('settings unavailable', 503))
       .mockReturnValue(second.promise)
-    renderPage()
+    renderPage('planning')
 
     // The frame is ready (the Appearance card needs no network), so the failure arrives as
     // a plain banner above the grid — nothing is on screen for it to be stale over.
@@ -414,16 +420,15 @@ describe('SettingsPage — lifecycle', () => {
 
     second.resolve(SETTINGS)
     expect(await screen.findByRole('region', { name: 'Plan assumptions' })).toBeTruthy()
-    // The page's failure, the page's retry, then Plan assumptions', Price refresh's and the
-    // Calendar-feed card's own reads once `loadedOnce` finally lets the cards mount.
-    await waitFor(() => expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(5))
+    // The page's failed load and retry, followed by the opened Planning card's read.
+    await waitFor(() => expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(3))
     expect(screen.queryByRole('alert')).toBeNull()
   })
 })
 
 describe('SettingsPage — password', () => {
   it('refuses a new/confirm mismatch without spending a request', async () => {
-    renderPage()
+    renderPage('account')
     await screen.findByLabelText('Current password')
 
     fillPasswords('old-pw', 'new-pw-12345', 'new-pw-12346')
@@ -434,7 +439,7 @@ describe('SettingsPage — password', () => {
   })
 
   it('changes the password, clears all three boxes and says so', async () => {
-    renderPage()
+    renderPage('account')
     await screen.findByLabelText('Current password')
 
     fillPasswords('old-pw', 'new-pw-12345', 'new-pw-12345')
@@ -458,7 +463,7 @@ describe('SettingsPage — password', () => {
 
   it('renders a rejected password change verbatim and keeps the boxes', async () => {
     vi.mocked(changePassword).mockRejectedValue(new ApiError('Current password is incorrect', 400))
-    renderPage()
+    renderPage('account')
     await screen.findByLabelText('Current password')
 
     fillPasswords('wrong-pw', 'new-pw-12345', 'new-pw-12345')
@@ -476,27 +481,31 @@ describe('SettingsPage — password', () => {
     const change = deferred<void>()
     vi.mocked(putAppSettings).mockReturnValue(put.promise)
     vi.mocked(changePassword).mockReturnValue(change.promise)
-    renderPage()
-    // The Plan assumptions card owns a load of its own, so its Save button lands a beat after
-    // the password boxes the page renders synchronously behind `loadedOnce`.
+    renderPage('planning')
     await screen.findByLabelText('Withdrawal rate (% / year)')
 
     fireEvent.click(saveButton())
     await waitFor(() => expect(saveButton().disabled).toBe(true))
     // Two cards, two flags: a settings save must not lock the password form.
+    fireEvent.click(screen.getByRole('tab', { name: 'Account' }))
+    await screen.findByLabelText('Current password')
     expect(pwButton().disabled).toBe(false)
     await act(async () => {
       put.resolve(SETTINGS)
     })
+    fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
     await waitFor(() => expect(saveButton().disabled).toBe(false))
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Account' }))
     fillPasswords('old-pw', 'new-pw-12345', 'new-pw-12345')
     fireEvent.click(pwButton())
     await waitFor(() => expect(pwButton().disabled).toBe(true))
+    fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
     expect(saveButton().disabled).toBe(false)
     await act(async () => {
       change.resolve(undefined)
     })
+    fireEvent.click(screen.getByRole('tab', { name: 'Account' }))
     await waitFor(() => expect(pwButton().disabled).toBe(false))
   })
 })
@@ -504,7 +513,7 @@ describe('SettingsPage — password', () => {
 describe('SettingsPage — xlsx import', () => {
   it('offers no import card at all when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
-    renderPage()
+    renderPage('data')
 
     expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     // The card shares the two forms' `loadedOnce` gate on purpose: a settings GET that
@@ -516,7 +525,7 @@ describe('SettingsPage — xlsx import', () => {
 
   it('arms Dry run with a chosen file, and Apply only with a clean dry-run report', async () => {
     vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
-    renderPage()
+    renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     expect(dryButton().disabled).toBe(true)
@@ -534,7 +543,7 @@ describe('SettingsPage — xlsx import', () => {
 
   it('dry-runs the chosen file and renders the per-sheet diff', async () => {
     vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
-    renderPage()
+    renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     const file = xlsx()
@@ -577,7 +586,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(importXlsx).mockResolvedValue(
       makeReport({ paycheck: { samples: ['2024-06-14 gross 12500.00 -> 12750.00'] } }),
     )
-    renderPage()
+    renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -597,7 +606,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(importXlsx).mockResolvedValue(
       makeReport({ taxes: { errors: ['2024: bracket rows overlap at 100000'] } }),
     )
-    renderPage()
+    renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -613,7 +622,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(importXlsx).mockResolvedValue(
       makeReport({ crypto: { errors: ['row 3: unknown symbol "XBT"'] } }),
     )
-    renderPage()
+    renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -630,7 +639,7 @@ describe('SettingsPage — xlsx import', () => {
 
   it('drops the report when another file is picked', async () => {
     vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
-    renderPage()
+    renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -648,7 +657,7 @@ describe('SettingsPage — xlsx import', () => {
   it('spends no request when the clobber warning is declined', async () => {
     vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
     confirmSpy.mockReturnValue(false)
-    renderPage()
+    renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -666,7 +675,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(importXlsx)
       .mockResolvedValueOnce(makeReport(SPENDING_DIFF))
       .mockResolvedValueOnce(makeReport(SPENDING_DIFF, true))
-    renderPage()
+    renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     const file = xlsx()
@@ -691,7 +700,7 @@ describe('SettingsPage — xlsx import', () => {
 
   it('renders a refused upload verbatim in the card error slot', async () => {
     vi.mocked(importXlsx).mockRejectedValue(new ApiError('File too large (max 15 MB)', 413))
-    renderPage()
+    renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -717,7 +726,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(importXlsx)
       .mockResolvedValueOnce(makeReport(SPENDING_DIFF))
       .mockRejectedValueOnce(new ApiError('import failed: database is locked', 500))
-    renderPage()
+    renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -742,7 +751,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(importXlsx)
       .mockResolvedValueOnce(makeReport(SPENDING_DIFF))
       .mockRejectedValueOnce(new ApiError('import failed: sheet "Spending" is missing', 400))
-    renderPage()
+    renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -766,7 +775,7 @@ describe('SettingsPage — xlsx import', () => {
   it('shuts every import door while a request is in flight', async () => {
     const run = deferred<ImportReport>()
     vi.mocked(importXlsx).mockReturnValue(run.promise)
-    renderPage()
+    renderPage('data')
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -777,22 +786,27 @@ describe('SettingsPage — xlsx import', () => {
     // second upload behind the first, which is what buys this card its missing seq guard.
     expect(applyButton().disabled).toBe(true)
     expect(fileBox().disabled).toBe(true)
-    // Three cards, three flags — an import must not lock the two forms above it.
+    // Separate tasks keep their own request states; switching does not cancel the import.
+    fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
     await screen.findByLabelText('Withdrawal rate (% / year)')
     expect(saveButton().disabled).toBe(false)
+    fireEvent.click(screen.getByRole('tab', { name: 'Account' }))
+    await screen.findByLabelText('Current password')
     expect(pwButton().disabled).toBe(false)
 
     await act(async () => {
       run.resolve(makeReport(SPENDING_DIFF))
     })
+    fireEvent.click(screen.getByRole('tab', { name: 'Data' }))
     await waitFor(() => expect(dryButton().disabled).toBe(false))
     expect(fileBox().disabled).toBe(false)
+    expect(applyButton().disabled).toBe(false)
   })
 })
 
 describe('SettingsPage — system card', () => {
   it('mounts the System card alongside the forms', async () => {
-    renderPage()
+    renderPage('data')
     // A row the card still OWNS: the four scheduler facts moved to the Price refresh card
     // (2026-09-06 spec §3.3), which renders on this same page.
     expect(await screen.findByText('No backup recorded')).toBeDefined()
@@ -802,7 +816,7 @@ describe('SettingsPage — system card', () => {
 describe('SettingsPage — backups and restore cards', () => {
   it('offers neither card when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
-    renderPage()
+    renderPage('data')
     expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Restore' })).toBeNull()
     expect(vi.mocked(fetchSnapshots)).not.toHaveBeenCalled()
@@ -820,7 +834,7 @@ describe('SettingsPage — backups and restore cards', () => {
       restorable: true,
     }
     vi.mocked(createSnapshot).mockResolvedValue(fresh)
-    renderPage()
+    renderPage('data')
     await screen.findByText(/No stored snapshots yet/)
     fireEvent.click(screen.getByRole('button', { name: 'Snapshot now' }))
     const link = await screen.findByRole('link', { name: 'Restore…' })
@@ -839,7 +853,7 @@ describe('SettingsPage — backups and restore cards', () => {
 describe('SettingsPage — appearance card', () => {
   it('keeps the Appearance card when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
-    renderPage()
+    renderPage('account')
 
     expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     // It owns no fetch, so it sits OUTSIDE the loadedOnce gate the other cards share: theme
@@ -892,19 +906,18 @@ describe('SettingsPage — household, accounts and categories cards', () => {
 })
 
 describe('SettingsPage — assistant card', () => {
-  it('mounts the Assistant card last, behind the same loadedOnce gate', async () => {
-    renderPage()
+  it('opens Assistant in Integrations, behind the same loadedOnce gate', async () => {
+    renderPage('integrations')
 
     const assistant = await screen.findByRole('region', { name: 'Assistant' })
-    // Last on the page on purpose: it configures a side feature, not the dashboard's own
-    // numbers, so it sits below the data cards the page exists for.
-    expectInDocumentOrder(screen.getByRole('heading', { name: /Contribution limits/ }), assistant)
+    expect(assistant.closest('[role="tabpanel"]')?.getAttribute('hidden')).toBeNull()
+    expect(screen.queryByRole('heading', { name: /Contribution limits/ })).toBeNull()
     await waitFor(() => expect(vi.mocked(fetchAssistantSettings)).toHaveBeenCalledTimes(1))
   })
 
   it('offers no Assistant card when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
-    renderPage()
+    renderPage('integrations')
 
     expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Assistant' })).toBeNull()
@@ -915,54 +928,59 @@ describe('SettingsPage — assistant card', () => {
 describe('SettingsPage — health and activity cards', () => {
   it('offers neither card when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
-    renderPage()
+    renderPage('data')
     expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Data health' })).toBeNull()
     expect(vi.mocked(fetchHealth)).not.toHaveBeenCalled()
   })
 })
 
-describe('SettingsPage — section order (2026-09-06 spec §3.1)', () => {
-  // Resolved by id, never by accessible name: the band headings and the card headings collide
-  // on "Household", "Accounts", "Restore", "System" and "Activity".
+describe('SettingsPage — task views', () => {
   const el = (id: string) => document.getElementById(id) as HTMLElement
 
-  it('lays the five sections out in order, each with its cards', async () => {
+  it('makes every settings task reachable while showing one panel at a time', async () => {
     renderPage()
-    await screen.findByRole('region', { name: 'Plan assumptions' })
-    expectInDocumentOrder(
-      el('sec-household'), el('household'), el('categories'), el('accounts'),
-      el('sec-planning'), el('limits'), el('plan-assumptions'),
-      el('sec-account'), el('appearance'), el('password'),
-      el('sec-integrations'), el('price-refresh'), el('assistant'), el('calendar'),
-      el('sec-data'), el('import'), el('backups'), el('restore'), el('health'),
-      el('system'), el('activity'),
-    )
-  })
-
-  it('makes each band a span of the grid, not a card', async () => {
-    renderPage()
-    await screen.findByRole('region', { name: 'Plan assumptions' })
-    for (const id of ['sec-household', 'sec-planning', 'sec-account', 'sec-integrations', 'sec-data']) {
-      expect(el(id).tagName).toBe('H2')
-      // Not a .card: the arrival ring and the entrance stagger are both card-scoped, and a
-      // heading must take neither.
-      expect(el(id).classList.contains('card')).toBe(false)
-      expect(el(id).classList.contains('settings-section')).toBe(true)
+    await waitFor(() => expect(document.getElementById('accounts')).not.toBeNull())
+    const tasks = [
+      ['Household', 'sec-household', 'household', 'categories', 'accounts'],
+      ['Planning', 'sec-planning', 'limits', 'plan-assumptions'],
+      ['Account', 'sec-account', 'appearance', 'password'],
+      ['Integrations', 'sec-integrations', 'price-refresh', 'assistant', 'calendar'],
+      ['Data', 'sec-data', 'import', 'backups', 'restore', 'health', 'system', 'activity'],
+    ]
+    for (const [label, heading, ...cards] of tasks) {
+      fireEvent.click(screen.getByRole('tab', { name: label }))
+      const panel = screen.getByRole('tabpanel', { name: label })
+      await waitFor(() => expect(cards.every((id) => panel.contains(el(id)))).toBe(true))
+      expect(screen.getAllByRole('tabpanel')).toHaveLength(1)
+      expectInDocumentOrder(el(heading), ...cards.map(el))
+      expect(el(heading).tagName).toBe('H2')
+      expect(el(heading).classList.contains('card')).toBe(false)
     }
   })
 
-  it('mounts the rail in the sticky scope row', async () => {
+  it('preserves an unfinished planning edit across task changes', async () => {
+    renderPage('planning')
+    const rate = await screen.findByLabelText('Withdrawal rate (% / year)')
+    fireEvent.change(rate, { target: { value: '3.75' } })
+    fireEvent.click(screen.getByRole('tab', { name: 'Data' }))
+    expect(screen.queryByRole('region', { name: 'Plan assumptions' })).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
+    expect((screen.getByLabelText('Withdrawal rate (% / year)') as HTMLInputElement).value).toBe('3.75')
+    expect(putAppSettings).not.toHaveBeenCalled()
+  })
+
+  it('mounts accessible task navigation in the sticky scope row', async () => {
     renderPage()
-    await screen.findByRole('region', { name: 'Plan assumptions' })
+    await waitFor(() => expect(document.getElementById('accounts')).not.toBeNull())
     const row = document.querySelector('.page-frame-scope') as HTMLElement
     expect(row).not.toBeNull()
-    expect(within(row).getByRole('group', { name: 'Settings sections' })).toBeTruthy()
+    expect(within(row).getByRole('tablist', { name: 'Settings views' })).toBeTruthy()
   })
 
   it('keeps the Account band and Appearance outside the loadedOnce gates', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
-    renderPage()
+    renderPage('account')
 
     expect(await screen.findByText(/Couldn't load settings/)).toBeTruthy()
     // Appearance owns no fetch, so theme, density and the palette's #appearance jump keep
@@ -973,14 +991,8 @@ describe('SettingsPage — section order (2026-09-06 spec §3.1)', () => {
     // coming would promise what the API cannot give.
     expect(document.getElementById('sec-data')).toBeNull()
     expect(document.getElementById('sec-household')).toBeNull()
-    // And the rail says so: the lit chip is the only section actually on the page, not the
-    // first one in the list.
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Account' }).getAttribute('aria-pressed')).toBe(
-        'true',
-      ),
-    )
-    expect(screen.getByRole('button', { name: 'Household' }).getAttribute('aria-pressed')).toBe(
+    expect(screen.getByRole('tab', { name: 'Account' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('tab', { name: 'Household' }).getAttribute('aria-selected')).toBe(
       'false',
     )
   })
@@ -1192,7 +1204,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
   })
 
   it('leaves every card unrung when the URL carries no anchor', async () => {
-    renderPage()
+    renderPage('planning')
     const limits = await screen.findByRole('region', { name: 'Contribution limits' })
     expect(limits.classList.contains('is-highlighted')).toBe(false)
   })
@@ -1212,7 +1224,7 @@ function AnchorProbe({ to }: { to: string }) {
 
 describe('SettingsPage — calendar feed card', () => {
   it('mounts the Calendar feed card with its anchor', async () => {
-    renderPage()
+    renderPage('integrations')
     expect(await screen.findByRole('region', { name: 'Calendar feed' })).toBeTruthy()
     // The palette's /settings#calendar destination is this id (paletteRegistry).
     expect(document.getElementById('calendar')).not.toBeNull()
@@ -1260,7 +1272,7 @@ describe('SettingsPage — anchored arrival from the palette', () => {
   })
 
   it('leaves every card unrung when the URL carries no anchor', async () => {
-    renderPage()
+    renderPage('planning')
     const limits = await screen.findByRole('region', { name: 'Contribution limits' })
     expect(limits.classList.contains('is-highlighted')).toBe(false)
   })

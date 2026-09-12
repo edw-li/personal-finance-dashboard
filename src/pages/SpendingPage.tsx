@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
 import { describeError } from '../api/client'
 import { fetchMatrix, fetchYearly } from '../api/spending'
@@ -12,6 +12,11 @@ import PageFrame from '../components/shell/PageFrame'
 import ScopeBar from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
+import useSpendingEvidence from '../components/metrics/useSpendingEvidence'
+import { REVIEW_LABELS } from '../api/monthReview'
+import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
+import type { ChartSelection } from '../types/metrics'
+import SelectionDetail from '../components/details/SelectionDetail'
 import { useArrivalValue } from '../components/useArrivalParam'
 import Segmented from '../components/shell/Segmented'
 import BudgetPanel from '../components/spending/BudgetPanel'
@@ -48,6 +53,7 @@ import './SpendingPage.css'
 const TOP_N = 7
 const MAX_TREND = 3
 const MOVERS_TOP = 5
+const SECTIONS = [{ id: 'overview', label: 'Overview' }, { id: 'trends', label: 'Trends' }, { id: 'budgets', label: 'Budgets' }, { id: 'history', label: 'History' }] as const
 
 // Spending UP is BAD: the glyph carries which way the number moved, the colour whether
 // that is good — StatTile's decoupled delta grammar, table-cell sized. Null (no month to
@@ -84,6 +90,7 @@ function defaultTrend(m: SpendingMatrix): { categoryId: number; slot: number }[]
 
 export default function SpendingPage() {
   const navigate = useNavigate()
+  const views = useLocalSections(SECTIONS, 'overview', { resolveLegacy: ({ searchParams, hash }) => searchParams.has('trend') ? 'trends' : hash.includes('budget') ? 'budgets' : undefined })
   const cached = getSnapshot<SpendingSnapshot>(SNAPSHOT_KEY)
   const [matrix, setMatrix] = useState<SpendingMatrix | null>(cached?.matrix ?? null)
   const [yearly, setYearly] = useState<SpendingYearly | null>(cached?.yearly ?? null)
@@ -295,17 +302,13 @@ export default function SpendingPage() {
     [matrix, detailMonth],
   )
   const activeDetail = detailIndex >= 0
-  const detailLabel = activeDetail && matrix ? formatMonth(matrix.months[detailIndex]) : null
-
-  const monthDetailOption = useMemo(
-    () => (matrix === null ? null : monthPieOption(matrix, topIds, detailIndex)),
-    [matrix, topIds, detailIndex],
-  )
 
   // The page's FOCUSED month: the drilled month when the pie is open, the latest month
   // otherwise. The movers, the flow card and the Budget card all read it, so drilling a
   // month on the top chart moves the whole page's "what happened here" together.
-  const focusIndex = matrix ? (activeDetail ? detailIndex : matrix.months.length - 1) : -1
+  const focusIndex = matrix ? (activeDetail ? detailIndex : matrix.default_month !== undefined ? matrix.months.indexOf(matrix.default_month ?? '') : matrix.months.length - 1) : -1
+  const focusMonth = matrix?.months[focusIndex]
+  const evidence = useSpendingEvidence(focusMonth, matrix)
   const movers = useMemo(
     () => (matrix ? monthMovers(matrix, focusIndex, MOVERS_TOP) : []),
     [matrix, focusIndex],
@@ -323,16 +326,20 @@ export default function SpendingPage() {
     [flowPeriod],
   )
 
-  const handleSpendChartClick = (params: EChartEventParams) => {
-    if (activeDetail) {
-      setDetailMonth(null) // any chart click in detail mode returns to all months
-      return
+  const periodSelection = useCallback((index: number): ChartSelection | null => {
+    if (!matrix || index < 0 || index >= matrix.months.length) return null
+    const selectedMonth = matrix.months[index]
+    return { kind: 'period', id: `spending:${selectedMonth}`, period: selectedMonth, label: formatMonth(selectedMonth), scope: 'Household',
+      values: [{ label: 'Living spending', value: matrix.living_total?.[index] ?? null, unit: 'USD' },
+        { label: 'Tax paid from take-home', value: matrix.tax_total?.[index] ?? null, unit: 'USD' },
+        { label: 'Transfers', value: matrix.transfer_total?.[index] ?? null, unit: 'USD' },
+        { label: 'All category entries', value: matrix.totals[index], unit: 'USD' },
+        { label: 'Take-home pay', value: matrix.net_pay[index], unit: 'USD' }],
+      source: { href: `/update?month=${selectedMonth}&step=spending`, label: 'Open monthly entries' },
+      context: { month: selectedMonth, definition: 'All-category chart; living, tax and transfers are identified separately.' },
     }
-    const index = params.dataIndex
-    if (matrix && typeof index === 'number' && index >= 0 && index < matrix.months.length) {
-      setDetailMonth(matrix.months[index])
-    }
-  }
+  }, [matrix])
+  const selectedPeriod = useMemo(() => activeDetail ? periodSelection(detailIndex) : null, [activeDetail, detailIndex, periodSelection])
 
   // The heatmap's rows: the page's all-time order minus dormant categories unless asked
   // for. `visible` is what both the option and the hover -> bar mapping index by.
@@ -348,7 +355,7 @@ export default function SpendingPage() {
   // when it made the top fold, the "Other" stack segment when folded. seriesIndex is
   // positional in barsOption.series — kept in lockstep by both deriving from topIds.
   const handleHeatmapHover = (params: EChartEventParams) => {
-    if (!matrix || activeDetail || params.seriesType !== 'heatmap') return
+    if (!matrix || params.seriesType !== 'heatmap') return
     if (!Array.isArray(params.value)) return
     const [col, row] = params.value as [number, number, number]
     const categoryId = heatRows.visible[row]
@@ -422,19 +429,10 @@ export default function SpendingPage() {
     // must not dilute the average. totals[] itself carries "0.00" for such months (the
     // server sums over an empty set), so enteredness is judged on the SERIES — the same
     // rule filledMonths uses for the ribbon below.
-    const entered = matrix.months.map((_, i) => matrix.series.some((s) => s.values[i] !== null))
-    const window = matrix.totals
-      .map((total, i) => ({ total: Number(total), entered: entered[i] }))
-      .slice(Math.max(0, focusIndex - 11), focusIndex + 1)
-      .filter((cell) => cell.entered)
-    const average =
-      window.length === 0
-        ? null
-        : window.reduce((acc, cell) => acc + cell.total, 0) / window.length
     return {
       month: matrix.months[focusIndex],
-      total: matrix.totals[focusIndex],
-      average,
+      total: matrix.living_total?.[focusIndex] ?? null,
+      average: matrix.comparison_average?.[focusIndex] ?? null,
       savings: matrix.savings_rate[focusIndex],
       netPay: matrix.net_pay[focusIndex],
     }
@@ -447,7 +445,7 @@ export default function SpendingPage() {
     () =>
       matrix === null
         ? undefined
-        : Object.fromEntries(matrix.months.map((m, i) => [m, formatCurrency(matrix.totals[i])])),
+        : Object.fromEntries(matrix.months.map((m, i) => [m, `${formatCurrency(matrix.living_total?.[i])} living`])),
     [matrix],
   )
 
@@ -463,6 +461,7 @@ export default function SpendingPage() {
     <div className="page">
       <PageFrame
         title="Spending"
+        subheader={<LocalSectionNav state={views} label="Spending views" />}
         actions={
           <button
             className="button button-primary"
@@ -503,72 +502,67 @@ export default function SpendingPage() {
         {/* The secondary feed's own alert (2026-09-09 audit item 10) — at the top of the
             page, where the card it speaks for is missing from the bottom of it. */}
         <FeedBanner error={yearlyError} retry={retryYearly} retryLabel="Retry the yearly rollup" />
+        <LocalSectionPanel state={views} section="overview">
+        <FeedBanner error={evidence.error} />
         {kpis && (
           <div className="kpi-row">
             <StatTile
-              label={`Spend — ${formatMonth(kpis.month)}`}
+              label={`Living spending — ${formatMonth(kpis.month)}`}
               value={formatCurrency(kpis.total)}
-              hint="The viewed month's total across all categories — the drilled month when one is open, otherwise the latest entered month."
+              hint="Living categories only. Tax paid from take-home and transfers are shown separately."
+              evidence={evidence.metric('living_spending')}
             />
             <StatTile
-              label="12-month average"
+              label="Previous 12 months"
               value={formatCurrency(kpis.average)}
-              hint="Mean monthly spend over the 12 entered months ending with the viewed one."
+              hint="Mean living spending in eligible months within the previous 12 calendar months, excluding this month. Missing months do not pull older entries into the comparison."
+              delta={`${matrix?.comparison_count?.[focusIndex] ?? evidence.data?.comparison.window?.included.length ?? 0} eligible months`}
+              evidence={evidence.data?.comparison}
             />
             <StatTile
               label="Savings rate — cash"
               value={kpis.savings === null ? '—' : formatPct(kpis.savings, { signed: false })}
               hint="(net pay − living spend − tax paid) ÷ net pay for the viewed month. Payroll deductions are not in this one — the chart below draws both readings."
+              evidence={evidence.metric('cash_savings_rate')}
             />
             <StatTile
               label="Net pay"
               value={formatCurrency(kpis.netPay)}
               hint="Take-home pay entered for the viewed month."
+              evidence={evidence.metric('net_pay')}
             />
           </div>
         )}
+        {kpis && <p className="drill-hint spending-metric-context">{matrix?.review_state?.[focusIndex] && `${REVIEW_LABELS[matrix.review_state[focusIndex]]} · `}Tax paid from take-home {formatCurrency(matrix?.tax_total?.[focusIndex])} · Transfers {formatCurrency(matrix?.transfer_total?.[focusIndex])} · Cash outflow {formatCurrency(matrix?.cash_outflow?.[focusIndex])}. <Link to={`/update?month=${kpis.month}&step=review`}>Review month</Link></p>}
 
         <div className="card-grid">
           <ChartCard
-            title={
-              detailLabel
-                ? `Spending breakdown — ${detailLabel}`
-                : `Monthly spend vs net pay — top ${TOP_N} categories + other`
-            }
-            hint="Top categories stacked per month under your net-pay line; the dashed Sustainable spend line is what your investable assets could fund each month at your safe withdrawal rate (Settings). Click a bar for that month's breakdown."
-            ariaLabel={
-              detailLabel
-                ? `Donut chart of ${detailLabel}'s spending by category`
-                : 'Stacked bar chart of monthly spending by category under the net-pay line'
-            }
-            option={activeDetail ? monthDetailOption : barsOption}
-            empty={
-              activeDetail
-                ? `No spending recorded for ${detailLabel}.`
-                : 'No spending recorded yet — enter a month to begin.'
-            }
-            exportName={activeDetail ? `spending-${detailMonth}` : 'spending'}
-            csv={
-              matrix === null
-                ? undefined
-                : activeDetail
-                  ? () => monthPieCsv(matrix, topIds, detailIndex)
-                  : () => spendingCsv(matrix, topIds, nameById)
-            }
+            title={`Monthly entries vs take-home — top ${TOP_N} categories + other`}
+            hint="All categories are stacked here, including living, tax and transfers. Select a month for its separate totals and source entries. Sustainable spend is based on your investable assets and withdrawal-rate setting."
+            ariaLabel="Stacked bar chart of all monthly category entries under the net-pay line"
+            option={barsOption}
+            empty="No spending recorded yet — enter a month to begin."
+            exportName="spending"
+            csv={matrix === null ? undefined : () => spendingCsv(matrix, topIds, nameById)}
             height={340}
-            zoomable={!activeDetail}
-            group={
-              /* Off for the drill-in pie: it has no axisPointer or zoom to share, and echarts
-                 relays every action across a connect group. Safe to toggle since 2026-09-05 —
-                 `group` has its own effect, so this re-points the live instance instead of
-                 disposing the canvas the bar → pie morph runs on. */
-              activeDetail ? undefined : 'spending'
-            }
-            onClick={handleSpendChartClick}
+            zoomable
+            group="spending"
+            selectionAdapter={params => typeof params.dataIndex === 'number' ? periodSelection(params.dataIndex) : null}
+            rowSelection={(_, index) => periodSelection(index)}
+            selection={selectedPeriod}
+            onSelectionChange={selected => { if (selected?.kind === 'period') setDetailMonth(selected.period); else if (selected === null) setDetailMonth(null) }}
+            renderSelection={selected => {
+              const index = selected.kind === 'period' && matrix ? matrix.months.indexOf(selected.period) : -1
+              return <><SelectionDetail selection={selected} chartTitle="Monthly category entries" />{matrix && index >= 0 && <ChartCard
+                title={`${selected.label} breakdown`} hint="Positive categories make up this donut. Refunds are included in the totals above."
+                ariaLabel={`Donut chart of ${selected.label} categories`} option={monthPieOption(matrix, topIds, index)}
+                empty="No positive category amounts to draw." exportName={`spending-breakdown-${matrix.months[index]}`}
+                csv={() => monthPieCsv(matrix, topIds, index)} height={240} />}</>
+            }}
             instanceRef={barsChartRef}
             onLegendChange={onLegendChange}
             onDataZoom={onZoomWindow}
-            zoomWindow={activeDetail ? undefined : zoomWindow}
+            zoomWindow={zoomWindow}
             actions={
               /* The drill-in's way back. It stays here beside the pie it undoes, where the
                  eye already is — the scope row's "Back to latest" chip clears the same
@@ -587,10 +581,10 @@ export default function SpendingPage() {
                   {matrix.savings_rate[detailIndex] === null
                     ? '—'
                     : formatPct(matrix.savings_rate[detailIndex], { signed: false })}{' '}
-                  — click the chart to go back.
+                  · Selected month. Choose another bar to compare.
                 </p>
               ) : (
-                <p className="drill-hint">Click a month's bar to expand its breakdown.</p>
+                <p className="drill-hint">Select a month to pin its totals and breakdown beside the chart.</p>
               )
             }
           />
@@ -599,7 +593,7 @@ export default function SpendingPage() {
             <div className="card span-12">
               <h2 className="eyebrow">
                 What changed — {monthLabels[focusIndex]}
-                <InfoHint text="The month's biggest category moves, vs the prior month and vs each category's 12-month average." />
+                <InfoHint text="The month's biggest category moves, versus the prior calendar month where both entries exist and each category's eligible average in the previous 12 calendar months." />
               </h2>
               <table className="data-table">
                 <thead>
@@ -668,11 +662,17 @@ export default function SpendingPage() {
             />
           )}
 
+        </div>
+        </LocalSectionPanel>
+        <LocalSectionPanel state={views} section="budgets" className="card-grid">
           {/* onBudgetsChanged = the page's refetch: a saved budget re-draws the meters, the
               chart reference lines and the movers column together, from one matrix. */}
-          {matrix && matrix.months.length > 0 && (
+          {matrix && focusIndex >= 0 && (
             <BudgetPanel matrix={matrix} monthIndex={focusIndex} onBudgetsChanged={load} />
           )}
+          {focusIndex < 0 && <p className="empty-note">Select an entered month in the ribbon to review its budgets.</p>}
+        </LocalSectionPanel>
+        <LocalSectionPanel state={views} section="trends" className="card-grid">
 
           {/* Long-run half, summary before detail (2026-08-31 audit): the range-windowed
               pair reads right after the budgets that feed the trends chart's step lines;
@@ -691,6 +691,8 @@ export default function SpendingPage() {
             group="spending"
             onDataZoom={onZoomWindow}
             zoomWindow={zoomWindow}
+            selectionAdapter={params => typeof params.dataIndex === 'number' ? periodSelection(params.dataIndex) : null}
+            rowSelection={(_, index) => periodSelection(index)}
             footer={
               <p className="drill-hint">
                 Transfers to your own accounts are not counted as money gone; tax payments
@@ -779,8 +781,11 @@ export default function SpendingPage() {
             }
           />
 
+        </LocalSectionPanel>
+        <LocalSectionPanel state={views} section="history" className="card-grid">
           <ChartCard
             title="Month × category heatmap"
+            independentRangeLabel="Full recorded history"
             hint="Row: each category on its own 0 → max scale. vs average: orange = above its trailing 12-month average, blue = below (blank until six prior months exist). Absolute: one shared dollar scale. Rows are ordered by all-time total; categories that never spent are hidden until asked for."
             ariaLabel="Heatmap of spend per category per month"
             option={heatmapOpt}
@@ -788,6 +793,16 @@ export default function SpendingPage() {
             exportName="spending-heatmap"
             csv={matrix === null ? undefined : () => heatmapCsv(matrix, heatmapOrder, nameById)}
             height={Math.max(332, heatRows.visible.length * 24 + 142)}
+            selectionAdapter={params => {
+              if (!matrix || !Array.isArray(params.value)) return null
+              const [column, row] = params.value as number[]
+              const categoryId = heatRows.visible[row]
+              if (categoryId === undefined || !matrix.months[column]) return null
+              return { kind: 'heatmap', id: `spending-cell:${matrix.months[column]}:${categoryId}`, period: matrix.months[column], categoryId,
+                label: `${nameById.get(categoryId)} · ${formatMonth(matrix.months[column])}`, scope: 'Household',
+                values: [{ label: 'Entered amount', value: matrix.series.find(series => series.category_id === categoryId)?.values[column] ?? null, unit: 'USD' }],
+                source: { href: `/update?month=${matrix.months[column]}&step=spending`, label: 'Open monthly entries' } }
+            }}
             onHover={handleHeatmapHover}
             onHoverEnd={handleHeatmapHoverEnd}
             controls={
@@ -939,7 +954,7 @@ export default function SpendingPage() {
             </div>
           </div>
           )}
-        </div>
+        </LocalSectionPanel>
       </PageFrame>
     </div>
   )

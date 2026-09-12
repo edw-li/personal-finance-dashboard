@@ -156,10 +156,10 @@ describe('monthlyIncomeSums / monthlyIncomeCsv', () => {
 
   it('CSVs as month/amount rows with 2dp strings', () => {
     const csv = monthlyIncomeCsv([dividend('2026-08-03', '5.00')], TODAY)
-    expect(csv.headers).toEqual(['Month', 'Dividends'])
+    expect(csv.headers).toEqual(['Month', 'DividendEntriesUSD', 'DateBasis'])
     expect(csv.rows).toHaveLength(24)
-    expect(csv.rows[23]).toEqual(['2026-08-01', '5.00'])
-    expect(csv.rows[0]).toEqual([csv.rows[0][0], '0.00'])
+    expect(csv.rows[23]).toEqual(['2026-08-01', '5.00', 'Automatic: ex-date estimate; manual: entered pay date'])
+    expect(csv.rows[0]).toEqual([csv.rows[0][0], '0.00', 'Automatic: ex-date estimate; manual: entered pay date'])
   })
 })
 

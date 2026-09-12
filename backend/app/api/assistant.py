@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import AppSetting
+from app.models import AppSetting, User
 from app.rate_limit import limiter
 from app.schemas.assistant import (
     AssistantKeyStatus,
@@ -167,7 +167,9 @@ async def context_preview(body: PreviewIn, db: AsyncSession = Depends(get_db)) -
 
 @router.post("/chat")
 @limiter.limit(CHAT_LIMIT)
-async def chat(request: Request, body: ChatIn) -> StreamingResponse:
+async def chat(
+    request: Request, body: ChatIn, user: User = Depends(get_current_user)
+) -> StreamingResponse:
     """SSE agent loop. Deliberately NO Depends(get_db): FastAPI closes yield-deps before
     a StreamingResponse body runs, so the generator owns its session (assistant_chat)."""
     if registry_entry(body.model) is None:
@@ -176,6 +178,8 @@ async def chat(request: Request, body: ChatIn) -> StreamingResponse:
         model_key=body.model,
         messages=[m.model_dump() for m in body.messages],
         context=body.context.model_dump(),
+        intent=body.intent,
+        user_id=user.id,
     )
     return StreamingResponse(
         _with_keepalive(stream),

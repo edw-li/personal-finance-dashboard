@@ -55,6 +55,7 @@ describe('prefsStore — local mirror', () => {
       scope: 'finance.scope',
       palette_recents: 'commandPalette.recent',
       landing_page: 'finance.landingPage',
+      overview_layout: 'finance.overviewLayout',
     })
   })
 

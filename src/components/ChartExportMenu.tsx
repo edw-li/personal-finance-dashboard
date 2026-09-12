@@ -1,3 +1,4 @@
+import { useEffect, useId, useRef, useState } from 'react'
 import { captionedPng, dataUrlToBlob } from '../charts/exportImage'
 import { DARK, LIGHT } from '../theme/tokens'
 import { downloadDataUrl, downloadText, toCsv } from '../utils/download'
@@ -7,6 +8,7 @@ import { todayIso } from '../utils/months'
 import { useTheme } from './shell/ThemeProvider'
 import { useToast } from './ToastProvider'
 import './panels.css'
+import './chartInteractions.css'
 
 export interface ExportConfig {
   /** Download basename — the files land as {name}.png / {name}.csv. */
@@ -48,6 +50,19 @@ export default function ChartExportMenu({
   const { resolved } = useTheme()
   const toast = useToast()
   const tokens = resolved === 'light' ? LIGHT : DARK
+  const [open, setOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuId = useId()
+  useEffect(() => {
+    if (!open) return
+    const dismiss = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', dismiss)
+    return () => document.removeEventListener('pointerdown', dismiss)
+  }, [open])
+  const finish = (action: () => void) => { action(); setOpen(false); triggerRef.current?.focus() }
 
   const snapshot = (): string | null => {
     const chart = getChart()
@@ -96,24 +111,27 @@ export default function ChartExportMenu({
   const csv = config.csv
   return (
     <div className="chart-export" role="group" aria-label={`Export ${config.name}`}>
-      <span className="chart-export-glyph" aria-hidden="true">⤓</span>
-      <div className="segmented">
-        <button type="button" onClick={png}>PNG</button>
-        <button type="button" onClick={() => void copy()}>Copy</button>
-        {csv && (
-          <button
-            type="button"
-            onClick={() => {
-              const { headers, rows } = csv()
-              downloadText(toCsv(headers, rows), `${config.name}.csv`, 'text/csv;charset=utf-8')
-            }}
-          >
-            CSV
-          </button>
-        )}
-        {onToggleTable !== undefined && (
-          <button type="button" aria-pressed={tableShown === true} onClick={onToggleTable}>Table</button>
-        )}
+      {onToggleTable !== undefined && <button type="button" className="button" aria-pressed={tableShown === true} onClick={onToggleTable}>Table</button>}
+      <div ref={menuRef} className="chart-export-menu" onKeyDown={(event) => {
+        if (event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); setOpen(false); triggerRef.current?.focus() }
+        if (!open || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+        event.preventDefault()
+        const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
+        const index = items.findIndex((item) => item === document.activeElement)
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+        items[next]?.focus()
+      }}>
+        <button ref={triggerRef} type="button" className="button" aria-haspopup="menu" aria-expanded={open} aria-controls={menuId} onClick={() => setOpen((value) => !value)} onKeyDown={(event) => {
+          if (!open && ['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); setOpen(true) }
+        }}>Export</button>
+        {open && <div id={menuId} className="chart-export-popover" role="menu" aria-label={`Export ${config.title}`}>
+          <button type="button" role="menuitem" autoFocus onClick={() => finish(png)}>PNG</button>
+          <button type="button" role="menuitem" onClick={() => finish(() => { void copy() })}>Copy image</button>
+          {csv && <button type="button" role="menuitem" onClick={() => finish(() => {
+            const { headers, rows } = csv()
+            downloadText(toCsv(headers, rows), `${config.name}.csv`, 'text/csv;charset=utf-8')
+          })}>CSV</button>}
+        </div>}
       </div>
     </div>
   )

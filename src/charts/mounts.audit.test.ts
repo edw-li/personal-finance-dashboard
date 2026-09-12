@@ -122,7 +122,11 @@ const PAGE_CHART_HEADER =
 // section — a table, not a chart — legitimately keeps it, so it is named here rather than
 // waved through by directory: a NEW file reaching for the retired class fails this audit
 // even if it lives beside the page.
-const PANEL_TITLE_ROW_ALLOWED = new Set([path.join('pages', 'PortfolioPage.tsx')])
+const PANEL_TITLE_ROW_ALLOWED = new Set([
+  path.join('pages', 'PortfolioPage.tsx'),
+  // Allocation target maintenance is an editor; its chart remains inside ChartCard.
+  path.join('components', 'portfolio', 'AllocationTargetEditor.tsx'),
+])
 
 // A page-level PREREQUISITE gate is not a chart fallback: ProjectionPage has no projection
 // at all until a net-worth snapshot exists, so its `missing` branch replaces the tiles, the

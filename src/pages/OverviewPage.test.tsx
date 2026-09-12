@@ -1,8 +1,11 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
-import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
+import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
+import { fetchSpendingEvidence } from '../api/monthReview'
+import { getLocal, resetPrefsStoreForTests, STORAGE_KEYS } from '../prefs/prefsStore'
+import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
 import type {
   CalendarEvent,
   CalendarEventType,
@@ -75,6 +78,9 @@ vi.mock('../api/overview', async (importOriginal) => ({
 // network if a later scope key does.
 vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
 vi.mock('../api/coverage', () => ({ fetchCoverage: vi.fn() }))
+vi.mock('../api/monthReview', async importOriginal => ({
+  ...await importOriginal<typeof import('../api/monthReview')>(), fetchSpendingEvidence: vi.fn(),
+}))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law). What the three
 // charts DRAW is pinned elsewhere — the net-worth trend and the bars in
 // src/components/overview/overviewChartOptions.test.ts, the performance lines in
@@ -90,7 +96,7 @@ vi.mock('../components/EChart', async () => {
       onClick,
       animateEntrance = true,
     }: {
-      option: { xAxis?: { data?: unknown[] } }
+      option: { xAxis?: { data?: unknown[] }; series?: { type?: string; data?: unknown[] }[] }
       ariaLabel?: string
       onClick?: (params: { dataIndex?: number }) => void
       animateEntrance?: boolean
@@ -100,6 +106,7 @@ vi.mock('../components/EChart', async () => {
         // ChartCard hands every mount its house sentence (F11) — the page test reads it.
         'aria-label': ariaLabel,
         'data-categories': (option.xAxis?.data ?? []).join(','),
+        'data-spending-points': JSON.stringify(option.series?.find(series => series.type === 'bar')?.data ?? []),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
         // A click stands in for a click on the chart's FIRST point (dataIndex 0) —
@@ -254,12 +261,17 @@ function historyOut(over: Partial<PortfolioHistory> = {}): PortfolioHistory {
 }
 
 function matrixOut(over: Partial<SpendingMatrix> = {}): SpendingMatrix {
+  const months = over.months ?? [...SPEND_MONTHS]
+  const totals = over.totals ?? [...Array<string>(11).fill('5000.00'), '6000.00']
   return {
-    months: [...SPEND_MONTHS],
+    months,
     categories: [],
     series: [],
     // Eleven quiet months at 5,000 then a 6,000 July: the average to beat is exactly 5,000.
-    totals: [...Array<string>(11).fill('5000.00'), '6000.00'],
+    totals,
+    living_total: totals,
+    comparison_average: months.map((_, index) => index === 0 ? null : '5000.00'),
+    default_month: months.at(-1) ?? null,
     net_pay: [],
     savings_rate: [],
     four_pct_rule: [],
@@ -497,7 +509,7 @@ function deferred<T>() {
 // The tiles are addressed through their labels: a tile is a label, a value and (sometimes)
 // a delta, and "sometimes" is the point of half these tests.
 function tileFor(label: string | RegExp): HTMLElement {
-  const tile = screen.getByText(label).closest('.stat-tile')
+  const tile = within(document.querySelector('.kpi-row') as HTMLElement).getByText(label).closest('.stat-tile')
   expect(tile).not.toBeNull()
   return tile as HTMLElement
 }
@@ -526,12 +538,17 @@ function categoriesOf(chart: Element): string {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetPrefsStoreForTests()
   clearSnapshots()
   // useScope falls back to localStorage for keys the URL leaves empty — a scope one test
   // picks would otherwise be the next test's default.
   localStorage.clear()
   vi.mocked(fetchHousehold).mockResolvedValue(HOUSEHOLD)
   vi.mocked(fetchCoverage).mockResolvedValue({ balances: [], spending: [], net_pay: [] })
+  vi.mocked(fetchSpendingEvidence).mockResolvedValue({ month: '2026-07-01', review: null, metrics: [],
+    comparison: { id: 'living_spending_comparison_average', definition_version: 'spending-v1', label: 'Previous 12 months', definition: 'Eligible previous calendar months', value: '5000', unit: 'USD', scope: 'household', completeness: 'complete', components: [], source_link: '/spending', source_label: 'Entries', as_of: '2026-09-12', warnings: [] },
+    rolling: { id: 'living_spending_rolling_average', definition_version: 'spending-v1', label: 'Rolling average', definition: 'Inclusive eligible months', value: '5083.33', unit: 'USD', scope: 'household', completeness: 'complete', components: [], source_link: '/spending', source_label: 'Entries', as_of: '2026-09-12', warnings: [] },
+  })
 })
 
 /** The eleven-client snapshot exactly as the page stores it (the `flow` leg is its own
@@ -551,6 +568,13 @@ function snapshotOf(payload: Payload) {
     system: payload.system,
     coverage: payload.coverage,
   }
+}
+
+function seedOverview(payload: ReturnType<typeof snapshotOf>, owner: number | 'joint' | 'all' = 'all') {
+  setSnapshot(`overview:wealth:${owner}`, { summary: payload.summary, ts: payload.ts })
+  setSnapshot(`overview:investments:${owner}`, { holdings: payload.holdings, history: payload.history, dividends: payload.dividends })
+  setSnapshot('overview:spending', { matrix: payload.matrix, yearly: payload.yearly, coverage: payload.coverage })
+  setSnapshot('overview:planning', { taxes: payload.taxes, lots: payload.lots, taxYears: payload.taxYears, system: payload.system })
 }
 
 /** The three PAGE-level charts (net-worth trend, performance, recent spending) in render
@@ -588,7 +612,7 @@ describe('OverviewPage tiles', () => {
     // paints only, and a settling number is not a string this test can pin. The revalidation
     // still goes out and lands the same payload, so every figure below is the snapshot's.
     const payload = serve()
-    setSnapshot('overview:all', snapshotOf(payload))
+    seedOverview(snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
@@ -615,15 +639,15 @@ describe('OverviewPage tiles', () => {
     // 6,000 against a 5,000 average went UP (▲, honest about the number) and that is BAD
     // (red, plus the word "over"). A tone-derived glyph would have printed ▼ on a month that
     // rose. Direction × whether-up-is-good is the caller's job — StatTile.
-    const spending = tileFor('Spending — Jul 2026')
+    const spending = tileFor('Living spending — Jul 2026')
     expect(valueOf(spending)).toBe('$6,000.00')
-    expect(deltaOf(spending)?.textContent).toBe('▲ over $5,000.00 12-mo avg')
+    expect(deltaOf(spending)?.textContent).toBe('▲ over $5,000.00 previous 12-mo average')
     expect(deltaOf(spending)?.className).toContain('stat-delta-negative')
 
-    const tax = tileFor(`Effective tax — ${CURRENT_YEAR} (est.)`)
-    expect(valueOf(tax)).toBe('24.7%')
-    // A rate is a level, not a movement: no delta, no arrow.
-    expect(deltaOf(tax)).toBeNull()
+    const tax = tileFor(`Estimated tax — ${CURRENT_YEAR} (est.)`)
+    expect(valueOf(tax)).toBe('$123,456.78')
+    expect(deltaOf(tax)?.textContent).toBe('24.7% effective rate · Household')
+    expect(deltaOf(tax)?.textContent).not.toMatch(/[▲▼]/)
   })
 
   // RATIFIED (spec review): both halves of a delta or neither. A bare amount with no rate
@@ -633,7 +657,7 @@ describe('OverviewPage tiles', () => {
   it('drops the hero delta when the server sends an amount with no rate', async () => {
     // Cached paint (see above): the hero VALUE is pinned here too, so the count-up stays off.
     const payload = serve({ summary: summaryOut({ mom_delta: '100.00', mom_pct: null }) })
-    setSnapshot('overview:all', snapshotOf(payload))
+    seedOverview(snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
@@ -689,12 +713,12 @@ describe('OverviewPage tiles', () => {
     serve({ matrix: matrixOut({ totals: [...Array<string>(11).fill('5000.00'), '4000.00'] }) })
     renderPage()
 
-    const spending = await screen.findByText('Spending — Jul 2026')
+    const spending = await screen.findByText('Living spending — Jul 2026')
     const tile = spending.closest('.stat-tile') as HTMLElement
     expect(valueOf(tile)).toBe('$4,000.00')
     // The mirror of the case above: the number went DOWN (▼) and that is GOOD (green,
     // "under"). Same decoupling, opposite signs — here glyph and tone happen to agree.
-    expect(deltaOf(tile)?.textContent).toBe('▼ under $5,000.00 12-mo avg')
+    expect(deltaOf(tile)?.textContent).toBe('▼ under $5,000.00 previous 12-mo average')
     expect(deltaOf(tile)?.className).toContain('stat-delta-positive')
   })
 
@@ -710,21 +734,24 @@ describe('OverviewPage tiles', () => {
     })
     renderPage()
 
-    const tile = (await screen.findByText('Spending — Jul 2026')).closest('.stat-tile') as HTMLElement
+    const tile = (await screen.findByText('Living spending — Jul 2026')).closest('.stat-tile') as HTMLElement
     // Counted at full weight the eleven priors average $4,545.45; with June out they are
     // the ten real months, and the comparison is the $5,000.00 the household actually spends.
-    expect(deltaOf(tile)?.textContent).toBe('▲ over $5,000.00 12-mo avg')
+    expect(deltaOf(tile)?.textContent).toBe('▲ over $5,000.00 previous 12-mo average')
   })
 
   it('says nothing about a cashflow-only trailing month', async () => {
     // The matrix months are a UNION of spending rows and net-pay rows, so a month whose
     // paycheck is entered but whose spending is not comes back with an explicit "0.00".
     // A green "▼ under $5,000.00 avg" would congratulate the user for an unentered month.
-    serve({ matrix: matrixOut({ totals: [...Array<string>(11).fill('5000.00'), '0.00'] }) })
+    serve({ matrix: matrixOut({ totals: [...Array<string>(11).fill('5000.00'), '0.00'],
+      default_month: null, living_total: [...Array<string>(11).fill('5000.00'), '0.00'],
+      comparison_average: [...Array<null>(11).fill(null), '5000.00'],
+    }) })
     renderPage()
-    await screen.findByText('Spending — Jul 2026')
+    await screen.findByText('Net worth — Aug 2026')
 
-    const tile = tileFor('Spending — Jul 2026')
+    const tile = tileFor('Living spending')
     expect(valueOf(tile)).toBe('—')
     expect(deltaOf(tile)).toBeNull()
     expect(screen.queryByText(/12-mo avg/)).toBeNull()
@@ -739,35 +766,31 @@ describe('OverviewPage tiles', () => {
     // dash here would look like a load failure.
     serve({ matrix: matrixOut({ months: [SPEND_MONTHS[0]], totals: ['0.00'] }) })
     renderPage()
-    await screen.findByText('Spending — Aug 2025')
+    await screen.findByText('Living spending — Aug 2025')
 
-    const tile = tileFor('Spending — Aug 2025')
+    const tile = tileFor('Living spending — Aug 2025')
     expect(valueOf(tile)).toBe('$0.00')
     expect(deltaOf(tile)).toBeNull()
   })
 
-  it('states the degenerate zero-against-zero case rather than suppressing it', async () => {
-    // A whole history of zeros: avg12 is 0, so the `avg12 > 0` guard does NOT fire and the
-    // delta is spoken. 0 > 0 is false, so the month reads as "under" its average, ▼, green.
-    // Degenerate but honest — an all-zero database is not the case the guard exists for,
-    // and inventing a third phrasing for it would cost more than it explains. Pinned so the
-    // reading is a decision rather than an accident.
-    serve({ matrix: matrixOut({ totals: Array<string>(12).fill('0.00') }) })
+  it('describes equal spending and comparison values neutrally, including zero', async () => {
+    serve({ matrix: matrixOut({ totals: Array<string>(12).fill('0.00'), comparison_average: Array<string>(12).fill('0.00') }) })
     renderPage()
-    await screen.findByText('Spending — Jul 2026')
+    await screen.findByText('Living spending — Jul 2026')
 
-    const tile = tileFor('Spending — Jul 2026')
+    const tile = tileFor('Living spending — Jul 2026')
     expect(valueOf(tile)).toBe('$0.00')
-    expect(deltaOf(tile)?.textContent).toBe('▼ under $0.00 12-mo avg')
-    expect(deltaOf(tile)?.className).toContain('stat-delta-positive')
+    expect(deltaOf(tile)?.textContent).toBe('at $0.00 previous 12-mo average')
+    expect(deltaOf(tile)?.className).toContain('stat-delta-neutral')
   })
 
   it('marks a past tax year as the latest one on file', async () => {
     serve({ taxes: { years: [taxSummaryOut(CURRENT_YEAR - 1)] } })
     renderPage()
-    await screen.findByText(`Effective tax — ${CURRENT_YEAR - 1} (latest)`)
+    await screen.findByText(`Estimated tax — ${CURRENT_YEAR - 1} (latest)`)
 
-    expect(valueOf(tileFor(`Effective tax — ${CURRENT_YEAR - 1} (latest)`))).toBe('24.7%')
+    expect(valueOf(tileFor(`Estimated tax — ${CURRENT_YEAR - 1} (latest)`))).toBe('$123,456.78')
+    expect(deltaOf(tileFor(`Estimated tax — ${CURRENT_YEAR - 1} (latest)`))?.textContent).toContain('24.7% effective rate')
   })
 
   it('marks a future-only tax year as planned', async () => {
@@ -777,32 +800,32 @@ describe('OverviewPage tiles', () => {
     serve({ taxes: { years: [taxSummaryOut(CURRENT_YEAR + 1)] } })
     renderPage()
 
-    expect(await screen.findByText(`Effective tax — ${CURRENT_YEAR + 1} (planned)`)).toBeTruthy()
+    expect(await screen.findByText(`Estimated tax — ${CURRENT_YEAR + 1} (planned)`)).toBeTruthy()
   })
 
   it('leaves the tax tile blank when no year has been touched', async () => {
     serve({ taxes: { years: [] } })
     renderPage()
-    await screen.findByText('Effective tax')
+    await screen.findByText('Net worth — Aug 2026')
 
-    const tile = tileFor('Effective tax')
+    const tile = tileFor('Estimated tax')
     expect(valueOf(tile)).toBe('—')
     // No year in the label, no crash reaching into a summary that is not there.
-    expect(screen.queryByText(/Effective tax — /)).toBeNull()
+    expect(screen.queryByText(/Estimated tax — /)).toBeNull()
   })
 
-  it('dashes the tax rate when the year exists but has no computed rate', async () => {
+  it('keeps the estimated tax amount while showing an unavailable effective rate', async () => {
     // A year row exists the moment anything is entered against it, and the server sends a
     // null effective_rate until there is income to divide by. The label still names the
     // year (there IS a year on file) while the value admits it cannot state a rate — the
     // formatter's dash, not a 0.0% that would read as a tax-free year.
     serve({ taxes: { years: [taxSummaryOut(CURRENT_YEAR, null)] } })
     renderPage()
-    await screen.findByText(`Effective tax — ${CURRENT_YEAR} (est.)`)
+    await screen.findByText(`Estimated tax — ${CURRENT_YEAR} (est.)`)
 
-    const tile = tileFor(`Effective tax — ${CURRENT_YEAR} (est.)`)
-    expect(valueOf(tile)).toBe('—')
-    expect(deltaOf(tile)).toBeNull()
+    const tile = tileFor(`Estimated tax — ${CURRENT_YEAR} (est.)`)
+    expect(valueOf(tile)).toBe('$123,456.78')
+    expect(deltaOf(tile)?.textContent).toBe('— effective rate · Household')
   })
 })
 
@@ -1020,7 +1043,7 @@ describe('OverviewPage year to date', () => {
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
-    expect(screen.queryByText(/Year to date/)).toBeNull()
+    expect(screen.queryByRole('heading', { name: /Year to date/ })).toBeNull()
   })
 })
 
@@ -1035,7 +1058,7 @@ describe('OverviewPage attention strip', () => {
     expect(screen.queryByRole('navigation', { name: 'Needs attention' })).toBeNull()
   })
 
-  it('surfaces the overdue ritual, the ESPP countdown and the empty tax year, each linked home', async () => {
+  it('keeps actionable data checks separate from the dated calendar agenda', async () => {
     const current = currentMonthIso()
     serve({
       // Coverage stops TWO months back: previous and current both missing, which is the
@@ -1056,9 +1079,8 @@ describe('OverviewPage attention strip', () => {
       name: /Monthly updates for .* haven't been entered/,
     })
     expect(update.getAttribute('href')).toBe('/update')
-    expect(
-      screen.getByRole('link', { name: /An ESPP lot qualifies in 5 days/ }).getAttribute('href'),
-    ).toBe('/espp')
+    expect(screen.queryByRole('link', { name: /An ESPP lot qualifies in 5 days/ })).toBeNull()
+    expect(screen.getByRole('heading', { name: /Up next/ })).toBeTruthy()
     expect(
       screen
         .getByRole('link', { name: new RegExp(`${CURRENT_YEAR}'s tax inputs are empty`) })
@@ -1069,8 +1091,7 @@ describe('OverviewPage attention strip', () => {
         .getByRole('link', { name: /Nightly backup hasn't run recently/ })
         .getAttribute('href'),
     ).toBe('/settings#backups')
-    // Exactly the four conditions above — nothing else invented itself an item.
-    expect(strip.querySelectorAll('a')).toHaveLength(4)
+    expect(strip.querySelectorAll('a')).toHaveLength(3)
   })
 
   it('turns the coverage gaps into wizard links for those months', async () => {
@@ -1130,13 +1151,14 @@ describe('OverviewPage on an empty database', () => {
     })
     renderPage()
 
-    const hero = await screen.findByText('Net worth')
+    await screen.findByText(/No tax inputs are stored for 2031/)
+    const hero = within(document.querySelector('.kpi-row') as HTMLElement).getByText('Net worth')
     expect(valueOf(hero.closest('.stat-tile') as HTMLElement)).toBe('—')
     expect(deltaOf(hero.closest('.stat-tile') as HTMLElement)).toBeNull()
     // Pre-first-refresh: a price has never been fetched, so there is no day change to show.
     expect(deltaOf(tileFor('Portfolio'))).toBeNull()
-    expect(valueOf(tileFor('Spending'))).toBe('—')
-    expect(valueOf(tileFor('Effective tax'))).toBe('—')
+    expect(valueOf(tileFor('Living spending'))).toBe('—')
+    expect(valueOf(tileFor('Estimated tax'))).toBe('—')
 
     expect(screen.queryAllByTestId('echart')).toHaveLength(0)
     expect(screen.getByText('No snapshots yet.')).toBeTruthy()
@@ -1157,19 +1179,20 @@ describe('OverviewPage on an empty database', () => {
 })
 
 describe('OverviewPage failures', () => {
-  it('banners a failed first load and refetches all eleven on Retry', async () => {
+  it('names each failed resource group and refetches all groups on Refresh', async () => {
     failAll()
     renderPage()
 
-    const banner = await screen.findByRole('alert')
-    // The message alone: no stale cue, because there is nothing on screen to be stale.
-    expect(banner.textContent).toContain("Couldn't load the overview — the server had a problem (HTTP 500)")
-    expect(banner.textContent).not.toContain('earlier data')
-    // No tiles at all — a page of $0.00 would read as "you are broke", not as "load failed".
-    expect(document.querySelectorAll('.stat-tile')).toHaveLength(0)
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(4))
+    const banners = screen.getAllByRole('alert')
+    for (const noun of ['wealth', 'investments', 'spending and review', 'planning']) {
+      expect(banners.some(banner => banner.textContent?.includes(`Couldn't load ${noun}`))).toBe(true)
+    }
+    expect(banners.every(banner => !banner.textContent?.includes('earlier data'))).toBe(true)
+    expect(Array.from(document.querySelectorAll('.kpi-row .stat-value')).every(value => value.textContent === '—')).toBe(true)
 
     serve()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
 
     await screen.findByText('Net worth — Aug 2026')
     expect(screen.queryByRole('alert')).toBeNull()
@@ -1187,14 +1210,15 @@ describe('OverviewPage failures', () => {
     // Seeded so the first paint is cached and the hero settles nowhere (spec §8) — the
     // successful load this test needs before the failure still happens, as the revalidation.
     const payload = serve()
-    setSnapshot('overview:all', snapshotOf(payload))
+    seedOverview(snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
     failAll('overview unavailable')
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
 
-    await screen.findByText(/Showing earlier data — Couldn't load the overview/)
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(4))
+    expect(screen.getAllByRole('alert').every(banner => banner.textContent?.includes('Showing earlier data for this section.'))).toBe(true)
     // The previous snapshot survives the failure — a dashboard that blanks itself on a
     // dropped connection is worse than one that admits the numbers are a minute old.
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
@@ -1212,7 +1236,7 @@ describe('OverviewPage failures', () => {
     // Seeded so the hero is static from the first paint (spec §8) — the two refreshes whose
     // ordering this test is about are unchanged.
     const payload = serve()
-    setSnapshot('overview:all', snapshotOf(payload))
+    seedOverview(snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
@@ -1294,6 +1318,35 @@ it('a calendar failure dents only the strip, never the snapshot', async () => {
   await screen.findByText(/Couldn't load upcoming events/)
   screen.getByText(/Net worth —/) // the snapshot half rendered normally
   expect(screen.queryByRole('alert')).toBeNull() // and no page-level banner fired
+  expect(screen.queryByText(/Nothing scheduled/)).toBeNull()
+  expect(screen.queryByText(/Loading upcoming events/)).toBeNull()
+})
+
+it('keeps cached upcoming events after a failed refresh and replaces them only when retry succeeds', async () => {
+  serve()
+  setSnapshot(`overview:upnext:${todayIso()}`, upNextEvents(2))
+  vi.mocked(fetchCalendar).mockRejectedValueOnce(new ApiError('calendar down', 500))
+    .mockResolvedValueOnce({ events: [], sources: [], quote_as_of: null })
+  renderPage()
+  await screen.findByText(/Couldn't refresh upcoming events. Showing the last loaded schedule./)
+  expect(screen.getByText('Upcoming event 1')).toBeTruthy()
+  expect(screen.getByText('Upcoming event 2')).toBeTruthy()
+  expect(screen.queryByText(/Nothing scheduled/)).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry upcoming events' }))
+  await screen.findByText('Nothing scheduled in the next 45 days.')
+  expect(screen.queryByText('Upcoming event 1')).toBeNull()
+  expect(screen.queryByText(/Showing the last loaded schedule/)).toBeNull()
+  expect(fetchSummary).toHaveBeenCalledTimes(1)
+})
+
+it('labels a cached empty agenda as the last loaded schedule when refresh fails', async () => {
+  serve()
+  setSnapshot(`overview:upnext:${todayIso()}`, [])
+  vi.mocked(fetchCalendar).mockRejectedValue(new ApiError('calendar down', 500))
+  renderPage()
+  await screen.findByText(/Couldn't refresh upcoming events/)
+  expect(screen.getByText('The last loaded schedule had no events in the next 45 days.')).toBeTruthy()
+  expect(screen.queryByText('Nothing scheduled in the next 45 days.')).toBeNull()
 })
 
 describe('OverviewPage click-through (2026-08-25 spec §2d)', () => {
@@ -1302,6 +1355,9 @@ describe('OverviewPage click-through (2026-08-25 spec §2d)', () => {
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
     fireEvent.click(screen.getAllByTestId('echart')[2]) // bars: first of the 12-month slice
+    expect(screen.getByTestId('location').textContent).toBe('/?owner=all')
+    expect(screen.getByText('Pinned: Aug 2025')).toBeTruthy()
+    fireEvent.click(within(screen.getByRole('article', { name: 'Aug 2025 selected values' })).getByRole('link', { name: 'Open spending' }))
     expect(screen.getByTestId('location').textContent).toBe('/spending?month=2025-08-01')
   })
 
@@ -1316,21 +1372,27 @@ describe('OverviewPage click-through (2026-08-25 spec §2d)', () => {
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
     fireEvent.click(screen.getAllByTestId('echart')[2])
+    expect(screen.getByText('Pinned: Aug 2025')).toBeTruthy()
+    fireEvent.click(within(screen.getByRole('article', { name: 'Aug 2025 selected values' })).getByRole('link', { name: 'Open spending' }))
     expect(screen.getByTestId('location').textContent).toBe('/spending?month=2025-08-01')
   })
 
-  it('performance goes to /portfolio, the net-worth trend to /net-worth', async () => {
+  it('uses explicit navigation links after inspecting a chart', async () => {
     serve()
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
     fireEvent.click(screen.getAllByTestId('echart')[1])
+    expect(screen.getByTestId('location').textContent).toBe('/?owner=all')
+    fireEvent.click(screen.getByRole('link', { name: 'Open portfolio →' }))
     expect(screen.getByTestId('location').textContent).toBe('/portfolio')
     cleanup()
     serve()
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
     fireEvent.click(screen.getAllByTestId('echart')[0])
-    expect(screen.getByTestId('location').textContent).toBe('/net-worth')
+    expect(screen.getByTestId('location').textContent).toBe('/?owner=all')
+    fireEvent.click(screen.getByRole('link', { name: 'Open net worth records' }))
+    expect(screen.getByTestId('location').textContent).toBe(`/net-worth?month=${NW_MONTHS[0]}`)
   })
 })
 
@@ -1367,10 +1429,37 @@ it('Refresh refetches the money flow alongside the snapshot', async () => {
   expect(vi.mocked(fetchMoneyFlow).mock.calls[1]).toEqual([undefined])
 })
 
+it('does not repopulate isolated financial caches when requests resolve after logout unmounts the page', async () => {
+  serve()
+  const calendar = deferred<Awaited<ReturnType<typeof fetchCalendar>>>()
+  const flow = deferred<MoneyFlowOut>()
+  vi.mocked(fetchCalendar).mockReturnValue(calendar.promise)
+  vi.mocked(fetchMoneyFlow).mockReturnValue(flow.promise)
+  const view = renderPage()
+  await screen.findByText('Net worth — Aug 2026')
+  // Auth logout clears snapshots before ProtectedRoute unmounts the signed-in shell.
+  clearSnapshots()
+  view.unmount()
+  await act(async () => {
+    calendar.resolve({ events: upNextEvents(2), sources: [], quote_as_of: null })
+    flow.resolve(moneyFlowOut())
+  })
+  expect(getSnapshot(`overview:upnext:${todayIso()}`)).toBeUndefined()
+  expect(getSnapshot('overview:flow:auto')).toBeUndefined()
+
+  // A new session cannot instantly paint the previous session's late responses.
+  vi.mocked(fetchCalendar).mockReturnValue(new Promise(() => {}))
+  vi.mocked(fetchMoneyFlow).mockReturnValue(new Promise(() => {}))
+  renderPage()
+  expect(screen.queryByText('Upcoming event 1')).toBeNull()
+  expect(screen.queryByText(`Money flow — ${CURRENT_YEAR}`)).toBeNull()
+  expect(screen.getByText('Loading upcoming events...')).toBeTruthy()
+})
+
 describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
   it('paints instantly from a seeded snapshot and still revalidates', () => {
     const payload = serve()
-    setSnapshot('overview:all', snapshotOf(payload))
+    seedOverview(snapshotOf(payload))
     pendAllSnapshotFetches()
     const { container } = renderPage()
     // The hero tile's number is up on the very first paint, with no page skeleton. (The
@@ -1389,7 +1478,7 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
 
   it('seeds the up-next strip from its own day-keyed track', () => {
     const payload = serve()
-    setSnapshot('overview:all', snapshotOf(payload))
+    seedOverview(snapshotOf(payload))
     pendAllSnapshotFetches()
     // todayIso() is LOCAL-date based (utils/months) — the UTC slice would miss by a day.
     setSnapshot(`overview:upnext:${todayIso()}`, upNextEvents())
@@ -1401,7 +1490,7 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
 
   it('a changed revalidation payload updates the page and re-arms the charts', async () => {
     const payload = serve()
-    setSnapshot('overview:all', snapshotOf(payload))
+    seedOverview(snapshotOf(payload))
     serve({ summary: summaryOut({ net_worth: '2000000.00' }) })
     const { container } = renderPage()
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
@@ -1416,7 +1505,7 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
 
   it('leaves the charts still when the revalidation payload is identical', async () => {
     const payload = serve()
-    setSnapshot('overview:all', snapshotOf(payload))
+    seedOverview(snapshotOf(payload))
     const { container } = renderPage()
     // The dim lifting is the revalidation landing — .finally runs on every resolution.
     await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
@@ -1427,35 +1516,25 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
 })
 
 describe('OverviewPage — skeleton first paint (2026-08-27 spec §3)', () => {
-  it('ghosts the page chrome on a cache miss and announces it once', () => {
+  it('keeps the workspace present with unavailable headline values while its independent feeds load', () => {
     serve()
     pendAllSnapshotFetches()
     const { container } = renderPage()
 
     // Nothing seeded, nothing answered: the first paint is the page's own shape in
     // ghost form — four tiles and four cards — not a centered line of text.
-    const skeleton = container.querySelector('.page-skeleton')
-    expect(skeleton).not.toBeNull()
-    expect(skeleton?.className).toContain('loading-fallback')
-    expect(container.querySelectorAll('.page-skeleton .kpi-row .stat-tile').length).toBe(4)
-    expect(container.querySelectorAll('.page-skeleton .card-grid .card').length).toBe(4)
-
-    // The sentence the old `p.empty-note` carried is still announced, exactly once, and
-    // the ghosts themselves are silent.
-    const status = screen.getByRole('status')
-    expect(status.textContent).toBe('Loading…')
-    expect(status.className).toContain('visually-hidden')
-    expect(
-      container.querySelector('.page-skeleton .kpi-row')?.getAttribute('aria-hidden'),
-    ).toBe('true')
-    expect(
-      container.querySelector('.page-skeleton .card-grid')?.getAttribute('aria-hidden'),
-    ).toBe('true')
+    expect(container.querySelector('.page-skeleton')).toBeNull()
+    expect(container.querySelectorAll('.kpi-row .stat-tile')).toHaveLength(4)
+    expect(Array.from(container.querySelectorAll('.kpi-row .stat-value')).every(value => value.textContent === '—')).toBe(true)
+    expect(screen.getByRole('heading', { name: 'Net worth trend' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /Up next/ })).toBeTruthy()
+    expect(screen.getAllByRole('status').length).toBeGreaterThan(0)
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('revalidates a seeded page under the dim, never behind a skeleton', () => {
     const payload = serve()
-    setSnapshot('overview:all', snapshotOf(payload))
+    seedOverview(snapshotOf(payload))
     pendAllSnapshotFetches()
     const { container } = renderPage()
 
@@ -1472,7 +1551,7 @@ describe('OverviewPage — hero count-up (2026-08-27 spec §8)', () => {
     vi.unstubAllGlobals()
   })
 
-  it('hands the hero a count-up on a fresh paint, so it starts at the formatted zero', async () => {
+  it('updates a waiting hero to the returned value without a zero frame when the wealth feed arrives', async () => {
     // No frame ever fires, so what is on screen is the PAINT rather than a moment of the
     // animation — the easing itself is StatTile's test; this one pins the call-site gate,
     // which nothing else can see (the cached-paint half is pinned by the tests above, which
@@ -1483,7 +1562,7 @@ describe('OverviewPage — hero count-up (2026-08-27 spec §8)', () => {
     serve()
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
-    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$0.00')
+    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
     // The non-hero tiles never settle — they are up whole on the same paint.
     expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
   })
@@ -1504,7 +1583,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
     ).toBeTruthy()
   })
 
-  it('a reload failure keeps the page and shows the frame’s stale line with Retry', async () => {
+  it('a reload failure keeps the wealth data and names its own stale group with Retry', async () => {
     serve()
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
@@ -1512,22 +1591,23 @@ describe('OverviewPage — shell frame and owner scope', () => {
     vi.mocked(fetchSummary).mockRejectedValueOnce(new ApiError('offline', 503))
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
 
-    expect(
-      await screen.findByText(/Showing earlier data — Couldn't load the overview/),
-    ).toBeTruthy()
+    const banner = await screen.findByRole('alert')
+    expect(banner.textContent).toContain("Couldn't load wealth")
+    expect(banner.textContent).toContain('Showing earlier data for this section.')
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
     expect(document.querySelector('.stat-tile')).toBeTruthy() // data stayed up
   })
 
-  it('a first-load failure shows the frame’s alert alone', async () => {
+  it('a first-load wealth failure leaves the independently loaded portfolio and spending visible', async () => {
     serve()
     vi.mocked(fetchSummary).mockRejectedValueOnce(new ApiError('boom', 500))
     renderPage()
 
     const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toContain("Couldn't load the overview — the server had a problem (HTTP 500)")
-    // Not even the skeleton's ghost tiles: an error with no data is the banner alone.
-    expect(document.querySelector('.stat-tile')).toBeNull()
+    expect(alert.textContent).toContain("Couldn't load wealth — the server had a problem (HTTP 500)")
+    expect(valueOf(tileFor('Net worth'))).toBe('—')
+    expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
+    expect(valueOf(tileFor('Living spending — Jul 2026'))).toBe('$6,000.00')
   })
 
   it('honors the owner scope from the URL for net worth and holdings, not spending', async () => {
@@ -1566,7 +1646,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
     await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67'))
   })
 
-  it('dims the body while the new scope is in flight', async () => {
+  it('clears the previous owner figures while a new scope loads and keeps household feeds visible', async () => {
     serve()
     const { container } = renderPage()
     await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67'))
@@ -1574,10 +1654,11 @@ describe('OverviewPage — shell frame and owner scope', () => {
 
     pendAllSnapshotFetches()
     fireEvent.click(await screen.findByRole('button', { name: 'Grace' }))
-    // Nothing warm for that scope yet: the previous payload stays up, under the dim, rather
-    // than the refetch running silently behind unchanged numbers.
-    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
-    expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
+    expect(container.querySelectorAll('.chart-card-skeleton')).toHaveLength(2)
+    expect(valueOf(tileFor('Net worth'))).toBe('—')
+    expect(valueOf(tileFor('Portfolio'))).toBe('—')
+    expect(valueOf(tileFor('Living spending — Jul 2026'))).toBe('$6,000.00')
+    expect(fetchMatrix).toHaveBeenCalledTimes(1)
   })
 
   it('paints an already-seen scope from the cache the moment the chip flips', async () => {
@@ -1585,10 +1666,10 @@ describe('OverviewPage — shell frame and owner scope', () => {
     const { container } = renderPage()
     await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67'))
 
-    setSnapshot('overview:2', {
+    seedOverview({
       ...snapshotOf(payload),
       holdings: holdingsOut({ totals: { ...holdingsOut().totals, market_value: '99.00' } }),
-    })
+    }, 2)
     pendAllSnapshotFetches()
     fireEvent.click(await screen.findByRole('button', { name: 'Grace' }))
     // Instant, before any fetch resolves — and still revalidating underneath.
@@ -1629,7 +1710,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
     // Seeded so the paint is a CACHED one — the hero's count-up settles from $0.00 on a
     // fresh paint, and a settling number is not a string this test can pin.
     const payload = serve({ ts: timeseriesOut({ accounts: [] }) })
-    setSnapshot('overview:all', snapshotOf(payload))
+    seedOverview(snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
@@ -1663,7 +1744,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
     await screen.findByText('Net worth — Aug 2026')
     // The hint's button is named by its first four words now (motion spec §8), and this
     // caveat is APPENDED to a sentence — so the only place it can be read is the bubble.
-    expect(hintText(/^About The latest entered month's/)).toContain(
+    expect(hintText(/^About Living spending for the/)).toContain(
       'Household total — spending has no owner.',
     )
     expect(hintText(/^About Portfolio value vs cost/)).toContain(
@@ -1673,8 +1754,120 @@ describe('OverviewPage — shell frame and owner scope', () => {
     cleanup()
     renderPage('/?owner=all')
     await screen.findByText('Net worth — Aug 2026')
-    expect(hintText(/^About The latest entered month's/)).not.toContain('spending has no owner')
+    expect(hintText(/^About Living spending for the/)).not.toContain('spending has no owner')
     expect(hintText(/^About Portfolio value vs cost/)).not.toContain('weekly checkpoints')
+  })
+})
+
+describe('OverviewPage independent groups and preferences', () => {
+  it('retries only the failed spending group while wealth, investments and planning remain usable', async () => {
+    serve()
+    vi.mocked(fetchMatrix).mockRejectedValueOnce(new ApiError('private upstream detail', 500))
+    renderPage()
+    const banner = await screen.findByRole('alert')
+    expect(banner.textContent).toContain("Couldn't load spending and review")
+    expect(banner.textContent).not.toContain('private upstream detail')
+    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
+    expect(valueOf(tileFor(`Estimated tax — ${CURRENT_YEAR} (est.)`))).toBe('$123,456.78')
+    expect(valueOf(tileFor('Living spending'))).toBe('—')
+
+    fireEvent.click(within(banner).getByRole('button', { name: 'Retry' }))
+    await screen.findByText('Living spending — Jul 2026')
+    expect(screen.queryByRole('alert')).toBeNull()
+    for (const client of [fetchMatrix, fetchYearly, fetchCoverage]) expect(client).toHaveBeenCalledTimes(2)
+    for (const client of [fetchSummary, fetchTimeseries, fetchHoldings, fetchHistory, fetchDividends, fetchAllTaxSummaries, fetchLots, fetchTaxYears, fetchSystemStatus, fetchMoneyFlow, fetchCalendar]) expect(client).toHaveBeenCalledTimes(1)
+  })
+
+  it('labels a stale spending group while a successful wealth refresh advances', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Living spending — Jul 2026')
+    vi.mocked(fetchYearly).mockRejectedValueOnce(new ApiError('rollup offline', 503))
+    vi.mocked(fetchSummary).mockResolvedValue(summaryOut({ net_worth: '2000000.00' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    const banner = await screen.findByRole('alert')
+    expect(banner.textContent).toContain('spending and review')
+    expect(banner.textContent).toContain('Showing earlier data for this section.')
+    expect(valueOf(tileFor('Living spending — Jul 2026'))).toBe('$6,000.00')
+    await waitFor(() => expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$2,000,000.00'))
+    expect(screen.getByLabelText(/Line chart of net worth at every monthly snapshot/)).toBeTruthy()
+    expect(screen.getByLabelText(/Bar chart of living spending/)).toBeTruthy()
+  })
+
+  it('drops a late owner response and clears a selection captured under the previous scope', async () => {
+    const payload = serve()
+    const grace = deferred<HoldingsResponse>()
+    vi.mocked(fetchHoldings).mockImplementation(owner => owner === 2 ? grace.promise : Promise.resolve(owner === 1 ? holdingsOut({ totals: { ...payload.holdings.totals, market_value: '101.00' } }) : payload.holdings))
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    fireEvent.click(screen.getByLabelText('Line chart of net worth at every monthly snapshot'))
+    expect(screen.getByText(`Pinned: ${formatMonth(NW_MONTHS[0])}`)).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: 'Grace' }))
+    expect(valueOf(tileFor('Portfolio'))).toBe('—')
+    expect(screen.queryByText(/^Pinned:/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Edward' }))
+    await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$101.00'))
+    await act(async () => { grace.resolve(holdingsOut({ totals: { ...payload.holdings.totals, market_value: '999.00' } })); await grace.promise })
+    expect(valueOf(tileFor('Portfolio'))).toBe('$101.00')
+    expect(screen.getByTestId('location').textContent).toContain('owner=1')
+    expect(fetchMatrix).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains a confirmed zero as measured data even when legacy coverage marks that month empty', async () => {
+    const month = '2026-07-01'
+    serve({ matrix: matrixOut({ months: [month], totals: ['0.00'], living_total: ['0.00'], net_pay: ['6000.00'], review_state: ['closed'], eligible_spending: [true], comparison_average: [null], default_month: month }),
+      coverage: coverageOut({ spending_empty: [month] }) })
+    renderPage()
+    await screen.findByText('Living spending — Jul 2026')
+    expect(valueOf(tileFor('Living spending — Jul 2026'))).toBe('$0.00')
+    expect(screen.getByLabelText(/Bar chart of living spending/).getAttribute('data-spending-points')).toBe('[0]')
+  })
+
+  it('uses the selected eligible month and its exact server comparison rather than the latest raw entry', async () => {
+    serve({ matrix: matrixOut({ months: ['2026-06-01', '2026-07-01'], totals: ['9000.00', '15000.00'], living_total: ['3000.00', '4000.00'], comparison_average: ['1234.56', '3000.00'], default_month: '2026-06-01' }) })
+    renderPage()
+    await screen.findByText('Living spending — Jun 2026')
+    expect(valueOf(tileFor('Living spending — Jun 2026'))).toBe('$3,000.00')
+    expect(deltaOf(tileFor('Living spending — Jun 2026'))?.textContent).toContain('$1,234.56 previous 12-mo average')
+    await waitFor(() => expect(fetchSpendingEvidence).toHaveBeenLastCalledWith('2026-06-01'))
+  })
+
+  it('persists hidden and reordered views across remounts and resets to the supported defaults', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    fireEvent.click(screen.getByText('Customize'))
+    fireEvent.click(screen.getByRole('button', { name: 'Move Portfolio earlier' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Living spending' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Money flow' }))
+    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Portfolio')
+    expect(within(document.querySelector('.kpi-row') as HTMLElement).queryByText('Living spending — Jul 2026')).toBeNull()
+    expect(screen.queryByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeNull()
+    const saved = getLocal('overview_layout')!
+    expect(saved.tiles).toEqual(['portfolio', 'net_worth', 'tax'])
+    expect(saved.cards).not.toContain('money_flow')
+    cleanup()
+    renderPage()
+    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Portfolio')
+    expect(screen.queryByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeNull()
+    fireEvent.click(screen.getByText('Customize'))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }))
+    expect(getLocal('overview_layout')).toEqual(DEFAULT_OVERVIEW_LAYOUT)
+    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Net worth — Aug 2026')
+    expect(await screen.findByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeTruthy()
+  })
+
+  it('falls back from an invalid saved layout and keeps at least one headline tile visible', async () => {
+    localStorage.setItem(STORAGE_KEYS.overview_layout, JSON.stringify({ tiles: [], cards: ['not-a-card'] }))
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(document.querySelectorAll('.kpi-row .stat-tile')).toHaveLength(4)
+    fireEvent.click(screen.getByText('Customize'))
+    for (const name of ['Portfolio', 'Living spending', 'Estimated tax']) fireEvent.click(screen.getByRole('checkbox', { name }))
+    expect((screen.getByRole('checkbox', { name: 'Net worth' }) as HTMLInputElement).disabled).toBe(true)
+    expect(getLocal('overview_layout')?.tiles).toEqual(['net_worth'])
   })
 })
 
@@ -1685,7 +1878,7 @@ describe('OverviewPage chart cards (charts C2)', () => {
     await screen.findByText('Net worth trend')
     expect(screen.getByLabelText('Line chart of net worth at every monthly snapshot')).toBeTruthy()
     expect(screen.getByLabelText(/Line chart of portfolio value against cost basis/)).toBeTruthy()
-    expect(screen.getByLabelText(/Bar chart of total spending for each of the last 12 entered months/)).toBeTruthy()
+    expect(screen.getByLabelText(/Bar chart of living spending with the previous 12-month eligible average/)).toBeTruthy()
     expect(screen.getAllByRole('group', { name: /Export/ }).length).toBeGreaterThanOrEqual(3)
     expect(screen.getByRole('link', { name: 'Open net worth →' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open spending →' })).toBeTruthy()

@@ -129,7 +129,7 @@ async function settle() {
 async function openDrawerUnconfigured() {
   fireEvent.click(screen.getByRole('button', { name: /open assistant/i }))
   await screen.findByRole('complementary', { name: 'Assistant' })
-  return screen.findByText(/no nvidia api key configured/i)
+  return screen.findByText(/computed month reviews are available/i)
 }
 
 describe('AssistantDrawer', () => {
@@ -389,7 +389,7 @@ describe('AssistantDrawer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Month in review' }))
     await waitFor(() => expect(streamChat).toHaveBeenCalled())
     const body = streamChat.mock.calls[0][0] as { messages: { content: string }[] }
-    expect(body.messages.at(-1)?.content).toMatch(/month-in-review/i)
+    expect(body.messages.at(-1)?.content).toMatch(/latest completed month/i)
   })
 
   it('failover notice renders above the answer', async () => {

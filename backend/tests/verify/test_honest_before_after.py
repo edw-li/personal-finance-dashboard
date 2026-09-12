@@ -29,6 +29,7 @@ from app.models import (
     TaxYear,
 )
 from app.seed import seed_tax_definitions
+from app.services.month_review import adopt_existing_history
 
 COVERAGE = "/api/v1/coverage"
 MATRIX = "/api/v1/spending/matrix"
@@ -232,6 +233,10 @@ async def seed_census(db) -> dict:
                     filing_status="single",
                 )
             )
+    # create_all also skips the completed-month migration. Adopt this fixed historical
+    # census after every financial input is present, preserving its unreviewed status.
+    await db.flush()
+    await adopt_existing_history(db, date(2026, 9, 12))
     await db.commit()
     return {"categories": {n: r.id for n, r in categories.items()}, "person": person.id}
 

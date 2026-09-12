@@ -197,7 +197,7 @@ export default function DividendsPanel({
         setKept(false)
         onChanged()
         toast.success(
-          `Deleted the ${ticker} dividend paid ${formatDate(dividend.pay_date)}`,
+          `Deleted the ${ticker} dividend entry dated ${formatDate(dividend.pay_date)}`,
           undoable
             ? {
                 action: {
@@ -242,12 +242,12 @@ export default function DividendsPanel({
             <StatTile
               label="Trailing 12-mo income"
               value={stats.trailing12 === null ? '—' : formatCurrency(stats.trailing12)}
-              hint="Dividends received in the last 12 months, including the current one."
+              hint="Dividend entries in the last 12 months, including the current one. Automatic entries are ex-date estimates; manual entries use the entered pay date."
             />
             <StatTile
               label="YTD income"
               value={stats.ytd === null ? '—' : formatCurrency(stats.ytd)}
-              hint="Dividends received this calendar year."
+              hint="Dividend entries this calendar year. Automatic entries use ex-date and do not confirm payment."
             />
             <StatTile
               label="Projected annual income"
@@ -257,7 +257,7 @@ export default function DividendsPanel({
           </div>
           <ChartCard
             title="Monthly dividend income"
-            hint="Dividends received per month over the trailing two years, quiet months at zero."
+            hint="Dividend entries by recorded month over the trailing two years, quiet months at zero. Automatic records use ex-date estimates; manual records use the entered pay date."
             ariaLabel="Bar chart of dividend income per month over the trailing two years"
             option={chart}
             empty="No dividends in the trailing two years."
@@ -365,7 +365,7 @@ export default function DividendsPanel({
         <table className="port-table">
           <thead>
             <tr>
-              <th>Ticker</th><th>Account</th><th>Pay date</th>
+              <th>Ticker</th><th>Account</th><th>Recorded date</th>
               <th className="num">Amount</th><th>Source</th>
               <th className="num">Per share</th><th>Notes</th><th />
             </tr>
@@ -375,7 +375,7 @@ export default function DividendsPanel({
               <tr key={d.id}>
                 <td>{tickers.get(d.security_id) ?? '?'}</td>
                 <td>{d.account ?? '—'}</td>
-                <td>{formatDate(d.pay_date)}</td>
+                <td>{formatDate(d.pay_date)}<span className="sub">{d.source === 'auto' ? ' · ex-date' : ' · entered pay date'}</span></td>
                 <td className="num">{formatCurrency(d.amount)}</td>
                 <td><span className="badge">{d.source === 'auto' ? 'auto' : 'manual'}</span></td>
                 <td className="num">

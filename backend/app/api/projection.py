@@ -60,13 +60,15 @@ from app.schemas.projection import (
 from app.services import clock
 from app.services.budgets import living_budget_total
 from app.services.limit_check import employer_match
+from app.services.metrics import planning_window
 from app.services.money import quantize_money, quantize_pct
 from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
+from app.services.month_review import load_review_book
 from app.services.net_worth_calc import get_swr_pct, investable_base
 from app.services.paycheck_calc import MONTHS_PER_YEAR, breakdown, half_up2
 from app.services.people import load_people
 from app.services.projection import CENT, first_reaching, project
-from app.services.savings import load_month_savings, matched_months, payroll_monthly
+from app.services.savings import load_month_savings, payroll_monthly
 
 router = APIRouter(
     prefix="/projection", tags=["projection"], dependencies=[Depends(get_current_user)]
@@ -126,8 +128,8 @@ NO_CASHFLOW_PAYROLL_WARNING = (
 NO_SPEND_WARNING = "no spending history — provide an annual spend to model the FI target"
 NO_SWR_WARNING = "withdrawal rate is 0 — no FI target to model"
 NO_MATCHED_MONTHS_WARNING = (
-    "no month has both spending and take-home on file — the contribution and annual "
-    "spend could not be derived"
+    "no eligible completed month has both spending and take-home on file — "
+    "the contribution and annual spend could not be derived"
 )
 
 
@@ -316,7 +318,8 @@ async def projection(
     # AND take-home. Before this, the spend mean and the savings mean averaged DIFFERENT
     # months — and the spend mean counted a zero-filled month as a month of no spending.
     savings_rows = await load_month_savings(db)
-    window = matched_months(savings_rows, TRAILING_MONTHS)
+    review_book = await load_review_book(db)
+    window, planning_receipt = planning_window(savings_rows, review_book)
     has_cashflow = any(row.net_pay is not None for row in savings_rows)
     has_spending = any(row.has_spending_rows for row in savings_rows)
     # Read BEFORE the two blocks below overwrite the knobs with their resolved values.
@@ -325,10 +328,25 @@ async def projection(
     # `contribution_breakdown`'s rule exactly. A window printed beside two typed numbers
     # would claim something was averaged when nothing was.
     derived_window = (
-        DerivedWindowOut(from_month=window[0].month, to_month=window[-1].month, months=len(window))
+        DerivedWindowOut(
+            from_month=planning_receipt.from_month,
+            to_month=planning_receipt.to_month,
+            months=len(window),
+        )
         if window and derives
         else None
     )
+    if planning_receipt is not None and window and derives:
+        if planning_receipt.unreviewed_history_count:
+            warnings.append(
+                f"Planning inputs include {planning_receipt.unreviewed_history_count} "
+                "unreviewed historical months."
+            )
+        if planning_receipt.excluded:
+            warnings.append(
+                f"{len(planning_receipt.excluded)} months in the 12-calendar-month planning "
+                "window are excluded; older months do not replace them."
+            )
     if not window and has_cashflow and has_spending and derives:
         # BOTH halves are on file and no month carries both — the one case the more
         # specific sentences below cannot describe. A book missing a half is named by

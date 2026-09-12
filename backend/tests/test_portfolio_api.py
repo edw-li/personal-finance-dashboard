@@ -1060,7 +1060,7 @@ async def test_allocation_by_each_dimension_weights_sum_to_one(auth_client, db):
     nvda = await _create_security(
         auth_client, ticker="NVDA", name="NVIDIA", industry="Technology", holding_type="stock"
     )
-    priv = await _create_security(  # industry None -> the "Uncategorized" bucket
+    priv = await _create_security(  # unknown industry remains in the denominator
         auth_client, ticker="PRIV", name="Private Fund", holding_type="private"
     )
     ghost = await _create_security(
@@ -1091,21 +1091,15 @@ async def test_allocation_by_each_dimension_weights_sum_to_one(auth_client, db):
         # VOO 10x500 = 5000 | NVDA 12x250 = 3000 (4 Fidelity, 8 Robinhood) | PRIV 1x500 = 500
         "industry": [
             {
-                "key": "Index Funds",
-                "market_value": "5000.00",
-                "weight_pct": "0.588235",
-                "holdings": 1,
+                "key": "__unknown__",
+                "market_value": "5500.00",
+                "weight_pct": "0.647059",
+                "holdings": 2,
             },
             {
                 "key": "Technology",
                 "market_value": "3000.00",
                 "weight_pct": "0.352941",
-                "holdings": 1,
-            },
-            {
-                "key": "Uncategorized",
-                "market_value": "500.00",
-                "weight_pct": "0.058824",
                 "holdings": 1,
             },
         ],
@@ -1137,7 +1131,10 @@ async def test_allocation_by_each_dimension_weights_sum_to_one(auth_client, db):
         assert body["by"] == by
         # 8500, not 8590: the priceless ZI position is skipped, not valued at cost.
         assert body["total_market_value"] == "8500.00"
-        assert body["slices"] == slices  # market-value DESC
+        assert [
+            {key: row[key] for key in ("key", "market_value", "weight_pct", "holdings")}
+            for row in body["slices"]
+        ] == slices  # market-value DESC; metadata is additive
         assert abs(sum(Decimal(s["weight_pct"]) for s in body["slices"]) - 1) < Decimal("0.000002")
 
     default = await auth_client.get(ALLOCATION)
@@ -1648,6 +1645,12 @@ async def test_owner_of_the_primary_is_byte_identical_to_the_household_after_bac
         joiner = "&" if "?" in url else "?"
         household = (await auth_client.get(url)).json()
         scoped = (await auth_client.get(f"{url}{joiner}owner={me.id}")).json()
+        if url.startswith(ALLOCATION):
+            # Amounts stay identical; allocation now carries owner-specific evidence and plans.
+            assert scoped.pop("scope_key") == f"person:{me.id}"
+            assert household.pop("scope_key") == "household"
+            scoped.pop("source_href")
+            household.pop("source_href")
         assert scoped == household, url
 
 

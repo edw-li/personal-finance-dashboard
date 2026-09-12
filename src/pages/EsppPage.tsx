@@ -1,3 +1,4 @@
+import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError, describeLoadFailures, errorDetail } from '../api/client'
@@ -905,7 +906,7 @@ function ModelerCard({
         canonicalAmount(edit.additional.trim()) !== row.additional_payments) ||
       (edit.pct !== undefined &&
         canonicalAmount(edit.pct.trim(), { expressions: false }) !==
-          shiftPoint(row.contribution_pct, 2))
+        shiftPoint(row.contribution_pct, 2))
     )
   }
 
@@ -1100,7 +1101,7 @@ function ModelerCard({
         <p className="drill-hint" role="status">
           {`${dirtyRows.length} ${
             dirtyRows.length === 1 ? 'period has' : 'periods have'
-          } unsaved edits — the chain below is stale until you save & recalculate.`}
+            } unsaved edits — the chain below is stale until you save & recalculate.`}
         </p>
       )}
       {data !== null && (
@@ -1236,7 +1237,10 @@ function ModelerCard({
 
 // ── Page ────────────────────────────────────────────────────────────────────────────────
 
+const PAGE_SECTIONS = [{"id":"summary","label":"Summary"},{"id":"lots","label":"Lots"},{"id":"purchase","label":"Purchase model"}] as const
+
 export default function EsppPage() {
+  const views = useLocalSections(PAGE_SECTIONS, 'summary', { resolveLegacy: ({ searchParams, hash }) => searchParams.has('lot') || hash.startsWith('#lot') ? { section: 'lots', targetId: searchParams.has('lot') ? `lot-row-${searchParams.get('lot')}` : hash.slice(1) } : searchParams.has('year') || hash.includes('model') ? 'purchase' : null })
   const [lots, setLots] = useState<EsppLotsResponse | null>(
     () => getSnapshot<EsppLotsResponse>('espp:lots') ?? null,
   )
@@ -1274,9 +1278,10 @@ export default function EsppPage() {
   const [highlightLotId, setHighlightLotId] = useState<number | null>(null)
   const highlightHold = useRef<number | undefined>(undefined)
   const selectLot = (id: number) => {
+    views.setSection('lots')
     setHighlightLotId(id)
     // jsdom has no scrollIntoView; the optional call keeps the tests honest about that.
-    document.getElementById(`lot-row-${id}`)?.scrollIntoView?.({ block: 'nearest' })
+    requestAnimationFrame(() => document.getElementById(`lot-row-${id}`)?.scrollIntoView?.({ block: 'nearest' }))
     window.clearTimeout(highlightHold.current)
     highlightHold.current = window.setTimeout(() => setHighlightLotId(null), 2000)
   }
@@ -1440,10 +1445,8 @@ export default function EsppPage() {
   return (
     <div className="page espp-page">
       <PageFrame title="ESPP" resource={{ status: 'ready' }}>
+        <LocalSectionNav state={views} label="ESPP views" />
         <FeedBanner error={loadBanner} retry={retryFailedLoads} />
-        {/* The headline strip (2026-09-07 spec §4): four position tiles from the lots feed and
-            the modeler's $25k tile, one row, each feed ghosting its own slots until it answers
-            so the box below never moves (the 2026-09-05 CLS fix, widened to five tiles). */}
         <PositionStrip
           lots={lots}
           lotsBusy={lotsBusy}
@@ -1451,64 +1454,61 @@ export default function EsppPage() {
           modelerBusy={modelerBusy}
           modelerDirty={modelerDirty}
         />
+        <LocalSectionPanel state={views} section="summary">
 
-        {/* The two chart cards (2026-09-07 spec §5–§6), side by side under the headline strip;
-            the grid's own rule stacks them under 1000px. The lots payload is the anatomy card's
-            whole input, so it renders as soon as the lots do and holds a skeleton on a warm
-            pre-batch snapshot; the price card waits on the bars the offerings chip already fetches. */}
-        {lots !== null && (
-          <div className="card-grid">
-            <LotAnatomyCard data={lots} onHoverLot={setHighlightLotId} onSelectLot={selectLot} />
-            <EsppPriceCard
-              ticker={lots.espp_ticker}
-              bars={bars}
-              offerings={offerings ?? []}
-              lots={lots.lots}
+          {lots !== null && (
+            <div className="card-grid">
+              <LotAnatomyCard data={lots} onHoverLot={setHighlightLotId} onSelectLot={selectLot} />
+              <EsppPriceCard
+                ticker={lots.espp_ticker}
+                bars={bars}
+                offerings={offerings ?? []}
+                lots={lots.lots}
+              />
+            </div>
+          )}
+        </LocalSectionPanel>
+        <LocalSectionPanel state={views} section="lots">
+          <Feed
+            data={lots}
+            busy={lotsBusy}
+            staleNoun="the table"
+            skeleton={{ height: FEED_SKELETON.esppLots, label: 'Loading lots…' }}
+          >
+            {(data) => (
+              <LotsPanel
+                data={data}
+                offerings={offerings ?? []}
+                highlightId={highlightLotId}
+                onChanged={reloadLots}
+              />
+            )}
+          </Feed>
+          <Feed
+            data={offerings}
+            busy={offeringsBusy}
+            staleNoun="the table"
+            skeleton={{ height: FEED_SKELETON.esppOfferings, label: 'Loading offerings…' }}
+          >
+            {(rows) => <OfferingsPanel offerings={rows} bars={bars ?? []} onChanged={onOfferingsChanged} />}
+          </Feed>
+        </LocalSectionPanel>
+        <LocalSectionPanel state={views} section="purchase">
+          <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
+            <ModelerCard
+              data={modeler}
+              knobs={knobs}
+              // The setter itself: the card hands back an updater, so a keystroke cannot
+              // spread a stale sibling over its neighbour.
+              onKnobChange={setKnobs}
+              onRun={runModeler}
+              onYearSelect={selectYear}
+              onRowsSaved={() => runModeler()}
+              onDirtyChange={setModelerDirty}
+              busy={modelerBusy}
             />
           </div>
-        )}
-
-        {/* NOT keyed, and a sibling of the two cards below: a modeler or offerings refetch
-            re-renders this panel with the same payload, so a half-typed row survives. */}
-        <Feed
-          data={lots}
-          busy={lotsBusy}
-          staleNoun="the table"
-          skeleton={{ height: FEED_SKELETON.esppLots, label: 'Loading lots…' }}
-        >
-          {(data) => (
-            <LotsPanel
-              data={data}
-              offerings={offerings ?? []}
-              highlightId={highlightLotId}
-              onChanged={reloadLots}
-            />
-          )}
-        </Feed>
-
-        <Feed
-          data={offerings}
-          busy={offeringsBusy}
-          staleNoun="the table"
-          skeleton={{ height: FEED_SKELETON.esppOfferings, label: 'Loading offerings…' }}
-        >
-          {(rows) => <OfferingsPanel offerings={rows} bars={bars ?? []} onChanged={onOfferingsChanged} />}
-        </Feed>
-
-        <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
-          <ModelerCard
-            data={modeler}
-            knobs={knobs}
-            // The setter itself: the card hands back an updater, so a keystroke cannot
-            // spread a stale sibling over its neighbour.
-            onKnobChange={setKnobs}
-            onRun={runModeler}
-            onYearSelect={selectYear}
-            onRowsSaved={() => runModeler()}
-            onDirtyChange={setModelerDirty}
-            busy={modelerBusy}
-          />
-        </div>
+        </LocalSectionPanel>
       </PageFrame>
     </div>
   )

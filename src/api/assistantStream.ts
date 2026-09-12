@@ -4,6 +4,8 @@
 // legitimately runs longer, and its liveness signal is the keepalive comments.
 import { expireSession, getToken } from './client'
 import type { AssistantContextIn } from '../types/api'
+import { isEvidenceBundle } from '../types/assistantEvidence'
+import type { AssistantEvidenceBundle, AssistantIntent } from '../types/assistantEvidence'
 
 export interface ChatMessageIn {
   role: 'user' | 'assistant'
@@ -12,6 +14,7 @@ export interface ChatMessageIn {
 
 export interface ChatRequest {
   model: string
+  intent?: AssistantIntent
   context: AssistantContextIn
   messages: ChatMessageIn[]
 }
@@ -61,6 +64,8 @@ export interface ToolResultEvent {
 }
 
 export interface AssistantHandlers {
+  onComputedSummary?: (bundle: AssistantEvidenceBundle) => void
+  onEvidence?: (bundle: AssistantEvidenceBundle) => void
   onNotice?: (notice: { kind: string; from: string; to: string }) => void
   onToolStart?: (tool: { name: string; summary: string }) => void
   onToolResult?: (tool: ToolResultEvent) => void
@@ -128,6 +133,12 @@ function dispatchFrame(frame: SseFrame, handlers: AssistantHandlers): 'done' | '
     return null // a malformed frame is dropped, never fatal
   }
   switch (frame.event) {
+    case 'computed_summary':
+      if (isEvidenceBundle(payload)) handlers.onComputedSummary?.(payload)
+      return null
+    case 'evidence':
+      if (isEvidenceBundle(payload)) handlers.onEvidence?.(payload)
+      return null
     case 'notice':
       handlers.onNotice?.(payload as { kind: string; from: string; to: string })
       return null

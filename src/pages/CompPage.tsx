@@ -1,3 +1,4 @@
+import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, describeLoadFailures, errorDetail } from '../api/client'
 import {
@@ -71,17 +72,17 @@ const EQUITY_PAIRS: {
   names: [string, string]
   product: string
 }[] = [
-  {
-    fields: ['unvested_rsus', 'unvested_price'],
-    names: ['unvested RSUs', 'unvested price'],
-    product: 'unvested equity',
-  },
-  {
-    fields: ['refresh_rsus', 'grant_price'],
-    names: ['refresh RSUs', 'grant price'],
-    product: 'the equity delta',
-  },
-]
+    {
+      fields: ['unvested_rsus', 'unvested_price'],
+      names: ['unvested RSUs', 'unvested price'],
+      product: 'unvested equity',
+    },
+    {
+      fields: ['refresh_rsus', 'grant_price'],
+      names: ['refresh RSUs', 'grant price'],
+      product: 'the equity delta',
+    },
+  ]
 
 /**
  * One sentence per pair THIS EDIT left half-filled, naming the operand orphaned by it.
@@ -458,7 +459,10 @@ function EventsPanel({
 
 // ── Page ────────────────────────────────────────────────────────────────────────────────
 
+const PAGE_SECTIONS = [{"id":"summary","label":"Summary"},{"id":"vesting","label":"Vesting"},{"id":"manage","label":"Manage"}] as const
+
 export default function CompPage() {
+  const views = useLocalSections(PAGE_SECTIONS, 'summary', { resolveLegacy: ({ searchParams, hash }) => searchParams.has('grant') || hash.includes('vesting') ? 'vesting' : hash.includes('focal') || hash.includes('grant') ? 'manage' : null })
   const cachedEvents = getSnapshot<CompEventOut[]>('comp:events')
   const [events, setEvents] = useState<CompEventOut[] | null>(cachedEvents ?? null)
   // Both *Error slots hold an `errorDetail` DETAIL, not a sentence: the page composes one
@@ -583,15 +587,8 @@ export default function CompPage() {
       {/* Nothing is loaded page-wide: the two feeds below own their own lifecycles, so the
           frame is only the title row. */}
       <PageFrame title="Comp" resource={{ status: 'ready', fromCache }}>
-        {/* The page's ONE banner, leading the schedule's OWN tiles (2026-08-31 review round):
-            after a failed reload the strip below is the page's most prominent stale surface,
-            and the "showing earlier data" cue has to sit beside it, not below the fold with
-            the schedule card. */}
+        <LocalSectionNav state={views} label="Comp views" />
         <FeedBanner error={loadBanner} retry={retryFailedLoads} />
-
-        {/* The headline tiles are the 2026-08-31 audit's; the no-grants branch is
-            VestingTiles' own (it renders nothing — the panel's empty state carries the
-            message). */}
         <Feed
           data={schedule}
           busy={scheduleBusy}
@@ -602,66 +599,73 @@ export default function CompPage() {
         >
           {(s) => <VestingTiles schedule={s} />}
         </Feed>
+        <LocalSectionPanel state={views} section="summary">
 
-        {/* Page order (2026-08-21 user revision): the ENTERED history first — Focal History,
-            then the chart it draws — and the computed vesting surfaces after: grants (the
-            input), then the schedule they produce. The panel is NOT keyed: a reload
-            re-renders it with a replaced array, so its half-typed row survives. */}
-        <Feed
-          data={events}
-          busy={busy}
-          staleNoun="the table"
-          skeleton={{ height: FEED_SKELETON.compEvents, label: 'Loading comp events…' }}
-        >
-          {(rows) => <EventsPanel events={rows} onChanged={onEventsChanged} />}
-        </Feed>
+          <ChartCard
+            title={TC_CHART_LABEL}
+            hint="Base salary stacked under the value of unvested equity, including the year's refresh — this app's total-comp proxy; the line is the server's own total."
+            ariaLabel="Stacked bar chart of base salary and unvested equity value per focal year, with total comp as a line"
+            option={trajectory}
+            empty="No comp events yet — add one in Manage."
+            exportName="total-comp"
+            csv={events === null ? undefined : () => tcTrajectoryCsv(events)}
+            height={320}
+            // Dimmed by the SAME flag as the table above it: both are drawn from one payload,
+            // and a chart left bright while the table beside it says "may be showing earlier
+            // data" would be the one thing the eye is on claiming to be current.
+            busy={busy || events === null}
+            onLegendChange={(selected) => setTcLegend((current) => ({ ...current, ...selected }))}
+            footer={
+              <p className="drill-hint">
+                Total comp as this app defines it: the base the year landed on, stacked under
+                the value of the unvested equity behind it (the sheet has no TC column — this is
+                the proxy, and the line is the server&apos;s own total).
+              </p>
+            }
+          />
+        </LocalSectionPanel>
+        <LocalSectionPanel state={views} section="vesting">
+          <Feed
+            data={schedule}
+            busy={scheduleBusy}
+            staleNoun="the schedule"
+            skeleton={{ height: 280, label: 'Loading the vesting schedule…' }}
+          >
+            {(s) => (
+              <>
 
-        <ChartCard
-          title={TC_CHART_LABEL}
-          hint="Base salary stacked under the value of unvested equity, including the year's refresh — this app's total-comp proxy; the line is the server's own total."
-          ariaLabel="Stacked bar chart of base salary and unvested equity value per focal year, with total comp as a line"
-          option={trajectory}
-          empty="No comp events yet — add one above."
-          exportName="total-comp"
-          csv={events === null ? undefined : () => tcTrajectoryCsv(events)}
-          height={320}
-          // Dimmed by the SAME flag as the table above it: both are drawn from one payload,
-          // and a chart left bright while the table beside it says "may be showing earlier
-          // data" would be the one thing the eye is on claiming to be current.
-          busy={busy || events === null}
-          onLegendChange={(selected) => setTcLegend((current) => ({ ...current, ...selected }))}
-          footer={
-            <p className="drill-hint">
-              Total comp as this app defines it: the base the year landed on, stacked under
-              the value of the unvested equity behind it (the sheet has no TC column — this is
-              the proxy, and the line is the server&apos;s own total).
-            </p>
-          }
-        />
+                <VestingSchedulePanel schedule={s} />
+              </>
+            )}
+          </Feed>
+        </LocalSectionPanel>
+        <LocalSectionPanel state={views} section="manage">
+          <Feed
+            data={events}
+            busy={busy}
+            staleNoun="the table"
+            skeleton={{ height: FEED_SKELETON.compEvents, label: 'Loading comp events…' }}
+          >
+            {(rows) => <EventsPanel events={rows} onChanged={onEventsChanged} />}
+          </Feed>
+          <Feed
+            data={schedule}
+            busy={scheduleBusy}
+            staleNoun="the schedule"
+            skeleton={{ height: 280, label: 'Loading the vesting schedule…' }}
+          >
+            {(s) => (
+              <>
+                <RsuGrantsPanel
+                  grants={s.grants}
+                  seedCandidates={s.seed_candidates}
+                  onChanged={reloadSchedule}
+                />
 
-        {/* No `error` here: the page's banner already leads the tiles above, and one
-            failure must not print two alerts. One payload, one dim — the grants table IS the
-            schedule card's input, and a bright form beside a card that says it may be stale
-            would invite an edit against figures that are already gone. NOT keyed, like the
-            events panel. Grants before the schedule (the 2026-08-21 order): the inputs, then
-            what they compute. */}
-        <Feed
-          data={schedule}
-          busy={scheduleBusy}
-          staleNoun="the schedule"
-          skeleton={{ height: 280, label: 'Loading the vesting schedule…' }}
-        >
-          {(s) => (
-            <>
-              <RsuGrantsPanel
-                grants={s.grants}
-                seedCandidates={s.seed_candidates}
-                onChanged={reloadSchedule}
-              />
-              <VestingSchedulePanel schedule={s} />
-            </>
-          )}
-        </Feed>
+              </>
+            )}
+          </Feed>
+        </LocalSectionPanel>
       </PageFrame>
     </div>
   )

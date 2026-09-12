@@ -34,20 +34,23 @@ from app.schemas.spending import (
 from app.services import clock
 from app.services.budgets import MIN_SEED_MONTHS, load_suggestions, resolve_budgets
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.metrics import average_evidence, category_comparison
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     quantize_money,
     require_first_of_month,
 )
+from app.services.month_review import load_review_book
+from app.services.month_writes import write_spending
 from app.services.net_worth_calc import get_swr_pct, investable_bases
 from app.services.savings import (
     LIVING,
     MonthSavings,
     compose_months,
+    load_month_savings,
     load_payroll_by_month,
     rollup,
 )
-from app.services.spending_guard import EMPTY_MONTH_REFUSAL, records_something
 
 router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(get_current_user)])
 
@@ -434,6 +437,13 @@ async def matrix(
             values[i] for values in budgets_by_category.values() if values[i] is not None
         ]
         total_budget.append(sum(month_budgets, Decimal("0.00")) if month_budgets else None)
+    review_book = await load_review_book(db)
+    full_history = await load_month_savings(db)
+    comparisons = [average_evidence(full_history, review_book, month) for month in months]
+    category_averages = {
+        c.id: [category_comparison(review_book, c.id, month) for month in months]
+        for c in categories
+    }
     return MatrixOut(
         months=months,
         categories=[CategoryOut.model_validate(c) for c in categories],
@@ -442,6 +452,8 @@ async def matrix(
                 category_id=c.id,
                 values=[cells.get((c.id, i)) for i in range(len(months))],
                 budgets=budgets_by_category.get(c.id, no_budgets),
+                comparison_average=[item[0] for item in category_averages[c.id]],
+                comparison_count=[item[1] for item in category_averages[c.id]],
             )
             for c in categories
         ],
@@ -457,6 +469,13 @@ async def matrix(
         payroll_savings=[row.payroll_savings for row in savings_rows],
         total_savings=[row.total_savings for row in savings_rows],
         total_savings_rate=[row.total_rate for row in savings_rows],
+        cash_outflow=[row.living_spend + row.tax_paid for row in savings_rows],
+        comparison_average=[item.value for item in comparisons],
+        comparison_count=[len(item.window.included) if item.window else 0 for item in comparisons],
+        review_state=[review_book.months[month].state for month in months],
+        eligible_spending=[review_book.months[month].eligible_spending for month in months],
+        eligible_savings=[review_book.months[month].eligible_savings for month in months],
+        default_month=review_book.default_month,
     )
 
 
@@ -557,126 +576,9 @@ async def put_month(
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> SpendingUpsertResult:
-    require_first_of_month(month)
-    ids = [entry.category_id for entry in body.amounts]
-    if len(set(ids)) != len(ids):
-        raise HTTPException(status_code=422, detail="duplicate category_id in amounts")
-    quantized: dict[int, Decimal] = {
-        entry.category_id: quantize_money(
-            entry.amount,
-            f"amount[category_id={entry.category_id}]",
-            max_abs=MONEY_MAX_ABS_12_2,  # Numeric(12,2): 10 integer digits, not 12
-        )
-        for entry in body.amounts
-    }
-    # net_pay is tri-state (the notes-null convention, spec 2026-08-21 §4.2 rider):
-    # omitted = leave it alone; a string = upsert; an EXPLICIT null = clear the month's
-    # cashflow row. model_fields_set is what tells an omitted field from a null one.
-    net_pay_present = "net_pay" in body.model_fields_set
-    net_pay_provided = net_pay_present and body.net_pay is not None
-    net_pay_clear = net_pay_present and body.net_pay is None
-    net_pay_value = (
-        quantize_money(body.net_pay, "net_pay", max_abs=MONEY_MAX_ABS_12_2)
-        if net_pay_provided
-        else None
-    )
-    if net_pay_value is not None and net_pay_value < 0:
-        # Take-home pay can't be negative; a typo'd minus sign would flip the
-        # savings-rate denominator into flattering nonsense (Task 7 review).
-        raise HTTPException(status_code=422, detail="net_pay must be non-negative")
-    # Spec §4: every category $0.00 with no take-home is what put a fake $0 month on
-    # production's Sep 2026 — refuse it unless the client says it means it. An EXPLICIT
-    # net_pay null passes only when it is the WHOLE body: that body records something (it
-    # deletes the month's cashflow row) and writes no zeros. Beside a page of zeros the
-    # same null would clear the take-home AND store 19 rows of $0.00 — Sep 2026 exactly —
-    # so the delete must not buy those zeros a way past the guard.
-    if not (
-        body.confirm_zero
-        or (net_pay_clear and not quantized)
-        or records_something(quantized.values(), net_pay_value)
-    ):
-        raise HTTPException(status_code=422, detail=EMPTY_MONTH_REFUSAL)
-    if ids:
-        known = set(
-            (
-                await db.execute(select(SpendingCategory.id).where(SpendingCategory.id.in_(ids)))
-            ).scalars()
-        )
-        missing = sorted(set(ids) - known)
-        if missing:
-            raise HTTPException(status_code=422, detail=f"unknown category_id(s): {missing}")
-
-    existing = {
-        row.category_id: row
-        for row in (
-            await db.execute(select(MonthlySpending).where(MonthlySpending.month == month))
-        ).scalars()
-    }
-    created = updated = unchanged = skipped_blank = 0
-    new_rows: list[MonthlySpending] = []
-    for category_id, value in quantized.items():
-        row = existing.get(category_id)
-        if row is None:
-            # A ZERO for a category this month has never stored is a blank box, not an
-            # entry (2026-09-09 audit item 1): the wizard seeds every active category with
-            # "0.00", so inserting these is what fabricated production's phantom rows —
-            # nineteen $0.00 records beside a take-home figure, which every average, mover,
-            # heatmap and budget seed then read as "spent nothing on housing". Only
-            # `confirm_zero` — the "Record this month as $0" checkbox — means them.
-            #
-            # A category that DOES have a stored row falls through to the update branch
-            # below, because correcting a figure down to zero is an edit and must persist.
-            if value == 0 and not body.confirm_zero:
-                skipped_blank += 1
-                continue
-            row = MonthlySpending(month=month, category_id=category_id, amount=value)
-            db.add(row)
-            new_rows.append(row)
-            created += 1
-        elif row.amount != value:
-            before = row_image(row)
-            row.amount = value
-            batch.record_update(row, before, month=month)
-            updated += 1
-        else:
-            unchanged += 1
-    if new_rows:
-        await db.flush()
-        for row in new_rows:
-            batch.record_insert(row, month=month)
-    net_pay_cleared = False
-    net_pay_note = ""
-    if net_pay_provided:
-        cashflow = await db.get(MonthlyCashflow, month)
-        if cashflow is None:
-            cashflow = MonthlyCashflow(month=month, net_pay=net_pay_value)
-            db.add(cashflow)
-            await db.flush()
-            batch.record_insert(cashflow, month=month)
-        else:
-            before = row_image(cashflow)
-            cashflow.net_pay = net_pay_value
-            batch.record_update(cashflow, before, month=month)
-        net_pay_note = ", take-home set"
-    elif net_pay_clear:
-        cashflow = await db.get(MonthlyCashflow, month)
-        if cashflow is not None:
-            batch.record_delete(cashflow, month=month)
-            await db.delete(cashflow)
-            net_pay_cleared = True
-            net_pay_note = ", take-home cleared"
-    batch.label = f"Saved {month:%b %Y} spending — {created + updated} updated{net_pay_note}"
-    batch_id = await batch.commit()
-    return SpendingUpsertResult(
-        month=month,
-        created=created,
-        updated=updated,
-        unchanged=unchanged,
-        net_pay_set=net_pay_provided,
-        skipped_blank=skipped_blank,
-        net_pay_cleared=net_pay_cleared,
-        batch_id=batch_id,
-    )
+    result = await write_spending(month, body, db, batch)
+    result.batch_id = await batch.commit()
+    return result
 
 
 @router.delete("/months/{month}", status_code=204)

@@ -1,4 +1,5 @@
 import type { SpendingMatrix } from '../types/api'
+import { addMonths } from './months'
 
 export interface MonthSlice {
   name: string
@@ -59,31 +60,33 @@ export interface CategoryMover {
  * and deltas against it would congratulate the user for data that does not exist.
  */
 export function monthMovers(
-  matrix: Pick<SpendingMatrix, 'series'>,
+  matrix: Pick<SpendingMatrix, 'series'> & Partial<Pick<SpendingMatrix, 'months'>>,
   monthIndex: number,
   top = 5,
 ): CategoryMover[] {
   if (monthIndex < 0) return []
-  const entered = (i: number) => matrix.series.some((s) => s.values[i] !== null)
+  const entered = (i: number) => matrix.series.some((s) => s.values[i] != null)
   if (!entered(monthIndex)) return []
-  const priorIndex = monthIndex - 1
+  const priorIndex = matrix.months ? matrix.months.indexOf(addMonths(matrix.months[monthIndex], -1)) : monthIndex - 1
   const hasPrior = priorIndex >= 0 && entered(priorIndex)
-  const movers: CategoryMover[] = matrix.series.map((s) => {
-    const value = Number(s.values[monthIndex] ?? 0)
-    const prior = hasPrior ? Number(s.values[priorIndex] ?? 0) : null
+  const movers: CategoryMover[] = matrix.series.flatMap((s) => {
+    if (s.values[monthIndex] == null) return []
+    const value = Number(s.values[monthIndex])
+    const prior = hasPrior && s.values[priorIndex] != null ? Number(s.values[priorIndex]) : null
     const window = s.values
       .slice(Math.max(0, monthIndex - 12), monthIndex)
       .filter((v): v is string => v !== null)
-    const avg =
-      window.length > 0 ? window.reduce((acc, v) => acc + Number(v), 0) / window.length : null
+    const avg = s.comparison_average !== undefined
+      ? s.comparison_average[monthIndex] == null ? null : Number(s.comparison_average[monthIndex])
+      : window.length > 0 ? window.reduce((acc, v) => acc + Number(v), 0) / window.length : null
     const budget = s.budgets[monthIndex] ?? null
-    return {
+    return [{
       categoryId: s.category_id,
       value,
       deltaPrior: prior === null ? null : value - prior,
       deltaAvg: avg === null ? null : value - avg,
       deltaBudget: budget === null ? null : value - Number(budget),
-    }
+    }]
   })
   const magnitude = (m: CategoryMover) =>
     Math.max(Math.abs(m.deltaPrior ?? 0), Math.abs(m.deltaAvg ?? 0))

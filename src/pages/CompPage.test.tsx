@@ -1,3 +1,4 @@
+import { MemoryRouter } from 'react-router-dom'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
@@ -319,7 +320,7 @@ afterEach(() => {
 
 describe('CompPage — events table', () => {
   it('renders the stored and computed columns from the server, nothing re-derived', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
 
     expect(await screen.findByText('$601,854.46')).toBeTruthy() // 2026 tc_after
     expect(screen.getByText('$495,882.96')).toBeTruthy() // 2026 tc_before
@@ -339,7 +340,7 @@ describe('CompPage — events table', () => {
 
   it('renders "—" for every null computed column of a bare year', async () => {
     vi.mocked(fetchEvents).mockResolvedValue([event2027])
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
 
     // tc_before / tc_after are never null, so they still carry figures.
     expect(await screen.findAllByText('$188,930.00')).toHaveLength(3) // base + both TCs
@@ -349,7 +350,7 @@ describe('CompPage — events table', () => {
   })
 
   it('draws the trajectory from the years the server sent, under its own label', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=summary']}><CompPage /></MemoryRouter>)
 
     const chart = await screen.findByTestId('echart')
     expect(chart.getAttribute('data-categories')).toBe('2024,2026,2027')
@@ -360,16 +361,16 @@ describe('CompPage — events table', () => {
 
   it('offers an empty state instead of a chart when there are no events', async () => {
     vi.mocked(fetchEvents).mockResolvedValue([])
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=summary']}><CompPage /></MemoryRouter>)
 
-    expect(await screen.findByText('No comp events yet — add one above.')).toBeTruthy()
+    expect(await screen.findByText('No comp events yet — add one in Manage.')).toBeTruthy()
     expect(screen.queryByTestId('echart')).toBeNull()
   })
 })
 
 describe('CompPage — writes', () => {
   it('posts a new event with every nullable column present', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     fillNewEvent()
@@ -392,7 +393,7 @@ describe('CompPage — writes', () => {
   })
 
   it('puts the caret back on the focal year after a save', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     fillNewEvent()
@@ -406,7 +407,7 @@ describe('CompPage — writes', () => {
   })
 
   it('never resurrects the pre-reset text when the caret was still in a money box', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     type('Focal year', '2028')
@@ -430,7 +431,7 @@ describe('CompPage — writes', () => {
   })
 
   it('PATCHes the FULL row, and a blanked column travels as an explicit null', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit the 2026 comp event' }))
@@ -468,7 +469,7 @@ describe('CompPage — writes', () => {
   })
 
   it('clears the notes with an explicit null too', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit the 2026 comp event' }))
@@ -480,7 +481,7 @@ describe('CompPage — writes', () => {
   })
 
   it('canonicalizes a grouped base at the wire boundary, with no blur', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     type('Focal year', '2028')
@@ -494,7 +495,7 @@ describe('CompPage — writes', () => {
   })
 
   it('EVALUATES an =-expression typed into the money base — the other half of the split', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     type('Focal year', '2028')
@@ -512,7 +513,7 @@ describe('CompPage — writes', () => {
   })
 
   it('ships an =-expression typed into a COUNT box verbatim — the belt never evaluates it', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     fillNewEvent()
@@ -535,7 +536,7 @@ describe('CompPage — writes', () => {
   })
 
   it('deletes an event only after the confirm is accepted', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     confirmSpy.mockReturnValue(false)
@@ -549,7 +550,7 @@ describe('CompPage — writes', () => {
   })
 
   it('requires the two NOT NULL columns before spending a request', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     type('Focal year', '2028')
@@ -560,7 +561,7 @@ describe('CompPage — writes', () => {
   })
 
   it('answers a mistyped focal year in the server’s own sentence', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     type('Focal year', '20268')
@@ -575,7 +576,7 @@ describe('CompPage — writes', () => {
     vi.mocked(createEvent).mockRejectedValue(
       new ApiError('a comp event for 2028 already exists', 409),
     )
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     fillNewEvent()
@@ -591,7 +592,7 @@ describe('CompPage — writes', () => {
 
 describe('CompPage — orphaned equity operands', () => {
   it('names the operand left without its partner, without blocking the save', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     // The stored row has BOTH sides, so clearing one is this edit's own doing.
@@ -614,7 +615,7 @@ describe('CompPage — orphaned equity operands', () => {
   })
 
   it('names the other side of each pair too', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     // Both pairs are whole on the stored 2026 row, so either box cleared is a change.
@@ -635,7 +636,7 @@ describe('CompPage — orphaned equity operands', () => {
   })
 
   it('says nothing when a pair is whole, or gone entirely', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     // Both filled (the row as stored).
@@ -660,7 +661,7 @@ describe('CompPage — orphaned equity operands', () => {
       unvested_rsus: '2152.0000', tc_before: '162000.00', tc_after: '162000.00',
     })
     vi.mocked(fetchEvents).mockResolvedValue([halfPaired])
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByRole('button', { name: 'Edit the 2025 comp event' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit the 2025 comp event' }))
@@ -677,7 +678,7 @@ describe('CompPage — orphaned equity operands', () => {
   })
 
   it('names a half-filled pair typed into a NEW row, where there is nothing stored', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     // Nothing is being edited, so the pair's stored state is "neither" — one side filled
@@ -695,7 +696,7 @@ describe('CompPage — orphaned equity operands', () => {
 describe('CompPage — loading', () => {
   it('offers a retry when the first load fails, with no stale cue behind it', async () => {
     vi.mocked(fetchEvents).mockRejectedValueOnce(new ApiError('comp unavailable', 503))
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
 
     expect(await screen.findByText("Couldn't load the comp events — the server had a problem (HTTP 503)")).toBeTruthy()
     // One banner for the page needs no disambiguating label (motion spec §9).
@@ -708,7 +709,7 @@ describe('CompPage — loading', () => {
     vi.mocked(fetchEvents)
       .mockResolvedValueOnce(EVENTS)
       .mockRejectedValueOnce(new ApiError('comp unavailable', 503))
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     type('Notes', 'half-typed event')
@@ -727,12 +728,13 @@ describe('CompPage — loading', () => {
   it('dims the chart card as well as the table while a reload is in flight', async () => {
     const slow = deferred<CompEventOut[]>()
     vi.mocked(fetchEvents).mockResolvedValueOnce(EVENTS).mockReturnValueOnce(slow.promise)
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete the 2027 comp event' }))
     await waitFor(() => expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(2))
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
     // The chart is drawn from the same payload the table is, so it goes dim with it: a
     // bright chart over a table that says it may be stale is the one figure the eye is on
     // claiming to be current.
@@ -757,7 +759,7 @@ describe('CompPage — loading', () => {
       .mockResolvedValueOnce(EVENTS)
       .mockReturnValueOnce(slow.promise)
       .mockReturnValueOnce(fast.promise)
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete the 2024 comp event' }))
@@ -765,6 +767,7 @@ describe('CompPage — loading', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete the 2027 comp event' }))
     await waitFor(() => expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(3))
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
     fast.resolve([event2026])
     await waitFor(() =>
       expect(screen.getByTestId('echart').getAttribute('data-categories')).toBe('2026'),
@@ -785,7 +788,7 @@ describe('CompPage — vesting schedule', () => {
   })
 
   it('renders the three tiles from the server’s own strings, nothing re-derived', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=vesting']}><CompPage /></MemoryRouter>)
     await screen.findByText('Vesting schedule')
 
     // The tile's value is the next vest DATE and its delta the shares and the estimate the
@@ -805,7 +808,7 @@ describe('CompPage — vesting schedule', () => {
       ...SCHEDULE,
       tiles: { ...SCHEDULE.tiles, vested_this_year_income: null },
     })
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=vesting']}><CompPage /></MemoryRouter>)
     await screen.findByText('Vesting schedule')
 
     // The shares still vested; only their value is unknown. An em dash under the count would
@@ -816,21 +819,22 @@ describe('CompPage — vesting schedule', () => {
 
   it('surfaces the vest tiles at the page top, above the focal history (2026-08-31 audit)', async () => {
     vi.mocked(fetchVestingSchedule).mockResolvedValue(SCHEDULE)
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     const nextVest = await screen.findByText('Next vest')
     expectInDocumentOrder(nextVest, screen.getByText('Focal history'))
   })
 
   it('mounts the TC trajectory and the vesting calendar through ChartCard', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=summary']}><CompPage /></MemoryRouter>)
     // Await the CHARTS, not the card title: the header (and TC_CHART_LABEL with it) is up
     // while the body is still the card's own “Loading…” status, so awaiting the title raced
     // both feeds — green alone, red once the full suite loaded the box (2026-09-04). The two
     // charts come from two different fetches, so each is awaited on its own name.
     expect(await screen.findByLabelText(/Stacked bar chart of base salary and unvested equity value/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Vesting' }))
     expect(await screen.findByLabelText(/Stacked bar chart of vest value per vest date/)).toBeTruthy()
     expect(screen.getByText(TC_CHART_LABEL)).toBeTruthy()
-    expect(screen.getByRole('group', { name: 'Export total-comp' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Export total-comp', hidden: true })).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Export vesting-calendar' })).toBeTruthy()
     // The strip's unvested half is the SERVER's tile figure verbatim — the same $235,471.20
     // the tile above prints. Re-deriving it from the quote here would disagree with that tile
@@ -844,17 +848,20 @@ describe('CompPage — vesting schedule', () => {
     // hatch on a hatch (tools/probes/charts-c5 panel A2). The footnote has to name the mark
     // the eye can actually find, so it switches with the setting.
     localStorage.setItem(DECALS_KEY, 'on')
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=vesting']}><CompPage /></MemoryRouter>)
     await screen.findByText('Vesting schedule')
 
     expect(screen.getByText('Faded = at today’s quote')).toBeTruthy()
     expect(screen.queryByText('Hatched = at today’s quote')).toBeNull()
   })
 
-  it('draws the vesting calendar beside the trajectory, on the vest dates', async () => {
-    render(<CompPage />)
+  it('keeps the trajectory and vest calendar data across their task views', async () => {
+    render(<MemoryRouter initialEntries={['/comp?section=vesting']}><CompPage /></MemoryRouter>)
     await screen.findByText('Vesting schedule')
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
+    await screen.findByLabelText(/Stacked bar chart of base salary/)
+    fireEvent.click(screen.getByRole('tab', { name: 'Vesting' }))
     const charts = await screen.findAllByTestId('echart')
     expect(charts).toHaveLength(2)
     // The trajectory is unchanged and still first — the vesting calendar is the second card.
@@ -867,7 +874,7 @@ describe('CompPage — vesting schedule', () => {
   })
 
   it('groups the table one row per date, badges the next day, and scrolls', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=vesting']}><CompPage /></MemoryRouter>)
     await screen.findByText('Vesting schedule')
 
     // Four day rows for five tranches (the 2026-11-18 day merges two grants), collapsed by
@@ -888,7 +895,7 @@ describe('CompPage — vesting schedule', () => {
   })
 
   it('expands one date at a time and folds it on a second click', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=vesting']}><CompPage /></MemoryRouter>)
     await screen.findByText('Vesting schedule')
     const trancheLabels = () =>
       Array.from(document.querySelectorAll('td.vest-tranche-label')).map((el) => el.textContent)
@@ -913,24 +920,21 @@ describe('CompPage — vesting schedule', () => {
     expect(trancheLabels()).toEqual([])
   })
 
-  it('orders the page focal history → trajectory → grants → schedule', async () => {
-    // The 2026-08-21 revision's page order: the entered history and its chart first, then
-    // the computed vesting surfaces — grants (the input) before the schedule they produce.
-    render(<CompPage />)
-    await screen.findByText('Vesting schedule')
-    const eyebrows = Array.from(document.querySelectorAll('h2.eyebrow')).map(
-      (el) => el.textContent,
-    )
-    expect(eyebrows).toEqual([
-      'Focal history',
-      'Base + unvested equity value',
-      'RSU grants',
-      'Vesting schedule',
-    ])
+  it('keeps comp records in Manage and preserves a draft through Vesting', async () => {
+    render(<MemoryRouter initialEntries={['/comp']}><CompPage /></MemoryRouter>)
+    await screen.findByLabelText(/Stacked bar chart of base salary/)
+    expect(screen.queryByRole('heading', { name: 'Focal history' })).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
+    await screen.findByRole('heading', { name: 'Focal history' })
+    type('Notes', 'draft comp change')
+    fireEvent.click(screen.getByRole('tab', { name: 'Vesting' }))
+    await screen.findByRole('heading', { name: 'Vesting schedule' })
+    fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
+    expect(field('Notes').value).toBe('draft comp change')
   })
 
   it('renders the drift warnings and the payload’s own warnings', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=vesting']}><CompPage /></MemoryRouter>)
     await screen.findByText('Vesting schedule')
 
     expect(
@@ -950,10 +954,10 @@ describe('CompPage — vesting schedule', () => {
       // the empty state is exactly where that sentence is the only evidence it exists.
       warnings: ['FY24 new hire: stored grant cannot be scheduled — cliff_pct out of range'],
     })
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=vesting']}><CompPage /></MemoryRouter>)
 
     expect(
-      await screen.findByText('No grants yet — add one above to see the schedule.'),
+      await screen.findByText('No grants yet — add one in Manage to see the schedule.'),
     ).toBeTruthy()
     expect(
       screen.getByText('FY24 new hire: stored grant cannot be scheduled — cliff_pct out of range'),
@@ -962,11 +966,11 @@ describe('CompPage — vesting schedule', () => {
     // The page-top strip is gated on the same zero grants (2026-08-31 audit): the panel's
     // empty state carries the message, so nothing renders above it.
     expect(document.querySelector('.kpi-row')).toBeNull()
-    expect(screen.getAllByTestId('echart')).toHaveLength(1)
+    expect(screen.queryAllByTestId('echart')).toHaveLength(0)
   })
 
   it('renders the grants table with the server’s computed split', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     const table = within(grantsTable())
@@ -988,7 +992,7 @@ describe('CompPage — RSU grant writes', () => {
   })
 
   it('prefills the form from a seed chip and saves nothing', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     fireEvent.click(screen.getByRole('button', { name: 'Add 2026 focal — 480 sh @ $129.57' }))
@@ -1006,7 +1010,7 @@ describe('CompPage — RSU grant writes', () => {
   })
 
   it('derives the cliff from the kind on a new grant', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     fillNewGrant()
@@ -1032,7 +1036,7 @@ describe('CompPage — RSU grant writes', () => {
   })
 
   it('puts the caret back on the LABEL after a save, never on the kind select', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     fillNewGrant()
@@ -1047,7 +1051,7 @@ describe('CompPage — RSU grant writes', () => {
   })
 
   it('derives the refresh cliff when the kind says refresh', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     fillNewGrant()
@@ -1059,7 +1063,7 @@ describe('CompPage — RSU grant writes', () => {
   })
 
   it('keeps the STORED cliff on an edit, and re-derives only when the kind flips', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit the FY24 new hire grant' }))
@@ -1104,7 +1108,7 @@ describe('CompPage — RSU grant writes', () => {
   })
 
   it('clears the two nullable columns with an explicit null', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit the FY26 refresh grant' }))
@@ -1123,7 +1127,7 @@ describe('CompPage — RSU grant writes', () => {
   })
 
   it('fences a fractional share count before spending a request', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     fillNewGrant()
@@ -1135,7 +1139,7 @@ describe('CompPage — RSU grant writes', () => {
   })
 
   it('fences a price that is not a plain decimal, where no 422 is behind it', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     fillNewGrant()
@@ -1148,7 +1152,7 @@ describe('CompPage — RSU grant writes', () => {
   })
 
   it('answers a mistyped focal year in the server’s own sentence', async () => {
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     fillNewGrant()
@@ -1163,7 +1167,7 @@ describe('CompPage — RSU grant writes', () => {
     vi.mocked(createRsuGrant).mockRejectedValue(
       new ApiError("a grant labeled 'FY27 new hire' already exists", 409),
     )
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     fillNewGrant()
@@ -1179,7 +1183,7 @@ describe('CompPage — RSU grant writes', () => {
   it('shuts the seed chips and the row Edits while a save is in flight', async () => {
     const slow = deferred<RsuGrantOut>()
     vi.mocked(createRsuGrant).mockReturnValueOnce(slow.promise)
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     const chip = () =>
@@ -1209,7 +1213,7 @@ describe('CompPage — RSU grant writes', () => {
   it('deletes a grant instantly, and Undo re-creates it through the POST', async () => {
     render(
       <ToastProvider>
-        <CompPage />
+        <MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>
       </ToastProvider>,
     )
     await screen.findByText('RSU grants')
@@ -1250,7 +1254,7 @@ describe('CompPage — shell frame', () => {
     vi.mocked(fetchVestingSchedule)
       .mockResolvedValueOnce(SCHEDULE)
       .mockRejectedValueOnce(new ApiError('vesting unavailable', 503))
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     // One header for every page (spec §5) — the page's own title row is gone.
@@ -1269,7 +1273,7 @@ describe('CompPage — the two feeds are independent', () => {
   it('collapses both failed loads into one banner with one Retry', async () => {
     vi.mocked(fetchEvents).mockRejectedValueOnce(new ApiError('comp unavailable', 503))
     vi.mocked(fetchVestingSchedule).mockRejectedValueOnce(new ApiError('comp unavailable', 503))
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     // One reason behind both, so it is said once — above the tiles it disclaims.
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toBe(
@@ -1286,7 +1290,7 @@ describe('CompPage — the two feeds are independent', () => {
       new ApiError('vesting unavailable', 503),
     )
     vi.mocked(fetchVestingSchedule).mockResolvedValue(SCHEDULE)
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
 
     expect(
       await screen.findByText("Couldn't load the vesting schedule — the server had a problem (HTTP 503)"),
@@ -1297,6 +1301,7 @@ describe('CompPage — the two feeds are independent', () => {
     expect(screen.queryByText(/Showing earlier data/)).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Vesting' }))
     expect(await screen.findByText('Vesting schedule')).toBeTruthy()
     expect(screen.queryByText("Couldn't load the vesting schedule — the server had a problem (HTTP 503)")).toBeNull()
   })
@@ -1305,7 +1310,7 @@ describe('CompPage — the two feeds are independent', () => {
     vi.mocked(fetchVestingSchedule)
       .mockResolvedValueOnce(SCHEDULE)
       .mockRejectedValueOnce(new ApiError('vesting unavailable', 503))
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     type('Label', 'half-typed grant')
@@ -1325,7 +1330,7 @@ describe('CompPage — the two feeds are independent', () => {
 
   it('reloads BOTH feeds after a comp event write', async () => {
     vi.mocked(fetchVestingSchedule).mockResolvedValue(SCHEDULE)
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('$601,854.46')
 
     // A focal year is what the seed chips and the drift sentences are built from, so an
@@ -1342,7 +1347,7 @@ describe('CompPage — the two feeds are independent', () => {
       .mockResolvedValueOnce(SCHEDULE)
       .mockReturnValueOnce(slow.promise)
       .mockReturnValueOnce(fast.promise)
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     await screen.findByText('RSU grants')
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete the FY26 refresh grant' }))
@@ -1375,8 +1380,9 @@ describe('CompPage — snapshot cache (2026-08-27 spec §1)', () => {
     setSnapshot('comp:events', EVENTS)
     // Never-resolving fetch: whatever is on screen came from the seed alone.
     vi.mocked(fetchEvents).mockReturnValue(new Promise(() => {}))
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
     expect(screen.getByText('$601,854.46')).toBeTruthy() // 2026 tc_after
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
     expect(screen.getByTestId('echart').getAttribute('data-categories')).toBe('2024,2026,2027')
     // A cached paint renders its chart still, and the revalidation still went out.
     expect(screen.getByTestId('echart').getAttribute('data-animate')).toBe('false')
@@ -1390,14 +1396,14 @@ describe('CompPage — snapshot cache (2026-08-27 spec §1)', () => {
       warnings: ['seeded-from-cache warning'],
     })
     vi.mocked(fetchVestingSchedule).mockReturnValue(new Promise(() => {}))
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=vesting']}><CompPage /></MemoryRouter>)
     expect(screen.getByText('seeded-from-cache warning')).toBeTruthy()
   })
 
   it('a changed revalidation payload updates the table and re-arms the chart', async () => {
     setSnapshot('comp:events', EVENTS)
     vi.mocked(fetchEvents).mockResolvedValue([event2024, event2026])
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=summary']}><CompPage /></MemoryRouter>)
     expect(screen.getByTestId('echart').getAttribute('data-categories')).toBe('2024,2026,2027')
     await waitFor(() =>
       expect(screen.getByTestId('echart').getAttribute('data-categories')).toBe('2024,2026'),
@@ -1407,7 +1413,7 @@ describe('CompPage — snapshot cache (2026-08-27 spec §1)', () => {
 
   it('leaves the chart still when the revalidation payload is identical', async () => {
     setSnapshot('comp:events', EVENTS)
-    render(<CompPage />)
+    render(<MemoryRouter initialEntries={['/comp?section=summary']}><CompPage /></MemoryRouter>)
     await waitFor(() => expect(fetchEvents).toHaveBeenCalledTimes(1))
     await act(async () => {})
     expect(screen.getByTestId('echart').getAttribute('data-animate')).toBe('false')

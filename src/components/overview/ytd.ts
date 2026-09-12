@@ -113,7 +113,9 @@ export function ytdStats(
   const enteredSpend = inYear(coverage.spending)
   const enteredPay = inYear(coverage.net_pay)
   const paySet = new Set(enteredPay)
-  const matched = enteredSpend.filter((month) => paySet.has(month))
+  const matched = coverage.eligible_savings === undefined
+    ? enteredSpend.filter((month) => paySet.has(month))
+    : inYear(coverage.eligible_savings)
   const spanOf = (months: string[], count?: number): YtdWindow | null =>
     months.length === 0
       ? null
@@ -133,7 +135,7 @@ export function ytdStats(
     throughMonth: latestIdx >= 0 ? ts.months[latestIdx] : null,
     // living_total is the honest spend; `total` is what a pre-kinds backend sends, and it
     // is what this card printed until today — so the fallback changes nothing for it.
-    spend: row?.living_total ?? row?.total ?? null,
+    spend: row?.living_total === undefined ? row?.total ?? null : hasMatch ? row.living_total : null,
     // The label follows the FIGURE, never the feed: `living_total` is summed over matched
     // months only, so a month entered without a paycheck beside it is in neither. The
     // fallback `total` does cover every entered month, and says so.

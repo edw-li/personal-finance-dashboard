@@ -192,7 +192,8 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate }:
     () =>
       coverage === null
         ? null
-        : { balances: new Set(coverage.balances), spending: new Set(coverage.spending) },
+        : { balances: new Set(coverage.balances), spending: new Set(coverage.spending),
+            reviews: coverage.review_months ? Object.fromEntries(coverage.review_months.map(review => [review.month, review.state])) : undefined },
     [coverage],
   )
   const earliest = useMemo(() => {

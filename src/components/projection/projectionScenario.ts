@@ -173,11 +173,12 @@ export function labelForProjection(
 }
 
 export const COMPARE_ROWS: CompareRow[] = [
+  { key: 'years', label: 'Horizon (years)', kind: 'plain' },
   { key: 'fi_target', label: 'FI target', kind: 'money' },
   { key: 'fi_ratio', label: 'FI ratio', kind: 'percent' },
   { key: 'fi_month', label: 'FI date', kind: 'month' },
   { key: 'coast_fi_month', label: 'Coast FI date', kind: 'month' },
-  { key: 'fi_probability', label: 'FI probability', kind: 'percent' },
+  { key: 'fi_probability', label: 'Reach within horizon', kind: 'percent' },
   { key: 'fi_month_p10', label: 'p10 date', kind: 'month' },
   { key: 'fi_month_p50', label: 'p50 date', kind: 'month' },
   { key: 'fi_month_p90', label: 'p90 date', kind: 'month' },
@@ -188,5 +189,6 @@ const ROW_KEYS = new Set(COMPARE_ROWS.map((r) => r.key))
 
 export function projectionValue(result: ProjectionOut, key: string): string | null {
   if (!ROW_KEYS.has(key)) return null
+  if (key === 'years') return String(result.years)
   return (result as unknown as Record<string, string | null | undefined>)[key] ?? null
 }

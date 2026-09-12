@@ -8,7 +8,7 @@ can take `[0]` as the earliest covered month.
 The CLASSIFICATION — which spending months count as entered, empty or missing — lives in
 `services/coverage.py`, because three health checks read the same sentences and neither a
 service nor a check may import a router (2026-09-04 honest-numbers spec §3). This endpoint
-is the wire mapping of that one definition, and it still runs one query per table.
+is the wire mapping of that definition together with the explicit month-review states.
 """
 
 from datetime import date
@@ -20,6 +20,7 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.schemas.coverage import CoverageLatestOut, CoverageOut
 from app.services.coverage import load_coverage
+from app.services.month_review import load_review_book
 
 router = APIRouter(prefix="/coverage", tags=["coverage"], dependencies=[Depends(get_current_user)])
 
@@ -30,7 +31,8 @@ def _latest(months: list[date]) -> date | None:
 
 @router.get("", response_model=CoverageOut)
 async def coverage(db: AsyncSession = Depends(get_db)) -> CoverageOut:
-    found = await load_coverage(db)
+    reviews = await load_review_book(db)
+    found = await load_coverage(db, reviews)
     return CoverageOut(
         balances=found.balances,
         spending=found.entered,
@@ -43,4 +45,9 @@ async def coverage(db: AsyncSession = Depends(get_db)) -> CoverageOut:
             spending=_latest(found.entered),
             net_pay=_latest(found.net_pay),
         ),
+        review_months=list(reviews.months.values()),
+        default_month=reviews.default_month,
+        adopted_on=reviews.adopted_on,
+        eligible_spending=[m for m, state in reviews.months.items() if state.eligible_spending],
+        eligible_savings=[m for m, state in reviews.months.items() if state.eligible_savings],
     )

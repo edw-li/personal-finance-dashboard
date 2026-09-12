@@ -224,7 +224,7 @@ export default function VestingSchedulePanel({ schedule }: { schedule: VestingSc
       option={schedule.grants.length === 0 ? null : calendar}
       empty={
         schedule.grants.length === 0
-          ? 'No grants yet — add one above to see the schedule.'
+          ? 'No grants yet — add one in Manage to see the schedule.'
           : 'Nothing priced to draw yet — see the notes below.'
       }
       exportName="vesting-calendar"

@@ -58,6 +58,15 @@ function dividend(payDate: string, amount: string, id = 1): DividendOut {
 }
 
 describe('ytdStats — net worth delta', () => {
+  it('uses the eligible savings window when entered current-month rows are excluded', () => {
+    const stats = ytdStats(ts([], []), yearly([{ ...rollup(2026), months_matched: 1 }]), [], coverageOut({
+      spending: ['2026-06-01', '2026-07-01', '2026-08-01'], net_pay: ['2026-06-01', '2026-07-01', '2026-08-01'],
+      eligible_savings: ['2026-07-01'],
+    }), TODAY)
+    expect(stats.savedWindow).toEqual({ from: '2026-07-01', to: '2026-07-01', months: 1 })
+    expect(stats.spendWindow).toEqual(stats.savedWindow)
+    expect(stats.netPayWindow?.to).toBe('2026-08-01')
+  })
   it('anchors on the last snapshot before January and spans to the latest in-year one', () => {
     const stats = ytdStats(
       ts(['2025-11-01', '2025-12-01', '2026-01-01', '2026-08-01'], [90, 100, 110, 130]),
@@ -226,7 +235,7 @@ describe('ytdStats — every figure names its window (spec §3)', () => {
     expect(stats.netPayWindow).toBeNull()
     // Nor does spend: the $0.00 the server sends is the sum over NO matched months, and a
     // window would tell the reader that figure covers Jan-Jul. It covers nothing.
-    expect(stats.spend).toBe('0.00')
+    expect(stats.spend).toBeNull()
     expect(stats.spendWindow).toBeNull()
   })
 

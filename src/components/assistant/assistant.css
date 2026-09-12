@@ -43,6 +43,31 @@
   box-shadow: -12px 0 40px rgba(0, 0, 0, 0.45);
 }
 
+.assistant-dock-mount, .assistant-dock-mount > div { height: 100%; min-height: 0; }
+.detail-panel-body:has(.assistant-dock-mount) { padding: 0; overflow: hidden; }
+.assistant-drawer-coordinated { position: static; width: 100%; height: 100%; border: 0; box-shadow: none; }
+.assistant-drawer-coordinated .assistant-model-select { max-width: none; }
+.assistant-tabs { display: flex; gap: .5rem; padding: .6rem .75rem; border-bottom: 1px solid var(--border); }
+.assistant-tabs button { color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 5px; padding: .35rem .55rem; cursor: pointer; }
+.assistant-tabs [aria-selected=true] { color: var(--text); background: var(--surface-2); border-color: var(--border); }
+.assistant-messages[hidden], .assistant-context[hidden] { display: none; }
+.assistant-review-action { margin-bottom: .8rem; }
+.assistant-review-action .button { font-size: .8rem; }
+.assistant-question-context { display: block; font-size: .7rem; opacity: .8; margin-top: .3rem; }
+.assistant-computed-summary { background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; padding: .8rem; margin-bottom: .8rem; }
+.assistant-computed-summary > strong { font-size: .9rem; }
+.assistant-computed-summary summary, .assistant-saved-finding summary { cursor: pointer; }
+.assistant-computed-summary dl, .assistant-saved-finding dl { font-size: .8rem; }
+.assistant-computed-summary dl > div, .assistant-saved-finding dl > div { display: flex; justify-content: space-between; gap: 1rem; padding: .3rem 0; border-bottom: 1px solid var(--border); }
+.assistant-computed-summary dd, .assistant-saved-finding dd { margin: 0; }
+.assistant-evidence-link { padding: 0; background: none; border: 0; border-bottom: 1px dotted currentColor; color: var(--accent); cursor: pointer; font: inherit; font-variant-numeric: tabular-nums; }
+.assistant-evidence-inline { display: block; font-size: .8rem; color: var(--muted); }
+.assistant-save-finding { margin-top: .7rem; }
+.assistant-save-finding .button { font-size: .75rem; }
+.assistant-saved-findings { overflow: auto; flex: 1; min-height: 0; padding: .8rem; font-size: .85rem; }
+.assistant-saved-finding { margin-top: .8rem; padding: .7rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; }
+.assistant-saved-finding summary small { display: block; color: var(--muted); margin-top: .2rem; }
+
 /* One line, always. At 400px the four children measured ~4px of slack, so any longer model
    label wrapped the Close button onto a row of its own. nowrap + a shrinkable select makes
    the SELECT absorb the overflow (it ellipsises) instead of the layout breaking. */

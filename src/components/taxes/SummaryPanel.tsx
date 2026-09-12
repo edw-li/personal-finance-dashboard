@@ -3,6 +3,7 @@ import { FILING_STATUS_LABELS, jurisdictionLabel } from '../../api/taxes'
 import ChartCard from '../ChartCard'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
+import { metricReceipt } from '../../utils/metricReceipt'
 import type {
   FilingStatus,
   PersonWageTaxOut,
@@ -104,6 +105,13 @@ export default function SummaryPanel({
   // Null exactly when the engine refused: the tiles read em-dashes (formatCurrency/formatPct
   // answer '—' for an absent value) rather than the zeros it declined to compute.
   const totals = missing.length > 0 ? null : summary.totals
+  const receipt = (id: 'gross_income' | 'total_tax' | 'take_home' | 'effective_rate', label: string, definition: string) => metricReceipt({
+    id: `tax_${id}`, label, definition, value: totals?.[id] ?? null, unit: id === 'effective_rate' ? 'ratio' : 'USD',
+    scope: `Household · ${FILING_STATUS_LABELS[filingStatus]}`, completeness: totals === null ? 'unavailable' : 'estimate',
+    source_link: `/taxes?year=${summary.year}&section=inputs`, warnings: summary.warnings,
+    window: { from: `${summary.year}-01-01`, to: `${summary.year}-12-31`, included: [], excluded: [] },
+    components: id === 'effective_rate' || id === 'take_home' ? [{ label: 'Gross income', value: totals?.gross_income ?? null, unit: 'USD' }, { label: 'Total tax', value: totals?.total_tax ?? null, unit: 'USD' }] : [],
+  })
 
   // One list on the wire, two registers on screen. Everything the engine says is still
   // shown, in the order it said it; the deduction sentence is simply not muted.
@@ -122,11 +130,13 @@ export default function SummaryPanel({
           <StatTile
             label="Gross income"
             value={formatCurrency(totals?.gross_income)}
+            evidence={receipt('gross_income', 'Gross income', 'Sum of the tax engine’s stored income components for the selected tax year, before taxes. This estimate follows the selected filing status and recorded inputs.')}
             hint="Every income component summed before any tax — the waterfall&apos;s opening bar."
           />
           <StatTile
             label="Total tax"
             value={formatCurrency(totals?.total_tax)}
+            evidence={receipt('total_tax', 'Total tax', 'Sum of the tax engine’s federal, state, payroll, capital-gains and NIIT lines where applicable, using the stored brackets and inputs for this year. This is estimated liability, not tax payments.')}
             hint="Every tax line summed: federal, state, Medicare, Social Security, SDI, capital gains — and NIIT when it applies."
           />
           {/* Same size as its three siblings: the hero treatment belongs to pages with ONE
@@ -134,11 +144,13 @@ export default function SummaryPanel({
           <StatTile
             label="Take-home"
             value={formatCurrency(totals?.take_home)}
+            evidence={receipt('take_home', 'Take-home', 'Gross annual income less estimated total tax. Payroll contributions and the cash timing of withholding are separate from this tax estimate.')}
             hint="Gross income minus total tax."
           />
           <StatTile
             label="Effective rate"
             value={formatPct(totals?.effective_rate, { signed: false })}
+            evidence={receipt('effective_rate', 'Effective rate', 'Estimated total tax divided by gross annual income, calculated by the existing tax engine. It is distinct from the marginal rate on additional income.')}
             hint="Total tax ÷ gross income."
           />
         </div>

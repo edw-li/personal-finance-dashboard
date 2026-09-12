@@ -63,14 +63,14 @@ describe('monthMovers', () => {
       1: ['100.00', '100.00', '400.00'], // +300 vs prior, +300 vs avg
       2: ['50.00', '80.00', '20.00'], // -60 vs prior, -45 vs avg
       3: ['10.00', '10.00', '10.00'], // flat both ways — not a mover
-      4: [null, null, '30.00'], // new spend: +30 vs prior's implicit 0, no history for avg
+      4: [null, null, '30.00'], // no prior entry or baseline; no invented zero comparison
     })
     expect(monthMovers(m, 2, 2)).toEqual([
       { categoryId: 1, value: 400, deltaPrior: 300, deltaAvg: 300, deltaBudget: null },
       { categoryId: 2, value: 20, deltaPrior: -60, deltaAvg: -45, deltaBudget: null },
     ])
-    // Unclipped, the new spend ranks third and the flat category never appears.
-    expect(monthMovers(m, 2).map((mv) => mv.categoryId)).toEqual([1, 2, 4])
+    // New spending without a comparable entry is not a measured change.
+    expect(monthMovers(m, 2).map((mv) => mv.categoryId)).toEqual([1, 2])
   })
 
   it('surfaces a flat-vs-prior category that is far off its average', () => {

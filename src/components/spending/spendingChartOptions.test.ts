@@ -35,7 +35,7 @@ describe('spendingCsv', () => {
       net_pay: ['6000.00', null],
     }
     expect(spendingCsv(matrix, [1], new Map([[1, 'Rent']]))).toEqual({
-      headers: ['Month', 'Rent', 'Other', 'Total', 'Net pay'],
+      headers: ['Month', 'Rent', 'Other', 'All category entries', 'Net pay'],
       rows: [
         ['2026-06-01', '2000.00', '150.00', '2150.00', '6000.00'],
         // null cells go EMPTY, never '0.00' — absent is not zero; Other re-sums the fold.
@@ -57,6 +57,16 @@ describe('spendingCsv', () => {
     expect(spendingCsv(matrix, [1], new Map([[1, 'Rent']])).rows).toEqual([
       ['2026-08-01', '', '0.00', '0.00', '6000.00'],
     ])
+  })
+
+  it('exports the exact server components and distinguishes transfers from cash outflow', () => {
+    const matrix = matrixFixture({ totals: ['435.01', '0.00'], living_total: ['300.00', '0.00'], tax_total: ['35.01', '0.00'], transfer_total: ['100.00', '0.00'], cash_outflow: ['335.01', '0.00'], review_state: ['closed', 'in_progress'] })
+    const table = spendingCsv(matrix, [1], new Map([[1, 'Rent']]))
+    const record = Object.fromEntries(table.headers.map((header, i) => [header, table.rows[0][i]]))
+    expect(record).toMatchObject({ 'All category entries': '435.01', 'Living spending': '300.00', 'Tax paid from take-home': '35.01', Transfers: '100.00', 'Cash outflow': '335.01', 'Review status': 'closed' })
+    const savings = savingsRateCsv(matrix)
+    expect(savings.rows[0].slice(-2)).toEqual(['335.01', 'closed'])
+    expect(savings.rows[1].slice(-2)).toEqual(['0.00', 'in_progress'])
   })
 })
 
@@ -368,7 +378,7 @@ describe('savingsRateOption', () => {
 
   it('exports month, net pay, living and total spend, and both rates — blanks for nulls', () => {
     expect(savingsRateCsv(matrixFixture())).toEqual({
-      headers: ['Month', 'Net pay', 'Living spend', 'Total spend', 'Cash rate', 'Total rate'],
+      headers: ['Month', 'Net pay', 'Living spending', 'All category entries', 'Cash rate', 'Total rate'],
       rows: [
         ['2026-06-01', '6000.00', '2600.00', '2750.00', '0.541666667', '0.607142857'],
         ['2026-07-01', '6000.00', '2000.00', '2000.00', '', ''],

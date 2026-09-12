@@ -2,6 +2,7 @@
 // builders belong in a module the tests can call directly, and the Overview page needs the
 // donut too — a second copy would be two things to keep in step.
 import type { EChartsOption } from '../../charts/echarts'
+import type { AllocationData } from '../../api/allocation'
 import { DIVERGING, INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { itemTooltip } from '../../charts/tooltip'
 import type { AllocationResponse, HoldingOut } from '../../types/api'
@@ -100,7 +101,11 @@ interface HeatGroup {
 const clamp = (v: number) => Math.max(-HEAT_CLAMP, Math.min(HEAT_CLAMP, v))
 const metricOf = (h: HoldingOut, metric: HeatMetric) =>
   Number((metric === 'unrealized' ? h.unrealized_gl_pct : h.day_change_pct) ?? 0)
-const industryOf = (h: HoldingOut) => h.industry ?? TYPE_LABELS[h.holding_type] ?? h.holding_type
+const industryOf = (h: HoldingOut) => {
+  if (h.holding_type === 'etf' || h.holding_type === 'mutual_fund') return 'Unknown fund industry'
+  if (!h.industry || ['etf', 'mutual fund', 'mutual_fund', 'stock', 'private'].includes(h.industry.toLowerCase())) return 'Unknown industry'
+  return h.industry
+}
 // Saturated arms are light on dark (and dark on light), so they take the SURFACE ink; the
 // neutral middle takes INK. recolor.ts swaps both tokens under the light theme.
 const inkFor = (pct: number) => (Math.abs(pct) >= 0.3 ? SURFACE : INK)
@@ -250,5 +255,40 @@ export function donutCsv(data: AllocationResponse, labels: boolean): ExportTable
         ? [['Other', rest.reduce((sum, s) => sum + s.value, 0).toFixed(2)]]
         : []),
     ],
+  }
+}
+
+/** All allocation categories remain individually addressable, including unknowns. */
+export function exposureOption(data: AllocationData): EChartsOption | null {
+  if (Number(data.total_market_value) <= 0 || data.slices.some((s) => Number(s.market_value) < 0)) return null
+  return {
+    tooltip: itemTooltip<{ name?: string; value?: unknown }>({
+      body: (p) => ({
+        value: Number(p.value), label: p.name ?? '',
+        sub: `${formatPct(Number(p.value) / Number(data.total_market_value), { signed: false })} of priced holdings`,
+      }),
+    }),
+    series: [{
+      type: 'pie', radius: ['50%', '78%'], center: ['50%', '50%'],
+      selectedMode: 'single', selectedOffset: 8,
+      label: { show: false },
+      data: data.slices.filter((s) => Number(s.market_value) > 0).map((s, i) => ({
+        name: s.label, value: Number(s.market_value), allocationKey: s.key,
+        itemStyle: { color: s.is_unknown ? OTHER_SERIES_COLOR : PALETTE[i % PALETTE.length] },
+      })),
+    }],
+  }
+}
+
+export function exposureCsv(data: AllocationData): ExportTable {
+  return {
+    headers: ['Category', 'Market value (USD)', 'Weight of priced holdings (%)', 'Classification', 'Owner scope', 'Oldest quote', 'Newest quote'],
+    rows: [...data.slices.map((s) => [
+      s.label, s.market_value, (Number(s.weight_pct) * 100).toFixed(4),
+      s.is_unknown ? 'Unknown' : 'Classified', data.scope_key, data.as_of ?? '', data.latest_quote_at ?? '',
+    ]), ...data.coverage.unpriced_holdings.map((member) => [
+      `Unpriced: ${member.ticker}${member.account ? ` (${member.account})` : ''}`, '', '',
+      'Value unavailable', data.scope_key, '', '',
+    ])],
   }
 }

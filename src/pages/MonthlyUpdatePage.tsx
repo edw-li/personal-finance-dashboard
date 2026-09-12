@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { ClipboardEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { CalendarPlus } from 'lucide-react'
@@ -8,7 +8,6 @@ import {
   fetchAccounts,
   fetchMonthBalances,
   fetchTimeseries,
-  putMonthBalances,
 } from '../api/netWorth'
 import { fetchHousehold } from '../api/household'
 import { undoBatch } from '../api/lifecycle'
@@ -17,9 +16,12 @@ import {
   fetchCategories,
   fetchMatrix,
   fetchSpendingMonth,
-  putSpendingMonth,
 } from '../api/spending'
 import AmountInput from '../components/AmountInput'
+import { fetchMonthReview, saveMonthReview, REVIEW_LABELS } from '../api/monthReview'
+import type { MonthReview, ReviewedFeeds } from '../api/monthReview'
+import ReviewChanges from '../components/monthly/ReviewChanges'
+import HistoricalReview from '../components/monthly/HistoricalReview'
 import InfoHint from '../components/InfoHint'
 import { useToast } from '../components/ToastProvider'
 import { FeedBanner } from '../components/shell/Feed'
@@ -87,6 +89,11 @@ interface WizardDraft {
    *  total over $0.00 components. Optional so a draft written before this field still parses;
    *  such a draft simply keeps the month's load-time set. */
   typedParents?: number[]
+}
+
+interface LoadedMonth {
+  month: string
+  generation: number
 }
 
 const DRAFT_PREFIX = 'finance-update-draft:'
@@ -313,6 +320,15 @@ export default function MonthlyUpdatePage() {
   // outstanding, the memory the retry needs. Cleared on month load, on a month delete, and at
   // the start of any attempt that is not a retry of a partial failure.
   const [legs, setLegs] = useState<SaveLegs | null>(null)
+  const [review, setReview] = useState<MonthReview | null>(null)
+  const [reviewConfirmations, setReviewConfirmations] = useState<Partial<Record<keyof ReviewedFeeds, string>>>({})
+  const [finalCurrentMonth, setFinalCurrentMonth] = useState(false)
+  const [reviewConflict, setReviewConflict] = useState(false)
+  const saveRequest = useRef<{ payload: string; requestId: string } | null>(null)
+  const loadGeneration = useRef(0)
+  const loadedMonth = useRef<LoadedMonth | null>(null)
+  const savingMonth = useRef<LoadedMonth | null>(null)
+  const currentDraft = useRef<string | null>(null)
   // Did the LOADED month carry ENTERED spending — any non-zero amount, or a net pay row (the
   // spec §3 definition)? An entered month is one the user is EDITING, so its save always
   // writes: a correction that zeroes a category must land rather than be skipped as "nothing
@@ -387,6 +403,9 @@ export default function MonthlyUpdatePage() {
     // loadNonce has no data role: the wizard delete bumps it to force this chain when
     // the deleted month is the month already on screen.
     void loadNonce
+    let cancelled = false
+    const loaded = { month, generation: ++loadGeneration.current }
+    loadedMonth.current = loaded
     Promise.all([
       fetchAccounts(),
       fetchCategories(),
@@ -402,6 +421,7 @@ export default function MonthlyUpdatePage() {
       // endpoint is down, the grid falls back to today's flat group walk rather than
       // refusing to render the month.
       fetchHousehold().catch((): HouseholdOut | null => null),
+      fetchMonthReview(month),
     ])
       .then(([
         accountList,
@@ -412,10 +432,18 @@ export default function MonthlyUpdatePage() {
         timeseries,
         matrixData,
         householdData,
+        monthReview,
       ]) => {
+        if (cancelled) return
         setError(null)
         setLoadError(null)
         setLegs(null)
+        setReview(monthReview)
+        setReviewConfirmations({})
+        setFinalCurrentMonth(false)
+        setReviewConflict(false)
+        setSaving(false)
+        saveRequest.current = null
         // Nested order: component inputs sit right after their aggregate's input
         // (the group filter below preserves it — components share the parent's group).
         //
@@ -451,6 +479,7 @@ export default function MonthlyUpdatePage() {
         setRecordZero(false)
         setEmptyMonth(
           spendMonth.exists &&
+            !monthReview.reviewed.spending &&
             spendMonth.net_pay === null &&
             // At least one row: a month with NO rows at all is missing, not empty, and the
             // repair delete would 404 on it.
@@ -562,9 +591,14 @@ export default function MonthlyUpdatePage() {
         setRestored(draft !== null)
       })
       .catch((err: unknown) => {
+        if (cancelled) return
         setLoadError(describeError(err, 'this month'))
       })
-      .finally(() => setLoading(false))
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => {
+      cancelled = true
+      if (loadedMonth.current === loaded) loadedMonth.current = null
+    }
   }, [month, loadNonce])
 
   // Persist typed-but-unsaved work continuously: the draft is written on every edit and
@@ -576,6 +610,7 @@ export default function MonthlyUpdatePage() {
   useEffect(() => {
     if (loading || baseline === null || baseline.month !== month) return
     const current = snapshotOf(balances, amounts, netPay, recordedOn, notes, typedParents)
+    currentDraft.current = current
     if (current === baseline.data) {
       sessionStorage.removeItem(draftKey(baseline.month))
     } else {
@@ -685,6 +720,10 @@ export default function MonthlyUpdatePage() {
       netWorth,
       delta: deltaCents === null ? null : deltaCents === 0 ? 0 : deltaCents / 100,
       totalSpend,
+      livingSpend: categories.filter(c => c.kind === 'living').reduce((sum, c) => sum + (Number(canonicalAmount(amounts[c.id] ?? '')) || 0), 0),
+      taxSpend: categories.filter(c => c.kind === 'tax').reduce((sum, c) => sum + (Number(canonicalAmount(amounts[c.id] ?? '')) || 0), 0),
+      transfers: totalSpend - cashSpend,
+      cashSpend,
       // (net pay − living − tax) ÷ net pay — the server's own cash rate, to the cent.
       savings: pay === null || pay === 0 ? null : (pay - cashSpend) / pay,
     }
@@ -714,15 +753,30 @@ export default function MonthlyUpdatePage() {
     }
   }
 
-  const save = async () => {
+  const confirmationInputs = {
+    balances: JSON.stringify({ balances, recordedOn, notes, typedParents: [...typedParents].sort() }),
+    spending: JSON.stringify({ amounts, recordZero }),
+    take_home: netPay,
+  }
+  const reviewed: ReviewedFeeds = {
+    balances: reviewConfirmations.balances === confirmationInputs.balances,
+    spending: reviewConfirmations.spending === confirmationInputs.spending,
+    take_home: reviewConfirmations.take_home === confirmationInputs.take_home,
+  }
+  const canRequestClose = reviewed.balances && reviewed.spending && reviewed.take_home
+    && willWriteSpending && netPay.trim() !== '' && month <= currentMonthIso()
+    && (month !== currentMonthIso() || finalCurrentMonth)
+
+  const save = async (close = false) => {
+    const loaded = loadedMonth.current
+    if (loading || saving || deleting || repairing || loaded === null || loaded.month !== month
+      || savingMonth.current === loaded || review === null || review.month !== month
+      || baseline?.month !== month) return
+    savingMonth.current = loaded
+    const submittedDraft = snapshotOf(balances, amounts, netPay, recordedOn, notes, typedParents)
     setSaving(true)
     setError(null)
-    // Keep ONLY a retry memory — a balances leg that landed while its spending sibling did
-    // not. Any other receipt belongs to a FINISHED attempt, and leaving it up would put two
-    // verdicts for one month on screen (a stale "Month saved" beside a split-save alert).
-    const retryOf =
-      legs !== null && legs.month === month && legs.spending === null ? legs.balances : null
-    setLegs(retryOf === null ? null : { month, balances: retryOf, spending: null })
+    setLegs(null)
     // canonicalAmount, not .trim(): a cell committed by blur is already canonical, but a save
     // reached without one (Ctrl+Enter, or a click in jsdom) must not ship "$1,600.00" or
     // "=200+50" to a Decimal column. Computed ONCE, then spent three ways — the wire, the
@@ -746,82 +800,51 @@ export default function MonthlyUpdatePage() {
       (c) =>
         recordZero || storedCategories.has(c.id) || (Number(canonAmounts[c.id]) || 0) !== 0,
     )
-    // Everything the balances PUT would ship, serialized — the "is this a PURE retry?"
-    // comparison. Numeric keys serialize in ascending order (snapshotOf's law), so equal
-    // values always compare equal.
     const balancesPayload = JSON.stringify({ balances: canonBalances, recordedOn, notes })
-    // Which PUT is in flight — the catch words the banner by the leg that actually failed.
-    let leg: 'balances' | 'spending' = 'balances'
     try {
-      let balanceResult: MonthUpsertResult
-      if (retryOf !== null && retryOf.payload === balancesPayload) {
-        // The balances PUT already landed for exactly this payload — skip it and reuse its
-        // counts (they describe the request that actually ran).
-        balanceResult = retryOf.result
-      } else {
-        balanceResult = await putMonthBalances(month, {
-          recorded_on: recordedOn === '' ? undefined : recordedOn,
-          // null (not undefined): blanking the field must CLEAR a previously saved note.
-          notes: notes.trim() === '' ? null : notes,
-          // Spec §5: a parent with components is derived server-side from the components in
-          // this very payload. Sending one would at best be noise and at worst a 422.
-          balances: accounts
-            // A boxless row is never sent: a derived parent is the server's own sum, and a
-            // retired component is already stored — the server falls back to that value, so
-            // echoing it back would be the client re-asserting a figure it cannot edit.
-            .filter((a) => !isReadOnlyRow(a))
-            // …nor a HAND-TYPED parent's components, which this month has never entered:
-            // shipping their seeded $0.00 would create exactly the rows that flip the row to
-            // a derived $0.00 on the next visit, silently zeroing the stored total.
-            .filter((a) => a.parent_account_id === null || !typedParents.has(a.parent_account_id))
-            .map((a) => ({ account_id: a.id, balance: canonBalances[a.id] })),
-        })
-      }
-      // Deliberately NOT reusing the retired A8 state's name here: it would read as the old
-      // standalone field rather than as THIS attempt's landed half.
-      const landedBalances = { payload: balancesPayload, result: balanceResult }
-      // From here on any failure must leave this leg REMEMBERED, so the retry re-attempts
-      // only what failed.
-      setLegs({ month, balances: landedBalances, spending: null })
-      leg = 'spending'
-      let spendingLeg: NonNullable<SaveLegs['spending']>
+      let spendingBody: SpendingMonthUpsert | undefined
       if (willWriteSpending) {
-        const body: SpendingMonthUpsert = {
+        spendingBody = {
           amounts: sentCategories.map((c) => ({ category_id: c.id, amount: canonAmounts[c.id] })),
         }
         if (canonNetPay !== '') {
-          body.net_pay = canonNetPay
+          spendingBody.net_pay = canonNetPay
         } else if (hadNetPay) {
-          // Tri-state rider (spec §4.2): blanking a previously saved net pay must CLEAR it —
-          // omitting would silently keep the stale figure in every savings-rate denominator.
-          body.net_pay = null
+          spendingBody.net_pay = null
         }
-        if (recordZero) {
-          // Only the checkbox may confirm an empty month — the key is ABSENT otherwise, so a
-          // body the user did not consent to is refused by the server rather than waved
-          // through by a client-side default.
-          body.confirm_zero = true
-        }
-        const result = await putSpendingMonth(month, body)
-        spendingLeg = {
-          status: 'saved',
-          result,
-          // The two are disjoint: one is what the client never sent, the other what the
-          // server refused to insert. Normally the second is 0 — counting it anyway keeps
-          // the sentence honest if the two ever disagree about what a blank is.
-          blank: categories.length - sentCategories.length + result.skipped_blank,
-        }
-      } else {
-        spendingLeg = { status: 'skipped', reason: 'nothing entered.' }
+        if (recordZero) spendingBody.confirm_zero = true
       }
-      setLegs({ month, balances: landedBalances, spending: spendingLeg })
-      const saveBatches = [
-        spendingLeg.status === 'saved' ? (spendingLeg.result.batch_id ?? null) : null,
-        balanceResult.batch_id ?? null,
-      ]
+      const body = {
+        expected_revision: review.input_revision,
+        balances: {
+          recorded_on: recordedOn === '' ? undefined : recordedOn,
+          notes: notes.trim() === '' ? null : notes,
+          balances: accounts.filter(a => !isReadOnlyRow(a))
+            .filter(a => a.parent_account_id === null || !typedParents.has(a.parent_account_id))
+            .map(a => ({ account_id: a.id, balance: canonBalances[a.id] })),
+        },
+        spending: spendingBody,
+        reviewed,
+        close,
+      }
+      const payload = JSON.stringify({ month, ...body })
+      if (saveRequest.current?.payload !== payload) saveRequest.current = { payload, requestId: crypto.randomUUID() }
+      const result = await saveMonthReview(month, { ...body, request_id: saveRequest.current.requestId })
+      // A save belongs to this particular load, not merely its month. Leaving and returning
+      // can load a newer revision or restore a newer draft while this response is in flight.
+      if (loadedMonth.current !== loaded) return
+      const unchangedSinceSubmit = currentDraft.current === submittedDraft
+      setReview(result.review)
+      saveRequest.current = null
+      const balanceResult = result.balances!
+      const spendingLeg: NonNullable<SaveLegs['spending']> = result.spending
+        ? { status: 'saved', result: result.spending, blank: categories.length - sentCategories.length + result.spending.skipped_blank }
+        : { status: 'skipped', reason: 'nothing entered.' }
+      setLegs({ month, balances: { payload: balancesPayload, result: balanceResult }, spending: spendingLeg })
+      const saveBatches = [result.batch_id]
       if (saveBatches.some((id) => id !== null)) {
         toast.success(
-          `Saved ${formatMonth(month)} — ${balanceResult.created + balanceResult.updated} balances updated`,
+          `${close ? 'Closed' : 'Saved progress for'} ${formatMonth(month)} — balances and spending saved together`,
           {
             action: {
               label: 'Undo',
@@ -837,15 +860,14 @@ export default function MonthlyUpdatePage() {
       // Coverage moved: this month now has balances, and spending too when that leg ran. Tell
       // the scope row to re-read it.
       setCoverageNonce((n) => n + 1)
-      // What the wire received IS what the boxes now hold. Adopting the canonical values into
-      // the STATE as well as the baseline is load-bearing: a cell advanced past by clicks
-      // still held raw text ("9,000"), and a baseline taken from that raw state would differ
-      // from the "9000" the next focus+blur commits — filing a draft for fully saved work.
-      // Safe for a SKIPPED spending leg too: a skip means the amounts are the seed's zeros
-      // (anything else would have run the leg), so canonicalizing them changes nothing.
-      setBalances(canonBalances)
-      setAmounts(canonAmounts)
-      setNetPay(canonNetPay)
+      // Canonicalize fully saved entries, but keep any typing done after submission. The
+      // baseline still advances to the saved values so those newer edits remain a draft.
+      if (unchangedSinceSubmit) {
+        setBalances(canonBalances)
+        setAmounts(canonAmounts)
+        setNetPay(canonNetPay)
+        setRestored(false)
+      }
       if (spendingLeg.status === 'saved') {
         // Only a leg that RAN may teach us the server's state: a skipped one changed nothing,
         // so a month that had a take-home still has it, and an empty month is still empty.
@@ -866,18 +888,13 @@ export default function MonthlyUpdatePage() {
         month,
         data: snapshotOf(canonBalances, canonAmounts, canonNetPay, recordedOn, notes, typedParents),
       })
-      setRestored(false)
     } catch (err) {
-      if (leg === 'spending') {
-        // Truth-telling (A8), plus the server's own words when it had any: a 422 from the
-        // empty-month guard is an instruction ("set confirm_zero"), not noise to swallow.
-        const why = err instanceof ApiError ? ` ${err.message}` : ''
-        setError(`Balances saved. Spending failed — Retry saves only spending.${why}`)
-      } else {
-        setError(err instanceof ApiError ? err.message : 'Saving failed — nothing was lost, retry')
-      }
+      if (loadedMonth.current !== loaded) return
+      setError(err instanceof ApiError ? err.message : 'The save could not be confirmed. Your entries are preserved; retry to check the same save.')
+      setReviewConflict(err instanceof ApiError && err.status === 409)
     } finally {
-      setSaving(false)
+      if (savingMonth.current === loaded) savingMonth.current = null
+      if (loadedMonth.current === loaded) setSaving(false)
     }
   }
 
@@ -894,6 +911,7 @@ export default function MonthlyUpdatePage() {
   }
 
   const deleteMonth = async () => {
+    if (saving) return
     setDeleting(true)
     setError(null)
     try {
@@ -952,6 +970,7 @@ export default function MonthlyUpdatePage() {
   // Activity card can still undo it). Balances are untouched by design: the snapshot is the
   // ritual's anchor, and the month keeps its net worth.
   const deleteEmptySpending = async () => {
+    if (saving) return
     setRepairing(true)
     setError(null)
     try {
@@ -1006,6 +1025,9 @@ export default function MonthlyUpdatePage() {
   // would blank the wizard forever.
   const selectMonth = (m: string) => {
     if (m === month) return
+    // Invalidate before navigation commits, closing the gap before the load effect runs.
+    loadedMonth.current = null
+    setSaving(false)
     setLoading(true)
     setError(null)
     setLegs(null)
@@ -1248,6 +1270,7 @@ export default function MonthlyUpdatePage() {
         }
       >
         <FeedBanner error={error} />
+        {reviewConflict && <div className="draft-note"><span>The saved inputs changed during this visit. Reload to compare your draft with the latest saved figures.</span><button className="button" onClick={() => { setLoading(true); setLoadNonce(n => n + 1) }}>Reload latest and compare draft</button></div>}
         {emptyMonth && (
           // Spec §4: the repair prompt for a month that was saved with no spending — the
           // wizard is where the fix lives, so the banner carries both routes out of it.
@@ -1256,7 +1279,7 @@ export default function MonthlyUpdatePage() {
             action={{
               label: 'Delete the empty month',
               onAction: () => void deleteEmptySpending(),
-              disabled: repairing,
+              disabled: repairing || saving,
             }}
           />
         )}
@@ -1277,9 +1300,12 @@ export default function MonthlyUpdatePage() {
           // renders above the step body, which is the review step whenever a save lands —
           // the only step the primary is reachable from.
           <div className="card" style={{ marginBottom: '1rem' }}>
-            <h2 className="eyebrow">Month saved</h2>
+            <h2 className="eyebrow">{review?.state === 'closed' ? 'Month closed' : 'Progress saved'}</h2>
             {legs.balances !== null && <p>{balancesSentence(legs.balances.result)}</p>}
             <p>{spendingSentence(legs.spending)}</p>
+            {baseline?.month === month && snapshotOf(balances, amounts, netPay, recordedOn, notes, typedParents) !== baseline.data && (
+              <p role="status">You have new unsaved changes. Save again to include them.</p>
+            )}
             <p>
               <Link to="/net-worth">See net worth</Link> · <Link to="/spending">See spending</Link>
             </p>
@@ -1662,10 +1688,10 @@ export default function MonthlyUpdatePage() {
                 aria-describedby="record-zero-hint"
                 onChange={(e) => setRecordZero(e.target.checked)}
               />
-              Record this month as $0
+              Confirm remaining categories as $0
             </label>
             <p className="drill-hint" id="record-zero-hint">
-              Writes $0.00 for every category — use it for a month you truly spent nothing.
+              Records untouched categories as $0.00. Amounts you entered stay as entered.
             </p>
             {pasteNote && (
               <p className="drill-hint" role="status" aria-live="polite">
@@ -1674,7 +1700,7 @@ export default function MonthlyUpdatePage() {
             )}
             <div className="entry-footer" role="status" aria-label="Live totals">
               <span>
-                Total spend (live): <strong>{formatCurrency(preview.totalSpend)}</strong>
+                Living spending (live): <strong>{formatCurrency(preview.livingSpend)}</strong>
               </span>
               <span>
                 {/* Named for what it IS: the footer's other figure is the ALL-kind total, so
@@ -1703,8 +1729,9 @@ export default function MonthlyUpdatePage() {
           <div className="card">
             <h2 className="eyebrow">
               Review & save — {formatMonth(month)}
-              <InfoHint text="A client-side preview; the server&apos;s rounding is authoritative once saved." />
+              <InfoHint text="Review the entered figures, then save progress or close a completed month. Your entries stay in this browser until saved." />
             </h2>
+            {review && <p className={`month-review-status month-review-status-${review.state}`}>{REVIEW_LABELS[review.state]}{review.closed_at ? ` · Last closed ${new Date(review.closed_at).toLocaleDateString()}` : ''}</p>}
             <div className="review-grid">
               <div>
                 <div className="stat-label">Net worth (preview)</div>
@@ -1720,8 +1747,8 @@ export default function MonthlyUpdatePage() {
                 )}
               </div>
               <div>
-                <div className="stat-label">Total spend</div>
-                <div className="stat-value">{formatCurrency(preview.totalSpend)}</div>
+                <div className="stat-label">Living spending</div>
+                <div className="stat-value">{formatCurrency(preview.livingSpend)}</div>
               </div>
               <div>
                 {/* Same qualifier as the sticky footer's: the tile beside it is the
@@ -1733,9 +1760,22 @@ export default function MonthlyUpdatePage() {
               </div>
             </div>
             <p className="drill-hint" style={{ marginTop: '0.75rem' }}>
-              Server-side rounding (2 decimals, half-up) is authoritative; the preview is
-              client math. {stepIndex === 2 && !balancesValid ? 'Fix balance entries first.' : ''}
+              Tax paid from take-home: {formatCurrency(preview.taxSpend)} · Transfers: {formatCurrency(preview.transfers)} · Cash outflow: {formatCurrency(preview.cashSpend)}.
+              {stepIndex === 2 && !balancesValid ? ' Fix balance entries first.' : ''}
             </p>
+            <ReviewChanges accounts={accounts} categories={categories} balances={balances} amounts={amounts}
+              priorBalances={priorBalances} baseline={baseline?.month === month ? baseline.data : null}
+              month={month} matrix={matrix} monthExisted={monthExisted} />
+            <fieldset className="review-confirmations" disabled={saving}>
+              <legend>Confirm this month is complete</legend>
+              {(['balances', 'spending', 'take_home'] as const).map(feed => <label key={feed}>
+                <input type="checkbox" checked={reviewed[feed]} onChange={e => setReviewConfirmations(current => ({ ...current, [feed]: e.target.checked ? confirmationInputs[feed] : undefined }))} />
+                {feed === 'balances' ? 'I checked every account balance.' : feed === 'spending' ? 'I checked spending, tax, and transfers for the whole month.' : 'I checked household take-home for the whole month.'}
+              </label>)}
+              {month === currentMonthIso() && <label><input type="checkbox" checked={finalCurrentMonth} onChange={e => setFinalCurrentMonth(e.target.checked)} />These figures are final even though this month is still in progress.</label>}
+            </fieldset>
+            {month > currentMonthIso() && <p className="drill-hint">Future months can be saved as drafts. Close this month once the period arrives and the figures are final.</p>}
+            {!canRequestClose && <p className="drill-hint">Save progress at any time. To close, complete all three confirmations and enter spending and household take-home, including explicit zeros where appropriate.</p>}
             {!willWriteSpending && (
               // Said BEFORE the click, not only in the receipt after it: "Save month" on an
               // untouched spending step now writes balances only, and a user who expected a
@@ -1745,8 +1785,8 @@ export default function MonthlyUpdatePage() {
               </p>
             )}
             {monthExisted && (
-              <div className="danger-zone">
-                <h3 className="eyebrow">Danger</h3>
+              <details className="month-actions">
+                <summary>Month actions</summary>
                 <p className="drill-hint">
                   Delete this month everywhere: its balances snapshot, spending rows and
                   take-home. Undo is offered for six seconds afterwards, and the Activity card
@@ -1765,13 +1805,13 @@ export default function MonthlyUpdatePage() {
                   <button
                     type="button"
                     className="button danger-button"
-                    disabled={deleting || deleteArm.trim() !== month.slice(0, 7)}
+                    disabled={saving || deleting || deleteArm.trim() !== month.slice(0, 7)}
                     onClick={() => void deleteMonth()}
                   >
                     {deleting ? 'Deleting…' : 'Delete this month'}
                   </button>
                 </div>
-              </div>
+              </details>
             )}
             <div className="wizard-footer">
               <button className="button" onClick={() => setStep('spending')}>
@@ -1781,25 +1821,19 @@ export default function MonthlyUpdatePage() {
                   failed load both validity flags are vacuously true, and a meta-only PUT
                   to an existing month would clear its saved note. */}
               <button
-                className="button button-primary"
+                className="button"
                 disabled={
-                  saving || loading || accounts.length === 0 || !balancesValid || !amountsValid
+                  saving || loading || review === null || accounts.length === 0 || !balancesValid || !amountsValid
                 }
                 onClick={() => void save()}
               >
-                {/* A8: while a committed balances leg is remembered with its spending sibling
-                    still outstanding, the primary IS the retry the banner promised. (After an
-                    in-between balance edit the click re-sends balances too — save() compares
-                    the payload, not the label.) */}
-                {saving
-                  ? 'Saving…'
-                  : legs !== null && legs.month === month && legs.spending === null
-                    ? 'Retry spending'
-                    : 'Save month'}
+                {saving ? 'Saving…' : 'Save progress'}
               </button>
+              <button className="button button-primary" disabled={saving || loading || review === null || accounts.length === 0 || !balancesValid || !amountsValid || !canRequestClose} onClick={() => void save(true)}>Save and close month</button>
             </div>
           </div>
         )}
+        {!loading && step === 'review' && <HistoricalReview onChanged={() => { setCoverageNonce(n => n + 1) }} />}
       </PageFrame>
     </div>
   )

@@ -43,7 +43,7 @@ const HINTS: Partial<Record<ProjectionKnob, string>> = {
     'Derived from living spend over that same window, × 12. Tax payments and transfers to your own accounts are not living spend, so neither is in this figure. When budgets exist, "Use my budgets" sets this to twelve times the living-category budgets in force this month.',
   swr: 'Derived from Settings. The FI target is annual spend ÷ this rate.',
   volatility: 'Turns the fan on; 0 turns it off.',
-  inflation: 'Converts the chart to today\'s dollars; 0 reads nominal dollars.',
+  inflation: 'Annual price inflation used in the model. The chart dollar switch changes display units without changing this assumption.',
   contribution_growth: 'Models raises: the contribution escalates at this rate.',
 }
 
@@ -57,11 +57,13 @@ export default function ScenarioPanel({
   sandbox,
   baseline,
   people,
+  compact = false,
 }: {
   sandbox: Sandbox<ProjectionScenario, ProjectionOut>
   /** The empty run — every knob's derived value. */
   baseline: ProjectionOut | null
   people: PersonOut[]
+  compact?: boolean
 }) {
   const [open, setOpen] = useState(true)
   const [monthError, setMonthError] = useState<string | null>(null)
@@ -130,16 +132,17 @@ export default function ScenarioPanel({
 
   return (
     <SandboxPanel
-      eyebrow="Scenario"
-      hint="Every knob the projection runs on. Blank knobs are derived from your data (or their planning defaults) and re-derive on their own — nothing is saved."
+      eyebrow="Planning assumptions"
+      hint="Inputs from your records, Settings, or planning defaults. An edited input is a scenario override. Clearing it restores its baseline; your financial records stay unchanged."
       open={open}
       onToggle={() => setOpen((o) => !o)}
-      toggleLabels={{ open: 'Show knobs', close: 'Hide knobs' }}
+      toggleLabels={{ open: 'Show assumptions', close: 'Hide assumptions' }}
       sandbox={sandbox}
-      resetLabel="Reset to derived"
+      resetLabel="Reset to baseline"
       staleNoun="this projection"
       skeletonHeight={220}
-      compare={
+      hidePins={compact}
+      compare={compact ? undefined :
         <CompareTable<ProjectionOut>
           rows={COMPARE_ROWS}
           baseline={baseline}
@@ -147,7 +150,7 @@ export default function ScenarioPanel({
           valueOf={projectionValue}
           pins={sandbox.pins.map((pin) => ({ id: pin.id, label: pin.label, result: sandbox.pinResults[pin.id] }))}
           onUnpin={sandbox.unpin}
-          caption="Headline figures — baseline (derived) against the live scenario and any pins"
+          caption="Headline figures — baseline against the live scenario and any pins"
         />
       }
     >
@@ -161,6 +164,8 @@ export default function ScenarioPanel({
             kind={SLIDER[key].kind}
             value={scenario.knobs[key] ?? ''}
             actual={derived[key]}
+            sourceLabel={key === 'annual_spend' || key === 'monthly_contribution' ? 'From your records' : key === 'swr' ? 'Settings' : 'Planning default'}
+            baselineLabel="Baseline"
             min={SLIDER[key].min}
             max={SLIDER[key].max}
             step={SLIDER[key].step}
@@ -198,7 +203,7 @@ export default function ScenarioPanel({
             {slider}
             {key === 'monthly_contribution' && breakdown !== null && (
               <span className="projection-derived">
-                derived: {formatCurrency(breakdown.cash)} cash savings +{' '}
+                From records: {formatCurrency(breakdown.cash)} cash savings +{' '}
                 {formatCurrency(breakdown.payroll)} payroll deductions
                 {Number(breakdown.employer) !== 0 &&
                   ` + ${formatCurrency(breakdown.employer)} employer match`}
@@ -216,7 +221,7 @@ export default function ScenarioPanel({
             )}
             {windowed && derivedWindow !== null && (
               <span className="projection-derived">
-                derived over {windowWords(derivedWindow)} ({derivedWindow.months}{' '}
+                Records from {windowWords(derivedWindow)} ({derivedWindow.months}{' '}
                 {derivedWindow.months === 1 ? 'month' : 'months'})
               </span>
             )}
@@ -277,9 +282,9 @@ export default function ScenarioPanel({
         </p>
       )}
       <p className="drill-hint">
-        Percents are percents (5 = 5%). The Monte Carlo seed is fixed, so scenarios are seed-stable:
-        identical knobs redraw identical bands, and two scenarios differ only by their knobs, never
-        by sampling noise. The withdrawal rate&apos;s stored value lives in{' '}
+        Enter 5 for 5%. Simulations reuse the same random samples so changes reflect your
+        assumptions. Money inputs use today&apos;s dollars at the projection start date. The
+        withdrawal rate&apos;s stored value lives in{' '}
         <Link to="/settings">Settings</Link>.
       </p>
     </SandboxPanel>

@@ -113,6 +113,11 @@ export interface NetWorthSummary {
  *  four added fields are OPTIONAL for the reason `MoneyFlowTaxes.niit` documents: the live
  *  server always sends them, and a fixture written before this program keeps compiling. */
 export interface CoverageOut {
+  review_months?: import('../api/monthReview').MonthReview[]
+  default_month?: string | null
+  adopted_on?: string | null
+  eligible_spending?: string[]
+  eligible_savings?: string[]
   balances: string[]
   spending: string[]
   net_pay: string[]
@@ -207,11 +212,18 @@ export interface AmountEntry {
 }
 
 export interface SpendingMatrix {
+  cash_outflow?: string[]
+  comparison_average?: (string | null)[]
+  comparison_count?: number[]
+  review_state?: import('../api/monthReview').ReviewState[]
+  eligible_spending?: boolean[]
+  eligible_savings?: boolean[]
+  default_month?: string | null
   months: string[]
   categories: CategoryOut[]
   // budgets: the category's RESOLVED budget per month (greatest effective_month <= M,
   // spec §2), aligned with months; null = unbudgeted that month.
-  series: { category_id: number; values: (string | null)[]; budgets: (string | null)[] }[]
+  series: { category_id: number; values: (string | null)[]; budgets: (string | null)[]; comparison_average?: (string | null)[]; comparison_count?: number[] }[]
   totals: string[]
   net_pay: (string | null)[]
   /** The CASH rate — (net pay − living spend − tax paid) ÷ net pay (2026-09-04
@@ -2361,6 +2373,7 @@ export interface AssistantModelsOut {
 // page published through useAssistantView.
 export interface AssistantContextIn {
   route: string
+  selection?: import('./metrics').ExplainSelectionRequest
   search: Record<string, string>
   // A list value is a repeated url param (`?whatif=a&whatif=b`), which `search` cannot
   // carry — URLSearchParams keeps only the last (2026-09-09 audit item 8).

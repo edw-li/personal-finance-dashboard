@@ -1,4 +1,5 @@
 from app.models.app_setting import AppSetting
+from app.models.assistant_finding import AssistantFinding
 from app.models.calendar import (
     DIRECTIONS,
     RECURRENCES,
@@ -26,6 +27,7 @@ from app.models.credit_cards import (
 from app.models.household import Person
 from app.models.lifecycle import ChangeLog, LifecycleRun, UserPreference
 from app.models.limits import ContributionLimit
+from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.models.net_worth import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot
 from app.models.portfolio import (
     DIVIDEND_SOURCES,
@@ -33,6 +35,7 @@ from app.models.portfolio import (
     PRICE_SOURCES,
     TRANSACTION_SOURCES,
     TRANSACTION_TYPES,
+    AllocationTargetSet,
     DividendPayment,
     LatestPrice,
     PortfolioAccount,
@@ -50,7 +53,9 @@ __all__ = [
     "ACCOUNT_GROUPS",
     "Account",
     "AccountBalance",
+    "AllocationTargetSet",
     "AppSetting",
+    "AssistantFinding",
     "CREDIT_RESET_CADENCES",
     "CalendarEventOverride",
     "CalendarFeedToken",
@@ -72,6 +77,8 @@ __all__ = [
     "LatestPrice",
     "LifecycleRun",
     "MonthlyCashflow",
+    "MonthReview",
+    "MonthReviewAdoption",
     "MonthlySpending",
     "NetWorthSnapshot",
     "PRICE_SOURCES",

@@ -532,7 +532,7 @@ cannot connect.) Outside the container `DB_HOST`/`DB_PORT`/`POSTGRES_*` from the
 `.env` still win, and a relative `PYTHON` like the one above is fine — the drill makes it
 absolute before it changes directory.
 
-Expected: `PASS: 35 tables identical` and `[drill] PASS`, exit 0. The drill drops its scratch
+Expected at revision `f12026091203`: `PASS: 41 tables identical` and `[drill] PASS`, exit 0. The drill drops its scratch
 database and its temporary data directory on the way out, whichever way it exits. The nightly files
 live on the `finance-data` volume (`docker volume inspect personal-finance-dashboard_finance-data`
 for the host path); the same ZIP restores from the UI — Restore card → Dry run → type the date →

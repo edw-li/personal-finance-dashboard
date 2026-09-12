@@ -9,7 +9,7 @@
 // chip stops trusting the whole answer.
 import { FILING_STATUSES, FILING_STATUS_LABELS } from '../../api/taxes'
 import type { AssistantContextIn, FilingStatus, PersonOut } from '../../types/api'
-import { formatMonth } from '../../utils/format'
+import { formatDate, formatMonth } from '../../utils/format'
 import { NAV_ITEMS } from '../navItems'
 
 // The shell's own month grammar (`month=YYYY-MM`, src/components/shell/useScope.ts), with
@@ -68,6 +68,7 @@ export function describeContext(
     pageLabel(context.route),
     monthPhrase(context),
     ownerPhrase(context, people),
+    typeof context.view.profileEffectiveDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(context.view.profileEffectiveDate) ? `profile from ${formatDate(context.view.profileEffectiveDate)}` : null,
     typeof ticker === 'string' && ticker !== '' ? ticker : null,
     yearPhrase(context),
     filingPhrase(context),

@@ -16,6 +16,8 @@ export interface EChartEventParams {
   seriesType?: string
   name?: string
   dataIndex?: number
+  seriesIndex?: number
+  dataType?: string
   value?: unknown
 }
 
@@ -100,6 +102,9 @@ export default function EChart({
   const onHoverEndRef = useRef(onHoverEnd)
   const onLegendChangeRef = useRef(onLegendChange)
   const onDataZoomRef = useRef(onDataZoom)
+  const legendSelectionRef = useRef<Record<string, boolean>>({})
+  const manualZoomRef = useRef<ZoomWindow | null>(null)
+  const requestedZoomRef = useRef<string | null>(null)
 
   // Latest-handler refs, refreshed after each render so the chart's listeners never
   // have to be rebound. Assigning during render trips react-hooks/refs ("Cannot update
@@ -132,9 +137,11 @@ export default function EChart({
     chart.on('globalout', () => onHoverEndRef.current?.())
     chart.on('legendselectchanged', (params) => {
       // Copied, not aliased: echarts mutates its own map on the next toggle.
-      onLegendChangeRef.current?.({
+      const selected = {
         ...(params as { selected: Record<string, boolean> }).selected,
-      })
+      }
+      legendSelectionRef.current = selected
+      onLegendChangeRef.current?.(selected)
     })
     chart.on('datazoom', () => {
       // The event's own payload is percent-based (and batch-shaped from inside zooms);
@@ -143,7 +150,9 @@ export default function EChart({
         chart.getOption() as { dataZoom?: { startValue?: unknown; endValue?: unknown }[] }
       ).dataZoom?.[0]
       if (zoom && typeof zoom.startValue === 'number' && typeof zoom.endValue === 'number') {
-        onDataZoomRef.current?.({ startValue: zoom.startValue, endValue: zoom.endValue })
+        const window = { startValue: zoom.startValue, endValue: zoom.endValue }
+        manualZoomRef.current = window
+        onDataZoomRef.current?.(window)
       }
     })
     chartRef.current = chart
@@ -284,9 +293,20 @@ export default function EChart({
     const still = reducedMotion ? { animation: false } : entrance ? null : { animationDuration: 0 }
     const painted = still === null ? base : pinSeriesMotion(base, still)
     const apply = () => {
+      // A page may explicitly own legend/zoom state. Otherwise retain the user's
+      // choices across data refreshes and theme rebuilds, including expanded charts.
+      const rememberedLegend = legendSelectionRef.current
+      const legends = painted.legend === undefined ? undefined : Array.isArray(painted.legend) ? painted.legend : [painted.legend]
+      const requestedZoom = JSON.stringify(option.dataZoom ?? null)
+      const keepManualZoom = zoomWindow === undefined && requestedZoomRef.current === requestedZoom
+      const zooms = painted.dataZoom === undefined ? undefined : Array.isArray(painted.dataZoom) ? painted.dataZoom : [painted.dataZoom]
+      if (!keepManualZoom) manualZoomRef.current = null
+      requestedZoomRef.current = requestedZoom
       chart.setOption(
         {
           ...painted,
+          ...(legends ? { legend: legends.map((legend) => ({ ...legend, selected: { ...rememberedLegend, ...legend.selected } })) } : {}),
+          ...(keepManualZoom && manualZoomRef.current && zooms ? { dataZoom: zooms.map((zoom) => ({ ...zoom, ...manualZoomRef.current })) } : {}),
           // Decals ride echarts' aria component; its own label generation is OFF because it
           // would overwrite the container's house aria-label with a generated sentence.
           ...(decals ? { aria: { enabled: true, label: { enabled: false }, decal: { show: true } } } : {}),

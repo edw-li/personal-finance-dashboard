@@ -8,12 +8,23 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
+from contextlib import aclosing, suppress
+from datetime import datetime
 
 import httpx
 
 from app.database import SessionLocal
+from app.schemas.metrics import MetricEvidence
 from app.services import clock
 from app.services.assistant_context import build_context
+from app.services.assistant_evidence import (
+    captured_month,
+    computed_review_intent,
+    contribution_pace_bundle,
+    mint_bundle,
+    month_review_bundle,
+    narrative_is_supported,
+)
 from app.services.assistant_models import (
     REGISTRY,
     AssistantModel,
@@ -38,13 +49,13 @@ KEEPALIVE_SECONDS = 15.0
 # alive but is invisible to the user, and a free endpoint can think for a minute before
 # its first frame — say so instead of showing dead air.
 WAIT_STATUS_SECONDS = 15.0
-# One transient 5xx is usually the endpoint, not the model: pause, ask the SAME model
-# again, and only then walk the ladder (a failover answers worse AND says so).
+# Includes reasoning, response headers and tool cycles before any narrative reaches
+# the user; transient transport errors may retry, a silent model moves to the next rung.
+MODEL_SILENCE_SECONDS = 25.0
+# Retry a transient transport failure once, within the same first-output allowance.
 RETRY_DELAY_SECONDS = 1.5
-# Below this much budget, re-asking would eat the answer's remaining time. Sized against
-# REQUEST_TIMEOUT.read on purpose: a read timeout burns 75 of the 90 s budget, and those
-# last 15 s belong to the NEXT rung — not to a second helping of the model that just hung
-# (measured 2026-09-02: DeepSeek's endpoint times out rather than refusing).
+# Reserve the final portion of the request budget for the fallback rather than retrying
+# the original provider. The tighter first-output deadline still applies to that retry.
 RETRY_MIN_REMAINING_SECONDS = 20.0
 # connect fast; read generous per-chunk (the keepalive covers client liveness, and the
 # total budget bounds the whole answer); a silently dead upstream errors inside budget.
@@ -77,10 +88,18 @@ async def _with_keepalive(source: AsyncIterator[str], interval: float = KEEPALIV
     finally:
         if pending is not None:
             pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        if hasattr(iterator, "aclose"):
+            with suppress(RuntimeError, asyncio.CancelledError):
+                await iterator.aclose()
 
 
 class _Retriable(Exception):
     """Connect error / timeout / 5xx / model-missing — the failover ladder's food."""
+
+
+class _Silent(_Retriable):
+    """No useful output within the bounded model allowance; do not retry this rung."""
 
 
 class _BadKey(Exception):
@@ -110,6 +129,14 @@ def system_prompt(context_json: str, tools_enabled: bool) -> str:
         "Answer ONLY from the CONTEXT JSON below and any tool results — never from general",
         "knowledge of markets, prices, or tax law beyond naming concepts.",
         "Quote figures verbatim with their month or year; write money like $1,234.56.",
+        "For spending averages, savings or month reviews, use get_metrics/get_month_review. "
+        "Never calculate an average from raw page history.",
+        "When computed evidence is supplied, refer to each quantity with its exact "
+        "[[metric:id]] token; the application renders its value and clickable source. "
+        "Do not repeat numeric amounts or percentages as prose. Use prose for explanation.",
+        "Captured chart context identifies the user's original selection. Client-captured "
+        "values are not verified receipts: use supplied application evidence or tools "
+        "before making numerical claims about them.",
         "If the data does not contain the answer, say so and name the page or tool that would.",
         "Freshness stamps ride inside the context (prices as-of, latest entered month) —",
         "caveat stale data the way the dashboard's own footer does.",
@@ -121,7 +148,9 @@ def system_prompt(context_json: str, tools_enabled: bool) -> str:
     ]
     if tools_enabled:
         lines.append(
-            "Tools: get_page_data (another page's bundle), get_month_detail (one spending "
+            "Tools: get_metrics (computed figures and comparisons), get_month_review "
+            "(computed review), get_page_data (another page's bundle), "
+            "get_month_detail (one spending "
             "month), run_tax_whatif (deterministic tax scenario — prefer it over your own "
             "arithmetic for any sale/override question)."
         )
@@ -269,6 +298,39 @@ async def _narrate_wait(
     finally:
         if pending is not None:
             pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        if hasattr(iterator, "aclose"):
+            with suppress(RuntimeError, asyncio.CancelledError):
+                await iterator.aclose()
+
+
+async def _bounded_output(
+    source: AsyncIterator[str], deadline: float, *, first_deadline: float | None = None
+) -> AsyncIterator[str]:
+    """Bound first output across retries/tool rounds, then bound each silent gap."""
+    iterator = source.__aiter__()
+    useful_deadline = min(
+        deadline,
+        first_deadline if first_deadline is not None else time.monotonic() + MODEL_SILENCE_SECONDS,
+    )
+    try:
+        while True:
+            remaining = useful_deadline - time.monotonic()
+            if remaining <= 0:
+                raise _Silent()
+            try:
+                frame = await asyncio.wait_for(anext(iterator), remaining)
+            except StopAsyncIteration:
+                return
+            except TimeoutError as exc:
+                raise _Silent() from exc
+            if frame.startswith("event: token\n"):
+                useful_deadline = min(deadline, time.monotonic() + MODEL_SILENCE_SECONDS)
+            yield frame
+    finally:
+        if hasattr(iterator, "aclose"):
+            with suppress(RuntimeError, asyncio.CancelledError):
+                await iterator.aclose()
 
 
 async def _converse(
@@ -281,14 +343,18 @@ async def _converse(
     forwarded: list[bool],
     deadline: float,
     spent: list[int],
+    evidence: list[MetricEvidence],
+    context: dict,
+    user_id: int | None,
+    evidence_as_of: datetime | None,
 ) -> AsyncIterator[str]:
     """The whole multi-round conversation on ONE model, requested as `catalog_id` (the
     live catalog's spelling, which can differ from the registry guess). _Retriable escapes
     to the ladder.
 
     `deadline` and `spent` belong to the REQUEST, not to this model: spec §5 budgets six
-    tool calls and ninety seconds for the whole answer, so a four-model ladder must not
-    multiply either. Rounds stay per-model — a fresh model starts its own conversation."""
+    tool calls and ninety seconds for the whole answer; fallback cannot multiply either.
+    Rounds stay per-model — a fresh model starts its own conversation."""
     messages = [dict(m) for m in base_messages]
     for _round in range(MAX_ROUNDS):
         if time.monotonic() > deadline:
@@ -306,24 +372,60 @@ async def _converse(
             },
         )
         end_payload: dict = {}
-        async for kind, payload in _narrate_wait(
+        round_stream = _narrate_wait(
             _model_round(client, api_key, catalog_id, messages, model.supports_tools),
             model.label,
             WAIT_STATUS_SECONDS,
-        ):
-            if kind == "token":
-                forwarded[0] = True
-                yield sse("token", {"text": payload})
-            elif kind == "thinking":
-                # Deliberately does NOT set forwarded[0]: reasoning is not an answer, so a
-                # rung that thinks and then dies may still hand off to the next model.
-                yield sse("thinking", {"text": payload})
-            elif kind == "status":
-                yield sse("status", {"text": payload})
-            else:
-                end_payload = payload  # type: ignore[assignment]
+        )
+        async with aclosing(round_stream):
+            async for kind, payload in round_stream:
+                if kind == "token":
+                    if not evidence and evidence_as_of is None:
+                        forwarded[0] = True
+                        yield sse("token", {"text": payload})
+                elif kind == "thinking":
+                    # Deliberately does NOT set forwarded[0]: reasoning is not an answer, so a
+                    # rung that thinks and then dies may still hand off to the next model.
+                    yield sse("thinking", {"text": payload})
+                elif kind == "status":
+                    yield sse("status", {"text": payload})
+                else:
+                    end_payload = payload  # type: ignore[assignment]
         tool_calls = end_payload.get("tool_calls") or []
         if not tool_calls:
+            content = end_payload.get("content") or ""
+            if evidence or evidence_as_of is not None:
+                if narrative_is_supported(content, evidence):
+                    forwarded[0] = True
+                    yield sse("token", {"text": content})
+                else:
+                    yield sse(
+                        "notice",
+                        {
+                            "kind": "evidence_fallback",
+                            "message": "The calculated figures are available; "
+                            "the additional narrative could not be verified.",
+                        },
+                    )
+                    yield sse(
+                        "token",
+                        {
+                            "text": "The calculated figures above are ready. I couldn't verify "
+                            "the additional narrative against those figures."
+                        },
+                    )
+                    forwarded[0] = True
+            if user_id is not None:
+                bundle = mint_bundle(
+                    title="Saved answer",
+                    month=captured_month(context),
+                    summary_text="",
+                    metrics=evidence,
+                    context=context,
+                    user_id=user_id,
+                    as_of=evidence_as_of,
+                )
+                yield sse("evidence", bundle.model_dump(mode="json", by_alias=True))
             yield sse("done", {"model_used": model.key})
             return
         if spent[0] + len(tool_calls) > MAX_TOOL_CALLS:
@@ -360,6 +462,27 @@ async def _converse(
             summary = ", ".join(f"{k}={v}" for k, v in list(args.items())[:3]) or "no args"
             yield sse("tool_start", {"name": call["name"], "summary": summary})
             result = await execute_tool(db, call["name"], args)
+            if call["name"] in {"get_metrics", "get_month_review"} and "error" not in result:
+                try:
+                    additions = [
+                        MetricEvidence.model_validate(metric)
+                        for metric in result.get("metrics", [])
+                    ]
+                    known = {metric.id for metric in evidence}
+                    evidence.extend(metric for metric in additions if metric.id not in known)
+                    del evidence[100:]
+                    bundle = mint_bundle(
+                        title=str(result.get("title", "Calculated figures")),
+                        month=None,
+                        summary_text=str(result.get("summary_text", "")),
+                        metrics=evidence,
+                        context=context,
+                        user_id=user_id,
+                    )
+                    evidence_as_of = bundle.as_of
+                    yield sse("evidence", bundle.model_dump(mode="json", by_alias=True))
+                except (ValueError, TypeError):
+                    result = {"error": "Metric evidence could not be validated."}
             if "error" in result:
                 # A tool that died mid-statement leaves the session in a failed transaction;
                 # every later tool in this conversation would then raise instead of answering.
@@ -397,11 +520,75 @@ async def _converse(
     )
 
 
-async def stream_chat(*, model_key: str, messages: list[dict], context: dict) -> AsyncIterator[str]:
+async def stream_chat(
+    *,
+    model_key: str,
+    messages: list[dict],
+    context: dict,
+    intent: str | None = None,
+    user_id: int | None = None,
+) -> AsyncIterator[str]:
+    deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
+    try:
+        async with asyncio.timeout(TOTAL_BUDGET_SECONDS):
+            source = _stream_chat(
+                model_key=model_key,
+                messages=messages,
+                context=context,
+                intent=intent,
+                user_id=user_id,
+                deadline=deadline,
+            )
+            async with aclosing(source):
+                async for frame in source:
+                    yield frame
+    except TimeoutError:
+        yield sse(
+            "error",
+            {
+                "kind": "internal",
+                "message": "The answer ran past its time budget. "
+                "Any calculated figures above remain available.",
+            },
+        )
+
+
+async def _stream_chat(
+    *,
+    model_key: str,
+    messages: list[dict],
+    context: dict,
+    intent: str | None,
+    user_id: int | None,
+    deadline: float,
+) -> AsyncIterator[str]:
     # The very first frame, before the session, the context build or any network hop: the
     # user pressed Send and must see the machine move (the reported dead-air symptom).
+    # Detached from caller-owned objects before the first database/provider await.
+    context = json.loads(json.dumps(context))
+    messages = json.loads(json.dumps(messages))
     yield sse("status", {"text": "Reading the page's data…"})
     async with SESSION_FACTORY() as db:
+        evidence: list[MetricEvidence] = []
+        evidence_as_of = None
+        review = None
+        recipe = computed_review_intent(messages, intent)
+        if recipe == "contribution_pace":
+            review = await contribution_pace_bundle(db, context, user_id)
+        elif recipe or (intent == "selection" and context.get("route") == "/spending"):
+            review = await month_review_bundle(
+                db,
+                context,
+                user_id,
+                # The standard review starts at the latest eligible completed month.
+                # An explicit chart selection retains the period the user selected.
+                month=captured_month(context) if intent == "selection" else None,
+                topic=recipe or "month_review",
+            )
+        if review is not None:
+            evidence = list(review.metrics)
+            evidence_as_of = review.as_of
+            yield sse("computed_summary", review.model_dump(mode="json", by_alias=True))
         api_key, _source = await resolve_api_key(db)
         if api_key is None:
             yield sse(
@@ -418,12 +605,21 @@ async def stream_chat(*, model_key: str, messages: list[dict], context: dict) ->
                 "error", {"kind": "bad_request", "message": f"unknown model key: {model_key}"}
             )
             return
-        context_payload = await build_context(
-            db,
-            route=str(context.get("route", "/")),
-            search=dict(context.get("search") or {}),
-            view=dict(context.get("view") or {}),
-        )
+        if review is not None:
+            context_payload = {
+                "computed_review": review.model_dump(
+                    mode="json", by_alias=True, exclude={"receipt"}
+                )
+            }
+        else:
+            context_payload = await build_context(
+                db,
+                route=str(context.get("route", "/")),
+                search=dict(context.get("search") or {}),
+                view=dict(context.get("view") or {}),
+            )
+            if context.get("selection"):
+                context_payload["captured_selection"] = context["selection"]
         prompt = system_prompt(json.dumps(context_payload), requested.supports_tools)
         base_messages = [{"role": "system", "content": prompt}, *messages]
         # ONE probe for the whole stream (cached — the drawer's /models call usually filled
@@ -447,27 +643,41 @@ async def stream_chat(*, model_key: str, messages: list[dict], context: dict) ->
             # this one changes who answers, so it gets the same words a mid-flight failover
             # gets — never a silent substitution.
             yield sse("notice", {"kind": "failover", "from": requested.key, "to": ladder[0][0].key})
+        # One automatic fallback is enough to recover a provider outage without turning
+        # a question into an opaque tour of the catalog. A missing requested model already
+        # spent that fallback; the user can explicitly restart with another choice.
+        ladder = ladder[:2] if ladder[0][0].key == requested.key else ladder[:1]
         forwarded = [False]
         # ONE budget for the request, not one per rung (spec §5).
-        deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
         spent = [0]
         async with http_client(REQUEST_TIMEOUT) as client:
             for index, (model, catalog_id) in enumerate(ladder):
                 retried = False
+                first_deadline = min(deadline, time.monotonic() + MODEL_SILENCE_SECONDS)
                 while True:
                     try:
-                        async for frame in _converse(
-                            db,
-                            client,
-                            api_key,
-                            model,
-                            catalog_id,
-                            base_messages,
-                            forwarded,
+                        bounded = _bounded_output(
+                            _converse(
+                                db,
+                                client,
+                                api_key,
+                                model,
+                                catalog_id,
+                                base_messages,
+                                forwarded,
+                                deadline,
+                                spent,
+                                evidence,
+                                context,
+                                user_id,
+                                evidence_as_of,
+                            ),
                             deadline,
-                            spent,
-                        ):
-                            yield frame
+                            first_deadline=first_deadline,
+                        )
+                        async with aclosing(bounded):
+                            async for frame in bounded:
+                                yield frame
                         return
                     except _BadKey as exc:
                         yield sse("error", {"kind": "bad_key", "message": exc.message})
@@ -481,7 +691,7 @@ async def stream_chat(*, model_key: str, messages: list[dict], context: dict) ->
                             payload["retry_after"] = exc.retry_after
                         yield sse("error", payload)
                         return
-                    except _Retriable:
+                    except _Retriable as exc:
                         if forwarded[0]:
                             yield sse(
                                 "error",
@@ -496,6 +706,7 @@ async def stream_chat(*, model_key: str, messages: list[dict], context: dict) ->
                         # timeout has usually eaten it already.
                         if (
                             not retried
+                            and not isinstance(exc, _Silent)
                             and deadline - time.monotonic() > RETRY_MIN_REMAINING_SECONDS
                         ):
                             retried = True
@@ -517,7 +728,8 @@ async def stream_chat(*, model_key: str, messages: list[dict], context: dict) ->
                             "error",
                             {
                                 "kind": "unavailable",
-                                "message": f"Every model failed — tried {tried}.",
+                                "message": f"The selected model and fallback were unavailable — "
+                                f"tried {tried}. You can restart with another model.",
                             },
                         )
                         return

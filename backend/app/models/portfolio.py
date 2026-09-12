@@ -2,6 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -12,6 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -30,6 +32,13 @@ class Security(Base):
     ticker: Mapped[str] = mapped_column(String(20), unique=True)
     name: Mapped[str] = mapped_column(String(200))
     industry: Mapped[str | None] = mapped_column(String(80))
+    # User-reviewed allocation metadata is independent of importer/provider fields.
+    asset_class: Mapped[str | None] = mapped_column(String(30))
+    allocation_industry: Mapped[str | None] = mapped_column(String(80))
+    geography: Mapped[str | None] = mapped_column(String(30))
+    classification_source: Mapped[str | None] = mapped_column(String(30))
+    classification_note: Mapped[str | None] = mapped_column(String(500))
+    classification_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     holding_type: Mapped[str] = mapped_column(String(20))  # one of HOLDING_TYPES
     is_manual_priced: Mapped[bool] = mapped_column(default=False)
     is_active: Mapped[bool] = mapped_column(default=True)
@@ -50,6 +59,28 @@ class Security(Base):
     # NULL means "never fetched": a failed or empty answer leaves it NULL and the next
     # refresh retries. Nothing else reads or writes it.
     dividend_events_floor: Mapped[date | None] = mapped_column(Date)
+
+
+class AllocationTargetSet(Base):
+    """One active plan and, optionally, an unfinished draft per scope and dimension."""
+
+    __tablename__ = "allocation_target_sets"
+    __table_args__ = (
+        UniqueConstraint("scope_key", "dimension", "state"),
+        CheckConstraint("state IN ('draft', 'active')", name="allocation_target_state"),
+        CheckConstraint(
+            "dimension IN ('asset_class', 'industry', 'geography', 'account', 'type')",
+            name="allocation_target_dimension",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scope_key: Mapped[str] = mapped_column(String(40))
+    dimension: Mapped[str] = mapped_column(String(30))
+    state: Mapped[str] = mapped_column(String(10))
+    # Percent and tolerance are decimal strings; no float round-trip in saved plans.
+    targets: Mapped[list[dict]] = mapped_column(JSONB)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class PortfolioAccount(Base):

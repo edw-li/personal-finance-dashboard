@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import MonthlyCashflow, MonthlySpending, NetWorthSnapshot
+from app.services.month_review import ReviewBook, load_review_book
 
 
 @dataclass(frozen=True)
@@ -51,20 +52,28 @@ def _window(balances: Sequence[date]) -> list[date]:
 
 
 def classify(
-    balances: Sequence[date], spending: Mapping[date, bool], net_pay: Sequence[date]
+    balances: Sequence[date],
+    spending: Mapping[date, bool],
+    net_pay: Sequence[date],
+    confirmed_zero: Sequence[date] = (),
 ) -> Coverage:
     """`spending` maps every month WITH rows to "does it carry a non-zero amount"."""
     pay = set(net_pay)
+    confirmed = set(confirmed_zero)
     months = sorted(balances)
     window = _window(months)
     return Coverage(
         balances=months,
-        entered=sorted({month for month, nonzero in spending.items() if nonzero} | pay),
+        entered=sorted({month for month, nonzero in spending.items() if nonzero} | pay | confirmed),
         empty=sorted(
-            month for month, nonzero in spending.items() if not nonzero and month not in pay
+            month
+            for month, nonzero in spending.items()
+            if not nonzero and month not in pay and month not in confirmed
         ),
         zero_with_net_pay=sorted(
-            month for month, nonzero in spending.items() if not nonzero and month in pay
+            month
+            for month, nonzero in spending.items()
+            if not nonzero and month in pay and month not in confirmed
         ),
         missing=[month for month in window if month not in spending and month not in pay],
         net_pay=sorted(pay),
@@ -73,9 +82,11 @@ def classify(
     )
 
 
-async def load_coverage(db: AsyncSession) -> Coverage:
-    """One query per table (spec §3). The spending query carries the month's peak
-    |amount| so "entered" is decided in SQL's own words, not by loading every row."""
+async def load_coverage(db: AsyncSession, reviews: ReviewBook | None = None) -> Coverage:
+    """Aggregate raw feed presence, then apply explicit zero confirmations from reviews.
+
+    Callers that already loaded the review book pass it in to avoid repeating those reads.
+    """
     balances = list((await db.execute(select(NetWorthSnapshot.month).distinct())).scalars().all())
     spend_rows = (
         await db.execute(
@@ -85,4 +96,11 @@ async def load_coverage(db: AsyncSession) -> Coverage:
         )
     ).all()
     net_pay = list((await db.execute(select(MonthlyCashflow.month))).scalars().all())
-    return classify(balances, {month: peak != 0 for month, peak in spend_rows}, net_pay)
+    reviews = reviews or await load_review_book(db)
+    confirmed = [
+        month
+        for month, review in reviews.reviews.items()
+        if review.zero_spending_confirmed
+        and review.confirmation_revision == reviews.months[month].input_revision
+    ]
+    return classify(balances, {month: peak != 0 for month, peak in spend_rows}, net_pay, confirmed)

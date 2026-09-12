@@ -20,7 +20,8 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); localSto
 describe('ChartExportMenu', () => {
   it('snapshots at 2x on the resolved card surface', () => {
     render(<ChartExportMenu config={{ name: 'demo', title: 'Demo' }} getChart={() => chart} />)
-    fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'PNG' }))
     expect(chart.getDataURL).toHaveBeenCalledWith({ pixelRatio: 2, backgroundColor: DARK.surface })
   })
 
@@ -33,24 +34,28 @@ describe('ChartExportMenu', () => {
         <ChartExportMenu config={{ name: 'demo', title: 'Demo' }} getChart={() => chart} />
       </ThemeProvider>,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'PNG' }))
     expect(chart.getDataURL).toHaveBeenCalledWith({ pixelRatio: 2, backgroundColor: LIGHT.surface })
   })
 
   it('offers CSV only when a csv fn is supplied', () => {
     const { unmount } = render(<ChartExportMenu config={{ name: 'demo', title: 'Demo' }} getChart={() => chart} />)
     expect(screen.getByRole('group', { name: 'Export demo' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'PNG' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'CSV' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+    expect(screen.getByRole('menuitem', { name: 'PNG' })).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: 'CSV' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Table' })).toBeNull()
     unmount()
     render(<ChartExportMenu config={{ name: 'demo', title: 'Demo', csv: () => ({ headers: [], rows: [] }) }} getChart={() => chart} />)
-    expect(screen.getByRole('button', { name: 'CSV' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+    expect(screen.getByRole('menuitem', { name: 'CSV' })).toBeTruthy()
   })
 
   it('captioned PNG: composites title, caption and the export date on the resolved surface', async () => {
     render(<ChartExportMenu config={{ name: 'net-worth', title: 'Net worth', caption: 'as of Aug 14, 2026' }} getChart={() => chart} />)
-    fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'PNG' }))
     await waitFor(() => expect(downloadDataUrl).toHaveBeenCalledWith('data:image/png;base64,CAPTIONED', 'net-worth.png'))
     expect(captionedPng).toHaveBeenCalledWith('data:image/png;base64,RAW', expect.objectContaining({
       title: 'Net worth', caption: 'as of Aug 14, 2026', surface: '#171a21', ink: '#e6e9ef', muted: '#8b93a3', exportedOn: expect.stringMatching(/\w{3} \d{1,2}, \d{4}/),
@@ -63,7 +68,8 @@ describe('ChartExportMenu', () => {
   it('PNG falls back to the raw snapshot when decoration rejects', async () => {
     vi.mocked(captionedPng).mockRejectedValueOnce(new Error('export image failed to decode'))
     render(<ChartExportMenu config={{ name: 'net-worth', title: 'Net worth' }} getChart={() => chart} />)
-    fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'PNG' }))
     await waitFor(() =>
       expect(downloadDataUrl).toHaveBeenCalledWith('data:image/png;base64,RAW', 'net-worth.png'),
     )
@@ -75,7 +81,8 @@ describe('ChartExportMenu', () => {
     vi.stubGlobal('ClipboardItem', class { constructor(public items: Record<string, Blob>) {} })
     vi.stubGlobal('navigator', { clipboard: { write } })
     render(<ToastProvider><ChartExportMenu config={{ name: 'demo', title: 'Demo' }} getChart={() => chart} /></ToastProvider>)
-    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy image' }))
     await waitFor(() => expect(write).toHaveBeenCalledTimes(1))
     expect(dataUrlToBlob).toHaveBeenCalledWith('data:image/png;base64,RAW')
     expect(await screen.findByText('Chart copied')).toBeTruthy()
@@ -86,7 +93,8 @@ describe('ChartExportMenu', () => {
     vi.stubGlobal('ClipboardItem', class { constructor(public items: Record<string, Blob>) {} })
     vi.stubGlobal('navigator', { clipboard: { write } })
     render(<ToastProvider><ChartExportMenu config={{ name: 'demo', title: 'Demo' }} getChart={() => chart} /></ToastProvider>)
-    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy image' }))
     await waitFor(() => expect(write).toHaveBeenCalledTimes(1))
     expect(downloadDataUrl).not.toHaveBeenCalled()
     expect(await screen.findByText('Chart copied')).toBeTruthy()
@@ -95,7 +103,8 @@ describe('ChartExportMenu', () => {
   it('Copy falls back to a download with the toast when ClipboardItem is missing (Firefox default)', async () => {
     vi.stubGlobal('ClipboardItem', undefined)
     render(<ToastProvider><ChartExportMenu config={{ name: 'demo', title: 'Demo' }} getChart={() => chart} /></ToastProvider>)
-    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy image' }))
     await waitFor(() => expect(downloadDataUrl).toHaveBeenCalledWith('data:image/png;base64,CAPTIONED', 'demo.png'))
     expect(await screen.findByText('Clipboard unavailable — downloaded instead')).toBeTruthy()
   })
@@ -107,7 +116,8 @@ describe('ChartExportMenu', () => {
     expect(screen.getByRole('button', { name: 'Table' }).getAttribute('aria-pressed')).toBe('false')
     fireEvent.click(screen.getByRole('button', { name: 'Table' }))
     expect(onToggleTable).toHaveBeenCalledTimes(1)
-    fireEvent.click(screen.getByRole('button', { name: 'CSV' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'CSV' }))
     expect(csv).toHaveBeenCalledTimes(1) // lazy: rows built on click, never on render
     // Argument-ORDER pin, carried here when the menu moved out of EChart: toCsv(headers, rows).
     // The mock answers 'CSV' whatever it is handed, so a swapped pair would slip past every

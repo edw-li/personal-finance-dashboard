@@ -296,7 +296,7 @@ describe('DividendsPanel editing', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'Delete this dividend' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
-    expect(screen.getByText('Deleted the NVDA dividend paid Dec 15, 2025')).toBeTruthy()
+    expect(screen.getByText('Deleted the NVDA dividend entry dated Dec 15, 2025')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
     // DividendCreate's shape exactly — no id, no provenance fields (an undone auto row
@@ -330,7 +330,7 @@ describe('DividendsPanel editing', () => {
     // The receipt still lands — only the offer is withheld: an undone auto row re-enters
     // as 'manual' and the next refresh re-adds its auto twin on top (double-counted
     // income). The ingest self-heals, so the row comes back on its own next run.
-    expect(screen.getByText('Deleted the NVDA dividend paid Jun 19, 2026')).toBeTruthy()
+    expect(screen.getByText('Deleted the NVDA dividend entry dated Jun 19, 2026')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
     expect(createDividend).not.toHaveBeenCalled()
   })

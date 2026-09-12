@@ -1,0 +1,32 @@
+.allocation-workspace { display: grid; gap: 16px; container-type: inline-size; }
+.allocation-workspace .panel { margin-bottom: 0; }
+.allocation-toolbar { display: flex; flex-wrap: wrap; gap: 12px; }
+.allocation-overview-grid { display: grid; grid-template-columns: minmax(320px, 0.85fr) minmax(480px, 1.15fr); gap: 16px; }
+.allocation-overview-grid > .chart-card { grid-column: auto; }
+.allocation-book-value { font-size: 1.8rem; font-weight: 600; font-variant-numeric: tabular-nums; margin: 8px 0 12px; }
+.allocation-coverage { display: flex; gap: 20px; padding: 10px 0; border-block: 1px solid var(--border); font-size: 0.82rem; }
+.allocation-coverage span { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
+.allocation-coverage strong { color: var(--text); font-size: 0.98rem; }
+.allocation-ranked .port-table th:first-child { white-space: normal; }
+.allocation-category-button { display: inline-flex; align-items: center; gap: 8px; background: transparent; color: var(--text); border: 0; font: inherit; padding: 5px 0; cursor: pointer; text-align: left; }
+.allocation-category-swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.allocation-category-button:hover { text-decoration: underline; }
+.allocation-category-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+.allocation-unknown { background: var(--surface-2); }
+.allocation-target-form, .allocation-classification-form { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin: 12px 0; }
+.allocation-target-form .field-input { max-width: 15ch; }
+.allocation-add-target { display: flex; align-items: end; gap: 8px; margin-top: 12px; }
+.allocation-add-target label, .allocation-search { display: flex; flex-direction: column; gap: 5px; font-size: 0.85rem; }
+.allocation-add-target .field-input { max-width: 32ch; }
+.allocation-employer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.allocation-employer-grid > div + div { border-left: 1px solid var(--border); padding-left: 24px; }
+.allocation-employer h3, .allocation-classification-form h3 { font-size: 0.92rem; margin: 8px 0 12px; }
+.allocation-employer strong { font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+.allocation-employer p { font-size: 0.85rem; }
+.allocation-classifications > summary, .allocation-heat > summary { padding: 4px 0; cursor: pointer; font-weight: 600; }
+.allocation-heat[open] > summary { margin-bottom: 12px; }
+.allocation-search { max-width: 30ch; margin: 14px 0; }
+.allocation-member { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.allocation-member small { grid-column: 1 / -1; color: var(--muted); }
+/* A dock can narrow a desktop workspace. Keep both sections usable without overflow. */
+@container (max-width: 900px) { .allocation-overview-grid { grid-template-columns: 1fr; } }

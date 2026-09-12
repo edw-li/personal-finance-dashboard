@@ -1,3 +1,4 @@
+import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
@@ -15,6 +16,7 @@ import ScopeBar from '../components/shell/ScopeBar'
 import Segmented from '../components/shell/Segmented'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
+import { metricReceipt } from '../utils/metricReceipt'
 import { chartCardBox, ghostCardBody } from '../components/skeletonMetrics'
 import { useArrivalValue } from '../components/useArrivalParam'
 import {
@@ -31,6 +33,7 @@ import {
   netWorthStackOption,
 } from '../components/networth/netWorthChartOptions'
 import type { MoversMode, StackMode } from '../components/networth/netWorthChartOptions'
+import type { ChartSelection } from '../types/metrics'
 import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import { GROUP_LABELS, PALETTE } from '../charts/theme'
@@ -99,7 +102,10 @@ function defaultDrill(ts: NetWorthTimeseries): { accountId: number; slot: number
   return best ? [{ accountId: best.id, slot: 0 }] : []
 }
 
+const PAGE_SECTIONS = [{"id":"overview","label":"Overview"},{"id":"accounts","label":"Accounts"}] as const
+
 export default function NetWorthPage() {
+  const views = useLocalSections(PAGE_SECTIONS, 'overview', { resolveLegacy: ({ searchParams }) => searchParams.has('drill') ? 'accounts' : null })
   const navigate = useNavigate()
   const [granularity, setGranularity] = useState<'monthly' | 'quarterly'>('monthly')
   // The URL owns owner, range and the viewed month (2026-09-03 shell spec §6); the scope
@@ -383,10 +389,10 @@ export default function NetWorthPage() {
   const ownerScopes: { ownerScope: OwnerScope; label: string }[] =
     orderedPeople.length > 1
       ? [
-          { ownerScope: null, label: 'All' },
-          ...orderedPeople.map((p) => ({ ownerScope: p.id as OwnerScope, label: p.name })),
-          { ownerScope: 'joint' as OwnerScope, label: 'Joint' },
-        ]
+        { ownerScope: null, label: 'All' },
+        ...orderedPeople.map((p) => ({ ownerScope: p.id as OwnerScope, label: p.name })),
+        { ownerScope: 'joint' as OwnerScope, label: 'Joint' },
+      ]
       : []
 
   // The ribbon prints that month's net worth in its chip label (spec §7) — the figure the
@@ -440,13 +446,13 @@ export default function NetWorthPage() {
       data === null
         ? null
         : netWorthStackOption({
-            ts: data,
-            mode: stackBy,
-            people: orderedPeople,
-            marriageDate: household?.marriage_date ?? null,
-            range,
-            selected: stackedLegend,
-          }),
+          ts: data,
+          mode: stackBy,
+          people: orderedPeople,
+          marriageDate: household?.marriage_date ?? null,
+          range,
+          selected: stackedLegend,
+        }),
     [data, stackBy, orderedPeople, household, range, stackedLegend],
   )
   const drillOption = useMemo(
@@ -505,6 +511,17 @@ export default function NetWorthPage() {
   // not at their raw sheet-column sort position.
   const orderedAccounts = useMemo(() => (data ? nestComponents(data.accounts) : []), [data])
 
+  const inspectMonth = (index: number | undefined): ChartSelection | null => {
+    const month = index === undefined ? undefined : months[index]
+    if (month === undefined || index === undefined || data === null) return null
+    return {
+      kind: 'period', id: `net-worth:${owner ?? 'all'}:${month}`, period: month, label: formatMonth(month), scope: owner,
+      values: [{ label: 'Net worth', value: data.net_worth[index] ?? null, unit: 'USD' }, { label: 'Change from prior snapshot', value: data.mom_pct[index] ?? null, unit: 'ratio' }],
+      source: { href: `/net-worth?section=accounts&month=${month.slice(0, 7)}&owner=${owner ?? 'all'}`, label: 'Open this snapshot’s accounts' },
+      context: { granularity },
+    }
+  }
+
 
   return (
     <div className="page">
@@ -553,6 +570,44 @@ export default function NetWorthPage() {
           ],
         }}
       >
+        <div className="local-section-toolbar"><LocalSectionNav state={views} label="Net worth views" /><Segmented
+          variant="toggle"
+          size="sm"
+          ariaLabel="Granularity"
+          options={[
+            { value: 'monthly', label: 'Monthly' },
+            { value: 'quarterly', label: 'Quarterly' },
+          ]}
+          value={granularity}
+          onChange={(g) => {
+            // A press on the ACTIVE chip is a no-op, not a refetch: setGranularity
+            // would bail out and leave the dim raised with nothing coming to lower it.
+            if (g === granularity) return
+            setLoading(true)
+            setError(null)
+            setSummaryError(null)
+            // Same handler-side seed as the owner adoption above: a warm grain paints
+            // instantly, and the rendered-state guard in load() stays truthful. The
+            // ref write is fine HERE — an event handler, never a render.
+            // The TARGET grain's key, so the month is snapped the way that
+            // grain will read it — a quarterly peek must not look up a monthly one.
+            const peeked = getSnapshot<NetWorthSnapshot>(
+              netWorthKey(
+                g,
+                owner,
+                g === 'quarterly' ? quarterEndOnOrBefore(scope.month) : scope.month,
+              ),
+            )
+            if (peeked !== undefined) {
+              shown.current = peeked
+              setFromCache(true)
+              setData(peeked.ts)
+              setSummary(peeked.summary)
+            }
+            setGranularity(g)
+          }}
+        /></div>
+
         {/* The secondary feed's own alert (2026-09-09 audit item 10). Above the charts it
             failed beside, because the tiles it feeds are what is missing from up here. */}
         <FeedBanner error={summaryError} retry={retrySummary} retryLabel="Retry the month summary" />
@@ -584,6 +639,11 @@ export default function NetWorthPage() {
                   hero
                   label={`Net worth — ${formatMonth(summary.month)}`}
                   value={formatCurrency(summary.net_worth)}
+                  evidence={metricReceipt({ id: 'net_worth', label: 'Net worth', value: summary.net_worth,
+                    definition: 'Sum of non-component account balances, including signed liabilities, at this recorded snapshot. Changes compare recorded balances and do not isolate investment return.',
+                    scope: owner ?? 'Household', as_of: summary.month,
+                    source_link: `/net-worth?section=accounts&month=${summary.month}${owner === null ? '' : `&owner=${owner}`}`,
+                    components: summary.groups.map(group => ({ label: GROUP_LABELS[group.group], value: group.total, unit: 'USD' })) })}
                   // Fresh paints only (spec §8); a decimal-string amount, so Number() for the ease.
                   countUp={
                     !fromCache && summary.net_worth !== null
@@ -610,6 +670,11 @@ export default function NetWorthPage() {
                       key={group}
                       label={GROUP_LABELS[group]}
                       value={formatCurrency(entry.total)}
+                      evidence={metricReceipt({ id: `net_worth_${group}`, label: GROUP_LABELS[group], value: entry.total,
+                        definition: 'Total of the accounts in this group at the selected monthly snapshot. Derived parent balances include their components once; liabilities remain signed.',
+                        scope: owner ?? 'Household', as_of: summary.month,
+                        source_link: `/net-worth?section=accounts&month=${summary.month}${owner === null ? '' : `&owner=${owner}`}`,
+                        components: [{ label: 'Change from preceding snapshot', value: entry.mom_delta, unit: 'USD' }] })}
                       delta={delta === null ? undefined : `${formatCurrency(delta)} vs prior`}
                       tone={toneOf(delta)}
                       hint={GROUP_TILE_HINT}
@@ -647,248 +712,221 @@ export default function NetWorthPage() {
             )}
 
             <div className="card-grid">
-              <ChartCard
-                title="By group over time"
-                hint={
-                  stackBy === 'share'
-                    ? 'Each asset group as a share of that month’s assets — composition, not size.'
-                    : 'Asset groups stacked to their combined total, with liabilities and net worth as their own lines. Diamonds mark months with a saved note. Liabilities under 1% of assets stay in the tooltip but are not drawn.'
-                }
-                ariaLabel={
-                  stackBy === 'owner'
-                    ? 'Stacked area chart of net worth by owner over time'
-                    : stackBy === 'share'
-                      ? 'Stacked area chart of each asset group as a share of assets per month'
-                      : 'Stacked area chart of asset groups over time with liabilities and net worth as lines'
-                }
-                option={stackedOption}
-                empty="No snapshots yet — enter your first month to start the chart."
-                exportName="net-worth"
-                csv={data === null ? undefined : () => netWorthCsv(data)}
-                height={360}
-                zoomable
-                group="net-worth"
-                onLegendChange={onStackedLegendChange}
-                onDataZoom={onZoomWindow}
-                zoomWindow={zoomWindow}
-                controls={
-                  <>
-                    <Segmented
-                      variant="toggle"
-                      size="sm"
-                      ariaLabel="Stack by"
-                      // One person means "whose" has nothing to choose between — By owner hides.
-                      options={ownerScopes.length > 0 ? STACK_MODES : STACK_MODES.filter((m) => m.value !== 'owner')}
-                      value={stackBy}
-                      onChange={setStackBy}
-                    />
-                    <Segmented
-                      variant="toggle"
-                      size="sm"
-                      ariaLabel="Granularity"
-                      options={[
-                        { value: 'monthly', label: 'Monthly' },
-                        { value: 'quarterly', label: 'Quarterly' },
-                      ]}
-                      value={granularity}
-                      onChange={(g) => {
-                        // A press on the ACTIVE chip is a no-op, not a refetch: setGranularity
-                        // would bail out and leave the dim raised with nothing coming to lower it.
-                        if (g === granularity) return
-                        setLoading(true)
-                        setError(null)
-                        setSummaryError(null)
-                        // Same handler-side seed as the owner adoption above: a warm grain paints
-                        // instantly, and the rendered-state guard in load() stays truthful. The
-                        // ref write is fine HERE — an event handler, never a render.
-                        // The TARGET grain's key, so the month is snapped the way that
-                        // grain will read it — a quarterly peek must not look up a monthly one.
-                        const peeked = getSnapshot<NetWorthSnapshot>(
-                          netWorthKey(
-                            g,
-                            owner,
-                            g === 'quarterly' ? quarterEndOnOrBefore(scope.month) : scope.month,
-                          ),
-                        )
-                        if (peeked !== undefined) {
-                          shown.current = peeked
-                          setFromCache(true)
-                          setData(peeked.ts)
-                          setSummary(peeked.summary)
-                        }
-                        setGranularity(g)
-                      }}
-                    />
-                  </>
-                }
-              />
-
-              {data !== null && viewedIndex >= 1 && (
+              <LocalSectionPanel state={views} section="overview" className="span-12 card-grid">
                 <ChartCard
-                  title={`What moved — ${formatMonth(months[viewedIndex])}`}
-                  hint="How each account group — or account — moved net worth from the prior snapshot to this one, largest first. Every bar grows from zero by the size of the move; a loss is drawn outlined, a gain solid, and the label carries the sign. Groups that did not move are left out."
-                  // The aria follows the TOGGLE: a sentence saying "group" over a chart of
-                  // accounts is the one reading a screen-reader user cannot check.
-                  ariaLabel={`Horizontal bar chart of how each ${moversBy === 'account' ? 'account' : 'account group'} moved net worth from the prior ${priorNoun} to this one`}
-                  option={moversOption}
-                  empty={`Nothing moved between these two ${priorNoun}s.`}
-                  exportName="net-worth-movers"
-                  csv={() => netWorthMoversCsv(data, viewedIndex, moversBy)}
-                  height={moversHeight(movers.length)}
-                  controls={
-                    <Segmented variant="toggle" size="sm" ariaLabel="Break down by" options={MOVERS_MODES} value={moversBy} onChange={setMoversBy} />
+                  title="By group over time"
+                  hint={
+                    stackBy === 'share'
+                      ? 'Each asset group as a share of that month’s assets — composition, not size.'
+                      : 'Asset groups stacked to their combined total, with liabilities and net worth as their own lines. Diamonds mark months with a saved note. Liabilities under 1% of assets stay in the tooltip but are not drawn.'
                   }
-                  lede={
-                    moversLede === null || summary === null ? undefined : (
-                      <>
-                        {`${moversLede.fromLabel} `}<b>{moversLede.fromValue}</b>{` → ${moversLede.toLabel} `}
-                        <b>{moversLede.toValue}</b>{' · '}
-                        <span className={`stat-delta-${moversLede.tone}`}>{moversLede.delta}</span>
-                        {moversLede.pct !== null && (
-                          <>{' · '}<span className={`stat-delta-${moversLede.tone}`}>{moversLede.pct}</span></>
-                        )}
-                      </>
-                    )
+                  ariaLabel={
+                    stackBy === 'owner'
+                      ? 'Stacked area chart of net worth by owner over time'
+                      : stackBy === 'share'
+                        ? 'Stacked area chart of each asset group as a share of assets per month'
+                        : 'Stacked area chart of asset groups over time with liabilities and net worth as lines'
+                  }
+                  option={stackedOption}
+                  empty="No snapshots yet — enter your first month to start the chart."
+                  exportName="net-worth"
+                  selectionAdapter={(params) => inspectMonth(params.dataIndex)}
+                  rowSelection={(_row, index) => inspectMonth(index)}
+                  selectionScopeKey={`${owner ?? 'all'}:${granularity}`}
+                  csv={data === null ? undefined : () => netWorthCsv(data)}
+                  height={360}
+                  zoomable
+                  group="net-worth"
+                  onLegendChange={onStackedLegendChange}
+                  onDataZoom={onZoomWindow}
+                  zoomWindow={zoomWindow}
+                  controls={
+                    <>
+                      <Segmented
+                        variant="toggle"
+                        size="sm"
+                        ariaLabel="Stack by"
+                        // One person means "whose" has nothing to choose between — By owner hides.
+                        options={ownerScopes.length > 0 ? STACK_MODES : STACK_MODES.filter((m) => m.value !== 'owner')}
+                        value={stackBy}
+                        onChange={setStackBy}
+                      />
+
+                    </>
                   }
                 />
-              )}
 
-              <ChartCard
-                title="Account drill-down"
-                hint="Individual account balances over time — toggle accounts below or by clicking table rows."
-                ariaLabel="Line chart of the selected accounts’ balances over time"
-                option={drillOption}
-                empty="No accounts selected."
-                exportName="net-worth-accounts"
-                csv={data === null ? undefined : () => netWorthDrillCsv(data, drill)}
-                height={280}
-                zoomable
-                group="net-worth"
-                onLegendChange={onDrillLegendChange}
-                onDataZoom={onZoomWindow}
-                zoomWindow={zoomWindow}
-                footer={
-                  <>
-                    <p className="drill-hint">
-                      Pick up to {MAX_DRILL} accounts to compare their history. Clicking rows in the
-                      accounts table below toggles them here too.
-                    </p>
-                    <Segmented
-                      variant="chips"
-                      multiple
-                      ariaLabel="Accounts to compare"
-                      options={orderedAccounts.map((account) => {
-                        const active = drill.find((d) => d.accountId === account.id)
-                        return {
-                          value: String(account.id),
-                          // Slot hue rides a swatch beside the name, never the text itself
-                          // (SpendingPage's chip rule). The DOM swatch reads the CSS slot, not
-                          // PALETTE: index.css repoints --chart-N per theme, so it tracks a
-                          // light/dark switch that a baked hex would ignore. Slots are 0-based,
-                          // the tokens are 1-based.
-                          label: (
-                            <>
-                              {active !== undefined && (
-                                <span
-                                  className="networth-drill-swatch"
-                                  aria-hidden="true"
-                                  style={{ background: `var(--chart-${active.slot + 1})` }}
-                                />
-                              )}
-                              {account.name}
-                            </>
-                          ),
-                          // Every palette slot spoken for: the rest go quiet rather than silently
-                          // refusing the click (theme.ts: never cycle past 8).
-                          disabled: active === undefined && drill.length >= MAX_DRILL,
-                        }
-                      })}
-                      value={drill.map((d) => String(d.accountId))}
-                      onChange={syncDrill}
-                    />
-                  </>
-                }
-              />
-
-              <div className="card span-12">
-                <h2 className="eyebrow">
-                  Accounts — {viewedLabel}
-                  <InfoHint text="Each account's balance for the month named above and its change from the one before. Component accounts live inside a parent aggregate and are excluded from totals." />
-                </h2>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Account</th>
-                      <th>Group</th>
-                      <th className="num">Balance</th>
-                      <th className="num">{momHeader}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {orderedAccounts.map((account) => {
-                      const values = data?.series.find((s) => s.account_id === account.id)?.values ?? []
-                      const curr = viewedIndex >= 0 ? values[viewedIndex] : null
-                      const prev = viewedIndex >= 1 ? values[viewedIndex - 1] : null
-                      const pct = pctChange(curr, prev)
-                      const selected = drill.some((d) => d.accountId === account.id)
-                      return (
-                        <tr
-                          key={account.id}
-                          className={account.is_component ? 'component-row row-click' : 'row-click'}
-                          onClick={() => toggleDrill(account.id)}
-                          style={{ cursor: 'pointer', background: selected ? 'var(--surface-2)' : undefined }}
-                        >
-                          <td>
-                            <button
-                              type="button"
-                              className="row-toggle"
-                              aria-pressed={selected}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                toggleDrill(account.id)
-                              }}
-                            >
-                              {account.name}
-                            </button>
-                            {account.is_component && <span className="badge">component</span>}
-                            {!account.is_active && <span className="badge">inactive</span>}
-                          </td>
-                          <td>{GROUP_LABELS[account.group]}</td>
-                          <td className="num">{formatCurrency(curr)}</td>
-                          <td className="num">
-                            {pct === null ? (
-                              '—'
-                            ) : (
-                              <span className={pct >= 0 ? 'delta-positive' : 'delta-negative'}>
-                                {formatPct(pct)}
-                              </span>
-                            )}
-                          </td>
-                        </tr>
+                {data !== null && viewedIndex >= 1 && (
+                  <ChartCard
+                    title={`What moved — ${formatMonth(months[viewedIndex])}`}
+                    hint="How each account group — or account — moved net worth from the prior snapshot to this one, largest first. Every bar grows from zero by the size of the move; a loss is drawn outlined, a gain solid, and the label carries the sign. Groups that did not move are left out."
+                    // The aria follows the TOGGLE: a sentence saying "group" over a chart of
+                    // accounts is the one reading a screen-reader user cannot check.
+                    ariaLabel={`Horizontal bar chart of how each ${moversBy === 'account' ? 'account' : 'account group'} moved net worth from the prior ${priorNoun} to this one`}
+                    option={moversOption}
+                    empty={`Nothing moved between these two ${priorNoun}s.`}
+                    exportName="net-worth-movers"
+                    csv={() => netWorthMoversCsv(data, viewedIndex, moversBy)}
+                    height={moversHeight(movers.length)}
+                    controls={
+                      <Segmented variant="toggle" size="sm" ariaLabel="Break down by" options={MOVERS_MODES} value={moversBy} onChange={setMoversBy} />
+                    }
+                    lede={
+                      moversLede === null || summary === null ? undefined : (
+                        <>
+                          {`${moversLede.fromLabel} `}<b>{moversLede.fromValue}</b>{` → ${moversLede.toLabel} `}
+                          <b>{moversLede.toValue}</b>{' · '}
+                          <span className={`stat-delta-${moversLede.tone}`}>{moversLede.delta}</span>
+                          {moversLede.pct !== null && (
+                            <>{' · '}<span className={`stat-delta-${moversLede.tone}`}>{moversLede.pct}</span></>
+                          )}
+                        </>
                       )
-                    })}
-                  </tbody>
-                  {data && months.length > 0 && (
-                    <tfoot>
+                    }
+                  />
+                )}
+
+
+              </LocalSectionPanel>
+              <LocalSectionPanel state={views} section="accounts" className="span-12 card-grid">
+                <ChartCard
+                  title="Account drill-down"
+                  hint="Individual account balances over time — toggle accounts below or by clicking table rows."
+                  ariaLabel="Line chart of the selected accounts’ balances over time"
+                  option={drillOption}
+                  empty="No accounts selected."
+                  exportName="net-worth-accounts"
+                  csv={data === null ? undefined : () => netWorthDrillCsv(data, drill)}
+                  height={280}
+                  zoomable
+                  group="net-worth"
+                  onLegendChange={onDrillLegendChange}
+                  onDataZoom={onZoomWindow}
+                  zoomWindow={zoomWindow}
+                  footer={
+                    <>
+                      <p className="drill-hint">
+                        Pick up to {MAX_DRILL} accounts to compare their history. Clicking rows in the
+                        accounts table below toggles them here too.
+                      </p>
+                      <Segmented
+                        variant="chips"
+                        multiple
+                        ariaLabel="Accounts to compare"
+                        options={orderedAccounts.map((account) => {
+                          const active = drill.find((d) => d.accountId === account.id)
+                          return {
+                            value: String(account.id),
+                            // Slot hue rides a swatch beside the name, never the text itself
+                            // (SpendingPage's chip rule). The DOM swatch reads the CSS slot, not
+                            // PALETTE: index.css repoints --chart-N per theme, so it tracks a
+                            // light/dark switch that a baked hex would ignore. Slots are 0-based,
+                            // the tokens are 1-based.
+                            label: (
+                              <>
+                                {active !== undefined && (
+                                  <span
+                                    className="networth-drill-swatch"
+                                    aria-hidden="true"
+                                    style={{ background: `var(--chart-${active.slot + 1})` }}
+                                  />
+                                )}
+                                {account.name}
+                              </>
+                            ),
+                            // Every palette slot spoken for: the rest go quiet rather than silently
+                            // refusing the click (theme.ts: never cycle past 8).
+                            disabled: active === undefined && drill.length >= MAX_DRILL,
+                          }
+                        })}
+                        value={drill.map((d) => String(d.accountId))}
+                        onChange={syncDrill}
+                      />
+                    </>
+                  }
+                />
+
+                <div className="card span-12">
+                  <h2 className="eyebrow">
+                    Accounts — {viewedLabel}
+                    <InfoHint text="Each account's balance for the month named above and its change from the one before. Component accounts live inside a parent aggregate and are excluded from totals." />
+                  </h2>
+                  <table className="data-table">
+                    <thead>
                       <tr>
-                        <td style={{ fontWeight: 600 }}>Net worth</td>
-                        <td />
-                        <td className="num" style={{ fontWeight: 600 }}>
-                          {formatCurrency(data.net_worth[viewedIndex])}
-                        </td>
-                        <td className="num">{formatPct(data.mom_pct[viewedIndex])}</td>
+                        <th>Account</th>
+                        <th>Group</th>
+                        <th className="num">Balance</th>
+                        <th className="num">{momHeader}</th>
                       </tr>
-                    </tfoot>
-                  )}
-                </table>
-                <p className="drill-hint" style={{ marginTop: '0.5rem' }}>
-                  Component accounts are tracked inside an aggregate account and are excluded
-                  from group totals and net worth.
-                </p>
-              </div>
-            </div>
+                    </thead>
+                    <tbody>
+                      {orderedAccounts.map((account) => {
+                        const values = data?.series.find((s) => s.account_id === account.id)?.values ?? []
+                        const curr = viewedIndex >= 0 ? values[viewedIndex] : null
+                        const prev = viewedIndex >= 1 ? values[viewedIndex - 1] : null
+                        const pct = pctChange(curr, prev)
+                        const selected = drill.some((d) => d.accountId === account.id)
+                        return (
+                          <tr
+                            key={account.id}
+                            className={account.is_component ? 'component-row row-click' : 'row-click'}
+                            onClick={() => toggleDrill(account.id)}
+                            style={{ cursor: 'pointer', background: selected ? 'var(--surface-2)' : undefined }}
+                          >
+                            <td>
+                              <button
+                                type="button"
+                                className="row-toggle"
+                                aria-pressed={selected}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  toggleDrill(account.id)
+                                }}
+                              >
+                                {account.name}
+                              </button>
+                              {account.is_component && <span className="badge">component</span>}
+                              {!account.is_active && <span className="badge">inactive</span>}
+                            </td>
+                            <td>{GROUP_LABELS[account.group]}</td>
+                            <td className="num">{formatCurrency(curr)}</td>
+                            <td className="num">
+                              {pct === null ? (
+                                '—'
+                              ) : (
+                                <span className={pct >= 0 ? 'delta-positive' : 'delta-negative'}>
+                                  {formatPct(pct)}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                    {data && months.length > 0 && (
+                      <tfoot>
+                        <tr>
+                          <td style={{ fontWeight: 600 }}>Net worth</td>
+                          <td />
+                          <td className="num" style={{ fontWeight: 600 }}>
+                            {formatCurrency(data.net_worth[viewedIndex])}
+                          </td>
+                          <td className="num">{formatPct(data.mom_pct[viewedIndex])}</td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                  <p className="drill-hint" style={{ marginTop: '0.5rem' }}>
+                    Component accounts are tracked inside an aggregate account and are excluded
+                    from group totals and net worth.
+                  </p>
+                </div>
+
+              </LocalSectionPanel></div>
           </>
         )}
+
       </PageFrame>
     </div>
   )

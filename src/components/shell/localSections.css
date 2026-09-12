@@ -1,0 +1,12 @@
+.local-section-nav { margin: 0 0 1.1rem; padding: 0; border-bottom: 1px solid var(--border); }
+.local-section-nav [role=tablist] { display: flex; gap: .2rem; flex-wrap: wrap; }
+.local-section-nav [role=tab] { display: inline-flex; align-items: center; gap: .5rem; padding: .65rem .9rem; background: none; color: var(--muted); font-size: .85rem; border: 0; border-bottom: 2px solid transparent; cursor: pointer; }
+.local-section-nav [role=tab][aria-selected=true] { color: var(--text); border-bottom-color: var(--accent); }
+.local-section-nav [role=tab]:hover { background: var(--surface-2); color: var(--text); }
+.local-section-nav [role=tab]:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: 4px; }
+.local-section-nav [role=tab] > span { padding: .05rem .35rem; border-radius: 8px; background: var(--surface-2); font-size: .7rem; }
+.local-section-panel { min-width: 0; }
+.local-section-panel[hidden] { display: none !important; }
+.local-section-panel [id] { scroll-margin-top: 7rem; }
+.local-section-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.local-section-toolbar > .local-section-nav { flex: 1; }

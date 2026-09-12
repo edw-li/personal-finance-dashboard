@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { useArrivalValue } from '../components/useArrivalParam'
 import { ApiError, describeLoadFailures, errorDetail } from '../api/client'
 import {
   createProfile,
@@ -25,6 +28,8 @@ import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
 import { FEED_SKELETON } from '../components/skeletonMetrics'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
+import { useAssistantView } from '../components/assistant/viewState'
+import { metricReceipt } from '../utils/metricReceipt'
 import type {
   HouseholdOut,
   HsaCoverage,
@@ -66,18 +71,18 @@ const WATERFALL: {
   key: Exclude<keyof PaycheckBreakdownOut, 'profile' | 'warnings' | 'monthly_net' | 'pace'>
   label: string
 }[] = [
-  { key: 'gross', label: 'Gross' },
-  { key: 'trad_401k', label: 'Traditional 401(k)' },
-  { key: 'dental_vision', label: 'Dental & vision' },
-  { key: 'hsa', label: 'HSA' },
-  { key: 'taxable', label: 'Taxable' },
-  { key: 'withholding', label: 'Withholding' },
-  { key: 'post_tax', label: 'Post-tax' },
-  { key: 'roth_401k', label: 'Roth 401(k)' },
-  { key: 'after_tax_401k', label: 'After-tax 401(k)' },
-  { key: 'espp', label: 'ESPP' },
-  { key: 'net_pay', label: 'Net pay' },
-]
+    { key: 'gross', label: 'Gross' },
+    { key: 'trad_401k', label: 'Traditional 401(k)' },
+    { key: 'dental_vision', label: 'Dental & vision' },
+    { key: 'hsa', label: 'HSA' },
+    { key: 'taxable', label: 'Taxable' },
+    { key: 'withholding', label: 'Withholding' },
+    { key: 'post_tax', label: 'Post-tax' },
+    { key: 'roth_401k', label: 'Roth 401(k)' },
+    { key: 'after_tax_401k', label: 'After-tax 401(k)' },
+    { key: 'espp', label: 'ESPP' },
+    { key: 'net_pay', label: 'Net pay' },
+  ]
 
 function BreakdownPanel({ data, still }: { data: PaycheckBreakdownOut; still: boolean }) {
   return (
@@ -101,6 +106,11 @@ function BreakdownPanel({ data, still }: { data: PaycheckBreakdownOut; still: bo
         <StatTile
           label="Monthly net"
           value={formatCurrency(data.monthly_net)}
+          evidence={metricReceipt({ id: 'paycheck_monthly_net', label: 'Monthly net', value: data.monthly_net,
+            definition: 'The paycheck calculator’s net per check multiplied by the profile’s annual check count and divided by twelve. This is a profile-based estimate, separate from monthly take-home entries.',
+            scope: data.profile.person_id, as_of: data.profile.effective_date, completeness: 'estimate', warnings: data.warnings,
+            source_link: `/paycheck?section=summary&profile=${data.profile.id}&owner=${data.profile.person_id}`,
+            components: [{ label: 'Net per check', value: data.net_pay, unit: 'USD' }, { label: 'Checks per year', value: data.profile.pay_periods_per_year, unit: 'count' }] })}
           // Fresh paints only (spec §8) — `still` is the panel's cached-paint flag, the same
           // one FlowPanel takes. A decimal-string amount, so Number() for the ease.
           countUp={
@@ -984,10 +994,16 @@ function breakdownKey(profileId: number | null, personId: number | null): string
   return personId === null ? base : `${base}:person:${personId}`
 }
 
+const PAGE_SECTIONS = [{"id":"summary","label":"Summary"},{"id":"changes","label":"Try changes"},{"id":"profiles","label":"Profiles"}] as const
+
 export default function PaycheckPage() {
+  const views = useLocalSections(PAGE_SECTIONS, 'summary', { resolveLegacy: ({ searchParams, hash }) => searchParams.has('profile') ? 'summary' : hash.includes('profile') ? 'profiles' : searchParams.has('scenario') || searchParams.has('whatif') || hash.includes('try') ? 'changes' : null })
   // The scope row's person chip IS this page's person picker (spec §6), so the URL — not a
   // piece of page state — is where the pick lives.
   const { scope } = useScope({ owner: true })
+  const [searchParams] = useSearchParams()
+  const profileArrival = searchParams.get('profile')
+  const [profileArrivalNote, setProfileArrivalNote] = useState<string | null>(null)
 
   const [profiles, setProfiles] = useState<PaycheckProfileOut[] | null>(
     () => getSnapshot<PaycheckProfileOut[]>('paycheck:profiles') ?? null,
@@ -1043,6 +1059,7 @@ export default function PaycheckPage() {
   const [household, setHousehold] = useState<HouseholdOut | null>(
     () => getSnapshot<HouseholdOut>(HOUSEHOLD_SNAPSHOT) ?? null,
   )
+  const [householdSettled, setHouseholdSettled] = useState(false)
   // One in-force breakdown per person, fetched on its OWN so a partner failure costs the
   // tile and nothing else. Deliberately NOT derived from the waterfall above: that one
   // follows the chips and any pinned row, while this figure is always "the profile in
@@ -1131,6 +1148,7 @@ export default function PaycheckPage() {
         /* keep whatever the snapshot had, as ScopeBar does: the switcher is an affordance,
            and a household hiccup must not cost the waterfall */
       })
+      .finally(() => setHouseholdSettled(true))
   }, [])
 
   // Two GETs on a two-person household, once per household load (and once per write), and
@@ -1163,6 +1181,9 @@ export default function PaycheckPage() {
   // compilation (MonthlyUpdatePage's note).
   useEffect(() => {
     const seq = ++breakdownSeq.current
+    // A source link names one historical check. Verify its ownership before fetching
+    // or painting a different in-force profile while the two rosters arrive.
+    if (profileArrival !== null) return
     fetchBreakdown(selection.profileId ?? undefined, selection.personId ?? undefined)
       .then((data) => {
         if (seq !== breakdownSeq.current) return
@@ -1197,7 +1218,7 @@ export default function PaycheckPage() {
       .finally(() => {
         if (seq === breakdownSeq.current) setBreakdownBusy(false)
       })
-  }, [selection])
+  }, [selection, profileArrival])
 
   // "We are fetching" flips live in the handlers that cause a fetch, never in the effect.
   const reloadProfiles = () => {
@@ -1215,6 +1236,7 @@ export default function PaycheckPage() {
    * Always a fresh object, so the load effect re-runs even when the id is unchanged.
    */
   const reselectWith = (next: (current: number | null) => number | null) => {
+    setProfileArrivalNote(null)
     setBreakdownBusy(true)
     setBreakdownError(null)
     // Cleared TOGETHER with the error it is a flavour of: the empty state renders
@@ -1233,6 +1255,7 @@ export default function PaycheckPage() {
   const reselect = (profileId: number | null) => reselectWith(() => profileId)
 
   const selectProfile = (id: number) => {
+    views.setSection('summary')
     // Re-pressing the row that is already shown must not refetch (MonthlyUpdatePage's
     // same-month lesson: the identity would change and the panel would blink).
     if (id === selection.profileId) return
@@ -1240,6 +1263,7 @@ export default function PaycheckPage() {
   }
 
   const showCurrent = () => {
+    views.setSection('summary')
     if (selection.profileId === null) return
     reselect(null)
   }
@@ -1285,12 +1309,24 @@ export default function PaycheckPage() {
   const primaryId = orderedPeople[0]?.id ?? null
   const wantedPersonId: number | null =
     !switchable ||
-    typeof scope.owner !== 'number' ||
-    scope.owner === primaryId ||
-    !orderedPeople.some((p) => p.id === scope.owner)
+      typeof scope.owner !== 'number' ||
+      scope.owner === primaryId ||
+      !orderedPeople.some((p) => p.id === scope.owner)
       ? null
       : scope.owner
   if (wantedPersonId !== selection.personId) selectPerson(wantedPersonId)
+
+  // Use the check actually on screen, including a retained same-person check while
+  // another profile loads. Never attach that retained profile to a newly picked owner.
+  const assistantOwner = wantedPersonId ?? primaryId ?? breakdown?.profile.person_id ?? null
+  const assistantProfile = profileArrival === null && !breakdownMissing
+    && breakdown?.profile.person_id === assistantOwner ? breakdown.profile : null
+  useAssistantView({
+    owner: assistantOwner,
+    person: assistantOwner,
+    profile: assistantProfile?.id ?? null,
+    profileEffectiveDate: assistantProfile?.effective_date ?? null,
+  })
 
   // The history table follows the chips — client-side, because the router answers with one
   // ordered list for every person (spec §4.1), so a chip press costs the table nothing.
@@ -1304,6 +1340,37 @@ export default function PaycheckPage() {
         : profiles.filter((p) => p.person_id === activePersonId),
     [profiles, switchable, activePersonId],
   )
+
+  const arriveOnProfile = useCallback((raw: string) => {
+    const showCurrentFallback = (note: string) => {
+      setProfileArrivalNote(note)
+      setBreakdownBusy(true)
+      setBreakdownError(null)
+      setBreakdownMissing(false)
+      setSelection({ profileId: null, personId: wantedPersonId })
+    }
+    if (!/^\d{1,10}$/.test(raw) || Number(raw) < 1) {
+      showCurrentFallback('That profile link is invalid. Showing the current profile.')
+      return
+    }
+    if (profilesBusy || !householdSettled) return false
+    const requested = profiles?.find((profile) => profile.id === Number(raw))
+    const ownerId = wantedPersonId ?? primaryId
+    if (household === null || profiles === null) {
+      showCurrentFallback('Could not verify this profile’s owner. Showing the current profile.')
+      return
+    }
+    if (!requested || ownerId === null || requested.person_id !== ownerId) {
+      showCurrentFallback('That profile is not available for the selected person. Showing the current profile.')
+      return
+    }
+    setProfileArrivalNote(null)
+    setBreakdownBusy(true)
+    setBreakdownError(null)
+    setBreakdownMissing(false)
+    setSelection({ profileId: requested.id, personId: wantedPersonId })
+  }, [profilesBusy, householdSettled, profiles, household, wantedPersonId, primaryId])
+  useArrivalValue('profile', arriveOnProfile)
 
   // The profile panel's identity: the chip's pick, and whether the list is scoped yet (see
   // the mount below). An Apply seed is only ever handed to the panel it was applied FROM.
@@ -1319,7 +1386,7 @@ export default function PaycheckPage() {
     householdNets === null
       ? null
       : Math.round(householdNets.reduce((acc, leg) => acc + Number(leg.monthlyNet), 0) * 100) /
-        100
+      100
 
   // A profile write moves BOTH halves of the page: the list, and the waterfall (a deleted
   // profile takes its own breakdown with it, so the selection falls back to the server's
@@ -1367,34 +1434,33 @@ export default function PaycheckPage() {
         // every ChartCard under it reads to render still (spec §1).
         resource={{ status: 'ready', fromCache }}
       >
+        <LocalSectionNav state={views} label="Paycheck views" />
+        {profileArrivalNote && <p className="hint" role="status">{profileArrivalNote}</p>}
         <FeedBanner error={loadBanner} retry={retryFailedLoads} />
-
-        {/* TWO OR MORE answers or nothing: one person's net is not a household take-home, and
-            printing it as one would be a half-truth (spec §6). It sits OUTSIDE the per-check
-            card on purpose — it is not part of any one person's waterfall, and it does not
-            follow the chips. */}
-        {householdNets !== null && householdNets.length > 1 && (
-          <section className="paycheck-household">
-            <div className="kpi-row kpi-row-lone">
-              <StatTile
-                label="Household take-home"
-                value={formatCurrency(householdTotal)}
-                hint="The monthly net of the profile IN FORCE for each person, added together. It ignores the chip and any pinned row — it is always the whole household — and a person with no profile in force is not counted. Each person has their own profile timeline. The waterfall, the flow and the history below all follow the chip; the household figure does not — it is always both of you."
-              />
-            </div>
-            <p className="drill-hint">
-              {householdNets.map((leg) => leg.name).join(' + ')} — the profile in force for
-              each person.
-            </p>
-          </section>
-        )}
-
-        {/* A 404 is not a failure to recover from — it is "there is nothing to model yet", so
-            it travels as the feed's EMPTY state rather than its error: the answer on screen is
-            the form below, not a Retry. */}
+        <div hidden={views.section !== 'summary'}>
+          {householdNets !== null && householdNets.length > 1 && (
+            <section className="paycheck-household">
+              <div className="kpi-row kpi-row-lone">
+                <StatTile
+                  label="Household take-home"
+                  value={formatCurrency(householdTotal)}
+                  evidence={metricReceipt({ id: 'household_take_home', label: 'Household take-home', value: householdTotal,
+                    definition: 'Sum of monthly net estimates for the paycheck profile currently in force for each person. A person without an in-force profile is omitted.',
+                    completeness: 'estimate', source_link: '/paycheck?section=summary',
+                    components: householdNets.map(leg => ({ label: leg.name, value: leg.monthlyNet, unit: 'USD' })) })}
+                  hint="The monthly net of the profile IN FORCE for each person, added together. It ignores the chip and any pinned row — it is always the whole household — and a person with no profile in force is not counted. Each person has their own profile timeline. The waterfall, the flow and the history below all follow the chip; the household figure does not — it is always both of you."
+                />
+              </div>
+              <p className="drill-hint">
+                {householdNets.map((leg) => leg.name).join(' + ')} — the profile in force for
+                each person.
+              </p>
+            </section>
+          )}
+        </div>
         <Feed
-          data={breakdownMissing ? null : breakdown}
-          busy={breakdownBusy && !breakdownMissing}
+          data={breakdownMissing || profileArrival !== null ? null : breakdown}
+          busy={profileArrival !== null || (breakdownBusy && !breakdownMissing)}
           staleNoun="this breakdown"
           skeleton={{ height: FEED_SKELETON.paycheckBreakdown, label: 'Loading the breakdown…' }}
           empty={
@@ -1411,75 +1477,74 @@ export default function PaycheckPage() {
                       another person does, and "choose a profile below" beside an empty table
                       answers the wrong question (2026-08-28 bug report). */}
                   {shownProfiles.length > 0
-                    ? `${breakdownError} — choose a profile below.`
-                    : `${breakdownError} — add one below to see the waterfall.`}
+                    ? `${breakdownError} — choose an available row in Profiles.`
+                    : `${breakdownError} — add a profile to see the breakdown.`}
                 </p>
+                <button type="button" className="button" onClick={() => views.setSection('profiles')}>{shownProfiles.length ? 'Choose a profile' : 'Add a profile'}</button>
               </section>
             ) : undefined
           }
         >
           {(data) => (
             <>
-              <BreakdownPanel data={data} still={fromCache} />
-              {/* Pace strip (2026-08-27 spec §5): the SAME payload as the waterfall above, so
-                  the rows can never describe a different profile than the check they sit
-                  under — including whichever person the chips picked. */}
-              <PacePanel items={data.pace} />
-              {/* Same payload, same busy dim: the flow can never show a different check than
-                  the table above it. */}
-              <FlowPanel data={data} />
-              {/* The sandbox (2026-09-03 planning-sandboxes spec §9), under the flow: it models
-                  the check ABOVE it, so it takes the same payload and the same two selectors
-                  GET /breakdown was asked with. Nothing it does writes. */}
-              <TryItPanel
-                profileId={selection.profileId}
-                personId={selection.personId}
-                breakdown={data}
-                onApply={(seed) =>
-                  setApplySeed((current) => ({
-                    seed,
-                    nonce: (current?.nonce ?? 0) + 1,
-                    forKey: profilesKey,
-                  }))
-                }
-              />
+              <LocalSectionPanel state={views} section="summary">
+                <BreakdownPanel data={data} still={fromCache} />
+                <PacePanel items={data.pace} />
+                <FlowPanel data={data} />
+              </LocalSectionPanel>
+              <LocalSectionPanel state={views} section="changes">
+                <TryItPanel
+                  profileId={selection.profileId}
+                  personId={selection.personId}
+                  breakdown={data}
+                  onApply={(seed) => {
+                    views.setSection('profiles')
+                    setApplySeed((current) => ({
+                      seed,
+                      nonce: (current?.nonce ?? 0) + 1,
+                      forKey: profilesKey,
+                    }))
+                  }}
+                />
+              </LocalSectionPanel>
             </>
           )}
         </Feed>
-
-        <Feed
-          data={profiles}
-          busy={profilesBusy}
-          staleNoun="the table"
-          skeleton={{ height: 240, label: 'Loading profiles…' }}
-        >
-          {/* The render prop's argument is only proof that `profiles` is non-null: the table
+        <LocalSectionPanel state={views} section="profiles">
+          <Feed
+            data={profiles}
+            busy={profilesBusy}
+            staleNoun="the table"
+            skeleton={{ height: 240, label: 'Loading profiles…' }}
+          >
+            {/* The render prop's argument is only proof that `profiles` is non-null: the table
               draws `shownProfiles`, the memo that scopes the one ordered list to the chip. */}
-          {() => (
-            /* Keyed by the CHIP's pick, and by whether the list is scoped yet. Switching
-               person must re-seed the carry-forward form from THAT person's latest row — a
-               half-typed row surviving the switch would be filed under the wrong person on
-               the next save. It reads `selection.personId` rather than the resolved
-               `activePersonId` so the primary's key is constant across a breakdown refetch
-               (the pre-batch behaviour: typed work survives). The `switchable` half is the
-               2026-09-03 fix: the profiles usually land BEFORE the household, so the panel
-               first mounts on the UNFILTERED list and seeds its form from whoever's row is
-               newest overall — the partner's, in production. Remounting once when the
-               household resolves re-seeds from the primary's own latest row; the only
-               typing that can be lost is whatever landed in that first instant. */
-            <ProfilesPanel
-              key={`${profilesKey}:${seedForPanel?.nonce ?? 0}`}
-              profiles={shownProfiles}
-              personId={selection.personId}
-              shownId={breakdown?.profile.id ?? null}
-              pinnedId={selection.profileId}
-              onSelect={selectProfile}
-              onShowCurrent={showCurrent}
-              onChanged={onProfilesChanged}
-              initialForm={seedForPanel?.seed}
-            />
-          )}
-        </Feed>
+            {() => (
+              /* Keyed by the CHIP's pick, and by whether the list is scoped yet. Switching
+                 person must re-seed the carry-forward form from THAT person's latest row — a
+                 half-typed row surviving the switch would be filed under the wrong person on
+                 the next save. It reads `selection.personId` rather than the resolved
+                 `activePersonId` so the primary's key is constant across a breakdown refetch
+                 (the pre-batch behaviour: typed work survives). The `switchable` half is the
+                 2026-09-03 fix: the profiles usually land BEFORE the household, so the panel
+                 first mounts on the UNFILTERED list and seeds its form from whoever's row is
+                 newest overall — the partner's, in production. Remounting once when the
+                 household resolves re-seeds from the primary's own latest row; the only
+                 typing that can be lost is whatever landed in that first instant. */
+              <ProfilesPanel
+                key={`${profilesKey}:${seedForPanel?.nonce ?? 0}`}
+                profiles={shownProfiles}
+                personId={selection.personId}
+                shownId={breakdown?.profile.id ?? null}
+                pinnedId={selection.profileId}
+                onSelect={selectProfile}
+                onShowCurrent={showCurrent}
+                onChanged={onProfilesChanged}
+                initialForm={seedForPanel?.seed}
+              />
+            )}
+          </Feed>
+        </LocalSectionPanel>
       </PageFrame>
     </div>
   )
