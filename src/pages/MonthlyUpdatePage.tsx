@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { ClipboardEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { CalendarPlus } from 'lucide-react'
+import { CalendarPlus, Ellipsis } from 'lucide-react'
 import { ApiError, describeError } from '../api/client'
 import {
   deleteMonthBalances,
@@ -19,6 +19,7 @@ import {
 } from '../api/spending'
 import AmountInput from '../components/AmountInput'
 import StatTile from '../components/StatTile'
+import { usePopoverDismiss } from '../components/usePopoverDismiss'
 import { fetchMonthReview, saveMonthReview, REVIEW_LABELS } from '../api/monthReview'
 import type { MonthReview, ReviewedFeeds } from '../api/monthReview'
 import ReviewChanges from '../components/monthly/ReviewChanges'
@@ -377,6 +378,13 @@ export default function MonthlyUpdatePage() {
   // button. loadNonce forces the load effect when the deleted month IS the month on
   // screen — the [month] dep alone would never re-run.
   const [deleteArm, setDeleteArm] = useState('')
+  // The Review head's kebab (2026-09-13 polish spec §11): the delete arm-and-confirm lives in a
+  // popover, so opening it never pushes the footer down the page.
+  const [actionsOpen, setActionsOpen] = useState(false)
+  const actionsTriggerRef = useRef<HTMLButtonElement>(null)
+  const actionsSurfaceRef = useRef<HTMLDivElement>(null)
+  const closeActions = () => setActionsOpen(false)
+  usePopoverDismiss(actionsOpen, closeActions, actionsTriggerRef, actionsSurfaceRef)
   const [deleting, setDeleting] = useState(false)
   const [loadNonce, setLoadNonce] = useState(0)
   const toast = useToast()
@@ -393,6 +401,7 @@ export default function MonthlyUpdatePage() {
     // cells that are about to unmount — neither may follow the user to the next step.
     setPasteNote(null)
     setFlashIds(new Set())
+    setActionsOpen(false)
     setParams((current) => {
       const copy = new URLSearchParams(current)
       copy.set('month', month)
@@ -958,6 +967,7 @@ export default function MonthlyUpdatePage() {
           : undefined,
       )
       setDeleteArm('')
+      setActionsOpen(false)
       // A remembered half-landed save describes rows that no longer exist — leaving it would
       // keep the primary reading "Retry spending" for a deleted month, and the receipt would
       // narrate a month that is gone.
@@ -1053,6 +1063,7 @@ export default function MonthlyUpdatePage() {
     // Same reason the step change clears them: the note counts the OLD month's rows.
     setPasteNote(null)
     setDeleteArm('')
+    setActionsOpen(false)
     setRecordZero(false)
     setFlashIds(new Set())
     // Item 18 (2026-09-09 audit): the step SURVIVES the month change. Entering the same
@@ -1769,6 +1780,49 @@ export default function MonthlyUpdatePage() {
                 <InfoHint text="Review the entered figures, then save progress or close a completed month. Your entries stay in this browser until saved." />
               </h2>
               {review && <p className={`month-review-status month-review-status-${review.state}`}>{REVIEW_LABELS[review.state]}{review.closed_at ? ` · Last closed ${new Date(review.closed_at).toLocaleDateString()}` : ''}</p>}
+              {monthExisted && (
+                <div className="month-actions">
+                  <button
+                    ref={actionsTriggerRef}
+                    type="button"
+                    className="button month-actions-trigger"
+                    aria-label="Month actions"
+                    aria-haspopup="dialog"
+                    aria-expanded={actionsOpen}
+                    onClick={() => setActionsOpen((open) => !open)}
+                  >
+                    <Ellipsis size={15} aria-hidden="true" />
+                  </button>
+                  {actionsOpen && (
+                    <div ref={actionsSurfaceRef} className="popover-surface month-actions-popover" role="dialog" aria-label="Month actions">
+                      <p className="drill-hint">
+                        Delete this month everywhere: its balances snapshot, spending rows and
+                        take-home. Undo is offered for six seconds afterwards, and the Activity card
+                        can undo it later.
+                      </p>
+                      <div className="danger-row">
+                        <label htmlFor="delete-arm">Type {month.slice(0, 7)} to confirm</label>
+                        <input
+                          id="delete-arm"
+                          type="text"
+                          className="field-input"
+                          value={deleteArm}
+                          onChange={(e) => setDeleteArm(e.target.value)}
+                          placeholder={month.slice(0, 7)}
+                        />
+                        <button
+                          type="button"
+                          className="button danger-button"
+                          disabled={saving || deleting || deleteArm.trim() !== month.slice(0, 7)}
+                          onClick={() => void deleteMonth()}
+                        >
+                          {deleting ? 'Deleting…' : 'Delete this month'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             {/* W5 (2026-09-13 audit): the four figures of the approved receipt (design §4.3) as
                 real tiles — the app's tile vocabulary, not three label/value pairs 375px apart.
@@ -1820,35 +1874,6 @@ export default function MonthlyUpdatePage() {
               <p className="drill-hint" role="status">
                 Spending: nothing entered — this save writes balances only.
               </p>
-            )}
-            {monthExisted && (
-              <details className="month-actions">
-                <summary>Month actions</summary>
-                <p className="drill-hint">
-                  Delete this month everywhere: its balances snapshot, spending rows and
-                  take-home. Undo is offered for six seconds afterwards, and the Activity card
-                  can undo it later.
-                </p>
-                <div className="danger-row">
-                  <label htmlFor="delete-arm">Type {month.slice(0, 7)} to confirm</label>
-                  <input
-                    id="delete-arm"
-                    type="text"
-                    className="field-input"
-                    value={deleteArm}
-                    onChange={(e) => setDeleteArm(e.target.value)}
-                    placeholder={month.slice(0, 7)}
-                  />
-                  <button
-                    type="button"
-                    className="button danger-button"
-                    disabled={saving || deleting || deleteArm.trim() !== month.slice(0, 7)}
-                    onClick={() => void deleteMonth()}
-                  >
-                    {deleting ? 'Deleting…' : 'Delete this month'}
-                  </button>
-                </div>
-              </details>
             )}
             <div className="wizard-footer">
               <button className="button" onClick={() => setStep('spending')}>

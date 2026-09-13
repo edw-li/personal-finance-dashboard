@@ -1224,10 +1224,16 @@ function renderWizardAt(entry: string) {
   )
 }
 
+// A2 (2026-09-13 audit): the delete arm-and-confirm lives behind the Review head's kebab.
+async function openMonthActions() {
+  fireEvent.click(await screen.findByRole('button', { name: 'Month actions' }))
+  return screen.getByRole('dialog', { name: 'Month actions' })
+}
+
 it('offers no delete on a month the server has never seen', async () => {
   renderWizardAt('/update?month=2026-08-01&step=review')
   await screen.findByRole('button', { name: 'Save progress' })
-  expect(screen.queryByRole('button', { name: 'Delete this month' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Month actions' })).toBeNull()
 })
 
 it('arms on the typed month, fires both deletes tolerating a 404, clears the draft', async () => {
@@ -1238,6 +1244,7 @@ it('arms on the typed month, fires both deletes tolerating a 404, clears the dra
   )
   sessionStorage.setItem('finance-update-draft:2026-07-01', '{"balances":{"1":"9.00"}}')
   renderWizardAt('/update?month=2026-07-01&step=review')
+  await openMonthActions()
   const button = (await screen.findByRole('button', {
     name: 'Delete this month',
   })) as HTMLButtonElement
@@ -1265,6 +1272,7 @@ it('arms on the typed month, fires both deletes tolerating a 404, clears the dra
 it('surfaces a non-404 delete failure, stops before the second leg, stays on the month', async () => {
   vi.mocked(netWorthApi.deleteMonthBalances).mockRejectedValue(new ApiError('db exploded', 500))
   renderWizardAt('/update?month=2026-07-01&step=review')
+  await openMonthActions()
   fireEvent.change(await screen.findByLabelText('Type 2026-07 to confirm'), {
     target: { value: '2026-07' },
   })
@@ -1288,6 +1296,7 @@ it('the delete toast carries Undo, which undoes the spending batch then the bala
     label: 'Undid: Deleted Jul 2026 spending', month: '2026-07-01', rows: 2, undoable: true, undone_by: null,
   })
   renderWizardAt('/update?month=2026-07-01&step=review')
+  await openMonthActions()
   const button = (await screen.findByRole('button', { name: 'Delete this month' })) as HTMLButtonElement
   fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
   fireEvent.click(button)
@@ -1315,6 +1324,7 @@ it('a 404 leg leaves no batch to undo, so Undo only fires the leg that wrote', a
     label: 'Undid: Deleted Jul 2026 balances', month: '2026-07-01', rows: 2, undoable: true, undone_by: null,
   })
   renderWizardAt('/update?month=2026-07-01&step=review')
+  await openMonthActions()
   await screen.findByRole('button', { name: 'Delete this month' })
   fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
   fireEvent.click(screen.getByRole('button', { name: 'Delete this month' }))
@@ -1336,6 +1346,7 @@ it('a partial undo still reloads — leg 1 landed even though leg 2 was refused'
     })
     .mockRejectedValueOnce(new ApiError('a later change touched these rows', 409))
   renderWizardAt('/update?month=2026-07-01&step=review')
+  await openMonthActions()
   await screen.findByRole('button', { name: 'Delete this month' })
   fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
   fireEvent.click(screen.getByRole('button', { name: 'Delete this month' }))
@@ -2463,4 +2474,18 @@ it('lays the Review step out as four tiles with the cash split and the close gat
   expect(footer.textContent).toContain('To close, complete all three confirmations')
   // The month is printed by the h1; the eyebrow does not repeat it.
   expect(screen.queryByRole('heading', { name: /Review & save — / })).toBeNull()
+})
+
+it('the kebab opens the month-actions popover and Escape closes it back onto the button', async () => {
+  renderWizardAt('/update?month=2026-07-01&step=review')
+  const trigger = await screen.findByRole('button', { name: 'Month actions' })
+  expect(trigger.getAttribute('aria-expanded')).toBe('false')
+  expect(trigger.getAttribute('aria-haspopup')).toBe('dialog')
+  const dialog = await openMonthActions()
+  expect(trigger.getAttribute('aria-expanded')).toBe('true')
+  expect(dialog.className).toContain('popover-surface')
+  expect(within(dialog).getByRole('button', { name: 'Delete this month' })).toBeTruthy()
+  fireEvent.keyDown(dialog, { key: 'Escape' })
+  expect(screen.queryByRole('dialog', { name: 'Month actions' })).toBeNull()
+  expect(document.activeElement).toBe(trigger)
 })

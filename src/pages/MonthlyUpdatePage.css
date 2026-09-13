@@ -243,19 +243,7 @@
   color: var(--warn);
 }
 
-/* ── Danger zone (delete month) — the Review step's arm-and-confirm ─────────── */
-.danger-zone {
-  margin-top: 1.25rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border);
-}
-.danger-zone .danger-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  margin-top: 0.5rem;
-}
+/* ── Delete month — the Review head's arm-and-confirm, inside the kebab popover ──── */
 .danger-button:not(:disabled) {
   border-color: var(--negative);
   color: var(--negative);
@@ -271,9 +259,13 @@
 .month-review-status { display: inline-flex; padding: .3rem .7rem; border-radius: 100px; background: var(--surface-2); border: 1px solid var(--border); font-size: .8rem; margin: 0; }
 .month-review-status-closed { color: var(--positive); }
 .month-review-status-needs_review { color: var(--warn); }
-.month-actions { margin-top: 1.5rem; padding-top: .8rem; border-top: 1px solid var(--border); }
-.month-actions summary, .historical-review summary { cursor: pointer; font-weight: 600; font-size: .85rem; }
-.month-actions[open] summary { margin-bottom: .75rem; }
+/* The kebab and its popover. The wrapper is the popover's positioning box; the surface itself
+   is the shared .popover-surface (panels.css) — F2's motion and tokens, nothing local. */
+.month-actions { position: relative; margin-left: auto; }
+.month-actions-trigger { padding: .3rem .5rem; line-height: 0; }
+.month-actions-popover { right: 0; top: calc(100% + .4rem); width: min(440px, 90vw); }
+.month-actions-popover .danger-row { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-top: .5rem; }
+.historical-review summary { cursor: pointer; font-weight: 600; font-size: .85rem; }
 .historical-review { margin-top: 1rem; padding: 1.25rem; }
 .history-review-list { max-height: 20rem; overflow: auto; margin: 1rem 0; }
 .history-review-row { display: grid; grid-template-columns: 1.25rem 1fr 1fr auto; align-items: center; gap: .75rem; padding: .6rem 0; border-bottom: 1px solid var(--border); font-size: .85rem; }
