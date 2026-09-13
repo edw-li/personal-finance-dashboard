@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { SkeletonCard } from '../PageSkeleton'
 import { XFADE_MS } from '../skeletonMetrics'
 import { useReducedMotion } from '../useReducedMotion'
+import { CASCADE_WINDOW_MS, tagStagger } from '../useStagger'
+import { usePageFrame } from './PageFrame'
 import '../panels.css'
 
 // A card-level feed's three states, in the grammar the multi-feed pages (Comp, ESPP,
@@ -58,6 +60,23 @@ export default function Feed<T extends NonNullable<unknown>>({
     const id = setTimeout(() => setFading(false), XFADE_MS)
     return () => clearTimeout(id)
   }, [fading])
+  // The card cascade for a feed-driven page (2026-09-13 polish §2.5). PageFrame tags its body at
+  // `ready`, which on Comp/ESPP/Paycheck/Taxes is the mount — before any feed has answered — so
+  // the only thing it ever tagged here was the ghost. The first payload tags its own cards
+  // instead, once per Feed mount, and only inside the page's arrival window: a payload landing
+  // later (a revisit, a tab switch, a refetch) joins a page the reader is already reading. A
+  // LAYOUT effect, like useStagger: the tag has to be on the card before its first paint. The
+  // root is the .xfade wrapper below, which exists exactly when there is content to tag.
+  const { mountedAt } = usePageFrame()
+  const rootRef = useRef<HTMLDivElement>(null)
+  const taggedRef = useRef(false)
+  useLayoutEffect(() => {
+    if (data === null || taggedRef.current) return
+    taggedRef.current = true
+    const root = rootRef.current
+    if (root === null || performance.now() - mountedAt >= CASCADE_WINDOW_MS) return
+    tagStagger(root)
+  }, [data, mountedAt])
   // the stale cue only when there IS something stale: a reload failure leaves the previous
   // table up, a first-load failure leaves nothing to be behind
   const banner = !error ? null : data === null ? error : `${error} — ${staleNoun} may be showing earlier data.`
@@ -67,7 +86,7 @@ export default function Feed<T extends NonNullable<unknown>>({
       {data === null ? (
         busy ? <SkeletonCard height={skeleton.height} label={skeleton.label} /> : (empty ?? null)
       ) : (
-        <div className={`xfade${fading ? ' is-fading' : ''}`}>
+        <div ref={rootRef} className={`xfade${fading ? ' is-fading' : ''}`}>
           <div className={`loading-dim${busy ? ' is-loading' : ''}`}>{children(data)}</div>
           {/* The outgoing ghost, absolutely over the content that already occupies its box: it fades
               out, the content fades in, the height never changes. No label — the status line

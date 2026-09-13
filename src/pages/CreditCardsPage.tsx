@@ -325,6 +325,7 @@ export default function CreditCardsPage() {
     <div className="page credit-cards-page">
       <PageFrame
         title="Credit cards"
+        sections={<LocalSectionNav state={views} label="CreditCards views" onChange={(section, options) => views.setSection(section, { ...options, removeParams: ['card'] })} />}
         actions={
           <button
             className="button button-primary"
@@ -357,8 +358,6 @@ export default function CreditCardsPage() {
         }}
         skeleton={{ tiles: 3, cards: [{ span: 12, height: 320 }, { span: 12, height: 260 }] }}
       >
-        <LocalSectionNav state={views} label="CreditCards views" onChange={(section) => views.setSection(section, { removeParams: ['card'] })} />
-
         {activeCard ? (
           <CardDetail
             key={activeCard.id}

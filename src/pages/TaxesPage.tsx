@@ -727,6 +727,7 @@ export default function TaxesPage() {
     <div className="page taxes-page">
       <PageFrame
         title="Taxes"
+        sections={<LocalSectionNav state={views} label="Taxes views" />}
         resource={{
           // The years LIST is this page's lifecycle; a year's detail is the feed below it.
           // A first-load failure leaves no year selected and nothing to look at, so it is
@@ -752,8 +753,6 @@ export default function TaxesPage() {
           ],
         }}
       >
-        <LocalSectionNav state={views} label="Taxes views" />
-
         <section className="card">
           <h2 className="eyebrow">
             Tax year

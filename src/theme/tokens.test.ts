@@ -94,13 +94,30 @@ describe('tokens', () => {
   it.each(surfaces)('%s: no diverging step equals another token hex or another step', (_name, t) => {
     const others = new Set(
       [
-        t.bg, t.surface, t.surface2, t.border, t.text, t.muted, t.accent, t.onAccent,
+        t.bg, t.surface, t.surface2, t.border, t.fill, t.text, t.muted, t.accent, t.onAccent,
         t.positive, t.negative, t.warn, t.gridLine, t.axisLine, t.otherSeries,
         ...t.palette, ...t.sequential,
       ].map((h) => h.toLowerCase()),
     )
     for (const hex of t.diverging) expect(others.has(hex.toLowerCase()), hex).toBe(false)
     expect(new Set(t.diverging.map((h) => h.toLowerCase())).size).toBe(9)
+  })
+
+  // §6 fill: the pressed/hover/ghost surface has to be a visible step on the CARD in both themes.
+  // --surface-2 sits between --bg and --surface in LIGHT (1.05:1 on white), which is why active
+  // segments, tab hovers and skeleton ghosts vanished there (2026-09-13 audit L-1). 1.15:1 is the
+  // acceptance floor (spec §15.7); the fill must also not just be surface-2 under another name.
+  it.each(surfaces)('%s: the fill reads as a step against the card', (_name, t) => {
+    expect(contrastRatio(t.fill, t.surface)).toBeGreaterThanOrEqual(1.15)
+    expect(t.fill.toLowerCase()).not.toBe(t.surface2.toLowerCase())
+  })
+
+  // The two NON-hex tokens are pinned to the shapes their consumers read: --scrim is a whole
+  // rgba() colour (a backdrop), --shadow is the component list inside rgb(var(--shadow)). Neither
+  // may go through luminance(), which accepts only #rrggbb — hence a shape pin, not a contrast one.
+  it.each(surfaces)('%s: scrim is an rgba() colour and shadow is bare r g b / a components', (_name, t) => {
+    expect(t.scrim).toMatch(/^rgba\(\d{1,3}, \d{1,3}, \d{1,3}, 0?\.\d+\)$/)
+    expect(t.shadow).toMatch(/^\d{1,3} \d{1,3} \d{1,3} \/ 0?\.\d+$/)
   })
 
   it('index.css declares every token of both palettes with the same value', () => {

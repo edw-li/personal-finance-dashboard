@@ -7,6 +7,11 @@
   --surface: #171a21;
   --surface-2: #1e222c;
   --border: #262b36;
+  /* Pressed/hover/ghost fill, the one modal scrim, and shadow ink (2026-09-13 polish §6).
+     --shadow is bare `r g b / a` components: read it as rgb(var(--shadow)) inside box-shadow. */
+  --fill: #262b36;
+  --scrim: rgba(0, 0, 0, 0.55);
+  --shadow: 0 0 0 / 0.45;
   --text: #e6e9ef;
   --muted: #8b93a3;
   --accent: #4f8cff;
@@ -82,6 +87,9 @@
   --surface: #ffffff;
   --surface-2: #f7f9fc;
   --border: #e1e7ef;
+  --fill: #e6ebf2;
+  --scrim: rgba(20, 30, 50, 0.35);
+  --shadow: 20 30 50 / 0.14;
   --text: #141a24;
   --muted: #5f6b7a;
   --accent: #296dcc;

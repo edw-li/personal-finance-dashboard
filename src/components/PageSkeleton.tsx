@@ -12,20 +12,24 @@ export default function PageSkeleton({
   cards = [],
   strip = false,
 }: {
-  tiles?: number
+  /** Tile ghosts. A number draws the full tile (label, value, delta line); `{ count, delta: false }`
+   *  draws the shorter delta-less tile for rows whose real tiles carry no delta. */
+  tiles?: number | { count: number; delta?: boolean }
   cards?: { span: 4 | 6 | 8 | 12; height?: number }[]
   /** Net worth's per-owner strip under the tiles — ghosted, or the tiles jump when it lands. */
   strip?: boolean
 }) {
+  const tileSpec =
+    typeof tiles === 'number' ? { count: tiles, delta: true } : { count: tiles.count, delta: tiles.delta ?? true }
   return (
     <div className="page-skeleton loading-fallback">
       <p className="visually-hidden" role="status">
         Loading…
       </p>
-      {tiles > 0 && (
+      {tileSpec.count > 0 && (
         <div className="kpi-row" aria-hidden="true">
-          {Array.from({ length: tiles }, (_, i) => (
-            <GhostTile key={i} />
+          {Array.from({ length: tileSpec.count }, (_, i) => (
+            <GhostTile key={i} delta={tileSpec.delta} />
           ))}
         </div>
       )}
@@ -52,14 +56,16 @@ export default function PageSkeleton({
    PageSkeleton draws and the row a page reserves on its own can never drift apart.
    Exported (2026-09-07): the ESPP strip paints four tiles from one feed and one from another,
    so it ghosts the slots of whichever feed is still in flight with this very tile. */
-export function GhostTile() {
+export function GhostTile({ delta = true }: { delta?: boolean }) {
   return (
     // aria-hidden on the TILE, not only on the row above it: in a mixed row (the ESPP strip)
     // its neighbours are real tiles that must stay readable, so there is no hidden container.
-    <div className="stat-tile skeleton-tile" aria-hidden="true">
+    // `delta: false` is the delta-less tile's twin (2026-09-13 polish §9): two blocks, and the
+    // shorter --m-stat-tile-bare box, so the row is the same height before and after data lands.
+    <div className={`stat-tile skeleton-tile${delta ? '' : ' skeleton-tile-bare'}`} aria-hidden="true">
       <div className="skeleton skeleton-label" />
       <div className="skeleton skeleton-value" />
-      <div className="skeleton skeleton-delta" />
+      {delta && <div className="skeleton skeleton-delta" />}
     </div>
   )
 }

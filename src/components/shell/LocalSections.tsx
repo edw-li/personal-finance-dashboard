@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useLocation, useNavigate, useNavigationType } from 'react-router-dom'
+import { EASE_OUT, MOTION_MS } from '../../theme/motion'
+import { prefersReducedMotion } from '../useReducedMotion'
 import { LocalSectionVisibility } from './localSectionContext'
 import './localSections.css'
 
@@ -90,20 +92,61 @@ function safeHash(hash: string): string | undefined {
   try { return decodeURIComponent(hash.replace(/^#/, '')) || undefined } catch { return undefined }
 }
 
-export function LocalSectionNav<T extends string>({ state, label, onChange }: { state: LocalSectionState<T>; label: string; onChange?: (section: T) => void }) {
+/** What the strip tells `onChange` about HOW a view was picked: a keyboard sweep replaces the
+ *  history entry, a click pushes one (2026-09-13 polish §2.4 — five arrow presses used to leave
+ *  five entries). Pages that add their own params spread it into `setSection`'s options. */
+export type LocalSectionChangeOptions = { replace?: boolean }
+
+export function LocalSectionNav<T extends string>({ state, label, onChange, trailing }: {
+  state: LocalSectionState<T>
+  label: string
+  onChange?: (section: T, options?: LocalSectionChangeOptions) => void
+  /** Right-aligned on the strip's own line (Net worth's Monthly/Quarterly Segmented). */
+  trailing?: ReactNode
+}) {
   const change = onChange ?? state.setSection
+  const listRef = useRef<HTMLDivElement>(null)
+  const indicatorRef = useRef<HTMLSpanElement>(null)
+  // Whether a measurement has been committed. The FIRST placement is where the bar LIVES, not a
+  // move (Layout.tsx's nav-indicator idiom): data-placed goes on from the second placement, and
+  // localSections.css hangs the transition on that attribute.
+  const placedRef = useRef(false)
+  useLayoutEffect(() => {
+    const place = () => {
+      const list = listRef.current
+      const bar = indicatorRef.current
+      if (list === null || bar === null) return
+      const tab = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      if (tab === null) { bar.style.width = '0px'; return }
+      if (placedRef.current) bar.dataset.placed = ''
+      bar.style.width = `${tab.offsetWidth}px`
+      // The y term is 0 on a one-row strip; when the tabs wrap it lifts the bar to the selected
+      // tab's own row instead of leaving it under the last one.
+      bar.style.transform = `translate(${tab.offsetLeft}px, ${tab.offsetTop + tab.offsetHeight - list.offsetHeight}px)`
+      placedRef.current = true
+    }
+    place()
+    // Tabs move without the section changing — a wrap, the density toggle, a badge landing.
+    // Guarded for jsdom and old browsers: without it the bar waits for the next activation.
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => place())
+    if (listRef.current !== null) observer?.observe(listRef.current)
+    return () => observer?.disconnect()
+  }, [state.section, state.sections])
   return <nav className="local-section-nav" aria-label={label}>
-    <div role="tablist" aria-label={label}>
-      {state.sections.map((item, index) => <button key={item.id} type="button" role="tab" id={state.tabId(item.id)} aria-controls={state.panelId(item.id)} aria-selected={item.id === state.section} tabIndex={item.id === state.section ? 0 : -1} onClick={() => change(item.id)} onKeyDown={(event) => {
+    <div ref={listRef} role="tablist" aria-label={label}>
+      {/* Decorative: aria-selected already says which tab is current. */}
+      <span ref={indicatorRef} className="local-section-indicator" aria-hidden="true" />
+      {state.sections.map((item, index) => <button key={item.id} type="button" role="tab" id={state.tabId(item.id)} aria-controls={state.panelId(item.id)} aria-selected={item.id === state.section} tabIndex={item.id === state.section ? 0 : -1} onClick={() => change(item.id, undefined)} onKeyDown={(event) => {
         const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
         const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? state.sections.length - 1 : step ? (index + step + state.sections.length) % state.sections.length : null
         if (nextIndex === null) return
         event.preventDefault()
         const next = state.sections[nextIndex].id
-        change(next)
+        change(next, { replace: true })
         document.getElementById(state.tabId(next))?.focus({ preventScroll: true })
       }}>{item.label}{item.badge !== undefined && <span>{item.badge}</span>}</button>)}
     </div>
+    {trailing !== undefined && <div className="local-section-trailing">{trailing}</div>}
   </nav>
 }
 
@@ -119,6 +162,27 @@ export function LocalSectionPanel<T extends string>({ state, section, children, 
   const active = state.section === section
   const [visited, setVisited] = useState(active)
   if (active && !visited) setVisited(true)
+  const ref = useRef<HTMLElement>(null)
+  // The view swap is one panel-level fade, not a second card cascade (2026-09-13 polish §2.4).
+  // WAAPI rather than a CSS animation because a kept-mounted panel only toggles `hidden`, and a
+  // CSS animation would not restart. A LAYOUT effect: it runs in the commit that cleared
+  // `hidden`, so the first frame the panel is visible is already the fade's first frame. The
+  // component instance exists from page arrival (an inactive panel renders null, not nothing),
+  // so the first effect run IS the arrival — the initially active section does not animate; the
+  // page body's own entrance already covers it — and every later activation, first visit or
+  // revisit, does.
+  const arrivalRef = useRef(true)
+  useLayoutEffect(() => {
+    const arrival = arrivalRef.current
+    arrivalRef.current = false
+    if (!active || arrival) return
+    const el = ref.current
+    if (el === null || prefersReducedMotion() || typeof el.animate !== 'function') return
+    el.animate(
+      [{ opacity: 0, translate: '0 6px' }, { opacity: 1, translate: 'none' }],
+      { duration: MOTION_MS.xfade, easing: EASE_OUT, fill: 'backwards' },
+    )
+  }, [active])
   if (!active && (!keepMounted || !visited)) return null
-  return <LocalSectionVisibility.Provider value={active}><section id={state.panelId(section)} role="tabpanel" aria-labelledby={state.tabId(section)} hidden={!active} className={`local-section-panel${className ? ` ${className}` : ''}`}>{children}</section></LocalSectionVisibility.Provider>
+  return <LocalSectionVisibility.Provider value={active}><section ref={ref} id={state.panelId(section)} role="tabpanel" aria-labelledby={state.tabId(section)} hidden={!active} className={`local-section-panel${className ? ` ${className}` : ''}`}>{children}</section></LocalSectionVisibility.Provider>
 }

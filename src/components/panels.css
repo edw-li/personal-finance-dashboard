@@ -6,6 +6,12 @@
    auto-fit/12-col so they redistribute rather than stretch single columns. */
 .page {
   padding: 1.75rem 2rem 3rem;
+  /* The container the KPI rows query (2026-09-13 polish §12): a dock beside the page narrows the
+     CONTAINER, not the viewport, so tile columns must answer to this box. Layout containment makes
+     .page the containing block for fixed descendants — none exist inside it (launcher and toasts
+     are outside; panels and dialogs are portaled or in the top layer); Projection already did this
+     on the same element. */
+  container-type: inline-size;
 }
 
 .page-header {
@@ -79,6 +85,27 @@
   max-width: 320px;
 }
 
+/* Balanced rows (2026-09-13 polish §12). The last tile always reaches the row's last line, so a
+   4+1 wrap fills the void instead of leaving one narrow orphan (in a full row it spans one track
+   as before). A five-tile row — ESPP's strip, Projection's outcomes — is five columns wherever
+   1000px of container allow it and auto-fits below; every other row goes 2×2 once a dock has
+   narrowed the page under 980px, where four columns read as 3+1. .kpi-row-dense is Portfolio's
+   five dense tiles (it replaces that page's private .tiles-row). Container queries, not media
+   queries: the dock is the thing that changes the width. */
+.kpi-row > :last-child { grid-column-end: -1; }
+
+.kpi-row-5 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+
+.kpi-row-dense { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+
+@container (min-width: 1000px) {
+  .kpi-row-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+
+@container (max-width: 980px) {
+  .kpi-row:not(.kpi-row-5) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .stat-tile {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -95,6 +122,29 @@
   text-transform: uppercase;
   color: var(--muted);
   margin-bottom: 0.45rem;
+}
+
+/* Label text and its (i) travel as one unbreakable unit (2026-09-13 polish §10). The one label
+   known to overflow five 217px columns ("Reach FI target within N years") is shortened by lane P4;
+   every other label fits its tile at the 220px floor. */
+.stat-label-text {
+  white-space: nowrap;
+}
+
+/* A small status pill after the label, in the caller's own casing — a state, not an eyebrow. */
+.stat-badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
 /* Sized from the TILE, not the viewport. .kpi-row is repeat(auto-fit, minmax(220px, 1fr)),
@@ -159,7 +209,7 @@
 
 .data-table td {
   padding: var(--density-cell-pad);
-  border-bottom: 1px solid var(--surface-2);
+  border-bottom: 1px solid var(--border);
 }
 
 .data-table .num {
@@ -172,6 +222,39 @@
   padding-left: 1.6rem;
   color: var(--muted);
 }
+
+/* Row actions stay in view while a wide table scrolls sideways (2026-09-13 polish §7). Only a
+   table that has OPTED IN — one with a `td.row-actions` column — pins its last header cell, so no
+   other table grows a hairline on its last column. border-collapse loses a sticky cell's own
+   border, so the hairline is redrawn as a box-shadow (CompPage.css's precedent). The identity
+   column is the left-hand twin; z-index 1 keeps it over the cells it slides across. */
+.data-table:has(td.row-actions) th:last-child,
+.data-table td.row-actions,
+.port-table:has(td.row-actions) th:last-child,
+.port-table td.row-actions {
+  position: sticky;
+  right: 0;
+  background: var(--surface);
+  box-shadow: -1px 0 0 var(--border);
+}
+
+.data-table th.col-identity,
+.data-table td.col-identity,
+.port-table th.col-identity,
+.port-table td.col-identity {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--border);
+}
+
+/* useScrollEdges writes which edges still hide content; the mask says so without a scrollbar.
+   The two-token rule exists because mask-image does not add up: with both edges hidden, the
+   later single-edge rule would otherwise win and the other edge would read as the table's end. */
+[data-scroll-more~="right"] { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+[data-scroll-more~="left"] { mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); }
+[data-scroll-more~="left"][data-scroll-more~="right"] { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
 
 .badge {
   display: inline-block;
@@ -197,7 +280,7 @@
   padding: 0.5rem 0.9rem;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--surface-2);
+  background: var(--fill);
   color: var(--text);
   font-size: 0.85rem;
   cursor: pointer;
@@ -222,6 +305,19 @@
 .button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* A disabled PRIMARY demotes to one step UNDER the quiet button (2026-09-13 polish §6, audit
+   S-7): at 50% the accent pill still outranked the enabled Dry run beside it in light.
+   --surface-2, not --fill, on purpose — a control that cannot be pressed sits a shade below the
+   ones that can. Later than .button:disabled at the same specificity, so it wins the opacity. */
+.button-primary:disabled,
+.button-primary:disabled:hover {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--muted);
+  opacity: 1;
+  filter: none;
 }
 
 .field-input {
@@ -264,7 +360,7 @@
 }
 
 .segmented button.active {
-  background: var(--surface-2);
+  background: var(--fill);
   color: var(--text);
 }
 
@@ -526,10 +622,31 @@
   text-align: right;
 }
 
+/* The pin strip wears the fill (2026-09-13 polish §6). Two classes on purpose: the strip's own
+   rule lives in chartInteractions.css, which is bundled AFTER this sheet at one class of
+   specificity, so a single-class override here would lose the cascade. */
+.chart-card .chart-selection-summary { background: var(--fill); }
+
+/* ── Popover surface (2026-09-13 polish §11) ─────────────────── */
+/* The one anchored popover box (Overview's Customize, Taxes' new-year form, the wizard's month
+   actions), positioned by its caller's `position: relative` wrapper. z 20: over the dock (16),
+   under toasts (30). Shadow ink from --shadow, so light gets a cool 14% instead of a black smudge;
+   the entrance is the shared pop-in in the motion-grammar block. Dismissal is
+   usePopoverDismiss's job, not this rule's. */
+.popover-surface {
+  position: absolute;
+  z-index: 20;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgb(var(--shadow));
+}
+
 /* ── Skeleton first paint (2026-08-27 spec §3) ─────────────────────── */
 
 .skeleton {
-  background: var(--surface-2);
+  background: var(--fill);
   border-radius: 6px;
 }
 
@@ -551,6 +668,10 @@
 .page-skeleton,
 .loading-fallback {
   --m-stat-tile: 115px;
+  /* The delta-less tile (2026-09-13 polish §9): 115 minus the .stat-delta line — 0.8rem type at
+     the system-ui line height (≈17px) plus its 0.35rem top margin (5.6px) — rounded like every
+     twin here. Lane V's CLS smoke on Credit cards and Portfolio is the check on the number. */
+  --m-stat-tile-bare: 93px;
   --m-owner-strip: 41px;
 }
 
@@ -558,6 +679,10 @@
    .stat-tile it is replaced by, delta line and all — the --m-* variables above hold the numbers. */
 .skeleton-tile {
   min-height: var(--m-stat-tile);
+}
+
+.skeleton-tile-bare {
+  min-height: var(--m-stat-tile-bare);
 }
 
 .skeleton-delta {
@@ -667,7 +792,12 @@
   .chip,
   .row-toggle,
   .info-hint,
-  .segmented button {
+  .segmented button,
+  .metric-info-button,
+  .local-section-nav [role=tab],
+  .assistant-icon-button,
+  .detail-panel-resizer,
+  .disclosure > summary {
     transition:
       background-color var(--t-fast) ease,
       border-color var(--t-fast) ease,
@@ -683,6 +813,25 @@
   .row-click {
     transition: background-color var(--t-fast) ease;
   }
+
+  /* "A surface appears" (2026-09-13 polish §2.1) — the rule the refactor had no rule for, so
+     every popover shipped at 0ms. Small anchored things (bubbles, menus, the pin strip, a
+     disclosure body) rise 4px into place over --t-fast; larger surfaces use panel-in (6px) and a
+     backdrop simply fades — F1's panel and dialog sheets reference these names. Inside the gate,
+     so a reduced-motion reader never has the keyframes at all; the durations are tokens, so they
+     could not run anyway. `translate`, not `transform`: the bubbles are positioned with
+     transforms of their own and the two properties compose. */
+  .info-hint-bubble,
+  .chart-export-popover,
+  .chart-selection-summary,
+  .popover-surface,
+  .disclosure[open] > .disclosure-body {
+    animation: pop-in var(--t-fast) var(--ease-out) both;
+  }
+
+  @keyframes pop-in { from { opacity: 0; translate: 0 -4px; } }
+  @keyframes panel-in { from { opacity: 0; translate: 0 6px; } }
+  @keyframes backdrop-in { from { opacity: 0; } }
 
   /* The whole-page entrance that used to live here is gone (2026-09-05 spec §2): it faded
      the title row too, it was justified by the key={pathname} Layout no longer passes, and

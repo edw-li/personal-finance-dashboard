@@ -117,4 +117,28 @@ describe('ghost parity (motion spec §7)', () => {
     render(<SkeletonTileRow tiles={2} />)
     expect(document.querySelector('.skeleton-tile')?.closest('.loading-fallback')).not.toBeNull()
   })
+  it('draws a delta-less ghost on request, at the shorter box a delta-less tile occupies', () => {
+    // Credit cards' and Portfolio's tiles carry no delta line (2026-09-13 polish §9): a
+    // three-block ghost under them stood 22px taller than the row that replaced it.
+    render(<GhostTile delta={false} />)
+    const tile = document.querySelector('.stat-tile.skeleton-tile') as HTMLElement
+    expect(tile.querySelectorAll('.skeleton').length).toBe(2) // label, value
+    expect(tile.className).toContain('skeleton-tile-bare')
+    const css = readFileSync(path.join(__dirname, 'panels.css'), 'utf8').replace(/\s+/g, ' ')
+    expect(css).toContain('--m-stat-tile-bare: 93px;')
+    expect(css).toContain('.skeleton-tile-bare { min-height: var(--m-stat-tile-bare); }')
+  })
+
+  it('accepts a tiles object so a page can ghost a delta-less row, and a count still draws the full tile', () => {
+    render(<PageSkeleton tiles={{ count: 4, delta: false }} />)
+    expect(document.querySelectorAll('.kpi-row .skeleton-tile-bare').length).toBe(4)
+    expect(document.querySelectorAll('.skeleton-delta').length).toBe(0)
+    cleanup()
+    render(<PageSkeleton tiles={{ count: 2 }} />)
+    expect(document.querySelectorAll('.skeleton-delta').length).toBe(2)
+    expect(document.querySelector('.skeleton-tile-bare')).toBeNull()
+    cleanup()
+    render(<PageSkeleton tiles={3} />)
+    expect(document.querySelectorAll('.skeleton-delta').length).toBe(3)
+  })
 })

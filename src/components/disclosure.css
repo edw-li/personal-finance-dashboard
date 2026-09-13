@@ -1,0 +1,75 @@
+/* The Disclosure primitive (2026-09-13 polish §2.6). Imported by Disclosure.tsx after panels.css,
+   which owns the body's pop-in and the summary's hover transition; this sheet is the look. */
+
+/* The summary is an eyebrow-weight row, not a sentence with a triangle. `list-style: none` drops
+   the UA marker (the -webkit pseudo below is Safari's copy); the negative margin lets the hover
+   wash sit flush with the text column while the row stays aligned with its neighbours. */
+.disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 -0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  user-select: none;
+}
+
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure > summary:hover {
+  background: var(--fill);
+  color: var(--text);
+}
+
+.disclosure > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.disclosure-chevron {
+  flex: none;
+}
+
+.disclosure[open] > summary .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+.disclosure-body {
+  padding-top: 0.6rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .disclosure-chevron {
+    transition: transform var(--t-fast) var(--ease-out);
+  }
+}
+
+/* Where the browser can interpolate to `auto`, the body's height glides too; elsewhere the pop-in
+   alone says "revealed". content-visibility is discrete, so it needs allow-discrete to stay
+   visible for the length of the closing glide. Tokens only, so `reduce` zeroes both. */
+@supports (interpolate-size: allow-keywords) {
+  .disclosure {
+    interpolate-size: allow-keywords;
+  }
+
+  .disclosure::details-content {
+    block-size: 0;
+    overflow: clip;
+    transition:
+      block-size var(--t-fast) var(--ease-out),
+      content-visibility var(--t-fast) allow-discrete;
+  }
+
+  .disclosure[open]::details-content {
+    block-size: auto;
+  }
+}

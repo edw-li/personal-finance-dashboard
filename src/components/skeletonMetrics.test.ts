@@ -46,7 +46,10 @@ describe('skeletonMetrics', () => {
     const row = flat(SHELL).match(/\.page-frame-scope \{[^}]*\}/)?.[0] ?? ''
     expect(row).toBeTruthy()
     expect(row).not.toContain('min-height')
-    expect(flat(SHELL)).toContain('.page-frame-scope:empty { display: none; }')
+    // The row is wrapped now (2026-09-13 polish §3: the sections strip shares the sticky block),
+    // so `:empty` is tested on the row and the block hides when no child has anything in it.
+    expect(flat(SHELL)).toContain('.page-frame-scope-row:empty { display: none; }')
+    expect(flat(SHELL)).toContain('.page-frame-scope:not(:has(> :not(:empty))) { display: none; }')
     // The collapse is not an event: a household that turns out to be one person takes the
     // ghost away at once — a 50px row sliding shut is the same shift again, slower. (The
     // blocks inside still pulse; that is .skeleton's appearance, not the row's exit.)

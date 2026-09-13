@@ -1,9 +1,12 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { XFADE_MS } from '../skeletonMetrics'
+import { CASCADE_WINDOW_MS } from '../useStagger'
 import Feed, { FeedBanner } from './Feed'
+import PageFrame from './PageFrame'
 
 // No `globals: true` in vite.config.ts, so RTL never registers its own auto-cleanup —
 // every suite in this repo unmounts by hand or leftover alerts leak into the next test.
@@ -188,5 +191,74 @@ describe('FeedBanner', () => {
       />,
     )
     expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Retry', 'Delete it'])
+  })
+})
+
+// The card cascade on feed-driven pages (2026-09-13 polish §2.5). PageFrame tags its body at
+// `ready`, which on Comp/ESPP/Paycheck/Taxes is the MOUNT — before any feed has answered — so the
+// only thing it ever tagged was the ghost. The first payload now tags its own cards, once, and
+// only inside the page's arrival window.
+describe('Feed card cascade (polish §2.5)', () => {
+  const props = { busy: false, staleNoun: 'the table', skeleton: { height: 200, label: 'Loading rows…' } }
+  const cards = () => (
+    <div>
+      <section className="card">a</section>
+      <section className="card">b</section>
+    </div>
+  )
+  const frame = (feed: ReactNode) => (
+    <PageFrame title="Comp" resource={{ status: 'ready' }}>{feed}</PageFrame>
+  )
+  // `.loading-dim` is the PAYLOAD's half of the cross-fade: the outgoing ghost veil beside it
+  // renders a SkeletonCard, which is a `.card` too — and one panels.css already pins to
+  // `animation: none`, so whether the cascade tags it is invisible either way.
+  const staggers = () =>
+    Array.from(document.querySelectorAll<HTMLElement>('.xfade .loading-dim .card')).map(
+      (el) => el.dataset.stagger,
+    )
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('tags the first payload’s cards when it lands inside the arrival window', () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(1000)
+    const { rerender } = render(frame(<Feed {...props} data={null} busy>{cards}</Feed>))
+    now.mockReturnValue(1000 + CASCADE_WINDOW_MS - 1)
+    rerender(frame(<Feed {...props} data={{ n: 1 }}>{cards}</Feed>))
+    expect(staggers()).toEqual(['0', '1'])
+  })
+
+  it('leaves a late payload untagged — a revisit or a refetch is not an entrance', () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(1000)
+    const { rerender } = render(frame(<Feed {...props} data={null} busy>{cards}</Feed>))
+    now.mockReturnValue(1000 + CASCADE_WINDOW_MS)
+    rerender(frame(<Feed {...props} data={{ n: 1 }}>{cards}</Feed>))
+    expect(staggers()).toEqual([undefined, undefined])
+  })
+
+  it('tags once per Feed: a second payload inside the window never re-runs the cascade', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(1000)
+    const { rerender } = render(frame(<Feed {...props} data={null} busy>{cards}</Feed>))
+    rerender(frame(<Feed {...props} data={{ n: 1 }}>{cards}</Feed>))
+    expect(staggers()).toEqual(['0', '1'])
+    rerender(frame(<Feed {...props} data={null} busy>{cards}</Feed>)) // a scope change…
+    rerender(frame(<Feed {...props} data={{ n: 2 }}>{cards}</Feed>)) // …and its fresh cards
+    expect(staggers()).toEqual([undefined, undefined])
+  })
+
+  it('skips cards inside a hidden view, and never tags outside a PageFrame', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(1000)
+    const mixed = () => (
+      <div>
+        <section className="card">shown</section>
+        <div hidden><section className="card">hidden</section></div>
+      </div>
+    )
+    const { rerender } = render(frame(<Feed {...props} data={null} busy>{mixed}</Feed>))
+    rerender(frame(<Feed {...props} data={{ n: 1 }}>{mixed}</Feed>))
+    expect((document.querySelector('.xfade .card') as HTMLElement).dataset.stagger).toBe('0')
+    expect(document.querySelector('.xfade [hidden] .card[data-stagger]')).toBeNull()
+    cleanup()
+    const bare = render(<Feed {...props} data={null} busy>{cards}</Feed>)
+    bare.rerender(<Feed {...props} data={{ n: 1 }}>{cards}</Feed>)
+    expect(document.querySelectorAll('.card[data-stagger]').length).toBe(0)
   })
 })

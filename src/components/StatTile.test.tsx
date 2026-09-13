@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { hintLabel } from './InfoHint'
@@ -173,5 +175,37 @@ describe('countUp', () => {
     // CALLER's exact string renders.
     act(() => frames[frames.length - 1](500))
     expect(valueEl.textContent).toBe('$100.00')
+  })
+})
+
+// The badge (2026-09-13 polish §10) is how Overview's and Spending's review state moves off the
+// orphan hint line and onto the tile it describes; the nowrap unit is why the (i) can no longer
+// wrap onto a line of its own.
+describe('StatTile badge and label unit', () => {
+  it('renders the badge as a pill after the label and keeps the label text queryable', () => {
+    render(<StatTile label="Living spending" value="$4,932.87" badge="Not yet reviewed" hint="Cash outflow this month." />)
+    const badge = document.querySelector('.stat-label .stat-badge')
+    expect(badge?.textContent).toBe('Not yet reviewed')
+    // Every page test that finds a tile by its label keeps working: the text is one node.
+    expect(screen.getByText('Living spending')).toBeTruthy()
+    // Text and (i) share one nowrap span, so the icon can never wrap alone.
+    const unit = document.querySelector('.stat-label-text') as HTMLElement
+    expect(unit.textContent).toBe('Living spending')
+    expect(unit.querySelector('button.info-hint')).toBeTruthy()
+    expect(unit.nextElementSibling).toBe(badge)
+  })
+
+  it('renders no badge node without the prop', () => {
+    render(<StatTile label="Net worth" value="$1.00" />)
+    expect(document.querySelector('.stat-badge')).toBeNull()
+    expect(document.querySelector('.stat-label')?.textContent).toBe('Net worth')
+  })
+
+  it('pins the CSS: the unit is nowrap and the pill wears --fill at .7rem in the caller’s casing', () => {
+    const css = readFileSync(path.join(__dirname, 'panels.css'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\s+/g, ' ')
+    expect(css).toContain('.stat-label-text { white-space: nowrap; }')
+    expect(css).toMatch(/\.stat-badge \{[^}]*background: var\(--fill\);[^}]*font-size: 0\.7rem;[^}]*text-transform: none;/)
   })
 })

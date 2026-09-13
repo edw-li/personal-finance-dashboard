@@ -176,4 +176,13 @@ describe('shared dark hexes', () => {
     expect(DARK.diverging).toHaveLength(LIGHT.diverging.length)
     expect(new Set(DARK.diverging.map((h) => h.toLowerCase())).size).toBe(DARK.diverging.length)
   })
+
+  // fill/scrim/shadow (2026-09-13 polish §6) stay OUT of the map: fill's dark hex is border's, so
+  // listing it would only re-run the border/axisLine election with a third name — the light twin
+  // of #262b36 is still LIGHT.border — and the two non-hex tokens have no key at all.
+  it('leaves the UI-surface tokens out of the election', () => {
+    expect(lightFromDark.get(DARK.border.toLowerCase())).toBe(LIGHT.border)
+    expect(lightFromDark.has(DARK.scrim.toLowerCase())).toBe(false)
+    expect(lightFromDark.has(DARK.shadow.toLowerCase())).toBe(false)
+  })
 })

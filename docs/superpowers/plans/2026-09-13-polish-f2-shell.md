@@ -2760,3 +2760,101 @@ delta? }` (Task 9, used by the PageFrame plumbing test); `StatTile badge` (Task 
     that starts open (a lazy load behind `defaultOpen` still has to load).
 11. Projection keeps its `missing` guard on the strip (`sections={missing ? undefined : …}`) — a
     book with no projection has no views to switch — while the strip now shows during loading.
+
+---
+
+## Results (implementer, 2026-09-13)
+
+**Status: DONE.** All 15 tasks executed in order, TDD per task (failing test → run → minimal
+implementation → run → commit). 15 commits on `polish/f2-shell`, none pushed. Working tree clean.
+
+### Commits
+
+| Task | SHA | Message |
+| --- | --- | --- |
+| 1 | `8b2830f` | feat(tokens): add fill, scrim and shadow palette slots in both themes |
+| 2 | `eb0c1af` | feat(tokens): paint fills, hairlines and the disabled primary from the new tokens |
+| 3 | `6edfaf6` | feat(motion): shared pop-in/panel-in/backdrop-in keyframes and the hover list for new controls |
+| 4 | `a1bc6fd` | feat(shell): KPI row grammar — container queries, five-column rows, last tile fills the row |
+| 5 | `065eaa1` | feat(shell): sticky row-action and identity cells, scroll-edge masks and useScrollEdges |
+| 6 | `809ce9b` | feat(shell): popover-surface class and usePopoverDismiss (outside pointerdown, Escape with focus return) |
+| 7 | `b290f27` | feat(shell): Disclosure primitive — chevron summary, pop-in body, controlled/uncontrolled open, onOpen once |
+| 8 | `e08f228` | feat(shell): StatTile badge pill and a nowrap label unit so the (i) never wraps alone |
+| 9 | `7db962b` | feat(shell): delta-less ghost tiles — GhostTile delta prop and PageSkeleton tiles as { count, delta } |
+| 10 | `23cebe6` | feat(motion): tagStagger export, PageFrame mountedAt, Feed cascades its first payload inside the arrival window |
+| 11 | `1ab5a13` | feat(shell): PageFrame sections slot — the view strip rides inside the sticky block above the scope row |
+| 12 | `0b76128` | feat(shell): tab strip — sliding accent indicator, trailing slot, keyboard activation replaces history |
+| 13 | `6530e80` | feat(motion): LocalSectionPanel cross-fades on activation through WAAPI, skipping arrival and reduced motion |
+| 14 | `c3d9483` | feat(shell): every tabbed page hands its view strip to PageFrame sections; .local-section-toolbar retired |
+| 15 | `cfcb22a` | chore(shell): gate fixes for lane F2 — DividendsPanel tile lookup reads from the tile, not the label's parent |
+
+### Gates (Task 15)
+
+- `npx tsc -b` — exit 0, no output.
+- `npx eslint src` — **0 errors, 25 warnings**, equal to the post-F1 baseline of 25 (the plan's
+  text says 24; the merged F1 branch left 25, all `react-refresh/only-export-components`). This
+  lane adds none: `PageFrame.tsx` and `LocalSections.tsx` already carried theirs.
+- Scoped set (Task 15 Step 3) — **23 files / 245 tests passed**.
+- `npx vitest run` — **214 files / 2930 tests passed, 0 failed** (main was 2753 at the 09-12
+  hand-off; F1 and this lane account for the rest — F2 adds ~52).
+- `npm run build` — `tsc -b` silent, `vite build ✓ built in 9.26s`, no chunk-size warning.
+  `dist/assets/index-*.js` 352.34 kB (gzip 111.91 kB), `index-*.css` 45.01 kB,
+  `tooltip-*.js` 758.10 kB (the echarts chunk, unchanged), `LocalSections-*.css` 1.36 kB.
+
+### Deviations (all recorded, none silent)
+
+1. **`react-hooks/refs` in the two `.ts` hook harnesses.** `createElement('div', { ref, … })` is
+   flagged by the React-Compiler `refs` rule ("Passing a ref to a function may read its value
+   during render"); the JSX form the rule allows is unavailable in a `.ts` file, and the plan
+   fixed those two test files as `.ts` on purpose (Task 15 Step 3 names them). Each call carries a
+   one-line `// eslint-disable-next-line react-hooks/refs` with the reason. No production code
+   is disabled, and the repo's warning count is unchanged.
+2. **`Feed.test.tsx`'s `staggers()` selector** reads `.xfade .loading-dim .card`, not
+   `.xfade .card`. During the cross-fade the outgoing ghost veil renders a `SkeletonCard`, which
+   is a third `.card` inside `.xfade`, so the plan's literal selector returns three entries in
+   every case and can never equal a two-entry array. The `.loading-dim` wrapper is the payload's
+   half of the fade. The implementation is exactly as planned (root = the `.xfade` wrapper); the
+   veil's ghost is tagged too, which is invisible because panels.css already pins
+   `.xfade-veil .loading-fallback { animation: none }`.
+3. **`LocalSectionNav`'s click path calls `change(item.id, undefined)`.** The plan's Task 12 test
+   asserts `toHaveBeenLastCalledWith('inputs', undefined)`, and vitest counts arity, so a
+   one-argument call fails it; the plan's own Step 2 predicted the pre-fix failure as "`onChange`
+   receives one argument". Semantically identical — a click carries no options and therefore
+   pushes.
+4. **`SettingsPage.test.tsx`'s ResizeObserver count 2 → 3** (updated in place, assertions intact):
+   `LocalSectionNav` now observes its tablist to re-place the sliding indicator. The comment above
+   the assertion names the third observer.
+5. **`DividendsPanel.test.tsx`'s `tileValue` helper** now reads
+   `getByText(label).closest('.stat-tile')` instead of `.parentElement` — the exact repair Task 8
+   Step 5 authorised, needed because the label text and its (i) share a `.stat-label-text` span.
+   It was the only such selector in the suite.
+6. **eslint baseline is 25, not the plan's 24** (see Gates). No new warning was introduced.
+
+### Notes for lane V
+
+- One cross-file flake observed once and not reproducible: `src/components/settings/RestoreCard.test.tsx`
+  "leaves focus on the report after a restore is applied, never on the body" failed in one full-suite
+  run and passed both in isolation and in the next full run of the same tree. Not touched by this
+  lane (no focus, portal or settings code changed).
+- `--m-stat-tile-bare: 93px` is a computed estimate (115 − ≈17px delta line − 5.6px margin); the
+  CLS smoke on Credit cards and Portfolio is the check on it.
+- `.local-section-indicator` transition should measure non-zero under no-preference and 0s under
+  `reduce` (it reads `--t-nav`, which the reduce block zeroes); `.popover-surface` likewise on
+  `--t-fast` through `pop-in`.
+- `nav.local-section-nav` now lies inside `.page-frame-scope` on all ten tabbed pages; Projection
+  hides it only when the book has no projection (`missing`).
+
+### Hand-offs
+
+The plan's hand-off list (F1 follow-up, P1–P4, lane V) stands unchanged — every contract it names
+shipped under the exact names in the "Contracts this lane publishes" table, verified after Task 15:
+`Disclosure` (default export), `usePopoverDismiss(open, onClose, triggerRef, surfaceRef)`,
+`useScrollEdges(ref)`, `tagStagger(root, startIndex)`, `CASCADE_WINDOW_MS`, `usePageFrame() →
+{ fromCache, mountedAt }`, `PageFrame sections`, `LocalSectionNav { trailing, onChange(section,
+options) }`, `GhostTile delta`, `PageSkeleton tiles: number | { count, delta }`, `StatTile badge`,
+`.popover-surface`, `.row-actions` / `.col-identity`, `.kpi-row-5` / `.kpi-row-dense`,
+`--fill` / `--scrim` / `--shadow`.
+
+One addition for **P2**: `PortfolioPage.tsx` still renders `.tiles-row`; this lane published
+`.kpi-row-dense` but did not convert the page (out of scope — Task 14 was the `sections=` wiring
+only).

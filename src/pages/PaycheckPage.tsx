@@ -1426,6 +1426,7 @@ export default function PaycheckPage() {
     <div className="page paycheck-page">
       <PageFrame
         title="Paycheck"
+        sections={<LocalSectionNav state={views} label="Paycheck views" />}
         // No All and no Joint: a paycheck belongs to ONE person (spec §6), and the chip that
         // used to live in `.paycheck-person-row` is this row now.
         scopeRow={<ScopeBar owner={{ joint: false, all: false }} />}
@@ -1434,7 +1435,6 @@ export default function PaycheckPage() {
         // every ChartCard under it reads to render still (spec §1).
         resource={{ status: 'ready', fromCache }}
       >
-        <LocalSectionNav state={views} label="Paycheck views" />
         {profileArrivalNote && <p className="hint" role="status">{profileArrivalNote}</p>}
         <FeedBanner error={loadBanner} retry={retryFailedLoads} />
         <div hidden={views.section !== 'summary'}>

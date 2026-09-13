@@ -461,7 +461,7 @@ export default function SpendingPage() {
     <div className="page">
       <PageFrame
         title="Spending"
-        subheader={<LocalSectionNav state={views} label="Spending views" />}
+        sections={<LocalSectionNav state={views} label="Spending views" />}
         actions={
           <button
             className="button button-primary"
