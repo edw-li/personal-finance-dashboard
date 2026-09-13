@@ -99,3 +99,11 @@ describe('sticky row actions (2026-09-13 polish §7)', () => {
     expect(PANELS).toContain('[data-scroll-more~="left"][data-scroll-more~="right"] { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }')
   })
 })
+
+describe('popover surface (2026-09-13 polish §11)', () => {
+  it('is the one anchored popover box, shadowed from --shadow', () => {
+    expect(PANELS).toContain(
+      '.popover-surface { position: absolute; z-index: 20; padding: 0.9rem 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 36px rgb(var(--shadow)); }',
+    )
+  })
+})

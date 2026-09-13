@@ -604,6 +604,22 @@
    specificity, so a single-class override here would lose the cascade. */
 .chart-card .chart-selection-summary { background: var(--fill); }
 
+/* ── Popover surface (2026-09-13 polish §11) ─────────────────── */
+/* The one anchored popover box (Overview's Customize, Taxes' new-year form, the wizard's month
+   actions), positioned by its caller's `position: relative` wrapper. z 20: over the dock (16),
+   under toasts (30). Shadow ink from --shadow, so light gets a cool 14% instead of a black smudge;
+   the entrance is the shared pop-in in the motion-grammar block. Dismissal is
+   usePopoverDismiss's job, not this rule's. */
+.popover-surface {
+  position: absolute;
+  z-index: 20;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgb(var(--shadow));
+}
+
 /* ── Skeleton first paint (2026-08-27 spec §3) ─────────────────────── */
 
 .skeleton {
