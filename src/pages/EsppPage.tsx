@@ -27,6 +27,7 @@ import LimitChainMeter from '../components/espp/LimitChainMeter'
 import LotAnatomyCard from '../components/espp/LotAnatomyCard'
 import PositionStrip from '../components/espp/PositionStrip'
 import Feed, { FeedBanner } from '../components/shell/Feed'
+import { useScrollEdges } from '../components/useScrollEdges'
 import PageFrame from '../components/shell/PageFrame'
 import { FEED_SKELETON } from '../components/skeletonMetrics'
 import type {
@@ -53,6 +54,10 @@ function message(err: unknown, fallback: string): string {
   // 404/409/422 details are the server's own sentences — rendered verbatim (house note).
   return err instanceof ApiError ? err.message : fallback
 }
+
+// The page's three views — PAGE_SECTIONS' ids (below), spelled once so the panels can take a
+// `goTo(section)` door (2026-09-13 polish spec §14) without reaching for the page's constant.
+type EsppSection = 'summary' | 'lots' | 'purchase'
 
 // ── Lots ────────────────────────────────────────────────────────────────────────────────
 
@@ -126,6 +131,9 @@ function LotsPanel({
   const [error, setError] = useState<string | null>(null)
   // Single-flight across the panel (SecuritiesPanel's busy flag).
   const [busy, setBusy] = useState(false)
+  // The lots scroller's edge cue (data-scroll-more, spec §7) — the shared hook; null-safe.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useScrollEdges(scrollRef)
 
   const set = (field: keyof LotFormState) => (value: string) =>
     setForm((f) => ({ ...f, [field]: value }))
@@ -315,12 +323,10 @@ function LotsPanel({
           )}`}
         </p>
       )}
+      {/* One sentence about the TABLE; the two rules about the FORM sit under the boxes they
+          govern (2026-09-13 polish spec §14; audit C6). */}
       <p className="drill-hint">
-        Leave the purchase price blank and the server derives it from the lower of
-        subscription price and purchase FMV, less the plan discount (Settings → Plan
-        assumptions). Sold date and sold price travel together:
-        set both to realize a lot, clear both to un-sell it. A sold lot is measured
-        against its sale price; every other row against the quote above.
+        A sold lot is measured against its sale price; every other row against the quote above.
       </p>
       <FeedBanner error={error} />
       <form
@@ -378,27 +384,43 @@ function LotsPanel({
             onValueChange={set('purchase_fmv')}
           />
         </label>
-        <label>
-          Purchase price
-          <AmountInput
-            kind="plain"
-            value={form.purchase_price}
-            onValueChange={set('purchase_price')}
-          />
-        </label>
-        <label>
-          Sold date
-          <input
-            className="field-input"
-            type="date"
-            value={form.sold_date}
-            onChange={(e) => set('sold_date')(e.target.value)}
-          />
-        </label>
-        <label>
-          Sold price
-          <AmountInput kind="plain" value={form.sold_price} onValueChange={set('sold_price')} />
-        </label>
+        {/* A box with its own note (PaycheckPage's .paycheck-count-field shape): the note lives
+            OUTSIDE the label, because a label's text is the box's accessible name. */}
+        <div className="espp-field">
+          <label>
+            Purchase price
+            <AmountInput
+              kind="plain"
+              value={form.purchase_price}
+              onValueChange={set('purchase_price')}
+            />
+          </label>
+          <span className="espp-field-note">
+            Leave the purchase price blank and the server derives it from the lower of
+            subscription price and purchase FMV, less the plan discount (Settings → Plan
+            assumptions).
+          </span>
+        </div>
+        {/* The two boxes that travel together share one note. */}
+        <div className="espp-sold-pair">
+          <label>
+            Sold date
+            <input
+              className="field-input"
+              type="date"
+              value={form.sold_date}
+              onChange={(e) => set('sold_date')(e.target.value)}
+            />
+          </label>
+          <label>
+            Sold price
+            <AmountInput kind="plain" value={form.sold_price} onValueChange={set('sold_price')} />
+          </label>
+          <span className="espp-field-note">
+            Sold date and sold price travel together: set both to realize a lot, clear both to
+            un-sell it.
+          </span>
+        </div>
         <label className="span-2">
           Notes
           <input
@@ -426,14 +448,17 @@ function LotsPanel({
           )}
         </div>
       </form>
-      {data.lots.length === 0 ? (
-        <p className="empty-note">No lots yet.</p>
-      ) : (
-        <div className="espp-scroll">
+      {data.lots.length === 0 && <p className="empty-note">No lots yet.</p>}
+      {/* The scroller renders before its first row: useScrollEdges reads the ref ONCE, at
+          mount, so a wrapper that only appears with the first row would never arm (lead note,
+          2026-09-13). Empty, it is a zero-height `overflow-x: auto` box. */}
+      <div className="espp-scroll" ref={scrollRef}>
+        {data.lots.length > 0 && (
           <table className="data-table">
             <thead>
               <tr>
-                <th>Purchased</th>
+                {/* Sticky left; the actions cell sticky right (panels.css, spec §7). */}
+                <th className="col-identity">Purchased</th>
                 <th className="num">Shares</th>
                 <th className="num">Subscription</th>
                 <th className="num">FMV</th>
@@ -460,7 +485,7 @@ function LotsPanel({
                       .join(' ') || undefined
                   }
                 >
-                  <td>{formatDate(lot.purchase_date)}</td>
+                  <td className="col-identity">{formatDate(lot.purchase_date)}</td>
                   <td className="num">{formatShares(lot.shares)}</td>
                   <td className="num">{formatCurrency(lot.subscription_price)}</td>
                   <td className="num">{formatCurrency(lot.purchase_fmv)}</td>
@@ -525,7 +550,7 @@ function LotsPanel({
             {data.totals !== undefined && (
               <tfoot>
                 <tr className="espp-totals">
-                  <td>Held</td>
+                  <td className="col-identity">Held</td>
                   <td className="num">{formatShares(data.totals.held.shares)}</td>
                   <td />
                   <td />
@@ -541,7 +566,7 @@ function LotsPanel({
                 </tr>
                 {data.totals.sold.lots > 0 && (
                   <tr className="espp-totals">
-                    <td>Sold</td>
+                    <td className="col-identity">Sold</td>
                     <td className="num">{formatShares(data.totals.sold.shares)}</td>
                     <td />
                     <td />
@@ -560,8 +585,8 @@ function LotsPanel({
               </tfoot>
             )}
           </table>
-        </div>
-      )}
+        )}
+      </div>
     </section>
   )
 }
@@ -585,11 +610,14 @@ function OfferingsPanel({
   offerings,
   bars,
   onChanged,
+  goTo,
 }: {
   offerings: EsppOfferingOut[]
   // Employer daily closes for the "use close" chip; empty when the ticker/bars are absent.
   bars: PricePoint[]
   onChanged: () => void
+  /** The page's view switch — the empty note's door into the Purchase model view (spec §14). */
+  goTo: (section: EsppSection) => void
 }) {
   const [form, setForm] = useState<OfferingFormState>(EMPTY_OFFERING)
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -757,7 +785,10 @@ function OfferingsPanel({
       {offerings.length === 0 ? (
         <p className="empty-note">
           No offerings yet — add your enrollment date and its closing price to drive the
-          modeler below.
+          Purchase model view.{' '}
+          <button type="button" className="button" onClick={() => goTo('purchase')}>
+            Open Purchase model
+          </button>
         </p>
       ) : (
         <div className="espp-scroll">
@@ -878,6 +909,9 @@ function ModelerCard({
   const [edits, setEdits] = useState<RowEdits>({})
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  // The period table's edge cue (spec §7) — null until a payload renders the table.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useScrollEdges(scrollRef)
 
   // An UPDATER, never `{ ...knobs, field: value }`: React batches, and a keystroke built
   // from a stale props snapshot would resurrect the siblings it spread.
@@ -1024,7 +1058,7 @@ function ModelerCard({
   return (
     <section className="card" data-entry-scope="">
       <h2 className="eyebrow">
-        Purchase modeler{data === null ? '' : ` — ${data.year}`}
+        Purchase model{data === null ? '' : ` — ${data.year}`}
         <InfoHint
           text={`What each period buys: your entered base and contribution % chained against the $25k IRS limit, priced at each period's offering subscription price and ${discountWords} on the lower of it and the FMV.`}
         />
@@ -1137,11 +1171,11 @@ function ModelerCard({
               hint="Cash the cap sent back — nothing carries when a purchase is capped."
             />
           </div>
-          <div className="espp-scroll">
+          <div className="espp-scroll" ref={scrollRef}>
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Period</th>
+                  <th className="col-identity">Period</th>
                   <th className="num">Subscription</th>
                   <th className="num">Base</th>
                   <th className="num">Additional</th>
@@ -1160,7 +1194,7 @@ function ModelerCard({
               <tbody>
                 {data.periods.map((row) => (
                   <tr key={rowKey(row)}>
-                    <td>
+                    <td className="col-identity">
                       {row.label}
                       {!row.stored && <span className="badge">derived</span>}
                       {row.over_limit && <span className="badge">Over limit</span>}
@@ -1489,7 +1523,14 @@ export default function EsppPage() {
             staleNoun="the table"
             skeleton={{ height: FEED_SKELETON.esppOfferings, label: 'Loading offerings…' }}
           >
-            {(rows) => <OfferingsPanel offerings={rows} bars={bars ?? []} onChanged={onOfferingsChanged} />}
+            {(rows) => (
+              <OfferingsPanel
+                offerings={rows}
+                bars={bars ?? []}
+                onChanged={onOfferingsChanged}
+                goTo={(section) => views.setSection(section)}
+              />
+            )}
           </Feed>
         </LocalSectionPanel>
         <LocalSectionPanel state={views} section="purchase">

@@ -57,7 +57,10 @@ export default function PositionStrip({
   const dim = (held !== undefined && lotsBusy) || (modeler !== null && modelerBusy)
   return (
     <div className={`loading-dim${dim ? ' is-loading' : ''}`}>
-      <div className="kpi-row">
+      {/* Five tiles on ONE row at 1440 (2026-09-13 polish spec §12): the modifier pins five
+          equal tracks above the 1000px container width, and .stat-value's cqi cap shrinks the
+          figures to fit; below it the row falls back to auto-fit. */}
+      <div className="kpi-row kpi-row-5">
         {held === undefined || lots === null ? (
           lotsFailed ? (
             <>
