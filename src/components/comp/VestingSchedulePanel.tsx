@@ -159,7 +159,15 @@ export function VestingTiles({ schedule }: { schedule: VestingScheduleOut }) {
  * (the vested split moves on its own between reads, so a figure re-derived here would disagree
  * with the one beside it).
  */
-export default function VestingSchedulePanel({ schedule }: { schedule: VestingScheduleOut }) {
+export default function VestingSchedulePanel({
+  schedule,
+  goTo,
+}: {
+  schedule: VestingScheduleOut
+  /** The page's view switch: the empty state's "add one in Manage" gets a real door
+   *  (2026-09-13 polish spec §14). Absent → the sentence alone. */
+  goTo?: (section: 'manage') => void
+}) {
   // The legend picks the panel mirrors back into the option (§9), and the calendar itself.
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every render
   // would replay the chart on unrelated state flips (AllocationPanel's note).
@@ -248,6 +256,11 @@ export default function VestingSchedulePanel({ schedule }: { schedule: VestingSc
             <p className="drill-hint">
               {`${ticker} · ${formatCurrency(latestPrice)} · as of ${formatDate(schedule.quoted_at)}`}
             </p>
+          )}
+          {schedule.grants.length === 0 && goTo !== undefined && (
+            <button type="button" className="button" onClick={() => goTo('manage')}>
+              Add a grant in Manage
+            </button>
           )}
           {schedule.grants.length > 0 && (
             <p className="drill-hint">
