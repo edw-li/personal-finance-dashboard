@@ -11,7 +11,7 @@ import { downloadCalendarIcs } from '../api/calendarFeed'
 import { ApiError, describeError } from '../api/client'
 import { fetchHousehold } from '../api/household'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
-import AmountInput from '../components/AmountInput'
+import AddEventForm, { EMPTY_FIELDS, type EventFields } from '../components/calendar/AddEventForm'
 import CalendarGrid, { dayInMonth } from '../components/calendar/CalendarGrid'
 import CashflowStrip, { CashflowNotes } from '../components/calendar/CashflowStrip'
 import DayDrawer from '../components/calendar/DayDrawer'
@@ -25,17 +25,14 @@ import {
   stripPersonSuffix,
   visibleEvents,
 } from '../components/calendar/calendarView'
-import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import Segmented from '../components/shell/Segmented'
 import { useScope } from '../components/shell/useScope'
 import { useToast } from '../components/ToastProvider'
 import { useArrivalPair } from '../components/useArrivalParam'
 import type {
-  CalendarDirection,
   CalendarEvent,
   CalendarOverrideBody,
-  CalendarRecurrence,
   CalendarResponse,
   CustomEventBody,
   PersonOut,
@@ -63,26 +60,6 @@ const ADD_ARRIVALS = ['1'] as const
 const ISO_MONTH = /^\d{4}-\d{2}$/
 type ViewMode = 'grid' | 'list'
 type FormState = { mode: 'add' } | { mode: 'edit'; id: number } | null
-interface Fields {
-  date: string
-  label: string
-  detail: string
-  person: string // '' = Household; a tag is always deliberate
-  amount: string
-  direction: CalendarDirection
-  recurrence: CalendarRecurrence
-  until: string
-}
-const EMPTY_FIELDS: Fields = {
-  date: '',
-  label: '',
-  detail: '',
-  person: '',
-  amount: '',
-  direction: 'neutral',
-  recurrence: 'none',
-  until: '',
-}
 const VIEW_OPTIONS = [
   { value: 'grid' as const, label: 'Grid' },
   { value: 'list' as const, label: 'List' },
@@ -116,7 +93,7 @@ export default function CalendarPage() {
   const [formTick, setFormTick] = useState(0)
   const formDateRef = useRef<HTMLInputElement | null>(null)
   const [form, setForm] = useState<FormState>(null)
-  const [fields, setFields] = useState<Fields>(EMPTY_FIELDS)
+  const [fields, setFields] = useState<EventFields>(EMPTY_FIELDS)
   // Its own fetch, outside the per-month snapshot: the roster does not change with the
   // month, and folding it in would invalidate every cached month.
   const [people, setPeople] = useState<PersonOut[]>([])
@@ -483,8 +460,8 @@ export default function CalendarPage() {
   )
 
   const field =
-    <K extends keyof Fields>(key: K) =>
-    (value: Fields[K]) =>
+    <K extends keyof EventFields>(key: K) =>
+    (value: EventFields[K]) =>
       setFields((current) => ({ ...current, [key]: value }))
   // The list shows the SHOWN month only, hidden rows included (dimmed) so Unhide is reachable.
   const monthEvents = (shown?.events ?? []).filter((e) => e.date.slice(0, 7) === month.slice(0, 7))
@@ -576,112 +553,18 @@ export default function CalendarPage() {
               {form !== null && (
                 <section className="card span-12">
                   <h2 className="eyebrow">{form.mode === 'add' ? 'Add event' : 'Edit event'}</h2>
-                  <FeedBanner error={formError} />
-                  <div className="cal-form">
-                    <label className="cal-form-field">
-                      Date
-                      <input
-                        type="date"
-                        ref={formDateRef}
-                        className="field-input cal-form-input"
-                        value={fields.date}
-                        onChange={(e) => field('date')(e.target.value)}
-                      />
-                    </label>
-                    <label className="cal-form-field">
-                      Title
-                      <input
-                        className="field-input cal-form-input"
-                        value={fields.label}
-                        maxLength={120}
-                        onChange={(e) => field('label')(e.target.value)}
-                      />
-                    </label>
-                    <label className="cal-form-field cal-form-note">
-                      Note (optional)
-                      <input
-                        className="field-input cal-form-input"
-                        value={fields.detail}
-                        maxLength={300}
-                        onChange={(e) => field('detail')(e.target.value)}
-                      />
-                    </label>
-                    {orderedPeople.length > 1 && (
-                      <label className="cal-form-field">
-                        Person
-                        <select
-                          className="field-input cal-form-input"
-                          value={fields.person}
-                          onChange={(e) => field('person')(e.target.value)}
-                        >
-                          <option value="">Household</option>
-                          {orderedPeople.map((person) => (
-                            <option key={person.id} value={String(person.id)}>
-                              {person.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-                    <label className="cal-form-field">
-                      Amount (optional)
-                      <AmountInput
-                        kind="money"
-                        className="cal-form-input"
-                        value={fields.amount}
-                        onValueChange={field('amount')}
-                        aria-label="Amount (optional)"
-                        placeholder="$0.00"
-                      />
-                    </label>
-                    <label className="cal-form-field">
-                      Direction
-                      <select
-                        className="field-input cal-form-input"
-                        value={fields.direction}
-                        onChange={(e) => field('direction')(e.target.value as CalendarDirection)}
-                      >
-                        <option value="neutral">No direction</option>
-                        <option value="in">Money in</option>
-                        <option value="out">Money out</option>
-                      </select>
-                    </label>
-                    <label className="cal-form-field">
-                      Repeats
-                      <select
-                        className="field-input cal-form-input"
-                        value={fields.recurrence}
-                        onChange={(e) => field('recurrence')(e.target.value as CalendarRecurrence)}
-                      >
-                        <option value="none">Never</option>
-                        <option value="weekly">Weekly</option>
-                        <option value="monthly">Monthly</option>
-                        <option value="yearly">Yearly</option>
-                      </select>
-                    </label>
-                    {fields.recurrence !== 'none' && (
-                      <label className="cal-form-field">
-                        Until (optional)
-                        <input
-                          type="date"
-                          className="field-input cal-form-input"
-                          value={fields.until}
-                          onChange={(e) => field('until')(e.target.value)}
-                        />
-                      </label>
-                    )}
-                    <button
-                      type="button"
-                      className="button button-primary"
-                      disabled={saving || fields.label.trim() === '' || fields.date === ''}
-                      onClick={saveForm}
-                    >
-                      {form.mode === 'add' ? 'Save event' : 'Save changes'}
-                    </button>
-                    <button type="button" className="button" onClick={() => setForm(null)}>
-                      Cancel
-                    </button>
-                  </div>
+                  <AddEventForm
+                    mode={form.mode}
+                    fields={fields}
+                    onField={field}
+                    people={orderedPeople}
+                    error={formError}
+                    saving={saving}
+                    onSave={saveForm}
+                    onCancel={() => setForm(null)}
+                    dateRef={formDateRef}
+                    hosted="card"
+                  />
                 </section>
               )}
               <section className="card span-12">
