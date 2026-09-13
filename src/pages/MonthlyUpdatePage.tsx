@@ -686,6 +686,26 @@ export default function MonthlyUpdatePage() {
   const willWriteSpending =
     hadSpending || anyAmountEntered || netPay.trim() !== '' || recordZero
 
+  // The categories the spending leg LISTS (2026-09-09 item 1): every one with a stored row (a
+  // correction to $0.00 must land), every one carrying a figure, and all of them under the $0
+  // consent. Derived ONCE, here, for save()'s body AND the Review step's difference table
+  // (bug F2, 2026-09-13): a seed nobody touched is in neither.
+  const sentCategories = useMemo(
+    () =>
+      categories.filter(
+        (c) =>
+          recordZero ||
+          storedCategories.has(c.id) ||
+          (Number(canonicalAmount(amounts[c.id] ?? '')) || 0) !== 0,
+      ),
+    [categories, recordZero, storedCategories, amounts],
+  )
+  // …and as a set, only while the leg will run at all: a skipped leg records nothing.
+  const recordedCategoryIds = useMemo(
+    () => new Set(willWriteSpending ? sentCategories.map((c) => c.id) : []),
+    [willWriteSpending, sentCategories],
+  )
+
   // Sums the COMMITTED values, not the raw ones: a cell still holding "$1,600" or "=200+50"
   // (no blur yet — jsdom clicks and Ctrl+Enter never fire one) would read as NaN → 0 and
   // preview a wrong net worth for the number that is about to be saved.
@@ -789,17 +809,7 @@ export default function MonthlyUpdatePage() {
       categories.map((c) => [c.id, canonicalAmount(amounts[c.id] ?? '')]),
     )
     const canonNetPay = netPay.trim() === '' ? '' : canonicalAmount(netPay)
-    // Spec 2026-09-09 item 1: what the body LISTS is what gets a row. Every category that
-    // already has one is listed whatever it holds (a correction to $0.00 must persist), plus
-    // every category carrying a figure. A blank box with no stored row is omitted — the
-    // wizard seeds all of them with "0.00", and sending those is what wrote nineteen phantom
-    // $0.00 records a month behind a single take-home figure. The $0 checkbox is the one
-    // consent that lists them all. Derived ONCE: the wire, the receipt's blank count and the
-    // post-save stored-row set all read this list, and computing it twice is how they drift.
-    const sentCategories = categories.filter(
-      (c) =>
-        recordZero || storedCategories.has(c.id) || (Number(canonAmounts[c.id]) || 0) !== 0,
-    )
+    // `sentCategories` is the component-level memo above — one rule for the wire and the review.
     const balancesPayload = JSON.stringify({ balances: canonBalances, recordedOn, notes })
     try {
       let spendingBody: SpendingMonthUpsert | undefined
@@ -1765,7 +1775,7 @@ export default function MonthlyUpdatePage() {
             </p>
             <ReviewChanges accounts={accounts} categories={categories} balances={balances} amounts={amounts}
               priorBalances={priorBalances} baseline={baseline?.month === month ? baseline.data : null}
-              month={month} matrix={matrix} monthExisted={monthExisted} />
+              month={month} matrix={matrix} monthExisted={monthExisted} recordedCategories={recordedCategoryIds} />
             <fieldset className="review-confirmations" disabled={saving}>
               <legend>Confirm this month is complete</legend>
               {(['balances', 'spending', 'take_home'] as const).map(feed => <label key={feed}>

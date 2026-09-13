@@ -1364,6 +1364,23 @@ it('writes balances only when nothing was entered on the spending step, and says
   expect(screen.getByText('Spending: skipped — nothing entered.')).toBeTruthy()
 })
 
+// Bug F2 (2026-09-13 audit): Food has a $300 median in the fixture matrix; its seeded "0.00"
+// is not a −$300 difference until something is actually recorded for the month.
+it('lists no spending difference for a seeded category nobody touched, then lists it once entered', async () => {
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  await screen.findByText('No differences with an available recent reference.')
+  expect(screen.queryByRole('rowheader', { name: 'Food' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: /^back$/i }))
+  await enterSpending('250.00')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  expect(await screen.findByRole('rowheader', { name: 'Food' })).toBeTruthy()
+  expect(screen.getByText('−$50.00')).toBeTruthy()
+})
+
 it('net pay alone saves the cashflow row and not one blank category', async () => {
   // The audit's item 1: a blank box is not an entry. The leg runs (a take-home IS content)
   // and it carries nothing else — no category has a stored row or a figure in it.

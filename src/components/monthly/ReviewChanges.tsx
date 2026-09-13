@@ -27,9 +27,13 @@ function ChangeTable({ title, rows, empty }: { title: string; rows: Change[]; em
   </section>
 }
 
-export default function ReviewChanges({ accounts, categories, balances, amounts, priorBalances, baseline, month, matrix, monthExisted }: {
+export default function ReviewChanges({ accounts, categories, balances, amounts, priorBalances, baseline, month, matrix, monthExisted, recordedCategories }: {
   accounts: AccountOut[]; categories: CategoryOut[]; balances: Record<number, string>; amounts: Record<number, string>
   priorBalances: Record<number, string>; baseline: string | null; month: string; matrix: SpendingMatrix | null; monthExisted: boolean
+  /** The category ids this save will write a spending row for — the page's `sentCategories`
+   *  with `willWriteSpending` folded in (empty when the leg is skipped). A category outside it
+   *  is an untouched "0.00" seed, and a seed is not a figure to check against a median (bug F2). */
+  recordedCategories: ReadonlySet<number>
 }) {
   const saved = baseline ? JSON.parse(baseline) as { balances: Record<number, string>; amounts: Record<number, string>; netPay: string } : null
   const balanceRows = accounts.filter(a => !a.is_component)
@@ -38,7 +42,7 @@ export default function ReviewChanges({ accounts, categories, balances, amounts,
   const unsavedCategories = saved ? categories.filter(c => changed(saved.amounts[c.id], amounts[c.id])).length : 0
   const unusual = largest(categories.flatMap(c => {
     const typical = matrix ? typicalSpend(matrix, month, c.id) : null
-    return typical === null || !entered(amounts[c.id]) ? [] : [{ id: c.id, label: c.name, before: typical, after: amount(amounts[c.id]) }]
+    return typical === null || !recordedCategories.has(c.id) || !entered(amounts[c.id]) ? [] : [{ id: c.id, label: c.name, before: typical, after: amount(amounts[c.id]) }]
   }))
   return <div className="review-changes">
     <p className="review-save-summary" role="status">{monthExisted
