@@ -86,7 +86,7 @@ const WATERFALL: {
 
 function BreakdownPanel({ data, still }: { data: PaycheckBreakdownOut; still: boolean }) {
   return (
-    <section className="card">
+    <section className="card span-6">
       {/* The panel names the profile it belongs to. That is what makes keeping a stale
           payload on a failed reload honest: the heading moves with the numbers, so one
           profile's waterfall can never be read as another's. */}
@@ -170,9 +170,11 @@ function FlowPanel({ data }: { data: PaycheckBreakdownOut }) {
       exportName="paycheck-flow"
       csv={() => paycheckSankeyCsv(data)}
       height={320}
+      // Half the summary grid, beside the waterfall it draws (2026-09-13 polish spec §12).
+      span={6}
       // The legend describes the CHART, so it goes when the chart does: under the empty
       // sentence it was explaining node colours and a hover affordance for a sankey that
-      // is not on the page (the table below is the surface to read instead).
+      // is not on the page (the table beside it is the surface to read instead).
       footer={
         option === null ? undefined : (
           <p className="drill-hint">
@@ -1444,17 +1446,22 @@ export default function PaycheckPage() {
                 <StatTile
                   label="Household take-home"
                   value={formatCurrency(householdTotal)}
+                  // The legs under the total (2026-09-13 polish spec §10; audit T1): the caption
+                  // "Edward + Grace — the profile in force for each person." that floated under
+                  // this tile on the page background is gone, and the per-person figures it
+                  // alluded to are printed in the tile's own delta slot, the way ESPP prints
+                  // "6 lots". Neutral: a level, not a movement.
+                  delta={householdNets
+                    .map((leg) => `${leg.name} ${formatCurrency(leg.monthlyNet)}`)
+                    .join(' · ')}
+                  tone="neutral"
                   evidence={metricReceipt({ id: 'household_take_home', label: 'Household take-home', value: householdTotal,
                     definition: 'Sum of monthly net estimates for the paycheck profile currently in force for each person. A person without an in-force profile is omitted.',
                     completeness: 'estimate', source_link: '/paycheck?section=summary',
                     components: householdNets.map(leg => ({ label: leg.name, value: leg.monthlyNet, unit: 'USD' })) })}
-                  hint="The monthly net of the profile IN FORCE for each person, added together. It ignores the chip and any pinned row — it is always the whole household — and a person with no profile in force is not counted. Each person has their own profile timeline. The waterfall, the flow and the history below all follow the chip; the household figure does not — it is always both of you."
+                  hint="The monthly net of the profile IN FORCE for each person, added together. It ignores the chip and any pinned row — it is always the whole household — and a person with no profile in force is not counted. Each person has their own profile timeline. The waterfall, the flow beside it and the history in Profiles all follow the chip; the household figure does not — it is always both of you."
                 />
               </div>
-              <p className="drill-hint">
-                {householdNets.map((leg) => leg.name).join(' + ')} — the profile in force for
-                each person.
-              </p>
             </section>
           )}
         </div>
@@ -1488,15 +1495,21 @@ export default function PaycheckPage() {
           {(data) => (
             <>
               <LocalSectionPanel state={views} section="summary">
-                <BreakdownPanel data={data} still={fromCache} />
+                {/* Breakdown beside its flow (2026-09-13 polish spec §12): the eleven lines and
+                    the sankey that draws them are one story, read side by side; the pace strip
+                    keeps the full width beneath. .card-grid collapses to one column under 1000px. */}
+                <div className="card-grid paycheck-summary-grid">
+                  <BreakdownPanel data={data} still={fromCache} />
+                  <FlowPanel data={data} />
+                </div>
                 <PacePanel items={data.pace} />
-                <FlowPanel data={data} />
               </LocalSectionPanel>
               <LocalSectionPanel state={views} section="changes">
                 <TryItPanel
                   profileId={selection.profileId}
                   personId={selection.personId}
                   breakdown={data}
+                  defaultOpen
                   onApply={(seed) => {
                     views.setSection('profiles')
                     setApplySeed((current) => ({

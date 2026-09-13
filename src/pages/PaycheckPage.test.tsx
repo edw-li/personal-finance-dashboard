@@ -10,6 +10,7 @@ import type {
 } from '../types/api'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import PaycheckPage from './PaycheckPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 import { readAssistantView } from '../components/assistant/viewState'
 
 // Every request is stubbed.
@@ -1298,6 +1299,44 @@ describe('PaycheckPage — the flow card', () => {
     // Mounted through ChartCard: PNG/Copy/CSV/Table (F12).
     expect(screen.getByRole('group', { name: 'Export paycheck-flow' })).toBeTruthy()
   })
+
+  it('lays the breakdown beside the flow in a card grid, with the pace strip full width beneath', async () => {
+    // The golden fixture carries no pace rows, so PacePanel draws nothing: the strip this test
+    // is about only exists with a limit to walk.
+    vi.mocked(fetchBreakdown).mockResolvedValue(
+      breakdownOf(profile2026, {
+        pace: [
+          {
+            key: 'limit_401k_elective',
+            label: '401(k) elective deferral',
+            annualized: '24560.90',
+            so_far: '16373.93',
+            limit: '24500.00',
+            ratio: '1.0025',
+            tone: 'over',
+          },
+        ],
+      }),
+    )
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByText('$3,384.16')
+
+    // 2026-09-13 polish spec §12 (audit W1: the waterfall used 41% of a full-width card).
+    const grid = document.querySelector('.paycheck-summary-grid') as HTMLElement
+    expect(grid.classList.contains('card-grid')).toBe(true)
+    const children = Array.from(grid.children)
+    expect(children).toHaveLength(2)
+    expect(children[0].classList.contains('card')).toBe(true)
+    expect(children[0].classList.contains('span-6')).toBe(true)
+    expect(children[0].textContent).toContain('Per-check breakdown')
+    // ChartCard mounts through ChartSurface: the grid child is its span-6 slot, the card inside.
+    expect(children[1].classList.contains('span-6')).toBe(true)
+    expect(children[1].querySelector('.chart-card')?.textContent).toContain('Where each check goes')
+    // The pace strip is NOT in the grid: it keeps the full width under the pair.
+    const pace = screen.getByRole('region', { name: 'Contribution pace' })
+    expect(grid.contains(pace)).toBe(false)
+    expectInDocumentOrder(grid, pace)
+  })
 })
 
 describe('PaycheckPage — snapshot cache (2026-08-27 spec §1)', () => {
@@ -1586,8 +1625,11 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     // 6768.33 + 5231.34. Each leg is the AUTHORITATIVE monthly figure of one person's
     // in-force profile — never a sum of the display-rounded waterfall lines (rule 9).
     expect(screen.getByText('$11,999.67')).toBeTruthy()
-    // The copy says exactly what was added, so the tile can never be read as a forecast.
-    expect(screen.getByText('Me + Sam — the profile in force for each person.')).toBeTruthy()
+    // The copy says exactly what was added, so the tile can never be read as a forecast — in
+    // the tile's own delta slot now, never a caption on the page background (spec §10).
+    expect(document.querySelector('.paycheck-household .stat-delta')?.textContent).toBe(
+      'Me $6,768.33 · Sam $5,231.34',
+    )
     // Both legs ask for the IN-FORCE profile, so neither carries a profile_id.
     expect(vi.mocked(fetchBreakdown).mock.calls).toContainEqual([undefined, SAM.id])
     expect(
@@ -1662,6 +1704,18 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     expect(screen.getByText('Jan 1, 2026')).toBeTruthy()
     expect(screen.getByText('Jan 1, 2025')).toBeTruthy()
     expect(field('Annual salary').value).toBe('$188,930.00')
+  })
+
+  it('prints each person’s take-home in the household tile’s delta, with no orphan caption', async () => {
+    twoEarners()
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
+    // The legs are the profiles in force: mine at $6,768.33 a month, Sam's at $5,231.34.
+    const tile = (await screen.findByText('Household take-home')).closest('.stat-tile') as HTMLElement
+    expect(tile.textContent).toContain('$11,999.67')
+    expect(tile.querySelector('.stat-delta')?.textContent).toBe('Me $6,768.33 · Sam $5,231.34')
+    // The caption that floated under the tile on the page background is gone (spec §10, audit T1).
+    expect(screen.queryByText(/the profile in force for each person/)).toBeNull()
+    expect(document.querySelector('.paycheck-household .drill-hint')).toBeNull()
   })
 })
 
