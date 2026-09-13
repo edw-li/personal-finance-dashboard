@@ -140,16 +140,22 @@ it('meters an over month: clamped fill, overflow tick, toned figures, summary co
   expect(screen.getByText('1 of 1 budgeted categories over in Feb 2026')).toBeDefined()
 })
 
-it('lists unbudgeted ACTIVE categories collapsed, without meters or inactive ones', () => {
+it('lists unbudgeted ACTIVE categories under "No budget yet", collapsed while budgets exist, without meters or inactive ones', () => {
   renderPanel(0)
-  const collapsed = screen.getByText('No budget — set one (1)').closest('details') as HTMLElement
-  expect(within(collapsed).getByText('Rent')).toBeDefined()
-  expect(within(collapsed).queryByText('Old')).toBeNull()
+  const section = screen.getByText('No budget yet (1)').closest('details') as HTMLElement
+  expect(section).not.toBeNull()
+  expect(section.hasAttribute('open')).toBe(false)
+  expect(within(section).getByText('Rent')).toBeDefined()
+  expect(within(section).getByRole('button', { name: 'Set Rent budget' })).toBeDefined()
+  expect(within(section).queryByText('Old')).toBeNull()
   expect(screen.queryByRole('meter', { name: 'Rent spend vs budget' })).toBeNull()
+  // A1: no accordion inside the accordion — the editor opens from the row's button.
+  expect(document.querySelectorAll('details.budget-editor')).toHaveLength(0)
 })
 
 it('saves through the PUT (editor defaults to the FOCUSED month) and renders the returned history', async () => {
   renderPanel(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Food budget' }))
   // A5: the default is the month the meters read — matrix.months[monthIndex] — so a first
   // budget saved with the default visibly lands on the meters. (Fixture-dated, so this
   // test no longer depends on the day the suite runs.)
@@ -178,6 +184,7 @@ it('saves through the PUT (editor defaults to the FOCUSED month) and renders the
 
 it('follows the focused month when the page drills elsewhere', () => {
   renderPanel(1)
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Food budget' }))
   const monthBox = screen.getByLabelText('Food budget effective from') as HTMLInputElement
   expect(monthBox.value).toBe('2026-02')
   expect(screen.getAllByText(/Defaults to Feb 2026/).length).toBeGreaterThan(0)
@@ -185,6 +192,7 @@ it('follows the focused month when the page drills elsewhere', () => {
 
 it('a blank amount saves the null end-marker', async () => {
   renderPanel(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Food budget' }))
   fireEvent.change(screen.getByLabelText('Food budget amount'), { target: { value: '' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save Food budget' }))
   await waitFor(() =>
@@ -197,6 +205,7 @@ it('a blank amount saves the null end-marker', async () => {
 
 it('deletes a history row through the DELETE and drops it from the list', async () => {
   renderPanel(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Food budget' }))
   fireEvent.change(screen.getByLabelText('Food budget amount'), { target: { value: '425.00' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save Food budget' }))
   await screen.findByText('Mar 2026 — $425.00')
@@ -209,6 +218,7 @@ it('deletes a history row through the DELETE and drops it from the list', async 
 
 it('rejects a negative amount client-side without calling the API', () => {
   renderPanel(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Food budget' }))
   fireEvent.change(screen.getByLabelText('Food budget amount'), { target: { value: '-5' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save Food budget' }))
   expect(putCategoryBudget).not.toHaveBeenCalled()
@@ -272,18 +282,27 @@ it('degrades when the suggestions cannot load: seed disabled with the reason, ed
   expect(
     (screen.getByRole('button', { name: 'Start from my averages' }) as HTMLButtonElement).disabled,
   ).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Set Food budget' }))
   expect(screen.getByLabelText('Food budget amount')).toBeDefined()
   expect(screen.queryByRole('button', { name: /^Use Food/ })).toBeNull()
 })
 
-it('the editor shows suggestion chips and a chip fills the amount box; the cue names the shape', async () => {
+it('the editor shows suggestion chips, a chip fills the amount box, and opening another row closes the first', async () => {
   renderPanel(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Food budget' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Use Food median $390.00' }))
   expect((screen.getByLabelText('Food budget amount') as HTMLInputElement).value).toBe('$390.00')
   fireEvent.click(screen.getByRole('button', { name: 'Use Food suggested $413.00' }))
   expect((screen.getByLabelText('Food budget amount') as HTMLInputElement).value).toBe('$413.00')
+  // One editor at a time (spec §16): Rent's opens, Food's closes.
+  fireEvent.click(screen.getByRole('button', { name: 'Set Rent budget' }))
+  expect(screen.queryByLabelText('Food budget amount')).toBeNull()
   expect(screen.getByRole('button', { name: 'Use Rent last month $2,000.00' })).toBeDefined()
   expect(screen.getByText(/^Steady — within 10% every month/)).toBeDefined()
+  // Reopening Food brings back what was typed — the draft lives in `editors`, not in the DOM.
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Food budget' }))
+  expect((screen.getByLabelText('Food budget amount') as HTMLInputElement).value).toBe('$413.00')
+  expect(screen.queryByLabelText('Rent budget amount')).toBeNull()
 })
 
 it('re-seeding asks first, counting the budgets it rewrites, and only POSTs on Confirm', async () => {
@@ -321,6 +340,7 @@ it('hides Re-seed when every seed already stands', async () => {
     total_budget: ['2413.00', '2413.00'],
   }
   render(<BudgetPanel matrix={settled} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Food budget' }))
   await screen.findByRole('button', { name: 'Use Food median $390.00' }) // suggestions arrived
   expect(screen.queryByRole('button', { name: 'Re-seed from averages' })).toBeNull()
 })
@@ -337,4 +357,17 @@ it('says Nothing to seed when every category is dormant', async () => {
   expect(
     (screen.getByRole('button', { name: 'Start from my averages' }) as HTMLButtonElement).disabled,
   ).toBe(true)
+})
+
+// A1/W6 (2026-09-13 audit): with no budgets the whole job of the card is to get one set, so the
+// list is open and plain, and the seed sentence sits beside its button.
+it('shows the unbudgeted list as an open plain section when the book has no budgets, with the seed sentence and button on one row', async () => {
+  render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
+  expect(screen.getByRole('heading', { name: 'No budget yet (2)' })).toBeDefined()
+  expect(document.querySelector('.budget-unbudgeted')?.tagName).toBe('SECTION')
+  expect(screen.getByRole('button', { name: 'Set Food budget' })).toBeDefined()
+  expect(screen.getByRole('button', { name: 'Set Rent budget' })).toBeDefined()
+  const row = screen.getByText('No budgets yet.').closest('.budget-seed-row') as HTMLElement
+  expect(within(row).getByRole('button', { name: 'Start from my averages' })).toBeDefined()
+  await screen.findByText(/Writes a budget for 2 living categories/)
 })

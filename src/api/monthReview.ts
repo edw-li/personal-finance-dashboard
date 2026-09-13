@@ -46,9 +46,12 @@ export interface SpendingEvidence {
   comparison: MetricEvidence
   rolling: MetricEvidence
 }
+// Plain words for a person reading a chip (2026-09-13 polish spec §14): "history" and "closed"
+// were the system's terms, not the reader's. The inspector still explains what
+// unreviewed_history means ("entered before month review existed").
 export const REVIEW_LABELS: Record<ReviewState, string> = {
   not_started: 'Not started', in_progress: 'In progress', ready_to_review: 'Ready to review',
-  closed: 'Closed', needs_review: 'Needs review', unreviewed_history: 'Unreviewed history',
+  closed: 'Reviewed', needs_review: 'Changed since review', unreviewed_history: 'Not yet reviewed',
 }
 export const fetchMonthReviews = () => api<MonthReviewList>('/month-review')
 export const fetchMonthReview = (month: string) => api<MonthReview>(`/month-review/months/${month}`)

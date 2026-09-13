@@ -21,6 +21,7 @@ import InfoHint from '../InfoHint'
 import { windowWords } from '../overview/ytd'
 import { FeedBanner } from '../shell/Feed'
 import { useToast } from '../ToastProvider'
+import Disclosure from '../Disclosure'
 import BudgetSuggestions from './BudgetSuggestions'
 import { MIN_SEED_MONTHS, seedCounts, skipSummary } from './budgetSeed'
 import '../panels.css'
@@ -58,6 +59,10 @@ export default function BudgetPanel({
 }) {
   const toast = useToast()
   const [editors, setEditors] = useState<Record<number, EditorState>>({})
+  // The one open inline editor (2026-09-13 polish spec §11/§16): a row's Set/Edit button opens
+  // its editor and closes any other. What was typed in a closed editor stays in `editors`
+  // (keyed by category), so switching rows never loses work.
+  const [openEditor, setOpenEditor] = useState<number | null>(null)
   // Histories arrive ONLY as PUT responses (spec §3 — no history GET exists), so the
   // expandable list appears per category once this session has saved it.
   const [histories, setHistories] = useState<Record<number, CategoryBudgetEntry[]>>({})
@@ -196,6 +201,9 @@ export default function BudgetPanel({
           delete next[category.id]
           return next
         })
+        // The editor STAYS open: the PUT's response is the effective-dated history rendered
+        // inside it, and that list is the save's only receipt (its own tests pin it). One
+        // editor at a time is still the rule — it is the row's button that closes this one.
         onBudgetsChanged()
       })
       .catch((err: unknown) => setError(failMessage(err, 'Failed to save the budget')))
@@ -229,8 +237,7 @@ export default function BudgetPanel({
     const history = histories[category.id]
     const suggestion = suggestionById.get(category.id)
     return (
-      <details className="budget-editor">
-        <summary>Set budget</summary>
+      <div className="budget-editor">
         <div className="budget-editor-form">
           <label>
             Monthly budget
@@ -298,9 +305,22 @@ export default function BudgetPanel({
             ))}
           </ul>
         )}
-      </details>
+      </div>
     )
   }
+
+  // The row's one control: "Edit budget" where a budget stands, "Set budget" where none does.
+  const editorToggle = (category: CategoryOut, verb: 'Set' | 'Edit') => (
+    <button
+      type="button"
+      className="button budget-editor-toggle"
+      aria-label={`${verb} ${category.name} budget`}
+      aria-expanded={openEditor === category.id}
+      onClick={() => setOpenEditor((current) => (current === category.id ? null : category.id))}
+    >
+      {verb} budget
+    </button>
+  )
 
   const newCount = counts === null ? 0 : counts.writes - counts.rewrites
 
@@ -362,65 +382,84 @@ export default function BudgetPanel({
           )}
           <div className="budget-rows">
             {budgeted.map(({ category, budget, progress }) => (
-              <div className="budget-row" key={category.id}>
-                <span className="budget-name">{category.name}</span>
-                <div
-                  className="budget-meter"
-                  role="meter"
-                  aria-label={`${category.name} spend vs budget`}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(progress.fillPct)}
-                  aria-valuetext={`${formatCurrency(progress.spent)} of ${formatCurrency(progress.budget)}`}
-                >
+              <div className="budget-entry" key={category.id}>
+                <div className="budget-row">
+                  <span className="budget-name">{category.name}</span>
                   <div
-                    className={`budget-fill${progress.over ? ' is-over' : ''}`}
-                    style={{ width: `${progress.fillPct.toFixed(2)}%` }}
-                  />
-                  {/* Over-ness rides a POSITION channel (the tick past the track's end),
-                      not colour alone — the summary line carries it in words too. */}
-                  {progress.over && <span className="budget-overflow-tick" aria-hidden="true" />}
+                    className="budget-meter"
+                    role="meter"
+                    aria-label={`${category.name} spend vs budget`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(progress.fillPct)}
+                    aria-valuetext={`${formatCurrency(progress.spent)} of ${formatCurrency(progress.budget)}`}
+                  >
+                    <div
+                      className={`budget-fill${progress.over ? ' is-over' : ''}`}
+                      style={{ width: `${progress.fillPct.toFixed(2)}%` }}
+                    />
+                    {/* Over-ness rides a POSITION channel (the tick past the track's end),
+                        not colour alone — the summary line carries it in words too. */}
+                    {progress.over && <span className="budget-overflow-tick" aria-hidden="true" />}
+                  </div>
+                  <span className={`budget-figures${progress.over ? ' delta-negative' : ''}`}>
+                    {`${formatCurrency(progress.spent)} / ${formatCurrency(progress.budget)}`}
+                  </span>
+                  {editorToggle(category, 'Edit')}
                 </div>
-                <span className={`budget-figures${progress.over ? ' delta-negative' : ''}`}>
-                  {`${formatCurrency(progress.spent)} / ${formatCurrency(progress.budget)}`}
-                </span>
-                {editorBlock(category, budget)}
+                {openEditor === category.id && editorBlock(category, budget)}
               </div>
             ))}
           </div>
         </>
       ) : (
         <div className="budget-seed">
-          <p className="empty-note">No budgets yet.</p>
-          <button
-            type="button"
-            className="button button-primary"
-            // Disabled says THAT it cannot run; only the hint says why, so the button has to
-            // name it — a disabled control is otherwise mute to a screen reader.
-            aria-describedby="budget-seed-hint"
-            disabled={busy || !canSeed}
-            onClick={seed}
-          >
-            Start from my averages
-          </button>
+          {/* W6: a lead sentence beside its button — not a centred placeholder 24px from both. */}
+          <div className="budget-seed-row">
+            <p className="empty-note">No budgets yet.</p>
+            <button
+              type="button"
+              className="button button-primary"
+              // Disabled says THAT it cannot run; only the hint says why, so the button has to
+              // name it — a disabled control is otherwise mute to a screen reader.
+              aria-describedby="budget-seed-hint"
+              disabled={busy || !canSeed}
+              onClick={seed}
+            >
+              Start from my averages
+            </button>
+          </div>
           <p className="drill-hint budget-seed-hint" id="budget-seed-hint">
             {seedHint()}
           </p>
         </div>
       )}
-      {unbudgeted.length > 0 && (
-        <details className="budget-unbudgeted">
-          <summary>{`No budget — set one (${unbudgeted.length})`}</summary>
+      {unbudgeted.length > 0 && (() => {
+        const title = `No budget yet (${unbudgeted.length})`
+        const rows = (
           <div className="budget-rows">
             {unbudgeted.map(({ category, budget }) => (
-              <div className="budget-row" key={category.id}>
-                <span className="budget-name">{category.name}</span>
-                {editorBlock(category, budget)}
+              <div className="budget-entry" key={category.id}>
+                <div className="budget-row budget-row-unbudgeted">
+                  <span className="budget-name">{category.name}</span>
+                  {editorToggle(category, 'Set')}
+                </div>
+                {openEditor === category.id && editorBlock(category, budget)}
               </div>
             ))}
           </div>
-        </details>
-      )}
+        )
+        // A disclosure only while budgets exist above it (spec §11); with none, getting one set IS
+        // the card's job, so the list is open and plain.
+        return budgeted.length > 0 ? (
+          <Disclosure className="budget-unbudgeted" summary={title}>{rows}</Disclosure>
+        ) : (
+          <section className="budget-unbudgeted">
+            <h3 className="eyebrow">{title}</h3>
+            {rows}
+          </section>
+        )
+      })()}
     </section>
   )
 }

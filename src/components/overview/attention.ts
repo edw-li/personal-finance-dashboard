@@ -9,6 +9,7 @@ import type {
   TaxYearOut,
 } from '../../types/api'
 import { insideBalancesWindow } from './freshness'
+import type { MonthReview } from '../../api/monthReview'
 import { formatDate, formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
 import { backupAge, isStaleQuote } from '../../utils/staleness'
@@ -34,7 +35,7 @@ export interface AttentionInputs {
 // The ritual runs in the month's first days (recorded_on evidence), so the nudge waits a
 // week before calling the current month late; a missing PREVIOUS month is overdue on any
 // day of the calendar.
-const UPDATE_NUDGE_DAY = 7
+export const UPDATE_NUDGE_DAY = 7
 const ESPP_WINDOW_DAYS = 30
 
 function plural(count: number, one: string, many: string): string {
@@ -223,4 +224,42 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
   }
 
   return items
+}
+
+/**
+ * The month-review rows of the Needs attention card (2026-09-13 polish spec §14). Past months
+ * only — the current month is in progress by definition (design §3.2) and used to sit in the
+ * card every day of every month as a state, not a task. Each row is phrased as the action it
+ * asks for and links to that month's Review step; newest first, at most two, so a backlog
+ * never turns the card into a list. The current month joins only once UPDATE_NUDGE_DAY has
+ * passed — the same patience the balances nudge above shows.
+ */
+export function reviewAttentionItems(
+  reviews: Pick<MonthReview, 'month' | 'state'>[] | undefined,
+  todayIso: string,
+): AttentionItem[] {
+  const currentMonth = `${todayIso.slice(0, 7)}-01`
+  const dayOfMonth = Number(todayIso.slice(8, 10))
+  return (reviews ?? [])
+    .filter(
+      (review) =>
+        review.month < currentMonth ||
+        (review.month === currentMonth && dayOfMonth >= UPDATE_NUDGE_DAY),
+    )
+    .flatMap((review) => {
+      const name = formatMonth(review.month)
+      const text =
+        review.state === 'in_progress'
+          ? `Finish ${name}'s update`
+          : review.state === 'needs_review'
+            ? `${name} changed since review — reopen`
+            : review.state === 'ready_to_review'
+              ? `${name} is ready to close`
+              : null
+      return text === null
+        ? []
+        : [{ key: `review-${review.month}`, text, to: `/update?month=${review.month}&step=review` }]
+    })
+    .sort((a, b) => b.key.localeCompare(a.key))
+    .slice(0, 2)
 }

@@ -10,6 +10,11 @@ export type FreshnessKey = 'balances' | 'spending' | 'net_pay'
 
 export interface FreshnessClause {
   key: FreshnessKey
+  /** The row's <dt>: "Balances through" while the feed has months, the bare feed name once it never started. */
+  label: string
+  /** The row's <dd>: the month (plus the spending gaps), or "no months". */
+  detail: string
+  /** `${label} ${detail}` as one sentence — what the old footer printed. */
   text: string
   /** Amber: this feed is at least one whole month behind the balances. */
   lagging: boolean
@@ -93,26 +98,15 @@ export function freshnessClauses(coverage: CoverageOut): FreshnessClause[] {
   const spending = latestOf(coverage, 'spending')
   const netPay = latestOf(coverage, 'net_pay')
   const gaps = spendingGaps(coverage)
+  const clause = (key: FreshnessKey, name: string, latest: string | null, tail: string, lagging: boolean): FreshnessClause => {
+    if (latest === null) return { key, label: name, detail: 'no months', text: `${name} — no months`, lagging: false }
+    const detail = `${formatMonth(latest)}${tail}`
+    return { key, label: `${name} through`, detail, text: `${name} through ${detail}`, lagging }
+  }
   return [
-    {
-      key: 'balances',
-      text:
-        balances === null ? 'Balances — no months' : `Balances through ${formatMonth(balances)}`,
-      // The anchor cannot lag itself.
-      lagging: false,
-    },
-    {
-      key: 'spending',
-      text:
-        spending === null
-          ? 'Spending — no months'
-          : `Spending through ${formatMonth(spending)}${gaps === '' ? '' : ` (${gaps})`}`,
-      lagging: lags(spending),
-    },
-    {
-      key: 'net_pay',
-      text: netPay === null ? 'Net pay — no months' : `Net pay through ${formatMonth(netPay)}`,
-      lagging: lags(netPay),
-    },
+    // The anchor cannot lag itself.
+    clause('balances', 'Balances', balances, '', false),
+    clause('spending', 'Spending', spending, gaps === '' ? '' : ` (${gaps})`, lags(spending)),
+    clause('net_pay', 'Net pay', netPay, '', lags(netPay)),
   ]
 }

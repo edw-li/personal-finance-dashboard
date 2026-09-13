@@ -63,17 +63,14 @@
   color: var(--negative);
 }
 
-.budget-editor summary,
-.budget-unbudgeted summary {
-  cursor: pointer;
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-
-.budget-unbudgeted summary {
-  font-size: 0.8rem;
-  margin-top: 0.75rem;
-}
+/* Rows and their inline editor (2026-09-13 polish §11): one editor open at a time, opened by the
+   row's own Set/Edit button — no accordion inside an accordion. */
+.budget-entry { display: flex; flex-direction: column; gap: 0.35rem; }
+.budget-row-unbudgeted { grid-template-columns: minmax(110px, 160px) auto; justify-content: start; }
+.button.budget-editor-toggle { font-size: 0.72rem; padding: 0.2rem 0.55rem; }
+.budget-editor { margin: 0.1rem 0 0.4rem; padding: 0.6rem 0.75rem; border: 1px solid var(--border); border-radius: 8px; }
+.budget-unbudgeted { margin-top: 0.75rem; }
+.budget-unbudgeted .eyebrow { margin-bottom: 0.5rem; }
 
 .budget-editor-form {
   display: flex;
@@ -129,16 +126,10 @@
 /* 2026-09-07 seed (budget-seed spec §3): the empty state's one action, the re-seed row and
    the editor's suggestion chips. Text tokens and the .button family only — nothing here is
    a chart, and no colour carries a meaning the words do not. */
-.budget-seed {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.5rem;
-}
-
-.budget-seed .empty-note {
-  margin: 0;
-}
+.budget-seed { display: flex; flex-direction: column; gap: 0.5rem; }
+.budget-seed-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+/* W6: a lead sentence, not a placeholder — no vertical padding, no centring. */
+.budget-seed .empty-note { margin: 0; padding: 0; text-align: left; }
 
 .budget-seed-hint,
 .budget-seed-status {

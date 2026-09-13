@@ -15,7 +15,7 @@ const largest = (rows: Change[]) => rows.filter(row => Math.round((row.after - r
 
 function ChangeTable({ title, rows, empty }: { title: string; rows: Change[]; empty: string }) {
   return <section className="review-change-group">
-    <h3 className="eyebrow">{title}</h3>
+    <h4 className="eyebrow">{title}</h4>
     {rows.length === 0 ? <p className="drill-hint">{empty}</p> : <table className="data-table">
       <thead><tr><th>Item</th><th>Reference</th><th>Entered</th><th>Change</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.id}>
@@ -27,9 +27,13 @@ function ChangeTable({ title, rows, empty }: { title: string; rows: Change[]; em
   </section>
 }
 
-export default function ReviewChanges({ accounts, categories, balances, amounts, priorBalances, baseline, month, matrix, monthExisted }: {
+export default function ReviewChanges({ accounts, categories, balances, amounts, priorBalances, baseline, month, matrix, monthExisted, recordedCategories }: {
   accounts: AccountOut[]; categories: CategoryOut[]; balances: Record<number, string>; amounts: Record<number, string>
   priorBalances: Record<number, string>; baseline: string | null; month: string; matrix: SpendingMatrix | null; monthExisted: boolean
+  /** The category ids this save will write a spending row for — the page's `sentCategories`
+   *  with `willWriteSpending` folded in (empty when the leg is skipped). A category outside it
+   *  is an untouched "0.00" seed, and a seed is not a figure to check against a median (bug F2). */
+  recordedCategories: ReadonlySet<number>
 }) {
   const saved = baseline ? JSON.parse(baseline) as { balances: Record<number, string>; amounts: Record<number, string>; netPay: string } : null
   const balanceRows = accounts.filter(a => !a.is_component)
@@ -38,16 +42,23 @@ export default function ReviewChanges({ accounts, categories, balances, amounts,
   const unsavedCategories = saved ? categories.filter(c => changed(saved.amounts[c.id], amounts[c.id])).length : 0
   const unusual = largest(categories.flatMap(c => {
     const typical = matrix ? typicalSpend(matrix, month, c.id) : null
-    return typical === null || !entered(amounts[c.id]) ? [] : [{ id: c.id, label: c.name, before: typical, after: amount(amounts[c.id]) }]
+    return typical === null || !recordedCategories.has(c.id) || !entered(amounts[c.id]) ? [] : [{ id: c.id, label: c.name, before: typical, after: amount(amounts[c.id]) }]
   }))
+  const balancesWord = unsavedBalances === 1 ? 'balance' : 'balances'
+  const categoriesWord = unsavedCategories === 1 ? 'category' : 'categories'
   return <div className="review-changes">
-    <p className="review-save-summary" role="status">{monthExisted
-      ? `${unsavedBalances} account balances and ${unsavedCategories} categories changed since the last save.`
-      : 'New balance snapshot. Review carried-forward balances before confirming.'}</p>
+    {/* T4 (2026-09-13 audit): the count is the eyebrow of the tables it summarises, the method
+        note their footer — connective tissue attached to its subject instead of floating. */}
+    <div className="review-changes-head">
+      <h3 className="eyebrow">Changes since last save</h3>
+      <span className="review-changes-count" role="status">{monthExisted
+        ? `${unsavedBalances} ${balancesWord} · ${unsavedCategories} ${categoriesWord}`
+        : 'New balance snapshot — review the carried-forward balances before confirming.'}</span>
+    </div>
     <div className="review-change-grid">
       <ChangeTable title="Largest balance changes · prior month" rows={prior} empty="No changed balances with a prior-month reference." />
       <ChangeTable title="Largest spending differences · recent median" rows={unusual} empty="No differences with an available recent reference." />
     </div>
-    <p className="drill-hint">Spending references use up to three prior entered months. Differences are prompts to check your entries.</p>
+    <p className="drill-hint review-changes-footer">Spending references use up to three prior entered months. Differences are prompts to check your entries.</p>
   </div>
 }

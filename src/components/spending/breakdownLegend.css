@@ -1,0 +1,7 @@
+/* The dock donut's legend (2026-09-13 polish §12): name · amount · share, swatches on the CSS
+   slot tokens so they follow the theme like the trend chips do. No motion of its own. */
+.breakdown-legend { list-style: none; margin: 0; padding: 0; display: grid; gap: .3rem; align-content: start; font-size: .82rem; }
+.breakdown-legend li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; align-items: center; gap: .5rem; }
+.breakdown-swatch { width: 10px; height: 10px; border-radius: 2px; }
+.breakdown-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.breakdown-amount, .breakdown-share { color: var(--muted); font-variant-numeric: tabular-nums; }

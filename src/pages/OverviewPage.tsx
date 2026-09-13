@@ -14,8 +14,10 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import { chipAmount, eventKey } from '../components/calendar/calendarView'
-import { attentionItems } from '../components/overview/attention'
-import { freshnessClauses } from '../components/overview/freshness'
+import { attentionItems, reviewAttentionItems } from '../components/overview/attention'
+import DataStatusCard from '../components/overview/DataStatusCard'
+import { netWorthComponents } from '../components/overview/netWorthReceipt'
+import { GhostTile, SkeletonCard } from '../components/PageSkeleton'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
 import { UP_NEXT_WINDOW_DAYS, rankUpNext, upNextLine } from '../components/overview/upNext'
 import { windowWords, ytdStats } from '../components/overview/ytd'
@@ -67,7 +69,6 @@ import type {
 } from '../types/api'
 import { formatCurrency, formatDate, formatMonth, formatPct } from '../utils/format'
 import { addDays, todayIso } from '../utils/months'
-import { isStaleQuote } from '../utils/staleness'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './OverviewPage.css'
@@ -307,10 +308,15 @@ export default function OverviewPage() {
   const tax = data.taxes ? pickTaxSummary(data.taxes.years, currentYear) : null
   // Plain consts like their siblings (the memo rule below covers CHART options only) —
   // the strip's and the YTD card's rules are cheap math over the snapshot.
-  const attention = attentionItems({
-    months: data.ts?.months, holdings: data.holdings, lots: data.lots,
-    taxYears: data.taxYears, system: data.system, coverage: data.coverage,
-  }, todayIso()).filter(item => item.key !== 'espp-qualifying')
+  // Review rows lead (they are this household's own ritual), then the feed checks; both are
+  // phrased as actions and rendered by the same strip (2026-09-13 polish spec §14).
+  const attention = [
+    ...reviewAttentionItems(data.coverage?.review_months, todayIso()),
+    ...attentionItems({
+      months: data.ts?.months, holdings: data.holdings, lots: data.lots,
+      taxYears: data.taxYears, system: data.system, coverage: data.coverage,
+    }, todayIso()).filter(item => item.key !== 'espp-qualifying'),
+  ]
   const ytd = data.ts && data.yearly && data.dividends && data.coverage ? ytdStats(data.ts, data.yearly, data.dividends, data.coverage, todayIso()) : null
   // Shown once ANY feed has history — on a fresh database the empty states below carry
   // the message, and a card of five dashes would just restate them.
@@ -334,14 +340,23 @@ export default function OverviewPage() {
   // direction, colour = good/bad, "over"/"under" = the judgment in words; the same fact
   // three ways, and none of them wrong. (avg12 and aboveAvg are null together — spendStats
   // — but both are named so the narrowing is the compiler's job, not a reader's memory.)
+  // The MONTH rides the delta line too (W2, 2026-09-13 audit): the label is "Living spending"
+  // at every width, and a month with no comparison still says which month it is — neutral,
+  // no glyph.
+  const spendMonth = stats?.month ? formatMonth(stats.month) : null
   const spendDelta =
     stats && stats.avg12 !== null && stats.aboveAvg !== null && !cashflowOnly
       ? {
-          text: `${Number(stats.total) === stats.avg12 ? 'at' : stats.aboveAvg ? 'over' : 'under'} ${formatCurrency(stats.avg12)} previous 12-mo average`,
+          text: `${Number(stats.total) === stats.avg12 ? 'at' : stats.aboveAvg ? 'over' : 'under'} ${formatCurrency(stats.avg12)} previous 12-mo average${spendMonth ? ` · ${spendMonth}` : ''}`,
           tone: Number(stats.total) === stats.avg12 ? ('neutral' as const) : stats.aboveAvg ? ('negative' as const) : ('positive' as const),
           direction: Number(stats.total) === stats.avg12 ? undefined : stats.aboveAvg ? ('up' as const) : ('down' as const),
         }
-      : null
+      : spendMonth !== null
+        ? { text: spendMonth, tone: 'neutral' as const, direction: undefined }
+        : null
+  // The compared month's review state — a badge on the tile when it is not closed (T1); the
+  // sentence about the comparison window lives in the Data status card.
+  const reviewState = spendingEvidence.data?.review?.state
 
   // Two cards the owner scope cannot reach: /spending/matrix has no owner dimension, and
   // the weekly /portfolio/history checkpoints are household-wide. Saying so beats a silent
@@ -364,9 +379,8 @@ export default function OverviewPage() {
               : ' (est.)'
         }`
 
-  const reviewAttention = (data.coverage?.review_months ?? []).filter(review => review.state === 'needs_review' || review.state === 'ready_to_review' || review.state === 'in_progress').sort((a, b) => b.month.localeCompare(a.month)).slice(0, 2)
   const tileElements = {
-    net_worth: (
+    net_worth: wealth.busy && data.summary === undefined ? <GhostTile delta={false} /> : (
               <StatTile
                 hero
                 label={summary?.month ? `Net worth — ${formatMonth(summary.month)}` : 'Net worth'}
@@ -392,10 +406,10 @@ export default function OverviewPage() {
                 }
                 tone={emptyScopeNote !== null ? 'neutral' : toneOf(summary?.mom_delta)}
                 hint="Assets minus liabilities from the latest monthly snapshot, with its change from the month before."
-                evidence={summary ? metricReceipt({ id: 'net_worth', label: 'Net worth', value: summary.net_worth, definition: 'Sum of non-component account balances, including signed liabilities, at the recorded monthly snapshot.', scope: owner ?? 'Household', as_of: summary.month, source_link: `/net-worth${owner === null ? '' : `?owner=${owner}`}`, components: summary.groups.map(group => ({ label: group.group.replaceAll('_', ' '), value: group.total, unit: 'USD' })) }) : undefined}
+                evidence={summary ? metricReceipt({ id: 'net_worth', label: 'Net worth', value: summary.net_worth, definition: 'Sum of non-component account balances, including signed liabilities, at the recorded monthly snapshot.', scope: owner ?? 'Household', as_of: summary.month, source_link: `/net-worth${owner === null ? '' : `?owner=${owner}`}`, components: netWorthComponents(summary.groups) }) : undefined}
               />
     ),
-    portfolio: (
+    portfolio: investments.busy && data.holdings === undefined ? <GhostTile delta={false} /> : (
               <StatTile
                 label="Portfolio"
                 // Holdings hang off accounts, so the scope with none has no portfolio
@@ -417,9 +431,10 @@ export default function OverviewPage() {
                 evidence={data.holdings ? metricReceipt({ id: 'portfolio_value', label: 'Portfolio value', value: totals?.market_value ?? null, definition: 'Shares held multiplied by available prices. Missing quotes are excluded from priced value; quote dates can differ from refresh time.', scope: owner ?? 'Household', as_of: asOf, source_link: `/portfolio${owner === null ? '' : `?owner=${owner}`}`, completeness: (totals?.unpriced_count ?? 0) > 0 ? 'mixed' : 'complete', warnings: (totals?.unpriced_count ?? 0) > 0 ? [`${totals!.unpriced_count} holdings have no price.`] : [], components: [{ label: 'Unpriced holdings', value: totals?.unpriced_count ?? 0, unit: 'count' }] }) : undefined}
               />
     ),
-    living_spending: (
+    living_spending: spending.busy && data.matrix === undefined ? <GhostTile delta={false} /> : (
               <StatTile
-                label={stats?.month ? `Living spending — ${formatMonth(stats.month)}` : 'Living spending'}
+                label="Living spending"
+                badge={reviewState !== undefined && reviewState !== 'closed' ? REVIEW_LABELS[reviewState] : undefined}
                 value={cashflowOnly ? '—' : formatCurrency(stats?.total)}
                 delta={spendDelta?.text}
                 tone={spendDelta?.tone}
@@ -428,7 +443,7 @@ export default function OverviewPage() {
                 evidence={spendingEvidence.metric('living_spending')}
               />
     ),
-    tax: (
+    tax: planning.busy && data.taxes === undefined ? <GhostTile delta={false} /> : (
               <StatTile
                 label={taxLabel}
                 value={tax === null ? '—' : formatCurrency(tax.totals.total_tax)}
@@ -439,8 +454,8 @@ export default function OverviewPage() {
     )
   }
   const deeperCards = {
-    ytd: (showYtd && ytd && (
-              <section className="card ytd-card">
+    ytd: showYtd && ytd ? (
+              <section className="card ytd-card span-12">
                 <h2 className="eyebrow">
                   Year to date — {ytd.year}
                   <InfoHint text="The year so far, each figure over the window it was measured on: net-worth change since the last pre-January snapshot, living spend (tax payments and transfers are counted apart), net pay, savings with payroll deductions counted in, and dividend entries (automatic records use ex-date)." />
@@ -454,14 +469,11 @@ export default function OverviewPage() {
                       ) : (
                         // Glyph + colour + the signed number — three channels, none alone
                         // (StatTile's delta grammar). Up is good here, so glyph and tone agree.
+                        // The amount is one unbreakable run (W4): the sub-line wraps, it never does.
                         <span
-                          className={
-                            ytd.netWorthDelta > 0
-                              ? 'delta-positive'
-                              : ytd.netWorthDelta < 0
-                                ? 'delta-negative'
-                                : ''
-                          }
+                          className={`ytd-value ${
+                            ytd.netWorthDelta > 0 ? 'delta-positive' : ytd.netWorthDelta < 0 ? 'delta-negative' : ''
+                          }`.trim()}
                         >
                           <span aria-hidden="true">
                             {ytd.netWorthDelta > 0 ? '▲ ' : ytd.netWorthDelta < 0 ? '▼ ' : ''}
@@ -472,7 +484,6 @@ export default function OverviewPage() {
                       )}
                       {ytd.anchorMonth && (
                         <span className="ytd-sub">
-                          {' '}
                           since {formatMonth(ytd.anchorMonth)}
                           {ytd.throughMonth !== null &&
                             ` (through ${formatMonth(ytd.throughMonth).slice(0, 3)})`}
@@ -541,14 +552,25 @@ export default function OverviewPage() {
                     </dd>
                   </div>
                   <div className="ytd-fact">
-                    <dt>Dividend entries · ex-date for automatic records</dt>
+                    <dt>
+                      Dividends
+                      <span className="ytd-sub"> ex-date for automatic records</span>
+                    </dt>
                     <dd>{ytd.dividends === null ? '—' : formatCurrency(ytd.dividends)}</dd>
                   </div>
                 </dl>
               </section>
-            )),
+            ) : ytd === null && (wealth.busy || investments.busy || spending.busy) ? (
+              // Spec §9: reserve the slot while the feeds behind it are still in flight — the card
+              // used to appear out of nothing when `dividends` landed and shoved the deeper stack
+              // down 212px on a slow investments feed.
+              <div className="span-12">
+                <SkeletonCard height={96} label="Loading year to date…" />
+              </div>
+            ) : null,
     performance: (
               <ChartCard
+                span={6}
                 title="Portfolio performance"
                 hint={performanceHint}
                 ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
@@ -567,6 +589,7 @@ export default function OverviewPage() {
     ),
     spending: (
               <ChartCard
+                span={6}
                 title="Recent spending"
                 // The dashed line is spendStats.avg12 (the twelve months BEFORE the
                 // latest), which is also the figure the spend tile compares against — the
@@ -714,7 +737,6 @@ export default function OverviewPage() {
             </div>
 
                 <section className="card overview-attention"><h2 className="eyebrow">Needs attention</h2>
-                  {reviewAttention.map(item => <NavLink key={item.month} className="attention-item" to={`/update?month=${item.month}&step=review`}>{formatMonth(item.month)}: {REVIEW_LABELS[item.state]}</NavLink>)}
             {/* The dashboard's to-do list: each line is a condition the snapshot itself
                 proves and a link to where it gets fixed. Absent when nothing needs doing —
                 an "all clear" badge would be one more thing to read every morning. */}
@@ -728,33 +750,20 @@ export default function OverviewPage() {
               </nav>
             )}
 
-                  {attention.length === 0 && reviewAttention.length === 0 && <p className="drill-hint">{wealth.data && investments.data && spending.data && planning.data ? 'No outstanding data checks.' : 'Additional checks are waiting for their data feeds.'}</p>}
+                  {attention.length === 0 && <p className="drill-hint">{wealth.data && investments.data && spending.data && planning.data ? 'No outstanding data checks.' : 'Additional checks are waiting for their data feeds.'}</p>}
                 </section>
+                <DataStatusCard
+                  asOf={asOf}
+                  coverage={data.coverage}
+                  comparison={
+                    spendingEvidence.data?.review
+                      ? { month: spendingEvidence.data.review.month, included: spendingEvidence.data.comparison.window?.included.length ?? 0 }
+                      : null
+                  }
+                />
               </aside>
             </div>
-            {spendingEvidence.data?.review && <p className="drill-hint">Living spending: {REVIEW_LABELS[spendingEvidence.data.review.state]} for {formatMonth(spendingEvidence.data.review.month)}. Comparison includes {spendingEvidence.data.comparison.window?.included.length ?? 0} eligible months.</p>}
-            <div className="overview-deeper">{layout.cards.map(id => <Fragment key={id}>{deeperCards[id]}</Fragment>)}</div>
-            {/* Four clocks: quotes move daily, while balances, spending and net pay are
-                hand-entered and each stands on its OWN month (honest-numbers spec §3). A
-                feed a month or more behind the balances wears the same amber a stale quote
-                does — one visual language for "this number is older than it looks". */}
-            <div className="overview-freshness">
-              <span className={isStaleQuote(asOf) ? 'freshness stale' : 'freshness'}>
-                {/* Capitalized, a deliberate departure from PortfolioPage's lowercase pair
-                    ("prices as of …" / "prices never refreshed" — a note tucked beside its
-                    Refresh button). This row is four PEER clauses separated by dots, and
-                    the others capitalize; a lowercase one would read as a fragment. */}
-                {asOf ? `Prices as of ${formatDate(asOf)}` : 'Prices never refreshed'}
-              </span>
-              {(data.coverage ? freshnessClauses(data.coverage) : []).map((clause) => (
-                <Fragment key={clause.key}>
-                  <span aria-hidden="true">·</span>
-                  <span className={clause.lagging ? 'freshness stale' : 'freshness'}>
-                    {clause.text}
-                  </span>
-                </Fragment>
-              ))}
-            </div>
+            <div className="overview-deeper card-grid">{layout.cards.map(id => <Fragment key={id}>{deeperCards[id]}</Fragment>)}</div>
           </>
         )}
       </PageFrame>

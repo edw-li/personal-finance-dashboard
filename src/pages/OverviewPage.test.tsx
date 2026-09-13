@@ -3,7 +3,8 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
-import { fetchSpendingEvidence } from '../api/monthReview'
+import { fetchSpendingEvidence, REVIEW_LABELS } from '../api/monthReview'
+import type { MonthReview } from '../api/monthReview'
 import { getLocal, resetPrefsStoreForTests, STORAGE_KEYS } from '../prefs/prefsStore'
 import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
 import type {
@@ -524,6 +525,18 @@ function hintText(name: RegExp): string {
   return text
 }
 
+// The Data status card's rows are <dt>label</dt><dd>value</dd>; this reads the value beside a label.
+function statusValue(label: string): HTMLElement {
+  const card = document.querySelector('.overview-data-status') as HTMLElement
+  return within(card).getByText(label).nextElementSibling as HTMLElement
+}
+
+// The spending tile's label no longer carries the month (W2); wait for its VALUE instead.
+async function spendingTileShowing(value: string): Promise<HTMLElement> {
+  await waitFor(() => expect(valueOf(tileFor('Living spending'))).toBe(value))
+  return tileFor('Living spending')
+}
+
 function valueOf(tile: HTMLElement): string {
   return tile.querySelector('.stat-value')?.textContent ?? ''
 }
@@ -639,9 +652,9 @@ describe('OverviewPage tiles', () => {
     // 6,000 against a 5,000 average went UP (▲, honest about the number) and that is BAD
     // (red, plus the word "over"). A tone-derived glyph would have printed ▼ on a month that
     // rose. Direction × whether-up-is-good is the caller's job — StatTile.
-    const spending = tileFor('Living spending — Jul 2026')
+    const spending = tileFor('Living spending')
     expect(valueOf(spending)).toBe('$6,000.00')
-    expect(deltaOf(spending)?.textContent).toBe('▲ over $5,000.00 previous 12-mo average')
+    expect(deltaOf(spending)?.textContent).toBe('▲ over $5,000.00 previous 12-mo average · Jul 2026')
     expect(deltaOf(spending)?.className).toContain('stat-delta-negative')
 
     const tax = tileFor(`Estimated tax — ${CURRENT_YEAR} (est.)`)
@@ -713,12 +726,10 @@ describe('OverviewPage tiles', () => {
     serve({ matrix: matrixOut({ totals: [...Array<string>(11).fill('5000.00'), '4000.00'] }) })
     renderPage()
 
-    const spending = await screen.findByText('Living spending — Jul 2026')
-    const tile = spending.closest('.stat-tile') as HTMLElement
-    expect(valueOf(tile)).toBe('$4,000.00')
+    const tile = await spendingTileShowing('$4,000.00')
     // The mirror of the case above: the number went DOWN (▼) and that is GOOD (green,
     // "under"). Same decoupling, opposite signs — here glyph and tone happen to agree.
-    expect(deltaOf(tile)?.textContent).toBe('▼ under $5,000.00 previous 12-mo average')
+    expect(deltaOf(tile)?.textContent).toBe('▼ under $5,000.00 previous 12-mo average · Jul 2026')
     expect(deltaOf(tile)?.className).toContain('stat-delta-positive')
   })
 
@@ -734,10 +745,10 @@ describe('OverviewPage tiles', () => {
     })
     renderPage()
 
-    const tile = (await screen.findByText('Living spending — Jul 2026')).closest('.stat-tile') as HTMLElement
+    const tile = await spendingTileShowing('$6,000.00')
     // Counted at full weight the eleven priors average $4,545.45; with June out they are
     // the ten real months, and the comparison is the $5,000.00 the household actually spends.
-    expect(deltaOf(tile)?.textContent).toBe('▲ over $5,000.00 previous 12-mo average')
+    expect(deltaOf(tile)?.textContent).toBe('▲ over $5,000.00 previous 12-mo average · Jul 2026')
   })
 
   it('says nothing about a cashflow-only trailing month', async () => {
@@ -766,21 +777,17 @@ describe('OverviewPage tiles', () => {
     // dash here would look like a load failure.
     serve({ matrix: matrixOut({ months: [SPEND_MONTHS[0]], totals: ['0.00'] }) })
     renderPage()
-    await screen.findByText('Living spending — Aug 2025')
-
-    const tile = tileFor('Living spending — Aug 2025')
-    expect(valueOf(tile)).toBe('$0.00')
-    expect(deltaOf(tile)).toBeNull()
+    const tile = await spendingTileShowing('$0.00')
+    // The month still has a home: the delta line, neutral, no glyph.
+    expect(deltaOf(tile)?.textContent).toBe('Aug 2025')
+    expect(deltaOf(tile)?.className).toContain('stat-delta-neutral')
   })
 
   it('describes equal spending and comparison values neutrally, including zero', async () => {
     serve({ matrix: matrixOut({ totals: Array<string>(12).fill('0.00'), comparison_average: Array<string>(12).fill('0.00') }) })
     renderPage()
-    await screen.findByText('Living spending — Jul 2026')
-
-    const tile = tileFor('Living spending — Jul 2026')
-    expect(valueOf(tile)).toBe('$0.00')
-    expect(deltaOf(tile)?.textContent).toBe('at $0.00 previous 12-mo average')
+    const tile = await spendingTileShowing('$0.00')
+    expect(deltaOf(tile)?.textContent).toBe('at $0.00 previous 12-mo average · Jul 2026')
     expect(deltaOf(tile)?.className).toContain('stat-delta-neutral')
   })
 
@@ -826,6 +833,25 @@ describe('OverviewPage tiles', () => {
     const tile = tileFor(`Estimated tax — ${CURRENT_YEAR} (est.)`)
     expect(valueOf(tile)).toBe('$123,456.78')
     expect(deltaOf(tile)?.textContent).toBe('— effective rate · Household')
+  })
+
+  // T1/C4 (2026-09-13 audit): the review state rides the tile as a badge; the comparison
+  // sentence lives in the Data status card.
+  it('badges the spending tile with a non-closed review state and states the comparison in Data status', async () => {
+    serve()
+    const base = await fetchSpendingEvidence()
+    const review: MonthReview = { month: '2026-07-01', state: 'unreviewed_history', input_revision: 'r', reviewed: { balances: false, spending: false, take_home: false }, coverage: { balances: true, spending: true, take_home: true, spending_nonzero: true, missing_account_ids: [], missing_category_ids: [] }, can_close: false, blockers: [], eligible_spending: true, eligible_savings: true, legacy_eligible: true, closed_at: null, closed_by: null, source_link: '/update?month=2026-07-01' }
+    vi.mocked(fetchSpendingEvidence).mockResolvedValue({ ...base, review })
+    renderPage()
+    const tile = await spendingTileShowing('$6,000.00')
+    await waitFor(() => expect(tile.querySelector('.stat-badge')?.textContent).toBe(REVIEW_LABELS.unreviewed_history))
+    expect(within(document.querySelector('.overview-data-status') as HTMLElement).getByText('Living spending compares Jul 2026 with 0 eligible months.')).toBeTruthy()
+    cleanup()
+    vi.mocked(fetchSpendingEvidence).mockResolvedValue({ ...base, review: { ...review, state: 'closed' } })
+    renderPage()
+    const closed = await spendingTileShowing('$6,000.00')
+    await waitFor(() => expect(screen.getByText('Living spending compares Jul 2026 with 0 eligible months.')).toBeTruthy())
+    expect(closed.querySelector('.stat-badge')).toBeNull()
   })
 })
 
@@ -891,35 +917,37 @@ describe('OverviewPage charts', () => {
   })
 })
 
-describe('OverviewPage freshness', () => {
-  it('dates the quotes and stands each hand-entered feed on its own month', async () => {
+describe('OverviewPage data status card', () => {
+  it('dates the quotes and stands each hand-entered feed on its own month, inside the agenda column', async () => {
     const quoted = daysAgo(1)
     serve({ holdings: holdingsOut({ as_of: quoted }) })
     renderPage()
 
-    const prices = await screen.findByText(`Prices as of ${formatDate(quoted)}`)
+    await waitFor(() => expect(statusValue('Prices as of').textContent).toBe(formatDate(quoted)))
     // Yesterday's bar is not stale — no amber.
-    expect(prices.className).not.toContain('stale')
-    expect(screen.getByText(`Balances through ${formatMonth(YEAR_MONTHS[6])}`)).toBeTruthy()
-    expect(screen.getByText(`Spending through ${formatMonth(YEAR_MONTHS[6])}`)).toBeTruthy()
-    expect(screen.getByText(`Net pay through ${formatMonth(YEAR_MONTHS[6])}`)).toBeTruthy()
+    expect(statusValue('Prices as of').className).not.toContain('stale')
+    expect(statusValue('Balances through').textContent).toBe(formatMonth(YEAR_MONTHS[6]))
+    expect(statusValue('Spending through').textContent).toBe(formatMonth(YEAR_MONTHS[6]))
+    expect(statusValue('Net pay through').textContent).toBe(formatMonth(YEAR_MONTHS[6]))
     // Level feeds: nothing ambers.
-    expect(document.querySelectorAll('.overview-freshness .stale')).toHaveLength(0)
+    expect(document.querySelectorAll('.overview-data-status .stale')).toHaveLength(0)
+    // It is a card in the agenda column — no bare footer row, no orphan sentence (T1, T2).
+    expect(document.querySelector('.overview-agenda-column .overview-data-status')).not.toBeNull()
+    expect(document.querySelector('.overview-freshness')).toBeNull()
+    expect(screen.queryByText(/^Living spending: /)).toBeNull()
   })
 
   it('names the months the window is still waiting for and ambers the feeds that lag', async () => {
     serve({ coverage: LAGGING })
     renderPage()
 
-    const spending = await screen.findByText(
-      `Spending through ${formatMonth(YEAR_MONTHS[6])} (Aug missing, Sep empty)`,
+    await waitFor(() =>
+      expect(statusValue('Spending through').textContent).toBe(`${formatMonth(YEAR_MONTHS[6])} (Aug missing, Sep empty)`),
     )
-    expect(spending.className).toContain('stale')
-    const balances = screen.getByText(`Balances through ${formatMonth(SEP)}`)
-    expect(balances.className).not.toContain('stale')
-    expect(screen.getByText(`Net pay through ${formatMonth(YEAR_MONTHS[6])}`).className).toContain(
-      'stale',
-    )
+    expect(statusValue('Spending through').className).toContain('stale')
+    expect(statusValue('Balances through').textContent).toBe(formatMonth(SEP))
+    expect(statusValue('Balances through').className).not.toContain('stale')
+    expect(statusValue('Net pay through').className).toContain('stale')
   })
 
   it('ambers a quote date that has gone stale — and the strip says the same thing', async () => {
@@ -927,12 +955,9 @@ describe('OverviewPage freshness', () => {
     serve({ holdings: holdingsOut({ as_of: quoted }) })
     renderPage()
 
-    const prices = await screen.findByText(`Prices as of ${formatDate(quoted)}`)
-    expect(prices.className).toContain('stale')
-    // Two registers for one fact: the freshness row states it, the strip makes it a task.
-    expect(
-      screen.getByRole('link', { name: /Quotes are stale/ }).getAttribute('href'),
-    ).toBe('/portfolio')
+    await waitFor(() => expect(statusValue('Prices as of').className).toContain('stale'))
+    // Two registers for one fact: the card states it, the strip makes it a task.
+    expect(screen.getByRole('link', { name: /Quotes are stale/ }).getAttribute('href')).toBe('/portfolio')
   })
 })
 
@@ -1045,6 +1070,30 @@ describe('OverviewPage year to date', () => {
 
     expect(screen.queryByRole('heading', { name: /Year to date/ })).toBeNull()
   })
+
+  it('reads "Dividends" with the ex-date note as a sub-label, and keeps the net-worth amount whole', async () => {
+    serve({ yearly: { years: [{ year: CURRENT_YEAR, by_category: [], total: '1.00', net_pay_total: '2.00', savings_rate: '0.5' }] } })
+    renderPage()
+    await screen.findByText(`Year to date — ${CURRENT_YEAR}`)
+    const dividends = screen.getByText('Dividends').closest('dt') as HTMLElement
+    expect(dividends.querySelector('.ytd-sub')?.textContent).toContain('ex-date for automatic records')
+    const netWorth = screen.getByText('Net worth', { selector: 'dt' }).closest('.ytd-fact') as HTMLElement
+    expect(netWorth.querySelector('dd .ytd-value')?.textContent).toContain('$34,567.00')
+    expect(netWorth.querySelector('dd .ytd-sub')?.textContent).toMatch(/^since .*\(through .*\)$/)
+  })
+
+  it('reserves the year-to-date slot with a ghost while its feeds are pending', async () => {
+    const payload = serve({ yearly: { years: [{ year: CURRENT_YEAR, by_category: [], total: '1.00', net_pay_total: '2.00', savings_rate: '0.5' }] } })
+    const dividends = deferred<DividendOut[]>()
+    vi.mocked(fetchDividends).mockImplementation(() => dividends.promise)
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(document.querySelector('.overview-deeper .span-12 .loading-fallback')).not.toBeNull()
+    expect(screen.queryByRole('heading', { name: /Year to date/ })).toBeNull()
+    await act(async () => { dividends.resolve(payload.dividends) })
+    expect(await screen.findByRole('heading', { name: /Year to date/ })).toBeTruthy()
+    expect(document.querySelector('.overview-deeper .loading-fallback')).toBeNull()
+  })
 })
 
 describe('OverviewPage attention strip', () => {
@@ -1111,6 +1160,20 @@ describe('OverviewPage attention strip', () => {
         .getAttribute('href'),
     ).toBe(`/update?month=${SEP}&step=spending`)
   })
+
+  // C1 (2026-09-13 audit): a past open month is a to-do with a verb; a closed one is silence.
+  it('lists past review months as actions in the strip and never a closed one', async () => {
+    const reviewOut = (month: string, state: MonthReview['state']): MonthReview => ({ month, state, input_revision: 'r', reviewed: { balances: true, spending: true, take_home: true }, coverage: { balances: true, spending: true, take_home: true, spending_nonzero: true, missing_account_ids: [], missing_category_ids: [] }, can_close: true, blockers: [], eligible_spending: true, eligible_savings: true, legacy_eligible: false, closed_at: null, closed_by: null, source_link: `/update?month=${month}` })
+    const past = addMonths(currentMonthIso(), -2)
+    const closed = addMonths(currentMonthIso(), -3)
+    serve({ coverage: coverageOut({ review_months: [reviewOut(past, 'ready_to_review'), reviewOut(closed, 'closed')] }) })
+    renderPage()
+    const strip = await screen.findByRole('navigation', { name: 'Needs attention' })
+    const row = within(strip).getByRole('link', { name: `${formatMonth(past)} is ready to close →` })
+    expect(row.getAttribute('href')).toBe(`/update?month=${past}&step=review`)
+    expect(within(strip).queryByRole('link', { name: new RegExp(formatMonth(closed)) })).toBeNull()
+    expect(strip.querySelectorAll('a')).toHaveLength(1)
+  })
 })
 
 describe('OverviewPage on an empty database', () => {
@@ -1167,14 +1230,13 @@ describe('OverviewPage on an empty database', () => {
     // The money-flow card refuses with the SERVER's sentence — no fourth chart.
     expect(screen.getByText(/No tax inputs are stored for 2031/)).toBeTruthy()
 
-    // Capitalized (unlike PortfolioPage's lowercase note): four peer clauses in one row,
-    // and the other three start with a capital. A feed that never started says so — a
-    // fresh database is not a late one, so none of these wears the amber.
-    expect(screen.getByText('Prices never refreshed')).toBeTruthy()
-    expect(screen.getByText('Balances — no months')).toBeTruthy()
-    expect(screen.getByText('Spending — no months')).toBeTruthy()
-    expect(screen.getByText('Net pay — no months')).toBeTruthy()
-    expect(document.querySelectorAll('.overview-freshness .stale')).toHaveLength(0)
+    // A feed that never started says so — a fresh database is not a late one, so none of these
+    // wears the amber.
+    expect(statusValue('Prices').textContent).toBe('never refreshed')
+    expect(statusValue('Balances').textContent).toBe('no months')
+    expect(statusValue('Spending').textContent).toBe('no months')
+    expect(statusValue('Net pay').textContent).toBe('no months')
+    expect(document.querySelectorAll('.overview-data-status .stale')).toHaveLength(0)
   })
 })
 
@@ -1551,18 +1613,21 @@ describe('OverviewPage — hero count-up (2026-08-27 spec §8)', () => {
     vi.unstubAllGlobals()
   })
 
-  it('updates a waiting hero to the returned value without a zero frame when the wealth feed arrives', async () => {
-    // No frame ever fires, so what is on screen is the PAINT rather than a moment of the
-    // animation — the easing itself is StatTile's test; this one pins the call-site gate,
-    // which nothing else can see (the cached-paint half is pinned by the tests above, which
-    // would read $0.00 if the gate were inverted).
+  it('settles the hero up from zero on a fresh paint, and never on a cached one', async () => {
+    // No frame ever fires, so what is on screen is the settle's FIRST frame rather than a
+    // moment of the easing — the easing itself is StatTile's test; this one pins the
+    // call-site gate, which nothing else can see (the cached-paint tests above read the
+    // exact figure, and would read $0.00 if the gate were inverted). The gate only reaches
+    // the tile now that a ghost precedes its mount (2026-09-13 polish §9): before, the hero
+    // was already on screen holding '—' when the feed landed, and StatTile captures its
+    // count-up at MOUNT, so the flourish spec §8 asks for never actually ran.
     vi.stubGlobal('requestAnimationFrame', () => 1)
     vi.stubGlobal('cancelAnimationFrame', () => {})
 
     serve()
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
-    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$0.00')
     // The non-hero tiles never settle — they are up whole on the same paint.
     expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
   })
@@ -1607,7 +1672,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
     expect(alert.textContent).toContain("Couldn't load wealth — the server had a problem (HTTP 500)")
     expect(valueOf(tileFor('Net worth'))).toBe('—')
     expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
-    expect(valueOf(tileFor('Living spending — Jul 2026'))).toBe('$6,000.00')
+    expect(valueOf(tileFor('Living spending'))).toBe('$6,000.00')
   })
 
   it('honors the owner scope from the URL for net worth and holdings, not spending', async () => {
@@ -1655,9 +1720,9 @@ describe('OverviewPage — shell frame and owner scope', () => {
     pendAllSnapshotFetches()
     fireEvent.click(await screen.findByRole('button', { name: 'Grace' }))
     expect(container.querySelectorAll('.chart-card-skeleton')).toHaveLength(2)
-    expect(valueOf(tileFor('Net worth'))).toBe('—')
-    expect(valueOf(tileFor('Portfolio'))).toBe('—')
-    expect(valueOf(tileFor('Living spending — Jul 2026'))).toBe('$6,000.00')
+    // L3: a group that is busy with nothing to show ghosts its tiles instead of printing "—".
+    expect(container.querySelectorAll('.kpi-row .skeleton-tile')).toHaveLength(2)
+    expect(valueOf(tileFor('Living spending'))).toBe('$6,000.00')
     expect(fetchMatrix).toHaveBeenCalledTimes(1)
   })
 
@@ -1767,29 +1832,37 @@ describe('OverviewPage independent groups and preferences', () => {
     const banner = await screen.findByRole('alert')
     expect(banner.textContent).toContain("Couldn't load spending and review")
     expect(banner.textContent).not.toContain('private upstream detail')
-    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    // The hero is mid-settle on this fresh paint (spec §8's count-up, which §9's ghost finally
+    // lets reach the tile), so its exact string is not pinnable here — what this test is about
+    // is that the wealth group is UP: a real tile, no ghost, no dash.
+    expect(tileFor('Net worth — Aug 2026').querySelector('.skeleton')).toBeNull()
+    expect(valueOf(tileFor('Net worth — Aug 2026'))).not.toBe('—')
     expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
     expect(valueOf(tileFor(`Estimated tax — ${CURRENT_YEAR} (est.)`))).toBe('$123,456.78')
     expect(valueOf(tileFor('Living spending'))).toBe('—')
 
     fireEvent.click(within(banner).getByRole('button', { name: 'Retry' }))
-    await screen.findByText('Living spending — Jul 2026')
+    await spendingTileShowing('$6,000.00')
     expect(screen.queryByRole('alert')).toBeNull()
     for (const client of [fetchMatrix, fetchYearly, fetchCoverage]) expect(client).toHaveBeenCalledTimes(2)
     for (const client of [fetchSummary, fetchTimeseries, fetchHoldings, fetchHistory, fetchDividends, fetchAllTaxSummaries, fetchLots, fetchTaxYears, fetchSystemStatus, fetchMoneyFlow, fetchCalendar]) expect(client).toHaveBeenCalledTimes(1)
   })
 
   it('labels a stale spending group while a successful wealth refresh advances', async () => {
-    serve()
+    // Seeded so the first paint is a CACHED one: the hero's count-up runs on fresh paints
+    // only (the tiles test above takes the same route), and a settling number is not a
+    // string the refresh assertion below could pin.
+    const payload = serve()
+    seedOverview(snapshotOf(payload))
     renderPage()
-    await screen.findByText('Living spending — Jul 2026')
+    await spendingTileShowing('$6,000.00')
     vi.mocked(fetchYearly).mockRejectedValueOnce(new ApiError('rollup offline', 503))
     vi.mocked(fetchSummary).mockResolvedValue(summaryOut({ net_worth: '2000000.00' }))
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     const banner = await screen.findByRole('alert')
     expect(banner.textContent).toContain('spending and review')
     expect(banner.textContent).toContain('Showing earlier data for this section.')
-    expect(valueOf(tileFor('Living spending — Jul 2026'))).toBe('$6,000.00')
+    expect(valueOf(tileFor('Living spending'))).toBe('$6,000.00')
     await waitFor(() => expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$2,000,000.00'))
     expect(screen.getByLabelText(/Line chart of net worth at every monthly snapshot/)).toBeTruthy()
     expect(screen.getByLabelText(/Bar chart of living spending/)).toBeTruthy()
@@ -1804,7 +1877,7 @@ describe('OverviewPage independent groups and preferences', () => {
     fireEvent.click(screen.getByLabelText('Line chart of net worth at every monthly snapshot'))
     expect(screen.getByText(`Pinned: ${formatMonth(NW_MONTHS[0])}`)).toBeTruthy()
     fireEvent.click(await screen.findByRole('button', { name: 'Grace' }))
-    expect(valueOf(tileFor('Portfolio'))).toBe('—')
+    await waitFor(() => expect(document.querySelectorAll('.kpi-row .skeleton-tile')).toHaveLength(1))
     expect(screen.queryByText(/^Pinned:/)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Edward' }))
     await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$101.00'))
@@ -1819,17 +1892,15 @@ describe('OverviewPage independent groups and preferences', () => {
     serve({ matrix: matrixOut({ months: [month], totals: ['0.00'], living_total: ['0.00'], net_pay: ['6000.00'], review_state: ['closed'], eligible_spending: [true], comparison_average: [null], default_month: month }),
       coverage: coverageOut({ spending_empty: [month] }) })
     renderPage()
-    await screen.findByText('Living spending — Jul 2026')
-    expect(valueOf(tileFor('Living spending — Jul 2026'))).toBe('$0.00')
+    await spendingTileShowing('$0.00')
     expect(screen.getByLabelText(/Bar chart of living spending/).getAttribute('data-spending-points')).toBe('[0]')
   })
 
   it('uses the selected eligible month and its exact server comparison rather than the latest raw entry', async () => {
     serve({ matrix: matrixOut({ months: ['2026-06-01', '2026-07-01'], totals: ['9000.00', '15000.00'], living_total: ['3000.00', '4000.00'], comparison_average: ['1234.56', '3000.00'], default_month: '2026-06-01' }) })
     renderPage()
-    await screen.findByText('Living spending — Jun 2026')
-    expect(valueOf(tileFor('Living spending — Jun 2026'))).toBe('$3,000.00')
-    expect(deltaOf(tileFor('Living spending — Jun 2026'))?.textContent).toContain('$1,234.56 previous 12-mo average')
+    const tile = await spendingTileShowing('$3,000.00')
+    expect(deltaOf(tile)?.textContent).toContain('$1,234.56 previous 12-mo average · Jun 2026')
     await waitFor(() => expect(fetchSpendingEvidence).toHaveBeenLastCalledWith('2026-06-01'))
   })
 
@@ -1842,7 +1913,7 @@ describe('OverviewPage independent groups and preferences', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Living spending' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Money flow' }))
     expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Portfolio')
-    expect(within(document.querySelector('.kpi-row') as HTMLElement).queryByText('Living spending — Jul 2026')).toBeNull()
+    expect(within(document.querySelector('.kpi-row') as HTMLElement).queryByText('Living spending')).toBeNull()
     expect(screen.queryByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeNull()
     const saved = getLocal('overview_layout')!
     expect(saved.tiles).toEqual(['portfolio', 'net_worth', 'tax'])
@@ -1869,9 +1940,51 @@ describe('OverviewPage independent groups and preferences', () => {
     expect((screen.getByRole('checkbox', { name: 'Net worth' }) as HTMLInputElement).disabled).toBe(true)
     expect(getLocal('overview_layout')?.tiles).toEqual(['net_worth'])
   })
+
+  // A4 (2026-09-13 audit): a real popover — closes on Escape and outside pointer, focus returns.
+  it('the Customize popover opens as a dialog, closes on Escape / outside pointer / Done, and names the spending card as titled', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    const trigger = screen.getByRole('button', { name: 'Customize' })
+    expect(trigger.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(trigger)
+    const dialog = screen.getByRole('dialog', { name: 'Customize overview' })
+    expect(dialog.className).toContain('popover-surface')
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(within(dialog).getByRole('checkbox', { name: 'Recent spending' })).toBeTruthy()
+    expect(within(dialog).queryByText('Recent living spending')).toBeNull()
+    // A dialog takes the caret with it (P1 review round): the first control inside it.
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+    fireEvent.click(trigger)
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+  })
 })
 
 describe('OverviewPage chart cards (charts C2)', () => {
+  it('lays the deeper cards on the card grid — performance and spending side by side, YTD and money flow full width', async () => {
+    serve({ yearly: { years: [{ year: CURRENT_YEAR, by_category: [], total: '1.00', net_pay_total: '2.00', savings_rate: '0.5' }] } })
+    renderPage()
+    // The YTD card is the last of the four to land (it waits on the dividends feed).
+    await screen.findByRole('heading', { name: /Year to date/ })
+    const deeper = document.querySelector('.overview-deeper') as HTMLElement
+    expect(deeper.classList.contains('card-grid')).toBe(true)
+    const cardOf = (name: RegExp) => screen.getByRole('heading', { name }).closest('.card') as HTMLElement
+    expect(cardOf(/Portfolio performance/).classList.contains('span-6')).toBe(true)
+    expect(cardOf(/Recent spending/).classList.contains('span-6')).toBe(true)
+    expect(cardOf(/Year to date/).classList.contains('span-12')).toBe(true)
+    expect(cardOf(new RegExp(`Money flow.*${CURRENT_YEAR}`)).classList.contains('span-12')).toBe(true)
+  })
+
   it('mounts the three snapshot charts through ChartCard with labels, export rows and the drill links', async () => {
     serve()
     renderPage()

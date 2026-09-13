@@ -14,6 +14,7 @@ import {
   heatmapOption,
   heatmapRows,
   monthPieCsv,
+  monthPieLegend,
   monthPieOption,
   CASH_RATE_SERIES,
   TOTAL_RATE_SERIES,
@@ -170,6 +171,27 @@ describe('spendingBarsOption', () => {
     expect(option.series.map((s) => s.id)).not.toContain('budget-Total budget')
   })
 
+  // F5 (2026-09-13 audit): one budgeted month in 38 drove a permanent legend chip.
+  it('omits the budget step unless the DISPLAYED window shows at least two budgeted months', () => {
+    expect(read(spendingBarsOption(barsInput(matrixFixture({ total_budget: ['500.00', null] })))).series.map((s) => s.id)).not.toContain('budget-Total budget')
+    const three = matrixFixture({
+      months: ['2026-05-01', '2026-06-01', '2026-07-01'],
+      series: [
+        { category_id: 1, values: ['2000.00', '2000.00', '2000.00'], budgets: ['500.00', '500.00', null] },
+        { category_id: 2, values: ['600.00', '600.00', null], budgets: [null, null, null] },
+        { category_id: 3, values: ['150.00', '150.00', null], budgets: [null, null, null] },
+      ],
+      totals: ['2750.00', '2750.00', '2000.00'], net_pay: ['6000.00', '6000.00', '6000.00'],
+      savings_rate: ['0.54', '0.54', null], four_pct_rule: ['4100.50', '4100.50', '4100.50'],
+      total_budget: ['500.00', '500.00', null],
+    })
+    const labels = ['May 2026', 'Jun 2026', 'Jul 2026']
+    const inView = read(spendingBarsOption({ ...barsInput(three), monthLabels: labels, range: { preset: 'all' as const, window: { startValue: 0, endValue: 1 } } }))
+    expect(inView.series.map((s) => s.id)).toContain('budget-Total budget')
+    const outOfView = read(spendingBarsOption({ ...barsInput(three), monthLabels: labels, range: { preset: 'all' as const, window: { startValue: 2, endValue: 2 } } }))
+    expect(outOfView.series.map((s) => s.id)).not.toContain('budget-Total budget')
+  })
+
   it('grid, axes, legend: money grid, every month labelled, compact money ticks, Total budget deselected under the page picks', () => {
     const option = read(spendingBarsOption(barsInput(matrixFixture(), { 'Net pay': false })))
     expect(option.grid).toEqual(GRID_VARIANTS.default)
@@ -235,11 +257,27 @@ describe('monthPieOption', () => {
     expect(monthPieOption(matrixFixture(), [1, 2], -1)).toBeNull()
     expect(monthPieOption(matrixFixture({ series: [{ category_id: 1, values: ['0.00', '0.00'], budgets: [null, null] }] }), [1], 0)).toBeNull()
   })
+  it('drops the leader labels in the compact (dock) variant and keeps them by default (W7)', () => {
+    type Pie = { series: { label?: { show?: boolean; formatter?: string } }[] }
+    expect((monthPieOption(matrixFixture(), [1, 2], 0) as unknown as Pie).series[0].label).toMatchObject({ formatter: '{b}  {d}%' })
+    expect((monthPieOption(matrixFixture(), [1, 2], 0, { compact: true }) as unknown as Pie).series[0].label).toEqual({ show: false })
+  })
   it('exports the slices as a table', () => {
     expect(monthPieCsv(matrixFixture(), [1, 2], 0)).toEqual({
       headers: ['Category', 'Amount'],
       rows: [['Rent', '2000.00'], ['Groceries <b>& more</b>', '600.00'], ['Other', '150.00']],
     })
+  })
+})
+
+describe('monthPieLegend', () => {
+  it('lists the drawn slices with their share of the month and their palette slot', () => {
+    expect(monthPieLegend(matrixFixture(), [1, 2], 0)).toEqual([
+      { name: 'Rent', value: 2000, share: 2000 / 2750, slot: 0 },
+      { name: 'Groceries <b>& more</b>', value: 600, share: 600 / 2750, slot: 1 },
+      { name: 'Other', value: 150, share: 150 / 2750, slot: null },
+    ])
+    expect(monthPieLegend(matrixFixture(), [1, 2], -1)).toEqual([])
   })
 })
 
