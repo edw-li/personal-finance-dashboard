@@ -106,6 +106,23 @@ describe('ChartCard chrome', () => {
     expect(lede.previousElementSibling?.className).toBe('chart-card-header')
     expect(document.querySelector('.chart-lede + .chart-card-row-export')).toBeTruthy()
   })
+  it('renders an aside beside the plot in a two-column body wrapper, and no wrapper at all without one', () => {
+    render(<ChartCard {...base} option={OPTION} aside={<ul className="legend-list"><li>Cash</li></ul>} />)
+    const section = document.querySelector('section.chart-card') as HTMLElement
+    expect(section.classList.contains('chart-card-has-aside')).toBe(true) // the container-query root
+    const wrapper = section.querySelector('.chart-card-body.chart-card-with-aside') as HTMLElement
+    expect(wrapper).toBeTruthy()
+    expect(wrapper.children[0].className).toBe('chart-card-plot')
+    expect(wrapper.children[0].querySelector('[data-testid="echart"]')).toBeTruthy()
+    expect(wrapper.children[1].className).toBe('chart-card-aside')
+    expect(wrapper.children[1].textContent).toBe('Cash')
+    // The wrapper sits where the bare plot did: after the export row, before the zoom/table/footer rows.
+    expect(wrapper.previousElementSibling?.className).toBe('chart-card-row chart-card-row-export')
+    cleanup()
+    render(<ChartCard {...base} option={OPTION} />)
+    expect(document.querySelector('.chart-card-body')).toBeNull()
+    expect(document.querySelector('.chart-card-has-aside')).toBeNull()
+  })
   it('draws no lede element at all for the cards that pass none', () => {
     render(<ChartCard {...base} option={OPTION} />)
     expect(document.querySelector('.chart-lede')).toBeNull()

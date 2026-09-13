@@ -52,3 +52,20 @@
     }
   }
 }
+
+/* ── ChartCard `aside` (2026-09-13 spec §12) ──────────────────────────────
+   The plot and a second column. `.chart-card-has-aside` (the section) is the query container — the
+   body cannot query itself — so the columns collapse on the CARD's width, which a dock or a span-6
+   narrows, not on the viewport's. inline-size containment is safe here: the card's width is the
+   grid track's, never its content's, and the InfoHint bubble / ECharts tooltip are already
+   positioned inside the card. */
+.chart-card-has-aside { container-type: inline-size; }
+.chart-card-with-aside { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, .9fr); gap: 1rem 1.5rem; align-items: start; }
+.chart-card-with-aside > .chart-card-plot, .chart-card-with-aside > .chart-card-aside { min-width: 0; }
+@container (max-width: 899px) {
+  .chart-card-with-aside { grid-template-columns: minmax(0, 1fr); }
+}
+/* Inside the Expand dialog the wrapper is the flex child that grows, and the plot column is its own
+   column flexbox so `.loading-dim { flex: 1 }` (above) still reaches the canvas. */
+.chart-expanded-dialog .chart-card-with-aside { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+.chart-expanded-dialog .chart-card-plot { display: flex; flex-direction: column; min-height: 0; }

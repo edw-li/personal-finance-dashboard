@@ -49,6 +49,10 @@ export interface ChartCardProps {
   footer?: ReactNode
   /** A header strip under the title: the movers card's "from → to" line (spec §4.2). */
   lede?: ReactNode
+  /** A second column beside the plot — Allocation's ranked table, Spending's legend list (2026-09-13
+   *  spec §12). The body becomes `.chart-card-body.chart-card-with-aside`, one column under 900px of
+   *  CARD width (the card is the container-query root). */
+  aside?: ReactNode
   /** Renders ChartZoomHint; the option carries the dataZoom. */
   zoomable?: boolean
   /** echarts.connect group for same-axis siblings. */
@@ -80,7 +84,7 @@ export interface ChartCardProps {
 }
 
 export default function ChartCard({
-  title, hint, ariaLabel, option, empty, exportName, csv, caption, height = 320, controls, actions, footer, lede,
+  title, hint, ariaLabel, option, empty, exportName, csv, caption, height = 320, controls, actions, footer, lede, aside,
   zoomable = false, group, busy = false, error = null, span = 12,
   onClick, onHover, onHoverEnd, instanceRef, onLegendChange, onDataZoom, zoomWindow,
   selectionAdapter, rowSelection, selection, onSelectionChange, renderSelection, selectionScopeKey = '', independentRangeLabel, allowExpand = true,
@@ -204,7 +208,7 @@ export default function ChartCard({
     <>
     {selected && panel && !expanded && createPortal(selectionContent, detailHost)}
     <ChartSurface title={title} expanded={expanded} onClose={() => setExpanded(false)} span={span}>
-    <section className={`card chart-card span-${span}`}>
+    <section className={`card chart-card span-${span}${aside !== undefined ? ' chart-card-has-aside' : ''}`}>
       <div className="chart-card-header">
         <h2 className="eyebrow">
           {title}
@@ -240,7 +244,9 @@ export default function ChartCard({
       {option !== null && error !== null && (
         <p className="chart-card-error" role="status">{error}</p>
       )}
-      {body}
+      {aside !== undefined
+        ? <div className="chart-card-body chart-card-with-aside"><div className="chart-card-plot">{body}</div><div className="chart-card-aside">{aside}</div></div>
+        : body}
       {selected && <div className="chart-selection-summary">
         {/* Live region on the TEXT only (audit D3): each pin announces "Pinned: …", never the buttons. */}
         <span role="status">Pinned: {selected.label}</span>
