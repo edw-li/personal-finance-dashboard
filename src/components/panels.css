@@ -124,6 +124,29 @@
   margin-bottom: 0.45rem;
 }
 
+/* Label text and its (i) travel as one unbreakable unit (2026-09-13 polish §10). The one label
+   known to overflow five 217px columns ("Reach FI target within N years") is shortened by lane P4;
+   every other label fits its tile at the 220px floor. */
+.stat-label-text {
+  white-space: nowrap;
+}
+
+/* A small status pill after the label, in the caller's own casing — a state, not an eyebrow. */
+.stat-badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 /* Sized from the TILE, not the viewport. .kpi-row is repeat(auto-fit, minmax(220px, 1fr)),
    so tile width sawtooths as the window grows — a purely vw-scaled value stayed large
    through the narrow phase and an 11-13 character amount wrapped mid-number ("$799,395.1"

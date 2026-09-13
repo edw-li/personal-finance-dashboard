@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import InfoHint from './InfoHint'
 import { MetricInfoButton } from './details/MetricInspector'
 import type { MetricEvidence } from '../types/metrics'
@@ -45,6 +46,7 @@ export default function StatTile({
   hero = false,
   countUp,
   evidence,
+  badge,
 }: {
   label: string
   value: string
@@ -54,6 +56,9 @@ export default function StatTile({
   hint?: string
   hero?: boolean
   evidence?: MetricEvidence
+  /** A small status pill after the label ("Not yet reviewed") — the review state that used to
+   *  float under the tile row as an orphan line (2026-09-13 polish §10). */
+  badge?: ReactNode
   /** Settle the value from 0 over ~450ms on a FRESH first paint (2026-08-27 spec §8).
    *  Callers gate it themselves (never on cached paints); the final frame renders
    *  `value` exactly. Additive — omitted means today's static render. */
@@ -105,9 +110,15 @@ export default function StatTile({
   return (
     <div className={hero ? 'stat-tile stat-tile-hero' : 'stat-tile'}>
       <div className="stat-label">
-        {label}
-        {hint !== undefined && evidence === undefined && <InfoHint text={hint} />}
-        {evidence !== undefined && <MetricInfoButton evidence={evidence} />}
+        {/* One nowrap unit for the words and their (i): an atomic inline may break before it,
+            and the icon kept landing alone on a second line (audit P-11). The badge stays
+            outside the unit so IT may wrap under the label when the tile is narrow. */}
+        <span className="stat-label-text">
+          {label}
+          {hint !== undefined && evidence === undefined && <InfoHint text={hint} />}
+          {evidence !== undefined && <MetricInfoButton evidence={evidence} />}
+        </span>
+        {badge !== undefined && <span className="stat-badge">{badge}</span>}
       </div>
       <div className="stat-value">{display ?? value}</div>
       {delta !== undefined && (
