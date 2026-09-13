@@ -55,14 +55,15 @@ export function shiftMonth(dayIso: string, delta: number): string {
   return dayInMonth(addMonths(`${dayIso.slice(0, 7)}-01`, delta), dayIso)
 }
 
-/** "+$6.8k / −$395" for the week gutter; an em dash when nothing moves. */
-export function gutterText(summary: CashSummary): string {
-  if (summary.cashIn === 0 && summary.cashOut === 0) return '—'
-  return `${signedCompact(summary.cashIn, 'in', summary.estimated.cashIn)} / ${signedCompact(
-    summary.cashOut,
-    'out',
-    summary.estimated.cashOut,
-  )}`
+/** The week gutter's lines: cash in over cash out — "+$6.8k" then "−$395" — or a lone em dash when
+ *  nothing moves. Two lines, never one string with a slash: the 84px track broke the second token
+ *  in half (audit C-2). A zero side prints "$0" (cashflow.ts's rule), so the shape is stable. */
+export function gutterLines(summary: CashSummary): string[] {
+  if (summary.cashIn === 0 && summary.cashOut === 0) return ['—']
+  return [
+    signedCompact(summary.cashIn, 'in', summary.estimated.cashIn),
+    signedCompact(summary.cashOut, 'out', summary.estimated.cashOut),
+  ]
 }
 
 export default function CalendarGrid({
@@ -257,7 +258,11 @@ export default function CalendarGrid({
             )
           })}
           <div role="gridcell" className="cal-gutter" aria-label="Week totals" tabIndex={-1}>
-            {gutterText(weekSummary(events, week))}
+            {gutterLines(weekSummary(events, week)).map((line, index) => (
+              <span key={index} className="cal-gutter-line">
+                {line}
+              </span>
+            ))}
           </div>
         </div>
       ))}

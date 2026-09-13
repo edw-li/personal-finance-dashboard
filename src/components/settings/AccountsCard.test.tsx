@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { AccountOut, PersonOut, PortfolioAccountOut } from '../../types/api'
@@ -116,6 +116,16 @@ const CLOSED_SLICE: AccountOut = {
 }
 const BROKERAGE: PortfolioAccountOut = { id: 30, label: 'Fidelity Brokerage', person_id: 1 }
 const JOINT_ROTH: PortfolioAccountOut = { id: 31, label: 'Joint Roth', person_id: null }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
 
 beforeEach(() => {
   vi.mocked(fetchAccounts).mockResolvedValue([CHECKING, HSA])
@@ -476,4 +486,27 @@ it('renders a refused retag inline under the labels, with no Retry (motion spec 
   expect(alert.textContent).toBe('owner must be a household member')
   // Retry re-runs the labels FETCH; it cannot fix a PATCH the server refused.
   expect(within(alert).queryByRole('button')).toBeNull()
+})
+
+it('renders once, after BOTH feeds settle — no roster table before the portfolio labels are in (spec §9)', async () => {
+  const accounts = deferred<AccountOut[]>()
+  const labels = deferred<PortfolioAccountOut[]>()
+  vi.mocked(fetchAccounts).mockReturnValue(accounts.promise)
+  vi.mocked(fetchPortfolioAccounts).mockReturnValue(labels.promise)
+  render(<AccountsCard people={[ME]} />)
+  expect((document.querySelector('.settings-ghost') as HTMLElement).dataset.ghostHeight).toBe('1045')
+  expect(screen.queryByText('Portfolio accounts')).toBeNull()
+  await act(async () => {
+    accounts.resolve([CHECKING])
+  })
+  // The roster is in, the labels are not: still the ghost — the card used to grow here and again
+  // 76ms later, pushing the second table 1118px down the page (audit S-5).
+  expect(screen.queryByRole('table', { name: 'Net-worth accounts' })).toBeNull()
+  expect(document.querySelector('.settings-ghost')).not.toBeNull()
+  await act(async () => {
+    labels.resolve([BROKERAGE])
+  })
+  expect(await screen.findByRole('table', { name: 'Net-worth accounts' })).toBeTruthy()
+  expect(screen.getByRole('table', { name: 'Portfolio accounts' })).toBeTruthy()
+  expect(document.querySelector('.settings-ghost')).toBeNull()
 })

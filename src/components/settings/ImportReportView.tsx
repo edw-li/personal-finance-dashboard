@@ -1,4 +1,5 @@
 import type { ImportReport, ImportSheetReport } from '../../types/api'
+import Disclosure from '../Disclosure'
 import '../panels.css'
 import './settings.css'
 
@@ -88,17 +89,15 @@ function SheetSection({ label, sheet }: { label: string; sheet: ImportSheetRepor
         </p>
       ))}
       {sheet.samples.length > 0 && (
-        <details>
-          <summary>
-            {sheet.samples.length} sample changes
-            {sheet.samples_truncated > 0 ? ` (+${sheet.samples_truncated} more)` : ''}
-          </summary>
+        <Disclosure
+          summary={`${sheet.samples.length} sample changes${sheet.samples_truncated > 0 ? ` (+${sheet.samples_truncated} more)` : ''}`}
+        >
           <ul>
             {sheet.samples.map((s, i) => (
               <li key={i}>{s}</li>
             ))}
           </ul>
-        </details>
+        </Disclosure>
       )}
     </section>
   )

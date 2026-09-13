@@ -9,6 +9,8 @@ import { FeedBanner } from '../shell/Feed'
 import { usePriceRefresh } from '../usePriceRefresh'
 import '../panels.css'
 import './settings.css'
+import SettingsGhost from './SettingsGhost'
+import { WARM, warmSource } from './settingsPrefetch'
 
 // The four scheduler facts, moved off the System card (spec §3.3) — the same sentences,
 // printed beside the schedule that produces them.
@@ -72,9 +74,10 @@ export default function PriceRefreshCard() {
 
   // Mount and Retry only: the settings read is what seeds the cron box, and the box is the
   // one thing on this card the reader can be halfway through changing.
-  const load = () => {
+  const load = (initial = false) => {
     const seq = ++seqRef.current
-    Promise.all([fetchSystemStatus(), fetchAppSettings()])
+    const source = warmSource(initial)
+    Promise.all([source(WARM.systemStatus, fetchSystemStatus), source(WARM.appSettings, fetchAppSettings)])
       .then(([current, stored]) => {
         if (seq !== seqRef.current) return
         setStatus(current)
@@ -88,7 +91,7 @@ export default function PriceRefreshCard() {
   }
 
   useEffect(() => {
-    load()
+    load(true)
     // mount-only: a plain function over stable setters (house idiom)
   }, [])
 
@@ -120,8 +123,8 @@ export default function PriceRefreshCard() {
         Price refresh
         <InfoHint text="5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applied to the live schedule on save. Must not fire more often than hourly. The Monday run also records the weekly performance point — keep Mondays covered." />
       </h2>
-      <FeedBanner error={loadError} retry={load} retryLabel="Retry loading the refresh schedule" />
-      {status === null && loadError === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner error={loadError} retry={() => load()} retryLabel="Retry loading the refresh schedule" />
+      {status === null && loadError === null && <SettingsGhost height={420} />}
       {/* Gated on the first reading, like Plan assumptions: a cron box seeded with a
           blank would read as "your schedule is empty" and offer to save it. The banner
           above stays outside the gate — a failed load is exactly when it must show. */}

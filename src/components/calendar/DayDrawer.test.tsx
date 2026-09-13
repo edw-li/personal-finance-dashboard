@@ -50,4 +50,18 @@ describe('DayDrawer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close the day' }))
     expect(handlers.onClose).toHaveBeenCalledTimes(2)
   })
+
+  it('wears no est. badge on a zero estimate — an estimate of nothing is just $0', () => {
+    render(
+      <DayDrawer
+        day="2026-09-15"
+        events={[calendarEvent({ date: '2026-09-15', type: 'tax_deadline', label: 'Tax deadline — Q3 estimated payment', amount: '0.00', direction: 'out', basis: 'estimated' })]}
+        renderDetails={() => null}
+        onClose={vi.fn()}
+        onAddOnDay={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('$0')).toBeTruthy()
+    expect(screen.queryByText('est.')).toBeNull()
+  })
 })

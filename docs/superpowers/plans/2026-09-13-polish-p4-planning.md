@@ -3116,3 +3116,252 @@ Preconditions with the spec's contract spelled out, and Task 9's HouseholdCard t
 selector to confirm with a grep. No "TBD", no "similar to Task N".
 
 **Type/name consistency:** `SettingsGhost({ height, chrome?, label? })` + `SETTINGS_CARD_CHROME_PX` (T10) match every call site in T11/T12; `WARM`, `warmSource(initial)`, `takeWarm`, `fresh`, `primeWarm`, `prefetchSection`, `resetWarmForTests`, `SettingsSection` (T10) match T11–T13 and the tests; `CashflowNotes({ events, month, quoteAsOf })` (T6) matches the page call; `gutterLines` (T5) matches the grid render and the test import; `AddEventForm` props (T7) match the page's `eventForm` (T8), including `hosted`; `ScenarioHints({ people })` (T4) matches the page; `FORM_PANEL_ID = 'calendar-add'` matches the mocked-`open` assertion; `FormState` `day` is read by `formTitle`; `measureBand` is the band's `ref` and writes `--projection-band-h`, which the CSS reads with the `131px` fallback.
+
+---
+
+## Results
+
+Lane P4 executed in `.worktrees/polish-p4` on `polish/p4-planning`, branched from main @`895cdaf`
+(F1 + F2 merged). Tasks 0–16 done in order, TDD per task, one commit per task. Nothing pushed,
+nothing deleted.
+
+### Commits (base `895cdaf` → head `479acf6`)
+
+| Task | SHA | Subject |
+| --- | --- | --- |
+| 1 | `d80f118` | `feat(projection)`: outcomes band is one row of five tiles, static below 1000px; shorter FI tile label |
+| 2 | `2861b2a` | `feat(projection)`: assumptions column loses its inner scroller; the chart column sticks under the measured outcomes band |
+| 3 | `880bed0` | `feat(projection)`: method note, warnings and trend intro live inside their chart cards |
+| 4 | `2867927` | `feat(projection)`: compare card carries the assumptions fine print; table, caption, pin box and budgets preset fit their words |
+| 5 | `3c21595` | `feat(calendar)`: zero amounts print `$0` with no sign or tilde; the week gutter reads in over out |
+| 6 | `9aad404` | `feat(calendar)`: strip footnotes leave the tile grid for the card footer; 76px weeks that grow; one month name in the scope row |
+| 7 | `a6ea14a` | `refactor(calendar)`: AddEventForm is its own component, ready to stand in the detail panel |
+| 8 | `5268dc1` | `feat(calendar)`: Add event opens in the shared detail panel — the grid stays put; inline card without a provider |
+| 9 | `9c7b0b3` | `feat(settings)`: section bands visually hidden, card pairs start-aligned, Categories span-8 with a sticky row-actions scroller |
+| 10 | `4b51169` | `feat(settings)`: SettingsGhost (a card body's ghost at its loaded height) and the tab-hover warm cache |
+| 11 | `c981d84` | `feat(settings)`: every lazily loaded card stands a ghost of its loaded height and takes primed data on mount |
+| 12 | `ff63a4d` | `feat(settings)`: Accounts card renders once after both feeds settle, behind one ghost |
+| 13 | `70f42f7` | `feat(settings)`: tab hover and focus prefetch a task's data once, consumed by the cards on mount |
+| 14 | `458e6d5` | `fix(copy)`: one password sentence; system facts as lists across both columns; restore labels in the form register |
+| 15 | `479acf6` | `feat(settings)`: import and restore report folds use the Disclosure primitive |
+| 16 | — | gates only; no code change was needed |
+
+46 files changed, +1474 / −541.
+
+### Preconditions (Task 0)
+
+Every F1/F2 expectation held verbatim: `PageFrame` `sections?: ReactNode` + `.page-frame-sections`;
+one `sections=` per page in Projection and Settings; `.kpi-row-5` five equal tracks inside
+`@container (min-width: 1000px)` with `.page { container-type: inline-size }`; the `td.row-actions`
+sticky rule and the `[data-scroll-more~="right"]` mask; `useScrollEdges(ref: RefObject<HTMLElement |
+null>): void` and `export default function Disclosure({ summary, … })` rendering
+`<details class="disclosure"><summary><chevron/><span class="disclosure-summary">…` ; `modal?: boolean`
+on `DetailPanelRequest`; no `GhostCard` in `PageSkeleton`. Both call sites (Task 9's `useScrollEdges`,
+Task 15's `Disclosure summary=`) matched the plan's contract, so neither needed adapting.
+
+### Gates (Task 16)
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc -b` | clean, exit 0 |
+| scoped `npx eslint` (the three pages + three component dirs) | 0 errors, **3 warnings**, all pre-existing `react-refresh/only-export-components` in `CalendarGrid.tsx` (it exported three helpers before this lane too) |
+| `npx eslint .` (whole repo) | **25 warnings, 0 errors — exactly the repo baseline of 25. This lane adds none.** |
+| scoped `npx vitest run` (Projection/Calendar/Settings pages + `components/{projection,calendar,settings}` + `sandbox`) | 44 files, **488 tests**, all pass |
+| `npx vitest run` (full) | **216 files / 2954 tests pass** (green run captured; see flakes below) |
+| `npm run build` | `✓ built in 19.07s`, no errors |
+
+House-rule checks: the CSS diff adds **no** `transition`, `animation` or literal duration anywhere
+(`motionCss.test.ts` green); `mounts.audit.test.ts` green (the trend `ChartCard` still carries
+`hint`/`empty`/`exportName`/`ariaLabel`); `settingsCss.test.ts` green (the band's
+`scroll-margin-top` declaration was kept). No shell file was edited. The removed classes
+(`.projection-warnings`, `.projection-method-note`, `.projection-view-intro`, `.cal-title`,
+`.cal-strip-asof`, `.cal-strip-unknown`) and the removed helpers (`gutterText`, `backupRunsLine`)
+have zero remaining references outside the three "must be null" test assertions.
+
+**Flakes (all outside this lane, all pass in isolation).** Four full runs: two green, two with a
+failure. The offenders were `src/components/portfolio/TransactionsPanel.test.tsx > "a successful
+edit still resets the whole form"` (the known pre-existing cross-file flake — passes alone, fails
+beside other files), `src/pages/PaycheckPage.test.tsx > "names the employer match under the
+waterfall"` and `src/pages/OverviewPage.test.tsx:1879`. None of the three files is touched by P4,
+and each passes when run alone. `RestoreCard.test.tsx`'s "leaves focus on the report…" — the known
+flake in P4's area — did not trip in any run; per the brief it was left alone (that file is not
+edited by this lane).
+
+### Spec coverage, requirement → commit
+
+**Projection.** One-row sticky band, `.kpi-row-5`, shorter FI label with the glued (i) — `d80f118`
+(§12). Un-clipped assumptions (`max-height` gone) with the chart column sticky under a *measured*
+band — `2861b2a` (§12). Prose inside cards: method sentence appended to the chart card `footer`,
+`data.warnings` as the chart card `lede`, trend intro as the trend card `lede` — `880bed0` (§10).
+Fine print into the compare card, compare table `max-width: 900px` + left muted caption,
+`.sandbox-pins .field-input` reads as words, budgets sentence wraps as a unit, "below" → "in this
+table" — `2867927` (§12, §14).
+
+**Calendar.** Footnotes out of the tile grid (quote date → Vesting `delta`, both notes → `CashflowNotes`
+inside the calendar card after `SourceHealth`) — `9aad404` (§10, §12). 76px cells with
+`grid-auto-rows: minmax(76px, auto)`, duplicate month `h2` dropped — `9aad404` (§12). Add event in
+the shared detail panel with the inline-card fallback — `a6ea14a` + `5268dc1` (§12). Gutter reads
+in over out on two lines; zero amounts print `$0` with no sign, tilde or `est.` badge — `3c21595`
+(§12, §14).
+
+**Settings.** Bands `visually-hidden` with ids kept — `9c7b0b3` (§3, §10). `.settings-page
+.card-grid { align-items: start }` — `9c7b0b3` (§12). Span change (Categories `span-8`, Household
+`span-4`) with `useScrollEdges` on `.settings-scroll` and the `td.row-actions` column — `9c7b0b3`
+(§7). Ghosts at the spec's twelve heights + skeleton parity — `4b51169` + `c981d84` (§9). Single
+Accounts render after both feeds settle — `ff63a4d` (§9). Hover/focus prefetch — `4b51169` +
+`70f42f7` (§9). Copy: one password sentence, system facts as `<ul>` across both columns, restore
+source labels in the form register — `458e6d5` (§14, lead item 4). Import/restore folds on
+`Disclosure` — `479acf6` (§11).
+
+### Deviations from the plan (and why)
+
+1. **`EMPTY_FIELDS` stays in `CalendarPage.tsx`** instead of being exported from `AddEventForm.tsx`
+   (plan Task 7 Step 1/2). A non-literal value export beside a component costs a
+   `react-refresh/only-export-components` warning, and the lane must add none; the `EventFields`
+   *type* still comes from the form module, so the cohesion the plan wanted is kept. Applied in
+   `5268dc1`.
+2. **The no-break spaces in the FI tile label are written as ` ` escapes, not literal NBSP
+   characters.** Literal U+00A0 in source trips eslint's `no-irregular-whitespace` (2 errors). Same
+   runtime string, so the plan's `expect(label.textContent).toContain('yrs ')` assertion is
+   untouched. Folded into `2867927`.
+3. **One existing test updated beyond the plan's list:** `SettingsPage.test.tsx > "ghosts the page
+   through the frame while the FIRST load is in flight"` expected five `.page-skeleton .card`
+   ghosts. Task 12's skeleton-parity change makes it three (Household 4 · Categories 8 · Accounts
+   12), so the count and its comment were updated in place, never deleted. In `c981d84`.
+4. **`AccountsCard` uses `Promise.allSettled`**, where §9 says `Promise.all` — "settle" is the
+   behaviour the spec describes, and the card's existing contract (and its test "keeps the net-worth
+   roster alive when the portfolio labels fail to load") requires a failed feed not to blank the
+   other. The plan already sanctioned this; recorded here for the spec's as-built notes.
+5. **The chart column's sticky `top` adds the measured `--projection-band-h`** to the spec's
+   `var(--sticky-inset) + 8px`; without it the band (z-index 6) covered the chart card's header.
+   Plan-sanctioned; recorded for the as-built notes.
+6. **The hover prefetch lands in a 30s warm cache** (`settingsPrefetch.ts`) that cards consume on
+   mount — `client.ts` only dedupes *in-flight* GETs, so a bare prefetch would be discarded before
+   the click. Plan-sanctioned; recorded for the as-built notes.
+7. **Calendar footnotes render inside the calendar card** (after `SourceHealth`), not as a bare line
+   under the strip: a paragraph between the tile row and the card is the orphan §15.3 forbids.
+   Plan-sanctioned; recorded for the as-built notes.
+8. **Vesting `delta` reads "quote as of Sep 2, 2026"** (`formatDate`, the app's one date formatter),
+   and the **compare caption is left-aligned and muted**, not `visually-hidden` (it still names the
+   table for assistive tech). Plan-sanctioned; recorded for the as-built notes.
+9. **Task 16 Step 4 (browser eyeball) was not performed** — the dev stack was not running in this
+   worktree and it is explicitly not a gate. Lane V's acceptance walk covers it.
+
+### Notes for lane V
+
+- **Ghost selectors.** `.settings-ghost` is the block; it carries `aria-hidden="true"` and
+  `data-ghost-height="<the card's loaded height>"` (so a walk can assert *which* card's ghost it is
+  without measuring). A `<p class="visually-hidden" role="status">Loading…</p>` sits beside it —
+  that is the only "Loading…" a settings card prints now; `.empty-note` no longer carries it.
+  Heights in use: household 420, categories 900, accounts 1045, limits 415 (chrome
+  `SETTINGS_CARD_CHROME_PX + 42`), plan-assumptions 415, price-refresh 420, assistant 420,
+  calendar-feed 357, backups 313, health 313, system 313, activity 487.
+- **Add-event panel.** The panel id is **`calendar-add`** — one surface for add *and* edit. Titles:
+  `Add event`, `Add event on {formatDate(day)}`, or `Edit event`. The panel content is a stable host
+  `<div>`; the form is portaled into it, so keystrokes never reopen the panel. `returnTo` is the
+  header's "Add event" button. With no `DetailPanelProvider` the page falls back to the inline
+  `section.card.span-12` — that is what every pre-existing page test exercises.
+- **Prefetch.** Hovering or focusing a Settings tab fires that section's GETs once per mount
+  (`prefetchSection`); the section on screen and any already-visited section are never primed. A
+  primed promise expires after `WARM_TTL_MS` = 30s. `resetWarmForTests()` clears it between tests.
+- **Skeleton parity.** `/settings` now ghosts three cards (span 4 / 8 / 12 at 362 / 842 / 987), not
+  five.
+- **Projection.** `--projection-band-h` is written on the band's *parent* (the `LocalSectionPanel`)
+  by a `ResizeObserver`; without `ResizeObserver` the CSS falls back to `131px`. The band is
+  `position: static` below 1000px of container width, and so is the chart column below 900px or
+  while the assumptions aside is collapsed (`.projection-workspace:has(.sandbox-header-actions >
+  [aria-expanded='false'])`).
+- **Container queries.** This lane's `@container` rules are unnamed and resolve to `.projection-page`
+  (the same element as `.page`), so the lead's rename to `container: page / inline-size` needs no
+  change here.
+
+### Review round (2026-09-13, verdict APPROVE WITH FIXES)
+
+Merged `main` @`4576025` (the F2 review round) into the lane first — `ca713d1`, clean, no conflicts.
+That merge changed two things under this lane: `useScrollEdges(ref, active = true)` gained an
+optional second argument (P4's single call site passes one argument and is unaffected — the
+`CategoriesTable` child already renders its scroller unconditionally, which is the pattern the
+change asks for), and `panels.css` now names the page container (`container: page / inline-size`)
+and makes `.stat-tile` a container. The merged base was verified green (tsc + 44 files / 488 tests)
+before any fix was applied.
+
+All three fixes landed in one commit, `285f204` — `fix(planning): P4 review round — dead container
+override, cross-section stale primes, trailing label space`. TDD throughout: each fix's test was
+written and watched fail first (2 failures for fix 1, 4 for fix 2, 1 for fix 3).
+
+**1 (IMPORTANT) — the dead `@container` override.** Correct as reported. The
+`@container (max-width: 999px)` block sat *above* the base `.projection-chart-area` rule; a
+container query adds no specificity, so the base `top: calc(… + var(--projection-band-h, 131px) +
+8px)` won and the narrow-width `top` never applied. Between 900 and 999px of page width the band
+went `static` (two rows, ~250px) while the chart still stuck 250px below the frame — a band-sized
+hole above the chart card. The block now follows the rule it overrides, with
+`@container (max-width: 900px)` still last. New `src/pages/projectionCss.test.ts` (built on
+`settingsCss.test.ts`'s `stripComments` shape) pins the order: the 999px block after the base rule,
+the 900px block after that.
+
+*Beyond the ask, forced by the merge:* both queries are now **named** — `@container page (…)` — and
+`.projection-page` carries main's own `container: page / inline-size` on the same element. After the
+F2 review round `.stat-tile` is a query container, and panels.css's own comment explains that an
+unnamed query binds to the nearest one; leaving these anonymous was a live trap for any future rule
+in this sheet. The test asserts no anonymous `@container (` survives in `ProjectionPage.css`.
+
+**2 (IMPORTANT) — cross-section stale primes.** Correct as reported, and fixed centrally as
+prescribed. `settingsPrefetch.ts` gains
+`export const WRITERS: Record<string, SettingsSection[]>` — `household`/`categories`/`accounts`/
+`portfolio-accounts` → `['household']`; `limits` → `['planning']`; `app-settings` →
+`['planning','integrations']`; `profiles` → `['planning']`; `system-status` →
+`['integrations','data']`; `assistant-settings`/`feed-tokens` → `['integrations']`;
+`snapshots`/`health`/`coverage`/`activity` → `['data']`. A `writersFor(key)` helper looks the
+per-year `limits:2026` key up under its `limits` stem. Each section's loader now receives a `prime`
+callback instead of calling `primeWarm` directly, and
+`prefetchSection(section, visited: ReadonlySet<SettingsSection>)` skips any key whose writer section
+is in `visited`. `SettingsPage.tsx` passes the `visitedRef` set it already keeps.
+
+Practical effect: Household is the landing section, so it is visited from the first render and a
+hover over Planning no longer primes `/household` at all — the reported window (hover Planning, edit
+a person on the Household tab, click Planning, read the pre-edit roster) is closed. The card simply
+fetches fresh, which is what it did before the lane.
+
+`resetWarm()` is exported for the lead to wire at sign-out; `resetWarmForTests` is now an alias of
+it, so existing importers are unchanged. No shared file (`api/client.ts`, `AuthContext.tsx`) was
+touched.
+
+Five new tests in `settingsPrefetch.test.ts` (the twelve API modules are mocked there now — what is
+under test is *which* loaders a hover starts): `/household` unprimed for Planning once Household has
+been open while Planning's own keys still warm; `/settings` unprimed for Integrations once Planning
+has been open; `/system` unprimed for Data once Integrations has been open; everything primed when
+no writer has been open, and the card takes the primed promise; `resetWarm` drops every entry. The
+page-level test `"warms a task's data on tab hover or focus"` gained the same assertion where the
+hazard actually lives: after hovering Planning, `fetchHousehold` is still at its single mount call.
+
+**3 (minor) — the trailing no-break space.** Dropped. F2's `.stat-label-text { white-space: nowrap }`
+already holds the label and its (i) in one unit, so the trailing space only padded the row; the
+space between the figure and its unit ("30 yrs") stays. The Task-1 assertion is tightened from
+`toContain('yrs ')` to an exact `toBe('Reach FI within 30 yrs')`, which pins both the kept
+space and the absence of the dropped one.
+
+**Gates after the round:** `npx tsc -b` clean · scoped `eslint` 0 errors / 3 warnings (all
+pre-existing in `CalendarGrid.tsx`) · `npx eslint .` **25 warnings, 0 errors — still exactly the repo
+baseline** · scoped vitest **45 files / 495 tests** pass · full `npx vitest run` **217 files / 2967
+tests pass, green on the first attempt** (none of the earlier cross-file flakes tripped) ·
+`npm run build` ✓ 8.85s.
+
+Lane head is now `285f204` (plus this note). Note for the lead: `main` advanced again to `d28527c`
+(lane P1 merged) after this round's merge of `4576025`; P4 has not been re-merged onto it.
+
+### Follow-ups — deletions DEFERRED to the lead (lane P4 deleted nothing)
+
+```
+// TODO(polish-cleanup) — deletions deferred to the end of the night (lane P4 did NOT delete):
+//  - src/components/settings/SettingsRail.tsx + SettingsRail.test.tsx: imported by its test only (audit S-12).
+//  - src/components/settings/settings.css (".settings-page .card" arrival ring + scroll-margin-top):
+//    audit S-12 calls it rail-era, BUT the ring is still exercised by the palette's anchored arrival
+//    (SettingsPage.tsx hash effect, tests "SettingsPage — anchored arrival from the palette") and the
+//    scroll-margin keeps /settings#limits from landing under the sticky strip (settingsCss.test.ts pins
+//    it). Recommend KEEPING; delete only if the anchored-arrival ring is also retired.
+//  - The CSS this lane already removed (no follow-up): .projection-warnings, .projection-method-note,
+//    .projection-view-intro, .cal-title, .cal-strip-asof/.cal-strip-unknown, the section bands' typography.
+```
+
+Other carry-overs: none. No database, no backend, no shell file was touched; no worktree or branch
+cleanup is owed by this lane beyond the usual merge-and-remove.

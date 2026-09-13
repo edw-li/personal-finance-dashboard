@@ -48,6 +48,8 @@ describe('RestoreReportView', () => {
     // The plan's Step-4 rider: jsdom keeps a closed <details>'s children in the DOM and
     // getByText finds them regardless, so the FOLD ITSELF is what the state assertion reads.
     const details = fold.closest('details') as HTMLDetailsElement
+    // The house fold (2026-09-13 spec §11): the shared Disclosure primitive, not a bare <details>.
+    expect(details.classList.contains('disclosure')).toBe(true)
     expect(details.open).toBe(false)
     fireEvent.click(fold)
     expect(details.open).toBe(true)

@@ -98,7 +98,7 @@
 }
 
 /* Six facts down a half-width card is a long thin list; two columns fill it (spec §3.3), and
-   the label track has to give inside the narrower column. */
+   the label track has to give inside the narrower column. A list-valued fact takes both. */
 @media (min-width: 721px) {
   .system-facts {
     display: grid;
@@ -109,6 +109,24 @@
   .system-facts .system-fact {
     grid-template-columns: minmax(110px, 40%) 1fr;
   }
+
+  .system-facts .system-fact-wide {
+    grid-column: 1 / -1;
+  }
+}
+
+/* One line per value (audit S-8): timestamps and feed clauses, never a " · "-joined paragraph. */
+.system-fact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.system-fact-more {
+  color: var(--muted);
 }
 
 /* --- household / accounts / categories cards (2026-08-26 spec §6) --- */
@@ -208,6 +226,13 @@
   top: 0;
   background: var(--surface);
   z-index: 1;
+}
+
+/* A lazily loaded card's body while it fetches (2026-09-13 spec §9): one .skeleton block sized by
+   SettingsGhost to the card's loaded height, so the tab switch lands on a stable layout. */
+.settings-ghost {
+  display: block;
+  margin-top: 0.25rem;
 }
 
 /* Panel-scoped, like roster.css and categories.css: without these, portfolio.css's bare
@@ -343,7 +368,10 @@
   margin-top: 0.75rem;
 }
 
-.restore-arm label {
+/* The source picker's labels wear the same form register as every other label on the page
+   (audit S-6): 16px body text over a select read as a sentence, not a field. */
+.restore-arm label,
+.restore-source label {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -503,27 +531,15 @@
   color: var(--warn);
 }
 
-/* --- section bands and the chip rail (2026-09-06 spec §3.1–§3.2) --- */
+/* --- section bands (2026-09-06 spec §3.1, hidden 2026-09-13 spec §3) --- */
 
-/* A band across the whole grid, NOT a .card: it takes no entrance animation and no arrival
-   ring, and the reveal timeline has nothing to catch on it. It carries its own span rather
-   than wearing .span-12, which is card vocabulary. */
+/* The band repeats the selected tab's label, so it is .visually-hidden (panels.css) — kept in the
+   DOM for assistive tech and as the legacy #sec-* anchor. What remains is the anchor's inset: a
+   jump scrolls the band to the top of the scrollport, which the sticky strip covers; PageFrame
+   MEASURES the strip into --sticky-inset on .page-frame-body and the band inherits it, so it lands
+   below the strip instead of under it (settingsCss.test.ts pins this declaration). */
 .card-grid > .settings-section {
-  grid-column: 1 / -1;
-  margin: 0.75rem 0 0;
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--muted);
-  /* A chip scrolls a band to the top of the scrollport, which the sticky scope row covers.
-     PageFrame MEASURES that row into --sticky-inset on .page-frame-body and these bands
-     inherit it, so the band lands below the row instead of under it. */
   scroll-margin-top: calc(var(--sticky-inset, 0px) + 0.75rem);
-}
-
-.card-grid > .settings-section:first-child {
-  margin-top: 0;
 }
 
 /* One line per person, read as sentences rather than as a table (spec §3.3). */

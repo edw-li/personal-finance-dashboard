@@ -3,7 +3,7 @@ import { createRef } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { calendarEvent } from '../../testing/calendarFixtures'
 import type { CalendarEvent } from '../../types/api'
-import CalendarGrid, { gutterText, shiftMonth } from './CalendarGrid'
+import CalendarGrid, { gutterLines, shiftMonth } from './CalendarGrid'
 import { summarize } from './cashflow'
 
 afterEach(cleanup)
@@ -159,18 +159,23 @@ describe('CalendarGrid', () => {
     expect(handlers.onActiveDay).toHaveBeenCalledWith('2026-10-01')
   })
 
-  it('every row ends with a Week totals gutter reading in / out', () => {
+  it('every row ends with a Week totals gutter reading in over out, on two lines', () => {
     mount()
     const gutters = screen.getAllByRole('gridcell', { name: 'Week totals' })
     expect(gutters).toHaveLength(5) // September 2026 spans five Sunday-first rows
-    expect(gutters[2].textContent).toBe('+$6.8k / ~−$395') // the week of Sep 13-19
-    expect(gutters[4].textContent).toBe('—') // Sep 27 - Oct 3: nothing
+    const lines = (cell: HTMLElement) =>
+      Array.from(cell.querySelectorAll('.cal-gutter-line')).map((line) => line.textContent)
+    // The week of Sep 13-19: two deliberate lines, no slash for an 84px track to break in half.
+    expect(lines(gutters[2])).toEqual(['+$6.8k', '~−$395'])
+    expect(lines(gutters[4])).toEqual(['—']) // Sep 27 - Oct 3: nothing
   })
 
-  it('helpers: shiftMonth clamps to month end; gutterText', () => {
+  it('helpers: shiftMonth clamps to month end; gutterLines prints a zero side as $0', () => {
     expect(shiftMonth('2026-01-31', 1)).toBe('2026-02-28')
     expect(shiftMonth('2026-03-15', -1)).toBe('2026-02-15')
     expect(shiftMonth('2026-12-31', 1)).toBe('2027-01-31')
-    expect(gutterText(summarize([]))).toBe('—')
+    expect(gutterLines(summarize([]))).toEqual(['—'])
+    const paydayOnly = [calendarEvent({ date: SEP15, type: 'payday', label: 'Payday', amount: '6812.44', direction: 'in' })]
+    expect(gutterLines(summarize(paydayOnly))).toEqual(['+$6.8k', '$0'])
   })
 })

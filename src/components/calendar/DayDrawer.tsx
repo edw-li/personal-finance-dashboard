@@ -4,7 +4,7 @@ import type { CalendarEvent } from '../../types/api'
 import { formatDate } from '../../utils/format'
 import '../assistant/assistant.css'
 import { SOURCE_COLORS, chipAmount } from './calendarView'
-import { cashLine, summarize } from './cashflow'
+import { cashLine, summarize, toCents } from './cashflow'
 
 export interface DayDrawerProps {
   day: string
@@ -82,7 +82,7 @@ export default function DayDrawer({
                 />
                 <span className="cal-drawer-label">{event.label}</span>
                 <span className="cal-drawer-amount num">{chipAmount(event) ?? '—'}</span>
-                {event.basis === 'estimated' && event.amount !== null && (
+                {event.basis === 'estimated' && event.amount !== null && toCents(event.amount) !== 0 && (
                   <span className="badge">est.</span>
                 )}
               </button>

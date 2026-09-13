@@ -65,3 +65,10 @@
   font: inherit;
   cursor: pointer;
 }
+
+/* A short card ends where its content ends (2026-09-13 spec §12, audit S-4): the panel grid
+   stretched every span-6 pair to its taller sibling — Household stood 322px of empty card beside
+   Categories. The void is page background now, which reads as "short card", not "empty card". */
+.settings-page .card-grid {
+  align-items: start;
+}

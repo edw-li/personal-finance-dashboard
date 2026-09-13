@@ -2,25 +2,8 @@
    .card, .kpi-row, .stat-tile, .button, .field-input, .error-banner, .empty-note,
    .drill-hint, .loading-dim) lives in panels.css and is not redefined here. */
 
-/* Advisory sentences about what the model ran with — the tax-warnings register: nothing
-   failed, so never an error banner. */
-.projection-warnings {
-  display: grid;
-  gap: 0.3rem;
-  margin-bottom: 1rem;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--muted);
-  border-radius: 6px;
-  background: var(--surface-2);
-}
-
-.projection-warnings p {
-  margin: 0;
-  font-size: 0.78rem;
-  line-height: 1.45;
-  color: var(--muted);
-}
+/* The warnings lede is one <p> per sentence inside panels.css's .chart-lede strip. */
+.projection-page .chart-lede p { margin: 0 0 0.25rem; }
 
 /* The derived-contribution arithmetic under its knob: a caption, not a control. It lives
    inside ScenarioPanel's sandbox controls (2026-09-03 planning-sandboxes spec §11); the
@@ -33,12 +16,38 @@
   color: var(--muted);
 }
 
-.projection-page { container-type: inline-size; }
+/* The same declaration panels.css puts on .page, on the same element: NAMED, so the queries below
+   cannot bind to a nearer container (.stat-tile is one) if this sheet ever outlives that rule. */
+.projection-page { container: page / inline-size; }
 .projection-outcomes { position: sticky; top: var(--sticky-inset, 0px); z-index: 6; background: var(--bg); padding-block: 8px; }
+
 .projection-workspace { display: grid; grid-template-columns: minmax(480px, 1fr) 350px; align-items: start; gap: 18px; }
-.projection-chart-area { min-width: 0; }
+/* The chart stays in view while every knob is reachable (spec §12, audit P-2: the old inner
+   scroller hid 932px of controls behind a hard edge through the Withdrawal-rate box). The aside is
+   its natural height and the CHART column pins under the outcomes band. --sticky-inset is the
+   frame's sticky block (the tab strip, measured by PageFrame); --projection-band-h is the band,
+   measured by ProjectionPage.tsx's measureBand; 131px is the one-row band it falls back to. */
+.projection-chart-area {
+  min-width: 0;
+  position: sticky;
+  top: calc(var(--sticky-inset, 0px) + var(--projection-band-h, 131px) + 8px);
+  align-self: start;
+}
+
+/* Five tiles, one row (2026-09-13 polish spec §12): panels.css lays .kpi-row-5 out as five equal
+   tracks above 1000px of container width. Below that the row wraps, and a two-row band pinned to
+   the top of a laptop viewport covered the very chart it describes (audit P-1: 253px, 28% of a
+   900px viewport) — so there the band simply scrolls with the page, and the chart pins directly
+   under the frame instead of under a band that is no longer there.
+   BELOW the base rule on purpose (projectionCss.test.ts pins the order): a container query adds no
+   specificity, so written above it this `top` lost to the base one and left a band-sized hole above
+   the chart between 900 and 999px (2026-09-13 P4 review). */
+@container page (max-width: 999px) {
+  .projection-outcomes { position: static; }
+  .projection-chart-area { top: calc(var(--sticky-inset, 0px) + 8px); }
+}
 .projection-chart-controls { display: flex; gap: 8px; flex-wrap: wrap; }
-.projection-assumptions { max-height: min(780px, calc(100vh - 210px)); min-height: 460px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border-radius: 10px; }
+.projection-assumptions { min-width: 0; }
 .projection-assumptions .sandbox-card { padding: 16px; }
 .projection-assumptions .sandbox-header { align-items: flex-start; flex-direction: column; }
 .projection-assumptions .sandbox-header-actions { flex-wrap: wrap; }
@@ -47,10 +56,37 @@
 .projection-assumptions .sandbox-badge { font-size: 0.63rem; white-space: nowrap; }
 .projection-assumptions .drill-hint { font-size: 0.75rem; line-height: 1.5; }
 .projection-assumptions:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.projection-method-note, .projection-view-intro { font-size: 0.84rem; line-height: 1.55; color: var(--muted); }
 .projection-comparisons { margin-top: 20px; }
-@container (max-width: 900px) {
+/* Three pins wide is the most this table ever holds (audit P-6): past 900px the figure sat a screen
+   away from its label. The caption keeps the table self-describing for assistive tech and reads like
+   the page's other captions — left, small, muted — instead of centred across the card. */
+.projection-comparisons .compare-table { max-width: 900px; }
+.projection-comparisons .compare-table caption {
+  caption-side: top;
+  padding: 0 0 0.4rem;
+  text-align: left;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+/* The budgets preset and its sentence are flex items: the sentence wraps as a UNIT under the button
+   when the 350px column is narrow (audit P-8), never "12 × the living-" orphaned beside it. After
+   .sandbox-controls .projection-derived above, whose display: block it overrides. */
+.sandbox-controls .projection-derived-preset {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+}
+/* Assumptions hidden → the chart takes the whole width and the collapsed header card sits above it,
+   where the reader left the toggle (audit P-9). Scoped to the HEADER's toggle button: the ⓘ hints
+   inside the card carry aria-expanded too, and would otherwise collapse the workspace permanently. */
+.projection-workspace:has(.sandbox-header-actions > [aria-expanded='false']) { grid-template-columns: 1fr; }
+.projection-workspace:has(.sandbox-header-actions > [aria-expanded='false']) .projection-chart-area { position: static; }
+.projection-workspace:has(.sandbox-header-actions > [aria-expanded='false']) .projection-assumptions { order: -1; }
+/* One column: the chart above the knobs. A sticky chart here would pin a 400px canvas over the
+   controls the reader is scrolling towards, so it scrolls with them. */
+@container page (max-width: 900px) {
   .projection-workspace { grid-template-columns: 1fr; }
-  .projection-assumptions { max-height: none; }
+  .projection-chart-area { position: static; }
   .projection-assumptions .sandbox-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

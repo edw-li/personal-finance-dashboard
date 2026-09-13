@@ -1,5 +1,6 @@
 import type { RestoreReport } from '../../types/api'
 import { formatInstantDate } from '../../utils/format'
+import Disclosure from '../Disclosure'
 import '../panels.css'
 import './settings.css'
 
@@ -64,10 +65,7 @@ export default function RestoreReportView({ report }: { report: RestoreReport })
         </table>
       )}
       {unchanged.length > 0 && (
-        <details>
-          <summary>
-            {unchanged.length} {unchanged.length === 1 ? 'table' : 'tables'} unchanged
-          </summary>
+        <Disclosure summary={`${unchanged.length} ${unchanged.length === 1 ? 'table' : 'tables'} unchanged`}>
           <ul>
             {unchanged.map(([name, diff]) => (
               <li key={name}>
@@ -75,7 +73,7 @@ export default function RestoreReportView({ report }: { report: RestoreReport })
               </li>
             ))}
           </ul>
-        </details>
+        </Disclosure>
       )}
       {report.preserved_settings.length > 0 && (
         <p className="settings-note">

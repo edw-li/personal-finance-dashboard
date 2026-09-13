@@ -7,12 +7,14 @@ import type {
   AppSettingsOut,
   ImportReport,
   ImportSheetReport,
+  LimitsOut,
   PersonOut,
   SnapshotEntry,
   SystemStatus,
 } from '../types/api'
 import SettingsPage from './SettingsPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
+import { resetWarmForTests } from '../components/settings/settingsPrefetch'
 
 // Four api modules, all stubbed. No EChart mock here: this page draws nothing, so the
 // house's never-render-echarts-in-jsdom rule has nothing to catch.
@@ -280,6 +282,7 @@ const resizeObservers: ObserverRecord[] = []
 const bodyObserver = () => resizeObservers.find((o) => o.targets.includes(document.body))
 
 beforeEach(() => {
+  resetWarmForTests()
   resizeObservers.length = 0
   vi.stubGlobal(
     'ResizeObserver',
@@ -373,9 +376,9 @@ describe('SettingsPage — lifecycle', () => {
     // paragraph is the skeleton's visually-hidden status line over three ghost cards.
     expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeTruthy()
     expect(screen.getByText('Loading…')).toBeTruthy()
-    // Five ghosts, the section-1 shape: Household 6 · Categories 6 · Accounts 12 ·
-    // Limits 6 · Plan assumptions 6 (spec §3.6).
-    expect(document.querySelectorAll('.page-skeleton .card')).toHaveLength(5)
+    // Three ghosts, the Household section's shape at the heights its cards' own ghosts stand at:
+    // Household 4 · Categories 8 · Accounts 12 (2026-09-13 spec §9 skeleton parity).
+    expect(document.querySelectorAll('.page-skeleton .card')).toHaveLength(3)
     expect(screen.queryByRole('region', { name: 'Plan assumptions' })).toBeNull()
 
     gate.resolve(SETTINGS)
@@ -449,12 +452,10 @@ describe('SettingsPage — password', () => {
       expect(vi.mocked(changePassword)).toHaveBeenCalledWith('old-pw', 'new-pw-12345'),
     )
     expect(await screen.findByText('Password changed.')).toBeTruthy()
-    // What the change actually DOES, said out loud on the page (2026-09-03 shell spec §10):
-    // the server bumps token_version, so every other session ends and only this one — which
-    // stored the token the response handed back — survives.
-    expect(
-      screen.getByText('Other devices are signed out; this one stays signed in.'),
-    ).toBeTruthy()
+    // What the change DOES is said once, in the heading's (i) (2026-09-13 spec §14, audit S-11):
+    // the note under the form repeated that sentence word for word.
+    expect(screen.queryByText('Other devices are signed out; this one stays signed in.')).toBeNull()
+    expect(screen.getByRole('button', { name: /^About Changes your login password/ })).toBeTruthy()
     // Nothing typed here may stay on screen after it has been used.
     expect(currentPwBox().value).toBe('')
     expect(newPwBox().value).toBe('')
@@ -956,6 +957,9 @@ describe('SettingsPage — task views', () => {
       expectInDocumentOrder(el(heading), ...cards.map(el))
       expect(el(heading).tagName).toBe('H2')
       expect(el(heading).classList.contains('card')).toBe(false)
+      // The band duplicates the selected tab's label (2026-09-13 spec §3, audit S-1): hidden from
+      // sight, kept for assistive tech and as the legacy #sec-* anchor.
+      expect(el(heading).classList.contains('visually-hidden')).toBe(true)
     }
   })
 
@@ -1276,5 +1280,76 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     renderPage('planning')
     const limits = await screen.findByRole('region', { name: 'Contribution limits' })
     expect(limits.classList.contains('is-highlighted')).toBe(false)
+  })
+})
+
+describe('SettingsPage — loading states (2026-09-13 spec §9)', () => {
+  it('stands a ghost of the loaded card until a lazily loaded card has its data', async () => {
+    const limits = deferred<LimitsOut>()
+    vi.mocked(fetchLimits).mockReturnValue(limits.promise)
+    renderPage('planning')
+    const card = await waitFor(() => {
+      const el = document.getElementById('limits')
+      expect(el).not.toBeNull()
+      return el as HTMLElement
+    })
+    const ghost = card.querySelector('.settings-ghost') as HTMLElement
+    expect(ghost).not.toBeNull()
+    expect(ghost.dataset.ghostHeight).toBe('415')
+    expect(within(card).getByRole('status').textContent).toBe('Loading…')
+    expect(card.querySelector('form')).toBeNull()
+    expect(card.querySelector('.empty-note')).toBeNull()
+    await act(async () => {
+      limits.resolve({ year: new Date().getFullYear(), items: [] })
+    })
+    expect(card.querySelector('.settings-ghost')).toBeNull()
+    expect(card.querySelector('form')).not.toBeNull()
+  })
+
+  it('ghosts every Data card while it loads and never prints the old Loading… note', async () => {
+    const snapshots = deferred<SnapshotEntry[]>()
+    vi.mocked(fetchSnapshots).mockReturnValue(snapshots.promise)
+    renderPage('data')
+    const backups = await waitFor(() => {
+      const el = document.getElementById('backups')
+      expect(el).not.toBeNull()
+      return el as HTMLElement
+    })
+    expect((backups.querySelector('.settings-ghost') as HTMLElement).dataset.ghostHeight).toBe('313')
+    expect(screen.queryByText('Loading…', { selector: '.empty-note' })).toBeNull()
+    await act(async () => {
+      snapshots.resolve([])
+    })
+    expect(backups.querySelector('.settings-ghost')).toBeNull()
+  })
+
+  it('warms a task’s data on tab hover or focus, once, so the click finds it already loaded', async () => {
+    renderPage()
+    await waitFor(() => expect(document.getElementById('accounts')).not.toBeNull())
+    expect(vi.mocked(fetchProfiles)).not.toHaveBeenCalled()
+    expect(vi.mocked(fetchLimits)).not.toHaveBeenCalled()
+
+    // Household mounted, so its roster is already on the wire once.
+    expect(vi.mocked(fetchHousehold)).toHaveBeenCalledTimes(1)
+
+    fireEvent.pointerOver(screen.getByRole('tab', { name: 'Planning' }))
+    expect(vi.mocked(fetchProfiles)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchLimits)).toHaveBeenCalledTimes(1)
+    // ...but NOT /household: Household is the section on screen and can save a person, so a prime
+    // parked here could hand Planning a pre-edit roster (settingsPrefetch.ts's WRITERS, P4 review).
+    expect(vi.mocked(fetchHousehold)).toHaveBeenCalledTimes(1)
+    // Again, and by keyboard: still once per section.
+    fireEvent.pointerOver(screen.getByRole('tab', { name: 'Planning' }))
+    fireEvent.focus(screen.getByRole('tab', { name: 'Planning' }))
+    expect(vi.mocked(fetchProfiles)).toHaveBeenCalledTimes(1)
+    // The section on screen is never primed: its cards have fetched.
+    fireEvent.pointerOver(screen.getByRole('tab', { name: 'Household' }))
+    expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
+    await screen.findByLabelText('Withdrawal rate (% / year)')
+    // The cards took the primed promises instead of asking again.
+    expect(vi.mocked(fetchProfiles)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchLimits)).toHaveBeenCalledTimes(1)
   })
 })

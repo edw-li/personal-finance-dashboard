@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchHousehold } from '../api/household'
 import { fetchProjection } from '../api/projection'
@@ -8,7 +8,7 @@ import { projectionCsv, projectionOption } from '../components/projection/projec
 import { decodeProjection, encodeProjection, isEmptyProjection, labelForProjection, toParams, COMPARE_ROWS, projectionValue, type ProjectionScenario } from '../components/projection/projectionScenario'
 import { displayProjection, milestoneWindow, projectionReceipts, projectionSelection, type ProjectionDollars } from '../components/projection/projectionDisplay'
 import ProjectionTrendPanel from '../components/projection/ProjectionTrendPanel'
-import ScenarioPanel from '../components/projection/ScenarioPanel'
+import ScenarioPanel, { ScenarioHints } from '../components/projection/ScenarioPanel'
 import { useAssistantView } from '../components/assistant/viewState'
 import StatTile from '../components/StatTile'
 import Segmented from '../components/shell/Segmented'
@@ -83,6 +83,25 @@ export default function ProjectionPage() {
   const selection = selectedIndex === null ? null : readout(selectedIndex)
   const select = (value: ChartSelection | null) => setSelectedIndex(value?.kind === 'projection' && display ? display.months.indexOf(value.date) : null)
   const receipts = useMemo(() => data ? projectionReceipts(data) : null, [data])
+  // The chart column sticks UNDER the outcomes band (spec §12), whose height is measured rather
+  // than assumed: it is one row of tiles when their labels fit and taller when one wraps, and a
+  // constant would park the chart's header under the band at exactly the widths that wrap.
+  // Written on the band's parent (the section panel) so .projection-chart-area inherits it; the
+  // 131px fallback in the CSS is the one-row band (115px tile + 8px padding twice). A ref callback
+  // with a cleanup (React 19), memoised so React does not re-observe on every render. jsdom and
+  // any browser without ResizeObserver keep the fallback.
+  const measureBand = useCallback((band: HTMLDivElement | null) => {
+    const target = band?.parentElement ?? null
+    if (band === null || target === null || typeof ResizeObserver === 'undefined') return undefined
+    const write = () => target.style.setProperty('--projection-band-h', `${band.offsetHeight}px`)
+    write()
+    const observer = new ResizeObserver(write)
+    observer.observe(band)
+    return () => {
+      observer.disconnect()
+      target.style.removeProperty('--projection-band-h')
+    }
+  }, [])
   return <div className="page projection-page">
     <PageFrame title="Projection" sections={missing ? undefined : <LocalSectionNav state={sections} label="Projection views" />} resource={{
       status: missing ? 'ready' : data === null ? pageError !== null ? 'error' : 'loading' : 'ready',
@@ -93,7 +112,7 @@ export default function ProjectionPage() {
         <p className="empty-note">{sandbox.error} — <Link to="/update">enter a monthly update</Link> to start one.</p></section>
         : data !== null && display !== null && receipts !== null && <>
           <LocalSectionPanel state={sections} section="planning">
-            <div className="kpi-row projection-outcomes" aria-label="Planning outcomes">
+            <div ref={measureBand} className="kpi-row kpi-row-5 projection-outcomes" aria-label="Planning outcomes">
               <StatTile label="FI target" value={formatCurrency(data.fi_target)}
                 delta={data.fi_target === null ? undefined : `annual spend ÷ ${formatPct(data.swr_pct, { signed: false })} SWR`}
                 hint="Annual spend ÷ withdrawal rate — the balance at which withdrawals could cover spending."
@@ -105,7 +124,10 @@ export default function ProjectionPage() {
               <StatTile label="Projected FI date" value={data.fi_month === null ? data.fi_target === null ? '—' : 'Not reached' : formatMonth(data.fi_month)} evidence={receipts.reachDate}
                 delta={data.coast_fi_month === null ? 'At your assumed constant return' : `growth alone: ${formatMonth(data.coast_fi_month)}`}
                 tone="neutral" hint="First month the deterministic projection reaches the target. Growth alone repeats it with contributions off." />
-              <StatTile label={`Reach FI target within ${data.years} years`} value={formatPct(data.fi_probability, { signed: false })}
+              {/* Short enough for a fifth of the row. The no-break space keeps the figure and its
+                  unit on one line; the (i) needs none — F2's .stat-label-text holds the words and
+                  the icon in one nowrap unit (audit P-11). */}
+              <StatTile label={`Reach FI within ${data.years}\u00A0yrs`} value={formatPct(data.fi_probability, { signed: false })}
                 delta={data.fi_month_p50 === null ? undefined : `Median reach: ${formatMonth(data.fi_month_p50)}`}
                 tone="neutral" evidence={receipts.probability} hint="Share of 500 simulated paths reaching the target within this horizon. It does not measure retirement spending sustainability." />
             </div>
@@ -132,10 +154,10 @@ export default function ProjectionPage() {
                       { value: 'linear', label: 'Linear' }, { value: 'log', label: 'Log' },
                     ]} value={log ? 'log' : 'linear'} onChange={(value) => setLog(value === 'log')} />
                   </div>}
-                  footer={<p className="drill-hint">{display.display_dollars === 'future' ? 'Future dollars include the modeled price inflation in each month; the target rises by the same factor.' : `Today's dollars express buying power at ${formatMonth(data.start_month)}.`} Inputs and headline targets stay in that starting dollar basis. Growth only excludes contributions. {log ? 'The log axis omits values at or below zero.' : ''}</p>} />
-                <p className="projection-method-note">The central line uses a constant assumed return; simulated paths vary around it. Identical assumptions reuse the same samples for a stable comparison.</p>
-                {unknownPinInflation && <p className="projection-method-note">A pinned scenario has no inflation assumption, so its future-dollar line is unavailable. Its starting-dollar results remain in the comparison table.</p>}
-                {data.warnings.length > 0 && <div className="projection-warnings">{data.warnings.map((warning) => <p key={warning}>{warning}</p>)}</div>}
+                  // Advisory sentences about what the model ran with — the tax-warnings register:
+                  // nothing failed, so never an error banner; the card's own muted header strip.
+                  lede={data.warnings.length > 0 ? data.warnings.map((warning) => <p key={warning}>{warning}</p>) : undefined}
+                  footer={<p className="drill-hint">{display.display_dollars === 'future' ? 'Future dollars include the modeled price inflation in each month; the target rises by the same factor.' : `Today's dollars express buying power at ${formatMonth(data.start_month)}.`} Inputs and headline targets stay in that starting dollar basis. Growth only excludes contributions. {log ? 'The log axis omits values at or below zero. ' : ''}The central line uses a constant assumed return; simulated paths vary around it. Identical assumptions reuse the same samples for a stable comparison.{unknownPinInflation ? ' A pinned scenario has no inflation assumption, so its future-dollar line is unavailable. Its starting-dollar results remain in the comparison table.' : ''}</p>} />
               </div>
               <aside id="projection-assumptions" className="projection-assumptions" tabIndex={-1} aria-label="Planning assumptions controls">
                 <ScenarioPanel sandbox={sandbox} baseline={sandbox.baseline} people={roster} compact />
@@ -143,11 +165,14 @@ export default function ProjectionPage() {
             </div>
             <section className="card projection-comparisons" aria-label="Scenario comparisons">
               <h2 className="eyebrow">Compare your scenarios</h2>
-              <p className="hint">Money inputs and FI targets below use {formatMonth(data.start_month)} dollars. Each probability uses its own scenario horizon.</p>
+              <p className="hint">Money inputs and FI targets in this table use {formatMonth(data.start_month)} dollars. Each probability uses its own scenario horizon.</p>
               <CompareTable<ProjectionOut> rows={COMPARE_ROWS} baseline={sandbox.baseline} scenario={sandbox.result} valueOf={projectionValue}
                 pins={sandbox.pins.map((pin) => ({ id: pin.id, label: pin.label, result: sandbox.pinResults[pin.id] }))}
                 onUnpin={sandbox.unpin} caption="Headline figures — baseline against the live scenario and any pins" />
               <PinRow sandbox={sandbox} />
+              {/* The assumptions' fine print closes the card (spec §12): the knobs column is controls
+                  only, and the sentences about entering them sit beside the figures they produce. */}
+              <ScenarioHints people={roster} />
             </section>
           </LocalSectionPanel>
           <LocalSectionPanel state={sections} section="trend"><ProjectionTrendPanel startMonth={data.start_month} /></LocalSectionPanel>
