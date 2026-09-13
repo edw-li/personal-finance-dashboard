@@ -79,6 +79,13 @@
   gap: 0.5rem;
 }
 
+/* A wash under the row the pointer is on (.row-click's spirit): in a form where a wrong cell is a
+   wrong tax figure, the eye needs to be sure which box belongs to which label. */
+.tax-input-row:hover {
+  background: var(--surface-2);
+  border-radius: 4px;
+}
+
 .tax-input-label {
   display: flex;
   align-items: center;
@@ -102,8 +109,13 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Married-joint rows: the label track is CAPPED and the row left-justified (2026-09-13 polish
+   spec §12; audit W4: a minmax(0, 1fr) track stretched to 675px and put 604px of nothing between
+   the label and its box on 46 rows). 40ch holds the longest label — "Sec 199A QBI deduction (20%
+   of qualified REIT/PTP dividends)" already ellipsises with a title fallback. */
 .tax-input-grid.is-split .tax-input-row {
-  grid-template-columns: minmax(0, 1fr) 120px 120px 170px;
+  grid-template-columns: minmax(0, 40ch) 120px 120px 170px;
+  justify-content: start;
 }
 
 .tax-input-grid.is-split .field-input.tax-input-wide,
@@ -201,6 +213,33 @@
 
 .tax-form-actions .drill-hint {
   margin: 0;
+}
+
+/* The save bar rides the viewport bottom while the form scrolls (2026-09-13 polish spec §12). The
+   wizard's .entry-footer recipe, COPIED under this page's scope rather than imported —
+   MonthlyUpdatePage.css travels with its own screen. The class NAME is the wizard's on purpose:
+   panels.css exempts `.card:has(.entry-footer)` from the scroll-reveal transform, and a transformed
+   ancestor would drag a sticky child along with it and strand the bar mid-page. */
+.taxes-page .entry-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  margin-top: 1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.tax-save-shortcut kbd {
+  font-family: inherit;
+  font-size: 0.7rem;
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
 }
 
 .bracket-block {
