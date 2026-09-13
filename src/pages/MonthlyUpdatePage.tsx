@@ -7,8 +7,8 @@ import {
   deleteMonthBalances,
   fetchAccounts,
   fetchMonthBalances,
-  fetchTimeseries,
 } from '../api/netWorth'
+import { fetchCoverage } from '../api/coverage'
 import { fetchHousehold } from '../api/household'
 import { undoBatch } from '../api/lifecycle'
 import {
@@ -31,6 +31,7 @@ import { GROUP_LABELS, GROUP_ORDER } from '../charts/theme'
 import type {
   AccountOut,
   CategoryOut,
+  CoverageOut,
   HouseholdOut,
   MonthUpsertResult,
   SpendingMatrix,
@@ -303,7 +304,16 @@ export default function MonthlyUpdatePage() {
   // the "of {budget}" subtext's source; advice, never a gate (spec §4.1).
   const [monthBudgets, setMonthBudgets] = useState<Record<number, string>>({})
   const [monthExisted, setMonthExisted] = useState(false)
-  const [coveredMonths, setCoveredMonths] = useState<Set<string>>(new Set())
+  // /coverage — the shared "which months exist" feed (the scope row reads the same one and the
+  // api client dedupes the in-flight GET). It replaces the full monthly timeseries the wizard
+  // used to download only to learn which months have balances (2026-09-13 polish spec §9).
+  const [coverage, setCoverage] = useState<CoverageOut | null>(null)
+  const coveredMonths = useMemo(() => new Set(coverage?.balances ?? []), [coverage])
+  // The load whose SEED is on screen — null until the first month lands. `loading` says a load
+  // is in flight; this says whether there is anything to show under it. A month switch keeps
+  // the previous seed mounted and dimmed until the new one arrives (spec §9), so the body is
+  // never blank and never jumps 900 → 2,400px.
+  const [seeded, setSeeded] = useState<LoadedMonth | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -406,34 +416,26 @@ export default function MonthlyUpdatePage() {
     let cancelled = false
     const loaded = { month, generation: ++loadGeneration.current }
     loadedMonth.current = loaded
+    // Two tiers (2026-09-13 polish spec §9). The FIRST PAINT waits for the six per-month feeds
+    // the seed and the save are built from. The three household-wide AIDS below land on their
+    // own and each already tolerates absence — '—' in the Typical column, a flat group walk, an
+    // empty covered set. Every callback checks the same `cancelled` flag, so a late answer for
+    // a month the user has left can never land over the month they moved to.
+    const matrixPromise = fetchMatrix().catch((): SpendingMatrix | null => null)
+    const householdPromise = fetchHousehold().catch((): HouseholdOut | null => null)
+    const coveragePromise = fetchCoverage().catch((): CoverageOut | null => null)
+    void matrixPromise.then((matrixData) => { if (!cancelled) setMatrix(matrixData) })
+    void householdPromise.then((householdData) => { if (!cancelled) setPeople(householdData?.people ?? []) })
+    void coveragePromise.then((coverageData) => { if (!cancelled && coverageData !== null) setCoverage(coverageData) })
     Promise.all([
       fetchAccounts(),
       fetchCategories(),
       fetchMonthBalances(month),
       fetchMonthBalances(addMonths(month, -1)),
       fetchSpendingMonth(month),
-      fetchTimeseries(),
-      // The Typical column is an entry AID, and '—' is its designed degraded state: a
-      // matrix that fails must never take the whole wizard down with it, because the
-      // month still has to be enterable without any history to compare against.
-      fetchMatrix().catch((): SpendingMatrix | null => null),
-      // The owner grouping is an entry AID like the Typical column: if the household
-      // endpoint is down, the grid falls back to today's flat group walk rather than
-      // refusing to render the month.
-      fetchHousehold().catch((): HouseholdOut | null => null),
       fetchMonthReview(month),
     ])
-      .then(([
-        accountList,
-        categoryList,
-        thisMonth,
-        priorMonth,
-        spendMonth,
-        timeseries,
-        matrixData,
-        householdData,
-        monthReview,
-      ]) => {
+      .then(([accountList, categoryList, thisMonth, priorMonth, spendMonth, monthReview]) => {
         if (cancelled) return
         setError(null)
         setLoadError(null)
@@ -468,9 +470,6 @@ export default function MonthlyUpdatePage() {
         setAccounts(visibleAccounts)
         setCategories(categoryList.filter((c) => c.is_active))
         setMonthExisted(thisMonth.exists)
-        setCoveredMonths(new Set(timeseries.months))
-        setMatrix(matrixData)
-        setPeople(householdData?.people ?? [])
         setHadNetPay(spendMonth.net_pay !== null)
         setStoredCategories(new Set(spendMonth.amounts.map((a) => a.category_id)))
         setHadSpending(
@@ -589,12 +588,16 @@ export default function MonthlyUpdatePage() {
         setNotes(draft ? (draft.notes ?? seededNotes) : seededNotes)
         setBaseline({ month, data: seedSnapshot })
         setRestored(draft !== null)
+        // The seed is on screen from this render: the frame's skeleton or the previous month's
+        // dimmed card gives way to this month's. Same batch as the setters above.
+        setSeeded(loaded)
+        setLoading(false)
       })
       .catch((err: unknown) => {
         if (cancelled) return
         setLoadError(describeError(err, 'this month'))
+        setLoading(false)
       })
-      .finally(() => { if (!cancelled) setLoading(false) })
     return () => {
       cancelled = true
       if (loadedMonth.current === loaded) loadedMonth.current = null
@@ -1269,15 +1272,29 @@ export default function MonthlyUpdatePage() {
             )}
           </>
         }
-        // The wizard is a FORM, not a feed — its SAVE failures are banners inside it. Its
-        // LOAD is a lifecycle like any other page's, so it goes through the frame.
+        // The wizard is a FORM, not a feed — its SAVE failures are banners inside it. Its LOAD is
+        // a lifecycle like any other page's (2026-09-13 polish spec §9): a skeleton until the
+        // first seed lands, an error-only view when a load fails with nothing to show, and the
+        // busy dim over the previous month's card while a switch is in flight. `!loading`
+        // retires an error the instant a switch or a Retry starts — the banner is about the
+        // month being LEFT, and the load chain clears it on arrival.
         resource={
-          // `!loading` retires it the instant a month switch (or a Retry) starts a new load:
-          // the banner is about the month being LEFT, and the load chain clears it on arrival.
-          loadError !== null && !loading
+          loadError !== null && seeded === null && !loading
             ? { status: 'error', error: loadError, retry: retryLoad }
-            : { status: 'ready' }
+            : {
+                status: loading && seeded === null ? 'loading' : 'ready',
+                busy: loading,
+                error: loading ? null : loadError,
+                retry: retryLoad,
+              }
         }
+        skeleton={{
+          tiles: 0,
+          cards:
+            step === 'review'
+              ? [{ span: 12, height: 480 }, { span: 12, height: 58 }]
+              : [{ span: 12, height: 640 }],
+        }}
       >
         <FeedBanner error={error} />
         {reviewConflict && <div className="draft-note"><span>The saved inputs changed during this visit. Reload to compare your draft with the latest saved figures.</span><button className="button" onClick={() => { setLoading(true); setLoadNonce(n => n + 1) }}>Reload latest and compare draft</button></div>}
@@ -1322,8 +1339,11 @@ export default function MonthlyUpdatePage() {
           </div>
         )}
 
-        {!loading && step === 'balances' && (
+        {seeded !== null && step === 'balances' && (
           <div
+            key={seeded.generation}
+            aria-busy={loading || undefined}
+            inert={loading || undefined}
             className="card"
             data-entry-scope=""
             onPaste={(e) =>
@@ -1585,8 +1605,11 @@ export default function MonthlyUpdatePage() {
           </div>
         )}
 
-        {!loading && step === 'spending' && (
+        {seeded !== null && step === 'spending' && (
           <div
+            key={seeded.generation}
+            aria-busy={loading || undefined}
+            inert={loading || undefined}
             className="card"
             data-entry-scope=""
             onPaste={(e) =>
@@ -1735,8 +1758,8 @@ export default function MonthlyUpdatePage() {
           </div>
         )}
 
-        {!loading && step === 'review' && (
-          <div className="card">
+        {seeded !== null && step === 'review' && (
+          <div key={seeded.generation} className="card" aria-busy={loading || undefined} inert={loading || undefined}>
             <h2 className="eyebrow">
               Review & save — {formatMonth(month)}
               <InfoHint text="Review the entered figures, then save progress or close a completed month. Your entries stay in this browser until saved." />
@@ -1843,7 +1866,7 @@ export default function MonthlyUpdatePage() {
             </div>
           </div>
         )}
-        {!loading && step === 'review' && <HistoricalReview onChanged={() => { setCoverageNonce(n => n + 1) }} />}
+        {seeded !== null && step === 'review' && <HistoricalReview onChanged={() => { setCoverageNonce(n => n + 1) }} />}
       </PageFrame>
     </div>
   )
