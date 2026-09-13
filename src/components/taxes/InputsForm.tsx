@@ -831,8 +831,10 @@ export default function InputsForm({
           >
             {saving ? 'Saving…' : 'Save inputs'}
           </button>
+          {/* No aria-label on the span: naming a generic role is prohibited, and the two <kbd>s
+              already read as "Ctrl+Enter" (2026-09-13 review round). */}
           {changedCount > 0 && (
-            <span className="drill-hint tax-save-shortcut" aria-label="Ctrl+Enter saves">
+            <span className="drill-hint tax-save-shortcut">
               <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
             </span>
           )}

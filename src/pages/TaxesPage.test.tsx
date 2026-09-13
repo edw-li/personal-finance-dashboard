@@ -2060,6 +2060,32 @@ describe('TaxesPage — scope row and year menu (2026-09-13 polish spec §11–1
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New tax year' })).toBeNull())
   })
 
+  it('shuts the armed delete while a create is in flight, and drops the arm when the year changes', async () => {
+    const gate = deferred<TaxBracketsCloneOut>()
+    vi.mocked(cloneBrackets).mockReturnValueOnce(gate.promise)
+    renderPage('/taxes?section=summary')
+    await readyInputs()
+
+    // Armed against 2024, then Create is pressed without folding the question away.
+    fireEvent.click(deleteYearButton())
+    expect(confirmDeleteButton().disabled).toBe(false)
+    fireEvent.click(createYearButton())
+    // Busy: firing the delete from here would race the create (2026-09-13 review round).
+    await waitFor(() => expect(confirmDeleteButton().disabled).toBe(true))
+    await act(async () => {
+      gate.resolve(cloneFor(2025))
+    })
+
+    // And a year switched under an armed question drops the arm rather than re-aiming it — the
+    // sentence names a year, and the button under it must never delete a different one.
+    await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
+    fireEvent.click(deleteYearButton())
+    expect(screen.getByText(/and all of its inputs and brackets/)).toBeTruthy()
+    fireEvent.click(within(document.querySelector('.page-frame-scope') as HTMLElement).getByRole('button', { name: '2023' }))
+    await waitFor(() => expect(screen.queryByText(/and all of its inputs and brackets/)).toBeNull())
+    expect(vi.mocked(deleteTaxYear)).not.toHaveBeenCalled()
+  })
+
   it('switches views from a panel’s door and writes ?section= like a tab does', async () => {
     vi.mocked(fetchTaxYears).mockResolvedValue([{ ...year2024, filing_status: 'married_joint' }])
     vi.mocked(fetchTaxSummary).mockImplementation(async (year: number) => ({

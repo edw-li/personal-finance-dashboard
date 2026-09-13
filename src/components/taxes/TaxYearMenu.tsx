@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePopoverDismiss } from '../usePopoverDismiss'
 import { FeedBanner } from '../shell/Feed'
 import './taxes.css'
@@ -57,12 +57,23 @@ export default function TaxYearMenu({
   const confirmRef = useRef<HTMLButtonElement>(null)
   const wasArmed = useRef(false)
 
-  const close = () => {
+  // Stable across renders: usePopoverDismiss keys its effect on the callback, so a fresh closure
+  // per keystroke in the year box would tear the document listeners down and re-add them on every
+  // character typed (2026-09-13 review round).
+  const close = useCallback(() => {
     setOpen(false)
     setArmedYear(null)
-  }
+  }, [])
   // Outside pointerdown and Escape close it; focus returns to the trigger (the shared hook).
   usePopoverDismiss(open, close, triggerRef, surfaceRef)
+
+  // A year switched while the delete is armed drops the arm rather than re-aiming it: the
+  // question names a year, and the button under it must never delete a different one. `armed`
+  // already reads false in that window — this is what clears the state behind it, so a switch
+  // back to the original year does not silently re-arm. Adjusted DURING render, never from an
+  // effect body (the house rule — TryItPanel's arrival latch): React re-renders immediately, so
+  // the question for the old year never paints beside the new one.
+  if (armedYear !== null && armedYear !== selectedYear) setArmedYear(null)
 
   // The year box takes the caret when the popover opens — DOM calls only, no state.
   useEffect(() => {
@@ -157,6 +168,10 @@ export default function TaxYearMenu({
                     type="button"
                     className="button"
                     aria-describedby="tax-year-delete-question"
+                    // The same gate the door above carries: arming, then pressing Create, leaves
+                    // the question on screen over a page that is busy creating a year — firing
+                    // the delete from there would race the create (2026-09-13 review round).
+                    disabled={deleteDisabled}
                     onClick={() => {
                       onDelete()
                       close()

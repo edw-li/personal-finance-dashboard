@@ -909,9 +909,12 @@ function ModelerCard({
   const [edits, setEdits] = useState<RowEdits>({})
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  // The period table's edge cue (spec §7) — null until a payload renders the table.
+  // The period table's edge cue (spec §7). The scroller lives behind a `data !== null` gate, so
+  // on a COLD arrival at /espp?section=purchase the ref is still null when the effect first runs
+  // — `active` is what re-runs it once the payload renders the table (2026-09-13 review round;
+  // useScrollEdges' own note). The card's other three scrollers render unconditionally instead.
   const scrollRef = useRef<HTMLDivElement>(null)
-  useScrollEdges(scrollRef)
+  useScrollEdges(scrollRef, data !== null)
 
   // An UPDATER, never `{ ...knobs, field: value }`: React batches, and a keystroke built
   // from a stale props snapshot would resurrect the siblings it spread.

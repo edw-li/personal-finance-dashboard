@@ -1462,6 +1462,31 @@ describe('EsppPage — modeler', () => {
     expect(field('Notes').value).toBe('half-typed lot')
   })
 
+  it('arms the period scroller on a COLD arrival, once the payload renders the table', async () => {
+    // The bug the `active` argument exists for (2026-09-13 review round): ModelerCard mounts with
+    // `data` null while the fetch is in flight, so its scroller is not in the DOM when the effect
+    // first runs — without `active` the hook returned on the null ref and never ran again, and
+    // the widest table on the page went unmasked for its whole life on every cold visit.
+    const gate = deferred<EsppModelerOut>()
+    vi.mocked(fetchModeler).mockReturnValue(gate.promise)
+    renderPage('/espp?section=purchase')
+    await screen.findByRole('heading', { name: /Purchase model/ })
+    expect(document.querySelector('.espp-scroll .data-table')).toBeNull()
+
+    await act(async () => {
+      gate.resolve(modelerResponse())
+    })
+    const scroller = (await screen.findByRole('columnheader', { name: 'Period' })).closest(
+      '.espp-scroll',
+    ) as HTMLElement
+    // jsdom lays nothing out, so the overflowing box is faked and announced through a scroll
+    // event — which only lands if the hook attached its listener after the table arrived.
+    Object.defineProperty(scroller, 'scrollWidth', { value: 900, configurable: true })
+    Object.defineProperty(scroller, 'clientWidth', { value: 400, configurable: true })
+    scroller.dispatchEvent(new Event('scroll'))
+    expect(scroller.getAttribute('data-scroll-more')).toBe('right')
+  })
+
   it('pins the period column and the row actions of the modeler scroller (spec §7)', async () => {
     renderPage('/espp?section=purchase')
     await screen.findByRole('heading', { name: /Purchase model — 2024/ })
