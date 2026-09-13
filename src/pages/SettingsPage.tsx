@@ -243,16 +243,15 @@ export default function SettingsPage() {
           busy: loading && loadedOnce,
           retry: retryLoad,
         }}
-        // The page's own shape: the Household section's three cards over the Planning
-        // section's pair (spec §3.6).
+        // The page's own shape: the Household section's three cards at the heights their ghosts
+        // will stand at (SettingsGhost heights minus the chrome PageSkeleton's card already draws),
+        // so the gate GET resolving swaps like for like instead of jumping.
         skeleton={{
           tiles: 0,
           cards: [
-            { span: 6, height: 220 },
-            { span: 6, height: 220 },
-            { span: 12, height: 260 },
-            { span: 6, height: 240 },
-            { span: 6, height: 240 },
+            { span: 4, height: 362 },
+            { span: 8, height: 842 },
+            { span: 12, height: 987 },
           ],
         }}
       >

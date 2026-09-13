@@ -14,6 +14,8 @@ import Segmented from '../shell/Segmented'
 import { useScrollEdges } from '../useScrollEdges'
 import '../panels.css'
 import './settings.css'
+import SettingsGhost from './SettingsGhost'
+import { WARM, warmSource } from './settingsPrefetch'
 
 interface CategoryFormState {
   name: string
@@ -52,9 +54,9 @@ export default function CategoriesCard() {
   const seqRef = useRef(0)
   const toast = useToast()
 
-  const load = () => {
+  const load = (initial = false) => {
     const seq = ++seqRef.current
-    fetchCategories()
+    warmSource(initial)(WARM.categories, fetchCategories)
       .then((rows) => {
         if (seq !== seqRef.current) return
         setCategories(rows)
@@ -68,7 +70,7 @@ export default function CategoriesCard() {
   }
 
   useEffect(() => {
-    load()
+    load(true)
     // mount-only: a plain function over stable setters (house idiom)
   }, [])
 
@@ -144,8 +146,8 @@ export default function CategoriesCard() {
         Spending categories
         <InfoHint text="The spending matrix's rows. Retire keeps a category out of the wizard without losing its history; delete only works while a category has no monthly rows. The slug never changes — it is the workbook importer's key." />
       </h2>
-      <FeedBanner error={loadError} retry={load} retryLabel="Retry loading the categories" />
-      {!loaded && loadError === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner error={loadError} retry={() => load()} retryLabel="Retry loading the categories" />
+      {!loaded && loadError === null && <SettingsGhost height={900} />}
       {loaded && (
         <>
           <form

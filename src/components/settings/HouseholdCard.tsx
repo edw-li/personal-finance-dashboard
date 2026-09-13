@@ -6,6 +6,8 @@ import InfoHint from '../InfoHint'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
+import SettingsGhost from './SettingsGhost'
+import { WARM, warmSource } from './settingsPrefetch'
 
 function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
@@ -38,9 +40,9 @@ export default function HouseholdCard({
   const [savedNote, setSavedNote] = useState(false)
   const seqRef = useRef(0)
 
-  const load = () => {
+  const load = (initial = false) => {
     const seq = ++seqRef.current
-    fetchHousehold()
+    warmSource(initial)(WARM.household, fetchHousehold)
       .then((h) => {
         if (seq !== seqRef.current) return
         setPeople(h.people)
@@ -56,7 +58,7 @@ export default function HouseholdCard({
   }
 
   useEffect(() => {
-    load()
+    load(true)
     // mount-only: a plain function over stable setters (house idiom). Unlike the sibling
     // cards, `load` also calls the onPeopleChange PROP, which the rule cannot see as
     // stable — silenced the same way CalendarPage's mount-only load is.
@@ -122,8 +124,8 @@ export default function HouseholdCard({
         Household
         <InfoHint text="Who this dashboard tracks. Accounts point at these people; an account with no owner is joint. The primary member can be renamed but never changed or removed." />
       </h2>
-      <FeedBanner error={loadError} retry={load} retryLabel="Retry loading the household" />
-      {!loaded && loadError === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner error={loadError} retry={() => load()} retryLabel="Retry loading the household" />
+      {!loaded && loadError === null && <SettingsGhost height={420} />}
       {loaded && (
         <>
           <ul className="household-people">

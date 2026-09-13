@@ -10,6 +10,8 @@ import InfoHint from '../InfoHint'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
+import SettingsGhost from './SettingsGhost'
+import { WARM, warmSource } from './settingsPrefetch'
 
 // Module scope like SettingsPage's boxesFor: pure derivations off the payload, so the
 // component's load chain stays a plain function with no reactive dependencies.
@@ -123,12 +125,13 @@ export default function SystemCard() {
   const [error, setError] = useState<string | null>(null)
   const seqRef = useRef(0)
 
-  const load = () => {
+  const load = (initial = false) => {
     const seq = ++seqRef.current
+    const source = warmSource(initial)
     // All-or-nothing, the OverviewPage snapshot's contract: this card is ONE reading of
     // the system, and a freshness row standing on a coverage read that failed while the
     // rows beside it stand on a fresh status read would be a card of two instants.
-    Promise.all([fetchSystemStatus(), fetchCoverage()])
+    Promise.all([source(WARM.systemStatus, fetchSystemStatus), source(WARM.coverage, fetchCoverage)])
       .then(([status, coverage]) => {
         if (seq !== seqRef.current) return
         setSnapshot({ status, coverage })
@@ -144,7 +147,7 @@ export default function SystemCard() {
   }
 
   useEffect(() => {
-    load()
+    load(true)
     // mount-only: a plain function over stable setters (house idiom)
   }, [])
 
@@ -162,7 +165,7 @@ export default function SystemCard() {
         }}
       />
       {snapshot === null
-        ? loading && <p className="empty-note">Loading…</p>
+        ? loading && <SettingsGhost height={313} />
         : !error && <SystemFacts status={snapshot.status} coverage={snapshot.coverage} />}
     </section>
   )

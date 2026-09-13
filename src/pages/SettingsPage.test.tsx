@@ -7,6 +7,7 @@ import type {
   AppSettingsOut,
   ImportReport,
   ImportSheetReport,
+  LimitsOut,
   PersonOut,
   SnapshotEntry,
   SystemStatus,
@@ -373,9 +374,9 @@ describe('SettingsPage — lifecycle', () => {
     // paragraph is the skeleton's visually-hidden status line over three ghost cards.
     expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeTruthy()
     expect(screen.getByText('Loading…')).toBeTruthy()
-    // Five ghosts, the section-1 shape: Household 6 · Categories 6 · Accounts 12 ·
-    // Limits 6 · Plan assumptions 6 (spec §3.6).
-    expect(document.querySelectorAll('.page-skeleton .card')).toHaveLength(5)
+    // Three ghosts, the Household section's shape at the heights its cards' own ghosts stand at:
+    // Household 4 · Categories 8 · Accounts 12 (2026-09-13 spec §9 skeleton parity).
+    expect(document.querySelectorAll('.page-skeleton .card')).toHaveLength(3)
     expect(screen.queryByRole('region', { name: 'Plan assumptions' })).toBeNull()
 
     gate.resolve(SETTINGS)
@@ -1279,5 +1280,46 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     renderPage('planning')
     const limits = await screen.findByRole('region', { name: 'Contribution limits' })
     expect(limits.classList.contains('is-highlighted')).toBe(false)
+  })
+})
+
+describe('SettingsPage — loading states (2026-09-13 spec §9)', () => {
+  it('stands a ghost of the loaded card until a lazily loaded card has its data', async () => {
+    const limits = deferred<LimitsOut>()
+    vi.mocked(fetchLimits).mockReturnValue(limits.promise)
+    renderPage('planning')
+    const card = await waitFor(() => {
+      const el = document.getElementById('limits')
+      expect(el).not.toBeNull()
+      return el as HTMLElement
+    })
+    const ghost = card.querySelector('.settings-ghost') as HTMLElement
+    expect(ghost).not.toBeNull()
+    expect(ghost.dataset.ghostHeight).toBe('415')
+    expect(within(card).getByRole('status').textContent).toBe('Loading…')
+    expect(card.querySelector('form')).toBeNull()
+    expect(card.querySelector('.empty-note')).toBeNull()
+    await act(async () => {
+      limits.resolve({ year: new Date().getFullYear(), items: [] })
+    })
+    expect(card.querySelector('.settings-ghost')).toBeNull()
+    expect(card.querySelector('form')).not.toBeNull()
+  })
+
+  it('ghosts every Data card while it loads and never prints the old Loading… note', async () => {
+    const snapshots = deferred<SnapshotEntry[]>()
+    vi.mocked(fetchSnapshots).mockReturnValue(snapshots.promise)
+    renderPage('data')
+    const backups = await waitFor(() => {
+      const el = document.getElementById('backups')
+      expect(el).not.toBeNull()
+      return el as HTMLElement
+    })
+    expect((backups.querySelector('.settings-ghost') as HTMLElement).dataset.ghostHeight).toBe('313')
+    expect(screen.queryByText('Loading…', { selector: '.empty-note' })).toBeNull()
+    await act(async () => {
+      snapshots.resolve([])
+    })
+    expect(backups.querySelector('.settings-ghost')).toBeNull()
   })
 })

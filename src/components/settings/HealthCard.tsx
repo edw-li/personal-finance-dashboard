@@ -10,6 +10,8 @@ import { FeedBanner } from '../shell/Feed'
 import { useToast } from '../ToastProvider'
 import '../panels.css'
 import './settings.css'
+import SettingsGhost from './SettingsGhost'
+import { WARM, warmSource } from './settingsPrefetch'
 
 function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
@@ -29,9 +31,9 @@ export default function HealthCard() {
   const seqRef = useRef(0)
   const toast = useToast()
 
-  const load = () => {
+  const load = (initial = false) => {
     const seq = ++seqRef.current
-    fetchHealth()
+    warmSource(initial)(WARM.health, fetchHealth)
       .then((out) => {
         if (seq !== seqRef.current) return
         setChecks(out.checks.filter((check) => check.severity !== 'ok'))
@@ -45,7 +47,7 @@ export default function HealthCard() {
   }
 
   useEffect(() => {
-    load()
+    load(true)
     // mount-only (house idiom)
   }, [])
 
@@ -138,8 +140,8 @@ export default function HealthCard() {
             computed line cannot go stale, so there is nothing left to name or repair. */}
         <InfoHint text="Checks the server runs on every visit: zero-filled spending months, balances or spending entered without the other, stale quotes, two identical months, the backup marker and the stored snapshots. Each names its fix; the repair is logged and undoable." />
       </h2>
-      <FeedBanner error={error} retry={load} retryLabel="Retry the health checks" />
-      {checks === null && error === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner error={error} retry={() => load()} retryLabel="Retry the health checks" />
+      {checks === null && error === null && <SettingsGhost height={313} />}
       {checks !== null && checks.length === 0 && <p className="empty-note">All checks pass.</p>}
       {checks !== null && checks.length > 0 && (
         <ul className="health-list">

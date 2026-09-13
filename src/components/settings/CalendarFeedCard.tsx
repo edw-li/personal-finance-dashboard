@@ -9,6 +9,8 @@ import { useToast } from '../ToastProvider'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
+import SettingsGhost from './SettingsGhost'
+import { WARM, warmSource } from './settingsPrefetch'
 
 function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
@@ -38,9 +40,10 @@ export default function CalendarFeedCard() {
 
   // A plain function over stable setters, called from the effect and from Retry (the
   // LimitsCard idiom — a useCallback here trips preserve-manual-memoization).
-  const load = () => {
+  const load = (initial = false) => {
     const seq = ++seqRef.current
-    Promise.all([fetchFeedTokens(), fetchAppSettings()])
+    const source = warmSource(initial)
+    Promise.all([source(WARM.feedTokens, fetchFeedTokens), source(WARM.appSettings, fetchAppSettings)])
       .then(([list, appSettings]) => {
         if (seq !== seqRef.current) return
         setTokens(list)
@@ -55,7 +58,7 @@ export default function CalendarFeedCard() {
   }
 
   useEffect(() => {
-    load()
+    load(true)
     // mount-only: a plain function over stable setters (house idiom)
   }, [])
 
@@ -131,8 +134,8 @@ export default function CalendarFeedCard() {
         Calendar feed
         <InfoHint text="Subscribe your phone or desktop calendar to the dashboard's events — vests, paydays, deadlines, your own reminders — with amounts. The link is the credential: anyone holding it can read the feed." />
       </h2>
-      <FeedBanner error={error} retry={load} retryLabel="Retry loading the calendar feed" />
-      {tokens === null && error === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner error={error} retry={() => load()} retryLabel="Retry loading the calendar feed" />
+      {tokens === null && error === null && <SettingsGhost height={357} />}
       {tokens !== null && (
         <>
           {/* The two forms pair on the span-12 card (2026-09-06 spec §3.3); the token
