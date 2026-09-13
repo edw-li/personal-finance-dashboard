@@ -2988,3 +2988,56 @@ was 210/210 green. The test asserts the reset form synchronously right after
 `AssistantDrawer.test.tsx`'s `openDrawer()` comment documents ("about one run in ten"): the mock is
 called before React commits the reset. Pre-existing, order/timing dependent, and in P2's file
 (`src/components/portfolio/*`), so it is left for the lead / P2 rather than fixed from this lane.
+---
+
+## Results — Task 12 (follow-up lane F1b)
+
+Lane F1 skipped Task 12 because `src/components/Disclosure.tsx` did not exist yet. F2 has since
+merged, so the task was run on its own from main @`895cdaf` in worktree `.worktrees/polish-f1b`,
+branch `polish/f1b-disclosure`.
+
+**Commit:** `89857a9` — `refactor(disclosure): adopt the shared Disclosure in ChartTable,
+SelectionDetail and the assistant blocks`.
+
+**Pre-check.** Both files present. The contract holds on all three points, (c) included: `open`
+going `true → undefined` takes the primitive from controlled to uncontrolled, and its
+`uncontrolledOpen` is still `defaultOpen` (`false`) because the controlled branch swallowed every
+toggle — so React writes `open={false}` exactly once (the attribute is removed, the block
+collapses) and never touches it again. The reasoning block was therefore adopted too.
+
+| Where | Adopted as |
+| --- | --- |
+| `ChartTable.tsx` | `<Disclosure className="chart-table" defaultOpen summary="Data table">`; the `<caption>`/`<thead>`/`<tbody>` markup is verbatim |
+| `details/SelectionDetail.tsx` | per-evidence ``<Disclosure summary={`${evidence.label}: calculation`}>`` |
+| `assistant/AssistantEvidence.tsx` | `ComputedSummary`'s "Inspect the figures and comparison window"; each `SavedFindings` row as `<Disclosure className="assistant-saved-finding" summary={<>{title}<small>…</small></>}>` |
+| `assistant/AssistantDrawer.tsx` | `<Disclosure className="assistant-thinking" open={item.content === '' ? true : undefined} summary={…}>`, the flip comment rewritten for the primitive |
+
+`chart-table`, `assistant-thinking`, `assistant-saved-finding` and `assistant-computed-summary` all
+survive as `className` (or, for the section, untouched), so `panels.css`, `chartInteractions.css` and
+`assistant.css` keep their hooks. `Disclosure.tsx` and `disclosure.css` were **not** edited, and no
+prop was missing. The old per-site `summary` rules (`.chart-table summary`, `.assistant-thinking >
+summary`, `.assistant-computed-summary summary`) still match and tie on specificity with
+`.disclosure > summary`; `disclosure.css` is imported after them, so the shared eyebrow row wins —
+which is the unification this task is for.
+
+**Tests (TDD — each one run red first).** Four new, one adjusted:
+`ChartTable.test.tsx` "is an open-by-default Disclosure the reader can collapse";
+`details/MetricInspector.test.tsx` "SelectionDetail puts each calculation behind a closed
+Disclosure"; `assistant/AssistantExperience.test.tsx` "the computed summary keeps its figures behind
+a closed Disclosure" and "each saved finding is a Disclosure that keeps the assistant-saved-finding
+hook"; `assistant/AssistantDrawer.test.tsx` "reasoning streams open, then collapses when the answer
+starts" now queries `details.disclosure.assistant-thinking` and additionally pins the hand-over —
+after the collapse the reader reopens the block and a further token leaves it open.
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc -b` | no output, exit 0 |
+| `npx eslint src/components/ChartTable.tsx src/components/ChartTable.test.tsx src/components/details src/components/assistant` | **0 errors**, 4 warnings (the same pre-existing `react-refresh/only-export-components` set in `DetailPanelProvider.tsx` / `MetricInspector.tsx`) |
+| `npx vitest run src/components/ChartTable.test.tsx src/components/details src/components/assistant` | 12 files, **118 tests passed** |
+| `npx vitest run` (full) | 214 files, **2934 tests passed, 0 failed** — the two known flakes (`TransactionsPanel` "successful edit resets form", `RestoreCard` "leaves focus on the report") did not trip |
+
+**One deliberate behaviour nuance.** While the reasoning block is controlled open (the answer is
+still empty), the primitive cancels the summary's activation, so a reader can no longer fold the
+stream away mid-answer; before, a click closed it until the next prop write. That is the primitive's
+controlled contract, it lasts only until the first token lands (after which the block is fully the
+reader's), and no test pinned the old escape hatch — recorded here rather than worked around.
