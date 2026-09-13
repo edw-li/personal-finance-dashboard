@@ -1,6 +1,7 @@
 import type { ExportTable } from '../utils/download'
 import type { ChartSelection } from '../types/metrics'
 import { ApplicationSourceLink } from './details/MetricInspector'
+import Disclosure from './Disclosure'
 import './panels.css'
 
 /** The accessibility twin (chart spec §14): the builder's own ExportTable as a real table
@@ -14,8 +15,7 @@ export default function ChartTable({ table, caption, rowSelection, onSelect, sel
 }) {
   const numeric = (cell: string | number) => typeof cell === 'number' || /^-?\d/.test(String(cell))
   return (
-    <details className="chart-table" open>
-      <summary>Data table</summary>
+    <Disclosure className="chart-table" defaultOpen summary="Data table">
       <div className="chart-table-scroll">
         <table className="data-table">
           <caption className="visually-hidden">{caption}</caption>
@@ -45,6 +45,6 @@ export default function ChartTable({ table, caption, rowSelection, onSelect, sel
           </tbody>
         </table>
       </div>
-    </details>
+    </Disclosure>
   )
 }
