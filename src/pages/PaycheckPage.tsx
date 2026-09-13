@@ -880,8 +880,11 @@ function ProfilesPanel({
           )}
         </div>
       </form>
-      {profiles.length > 0 && (
-        <div className="paycheck-scroll" ref={scrollRef}>
+      {/* The scroller renders before its first row: useScrollEdges reads the ref ONCE, at
+          mount, so a wrapper that only appears with the first row would never arm (lead note,
+          2026-09-13). Empty, it is a zero-height `overflow-x: auto` box. */}
+      <div className="paycheck-scroll" ref={scrollRef}>
+        {profiles.length > 0 && (
           <table className="data-table">
             <thead>
               <tr>
@@ -982,8 +985,8 @@ function ProfilesPanel({
               ))}
             </tbody>
           </table>
-        </div>
-      )}
+        )}
+      </div>
       {/* A SIBLING of the scroller, not a child of it: twelve columns overflow the strip,
           and a control parked at the end of a horizontally scrolled one is a control the
           user has to go looking for sideways. It belongs to the table as a whole. */}
