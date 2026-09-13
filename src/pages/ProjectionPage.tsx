@@ -153,10 +153,10 @@ export default function ProjectionPage() {
                       { value: 'linear', label: 'Linear' }, { value: 'log', label: 'Log' },
                     ]} value={log ? 'log' : 'linear'} onChange={(value) => setLog(value === 'log')} />
                   </div>}
-                  footer={<p className="drill-hint">{display.display_dollars === 'future' ? 'Future dollars include the modeled price inflation in each month; the target rises by the same factor.' : `Today's dollars express buying power at ${formatMonth(data.start_month)}.`} Inputs and headline targets stay in that starting dollar basis. Growth only excludes contributions. {log ? 'The log axis omits values at or below zero.' : ''}</p>} />
-                <p className="projection-method-note">The central line uses a constant assumed return; simulated paths vary around it. Identical assumptions reuse the same samples for a stable comparison.</p>
-                {unknownPinInflation && <p className="projection-method-note">A pinned scenario has no inflation assumption, so its future-dollar line is unavailable. Its starting-dollar results remain in the comparison table.</p>}
-                {data.warnings.length > 0 && <div className="projection-warnings">{data.warnings.map((warning) => <p key={warning}>{warning}</p>)}</div>}
+                  // Advisory sentences about what the model ran with — the tax-warnings register:
+                  // nothing failed, so never an error banner; the card's own muted header strip.
+                  lede={data.warnings.length > 0 ? data.warnings.map((warning) => <p key={warning}>{warning}</p>) : undefined}
+                  footer={<p className="drill-hint">{display.display_dollars === 'future' ? 'Future dollars include the modeled price inflation in each month; the target rises by the same factor.' : `Today's dollars express buying power at ${formatMonth(data.start_month)}.`} Inputs and headline targets stay in that starting dollar basis. Growth only excludes contributions. {log ? 'The log axis omits values at or below zero. ' : ''}The central line uses a constant assumed return; simulated paths vary around it. Identical assumptions reuse the same samples for a stable comparison.{unknownPinInflation ? ' A pinned scenario has no inflation assumption, so its future-dollar line is unavailable. Its starting-dollar results remain in the comparison table.' : ''}</p>} />
               </div>
               <aside id="projection-assumptions" className="projection-assumptions" tabIndex={-1} aria-label="Planning assumptions controls">
                 <ScenarioPanel sandbox={sandbox} baseline={sandbox.baseline} people={roster} compact />

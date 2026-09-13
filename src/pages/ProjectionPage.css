@@ -2,25 +2,8 @@
    .card, .kpi-row, .stat-tile, .button, .field-input, .error-banner, .empty-note,
    .drill-hint, .loading-dim) lives in panels.css and is not redefined here. */
 
-/* Advisory sentences about what the model ran with — the tax-warnings register: nothing
-   failed, so never an error banner. */
-.projection-warnings {
-  display: grid;
-  gap: 0.3rem;
-  margin-bottom: 1rem;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--muted);
-  border-radius: 6px;
-  background: var(--surface-2);
-}
-
-.projection-warnings p {
-  margin: 0;
-  font-size: 0.78rem;
-  line-height: 1.45;
-  color: var(--muted);
-}
+/* The warnings lede is one <p> per sentence inside panels.css's .chart-lede strip. */
+.projection-page .chart-lede p { margin: 0 0 0.25rem; }
 
 /* The derived-contribution arithmetic under its knob: a caption, not a control. It lives
    inside ScenarioPanel's sandbox controls (2026-09-03 planning-sandboxes spec §11); the
@@ -67,7 +50,6 @@
 .projection-assumptions .sandbox-badge { font-size: 0.63rem; white-space: nowrap; }
 .projection-assumptions .drill-hint { font-size: 0.75rem; line-height: 1.5; }
 .projection-assumptions:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.projection-method-note, .projection-view-intro { font-size: 0.84rem; line-height: 1.55; color: var(--muted); }
 .projection-comparisons { margin-top: 20px; }
 /* One column: the chart above the knobs. A sticky chart here would pin a 400px canvas over the
    controls the reader is scrolling towards, so it scrolls with them. */

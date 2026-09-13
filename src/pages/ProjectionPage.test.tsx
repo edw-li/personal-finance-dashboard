@@ -432,7 +432,7 @@ describe('ProjectionPage', () => {
     expect(screen.queryAllByTestId('echart')).toHaveLength(0)
   })
 
-  it('renders the model warnings verbatim', async () => {
+  it('renders the model warnings verbatim, as the chart card’s lede', async () => {
     vi.mocked(fetchProjection).mockResolvedValue(
       projectionOut({
         warnings: ['no cashflow history — monthly contribution defaulted to 0'],
@@ -441,9 +441,12 @@ describe('ProjectionPage', () => {
     )
     renderPage()
 
-    expect(
-      await screen.findByText('no cashflow history — monthly contribution defaulted to 0'),
-    ).toBeTruthy()
+    const warning = await screen.findByText('no cashflow history — monthly contribution defaulted to 0')
+    // Inside the card, in the muted header strip — never a paragraph floating between two cards.
+    const card = warning.closest('.chart-card') as HTMLElement
+    expect(card).not.toBeNull()
+    expect(warning.closest('.chart-lede')).not.toBeNull()
+    expect(document.querySelector('.projection-warnings')).toBeNull()
   })
 
   it('opens on the planning model and loads historical exploration only when requested', async () => {
@@ -1020,5 +1023,24 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+
+  it('appends the method sentence to the chart card’s footer and renders no note outside it', async () => {
+    renderPage()
+    await loaded()
+    const card = screen.getByLabelText(/Projected investable balance over the next/).closest('.chart-card') as HTMLElement
+    const footer = card.querySelector('.chart-card-row-caption') as HTMLElement
+    expect(footer.textContent).toContain('Growth only excludes contributions.')
+    expect(footer.textContent).toContain('The central line uses a constant assumed return')
+    expect(document.querySelector('.projection-method-note')).toBeNull()
+  })
+
+  it('renders the trend intro as the trend card’s lede', async () => {
+    renderPage()
+    await openTrend()
+    const intro = await screen.findByText(/An exploratory fit of past net worth/)
+    expect(intro.closest('.chart-lede')).not.toBeNull()
+    expect(intro.closest('.chart-card')).not.toBeNull()
+    expect(document.querySelector('.projection-view-intro')).toBeNull()
   })
 })
