@@ -1160,6 +1160,20 @@ describe('OverviewPage attention strip', () => {
         .getAttribute('href'),
     ).toBe(`/update?month=${SEP}&step=spending`)
   })
+
+  // C1 (2026-09-13 audit): a past open month is a to-do with a verb; a closed one is silence.
+  it('lists past review months as actions in the strip and never a closed one', async () => {
+    const reviewOut = (month: string, state: MonthReview['state']): MonthReview => ({ month, state, input_revision: 'r', reviewed: { balances: true, spending: true, take_home: true }, coverage: { balances: true, spending: true, take_home: true, spending_nonzero: true, missing_account_ids: [], missing_category_ids: [] }, can_close: true, blockers: [], eligible_spending: true, eligible_savings: true, legacy_eligible: false, closed_at: null, closed_by: null, source_link: `/update?month=${month}` })
+    const past = addMonths(currentMonthIso(), -2)
+    const closed = addMonths(currentMonthIso(), -3)
+    serve({ coverage: coverageOut({ review_months: [reviewOut(past, 'ready_to_review'), reviewOut(closed, 'closed')] }) })
+    renderPage()
+    const strip = await screen.findByRole('navigation', { name: 'Needs attention' })
+    const row = within(strip).getByRole('link', { name: `${formatMonth(past)} is ready to close →` })
+    expect(row.getAttribute('href')).toBe(`/update?month=${past}&step=review`)
+    expect(within(strip).queryByRole('link', { name: new RegExp(formatMonth(closed)) })).toBeNull()
+    expect(strip.querySelectorAll('a')).toHaveLength(1)
+  })
 })
 
 describe('OverviewPage on an empty database', () => {

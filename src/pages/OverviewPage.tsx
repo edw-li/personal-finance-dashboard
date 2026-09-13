@@ -14,7 +14,7 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import { chipAmount, eventKey } from '../components/calendar/calendarView'
-import { attentionItems } from '../components/overview/attention'
+import { attentionItems, reviewAttentionItems } from '../components/overview/attention'
 import DataStatusCard from '../components/overview/DataStatusCard'
 import { netWorthComponents } from '../components/overview/netWorthReceipt'
 import { GhostTile, SkeletonCard } from '../components/PageSkeleton'
@@ -308,10 +308,15 @@ export default function OverviewPage() {
   const tax = data.taxes ? pickTaxSummary(data.taxes.years, currentYear) : null
   // Plain consts like their siblings (the memo rule below covers CHART options only) —
   // the strip's and the YTD card's rules are cheap math over the snapshot.
-  const attention = attentionItems({
-    months: data.ts?.months, holdings: data.holdings, lots: data.lots,
-    taxYears: data.taxYears, system: data.system, coverage: data.coverage,
-  }, todayIso()).filter(item => item.key !== 'espp-qualifying')
+  // Review rows lead (they are this household's own ritual), then the feed checks; both are
+  // phrased as actions and rendered by the same strip (2026-09-13 polish spec §14).
+  const attention = [
+    ...reviewAttentionItems(data.coverage?.review_months, todayIso()),
+    ...attentionItems({
+      months: data.ts?.months, holdings: data.holdings, lots: data.lots,
+      taxYears: data.taxYears, system: data.system, coverage: data.coverage,
+    }, todayIso()).filter(item => item.key !== 'espp-qualifying'),
+  ]
   const ytd = data.ts && data.yearly && data.dividends && data.coverage ? ytdStats(data.ts, data.yearly, data.dividends, data.coverage, todayIso()) : null
   // Shown once ANY feed has history — on a fresh database the empty states below carry
   // the message, and a card of five dashes would just restate them.
@@ -374,7 +379,6 @@ export default function OverviewPage() {
               : ' (est.)'
         }`
 
-  const reviewAttention = (data.coverage?.review_months ?? []).filter(review => review.state === 'needs_review' || review.state === 'ready_to_review' || review.state === 'in_progress').sort((a, b) => b.month.localeCompare(a.month)).slice(0, 2)
   const tileElements = {
     net_worth: wealth.busy && data.summary === undefined ? <GhostTile delta={false} /> : (
               <StatTile
@@ -733,7 +737,6 @@ export default function OverviewPage() {
             </div>
 
                 <section className="card overview-attention"><h2 className="eyebrow">Needs attention</h2>
-                  {reviewAttention.map(item => <NavLink key={item.month} className="attention-item" to={`/update?month=${item.month}&step=review`}>{formatMonth(item.month)}: {REVIEW_LABELS[item.state]}</NavLink>)}
             {/* The dashboard's to-do list: each line is a condition the snapshot itself
                 proves and a link to where it gets fixed. Absent when nothing needs doing —
                 an "all clear" badge would be one more thing to read every morning. */}
@@ -747,7 +750,7 @@ export default function OverviewPage() {
               </nav>
             )}
 
-                  {attention.length === 0 && reviewAttention.length === 0 && <p className="drill-hint">{wealth.data && investments.data && spending.data && planning.data ? 'No outstanding data checks.' : 'Additional checks are waiting for their data feeds.'}</p>}
+                  {attention.length === 0 && <p className="drill-hint">{wealth.data && investments.data && spending.data && planning.data ? 'No outstanding data checks.' : 'Additional checks are waiting for their data feeds.'}</p>}
                 </section>
                 <DataStatusCard
                   asOf={asOf}
