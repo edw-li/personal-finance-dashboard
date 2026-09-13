@@ -2849,3 +2849,20 @@ Hero count-up kept as implemented (reviewer and lead agree).
 `npx eslint .` **25 warnings, 0 errors** (baseline) · scoped vitest 20 files / 431 tests pass ·
 full `npx vitest run` **217 files / 2968 tests, 0 failed** (+8 on the round) · `npm run build`
 ✓ built in 15.66s.
+
+### Follow-up fix on merged main (`7ee53e5`)
+
+`main` @`1f02963` (P1 + P3 + P4) merged in; the full suite failed deterministically there on
+`'forgets the $0 intent on a month switch — consent is about one save'` (the wizard sat on Balances
+with the $0 checkbox out of reach). `coveredMonths` was derived from the LATE `/coverage` feed, so
+`selectMonth`'s step-survival rule (`coveredMonths.has(m) ? step : 'balances'`) — and the
+"Start {month}" button beside the ribbon — were scheduling-dependent. `fetchCoverage().catch(() => null)`
+now rides the gating `Promise.all` (set in the same `.then` batch as the seed; an empty set on
+failure, unchanged); matrix stays late and the household stays gated from the review round. The
+step-survival question also went through one reader, `hasBalances(m)`, which treats the month whose
+seed is ON SCREEN as covered when that month exists — a coverage feed that has not caught up with a
+just-saved month can no longer un-cover it. Gates: `npx tsc -b` clean · scoped eslint 0 errors /
+1 pre-existing warning · `npx vitest run src/pages/MonthlyUpdatePage.test.tsx` 112 pass · full
+`npx vitest run` **220 files / 3024 tests, 0 failed** (one run tripped the unrelated, not-ours
+`CreditCardsPage` auto-weight test; it passes alone and the re-run is clean — an order-dependent
+flake to watch).

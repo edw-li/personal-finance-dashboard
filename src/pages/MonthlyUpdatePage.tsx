@@ -311,6 +311,15 @@ export default function MonthlyUpdatePage() {
   // used to download only to learn which months have balances (2026-09-13 polish spec §9).
   const [coverage, setCoverage] = useState<CoverageOut | null>(null)
   const coveredMonths = useMemo(() => new Set(coverage?.balances ?? []), [coverage])
+  /**
+   * Does this month have a balances snapshot? /coverage answers it, and the month whose seed is
+   * ON SCREEN answers for itself when that month exists — the wizard is holding its payload, so
+   * a coverage feed that has not caught up (a just-saved month, a failed GET) cannot un-cover it.
+   * Both readers of this question — the step-survival rule and the "Start {month}" button — go
+   * through here, so they can never disagree.
+   */
+  const hasBalances = (m: string) =>
+    coveredMonths.has(m) || (monthExisted && seeded !== null && seeded.month === m)
   // The load whose SEED is on screen — null until the first month lands. `loading` says a load
   // is in flight; this says whether there is anything to show under it. A month switch keeps
   // the previous seed mounted and dimmed until the new one arrives (spec §9), so the body is
@@ -449,9 +458,7 @@ export default function MonthlyUpdatePage() {
     // empty covered set. Every callback checks the same `cancelled` flag, so a late answer for
     // a month the user has left can never land over the month they moved to.
     const matrixPromise = fetchMatrix().catch((): SpendingMatrix | null => null)
-    const coveragePromise = fetchCoverage().catch((): CoverageOut | null => null)
     void matrixPromise.then((matrixData) => { if (!cancelled) setMatrix(matrixData) })
-    void coveragePromise.then((coverageData) => { if (!cancelled && coverageData !== null) setCoverage(coverageData) })
     Promise.all([
       fetchAccounts(),
       fetchCategories(),
@@ -464,10 +471,16 @@ export default function MonthlyUpdatePage() {
       // under the caret on a two-person book. Still absence-tolerant — a failure falls back to
       // the flat walk rather than refusing the month.
       fetchHousehold().catch((): HouseholdOut | null => null),
+      // …and so is /coverage: it decides which step a month switch may keep (the step-survival
+      // rule below) and whether the "Start {month}" button is offered, so a late answer made
+      // both scheduling-dependent. Gating it costs nothing — the GET is deduped with the scope
+      // row's — and a failure still degrades to the empty set.
+      fetchCoverage().catch((): CoverageOut | null => null),
     ])
-      .then(([accountList, categoryList, thisMonth, priorMonth, spendMonth, monthReview, householdData]) => {
+      .then(([accountList, categoryList, thisMonth, priorMonth, spendMonth, monthReview, householdData, coverageData]) => {
         if (cancelled) return
         setPeople(householdData?.people ?? [])
+        if (coverageData !== null) setCoverage(coverageData)
         setError(null)
         setLoadError(null)
         setLegs(null)
@@ -1093,7 +1106,7 @@ export default function MonthlyUpdatePage() {
     // with no balances yet: its snapshot is the ritual's anchor and every later step reads
     // from it, so an unanchored month opens where it has to start.
     setParams(
-      () => new URLSearchParams({ month: m, step: coveredMonths.has(m) ? step : 'balances' }),
+      () => new URLSearchParams({ month: m, step: hasBalances(m) ? step : 'balances' }),
     )
   }
 
@@ -1300,7 +1313,7 @@ export default function MonthlyUpdatePage() {
               month={{ mode: 'edit', anchor, selected: month, onSelect: selectMonth }}
               revalidate={coverageNonce}
             />
-            {!coveredMonths.has(anchor) && month !== anchor && (
+            {!hasBalances(anchor) && month !== anchor && (
               <button className="button" onClick={() => selectMonth(anchor)}>
                 <CalendarPlus size={15} /> Start {formatMonth(anchor)}
               </button>
