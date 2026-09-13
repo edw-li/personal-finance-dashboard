@@ -147,7 +147,7 @@ describe('AssistantDrawer', () => {
     mount('/spending?month=2026-03')
     await openDrawer()
     const chip = screen.getByTitle('Spending · Mar 2026')
-    expect(chip.textContent).toBe('Seeing: Spending · Mar 2026')
+    expect(chip.textContent).toBe('Context: Spending · Mar 2026')
   })
 
   it('resolves an owner id to a name through the household roster', async () => {
@@ -390,6 +390,46 @@ describe('AssistantDrawer', () => {
     await waitFor(() => expect(streamChat).toHaveBeenCalled())
     const body = streamChat.mock.calls[0][0] as { messages: { content: string }[] }
     expect(body.messages.at(-1)?.content).toMatch(/latest completed month/i)
+  })
+
+  it('offers the computed month review as the first starter chip, on the samples\' own grammar', async () => {
+    streamChat.mockImplementation(
+      (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {
+        h.onDone({ model_used: 'kimi-k3' })
+        return { abort: vi.fn(), finished: Promise.resolve() }
+      },
+    )
+    mount()
+    await openDrawer()
+    const chips = Array.from(document.querySelectorAll('.assistant-sample-chip')).map((chip) => chip.textContent)
+    expect(chips[0]).toBe('Review latest completed month')
+    expect(chips).toContain('Month in review')
+    // The old button-above-the-chips row is gone (audit B2: two starter grammars in one drawer).
+    expect(document.querySelector('.assistant-review-action')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Review latest completed month' }))
+    await waitFor(() => expect(streamChat).toHaveBeenCalled())
+    expect((streamChat.mock.calls[0][0] as { intent?: string }).intent).toBe('month_review')
+  })
+
+  it('renders the views as a Segmented tablist in the Context row, with an (i) that toggles the preview', async () => {
+    mount()
+    await openDrawer()
+    const row = document.querySelector('.assistant-context') as HTMLElement
+    expect(within(row).getByRole('tablist', { name: 'Assistant views' }).className).toContain('segmented-tabs')
+    expect(within(row).getByRole('tab', { name: 'Conversation' }).getAttribute('aria-selected')).toBe('true')
+    expect(within(row).getByRole('tab', { name: 'Conversation' }).getAttribute('aria-controls')).toBe('assistant-conversation')
+    expect(screen.getByRole('log', { name: 'Conversation' }).id).toBe('assistant-conversation')
+    expect(document.querySelector('.assistant-tabs')).toBeNull()
+    const info = within(row).getByRole('button', { name: 'What the assistant can see' })
+    expect(info.getAttribute('aria-expanded')).toBe('false')
+    expect(info.textContent).toBe('') // an icon; the sentence is its name, not its label text
+    fireEvent.click(info)
+    await waitFor(() => expect(screen.getByText(/household/)).toBeTruthy())
+    expect(info.getAttribute('aria-expanded')).toBe('true')
+    // Standalone (no provider) keeps its own header row with the picker and New chat.
+    const header = document.querySelector('.assistant-header') as HTMLElement
+    expect(within(header).getByRole('combobox', { name: 'Model' })).toBeTruthy()
+    expect(within(header).getByRole('button', { name: 'New chat' })).toBeTruthy()
   })
 
   it('failover notice renders above the answer', async () => {
