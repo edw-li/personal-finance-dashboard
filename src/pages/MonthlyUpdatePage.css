@@ -265,10 +265,17 @@
 .month-actions-trigger { padding: .3rem .5rem; line-height: 0; }
 .month-actions-popover { right: 0; top: calc(100% + .4rem); width: min(440px, 90vw); }
 .month-actions-popover .danger-row { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-top: .5rem; }
-.historical-review summary { cursor: pointer; font-weight: 600; font-size: .85rem; }
-.historical-review { margin-top: 1rem; padding: 1.25rem; }
-.history-review-list { max-height: 20rem; overflow: auto; margin: 1rem 0; }
-.history-review-row { display: grid; grid-template-columns: 1.25rem 1fr 1fr auto; align-items: center; gap: .75rem; padding: .6rem 0; border-bottom: 1px solid var(--border); font-size: .85rem; }
+/* Review historical months — a .card like every other block on the page (F4). */
+.historical-review { margin-top: 1rem; }
+.historical-review-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.historical-review-head .eyebrow { margin: 0; }
+.history-review-list { margin: .75rem 0 0; }
+.history-review-year { margin-top: .75rem; }
+.history-review-year-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .25rem; }
+.history-review-year-head .eyebrow { margin: 0; }
+.history-review-row { display: grid; grid-template-columns: 1.25rem 1fr 1.4fr auto; align-items: center; gap: .75rem; padding: .5rem 0; border-bottom: 1px solid var(--border); font-size: .85rem; }
+.history-review-missing { color: var(--muted); font-size: .78rem; }
+.historical-review-footer { display: flex; justify-content: flex-end; margin-top: .9rem; }
 
 /* The Review step's head row: eyebrow, review pill, and (Task 4) the month-actions kebab. */
 .review-head { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; margin-bottom: .9rem; }

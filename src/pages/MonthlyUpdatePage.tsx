@@ -1903,7 +1903,7 @@ export default function MonthlyUpdatePage() {
             </div>
           </div>
         )}
-        {seeded !== null && step === 'review' && <HistoricalReview onChanged={() => { setCoverageNonce(n => n + 1) }} />}
+        {seeded !== null && step === 'review' && <HistoricalReview coverage={coverage} onChanged={() => { setCoverageNonce(n => n + 1) }} />}
       </PageFrame>
     </div>
   )
