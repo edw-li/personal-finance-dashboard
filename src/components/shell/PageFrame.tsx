@@ -28,9 +28,16 @@ export type PageSkeletonSpec = ComponentProps<typeof PageSkeleton>
 
 interface PageFrameContextValue {
   fromCache: boolean
+  /** performance.now() at the frame's first render. Feed gates its card cascade on it (2026-09-13
+   *  polish §2.5): a payload landing within CASCADE_WINDOW_MS of this is the page's arrival, a
+   *  later one is a revisit. -Infinity outside a frame, so nothing ever cascades there. */
+  mountedAt: number
 }
 
-const PageFrameContext = createContext<PageFrameContextValue>({ fromCache: false })
+const PageFrameContext = createContext<PageFrameContextValue>({
+  fromCache: false,
+  mountedAt: Number.NEGATIVE_INFINITY,
+})
 
 /** `fromCache` for charts rendered inside a frame; false outside one. */
 export function usePageFrame(): PageFrameContextValue {
@@ -82,6 +89,11 @@ export default function PageFrame({
     return () => observer.disconnect()
   }, [hasScopeRow])
 
+  // Fixed at mount through a lazy initializer: a bare performance.now() in render is impure (the
+  // react-hooks purity rule rejects it as a useRef argument), and a ref written from an effect
+  // could not be read into the context value without a render-time ref read.
+  const [mountedAt] = useState(() => performance.now())
+
   const hasData = resource.status === 'ready'
   // The cascade is the PAYLOAD's, not the skeleton's: tagging waits for `ready`, so the
   // groups measured are the real cards at the positions they actually occupy.
@@ -116,7 +128,10 @@ export default function PageFrame({
   const showErrorOnly = resource.status === 'error'
   const staleError = hasData && resource.error ? resource.error : null
   // A fresh object here would re-render every chart reading the context on each render.
-  const context = useMemo(() => ({ fromCache: resource.fromCache === true }), [resource.fromCache])
+  const context = useMemo(
+    () => ({ fromCache: resource.fromCache === true, mountedAt }),
+    [resource.fromCache, mountedAt],
+  )
 
   return (
     <PageFrameContext.Provider value={context}>

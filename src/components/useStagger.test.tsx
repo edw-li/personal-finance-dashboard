@@ -1,7 +1,7 @@
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { STAGGER_CAP } from '../theme/motion'
-import { useStagger } from './useStagger'
+import { tagStagger, useStagger } from './useStagger'
 
 // jsdom reports a zero rect for everything, which would call the whole document visible.
 // One prototype stub answers with the top each fixture declares (innerHeight is 768).
@@ -52,4 +52,38 @@ it('waits for the payload, tags once, and caps the cascade at six groups', () =>
   // A revalidation re-renders with the same status; re-tagging would replay the cascade.
   rerender(<Harness ready tops={[900, 900, 900, 900, 900, 900, 900]} />)
   expect(tagged()).toHaveLength(8)
+})
+
+it('exports the loop as tagStagger: starts at the given index, skips hidden groups, returns the next index', () => {
+  render(
+    <div data-testid="root">
+      <div className="card" data-top="10" data-name="a" />
+      <div hidden>
+        <div className="card" data-top="0" data-name="hidden" />
+      </div>
+      <div className="card" data-top="20" data-name="b" />
+      <div className="card" data-top="2000" data-name="below" />
+    </div>,
+  )
+  // A hidden view's card measures 0×0 at the top of the viewport; tagging it would replay the
+  // entrance the moment the view is shown (spec §2.4: no per-card cascade on a tab switch).
+  const next = tagStagger(document.querySelector('[data-testid="root"]') as HTMLElement, 2)
+  expect(tagged()).toEqual(['a:2', 'b:3'])
+  expect(next).toBe(4)
+})
+
+it('the hook and the helper agree: a hidden wrapper at arrival is left untagged by useStagger too', () => {
+  function Hidden() {
+    const ref = useStagger<HTMLDivElement>(true)
+    return (
+      <div ref={ref}>
+        <div className="card" data-top="0" data-name="shown" />
+        <div hidden>
+          <div className="card" data-top="0" data-name="hidden" />
+        </div>
+      </div>
+    )
+  }
+  render(<Hidden />)
+  expect(tagged()).toEqual(['shown:0'])
 })

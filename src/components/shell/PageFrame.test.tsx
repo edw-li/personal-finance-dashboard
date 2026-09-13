@@ -30,7 +30,13 @@ beforeEach(() => {
 })
 
 function CacheProbe() {
-  return <span data-testid="cache">{String(usePageFrame().fromCache)}</span>
+  const { fromCache, mountedAt } = usePageFrame()
+  return (
+    <>
+      <span data-testid="cache">{String(fromCache)}</span>
+      <span data-testid="mounted">{String(mountedAt)}</span>
+    </>
+  )
 }
 
 describe('PageFrame', () => {
@@ -245,6 +251,19 @@ describe('PageFrame', () => {
       </PageFrame>,
     )
     expect(screen.getByText(/Showing earlier data — offline/).getAttribute('role')).toBe('status')
+  })
+
+  it('records performance.now() at mount in its context; outside a frame it is -Infinity', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(4321)
+    render(
+      <PageFrame title="Comp" resource={{ status: 'ready' }}>
+        <CacheProbe />
+      </PageFrame>,
+    )
+    expect(screen.getByTestId('mounted').textContent).toBe('4321')
+    cleanup()
+    render(<CacheProbe />)
+    expect(screen.getByTestId('mounted').textContent).toBe('-Infinity')
   })
 
   it('forwards a tiles object to the skeleton, so a page can reserve a delta-less row', () => {
