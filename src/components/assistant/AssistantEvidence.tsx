@@ -4,6 +4,7 @@ import { deleteFinding, fetchFindings, saveFinding } from '../../api/assistantFi
 import { errorDetail } from '../../api/client'
 import type { AssistantEvidenceBundle, AssistantFinding } from '../../types/assistantEvidence'
 import type { MetricEvidence } from '../../types/metrics'
+import Disclosure from '../Disclosure'
 import MetricInspector, { ApplicationSourceLink, formatEvidenceValue } from '../details/MetricInspector'
 import { useDetailPanel } from '../details/DetailPanelProvider'
 import { renderMarkdown } from './markdown'
@@ -44,9 +45,9 @@ export function ComputedSummary({ bundle }: { bundle: AssistantEvidenceBundle })
     <strong>{bundle.title}</strong>
     <p className="assistant-meta">Calculated from your records · {bundle.month?.slice(0, 7) ?? 'Captured selection'}</p>
     <AssistantMessageBody text={bundle.summary_text} metrics={bundle.metrics} />
-    <details><summary>Inspect the figures and comparison window</summary>
+    <Disclosure summary="Inspect the figures and comparison window">
       <dl>{bundle.metrics.map((metric) => <div key={metric.id}><dt>{metric.label}</dt><dd><EvidenceReference metric={metric} /></dd></div>)}</dl>
-    </details>
+    </Disclosure>
     <p className="assistant-meta">Evidence as of {new Date(bundle.as_of).toLocaleString()}</p>
   </section>
 }
@@ -82,8 +83,8 @@ export function SavedFindings({ revision }: { revision: number }) {
     {error && <p role="alert">Could not load findings: {error} <button className="button" onClick={() => setRetry((n) => n + 1)}>Retry</button></p>}
     {findings === null && !error && <p role="status">Loading saved findings…</p>}
     {findings?.length === 0 && <p>No saved findings yet. Save a useful answer from your conversation.</p>}
-    {findings?.map((finding) => <details key={finding.id} className="assistant-saved-finding">
-      <summary>{finding.title}<small>Evidence from {new Date(finding.evidence_as_of).toLocaleString()}</small></summary>
+    {findings?.map((finding) => <Disclosure key={finding.id} className="assistant-saved-finding"
+      summary={<>{finding.title}<small>Evidence from {new Date(finding.evidence_as_of).toLocaleString()}</small></>}>
       <AssistantMessageBody text={finding.content} metrics={finding.evidence} />
       {finding.evidence.length > 0 && <dl>{finding.evidence.map((metric) => <div key={metric.id}><dt>{metric.label}</dt><dd><EvidenceReference metric={metric} /></dd></div>)}</dl>}
       <p className="assistant-meta">Saved {new Date(finding.created_at).toLocaleString()}{finding.model_used ? ` · ${finding.model_used}` : ''}</p>
@@ -92,6 +93,6 @@ export function SavedFindings({ revision }: { revision: number }) {
         deleteFinding(finding.id).then(() => setFindings((rows) => rows?.filter((row) => row.id !== finding.id) ?? null))
           .catch((e: unknown) => setError(errorDetail(e))).finally(() => setDeleting(null))
       }}>{deleting === finding.id ? 'Removing…' : 'Remove saved finding'}</button>
-    </details>)}
+    </Disclosure>)}
   </div>
 }

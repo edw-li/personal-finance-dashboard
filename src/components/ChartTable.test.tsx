@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import ChartTable from './ChartTable'
 import type { ExportTable } from '../utils/download'
@@ -57,6 +57,24 @@ describe('ChartTable', () => {
       'num',
     ])
     expect([...rows[1].querySelectorAll('td')].map((td) => td.className)).toEqual(['', '', ''])
+  })
+
+  // The shared Disclosure (2026-09-13 polish §2.6): one <details> grammar for every
+  // "show me more". The twin still arrives open — it IS the accessible copy of the chart —
+  // and the reader can still fold it away.
+  it('is an open-by-default Disclosure the reader can collapse', async () => {
+    const { container } = render(<ChartTable table={TABLE} caption="Net worth by month" />)
+    // Re-queried every time: the element is re-rendered between assertions.
+    const twin = () => container.querySelector('details.disclosure.chart-table') as HTMLDetailsElement
+    expect(twin().open).toBe(true)
+    expect(twin().querySelector(':scope > summary')?.textContent).toBe('Data table')
+    // Caption and all, the table sits inside the primitive's body wrapper.
+    expect(twin().querySelector(':scope > .disclosure-body .data-table > caption')?.textContent)
+      .toBe('Net worth by month')
+    fireEvent.click(screen.getByText('Data table'))
+    // jsdom queues the toggle event as a task, here and in browsers alike; let it land.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(twin().open).toBe(false)
   })
 
   it('renders an empty body without a row when there is no data', () => {

@@ -1,14 +1,28 @@
 import { useEffect, type RefObject } from 'react'
 
-// Which edges of a horizontal scroller still hide content (2026-09-13 polish §7). Written as a
-// space-separated `data-scroll-more` token list ("left", "right", "left right") so panels.css can
-// mask the hidden edge with [data-scroll-more~="…"]; removed outright when nothing is hidden, so
-// a table that fits its card carries no attribute and no mask. Re-read on scroll, on the
-// scroller's own resize (a dock opening narrows it with no window event) and on window resize.
-// Page lanes attach it to their `*-scroll` wrappers alongside the `.row-actions` cells.
-export function useScrollEdges(ref: RefObject<HTMLElement | null>): void {
+/**
+ * Which edges of a horizontal scroller still hide content (2026-09-13 polish §7). Written as a
+ * space-separated `data-scroll-more` token list ("left", "right", "left right") so panels.css can
+ * mask the hidden edge with [data-scroll-more~="…"]; removed outright when nothing is hidden, so
+ * a table that fits its card carries no attribute and no mask. Re-read on scroll, on the
+ * scroller's own resize (a dock opening narrows it with no window event) and on window resize.
+ * Page lanes attach it to their `*-scroll` wrappers alongside the `.row-actions` cells.
+ *
+ * A ref is not a reactive value — it is filled during the commit, silently — so an effect that
+ * finds `ref.current` null and returns has nothing to wake it when the element finally arrives.
+ * Callers therefore pick one of two shapes (2026-09-13 review round: before `active` existed, a
+ * hook placed above a table that renders only once rows load attached on WARM renders and never
+ * on the first load, so that table was never masked):
+ *
+ * - call the hook INSIDE the component that renders the scroller unconditionally, so the ref is
+ *   filled by the first commit; or
+ * - keep it above a conditional scroller and pass `active={rows.length > 0}` — the flip re-runs
+ *   the effect, by which time the element exists. `active` going false detaches and clears the
+ *   attribute, which is what a scroller on its way out wants anyway.
+ */
+export function useScrollEdges(ref: RefObject<HTMLElement | null>, active = true): void {
   useEffect(() => {
-    const el = ref.current
+    const el = active ? ref.current : null
     if (el === null) return
     const update = () => {
       const edges: string[] = []
@@ -32,5 +46,8 @@ export function useScrollEdges(ref: RefObject<HTMLElement | null>): void {
       observer?.disconnect()
       el.removeAttribute('data-scroll-more')
     }
-  }, [ref])
+    // `active` is in the deps for the whole point of it: the effect has to run again when the
+    // scroller appears. `ref` is here only because the lint rule asks for it — a ref's identity
+    // never changes, and its .current is invisible to this list.
+  }, [ref, active])
 }

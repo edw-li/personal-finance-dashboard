@@ -10,8 +10,15 @@
      CONTAINER, not the viewport, so tile columns must answer to this box. Layout containment makes
      .page the containing block for fixed descendants — none exist inside it (launcher and toasts
      are outside; panels and dialogs are portaled or in the top layer); Projection already did this
-     on the same element. */
-  container-type: inline-size;
+     on the same element.
+     It also makes .page a STACKING CONTEXT (2026-09-13 review round): everything drawn inside the
+     page paints as ONE layer beneath the chrome, so no z-index on any descendant can lift it over
+     the dock (16), the palette (20) or toasts (30). Anything that must clear those has to be
+     portaled out of the page, not numbered higher inside it.
+     NAMED, not anonymous: a .kpi-row can sit inside a NEARER container (a chart card's aside, the
+     allocation workspace), and an unnamed @container query binds to the nearest one — which would
+     hand the row that little box's width. The two rules below ask for "page" by name. */
+  container: page / inline-size;
 }
 
 .page-header {
@@ -85,25 +92,34 @@
   max-width: 320px;
 }
 
-/* Balanced rows (2026-09-13 polish §12). The last tile always reaches the row's last line, so a
-   4+1 wrap fills the void instead of leaving one narrow orphan (in a full row it spans one track
-   as before). A five-tile row — ESPP's strip, Projection's outcomes — is five columns wherever
-   1000px of container allow it and auto-fits below; every other row goes 2×2 once a dock has
-   narrowed the page under 980px, where four columns read as 3+1. .kpi-row-dense is Portfolio's
-   five dense tiles (it replaces that page's private .tiles-row). Container queries, not media
-   queries: the dock is the thing that changes the width. */
-.kpi-row > :last-child { grid-column-end: -1; }
+/* Balanced rows (2026-09-13 polish §12). A five-tile row — ESPP's strip, Projection's outcomes —
+   is five columns wherever 1000px of container allow it and auto-fits below; every other row goes
+   2×2 once a dock has narrowed the page under 980px, where four columns read as 3+1. .kpi-row-dense
+   is Portfolio's five dense tiles (it replaces that page's private .tiles-row). Container queries,
+   not media queries: the dock is the thing that changes the width.
 
+   There is NO CSS-only fill for the auto-fit band, and the rule that claimed to be one is gone
+   (2026-09-13 review round). `.kpi-row > :last-child { grid-column-end: -1 }` does not stretch a
+   lone last tile: the start line stays auto, so the pair resolves to a ONE-track item placed in the
+   LAST column — a 4+1 wrap became a right-hand orphan with a hole beside it, worse than the
+   left-hand orphan it meant to cure. A span needs a known start line, and auto-fit's column count
+   is not known until layout; filling that band would mean JS measuring the row. The fixed 2-column
+   band below is where the arithmetic IS known, so that is where the span lives. */
 .kpi-row-5 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 
 .kpi-row-dense { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 
-@container (min-width: 1000px) {
+@container page (min-width: 1000px) {
   .kpi-row-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 }
 
-@container (max-width: 980px) {
+@container page (max-width: 980px) {
   .kpi-row:not(.kpi-row-5) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* Exactly two columns here, so "starts a new line" IS knowable: :nth-child(odd) is the last tile
+     of an odd count, and it spans the pair instead of sitting half-width beside a hole. Both the
+     start and the end line are named — the thing the deleted auto-fit rule could not do. */
+  .kpi-row:not(.kpi-row-5) > :last-child:nth-child(odd) { grid-column: 1 / -1; }
 }
 
 .stat-tile {
@@ -251,10 +267,17 @@
 
 /* useScrollEdges writes which edges still hide content; the mask says so without a scrollbar.
    The two-token rule exists because mask-image does not add up: with both edges hidden, the
-   later single-edge rule would otherwise win and the other edge would read as the table's end. */
-[data-scroll-more~="right"] { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
-[data-scroll-more~="left"] { mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); }
-[data-scroll-more~="left"][data-scroll-more~="right"] { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+   later single-edge rule would otherwise win and the other edge would read as the table's end.
+
+   A mask fades EVERYTHING under it — a position: sticky cell is not exempt — so a scroller whose
+   edge is already held by a pinned column is left unmasked on that side (2026-09-13 review round):
+   the pinned column is itself the "there is more" signal there, and a half-dissolved Actions
+   button or account name reads as a rendering fault rather than a hint. :has() takes the
+   specificity of its argument (one class here), so the three rules still sort among themselves by
+   source order, which is what keeps the two-token rule winning. */
+[data-scroll-more~="right"]:not(:has(.row-actions)) { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+[data-scroll-more~="left"]:not(:has(.col-identity)) { mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); }
+[data-scroll-more~="left"][data-scroll-more~="right"]:not(:has(.row-actions)):not(:has(.col-identity)) { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
 
 .badge {
   display: inline-block;
@@ -629,10 +652,14 @@
 
 /* ── Popover surface (2026-09-13 polish §11) ─────────────────── */
 /* The one anchored popover box (Overview's Customize, Taxes' new-year form, the wizard's month
-   actions), positioned by its caller's `position: relative` wrapper. z 20: over the dock (16),
-   under toasts (30). Shadow ink from --shadow, so light gets a cool 14% instead of a black smudge;
-   the entrance is the shared pop-in in the motion-grammar block. Dismissal is
-   usePopoverDismiss's job, not this rule's. */
+   actions), positioned by its caller's `position: relative` wrapper. z 20 orders it among PAGE
+   CONTENT ONLY (2026-09-13 review round): .page is a query container, containment makes it a
+   single stacking context, and every descendant paints inside that one layer — so this number
+   cannot put a popover over the dock (16), the palette (20) or toasts (30), and never could. A
+   popover anchored near the page's right edge should therefore OPEN LEFTWARD rather than trust it.
+   Shadow ink from --shadow, so light gets a cool 14% instead of a black smudge; the entrance is
+   the shared pop-in in the motion-grammar block. Dismissal is usePopoverDismiss's job, not this
+   rule's. */
 .popover-surface {
   position: absolute;
   z-index: 20;
