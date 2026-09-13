@@ -16,6 +16,21 @@ export interface ThemeTokens {
   surface: string
   surface2: string
   border: string
+  /** The pressed / hover / ghost fill (2026-09-13 polish §6): `.segmented button.active`, tab
+   *  hover, `.skeleton`, the quiet `.button`, the chart pin strip, a Disclosure summary under the
+   *  pointer. `surface2` sits BETWEEN `bg` and `surface` in LIGHT (1.05:1 on a white card), so it
+   *  reads as neither a raised nor an inset fill there; this slot is a real step on the card in
+   *  both themes — tokens.test.ts holds it to ≥ 1.15:1 against `surface`. */
+  fill: string
+  /** The one modal scrim (detail-panel backdrop, the chart Expand dialog's ::backdrop, the day
+   *  drawer). An rgba() string, not a hex: translucent by definition, so it enters no contrast
+   *  floor and no chart recolor map. */
+  scrim: string
+  /** Shadow ink as bare `r g b / a` components, read as `rgb(var(--shadow))` inside box-shadow
+   *  values (launcher, popovers, drawers, the panel). Dark keeps black; light uses the page's own
+   *  cool ink at 14%, so a white disc stops wearing a black smudge. Not a colour string — excluded
+   *  from every parse/contrast test and from charts/recolor.ts. */
+  shadow: string
   text: string
   muted: string
   accent: string
@@ -51,6 +66,9 @@ export const DARK: ThemeTokens = {
   surface: '#171a21',
   surface2: '#1e222c',
   border: '#262b36',
+  fill: '#262b36',
+  scrim: 'rgba(0, 0, 0, 0.55)',
+  shadow: '0 0 0 / 0.45',
   text: '#e6e9ef',
   muted: '#8b93a3',
   accent: '#4f8cff',
@@ -88,6 +106,9 @@ export const LIGHT: ThemeTokens = {
   surface: '#ffffff',
   surface2: '#f7f9fc',
   border: '#e1e7ef',
+  fill: '#e6ebf2',
+  scrim: 'rgba(20, 30, 50, 0.35)',
+  shadow: '20 30 50 / 0.14',
   text: '#141a24',
   muted: '#5f6b7a',
   accent: '#296dcc',
@@ -116,6 +137,9 @@ export function cssDeclarations(t: ThemeTokens): string[] {
     `--surface: ${t.surface};`,
     `--surface-2: ${t.surface2};`,
     `--border: ${t.border};`,
+    `--fill: ${t.fill};`,
+    `--scrim: ${t.scrim};`,
+    `--shadow: ${t.shadow};`,
     `--text: ${t.text};`,
     `--muted: ${t.muted};`,
     `--accent: ${t.accent};`,

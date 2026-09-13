@@ -21,7 +21,13 @@
 import { DARK, LIGHT, type ThemeTokens } from '../theme/tokens'
 
 // The dark set spends four hexes on TWO token names each, so a flat hex→hex map has to
-// elect a winner wherever the light set SPLITS the pair. Last write wins, and the order
+// elect a winner wherever the light set SPLITS the pair. NOT listed below, on purpose
+// (2026-09-13 polish §6): `fill`, `scrim` and `shadow` are UI-surface tokens that never reach a
+// chart option. fill's dark hex IS border's (#262b36) — listing it would only re-run the
+// border/axisLine election with a third name — and scrim (an rgba() string) and shadow (bare
+// `r g b / a` components) are not hexes a builder could have typed into an option.
+// recolor.test.ts pins that the border election is unchanged and that neither non-hex has a key.
+// Last write wins, and the order
 // below elects the meaning that actually reaches an option:
 //   #1e222c  gridLine | surface2   → surface2   grid/axis lines only ever come from the
 //   #262b36  axisLine | border     → border     REGISTERED theme, which is built per
