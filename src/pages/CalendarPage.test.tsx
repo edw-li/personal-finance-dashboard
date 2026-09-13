@@ -6,7 +6,7 @@ import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import ToastProvider from '../components/ToastProvider'
 import { calendarEvent } from '../testing/calendarFixtures'
 import type { CalendarEvent, CalendarResponse } from '../types/api'
-import { formatDate, formatMonth } from '../utils/format'
+import { formatDate } from '../utils/format'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import { shiftMonth } from '../components/calendar/CalendarGrid'
 import CalendarPage from './CalendarPage'
@@ -90,6 +90,10 @@ function renderPage(events: CalendarEvent[] = fixtureEvents(), entry = '/calenda
 }
 
 const url = () => screen.getByTestId('url').textContent
+const monthBox = () => screen.getByLabelText('Jump to month') as HTMLInputElement
+/** The month on screen, read from the scope row's month box — the duplicate h2 beside it is gone
+ *  (2026-09-13 spec §12, audit C-5). */
+const shownMonth = (iso: string) => waitFor(() => expect(monthBox().value).toBe(iso.slice(0, 7)))
 const cell = (day: string) =>
   document.querySelector(`[role="gridcell"][data-day="${day}"]`) as HTMLElement
 /** The grid's ONE roving tab stop, as a day string — there must be exactly one, or the
@@ -147,7 +151,7 @@ describe('CalendarPage — month, views, grid', () => {
     renderPage(fixtureEvents(), `/calendar?month=${PREV.slice(0, 7)}`)
     await screen.findByRole('grid')
     expect(fetchCalendar).toHaveBeenCalledWith(...windowFor(PREV))
-    expect(screen.getByRole('heading', { name: formatMonth(PREV) })).toBeTruthy()
+    expect(monthBox().value).toBe(PREV.slice(0, 7))
     fireEvent.click(screen.getByRole('button', { name: 'Next month' }))
     expect(url()).toBe('/calendar') // the current month is never written
     await waitFor(() => expect(vi.mocked(fetchCalendar).mock.calls.at(-1)).toEqual(windowFor(MONTH)))
@@ -216,12 +220,12 @@ describe('CalendarPage — month, views, grid', () => {
     await screen.findByRole('grid')
     expect(cursor()).toBe(todayIso())
     fireEvent.click(screen.getByRole('button', { name: 'router jump' }))
-    await screen.findByRole('heading', { name: formatMonth('2027-03-01') })
+    await shownMonth('2027-03-01')
     // Today is not in March 2027, so the cursor is that month's first day.
     expect(cursor()).toBe('2027-03-01')
     // ...and Back is a month change too: today is in it, so the cursor is today.
     fireEvent.click(screen.getByRole('button', { name: 'router back' }))
-    await screen.findByRole('heading', { name: formatMonth(MONTH) })
+    await shownMonth(MONTH)
     expect(cursor()).toBe(todayIso())
   })
 
@@ -569,7 +573,7 @@ describe('CalendarPage — snapshot cache', () => {
     expect(chipIn(DAY_15, 'Car insurance')).toBeTruthy()
     expect(fetchCalendar).toHaveBeenCalledWith(...windowFor(MONTH))
     fireEvent.click(screen.getByRole('button', { name: 'Next month' }))
-    await screen.findByRole('heading', { name: formatMonth(NEXT) })
+    await shownMonth(NEXT)
     expect(chipIn(`${NEXT.slice(0, 8)}09`, 'Next-month seed')).toBeTruthy()
     await waitFor(() => expect(fetchCalendar).toHaveBeenCalledTimes(2))
   })

@@ -13,7 +13,7 @@ import { fetchHousehold } from '../api/household'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import CalendarGrid, { dayInMonth } from '../components/calendar/CalendarGrid'
-import CashflowStrip from '../components/calendar/CashflowStrip'
+import CashflowStrip, { CashflowNotes } from '../components/calendar/CashflowStrip'
 import DayDrawer from '../components/calendar/DayDrawer'
 import EventDetails from '../components/calendar/EventDetails'
 import SourceHealth from '../components/calendar/SourceHealth'
@@ -41,7 +41,7 @@ import type {
   PersonOut,
 } from '../types/api'
 import { canonicalAmount, isAmount } from '../utils/amount'
-import { formatCurrency, formatDate, formatMonth } from '../utils/format'
+import { formatCurrency, formatDate } from '../utils/format'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import '../components/panels.css'
 import './CalendarPage.css'
@@ -552,7 +552,6 @@ export default function CalendarPage() {
                   goToMonth(`${e.target.value}-01`, `${e.target.value}-01`)
               }}
             />
-            <h2 className="cal-title">{formatMonth(month)}</h2>
             <Segmented
               variant="toggle"
               ariaLabel="Calendar view"
@@ -747,6 +746,7 @@ export default function CalendarPage() {
                   </ul>
                 )}
                 <SourceHealth sources={shown.sources} />
+                <CashflowNotes events={visible} month={month} quoteAsOf={shown.quote_as_of} />
                 {shown.events.length === 0 && (
                   <p className="empty-note">
                     No events in this window — vests, purchases, paydays and card dates appear once

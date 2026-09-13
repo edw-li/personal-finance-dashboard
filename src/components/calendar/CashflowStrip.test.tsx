@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { calendarEvent } from '../../testing/calendarFixtures'
-import CashflowStrip from './CashflowStrip'
+import CashflowStrip, { CashflowNotes } from './CashflowStrip'
 
 afterEach(cleanup)
 
@@ -26,7 +26,10 @@ describe('CashflowStrip', () => {
     expect(tiles[2]).toContain('$13,229.88')
     expect(tiles[3]).toContain('Vesting')
     expect(tiles[3]).toContain('~$41,200.00')
-    expect(screen.getByText(/quote as of Sep 2, 2026/)).toBeTruthy()
+    // The quote date rides the Vesting tile's own delta line (spec §10) — not a footnote row that
+    // occupied a whole track of the tile grid and left the right third empty at 1920 (audit C-7).
+    expect(tiles[3]).toContain('quote as of Sep 2, 2026')
+    expect(document.querySelector('.cal-strip p')).toBeNull()
   })
 
   it('reads a negative net and an empty month honestly', () => {
@@ -39,10 +42,14 @@ describe('CashflowStrip', () => {
     expect(screen.getAllByRole('group')[0].textContent).toContain('$0.00')
   })
 
-  it('counts the events whose money cannot be known', () => {
+  it('CashflowNotes counts the events whose money cannot be known and names the quote', () => {
     const unknowable = calendarEvent({ date: '2026-09-04', type: 'ex_dividend', label: 'Ex-dividend — NVDA', direction: 'in' })
-    render(<CashflowStrip events={[events[0], unknowable]} month="2026-09-01" quoteAsOf={null} />)
+    render(<CashflowNotes events={[events[0], unknowable]} month="2026-09-01" quoteAsOf="2026-09-02T20:00:00Z" />)
     expect(screen.getByText(/1 event has no knowable amount/)).toBeTruthy()
+    expect(screen.getByText('Vest estimates ride the employer quote as of Sep 2, 2026.')).toBeTruthy()
+    cleanup()
+    render(<CashflowNotes events={[events[0]]} month="2026-09-01" quoteAsOf={null} />)
+    expect(document.body.textContent).toBe('')
   })
 
   it('prints a zero estimated leg as $0.00 without the tilde', () => {
