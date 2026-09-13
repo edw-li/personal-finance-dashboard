@@ -1,34 +1,69 @@
+/* The coordinated detail panel (2026-09-12 design §5; chrome and box model 2026-09-13 spec §2.2, §4).
+   Motion lives in the no-preference block at the foot of this file. */
 .detail-layout-content { min-width: 0; }
 .detail-panel-layer { position: fixed; inset: 0; z-index: 16; pointer-events: none; }
-.detail-panel-backdrop { position: absolute; inset: 0; background: #0007; pointer-events: auto; }
+/* --scrim is F2's light-theme token (spec §6); the fallback is today's dark value. */
+.detail-panel-backdrop { position: absolute; inset: 0; background: var(--scrim, #0007); pointer-events: auto; }
+
+/* ONE box model for all three modes (spec §2.2): inset / width / right / border-radius are the same
+   properties in every mode, so a mode switch is a transition, not a re-layout. Dock and overlay read
+   the dragged width from --dp-dock-w (set inline by the provider); reading mode overrides --dp-w. */
 .detail-panel {
-  position: absolute; top: 0; right: 0; bottom: 0;
-  display: flex; flex-direction: column; width: var(--detail-panel-width, 440px);
+  --dp-w: var(--dp-dock-w, 440px);
+  position: absolute; inset: var(--dp-top, 0) 0 var(--dp-bottom, 0) auto; width: var(--dp-w);
   max-width: calc(100vw - 24px); min-width: 0; color: var(--text);
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto minmax(0, 1fr);
   background: var(--surface); border-left: 1px solid var(--border);
   box-shadow: -8px 0 32px #0002; pointer-events: auto;
 }
 .detail-panel:focus { outline: none; }
-.detail-panel-expanded { inset: 24px; width: min(1100px, calc(100vw - 48px)); margin-inline: auto; border: 1px solid var(--border); border-radius: 12px; }
-.detail-panel-header { display: flex; align-items: flex-start; gap: .65rem; padding: 1.1rem; border-bottom: 1px solid var(--border); }
-.detail-panel-heading { flex: 1; min-width: 0; }
-.detail-panel-heading h2 { margin: 0; font-size: 1.05rem; line-height: 1.4; }
-.detail-panel-heading p { margin: .3rem 0 0; font-size: .78rem; color: var(--muted); }
-.detail-panel-toolbar { display: flex; flex-wrap: wrap; gap: .4rem; padding: .7rem 1.1rem; border-bottom: 1px solid var(--border); }
-.detail-panel-toolbar .button { font-size: .73rem; padding: .3rem .5rem; }
-.detail-panel-toolbar [aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
-.detail-panel-body { overflow: auto; overscroll-behavior: contain; padding: var(--density-card-pad, 1.1rem); flex: 1; min-height: 0; line-height: 1.55; }
+.detail-panel-expanded {
+  --dp-top: 24px; --dp-bottom: 24px; --dp-w: min(1100px, calc(100vw - 48px));
+  right: max(24px, calc((100vw - var(--dp-w)) / 2));
+  border: 1px solid var(--border); border-radius: 12px;
+}
+
+/* The header row is three grid cells — Back, heading, controls — because Back and the controls come
+   AFTER the body in the DOM (focus order heading → content → controls → resizer, spec §4) and are
+   placed up here by the grid. Each cell draws the same hairline, so the row reads as one. */
+.detail-panel-back { grid-area: 1 / 1 / 2 / 2; display: flex; align-items: center; padding: .6rem 0 .6rem .8rem; border-bottom: 1px solid var(--border); }
+.detail-panel-header { grid-area: 1 / 2 / 2 / 3; display: flex; align-items: center; min-width: 0; padding: .6rem .8rem; border-bottom: 1px solid var(--border); }
+.detail-panel-controls { grid-area: 1 / 3 / 2 / 4; display: flex; align-items: center; gap: .4rem; padding: .6rem .8rem .6rem 0; border-bottom: 1px solid var(--border); }
+.detail-panel-body { grid-area: 2 / 1 / 3 / 4; overflow: auto; overscroll-behavior: contain; padding: var(--density-card-pad, 1.1rem); min-height: 0; line-height: 1.55; }
+
+/* Title and subtitle share a line when they fit; the subtitle (a chart title) ellipsises (spec §4). */
+.detail-panel-heading { display: flex; gap: .5rem; flex-wrap: wrap; align-items: baseline; min-width: 0; flex: 1; }
+.detail-panel-heading h2 { margin: 0; font-size: .95rem; line-height: 1.4; }
+.detail-panel-heading p { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; color: var(--muted); }
+
+/* Back / Close: the assistant's icon-button scale, not a .button pill (spec §4, audit B7). */
+.detail-panel-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; background: none; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+.detail-panel-icon-button:hover { color: var(--text); border-color: var(--muted); }
+.detail-panel-icon-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.detail-panel-controls .segmented button { padding-inline: .45rem; }
+
+/* Resizer: DOM-last, CSS-first — a 10px strip on the panel's left edge with a visible grip (audit B6). */
 .detail-panel-resizer { position: absolute; inset-block: 0; left: -5px; width: 10px; cursor: ew-resize; touch-action: none; z-index: 1; }
+.detail-panel-resizer::after { content: ''; position: absolute; top: 50%; left: 3px; width: 3px; height: 32px; translate: 0 -50%; border-radius: 2px; background: var(--border); }
 .detail-panel-resizer:hover, .detail-panel-resizer:focus-visible { background: color-mix(in srgb, var(--accent) 40%, transparent); outline: none; }
+.detail-panel-resizer:hover::after, .detail-panel-resizer:focus-visible::after { background: var(--accent); }
+
+/* Reading mode: a measure cap for prose and receipts; the assistant's transcript keeps the width. */
+.detail-panel-expanded .detail-panel-body > :not(.assistant-dock-mount) { max-width: 72ch; margin-inline: auto; }
+
 .metric-info-button { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; margin: -.25rem 0 -.25rem .3rem; padding: 0; background: none; color: var(--muted); border: 0; border-radius: 4px; cursor: pointer; vertical-align: middle; }
 .metric-info-button:hover { color: var(--text); }
 .metric-info-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The figure whose receipt is open right now (spec §4, audit B4). */
+.metric-info-button[aria-expanded="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .metric-inspector h3, .selection-detail h3 { margin: 1.2rem 0 .5rem; font-size: .85rem; }
 .metric-inspector p, .selection-detail p { margin: .55rem 0; font-size: .85rem; }
 .metric-inspector-value { font-size: 1.7rem; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .metric-inspector-definition { color: var(--muted); }
 .metric-receipt-list { margin: .8rem 0; }
-.metric-receipt-list > div { display: flex; gap: 1rem; justify-content: space-between; border-bottom: 1px solid var(--border); padding: .45rem 0; font-size: .8rem; }
+/* Grid, not space-between: in reading mode the value sits a column gap from its label instead of
+   960px away at the far edge (audit B3). */
+.metric-receipt-list > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 1.5rem; border-bottom: 1px solid var(--border); padding: .45rem 0; font-size: .8rem; }
 .metric-receipt-list dt { color: var(--muted); }
 .metric-receipt-list dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 .metric-months { display: flex; flex-wrap: wrap; gap: .35rem; list-style: none; padding: 0; font-size: .78rem; }

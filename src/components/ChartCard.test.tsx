@@ -233,7 +233,7 @@ describe('ChartCard persistent interactions', () => {
     fireEvent.click(charts[1])
     expect(screen.queryByText('First chart details')).toBeNull()
     expect(screen.getByText('Second chart details')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to August' }))
     expect(screen.getByText('First chart details')).toBeTruthy()
     expect(screen.queryByText('Second chart details')).toBeNull()
   })

@@ -1,6 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { ChevronLeft, Layers, Maximize2, Minimize2, PanelRight, X } from 'lucide-react'
+import Segmented from '../shell/Segmented'
+import type { SegmentedOption } from '../shell/Segmented'
 import './details.css'
 
 export type DetailPanelMode = 'dock' | 'overlay' | 'expanded'
@@ -13,6 +16,9 @@ export interface DetailPanelRequest {
   contextKey?: string
   returnTo?: HTMLElement | null
   onClose?: () => void
+  /** Default true. `false` (the assistant — 2026-09-13 spec §4): in overlay or reading mode the
+   *  page stays live — no backdrop, no aria-modal, no inert, no Tab trap. Escape still closes it. */
+  modal?: boolean
 }
 
 interface DetailPanelApi {
@@ -39,26 +45,79 @@ const MIN_READING_SPACE = 930
 export function panelGeometry(viewport: number, preferredWidth: number, desiredMode: DetailPanelMode) {
   const available = viewport - MIN_READING_SPACE
   const canDock = available >= MIN_WIDTH
-  const mode = desiredMode === 'dock' && !canDock ? 'overlay' : desiredMode
+  const mode: DetailPanelMode = desiredMode === 'dock' && !canDock ? 'overlay' : desiredMode
   const maxWidth = Math.min(MAX_WIDTH, mode === 'dock' ? available : Math.max(MIN_WIDTH, viewport - 48))
   return { mode, canDock, maxWidth, width: Math.max(MIN_WIDTH, Math.min(preferredWidth, maxWidth)) }
 }
 
+/** clamp(400px, 26vw, 560px) as a number (2026-09-13 spec §4): the dock's width is a margin the
+ *  layout reserves, so it has to be arithmetic, not a CSS length. Used only while nothing is
+ *  stored — a dragged width wins. */
+export function defaultPanelWidth(viewport: number): number {
+  return Math.round(Math.min(560, Math.max(400, viewport * 0.26)))
+}
+
+/** Browser preferences, not financial data — localStorage, never the server prefs (spec §4). */
+export const MODE_STORAGE_KEY = 'finance.detailPanel.mode'
+export const WIDTH_STORAGE_KEY = 'finance.detailPanel.width'
+const MODES: readonly DetailPanelMode[] = ['dock', 'overlay', 'expanded']
+
+function readStoredMode(): DetailPanelMode | null {
+  try {
+    const stored = localStorage.getItem(MODE_STORAGE_KEY)
+    return MODES.includes(stored as DetailPanelMode) ? (stored as DetailPanelMode) : null
+  } catch {
+    return null
+  }
+}
+
+/** Clamped by panelGeometry on every render (spec §16): a stored width wider than today's maxWidth is fine. */
+function readStoredWidth(): number | null {
+  try {
+    const stored = Number(localStorage.getItem(WIDTH_STORAGE_KEY))
+    return Number.isFinite(stored) && stored > 0 ? stored : null
+  } catch {
+    return null
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // Private mode or quota: the preference simply does not persist.
+  }
+}
+
 const focusableSelector = 'button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex="0"]'
+
+// Mode tooltips (spec §14): what the panel DOES, not what the layout is called.
+const MODE_TITLES: Record<DetailPanelMode, string> = { dock: 'Beside the page', overlay: 'Over the page', expanded: 'Reading mode' }
+const EXIT_READING_TITLE = 'Exit reading mode'
+const DOCK_DISABLED_TITLE = 'Widen the window to keep at least 720 pixels of page content beside details.'
+
+/** An icon-only option whose accessible name is visually-hidden text: Segmented options carry a
+ *  `title` but no per-option aria-label, and Segmented.tsx is not this lane's file to change. */
+function iconOption(value: DetailPanelMode, name: string, icon: ReactNode, extra: Partial<SegmentedOption<DetailPanelMode>> = {}): SegmentedOption<DetailPanelMode> {
+  return { value, title: name, ...extra, label: <>{icon}<span className="visually-hidden">{name}</span></> }
+}
 
 export default function DetailPanelProvider({ children }: { children: ReactNode }) {
   const [stack, setStack] = useState<DetailPanelRequest[]>([])
   const stackRef = useRef<DetailPanelRequest[]>([])
-  const [desiredMode, setMode] = useState<DetailPanelMode>('dock')
-  const [preferredWidth, setWidth] = useState(440)
+  const [desiredMode, setDesiredMode] = useState<DetailPanelMode>(() => readStoredMode() ?? 'dock')
+  // null = nothing stored and nothing dragged yet: the width follows the viewport.
+  const [preferredWidth, setPreferredWidth] = useState<number | null>(readStoredWidth)
   const [viewport, setViewport] = useState(() => typeof window === 'undefined' ? 1600 : window.innerWidth)
+  const [dragging, setDragging] = useState(false)
   const panelRef = useRef<HTMLElement>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const dragRef = useRef<{ x: number; width: number } | null>(null)
   const readingOrigin = useRef<DetailPanelMode>('dock')
   const titleId = useId()
   const active = stack.at(-1)
-  const { mode, width, maxWidth, canDock } = panelGeometry(viewport, preferredWidth, desiredMode)
+  const previous = stack.at(-2)
+  const { mode, width, maxWidth, canDock } = panelGeometry(viewport, preferredWidth ?? defaultPanelWidth(viewport), desiredMode)
 
   const commit = useCallback((next: DetailPanelRequest[]) => {
     stackRef.current = next
@@ -98,6 +157,7 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
       entry.onClose?.()
       return
     }
+    if (current.length === 0) return
     returnFocus.current = current[0]?.returnTo ?? null
     commit([])
     current.forEach((entry) => entry.onClose?.())
@@ -110,6 +170,33 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
     commit(current.slice(0, -1))
     last?.onClose?.()
   }, [commit])
+
+  /** Persisted on change, not on mount: a reader who never touched the control keeps following the
+   *  default (and the viewport-derived width) on every visit. */
+  const setMode = useCallback((next: DetailPanelMode) => {
+    setDesiredMode(next)
+    writeStored(MODE_STORAGE_KEY, next)
+  }, [])
+
+  const resizeTo = (next: number) => {
+    const clamped = Math.max(MIN_WIDTH, Math.min(maxWidth, next))
+    setPreferredWidth(clamped)
+    writeStored(WIDTH_STORAGE_KEY, String(Math.round(clamped)))
+  }
+
+  const chooseMode = (next: DetailPanelMode) => {
+    if (next !== 'expanded') {
+      setMode(next)
+      return
+    }
+    // The reading-mode option is a toggle: pressed again, it returns to the mode it came from.
+    if (mode === 'expanded') {
+      setMode(readingOrigin.current)
+      return
+    }
+    readingOrigin.current = desiredMode
+    setMode('expanded')
+  }
 
   useEffect(() => {
     const measure = () => setViewport(window.innerWidth)
@@ -126,6 +213,11 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
       returnFocus.current = null
     }
   }, [activeId])
+
+  // Modal = the page is taken hostage: backdrop, aria-modal, inert, Tab trap. Never in dock mode,
+  // and never for a request that asked not to be (the assistant).
+  const modal = active !== undefined && mode !== 'dock' && active.modal !== false
+
   useEffect(() => {
     if (activeId === null) return
     panelRef.current?.focus({ preventScroll: true })
@@ -133,9 +225,12 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
       if (event.defaultPrevented) return
       if (event.key === 'Escape') {
         event.preventDefault()
-        close()
+        // One level at a time (design §5.1): evidence opened from a conversation returns to it.
+        if (stackRef.current.length > 1) back()
+        else close()
+        return
       }
-      if (event.key !== 'Tab' || mode === 'dock') return
+      if (event.key !== 'Tab' || !modal) return
       const panel = panelRef.current
       const nodes = Array.from(panel?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])
         .filter((el) => !el.closest('[hidden]'))
@@ -154,28 +249,65 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
     }
     document.addEventListener('keydown', keyboard)
     return () => document.removeEventListener('keydown', keyboard)
-  }, [activeId, close, mode])
+  }, [activeId, back, close, modal])
 
-  const api: DetailPanelApi = { activeId, mode: mode as DetailPanelMode, open, update, close, back, setMode }
-  const modal = active !== undefined && mode !== 'dock'
+  // The assistant launcher sits BESIDE a dock, not under it (spec §2.2): assistant.css reads this.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--dock-width', activeId !== null && mode === 'dock' ? `${Math.round(width)}px` : '0px')
+  }, [activeId, mode, width])
+  useEffect(() => () => { document.documentElement.style.removeProperty('--dock-width') }, [])
+
+  const api: DetailPanelApi = { activeId, mode, open, update, close, back, setMode }
+  const modeOptions: SegmentedOption<DetailPanelMode>[] = [
+    iconOption('dock', MODE_TITLES.dock, <PanelRight size={14} aria-hidden="true" />, { disabled: !canDock, title: canDock ? MODE_TITLES.dock : DOCK_DISABLED_TITLE }),
+    iconOption('overlay', MODE_TITLES.overlay, <Layers size={14} aria-hidden="true" />),
+    mode === 'expanded'
+      ? iconOption('expanded', EXIT_READING_TITLE, <Minimize2 size={14} aria-hidden="true" />)
+      : iconOption('expanded', MODE_TITLES.expanded, <Maximize2 size={14} aria-hidden="true" />),
+  ]
+  const draggingClass = dragging ? ' is-dragging' : ''
 
   return (
     <DetailPanelContext.Provider value={api}>
-      <div className="detail-layout-content" style={{ marginInlineEnd: active && mode === 'dock' ? width : 0 }} inert={modal || undefined}>
+      <div className={`detail-layout-content${draggingClass}`} style={{ marginInlineEnd: active && mode === 'dock' ? width : 0 }} inert={modal || undefined}>
         {children}
       </div>
       {active && createPortal(
-        <div className={`detail-panel-layer detail-panel-layer-${mode}`}>
+        <div className={`detail-panel-layer detail-panel-layer-${mode}${draggingClass}`}>
           {modal && <div className="detail-panel-backdrop" aria-hidden="true" onClick={() => close()} />}
           <aside
             ref={panelRef}
             className={`detail-panel detail-panel-${mode}`}
-            style={{ '--detail-panel-width': `${width}px` } as CSSProperties}
+            style={{ '--dp-dock-w': `${width}px` } as CSSProperties}
             role="dialog"
             aria-modal={modal || undefined}
             aria-labelledby={titleId}
             tabIndex={-1}
           >
+            <header className="detail-panel-header">
+              <div className="detail-panel-heading">
+                <h2 id={titleId}>{active.title}</h2>
+                {active.subtitle && <p title={active.subtitle}>{active.subtitle}</p>}
+              </div>
+            </header>
+            <div className="detail-panel-body">{active.content}</div>
+            {/* DOM-after the body, CSS-placed in the header row (spec §4): Tab from the panel lands
+                on the content first; Back, the layout control, the request's actions, Close and the
+                resizer come after it. */}
+            {previous !== undefined && (
+              <div className="detail-panel-back">
+                <button type="button" className="detail-panel-icon-button" aria-label={`Back to ${previous.title}`} title={`Back to ${previous.title}`} onClick={back}>
+                  <ChevronLeft size={14} aria-hidden="true" />
+                </button>
+              </div>
+            )}
+            <div className="detail-panel-controls">
+              <Segmented variant="toggle" size="sm" ariaLabel="Detail panel layout" value={mode} onChange={chooseMode} options={modeOptions} />
+              {active.actions}
+              <button type="button" className="detail-panel-icon-button" aria-label="Close details" title="Close details" onClick={() => close()}>
+                <X size={14} aria-hidden="true" />
+              </button>
+            </div>
             {mode !== 'expanded' && (
               <div
                 className="detail-panel-resizer"
@@ -189,44 +321,28 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
                 onPointerDown={(event) => {
                   if (event.button !== 0) return
                   dragRef.current = { x: event.clientX, width }
+                  setDragging(true)
                   event.currentTarget.setPointerCapture?.(event.pointerId)
                   event.preventDefault()
                 }}
                 onPointerMove={(event) => {
                   if (!dragRef.current) return
-                  setWidth(Math.max(MIN_WIDTH, Math.min(maxWidth, dragRef.current.width + dragRef.current.x - event.clientX)))
+                  resizeTo(dragRef.current.width + dragRef.current.x - event.clientX)
                 }}
                 onPointerUp={(event) => {
                   dragRef.current = null
+                  setDragging(false)
                   event.currentTarget.releasePointerCapture?.(event.pointerId)
                 }}
-                onPointerCancel={() => { dragRef.current = null }}
+                onPointerCancel={() => { dragRef.current = null; setDragging(false) }}
                 onKeyDown={(event) => {
                   const next = event.key === 'ArrowLeft' ? width + 20 : event.key === 'ArrowRight' ? width - 20 : event.key === 'Home' ? MIN_WIDTH : event.key === 'End' ? maxWidth : null
                   if (next === null) return
                   event.preventDefault()
-                  setWidth(Math.max(MIN_WIDTH, Math.min(maxWidth, next)))
+                  resizeTo(next)
                 }}
               />
             )}
-            <header className="detail-panel-header">
-              {stack.length > 1 && <button type="button" className="button" onClick={back}>Back</button>}
-              <div className="detail-panel-heading">
-                <h2 id={titleId}>{active.title}</h2>
-                {active.subtitle && <p>{active.subtitle}</p>}
-              </div>
-              <button type="button" className="button" aria-label="Close details" onClick={() => close()}>Close</button>
-            </header>
-            <div className="detail-panel-toolbar" role="group" aria-label="Detail panel layout">
-              <button type="button" className="button" aria-pressed={mode === 'dock'} disabled={!canDock} title={!canDock ? 'Widen the window to keep at least 720 pixels of page content beside details.' : undefined} onClick={() => setMode('dock')}>Dock</button>
-              <button type="button" className="button" aria-pressed={mode === 'overlay'} onClick={() => setMode('overlay')}>Overlay</button>
-              <button type="button" className="button" aria-pressed={mode === 'expanded'} onClick={() => {
-                if (mode === 'expanded') setMode(readingOrigin.current)
-                else { readingOrigin.current = mode as DetailPanelMode; setMode('expanded') }
-              }}>{mode === 'expanded' ? 'Restore size' : 'Expand reading'}</button>
-              {active.actions}
-            </div>
-            <div className="detail-panel-body">{active.content}</div>
           </aside>
         </div>, document.body,
       )}

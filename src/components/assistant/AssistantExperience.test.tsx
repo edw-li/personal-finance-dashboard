@@ -79,7 +79,7 @@ describe('assistant evidence and working context', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Ask the assistant' }), { target: { value: 'Keep this draft' } })
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect Living spending' })[0])
     expect(screen.getByRole('dialog', { name: 'Living spending' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Assistant' }))
     expect((screen.getByRole('textbox', { name: 'Ask the assistant' }) as HTMLTextAreaElement).value).toBe('Keep this draft')
     fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
     expect(screen.queryByRole('dialog')).toBeNull()
