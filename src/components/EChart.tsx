@@ -36,7 +36,9 @@ export default function EChart({
   group,
 }: {
   option: EChartsOption
-  height?: number
+  /** Pixels, or 'fill' = `height: 100%` for a host whose parent sizes it (the expanded chart
+   *  dialog's flex column — 2026-09-13 spec §2.3). The ResizeObserver below refits either way. */
+  height?: number | 'fill'
   // A one-sentence description of what the chart SHOWS (deliberate house wording — ECharts'
   // generated aria is switched off in the decal merge below). REQUIRED since the chart
   // grammar (2026-09-04, spec §14): ChartCard forwards its own required prop, so a nameless
@@ -160,9 +162,12 @@ export default function EChart({
     if (instanceRef) instanceRef.current = chart
     // The browser fires this the moment observe() is called, carrying the size the chart was
     // just init'ed at; resize() there restarts every animator, killing the entrance (spec §6).
+    // `animation.duration: 0`: while the dock's margin transitions (2026-09-13 spec §2.2) this
+    // fires once per frame, and the engine's own update animation on each call would run on
+    // top of the CSS motion — the resize is a refit, not a scene change.
     const observer = new ResizeObserver(() => {
       if (el.clientWidth !== chart.getWidth() || el.clientHeight !== chart.getHeight()) {
-        chart.resize()
+        chart.resize({ animation: { duration: 0 } })
       }
     })
     observer.observe(el)
@@ -351,7 +356,7 @@ export default function EChart({
       // image (the hedge it replaced only existed while the prop was optional).
       role="img"
       aria-label={ariaLabel}
-      style={{ height, width: '100%' }}
+      style={{ height: height === 'fill' ? '100%' : height, width: '100%' }}
     />
   )
 }

@@ -557,12 +557,15 @@ describe('EChart resize guard (spec §6)', () => {
     // resize() mid-entrance restarts every animator from frame 0 — why entrances have never been seen.
     expect(lastChart().resize).not.toHaveBeenCalled()
   })
-  it('resizes when the element and the engine disagree', () => {
+  it('resizes when the element and the engine disagree — without an engine animation on top of the CSS motion', () => {
     render(<EChart ariaLabel="test chart" option={OPTION} />)
     const chart = lastChart()
     chart.getWidth.mockReturnValue(800) // the element is still jsdom's 0-wide
     resizeNotify.forEach((fire) => fire())
     expect(chart.resize).toHaveBeenCalledTimes(1)
+    // The dock's margin transition already moves the canvas per frame (2026-09-13 spec §2.2); an
+    // ECharts update animation on each of those ~14 resizes would smear the series behind it.
+    expect(chart.resize).toHaveBeenCalledWith({ animation: { duration: 0 } })
   })
 })
 
@@ -667,5 +670,18 @@ describe('EChart cursor and tooltip motion (spec §6)', () => {
     // notMerge: a bare `tooltip: { transitionDuration: 0 }` would drop the formatter with it.
     expect(applied().tooltip.transitionDuration).toBe(0)
     expect(typeof applied().tooltip.formatter).toBe('function')
+  })
+})
+
+// The expanded dialog sizes the chart from the dialog, not from window.innerHeight (spec §2.3):
+// the card is a flex column and the host takes 100% of what the chrome leaves.
+describe('EChart height', () => {
+  it('a number is pixels', () => {
+    const { container } = render(<EChart option={OPTION} ariaLabel="Sized chart" height={280} />)
+    expect((container.firstElementChild as HTMLElement).style.height).toBe('280px')
+  })
+  it("'fill' hands the host to its flex parent — height: 100%", () => {
+    const { container } = render(<EChart option={OPTION} ariaLabel="Filled chart" height="fill" />)
+    expect((container.firstElementChild as HTMLElement).style.height).toBe('100%')
   })
 })
