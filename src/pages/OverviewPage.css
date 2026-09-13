@@ -58,7 +58,7 @@
 
 .ytd-facts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 10px 16px;
   margin: 0;
 }
@@ -77,6 +77,16 @@
   font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
   font-size: 1.05rem;
   font-variant-numeric: tabular-nums;
+  /* Value and sub-line are two children now (W4): the sub wraps under the amount instead of
+     breaking it mid-figure. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.35rem;
+}
+
+.ytd-fact .ytd-value {
+  white-space: nowrap;
 }
 
 .ytd-fact .ytd-sub {
@@ -152,7 +162,8 @@
 .overview-movers li { display: flex; flex-direction: column; gap: .3rem; font-size: .85rem; }
 .overview-movers a { color: var(--text); }
 .overview-movers span { font-variant-numeric: tabular-nums; font-size: 1.05rem; }
-.overview-deeper { display: grid; gap: 1rem; margin-top: 1rem; }
+/* The card-grid class supplies the grid and the density gap (F2's layout grammar). */
+.overview-deeper { margin-top: 1rem; }
 .overview-deeper > .card { margin: 0; }
 .overview-customize { position: relative; }
 .overview-customize summary { list-style: none; cursor: pointer; }

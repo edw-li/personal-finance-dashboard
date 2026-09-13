@@ -17,7 +17,7 @@ import { chipAmount, eventKey } from '../components/calendar/calendarView'
 import { attentionItems } from '../components/overview/attention'
 import DataStatusCard from '../components/overview/DataStatusCard'
 import { netWorthComponents } from '../components/overview/netWorthReceipt'
-import { GhostTile } from '../components/PageSkeleton'
+import { GhostTile, SkeletonCard } from '../components/PageSkeleton'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
 import { UP_NEXT_WINDOW_DAYS, rankUpNext, upNextLine } from '../components/overview/upNext'
 import { windowWords, ytdStats } from '../components/overview/ytd'
@@ -450,8 +450,8 @@ export default function OverviewPage() {
     )
   }
   const deeperCards = {
-    ytd: (showYtd && ytd && (
-              <section className="card ytd-card">
+    ytd: showYtd && ytd ? (
+              <section className="card ytd-card span-12">
                 <h2 className="eyebrow">
                   Year to date — {ytd.year}
                   <InfoHint text="The year so far, each figure over the window it was measured on: net-worth change since the last pre-January snapshot, living spend (tax payments and transfers are counted apart), net pay, savings with payroll deductions counted in, and dividend entries (automatic records use ex-date)." />
@@ -465,14 +465,11 @@ export default function OverviewPage() {
                       ) : (
                         // Glyph + colour + the signed number — three channels, none alone
                         // (StatTile's delta grammar). Up is good here, so glyph and tone agree.
+                        // The amount is one unbreakable run (W4): the sub-line wraps, it never does.
                         <span
-                          className={
-                            ytd.netWorthDelta > 0
-                              ? 'delta-positive'
-                              : ytd.netWorthDelta < 0
-                                ? 'delta-negative'
-                                : ''
-                          }
+                          className={`ytd-value ${
+                            ytd.netWorthDelta > 0 ? 'delta-positive' : ytd.netWorthDelta < 0 ? 'delta-negative' : ''
+                          }`.trim()}
                         >
                           <span aria-hidden="true">
                             {ytd.netWorthDelta > 0 ? '▲ ' : ytd.netWorthDelta < 0 ? '▼ ' : ''}
@@ -483,7 +480,6 @@ export default function OverviewPage() {
                       )}
                       {ytd.anchorMonth && (
                         <span className="ytd-sub">
-                          {' '}
                           since {formatMonth(ytd.anchorMonth)}
                           {ytd.throughMonth !== null &&
                             ` (through ${formatMonth(ytd.throughMonth).slice(0, 3)})`}
@@ -552,14 +548,25 @@ export default function OverviewPage() {
                     </dd>
                   </div>
                   <div className="ytd-fact">
-                    <dt>Dividend entries · ex-date for automatic records</dt>
+                    <dt>
+                      Dividends
+                      <span className="ytd-sub"> ex-date for automatic records</span>
+                    </dt>
                     <dd>{ytd.dividends === null ? '—' : formatCurrency(ytd.dividends)}</dd>
                   </div>
                 </dl>
               </section>
-            )),
+            ) : ytd === null && (wealth.busy || investments.busy || spending.busy) ? (
+              // Spec §9: reserve the slot while the feeds behind it are still in flight — the card
+              // used to appear out of nothing when `dividends` landed and shoved the deeper stack
+              // down 212px on a slow investments feed.
+              <div className="span-12">
+                <SkeletonCard height={96} label="Loading year to date…" />
+              </div>
+            ) : null,
     performance: (
               <ChartCard
+                span={6}
                 title="Portfolio performance"
                 hint={performanceHint}
                 ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
@@ -578,6 +585,7 @@ export default function OverviewPage() {
     ),
     spending: (
               <ChartCard
+                span={6}
                 title="Recent spending"
                 // The dashed line is spendStats.avg12 (the twelve months BEFORE the
                 // latest), which is also the figure the spend tile compares against — the
@@ -752,7 +760,7 @@ export default function OverviewPage() {
                 />
               </aside>
             </div>
-            <div className="overview-deeper">{layout.cards.map(id => <Fragment key={id}>{deeperCards[id]}</Fragment>)}</div>
+            <div className="overview-deeper card-grid">{layout.cards.map(id => <Fragment key={id}>{deeperCards[id]}</Fragment>)}</div>
           </>
         )}
       </PageFrame>

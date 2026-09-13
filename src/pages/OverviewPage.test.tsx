@@ -1070,6 +1070,30 @@ describe('OverviewPage year to date', () => {
 
     expect(screen.queryByRole('heading', { name: /Year to date/ })).toBeNull()
   })
+
+  it('reads "Dividends" with the ex-date note as a sub-label, and keeps the net-worth amount whole', async () => {
+    serve({ yearly: { years: [{ year: CURRENT_YEAR, by_category: [], total: '1.00', net_pay_total: '2.00', savings_rate: '0.5' }] } })
+    renderPage()
+    await screen.findByText(`Year to date — ${CURRENT_YEAR}`)
+    const dividends = screen.getByText('Dividends').closest('dt') as HTMLElement
+    expect(dividends.querySelector('.ytd-sub')?.textContent).toContain('ex-date for automatic records')
+    const netWorth = screen.getByText('Net worth', { selector: 'dt' }).closest('.ytd-fact') as HTMLElement
+    expect(netWorth.querySelector('dd .ytd-value')?.textContent).toContain('$34,567.00')
+    expect(netWorth.querySelector('dd .ytd-sub')?.textContent).toMatch(/^since .*\(through .*\)$/)
+  })
+
+  it('reserves the year-to-date slot with a ghost while its feeds are pending', async () => {
+    const payload = serve({ yearly: { years: [{ year: CURRENT_YEAR, by_category: [], total: '1.00', net_pay_total: '2.00', savings_rate: '0.5' }] } })
+    const dividends = deferred<DividendOut[]>()
+    vi.mocked(fetchDividends).mockImplementation(() => dividends.promise)
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(document.querySelector('.overview-deeper .span-12 .loading-fallback')).not.toBeNull()
+    expect(screen.queryByRole('heading', { name: /Year to date/ })).toBeNull()
+    await act(async () => { dividends.resolve(payload.dividends) })
+    expect(await screen.findByRole('heading', { name: /Year to date/ })).toBeTruthy()
+    expect(document.querySelector('.overview-deeper .loading-fallback')).toBeNull()
+  })
 })
 
 describe('OverviewPage attention strip', () => {
@@ -1905,6 +1929,20 @@ describe('OverviewPage independent groups and preferences', () => {
 })
 
 describe('OverviewPage chart cards (charts C2)', () => {
+  it('lays the deeper cards on the card grid — performance and spending side by side, YTD and money flow full width', async () => {
+    serve({ yearly: { years: [{ year: CURRENT_YEAR, by_category: [], total: '1.00', net_pay_total: '2.00', savings_rate: '0.5' }] } })
+    renderPage()
+    // The YTD card is the last of the four to land (it waits on the dividends feed).
+    await screen.findByRole('heading', { name: /Year to date/ })
+    const deeper = document.querySelector('.overview-deeper') as HTMLElement
+    expect(deeper.classList.contains('card-grid')).toBe(true)
+    const cardOf = (name: RegExp) => screen.getByRole('heading', { name }).closest('.card') as HTMLElement
+    expect(cardOf(/Portfolio performance/).classList.contains('span-6')).toBe(true)
+    expect(cardOf(/Recent spending/).classList.contains('span-6')).toBe(true)
+    expect(cardOf(/Year to date/).classList.contains('span-12')).toBe(true)
+    expect(cardOf(new RegExp(`Money flow.*${CURRENT_YEAR}`)).classList.contains('span-12')).toBe(true)
+  })
+
   it('mounts the three snapshot charts through ChartCard with labels, export rows and the drill links', async () => {
     serve()
     renderPage()
