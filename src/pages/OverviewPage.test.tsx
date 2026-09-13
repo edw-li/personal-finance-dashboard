@@ -1940,6 +1940,32 @@ describe('OverviewPage independent groups and preferences', () => {
     expect((screen.getByRole('checkbox', { name: 'Net worth' }) as HTMLInputElement).disabled).toBe(true)
     expect(getLocal('overview_layout')?.tiles).toEqual(['net_worth'])
   })
+
+  // A4 (2026-09-13 audit): a real popover — closes on Escape and outside pointer, focus returns.
+  it('the Customize popover opens as a dialog, closes on Escape / outside pointer / Done, and names the spending card as titled', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    const trigger = screen.getByRole('button', { name: 'Customize' })
+    expect(trigger.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(trigger)
+    const dialog = screen.getByRole('dialog', { name: 'Customize overview' })
+    expect(dialog.className).toContain('popover-surface')
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(within(dialog).getByRole('checkbox', { name: 'Recent spending' })).toBeTruthy()
+    expect(within(dialog).queryByText('Recent living spending')).toBeNull()
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+    fireEvent.click(trigger)
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+  })
 })
 
 describe('OverviewPage chart cards (charts C2)', () => {

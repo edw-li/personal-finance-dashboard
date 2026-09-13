@@ -165,9 +165,14 @@
 /* The card-grid class supplies the grid and the density gap (F2's layout grammar). */
 .overview-deeper { margin-top: 1rem; }
 .overview-deeper > .card { margin: 0; }
+/* Customize: the wrapper positions the shared .popover-surface; the surface supplies its own
+   background, border, shadow, padding, z-index and pop-in motion (panels.css, F2). It opens
+   LEFTWARD from its trigger (right edges aligned) so it stays inside the content column —
+   `.page`'s container-type makes the page a stacking context, so a surface that ran past the
+   column could not paint over a docked panel anyway. */
 .overview-customize { position: relative; }
-.overview-customize summary { list-style: none; cursor: pointer; }
-.overview-customize-menu { position: absolute; right: 0; top: calc(100% + .5rem); width: 390px; z-index: 40; padding: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px #0004; }
+.overview-customize-menu { right: 0; top: calc(100% + .5rem); width: min(390px, 90vw); }
+.overview-customize-actions { display: flex; justify-content: space-between; gap: .5rem; margin-top: .5rem; }
 .overview-customize-menu fieldset { border: 0; padding: 0; margin: 0 0 .85rem; }
 .overview-customize-menu legend { font-size: .8rem; font-weight: 600; margin-bottom: .4rem; }
 .overview-customize-row { display: flex; align-items: center; gap: .35rem; margin: .45rem 0; font-size: .8rem; }
