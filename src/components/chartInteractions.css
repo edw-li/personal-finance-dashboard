@@ -27,30 +27,19 @@
 .chart-row-actions button { font-size: .75rem; padding: .2rem .45rem; }
 
 /* ── Expand dialog motion (2026-09-13 spec §2.3) ────────────────────────────
-   Entrance: the surface fades up from the card over --t-page; the backdrop over --t-fast. Exit:
-   where the engine can transition `display`/`overlay` discretely (Chromium ≥ 117, Safari 17.4),
-   the dialog fades over --t-fast on close; elsewhere the close stays instant — focus and scroll
-   are already restored by ChartSurface. Tokens only (motion.test.ts); the reduce block zeroes
-   them and this block is gated besides. Keyframe names are this lane's own (spec §16). */
+   Entrance: the surface fades up from the card over --t-page; the backdrop over --t-fast. The close
+   is INSTANT, which spec §2.3 allows explicitly — focus and scroll are already restored by
+   ChartSurface. A discrete `display`/`overlay` exit was tried and removed in review: ChartSurface
+   moves the chart host back to its placeholder synchronously, so the fade played on an empty box;
+   ::backdrop had no exit and snapped out underneath it; and the @starting-style rule ran a --t-fast
+   opacity/transform transition against this --t-page animation on the same two properties, which
+   flickered on every open. Tokens only (motion.test.ts); the reduce block zeroes them and this block
+   is gated besides. Keyframe names are this lane's own (spec §16). */
 @media (prefers-reduced-motion: no-preference) {
   .chart-expanded-dialog[open] { animation: surface-in var(--t-page) var(--ease-out) both; }
   .chart-expanded-dialog[open]::backdrop { animation: chart-backdrop-in var(--t-fast) ease both; }
   @keyframes surface-in { from { opacity: 0; transform: translateY(8px) scale(.985); } }
   @keyframes chart-backdrop-in { from { opacity: 0; } }
-
-  @supports (transition-behavior: allow-discrete) {
-    .chart-expanded-dialog {
-      transition:
-        opacity var(--t-fast) ease,
-        transform var(--t-fast) ease,
-        overlay var(--t-fast) ease allow-discrete,
-        display var(--t-fast) ease allow-discrete;
-    }
-    .chart-expanded-dialog:not([open]) { opacity: 0; transform: translateY(8px) scale(.985); }
-    @starting-style {
-      .chart-expanded-dialog[open] { opacity: 0; transform: translateY(8px) scale(.985); }
-    }
-  }
 }
 
 /* ── ChartCard `aside` (2026-09-13 spec §12) ──────────────────────────────

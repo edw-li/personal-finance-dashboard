@@ -298,4 +298,19 @@ describe('coordinated detail panels', () => {
       expect(document.querySelector('.detail-panel')).toBeNull()
     })
   })
+  it('closes instantly under reduce — no opaque ghost over the reflowed page', () => {
+    // The motion block is gated on no-preference, so under reduce there is no detail-panel-out to
+    // fade: an inert ghost would just sit there opaque for the fallback timer's ~170ms.
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    try {
+      withAnimations(() => {
+        render(<DetailPanelProvider><Harness /></DetailPanelProvider>)
+        fireEvent.click(screen.getByRole('button', { name: 'Inspect month' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
+        expect(document.querySelector('.detail-panel')).toBeNull()
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

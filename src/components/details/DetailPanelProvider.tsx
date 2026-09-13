@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronLeft, Layers, Maximize2, Minimize2, PanelRight, X } from 'lucide-react'
 import { MOTION_MS } from '../../theme/motion'
+import { prefersReducedMotion } from '../useReducedMotion'
 import Segmented from '../shell/Segmented'
 import type { SegmentedOption } from '../shell/Segmented'
 import './details.css'
@@ -156,11 +157,13 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
 
   /** Arm the exit ghost for `last`. Gated on Web Animations because that is what separates a CSS
    *  animation engine from jsdom: without it the ghost would never hear animationend and would sit
-   *  for the whole fallback timer in every unit test. Reads the mode through a ref so `close` keeps
-   *  its identity — MetricInfoButton closes its receipt on unmount through `close`, and a new
-   *  identity per mode change would close panels by accident. */
+   *  for the whole fallback timer in every unit test. Gated on reduce too: the motion block is
+   *  no-preference only, so there would be no detail-panel-out to play and an opaque, inert ghost
+   *  would just cover the reflowed page until the fallback timer fired. Reads the mode through a ref
+   *  so `close` keeps its identity — MetricInfoButton closes its receipt on unmount through `close`,
+   *  and a new identity per mode change would close panels by accident. */
   const beginExit = useCallback((last: DetailPanelRequest) => {
-    if (typeof panelRef.current?.animate !== 'function') return
+    if (typeof panelRef.current?.animate !== 'function' || prefersReducedMotion()) return
     setLeaving({ request: last, mode: modeRef.current })
   }, [])
 

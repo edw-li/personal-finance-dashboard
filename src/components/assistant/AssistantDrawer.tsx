@@ -650,9 +650,12 @@ export default function AssistantDrawer() {
       onClose: () => { setOpen(false); setPreviewOpen(false) },
     })
   }, [open, openRequest, openPanel, portalHost])
+  // One source for the element: the ref effect above (declared first, so it commits first) builds
+  // it, and this pushes that same node. model/models/streaming/newChat stay in the dep list even
+  // though the body no longer names them — they are what makes this re-run when the actions change.
   useEffect(() => {
     if (!open || !updatePanel) return
-    updatePanel('assistant', { actions: <AssistantHeaderActions model={model} models={models} streaming={streaming} onModel={setModel} onNewChat={newChat} /> })
+    updatePanel('assistant', { actions: headerActionsRef.current })
   }, [open, updatePanel, model, models, streaming, newChat])
   useEffect(() => () => closePanel?.('assistant'), [closePanel])
 

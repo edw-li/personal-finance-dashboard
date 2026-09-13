@@ -412,6 +412,13 @@
     transition: right var(--t-page) var(--ease-out);
   }
 
+  /* The launcher rides --dock-width, so during a resizer drag it would lag --t-page behind the
+     hand exactly as the panel and the content would — those already opt out through .is-dragging
+     (details.css), and the launcher is a descendant of the .detail-layout-content that carries it. */
+  .is-dragging .assistant-launcher {
+    transition: none;
+  }
+
   @keyframes assistant-drawer-in {
     from {
       transform: translateX(24px);
