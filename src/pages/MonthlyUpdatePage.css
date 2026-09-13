@@ -163,12 +163,6 @@
   margin-top: 1.25rem;
 }
 
-.review-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1rem;
-}
-
 .meta-row {
   display: flex;
   gap: 1.25rem;
@@ -266,14 +260,15 @@
   border-color: var(--negative);
   color: var(--negative);
 }
-.review-change-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1.25rem 0; }
+.review-change-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: .75rem 0 0; }
 .review-change-group { min-width: 0; }
 .review-change-group table { width: 100%; font-size: .85rem; }
-.review-save-summary { color: var(--muted); font-size: .9rem; margin-top: 1.5rem; }
 .review-confirmations { border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; margin: 1.5rem 0 .75rem; }
 .review-confirmations legend { font-size: .9rem; font-weight: 600; padding: 0 .4rem; }
 .review-confirmations label { display: flex; align-items: baseline; gap: .65rem; margin: .5rem 0; font-size: .9rem; }
-.month-review-status { display: inline-flex; padding: .3rem .7rem; border-radius: 100px; background: var(--surface-raised, var(--bg-card)); border: 1px solid var(--border); font-size: .8rem; margin-bottom: 1rem; }
+/* F3 (2026-09-13 audit): the pill's two tokens (--surface-raised, --bg-card) never existed, so
+   it painted transparent. --surface-2 is the raised fill every other pill here wears. */
+.month-review-status { display: inline-flex; padding: .3rem .7rem; border-radius: 100px; background: var(--surface-2); border: 1px solid var(--border); font-size: .8rem; margin: 0; }
 .month-review-status-closed { color: var(--positive); }
 .month-review-status-needs_review { color: var(--warn); }
 .month-actions { margin-top: 1.5rem; padding-top: .8rem; border-top: 1px solid var(--border); }
@@ -282,3 +277,16 @@
 .historical-review { margin-top: 1rem; padding: 1.25rem; }
 .history-review-list { max-height: 20rem; overflow: auto; margin: 1rem 0; }
 .history-review-row { display: grid; grid-template-columns: 1.25rem 1fr 1fr auto; align-items: center; gap: .75rem; padding: .6rem 0; border-bottom: 1px solid var(--border); font-size: .85rem; }
+
+/* The Review step's head row: eyebrow, review pill, and (Task 4) the month-actions kebab. */
+.review-head { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; margin-bottom: .9rem; }
+.review-head .eyebrow { margin: 0; }
+.review-kpis { margin-bottom: 1.25rem; }
+.review-changes-head { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; flex-wrap: wrap; margin-top: 1.25rem; }
+.review-changes-head .eyebrow { margin: 0; }
+.review-changes-count { color: var(--muted); font-size: .85rem; }
+.review-changes-footer { margin: .75rem 0 0; padding-top: .6rem; border-top: 1px solid var(--border); }
+/* The footer's middle slot: the gate sentence beside the button it explains (T4). */
+.wizard-footer { align-items: center; }
+.wizard-footer-note { flex: 1; margin: 0; text-align: right; }
+.wizard-footer-actions { display: flex; gap: .6rem; }

@@ -16,7 +16,8 @@ it('counts blank-to-zero as an entry change and does not show missing input as a
   expect(screen.getByText('No differences with an available recent reference.')).toBeTruthy()
   // A typed $0.00 for a category with a stored row IS a recorded figure — the save lists it.
   view.rerender(<ReviewChanges {...base} balances={{ 1: '0.00' }} amounts={{ 2: '0.00' }} recordedCategories={new Set([2])} />)
-  expect(screen.getByRole('status').textContent).toContain('1 account balances and 1 categories changed')
+  expect(screen.getByRole('status').textContent).toBe('1 balance · 1 category')
+  expect(screen.getByRole('heading', { name: 'Changes since last save' })).toBeTruthy()
   expect(screen.getByText('Food')).toBeTruthy()
   expect(screen.getByText('Checking')).toBeTruthy()
 })
@@ -31,4 +32,10 @@ it('leaves an untouched $0.00 seed out of the spending differences, but compares
   view.rerender(<ReviewChanges {...base} amounts={{ 2: '0.00' }} recordedCategories={new Set([2])} />)
   expect(screen.getByText('Food')).toBeTruthy()
   expect(screen.getByText('−$100.00')).toBeTruthy()
+})
+
+it('names a new month as a snapshot, not as zero changes', () => {
+  render(<ReviewChanges accounts={accounts} categories={categories} balances={{}} amounts={{}} priorBalances={{}} baseline={null} month="2025-02-01" matrix={null} monthExisted={false} recordedCategories={new Set()} />)
+  expect(screen.getByRole('status').textContent).toBe('New balance snapshot — review the carried-forward balances before confirming.')
+  expect(screen.getByText(/Spending references use up to three prior entered months/).className).toContain('review-changes-footer')
 })

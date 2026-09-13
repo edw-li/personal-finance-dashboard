@@ -15,7 +15,7 @@ const largest = (rows: Change[]) => rows.filter(row => Math.round((row.after - r
 
 function ChangeTable({ title, rows, empty }: { title: string; rows: Change[]; empty: string }) {
   return <section className="review-change-group">
-    <h3 className="eyebrow">{title}</h3>
+    <h4 className="eyebrow">{title}</h4>
     {rows.length === 0 ? <p className="drill-hint">{empty}</p> : <table className="data-table">
       <thead><tr><th>Item</th><th>Reference</th><th>Entered</th><th>Change</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.id}>
@@ -44,14 +44,21 @@ export default function ReviewChanges({ accounts, categories, balances, amounts,
     const typical = matrix ? typicalSpend(matrix, month, c.id) : null
     return typical === null || !recordedCategories.has(c.id) || !entered(amounts[c.id]) ? [] : [{ id: c.id, label: c.name, before: typical, after: amount(amounts[c.id]) }]
   }))
+  const balancesWord = unsavedBalances === 1 ? 'balance' : 'balances'
+  const categoriesWord = unsavedCategories === 1 ? 'category' : 'categories'
   return <div className="review-changes">
-    <p className="review-save-summary" role="status">{monthExisted
-      ? `${unsavedBalances} account balances and ${unsavedCategories} categories changed since the last save.`
-      : 'New balance snapshot. Review carried-forward balances before confirming.'}</p>
+    {/* T4 (2026-09-13 audit): the count is the eyebrow of the tables it summarises, the method
+        note their footer — connective tissue attached to its subject instead of floating. */}
+    <div className="review-changes-head">
+      <h3 className="eyebrow">Changes since last save</h3>
+      <span className="review-changes-count" role="status">{monthExisted
+        ? `${unsavedBalances} ${balancesWord} · ${unsavedCategories} ${categoriesWord}`
+        : 'New balance snapshot — review the carried-forward balances before confirming.'}</span>
+    </div>
     <div className="review-change-grid">
       <ChangeTable title="Largest balance changes · prior month" rows={prior} empty="No changed balances with a prior-month reference." />
       <ChangeTable title="Largest spending differences · recent median" rows={unusual} empty="No differences with an available recent reference." />
     </div>
-    <p className="drill-hint">Spending references use up to three prior entered months. Differences are prompts to check your entries.</p>
+    <p className="drill-hint review-changes-footer">Spending references use up to three prior entered months. Differences are prompts to check your entries.</p>
   </div>
 }

@@ -2438,3 +2438,29 @@ it('keeps a late save conflict out of the newly loaded month', async () => {
   fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
   expect((await screen.findByRole('button', { name: 'Save progress' }) as HTMLButtonElement).disabled).toBe(false)
 })
+
+// W5/T4 (2026-09-13 audit): the receipt reads like the Overview it feeds — four tiles, and the
+// close-gate sentence sits in the footer beside the button it explains.
+it('lays the Review step out as four tiles with the cash split and the close gate in the footer', async () => {
+  vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category, transferCategory, taxCategory])
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '250.00' } })
+  fireEvent.change(screen.getByLabelText('Brokerage deposit'), { target: { value: '100.00' } })
+  fireEvent.change(screen.getByLabelText('Tax payment'), { target: { value: '50.00' } })
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '1000.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  await screen.findByRole('heading', { name: /^Review & save/ })
+  const tile = (label: string) => screen.getByText(label).closest('.stat-tile') as HTMLElement
+  expect(tile('Net worth').querySelector('.stat-value')?.textContent).toBe('$1,500.00')
+  expect(tile('Living spending').querySelector('.stat-value')?.textContent).toBe('$250.00')
+  expect(tile('Cash outflow').querySelector('.stat-value')?.textContent).toBe('$300.00')
+  expect(tile('Cash outflow').querySelector('.stat-delta')?.textContent).toBe('tax $50.00 · transfers $100.00')
+  expect(tile('Cash saved').querySelector('.stat-value')?.textContent).toBe('70.0%')
+  expect(tile('Cash saved').querySelector('.stat-delta')?.textContent).toBe('$700.00 of $1,000.00 take-home')
+  // The gate sentence lives in the footer, next to the disabled primary.
+  const footer = screen.getByRole('button', { name: 'Save and close month' }).closest('.wizard-footer') as HTMLElement
+  expect(footer.textContent).toContain('To close, complete all three confirmations')
+  // The month is printed by the h1; the eyebrow does not repeat it.
+  expect(screen.queryByRole('heading', { name: /Review & save — / })).toBeNull()
+})

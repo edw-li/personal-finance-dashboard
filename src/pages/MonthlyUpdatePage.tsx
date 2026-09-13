@@ -18,6 +18,7 @@ import {
   fetchSpendingMonth,
 } from '../api/spending'
 import AmountInput from '../components/AmountInput'
+import StatTile from '../components/StatTile'
 import { fetchMonthReview, saveMonthReview, REVIEW_LABELS } from '../api/monthReview'
 import type { MonthReview, ReviewedFeeds } from '../api/monthReview'
 import ReviewChanges from '../components/monthly/ReviewChanges'
@@ -747,6 +748,9 @@ export default function MonthlyUpdatePage() {
       taxSpend: categories.filter(c => c.kind === 'tax').reduce((sum, c) => sum + (Number(canonicalAmount(amounts[c.id] ?? '')) || 0), 0),
       transfers: totalSpend - cashSpend,
       cashSpend,
+      // The Cash saved tile's second line: what was left of take-home after cash went out.
+      netPay: pay,
+      cashSaved: pay === null ? null : pay - cashSpend,
       // (net pay − living − tax) ÷ net pay — the server's own cash rate, to the cent.
       savings: pay === null || pay === 0 ? null : (pay - cashSpend) / pay,
     }
@@ -1030,7 +1034,6 @@ export default function MonthlyUpdatePage() {
     setLoadNonce((n) => n + 1)
   }
 
-  const stepIndex = STEPS.indexOf(step)
 
   // Month change refetches via the [month] dep — flip the fetch state here, in the
   // event handler, never in the effect (react-hooks/set-state-in-effect). Same-month
@@ -1760,42 +1763,44 @@ export default function MonthlyUpdatePage() {
 
         {seeded !== null && step === 'review' && (
           <div key={seeded.generation} className="card" aria-busy={loading || undefined} inert={loading || undefined}>
-            <h2 className="eyebrow">
-              Review & save — {formatMonth(month)}
-              <InfoHint text="Review the entered figures, then save progress or close a completed month. Your entries stay in this browser until saved." />
-            </h2>
-            {review && <p className={`month-review-status month-review-status-${review.state}`}>{REVIEW_LABELS[review.state]}{review.closed_at ? ` · Last closed ${new Date(review.closed_at).toLocaleDateString()}` : ''}</p>}
-            <div className="review-grid">
-              <div>
-                <div className="stat-label">Net worth (preview)</div>
-                <div className="stat-value">{formatCurrency(preview.netWorth)}</div>
-                {preview.delta !== null && (
-                  <div
-                    className={`stat-delta ${preview.delta >= 0 ? 'stat-delta-positive' : 'stat-delta-negative'}`}
-                  >
-                    {/* Glyph + color, never color alone (Global visual rule; StatTile's pattern). */}
-                    <span aria-hidden="true">{preview.delta >= 0 ? '▲ ' : '▼ '}</span>
-                    {formatCurrency(preview.delta)} vs prior month
-                  </div>
-                )}
-              </div>
-              <div>
-                <div className="stat-label">Living spending</div>
-                <div className="stat-value">{formatCurrency(preview.livingSpend)}</div>
-              </div>
-              <div>
-                {/* Same qualifier as the sticky footer's: the tile beside it is the
-                    ALL-kind Total spend, so the unqualified name read as one minus the other. */}
-                <div className="stat-label">Savings rate — cash</div>
-                <div className="stat-value">
-                  {preview.savings === null ? '—' : formatPct(preview.savings, { signed: false })}
-                </div>
-              </div>
+            <div className="review-head">
+              <h2 className="eyebrow">
+                Review & save
+                <InfoHint text="Review the entered figures, then save progress or close a completed month. Your entries stay in this browser until saved." />
+              </h2>
+              {review && <p className={`month-review-status month-review-status-${review.state}`}>{REVIEW_LABELS[review.state]}{review.closed_at ? ` · Last closed ${new Date(review.closed_at).toLocaleDateString()}` : ''}</p>}
             </div>
-            <p className="drill-hint" style={{ marginTop: '0.75rem' }}>
-              Tax paid from take-home: {formatCurrency(preview.taxSpend)} · Transfers: {formatCurrency(preview.transfers)} · Cash outflow: {formatCurrency(preview.cashSpend)}.
-              {stepIndex === 2 && !balancesValid ? ' Fix balance entries first.' : ''}
-            </p>
+            {/* W5 (2026-09-13 audit): the four figures of the approved receipt (design §4.3) as
+                real tiles — the app's tile vocabulary, not three label/value pairs 375px apart.
+                Cash outflow carries the tax/transfers split the old floating line printed. */}
+            <div className="kpi-row review-kpis">
+              <StatTile
+                label="Net worth"
+                value={formatCurrency(preview.netWorth)}
+                delta={preview.delta === null ? undefined : `${formatCurrency(preview.delta)} vs prior month`}
+                tone={preview.delta === null ? undefined : preview.delta >= 0 ? 'positive' : 'negative'}
+                hint="Every non-component balance from the Balances step, summed as it stands now."
+              />
+              <StatTile
+                label="Living spending"
+                value={formatCurrency(preview.livingSpend)}
+                hint="Living categories only — tax paid from take-home and transfers are counted apart."
+              />
+              <StatTile
+                label="Cash outflow"
+                value={formatCurrency(preview.cashSpend)}
+                delta={`tax ${formatCurrency(preview.taxSpend)} · transfers ${formatCurrency(preview.transfers)}`}
+                tone="neutral"
+                hint="Living spending plus tax paid from take-home. Transfers to your own accounts stayed yours and are listed, not counted."
+              />
+              <StatTile
+                label="Cash saved"
+                value={preview.savings === null ? '—' : formatPct(preview.savings, { signed: false })}
+                delta={preview.netPay === null || preview.cashSaved === null ? 'enter household take-home to measure' : `${formatCurrency(preview.cashSaved)} of ${formatCurrency(preview.netPay)} take-home`}
+                tone="neutral"
+                hint="(take-home − living − tax) ÷ take-home — the cash rate the Spending page reports for the month."
+              />
+            </div>
             <ReviewChanges accounts={accounts} categories={categories} balances={balances} amounts={amounts}
               priorBalances={priorBalances} baseline={baseline?.month === month ? baseline.data : null}
               month={month} matrix={matrix} monthExisted={monthExisted} recordedCategories={recordedCategoryIds} />
@@ -1808,7 +1813,6 @@ export default function MonthlyUpdatePage() {
               {month === currentMonthIso() && <label><input type="checkbox" checked={finalCurrentMonth} onChange={e => setFinalCurrentMonth(e.target.checked)} />These figures are final even though this month is still in progress.</label>}
             </fieldset>
             {month > currentMonthIso() && <p className="drill-hint">Future months can be saved as drafts. Close this month once the period arrives and the figures are final.</p>}
-            {!canRequestClose && <p className="drill-hint">Save progress at any time. To close, complete all three confirmations and enter spending and household take-home, including explicit zeros where appropriate.</p>}
             {!willWriteSpending && (
               // Said BEFORE the click, not only in the receipt after it: "Save month" on an
               // untouched spending step now writes balances only, and a user who expected a
@@ -1850,19 +1854,27 @@ export default function MonthlyUpdatePage() {
               <button className="button" onClick={() => setStep('spending')}>
                 Back
               </button>
-              {/* accounts.length === 0 doubles as the "load succeeded" sentinel: after a
-                  failed load both validity flags are vacuously true, and a meta-only PUT
-                  to an existing month would clear its saved note. */}
-              <button
-                className="button"
-                disabled={
-                  saving || loading || review === null || accounts.length === 0 || !balancesValid || !amountsValid
-                }
-                onClick={() => void save()}
-              >
-                {saving ? 'Saving…' : 'Save progress'}
-              </button>
-              <button className="button button-primary" disabled={saving || loading || review === null || accounts.length === 0 || !balancesValid || !amountsValid || !canRequestClose} onClick={() => void save(true)}>Save and close month</button>
+              {/* T4: the only explanation of a disabled primary sits beside it, not 90px above. */}
+              {!balancesValid ? (
+                <p className="drill-hint wizard-footer-note" role="status">Fix balance entries first.</p>
+              ) : !canRequestClose ? (
+                <p className="drill-hint wizard-footer-note">Save progress at any time. To close, complete all three confirmations and enter spending and household take-home, including explicit zeros where appropriate.</p>
+              ) : null}
+              <div className="wizard-footer-actions">
+                {/* accounts.length === 0 doubles as the "load succeeded" sentinel: after a
+                    failed load both validity flags are vacuously true, and a meta-only PUT
+                    to an existing month would clear its saved note. */}
+                <button
+                  className="button"
+                  disabled={
+                    saving || loading || review === null || accounts.length === 0 || !balancesValid || !amountsValid
+                  }
+                  onClick={() => void save()}
+                >
+                  {saving ? 'Saving…' : 'Save progress'}
+                </button>
+                <button className="button button-primary" disabled={saving || loading || review === null || accounts.length === 0 || !balancesValid || !amountsValid || !canRequestClose} onClick={() => void save(true)}>Save and close month</button>
+              </div>
             </div>
           </div>
         )}
