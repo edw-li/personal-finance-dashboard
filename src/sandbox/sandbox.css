@@ -49,8 +49,12 @@
   margin-top: 0.9rem;
 }
 
+/* "Name this scenario" holds WORDS: the shared .field-input is the right-aligned monospace money
+   box, and a label wearing it reads as an amount (audit P-7; CalendarPage.css's select rule). */
 .sandbox-pins .field-input {
   max-width: 220px;
+  text-align: left;
+  font-family: inherit;
 }
 
 .sandbox-pin-chip {

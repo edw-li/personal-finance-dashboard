@@ -226,7 +226,9 @@ export default function ScenarioPanel({
               </span>
             )}
             {budgetAnnual !== null && (
-              <span className="projection-derived">
+              // A flex row (ProjectionPage.css): the sentence is its own item and wraps as a unit
+              // under the button when the column is narrow (audit P-8).
+              <span className="projection-derived projection-derived-preset">
                 <button
                   type="button"
                   className="button"
@@ -237,8 +239,9 @@ export default function ScenarioPanel({
                     ? 'using your budgets'
                     : `Use my budgets · ${formatCurrency(budgetAnnual)}/yr`}
                 </button>
-                {budgetMonth !== null &&
-                  ` 12 × the living-category budgets resolved for ${formatMonth(budgetMonth)}.`}
+                {budgetMonth !== null && (
+                  <span>12 × the living-category budgets resolved for {formatMonth(budgetMonth)}.</span>
+                )}
               </span>
             )}
           </div>
@@ -269,6 +272,18 @@ export default function ScenarioPanel({
       <div id="scenario-retire-error">
         <FeedBanner error={monthError} />
       </div>
+      {!compact && <ScenarioHints people={people} />}
+    </SandboxPanel>
+  )
+}
+
+/** The assumptions' fine print. ScenarioPanel renders it itself only when it stands alone; on the
+ *  Projection page (`compact`) the PAGE renders it inside the compare card, so the knobs column
+ *  ends at its last control and nothing has to be scrolled past to reach a knob (2026-09-13 polish
+ *  spec §12, audit P-2). */
+export function ScenarioHints({ people }: { people: PersonOut[] }) {
+  return (
+    <>
       {people.length > 0 && (
         // Named only where the boxes are: a roster-less database has no retirement to explain.
         <p className="drill-hint">
@@ -287,6 +302,6 @@ export default function ScenarioPanel({
         withdrawal rate&apos;s stored value lives in{' '}
         <Link to="/settings">Settings</Link>.
       </p>
-    </SandboxPanel>
+    </>
   )
 }

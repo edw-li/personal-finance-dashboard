@@ -8,7 +8,7 @@ import { projectionCsv, projectionOption } from '../components/projection/projec
 import { decodeProjection, encodeProjection, isEmptyProjection, labelForProjection, toParams, COMPARE_ROWS, projectionValue, type ProjectionScenario } from '../components/projection/projectionScenario'
 import { displayProjection, milestoneWindow, projectionReceipts, projectionSelection, type ProjectionDollars } from '../components/projection/projectionDisplay'
 import ProjectionTrendPanel from '../components/projection/ProjectionTrendPanel'
-import ScenarioPanel from '../components/projection/ScenarioPanel'
+import ScenarioPanel, { ScenarioHints } from '../components/projection/ScenarioPanel'
 import { useAssistantView } from '../components/assistant/viewState'
 import StatTile from '../components/StatTile'
 import Segmented from '../components/shell/Segmented'
@@ -126,7 +126,7 @@ export default function ProjectionPage() {
                 tone="neutral" hint="First month the deterministic projection reaches the target. Growth alone repeats it with contributions off." />
               {/* Short enough for a fifth of the row, and the (i) is glued to the last word with a
                   no-break space so it never drops to a line of its own (audit P-11). */}
-              <StatTile label={`Reach FI within ${data.years} yrs `} value={formatPct(data.fi_probability, { signed: false })}
+              <StatTile label={`Reach FI within ${data.years}\u00A0yrs\u00A0`} value={formatPct(data.fi_probability, { signed: false })}
                 delta={data.fi_month_p50 === null ? undefined : `Median reach: ${formatMonth(data.fi_month_p50)}`}
                 tone="neutral" evidence={receipts.probability} hint="Share of 500 simulated paths reaching the target within this horizon. It does not measure retirement spending sustainability." />
             </div>
@@ -164,11 +164,14 @@ export default function ProjectionPage() {
             </div>
             <section className="card projection-comparisons" aria-label="Scenario comparisons">
               <h2 className="eyebrow">Compare your scenarios</h2>
-              <p className="hint">Money inputs and FI targets below use {formatMonth(data.start_month)} dollars. Each probability uses its own scenario horizon.</p>
+              <p className="hint">Money inputs and FI targets in this table use {formatMonth(data.start_month)} dollars. Each probability uses its own scenario horizon.</p>
               <CompareTable<ProjectionOut> rows={COMPARE_ROWS} baseline={sandbox.baseline} scenario={sandbox.result} valueOf={projectionValue}
                 pins={sandbox.pins.map((pin) => ({ id: pin.id, label: pin.label, result: sandbox.pinResults[pin.id] }))}
                 onUnpin={sandbox.unpin} caption="Headline figures — baseline against the live scenario and any pins" />
               <PinRow sandbox={sandbox} />
+              {/* The assumptions' fine print closes the card (spec §12): the knobs column is controls
+                  only, and the sentences about entering them sit beside the figures they produce. */}
+              <ScenarioHints people={roster} />
             </section>
           </LocalSectionPanel>
           <LocalSectionPanel state={sections} section="trend"><ProjectionTrendPanel startMonth={data.start_month} /></LocalSectionPanel>

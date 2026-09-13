@@ -1043,4 +1043,17 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     expect(intro.closest('.chart-card')).not.toBeNull()
     expect(document.querySelector('.projection-view-intro')).toBeNull()
   })
+
+  it('keeps the assumptions fine print in the compare card, out of the knobs column', async () => {
+    renderPage()
+    await loaded()
+    const compare = document.querySelector('.projection-comparisons') as HTMLElement
+    expect(within(compare).getByText(/same random samples/)).toBeTruthy()
+    expect(within(compare).getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/settings')
+    // The household has two people in the fixture, so the retirement paragraph is there too.
+    expect(within(compare).getByText(/Blank means that person works for the whole horizon/)).toBeTruthy()
+    const knobs = document.getElementById('projection-assumptions') as HTMLElement
+    expect(within(knobs).queryByText(/same random samples/)).toBeNull()
+    expect(within(knobs).queryByText(/Blank means that person works/)).toBeNull()
+  })
 })

@@ -51,6 +51,32 @@
 .projection-assumptions .drill-hint { font-size: 0.75rem; line-height: 1.5; }
 .projection-assumptions:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .projection-comparisons { margin-top: 20px; }
+/* Three pins wide is the most this table ever holds (audit P-6): past 900px the figure sat a screen
+   away from its label. The caption keeps the table self-describing for assistive tech and reads like
+   the page's other captions — left, small, muted — instead of centred across the card. */
+.projection-comparisons .compare-table { max-width: 900px; }
+.projection-comparisons .compare-table caption {
+  caption-side: top;
+  padding: 0 0 0.4rem;
+  text-align: left;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+/* The budgets preset and its sentence are flex items: the sentence wraps as a UNIT under the button
+   when the 350px column is narrow (audit P-8), never "12 × the living-" orphaned beside it. After
+   .sandbox-controls .projection-derived above, whose display: block it overrides. */
+.sandbox-controls .projection-derived-preset {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+}
+/* Assumptions hidden → the chart takes the whole width and the collapsed header card sits above it,
+   where the reader left the toggle (audit P-9). Scoped to the HEADER's toggle button: the ⓘ hints
+   inside the card carry aria-expanded too, and would otherwise collapse the workspace permanently. */
+.projection-workspace:has(.sandbox-header-actions > [aria-expanded='false']) { grid-template-columns: 1fr; }
+.projection-workspace:has(.sandbox-header-actions > [aria-expanded='false']) .projection-chart-area { position: static; }
+.projection-workspace:has(.sandbox-header-actions > [aria-expanded='false']) .projection-assumptions { order: -1; }
 /* One column: the chart above the knobs. A sticky chart here would pin a 400px canvas over the
    controls the reader is scrolling towards, so it scrolls with them. */
 @container (max-width: 900px) {
