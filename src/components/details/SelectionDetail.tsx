@@ -1,5 +1,6 @@
 import type { ChartSelection } from '../../types/metrics'
 import { formatMetricScope } from '../../utils/metricReceipt'
+import Disclosure from '../Disclosure'
 import { useDetailPanel } from './DetailPanelProvider'
 import { explainSelection } from './explainSelection'
 import MetricInspector, { ApplicationSourceLink, formatEvidenceValue } from './MetricInspector'
@@ -16,7 +17,7 @@ export default function SelectionDetail({ selection, chartTitle, onClear, onOpen
         <dt>{value.label}</dt><dd>{formatEvidenceValue(value.value, value.unit)}</dd>
       </div>)}
     </dl>
-    {selection.evidence?.map((evidence) => <details key={evidence.id}><summary>{evidence.label}: calculation</summary><MetricInspector evidence={evidence} /></details>)}
+    {selection.evidence?.map((evidence) => <Disclosure key={evidence.id} summary={`${evidence.label}: calculation`}><MetricInspector evidence={evidence} /></Disclosure>)}
     <div className="selection-detail-actions">
       {selection.source && <ApplicationSourceLink href={selection.source.href} onClick={() => { panel?.close(); onOpenSource?.() }}>{selection.source.label}</ApplicationSourceLink>}
       <button type="button" className="button" onClick={() => explainSelection(selection, chartTitle)}>Explain selection</button>
