@@ -72,3 +72,14 @@ describe('surfaces appear (2026-09-13 polish §2.1)', () => {
     )
   })
 })
+
+describe('KPI grammar (2026-09-13 polish §12)', () => {
+  it('makes .page the query container and balances the rows', () => {
+    expect(PANELS).toMatch(/\.page \{[^}]*container-type: inline-size;/)
+    expect(PANELS).toContain('.kpi-row > :last-child { grid-column-end: -1; }')
+    expect(PANELS).toContain('.kpi-row-5 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }')
+    expect(PANELS).toContain('.kpi-row-dense { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }')
+    expect(PANELS).toContain('@container (min-width: 1000px) { .kpi-row-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); } }')
+    expect(PANELS).toContain('@container (max-width: 980px) { .kpi-row:not(.kpi-row-5) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }')
+  })
+})

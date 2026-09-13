@@ -6,6 +6,12 @@
    auto-fit/12-col so they redistribute rather than stretch single columns. */
 .page {
   padding: 1.75rem 2rem 3rem;
+  /* The container the KPI rows query (2026-09-13 polish §12): a dock beside the page narrows the
+     CONTAINER, not the viewport, so tile columns must answer to this box. Layout containment makes
+     .page the containing block for fixed descendants — none exist inside it (launcher and toasts
+     are outside; panels and dialogs are portaled or in the top layer); Projection already did this
+     on the same element. */
+  container-type: inline-size;
 }
 
 .page-header {
@@ -77,6 +83,27 @@
    (2026-08-31 review round; retires .paycheck-page .kpi-row and .espp-limit-row). */
 .kpi-row-lone {
   max-width: 320px;
+}
+
+/* Balanced rows (2026-09-13 polish §12). The last tile always reaches the row's last line, so a
+   4+1 wrap fills the void instead of leaving one narrow orphan (in a full row it spans one track
+   as before). A five-tile row — ESPP's strip, Projection's outcomes — is five columns wherever
+   1000px of container allow it and auto-fits below; every other row goes 2×2 once a dock has
+   narrowed the page under 980px, where four columns read as 3+1. .kpi-row-dense is Portfolio's
+   five dense tiles (it replaces that page's private .tiles-row). Container queries, not media
+   queries: the dock is the thing that changes the width. */
+.kpi-row > :last-child { grid-column-end: -1; }
+
+.kpi-row-5 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+
+.kpi-row-dense { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+
+@container (min-width: 1000px) {
+  .kpi-row-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+
+@container (max-width: 980px) {
+  .kpi-row:not(.kpi-row-5) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 .stat-tile {
