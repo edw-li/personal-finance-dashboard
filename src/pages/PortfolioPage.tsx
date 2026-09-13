@@ -36,6 +36,8 @@ import RealizedPanel from '../components/portfolio/RealizedPanel'
 import SecuritiesPanel from '../components/portfolio/SecuritiesPanel'
 import TransactionsPanel from '../components/portfolio/TransactionsPanel'
 import PageFrame from '../components/shell/PageFrame'
+import Segmented from '../components/shell/Segmented'
+import type { SegmentedOption } from '../components/shell/Segmented'
 import ScopeBar from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
@@ -68,6 +70,20 @@ type Tab = 'transactions' | 'dividends' | 'securities' | 'realized'
 
 // Explicit arrivals also reopen Transactions after another record editor was visited.
 const TAB_ARRIVALS: readonly Tab[] = ['transactions', 'dividends', 'securities', 'realized']
+
+// The Manage view's three ledgers as a shell tablist (2026-09-13 polish §12, S3) — the page's
+// private .tab-row was a second, differently styled tab idiom. `Tab` still carries 'dividends'
+// for the ?tab= arrival, which lands on the Income view instead.
+const RECORD_TABS: readonly SegmentedOption<Tab>[] = [
+  { value: 'transactions', label: 'Transactions' },
+  { value: 'securities', label: 'Securities' },
+  { value: 'realized', label: 'Realized' },
+]
+const RECORD_PANEL_IDS: Partial<Record<Tab, string>> = {
+  transactions: 'portfolio-records-transactions',
+  securities: 'portfolio-records-securities',
+  realized: 'portfolio-records-realized',
+}
 
 // Keyed by the fetch parameters, exactly like NetWorthPage's netWorthKey: an owner switch
 // is a DIFFERENT snapshot. 'all' spells the household view so the key can never collide
@@ -387,8 +403,8 @@ export default function PortfolioPage() {
   // agrees; every other empty header describes the view instead.
   const noPricesWords =
     (holdings !== null && holdings.holdings.length === 0) || refreshStatus?.last != null
-      ? 'no priced holdings in this view'
-      : 'prices never refreshed'
+      ? 'No priced holdings in this view'
+      : 'Prices never refreshed'
 
   // The SERVER already scopes `failed` to tickers a future refresh would still attempt
   // (active, auto-priced) — one rule on one side of the wire, so a deactivation clears
@@ -477,26 +493,34 @@ export default function PortfolioPage() {
         }
         subheader={
           <>
-            {asOf ? (
-              // A4 (2026-08-31 tier-1): as_of is the OLDEST quote — one manual-priced
-              // straggler pins it — so the clock wears the same stale treatment Overview's
-              // freshness cue uses (isStaleQuote → --warn amber) and the tooltip names the
-              // clock it is NOT showing. Display-only: as_of itself is unchanged. The
-              // no-newest fallback is stale-tab armor only — server-side both clocks derive
-              // from one quote list, so they are null (or set) together.
-              <span
-                className={isStaleQuote(asOf) ? 'as-of stale' : 'as-of'}
-                title={
-                  newestQuote
-                    ? `oldest quote across holdings — newest ${formatDate(newestQuote)}`
-                    : 'oldest quote across holdings'
-                }
-              >
-                prices as of {formatDate(asOf)}
-              </span>
-            ) : (
-              <span className="as-of">{noPricesWords}</span>
-            )}
+            {/* One line (2026-09-13 polish §10, C10): the price clock and the scheduler's last run
+                read as a sentence — "Prices as of … · last refresh … (scheduled) · 36 updated".
+                as_of is the OLDEST quote (A4) and keeps its stale tone + both-clocks tooltip. */}
+            <p className="portfolio-status-line">
+              {asOf ? (
+                <span
+                  className={isStaleQuote(asOf) ? 'as-of stale' : 'as-of'}
+                  title={
+                    newestQuote
+                      ? `oldest quote across holdings — newest ${formatDate(newestQuote)}`
+                      : 'oldest quote across holdings'
+                  }
+                >
+                  Prices as of {formatDate(asOf)}
+                </span>
+              ) : (
+                <span className="as-of">{noPricesWords}</span>
+              )}
+              {refreshStatus?.last && (
+                <span className="refresh-status-line">
+                  {' · '}last refresh {formatDateTime(refreshStatus.last.at)} ({refreshStatus.last.trigger}) · {refreshStatus.last.updated} updated
+                  {refreshStatus.last.failed && Object.keys(refreshStatus.last.failed).length > 0 && (
+                    <> · {Object.keys(refreshStatus.last.failed).length} failed</>
+                  )}
+                  {refreshStatus.next_run_at && <> · next {formatDateTime(refreshStatus.next_run_at)}</>}
+                </span>
+              )}
+            </p>
             {/* One element, always mounted: a live region added at announce-time is not
                 read. Partial failures are an alert, not a status — they need the user's
                 attention. */}
@@ -507,22 +531,6 @@ export default function PortfolioPage() {
             >
               {refreshNote.text}
             </div>
-            {/* The scheduler, finally visible: what ran last (manual or scheduled — the
-                outcome persists either way now) and when the next run fires. Wall-clock
-                stamps, local time — these answer "when", not "which bar". */}
-            {refreshStatus?.last && (
-              <div className="hint refresh-status-line">
-                Last refresh {formatDateTime(refreshStatus.last.at)} (
-                {refreshStatus.last.trigger}) · {refreshStatus.last.updated} updated
-                {refreshStatus.last.failed &&
-                  Object.keys(refreshStatus.last.failed).length > 0 && (
-                    <> · {Object.keys(refreshStatus.last.failed).length} failed</>
-                  )}
-                {refreshStatus.next_run_at && (
-                  <> · next {formatDateTime(refreshStatus.next_run_at)}</>
-                )}
-              </div>
-            )}
             {failedEntries.length > 0 && (
               <div className="refresh-failures">
                 {failedEntries.map(([ticker, reason]) => (
@@ -698,7 +706,7 @@ export default function PortfolioPage() {
                   </h2>
                   {detailHolding && (
                     <button type="button" className="button" onClick={() => setDetailTicker(null)}>
-                      All holdings
+                      Clear selection
                     </button>
                   )}
                 </div>
@@ -758,23 +766,16 @@ export default function PortfolioPage() {
               />
             </LocalSectionPanel><LocalSectionPanel state={views} section="manage">
                 <div className="portfolio-manage">
-                  {/* group, not tablist: these buttons toggle panels below rather than owning
-                  tabpanels, and the aria-labels keep "Dividends" from colliding with the
-                  holdings table's sort header of the same name. */}
-                  <div className="tab-row" role="group" aria-label="Portfolio records">
-                    {(['transactions', 'securities', 'realized'] as const).map((t) => (
-                      <button
-                        key={t}
-                        type="button"
-                        aria-label={`Show ${t}`}
-                        aria-pressed={tab === t}
-                        onClick={() => setTab(t)}
-                      >
-                        {t[0].toUpperCase() + t.slice(1)}
-                      </button>
-                    ))}
-                  </div>
-                  <div hidden={tab !== 'transactions'}>
+                  <Segmented
+                    variant="tabs"
+                    size="sm"
+                    ariaLabel="Portfolio records"
+                    options={RECORD_TABS}
+                    value={tab}
+                    onChange={setTab}
+                    panelIds={RECORD_PANEL_IDS}
+                  />
+                  <div id={RECORD_PANEL_IDS.transactions} role="tabpanel" hidden={tab !== 'transactions'}>
                     <TransactionsPanel
                       securities={securities}
                       transactions={transactions}
@@ -783,8 +784,8 @@ export default function PortfolioPage() {
                       onChanged={reload}
                     />
                   </div>
-                  <div hidden={tab !== 'securities'}><SecuritiesPanel securities={securities} onChanged={reload} /></div>
-                  <div hidden={tab !== 'realized'}>{realized && <RealizedPanel realized={realized} />}</div>
+                  <div id={RECORD_PANEL_IDS.securities} role="tabpanel" hidden={tab !== 'securities'}><SecuritiesPanel securities={securities} onChanged={reload} /></div>
+                  <div id={RECORD_PANEL_IDS.realized} role="tabpanel" hidden={tab !== 'realized'}>{realized && <RealizedPanel realized={realized} />}</div>
                 </div>
               </LocalSectionPanel></div>
           </>

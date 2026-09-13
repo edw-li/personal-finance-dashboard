@@ -85,7 +85,7 @@ import {
   fetchTransactions,
 } from '../api/portfolio'
 import { fetchPriceHistory, fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
-import { formatDate } from '../utils/format'
+import { formatDate, formatDateTime } from '../utils/format'
 
 // The roster behind the two ledgers' Account boxes (2026-09-09 audit item 27).
 const ACCOUNTS: PortfolioAccountOut[] = [
@@ -344,11 +344,11 @@ it('focuses the visible record editor and preserves its draft through other view
   await waitFor(() => expect(document.activeElement).toBe(ticker))
   fireEvent.change(ticker, { target: { value: 'DRAFT' } })
   fireEvent.click(screen.getByRole('link', { name: 'Open transaction editor' }))
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Show transactions' }).getAttribute('aria-pressed')).toBe('true'))
+  await waitFor(() => expect(screen.getByRole('tab', { name: 'Transactions' }).getAttribute('aria-selected')).toBe('true'))
   expect(document.activeElement?.closest('[hidden]')).toBeNull()
   fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
   fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Show securities' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Securities' }))
   expect((screen.getByRole('textbox', { name: 'Ticker' }) as HTMLInputElement).value).toBe('DRAFT')
 })
 
@@ -356,7 +356,7 @@ it('opens the transaction editor when Manage follows a dividend arrival', async 
   renderPage('/portfolio?tab=dividends')
   await screen.findByRole('tab', { name: 'Income', selected: true })
   fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
-  expect(await screen.findByRole('button', { name: 'Show transactions', pressed: true })).toBeTruthy()
+  expect(await screen.findByRole('tab', { name: 'Transactions', selected: true })).toBeTruthy()
   expect(screen.getByRole('combobox', { name: 'Account' }).closest('[hidden]')).toBeNull()
 })
 
@@ -841,7 +841,7 @@ it('tones the header amber when the oldest quote is stale and names both clocks'
   })
   renderPage()
   await screen.findByText('Portfolio value')
-  const header = screen.getByText(/^prices as of /)
+  const header = screen.getByText(/^Prices as of /)
   expect(header.className).toBe('as-of stale')
   expect(header.getAttribute('title')).toBe(
     `oldest quote across holdings — newest ${formatDate(isoDaysAgo(1))}`,
@@ -856,7 +856,7 @@ it('leaves a fresh header untoned and still names the newest clock', async () =>
   })
   renderPage()
   await screen.findByText('Portfolio value')
-  const header = screen.getByText(/^prices as of /)
+  const header = screen.getByText(/^Prices as of /)
   expect(header.className).toBe('as-of')
   expect(header.getAttribute('title')).toBe(
     `oldest quote across holdings — newest ${formatDate(isoDaysAgo(0))}`,
@@ -887,10 +887,10 @@ it('names an empty view instead of claiming prices were never refreshed', async 
     next_run_at: null,
   })
   renderPage()
-  expect(await screen.findByText('no priced holdings in this view')).toBeTruthy()
-  expect(screen.queryByText('prices never refreshed')).toBeNull()
+  expect(await screen.findByText('No priced holdings in this view')).toBeTruthy()
+  expect(screen.queryByText('Prices never refreshed')).toBeNull()
   // The refresh line is still there — the two sentences no longer contradict each other.
-  expect(screen.getByText(/^Last refresh /)).toBeTruthy()
+  expect(screen.getByText(/last refresh /)).toBeTruthy()
 })
 
 it('keeps "prices never refreshed" for a book that really has never run one', async () => {
@@ -902,7 +902,7 @@ it('keeps "prices never refreshed" for a book that really has never run one', as
     latest_quote_at: null,
   })
   renderPage()
-  expect(await screen.findByText('prices never refreshed')).toBeTruthy()
+  expect(await screen.findByText('Prices never refreshed')).toBeTruthy()
 })
 
 // ── Shell scope (2026-09-03 shell spec §5–§6) ─────────────────────────────────────────────
@@ -936,7 +936,7 @@ describe('PortfolioPage — shell scope', () => {
 
   it('renders the price status under the title row, not inside it', async () => {
     renderPage('/portfolio')
-    await screen.findByText(/prices as of|prices never refreshed/)
+    await screen.findByText(/Prices as of|Prices never refreshed/)
     expect(document.querySelector('.page-frame-subheader .as-of')).toBeTruthy()
     expect(document.querySelector('.page-header')).toBeNull()
     expect(
@@ -980,5 +980,33 @@ describe('PortfolioPage — card vocabulary', () => {
     expect(holdings.className).toBe('eyebrow')
     expect(holdings.closest('.card')).not.toBeNull()
     expect(holdings.closest('.card-title-row')).not.toBeNull()
+  })
+
+  it('joins the price clock and the last refresh into one status line (2026-09-13 polish §10)', async () => {
+    vi.mocked(fetchRefreshStatus).mockResolvedValue({
+      last: { at: '2026-09-11T20:10:00Z', trigger: 'scheduled', updated: 36, failed: {}, skipped_manual: 0, history_appended: false },
+      next_run_at: null,
+    })
+    renderPage()
+    await screen.findByText('Portfolio value')
+    const line = document.querySelector('.page-frame-subheader .portfolio-status-line') as HTMLElement
+    expect(line.textContent).toBe(`Prices as of ${formatDate('2026-08-27T20:00:00Z')} · last refresh ${formatDateTime('2026-09-11T20:10:00Z')} (scheduled) · 36 updated`)
+    expect(document.querySelectorAll('.page-frame-subheader .refresh-status-line')).toHaveLength(1)
+  })
+
+  it('names the Manage records with shell tabs and clears a selection by its real verb', async () => {
+    renderPage('/portfolio?ticker=voo')
+    await screen.findByRole('heading', { name: /Holdings — VOO/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }))
+    expect(await screen.findByRole('heading', { name: 'Holdings' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
+    const tabs = screen.getByRole('tablist', { name: 'Portfolio records' })
+    expect(tabs.className).toContain('segmented-tabs')
+    expect([...tabs.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toEqual(['Transactions', 'Securities', 'Realized'])
+    expect(document.querySelector('.tab-row')).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Realized' }))
+    const panel = document.getElementById('portfolio-records-realized') as HTMLElement
+    expect(panel.hidden).toBe(false)
+    expect(screen.getByRole('tab', { name: 'Realized' }).getAttribute('aria-controls')).toBe('portfolio-records-realized')
   })
 })
