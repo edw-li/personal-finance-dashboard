@@ -19,11 +19,14 @@ import { useAssistantView } from '../components/assistant/viewState'
 import InfoHint from '../components/InfoHint'
 import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
+import Segmented from '../components/shell/Segmented'
 import BracketsEditor from '../components/taxes/BracketsEditor'
 import CompositionPanel from '../components/taxes/CompositionPanel'
 import InputsForm from '../components/taxes/InputsForm'
 import MarginalPanel from '../components/taxes/MarginalPanel'
 import SummaryPanel from '../components/taxes/SummaryPanel'
+import type { TaxSection } from '../components/taxes/taxSections'
+import TaxYearMenu from '../components/taxes/TaxYearMenu'
 import WhatIfPanel from '../components/taxes/WhatIfPanel'
 // TYPE-only, and deliberately its own statement: the page test mocks this module's RUNTIME
 // with a default-only factory, so a value import of anything else would crash there. An
@@ -578,16 +581,22 @@ export default function TaxesPage() {
     refreshYearCounts()
   }
 
-  const createYear = () => {
+  /**
+   * Create the year in the box. Resolves TRUE when the year now exists (TaxYearMenu closes its
+   * popover on it), FALSE when nothing was created — a refused year, a declined discard, a 409.
+   * Everything after the request resolves is bookkeeping around a year that EXISTS, so none of it
+   * may ever be reported as a create failure.
+   */
+  const createYear = (): Promise<boolean> => {
     const year = Number(newYear.trim())
     if (!Number.isInteger(year) || year < YEAR_MIN || year > YEAR_MAX) {
       setCreateError(`Enter a year between ${YEAR_MIN} and ${YEAR_MAX}`)
-      return
+      return Promise.resolve(false)
     }
-    // Third of the three reload doors (chips, Retry, create): creating a year jumps to
-    // it and remounts the editors, so it needs the same discard gate — and it must sit
+    // Third of the reload doors (chips, Retry, create, delete, status): creating a year jumps
+    // to it and remounts the editors, so it needs the same discard gate — and it must sit
     // before the request so a declined confirm can't orphan a created year.
-    if (!confirmDiscard()) return
+    if (!confirmDiscard()) return Promise.resolve(false)
     // Seed from the newest year that actually HAS brackets. With none — a fresh database,
     // or a year list imported inputs-first — an empty inputs PUT is what creates the
     // tax_years row (both PUTs auto-create it; that IS the "new year" affordance).
@@ -597,11 +606,11 @@ export default function TaxesPage() {
     const request = source
       ? cloneBrackets(year, source.year)
       : putTaxInputs(year, { values: {} })
-    request
+    return request
       .then(() => {
         // The year EXISTS from here on, so nothing past this point may be reported as a
-        // create failure: under the form the only affordance left is Create, and a second
-        // Create against a year that now has brackets answers 409 forever.
+        // create failure: a second Create against a year that now has brackets answers 409
+        // forever.
         setNewYear(String(year + 1))
         // Show it immediately, with placeholder counts the reconcile below overwrites — a
         // failed list reload otherwise leaves the page sitting on the OLD year with no
@@ -610,45 +619,46 @@ export default function TaxesPage() {
           current.some((y) => y.year === year)
             ? current
             : [
-              ...current,
-              // 'single' is the column's own default, so the placeholder cannot claim a
-              // status the row does not have; the reconcile below replaces it either way.
-              // `satisfies`, not a bare literal: inside the array the status would widen
-              // to plain `string` and stop being a FilingStatus.
-              {
-                year,
-                notes: null,
-                input_count: 0,
-                bracket_count: 0,
-                filing_status: 'single',
-              } satisfies TaxYearOut,
-            ].sort((a, b) => a.year - b.year),
+                ...current,
+                // 'single' is the column's own default, so the placeholder cannot claim a
+                // status the row does not have; the reconcile below replaces it either way.
+                // `satisfies`, not a bare literal: inside the array the status would widen
+                // to plain `string` and stop being a FilingStatus.
+                {
+                  year,
+                  notes: null,
+                  input_count: 0,
+                  bracket_count: 0,
+                  filing_status: 'single',
+                } satisfies TaxYearOut,
+              ].sort((a, b) => a.year - b.year),
         )
         loadYear(year)
         // The main banner owns this one, because the main banner is the thing with Retry.
-        return reconcileYears().catch((err: unknown) => {
-          setError(describeError(err, 'the tax years'))
-        })
+        return reconcileYears()
+          .catch((err: unknown) => {
+            setError(describeError(err, 'the tax years'))
+          })
+          .then(() => true)
       })
       .catch((err: unknown) => {
         // 409 (the target already has brackets) and 404 (the source has none) both land
         // here verbatim — the year list is untouched, so nothing jumps.
         setCreateError(err instanceof ApiError ? err.message : 'Could not create the tax year')
+        return false
       })
       .finally(() => setCreating(false))
   }
 
-  // The FOURTH reload door (chips, Retry, create, delete), and the only one that asks its
-  // own question instead of confirmDiscard()'s: deleting the year throws away the SAVED
-  // inputs and brackets as well as the typed ones, so "discard unsaved changes?" is a
-  // weaker question with nothing left to add. One confirm, never two.
+  // The FOURTH reload door (chips, Retry, create, delete). The question — "delete the year and
+  // all of its inputs and brackets?" — is asked INSIDE the year menu's popover (TaxYearMenu's
+  // arm-and-confirm, 2026-09-13 polish spec §11), so by the time this runs it has been answered.
+  // No confirmDiscard() either: deleting the year throws away the SAVED inputs and brackets as
+  // well as the typed ones, so "discard unsaved changes?" is a weaker question with nothing left
+  // to add. One question, never two.
   const deleteYear = () => {
     if (selectedYear === null) return
     const year = selectedYear
-    const ok = window.confirm(
-      `Delete tax year ${year} and all of its inputs and brackets? This cannot be undone.`,
-    )
-    if (!ok) return
     // Everything still in flight belongs to a year that is going away: the detail seq (a
     // load that would repopulate the editors from a 404) and the totals seq (a refresh
     // whose only possible outcome is a banner about a year nobody can look at).
@@ -723,11 +733,100 @@ export default function TaxesPage() {
     })
   }
 
+  // The panels' doors into other views (2026-09-13 polish spec §14): "Open Tax tables" in the
+  // summary's missing-tables call to action, "Open Inputs" / "Open Tax tables" on the withholding
+  // card. The same setter the tab strip uses, so a door pushes ?section= exactly as a tab does.
+  const goTo = (section: TaxSection) => views.setSection(section)
+
+  // The scope row (2026-09-13 polish spec §12; audit S1): the year and its filing status are what
+  // every card on this page answers FOR, so they live in the sticky row Paycheck's person chips
+  // use — not in a body card that cost 202px on every view. Only once there are years: a fresh
+  // database has nothing to scope, and the frame draws no row for `undefined`.
+  const scopeRow =
+    years.length === 0 ? undefined : (
+      <div className="scope-bar tax-scope-bar">
+        <div className="scope-bar-group">
+          {/* The group already announces itself as "Tax year": this word is the sighted label
+              for the same thing (ScopeBar's own idiom). */}
+          <span className="eyebrow" aria-hidden="true">
+            Year
+          </span>
+          <Segmented
+            variant="chips"
+            ariaLabel="Tax year"
+            options={years.map((y) => ({
+              value: String(y.year),
+              label: String(y.year),
+              title: `${y.input_count} inputs · ${y.bracket_count} brackets`,
+            }))}
+            value={selectedYear === null ? '' : String(selectedYear)}
+            onChange={(value) => selectYear(Number(value))}
+          />
+        </div>
+        {/* The status of the SELECTED year, beside the year it belongs to — not another year
+            to pick. Shut while the year is loading or the PATCH is in flight, as before. */}
+        {selectedYear !== null && (
+          <div className="scope-bar-group">
+            <span className="eyebrow" aria-hidden="true">
+              Filing status
+            </span>
+            <Segmented
+              variant="toggle"
+              ariaLabel="Filing status"
+              options={FILING_STATUSES.map((status) => ({
+                value: status,
+                label: FILING_STATUS_LABELS[status],
+                disabled: statusSaving || busy,
+              }))}
+              value={filingStatus}
+              onChange={changeFilingStatus}
+            />
+            <InfoHint text="Which bracket tables the engine walks for this year, and whether the per-person inputs in the Inputs view split into two columns. Every year starts as Single." />
+          </div>
+        )}
+      </div>
+    )
+
   return (
     <div className="page taxes-page">
       <PageFrame
         title="Taxes"
+        // The page's primary action lives in the title row (PageFrame's own note), never in the
+        // scope row and never in a body card: create the next year, or delete the selected one.
+        actions={
+          <TaxYearMenu
+            newYear={newYear}
+            onNewYearChange={(value) => {
+              setNewYear(value)
+              // The create sentence described the year that WAS in the box.
+              setCreateError(null)
+            }}
+            onCreate={createYear}
+            creating={creating}
+            createError={createError}
+            disabled={loading}
+            yearMin={YEAR_MIN}
+            yearMax={YEAR_MAX}
+            createHint="Copies the newest year's bracket tables; the values are then edited in Tax tables."
+            selectedYear={selectedYear}
+            onDelete={deleteYear}
+            deleteDisabled={busy || creating}
+          />
+        }
+        // Standing, never dismissible: MFS brackets without Form-8958 community-income splitting
+        // are wrong in California, and the sentence has to sit wherever the number does (audit
+        // §3.2, design decision log "MFS"). The frame's subheader is where a page-wide caveat
+        // goes — under the title, above the sticky row that names the status it is about.
+        subheader={
+          selectedYear !== null && filingStatus === 'married_separate' ? (
+            <p className="filing-status-caveat" role="note">
+              California is a community-property state; true MFS requires 50/50
+              community-income splitting (Form 8958), which this calculator does not model.
+            </p>
+          ) : undefined
+        }
         sections={<LocalSectionNav state={views} label="Taxes views" />}
+        scopeRow={scopeRow}
         resource={{
           // The years LIST is this page's lifecycle; a year's detail is the feed below it.
           // A first-load failure leaves no year selected and nothing to look at, so it is
@@ -739,7 +838,7 @@ export default function TaxesPage() {
           // Deliberately NO frame-level `busy`: the year detail is the only thing a load
           // moves, and this page's own `.taxes-page .loading-dim.is-loading` sets
           // pointer-events: none — a page-wide dim would take the year chips and the
-          // new-year box out of reach for the length of every year load. The Feed below
+          // year menu out of reach for the length of every year load. The Feed below
           // owns the dim, over exactly the editors that rule was written for.
           retry,
         }}
@@ -753,114 +852,12 @@ export default function TaxesPage() {
           ],
         }}
       >
-        <section className="card">
-          <h2 className="eyebrow">
-            Tax year
-            <InfoHint text="One column of inputs and bracket tables per year. Creating a year copies the newest year&apos;s brackets." />
-          </h2>
-          {years.length > 0 && (
-            <div className="chip-row">
-              {years.map((y) => (
-                <button
-                  key={y.year}
-                  type="button"
-                  className={y.year === selectedYear ? 'chip active' : 'chip'}
-                  aria-pressed={y.year === selectedYear}
-                  title={`${y.input_count} inputs · ${y.bracket_count} brackets`}
-                  onClick={() => selectYear(y.year)}
-                >
-                  {y.year}
-                </button>
-              ))}
-            </div>
-          )}
-          {/* The status of the SELECTED year, not another year to pick: its own row under the
-              chips, in the app-wide segmented treatment (.segmented, declared once
-              in panels.css). */}
-          {selectedYear !== null && (
-            <div className="filing-status-row">
-              <span className="filing-status-label">Filing status</span>
-              <InfoHint text="Which bracket tables the engine walks for this year, and whether the per-person inputs below split into two columns. Every year starts as Single." />
-              <div className="segmented" role="group" aria-label="Filing status">
-                {FILING_STATUSES.map((status) => (
-                  <button
-                    key={status}
-                    type="button"
-                    className={status === filingStatus ? 'active' : ''}
-                    aria-pressed={status === filingStatus}
-                    disabled={statusSaving || busy}
-                    onClick={() => changeFilingStatus(status)}
-                  >
-                    {FILING_STATUS_LABELS[status]}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          {/* Standing, never dismissible: MFS brackets without Form-8958 community-income
-              splitting are wrong in California, and the sentence has to sit wherever the
-              number does (audit §3.2, design decision log "MFS"). */}
-          {selectedYear !== null && filingStatus === 'married_separate' && (
-            <p className="filing-status-caveat" role="note">
-              California is a community-property state; true MFS requires 50/50
-              community-income splitting (Form 8958), which this calculator does not model.
-            </p>
-          )}
-          {/* loadedOnce, not !loading: a FIRST load that failed knows nothing about whether
-              there are years, and "No tax years yet" under an error banner reads as an
-              answer. */}
-          {loadedOnce && years.length === 0 && (
-            <p className="empty-note">No tax years yet — create one to start.</p>
-          )}
-          <details className="tax-year-management" open={years.length === 0 || undefined}><summary>Manage tax years</summary>
-            <form
-              className="new-year-form"
-              // The bounds are enforced (and worded) by createYear. Left to the browser, the
-              // message is a native bubble that differs per engine and blocks submit before
-              // this page ever sees it.
-              noValidate
-              onSubmit={(e) => {
-                e.preventDefault()
-                createYear()
-              }}
-            >
-              <label htmlFor="new-tax-year">New year</label>
-              <input
-                id="new-tax-year"
-                className="field-input"
-                type="number"
-                inputMode="numeric"
-                min={YEAR_MIN}
-                max={YEAR_MAX}
-                value={newYear}
-                onChange={(e) => {
-                  setNewYear(e.target.value)
-                  // The sentence below describes the year that WAS in the box.
-                  setCreateError(null)
-                }}
-              />
-              <button type="submit" className="button" disabled={creating || loading}>
-                {creating ? 'Creating…' : 'Create year'}
-              </button>
-              {/* The other end of this row's job — Create makes the year in the box, Delete
-                throws away the SELECTED one — and the one control row that renders even with
-                no years, so its shut state is visible rather than absent. type="button", so
-                the form's submit stays the create path's alone. */}
-              <button
-                type="button"
-                className="button"
-                disabled={selectedYear === null || busy || creating}
-                onClick={deleteYear}
-              >
-                Delete year…
-              </button>
-              <span className="drill-hint">
-                Copies the newest year&apos;s bracket tables; the values are then edited below.
-              </span>
-            </form>
-          </details>
-          <FeedBanner error={createError} />
-        </section>
+        {/* loadedOnce, not !loading: a FIRST load that failed knows nothing about whether
+            there are years, and "No tax years yet" under an error banner reads as an
+            answer. The way to make one is the title row's "New tax year…". */}
+        {loadedOnce && years.length === 0 && (
+          <p className="empty-note">No tax years yet — create one to start.</p>
+        )}
 
         {/* The selected year's own failures — a load, a status flip, a totals refresh, a
             delete — stay an assertive banner beside the year they are about, never the
@@ -869,13 +866,13 @@ export default function TaxesPage() {
         <Feed
           data={detail}
           // A seeded-empty revisit has no year to ghost for: the list answers instantly
-          // from the snapshot and there is nothing under the new-year form.
+          // from the snapshot and there is nothing under the empty note.
           busy={busy && years.length > 0}
           staleNoun="the year"
           skeleton={{ height: 320, label: 'Loading the year…' }}
           // Only a delete gets here: every other path either selects a year or has no years
-          // to select. Without it the page ends at the form with nothing saying the chips
-          // above are waiting for a click.
+          // to select. Without it the page ends at the empty body with nothing saying the
+          // chips in the scope row are waiting for a click.
           empty={
             selection === null && years.length > 0 ? (
               <p className="empty-note">Select a tax year above.</p>
@@ -885,7 +882,7 @@ export default function TaxesPage() {
           {(d) => (
             <>
               <LocalSectionPanel state={views} section="summary">
-                <SummaryPanel summary={d.summary} filingStatus={filingStatus} />
+                <SummaryPanel summary={d.summary} filingStatus={filingStatus} goTo={goTo} />
                 {d.summary.year === new Date().getFullYear() && (
                   <WithholdingPanel
                     key={`withholding-${d.summary.year}`}
@@ -893,12 +890,14 @@ export default function TaxesPage() {
                     storedVestW2={vestW2Stored(d.inputs)}
                     inputsDirty={inputsDirty}
                     onVestApplied={onVestApplied}
+                    goTo={goTo}
                   />
                 )}
                 <MarginalPanel summary={d.summary} brackets={d.brackets} />
                 <CompositionPanel refreshKey={trendRefresh} />
               </LocalSectionPanel>
               <LocalSectionPanel state={views} section="whatif">
+                {/* The What-if tab IS the sandbox (2026-09-13 polish spec §8): open on arrival. */}
                 <WhatIfPanel
                   key={`whatif-${d.summary.year}`}
                   year={d.summary.year}
@@ -907,6 +906,7 @@ export default function TaxesPage() {
                   brackets={d.brackets}
                   summary={d.summary}
                   onApplyOverrides={applyOverrides}
+                  defaultOpen
                 />
               </LocalSectionPanel>
               <LocalSectionPanel state={views} section="inputs">

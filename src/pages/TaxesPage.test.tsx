@@ -335,7 +335,7 @@ const DEDUCTION_WARNING =
 // echo IS what the user sees — while the wire-body pins stay canonical plain decimals.
 const salary = () => screen.getByLabelText('Annual Salary') as HTMLInputElement
 const saveInputs = () => screen.getByRole('button', { name: /save inputs/i }) as HTMLButtonElement
-const deleteYearButton = () => { openYearManagement(); return screen.getByRole('button', { name: /delete year/i }) as HTMLButtonElement }
+const deleteYearButton = () => { openYearManagement(); return screen.getByRole('button', { name: /^Delete (year|\d{4})…$/ }) as HTMLButtonElement }
 // The one question the delete door asks — worded for a row of tables nobody can get back.
 const DELETE_2024_CONFIRM =
   'Delete tax year 2024 and all of its inputs and brackets? This cannot be undone.'
@@ -509,7 +509,7 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
     // Default = latest + 1.
-    expect((screen.getByLabelText('New year') as HTMLInputElement).value).toBe('2025')
+    expect(newYearInput().value).toBe('2025')
     fireEvent.click(createYearButton())
 
     await waitFor(() => expect(vi.mocked(cloneBrackets)).toHaveBeenCalledWith(2025, 2024))
@@ -608,7 +608,7 @@ describe('TaxesPage', () => {
     await readyInputs()
     fireEvent.change(salary(), { target: { value: '999' } })
 
-    fireEvent.change(screen.getByLabelText('New year'), { target: { value: '2026' } })
+    fireEvent.change(newYearInput(), { target: { value: '2026' } })
     fireEvent.click(createYearButton())
     expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved changes for 2024?')
     // Declined BEFORE the request: no year was created, nothing was lost.
@@ -742,7 +742,7 @@ describe('TaxesPage', () => {
     renderPage('/taxes?section=summary')
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
-    const input = screen.getByLabelText('New year')
+    const input = newYearInput()
     // A native bubble is worded by the engine, sits outside the page's error vocabulary
     // and never lets this code run at all.
     expect(input.closest('form')?.hasAttribute('novalidate')).toBe(true)
@@ -764,7 +764,7 @@ describe('TaxesPage', () => {
     expect(await screen.findByText('tax year 2025 already has 42 brackets')).toBeTruthy()
 
     // The sentence is about the year that WAS in the box.
-    fireEvent.change(screen.getByLabelText('New year'), { target: { value: '2026' } })
+    fireEvent.change(newYearInput(), { target: { value: '2026' } })
     expect(screen.queryByText('tax year 2025 already has 42 brackets')).toBeNull()
 
     fireEvent.click(createYearButton())
@@ -786,7 +786,7 @@ describe('TaxesPage', () => {
     renderPage('/taxes?section=summary')
 
     expect(await screen.findByText(/no tax years yet/i)).toBeTruthy()
-    expect((screen.getByLabelText('New year') as HTMLInputElement).value).toBe(String(thisYear))
+    expect(newYearInput().value).toBe(String(thisYear))
     expect(vi.mocked(fetchTaxInputs)).not.toHaveBeenCalled()
 
     fireEvent.click(createYearButton())
@@ -1120,32 +1120,35 @@ describe('TaxesPage', () => {
     renderPage('/taxes?section=summary')
     await screen.findByText(/no tax years yet/i)
 
-    // The exact label, pinned once: every other test here finds it by pattern.
-    expect(screen.getByRole('button', { name: 'Delete year…' })).toBeTruthy()
+    // The exact label, pinned once: every other test here finds it by pattern. It lives inside
+    // the year menu's popover now, so the helper opens that first.
     expect(deleteYearButton().disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Delete year…' })).toBeTruthy()
     // A shut door asks nothing and sends nothing.
     fireEvent.click(deleteYearButton())
+    expect(screen.queryByText(/and all of its inputs and brackets/)).toBeNull()
     expect(confirmSpy).not.toHaveBeenCalled()
     expect(vi.mocked(deleteTaxYear)).not.toHaveBeenCalled()
   })
 
-  it('asks ONE question before deleting — the delete confirm subsumes the discard one', async () => {
-    confirmSpy.mockReturnValue(false)
+  it('arms the delete inside the popover and asks nothing else — a "Keep" leaves the typed work', async () => {
     renderPage('/taxes?section=inputs')
     await readyInputs()
-    // Unsaved work, so the discard gate would fire too if the page stacked them.
+    // Unsaved work, so the discard gate would fire too if the page stacked questions.
     fireEvent.change(salary(), { target: { value: '999' } })
 
     fireEvent.click(deleteYearButton())
-    expect(confirmSpy).toHaveBeenCalledTimes(1)
-    // And it is the STRONGER question: deleting the year throws away the saved rows as
-    // well as the typed ones, so "discard unsaved changes?" has nothing left to ask.
-    expect(confirmSpy).toHaveBeenCalledWith(DELETE_2024_CONFIRM)
-    // Declined: no request, and the typed work is still there.
+    // The question is asked where the reader is looking (2026-09-13 polish spec §11), not in a
+    // window.confirm — and it is the STRONGER one: deleting the year throws away the saved rows
+    // as well as the typed ones, so "discard unsaved changes?" has nothing left to ask.
+    expect(screen.getByText(DELETE_2024_CONFIRM)).toBeTruthy()
+    expect(confirmSpy).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Keep 2024' }))
+    // Declined: no request, the question is gone, and the typed work is still there.
     expect(vi.mocked(deleteTaxYear)).not.toHaveBeenCalled()
+    expect(screen.queryByText(DELETE_2024_CONFIRM)).toBeNull()
     expect(salary().value).toBe('$999.00')
-    // And no busy leaked out of a question that was answered "no" — the door is open for a
-    // second thought.
+    // And no busy leaked out of a question answered "no" — the door is open for a second thought.
     expect(deleteYearButton().disabled).toBe(false)
   })
 
@@ -1158,7 +1161,7 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
 
     fireEvent.click(deleteYearButton())
-    expect(confirmSpy).toHaveBeenCalledWith(DELETE_2024_CONFIRM)
+    fireEvent.click(confirmDeleteButton())
     await waitFor(() => expect(vi.mocked(deleteTaxYear)).toHaveBeenCalledWith(2024))
 
     // The list is reloaded and the deleted year is gone from the chips...
@@ -1194,7 +1197,7 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
 
     fireEvent.click(deleteYearButton())
-    expect(confirmSpy).toHaveBeenCalledWith(DELETE_2024_CONFIRM)
+    fireEvent.click(confirmDeleteButton())
     await waitFor(() => expect(vi.mocked(deleteTaxYear)).toHaveBeenCalledWith(2024))
     const summaries = vi.mocked(fetchTaxSummary).mock.calls.length
     const lists = vi.mocked(fetchTaxYears).mock.calls.length
@@ -1225,6 +1228,7 @@ describe('TaxesPage', () => {
     await readyInputs()
 
     fireEvent.click(deleteYearButton())
+    fireEvent.click(confirmDeleteButton())
     expect(await screen.findByText('tax year 2024 not found')).toBeTruthy()
     // Nothing was dropped: the list was never reloaded and the year is still the page's.
     expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(1)
@@ -1508,6 +1512,7 @@ describe('?year= selected tax year', () => {
     renderPage('/taxes?year=2024')
     await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
     fireEvent.click(deleteYearButton())
+    fireEvent.click(confirmDeleteButton())
     await waitFor(() => expect(vi.mocked(deleteTaxYear)).toHaveBeenCalledWith(2024))
     // Nothing is selected any more, so the URL must stop naming a year that is gone.
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/taxes'))
@@ -1568,8 +1573,8 @@ describe('?comp= composition drill (2026-08-25 spec §2d)', () => {
 })
 
 describe('filing status (2026-08-26 design §6)', () => {
-  // Scoped to the YEAR card's control: the brackets editor below renders a tab row with the
-  // same three names, and only this one changes how the year is filed.
+  // Scoped to the SCOPE ROW's control: the brackets editor renders a group with the same
+  // three names ("Bracket filing status"), and only this one changes how the year is filed.
   const statusButton = (name: string) =>
     within(screen.getByRole('group', { name: 'Filing status' })).getByRole('button', {
       name,
@@ -1708,6 +1713,8 @@ describe('filing status (2026-08-26 design §6)', () => {
     // Verbatim, and not dismissible: an MFS calculation without Form-8958 community-income
     // splitting is wrong in California, so the sentence stays wherever the number is.
     expect(screen.getByText(CA_CAVEAT)).toBeTruthy()
+    // The frame's subheader (2026-09-13 polish spec §12): under the title, above the sticky row.
+    expect(screen.getByText(CA_CAVEAT).closest('.page-frame-subheader')).toBeTruthy()
 
     fireEvent.click(statusButton('Married filing jointly'))
     await waitFor(() => expect(screen.queryByText(CA_CAVEAT)).toBeNull())
@@ -1927,7 +1934,7 @@ describe('TaxesPage — snapshot cache (2026-08-27 spec §1)', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
     expect(screen.getByText('$77,777.77')).toBeTruthy()
     // The new-year box is seeded off the cached latest year, not left blank.
-    expect((screen.getByLabelText('New year') as HTMLInputElement).value).toBe('2025')
+    expect(newYearInput().value).toBe('2025')
     // Both revalidations still went out.
     expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024)
@@ -1992,7 +1999,92 @@ describe('TaxesPage — section order (2026-08-31 audit)', () => {
   })
 })
 
-function openYearManagement() { const disclosure = document.querySelector('.tax-year-management') as HTMLDetailsElement | null; if (disclosure && !disclosure.open) fireEvent.click(disclosure.querySelector('summary')!) }
+describe('TaxesPage — scope row and year menu (2026-09-13 polish spec §11–12)', () => {
+  it('puts the year chips and the filing status in the sticky scope row, wired to the same handlers', async () => {
+    renderPage('/taxes?section=summary')
+    await readyInputs()
+    const scope = document.querySelector('.page-frame-scope') as HTMLElement
+    expect(scope).toBeTruthy()
+    // The year card is gone from the body: no "Tax year" heading, no <details>.
+    expect(screen.queryByRole('heading', { name: 'Tax year' })).toBeNull()
+    expect(document.querySelector('.tax-year-management')).toBeNull()
+
+    // Chips inside the row, with the same title and pressed state the card's had.
+    const chips = () => within(scope).getByRole('group', { name: 'Tax year' })
+    expect(within(chips()).getByRole('button', { name: '2024' }).getAttribute('aria-pressed')).toBe('true')
+    expect(within(chips()).getByRole('button', { name: '2023' }).getAttribute('title')).toBe('21 inputs · 42 brackets')
+    // A chip click is the same door as before: three payloads for the new year.
+    fireEvent.click(within(chips()).getByRole('button', { name: '2023' }))
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2023))
+    expect(within(chips()).getByRole('button', { name: '2023' }).getAttribute('aria-pressed')).toBe('true')
+
+    // The filing status sits beside it and PATCHes the year like the card's control did — once
+    // the year's load has landed (the control is shut while a year is loading, as before).
+    const status = () => within(scope).getByRole('group', { name: 'Filing status' })
+    const mfj = () => within(status()).getByRole('button', { name: 'Married filing jointly' }) as HTMLButtonElement
+    await waitFor(() => expect(mfj().disabled).toBe(false))
+    fireEvent.click(mfj())
+    await waitFor(() => expect(vi.mocked(patchTaxYear)).toHaveBeenCalledWith(2023, { filing_status: 'married_joint' }))
+  })
+
+  it('creates a year from the New tax year popover and closes it; Escape dismisses it', async () => {
+    vi.mocked(fetchTaxYears)
+      .mockResolvedValueOnce([year2023, year2024])
+      .mockResolvedValueOnce([year2023, year2024, year2025])
+    renderPage('/taxes?section=summary')
+    await readyInputs()
+
+    // Shut until asked: the page's primary action lives in the title row (spec §11, audit A3).
+    expect(screen.queryByRole('dialog', { name: 'New tax year' })).toBeNull()
+    const trigger = screen.getByRole('button', { name: 'New tax year…' })
+    expect(trigger.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(trigger.closest('.page-frame-actions')).toBeTruthy()
+    fireEvent.click(trigger)
+    const dialog = screen.getByRole('dialog', { name: 'New tax year' })
+    expect(dialog.classList.contains('popover-surface')).toBe(true)
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect((within(dialog).getByLabelText('New year') as HTMLInputElement).value).toBe('2025')
+    // The create hint names the view the values are edited in — nothing is "below" any more.
+    expect(within(dialog).getByText(/the values are then edited in Tax tables/)).toBeTruthy()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create year' }))
+    await waitFor(() => expect(vi.mocked(cloneBrackets)).toHaveBeenCalledWith(2025, 2024))
+    // Created: the popover closes and the page is on the new year.
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New tax year' })).toBeNull())
+    expect(await screen.findByRole('button', { name: '2025' })).toBeTruthy()
+
+    // Escape dismisses it (the shared usePopoverDismiss).
+    fireEvent.click(screen.getByRole('button', { name: 'New tax year…' }))
+    const reopened = screen.getByRole('dialog', { name: 'New tax year' })
+    fireEvent.keyDown(within(reopened).getByLabelText('New year'), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New tax year' })).toBeNull())
+  })
+
+  it('switches views from a panel’s door and writes ?section= like a tab does', async () => {
+    vi.mocked(fetchTaxYears).mockResolvedValue([{ ...year2024, filing_status: 'married_joint' }])
+    vi.mocked(fetchTaxSummary).mockImplementation(async (year: number) => ({
+      ...summaryFor(year),
+      brackets_missing_for_status: ['federal', 'state'],
+    }))
+    renderPage('/taxes?section=summary')
+
+    // The summary's missing-tables call to action carries the door (spec §14).
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Tax tables' }))
+    expect(await screen.findByLabelText('Federal bracket 1 rate (%)')).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Tax tables' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('location').textContent).toContain('section=tables')
+  })
+})
+
+/** The year menu's popover — opened when a helper needs what is inside it (the year box, Create,
+ *  the delete door). Idempotent: a popover already open is left alone. */
+function openYearManagement() {
+  if (document.querySelector('.tax-year-menu .popover-surface') === null) {
+    fireEvent.click(screen.getByRole('button', { name: 'New tax year…' }))
+  }
+}
 function newYearInput() { openYearManagement(); return screen.getByLabelText('New year') as HTMLInputElement }
 function createYearButton() { openYearManagement(); return screen.getByRole('button', { name: /create year/i }) }
+/** The arm-and-confirm's second button: the delete itself (TaxYearMenu). */
+function confirmDeleteButton() { return screen.getByRole('button', { name: /^Delete \d{4}$/ }) as HTMLButtonElement }
 async function readyInputs() { const current = (await screen.findByRole('tab', { selected: true })).textContent!; fireEvent.click(screen.getByRole('tab', { name: 'Inputs' })); const field = await screen.findByLabelText('Annual Salary'); fireEvent.click(screen.getByRole('tab', { name: current })); return field }
