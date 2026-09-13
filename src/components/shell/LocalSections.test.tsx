@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { EASE_OUT, MOTION_MS } from '../../theme/motion'
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from './LocalSections'
 
 const SECTIONS = [{ id: 'summary', label: 'Summary' }, { id: 'inputs', label: 'Inputs' }] as const
@@ -123,5 +124,33 @@ describe('LocalSectionNav indicator, trailing slot and history (2026-09-13 polis
     expect(onChange).toHaveBeenLastCalledWith('inputs', undefined)
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Summary' }), { key: 'End' })
     expect(onChange).toHaveBeenLastCalledWith('inputs', { replace: true })
+  })
+})
+
+describe('LocalSectionPanel fade (2026-09-13 polish §2.4)', () => {
+  // jsdom has no Element.animate; the component guards on its presence, so the tests install one.
+  const animate = vi.fn()
+  beforeEach(() => { Object.defineProperty(HTMLElement.prototype, 'animate', { value: animate, configurable: true, writable: true }) })
+  afterEach(() => { Reflect.deleteProperty(HTMLElement.prototype, 'animate'); animate.mockClear(); vi.unstubAllGlobals() })
+
+  it('does not animate the section the page arrived on, fades every later activation and revisit', () => {
+    render(<MemoryRouter><Harness /></MemoryRouter>)
+    expect(animate).not.toHaveBeenCalled() // the page body's own entrance covers arrival
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
+    expect(animate).toHaveBeenCalledTimes(1)
+    const [frames, options] = animate.mock.calls[0] as [Keyframe[], KeyframeAnimationOptions]
+    expect(frames).toEqual([{ opacity: 0, translate: '0 6px' }, { opacity: 1, translate: 'none' }])
+    expect(options).toEqual({ duration: MOTION_MS.xfade, easing: EASE_OUT, fill: 'backwards' })
+    // The panel that animated is the one that just became visible.
+    expect((animate.mock.contexts[0] as HTMLElement).id).toBe(screen.getByRole('tabpanel').id)
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' })) // a kept-mounted revisit fades too
+    expect(animate).toHaveBeenCalledTimes(2)
+  })
+
+  it('is skipped under prefers-reduced-motion', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    render(<MemoryRouter><Harness /></MemoryRouter>)
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
+    expect(animate).not.toHaveBeenCalled()
   })
 })

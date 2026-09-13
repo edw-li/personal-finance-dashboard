@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useLocation, useNavigate, useNavigationType } from 'react-router-dom'
+import { EASE_OUT, MOTION_MS } from '../../theme/motion'
+import { prefersReducedMotion } from '../useReducedMotion'
 import { LocalSectionVisibility } from './localSectionContext'
 import './localSections.css'
 
@@ -160,6 +162,27 @@ export function LocalSectionPanel<T extends string>({ state, section, children, 
   const active = state.section === section
   const [visited, setVisited] = useState(active)
   if (active && !visited) setVisited(true)
+  const ref = useRef<HTMLElement>(null)
+  // The view swap is one panel-level fade, not a second card cascade (2026-09-13 polish §2.4).
+  // WAAPI rather than a CSS animation because a kept-mounted panel only toggles `hidden`, and a
+  // CSS animation would not restart. A LAYOUT effect: it runs in the commit that cleared
+  // `hidden`, so the first frame the panel is visible is already the fade's first frame. The
+  // component instance exists from page arrival (an inactive panel renders null, not nothing),
+  // so the first effect run IS the arrival — the initially active section does not animate; the
+  // page body's own entrance already covers it — and every later activation, first visit or
+  // revisit, does.
+  const arrivalRef = useRef(true)
+  useLayoutEffect(() => {
+    const arrival = arrivalRef.current
+    arrivalRef.current = false
+    if (!active || arrival) return
+    const el = ref.current
+    if (el === null || prefersReducedMotion() || typeof el.animate !== 'function') return
+    el.animate(
+      [{ opacity: 0, translate: '0 6px' }, { opacity: 1, translate: 'none' }],
+      { duration: MOTION_MS.xfade, easing: EASE_OUT, fill: 'backwards' },
+    )
+  }, [active])
   if (!active && (!keepMounted || !visited)) return null
-  return <LocalSectionVisibility.Provider value={active}><section id={state.panelId(section)} role="tabpanel" aria-labelledby={state.tabId(section)} hidden={!active} className={`local-section-panel${className ? ` ${className}` : ''}`}>{children}</section></LocalSectionVisibility.Provider>
+  return <LocalSectionVisibility.Provider value={active}><section ref={ref} id={state.panelId(section)} role="tabpanel" aria-labelledby={state.tabId(section)} hidden={!active} className={`local-section-panel${className ? ` ${className}` : ''}`}>{children}</section></LocalSectionVisibility.Provider>
 }
