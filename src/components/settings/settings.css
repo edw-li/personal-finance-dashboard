@@ -210,6 +210,13 @@
   z-index: 1;
 }
 
+/* A lazily loaded card's body while it fetches (2026-09-13 spec §9): one .skeleton block sized by
+   SettingsGhost to the card's loaded height, so the tab switch lands on a stable layout. */
+.settings-ghost {
+  display: block;
+  margin-top: 0.25rem;
+}
+
 /* Panel-scoped, like roster.css and categories.css: without these, portfolio.css's bare
    `.row-actions button` rules (globally bundled) leak into these tables and the is-editing
    class is inert. */
