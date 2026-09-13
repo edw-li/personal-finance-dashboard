@@ -135,3 +135,9 @@ it('renders a validation error inline with no Retry beside it (motion spec §9)'
   // Retry re-runs the FETCH: here it would invite a re-send of a form the client refused.
   expect(within(alert).queryByRole('button')).toBeNull()
 })
+
+it('is a span-4 card: a two-field form beside the wide categories table (2026-09-13 spec §7)', async () => {
+  render(<HouseholdCard onPeopleChange={vi.fn()} />)
+  await screen.findByRole('button', { name: 'Add member' })
+  expect((document.getElementById('household') as HTMLElement).classList.contains('span-4')).toBe(true)
+})

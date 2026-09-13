@@ -11,6 +11,7 @@ import InfoHint from '../InfoHint'
 import { useToast } from '../ToastProvider'
 import { FeedBanner } from '../shell/Feed'
 import Segmented from '../shell/Segmented'
+import { useScrollEdges } from '../useScrollEdges'
 import '../panels.css'
 import './settings.css'
 
@@ -138,7 +139,7 @@ export default function CategoriesCard() {
   }
 
   return (
-    <section className="card span-6" id="categories">
+    <section className="card span-8" id="categories">
       <h2 className="eyebrow">
         Spending categories
         <InfoHint text="The spending matrix's rows. Retire keeps a category out of the wizard without losing its history; delete only works while a category has no monthly rows. The slug never changes — it is the workbook importer's key." />
@@ -187,88 +188,19 @@ export default function CategoriesCard() {
             <p className="empty-note">No categories yet — add the first one above.</p>
           ) : (
             <>
-              <div className="settings-scroll">
-                <table className="data-table category-table">
-                  <thead>
-                    <tr>
-                      <th>Category</th>
-                      <th>Kind</th>
-                      <th className="num">Sort</th>
-                      <th>Status</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {categories.map((category) => (
-                      <tr
-                        key={category.id}
-                        className={category.id === editingId ? 'is-editing' : undefined}
-                      >
-                        <td>{category.name}</td>
-                        <td>
-                          <Segmented
-                            variant="toggle"
-                            size="sm"
-                            ariaLabel={`Kind for ${category.name}`}
-                            // disabled while a request is in flight, like the row's other
-                            // controls: a second PATCH would race the reload that follows the
-                            // first and the picker would flicker back.
-                            options={KINDS.map((k) => ({ ...k, disabled: busy }))}
-                            value={category.kind}
-                            onChange={(next) => setKind(category, next)}
-                          />
-                        </td>
-                        <td className="num">{category.sort_order}</td>
-                        <td>
-                          <span className="badge">
-                            {category.is_active ? 'Active' : 'Retired'}
-                          </span>
-                        </td>
-                        <td className="row-actions">
-                          <button
-                            type="button"
-                            className="button"
-                            aria-label={`Edit ${category.name}`}
-                            disabled={busy}
-                            onClick={() => {
-                              setEditingId(category.id)
-                              setFormError(null)
-                              setForm({
-                                name: category.name,
-                                sort_order: String(category.sort_order),
-                              })
-                            }}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            className="button"
-                            aria-label={
-                              category.is_active
-                                ? `Retire ${category.name}`
-                                : `Restore ${category.name}`
-                            }
-                            disabled={busy}
-                            onClick={() => toggleActive(category)}
-                          >
-                            {category.is_active ? 'Retire' : 'Restore'}
-                          </button>
-                          <button
-                            type="button"
-                            className="button"
-                            aria-label={`Delete ${category.name}`}
-                            disabled={busy}
-                            onClick={() => remove(category)}
-                          >
-                            Delete
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <CategoriesTable
+                categories={categories}
+                busy={busy}
+                editingId={editingId}
+                onEdit={(category) => {
+                  setEditingId(category.id)
+                  setFormError(null)
+                  setForm({ name: category.name, sort_order: String(category.sort_order) })
+                }}
+                onToggleActive={toggleActive}
+                onKind={setKind}
+                onRemove={remove}
+              />
               {/* ONE line per kind (spec §1): the three definitions are read while deciding
                   a single row's picker, so they have to be scannable side by side, not
                   buried in a paragraph the reader has to parse to find their case. */}
@@ -295,5 +227,86 @@ export default function CategoriesCard() {
         </>
       )}
     </section>
+  )
+}
+
+/** The scrolling table, its own component so `useScrollEdges` sees a scroller that EXISTS on its
+ *  first commit: the card mounts before its rows land, and a hook bound to a ref that is still null
+ *  then would never observe the element. The scroller flags `data-scroll-more` (panels.css masks
+ *  the clipped edge) and the last column is sticky, so Delete is never hidden behind a scrollbar
+ *  that only appears on hover (2026-09-13 spec §7, audit S-3). */
+function CategoriesTable({
+  categories,
+  busy,
+  editingId,
+  onEdit,
+  onToggleActive,
+  onKind,
+  onRemove,
+}: {
+  categories: CategoryOut[]
+  busy: boolean
+  editingId: number | null
+  onEdit: (category: CategoryOut) => void
+  onToggleActive: (category: CategoryOut) => void
+  onKind: (category: CategoryOut, next: CategoryKind) => void
+  onRemove: (category: CategoryOut) => void
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useScrollEdges(scrollRef)
+  return (
+    <div className="settings-scroll" ref={scrollRef}>
+      <table className="data-table category-table">
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Kind</th>
+            <th className="num">Sort</th>
+            <th>Status</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {categories.map((category) => (
+            <tr key={category.id} className={category.id === editingId ? 'is-editing' : undefined}>
+              <td>{category.name}</td>
+              <td>
+                <Segmented
+                  variant="toggle"
+                  size="sm"
+                  ariaLabel={`Kind for ${category.name}`}
+                  // disabled while a request is in flight, like the row's other controls: a second
+                  // PATCH would race the reload that follows the first and the picker would flicker back.
+                  options={KINDS.map((k) => ({ ...k, disabled: busy }))}
+                  value={category.kind}
+                  onChange={(next) => onKind(category, next)}
+                />
+              </td>
+              <td className="num">{category.sort_order}</td>
+              <td>
+                <span className="badge">{category.is_active ? 'Active' : 'Retired'}</span>
+              </td>
+              <td className="row-actions">
+                <button type="button" className="button" aria-label={`Edit ${category.name}`} disabled={busy} onClick={() => onEdit(category)}>
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  aria-label={category.is_active ? `Retire ${category.name}` : `Restore ${category.name}`}
+                  disabled={busy}
+                  onClick={() => onToggleActive(category)}
+                >
+                  {category.is_active ? 'Retire' : 'Restore'}
+                </button>
+                <button type="button" className="button" aria-label={`Delete ${category.name}`} disabled={busy} onClick={() => onRemove(category)}>
+                  Delete
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }

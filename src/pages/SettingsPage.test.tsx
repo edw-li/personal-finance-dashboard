@@ -956,6 +956,9 @@ describe('SettingsPage — task views', () => {
       expectInDocumentOrder(el(heading), ...cards.map(el))
       expect(el(heading).tagName).toBe('H2')
       expect(el(heading).classList.contains('card')).toBe(false)
+      // The band duplicates the selected tab's label (2026-09-13 spec §3, audit S-1): hidden from
+      // sight, kept for assistive tech and as the legacy #sec-* anchor.
+      expect(el(heading).classList.contains('visually-hidden')).toBe(true)
     }
   })
 

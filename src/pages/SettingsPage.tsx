@@ -266,18 +266,18 @@ export default function SettingsPage() {
         />
         <div className="card-grid">
 <LocalSectionPanel state={views} section="household" className="span-12 card-grid">
-{loadedOnce && <><h2 className="settings-section" id="sec-household">Household</h2>
+{loadedOnce && <><h2 className="settings-section visually-hidden" id="sec-household">Household</h2>
 <HouseholdCard onPeopleChange={setPeople} />
 <CategoriesCard />
 <AccountsCard people={people} /></>}
 </LocalSectionPanel>
 <LocalSectionPanel state={views} section="planning" className="span-12 card-grid">
-{loadedOnce && <><h2 className="settings-section" id="sec-planning">Planning</h2>
+{loadedOnce && <><h2 className="settings-section visually-hidden" id="sec-planning">Planning</h2>
 <LimitsCard />
 <PlanAssumptionsCard /></>}
 </LocalSectionPanel>
 <LocalSectionPanel state={views} section="account" className="span-12 card-grid">
-<h2 className="settings-section" id="sec-account">Account</h2>
+<h2 className="settings-section visually-hidden" id="sec-account">Account</h2>
 <AppearanceCard />
 {loadedOnce && <section className="card span-6" id="password">
                 <h2 className="eyebrow">
@@ -342,13 +342,13 @@ export default function SettingsPage() {
               </section>}
 </LocalSectionPanel>
 <LocalSectionPanel state={views} section="integrations" className="span-12 card-grid">
-{loadedOnce && <><h2 className="settings-section" id="sec-integrations">Integrations</h2>
+{loadedOnce && <><h2 className="settings-section visually-hidden" id="sec-integrations">Integrations</h2>
 <PriceRefreshCard />
 <AssistantCard />
 <CalendarFeedCard /></>}
 </LocalSectionPanel>
 <LocalSectionPanel state={views} section="data" className="span-12 card-grid">
-{loadedOnce && <><h2 className="settings-section" id="sec-data">Data</h2>
+{loadedOnce && <><h2 className="settings-section visually-hidden" id="sec-data">Data</h2>
 <section className="card span-12" id="import">
                 <h2 className="eyebrow">
                   Import workbook

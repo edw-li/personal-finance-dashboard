@@ -237,3 +237,12 @@ it('renders a validation error inline with no Retry beside it (motion spec §9)'
   // Retry re-runs the FETCH: here it would invite a re-send of a form the client refused.
   expect(within(alert).queryByRole('button')).toBeNull()
 })
+
+it('is a span-8 card whose table scroller carries the row-actions column (2026-09-13 spec §7)', async () => {
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+  const card = document.getElementById('categories') as HTMLElement
+  expect(card.classList.contains('span-8')).toBe(true)
+  expect(card.querySelector('.settings-scroll')).not.toBeNull()
+  expect(card.querySelectorAll('td.row-actions').length).toBeGreaterThan(0)
+})
