@@ -722,6 +722,13 @@ describe('SpendingPage — shell scope', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
     expect(screen.getByTestId('location').textContent).toContain('month=2026-07')
     expect(await screen.findByText(/Jul 2026 breakdown/)).toBeTruthy()
+    // W7: the donut's names ride a legend list beside it (ChartCard aside).
+    const legend = screen.getByRole('list', { name: 'Jul 2026 breakdown legend' })
+    expect(within(legend).getByText('Rent')).toBeTruthy()
+    expect(within(legend).getByText('$2,000.00')).toBeTruthy()
+    expect(within(legend).getByText('77.5%')).toBeTruthy()
+    expect(within(legend).getByText('22.5%')).toBeTruthy()
+    expect(within(legend).getAllByRole('listitem')).toHaveLength(2) // Fun is $0.00 in July: not a slice
     fireEvent.click(screen.getByRole('button', { name: 'All months' }))
     expect(screen.getByTestId('location').textContent).not.toContain('month=')
   })

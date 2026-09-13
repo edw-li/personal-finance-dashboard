@@ -5,6 +5,7 @@ import { describeError } from '../api/client'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartCard from '../components/ChartCard'
+import BreakdownLegend from '../components/spending/BreakdownLegend'
 import type { EChartEventParams, EChartsInstance } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { FeedBanner } from '../components/shell/Feed'
@@ -29,6 +30,7 @@ import {
   heatmapOption,
   heatmapRows,
   monthPieCsv,
+  monthPieLegend,
   monthPieOption,
   savingsRateCsv,
   savingsRateOption,
@@ -564,9 +566,11 @@ export default function SpendingPage() {
               const index = selected.kind === 'period' && matrix ? matrix.months.indexOf(selected.period) : -1
               return <><SelectionDetail selection={selected} chartTitle="Monthly category entries" />{matrix && index >= 0 && <ChartCard
                 title={`${selected.label} breakdown`} hint="Positive categories make up this donut. Refunds are included in the totals above."
-                ariaLabel={`Donut chart of ${selected.label} categories`} option={monthPieOption(matrix, topIds, index)}
+                ariaLabel={`Donut chart of ${selected.label} categories`} option={monthPieOption(matrix, topIds, index, { compact: true })}
                 empty="No positive category amounts to draw." exportName={`spending-breakdown-${matrix.months[index]}`}
-                csv={() => monthPieCsv(matrix, topIds, index)} height={240} />}</>
+                csv={() => monthPieCsv(matrix, topIds, index)} height={240}
+                // W7: names beside the chart instead of leader labels that truncate in the dock.
+                aside={<BreakdownLegend rows={monthPieLegend(matrix, topIds, index)} label={`${selected.label} breakdown legend`} />} />}</>
             }}
             instanceRef={barsChartRef}
             onLegendChange={onLegendChange}
