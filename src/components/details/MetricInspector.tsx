@@ -4,23 +4,14 @@ import type { ReactNode } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 import type { MetricEvidence } from '../../types/metrics'
 import { isApplicationSource } from '../../types/metrics'
-import { formatMetricScope } from '../../utils/metricReceipt'
+import { formatEvidenceValue, formatMetricScope } from '../../utils/metricReceipt'
 import { useDetailPanel } from './DetailPanelProvider'
 import { explainSelection } from './explainSelection'
 import './details.css'
 
-export function formatEvidenceValue(value: string | number | null, unit?: string, displayPrecision?: number | null): string {
-  if (value === null) return 'Unavailable'
-  if (!unit) return String(value)
-  const number = Number(value)
-  if (!Number.isFinite(number)) return String(value)
-  const precision = typeof displayPrecision === 'number' && Number.isInteger(displayPrecision) && displayPrecision >= 0 && displayPrecision <= 9 ? displayPrecision : undefined
-  if (unit === 'USD') return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: precision ?? 2 }).format(number)
-  if (unit === 'ratio') return new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: precision ?? 2 }).format(number)
-  if (unit === 'percent') return `${new Intl.NumberFormat('en-US', { maximumFractionDigits: precision ?? 2 }).format(number)}%`
-  if (unit === 'count') return new Intl.NumberFormat('en-US', { maximumFractionDigits: precision ?? 6 }).format(number)
-  return `${value} ${unit}`
-}
+// Moved to utils/metricReceipt.ts (the explain prompt formats the same figure); re-exported so
+// SelectionDetail, AssistantEvidence and the tests keep their import path.
+export { formatEvidenceValue }
 
 export function ApplicationSourceLink({ href, children, onClick }: { href: string; children: ReactNode; onClick?: () => void }) {
   const inRouter = useInRouterContext()
