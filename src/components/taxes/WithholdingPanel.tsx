@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../../api/client'
 import { fetchWithholding, putTaxInputs } from '../../api/taxes'
+import Disclosure from '../Disclosure'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import type {
@@ -11,6 +13,7 @@ import type {
   WithholdingSafeHarbor,
 } from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
+import type { TaxSection } from './taxSections'
 import type { Tone } from '../../utils/tone'
 // This component's own sheet, like its siblings: the app-wide vocabulary
 // (.card/.eyebrow/.kpi-row/.error-banner/.empty-note/.drill-hint) is panels.css, which the
@@ -145,11 +148,24 @@ function JurisdictionTile({
   )
 }
 
+/**
+ * Server warning fragments arrive lowercase and unpunctuated ("partner checks before their first
+ * profile's effective date use that profile"); the card prints them as sentences. A formatter at
+ * the render site — never a rewrite of the payload (2026-09-13 polish spec §14; audit C4).
+ */
+function sentence(fragment: string): string {
+  const text = fragment.trim()
+  if (text === '') return text
+  const capitalised = text.charAt(0).toUpperCase() + text.slice(1)
+  return /[.!?…]$/.test(capitalised) ? capitalised : `${capitalised}.`
+}
+
 export default function WithholdingPanel({
   year,
   storedVestW2 = null,
   inputsDirty = false,
   onVestApplied,
+  goTo,
 }: {
   year: number
   /** The PRIMARY person's stored w2_stock_rsus_sold (the 4dp echo), null when unset —
@@ -161,6 +177,9 @@ export default function WithholdingPanel({
    *  refreshes the totals. The chip renders ONLY when the page provides this — an Apply
    *  that could not complete that loop would leave a stale form under a fresh number. */
   onVestApplied?: (echo: TaxInputsOut) => void
+  /** The page's view switch (2026-09-13 polish spec §14): the partner note's "Open Inputs" and
+   *  the missing-tables "Open Tax tables" doors. Absent → the sentences alone. */
+  goTo?: (section: TaxSection) => void
 }) {
   // null = the feed has not answered yet (never a zeroed payload — "not loaded" and "nothing
   // withheld" say very different things under this heading).
@@ -255,7 +274,7 @@ export default function WithholdingPanel({
     if (
       inputsDirty &&
       !window.confirm(
-        'Applying writes the W-2 vest input and reloads the inputs form below, discarding its unsaved edits. Continue?',
+        'Applying writes the W-2 vest input and reloads the Inputs view, discarding its unsaved edits. Continue?',
       )
     )
       return
@@ -282,6 +301,84 @@ export default function WithholdingPanel({
   // than crash on a null.
   const partnerSimulated = withholding !== null && withholding.partner_source === 'simulated'
   const partnerLeg = withholding === null ? null : withholding.partner_salary
+
+  // The methodology, folded (2026-09-13 polish spec §11; audit A2): the safe-harbor sentences,
+  // the reference-return note, the assumptions paragraph and the server's own asterisks EXPLAIN
+  // the estimate rather than act on it, so they sit behind ONE disclosure whose summary counts
+  // them. The status line, the remedies, the split nudge and the vest Apply stay in the open.
+  const methodNotes: ReactNode[] = []
+  if (withholding !== null) {
+    // Nothing at all when NEITHER statutory leg exists: a missing prior year is the normal
+    // first-year case and arrives with no warning of its own. The multiplier is the SERVER'S —
+    // 110% only above the IRC 6654(d)(1)(C) prior-year AGI gate, 100% at or below it.
+    if (split === null && withholding.safe_harbor !== null) {
+      methodNotes.push(
+        <p className="hint" key="harbor">
+          {safeHarborSentence(withholding.safe_harbor)}
+          <InfoHint text="Real safe harbor is per-jurisdiction; this compares all-in totals — approximate by construction. The statutory harbor is the LESSER of last year's 100/110% figure and 90% of this year's liability." />
+        </p>,
+      )
+    }
+    // The real thing, once the split makes it computable: two harbors against two liabilities,
+    // which is how the statute is actually written. The combined sentence above is suppressed
+    // rather than shown alongside them.
+    if (split !== null && split.federal.safe_harbor !== null) {
+      methodNotes.push(
+        <p className="hint" key="harbor-federal">
+          {safeHarborSentence(split.federal.safe_harbor, 'Federal safe harbor', 'federal tax')}
+          <InfoHint text="IRC 6654: the LESSER of 100/110% of last year's federal tax and 90% of this year's. Withhold at least that much and the underpayment penalty does not apply, however large the April bill is." />
+        </p>,
+      )
+    }
+    if (split !== null && split.state.safe_harbor !== null) {
+      methodNotes.push(
+        <p className="hint" key="harbor-state">
+          {safeHarborSentence(split.state.safe_harbor, 'California safe harbor', 'California tax')}
+          <InfoHint text="R&TC 19136, the federal rule with one extra clause: at $1,000,000 of California AGI the prior-year leg is gone and only 90% of this year's tax will do." />
+        </p>,
+      )
+    }
+    // The wedding-year note: the reference return is last year's, so on the first married year it
+    // was filed under another status. A labelling matter, never a math one; skipped when the prior
+    // leg is missing — there is no reference return to label.
+    if (
+      withholding.safe_harbor !== null &&
+      withholding.safe_harbor.prior_filing_status !== null &&
+      withholding.safe_harbor.prior_filing_status !== withholding.filing_status
+    ) {
+      methodNotes.push(
+        <p className="hint" key="reference">
+          {`That reference return was filed as ${withholding.safe_harbor.prior_filing_status.replaceAll(
+            '_',
+            ' ',
+          )} — still the legal safe harbor, just a different household.`}
+        </p>,
+      )
+    }
+    // What the estimate ASSUMED, in the order it bites: the check grid, the FICA stacking, and
+    // the quote the future half rides. "Tends to err toward owing more" rather than a flat
+    // promise: the stacking leans that way, but additional-Medicare convexity can run the other,
+    // and an even grid is direction-neutral.
+    methodNotes.push(
+      <p className="drill-hint" key="assumptions">
+        Checks are estimated on an even calendar grid, and vest FICA stacks on top of salary
+        rather than by date — an approximation that tends to err toward owing more. Future
+        vests are valued at the latest quote. Supplemental rates: 22% federal, rising to 37%
+        above $1,000,000 of vests and bonuses in a year; California 10.23% on vests and 6.6%
+        on bonuses.
+      </p>,
+    )
+    // Advisory, never an error banner: the estimate CAME BACK — these are the honest asterisks
+    // on what it was computed from, each naming a piece that was left out. Text-as-key: a fixed
+    // list of distinct sentences rendered straight from the payload.
+    for (const warning of withholding.warnings) {
+      methodNotes.push(
+        <p className="hint" key={warning}>
+          {sentence(warning)}
+        </p>,
+      )
+    }
+  }
 
   return (
     <section className="card withholding-panel">
@@ -468,8 +565,16 @@ export default function WithholdingPanel({
               ) : (
                 <p className="drill-hint">
                   Your side is simulated from paycheck profiles; your partner&rsquo;s is
-                  entered. Edit all three in the inputs form below. Partner amounts are already
-                  counted once in each total above — don&rsquo;t add them again.
+                  entered. Edit all three in Inputs. Partner amounts are already counted once in
+                  each total above — don&rsquo;t add them again.
+                  {goTo !== undefined && (
+                    <>
+                      {' '}
+                      <button type="button" className="button" onClick={() => goTo('inputs')}>
+                        Open Inputs
+                      </button>
+                    </>
+                  )}
                 </p>
               )}
             </div>
@@ -493,59 +598,17 @@ export default function WithholdingPanel({
             <p className="hint withholding-cta">
               {`No ${withholding.brackets_missing_for_status.join(
                 ', ',
-              )} bracket table for this year’s filing status — the tax engine cannot price the year until they exist. Add them in the brackets editor below, or clone another year’s and edit the thresholds.`}
-            </p>
-          )}
-
-          {/* Nothing at all when NEITHER statutory leg exists: a missing prior year is the
-              normal first-year case and arrives with no warning of its own, so there is no
-              absence here to explain. (A prior year that exists but computes to zero DOES
-              warn, and that sentence lands with the rest of them below.) The multiplier is
-              the SERVER'S — 110% only above the IRC 6654(d)(1)(C) prior-year AGI gate, 100%
-              at or below it — never a literal here, or a low-AGI year reads as an arithmetic
-              error next to a threshold that equals the figure beside it. */}
-          {split === null && withholding.safe_harbor !== null && (
-            <p className="hint">
-              {safeHarborSentence(withholding.safe_harbor)}
-              <InfoHint text="Real safe harbor is per-jurisdiction; this compares all-in totals — approximate by construction. The statutory harbor is the LESSER of last year's 100/110% figure and 90% of this year's liability." />
-            </p>
-          )}
-
-          {/* The real thing, once the split makes it computable: two harbors against two
-              liabilities, which is how the statute is actually written. The combined
-              sentence above is suppressed rather than shown alongside them — it exists to
-              approximate exactly what these two say properly. */}
-          {split !== null && split.federal.safe_harbor !== null && (
-            <p className="hint">
-              {safeHarborSentence(split.federal.safe_harbor, 'Federal safe harbor', 'federal tax')}
-              <InfoHint text="IRC 6654: the LESSER of 100/110% of last year's federal tax and 90% of this year's. Withhold at least that much and the underpayment penalty does not apply, however large the April bill is." />
-            </p>
-          )}
-          {split !== null && split.state.safe_harbor !== null && (
-            <p className="hint">
-              {safeHarborSentence(
-                split.state.safe_harbor,
-                'California safe harbor',
-                'California tax',
+              )} bracket table for this year’s filing status — the tax engine cannot price the year until they exist. Add them in Tax tables, or clone another year’s and edit the thresholds.`}
+              {goTo !== undefined && (
+                <>
+                  {' '}
+                  <button type="button" className="button" onClick={() => goTo('tables')}>
+                    Open Tax tables
+                  </button>
+                </>
               )}
-              <InfoHint text="R&TC 19136, the federal rule with one extra clause: at $1,000,000 of California AGI the prior-year leg is gone and only 90% of this year's tax will do." />
             </p>
           )}
-
-          {/* The wedding-year note: the reference return is last year's, so on the first
-              married year it was filed under another status. The number is still the legal
-              safe harbor — a labelling matter, never a math one. Skipped entirely when the
-              prior leg is missing — there is no reference return to label. */}
-          {withholding.safe_harbor !== null &&
-            withholding.safe_harbor.prior_filing_status !== null &&
-            withholding.safe_harbor.prior_filing_status !== withholding.filing_status && (
-              <p className="hint">
-                {`That reference return was filed as ${withholding.safe_harbor.prior_filing_status.replaceAll(
-                  '_',
-                  ' ',
-                )} — still the legal safe harbor, just a different household.`}
-              </p>
-            )}
 
           {/* The two halves of the app that both know about vest income have to agree: this
               card counts the vests, while the engine's total above it knows only what the
@@ -554,7 +617,7 @@ export default function WithholdingPanel({
             <p className="hint">
               {`This year's vests imply ≈${formatCurrency(
                 withholding.vest.income_projected,
-              )} of W-2 income at vest prices — make sure your W-2 inputs below include it.`}
+              )} of W-2 income at vest prices — make sure your W-2 inputs in the Inputs view include it.`}
               {/* The chip closes the loop the sentence opens, but ONLY when the page can
                   complete it (onVestApplied remounts the form under a fresh number). */}
               {onVestApplied !== undefined && (
@@ -582,30 +645,13 @@ export default function WithholdingPanel({
               true, so this never becomes the card's error banner. */}
           <FeedBanner error={applyError} />
 
-          {/* What the estimate ASSUMED, in the order it bites: the check grid, the FICA
-              stacking, and the quote the future half rides — the balance above moves with the
-              stock, which is the one thing a reader would otherwise not guess. "Tends to err
-              toward owing more" rather than a flat promise: the stacking leans that way, but
-              additional-Medicare convexity can run the other, and an even grid is
-              direction-neutral. */}
-          <p className="drill-hint">
-            Checks are estimated on an even calendar grid, and vest FICA stacks on top of salary
-            rather than by date — an approximation that tends to err toward owing more. Future
-            vests are valued at the latest quote. Supplemental rates: 22% federal, rising to 37%
-            above $1,000,000 of vests and bonuses in a year; California 10.23% on vests and 6.6%
-            on bonuses.
-          </p>
-
-          {/* Advisory, never an error banner: the estimate CAME BACK — these are the honest
-              asterisks on what it was computed from (an unpriced vest, a profile that could not
-              be used, a missing quote), and each one names a piece that was left out. */}
-          {withholding.warnings.map((warning) => (
-            // Text-as-key: a fixed list of distinct sentences rendered straight from the
-            // payload (VestingSchedulePanel's).
-            <p className="hint" key={warning}>
-              {warning}
-            </p>
-          ))}
+          {/* One accordion on the page, and the right tool for it: explanation, not controls. */}
+          <Disclosure
+            className="withholding-method"
+            summary={`How this is estimated (${methodNotes.length} ${methodNotes.length === 1 ? 'note' : 'notes'})`}
+          >
+            {methodNotes}
+          </Disclosure>
         </div>
       )}
     </section>

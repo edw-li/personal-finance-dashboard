@@ -495,9 +495,8 @@ describe('WithholdingPanel', () => {
     render(<WithholdingPanel year={2026} />)
     expect(
       await screen.findByText(
-        // BELOW: the inputs form the reader has to fix this in renders under this card
-        // (TaxesPage's order — summary, this card, what-if, then the two editors).
-        "This year's vests imply ≈$48,000.00 of W-2 income at vest prices — make sure your W-2 inputs below include it.",
+        // The inputs form the reader has to fix this in lives on the Inputs tab — named, never "below".
+        "This year's vests imply ≈$48,000.00 of W-2 income at vest prices — make sure your W-2 inputs in the Inputs view include it.",
       ),
     ).toBeTruthy()
     cleanup()
@@ -536,7 +535,7 @@ describe('WithholdingPanel', () => {
     ).toBeTruthy()
   })
 
-  it('renders every server warning verbatim, beside the estimate rather than over it', async () => {
+  it('renders every server warning as a sentence, beside the estimate rather than over it', async () => {
     vi.mocked(fetchWithholding).mockResolvedValue(
       fixture({
         warnings: [
@@ -548,10 +547,10 @@ describe('WithholdingPanel', () => {
     render(<WithholdingPanel year={2026} />)
 
     expect(
-      await screen.findByText('vest on 2026-02-18 has no stored price — excluded from the estimate'),
+      await screen.findByText('Vest on 2026-02-18 has no stored price — excluded from the estimate.'),
     ).toBeTruthy()
     expect(
-      screen.getByText('no usable paycheck profile — salary withholding estimated as 0'),
+      screen.getByText('No usable paycheck profile — salary withholding estimated as 0.'),
     ).toBeTruthy()
     // The estimate CAME BACK: these are asterisks on it, not a failure of it.
     expect(screen.queryByRole('alert')).toBeNull()
@@ -638,7 +637,7 @@ describe('WithholdingPanel', () => {
     // paths to one row would race each other.
     expect(
       screen.getByText(
-        /Your side is simulated from paycheck profiles; your partner’s is entered\. Edit all three in the inputs form below\./,
+        /Your side is simulated from paycheck profiles; your partner’s is entered\. Edit all three in Inputs\./,
       ),
     ).toBeTruthy()
     expect(screen.queryByRole('textbox')).toBeNull()
@@ -692,7 +691,7 @@ describe('WithholdingPanel', () => {
 
     expect(
       await screen.findByText(
-        /No federal, medicare bracket table for this year’s filing status — the tax engine cannot price the year until they exist\. Add them in the brackets editor below, or clone another year’s and edit the thresholds\./,
+        /No federal, medicare bracket table for this year’s filing status — the tax engine cannot price the year until they exist\. Add them in Tax tables, or clone another year’s and edit the thresholds\./,
       ),
     ).toBeTruthy()
   })
@@ -926,5 +925,43 @@ describe('WithholdingPanel', () => {
     // The estimate on screen is still true — and no reload was spent on a write that failed.
     expect(screen.getByText('$123,456.78')).toBeTruthy()
     expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(1)
+  })
+
+  it('folds the methodology behind one disclosure that counts its notes, and leaves the actions in the open', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      fixture({ warnings: ['partner checks before their first profile’s effective date use that profile'] }),
+    )
+    // onVestApplied given, so the Apply chip renders — it is one of the lines that must stay OUT.
+    render(<WithholdingPanel year={2026} onVestApplied={vi.fn()} />)
+    await screen.findByText('$123,456.78')
+
+    // Safe harbor + assumptions + one server note = three notes (2026-09-13 polish spec §11).
+    const summary = screen.getByText('How this is estimated (3 notes)')
+    const details = summary.closest('details') as HTMLDetailsElement
+    expect(details.classList.contains('disclosure')).toBe(true)
+    expect(details.contains(screen.getByText(/Safe harbor \(approx\.\)/))).toBe(true)
+    expect(details.contains(screen.getByText(/Checks are estimated on an even calendar grid/))).toBe(true)
+    // The server fragment is printed as a sentence: capital first letter, terminal period (§14).
+    expect(
+      details.contains(
+        screen.getByText('Partner checks before their first profile’s effective date use that profile.'),
+      ),
+    ).toBe(true)
+    // The status line, the remedy and the vest Apply stay outside it.
+    expect(details.contains(screen.getByText(/withheld so far/))).toBe(false)
+    expect(details.contains(screen.getByText(/per remaining paycheck/))).toBe(false)
+    expect(details.contains(screen.getByRole('button', { name: 'Apply vest income to W-2 inputs' }))).toBe(false)
+  })
+
+  it('calls the page’s goTo from the Inputs and Tax tables doors', async () => {
+    const goTo = vi.fn()
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      married({ brackets_missing_for_status: ['federal'], liability_total: null, balance_projected: null }),
+    )
+    render(<WithholdingPanel year={2026} goTo={goTo} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Tax tables' }))
+    expect(goTo).toHaveBeenCalledWith('tables')
+    fireEvent.click(screen.getByRole('button', { name: 'Open Inputs' }))
+    expect(goTo).toHaveBeenCalledWith('inputs')
   })
 })
