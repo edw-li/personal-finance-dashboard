@@ -16,6 +16,8 @@ import InfoHint from '../components/InfoHint'
 import { chipAmount, eventKey } from '../components/calendar/calendarView'
 import { attentionItems } from '../components/overview/attention'
 import DataStatusCard from '../components/overview/DataStatusCard'
+import { netWorthComponents } from '../components/overview/netWorthReceipt'
+import { GhostTile } from '../components/PageSkeleton'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
 import { UP_NEXT_WINDOW_DAYS, rankUpNext, upNextLine } from '../components/overview/upNext'
 import { windowWords, ytdStats } from '../components/overview/ytd'
@@ -333,14 +335,23 @@ export default function OverviewPage() {
   // direction, colour = good/bad, "over"/"under" = the judgment in words; the same fact
   // three ways, and none of them wrong. (avg12 and aboveAvg are null together — spendStats
   // — but both are named so the narrowing is the compiler's job, not a reader's memory.)
+  // The MONTH rides the delta line too (W2, 2026-09-13 audit): the label is "Living spending"
+  // at every width, and a month with no comparison still says which month it is — neutral,
+  // no glyph.
+  const spendMonth = stats?.month ? formatMonth(stats.month) : null
   const spendDelta =
     stats && stats.avg12 !== null && stats.aboveAvg !== null && !cashflowOnly
       ? {
-          text: `${Number(stats.total) === stats.avg12 ? 'at' : stats.aboveAvg ? 'over' : 'under'} ${formatCurrency(stats.avg12)} previous 12-mo average`,
+          text: `${Number(stats.total) === stats.avg12 ? 'at' : stats.aboveAvg ? 'over' : 'under'} ${formatCurrency(stats.avg12)} previous 12-mo average${spendMonth ? ` · ${spendMonth}` : ''}`,
           tone: Number(stats.total) === stats.avg12 ? ('neutral' as const) : stats.aboveAvg ? ('negative' as const) : ('positive' as const),
           direction: Number(stats.total) === stats.avg12 ? undefined : stats.aboveAvg ? ('up' as const) : ('down' as const),
         }
-      : null
+      : spendMonth !== null
+        ? { text: spendMonth, tone: 'neutral' as const, direction: undefined }
+        : null
+  // The compared month's review state — a badge on the tile when it is not closed (T1); the
+  // sentence about the comparison window lives in the Data status card.
+  const reviewState = spendingEvidence.data?.review?.state
 
   // Two cards the owner scope cannot reach: /spending/matrix has no owner dimension, and
   // the weekly /portfolio/history checkpoints are household-wide. Saying so beats a silent
@@ -365,7 +376,7 @@ export default function OverviewPage() {
 
   const reviewAttention = (data.coverage?.review_months ?? []).filter(review => review.state === 'needs_review' || review.state === 'ready_to_review' || review.state === 'in_progress').sort((a, b) => b.month.localeCompare(a.month)).slice(0, 2)
   const tileElements = {
-    net_worth: (
+    net_worth: wealth.busy && data.summary === undefined ? <GhostTile delta={false} /> : (
               <StatTile
                 hero
                 label={summary?.month ? `Net worth — ${formatMonth(summary.month)}` : 'Net worth'}
@@ -391,10 +402,10 @@ export default function OverviewPage() {
                 }
                 tone={emptyScopeNote !== null ? 'neutral' : toneOf(summary?.mom_delta)}
                 hint="Assets minus liabilities from the latest monthly snapshot, with its change from the month before."
-                evidence={summary ? metricReceipt({ id: 'net_worth', label: 'Net worth', value: summary.net_worth, definition: 'Sum of non-component account balances, including signed liabilities, at the recorded monthly snapshot.', scope: owner ?? 'Household', as_of: summary.month, source_link: `/net-worth${owner === null ? '' : `?owner=${owner}`}`, components: summary.groups.map(group => ({ label: group.group.replaceAll('_', ' '), value: group.total, unit: 'USD' })) }) : undefined}
+                evidence={summary ? metricReceipt({ id: 'net_worth', label: 'Net worth', value: summary.net_worth, definition: 'Sum of non-component account balances, including signed liabilities, at the recorded monthly snapshot.', scope: owner ?? 'Household', as_of: summary.month, source_link: `/net-worth${owner === null ? '' : `?owner=${owner}`}`, components: netWorthComponents(summary.groups) }) : undefined}
               />
     ),
-    portfolio: (
+    portfolio: investments.busy && data.holdings === undefined ? <GhostTile delta={false} /> : (
               <StatTile
                 label="Portfolio"
                 // Holdings hang off accounts, so the scope with none has no portfolio
@@ -416,9 +427,10 @@ export default function OverviewPage() {
                 evidence={data.holdings ? metricReceipt({ id: 'portfolio_value', label: 'Portfolio value', value: totals?.market_value ?? null, definition: 'Shares held multiplied by available prices. Missing quotes are excluded from priced value; quote dates can differ from refresh time.', scope: owner ?? 'Household', as_of: asOf, source_link: `/portfolio${owner === null ? '' : `?owner=${owner}`}`, completeness: (totals?.unpriced_count ?? 0) > 0 ? 'mixed' : 'complete', warnings: (totals?.unpriced_count ?? 0) > 0 ? [`${totals!.unpriced_count} holdings have no price.`] : [], components: [{ label: 'Unpriced holdings', value: totals?.unpriced_count ?? 0, unit: 'count' }] }) : undefined}
               />
     ),
-    living_spending: (
+    living_spending: spending.busy && data.matrix === undefined ? <GhostTile delta={false} /> : (
               <StatTile
-                label={stats?.month ? `Living spending — ${formatMonth(stats.month)}` : 'Living spending'}
+                label="Living spending"
+                badge={reviewState !== undefined && reviewState !== 'closed' ? REVIEW_LABELS[reviewState] : undefined}
                 value={cashflowOnly ? '—' : formatCurrency(stats?.total)}
                 delta={spendDelta?.text}
                 tone={spendDelta?.tone}
@@ -427,7 +439,7 @@ export default function OverviewPage() {
                 evidence={spendingEvidence.metric('living_spending')}
               />
     ),
-    tax: (
+    tax: planning.busy && data.taxes === undefined ? <GhostTile delta={false} /> : (
               <StatTile
                 label={taxLabel}
                 value={tax === null ? '—' : formatCurrency(tax.totals.total_tax)}
