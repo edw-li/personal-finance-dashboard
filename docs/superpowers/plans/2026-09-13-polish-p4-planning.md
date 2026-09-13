@@ -3275,6 +3275,80 @@ source labels in the form register — `458e6d5` (§14, lead item 4). Import/res
   (the same element as `.page`), so the lead's rename to `container: page / inline-size` needs no
   change here.
 
+### Review round (2026-09-13, verdict APPROVE WITH FIXES)
+
+Merged `main` @`4576025` (the F2 review round) into the lane first — `ca713d1`, clean, no conflicts.
+That merge changed two things under this lane: `useScrollEdges(ref, active = true)` gained an
+optional second argument (P4's single call site passes one argument and is unaffected — the
+`CategoriesTable` child already renders its scroller unconditionally, which is the pattern the
+change asks for), and `panels.css` now names the page container (`container: page / inline-size`)
+and makes `.stat-tile` a container. The merged base was verified green (tsc + 44 files / 488 tests)
+before any fix was applied.
+
+All three fixes landed in one commit, `285f204` — `fix(planning): P4 review round — dead container
+override, cross-section stale primes, trailing label space`. TDD throughout: each fix's test was
+written and watched fail first (2 failures for fix 1, 4 for fix 2, 1 for fix 3).
+
+**1 (IMPORTANT) — the dead `@container` override.** Correct as reported. The
+`@container (max-width: 999px)` block sat *above* the base `.projection-chart-area` rule; a
+container query adds no specificity, so the base `top: calc(… + var(--projection-band-h, 131px) +
+8px)` won and the narrow-width `top` never applied. Between 900 and 999px of page width the band
+went `static` (two rows, ~250px) while the chart still stuck 250px below the frame — a band-sized
+hole above the chart card. The block now follows the rule it overrides, with
+`@container (max-width: 900px)` still last. New `src/pages/projectionCss.test.ts` (built on
+`settingsCss.test.ts`'s `stripComments` shape) pins the order: the 999px block after the base rule,
+the 900px block after that.
+
+*Beyond the ask, forced by the merge:* both queries are now **named** — `@container page (…)` — and
+`.projection-page` carries main's own `container: page / inline-size` on the same element. After the
+F2 review round `.stat-tile` is a query container, and panels.css's own comment explains that an
+unnamed query binds to the nearest one; leaving these anonymous was a live trap for any future rule
+in this sheet. The test asserts no anonymous `@container (` survives in `ProjectionPage.css`.
+
+**2 (IMPORTANT) — cross-section stale primes.** Correct as reported, and fixed centrally as
+prescribed. `settingsPrefetch.ts` gains
+`export const WRITERS: Record<string, SettingsSection[]>` — `household`/`categories`/`accounts`/
+`portfolio-accounts` → `['household']`; `limits` → `['planning']`; `app-settings` →
+`['planning','integrations']`; `profiles` → `['planning']`; `system-status` →
+`['integrations','data']`; `assistant-settings`/`feed-tokens` → `['integrations']`;
+`snapshots`/`health`/`coverage`/`activity` → `['data']`. A `writersFor(key)` helper looks the
+per-year `limits:2026` key up under its `limits` stem. Each section's loader now receives a `prime`
+callback instead of calling `primeWarm` directly, and
+`prefetchSection(section, visited: ReadonlySet<SettingsSection>)` skips any key whose writer section
+is in `visited`. `SettingsPage.tsx` passes the `visitedRef` set it already keeps.
+
+Practical effect: Household is the landing section, so it is visited from the first render and a
+hover over Planning no longer primes `/household` at all — the reported window (hover Planning, edit
+a person on the Household tab, click Planning, read the pre-edit roster) is closed. The card simply
+fetches fresh, which is what it did before the lane.
+
+`resetWarm()` is exported for the lead to wire at sign-out; `resetWarmForTests` is now an alias of
+it, so existing importers are unchanged. No shared file (`api/client.ts`, `AuthContext.tsx`) was
+touched.
+
+Five new tests in `settingsPrefetch.test.ts` (the twelve API modules are mocked there now — what is
+under test is *which* loaders a hover starts): `/household` unprimed for Planning once Household has
+been open while Planning's own keys still warm; `/settings` unprimed for Integrations once Planning
+has been open; `/system` unprimed for Data once Integrations has been open; everything primed when
+no writer has been open, and the card takes the primed promise; `resetWarm` drops every entry. The
+page-level test `"warms a task's data on tab hover or focus"` gained the same assertion where the
+hazard actually lives: after hovering Planning, `fetchHousehold` is still at its single mount call.
+
+**3 (minor) — the trailing no-break space.** Dropped. F2's `.stat-label-text { white-space: nowrap }`
+already holds the label and its (i) in one unit, so the trailing space only padded the row; the
+space between the figure and its unit ("30 yrs") stays. The Task-1 assertion is tightened from
+`toContain('yrs ')` to an exact `toBe('Reach FI within 30 yrs')`, which pins both the kept
+space and the absence of the dropped one.
+
+**Gates after the round:** `npx tsc -b` clean · scoped `eslint` 0 errors / 3 warnings (all
+pre-existing in `CalendarGrid.tsx`) · `npx eslint .` **25 warnings, 0 errors — still exactly the repo
+baseline** · scoped vitest **45 files / 495 tests** pass · full `npx vitest run` **217 files / 2967
+tests pass, green on the first attempt** (none of the earlier cross-file flakes tripped) ·
+`npm run build` ✓ 8.85s.
+
+Lane head is now `285f204` (plus this note). Note for the lead: `main` advanced again to `d28527c`
+(lane P1 merged) after this round's merge of `4576025`; P4 has not been re-merged onto it.
+
 ### Follow-ups — deletions DEFERRED to the lead (lane P4 deleted nothing)
 
 ```
