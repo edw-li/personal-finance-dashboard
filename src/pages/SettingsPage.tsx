@@ -81,7 +81,9 @@ export default function SettingsPage() {
       const section = PAGE_SECTIONS.find((item) => tab.id.endsWith(`-tab-${item.id}`))?.id
       if (section === undefined || visitedRef.current.has(section) || primedRef.current.has(section)) return
       primedRef.current.add(section)
-      prefetchSection(section)
+      // The visited set travels too: a key a visited section can WRITE is not primed at all
+      // (settingsPrefetch.ts's WRITERS), so a hover can never park a body an edit has since moved.
+      prefetchSection(section, visitedRef.current)
     }
     root.addEventListener('pointerover', onIntent)
     root.addEventListener('focusin', onIntent)

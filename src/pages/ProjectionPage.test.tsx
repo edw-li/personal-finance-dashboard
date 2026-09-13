@@ -1000,9 +1000,11 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     expect(band.classList.contains('kpi-row')).toBe(true)
     expect(band.classList.contains('kpi-row-5')).toBe(true)
     expect(band.querySelectorAll('.stat-tile')).toHaveLength(5)
-    // The label ends in a no-break space, so the info button can never wrap onto a line of its own.
+    // One no-break space, between the figure and its unit, so "30" and "yrs" cannot be split
+    // across two lines. Nothing trails the label: F2's .stat-label-text already holds the words
+    // and their (i) in one nowrap unit, so a trailing space would only pad the row (P4 review).
     const label = within(band).getByText('Reach FI within 30 yrs')
-    expect(label.textContent).toContain('yrs\u00A0')
+    expect(label.textContent).toBe('Reach FI within 30\u00A0yrs')
   })
 
   it('measures the outcomes band into --projection-band-h so the chart column sticks under it', async () => {

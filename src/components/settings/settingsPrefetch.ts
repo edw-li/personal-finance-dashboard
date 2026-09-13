@@ -77,43 +77,84 @@ export function warmSource(initial: boolean): WarmSource {
   return initial ? takeWarm : fresh
 }
 
-export function resetWarmForTests(): void {
+/** Drop every parked promise. Wire this at sign-out: a primed body must never cross a session
+ *  boundary, and nothing else in the app may read a promise started for a reader who has left. */
+export function resetWarm(): void {
   warm.clear()
 }
 
+/** The same thing, under the name the suites reach for in `beforeEach`. */
+export const resetWarmForTests = resetWarm
+
+/** Which SECTIONS hold cards that can write each endpoint. Three are read by two sections each,
+ *  and the page's per-section guard cannot see that: a hover over Planning primes /household, the
+ *  reader then edits a person on the Household tab they are standing on, and Planning's card would
+ *  mount on the pre-edit roster for the rest of the 30s window. So a key whose writer has been
+ *  OPEN this session is never primed at all (2026-09-13 P4 review). Keyed by the WARM value; the
+ *  per-year limits key is looked up under its `limits` stem. */
+export const WRITERS: Record<string, SettingsSection[]> = {
+  [WARM.household]: ['household'],
+  [WARM.categories]: ['household'],
+  [WARM.accounts]: ['household'],
+  [WARM.portfolioAccounts]: ['household'],
+  limits: ['planning'],
+  [WARM.appSettings]: ['planning', 'integrations'],
+  [WARM.profiles]: ['planning'],
+  [WARM.systemStatus]: ['integrations', 'data'],
+  [WARM.assistant]: ['integrations'],
+  [WARM.feedTokens]: ['integrations'],
+  [WARM.snapshots]: ['data'],
+  [WARM.health]: ['data'],
+  [WARM.coverage]: ['data'],
+  [WARM.activity]: ['data'],
+}
+
+/** `limits:2026` is written by whoever writes `limits`. An unlisted key has no writer here and is
+ *  always safe to prime. */
+function writersFor(key: string): readonly SettingsSection[] {
+  return WRITERS[key] ?? WRITERS[key.split(':')[0]] ?? []
+}
+
+/** What a section's loader is handed: `primeWarm`, minus the keys this session has put at risk. */
+type Prime = <T>(key: string, loader: () => Promise<T>) => void
+
 // What each task's cards ask for on mount (their load chains name the same keys). Account has no
 // fetching card (Appearance and Password own no request).
-const LOADERS: Record<SettingsSection, () => void> = {
-  household: () => {
-    primeWarm(WARM.household, fetchHousehold)
-    primeWarm(WARM.categories, fetchCategories)
-    primeWarm(WARM.accounts, fetchAccounts)
-    primeWarm(WARM.portfolioAccounts, fetchPortfolioAccounts)
+const LOADERS: Record<SettingsSection, (prime: Prime) => void> = {
+  household: (prime) => {
+    prime(WARM.household, fetchHousehold)
+    prime(WARM.categories, fetchCategories)
+    prime(WARM.accounts, fetchAccounts)
+    prime(WARM.portfolioAccounts, fetchPortfolioAccounts)
   },
-  planning: () => {
+  planning: (prime) => {
     const year = new Date().getFullYear() // LimitsCard opens on the current year
-    primeWarm(WARM.limits(year), () => fetchLimits(year))
-    primeWarm(WARM.appSettings, fetchAppSettings)
-    primeWarm(WARM.profiles, fetchProfiles)
-    primeWarm(WARM.household, fetchHousehold)
+    prime(WARM.limits(year), () => fetchLimits(year))
+    prime(WARM.appSettings, fetchAppSettings)
+    prime(WARM.profiles, fetchProfiles)
+    prime(WARM.household, fetchHousehold)
   },
   account: () => {},
-  integrations: () => {
-    primeWarm(WARM.systemStatus, fetchSystemStatus)
-    primeWarm(WARM.appSettings, fetchAppSettings)
-    primeWarm(WARM.assistant, fetchAssistantSettings)
-    primeWarm(WARM.feedTokens, fetchFeedTokens)
+  integrations: (prime) => {
+    prime(WARM.systemStatus, fetchSystemStatus)
+    prime(WARM.appSettings, fetchAppSettings)
+    prime(WARM.assistant, fetchAssistantSettings)
+    prime(WARM.feedTokens, fetchFeedTokens)
   },
-  data: () => {
-    primeWarm(WARM.snapshots, fetchSnapshots)
-    primeWarm(WARM.health, fetchHealth)
-    primeWarm(WARM.systemStatus, fetchSystemStatus)
-    primeWarm(WARM.coverage, fetchCoverage)
-    primeWarm(WARM.activity, () => fetchActivity())
+  data: (prime) => {
+    prime(WARM.snapshots, fetchSnapshots)
+    prime(WARM.health, fetchHealth)
+    prime(WARM.systemStatus, fetchSystemStatus)
+    prime(WARM.coverage, fetchCoverage)
+    prime(WARM.activity, () => fetchActivity())
   },
 }
 
-/** Warm a section's data before its tab is clicked. Idempotent inside the window. */
-export function prefetchSection(section: SettingsSection): void {
-  LOADERS[section]()
+/** Warm a section's data before its tab is clicked. Idempotent inside the window. `visited` is the
+ *  sections this reader has already had open — any key one of them can write is skipped. */
+export function prefetchSection(section: SettingsSection, visited: ReadonlySet<SettingsSection>): void {
+  LOADERS[section]((key, loader) => {
+    if (writersFor(key).some((writer) => visited.has(writer))) return
+    primeWarm(key, loader)
+  })
 }

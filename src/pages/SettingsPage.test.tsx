@@ -1329,9 +1329,15 @@ describe('SettingsPage — loading states (2026-09-13 spec §9)', () => {
     expect(vi.mocked(fetchProfiles)).not.toHaveBeenCalled()
     expect(vi.mocked(fetchLimits)).not.toHaveBeenCalled()
 
+    // Household mounted, so its roster is already on the wire once.
+    expect(vi.mocked(fetchHousehold)).toHaveBeenCalledTimes(1)
+
     fireEvent.pointerOver(screen.getByRole('tab', { name: 'Planning' }))
     expect(vi.mocked(fetchProfiles)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(fetchLimits)).toHaveBeenCalledTimes(1)
+    // ...but NOT /household: Household is the section on screen and can save a person, so a prime
+    // parked here could hand Planning a pre-edit roster (settingsPrefetch.ts's WRITERS, P4 review).
+    expect(vi.mocked(fetchHousehold)).toHaveBeenCalledTimes(1)
     // Again, and by keyboard: still once per section.
     fireEvent.pointerOver(screen.getByRole('tab', { name: 'Planning' }))
     fireEvent.focus(screen.getByRole('tab', { name: 'Planning' }))

@@ -16,17 +16,10 @@
   color: var(--muted);
 }
 
-.projection-page { container-type: inline-size; }
+/* The same declaration panels.css puts on .page, on the same element: NAMED, so the queries below
+   cannot bind to a nearer container (.stat-tile is one) if this sheet ever outlives that rule. */
+.projection-page { container: page / inline-size; }
 .projection-outcomes { position: sticky; top: var(--sticky-inset, 0px); z-index: 6; background: var(--bg); padding-block: 8px; }
-
-/* Five tiles, one row (2026-09-13 polish spec §12): panels.css lays .kpi-row-5 out as five equal
-   tracks above 1000px of container width. Below that the row wraps, and a two-row band pinned to
-   the top of a laptop viewport covered the very chart it describes (audit P-1: 253px, 28% of a
-   900px viewport) — so there the band simply scrolls with the page. */
-@container (max-width: 999px) {
-  .projection-outcomes { position: static; }
-  .projection-chart-area { top: calc(var(--sticky-inset, 0px) + 8px); }
-}
 
 .projection-workspace { display: grid; grid-template-columns: minmax(480px, 1fr) 350px; align-items: start; gap: 18px; }
 /* The chart stays in view while every knob is reachable (spec §12, audit P-2: the old inner
@@ -39,6 +32,19 @@
   position: sticky;
   top: calc(var(--sticky-inset, 0px) + var(--projection-band-h, 131px) + 8px);
   align-self: start;
+}
+
+/* Five tiles, one row (2026-09-13 polish spec §12): panels.css lays .kpi-row-5 out as five equal
+   tracks above 1000px of container width. Below that the row wraps, and a two-row band pinned to
+   the top of a laptop viewport covered the very chart it describes (audit P-1: 253px, 28% of a
+   900px viewport) — so there the band simply scrolls with the page, and the chart pins directly
+   under the frame instead of under a band that is no longer there.
+   BELOW the base rule on purpose (projectionCss.test.ts pins the order): a container query adds no
+   specificity, so written above it this `top` lost to the base one and left a band-sized hole above
+   the chart between 900 and 999px (2026-09-13 P4 review). */
+@container page (max-width: 999px) {
+  .projection-outcomes { position: static; }
+  .projection-chart-area { top: calc(var(--sticky-inset, 0px) + 8px); }
 }
 .projection-chart-controls { display: flex; gap: 8px; flex-wrap: wrap; }
 .projection-assumptions { min-width: 0; }
@@ -79,7 +85,7 @@
 .projection-workspace:has(.sandbox-header-actions > [aria-expanded='false']) .projection-assumptions { order: -1; }
 /* One column: the chart above the knobs. A sticky chart here would pin a 400px canvas over the
    controls the reader is scrolling towards, so it scrolls with them. */
-@container (max-width: 900px) {
+@container page (max-width: 900px) {
   .projection-workspace { grid-template-columns: 1fr; }
   .projection-chart-area { position: static; }
   .projection-assumptions .sandbox-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
