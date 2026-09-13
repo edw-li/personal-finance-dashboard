@@ -14,6 +14,7 @@ import type {
 } from '../types/api'
 import SettingsPage from './SettingsPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
+import { resetWarmForTests } from '../components/settings/settingsPrefetch'
 
 // Four api modules, all stubbed. No EChart mock here: this page draws nothing, so the
 // house's never-render-echarts-in-jsdom rule has nothing to catch.
@@ -281,6 +282,7 @@ const resizeObservers: ObserverRecord[] = []
 const bodyObserver = () => resizeObservers.find((o) => o.targets.includes(document.body))
 
 beforeEach(() => {
+  resetWarmForTests()
   resizeObservers.length = 0
   vi.stubGlobal(
     'ResizeObserver',
@@ -1321,5 +1323,29 @@ describe('SettingsPage — loading states (2026-09-13 spec §9)', () => {
       snapshots.resolve([])
     })
     expect(backups.querySelector('.settings-ghost')).toBeNull()
+  })
+
+  it('warms a task’s data on tab hover or focus, once, so the click finds it already loaded', async () => {
+    renderPage()
+    await waitFor(() => expect(document.getElementById('accounts')).not.toBeNull())
+    expect(vi.mocked(fetchProfiles)).not.toHaveBeenCalled()
+    expect(vi.mocked(fetchLimits)).not.toHaveBeenCalled()
+
+    fireEvent.pointerOver(screen.getByRole('tab', { name: 'Planning' }))
+    expect(vi.mocked(fetchProfiles)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchLimits)).toHaveBeenCalledTimes(1)
+    // Again, and by keyboard: still once per section.
+    fireEvent.pointerOver(screen.getByRole('tab', { name: 'Planning' }))
+    fireEvent.focus(screen.getByRole('tab', { name: 'Planning' }))
+    expect(vi.mocked(fetchProfiles)).toHaveBeenCalledTimes(1)
+    // The section on screen is never primed: its cards have fetched.
+    fireEvent.pointerOver(screen.getByRole('tab', { name: 'Household' }))
+    expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Planning' }))
+    await screen.findByLabelText('Withdrawal rate (% / year)')
+    // The cards took the primed promises instead of asking again.
+    expect(vi.mocked(fetchProfiles)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchLimits)).toHaveBeenCalledTimes(1)
   })
 })
