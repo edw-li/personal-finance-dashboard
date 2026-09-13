@@ -120,3 +120,12 @@ describe('sticky sections block (2026-09-13 polish §3)', () => {
     expect(SHELL).toContain('.page-frame-scope.is-stuck:has(> .page-frame-sections:last-child) { border-bottom-color: transparent; }')
   })
 })
+
+describe('tab strip indicator (2026-09-13 polish §2.4)', () => {
+  it('draws one accent bar that transitions only once placed, over token durations', () => {
+    expect(SECTIONS).toContain('.local-section-indicator { position: absolute; left: 0; bottom: -1px; width: 0; height: 2px; background: var(--accent); border-radius: 2px 2px 0 0; pointer-events: none; }')
+    expect(SECTIONS).toContain('.local-section-indicator[data-placed] { transition: transform var(--t-nav) var(--ease-out), width var(--t-nav) var(--ease-out); }')
+    expect(SECTIONS).toContain('.local-section-nav [role=tab][aria-selected=true] { color: var(--text); }')
+    expect(SECTIONS).toContain('.local-section-nav [role=tablist] { position: relative;')
+  })
+})

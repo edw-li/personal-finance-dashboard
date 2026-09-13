@@ -1,10 +1,18 @@
-.local-section-nav { margin: 0 0 1.1rem; padding: 0; border-bottom: 1px solid var(--border); }
-.local-section-nav [role=tablist] { display: flex; gap: .2rem; flex-wrap: wrap; }
+.local-section-nav { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; margin: 0 0 1.1rem; padding: 0; border-bottom: 1px solid var(--border); }
+/* position: relative — the indicator's offsets are measured against the tablist. */
+.local-section-nav [role=tablist] { position: relative; display: flex; gap: .2rem; flex-wrap: wrap; flex: 1 1 auto; min-width: 0; }
 .local-section-nav [role=tab] { display: inline-flex; align-items: center; gap: .5rem; padding: .65rem .9rem; background: none; color: var(--muted); font-size: .85rem; border: 0; border-bottom: 2px solid transparent; cursor: pointer; }
-.local-section-nav [role=tab][aria-selected=true] { color: var(--text); border-bottom-color: var(--accent); }
+/* The accent is the shared indicator's now (2026-09-13 polish §2.4); the tab keeps its transparent 2px so its box is unchanged. */
+.local-section-nav [role=tab][aria-selected=true] { color: var(--text); }
 .local-section-nav [role=tab]:hover { background: var(--fill); color: var(--text); }
 .local-section-nav [role=tab]:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: 4px; }
 .local-section-nav [role=tab] > span { padding: .05rem .35rem; border-radius: 8px; background: var(--surface-2); font-size: .7rem; }
+/* ONE accent bar for the strip, placed by LocalSectionNav's measuring effect — the sidebar's .nav-indicator, horizontal. Sits over the strip's hairline. */
+.local-section-indicator { position: absolute; left: 0; bottom: -1px; width: 0; height: 2px; background: var(--accent); border-radius: 2px 2px 0 0; pointer-events: none; }
+/* Only once placed at least once: the opening measurement lands instantly. Tokens read unconditionally — the reduce block zeroes --t-nav. */
+.local-section-indicator[data-placed] { transition: transform var(--t-nav) var(--ease-out), width var(--t-nav) var(--ease-out); }
+/* A control on the tab baseline (Net worth's Monthly/Quarterly). */
+.local-section-trailing { display: flex; align-items: center; flex: none; padding-bottom: .3rem; }
 .local-section-panel { min-width: 0; }
 .local-section-panel[hidden] { display: none !important; }
 .local-section-panel [id] { scroll-margin-top: 7rem; }
