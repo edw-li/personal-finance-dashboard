@@ -12,6 +12,7 @@ import type {
 } from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
 import { waterfallCsv, waterfallOption } from './taxChartOptions'
+import type { TaxSection } from './taxSections'
 // Only this component's own sheet, like its two siblings: the app-wide vocabulary
 // (.card/.eyebrow/.kpi-row/.empty-note/.error-banner) is panels.css, which the PAGE
 // imports — and StatTile brings it along regardless.
@@ -85,10 +86,14 @@ function jurisdictionRows(summary: TaxSummaryOut): DetailRow[] {
 export default function SummaryPanel({
   summary,
   filingStatus,
+  goTo,
 }: {
   summary: TaxSummaryOut
   /** The YEAR's status — what the missing-tables call-to-action names. */
   filingStatus: FilingStatus
+  /** The page's view switch: the missing-tables call to action opens Tax tables through it
+   *  (2026-09-13 polish spec §14). Absent → the sentence alone. */
+  goTo?: (section: TaxSection) => void
 }) {
   // Non-empty means the engine REFUSED to compute this year against another status' tables
   // (design §5.3), and the payload then carries NO sections at all — the figures are absent,
@@ -123,7 +128,7 @@ export default function SummaryPanel({
       <section className="card">
         <h2 className="eyebrow">
           Totals — {summary.year}
-          <InfoHint text="The engine&apos;s answer for this year, computed from the stored inputs and bracket tables below." />
+          <InfoHint text="The engine&apos;s answer for this year, computed from the stored inputs (the Inputs view) and bracket tables (the Tax tables view)." />
         </h2>
         <div className="kpi-row">
           {/* Every figure is the engine's, rendered as it arrived (global rule 9). */}
@@ -276,21 +281,26 @@ export default function SummaryPanel({
                   tables sitting right there, so the editor's clone is the answer; a SINGLE
                   year has nothing to clone from and is refusing because it is the year
                   being lived in (2026-09-09 spec 4g) — telling it to clone its own tables
-                  would be nonsense. */}
+                  would be nonsense. Either way the editor is the Tax tables VIEW, named as
+                  such (2026-09-13 polish spec §14), and the button is the door. */}
               {filingStatus === 'single' ? (
                 <p>
-                  Open <strong>Bracket tables</strong> below and enter {summary.year}&apos;s
-                  rates — the IRS and the Franchise Tax Board publish them each autumn. A
-                  settled year that was imported without them still computes; this one is
-                  the year you are living in, so a zero here would be a wrong answer rather
-                  than a gap.
+                  Enter {summary.year}&apos;s rates in Tax tables — the IRS and the Franchise Tax
+                  Board publish them each autumn. A settled year that was imported without them
+                  still computes; this one is the year you are living in, so a zero here would be
+                  a wrong answer rather than a gap.
                 </p>
               ) : (
                 <p>
-                  Open <strong>Bracket tables</strong> below, pick the{' '}
-                  {FILING_STATUS_LABELS[filingStatus]} tab, and clone {summary.year}&apos;s
-                  single-filer tables — then edit the thresholds that move with filing status.
+                  In Tax tables, pick the {FILING_STATUS_LABELS[filingStatus]} tab and clone{' '}
+                  {summary.year}&apos;s single-filer tables — then edit the thresholds that move
+                  with filing status.
                 </p>
+              )}
+              {goTo !== undefined && (
+                <button type="button" className="button" onClick={() => goTo('tables')}>
+                  Open Tax tables
+                </button>
               )}
             </div>
           </div>
@@ -305,7 +315,7 @@ export default function SummaryPanel({
           hint="Gross income walked down to take-home — each floating bar is one jurisdiction's bite."
           ariaLabel="Waterfall chart walking gross income down through each tax to take-home pay"
           option={waterfall}
-          empty="Nothing to chart yet — this year computes to zero until its inputs are filled in below."
+          empty="Nothing to chart yet — this year computes to zero until its inputs are filled in (the Inputs view)."
           exportName={`tax-waterfall-${summary.year}`}
           csv={() => waterfallCsv(summary)}
           height={320}

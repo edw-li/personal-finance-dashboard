@@ -303,7 +303,7 @@ const type = (label: string, value: string) =>
 const cardFor = (heading: RegExp) =>
   screen.getByRole('heading', { name: heading }).closest('section') as HTMLElement
 const offeringsCard = () => cardFor(/Subscription offerings/)
-const modelerCard = () => cardFor(/Purchase modeler/)
+const modelerCard = () => cardFor(/Purchase model/)
 // A modeler row, found through the one label only it carries.
 const rowFor = (label: string) =>
   screen.getByLabelText(`${label} semi-annual base`).closest('tr') as HTMLTableRowElement
@@ -788,6 +788,30 @@ describe('EsppPage — lots', () => {
     await screen.findByText('$10,720.49')
     expect(document.querySelectorAll('tfoot tr.espp-totals').length).toBe(1)
   })
+
+  it('attaches the form rules to the boxes they are about, and pins the scroller’s edges', async () => {
+    renderPage('/espp?section=lots')
+    await screen.findByText('$10,720.49')
+
+    // The blank-price rule sits under Purchase price, not in a paragraph above the form
+    // (2026-09-13 polish spec §14; audit C6).
+    const blankRule = screen.getByText(/Leave the purchase price blank/)
+    expect(blankRule.classList.contains('espp-field-note')).toBe(true)
+    expect(blankRule.parentElement?.querySelector('label')?.textContent).toContain('Purchase price')
+    // The sold-pair rule sits under Sold date / Sold price.
+    const soldRule = screen.getByText(/Sold date and sold price travel together/)
+    const pair = soldRule.closest('.espp-sold-pair') as HTMLElement
+    expect(pair.contains(screen.getByLabelText('Sold date'))).toBe(true)
+    expect(pair.contains(screen.getByLabelText('Sold price'))).toBe(true)
+    // One sentence is left above the form: what a sold row is measured against.
+    expect(screen.getByText(/A sold lot is measured against its sale price/)).toBeTruthy()
+
+    // Identity left, actions right (spec §7; audit X1: "Model sale →" started 3px past the edge).
+    const table = document.querySelector('.espp-scroll .data-table') as HTMLTableElement
+    expect(table.querySelector('thead th.col-identity')?.textContent).toBe('Purchased')
+    expect(table.querySelector('tbody td.col-identity')).toBeTruthy()
+    expect(table.querySelector('tbody td.row-actions')).toBeTruthy()
+  })
 })
 
 describe('EsppPage — offerings', () => {
@@ -796,7 +820,7 @@ describe('EsppPage — offerings', () => {
     const lots = await screen.findByRole('heading', { name: /^Lots/ })
     const offerings = screen.getByRole('heading', { name: /Subscription offerings/ })
     fireEvent.click(screen.getByRole('tab', { name: 'Purchase model' }))
-    const modeler = screen.getByRole('heading', { name: /Purchase modeler/ })
+    const modeler = screen.getByRole('heading', { name: /Purchase model/ })
 
     // Offerings sit BETWEEN the lots and the modeler they price (spec §5).
     expectInDocumentOrder(lots, offerings, modeler)
@@ -951,6 +975,17 @@ describe('EsppPage — offerings', () => {
     expect(
       (within(section).getByLabelText('Subscription price') as HTMLInputElement).value,
     ).toBe('48.50900')
+  })
+
+  it('offers the Purchase model view from the empty offerings note', async () => {
+    vi.mocked(fetchOfferings).mockResolvedValue([])
+    renderPage('/espp?section=lots')
+    await screen.findByText(/No offerings yet/)
+    // The sentence names the view, and the door beside it opens it (2026-09-13 polish spec §14).
+    expect(screen.getByText(/drive the Purchase model view/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Open Purchase model' }))
+    expect(await screen.findByRole('heading', { name: /Purchase model/ })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Purchase model' }).getAttribute('aria-selected')).toBe('true')
   })
 })
 
@@ -1425,6 +1460,40 @@ describe('EsppPage — modeler', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Lots' }))
     expect(field('Notes').value).toBe('half-typed lot')
+  })
+
+  it('arms the period scroller on a COLD arrival, once the payload renders the table', async () => {
+    // The bug the `active` argument exists for (2026-09-13 review round): ModelerCard mounts with
+    // `data` null while the fetch is in flight, so its scroller is not in the DOM when the effect
+    // first runs — without `active` the hook returned on the null ref and never ran again, and
+    // the widest table on the page went unmasked for its whole life on every cold visit.
+    const gate = deferred<EsppModelerOut>()
+    vi.mocked(fetchModeler).mockReturnValue(gate.promise)
+    renderPage('/espp?section=purchase')
+    await screen.findByRole('heading', { name: /Purchase model/ })
+    expect(document.querySelector('.espp-scroll .data-table')).toBeNull()
+
+    await act(async () => {
+      gate.resolve(modelerResponse())
+    })
+    const scroller = (await screen.findByRole('columnheader', { name: 'Period' })).closest(
+      '.espp-scroll',
+    ) as HTMLElement
+    // jsdom lays nothing out, so the overflowing box is faked and announced through a scroll
+    // event — which only lands if the hook attached its listener after the table arrived.
+    Object.defineProperty(scroller, 'scrollWidth', { value: 900, configurable: true })
+    Object.defineProperty(scroller, 'clientWidth', { value: 400, configurable: true })
+    scroller.dispatchEvent(new Event('scroll'))
+    expect(scroller.getAttribute('data-scroll-more')).toBe('right')
+  })
+
+  it('pins the period column and the row actions of the modeler scroller (spec §7)', async () => {
+    renderPage('/espp?section=purchase')
+    await screen.findByRole('heading', { name: /Purchase model — 2024/ })
+    const table = modelerCard().querySelector('.espp-scroll .data-table') as HTMLTableElement
+    expect(table.querySelector('thead th.col-identity')?.textContent).toBe('Period')
+    expect(table.querySelector('tbody td.col-identity')).toBeTruthy()
+    expect(table.querySelector('tbody td.row-actions')).toBeTruthy()
   })
 })
 

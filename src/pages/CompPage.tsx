@@ -1,5 +1,6 @@
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { ApiError, describeLoadFailures, errorDetail } from '../api/client'
 import {
   createEvent,
@@ -20,6 +21,8 @@ import {
   tcTrajectoryOption,
 } from '../components/comp/compChartOptions'
 import Feed, { FeedBanner } from '../components/shell/Feed'
+import Segmented from '../components/shell/Segmented'
+import { useScrollEdges } from '../components/useScrollEdges'
 import PageFrame from '../components/shell/PageFrame'
 import { FEED_SKELETON } from '../components/skeletonMetrics'
 import type { CompEventCreate, CompEventOut, VestingScheduleOut } from '../types/api'
@@ -115,6 +118,51 @@ function orphanWarnings(form: EventFormState, stored: CompEventOut | undefined):
   return warnings
 }
 
+// ── Columns ─────────────────────────────────────────────────────────────────────────────
+
+type ColumnSet = 'entered' | 'computed' | 'all'
+
+const COLUMN_SETS = [
+  { value: 'entered', label: 'Entered' },
+  { value: 'computed', label: 'Computed' },
+  { value: 'all', label: 'All' },
+] as const
+
+/**
+ * One column of the focal-history table (2026-09-13 polish spec §7; audit X1: sixteen columns
+ * parked Edit/Delete 461px past the scroller's edge at 1440). `kind` is what the column-set
+ * toggle filters on: what a reader TYPED (the form's boxes and the note) against what the server
+ * computed at read time (the deltas, unvested equity and total comp). Year and the action cell
+ * are not in this list — they frame every set, sticky at either edge.
+ */
+interface EventColumn {
+  key: string
+  label: string
+  kind: 'entered' | 'computed'
+  numeric: boolean
+  render: (event: CompEventOut) => ReactNode
+  title?: (event: CompEventOut) => string | undefined
+}
+
+const EVENT_COLUMNS: readonly EventColumn[] = [
+  { key: 'current_base', label: 'Current base', kind: 'entered', numeric: true, render: (e) => formatCurrency(e.current_base) },
+  { key: 'new_base', label: 'New base', kind: 'entered', numeric: true, render: (e) => formatCurrency(e.new_base) },
+  { key: 'base_delta', label: 'Base delta', kind: 'computed', numeric: true, render: (e) => formatCurrency(e.base_delta) },
+  { key: 'base_delta_pct', label: 'Base delta %', kind: 'computed', numeric: true, render: (e) => formatPct(e.base_delta_pct) },
+  { key: 'unvested_rsus', label: 'Unvested RSUs', kind: 'entered', numeric: true, render: (e) => formatShares(e.unvested_rsus) },
+  { key: 'unvested_price', label: 'Unvested price', kind: 'entered', numeric: true, render: (e) => formatCurrency(e.unvested_price) },
+  { key: 'unvested_equity', label: 'Unvested equity', kind: 'computed', numeric: true, render: (e) => formatCurrency(e.unvested_equity) },
+  { key: 'refresh_rsus', label: 'Refresh RSUs', kind: 'entered', numeric: true, render: (e) => formatShares(e.refresh_rsus) },
+  { key: 'grant_price', label: 'Grant price', kind: 'entered', numeric: true, render: (e) => formatCurrency(e.grant_price) },
+  { key: 'equity_delta', label: 'Equity delta', kind: 'computed', numeric: true, render: (e) => formatCurrency(e.equity_delta) },
+  { key: 'equity_delta_pct', label: 'Equity delta %', kind: 'computed', numeric: true, render: (e) => formatPct(e.equity_delta_pct) },
+  { key: 'tc_before', label: 'TC before', kind: 'computed', numeric: true, render: (e) => formatCurrency(e.tc_before) },
+  { key: 'tc_after', label: 'TC after', kind: 'computed', numeric: true, render: (e) => formatCurrency(e.tc_after) },
+  // The cell ellipsises a long note (CompPage.css), so the full text is the hover title —
+  // `undefined`, never null, or React would render a literal title="null" on every unnoted row.
+  { key: 'notes', label: 'Notes', kind: 'entered', numeric: false, render: (e) => e.notes ?? '—', title: (e) => e.notes ?? undefined },
+]
+
 // ── Events ──────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -135,6 +183,16 @@ function EventsPanel({
   const [error, setError] = useState<string | null>(null)
   // Single-flight across the panel (SecuritiesPanel's busy flag).
   const [busy, setBusy] = useState(false)
+  // Which half of the table is showing (2026-09-13 polish spec §7). Entered by default: the
+  // typed columns plus Notes fit a 1440 viewport with no horizontal scroll, so the actions stay
+  // in view. A view choice, not a preference — not persisted.
+  const [columnSet, setColumnSet] = useState<ColumnSet>('entered')
+  const visibleColumns = EVENT_COLUMNS.filter(
+    (column) => columnSet === 'all' || column.kind === columnSet,
+  )
+  // The scroller's edge cue (data-scroll-more) — the shared hook; null while no table renders.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useScrollEdges(scrollRef)
 
   const set = (field: keyof EventFormState) => (value: string) =>
     setForm((f) => ({ ...f, [field]: value }))
@@ -263,14 +321,14 @@ function EventsPanel({
     <section className="card">
       <h2 className="eyebrow">
         Focal history
-        <InfoHint text="One row per focal year: base moves, grants, and the computed equity and TC deltas. Everything right of the notes is computed by the server." />
+        <InfoHint text="One row per focal year: base moves, grants, and the computed equity and TC deltas. Entered shows the typed columns, Computed the server's deltas, unvested equity and total comp, All both." />
       </h2>
       <p className="drill-hint">
         One row per focal year. The base is the salary the year started on and the new base
         is what it moved to — leave it blank for a year without a raise. RSU counts and
         their prices travel in pairs: the unvested pair values the equity already granted,
-        the refresh pair values the new grant. Everything to the right of the notes is
-        computed by the server at read time.
+        the refresh pair values the new grant. The Computed columns — base and equity deltas,
+        unvested equity, total comp — are the server&apos;s, computed at read time.
       </p>
       {/* A save that failed, not a feed that is behind: the bare alert, with no stale cue
           and nothing to retry — the form itself is the retry. */}
@@ -380,54 +438,54 @@ function EventsPanel({
         </div>
       </form>
       {events.length > 0 && (
-        <div className="comp-scroll">
+        <div className="comp-column-set">
+          <span className="eyebrow">Columns</span>
+          <Segmented
+            variant="toggle"
+            size="sm"
+            ariaLabel="Focal history columns"
+            options={COLUMN_SETS}
+            value={columnSet}
+            onChange={setColumnSet}
+          />
+        </div>
+      )}
+      {/* The scroller renders before its first row: useScrollEdges reads the ref ONCE, at
+          mount, so a wrapper that only appears with the first row would never arm (lead note,
+          2026-09-13). Empty, it is a zero-height `overflow-x: auto` box. */}
+      <div className="comp-scroll" ref={scrollRef}>
+        {events.length > 0 && (
           <table className="data-table">
             <thead>
               <tr>
-                <th>Year</th>
-                <th className="num">Current base</th>
-                <th className="num">New base</th>
-                <th className="num">Base delta</th>
-                <th className="num">Base delta %</th>
-                <th className="num">Unvested RSUs</th>
-                <th className="num">Unvested price</th>
-                <th className="num">Unvested equity</th>
-                <th className="num">Refresh RSUs</th>
-                <th className="num">Grant price</th>
-                <th className="num">Equity delta</th>
-                <th className="num">Equity delta %</th>
-                <th className="num">TC before</th>
-                <th className="num">TC after</th>
-                <th>Notes</th>
+                {/* Year and the action cell frame every set: sticky left and right (panels.css,
+                    2026-09-13 polish spec §7). */}
+                <th className="col-identity">Year</th>
+                {visibleColumns.map((column) => (
+                  <th key={column.key} className={column.numeric ? 'num' : undefined}>
+                    {column.label}
+                  </th>
+                ))}
                 <th />
               </tr>
             </thead>
             <tbody>
               {events.map((event) => (
                 <tr key={event.id} className={event.id === editingId ? 'is-editing' : undefined}>
-                  <td>{event.focal_year}</td>
-                  {/* Every figure below is the server's, rendered as it arrived — the
-                      computed half is comp_calc's and none of it is re-derived here
-                      (global rule 9). */}
-                  <td className="num">{formatCurrency(event.current_base)}</td>
-                  <td className="num">{formatCurrency(event.new_base)}</td>
-                  <td className="num">{formatCurrency(event.base_delta)}</td>
-                  <td className="num">{formatPct(event.base_delta_pct)}</td>
-                  <td className="num">{formatShares(event.unvested_rsus)}</td>
-                  <td className="num">{formatCurrency(event.unvested_price)}</td>
-                  <td className="num">{formatCurrency(event.unvested_equity)}</td>
-                  <td className="num">{formatShares(event.refresh_rsus)}</td>
-                  <td className="num">{formatCurrency(event.grant_price)}</td>
-                  <td className="num">{formatCurrency(event.equity_delta)}</td>
-                  <td className="num">{formatPct(event.equity_delta_pct)}</td>
-                  <td className="num">{formatCurrency(event.tc_before)}</td>
-                  <td className="num">{formatCurrency(event.tc_after)}</td>
-                  {/* The cell ellipsises a long note (CompPage.css), so the full text is
-                      the hover title — `undefined`, never null, or React would render a
-                      literal title="null" on every unnoted row. */}
-                  <td className="comp-notes-cell" title={event.notes ?? undefined}>
-                    {event.notes ?? '—'}
-                  </td>
+                  <td className="col-identity">{event.focal_year}</td>
+                  {/* Every figure is the server's, rendered as it arrived — the computed half is
+                      comp_calc's and none of it is re-derived here (global rule 9). */}
+                  {visibleColumns.map((column) => (
+                    <td
+                      key={column.key}
+                      className={
+                        column.numeric ? 'num' : column.key === 'notes' ? 'comp-notes-cell' : undefined
+                      }
+                      title={column.title?.(event)}
+                    >
+                      {column.render(event)}
+                    </td>
+                  ))}
                   <td className="row-actions">
                     <button
                       type="button"
@@ -451,8 +509,8 @@ function EventsPanel({
               ))}
             </tbody>
           </table>
-        </div>
-      )}
+        )}
+      </div>
     </section>
   )
 }
@@ -588,16 +646,21 @@ export default function CompPage() {
           frame is only the title row. */}
       <PageFrame title="Comp" sections={<LocalSectionNav state={views} label="Comp views" />} resource={{ status: 'ready', fromCache }}>
         <FeedBanner error={loadBanner} retry={retryFailedLoads} />
-        <Feed
-          data={schedule}
-          busy={scheduleBusy}
-          staleNoun="the schedule"
-          // Its own sentence, not the schedule card's: two identical hidden labels would
-          // read out one after the other while the one feed behind them loads.
-          skeleton={{ height: FEED_SKELETON.compVesting, label: 'Loading vesting totals…' }}
-        >
-          {(s) => <VestingTiles schedule={s} />}
-        </Feed>
+        {/* The headline strip belongs to the views that read the schedule (2026-09-13 polish
+            spec §12): on Manage the tiles have no bearing on the two forms, so the strip is not
+            drawn there. The tab strip above is sticky, so nothing else moves when it goes. */}
+        {views.section !== 'manage' && (
+          <Feed
+            data={schedule}
+            busy={scheduleBusy}
+            staleNoun="the schedule"
+            // Its own sentence, not the schedule card's: two identical hidden labels would
+            // read out one after the other while the one feed behind them loads.
+            skeleton={{ height: FEED_SKELETON.compVesting, label: 'Loading vesting totals…' }}
+          >
+            {(s) => <VestingTiles schedule={s} />}
+          </Feed>
+        )}
         <LocalSectionPanel state={views} section="summary">
 
           <ChartCard
@@ -615,11 +678,18 @@ export default function CompPage() {
             busy={busy || events === null}
             onLegendChange={(selected) => setTcLegend((current) => ({ ...current, ...selected }))}
             footer={
-              <p className="drill-hint">
-                Total comp as this app defines it: the base the year landed on, stacked under
-                the value of the unvested equity behind it (the sheet has no TC column — this is
-                the proxy, and the line is the server&apos;s own total).
-              </p>
+              events !== null && events.length === 0 ? (
+                // The empty sentence names Manage; this is the door (2026-09-13 polish spec §14).
+                <button type="button" className="button" onClick={() => views.setSection('manage')}>
+                  Add a comp event in Manage
+                </button>
+              ) : (
+                <p className="drill-hint">
+                  Total comp as this app defines it: the base the year landed on, stacked under
+                  the value of the unvested equity behind it (the sheet has no TC column — this is
+                  the proxy, and the line is the server&apos;s own total).
+                </p>
+              )
             }
           />
         </LocalSectionPanel>
@@ -633,7 +703,7 @@ export default function CompPage() {
             {(s) => (
               <>
 
-                <VestingSchedulePanel schedule={s} />
+                <VestingSchedulePanel schedule={s} goTo={(section) => views.setSection(section)} />
               </>
             )}
           </Feed>

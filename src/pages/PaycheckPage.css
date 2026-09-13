@@ -98,6 +98,19 @@
   overflow-wrap: anywhere;
 }
 
+/* ── The summary grid ────────────────────────────────────────── */
+
+/* Breakdown beside its flow (2026-09-13 polish spec §12). The page's per-card bottom margin
+   would add to the grid gap inside the pair — and the flow card sits one level down, inside
+   ChartSurface's slot — so every card in the grid drops it; the grid carries the spacing. */
+.paycheck-summary-grid {
+  margin-bottom: 1rem;
+}
+
+.paycheck-summary-grid .card {
+  margin-bottom: 0;
+}
+
 /* ── Profiles ──────────────────────────────────────────────────────── */
 
 /* Twelve columns, nine of them numeric: scroll the table, never the page. */
@@ -171,13 +184,10 @@
 /* ── The household figure ──────────────────────────────────────────── */
 
 /* A sibling of the scope row's person chips, not part of the per-person card below it. The
-   shared .kpi-row-lone fence already stops its single tile from stretching. */
+   per-person legs ride the tile's delta (2026-09-13 polish spec §10). The shared .kpi-row-lone
+   fence already stops its single tile from stretching. */
 .paycheck-household {
   margin-bottom: 1rem;
-}
-
-.paycheck-household .drill-hint {
-  margin: 0.4rem 0 0;
 }
 
 /* The one non-numeric picker on this form: .field-input is right-aligned monospace for
@@ -208,6 +218,18 @@
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--muted);
+}
+
+/* The optional split behind a disclosure (2026-09-13 polish spec §11): the <details> spans the
+   form grid like the fieldsets do; its body reuses the fieldset's inner grid without the rule
+   around it, because the disclosure's own summary row already frames it. */
+.paycheck-form .paycheck-split {
+  grid-column: 1 / -1;
+}
+
+.paycheck-form .paycheck-split-grid {
+  border: 0;
+  padding: 0.25rem 0 0;
 }
 .paycheck-match-words { grid-column: 1 / -1; margin: 0; font-size: 0.75rem; color: var(--muted); }
 

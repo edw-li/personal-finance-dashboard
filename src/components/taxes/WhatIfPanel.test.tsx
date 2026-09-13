@@ -487,7 +487,7 @@ describe('WhatIfPanel', () => {
       </MemoryRouter>,
     )
     await waitFor(() => expect(lastBody()).toEqual({ year: 2025, sales: [{ security_id: 7, shares: '40', term: 'long' }], espp_sales: [] }))
-    expect(screen.getByRole('heading', { name: /What if — 2025/ })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /What-if — 2025/ })).toBeTruthy()
   })
 
   it('opens and runs when a link lands entries while the card is already mounted', async () => {
@@ -738,5 +738,16 @@ describe('WhatIfPanel', () => {
     await waitFor(() => expect(lastBody()?.overrides).toEqual({ annual_salary: '210000' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Apply 1 override to 2024' }))
     expect(onApplyOverrides).toHaveBeenCalledWith({ annual_salary: '210000' }, resultFixture().changed_inputs)
+  })
+
+  it('defaultOpen mounts the card open with no toggle and loads its feeds at once', async () => {
+    mount('/taxes', { defaultOpen: true })
+    // The What-if tab IS the sandbox (2026-09-13 polish spec §8): no Open/Close gate, and the
+    // eyebrow reads like the tab (audit C2).
+    expect(screen.queryByRole('button', { name: /^(Open|Close) what-if$/ })).toBeNull()
+    expect(screen.getByRole('heading', { name: /What-if — 2024/ })).toBeTruthy()
+    await waitFor(() => expect(addSale()).toBeTruthy())
+    expect(vi.mocked(fetchHoldings)).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Reset to actual' })).toBeTruthy()
   })
 })

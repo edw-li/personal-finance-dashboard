@@ -811,7 +811,18 @@ export default function InputsForm({
             {pasteNote}
           </p>
         )}
-        <div className="tax-form-actions">
+        {/* The save bar rides the viewport bottom while the form scrolls (2026-09-13 polish spec
+            §12; audit W5: Save sat 1,842px under the first field). Count · Save · shortcut — the
+            shortcut only while there is something it would save. `entry-footer` is the wizard's
+            class NAME on purpose: panels.css exempts a card holding it from the reveal transform,
+            which is what lets position: sticky work inside it (taxes.css carries its own copy of
+            the rule — never an import of the wizard's sheet). */}
+        <div className={`tax-form-actions entry-footer${changedCount > 0 ? ' is-dirty' : ''}`}>
+          <span className="drill-hint">
+            {changedCount === 0
+              ? 'No changes yet'
+              : `${changedCount} change${changedCount === 1 ? '' : 's'} to save`}
+          </span>
           <button
             type="submit"
             data-entry-primary=""
@@ -820,11 +831,13 @@ export default function InputsForm({
           >
             {saving ? 'Saving…' : 'Save inputs'}
           </button>
-          <span className="drill-hint">
-            {changedCount === 0
-              ? 'No changes yet'
-              : `${changedCount} change${changedCount === 1 ? '' : 's'} to save`}
-          </span>
+          {/* No aria-label on the span: naming a generic role is prohibited, and the two <kbd>s
+              already read as "Ctrl+Enter" (2026-09-13 review round). */}
+          {changedCount > 0 && (
+            <span className="drill-hint tax-save-shortcut">
+              <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
+            </span>
+          )}
         </div>
       </form>
     </section>

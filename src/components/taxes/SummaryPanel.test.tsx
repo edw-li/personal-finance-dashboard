@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TaxSummaryOut } from '../../types/api'
 import SummaryPanel from './SummaryPanel'
@@ -218,5 +218,34 @@ describe('SummaryPanel — per-earner payroll rows', () => {
     expect(subRows(container)).toHaveLength(0)
     expect(screen.getByText('Social Security')).toBeTruthy()
     expect(screen.getByText('Disability')).toBeTruthy()
+  })
+
+  it('names the Tax tables view in the missing-tables call to action and offers a door into it', () => {
+    const goTo = vi.fn()
+    render(
+      <SummaryPanel
+        summary={summaryFixture({ brackets_missing_for_status: ['federal', 'state'] })}
+        filingStatus="married_joint"
+        goTo={goTo}
+      />,
+    )
+    // Nothing on this tab is "below" any more (2026-09-13 polish spec §14; audit C1).
+    expect(
+      screen.getByText(/In Tax tables, pick the Married filing jointly tab and clone 2026/),
+    ).toBeTruthy()
+    expect(screen.queryByText(/Bracket tables.*below/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Open Tax tables' }))
+    expect(goTo).toHaveBeenCalledWith('tables')
+  })
+
+  it('renders the call to action without a door when the page hands no goTo', () => {
+    render(
+      <SummaryPanel
+        summary={summaryFixture({ brackets_missing_for_status: ['federal'] })}
+        filingStatus="single"
+      />,
+    )
+    expect(screen.getByText(/Enter 2026's rates in Tax tables/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Open Tax tables' })).toBeNull()
   })
 })

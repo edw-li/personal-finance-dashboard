@@ -661,9 +661,8 @@ describe('BracketsEditor — per-person tables', () => {
     expect(addFor('Social Security', 'Alex')).toBeTruthy()
     expect(addFor('Disability', 'Alex')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Add a table for Alex — Federal/ })).toBeNull()
-    expect(
-      screen.getAllByText(/the default applies to anyone without their own table/),
-    ).toHaveLength(2)
+    // Said ONCE, above the first per-person strip (2026-09-13 polish spec §14; audit C3).
+    expect(screen.getByText(/the default applies to anyone without their own table/)).toBeTruthy()
   })
 
   it('seeds a draft from the default table and saves it with the person', async () => {
@@ -907,5 +906,33 @@ describe('BracketsEditor — per-person tables', () => {
     // And back: Sam is not on a single return at all, so neither is their table.
     await waitFor(() => expect(screen.queryByText('Disability — Sam')).toBeNull())
     expect(addFor('Disability', 'Alex')).toBeTruthy()
+  })
+
+  it('lays the jurisdictions out as a grid of groups, each table over its own strip', () => {
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    // 2026-09-13 polish spec §12 (audit W3: seven 560px tables in a one-column ribbon).
+    const grid = document.querySelector('.bracket-grid') as HTMLElement
+    expect(grid).toBeTruthy()
+    const groups = Array.from(grid.children)
+    expect(groups).toHaveLength(6)
+    expect(groups.every((group) => group.classList.contains('bracket-group'))).toBe(true)
+    // A per-worker group holds its default table AND its per-person strip.
+    const socialSecurity = screen
+      .getByText('Social Security brackets — default for everyone')
+      .closest('.bracket-group') as HTMLElement
+    expect(socialSecurity.querySelector('form.bracket-block')).toBeTruthy()
+    expect(socialSecurity.querySelector('.bracket-person-strip')).toBeTruthy()
+    // The helper paragraph is the first thing in the FIRST strip, and nowhere else.
+    expect(
+      socialSecurity.querySelector('.bracket-person-strip > :first-child')?.textContent,
+    ).toMatch(/Per-worker tax/)
+    const disability = screen
+      .getByText('Disability brackets — default for everyone')
+      .closest('.bracket-group') as HTMLElement
+    expect(disability.textContent).not.toMatch(/Per-worker tax/)
+    // The editor's status control says what it is FOR, so it cannot be mistaken for the year's
+    // filing status in the scope row (audit S3).
+    const row = screen.getByText('Editing tables for').closest('.bracket-status-row') as HTMLElement
+    expect(row.contains(screen.getByRole('group', { name: 'Bracket filing status' }))).toBe(true)
   })
 })

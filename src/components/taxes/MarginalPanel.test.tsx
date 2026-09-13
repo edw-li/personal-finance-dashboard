@@ -131,6 +131,8 @@ describe('MarginalPanel', () => {
       />,
     )
     expect(screen.getByText(/the ladder has nothing to walk/i)).toBeTruthy()
+    // The editor is on another tab now: the sentence names it (spec §14).
+    expect(screen.getByText(/Enter them in Tax tables\./)).toBeTruthy()
     expect(screen.queryByTestId('echart')).toBeNull()
   })
 

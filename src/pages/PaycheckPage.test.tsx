@@ -10,6 +10,7 @@ import type {
 } from '../types/api'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import PaycheckPage from './PaycheckPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 import { readAssistantView } from '../components/assistant/viewState'
 
 // Every request is stubbed.
@@ -1166,6 +1167,50 @@ describe('PaycheckPage — the profile form', () => {
     expect(await screen.findByText('First match band must be >= 0')).toBeTruthy()
     expect(vi.mocked(createProfile)).not.toHaveBeenCalled()
   })
+
+  it('folds the optional withholding split behind a disclosure, after the employer policies', async () => {
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
+
+    // 2026-09-13 polish spec §11 / audit W8: the optional, usually-blank policy no longer sits
+    // between the pay figures and the deductions.
+    const details = screen.getByText('Withholding split (optional)').closest('details') as HTMLDetailsElement
+    expect(details.classList.contains('disclosure')).toBe(true)
+    // Blank for this household, so it starts shut — the boxes are still reachable by label.
+    expect(details.open).toBe(false)
+    expect(details.contains(field('Federal withholding %'))).toBe(true)
+    // Order: match, employer HSA, then the split.
+    expectInDocumentOrder(
+      screen.getByText('Employer 401(k) match'),
+      screen.getByText('Employer HSA contribution'),
+      details,
+    )
+    // The intro is two sentences; the percent/fraction rule moved into the heading's hint.
+    expect(screen.getByText(/One row per comp change, newest first\./).textContent).not.toContain('Percentages')
+  })
+
+  it('opens the split disclosure when the row it seeds from stores a split', async () => {
+    vi.mocked(fetchProfiles).mockResolvedValue([
+      { ...profile2026, fed_withholding_pct: '0.180000000', state_withholding_pct: '0.060000000' },
+      profile2025,
+    ])
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
+    // The carry-forward form copies the latest row's split, so the disclosure opens with it.
+    const details = screen.getByText('Withholding split (optional)').closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(true)
+    expect(field('Federal withholding %').value).toBe('18%')
+  })
+
+  it('pins the identity column and the row actions of the history scroller (spec §7)', async () => {
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
+    const table = document.querySelector('.paycheck-scroll .data-table') as HTMLTableElement
+    expect(table.querySelector('thead th.col-identity')?.textContent).toBe('Effective')
+    const row = screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2026' }).closest('tr') as HTMLTableRowElement
+    expect(row.querySelector('td.col-identity')).toBeTruthy()
+    expect(row.querySelector('td.row-actions')).toBeTruthy()
+  })
 })
 
 describe('PaycheckPage — loading', () => {
@@ -1297,6 +1342,44 @@ describe('PaycheckPage — the flow card', () => {
     expect(screen.getByLabelText('Sankey flow of one paycheck from gross to net')).toBeTruthy()
     // Mounted through ChartCard: PNG/Copy/CSV/Table (F12).
     expect(screen.getByRole('group', { name: 'Export paycheck-flow' })).toBeTruthy()
+  })
+
+  it('lays the breakdown beside the flow in a card grid, with the pace strip full width beneath', async () => {
+    // The golden fixture carries no pace rows, so PacePanel draws nothing: the strip this test
+    // is about only exists with a limit to walk.
+    vi.mocked(fetchBreakdown).mockResolvedValue(
+      breakdownOf(profile2026, {
+        pace: [
+          {
+            key: 'limit_401k_elective',
+            label: '401(k) elective deferral',
+            annualized: '24560.90',
+            so_far: '16373.93',
+            limit: '24500.00',
+            ratio: '1.0025',
+            tone: 'over',
+          },
+        ],
+      }),
+    )
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByText('$3,384.16')
+
+    // 2026-09-13 polish spec §12 (audit W1: the waterfall used 41% of a full-width card).
+    const grid = document.querySelector('.paycheck-summary-grid') as HTMLElement
+    expect(grid.classList.contains('card-grid')).toBe(true)
+    const children = Array.from(grid.children)
+    expect(children).toHaveLength(2)
+    expect(children[0].classList.contains('card')).toBe(true)
+    expect(children[0].classList.contains('span-6')).toBe(true)
+    expect(children[0].textContent).toContain('Per-check breakdown')
+    // ChartCard mounts through ChartSurface: the grid child is its span-6 slot, the card inside.
+    expect(children[1].classList.contains('span-6')).toBe(true)
+    expect(children[1].querySelector('.chart-card')?.textContent).toContain('Where each check goes')
+    // The pace strip is NOT in the grid: it keeps the full width under the pair.
+    const pace = screen.getByRole('region', { name: 'Contribution pace' })
+    expect(grid.contains(pace)).toBe(false)
+    expectInDocumentOrder(grid, pace)
   })
 })
 
@@ -1586,8 +1669,11 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     // 6768.33 + 5231.34. Each leg is the AUTHORITATIVE monthly figure of one person's
     // in-force profile — never a sum of the display-rounded waterfall lines (rule 9).
     expect(screen.getByText('$11,999.67')).toBeTruthy()
-    // The copy says exactly what was added, so the tile can never be read as a forecast.
-    expect(screen.getByText('Me + Sam — the profile in force for each person.')).toBeTruthy()
+    // The copy says exactly what was added, so the tile can never be read as a forecast — in
+    // the tile's own delta slot now, never a caption on the page background (spec §10).
+    expect(document.querySelector('.paycheck-household .stat-delta')?.textContent).toBe(
+      'Me $6,768.33 · Sam $5,231.34',
+    )
     // Both legs ask for the IN-FORCE profile, so neither carries a profile_id.
     expect(vi.mocked(fetchBreakdown).mock.calls).toContainEqual([undefined, SAM.id])
     expect(
@@ -1662,6 +1748,18 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     expect(screen.getByText('Jan 1, 2026')).toBeTruthy()
     expect(screen.getByText('Jan 1, 2025')).toBeTruthy()
     expect(field('Annual salary').value).toBe('$188,930.00')
+  })
+
+  it('prints each person’s take-home in the household tile’s delta, with no orphan caption', async () => {
+    twoEarners()
+    render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
+    // The legs are the profiles in force: mine at $6,768.33 a month, Sam's at $5,231.34.
+    const tile = (await screen.findByText('Household take-home')).closest('.stat-tile') as HTMLElement
+    expect(tile.textContent).toContain('$11,999.67')
+    expect(tile.querySelector('.stat-delta')?.textContent).toBe('Me $6,768.33 · Sam $5,231.34')
+    // The caption that floated under the tile on the page background is gone (spec §10, audit T1).
+    expect(screen.queryByText(/the profile in force for each person/)).toBeNull()
+    expect(document.querySelector('.paycheck-household .drill-hint')).toBeNull()
   })
 })
 
