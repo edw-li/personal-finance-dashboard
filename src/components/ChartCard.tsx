@@ -168,7 +168,6 @@ export default function ChartCard({
     setZoom((current) => ({ ...current, manual: null }))
     onDataZoom?.(zoom.baseline)
   }
-  const chartHeight = expanded ? Math.max(height, window.innerHeight - 280) : height
 
   let body: ReactNode
   if (option === null) {
@@ -185,7 +184,7 @@ export default function ChartCard({
       <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
         <EChart
           option={option}
-          height={chartHeight}
+          height={expanded ? 'fill' : height}
           ariaLabel={ariaLabel}
           animateEntrance={!fromCache}
           group={group}

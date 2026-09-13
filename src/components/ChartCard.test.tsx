@@ -7,7 +7,7 @@ import { hintLabel } from './InfoHint'
 vi.mock('./EChart', async () => {
   const { createElement } = await import('react')
   return {
-    default: ({ ariaLabel, animateEntrance = true, group, height, onClick, onDataZoom }: { ariaLabel?: string; animateEntrance?: boolean; group?: string; height?: number; onClick?: (params: { dataIndex: number; seriesIndex: number }) => void; onDataZoom?: (window: { startValue: number; endValue: number }) => void }) =>
+    default: ({ ariaLabel, animateEntrance = true, group, height, onClick, onDataZoom }: { ariaLabel?: string; animateEntrance?: boolean; group?: string; height?: number | 'fill'; onClick?: (params: { dataIndex: number; seriesIndex: number }) => void; onDataZoom?: (window: { startValue: number; endValue: number }) => void }) =>
       createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel, 'data-animate': String(animateEntrance), 'data-group': group ?? '', 'data-height': String(height), style: { height }, onClick: () => onClick?.({ dataIndex: 1, seriesIndex: 0 }), onDoubleClick: () => onDataZoom?.({ startValue: 1, endValue: 2 }) }),
   }
 })
@@ -159,6 +159,14 @@ describe('ChartCard persistent interactions', () => {
     expect(screen.getByTestId('echart')).toBe(canvas)
     expect(screen.getByText('Pinned: August')).toBeTruthy()
     expect(document.querySelector('.detail-panel')).toBeTruthy()
+  })
+  it('expanded → the chart fills the dialog; collapsed → the card height comes back', () => {
+    render(<ChartCard {...base} option={OPTION} height={320} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Net worth' }))
+    // No `innerHeight - 280` arithmetic (audit A3's 88px void): the dialog's flex column sizes it.
+    expect(screen.getByTestId('echart').getAttribute('data-height')).toBe('fill')
+    fireEvent.click(screen.getByRole('button', { name: 'Close expanded Net worth' }))
+    expect(screen.getByTestId('echart').getAttribute('data-height')).toBe('320')
   })
   it('names the panel after the selection, keeps the chart title as its subtitle, and the pin strip announces only its text', () => {
     render(<DetailPanelProvider><ChartCard {...base} option={history} selectionAdapter={() => selection} /></DetailPanelProvider>)
