@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChartSelection, MetricEvidence } from '../../types/metrics'
 import DetailPanelProvider from './DetailPanelProvider'
 import MetricInspector, { formatEvidenceValue, MetricInfoButton } from './MetricInspector'
+import SelectionDetail from './SelectionDetail'
 import { explainSelection, onExplainSelection } from './explainSelection'
 
 const evidence: MetricEvidence = {
@@ -60,5 +61,14 @@ describe('metric receipts and captured questions', () => {
     expect(screen.queryByText(/Definition:/)).toBeNull()
     expect(container.querySelector('.metric-inspector-definition')?.getAttribute('title'))
       .toBe('Metric living_spending_previous_12, definition spending-v1')
+  })
+  it('SelectionDetail states the selection once — Scope is a receipt row, no leading paragraph', () => {
+    const selection: ChartSelection = { kind: 'period', id: 'aug', period: '2026-08-01', label: 'August', scope: 'household', values: [{ label: 'Net worth', value: 200, unit: 'USD' }] }
+    const { container } = render(<SelectionDetail selection={selection} chartTitle="Net worth" />)
+    // The panel header already says "August" (audit B5: the label appeared three times in 120px).
+    expect(container.querySelector('article > p')).toBeNull()
+    const rows = Array.from(container.querySelectorAll('.metric-receipt-list > div'))
+      .map((row) => `${row.querySelector('dt')?.textContent}: ${row.querySelector('dd')?.textContent}`)
+    expect(rows).toEqual(['Scope: Household', 'Net worth: $200.00'])
   })
 })
