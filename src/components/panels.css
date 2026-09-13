@@ -668,6 +668,10 @@
 .page-skeleton,
 .loading-fallback {
   --m-stat-tile: 115px;
+  /* The delta-less tile (2026-09-13 polish §9): 115 minus the .stat-delta line — 0.8rem type at
+     the system-ui line height (≈17px) plus its 0.35rem top margin (5.6px) — rounded like every
+     twin here. Lane V's CLS smoke on Credit cards and Portfolio is the check on the number. */
+  --m-stat-tile-bare: 93px;
   --m-owner-strip: 41px;
 }
 
@@ -675,6 +679,10 @@
    .stat-tile it is replaced by, delta line and all — the --m-* variables above hold the numbers. */
 .skeleton-tile {
   min-height: var(--m-stat-tile);
+}
+
+.skeleton-tile-bare {
+  min-height: var(--m-stat-tile-bare);
 }
 
 .skeleton-delta {

@@ -246,4 +246,14 @@ describe('PageFrame', () => {
     )
     expect(screen.getByText(/Showing earlier data — offline/).getAttribute('role')).toBe('status')
   })
+
+  it('forwards a tiles object to the skeleton, so a page can reserve a delta-less row', () => {
+    render(
+      <PageFrame title="Credit cards" resource={{ status: 'loading' }} skeleton={{ tiles: { count: 4, delta: false } }}>
+        <p>body</p>
+      </PageFrame>,
+    )
+    expect(document.querySelectorAll('.stat-tile.skeleton-tile-bare')).toHaveLength(4)
+    expect(document.querySelector('.skeleton-delta')).toBeNull()
+  })
 })
