@@ -107,3 +107,16 @@ describe('popover surface (2026-09-13 polish §11)', () => {
     )
   })
 })
+
+describe('sticky sections block (2026-09-13 polish §3)', () => {
+  it('stacks the strip over the scope row and gives the strip the row’s old rule', () => {
+    expect(SHELL).toMatch(/\.page-frame-scope \{[^}]*flex-direction: column;/)
+    expect(SHELL).toContain('.page-frame-sections { border-bottom: 1px solid var(--border); }')
+    expect(SHELL).toContain('.page-frame-sections .local-section-nav { margin: 0; border-bottom: 0; }')
+    expect(SHELL).toContain(
+      '.page-frame-scope-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.25rem; padding: 0.6rem 0; }',
+    )
+    // A strip-only block would otherwise draw two hairlines 1px apart once stuck.
+    expect(SHELL).toContain('.page-frame-scope.is-stuck:has(> .page-frame-sections:last-child) { border-bottom-color: transparent; }')
+  })
+})

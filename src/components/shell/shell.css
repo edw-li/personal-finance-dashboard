@@ -141,29 +141,58 @@
   top: 0;
   z-index: 8;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.75rem 1.25rem;
-  padding: 0.6rem 0;
+  flex-direction: column;
+  align-items: stretch;
   margin: 0 0 1rem;
   background: var(--bg);
   border-bottom: 1px solid transparent;
 }
 
+/* Row one: the view strip (2026-09-13 polish §3). It spans the content width — Settings' strip
+   was 423px wide because the nav's own border ended with its tabs — and the divider is the row's,
+   not the nav's, so the nav drops its margin and border inside here. */
+.page-frame-sections {
+  border-bottom: 1px solid var(--border);
+}
+
+.page-frame-sections .local-section-nav {
+  margin: 0;
+  border-bottom: 0;
+}
+
+/* Row two: the scope controls, laid out exactly as the block itself used to be. */
+.page-frame-scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  padding: 0.6rem 0;
+}
+
 /* A declared scope row can still render nothing (a one-person household hides the owner control
    and the page declared no other control): an empty sticky row must not take space or draw its
-   hairline. `:empty` matches because ScopeBar returns null, leaving no DOM nodes in the slot.
-   While the household is still UNKNOWN the slot is NOT empty — ScopeBar stands a ghost of the
-   row's own height in it (panels.css, --m-scope-row) — so this rule only ever hides a row with
-   nothing coming. The row itself keeps no min-height: the reservation belongs to the ghost, or
-   every page that declares a scope row would stand 50px whether or not it has chips to put
-   there. */
-.page-frame-scope:empty {
+   hairline. `:empty` matches because ScopeBar returns null, leaving no DOM nodes in the row.
+   While the household is still UNKNOWN the row is NOT empty — ScopeBar stands a ghost of the
+   row's own height in it (panels.css, --m-scope-row) — so this only ever hides a row with
+   nothing coming. The block follows: with no strip and an empty row, the whole thing goes, so a
+   page with nothing to pin reserves no 1rem margin. No min-height anywhere: the reservation
+   belongs to the ghost, or every page that declares a scope row would stand 50px empty. */
+.page-frame-scope-row:empty {
+  display: none;
+}
+
+.page-frame-scope:not(:has(> :not(:empty))) {
   display: none;
 }
 
 .page-frame-scope.is-stuck {
   border-bottom-color: var(--border);
+}
+
+/* A strip-only block (Taxes, Comp, ESPP, Projection) already ends in the strip's own hairline;
+   the stuck hairline directly under it would read as a 2px rule. */
+.page-frame-scope.is-stuck:has(> .page-frame-sections:last-child) {
+  border-bottom-color: transparent;
 }
 
 .page-frame-scope .eyebrow {

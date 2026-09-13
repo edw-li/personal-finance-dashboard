@@ -253,6 +253,63 @@ describe('PageFrame', () => {
     expect(screen.getByText(/Showing earlier data — offline/).getAttribute('role')).toBe('status')
   })
 
+  // One sticky place for the view switcher (2026-09-13 polish §3): the strip renders INSIDE the
+  // element the sentinel, the is-stuck hairline and the --sticky-inset measurement already
+  // describe, as its first row, so every reveal timeline and InfoHint flip keeps working.
+  it('renders the sections slot inside the sticky block, ahead of the scope row', () => {
+    render(
+      <PageFrame
+        title="Net worth"
+        sections={<nav aria-label="Net worth views">tabs</nav>}
+        scopeRow={<span>scope</span>}
+        resource={{ status: 'ready' }}
+      >
+        <p>body</p>
+      </PageFrame>,
+    )
+    const block = document.querySelector('.page-frame-scope') as HTMLElement
+    expect(block.children).toHaveLength(2)
+    expect(block.children[0].className).toBe('page-frame-sections')
+    expect(block.children[0].textContent).toBe('tabs')
+    expect(block.children[1].className).toBe('page-frame-scope-row')
+    expect(block.children[1].textContent).toBe('scope')
+    expect(document.querySelector('.page-frame-sentinel')).toBeTruthy()
+    // Still outside the animated content region.
+    expect(document.querySelector('.page-frame-body .page-frame-scope')).toBeNull()
+  })
+
+  it('a page with only a sections strip still gets the sticky block, its sentinel and its inset', () => {
+    let notify: (() => void) | null = null
+    vi.stubGlobal(
+      'ResizeObserver',
+      vi.fn((cb: () => void) => ({ observe: () => { notify = cb }, disconnect: () => {}, unobserve: () => {} })),
+    )
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('page-frame-scope') ? 43 : 0
+    })
+    render(
+      <PageFrame title="Taxes" sections={<nav>tabs</nav>} resource={{ status: 'ready' }}>
+        <p>body</p>
+      </PageFrame>,
+    )
+    expect(document.querySelector('.page-frame-scope > .page-frame-sections')).toBeTruthy()
+    expect(document.querySelector('.page-frame-scope-row')).toBeNull()
+    expect(document.querySelector('.page-frame-sentinel')).toBeTruthy()
+    expect(document.querySelector<HTMLElement>('.page-frame-body')?.style.getPropertyValue('--sticky-inset')).toBe('43px')
+    expect(notify).not.toBeNull()
+  })
+
+  it('the sections strip is sticky-tracked like the scope row: is-stuck follows the sentinel', () => {
+    render(
+      <PageFrame title="Taxes" sections={<nav>tabs</nav>} resource={{ status: 'ready' }}>
+        <p>body</p>
+      </PageFrame>,
+    )
+    const block = document.querySelector('.page-frame-scope') as HTMLElement
+    act(() => observers.forEach((cb) => cb([{ isIntersecting: false }])))
+    expect(block.classList.contains('is-stuck')).toBe(true)
+  })
+
   it('records performance.now() at mount in its context; outside a frame it is -Infinity', () => {
     vi.spyOn(performance, 'now').mockReturnValue(4321)
     render(

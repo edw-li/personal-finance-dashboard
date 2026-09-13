@@ -12,7 +12,7 @@ import './shell.css'
 //   error, no data     → header · scope row · alert with Retry
 //   ready              → children (dimmed while `busy`)
 //   ready + error      → children + one stale line with Retry
-// The scope row is sticky; the hairline appears only while it is actually stuck.
+// The sticky block (view strip over the scope row) pins; the hairline appears only while it is stuck.
 export interface PageResource {
   status: 'loading' | 'ready' | 'error'
   error?: string | null
@@ -51,6 +51,7 @@ export default function PageFrame({
   actions,
   subheader,
   scopeRow,
+  sections,
   resource,
   skeleton = DEFAULT_SKELETON,
   children,
@@ -62,6 +63,10 @@ export default function PageFrame({
   subheader?: ReactNode
   /** The sticky row's content — a ScopeBar (Plan 1b) or any page-specific controls. Absent → no row. */
   scopeRow?: ReactNode
+  /** The page's view switcher (a LocalSectionNav), rendered INSIDE the sticky block as its first
+   *  row — strip first (which view), scope row second (for which period/owner). One placement
+   *  for all ten tabbed pages (2026-09-13 polish §3). */
+  sections?: ReactNode
   resource: PageResource
   /** Ghost layout while loading with no data. */
   skeleton?: PageSkeletonSpec
@@ -70,16 +75,16 @@ export default function PageFrame({
   const sentinelRef = useRef<HTMLDivElement>(null)
   const scopeRef = useRef<HTMLDivElement>(null)
   const [stuck, setStuck] = useState(false)
-  // Inline `scopeRow` JSX is a new object on every parent render; keying the effect on its
-  // mere presence avoids a disconnect/observe cycle per render.
-  const hasScopeRow = scopeRow !== undefined
+  // Inline JSX is a new object on every parent render; keying the effects on mere presence
+  // avoids a disconnect/observe cycle per render. Either slot makes the sticky block exist.
+  const hasScopeBlock = sections !== undefined || scopeRow !== undefined
 
   // The sentinel sits one pixel above the sticky row; once it scrolls out, the row is
   // pinned. Guarded for jsdom and old browsers: without the observer the row simply never
   // shows its hairline.
   useEffect(() => {
     const el = sentinelRef.current
-    if (!el || !hasScopeRow || typeof IntersectionObserver === 'undefined') return
+    if (!el || !hasScopeBlock || typeof IntersectionObserver === 'undefined') return
     const observer = new IntersectionObserver((entries) => {
       // A batched callback carries several entries; only the newest describes now.
       const last = entries[entries.length - 1]
@@ -87,7 +92,7 @@ export default function PageFrame({
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [hasScopeRow])
+  }, [hasScopeBlock])
 
   // Fixed at mount through a lazy initializer: a bare performance.now() in render is impure (the
   // react-hooks purity rule rejects it as a useRef argument), and a ref written from an effect
@@ -123,7 +128,7 @@ export default function PageFrame({
       // the way out means a stale inset can never outlive the row it was measured from.
       body.style.removeProperty('--sticky-inset')
     }
-  }, [hasScopeRow, bodyRef])
+  }, [hasScopeBlock, bodyRef])
   const showSkeleton = resource.status === 'loading'
   const showErrorOnly = resource.status === 'error'
   const staleError = hasData && resource.error ? resource.error : null
@@ -140,11 +145,15 @@ export default function PageFrame({
         {actions !== undefined && <div className="page-frame-actions">{actions}</div>}
       </header>
       {subheader !== undefined && <div className="page-frame-subheader">{subheader}</div>}
-      {scopeRow !== undefined && (
+      {hasScopeBlock && (
         <>
           <div ref={sentinelRef} className="page-frame-sentinel" aria-hidden="true" />
+          {/* The sentinel, the is-stuck hairline and the --sticky-inset measurement all describe
+              THIS element, so the strip lives inside it (2026-09-13 polish §3) and every reveal
+              timeline, scrim and InfoHint flip keeps measuring the right box. */}
           <div ref={scopeRef} className={`page-frame-scope${stuck ? ' is-stuck' : ''}`}>
-            {scopeRow}
+            {sections !== undefined && <div className="page-frame-sections">{sections}</div>}
+            {scopeRow !== undefined && <div className="page-frame-scope-row">{scopeRow}</div>}
           </div>
         </>
       )}
