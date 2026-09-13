@@ -42,3 +42,33 @@ describe('light tokens applied (2026-09-13 polish §6)', () => {
     )
   })
 })
+
+describe('surfaces appear (2026-09-13 polish §2.1)', () => {
+  const gate = PANELS.indexOf('@media (prefers-reduced-motion: no-preference) { .button, .chip')
+
+  it('declares the three shared keyframes inside the motion-grammar block', () => {
+    expect(gate).toBeGreaterThan(-1)
+    for (const frames of [
+      '@keyframes pop-in { from { opacity: 0; translate: 0 -4px; } }',
+      '@keyframes panel-in { from { opacity: 0; translate: 0 6px; } }',
+      '@keyframes backdrop-in { from { opacity: 0; } }',
+    ]) {
+      const at = PANELS.indexOf(frames)
+      expect(at, frames).toBeGreaterThan(gate)
+      // Same block: no other @media opens between the gate and the keyframe.
+      expect(PANELS.slice(gate + 1, at)).not.toContain('@media')
+    }
+  })
+
+  it('pops every bubble, popover, pin strip and disclosure body in over --t-fast', () => {
+    expect(PANELS).toContain(
+      '.info-hint-bubble, .chart-export-popover, .chart-selection-summary, .popover-surface, .disclosure[open] > .disclosure-body { animation: pop-in var(--t-fast) var(--ease-out) both; }',
+    )
+  })
+
+  it('gives the new controls the house hover transition', () => {
+    expect(PANELS).toContain(
+      '.button, .chip, .row-toggle, .info-hint, .segmented button, .metric-info-button, .local-section-nav [role=tab], .assistant-icon-button, .detail-panel-resizer, .disclosure > summary { transition: background-color var(--t-fast) ease, border-color var(--t-fast) ease, color var(--t-fast) ease, filter var(--t-fast) ease; }',
+    )
+  })
+})
