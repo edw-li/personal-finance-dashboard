@@ -5,6 +5,16 @@ import { useScrollEdges } from './useScrollEdges'
 
 afterEach(cleanup)
 
+// A scroller that is NOT in the DOM on the first render — the shape of every page that renders a
+// table only once rows arrive. The hook is called unconditionally (rules of hooks) and told
+// whether its target exists through `active`.
+function LateScroller({ show }: { show: boolean }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useScrollEdges(ref, show)
+  // eslint-disable-next-line react-hooks/refs
+  return show ? createElement('div', { ref, 'data-testid': 'scroller' }) : null
+}
+
 function Scroller() {
   const ref = useRef<HTMLDivElement>(null)
   useScrollEdges(ref)
@@ -52,5 +62,17 @@ describe('useScrollEdges', () => {
     expect(el.getAttribute('data-scroll-more')).toBe('right')
     view.unmount()
     expect(el.hasAttribute('data-scroll-more')).toBe(false)
+  })
+
+  it('attaches when a conditionally rendered scroller arrives, not only on a warm mount', () => {
+    const view = render(createElement(LateScroller, { show: false }))
+    expect(view.queryByTestId('scroller')).toBeNull()
+    view.rerender(createElement(LateScroller, { show: true }))
+    const el = view.getByTestId('scroller')
+    box(el, 600, 300)
+    el.dispatchEvent(new Event('scroll'))
+    // Without `active` in the effect's deps the effect never re-ran after its null-ref return, so
+    // no listener existed and the table below an empty state stayed unmasked for its whole life.
+    expect(el.getAttribute('data-scroll-more')).toBe('right')
   })
 })

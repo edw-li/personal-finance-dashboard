@@ -2858,3 +2858,84 @@ options) }`, `GhostTile delta`, `PageSkeleton tiles: number | { count, delta }`,
 One addition for **P2**: `PortfolioPage.tsx` still renders `.tiles-row`; this lane published
 `.kpi-row-dense` but did not convert the page (out of scope — Task 14 was the `sections=` wiring
 only).
+
+### Review round (2026-09-13, commit `7f631e8`)
+
+Six reviewer findings, all verified in a headless browser before they were written up, all applied
+as given. One commit; the gates below are the post-fix numbers.
+
+1. **CRITICAL — `.kpi-row > :last-child { grid-column-end: -1 }` did not do what the plan claimed
+   and has been deleted.** The rule sets only the END line; the start line stays `auto`, and the
+   pair resolves to a **one-track** item placed in the **last** column. A 4+1 wrap therefore became
+   a right-hand orphan with a hole to its left — strictly worse than the left-hand orphan the rule
+   was written to cure. There is no CSS-only fix in that band: a span needs a known start line, and
+   `repeat(auto-fit, …)` does not settle its column count until layout, so a real fill would be JS
+   measuring the row. The comment above the row now says exactly that, so nobody re-derives the
+   same wrong rule. The span moved to the one band where the arithmetic IS known — inside
+   `@container page (max-width: 980px)`, where the row is exactly two columns:
+   `.kpi-row:not(.kpi-row-5) > :last-child:nth-child(odd) { grid-column: 1 / -1; }`.
+   **Consequence for other lanes:** the contract row in `2026-09-13-polish-p1-overview.md` and
+   check 4e in `2026-09-13-polish-v-verify.md` both name the deleted rule. Above 980px of page
+   width a 4+1 wrap now leaves a **normal-width** last tile on its own line (auto-fit's own
+   behaviour, the pre-lane look); balanced filling is guaranteed only in the two-column band.
+   Lane V should assert that, not "no lone last tile" at every width.
+2. **The horizontal scroll masks were fading the sticky cells they share an edge with.** A
+   `mask-image` composites the whole element, and `position: sticky` does not exempt a child from
+   it, so a table with pinned `.row-actions` dissolved its own Actions buttons at the right edge
+   (and `.col-identity` at the left) — read as a rendering fault, not a hint. Each mask now skips
+   the edge a pinned column already holds:
+   `[data-scroll-more~="right"]:not(:has(.row-actions))`,
+   `[data-scroll-more~="left"]:not(:has(.col-identity))`, and the two-token rule excludes both.
+   Where a column is pinned, the pinned column IS the "there is more" signal.
+3. **`useScrollEdges` never re-armed.** The effect read `ref.current`, returned on null and listed
+   only `[ref]`, which is not a reactive value — so a hook placed above a scroller that renders
+   only once rows arrive attached on WARM renders and never on a first load, and that table was
+   unmasked for its whole life. The published signature is now
+   `useScrollEdges(ref, active = true)` — backward compatible, no caller changes (the page lanes
+   have not adopted it yet). `active` is in the deps, so flipping it re-runs the attach; flipping
+   it false detaches and clears the attribute. The JSDoc names the two correct call shapes: pass
+   `active={rows.length > 0}` for a conditional scroller, or call the hook inside the component
+   that renders the scroller unconditionally. New test: null ref at mount → rerender with the
+   scroller present and `active` true → the attribute appears.
+4. **`.page`'s containment makes it a stacking context, and two comments said otherwise.**
+   `container-type: inline-size` applies layout containment, so everything inside `.page` paints as
+   one layer: no z-index on a descendant can reach over the dock (16), the palette (20) or toasts
+   (30). `.popover-surface`'s "z 20: over the dock (16), under toasts (30)" was simply false — the
+   comment now states that 20 orders it among page content only and that a popover near the page's
+   right edge should open leftward rather than trust the number; `.page`'s own comment gained the
+   stacking-context sentence. The container is also **named** now — `container: page / inline-size`
+   — and both KPI rules ask for it by name (`@container page (…)`), so a `.kpi-row` nested inside a
+   nearer container (a chart card's aside, the allocation workspace) still measures the page
+   instead of that little box. `ProjectionPage.css`'s `.projection-page { container-type }` sits on
+   the same element and declares no name, so the name survives the cascade; its own unnamed
+   `@container` query is unaffected (an unnamed query matches any container).
+5. **Double hairline with a strip and an EMPTY scope row.** The suppression tested
+   `:has(> .page-frame-sections:last-child)`, but a page that declares a scope row keeps the row
+   ELEMENT even when `ScopeBar` renders nothing (a one-person household), so the strip was not the
+   last child and both hairlines drew 1px apart. The test is now "nothing renders below the strip":
+   `.page-frame-scope.is-stuck:not(:has(> .page-frame-scope-row:not(:empty)))`, the same
+   `:not(:empty)` the row's own `display: none` rule uses, which is what keeps the two in agreement.
+6. **`--shadow` adoption in `chartInteractions.css`** (F1 is merged, so no other lane owns the
+   sheet): `.chart-export-popover`'s `box-shadow: 0 6px 20px #0003` → `rgb(var(--shadow))`. The
+   token is a bare `r g b / a` triplet that already carries its alpha (`0 0 0 / 0.45` dark,
+   `20 30 50 / 0.14` light), so it is read whole exactly as `.popover-surface` reads it — no
+   `/ 0.2` suffix, which would have overridden the light theme's cool 14%. `tokens.test.ts` and
+   `motion.test.ts` are untouched and green.
+
+**Pins.** `surfaceGrammar.test.ts` gained a `CHART` source const and now pins: the absence of the
+deleted KPI rule, the named container, the odd-last-child rule **inside** the two-column block (as
+one string, so the nesting is part of the pin), the three `:has()`-excluded masks, the new stuck
+selector and the export popover's shadow. A comment on the KPI block records what these pins are
+worth: a text pin proves a rule is PRESENT and spelled as intended, never that it lays out — the
+deleted rule read perfectly and placed the tile in the wrong column. Lane V's browser check is the
+gate on the geometry.
+
+**Gates (post-fix).**
+
+- `npx tsc -b` — exit 0, no output.
+- `npx eslint src/components src/theme` — **0 errors, 18 warnings**, all pre-existing
+  `react-refresh/only-export-components` (the full-`src` baseline of 25 is unchanged; no warning is
+  in a file this round touched).
+- Scoped set (`src/components/shell`, `surfaceGrammar.test.ts`, `useScrollEdges.test.ts`,
+  `PageSkeleton.test.tsx`, `src/theme`) — **17 files / 204 tests passed**.
+- `npx vitest run` — **214 files / 2936 tests passed, 0 failed**. The Task 15 number, 2930, was measured on a tree without F1b; this round adds the two tests named above.
