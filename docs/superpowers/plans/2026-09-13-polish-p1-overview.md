@@ -2814,3 +2814,38 @@ Net +29 tests; the three new test files are `components/overview/DataStatusCard.
 - The wizard's first paint waits on six per-month feeds; the three household-wide aids (matrix,
   household, coverage) land independently. If the Typical column or the owner walk ever becomes
   load-bearing for the seed, they must move back into the gating `Promise.all`.
+
+### Review round (APPROVE WITH FIXES, applied)
+
+`main` @`4576025` (F2's review round) merged into the lane first — clean, no conflicts. Fixes in
+`8530629`, TDD, two new wizard tests plus assertions folded into the two popover tests.
+
+1. **IMPORTANT — a failed month switch left the previous month's form on screen.** After a landed
+   month, a switch whose gating feed rejected fell into the `ready / busy:false / error` branch, so
+   the month being LEFT stayed mounted, undimmed and interactive, under the new month's title. The
+   error-only branch now also fires when the seed on screen belongs to another month
+   (`const staleSeed = seeded !== null && seeded.month !== month`). While a load (or a Retry) is in
+   flight the stale card still shows — dimmed, `aria-busy`, `inert` — which is Task 2's design; only
+   the settled-error case is an error view. Test: `'shows the error view instead of the previous
+   month’s form when a switch fails to load'` (alert + Retry, no balance inputs, then June's cell
+   lands on Retry).
+2. **IMPORTANT — `fetchHousehold` is back in the gating `Promise.all`.** The owner walk decides
+   whether the grid renders one section or one per owner, so a late household re-formed every row on
+   a two-person book (production is Edward + Grace): layout jump and `autoFocus` yanking the caret
+   mid-typing. It keeps its `.catch(() => null)` fallback (a failure falls back to the flat walk);
+   matrix and coverage still land late. Test: `'waits for the household before painting the grid, so
+   the owner sections never re-form under the caret'`.
+3. **minor.** `closeActions` now clears `deleteArm`, so reopening the Month-actions popover can never
+   show an armed Delete (and `setStep` routes through it). Both popovers move focus into the surface
+   on open (`role="dialog"` contract; the arm box / the first checkbox) — `usePopoverDismiss` already
+   returned it to the trigger. Both `close` handlers are `useCallback`s, so the hook no longer
+   re-subscribes its document listeners on every keystroke. The wizard's `useCallback` lists
+   `[setActionsOpen, setDeleteArm]`: React Compiler's `preserve-manual-memoization` rejects `[]`
+   there (it infers the setters), and both are stable, so the identity is still constant.
+
+Hero count-up kept as implemented (reviewer and lead agree).
+
+**Gates after the round:** `npx tsc -b` clean · scoped eslint 0 errors / 1 pre-existing warning ·
+`npx eslint .` **25 warnings, 0 errors** (baseline) · scoped vitest 20 files / 431 tests pass ·
+full `npx vitest run` **217 files / 2968 tests, 0 failed** (+8 on the round) · `npm run build`
+✓ built in 15.66s.
