@@ -33,7 +33,7 @@ import { isNavLink } from './navLink'
 import { AssistantMessageBody, ComputedSummary, SaveFindingButton, SavedFindings } from './AssistantEvidence'
 import AssistantDockMount from './AssistantDockMount'
 import { useDetailPanel } from '../details/DetailPanelProvider'
-import { onExplainSelection } from '../details/explainSelection'
+import { explainPrompt, onExplainSelection } from '../details/explainSelection'
 import type { AssistantIntent } from '../../types/assistantEvidence'
 import { INSIGHT_PRESETS, samplesFor } from './samples'
 import { ASSISTANT_OPEN_EVENT, readAssistantView, useAssistantViewVersion } from './viewState'
@@ -581,7 +581,7 @@ export default function AssistantDrawer() {
   useEffect(() => onExplainSelection((selection) => {
     const source = new URL(selection.sourceRoute, window.location.origin)
     setPendingSelection({
-      prompt: `Explain ${selection.selection.label} in ${selection.chartTitle}. Use the captured selection and distinguish recorded facts from interpretation.`,
+      prompt: explainPrompt(selection),
       context: { route: source.pathname, search: Object.fromEntries(source.searchParams.entries()), view: JSON.parse(JSON.stringify(readAssistantView())), selection },
     })
     setTab('chat')

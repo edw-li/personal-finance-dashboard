@@ -118,6 +118,18 @@ describe('assistant evidence and working context', () => {
     expect(abort).toHaveBeenCalledTimes(2)
   })
 
+  it('asks about a metric as a figure, never "X in X"', async () => {
+    mount()
+    const captured = { chartTitle: 'Net worth', sourceRoute: '/', capturedAt: '2026-09-13T00:00:00Z',
+      selection: { kind: 'point', id: 'metric:net_worth', label: 'Net worth', date: '2026-08-01', scope: 'household',
+        values: [{ label: 'Net worth', value: '806708.50', unit: 'USD' }], evidence: [{ ...bundle.metrics[0], window: null, as_of: '2026-08-01' }] } }
+    act(() => window.dispatchEvent(new CustomEvent(EXPLAIN_SELECTION_EVENT, { detail: captured })))
+    await waitFor(() => expect(mocks.stream).toHaveBeenCalledOnce())
+    expect(mocks.stream.mock.calls[0][0].messages.at(-1).content)
+      .toBe('Explain the Net worth figure ($806,708.50, as of 2026-08-01, Household). Use the captured evidence and distinguish recorded facts from interpretation.')
+    expect(mocks.stream.mock.calls[0][0].intent).toBe('selection')
+  })
+
   it('renders only known metric references as inspectable values', () => {
     render(<AssistantMessageBody text={'Known [[metric:living_spending_2026_08_abc]], unknown [[metric:invented]], [bad](https://example.com).'} metrics={bundle.metrics} />)
     expect(screen.getByRole('button', { name: 'Inspect Living spending' }).textContent).toBe('$1,234.56')
