@@ -37,7 +37,7 @@
 }
 
 .segmented button.active {
-  background: var(--surface-2);
+  background: var(--fill);
   color: var(--text);
 }
 

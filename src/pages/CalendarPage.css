@@ -37,7 +37,7 @@
 
 .cal-day {
   min-height: 92px;
-  border: 1px solid var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px 6px;
   min-width: 0;
@@ -236,7 +236,7 @@
 
 .cal-list > li {
   padding: 0.4rem 0;
-  border-bottom: 1px solid var(--surface-2);
+  border-bottom: 1px solid var(--border);
 }
 
 .cal-list ul {
@@ -272,7 +272,7 @@
 .cal-list-expansion {
   margin: 0.35rem 0;
   padding: 0.1rem 0 0.1rem 0.75rem;
-  border-left: 2px solid var(--surface-2);
+  border-left: 2px solid var(--border);
 }
 
 /* v1 hid .cal-grid entirely under 720px because the list was a SECOND card, always
@@ -306,7 +306,7 @@
 .cal-gutter {
   min-height: 92px;
   padding: 4px 6px;
-  border: 1px dashed var(--surface-2);
+  border: 1px dashed var(--border);
   border-radius: 8px;
   font-size: 0.7rem;
   color: var(--muted);
@@ -507,7 +507,7 @@
   width: 100%;
   padding: 0.5rem 0.75rem;
   border: none;
-  border-bottom: 1px solid var(--surface-2);
+  border-bottom: 1px solid var(--border);
   background: none;
   color: var(--text);
   font: inherit;
@@ -546,7 +546,7 @@
 
 .cal-drawer-expansion {
   padding: 0.25rem 0.75rem 0.75rem 1.4rem;
-  border-bottom: 1px solid var(--surface-2);
+  border-bottom: 1px solid var(--border);
 }
 
 .cal-drawer-footer {

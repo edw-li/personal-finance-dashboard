@@ -159,7 +159,7 @@
 
 .data-table td {
   padding: var(--density-cell-pad);
-  border-bottom: 1px solid var(--surface-2);
+  border-bottom: 1px solid var(--border);
 }
 
 .data-table .num {
@@ -197,7 +197,7 @@
   padding: 0.5rem 0.9rem;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--surface-2);
+  background: var(--fill);
   color: var(--text);
   font-size: 0.85rem;
   cursor: pointer;
@@ -222,6 +222,19 @@
 .button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* A disabled PRIMARY demotes to one step UNDER the quiet button (2026-09-13 polish §6, audit
+   S-7): at 50% the accent pill still outranked the enabled Dry run beside it in light.
+   --surface-2, not --fill, on purpose — a control that cannot be pressed sits a shade below the
+   ones that can. Later than .button:disabled at the same specificity, so it wins the opacity. */
+.button-primary:disabled,
+.button-primary:disabled:hover {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--muted);
+  opacity: 1;
+  filter: none;
 }
 
 .field-input {
@@ -264,7 +277,7 @@
 }
 
 .segmented button.active {
-  background: var(--surface-2);
+  background: var(--fill);
   color: var(--text);
 }
 
@@ -526,10 +539,15 @@
   text-align: right;
 }
 
+/* The pin strip wears the fill (2026-09-13 polish §6). Two classes on purpose: the strip's own
+   rule lives in chartInteractions.css, which is bundled AFTER this sheet at one class of
+   specificity, so a single-class override here would lose the cascade. */
+.chart-card .chart-selection-summary { background: var(--fill); }
+
 /* ── Skeleton first paint (2026-08-27 spec §3) ─────────────────────── */
 
 .skeleton {
-  background: var(--surface-2);
+  background: var(--fill);
   border-radius: 6px;
 }
 
