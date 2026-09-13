@@ -6,7 +6,7 @@ import { reviewEvidenceFixture as bundle } from '../../testing/assistantEvidence
 import DetailPanelProvider from '../details/DetailPanelProvider'
 import { EXPLAIN_SELECTION_EVENT } from '../details/explainSelection'
 import AssistantDrawer from './AssistantDrawer'
-import { AssistantMessageBody } from './AssistantEvidence'
+import { AssistantMessageBody, ComputedSummary, SavedFindings } from './AssistantEvidence'
 
 const mocks = vi.hoisted(() => ({ settings: vi.fn(), stream: vi.fn(), save: vi.fn(), findings: vi.fn(), remove: vi.fn() }))
 vi.mock('../../api/assistant', () => ({ fetchAssistantSettings: mocks.settings, fetchAssistantModels: async () => ({ models: [
@@ -152,6 +152,29 @@ describe('assistant evidence and working context', () => {
     expect(mocks.stream.mock.calls[0][0].messages.at(-1).content)
       .toBe('Explain the Net worth figure ($806,708.50, as of 2026-08-01, Household). Use the captured evidence and distinguish recorded facts from interpretation.')
     expect(mocks.stream.mock.calls[0][0].intent).toBe('selection')
+  })
+
+  // Both evidence blocks speak the shared Disclosure grammar (2026-09-13 polish §2.6)
+  // while keeping the class hooks their own stylesheet is written against.
+  it('the computed summary keeps its figures behind a closed Disclosure', () => {
+    render(<ComputedSummary bundle={bundle} />)
+    const inspect = document.querySelector('.assistant-computed-summary details.disclosure') as HTMLDetailsElement
+    expect(inspect.open).toBe(false)
+    expect(inspect.querySelector(':scope > summary')?.textContent).toBe('Inspect the figures and comparison window')
+    expect(inspect.querySelector(':scope > .disclosure-body dl dt')?.textContent).toBe('Living spending')
+  })
+
+  it('each saved finding is a Disclosure that keeps the assistant-saved-finding hook', async () => {
+    mocks.findings.mockResolvedValue([{ id: 7, title: 'August looked fine', content: 'All good.', model_used: 'kimi-k3',
+      context: {}, evidence: bundle.metrics, evidence_as_of: '2026-09-12T09:00:00Z', created_at: '2026-09-12T10:00:00Z' }])
+    render(<SavedFindings revision={0} />)
+    await screen.findByText('August looked fine')
+    const finding = document.querySelector('details.disclosure.assistant-saved-finding') as HTMLDetailsElement
+    expect(finding.open).toBe(false)
+    expect(finding.querySelector(':scope > summary small')?.textContent).toContain('Evidence from')
+    const body = finding.querySelector(':scope > .disclosure-body') as HTMLElement
+    expect(within(body).getByRole('button', { name: 'Remove saved finding' })).toBeTruthy()
+    expect(within(body).getByRole('button', { name: 'Inspect Living spending' })).toBeTruthy()
   })
 
   it('renders only known metric references as inspectable values', () => {

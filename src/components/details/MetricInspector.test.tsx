@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChartSelection, MetricEvidence } from '../../types/metrics'
 import DetailPanelProvider from './DetailPanelProvider'
@@ -70,5 +70,18 @@ describe('metric receipts and captured questions', () => {
     const rows = Array.from(container.querySelectorAll('.metric-receipt-list > div'))
       .map((row) => `${row.querySelector('dt')?.textContent}: ${row.querySelector('dd')?.textContent}`)
     expect(rows).toEqual(['Scope: Household', 'Net worth: $200.00'])
+  })
+  // The calculation hangs off the shared Disclosure (2026-09-13 polish §2.6) — same closed-
+  // until-asked behaviour, one grammar with the table twin and the assistant's blocks.
+  it('SelectionDetail puts each calculation behind a closed Disclosure', async () => {
+    const selection: ChartSelection = { kind: 'period', id: 'aug', period: '2026-08-01', label: 'August', scope: 'household', values: [{ label: 'Net worth', value: 200, unit: 'USD' }], evidence: [evidence] }
+    const { container } = render(<SelectionDetail selection={selection} chartTitle="Net worth" />)
+    const calc = () => container.querySelector('details.disclosure') as HTMLDetailsElement
+    expect(calc().open).toBe(false)
+    expect(calc().querySelector(':scope > summary')?.textContent).toBe('Previous 12 months: calculation')
+    expect(calc().querySelector(':scope > .disclosure-body > .metric-inspector')).toBeTruthy()
+    fireEvent.click(screen.getByText('Previous 12 months: calculation'))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(calc().open).toBe(true)
   })
 })

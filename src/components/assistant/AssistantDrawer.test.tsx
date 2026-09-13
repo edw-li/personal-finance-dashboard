@@ -843,17 +843,25 @@ describe('AssistantDrawer progress feedback', () => {
     await ask()
     act(() => captured[0].onThinking?.('The user asks about '))
     act(() => captured[0].onThinking?.('housing.'))
-    const details = () => document.querySelector('details.assistant-thinking')
+    // The shared Disclosure (2026-09-13 polish §2.6) with its class hook kept.
+    const details = () => document.querySelector('details.disclosure.assistant-thinking')
     expect(details()?.hasAttribute('open')).toBe(true)
     expect(screen.getByText('Reasoning…')).toBeTruthy()
     expect(screen.getByText('The user asks about housing.')).toBeTruthy()
 
     act(() => captured[0].onToken('Housing was '))
     // The `open` attribute is gone, so the block is collapsed AND the reader may reopen it:
-    // React only writes `open` when the prop changes, so a manual toggle afterwards sticks.
+    // the prop flips true → undefined exactly once, which collapses the block and then hands
+    // it over — every later token leaves it alone.
     expect(details()?.hasAttribute('open')).toBe(false)
     expect(screen.getByText('Reasoning')).toBeTruthy()
     expect(screen.queryByText('Reasoning…')).toBeNull()
+
+    fireEvent.click(screen.getByText('Reasoning'))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(details()?.hasAttribute('open')).toBe(true)
+    act(() => captured[0].onToken('more of the answer'))
+    expect(details()?.hasAttribute('open')).toBe(true)
   })
 
   // A failover restarts the answer on a different model, so the reasoning on screen belongs
