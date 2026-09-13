@@ -7,7 +7,7 @@ import { hintLabel } from './InfoHint'
 vi.mock('./EChart', async () => {
   const { createElement } = await import('react')
   return {
-    default: ({ ariaLabel, animateEntrance = true, group, height, onClick, onDataZoom }: { ariaLabel?: string; animateEntrance?: boolean; group?: string; height?: number; onClick?: (params: { dataIndex: number; seriesIndex: number }) => void; onDataZoom?: (window: { startValue: number; endValue: number }) => void }) =>
+    default: ({ ariaLabel, animateEntrance = true, group, height, onClick, onDataZoom }: { ariaLabel?: string; animateEntrance?: boolean; group?: string; height?: number | 'fill'; onClick?: (params: { dataIndex: number; seriesIndex: number }) => void; onDataZoom?: (window: { startValue: number; endValue: number }) => void }) =>
       createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel, 'data-animate': String(animateEntrance), 'data-group': group ?? '', 'data-height': String(height), style: { height }, onClick: () => onClick?.({ dataIndex: 1, seriesIndex: 0 }), onDoubleClick: () => onDataZoom?.({ startValue: 1, endValue: 2 }) }),
   }
 })
@@ -106,6 +106,23 @@ describe('ChartCard chrome', () => {
     expect(lede.previousElementSibling?.className).toBe('chart-card-header')
     expect(document.querySelector('.chart-lede + .chart-card-row-export')).toBeTruthy()
   })
+  it('renders an aside beside the plot in a two-column body wrapper, and no wrapper at all without one', () => {
+    render(<ChartCard {...base} option={OPTION} aside={<ul className="legend-list"><li>Cash</li></ul>} />)
+    const section = document.querySelector('section.chart-card') as HTMLElement
+    expect(section.classList.contains('chart-card-has-aside')).toBe(true) // the container-query root
+    const wrapper = section.querySelector('.chart-card-body.chart-card-with-aside') as HTMLElement
+    expect(wrapper).toBeTruthy()
+    expect(wrapper.children[0].className).toBe('chart-card-plot')
+    expect(wrapper.children[0].querySelector('[data-testid="echart"]')).toBeTruthy()
+    expect(wrapper.children[1].className).toBe('chart-card-aside')
+    expect(wrapper.children[1].textContent).toBe('Cash')
+    // The wrapper sits where the bare plot did: after the export row, before the zoom/table/footer rows.
+    expect(wrapper.previousElementSibling?.className).toBe('chart-card-row chart-card-row-export')
+    cleanup()
+    render(<ChartCard {...base} option={OPTION} />)
+    expect(document.querySelector('.chart-card-body')).toBeNull()
+    expect(document.querySelector('.chart-card-has-aside')).toBeNull()
+  })
   it('draws no lede element at all for the cards that pass none', () => {
     render(<ChartCard {...base} option={OPTION} />)
     expect(document.querySelector('.chart-lede')).toBeNull()
@@ -160,6 +177,29 @@ describe('ChartCard persistent interactions', () => {
     expect(screen.getByText('Pinned: August')).toBeTruthy()
     expect(document.querySelector('.detail-panel')).toBeTruthy()
   })
+  it('expanded → the chart fills the dialog; collapsed → the card height comes back', () => {
+    render(<ChartCard {...base} option={OPTION} height={320} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Net worth' }))
+    // No `innerHeight - 280` arithmetic (audit A3's 88px void): the dialog's flex column sizes it.
+    expect(screen.getByTestId('echart').getAttribute('data-height')).toBe('fill')
+    fireEvent.click(screen.getByRole('button', { name: 'Close expanded Net worth' }))
+    expect(screen.getByTestId('echart').getAttribute('data-height')).toBe('320')
+  })
+  it('names the panel after the selection, keeps the chart title as its subtitle, and the pin strip announces only its text', () => {
+    render(<DetailPanelProvider><ChartCard {...base} option={history} selectionAdapter={() => selection} /></DetailPanelProvider>)
+    fireEvent.click(screen.getByTestId('echart'))
+    expect(screen.getByRole('dialog', { name: 'August' })).toBeTruthy()
+    expect(document.querySelector('.detail-panel-heading p')?.textContent).toBe('Net worth')
+    // role="status" on the text span only (audit D3): a re-pin never re-announces the buttons.
+    const strip = document.querySelector('.chart-selection-summary') as HTMLElement
+    expect(strip.getAttribute('role')).toBeNull()
+    expect(strip.querySelector('[role="status"]')?.textContent).toBe('Pinned: August')
+    fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Show details' }))
+    expect(screen.getByRole('dialog', { name: 'August' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Details' })).toBeNull()
+  })
   it('keeps legacy click handlers until a page supplies its typed selection adapter', () => {
     const legacy = vi.fn()
     render(<ChartCard {...base} option={history} onClick={legacy} />)
@@ -178,7 +218,7 @@ describe('ChartCard persistent interactions', () => {
     fireEvent.click(screen.getByTestId('echart'))
     expect(screen.getByText('Details for August')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
-    expect(screen.queryByRole('dialog', { name: 'Net worth' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'August' })).toBeNull()
     expect(screen.getByText('Pinned: August')).toBeTruthy()
     expect(screen.getByText('No open details')).toBeTruthy()
   })
@@ -193,7 +233,7 @@ describe('ChartCard persistent interactions', () => {
     fireEvent.click(charts[1])
     expect(screen.queryByText('First chart details')).toBeNull()
     expect(screen.getByText('Second chart details')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to August' }))
     expect(screen.getByText('First chart details')).toBeTruthy()
     expect(screen.queryByText('Second chart details')).toBeNull()
   })
@@ -219,7 +259,7 @@ describe('ChartCard persistent interactions', () => {
     expect(screen.getByText('Pinned: August')).toBeTruthy()
     rerender(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} onSelectionChange={changed} selectionScopeKey="owner:2" /></DetailPanelProvider>)
     expect(screen.queryByText('Pinned: August')).toBeNull()
-    expect(screen.queryByRole('dialog', { name: 'Net worth' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'August' })).toBeNull()
     expect(changed).toHaveBeenCalledWith(null)
   })
 })

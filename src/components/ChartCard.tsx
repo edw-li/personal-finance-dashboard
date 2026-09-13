@@ -49,6 +49,10 @@ export interface ChartCardProps {
   footer?: ReactNode
   /** A header strip under the title: the movers card's "from → to" line (spec §4.2). */
   lede?: ReactNode
+  /** A second column beside the plot — Allocation's ranked table, Spending's legend list (2026-09-13
+   *  spec §12). The body becomes `.chart-card-body.chart-card-with-aside`, one column under 900px of
+   *  CARD width (the card is the container-query root). */
+  aside?: ReactNode
   /** Renders ChartZoomHint; the option carries the dataZoom. */
   zoomable?: boolean
   /** echarts.connect group for same-axis siblings. */
@@ -80,7 +84,7 @@ export interface ChartCardProps {
 }
 
 export default function ChartCard({
-  title, hint, ariaLabel, option, empty, exportName, csv, caption, height = 320, controls, actions, footer, lede,
+  title, hint, ariaLabel, option, empty, exportName, csv, caption, height = 320, controls, actions, footer, lede, aside,
   zoomable = false, group, busy = false, error = null, span = 12,
   onClick, onHover, onHoverEnd, instanceRef, onLegendChange, onDataZoom, zoomWindow,
   selectionAdapter, rowSelection, selection, onSelectionChange, renderSelection, selectionScopeKey = '', independentRangeLabel, allowExpand = true,
@@ -129,7 +133,7 @@ export default function ChartCard({
   const inspect = (next: ChartSelection) => {
     setPinned({ scope: selectionScopeKey, value: next })
     onSelectionChange?.(next)
-    if (!expanded && activeView) openPanel?.({ id: panelId, title, subtitle: next.label, content: panelContent, contextKey: selectionScopeKey })
+    if (!expanded && activeView) openPanel?.({ id: panelId, title: next.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey })
   }
   const selectionContent = useMemo(() => selected === null ? null : renderSelection
     ? renderSelection(selected)
@@ -137,7 +141,7 @@ export default function ChartCard({
   [selected, renderSelection, title, clearSelection])
   useEffect(() => {
     if (!selected || expanded || !activeView) return
-    openPanel?.({ id: panelId, title, subtitle: selected.label, content: panelContent, contextKey: selectionScopeKey })
+    openPanel?.({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey })
   }, [selected, expanded, activeView, openPanel, panelId, title, panelContent, selectionScopeKey])
   useEffect(() => {
     if (previousScope.current !== selectionScopeKey) {
@@ -168,7 +172,6 @@ export default function ChartCard({
     setZoom((current) => ({ ...current, manual: null }))
     onDataZoom?.(zoom.baseline)
   }
-  const chartHeight = expanded ? Math.max(height, window.innerHeight - 280) : height
 
   let body: ReactNode
   if (option === null) {
@@ -185,7 +188,7 @@ export default function ChartCard({
       <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
         <EChart
           option={option}
-          height={chartHeight}
+          height={expanded ? 'fill' : height}
           ariaLabel={ariaLabel}
           animateEntrance={!fromCache}
           group={group}
@@ -205,7 +208,7 @@ export default function ChartCard({
     <>
     {selected && panel && !expanded && createPortal(selectionContent, detailHost)}
     <ChartSurface title={title} expanded={expanded} onClose={() => setExpanded(false)} span={span}>
-    <section className={`card chart-card span-${span}`}>
+    <section className={`card chart-card span-${span}${aside !== undefined ? ' chart-card-has-aside' : ''}`}>
       <div className="chart-card-header">
         <h2 className="eyebrow">
           {title}
@@ -241,10 +244,13 @@ export default function ChartCard({
       {option !== null && error !== null && (
         <p className="chart-card-error" role="status">{error}</p>
       )}
-      {body}
-      {selected && <div className="chart-selection-summary" role="status">
-        <span>Pinned: {selected.label}</span>
-        {panel && !expanded && <button type="button" className="button" onClick={() => panel.open({ id: panelId, title, subtitle: selected.label, content: panelContent, contextKey: selectionScopeKey })}>Details</button>}
+      {aside !== undefined
+        ? <div className="chart-card-body chart-card-with-aside"><div className="chart-card-plot">{body}</div><div className="chart-card-aside">{aside}</div></div>
+        : body}
+      {selected && <div className="chart-selection-summary">
+        {/* Live region on the TEXT only (audit D3): each pin announces "Pinned: …", never the buttons. */}
+        <span role="status">Pinned: {selected.label}</span>
+        {panel && !expanded && <button type="button" className="button" onClick={() => panel.open({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey })}>Show details</button>}
         <button type="button" className="button" onClick={clearSelection}>Clear selection</button>
       </div>}
       {selected && (!panel || expanded) && <div className="chart-inline-selection">{selectionContent}</div>}

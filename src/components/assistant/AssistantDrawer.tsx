@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 // Aliased, the palette's idiom: the window-level Escape listener below needs the DOM's
 // KeyboardEvent, which React's same-named type would otherwise shadow.
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Sparkles, Square, X } from 'lucide-react'
+import { Info, Sparkles, Square, X } from 'lucide-react'
 import {
   fetchAssistantModels,
   fetchAssistantSettings,
@@ -33,7 +33,9 @@ import { isNavLink } from './navLink'
 import { AssistantMessageBody, ComputedSummary, SaveFindingButton, SavedFindings } from './AssistantEvidence'
 import AssistantDockMount from './AssistantDockMount'
 import { useDetailPanel } from '../details/DetailPanelProvider'
-import { onExplainSelection } from '../details/explainSelection'
+import { explainPrompt, onExplainSelection } from '../details/explainSelection'
+import Segmented from '../shell/Segmented'
+import type { SegmentedOption } from '../shell/Segmented'
 import type { AssistantIntent } from '../../types/assistantEvidence'
 import { INSIGHT_PRESETS, samplesFor } from './samples'
 import { ASSISTANT_OPEN_EVENT, readAssistantView, useAssistantViewVersion } from './viewState'
@@ -53,6 +55,14 @@ const SENT_CONTENT_CAP = 8000
 /** One drawer per app (Layout mounts it once), so a constant id is safe as an
  *  aria-controls target. */
 const PREVIEW_LIST_ID = 'assistant-context-sections'
+
+/** The conversation log's id — the Conversation tab's aria-controls target. Saved findings owns its
+ *  own scrolling root (AssistantEvidence) and mounts on demand, so its tab carries none. */
+const CONVERSATION_ID = 'assistant-conversation'
+const ASSISTANT_TABS: readonly SegmentedOption<'chat' | 'findings'>[] = [
+  { value: 'chat', label: 'Conversation' },
+  { value: 'findings', label: 'Saved findings' },
+]
 
 /** One frozen empty roster: the label memo takes `people` as a dep, and a fresh literal
  *  each render would re-derive the sentence on every keystroke (ProjectionPage's idiom). */
@@ -139,11 +149,56 @@ function RetryCountdown({
   )
 }
 
+/** The header's controls. Inside the shared panel they render in the panel's own chrome row
+ *  (`DetailPanelRequest.actions`, spec §4); standalone they sit in the drawer's header. Module scope
+ *  so the element type is stable across the drawer's per-token re-renders. */
+function AssistantHeaderActions({ model, models, streaming, onModel, onNewChat }: {
+  model: string
+  models: AssistantModelsOut | null
+  streaming: boolean
+  onModel: (key: string) => void
+  onNewChat: () => void
+}) {
+  return (
+    <>
+      <select
+        className="assistant-model-select"
+        aria-label="Model"
+        value={model}
+        disabled={streaming}
+        onChange={(event) => onModel(event.target.value)}
+      >
+        {(
+          models?.models ?? [
+            {
+              key: model,
+              label: modelLabel(model, null),
+              available: true,
+              supports_tools: true,
+              default: true,
+              catalog_id: null,
+            },
+          ]
+        ).map((m) => (
+          <option key={m.key} value={m.key} disabled={!m.available}>
+            {m.label}
+            {m.available ? '' : ' (unavailable)'}
+          </option>
+        ))}
+      </select>
+      <button type="button" className="assistant-icon-button" onClick={onNewChat}>
+        New chat
+      </button>
+    </>
+  )
+}
+
 export default function AssistantDrawer() {
   const location = useLocation()
   const panel = useDetailPanel()
   const openPanel = panel?.open
   const closePanel = panel?.close
+  const updatePanel = panel?.update
   const [portalHost] = useState(() => document.createElement('div'))
   const viewVersion = useAssistantViewVersion()
   const [open, setOpen] = useState(false)
@@ -552,36 +607,62 @@ export default function AssistantDrawer() {
     send(question, retryModel, base, asked?.contextSnapshot ? { context: asked.contextSnapshot, intent: asked.intent } : lastRequest.current ?? undefined)
   }
 
-  const newChat = () => {
+  const newChat = useCallback(() => {
     sendSeq.current += 1
     handleRef.current?.abort()
     setStreaming(false)
     setTranscript([])
     setTab('chat')
-  }
+  }, [])
 
   const onComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       send(input)
-    } else if (event.key === 'Escape') {
+    } else if (event.key === 'Escape' && !panel) {
+      // Inside the shared panel the provider owns Escape — one level at a time (spec §4).
       event.preventDefault()
       close()
     }
   }
 
   const configured = settings?.key.configured === true
+  // Hoisted out of the JSX: an inline `configured && [...].map(cb)` makes the React Compiler's
+  // react-hooks/refs rule read `send` (which reads refs) as a render-time ref access.
+  const presetChips = configured ? [...INSIGHT_PRESETS, ...samplesFor(location.pathname)] : []
 
+  // Latest-ref (the EChart idiom): the open effect hands the panel its first actions without listing
+  // model/models/streaming as deps — re-running open() on those would re-raise the assistant and
+  // POP any evidence panel stacked above it. The update effect keeps them current afterwards.
+  const headerActionsRef = useRef<ReactNode>(null)
+  useEffect(() => {
+    headerActionsRef.current = <AssistantHeaderActions model={model} models={models} streaming={streaming} onModel={setModel} onNewChat={newChat} />
+  }, [model, models, streaming, newChat])
   useEffect(() => {
     if (!open || !openPanel) return
-    openPanel({ id: 'assistant', title: 'Assistant', content: <AssistantDockMount host={portalHost} />, onClose: () => setOpen(false) })
+    openPanel({
+      id: 'assistant',
+      title: 'Assistant',
+      content: <AssistantDockMount host={portalHost} />,
+      actions: headerActionsRef.current,
+      // Non-modal (spec §4, audit G1): in overlay mode the page stays live — no backdrop, no inert.
+      modal: false,
+      onClose: () => { setOpen(false); setPreviewOpen(false) },
+    })
   }, [open, openRequest, openPanel, portalHost])
+  // One source for the element: the ref effect above (declared first, so it commits first) builds
+  // it, and this pushes that same node. model/models/streaming/newChat stay in the dep list even
+  // though the body no longer names them — they are what makes this re-run when the actions change.
+  useEffect(() => {
+    if (!open || !updatePanel) return
+    updatePanel('assistant', { actions: headerActionsRef.current })
+  }, [open, updatePanel, model, models, streaming, newChat])
   useEffect(() => () => closePanel?.('assistant'), [closePanel])
 
   useEffect(() => onExplainSelection((selection) => {
     const source = new URL(selection.sourceRoute, window.location.origin)
     setPendingSelection({
-      prompt: `Explain ${selection.selection.label} in ${selection.chartTitle}. Use the captured selection and distinguish recorded facts from interpretation.`,
+      prompt: explainPrompt(selection),
       context: { route: source.pathname, search: Object.fromEntries(source.searchParams.entries()), view: JSON.parse(JSON.stringify(readAssistantView())), selection },
     })
     setTab('chat')
@@ -608,74 +689,48 @@ export default function AssistantDrawer() {
           // #main and palette idiom).
           tabIndex={-1}
           onKeyDown={(event) => {
-            if (event.key === 'Escape') {
+            if (event.key === 'Escape' && !panel) {
               event.preventDefault()
               close()
             }
           }}
         >
-          <div className="assistant-header">
-            {!panel && <span className="assistant-title">
-              <span aria-hidden="true">✦</span> Assistant
-            </span>}
-            <select
-              className="assistant-model-select"
-              aria-label="Model"
-              value={model}
-              disabled={streaming}
-              onChange={(event) => setModel(event.target.value)}
-            >
-              {(
-                models?.models ?? [
-                  {
-                    key: model,
-                    label: modelLabel(model, null),
-                    available: true,
-                    supports_tools: true,
-                    default: true,
-                    catalog_id: null,
-                  },
-                ]
-              ).map((m) => (
-                <option key={m.key} value={m.key} disabled={!m.available}>
-                  {m.label}
-                  {m.available ? '' : ' (unavailable)'}
-                </option>
-              ))}
-            </select>
-            <button type="button" className="assistant-icon-button" onClick={newChat}>
-              New chat
-            </button>
-            {!panel && <button
-              type="button"
-              className="assistant-icon-button"
-              aria-label="Close assistant"
-              onClick={close}
-            >
-              <X size={14} aria-hidden="true" />
-            </button>}
-          </div>
-          <div className="assistant-tabs" role="tablist" aria-label="Assistant views">
-            <button type="button" role="tab" aria-selected={tab === 'chat'} onClick={() => setTab('chat')}>Conversation</button>
-            <button type="button" role="tab" aria-selected={tab === 'findings'} onClick={() => setTab('findings')}>Saved findings</button>
-          </div>
-          {tab === 'findings' && <SavedFindings revision={findingsRevision} />}
-          <div className="assistant-context" hidden={tab !== 'chat'}>
-            {/* Ellipsised rather than wrapped: on Taxes this reads "Taxes · year: 2026 ·
-                filingStatus: single", which pushed the toggle onto a second line and shoved
-                the whole conversation down. The full text stays reachable as the tooltip. */}
+          {/* Standalone only (tests, embeds): inside the shared panel the title, the model picker,
+              New chat and Close all live in the panel's own chrome row (spec §4, audit B2). */}
+          {!panel && (
+            <div className="assistant-header">
+              <span className="assistant-title">
+                <span aria-hidden="true">✦</span> Assistant
+              </span>
+              <AssistantHeaderActions model={model} models={models} streaming={streaming} onModel={setModel} onNewChat={newChat} />
+              <button
+                type="button"
+                className="assistant-icon-button"
+                aria-label="Close assistant"
+                onClick={close}
+              >
+                <X size={14} aria-hidden="true" />
+              </button>
+            </div>
+          )}
+          {/* One row (audit E5): what the assistant is looking at, the (i) that lists it, the views.
+              Always visible — the tabs live here, so the row cannot hide with the conversation. */}
+          <div className="assistant-context">
             <span className="assistant-context-label" title={contextLabel}>
-              Seeing: {contextLabel}
+              Context: {contextLabel}
             </span>
             <button
               type="button"
               className="assistant-context-toggle"
+              aria-label="What the assistant can see"
+              title="What the assistant can see"
               aria-expanded={previewOpen}
               aria-controls={PREVIEW_LIST_ID}
               onClick={togglePreview}
             >
-              what the assistant can see
+              <Info size={13} aria-hidden="true" />
             </button>
+            <Segmented variant="tabs" size="sm" ariaLabel="Assistant views" value={tab} onChange={setTab} options={ASSISTANT_TABS} panelIds={{ chat: CONVERSATION_ID }} />
             {previewOpen && (
               <ul id={PREVIEW_LIST_ID} className="assistant-context-sections">
                 {previewSections === null ? (
@@ -692,8 +747,10 @@ export default function AssistantDrawer() {
               </ul>
             )}
           </div>
+          {tab === 'findings' && <SavedFindings revision={findingsRevision} />}
           <div
             className="assistant-messages"
+            id={CONVERSATION_ID}
             hidden={tab !== 'chat'}
             role="log"
             aria-label="Conversation"
@@ -714,13 +771,20 @@ export default function AssistantDrawer() {
                 Computed month reviews are available. Add a provider key in <Link to="/settings?section=integrations#assistant">Settings</Link> to enable written explanations and other questions.
               </p>
             )}
-            <div className="assistant-review-action">
-              <button type="button" className="button" disabled={streaming} onClick={() => send('Review the latest completed month.', undefined, undefined, { context: buildContext(), intent: 'month_review' })}>Review latest completed month</button>
-              {pendingSelection && streaming && <p role="status">Your selected chart point is queued. Finish or stop this answer to continue.</p>}
-            </div>
-            {configured && transcript.length === 0 && (
+            {pendingSelection && streaming && <p className="assistant-meta" role="status">Your selected chart point is queued. Finish or stop this answer to continue.</p>}
+            {transcript.length === 0 && (
               <div className="assistant-samples">
-                {[...INSIGHT_PRESETS, ...samplesFor(location.pathname)].map((sample) => (
+                {/* The computed review first, on the chips' own grammar (spec §4). It needs no provider
+                    key — send() lets an intent through unconfigured — so it is not gated on `configured`. */}
+                <button
+                  type="button"
+                  className="assistant-sample-chip"
+                  disabled={streaming}
+                  onClick={() => send('Review the latest completed month.', undefined, undefined, { context: buildContext(), intent: 'month_review' })}
+                >
+                  Review latest completed month
+                </button>
+                {presetChips.map((sample) => (
                   <button
                     key={sample.label}
                     type="button"
@@ -856,6 +920,8 @@ export default function AssistantDrawer() {
   return (
     <>
       <button ref={launcherRef} type="button" className="assistant-launcher" aria-label="Open assistant" aria-expanded={visible}
+        // Hidden while the conversation IS the active panel (spec §2.2): the panel's Close is the exit.
+        hidden={panel !== null && panel.activeId === 'assistant'}
         onClick={() => (visible ? close() : requestOpen())}><Sparkles size={18} aria-hidden="true" /></button>
       {panel && drawer ? createPortal(drawer, portalHost) : drawer}
     </>

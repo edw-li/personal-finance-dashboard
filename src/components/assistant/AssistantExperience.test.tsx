@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AssistantHandlers, ChatRequest } from '../../api/assistantStream'
@@ -33,7 +33,7 @@ beforeEach(() => {
   mocks.findings.mockResolvedValue([])
   mocks.save.mockResolvedValue({ id: 1 })
 })
-afterEach(() => { cleanup(); sessionStorage.clear(); vi.clearAllMocks() })
+afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); vi.clearAllMocks(); Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true }) })
 
 describe('assistant evidence and working context', () => {
   it('retains a computed review after provider failure and saves only this dated finding', async () => {
@@ -79,7 +79,7 @@ describe('assistant evidence and working context', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Ask the assistant' }), { target: { value: 'Keep this draft' } })
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect Living spending' })[0])
     expect(screen.getByRole('dialog', { name: 'Living spending' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Assistant' }))
     expect((screen.getByRole('textbox', { name: 'Ask the assistant' }) as HTMLTextAreaElement).value).toBe('Keep this draft')
     fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -104,6 +104,30 @@ describe('assistant evidence and working context', () => {
     expect(mocks.stream.mock.calls[1][0].context.selection.selection.evidence[0]).toEqual(bundle.metrics[0])
   })
 
+  it('inside the shared panel: non-modal, the model picker and New chat in the panel chrome, no drawer header, launcher stepped aside', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true }) // too narrow to dock → overlay
+    mount(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Assistant' })
+    await screen.findByRole('textbox', { name: 'Ask the assistant' })
+    // G1: a chat the reader can use while looking at the numbers — the page stays live.
+    expect(dialog.className).toContain('detail-panel-overlay')
+    expect(dialog.getAttribute('aria-modal')).toBeNull()
+    expect(document.querySelector('.detail-panel-backdrop')).toBeNull()
+    expect(document.querySelector('.detail-layout-content')!.hasAttribute('inert')).toBe(false)
+    // B2: one chrome row — the drawer's own header is gone; its controls are the panel's actions.
+    const controls = dialog.querySelector('.detail-panel-controls') as HTMLElement
+    expect(within(controls).getByRole('combobox', { name: 'Model' })).toBeTruthy()
+    expect(within(controls).getByRole('button', { name: 'New chat' })).toBeTruthy()
+    expect(document.querySelector('.assistant-header')).toBeNull()
+    expect(document.querySelector('.assistant-drawer-coordinated')).toBeTruthy()
+    // The launcher steps aside while the conversation IS the active panel; the panel's Close is the exit.
+    expect(screen.queryByRole('button', { name: 'Open assistant' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open assistant' }).getAttribute('aria-expanded')).toBe('false')
+  })
+
   it('ignores late content after Stop and cancels the provider when unmounted', async () => {
     const view = mount()
     fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
@@ -116,6 +140,18 @@ describe('assistant evidence and working context', () => {
     expect(abort).toHaveBeenCalledOnce()
     view.unmount()
     expect(abort).toHaveBeenCalledTimes(2)
+  })
+
+  it('asks about a metric as a figure, never "X in X"', async () => {
+    mount()
+    const captured = { chartTitle: 'Net worth', sourceRoute: '/', capturedAt: '2026-09-13T00:00:00Z',
+      selection: { kind: 'point', id: 'metric:net_worth', label: 'Net worth', date: '2026-08-01', scope: 'household',
+        values: [{ label: 'Net worth', value: '806708.50', unit: 'USD' }], evidence: [{ ...bundle.metrics[0], window: null, as_of: '2026-08-01' }] } }
+    act(() => window.dispatchEvent(new CustomEvent(EXPLAIN_SELECTION_EVENT, { detail: captured })))
+    await waitFor(() => expect(mocks.stream).toHaveBeenCalledOnce())
+    expect(mocks.stream.mock.calls[0][0].messages.at(-1).content)
+      .toBe('Explain the Net worth figure ($806,708.50, as of 2026-08-01, Household). Use the captured evidence and distinguish recorded facts from interpretation.')
+    expect(mocks.stream.mock.calls[0][0].intent).toBe('selection')
   })
 
   it('renders only known metric references as inspectable values', () => {

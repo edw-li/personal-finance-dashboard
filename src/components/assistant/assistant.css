@@ -7,7 +7,9 @@
 
 .assistant-launcher {
   position: fixed;
-  right: 1.25rem;
+  /* Beside a dock, never under it (2026-09-13 spec §2.2): DetailPanelProvider publishes the dock's
+     width on <html> (0px when nothing is docked). */
+  right: calc(1.25rem + var(--dock-width, 0px));
   /* Not a bare 1.25rem: `html { scrollbar-gutter: stable }` (index.css) reserves the
      scrollbar's column, and `right` is measured inside it — so an equal `bottom` renders a
      visibly SMALLER gap than the right one. The drawer measures the reservation at runtime
@@ -46,13 +48,7 @@
 .assistant-dock-mount, .assistant-dock-mount > div { height: 100%; min-height: 0; }
 .detail-panel-body:has(.assistant-dock-mount) { padding: 0; overflow: hidden; }
 .assistant-drawer-coordinated { position: static; width: 100%; height: 100%; border: 0; box-shadow: none; }
-.assistant-drawer-coordinated .assistant-model-select { max-width: none; }
-.assistant-tabs { display: flex; gap: .5rem; padding: .6rem .75rem; border-bottom: 1px solid var(--border); }
-.assistant-tabs button { color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 5px; padding: .35rem .55rem; cursor: pointer; }
-.assistant-tabs [aria-selected=true] { color: var(--text); background: var(--surface-2); border-color: var(--border); }
 .assistant-messages[hidden], .assistant-context[hidden] { display: none; }
-.assistant-review-action { margin-bottom: .8rem; }
-.assistant-review-action .button { font-size: .8rem; }
 .assistant-question-context { display: block; font-size: .7rem; opacity: .8; margin-top: .3rem; }
 .assistant-computed-summary { background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; padding: .8rem; margin-bottom: .8rem; }
 .assistant-computed-summary > strong { font-size: .9rem; }
@@ -93,7 +89,7 @@
 .assistant-model-select {
   flex: 1 1 auto;
   min-width: 0;
-  max-width: 150px;
+  max-width: 220px; /* every mode (spec §4): 998px in reading mode was the bug */
   text-overflow: ellipsis;
   background: var(--surface-2);
   color: var(--text);
@@ -119,12 +115,11 @@
   color: var(--text);
 }
 
-/* A row, not prose: on Taxes the label reads "Taxes · year: 2026 · filingStatus: single",
-   which wrapped the toggle onto its own line and pushed the transcript down. The label
-   ellipsises and the toggle keeps its width. */
+/* A row, not prose: label · (i) · views. The label ellipsises (on Taxes it reads "Taxes · 2026 ·
+   Married filing jointly"), the (i) keeps its box, the tablist sits at the right edge. */
 .assistant-context {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.4rem;
   flex-wrap: wrap;
   padding: 0.45rem 0.75rem;
@@ -141,15 +136,38 @@
   white-space: nowrap;
 }
 
+.assistant-context .segmented {
+  margin-left: auto;
+}
+
+/* The (i): InfoHint's scale and its open state (spec §4). */
 .assistant-context-toggle {
   flex: none;
-  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
   background: none;
   border: none;
-  padding: 0;
-  color: var(--accent);
-  font-size: 0.75rem;
+  border-radius: 4px;
+  color: var(--muted);
   cursor: pointer;
+}
+
+.assistant-context-toggle:hover {
+  color: var(--text);
+}
+
+.assistant-context-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.assistant-context-toggle[aria-expanded="true"] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 /* The expanded list is a third flex child; 100% basis breaks it to its own row under the
@@ -384,8 +402,21 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .assistant-drawer {
+  /* Standalone only: inside the shared panel the drawer is position: static, so a 24px translate
+     would slide its CONTENTS inside an already-visible panel — the panel's own entrance covers it. */
+  .assistant-drawer:not(.assistant-drawer-coordinated) {
     animation: assistant-drawer-in var(--t-fast) ease-out;
+  }
+
+  .assistant-launcher {
+    transition: right var(--t-page) var(--ease-out);
+  }
+
+  /* The launcher rides --dock-width, so during a resizer drag it would lag --t-page behind the
+     hand exactly as the panel and the content would — those already opt out through .is-dragging
+     (details.css), and the launcher is a descendant of the .detail-layout-content that carries it. */
+  .is-dragging .assistant-launcher {
+    transition: none;
   }
 
   @keyframes assistant-drawer-in {

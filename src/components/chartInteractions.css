@@ -1,7 +1,13 @@
 .chart-card-slot { min-width: 0; }
 .chart-expanded-dialog { position: fixed; inset: 24px; width: calc(100vw - 48px); max-width: none; height: calc(100vh - 48px); max-height: none; margin: 0; padding: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; overflow: auto; }
-.chart-expanded-dialog::backdrop { background: #0009; }
-.chart-expanded-dialog .chart-card { border: 0; border-radius: 0; }
+/* --scrim is F2's light-theme token (spec §6); the fallback is today's value. */
+.chart-expanded-dialog::backdrop { background: var(--scrim, #0009); }
+/* The void fix (spec §2.3): ChartSurface appends a class-less host div, so dialog → host → card
+   is the chain that hands the plot every pixel the header, export row and footer do not need.
+   EChart's `height: 'fill'` reads it; the ResizeObserver refits the canvas. */
+.chart-expanded-dialog > div { height: 100%; }
+.chart-expanded-dialog .chart-card { display: flex; flex-direction: column; height: 100%; border: 0; border-radius: 0; }
+.chart-expanded-dialog .loading-dim { flex: 1; min-height: 0; }
 .chart-expanded-dialog .chart-card-header { position: sticky; top: 0; z-index: 1; background: var(--surface); padding-bottom: .5rem; }
 .chart-card-utility { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; width: 100%; }
 .chart-card-utility .button { padding: .25rem .55rem; font-size: .75rem; }
@@ -19,3 +25,36 @@
 .chart-table tr.is-selected { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
 .chart-row-actions { display: flex; gap: .4rem; }
 .chart-row-actions button { font-size: .75rem; padding: .2rem .45rem; }
+
+/* ── Expand dialog motion (2026-09-13 spec §2.3) ────────────────────────────
+   Entrance: the surface fades up from the card over --t-page; the backdrop over --t-fast. The close
+   is INSTANT, which spec §2.3 allows explicitly — focus and scroll are already restored by
+   ChartSurface. A discrete `display`/`overlay` exit was tried and removed in review: ChartSurface
+   moves the chart host back to its placeholder synchronously, so the fade played on an empty box;
+   ::backdrop had no exit and snapped out underneath it; and the @starting-style rule ran a --t-fast
+   opacity/transform transition against this --t-page animation on the same two properties, which
+   flickered on every open. Tokens only (motion.test.ts); the reduce block zeroes them and this block
+   is gated besides. Keyframe names are this lane's own (spec §16). */
+@media (prefers-reduced-motion: no-preference) {
+  .chart-expanded-dialog[open] { animation: surface-in var(--t-page) var(--ease-out) both; }
+  .chart-expanded-dialog[open]::backdrop { animation: chart-backdrop-in var(--t-fast) ease both; }
+  @keyframes surface-in { from { opacity: 0; transform: translateY(8px) scale(.985); } }
+  @keyframes chart-backdrop-in { from { opacity: 0; } }
+}
+
+/* ── ChartCard `aside` (2026-09-13 spec §12) ──────────────────────────────
+   The plot and a second column. `.chart-card-has-aside` (the section) is the query container — the
+   body cannot query itself — so the columns collapse on the CARD's width, which a dock or a span-6
+   narrows, not on the viewport's. inline-size containment is safe here: the card's width is the
+   grid track's, never its content's, and the InfoHint bubble / ECharts tooltip are already
+   positioned inside the card. */
+.chart-card-has-aside { container-type: inline-size; }
+.chart-card-with-aside { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, .9fr); gap: 1rem 1.5rem; align-items: start; }
+.chart-card-with-aside > .chart-card-plot, .chart-card-with-aside > .chart-card-aside { min-width: 0; }
+@container (max-width: 899px) {
+  .chart-card-with-aside { grid-template-columns: minmax(0, 1fr); }
+}
+/* Inside the Expand dialog the wrapper is the flex child that grows, and the plot column is its own
+   column flexbox so `.loading-dim { flex: 1 }` (above) still reaches the canvas. */
+.chart-expanded-dialog .chart-card-with-aside { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+.chart-expanded-dialog .chart-card-plot { display: flex; flex-direction: column; min-height: 0; }

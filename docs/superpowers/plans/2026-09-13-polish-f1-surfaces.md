@@ -149,7 +149,7 @@ Why the move: Task 3's `explainPrompt` (in `explainSelection.ts`) needs `formatE
 formatter belongs in `utils/` anyway; the re-export keeps every existing importer (`SelectionDetail`,
 `AssistantEvidence`, the tests) on its current import path.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/utils/metricReceipt.test.ts`:
 
@@ -201,13 +201,13 @@ describe('receipt labels', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/utils/metricReceipt.test.ts`
 Expected: FAIL — the four names are not exported from `./metricReceipt` (`is not a function` /
 `toEqual` against `undefined`).
 
-- [ ] **Step 3: Implement — `src/utils/metricReceipt.ts` becomes**
+- [x] **Step 3: Implement — `src/utils/metricReceipt.ts` becomes**
 
 ```ts
 import type { MetricEvidence } from '../types/metrics'
@@ -271,7 +271,7 @@ export function formatCompleteness(value: string): string {
 }
 ```
 
-- [ ] **Step 4: Re-export from `MetricInspector.tsx`**
+- [x] **Step 4: Re-export from `MetricInspector.tsx`**
 
 In `src/components/details/MetricInspector.tsx` replace line 7 (`import { formatMetricScope } …`)
 and delete lines 12–23 (the whole `formatEvidenceValue` function) so the top of the file reads:
@@ -297,7 +297,7 @@ export function ApplicationSourceLink({ href, children, onClick }: { href: strin
 
 Everything from `ApplicationSourceLink` down is unchanged in this task.
 
-- [ ] **Step 5: Run the tests and the type check**
+- [x] **Step 5: Run the tests and the type check**
 
 Run: `npx vitest run src/utils/metricReceipt.test.ts src/components/details`
 Expected: 3 files, 12 tests PASS (4 new + 8 existing).
@@ -305,7 +305,7 @@ Expected: 3 files, 12 tests PASS (4 new + 8 existing).
 Run: `npx tsc -b`
 Expected: no output, exit 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/utils/metricReceipt.ts src/utils/metricReceipt.test.ts src/components/details/MetricInspector.tsx
@@ -321,7 +321,7 @@ git commit -m "fix(copy): completeness and component labels read as sentences; f
 - Modify: `src/components/details/details.css` (delete the `.metric-definition-id` rule, line 38)
 - Test: `src/components/details/MetricInspector.test.tsx`
 
-- [ ] **Step 1: Write the failing tests** — append inside the `describe('metric receipts and captured questions', …)` block of `src/components/details/MetricInspector.test.tsx`:
+- [x] **Step 1: Write the failing tests** — append inside the `describe('metric receipts and captured questions', …)` block of `src/components/details/MetricInspector.test.tsx`:
 
 ```tsx
   it('speaks the data status and component labels as sentences and keeps the definition id as a tooltip', () => {
@@ -349,13 +349,13 @@ with one assertion right after the first `expect(screen.getByText('$123.45')).to
     expect(document.querySelector('.detail-panel-heading p')).toBeNull()
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `npx vitest run src/components/details/MetricInspector.test.tsx`
 Expected: FAIL — `Unable to find an element with the text: Data status`; the subtitle assertion fails
 because `.detail-panel-heading p` renders "About this number".
 
-- [ ] **Step 3: Implement — replace the `MetricInspector` component and `MetricInfoButton`'s `open` call**
+- [x] **Step 3: Implement — replace the `MetricInspector` component and `MetricInfoButton`'s `open` call**
 
 Import the two formatters (line 7 becomes):
 
@@ -430,12 +430,12 @@ In `src/components/details/details.css` delete line 38:
 .metric-definition-id { color: var(--muted); font-size: .7rem !important; margin-top: 1.2rem !important; }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npx vitest run src/components/details`
 Expected: all PASS (DetailPanelProvider 4, MetricInspector 5).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/components/details/MetricInspector.tsx src/components/details/MetricInspector.test.tsx src/components/details/details.css
@@ -455,7 +455,7 @@ git commit -m "fix(copy): receipt rows speak in labels — Data status, sentence
 The template lives beside the event, not in the drawer: a pure function is testable without mounting
 the assistant, and the drawer stays a consumer.
 
-- [ ] **Step 1: Write the failing unit test** — create `src/components/details/explainSelection.test.ts`:
+- [x] **Step 1: Write the failing unit test** — create `src/components/details/explainSelection.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -510,12 +510,12 @@ describe('explainPrompt', () => {
 
 (`formatMetricScope(1)` reads the household snapshot cache, which is empty in tests → `'Selected person'`.)
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `npx vitest run src/components/details/explainSelection.test.ts`
 Expected: FAIL — `explainPrompt is not a function`.
 
-- [ ] **Step 3: Implement — `src/components/details/explainSelection.ts` becomes**
+- [x] **Step 3: Implement — `src/components/details/explainSelection.ts` becomes**
 
 ```ts
 import type { ChartSelection, ExplainSelectionRequest } from '../../types/metrics'
@@ -566,12 +566,12 @@ export function explainPrompt(request: ExplainSelectionRequest): string {
 }
 ```
 
-- [ ] **Step 4: Run the unit test**
+- [x] **Step 4: Run the unit test**
 
 Run: `npx vitest run src/components/details/explainSelection.test.ts`
 Expected: 4 tests PASS.
 
-- [ ] **Step 5: Write the failing drawer test** — append inside `describe('assistant evidence and working context', …)` in `src/components/assistant/AssistantExperience.test.tsx`:
+- [x] **Step 5: Write the failing drawer test** — append inside `describe('assistant evidence and working context', …)` in `src/components/assistant/AssistantExperience.test.tsx`:
 
 ```tsx
   it('asks about a metric as a figure, never "X in X"', async () => {
@@ -587,12 +587,12 @@ Expected: 4 tests PASS.
   })
 ```
 
-- [ ] **Step 6: Run to verify it fails**
+- [x] **Step 6: Run to verify it fails**
 
 Run: `npx vitest run src/components/assistant/AssistantExperience.test.tsx`
 Expected: FAIL on the new case — the content is `Explain Net worth in Net worth. Use the captured selection…`.
 
-- [ ] **Step 7: Implement in `AssistantDrawer.tsx`**
+- [x] **Step 7: Implement in `AssistantDrawer.tsx`**
 
 Import (add to the existing details imports, line 36):
 
@@ -614,12 +614,12 @@ Replace the listener (lines 581–590) with:
   }), [requestOpen])
 ```
 
-- [ ] **Step 8: Run the tests**
+- [x] **Step 8: Run the tests**
 
 Run: `npx vitest run src/components/assistant/AssistantExperience.test.tsx src/components/details`
 Expected: all PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/components/details/explainSelection.ts src/components/details/explainSelection.test.ts src/components/assistant/AssistantDrawer.tsx src/components/assistant/AssistantExperience.test.tsx
@@ -635,7 +635,7 @@ git commit -m "fix(copy): explain-this-number names the figure, its period and s
 - Modify: `src/components/ChartCard.tsx` (`inspect()` line 132, the effect at line 140, the pin strip lines 245–249)
 - Test: `src/components/details/MetricInspector.test.tsx`, `src/components/ChartCard.test.tsx`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `src/components/details/MetricInspector.test.tsx` add the import and a case:
 
@@ -680,13 +680,13 @@ Also update the two existing assertions that named the dialog after the chart (t
 `'immediately removes a stale owner selection and its panel on scope change'` line 222 —
 `screen.queryByRole('dialog', { name: 'Net worth' })` → `screen.queryByRole('dialog', { name: 'August' })`.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `npx vitest run src/components/details/MetricInspector.test.tsx src/components/ChartCard.test.tsx`
 Expected: FAIL — SelectionDetail renders `<p>August</p>` first and `Scope: Household` as a paragraph; the
 dialog is named `Net worth`; the strip carries `role="status"`; no `Show details` button.
 
-- [ ] **Step 3: Implement `SelectionDetail.tsx`** (whole file):
+- [x] **Step 3: Implement `SelectionDetail.tsx`** (whole file):
 
 ```tsx
 import type { ChartSelection } from '../../types/metrics'
@@ -717,7 +717,7 @@ export default function SelectionDetail({ selection, chartTitle, onClear, onOpen
 }
 ```
 
-- [ ] **Step 4: Implement the `ChartCard.tsx` swap and strip**
+- [x] **Step 4: Implement the `ChartCard.tsx` swap and strip**
 
 Line 132 (`inspect`) becomes:
 
@@ -742,12 +742,12 @@ Lines 245–249 (the pin strip) become:
       </div>}
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `npx vitest run src/components/details src/components/ChartCard.test.tsx`
 Expected: all PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/components/details/SelectionDetail.tsx src/components/details/MetricInspector.test.tsx src/components/ChartCard.tsx src/components/ChartCard.test.tsx
@@ -762,7 +762,7 @@ git commit -m "fix(copy): selection panel names the selection once (title = labe
 - Modify: `src/components/EChart.tsx` (props lines 26 and 39, the ResizeObserver lines 163–168, the host `style` line 354)
 - Test: `src/components/EChart.test.tsx`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `src/components/EChart.test.tsx`, replace the body of `'resizes when the element and the engine disagree'`
 (inside `describe('EChart resize guard (spec §6)')`) with:
@@ -797,13 +797,13 @@ describe('EChart height', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `npx vitest run src/components/EChart.test.tsx`
 Expected: FAIL — `resize` was called with no arguments; `height="fill"` is a type error at runtime
 renders `style.height` as `''` (jsdom drops the invalid `fill` length).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/components/EChart.tsx` — the prop (line 39) becomes:
 
@@ -834,7 +834,7 @@ The host (line 354) becomes:
       style={{ height: height === 'fill' ? '100%' : height, width: '100%' }}
 ```
 
-- [ ] **Step 4: Run the tests and the type check**
+- [x] **Step 4: Run the tests and the type check**
 
 Run: `npx vitest run src/components/EChart.test.tsx`
 Expected: all PASS (existing + 2 new).
@@ -842,7 +842,7 @@ Expected: all PASS (existing + 2 new).
 Run: `npx tsc -b`
 Expected: no output, exit 0 (`ResizeOpts.animation` exists on the ECharts 6 instance type).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/components/EChart.tsx src/components/EChart.test.tsx
@@ -861,7 +861,7 @@ git commit -m "feat(chart): EChart fills its host on request and refits without 
 Motion timing is not unit-tested (jsdom does not run CSS); lane V measures it. The unit test pins the
 one thing the card decides: expanded → `'fill'`, not `innerHeight - 280`.
 
-- [ ] **Step 1: Write the failing test** — in `src/components/ChartCard.test.tsx`, first widen the EChart
+- [x] **Step 1: Write the failing test** — in `src/components/ChartCard.test.tsx`, first widen the EChart
 mock's prop type (line 10) so `data-height` can carry `'fill'`:
 
 ```tsx
@@ -881,12 +881,12 @@ then add inside `describe('ChartCard persistent interactions', …)`:
   })
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `npx vitest run src/components/ChartCard.test.tsx`
 Expected: FAIL — `data-height` is `"488"` (jsdom's `innerHeight` 768 − 280) instead of `"fill"`.
 
-- [ ] **Step 3: Implement `ChartCard.tsx`**
+- [x] **Step 3: Implement `ChartCard.tsx`**
 
 Delete line 171 (`const chartHeight = expanded ? Math.max(height, window.innerHeight - 280) : height`) and
 change the `EChart` mount's height prop (line 188) to:
@@ -895,7 +895,7 @@ change the `EChart` mount's height prop (line 188) to:
           height={expanded ? 'fill' : height}
 ```
 
-- [ ] **Step 4: Implement `chartInteractions.css`** — replace lines 2–5 with:
+- [x] **Step 4: Implement `chartInteractions.css`** — replace lines 2–5 with:
 
 ```css
 .chart-expanded-dialog { position: fixed; inset: 24px; width: calc(100vw - 48px); max-width: none; height: calc(100vh - 48px); max-height: none; margin: 0; padding: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; overflow: auto; }
@@ -942,13 +942,13 @@ and append at the end of the file:
 }
 ```
 
-- [ ] **Step 5: Run the tests, including the motion literal scan**
+- [x] **Step 5: Run the tests, including the motion literal scan**
 
 Run: `npx vitest run src/components/ChartCard.test.tsx src/theme/motion.test.ts`
 Expected: all PASS — `motion.test.ts`'s "no stylesheet states a finite duration as a literal" stays
 green because every layer's first duration slot is a `var(--t-*)`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/components/chartInteractions.css src/components/ChartCard.tsx src/components/ChartCard.test.tsx
@@ -968,7 +968,7 @@ Used later by P2 (Allocation's donut + ranked table) and P1 (Spending's dock don
 The card is the container-query container (an element cannot query itself), so the two columns
 follow the CARD's width — a dock or a `span-6` narrows it — not the viewport's.
 
-- [ ] **Step 1: Write the failing test** — inside `describe('ChartCard chrome', …)` in `src/components/ChartCard.test.tsx`:
+- [x] **Step 1: Write the failing test** — inside `describe('ChartCard chrome', …)` in `src/components/ChartCard.test.tsx`:
 
 ```tsx
   it('renders an aside beside the plot in a two-column body wrapper, and no wrapper at all without one', () => {
@@ -990,12 +990,12 @@ follow the CARD's width — a dock or a `span-6` narrows it — not the viewport
   })
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `npx vitest run src/components/ChartCard.test.tsx`
 Expected: FAIL — `aside` is not a known prop (tsc) / `.chart-card-has-aside` is not on the section.
 
-- [ ] **Step 3: Implement `ChartCard.tsx`**
+- [x] **Step 3: Implement `ChartCard.tsx`**
 
 Add to `ChartCardProps` after `lede`:
 
@@ -1026,7 +1026,7 @@ The `{body}` slot (line 244) becomes:
         : body}
 ```
 
-- [ ] **Step 4: Append to `chartInteractions.css`**
+- [x] **Step 4: Append to `chartInteractions.css`**
 
 ```css
 
@@ -1048,7 +1048,7 @@ The `{body}` slot (line 244) becomes:
 .chart-expanded-dialog .chart-card-plot { display: flex; flex-direction: column; min-height: 0; }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `npx vitest run src/components/ChartCard.test.tsx`
 Expected: all PASS.
@@ -1056,7 +1056,7 @@ Expected: all PASS.
 Run: `npx tsc -b`
 Expected: no output, exit 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/components/ChartCard.tsx src/components/ChartCard.test.tsx src/components/chartInteractions.css
@@ -1089,7 +1089,7 @@ reading-mode measure cap, the receipt grid and the resizer grip land in the CSS.
 Motion (transitions, keyframes, the exit ghost, the unified box model's transition) is Task 9 — the
 CSS below already uses the `--dp-*` box model so Task 9 only appends the motion block.
 
-- [ ] **Step 1: Rewrite the test file** — `src/components/details/DetailPanelProvider.test.tsx` becomes:
+- [x] **Step 1: Rewrite the test file** — `src/components/details/DetailPanelProvider.test.tsx` becomes:
 
 ```tsx
 import { cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react'
@@ -1313,13 +1313,13 @@ describe('coordinated detail panels', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `npx vitest run src/components/details/DetailPanelProvider.test.tsx`
 Expected: FAIL — `defaultPanelWidth` / `MODE_STORAGE_KEY` / `WIDTH_STORAGE_KEY` are not exported; the
 remaining cases fail on `Back to …`, `Over the page`, `aria-valuenow` 440, `--dock-width`, `modal`.
 
-- [ ] **Step 3: Write `src/components/details/DetailPanelProvider.tsx`** (whole file):
+- [x] **Step 3: Write `src/components/details/DetailPanelProvider.tsx`** (whole file):
 
 ```tsx
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
@@ -1675,7 +1675,7 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
 }
 ```
 
-- [ ] **Step 4: Write `src/components/details/details.css`** (whole file; Task 9 appends the motion block):
+- [x] **Step 4: Write `src/components/details/details.css`** (whole file; Task 9 appends the motion block):
 
 ```css
 /* The coordinated detail panel (2026-09-12 design §5; chrome and box model 2026-09-13 spec §2.2, §4).
@@ -1754,7 +1754,7 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
 .selection-detail-actions .metric-source-link { margin: 0; }
 ```
 
-- [ ] **Step 5: Update the three tests that pinned the old Back name**
+- [x] **Step 5: Update the three tests that pinned the old Back name**
 
 - `src/components/ChartCard.test.tsx` line 196: `screen.getByRole('button', { name: 'Back' })` →
   `screen.getByRole('button', { name: 'Back to August' })` (the first chart's panel is titled by its
@@ -1764,7 +1764,7 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
   line 86: `{ name: 'Back' }` → `{ name: 'Back to Financial question' }`. (`App.test.tsx` belongs to no
   lane; this is the only change to it — say so in the hand-off.)
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `npx vitest run src/components/details src/components/ChartCard.test.tsx src/components/assistant/AssistantExperience.test.tsx src/App.test.tsx`
 Expected: all PASS (DetailPanelProvider 10, MetricInspector 6, explainSelection 4, ChartCard, AssistantExperience, App).
@@ -1779,7 +1779,7 @@ warning there. `allowConstantExport: true` is set in `eslint.config.js`, so stri
 `defaultPanelWidth`/`panelGeometry` are functions and `panelGeometry` was already exported, so the count is
 unchanged. If eslint prints anything new, stop and reconsider rather than disabling a rule.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/components/details/DetailPanelProvider.tsx src/components/details/details.css src/components/details/DetailPanelProvider.test.tsx src/components/ChartCard.test.tsx src/components/assistant/AssistantExperience.test.tsx src/App.test.tsx
@@ -1804,7 +1804,7 @@ for the exit beat. Same observable result, simpler invariants: `activeId` goes n
 `typeof panelRef.current.animate === 'function'` — the one cheap signal that separates a CSS-animating
 engine from jsdom — so every existing synchronous test keeps passing untouched.
 
-- [ ] **Step 1: Write the failing tests** — in `src/components/details/DetailPanelProvider.test.tsx` extend
+- [x] **Step 1: Write the failing tests** — in `src/components/details/DetailPanelProvider.test.tsx` extend
 the imports:
 
 ```tsx
@@ -1902,13 +1902,13 @@ and append inside `describe('coordinated detail panels', …)`:
   })
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `npx vitest run src/components/details/DetailPanelProvider.test.tsx`
 Expected: the four new cases FAIL — `document.querySelector('.detail-panel.is-leaving')` is `null`
 (today the panel unmounts at once). The ten earlier cases still PASS.
 
-- [ ] **Step 3: Implement in `DetailPanelProvider.tsx`**
+- [x] **Step 3: Implement in `DetailPanelProvider.tsx`**
 
 Add the import after the lucide import:
 
@@ -2016,7 +2016,7 @@ surface reopens mid-beat the ghost's `ref(null)` likewise runs before the live p
 The assistant's `AssistantDockMount` moves its portal host the same way; its drawer is already
 unmounted (`open` is false), so the ghost shows the frame and title fading, which is the intent.
 
-- [ ] **Step 4: Append the motion block to `src/components/details/details.css`**
+- [x] **Step 4: Append the motion block to `src/components/details/details.css`**
 
 ```css
 
@@ -2050,7 +2050,7 @@ unmounted (`open` is false), so the ghost shows the frame and title fading, whic
 .detail-panel.is-leaving { pointer-events: none; }
 ```
 
-- [ ] **Step 5: Run the tests, the literal-duration scan and the type check**
+- [x] **Step 5: Run the tests, the literal-duration scan and the type check**
 
 Run: `npx vitest run src/components/details src/theme/motion.test.ts src/components/ChartCard.test.tsx src/components/assistant/AssistantExperience.test.tsx src/App.test.tsx`
 Expected: all PASS (DetailPanelProvider now 14 cases; nothing else changed behaviour — jsdom has no
@@ -2059,7 +2059,7 @@ Expected: all PASS (DetailPanelProvider now 14 cases; nothing else changed behav
 Run: `npx tsc -b`
 Expected: no output, exit 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/components/details/DetailPanelProvider.tsx src/components/details/details.css src/components/details/DetailPanelProvider.test.tsx
@@ -2092,7 +2092,7 @@ toggles the preview list; `.assistant-model-select { max-width: 220px }` in ever
 beside a dock (`--dock-width`) and hides while the assistant is the active panel; inside the panel the
 drawer's own Escape handlers defer to the provider (one level at a time).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `src/components/assistant/AssistantDrawer.test.tsx` — line 150 becomes:
 
@@ -2181,13 +2181,13 @@ afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); vi.cl
   })
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `npx vitest run src/components/assistant`
 Expected: FAIL — `Seeing: Spending · Mar 2026`; first chip is `Month in review`; no `tablist` named
 `Assistant views`; the provider case finds `aria-modal="true"` and `.assistant-header` present.
 
-- [ ] **Step 3: Implement `AssistantDrawer.tsx`**
+- [x] **Step 3: Implement `AssistantDrawer.tsx`**
 
 Imports — line 5 and line 7 become, and add `Segmented` after the details imports:
 
@@ -2439,7 +2439,7 @@ The launcher (in the component's `return`) becomes:
         onClick={() => (visible ? close() : requestOpen())}><Sparkles size={18} aria-hidden="true" /></button>
 ```
 
-- [ ] **Step 4: Implement `assistant.css`**
+- [x] **Step 4: Implement `assistant.css`**
 
 `.assistant-launcher`'s `right` (line 10) becomes, with its comment:
 
@@ -2528,7 +2528,7 @@ transition is added:
   }
 ```
 
-- [ ] **Step 5: Run the tests, the type check and lint**
+- [x] **Step 5: Run the tests, the type check and lint**
 
 Run: `npx vitest run src/components/assistant src/components/details src/theme/motion.test.ts`
 Expected: all PASS.
@@ -2540,7 +2540,7 @@ Run: `npx eslint src/components/assistant`
 Expected: 0 errors, 0 new warnings (`react-hooks/exhaustive-deps` is satisfied: the open effect reads
 only refs and its listed deps; the update effect lists `newChat`, which is a stable `useCallback`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/components/assistant/AssistantDrawer.tsx src/components/assistant/assistant.css src/components/assistant/AssistantDrawer.test.tsx src/components/assistant/AssistantExperience.test.tsx
@@ -2554,19 +2554,19 @@ git commit -m "feat(assistant): the conversation lives in the shared panel's chr
 No code changes. Every command runs from the worktree root; stop at the first failure and fix it in
 the task that owns the file before continuing.
 
-- [ ] **Step 1:** `npx tsc -b` → no output, exit 0.
-- [ ] **Step 2:** `npx eslint src/components/details src/components/assistant src/components/ChartCard.tsx src/components/ChartSurface.tsx src/components/EChart.tsx`
+- [x] **Step 1:** `npx tsc -b` → no output, exit 0.
+- [x] **Step 2:** `npx eslint src/components/details src/components/assistant src/components/ChartCard.tsx src/components/ChartSurface.tsx src/components/EChart.tsx`
   → `✖ 3 problems (0 errors, 3 warnings)` or fewer — the warnings are the pre-existing
   `react-refresh/only-export-components` ones. No new rule may be disabled.
-- [ ] **Step 3:** `npx vitest run src/components/details src/components/assistant src/components/ChartCard.test.tsx src/components/EChart.test.tsx src/utils/metricReceipt.test.ts`
+- [x] **Step 3:** `npx vitest run src/components/details src/components/assistant src/components/ChartCard.test.tsx src/components/EChart.test.tsx src/utils/metricReceipt.test.ts`
   → all files green.
-- [ ] **Step 4:** `npx vitest run` → `Test Files  N passed (N)`, `Tests  ≈2783 passed` (2753 on main + about
+- [x] **Step 4:** `npx vitest run` → `Test Files  N passed (N)`, `Tests  ≈2783 passed` (2753 on main + about
   30 new), **0 failed**, no unhandled errors. `src/theme/motion.test.ts` (literal durations) and
   `src/theme/tokens.test.ts` must be among the green files.
-- [ ] **Step 5:** `npm run build` → `tsc -b` silent, then vite prints `✓ built in …s`; the echarts chunk
+- [x] **Step 5:** `npm run build` → `tsc -b` silent, then vite prints `✓ built in …s`; the echarts chunk
   advisory stays under the configured 760 kB limit (nothing in this lane adds echarts modules).
-- [ ] **Step 6:** `npx eslint .` → `0 errors`, warnings ≤ 24 (the repo baseline).
-- [ ] **Step 7:** Record the numbers (test count, warning count, build time) in the hand-off note; if any
+- [x] **Step 6:** `npx eslint .` → `0 errors`, warnings ≤ 24 (the repo baseline).
+- [x] **Step 7:** Record the numbers (test count, warning count, build time) in the hand-off note; if any
   gate needed a fix, that fix has its own commit in the task that owns the file.
 
 ---
@@ -2821,3 +2821,170 @@ generic; the ghost's `leaving` shape `{ request, mode }` is used identically in 
     conversions to F1, so Task 12 touches it and reports.
 15. **"Review latest completed month" queued-selection status.** The `<p role="status">` that lived inside
     the removed `.assistant-review-action` row renders on its own above the chips.
+
+---
+
+## Results (implementer hand-off, 2026-09-13)
+
+**Status: DONE_WITH_CONCERNS** — Tasks 1–11 complete on `polish/f1-surfaces` (branched from `main`
+@`dc91479`); **Task 12 skipped** (F2's `Disclosure` is not in this worktree and not on `main`). One
+documented eslint-warning addition (+1, of the same pre-existing kind), and three small deviations
+from the plan's letter, all recorded below.
+
+### Commits (one per task, in order)
+
+| # | Task | SHA | Message prefix |
+| --- | --- | --- | --- |
+| 1 | Receipt labels + `formatEvidenceValue` move | `d80fe07` | `fix(copy):` |
+| 2 | `MetricInspector` copy (Data status, labels, tooltip, no subtitle) | `7b86199` | `fix(copy):` |
+| 3 | Metric-aware `explainPrompt` | `2ea5ac7` | `fix(copy):` |
+| 4 | `SelectionDetail` / `ChartCard` title-subtitle swap + pin strip | `d1e2f23` | `fix(copy):` |
+| 5 | `EChart` `height: 'fill'` + animation-free resize | `d951ace` | `feat(chart):` |
+| 6 | Expand dialog entrance/exit + void fix | `6269acf` | `feat(chart):` |
+| 7 | `ChartCard aside` | `db89632` | `feat(chart):` |
+| 8 | Panel chrome + behaviour | `0d79ccf` | `feat(panel):` |
+| 9 | Panel motion + exit ghost | `050b2e8` | `feat(panel):` |
+| 10 | Assistant inside the panel | `3f93638` | `feat(assistant):` |
+| 11 | Gates (no code changes) | — | — |
+| 12 | Disclosure adoption | **skipped** | — |
+
+### Gate numbers (Task 11, run from the worktree root)
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| Types | `npx tsc -b` | no output, exit 0 |
+| Lint (scoped) | `npx eslint src/components/details src/components/assistant src/components/ChartCard.tsx src/components/ChartSurface.tsx src/components/EChart.tsx` | **0 errors, 4 warnings** (all `react-refresh/only-export-components`; the same paths on `main` measure 3 — see deviation 1) |
+| Tests (scoped) | `npx vitest run src/components/details src/components/assistant src/components/ChartCard.test.tsx src/components/EChart.test.tsx src/utils/metricReceipt.test.ts` | 13 files, **170 tests passed** |
+| Tests (full) | `npx vitest run` | **209 files, 2873 tests passed, 0 failed**, no unhandled errors; `src/theme/motion.test.ts` and `src/theme/tokens.test.ts` both green. Duration 98s. |
+| Build | `npm run build` | `tsc -b` silent, then `built in 9.09s`; largest chunk `assets/tooltip-*.js` **758.10 kB** (gzip 257.30 kB) — under the configured 760 kB advisory, and unchanged by this lane |
+| Lint (repo) | `npx eslint .` | **0 errors, 25 warnings** (`main` measures 24 — see deviation 1) |
+
+The plan's stated vitest baseline (2753) is stale: `main` @`dc91479` already carries more. This lane
+adds about 28 tests (metricReceipt 4, MetricInspector +2, explainSelection 4, ChartCard +3, EChart +2,
+DetailPanelProvider +10, assistant +3).
+
+### Deviations from the plan / spec
+
+1. **The eslint warning count is +1, not unchanged (Task 8, Step 6).** The plan predicted "the count
+   is unchanged" because `panelGeometry` was already exported. That arithmetic missed
+   `defaultPanelWidth`, which is a *new* exported function beside the component, so
+   `react-refresh/only-export-components` fires once more in `DetailPanelProvider.tsx`
+   (`src/components/details`: 3 to 4; repo-wide: 24 to 25). Kept rather than worked around: the
+   contracts block publishes `defaultPanelWidth` from `DetailPanelProvider.tsx` verbatim and the page
+   lanes build against that path. No rule was disabled, and the warning is the same kind the plan
+   pre-authorises. Spec §15 item 9 allows "baseline 24 + documented additions" — this is the addition.
+2. **The `headerActionsRef` effect carries a dependency array (Task 10, Step 3).** The plan wrote it
+   unkeyed (`useEffect(() => { headerActionsRef.current = <AssistantHeaderActions … /> })`).
+   `react-hooks/exhaustive-deps` rejects that shape here — it sees `setModel` referenced inside an
+   unkeyed effect and warns about "an infinite chain of updates". Written as
+   `}, [model, models, streaming, newChat])` instead: identical behaviour (the deps are exactly the
+   ref's inputs, and this effect is declared before the open effect, so `.current` is always set and
+   current when the open effect reads it), and the warning goes away. The plan's intent — the open
+   effect must NOT list model/models/streaming, so it never re-raises the assistant over a stacked
+   evidence panel — is unchanged.
+3. **The preset chip list is hoisted out of the JSX (Task 10, Step 3).** The plan's
+   `{configured && [...INSIGHT_PRESETS, ...samplesFor(location.pathname)].map((sample) => …)}` makes
+   the React Compiler's `react-hooks/refs` rule report **an error** ("Cannot access refs during
+   render") on the `send(…)` call inside the map callback — `send` reads `sendSeq` / `handleRef` /
+   `lastQuestion` / `modelsRef` / `stickToBottom`. Bisected: the inline `cond && array.map(cb)` is the
+   trigger; the same callback outside that shape is clean. Replaced with a hoisted
+   `const presetChips = configured ? [...INSIGHT_PRESETS, ...samplesFor(location.pathname)] : []`
+   beside `configured`, and `{presetChips.map(…)}` in the JSX. Same rendering, same gating, 0 errors.
+
+Ambiguities 1–15 in the plan's own self-review were all implemented as the plan resolved them; no
+further ambiguity surfaced. The spec's §2.2 phrasing (`leaving: true` inside the stack) is realised as
+the plan's exit ghost, and §2.2's per-mode entrance selector as the plan's `.detail-panel` selector —
+both are the plan's own recorded, reasoned departures from the spec's letter, not new ones.
+
+### Skipped
+
+**Task 12 — Disclosure adoption.** Pre-check run as specified:
+
+- `ls src/components/Disclosure.tsx src/components/disclosure.css` — both missing
+- `git ls-tree -r --name-only main -- src/components | grep -i disclosure` — no match
+
+So: **Task 12 skipped — `Disclosure` not present in this worktree; ChartTable, SelectionDetail
+calculations, ComputedSummary, SavedFindings and the reasoning block still render bare `<details>`.**
+The lead should re-run Task 12 on main after F2 merges (or hand it to F2). Nothing in this lane blocks
+that: `SelectionDetail.tsx` still carries its `<details>` on one line, and `AssistantEvidence.tsx` /
+`ChartTable.tsx` are untouched.
+
+### Files touched outside this lane's ownership
+
+- `src/App.test.tsx` — the two `name: 'Back'` queries only (the Back button is renamed by spec §4):
+  line 76 becomes `{ name: /^Back to / }`, line 86 becomes `{ name: 'Back to Financial question' }`.
+  No other change to that file.
+- Task 12's unowned files (`ChartTable.tsx`, `AssistantEvidence.tsx`) were **not** touched, since the
+  task was skipped.
+
+### For lane V (spec §15 item 1)
+
+- Under `reducedMotion: 'no-preference'`, non-zero `animation` / `transition` durations should read on
+  `.detail-panel` (`detail-panel-in` over `--t-page`, plus the inset / width / right / border-radius
+  transition), `.detail-panel.is-leaving` (`detail-panel-out` over `--t-fast`),
+  `.detail-panel-backdrop` (`dp-backdrop-in`), `.detail-layout-content` (margin-inline-end over
+  `--t-page`), `dialog.chart-expanded-dialog[open]` (`surface-in` over `--t-page`) and its
+  `::backdrop` (`chart-backdrop-in`). Under `reduce` all read 0s — every duration is a `var(--t-*)`.
+- Keyframe names are this lane's own and do not collide with F2's `panels.css`: `detail-panel-in`,
+  `detail-panel-out`, `dp-backdrop-in`, `surface-in`, `chart-backdrop-in`.
+- **Frame budget check still owed:** Spending (three canvases plus a sankey), no more than two frames
+  over 32ms during a dock open. If it fails, Task 9's closing note documents the `data-panel-motion`
+  contingency; it is deliberately NOT built.
+- Eyeballs this lane could not make in jsdom: the three-cell panel header row (Back / heading /
+  controls must read as ONE hairline row), the resizer grip pill, the expanded dialog with a real
+  chart filling it (audit A3's 88px void), the assistant's Context row at a narrow dock width, and the
+  launcher stepping sideways as a dock opens.
+
+### For the page lanes — contracts now live on this branch
+
+`DetailPanelRequest.modal?: boolean` (default true) · `defaultPanelWidth(viewport)` ·
+`MODE_STORAGE_KEY` / `WIDTH_STORAGE_KEY` (`finance.detailPanel.mode` / `finance.detailPanel.width`) ·
+`--dock-width` on `<html>` · `EChart height?: number | 'fill'` · `ChartCard aside?: ReactNode`
+(plus `.chart-card-has-aside` on the section and `.chart-card-body.chart-card-with-aside` /
+`.chart-card-plot` / `.chart-card-aside` inside) · the selection panel opens with
+`title = selection.label`, `subtitle = chart title` · `COMPLETENESS_LABELS`, `formatComponentLabel`,
+`formatCompleteness`, `formatEvidenceValue` from `src/utils/metricReceipt.ts` (`MetricInspector`
+re-exports `formatEvidenceValue`) · `explainPrompt(request)` from
+`src/components/details/explainSelection.ts`.
+
+Two renames page lanes may be asserting against: the pin strip's button is now **"Show details"**
+(was "Details") and the panel's Back button is **"Back to {previous title}"** (was "Back").
+
+### Review round (2026-09-13, verdict APPROVE WITH FIXES)
+
+All five review items applied in one commit, **`a94e9f8`** —
+`fix(panel): review round — header row keeps its title track, Expand dialog closes instantly, reduce
+skips the exit ghost, launcher freezes mid-drag, one source for the assistant's panel actions`.
+
+| # | Item | What changed | Pinned by |
+| --- | --- | --- | --- |
+| 1 | IMPORTANT — header row squeeze | `.detail-panel` becomes `grid-template-columns: auto minmax(min(40%, 12rem), 1fr) minmax(0, auto)` and `.detail-panel-controls` gains `min-width: 0`, so the ~437px of assistant actions shrink into the select's own `flex: 1 1 auto; min-width: 0; text-overflow: ellipsis` instead of collapsing the title track at the 400–416px default dock width. Reasoning also written into the header-row comment. | `surfaceCss.test.ts` |
+| 2 | IMPORTANT — Expand dialog exit | The whole `@supports (transition-behavior: allow-discrete)` block and its `@starting-style` are **deleted**. `surface-in` and `chart-backdrop-in` entrances stay; the close is instant, which spec §2.3 allows. The block comment now records the three reasons (host moved back synchronously so the fade played on an empty box; `::backdrop` snapped; `@starting-style`'s `--t-fast` opacity/transform fought the `--t-page` `surface-in` on the same properties). No existing test pinned the deleted rules. | `surfaceCss.test.ts` |
+| 3 | minor — reduced motion | `beginExit` early-returns on `typeof panelRef.current?.animate !== 'function' \|\| prefersReducedMotion()` (`src/components/useReducedMotion.ts`), so under `reduce` — where the motion block does not exist — the close is instant again instead of parking an opaque inert ghost over the reflowed page for ~170ms. | new `DetailPanelProvider.test.tsx` case, `matchMedia` stubbed to `matches: true` |
+| 4 | minor — launcher during a drag | `.is-dragging .assistant-launcher { transition: none; }` added inside assistant.css's no-preference block, beside the launcher's `right` transition. | `surfaceCss.test.ts` |
+| 5 | minor — one source for the actions | The update effect now pushes `headerActionsRef.current` rather than re-rendering `<AssistantHeaderActions …/>`. `model/models/streaming/newChat` stay in its dep list (they are what makes it re-run); a comment says so, and eslint is clean with the body no longer naming them. | existing assistant tests |
+
+**New test file:** `src/components/details/surfaceCss.test.ts` — lane F1's three stylesheets pinned as
+text, on `settingsCss.test.ts`'s idiom. jsdom applies no stylesheet, so a computed-style assertion
+(the review's first preference for item 1) reports UA defaults and can say nothing about a grid track
+or a transition; reading the sheet is the house's proven substitute and covers items 1, 2 and 4.
+
+**Gates after the round**
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc -b` | no output, exit 0 |
+| `npx eslint src/components/details src/components/assistant src/components/ChartCard.tsx src/components/ChartSurface.tsx src/components/EChart.tsx` | **0 errors, 4 warnings** (unchanged — the same `react-refresh/only-export-components` set) |
+| `npx vitest run` (scoped: details, assistant, ChartCard, EChart, metricReceipt, motion) | 15 files, **179 tests passed** |
+| `npx vitest run` (full) | **210 files, 2877 tests passed, 0 failed** |
+| `npm run build` | unchanged from the first round (no source shape changed that the bundler sees differently) |
+
+**One intermittent failure seen once, not ours.** The first full run after this round reported
+`src/components/portfolio/TransactionsPanel.test.tsx > TransactionsPanel entry session > a successful
+edit still resets the whole form — carry-forward is create-only` (`expected '1' to be ''`). It passes
+in isolation both in this worktree and in the main checkout, and the immediately following full run
+was 210/210 green. The test asserts the reset form synchronously right after
+`await waitFor(() => expect(updateTransaction).toHaveBeenCalled())` — the same race
+`AssistantDrawer.test.tsx`'s `openDrawer()` comment documents ("about one run in ten"): the mock is
+called before React commits the reset. Pre-existing, order/timing dependent, and in P2's file
+(`src/components/portfolio/*`), so it is left for the lead / P2 rather than fixed from this lane.

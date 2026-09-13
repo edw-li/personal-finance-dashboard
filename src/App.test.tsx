@@ -73,7 +73,7 @@ describe('authenticated detail-panel lifetime', () => {
     await screen.findByRole('heading', { name: 'Page /' })
     expect(screen.queryByRole('dialog')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Open financial question' }))
-    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Back to / })).toBeNull()
   })
 
   it('preserves nested history during normal authenticated page navigation', async () => {
@@ -83,7 +83,7 @@ describe('authenticated detail-panel lifetime', () => {
     await screen.findByRole('heading', { name: 'Page /portfolio' })
     expect(screen.getByRole('dialog', { name: 'Captured balance' })).toBeTruthy()
     expect(screen.getByText('$8,675,309.42')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Financial question' }))
     expect(screen.getByRole('dialog', { name: 'Financial question' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Inspect captured balance' })).toBeTruthy()
   })

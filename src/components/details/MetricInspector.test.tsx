@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChartSelection, MetricEvidence } from '../../types/metrics'
 import DetailPanelProvider from './DetailPanelProvider'
 import MetricInspector, { formatEvidenceValue, MetricInfoButton } from './MetricInspector'
+import SelectionDetail from './SelectionDetail'
 import { explainSelection, onExplainSelection } from './explainSelection'
 
 const evidence: MetricEvidence = {
@@ -31,6 +32,8 @@ describe('metric receipts and captured questions', () => {
     const { rerender } = render(<DetailPanelProvider><MetricInfoButton evidence={evidence} /></DetailPanelProvider>)
     fireEvent.click(screen.getByRole('button', { name: 'About this number: Previous 12 months' }))
     expect(screen.getByText('$123.45')).toBeTruthy()
+    // The header's title IS the metric; "About this number" as a subtitle said it twice (spec §4).
+    expect(document.querySelector('.detail-panel-heading p')).toBeNull()
     rerender(<DetailPanelProvider><MetricInfoButton evidence={{ ...evidence, value: '140.50' }} /></DetailPanelProvider>)
     expect(screen.getByText('$140.50')).toBeTruthy()
     expect(screen.queryByText('$123.45')).toBeNull()
@@ -43,5 +46,29 @@ describe('metric receipts and captured questions', () => {
     selection.scenario!.contribution = 900
     expect(receive.mock.calls[0][0]).toMatchObject({ chartTitle: 'Planning', selection: { scope: 2, date: '2030-01-01', scenario: { contribution: 500 } } })
     stop()
+  })
+  it('speaks the data status and component labels as sentences and keeps the definition id as a tooltip', () => {
+    const { container } = render(<MetricInspector evidence={{ ...evidence, components: [
+      { label: 'pre_tax', value: '10', unit: 'USD' },
+      { label: 'liability', value: '-5', unit: 'USD', included: false },
+    ] }} />)
+    // Row label and value (2026-09-13 spec §5): "Basis: mixed" → "Data status: Mixed sources".
+    expect(screen.getByText('Data status').nextElementSibling?.textContent).toBe('Mixed sources')
+    expect(screen.queryByText('Basis')).toBeNull()
+    expect(screen.getByText('Pre tax')).toBeTruthy()
+    expect(screen.getByText('Liability (excluded)')).toBeTruthy()
+    // The developer footer is gone from the visible receipt; support still has the id on hover.
+    expect(screen.queryByText(/Definition:/)).toBeNull()
+    expect(container.querySelector('.metric-inspector-definition')?.getAttribute('title'))
+      .toBe('Metric living_spending_previous_12, definition spending-v1')
+  })
+  it('SelectionDetail states the selection once — Scope is a receipt row, no leading paragraph', () => {
+    const selection: ChartSelection = { kind: 'period', id: 'aug', period: '2026-08-01', label: 'August', scope: 'household', values: [{ label: 'Net worth', value: 200, unit: 'USD' }] }
+    const { container } = render(<SelectionDetail selection={selection} chartTitle="Net worth" />)
+    // The panel header already says "August" (audit B5: the label appeared three times in 120px).
+    expect(container.querySelector('article > p')).toBeNull()
+    const rows = Array.from(container.querySelectorAll('.metric-receipt-list > div'))
+      .map((row) => `${row.querySelector('dt')?.textContent}: ${row.querySelector('dd')?.textContent}`)
+    expect(rows).toEqual(['Scope: Household', 'Net worth: $200.00'])
   })
 })
