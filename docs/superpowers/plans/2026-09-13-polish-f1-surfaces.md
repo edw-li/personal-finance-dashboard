@@ -2949,3 +2949,42 @@ re-exports `formatEvidenceValue`) · `explainPrompt(request)` from
 
 Two renames page lanes may be asserting against: the pin strip's button is now **"Show details"**
 (was "Details") and the panel's Back button is **"Back to {previous title}"** (was "Back").
+
+### Review round (2026-09-13, verdict APPROVE WITH FIXES)
+
+All five review items applied in one commit, **`a94e9f8`** —
+`fix(panel): review round — header row keeps its title track, Expand dialog closes instantly, reduce
+skips the exit ghost, launcher freezes mid-drag, one source for the assistant's panel actions`.
+
+| # | Item | What changed | Pinned by |
+| --- | --- | --- | --- |
+| 1 | IMPORTANT — header row squeeze | `.detail-panel` becomes `grid-template-columns: auto minmax(min(40%, 12rem), 1fr) minmax(0, auto)` and `.detail-panel-controls` gains `min-width: 0`, so the ~437px of assistant actions shrink into the select's own `flex: 1 1 auto; min-width: 0; text-overflow: ellipsis` instead of collapsing the title track at the 400–416px default dock width. Reasoning also written into the header-row comment. | `surfaceCss.test.ts` |
+| 2 | IMPORTANT — Expand dialog exit | The whole `@supports (transition-behavior: allow-discrete)` block and its `@starting-style` are **deleted**. `surface-in` and `chart-backdrop-in` entrances stay; the close is instant, which spec §2.3 allows. The block comment now records the three reasons (host moved back synchronously so the fade played on an empty box; `::backdrop` snapped; `@starting-style`'s `--t-fast` opacity/transform fought the `--t-page` `surface-in` on the same properties). No existing test pinned the deleted rules. | `surfaceCss.test.ts` |
+| 3 | minor — reduced motion | `beginExit` early-returns on `typeof panelRef.current?.animate !== 'function' \|\| prefersReducedMotion()` (`src/components/useReducedMotion.ts`), so under `reduce` — where the motion block does not exist — the close is instant again instead of parking an opaque inert ghost over the reflowed page for ~170ms. | new `DetailPanelProvider.test.tsx` case, `matchMedia` stubbed to `matches: true` |
+| 4 | minor — launcher during a drag | `.is-dragging .assistant-launcher { transition: none; }` added inside assistant.css's no-preference block, beside the launcher's `right` transition. | `surfaceCss.test.ts` |
+| 5 | minor — one source for the actions | The update effect now pushes `headerActionsRef.current` rather than re-rendering `<AssistantHeaderActions …/>`. `model/models/streaming/newChat` stay in its dep list (they are what makes it re-run); a comment says so, and eslint is clean with the body no longer naming them. | existing assistant tests |
+
+**New test file:** `src/components/details/surfaceCss.test.ts` — lane F1's three stylesheets pinned as
+text, on `settingsCss.test.ts`'s idiom. jsdom applies no stylesheet, so a computed-style assertion
+(the review's first preference for item 1) reports UA defaults and can say nothing about a grid track
+or a transition; reading the sheet is the house's proven substitute and covers items 1, 2 and 4.
+
+**Gates after the round**
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc -b` | no output, exit 0 |
+| `npx eslint src/components/details src/components/assistant src/components/ChartCard.tsx src/components/ChartSurface.tsx src/components/EChart.tsx` | **0 errors, 4 warnings** (unchanged — the same `react-refresh/only-export-components` set) |
+| `npx vitest run` (scoped: details, assistant, ChartCard, EChart, metricReceipt, motion) | 15 files, **179 tests passed** |
+| `npx vitest run` (full) | **210 files, 2877 tests passed, 0 failed** |
+| `npm run build` | unchanged from the first round (no source shape changed that the bundler sees differently) |
+
+**One intermittent failure seen once, not ours.** The first full run after this round reported
+`src/components/portfolio/TransactionsPanel.test.tsx > TransactionsPanel entry session > a successful
+edit still resets the whole form — carry-forward is create-only` (`expected '1' to be ''`). It passes
+in isolation both in this worktree and in the main checkout, and the immediately following full run
+was 210/210 green. The test asserts the reset form synchronously right after
+`await waitFor(() => expect(updateTransaction).toHaveBeenCalled())` — the same race
+`AssistantDrawer.test.tsx`'s `openDrawer()` comment documents ("about one run in ten"): the mock is
+called before React commits the reset. Pre-existing, order/timing dependent, and in P2's file
+(`src/components/portfolio/*`), so it is left for the lead / P2 rather than fixed from this lane.
