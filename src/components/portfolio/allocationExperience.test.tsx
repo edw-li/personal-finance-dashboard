@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { saveAllocationTargets, saveClassification } from '../../api/allocation'
+import { allocationLabel, displayLabel, saveAllocationTargets, saveClassification } from '../../api/allocation'
 import type { AllocationData, SecurityClassification } from '../../api/allocation'
 import AllocationTargetEditor from './AllocationTargetEditor'
 import ClassificationEditor from './ClassificationEditor'
@@ -34,7 +34,7 @@ describe('allocation targets', () => {
     render(<AllocationTargetEditor data={data} owner={7} onChanged={onChanged} />)
     fireEvent.click(screen.getByRole('button', { name: 'Set targets' }))
     fireEvent.change(screen.getByLabelText('Equity target percent'), { target: { value: '60' } })
-    fireEvent.change(screen.getByLabelText('Unknown target percent'), { target: { value: '39.9999' } })
+    fireEvent.change(screen.getByLabelText('Unclassified target percent'), { target: { value: '39.9999' } })
     expect((screen.getByRole('button', { name: 'Activate targets' }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledOnce())
@@ -49,7 +49,7 @@ describe('allocation targets', () => {
     render(<AllocationTargetEditor data={data} owner={7} onChanged={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Set targets' }))
     fireEvent.change(screen.getByLabelText('Equity target percent'), { target: { value: '60' } })
-    fireEvent.change(screen.getByLabelText('Unknown target percent'), { target: { value: '40' } })
+    fireEvent.change(screen.getByLabelText('Unclassified target percent'), { target: { value: '40' } })
     fireEvent.change(screen.getByLabelText('Equity tolerance percentage points'), { target: { value: '5' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate targets' }))
     await screen.findByText('Connection interrupted')
@@ -77,12 +77,17 @@ it('reviews a fund without pretending its wrapper is an industry', async () => {
   }))
 })
 
-it('keeps unknown exposure addressable and missing prices blank in the export', () => {
-  const option = exposureOption(data) as unknown as { series: { data: { allocationKey: string; value: number }[] }[] }
+it('spells the catch-all slice Unclassified in the donut and the export, and keeps missing prices blank', () => {
+  const option = exposureOption(data) as unknown as { series: { data: { name: string; allocationKey: string; value: number }[] }[] }
   expect(option.series[0].data.map((row) => row.allocationKey)).toEqual(['equity', '__unknown__'])
+  // The wire says "Unknown"; the page says what it means (2026-09-13 polish §13).
+  expect(option.series[0].data.map((row) => row.name)).toEqual(['Equity', 'Unclassified'])
   expect(option.series[0].data.reduce((sum, row) => sum + row.value, 0)).toBe(500)
   const csv = exposureCsv(data)
-  expect(csv.rows[1].slice(0, 4)).toEqual(['Unknown', '300.00', '60.0000', 'Unknown'])
+  expect(csv.rows[1].slice(0, 4)).toEqual(['Unclassified', '300.00', '60.0000', 'Unclassified'])
   expect(csv.rows[2].slice(0, 4)).toEqual(['Unpriced: GAP', '', '', 'Value unavailable'])
   expect(csv.rows[1]).toContain('person:7')
+  expect(allocationLabel('__unknown__', 'asset_class')).toBe('Unclassified')
+  expect(displayLabel('__unknown__', 'Unknown')).toBe('Unclassified')
+  expect(displayLabel('equity', 'Equity')).toBe('Equity')
 })

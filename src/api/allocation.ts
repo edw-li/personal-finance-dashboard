@@ -8,6 +8,15 @@ export const ALLOCATION_DIMENSIONS: { value: AllocationDimension; label: string 
   { value: 'type', label: 'Holding type' },
 ]
 export const UNKNOWN_CLASSIFICATION = '__unknown__'
+/** What the page calls the server's "__unknown__" catch-all (2026-09-13 polish §13): those
+ *  holdings are not unknowable, they are not yet classified — and the Security classifications
+ *  card is where that gets fixed. The wire keeps "Unknown" (portfolio_allocation.dimension_label);
+ *  nothing here changes what the server sends. */
+export const UNCLASSIFIED_LABEL = 'Unclassified'
+/** Every slice and drift row's label passes through here so the page speaks in one voice. */
+export function displayLabel(key: string, label: string): string {
+  return key === UNKNOWN_CLASSIFICATION ? UNCLASSIFIED_LABEL : label
+}
 export const ASSET_CLASSES: Record<string, string> = {
   equity: 'Equity', bonds: 'Bonds', cash: 'Cash / cash equivalents',
   real_assets: 'Real assets', mixed: 'Mixed', other: 'Other',
@@ -91,7 +100,7 @@ export function fetchEmployerExposure(owner: OwnerScope): Promise<EmployerExposu
 }
 
 export function allocationLabel(key: string, dimension: AllocationDimension): string {
-  if (key === UNKNOWN_CLASSIFICATION) return 'Unknown'
+  if (key === UNKNOWN_CLASSIFICATION) return UNCLASSIFIED_LABEL
   const labels: Record<string, Record<string, string>> = {
     asset_class: ASSET_CLASSES, geography: GEOGRAPHIES,
     type: { stock: 'Stock', etf: 'ETF', mutual_fund: 'Mutual fund', private: 'Private' },
