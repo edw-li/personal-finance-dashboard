@@ -113,6 +113,12 @@ interface PortfolioSnapshot {
 
 const PAGE_SECTIONS = [{"id":"overview","label":"Overview"},{"id":"holdings","label":"Holdings"},{"id":"allocation","label":"Allocation"},{"id":"income","label":"Income"},{"id":"manage","label":"Manage"}] as const
 
+// Tiles belong to a view's summary, not to every view (2026-09-13 polish §12, S1): Overview,
+// Holdings and Allocation read the whole book; on Income the Dividends card's own three tiles
+// are the row; Manage is a ledger and gets none. Nothing reserves the row's height — the tab
+// strip lives in the sticky block above, so a view without tiles cannot make it jump.
+const TILE_VIEWS: ReadonlySet<string> = new Set(['overview', 'holdings', 'allocation'])
+
 export default function PortfolioPage() {
   const detailPanel = useDetailPanel()
   const openDetailPanel = detailPanel?.open
@@ -578,7 +584,7 @@ export default function PortfolioPage() {
           },
         }}
         skeleton={{
-          tiles: 4,
+          tiles: 5,
           cards: [
             { span: 12, height: 340 },
             { span: 12, height: 300 },
@@ -587,7 +593,7 @@ export default function PortfolioPage() {
       >
         {holdings !== null && (
           <>
-            {totals && (
+            {totals && TILE_VIEWS.has(views.section) && (
               <div className="kpi-row kpi-row-dense">
                 <StatTile
                   label="Portfolio value"

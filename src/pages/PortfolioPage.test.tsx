@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Link, MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
@@ -708,6 +708,8 @@ it('shows the alert alone on a failed first load and retries back into the skele
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
   expect(screen.queryByRole('alert')).toBeNull()
   expect(container.querySelector('.page-skeleton')).not.toBeNull()
+  // Ghost parity (spec §9): five real tiles, five ghosts.
+  expect(container.querySelectorAll('.page-skeleton .skeleton-tile')).toHaveLength(5)
 })
 
 // Pinned verbatim, both halves: together they are the page's only defence against reading
@@ -1008,5 +1010,28 @@ describe('PortfolioPage — card vocabulary', () => {
     const panel = document.getElementById('portfolio-records-realized') as HTMLElement
     expect(panel.hidden).toBe(false)
     expect(screen.getByRole('tab', { name: 'Realized' }).getAttribute('aria-controls')).toBe('portfolio-records-realized')
+  })
+})
+
+// ── Tiles per view (2026-09-13 polish §12, S1/S7) ────────────────────────────────────────
+describe('PortfolioPage — tiles per view', () => {
+  it('shows the five tiles on Overview, Holdings and Allocation, and none on Income or Manage', async () => {
+    renderPage()
+    await screen.findByText('Portfolio value')
+    const pageTiles = () => document.querySelector('.loading-dim > .kpi-row')
+    expect(pageTiles()).not.toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Holdings' }))
+    expect(pageTiles()).not.toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Income' }))
+    expect(pageTiles()).toBeNull()
+    expect(screen.queryByText('Portfolio value')).toBeNull()
+    // The Dividends card's own tiles are the Income row (Trailing 12-mo / YTD / Projected).
+    const income = screen.getByRole('tabpanel', { name: 'Income' })
+    expect(within(income).getByRole('heading', { name: /Dividends/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
+    expect(pageTiles()).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Allocation' }))
+    expect(pageTiles()).not.toBeNull()
+    expect(screen.getByText('Portfolio value')).toBeTruthy()
   })
 })
