@@ -35,6 +35,5 @@
 .metric-months li { padding: .15rem .4rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; }
 .metric-warnings { padding-left: 1.1rem; font-size: .82rem; }
 .metric-source-link { display: inline-block; color: var(--accent); font-size: .85rem; margin-top: .6rem; }
-.metric-definition-id { color: var(--muted); font-size: .7rem !important; margin-top: 1.2rem !important; }
 .selection-detail-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: 1rem; }
 .selection-detail-actions .metric-source-link { margin: 0; }
