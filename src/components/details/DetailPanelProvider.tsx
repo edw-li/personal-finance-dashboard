@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffe
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronLeft, Layers, Maximize2, Minimize2, PanelRight, X } from 'lucide-react'
+import { MOTION_MS } from '../../theme/motion'
 import Segmented from '../shell/Segmented'
 import type { SegmentedOption } from '../shell/Segmented'
 import './details.css'
@@ -110,6 +111,10 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
   const [preferredWidth, setPreferredWidth] = useState<number | null>(readStoredWidth)
   const [viewport, setViewport] = useState(() => typeof window === 'undefined' ? 1600 : window.innerWidth)
   const [dragging, setDragging] = useState(false)
+  // The exit ghost (spec §2.2): the last request stays painted, inert, for one --t-fast beat after
+  // the stack empties. Null in engines without Web Animations (jsdom), where the unmount is at once.
+  const [leaving, setLeaving] = useState<{ request: DetailPanelRequest; mode: DetailPanelMode } | null>(null)
+  const modeRef = useRef<DetailPanelMode>('dock')
   const panelRef = useRef<HTMLElement>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const dragRef = useRef<{ x: number; width: number } | null>(null)
@@ -122,6 +127,8 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
   const commit = useCallback((next: DetailPanelRequest[]) => {
     stackRef.current = next
     setStack(next)
+    // A surface that comes back during the exit beat replaces the ghost; it never stacks under one.
+    if (next.length > 0) setLeaving(null)
   }, [])
 
   const open = useCallback((request: DetailPanelRequest) => {
@@ -147,21 +154,36 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
     commit(next)
   }, [commit])
 
+  /** Arm the exit ghost for `last`. Gated on Web Animations because that is what separates a CSS
+   *  animation engine from jsdom: without it the ghost would never hear animationend and would sit
+   *  for the whole fallback timer in every unit test. Reads the mode through a ref so `close` keeps
+   *  its identity — MetricInfoButton closes its receipt on unmount through `close`, and a new
+   *  identity per mode change would close panels by accident. */
+  const beginExit = useCallback((last: DetailPanelRequest) => {
+    if (typeof panelRef.current?.animate !== 'function') return
+    setLeaving({ request: last, mode: modeRef.current })
+  }, [])
+
   const close = useCallback((id?: string) => {
     const current = stackRef.current
     if (id !== undefined) {
       const entry = current.find((item) => item.id === id)
       if (entry === undefined) return
-      if (current.length === 1) returnFocus.current = entry.returnTo ?? null
-      commit(current.filter((item) => item.id !== id))
+      const next = current.filter((item) => item.id !== id)
+      if (next.length === 0) {
+        returnFocus.current = entry.returnTo ?? null
+        beginExit(entry)
+      }
+      commit(next)
       entry.onClose?.()
       return
     }
     if (current.length === 0) return
     returnFocus.current = current[0]?.returnTo ?? null
+    beginExit(current[current.length - 1])
     commit([])
     current.forEach((entry) => entry.onClose?.())
-  }, [commit])
+  }, [beginExit, commit])
 
   const back = useCallback(() => {
     const current = stackRef.current
@@ -257,6 +279,16 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
   }, [activeId, mode, width])
   useEffect(() => () => { document.documentElement.style.removeProperty('--dock-width') }, [])
 
+  // Unkeyed on purpose (the EChart latest-ref idiom): beginExit reads the mode the panel was in.
+  useEffect(() => { modeRef.current = mode })
+  // `reduce` zeroes --t-fast, and a 0ms animation may never report animationend: the timer is the
+  // guarantee that no reader is ever stranded behind a ghost (spec §16).
+  useEffect(() => {
+    if (leaving === null) return
+    const timer = window.setTimeout(() => setLeaving(null), MOTION_MS.fast + 50)
+    return () => window.clearTimeout(timer)
+  }, [leaving])
+
   const api: DetailPanelApi = { activeId, mode, open, update, close, back, setMode }
   const modeOptions: SegmentedOption<DetailPanelMode>[] = [
     iconOption('dock', MODE_TITLES.dock, <PanelRight size={14} aria-hidden="true" />, { disabled: !canDock, title: canDock ? MODE_TITLES.dock : DOCK_DISABLED_TITLE }),
@@ -343,6 +375,24 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
                 }}
               />
             )}
+          </aside>
+        </div>, document.body,
+      )}
+      {active === undefined && leaving !== null && createPortal(
+        <div className={`detail-panel-layer detail-panel-layer-${leaving.mode}`} aria-hidden="true">
+          <aside
+            className={`detail-panel detail-panel-${leaving.mode} is-leaving`}
+            style={{ '--dp-dock-w': `${width}px` } as CSSProperties}
+            inert
+            onAnimationEnd={(event) => { if (event.target === event.currentTarget) setLeaving(null) }}
+          >
+            <header className="detail-panel-header">
+              <div className="detail-panel-heading">
+                <h2>{leaving.request.title}</h2>
+                {leaving.request.subtitle && <p>{leaving.request.subtitle}</p>}
+              </div>
+            </header>
+            <div className="detail-panel-body">{leaving.request.content}</div>
           </aside>
         </div>, document.body,
       )}

@@ -1,6 +1,7 @@
-import { cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DetailPanelProvider, { defaultPanelWidth, MODE_STORAGE_KEY, panelGeometry, useDetailPanel, WIDTH_STORAGE_KEY } from './DetailPanelProvider'
+import { MOTION_MS } from '../../theme/motion'
 
 function Harness() {
   const panel = useDetailPanel()!
@@ -31,6 +32,17 @@ function withPointerEvents(run: () => void) {
   } finally {
     if (original === undefined) delete view.PointerEvent
     else view.PointerEvent = original
+  }
+}
+
+/** jsdom has no Web Animations; the provider reads `typeof el.animate` as "this engine runs CSS
+ *  animations" and only then keeps an exit ghost. Stubbing it opts a test in. */
+function withAnimations(run: () => void) {
+  Object.defineProperty(HTMLElement.prototype, 'animate', { value: () => ({}), configurable: true, writable: true })
+  try {
+    run()
+  } finally {
+    delete (HTMLElement.prototype as unknown as { animate?: unknown }).animate
   }
 }
 
@@ -214,6 +226,76 @@ describe('coordinated detail panels', () => {
       expect(content.classList.contains('is-dragging')).toBe(false)
       expect(document.querySelector('.detail-panel-layer')?.classList.contains('is-dragging')).toBe(false)
       expect(localStorage.getItem(WIDTH_STORAGE_KEY)).toBe('436')
+    })
+  })
+  it('keeps the closing panel painted as an inert ghost until its exit animation ends', () => {
+    withAnimations(() => {
+      render(<DetailPanelProvider><Harness /></DetailPanelProvider>)
+      const trigger = screen.getByRole('button', { name: 'Inspect month' })
+      trigger.focus()
+      fireEvent.click(trigger)
+      fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
+      // For assistive tech, focus and the launcher the surface is already gone…
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(document.activeElement).toBe(trigger)
+      expect(document.documentElement.style.getPropertyValue('--dock-width')).toBe('0px')
+      // …while the ghost fades out with the last content still in it (spec §2.2).
+      const ghost = document.querySelector('.detail-panel.is-leaving') as HTMLElement
+      expect(ghost).toBeTruthy()
+      expect(ghost.className).toContain('detail-panel-dock')
+      expect(ghost.hasAttribute('inert')).toBe(true)
+      expect(ghost.getAttribute('role')).toBeNull()
+      expect(ghost.closest('.detail-panel-layer')?.getAttribute('aria-hidden')).toBe('true')
+      expect(ghost.textContent).toContain('Selected month retained')
+      fireEvent.animationEnd(ghost)
+      expect(document.querySelector('.detail-panel')).toBeNull()
+    })
+  })
+
+  it('unmounts the ghost on the fallback timer when no animationend ever arrives (reduced motion)', () => {
+    vi.useFakeTimers()
+    try {
+      withAnimations(() => {
+        render(<DetailPanelProvider><Harness /></DetailPanelProvider>)
+        fireEvent.click(screen.getByRole('button', { name: 'Inspect month' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
+        expect(document.querySelector('.detail-panel.is-leaving')).toBeTruthy()
+        act(() => { vi.advanceTimersByTime(MOTION_MS.fast + 49) })
+        expect(document.querySelector('.detail-panel.is-leaving')).toBeTruthy()
+        act(() => { vi.advanceTimersByTime(1) })
+        expect(document.querySelector('.detail-panel')).toBeNull()
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a surface opened during the exit beat replaces the ghost instead of stacking under it', () => {
+    withAnimations(() => {
+      render(<DetailPanelProvider><Harness /></DetailPanelProvider>)
+      fireEvent.click(screen.getByRole('button', { name: 'Inspect month' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
+      expect(document.querySelector('.detail-panel.is-leaving')).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: 'Inspect month' }))
+      expect(document.querySelectorAll('.detail-panel')).toHaveLength(1)
+      expect(document.querySelector('.detail-panel.is-leaving')).toBeNull()
+      expect(screen.getByRole('dialog', { name: 'August spending' })).toBeTruthy()
+    })
+  })
+
+  it('the ghost keeps the box model it was closed from', () => {
+    withAnimations(() => {
+      render(<DetailPanelProvider><Harness /></DetailPanelProvider>)
+      fireEvent.click(screen.getByRole('button', { name: 'Inspect month' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Reading mode' }))
+      fireEvent.keyDown(document, { key: 'Escape' })
+      const ghost = document.querySelector('.detail-panel.is-leaving') as HTMLElement
+      expect(ghost.className).toContain('detail-panel-expanded')
+      // No backdrop lingers behind a ghost: the page is live the moment the stack empties.
+      expect(document.querySelector('.detail-panel-backdrop')).toBeNull()
+      expect(document.querySelector('.detail-layout-content')!.hasAttribute('inert')).toBe(false)
+      fireEvent.animationEnd(ghost)
+      expect(document.querySelector('.detail-panel')).toBeNull()
     })
   })
 })

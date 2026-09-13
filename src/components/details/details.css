@@ -72,3 +72,32 @@
 .metric-source-link { display: inline-block; color: var(--accent); font-size: .85rem; margin-top: .6rem; }
 .selection-detail-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: 1rem; }
 .selection-detail-actions .metric-source-link { margin: 0; }
+
+/* ── Motion (2026-09-13 spec §2.2) ─────────────────────────────────────────
+   Tokens only (motion.test.ts) — the reduce block zeroes them, and this block is gated besides.
+   Entrance: the panel rides in from 24px right over --t-page while the page's margin makes room on
+   the same curve (audit A1's one-frame snap). Mode switch: inset / width / right / border-radius
+   transition, so dock → reading mode reads as "the same thing, larger" (audit A2). Exit: the
+   provider keeps a ghost (.is-leaving) for one --t-fast beat. The entrance sits on .detail-panel,
+   not on a per-mode class: a mode switch swaps the class, and a class-scoped animation would
+   restart and fight the transition. Keyframe names are this lane's own (spec §16). */
+@media (prefers-reduced-motion: no-preference) {
+  .detail-layout-content { transition: margin-inline-end var(--t-page) var(--ease-out); }
+  .detail-panel {
+    animation: detail-panel-in var(--t-page) var(--ease-out) both;
+    transition:
+      inset var(--t-page) var(--ease-out),
+      width var(--t-page) var(--ease-out),
+      right var(--t-page) var(--ease-out),
+      border-radius var(--t-page) var(--ease-out);
+  }
+  .detail-panel.is-leaving { animation: detail-panel-out var(--t-fast) ease both; }
+  .detail-panel-backdrop { animation: dp-backdrop-in var(--t-fast) ease both; }
+  /* Pointer capture: the width follows the hand, never 240ms behind it (spec §2.2). */
+  .detail-layout-content.is-dragging, .is-dragging .detail-panel { transition: none; }
+  @keyframes detail-panel-in { from { transform: translateX(24px); opacity: 0; } }
+  @keyframes detail-panel-out { to { transform: translateX(24px); opacity: 0; } }
+  @keyframes dp-backdrop-in { from { opacity: 0; } }
+}
+/* Nothing in a ghost is reachable — by pointer, by Tab (inert) or by assistive tech (aria-hidden). */
+.detail-panel.is-leaving { pointer-events: none; }
