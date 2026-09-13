@@ -84,7 +84,7 @@ export default function MarginalPanel({
       hint="Where this year's taxable income (◆) sits in the bracket ladders, and what the next $1,000 of ordinary income costs. Computed in the browser from the stored tables — nothing here is saved."
       ariaLabel="Bracket ladder per jurisdiction with this year’s taxable income marked"
       option={model.option}
-      empty="No federal or state bracket tables for this year yet — the ladder has nothing to walk. Enter them in the bracket tables below."
+      empty="No federal or state bracket tables for this year yet — the ladder has nothing to walk. Enter them in Tax tables."
       exportName={`marginal-ladder-${summary.year}`}
       csv={() => ladderCsv(model.rows)}
       height={170}
