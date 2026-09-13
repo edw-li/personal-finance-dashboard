@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import {
   createCustomEvent,
@@ -11,7 +12,7 @@ import { downloadCalendarIcs } from '../api/calendarFeed'
 import { ApiError, describeError } from '../api/client'
 import { fetchHousehold } from '../api/household'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
-import AddEventForm, { EMPTY_FIELDS, type EventFields } from '../components/calendar/AddEventForm'
+import AddEventForm, { type EventFields } from '../components/calendar/AddEventForm'
 import CalendarGrid, { dayInMonth } from '../components/calendar/CalendarGrid'
 import CashflowStrip, { CashflowNotes } from '../components/calendar/CashflowStrip'
 import DayDrawer from '../components/calendar/DayDrawer'
@@ -25,6 +26,7 @@ import {
   stripPersonSuffix,
   visibleEvents,
 } from '../components/calendar/calendarView'
+import { useDetailPanel } from '../components/details/DetailPanelProvider'
 import PageFrame from '../components/shell/PageFrame'
 import Segmented from '../components/shell/Segmented'
 import { useScope } from '../components/shell/useScope'
@@ -59,7 +61,24 @@ const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/
 const ADD_ARRIVALS = ['1'] as const
 const ISO_MONTH = /^\d{4}-\d{2}$/
 type ViewMode = 'grid' | 'list'
-type FormState = { mode: 'add' } | { mode: 'edit'; id: number } | null
+/** `day` is the day the form was opened FOR (the drawer's "Add event on …", ?add=1&date=) — the
+ *  panel's title; the date box itself is `fields.date` and may be edited away from it. */
+type FormState = { mode: 'add'; day?: string } | { mode: 'edit'; id: number } | null
+/** One surface for add and edit: reopening the id updates the panel instead of stacking a second. */
+const FORM_PANEL_ID = 'calendar-add'
+/** Every box empty. '' = unset; the form IS the body a save sends, so a field the PATCH replaces
+ *  has a box here even when the form does not show it (a one-off's `until`). Kept in the page, not
+ *  the form module: a value export beside a component costs a react-refresh warning. */
+const EMPTY_FIELDS: EventFields = {
+  date: '',
+  label: '',
+  detail: '',
+  person: '',
+  amount: '',
+  direction: 'neutral',
+  recurrence: 'none',
+  until: '',
+}
 const VIEW_OPTIONS = [
   { value: 'grid' as const, label: 'Grid' },
   { value: 'list' as const, label: 'List' },
@@ -105,6 +124,28 @@ export default function CalendarPage() {
   const popoverRef = useRef<HTMLDivElement | null>(null)
   const addEventBtnRef = useRef<HTMLButtonElement | null>(null)
   const toast = useToast()
+  // The add/edit form's surface (2026-09-13 polish spec §12): the shell's detail panel when the
+  // shell provides one — the grid narrows beside the dock instead of dropping 206px under a new
+  // card (audit C-4) — and the old inline card in tests and embeds, where useDetailPanel() is null.
+  const panel = useDetailPanel()
+  const hasPanel = panel !== null
+  const openPanel = panel?.open
+  const closePanel = panel?.close
+  // The panel receives a STABLE host node; the form itself is portaled into that node from this
+  // tree, so every keystroke re-renders the form in place without reopening the panel (ChartCard's
+  // detail-host idiom).
+  const [formHost] = useState(() => document.createElement('div'))
+  const formHostMount = useMemo(
+    () => (
+      <div
+        ref={(node) => {
+          if (node && formHost.parentNode !== node) node.appendChild(formHost)
+          else if (!node) formHost.parentNode?.removeChild(formHost)
+        }}
+      />
+    ),
+    [formHost],
+  )
   // Undo closures and the arrival handler can outlive a month change: they read the month
   // on screen through this ref (unkeyed effect, not a render-time assignment).
   const monthRef = useRef(month)
@@ -293,7 +334,7 @@ export default function CalendarPage() {
   // Defaults to the VIEWED month's first day, or the day handed in (spec §8). useCallback
   // over stable setters and a ref: the arrival effect depends on it.
   const openAddForm = useCallback((day?: string) => {
-    setForm({ mode: 'add' })
+    setForm({ mode: 'add', day })
     setFields({ ...EMPTY_FIELDS, date: day ?? monthRef.current })
     setFormError(null)
     setOpenKey(null)
@@ -301,11 +342,50 @@ export default function CalendarPage() {
     setFormTick((tick) => tick + 1)
   }, [])
 
-  // A DOM call, no state: the form's first field is mounted by the time this runs, and
-  // tick 0 is the initial render, where there is no form and nothing to steal focus from.
+  // The caret lands in the date box when the form opens; tick 0 is the initial render, where there
+  // is no form. Inline, the box is mounted by the time this runs. In the panel it is attached only
+  // once the provider has rendered the aside — and the provider's own effect then focuses the
+  // aside — so the move waits a frame and runs after it. A DOM call, no state.
+  const formShown = form !== null && (panel === null || panel.activeId === FORM_PANEL_ID)
   useEffect(() => {
-    if (formTick > 0) formDateRef.current?.focus()
-  }, [formTick])
+    if (formTick === 0 || !formShown) return
+    if (!hasPanel) {
+      formDateRef.current?.focus()
+      return
+    }
+    const frame = requestAnimationFrame(() => formDateRef.current?.focus())
+    return () => cancelAnimationFrame(frame)
+  }, [formTick, formShown, hasPanel])
+
+  // The panel follows the form: open (or retitle) it while a form is up, close it when the form
+  // goes. Save and Cancel end here; a close the panel itself started (×, Escape) has already
+  // cleared the form through onClose, and closePanel finds nothing to close.
+  const formTitle =
+    form === null
+      ? null
+      : form.mode === 'edit'
+        ? 'Edit event'
+        : form.day === undefined
+          ? 'Add event'
+          : `Add event on ${formatDate(form.day)}`
+  useEffect(() => {
+    if (openPanel === undefined || closePanel === undefined) return
+    if (formTitle === null) {
+      closePanel(FORM_PANEL_ID)
+      return
+    }
+    openPanel({
+      id: FORM_PANEL_ID,
+      title: formTitle,
+      content: formHostMount,
+      // Where focus lands when the panel closes: the header's Add event button — a landmark that
+      // outlives whichever button opened the form (the drawer's unmounts with the drawer).
+      returnTo: addEventBtnRef.current,
+      onClose: () => setForm(null),
+    })
+  }, [formTitle, openPanel, closePanel, formHostMount])
+  // Leaving the page takes the form's panel with it.
+  useEffect(() => () => closePanel?.(FORM_PANEL_ID), [closePanel])
 
   // ?add=1 (the palette) opens the form; ?add=1&date=YYYY-MM-DD prefills it and views that
   // day's month. Both params are consumed in ONE replace, and the month this jumps to rides
@@ -463,6 +543,21 @@ export default function CalendarPage() {
     <K extends keyof EventFields>(key: K) =>
     (value: EventFields[K]) =>
       setFields((current) => ({ ...current, [key]: value }))
+  const eventForm =
+    form === null ? null : (
+      <AddEventForm
+        mode={form.mode}
+        fields={fields}
+        onField={field}
+        people={orderedPeople}
+        error={formError}
+        saving={saving}
+        onSave={saveForm}
+        onCancel={() => setForm(null)}
+        dateRef={formDateRef}
+        hosted={hasPanel ? 'panel' : 'card'}
+      />
+    )
   // The list shows the SHOWN month only, hidden rows included (dimmed) so Unhide is reachable.
   const monthEvents = (shown?.events ?? []).filter((e) => e.date.slice(0, 7) === month.slice(0, 7))
   const listGroups = [...groupByDate(monthEvents).entries()]
@@ -550,21 +645,10 @@ export default function CalendarPage() {
           <>
             <CashflowStrip events={visible} month={month} quoteAsOf={shown.quote_as_of} />
             <div className="card-grid">
-              {form !== null && (
+              {form !== null && !hasPanel && (
                 <section className="card span-12">
                   <h2 className="eyebrow">{form.mode === 'add' ? 'Add event' : 'Edit event'}</h2>
-                  <AddEventForm
-                    mode={form.mode}
-                    fields={fields}
-                    onField={field}
-                    people={orderedPeople}
-                    error={formError}
-                    saving={saving}
-                    onSave={saveForm}
-                    onCancel={() => setForm(null)}
-                    dateRef={formDateRef}
-                    hosted="card"
-                  />
+                  {eventForm}
                 </section>
               )}
               <section className="card span-12">
@@ -642,6 +726,7 @@ export default function CalendarPage() {
           </>
         )}
       </PageFrame>
+      {form !== null && hasPanel && createPortal(eventForm, formHost)}
       {drawerDay !== null && (
         <DayDrawer
           day={drawerDay}

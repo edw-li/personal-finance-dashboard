@@ -283,6 +283,20 @@
   font-family: inherit;
 }
 
+/* The same form inside the shell's detail panel (2026-09-13 spec §12): fluid two-up columns in a
+   ~400px dock instead of the card's fixed 170px boxes, the note on a row of its own. */
+.cal-form-panel .cal-form-field {
+  flex: 1 1 160px;
+}
+
+.cal-form-panel .cal-form-field .cal-form-input {
+  width: 100%;
+}
+
+.cal-form-panel .cal-form-note {
+  flex-basis: 100%;
+}
+
 /* ── Calendar v2 (2026-09-03 calendar spec §7–§10) ───────────────────────── */
 
 /* Eight columns: seven days and the week gutter. Rows are ARIA rows with display: contents

@@ -16,17 +16,6 @@ export interface EventFields {
   until: string
 }
 
-export const EMPTY_FIELDS: EventFields = {
-  date: '',
-  label: '',
-  detail: '',
-  person: '',
-  amount: '',
-  direction: 'neutral',
-  recurrence: 'none',
-  until: '',
-}
-
 export interface AddEventFormProps {
   mode: 'add' | 'edit'
   fields: EventFields
