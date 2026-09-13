@@ -200,6 +200,39 @@
   color: var(--muted);
 }
 
+/* Row actions stay in view while a wide table scrolls sideways (2026-09-13 polish §7). Only a
+   table that has OPTED IN — one with a `td.row-actions` column — pins its last header cell, so no
+   other table grows a hairline on its last column. border-collapse loses a sticky cell's own
+   border, so the hairline is redrawn as a box-shadow (CompPage.css's precedent). The identity
+   column is the left-hand twin; z-index 1 keeps it over the cells it slides across. */
+.data-table:has(td.row-actions) th:last-child,
+.data-table td.row-actions,
+.port-table:has(td.row-actions) th:last-child,
+.port-table td.row-actions {
+  position: sticky;
+  right: 0;
+  background: var(--surface);
+  box-shadow: -1px 0 0 var(--border);
+}
+
+.data-table th.col-identity,
+.data-table td.col-identity,
+.port-table th.col-identity,
+.port-table td.col-identity {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--border);
+}
+
+/* useScrollEdges writes which edges still hide content; the mask says so without a scrollbar.
+   The two-token rule exists because mask-image does not add up: with both edges hidden, the
+   later single-edge rule would otherwise win and the other edge would read as the table's end. */
+[data-scroll-more~="right"] { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+[data-scroll-more~="left"] { mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); }
+[data-scroll-more~="left"][data-scroll-more~="right"] { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+
 .badge {
   display: inline-block;
   margin-left: 0.5rem;

@@ -83,3 +83,19 @@ describe('KPI grammar (2026-09-13 polish §12)', () => {
     expect(PANELS).toContain('@container (max-width: 980px) { .kpi-row:not(.kpi-row-5) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }')
   })
 })
+
+describe('sticky row actions (2026-09-13 polish §7)', () => {
+  it('pins the actions column of a table that opted in, and the identity column on the left', () => {
+    expect(PANELS).toContain(
+      '.data-table:has(td.row-actions) th:last-child, .data-table td.row-actions, .port-table:has(td.row-actions) th:last-child, .port-table td.row-actions { position: sticky; right: 0; background: var(--surface); box-shadow: -1px 0 0 var(--border); }',
+    )
+    expect(PANELS).toContain(
+      '.data-table th.col-identity, .data-table td.col-identity, .port-table th.col-identity, .port-table td.col-identity { position: sticky; left: 0; z-index: 1; background: var(--surface); box-shadow: 1px 0 0 var(--border); }',
+    )
+  })
+  it('masks whichever edge still hides content', () => {
+    expect(PANELS).toContain('[data-scroll-more~="right"] { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }')
+    expect(PANELS).toContain('[data-scroll-more~="left"] { mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); }')
+    expect(PANELS).toContain('[data-scroll-more~="left"][data-scroll-more~="right"] { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }')
+  })
+})
