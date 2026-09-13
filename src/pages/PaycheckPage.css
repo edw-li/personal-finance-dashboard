@@ -219,6 +219,18 @@
   text-transform: uppercase;
   color: var(--muted);
 }
+
+/* The optional split behind a disclosure (2026-09-13 polish spec §11): the <details> spans the
+   form grid like the fieldsets do; its body reuses the fieldset's inner grid without the rule
+   around it, because the disclosure's own summary row already frames it. */
+.paycheck-form .paycheck-split {
+  grid-column: 1 / -1;
+}
+
+.paycheck-form .paycheck-split-grid {
+  border: 0;
+  padding: 0.25rem 0 0;
+}
 .paycheck-match-words { grid-column: 1 / -1; margin: 0; font-size: 0.75rem; color: var(--muted); }
 
 /* One grid cell holding a box and its own note (the note cannot live inside the label: a

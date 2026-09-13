@@ -15,6 +15,8 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
+import Disclosure from '../components/Disclosure'
+import { useScrollEdges } from '../components/useScrollEdges'
 import PacePanel from '../components/paycheck/PacePanel'
 import type { ApplySeed } from '../components/paycheck/paycheckScenario'
 import {
@@ -445,6 +447,10 @@ function ProfilesPanel({
   const [error, setError] = useState<string | null>(null)
   // Single-flight across the panel (SecuritiesPanel's busy flag).
   const [busy, setBusy] = useState(false)
+  // The history scroller's edge cue (data-scroll-more, 2026-09-13 polish spec §7) — the shared
+  // hook; a null ref (no rows yet, no table) is a no-op.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useScrollEdges(scrollRef)
 
   const set = (field: keyof ProfileFormState) => (value: string) =>
     setForm((f) => ({ ...f, [field]: value }))
@@ -698,13 +704,13 @@ function ProfilesPanel({
     <section className="card">
       <h2 className="eyebrow">
         Profile history
-        <InfoHint text="One profile per comp change; the breakdown uses the profile in force today unless a row is pinned." />
+        <InfoHint text="One profile per comp change; the breakdown uses the profile in force today unless a row is pinned. Percentages are entered as percents (13 = 13%) and stored as fractions with nine decimal places; withholding is a tax rather than a contribution, so it is not part of the 100% check." />
       </h2>
+      {/* Two sentences (2026-09-13 polish spec §14; audit C7): the percent/fraction rule the
+          intro used to repeat lives in the heading's hint, once. */}
       <p className="drill-hint">
         One row per comp change, newest first. A new profile starts as a copy of the current
-        one — change what moved and give it the date it takes effect on. Percentages are
-        entered as percents (13 = 13%) and stored as fractions with nine decimal places;
-        withholding is a tax rather than a contribution, so it is not part of the 100% check.
+        one — change what moved and give it the date it takes effect on.
       </p>
       {/* A save that failed, not a feed that is behind: the bare alert, with no stale cue
           and nothing to retry — the form itself is the retry. */}
@@ -753,19 +759,6 @@ function ProfilesPanel({
             <AmountInput kind="percent" value={form[field]} onValueChange={set(field)} />
           </label>
         ))}
-        {/* The all-in rate's split, right under it because that is the row it divides. Its
-            own fieldset (the match's shape) so ONE hint covers both boxes and neither
-            label has to carry the caveat that would rename it. */}
-        <fieldset className="paycheck-match">
-          <legend>Withholding split (optional)</legend>
-          {OPTIONAL_PCT_FIELDS.map(({ field, label }) => (
-            <label key={field}>
-              {label}
-              <AmountInput kind="percent" value={form[field]} onValueChange={set(field)} />
-            </label>
-          ))}
-          <p className="paycheck-match-words">{WITHHOLDING_SPLIT_HINT}</p>
-        </fieldset>
         <label>
           Dental &amp; vision
           <AmountInput
@@ -842,6 +835,27 @@ function ProfilesPanel({
           )}
           <p className="paycheck-match-words">{employerHsaWords(form)}</p>
         </fieldset>
+        {/* The all-in rate's optional split, LAST and behind a disclosure (2026-09-13 polish
+            spec §11; audit W8): it is blank for most rows until a paystub says otherwise, and
+            sitting between the pay figures and the deductions it split the primary fields.
+            Keyed on the row being edited, so a stored split opens it and a new row without one
+            starts shut; defaultOpen is read once per key, which is exactly that. */}
+        <Disclosure
+          key={editingId ?? 'new'}
+          summary="Withholding split (optional)"
+          className="paycheck-split"
+          defaultOpen={form.fed_withholding_pct !== '' || form.state_withholding_pct !== ''}
+        >
+          <div className="paycheck-match paycheck-split-grid">
+            {OPTIONAL_PCT_FIELDS.map(({ field, label }) => (
+              <label key={field}>
+                {label}
+                <AmountInput kind="percent" value={form[field]} onValueChange={set(field)} />
+              </label>
+            ))}
+            <p className="paycheck-match-words">{WITHHOLDING_SPLIT_HINT}</p>
+          </div>
+        </Disclosure>
         <label className="span-2">
           Notes
           <input
@@ -867,11 +881,13 @@ function ProfilesPanel({
         </div>
       </form>
       {profiles.length > 0 && (
-        <div className="paycheck-scroll">
+        <div className="paycheck-scroll" ref={scrollRef}>
           <table className="data-table">
             <thead>
               <tr>
-                <th>Effective</th>
+                {/* Sticky left, the actions sticky right (panels.css, spec §7): the identity and
+                    the row's controls frame a scrollable middle at every width. */}
+                <th className="col-identity">Effective</th>
                 <th className="num">Salary</th>
                 <th className="num">Periods</th>
                 <th className="num">Traditional</th>
@@ -894,7 +910,7 @@ function ProfilesPanel({
                   key={profile.id}
                   className={profile.id === editingId ? 'is-editing' : undefined}
                 >
-                  <td>
+                  <td className="col-identity">
                     {/* The date cell IS the selector: pressing it moves the waterfall
                         above to this profile. `shownId` comes from the breakdown payload,
                         so the server's own default is what lights up on arrival. */}

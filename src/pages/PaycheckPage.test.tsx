@@ -1167,6 +1167,50 @@ describe('PaycheckPage — the profile form', () => {
     expect(await screen.findByText('First match band must be >= 0')).toBeTruthy()
     expect(vi.mocked(createProfile)).not.toHaveBeenCalled()
   })
+
+  it('folds the optional withholding split behind a disclosure, after the employer policies', async () => {
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
+
+    // 2026-09-13 polish spec §11 / audit W8: the optional, usually-blank policy no longer sits
+    // between the pay figures and the deductions.
+    const details = screen.getByText('Withholding split (optional)').closest('details') as HTMLDetailsElement
+    expect(details.classList.contains('disclosure')).toBe(true)
+    // Blank for this household, so it starts shut — the boxes are still reachable by label.
+    expect(details.open).toBe(false)
+    expect(details.contains(field('Federal withholding %'))).toBe(true)
+    // Order: match, employer HSA, then the split.
+    expectInDocumentOrder(
+      screen.getByText('Employer 401(k) match'),
+      screen.getByText('Employer HSA contribution'),
+      details,
+    )
+    // The intro is two sentences; the percent/fraction rule moved into the heading's hint.
+    expect(screen.getByText(/One row per comp change, newest first\./).textContent).not.toContain('Percentages')
+  })
+
+  it('opens the split disclosure when the row it seeds from stores a split', async () => {
+    vi.mocked(fetchProfiles).mockResolvedValue([
+      { ...profile2026, fed_withholding_pct: '0.180000000', state_withholding_pct: '0.060000000' },
+      profile2025,
+    ])
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
+    // The carry-forward form copies the latest row's split, so the disclosure opens with it.
+    const details = screen.getByText('Withholding split (optional)').closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(true)
+    expect(field('Federal withholding %').value).toBe('18%')
+  })
+
+  it('pins the identity column and the row actions of the history scroller (spec §7)', async () => {
+    render(<MemoryRouter initialEntries={['/paycheck?section=profiles']}><PaycheckPage /></MemoryRouter>)
+    await screen.findByLabelText('Effective date')
+    const table = document.querySelector('.paycheck-scroll .data-table') as HTMLTableElement
+    expect(table.querySelector('thead th.col-identity')?.textContent).toBe('Effective')
+    const row = screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2026' }).closest('tr') as HTMLTableRowElement
+    expect(row.querySelector('td.col-identity')).toBeTruthy()
+    expect(row.querySelector('td.row-actions')).toBeTruthy()
+  })
 })
 
 describe('PaycheckPage — loading', () => {
