@@ -22,8 +22,9 @@ export default function CashflowStrip({
   const s = monthSummary(events, month)
   const asOf = quoteAsOf === null ? '' : ` (quote as of ${formatDate(quoteAsOf)})`
   const estimateHint = `Includes estimates${asOf}`
+  // The tilde marks a leg that includes an estimate — unless the leg is nothing (spec §14).
   const money = (cents: number, estimated: boolean) =>
-    `${estimated ? '~' : ''}${cents < 0 ? '−' : ''}${formatCurrency(fromCents(Math.abs(cents)))}`
+    `${estimated && cents !== 0 ? '~' : ''}${cents < 0 ? '−' : ''}${formatCurrency(fromCents(Math.abs(cents)))}`
   const netEstimated = s.estimated.cashIn || s.estimated.cashOut
   const receipt = (id: 'cashIn' | 'cashOut' | 'net' | 'vesting', label: string, definition: string) => metricReceipt({
     id: `calendar_${id}`, label, definition, value: fromCents(s[id]), completeness: s.unknown ? 'partial_estimate' : 'scheduled_events',

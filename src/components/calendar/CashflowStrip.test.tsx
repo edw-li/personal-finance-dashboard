@@ -44,4 +44,12 @@ describe('CashflowStrip', () => {
     render(<CashflowStrip events={[events[0], unknowable]} month="2026-09-01" quoteAsOf={null} />)
     expect(screen.getByText(/1 event has no knowable amount/)).toBeTruthy()
   })
+
+  it('prints a zero estimated leg as $0.00 without the tilde', () => {
+    const nothingOwed = calendarEvent({ date: '2026-09-15', type: 'tax_deadline', label: 'Q3', amount: '0.00', direction: 'out', basis: 'estimated' })
+    render(<CashflowStrip events={[nothingOwed]} month="2026-09-01" quoteAsOf={null} />)
+    const cashOut = screen.getAllByRole('group')[1].textContent ?? ''
+    expect(cashOut).toContain('$0.00')
+    expect(cashOut).not.toContain('~')
+  })
 })

@@ -303,7 +303,12 @@
   text-align: right;
 }
 
+/* In over out, two lines that never break (audit C-2); a lone em dash when nothing moves. */
 .cal-gutter {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
   min-height: 92px;
   padding: 4px 6px;
   border: 1px dashed var(--border);
@@ -312,6 +317,11 @@
   color: var(--muted);
   text-align: right;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cal-gutter-line {
+  white-space: nowrap;
 }
 
 /* The control row rides the frame's sticky scope slot, which brings its own padding. */

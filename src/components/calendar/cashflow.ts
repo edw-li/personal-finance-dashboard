@@ -31,12 +31,15 @@ export function formatCompactCents(cents: number): string {
 
 const SIGN: Record<CalendarDirection, string> = { in: '+', out: '−', neutral: '' }
 
-/** "+$6.8k" · "−$395" · "~+$41.2k" — direction is the sign, the tilde says estimate. */
+/** "+$6.8k" · "−$395" · "~+$41.2k" — direction is the sign, the tilde says estimate. A zero is
+ *  "$0" whatever its direction or basis (2026-09-13 polish spec §14): there is no sign to carry,
+ *  and "~−$0" read as negative money on a deadline where the safe harbor was met (audit C-3). */
 export function signedCompact(
   cents: number,
   direction: CalendarDirection,
   estimated: boolean,
 ): string {
+  if (cents === 0) return '$0'
   return `${estimated ? '~' : ''}${SIGN[direction]}${formatCompactCents(cents)}`
 }
 
