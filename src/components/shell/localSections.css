@@ -16,5 +16,3 @@
 .local-section-panel { min-width: 0; }
 .local-section-panel[hidden] { display: none !important; }
 .local-section-panel [id] { scroll-margin-top: 7rem; }
-.local-section-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
-.local-section-toolbar > .local-section-nav { flex: 1; }

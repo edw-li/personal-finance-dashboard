@@ -527,6 +527,51 @@ export default function NetWorthPage() {
     <div className="page">
       <PageFrame
         title="Net worth"
+        sections={
+          <LocalSectionNav
+            state={views}
+            label="Net worth views"
+            trailing={
+              <Segmented
+                variant="toggle"
+                size="sm"
+                ariaLabel="Granularity"
+                options={[
+                  { value: 'monthly', label: 'Monthly' },
+                  { value: 'quarterly', label: 'Quarterly' },
+                ]}
+                value={granularity}
+                onChange={(g) => {
+                  // A press on the ACTIVE chip is a no-op, not a refetch: setGranularity
+                  // would bail out and leave the dim raised with nothing coming to lower it.
+                  if (g === granularity) return
+                  setLoading(true)
+                  setError(null)
+                  setSummaryError(null)
+                  // Same handler-side seed as the owner adoption above: a warm grain paints
+                  // instantly, and the rendered-state guard in load() stays truthful. The
+                  // ref write is fine HERE — an event handler, never a render.
+                  // The TARGET grain's key, so the month is snapped the way that
+                  // grain will read it — a quarterly peek must not look up a monthly one.
+                  const peeked = getSnapshot<NetWorthSnapshot>(
+                    netWorthKey(
+                      g,
+                      owner,
+                      g === 'quarterly' ? quarterEndOnOrBefore(scope.month) : scope.month,
+                    ),
+                  )
+                  if (peeked !== undefined) {
+                    shown.current = peeked
+                    setFromCache(true)
+                    setData(peeked.ts)
+                    setSummary(peeked.summary)
+                  }
+                  setGranularity(g)
+                }}
+              />
+            }
+          />
+        }
         actions={
           <button className="button button-primary" onClick={() => navigate('/update')}>
             <PencilLine size={15} /> Enter month
@@ -570,44 +615,6 @@ export default function NetWorthPage() {
           ],
         }}
       >
-        <div className="local-section-toolbar"><LocalSectionNav state={views} label="Net worth views" /><Segmented
-          variant="toggle"
-          size="sm"
-          ariaLabel="Granularity"
-          options={[
-            { value: 'monthly', label: 'Monthly' },
-            { value: 'quarterly', label: 'Quarterly' },
-          ]}
-          value={granularity}
-          onChange={(g) => {
-            // A press on the ACTIVE chip is a no-op, not a refetch: setGranularity
-            // would bail out and leave the dim raised with nothing coming to lower it.
-            if (g === granularity) return
-            setLoading(true)
-            setError(null)
-            setSummaryError(null)
-            // Same handler-side seed as the owner adoption above: a warm grain paints
-            // instantly, and the rendered-state guard in load() stays truthful. The
-            // ref write is fine HERE — an event handler, never a render.
-            // The TARGET grain's key, so the month is snapped the way that
-            // grain will read it — a quarterly peek must not look up a monthly one.
-            const peeked = getSnapshot<NetWorthSnapshot>(
-              netWorthKey(
-                g,
-                owner,
-                g === 'quarterly' ? quarterEndOnOrBefore(scope.month) : scope.month,
-              ),
-            )
-            if (peeked !== undefined) {
-              shown.current = peeked
-              setFromCache(true)
-              setData(peeked.ts)
-              setSummary(peeked.summary)
-            }
-            setGranularity(g)
-          }}
-        /></div>
-
         {/* The secondary feed's own alert (2026-09-09 audit item 10). Above the charts it
             failed beside, because the tiles it feeds are what is missing from up here. */}
         <FeedBanner error={summaryError} retry={retrySummary} retryLabel="Retry the month summary" />

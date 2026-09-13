@@ -84,7 +84,7 @@ export default function ProjectionPage() {
   const select = (value: ChartSelection | null) => setSelectedIndex(value?.kind === 'projection' && display ? display.months.indexOf(value.date) : null)
   const receipts = useMemo(() => data ? projectionReceipts(data) : null, [data])
   return <div className="page projection-page">
-    <PageFrame title="Projection" resource={{
+    <PageFrame title="Projection" sections={missing ? undefined : <LocalSectionNav state={sections} label="Projection views" />} resource={{
       status: missing ? 'ready' : data === null ? pageError !== null ? 'error' : 'loading' : 'ready',
       error: pageError, busy: false, fromCache,
       retry: () => !sandbox.empty && sandbox.errorStatus === 422 ? sandbox.reset() : setRetryNonce((n) => n + 1),
@@ -92,7 +92,6 @@ export default function ProjectionPage() {
       {missing ? <section className="card"><h2 className="eyebrow">Projected investable balance</h2>
         <p className="empty-note">{sandbox.error} — <Link to="/update">enter a monthly update</Link> to start one.</p></section>
         : data !== null && display !== null && receipts !== null && <>
-          <LocalSectionNav state={sections} label="Projection views" />
           <LocalSectionPanel state={sections} section="planning">
             <div className="kpi-row projection-outcomes" aria-label="Planning outcomes">
               <StatTile label="FI target" value={formatCurrency(data.fi_target)}

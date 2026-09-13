@@ -1081,11 +1081,12 @@ describe('SettingsPage — anchored arrival from the palette', () => {
         ),
       )
       const landed = scrollIntoView.mock.calls.length
-      // TWO observers now: PageFrame measures the sticky scope row into --sticky-inset with
-      // one of its own (2026-09-06 spec §3.2 put the rail in that row). The chase is picked by
-      // WHAT it watches — the whole body — because construction order is an accident of which
-      // effect runs first, and this test is about the page's arrival, not about that.
-      expect(resizeObservers).toHaveLength(2)
+      // THREE observers now: PageFrame measures the sticky block into --sticky-inset with one
+      // of its own (2026-09-06 spec §3.2 put the strip in that block), and LocalSectionNav keeps
+      // its sliding indicator under the selected tab with another (2026-09-13 polish §2.4). The
+      // chase is picked by WHAT it watches — the whole body — because construction order is an
+      // accident of which effect runs first, and this test is about the page's arrival.
+      expect(resizeObservers).toHaveLength(3)
       const chase = bodyObserver()
       expect(chase).toBeDefined()
       if (chase === undefined) throw new Error('the arrival chase never observed the body')

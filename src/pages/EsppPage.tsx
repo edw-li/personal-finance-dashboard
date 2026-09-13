@@ -1444,8 +1444,7 @@ export default function EsppPage() {
 
   return (
     <div className="page espp-page">
-      <PageFrame title="ESPP" resource={{ status: 'ready' }}>
-        <LocalSectionNav state={views} label="ESPP views" />
+      <PageFrame title="ESPP" sections={<LocalSectionNav state={views} label="ESPP views" />} resource={{ status: 'ready' }}>
         <FeedBanner error={loadBanner} retry={retryFailedLoads} />
         <PositionStrip
           lots={lots}

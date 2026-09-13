@@ -468,6 +468,7 @@ export default function PortfolioPage() {
     <div className="page portfolio-page">
       <PageFrame
         title="Portfolio"
+        sections={<LocalSectionNav state={views} label="Portfolio views" />}
         actions={
           <button type="button" className="refresh-btn" onClick={onRefresh} disabled={refreshing}>
             <RefreshCw size={14} className={refreshing ? 'spin' : undefined} />
@@ -576,8 +577,6 @@ export default function PortfolioPage() {
           ],
         }}
       >
-        <LocalSectionNav state={views} label="Portfolio views" />
-
         {holdings !== null && (
           <>
             {totals && (

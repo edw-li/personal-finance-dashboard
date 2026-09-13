@@ -586,8 +586,7 @@ export default function CompPage() {
     <div className="page comp-page">
       {/* Nothing is loaded page-wide: the two feeds below own their own lifecycles, so the
           frame is only the title row. */}
-      <PageFrame title="Comp" resource={{ status: 'ready', fromCache }}>
-        <LocalSectionNav state={views} label="Comp views" />
+      <PageFrame title="Comp" sections={<LocalSectionNav state={views} label="Comp views" />} resource={{ status: 'ready', fromCache }}>
         <FeedBanner error={loadBanner} retry={retryFailedLoads} />
         <Feed
           data={schedule}
