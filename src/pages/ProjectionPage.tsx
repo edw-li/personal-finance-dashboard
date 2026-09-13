@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchHousehold } from '../api/household'
 import { fetchProjection } from '../api/projection'
@@ -83,6 +83,25 @@ export default function ProjectionPage() {
   const selection = selectedIndex === null ? null : readout(selectedIndex)
   const select = (value: ChartSelection | null) => setSelectedIndex(value?.kind === 'projection' && display ? display.months.indexOf(value.date) : null)
   const receipts = useMemo(() => data ? projectionReceipts(data) : null, [data])
+  // The chart column sticks UNDER the outcomes band (spec §12), whose height is measured rather
+  // than assumed: it is one row of tiles when their labels fit and taller when one wraps, and a
+  // constant would park the chart's header under the band at exactly the widths that wrap.
+  // Written on the band's parent (the section panel) so .projection-chart-area inherits it; the
+  // 131px fallback in the CSS is the one-row band (115px tile + 8px padding twice). A ref callback
+  // with a cleanup (React 19), memoised so React does not re-observe on every render. jsdom and
+  // any browser without ResizeObserver keep the fallback.
+  const measureBand = useCallback((band: HTMLDivElement | null) => {
+    const target = band?.parentElement ?? null
+    if (band === null || target === null || typeof ResizeObserver === 'undefined') return undefined
+    const write = () => target.style.setProperty('--projection-band-h', `${band.offsetHeight}px`)
+    write()
+    const observer = new ResizeObserver(write)
+    observer.observe(band)
+    return () => {
+      observer.disconnect()
+      target.style.removeProperty('--projection-band-h')
+    }
+  }, [])
   return <div className="page projection-page">
     <PageFrame title="Projection" sections={missing ? undefined : <LocalSectionNav state={sections} label="Projection views" />} resource={{
       status: missing ? 'ready' : data === null ? pageError !== null ? 'error' : 'loading' : 'ready',
@@ -93,7 +112,7 @@ export default function ProjectionPage() {
         <p className="empty-note">{sandbox.error} — <Link to="/update">enter a monthly update</Link> to start one.</p></section>
         : data !== null && display !== null && receipts !== null && <>
           <LocalSectionPanel state={sections} section="planning">
-            <div className="kpi-row kpi-row-5 projection-outcomes" aria-label="Planning outcomes">
+            <div ref={measureBand} className="kpi-row kpi-row-5 projection-outcomes" aria-label="Planning outcomes">
               <StatTile label="FI target" value={formatCurrency(data.fi_target)}
                 delta={data.fi_target === null ? undefined : `annual spend ÷ ${formatPct(data.swr_pct, { signed: false })} SWR`}
                 hint="Annual spend ÷ withdrawal rate — the balance at which withdrawals could cover spending."

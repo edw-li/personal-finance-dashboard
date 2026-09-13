@@ -1001,4 +1001,24 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     const label = within(band).getByText('Reach FI within 30 yrs')
     expect(label.textContent).toContain('yrs\u00A0')
   })
+
+  it('measures the outcomes band into --projection-band-h so the chart column sticks under it', async () => {
+    // jsdom has no ResizeObserver; the stub is what lets the measurement path run at all.
+    class StubResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', StubResizeObserver)
+    try {
+      renderPage()
+      await loaded()
+      const band = document.querySelector('.projection-outcomes') as HTMLElement
+      // Written on the band's parent (the section panel) so .projection-chart-area inherits it;
+      // jsdom lays nothing out, so the measured value is 0px — the WIRING is what is under test.
+      expect(band.parentElement?.style.getPropertyValue('--projection-band-h')).toBe('0px')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

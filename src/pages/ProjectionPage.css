@@ -42,12 +42,23 @@
    900px viewport) — so there the band simply scrolls with the page. */
 @container (max-width: 999px) {
   .projection-outcomes { position: static; }
+  .projection-chart-area { top: calc(var(--sticky-inset, 0px) + 8px); }
 }
 
 .projection-workspace { display: grid; grid-template-columns: minmax(480px, 1fr) 350px; align-items: start; gap: 18px; }
-.projection-chart-area { min-width: 0; }
+/* The chart stays in view while every knob is reachable (spec §12, audit P-2: the old inner
+   scroller hid 932px of controls behind a hard edge through the Withdrawal-rate box). The aside is
+   its natural height and the CHART column pins under the outcomes band. --sticky-inset is the
+   frame's sticky block (the tab strip, measured by PageFrame); --projection-band-h is the band,
+   measured by ProjectionPage.tsx's measureBand; 131px is the one-row band it falls back to. */
+.projection-chart-area {
+  min-width: 0;
+  position: sticky;
+  top: calc(var(--sticky-inset, 0px) + var(--projection-band-h, 131px) + 8px);
+  align-self: start;
+}
 .projection-chart-controls { display: flex; gap: 8px; flex-wrap: wrap; }
-.projection-assumptions { max-height: min(780px, calc(100vh - 210px)); min-height: 460px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border-radius: 10px; }
+.projection-assumptions { min-width: 0; }
 .projection-assumptions .sandbox-card { padding: 16px; }
 .projection-assumptions .sandbox-header { align-items: flex-start; flex-direction: column; }
 .projection-assumptions .sandbox-header-actions { flex-wrap: wrap; }
@@ -58,8 +69,10 @@
 .projection-assumptions:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .projection-method-note, .projection-view-intro { font-size: 0.84rem; line-height: 1.55; color: var(--muted); }
 .projection-comparisons { margin-top: 20px; }
+/* One column: the chart above the knobs. A sticky chart here would pin a 400px canvas over the
+   controls the reader is scrolling towards, so it scrolls with them. */
 @container (max-width: 900px) {
   .projection-workspace { grid-template-columns: 1fr; }
-  .projection-assumptions { max-height: none; }
+  .projection-chart-area { position: static; }
   .projection-assumptions .sandbox-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
