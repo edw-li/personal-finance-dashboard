@@ -58,9 +58,11 @@ function pinToday(): void {
   vi.setSystemTime(new Date('2026-08-20T12:00:00'))
 }
 
-// StatTile has no role of its own; read the value that sits beside a known label.
+// StatTile has no role of its own; read the value that sits beside a known label. From the TILE,
+// not the label's parent: the label text and its (i) share a `.stat-label-text` unit now
+// (2026-09-13 polish §10), so the label's parent is that span rather than the tile.
 function tileValue(label: string): string {
-  return screen.getByText(label).parentElement!.querySelector('.stat-value')!.textContent!
+  return screen.getByText(label).closest('.stat-tile')!.querySelector('.stat-value')!.textContent!
 }
 
 function renderPanel(dividends: DividendOut[], annualIncome: string | null = '432.10', onChanged = () => {}) {
