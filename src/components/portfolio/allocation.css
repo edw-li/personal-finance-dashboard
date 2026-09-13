@@ -1,5 +1,4 @@
 .allocation-workspace { display: grid; gap: 16px; container-type: inline-size; }
-.allocation-workspace .panel { margin-bottom: 0; }
 .allocation-toolbar { display: flex; flex-wrap: wrap; gap: 12px; }
 .allocation-overview-grid { display: grid; grid-template-columns: minmax(320px, 0.85fr) minmax(480px, 1.15fr); gap: 16px; }
 .allocation-overview-grid > .chart-card { grid-column: auto; }

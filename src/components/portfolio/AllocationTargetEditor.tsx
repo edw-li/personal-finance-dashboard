@@ -19,9 +19,9 @@ export default function AllocationTargetEditor({ data, owner, onChanged }: {
 }) {
   const [editing, setEditing] = useState(false)
   const saved = data.draft_target_set ?? data.target_set
-  return <section className="panel allocation-targets" aria-label="Allocation targets">
-    <div className="panel-title-row">
-      <h2 className="panel-title">Your allocation targets</h2>
+  return <section className="card allocation-targets" aria-label="Allocation targets">
+    <div className="card-title-row">
+      <h2 className="eyebrow">Your allocation targets</h2>
       <button className="button" onClick={() => setEditing((v) => !v)}>
         {editing ? 'Close editor' : saved ? 'Edit targets' : 'Set targets'}
       </button>

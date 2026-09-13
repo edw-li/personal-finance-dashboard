@@ -156,8 +156,8 @@ export default function SecuritiesPanel({
   }
 
   return (
-    <section className="panel">
-      <h2 className="panel-title">
+    <section className="card">
+      <h2 className="eyebrow">
         Securities
         <InfoHint text="The instruments themselves — metadata, pricing mode, active flag. Deactivate a dead ticker to stop refreshing it; deleting is refused while records reference it." />
       </h2>

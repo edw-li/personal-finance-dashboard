@@ -966,3 +966,19 @@ describe('PortfolioPage — shell scope', () => {
     ).toBeTruthy()
   })
 })
+
+// ── Shared card grammar (2026-09-13 polish §12, M3) ───────────────────────────────────────
+// .panel/.panel-title/.tiles-row sat outside the motion, reveal and skeleton selectors, which
+// all key on .card and .kpi-row. Same tokens, shared names.
+describe('PortfolioPage — card vocabulary', () => {
+  it('renders every block as .card/.eyebrow and the tiles as a dense .kpi-row', async () => {
+    renderPage('/portfolio?section=holdings')
+    await screen.findByText('Portfolio value')
+    expect(document.querySelector('.panel, .panel-title, .tiles-row')).toBeNull()
+    expect(document.querySelector('.loading-dim > .kpi-row.kpi-row-dense')).not.toBeNull()
+    const holdings = screen.getByRole('heading', { name: 'Holdings' })
+    expect(holdings.className).toBe('eyebrow')
+    expect(holdings.closest('.card')).not.toBeNull()
+    expect(holdings.closest('.card-title-row')).not.toBeNull()
+  })
+})

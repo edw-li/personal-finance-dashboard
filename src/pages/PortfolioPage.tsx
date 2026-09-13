@@ -580,7 +580,7 @@ export default function PortfolioPage() {
         {holdings !== null && (
           <>
             {totals && (
-              <div className="tiles-row">
+              <div className="kpi-row kpi-row-dense">
                 <StatTile
                   label="Portfolio value"
                   value={formatCurrency(totals.market_value)}
@@ -687,10 +687,10 @@ export default function PortfolioPage() {
                 }
               />
             </LocalSectionPanel>
-            <LocalSectionPanel state={views} section="holdings">
-              <section className="panel">
-                <div className="panel-title-row">
-                  <h2 className="panel-title">
+            <LocalSectionPanel state={views} section="holdings" className="card-grid">
+              <section className="card span-12">
+                <div className="card-title-row">
+                  <h2 className="eyebrow">
                     {/* The section keeps its NAME while drilled — "where am I" survives the
                       swap (SpendingPage's header does the same dance). */}
                     {detailHolding ? `Holdings — ${detailHolding.ticker}` : 'Holdings'}

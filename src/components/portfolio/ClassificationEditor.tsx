@@ -13,7 +13,7 @@ export default function ClassificationEditor({ classifications, onChanged }: {
   const [search, setSearch] = useState('')
   const rows = classifications.filter((row) => `${row.ticker} ${row.name}`.toLowerCase().includes(search.toLowerCase()))
   const selected = classifications.find((row) => row.security_id === editing)
-  return <details className="panel allocation-classifications">
+  return <details className="card allocation-classifications">
     <summary>Review security classifications</summary>
     <p className="hint">These classifications apply to the security across all owners. Your reviewed values survive price refreshes and imports. Fund industry stays unknown until constituent data is available.</p>
     <label className="allocation-search">Find a security <input className="field-input" type="search" value={search} onChange={(e) => setSearch(e.target.value)} /></label>

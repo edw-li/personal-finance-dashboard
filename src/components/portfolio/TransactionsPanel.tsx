@@ -283,8 +283,8 @@ export default function TransactionsPanel({
   }
 
   return (
-    <section className="panel">
-      <h2 className="panel-title">
+    <section className="card">
+      <h2 className="eyebrow">
         Transactions
         <InfoHint text="The buy/sell/split ledger every computed figure stands on. Sheet-imported rows are rewritten by re-imports; rows added here are never touched." />
       </h2>

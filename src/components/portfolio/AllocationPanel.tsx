@@ -123,8 +123,8 @@ export default function AllocationPanel({ holdings, owner = null, refreshKey = 0
             </div>}
           </>
         }} />
-      <section className="panel allocation-ranked" aria-label="Allocation amounts and coverage">
-        <h2 className="panel-title">Current priced book</h2>
+      <section className="card allocation-ranked" aria-label="Allocation amounts and coverage">
+        <h2 className="eyebrow">Current priced book</h2>
         <p className="allocation-book-value">{data ? formatCurrency(data.total_market_value) : '—'}</p>
         {data && <>
           <div className="allocation-coverage">
@@ -169,8 +169,8 @@ export default function AllocationPanel({ holdings, owner = null, refreshKey = 0
 }
 
 function EmployerPanel({ value, onSelectTicker }: { value: EmployerExposure; onSelectTicker: (ticker: string) => void }) {
-  return <section className="panel allocation-employer" aria-label="Employer equity exposure">
-    <h2 className="panel-title">Employer equity · {value.ticker ?? 'Not configured'}</h2>
+  return <section className="card allocation-employer" aria-label="Employer equity exposure">
+    <h2 className="eyebrow">Employer equity · {value.ticker ?? 'Not configured'}</h2>
     <div className="allocation-employer-grid">
       <div><h3>Shares you hold</h3><strong>{formatCurrency(value.held_value)}</strong>
         <p>{formatShares(value.held_shares)} shares · {formatPct(value.held_weight_pct, { signed: false })} of the selected priced portfolio</p>

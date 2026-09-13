@@ -225,8 +225,8 @@ export default function DividendsPanel({
   }
 
   return (
-    <section className="panel">
-      <h2 className="panel-title">
+    <section className="card">
+      <h2 className="eyebrow">
         Dividends
         <InfoHint text="The dividend log. Refreshes write auto rows from real events — shares held on the ex-date × the per-share amount; manual entry covers manual-priced holdings and older history." />
       </h2>
