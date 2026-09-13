@@ -212,6 +212,30 @@
   color: var(--text);
 }
 
+/* The jurisdictions as a grid (2026-09-13 polish spec §12; audit W3): two columns at 1440, three
+   at 1920, one on a narrow card. Each group is a form plus its optional per-person strip, so a
+   strip stays under the table it qualifies. align-items: start, because Federal and Medicare are
+   different heights and a stretched twin would be a void. The grid's gap carries the spacing the
+   blocks used to carry themselves. */
+.bracket-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(480px, 100%), 1fr));
+  gap: 1rem 2rem;
+  align-items: start;
+}
+
+.bracket-grid .bracket-block {
+  margin-bottom: 0;
+}
+
+.bracket-grid .bracket-block.has-person-strip {
+  margin-bottom: 0.55rem;
+}
+
+.bracket-grid .bracket-person-strip {
+  margin-bottom: 0;
+}
+
 .bracket-table {
   max-width: 560px;
 }
@@ -426,10 +450,22 @@
   margin-left: 0.5rem;
 }
 
-/* The tab row sits between the card's hint and the first table: the .segmented treatment is
-   panels.css's, so only its placement is this file's business. */
-.bracket-status-tabs {
+/* The status row sits between the card's hint and the grid: an eyebrow naming what the control
+   is FOR, the .segmented (panels.css's), and the hint. Only its placement is this file's business. */
+.bracket-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
   margin-bottom: 1rem;
+}
+
+.bracket-status-row > .eyebrow {
+  margin: 0;
+}
+
+.bracket-status-tabs {
+  margin-bottom: 0;
 }
 
 .bracket-clone {
