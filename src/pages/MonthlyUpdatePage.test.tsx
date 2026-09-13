@@ -729,6 +729,49 @@ it('keeps the step card mounted and busy through a month switch, swapping when t
   expect(container.querySelector('.loading-dim.is-loading')).toBeNull()
 })
 
+// P1 review round: a switch whose gating feed fails must not leave the PREVIOUS month's form
+// standing under the new month's title — undimmed, interactive, and saving nothing.
+it('shows the error view instead of the previous month’s form when a switch fails to load', async () => {
+  renderWizard()
+  await landedBalanceCell()
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => {
+    if (month === '2026-06-01') throw new ApiError('balances unavailable', 503)
+    return { month, exists: month === '2026-07-01', recorded_on: null, notes: null,
+      balances: month === '2026-07-01' ? [{ account_id: 1, balance: '1500.00' }] : [] }
+  })
+  fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
+  expect(await screen.findByRole('alert')).toBeTruthy()
+  expect(screen.getByText("Couldn't load this month — the server had a problem (HTTP 503)")).toBeTruthy()
+  // August's cells are GONE: a form for a month nobody is on is worse than no form at all.
+  expect(screen.queryByLabelText('Checking')).toBeNull()
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month, exists: true, recorded_on: null, notes: null, balances: [{ account_id: 1, balance: '900.00' }],
+  }))
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  // The retry is a load like any other: the dimmed, inert card comes back while it is in flight
+  // and carries June's figures the moment they land.
+  expect((await landedBalanceCell()).value).toBe('900.00')
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+// P1 review round: the owner walk is part of the SEED, not an aid — a late household flips a
+// one-section grid into per-owner sections, remounting every row (layout jump, stolen focus).
+it('waits for the household before painting the grid, so the owner sections never re-form under the caret', async () => {
+  type Household = Awaited<ReturnType<typeof householdApi.fetchHousehold>>
+  const gate = deferred<Household>()
+  vi.mocked(householdApi.fetchHousehold).mockImplementation(() => gate.promise)
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, samBrokerage, jointSavings])
+  renderWizard()
+  await screen.findByRole('heading', { level: 1, name: `Monthly update — ${formatMonth('2026-08-01')}` })
+  expect(screen.queryByLabelText('Checking')).toBeNull()
+  await act(async () => {
+    gate.resolve({ people: [{ id: 1, name: 'Me', is_primary: true }, { id: 2, name: 'Sam', is_primary: false }], marriage_date: '2026-09-12' })
+  })
+  expect(await screen.findByLabelText('Checking')).toBeTruthy()
+  // One paint, already grouped: the owner walk is there on the FIRST render of the grid.
+  expect([...document.querySelectorAll('tr.entry-owner-row')].map((r) => r.textContent)).toEqual(['Me', 'Sam', 'Joint'])
+})
+
 it('reads which months exist from /coverage rather than the whole net-worth timeseries', async () => {
   renderWizard()
   await screen.findByLabelText('Checking')
@@ -2485,7 +2528,14 @@ it('the kebab opens the month-actions popover and Escape closes it back onto the
   expect(trigger.getAttribute('aria-expanded')).toBe('true')
   expect(dialog.className).toContain('popover-surface')
   expect(within(dialog).getByRole('button', { name: 'Delete this month' })).toBeTruthy()
+  // A dialog takes the caret with it (P1 review round): the arm box is the first control.
+  expect(document.activeElement).toBe(screen.getByLabelText('Type 2026-07 to confirm'))
+  // A typed arm does not survive a close — reopening never shows a live Delete button.
+  fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
   fireEvent.keyDown(dialog, { key: 'Escape' })
   expect(screen.queryByRole('dialog', { name: 'Month actions' })).toBeNull()
   expect(document.activeElement).toBe(trigger)
+  await openMonthActions()
+  expect((screen.getByLabelText('Type 2026-07 to confirm') as HTMLInputElement).value).toBe('')
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Delete this month' }).disabled).toBe(true)
 })

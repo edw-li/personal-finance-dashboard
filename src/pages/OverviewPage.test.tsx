@@ -1955,6 +1955,8 @@ describe('OverviewPage independent groups and preferences', () => {
     expect(trigger.getAttribute('aria-expanded')).toBe('true')
     expect(within(dialog).getByRole('checkbox', { name: 'Recent spending' })).toBeTruthy()
     expect(within(dialog).queryByText('Recent living spending')).toBeNull()
+    // A dialog takes the caret with it (P1 review round): the first control inside it.
+    expect(dialog.contains(document.activeElement)).toBe(true)
     fireEvent.keyDown(dialog, { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
     expect(document.activeElement).toBe(trigger)

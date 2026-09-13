@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ClipboardEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { CalendarPlus, Ellipsis } from 'lucide-react'
@@ -316,6 +316,10 @@ export default function MonthlyUpdatePage() {
   // the previous seed mounted and dimmed until the new one arrives (spec §9), so the body is
   // never blank and never jumps 900 → 2,400px.
   const [seeded, setSeeded] = useState<LoadedMonth | null>(null)
+  // The seed on screen belongs to a month the user has LEFT (P1 review round): a failed switch
+  // must not leave the previous month's form standing, undimmed and interactive, under the new
+  // month's title — a save there is a no-op and the typing is filed under neither month.
+  const staleSeed = seeded !== null && seeded.month !== month
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -383,8 +387,21 @@ export default function MonthlyUpdatePage() {
   const [actionsOpen, setActionsOpen] = useState(false)
   const actionsTriggerRef = useRef<HTMLButtonElement>(null)
   const actionsSurfaceRef = useRef<HTMLDivElement>(null)
-  const closeActions = () => setActionsOpen(false)
+  // Stable (useCallback): the dismissal hook re-subscribes its document listeners whenever this
+  // identity changes, and a fresh closure on every keystroke of the arm box meant re-subscribing
+  // on every keystroke. Closing also disarms — a typed "2026-07" must never wait behind a shut
+  // popover for the next open to find a live Delete (P1 review round).
+  const closeActions = useCallback(() => {
+    setActionsOpen(false)
+    setDeleteArm('')
+  }, [setActionsOpen, setDeleteArm])
   usePopoverDismiss(actionsOpen, closeActions, actionsTriggerRef, actionsSurfaceRef)
+  // role="dialog" contract: opening moves focus INTO the surface (its first control, the arm
+  // box); the hook hands it back to the trigger on Escape or an outside pointer.
+  useEffect(() => {
+    if (!actionsOpen) return
+    actionsSurfaceRef.current?.querySelector<HTMLElement>('input, button')?.focus()
+  }, [actionsOpen])
   const [deleting, setDeleting] = useState(false)
   const [loadNonce, setLoadNonce] = useState(0)
   const toast = useToast()
@@ -401,7 +418,7 @@ export default function MonthlyUpdatePage() {
     // cells that are about to unmount — neither may follow the user to the next step.
     setPasteNote(null)
     setFlashIds(new Set())
-    setActionsOpen(false)
+    closeActions()
     setParams((current) => {
       const copy = new URLSearchParams(current)
       copy.set('month', month)
@@ -432,10 +449,8 @@ export default function MonthlyUpdatePage() {
     // empty covered set. Every callback checks the same `cancelled` flag, so a late answer for
     // a month the user has left can never land over the month they moved to.
     const matrixPromise = fetchMatrix().catch((): SpendingMatrix | null => null)
-    const householdPromise = fetchHousehold().catch((): HouseholdOut | null => null)
     const coveragePromise = fetchCoverage().catch((): CoverageOut | null => null)
     void matrixPromise.then((matrixData) => { if (!cancelled) setMatrix(matrixData) })
-    void householdPromise.then((householdData) => { if (!cancelled) setPeople(householdData?.people ?? []) })
     void coveragePromise.then((coverageData) => { if (!cancelled && coverageData !== null) setCoverage(coverageData) })
     Promise.all([
       fetchAccounts(),
@@ -444,9 +459,15 @@ export default function MonthlyUpdatePage() {
       fetchMonthBalances(addMonths(month, -1)),
       fetchSpendingMonth(month),
       fetchMonthReview(month),
+      // The household is part of the SEED, not an aid (P1 review round): it decides whether the
+      // grid walks owner → group → row or flat, so a late answer would re-form every section
+      // under the caret on a two-person book. Still absence-tolerant — a failure falls back to
+      // the flat walk rather than refusing the month.
+      fetchHousehold().catch((): HouseholdOut | null => null),
     ])
-      .then(([accountList, categoryList, thisMonth, priorMonth, spendMonth, monthReview]) => {
+      .then(([accountList, categoryList, thisMonth, priorMonth, spendMonth, monthReview, householdData]) => {
         if (cancelled) return
+        setPeople(householdData?.people ?? [])
         setError(null)
         setLoadError(null)
         setLegs(null)
@@ -1293,7 +1314,7 @@ export default function MonthlyUpdatePage() {
         // retires an error the instant a switch or a Retry starts — the banner is about the
         // month being LEFT, and the load chain clears it on arrival.
         resource={
-          loadError !== null && seeded === null && !loading
+          loadError !== null && !loading && (seeded === null || staleSeed)
             ? { status: 'error', error: loadError, retry: retryLoad }
             : {
                 status: loading && seeded === null ? 'loading' : 'ready',

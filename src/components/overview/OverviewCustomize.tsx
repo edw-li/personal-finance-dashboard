@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { DEFAULT_OVERVIEW_LAYOUT, OVERVIEW_CARDS, OVERVIEW_TILES } from '../../prefs/overviewLayout'
 import type { OverviewLayout } from '../../prefs/overviewLayout'
 import { usePopoverDismiss } from '../usePopoverDismiss'
@@ -13,8 +13,16 @@ export default function OverviewCustomize({ value, onChange }: { value: Overview
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const surfaceRef = useRef<HTMLDivElement>(null)
-  const close = () => setOpen(false)
+  // Stable (useCallback): usePopoverDismiss re-subscribes its document listeners on every new
+  // identity, and this component re-renders on every layout edit made inside the popover.
+  const close = useCallback(() => setOpen(false), [])
   usePopoverDismiss(open, close, triggerRef, surfaceRef)
+  // role="dialog" contract: opening moves focus INTO the surface; Escape, an outside pointer and
+  // Done all hand it back to the trigger.
+  useEffect(() => {
+    if (!open) return
+    surfaceRef.current?.querySelector<HTMLElement>('input, button')?.focus()
+  }, [open])
   const done = () => { setOpen(false); triggerRef.current?.focus() }
   return <div className="overview-customize">
     <button ref={triggerRef} type="button" className="button" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((current) => !current)}>Customize</button>
