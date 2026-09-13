@@ -3255,3 +3255,45 @@ Everything else that matched `below` is a code comment.
   the arm-and-confirm focus moves be asserted without the whole page.
 - Audit C5 (What-if caveat as a grid cell), D1 (Comp quote line with no grants), the Comp
   "Save all" idea: out of scope by the plan's own list.
+
+### Review round (2026-09-13, verdict APPROVE WITH FIXES)
+
+Merged `main` @`4576025` first (`75b4c5e`, no conflicts) — that brings F2's review round and with
+it `useScrollEdges(ref, active = true)`. All four fixes in one commit, **`5b52666`**.
+
+1. **IMPORTANT — the modeler scroller never armed on a cold arrival.** `EsppPage.tsx` ~L917:
+   `ModelerCard` calls the hook above a `data !== null` gate, so on `/espp?section=purchase` with
+   no snapshot the ref is null when the effect runs and the widest table on the page went unmasked
+   for its whole life. Now `useScrollEdges(scrollRef, data !== null)`. Test:
+   `EsppPage.test.tsx` → "arms the period scroller on a COLD arrival, once the payload renders the
+   table" — a deferred `fetchModeler`, `.espp-scroll .data-table` asserted absent, then the payload
+   resolved, the box faked and a `scroll` dispatched; `data-scroll-more="right"` only appears if
+   the listener attached after the table arrived. **Verified failing** (`expected null to be
+   'right'`) with the argument removed.
+   The lane's other three scrollers keep the first shape the hook's own doc comment sanctions —
+   the wrapper renders unconditionally — so they need no `active`.
+2. **IMPORTANT — the armed delete could fire mid-create.** `TaxYearMenu.tsx`: the confirm button
+   now carries `disabled={deleteDisabled}`, the same gate the arm door has. Test: `TaxesPage.test.tsx`
+   → "shuts the armed delete while a create is in flight, and drops the arm when the year changes"
+   (arm against 2024, press Create behind a deferred `cloneBrackets`, assert the confirm goes
+   disabled). **Verified failing** (`expected false to be true`) with the prop removed.
+3. **minor — arm lifecycle and popover subscription.** `close` is now `useCallback`-wrapped, so
+   `usePopoverDismiss` no longer tears down and re-adds its document listeners on every keystroke
+   in the year box. The arm is dropped when `selectedYear` changes — **deviation from the review's
+   suggested shape**: the proposed `useEffect(… setArmedYear(null), [selectedYear, armedYear])`
+   trips this repo's `Calling setState synchronously within an effect can trigger cascading
+   renders` ESLint **error**, so it is written as a render-time adjustment
+   (`if (armedYear !== null && armedYear !== selectedYear) setArmedYear(null)`), which is this
+   codebase's own idiom for the same job (TryItPanel / WhatIfPanel's arrival latch) and behaves
+   identically — `armed` already read false in that window; this clears the state behind it. The
+   second half of the same new test pins it (switching to 2023 folds the question away, no DELETE
+   sent).
+4. **minor — prohibited naming.** `InputsForm.tsx`: the `aria-label="Ctrl+Enter saves"` is gone
+   from the bare `<span>`; the two `<kbd>`s already read. (The explanatory JSX comment moved
+   *above* the `{changedCount > 0 && (` line — a `{/* */}` cannot be the first child of a `&&`
+   expression.)
+
+**Gates after the round:** `tsc -b` clean · scoped eslint **0 errors / 3 warnings** (the same three
+pre-existing `react-refresh` ones) · `eslint .` **25 problems (0 errors, 25 warnings)** = repo
+baseline · scoped vitest **774 passed** (772 → +2 new) · full `npx vitest run` **2961 passed /
+214 files, 0 failed** · `npm run build` exit 0.
