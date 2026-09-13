@@ -237,7 +237,7 @@ describe('ProjectionPage', () => {
     renderPage()
     await loaded()
     const target = valueOf(tileFor('FI target'))
-    const probability = valueOf(tileFor('Reach FI target within 30 years'))
+    const probability = valueOf(tileFor('Reach FI within 30 yrs'))
     const requests = vi.mocked(fetchProjection).mock.calls.length
 
     fireEvent.click(screen.getByRole('button', { name: 'Future dollars' }))
@@ -249,7 +249,7 @@ describe('ProjectionPage', () => {
     }
     expect(box('Inflation').placeholder).toBe('3')
     expect(valueOf(tileFor('FI target'))).toBe(target)
-    expect(valueOf(tileFor('Reach FI target within 30 years'))).toBe(probability)
+    expect(valueOf(tileFor('Reach FI within 30 yrs'))).toBe(probability)
     expect(vi.mocked(fetchProjection)).toHaveBeenCalledTimes(requests)
     expect(url()).toBe('/projection')
 
@@ -656,7 +656,7 @@ describe('ProjectionPage', () => {
     renderPage()
     await loaded()
 
-    const tile = tileFor('Reach FI target within 30 years')
+    const tile = tileFor('Reach FI within 30 yrs')
     expect(valueOf(tile)).toBe('—')
     expect(deltaOf(tile)).toBeNull() // no percentile months to name
   })
@@ -665,7 +665,7 @@ describe('ProjectionPage', () => {
     renderPage()
 
     await loaded()
-    const tile = tileFor('Reach FI target within 30 years')
+    const tile = tileFor('Reach FI within 30 yrs')
     expect(valueOf(tile)).toBe('62.0%')
     expect(deltaOf(tile)).toBe('Median reach: Oct 2055')
   })
@@ -674,7 +674,7 @@ describe('ProjectionPage', () => {
     vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_month_p10: null }))
     renderPage()
     await loaded()
-    expect(deltaOf(tileFor('Reach FI target within 30 years'))).toBe('Median reach: Oct 2055')
+    expect(deltaOf(tileFor('Reach FI within 30 yrs'))).toBe('Median reach: Oct 2055')
   })
 
   it('draws the fan under the lines when the payload carries bands', async () => {
@@ -985,5 +985,20 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
 
     expect(screen.getByText(/CURRENT monthly take-home/)).toBeTruthy()
     expect(screen.getByText(/Spending stays a household figure/)).toBeTruthy()
+  })
+})
+
+describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
+  it('lays the five outcomes out as one row and glues the FI tile’s (i) to its last word', async () => {
+    renderPage()
+    await loaded()
+    const band = document.querySelector('.projection-outcomes') as HTMLElement
+    // panels.css lays .kpi-row-5 out as five equal tracks above 1000px of container width.
+    expect(band.classList.contains('kpi-row')).toBe(true)
+    expect(band.classList.contains('kpi-row-5')).toBe(true)
+    expect(band.querySelectorAll('.stat-tile')).toHaveLength(5)
+    // The label ends in a no-break space, so the info button can never wrap onto a line of its own.
+    const label = within(band).getByText('Reach FI within 30 yrs')
+    expect(label.textContent).toContain('yrs\u00A0')
   })
 })

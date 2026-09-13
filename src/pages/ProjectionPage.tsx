@@ -93,7 +93,7 @@ export default function ProjectionPage() {
         <p className="empty-note">{sandbox.error} — <Link to="/update">enter a monthly update</Link> to start one.</p></section>
         : data !== null && display !== null && receipts !== null && <>
           <LocalSectionPanel state={sections} section="planning">
-            <div className="kpi-row projection-outcomes" aria-label="Planning outcomes">
+            <div className="kpi-row kpi-row-5 projection-outcomes" aria-label="Planning outcomes">
               <StatTile label="FI target" value={formatCurrency(data.fi_target)}
                 delta={data.fi_target === null ? undefined : `annual spend ÷ ${formatPct(data.swr_pct, { signed: false })} SWR`}
                 hint="Annual spend ÷ withdrawal rate — the balance at which withdrawals could cover spending."
@@ -105,7 +105,9 @@ export default function ProjectionPage() {
               <StatTile label="Projected FI date" value={data.fi_month === null ? data.fi_target === null ? '—' : 'Not reached' : formatMonth(data.fi_month)} evidence={receipts.reachDate}
                 delta={data.coast_fi_month === null ? 'At your assumed constant return' : `growth alone: ${formatMonth(data.coast_fi_month)}`}
                 tone="neutral" hint="First month the deterministic projection reaches the target. Growth alone repeats it with contributions off." />
-              <StatTile label={`Reach FI target within ${data.years} years`} value={formatPct(data.fi_probability, { signed: false })}
+              {/* Short enough for a fifth of the row, and the (i) is glued to the last word with a
+                  no-break space so it never drops to a line of its own (audit P-11). */}
+              <StatTile label={`Reach FI within ${data.years} yrs `} value={formatPct(data.fi_probability, { signed: false })}
                 delta={data.fi_month_p50 === null ? undefined : `Median reach: ${formatMonth(data.fi_month_p50)}`}
                 tone="neutral" evidence={receipts.probability} hint="Share of 500 simulated paths reaching the target within this horizon. It does not measure retirement spending sustainability." />
             </div>

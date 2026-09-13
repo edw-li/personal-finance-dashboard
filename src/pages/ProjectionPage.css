@@ -35,6 +35,15 @@
 
 .projection-page { container-type: inline-size; }
 .projection-outcomes { position: sticky; top: var(--sticky-inset, 0px); z-index: 6; background: var(--bg); padding-block: 8px; }
+
+/* Five tiles, one row (2026-09-13 polish spec §12): panels.css lays .kpi-row-5 out as five equal
+   tracks above 1000px of container width. Below that the row wraps, and a two-row band pinned to
+   the top of a laptop viewport covered the very chart it describes (audit P-1: 253px, 28% of a
+   900px viewport) — so there the band simply scrolls with the page. */
+@container (max-width: 999px) {
+  .projection-outcomes { position: static; }
+}
+
 .projection-workspace { display: grid; grid-template-columns: minmax(480px, 1fr) 350px; align-items: start; gap: 18px; }
 .projection-chart-area { min-width: 0; }
 .projection-chart-controls { display: flex; gap: 8px; flex-wrap: wrap; }
