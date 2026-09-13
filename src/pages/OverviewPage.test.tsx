@@ -524,6 +524,12 @@ function hintText(name: RegExp): string {
   return text
 }
 
+// The Data status card's rows are <dt>label</dt><dd>value</dd>; this reads the value beside a label.
+function statusValue(label: string): HTMLElement {
+  const card = document.querySelector('.overview-data-status') as HTMLElement
+  return within(card).getByText(label).nextElementSibling as HTMLElement
+}
+
 function valueOf(tile: HTMLElement): string {
   return tile.querySelector('.stat-value')?.textContent ?? ''
 }
@@ -891,35 +897,37 @@ describe('OverviewPage charts', () => {
   })
 })
 
-describe('OverviewPage freshness', () => {
-  it('dates the quotes and stands each hand-entered feed on its own month', async () => {
+describe('OverviewPage data status card', () => {
+  it('dates the quotes and stands each hand-entered feed on its own month, inside the agenda column', async () => {
     const quoted = daysAgo(1)
     serve({ holdings: holdingsOut({ as_of: quoted }) })
     renderPage()
 
-    const prices = await screen.findByText(`Prices as of ${formatDate(quoted)}`)
+    await waitFor(() => expect(statusValue('Prices as of').textContent).toBe(formatDate(quoted)))
     // Yesterday's bar is not stale — no amber.
-    expect(prices.className).not.toContain('stale')
-    expect(screen.getByText(`Balances through ${formatMonth(YEAR_MONTHS[6])}`)).toBeTruthy()
-    expect(screen.getByText(`Spending through ${formatMonth(YEAR_MONTHS[6])}`)).toBeTruthy()
-    expect(screen.getByText(`Net pay through ${formatMonth(YEAR_MONTHS[6])}`)).toBeTruthy()
+    expect(statusValue('Prices as of').className).not.toContain('stale')
+    expect(statusValue('Balances through').textContent).toBe(formatMonth(YEAR_MONTHS[6]))
+    expect(statusValue('Spending through').textContent).toBe(formatMonth(YEAR_MONTHS[6]))
+    expect(statusValue('Net pay through').textContent).toBe(formatMonth(YEAR_MONTHS[6]))
     // Level feeds: nothing ambers.
-    expect(document.querySelectorAll('.overview-freshness .stale')).toHaveLength(0)
+    expect(document.querySelectorAll('.overview-data-status .stale')).toHaveLength(0)
+    // It is a card in the agenda column — no bare footer row, no orphan sentence (T1, T2).
+    expect(document.querySelector('.overview-agenda-column .overview-data-status')).not.toBeNull()
+    expect(document.querySelector('.overview-freshness')).toBeNull()
+    expect(screen.queryByText(/^Living spending: /)).toBeNull()
   })
 
   it('names the months the window is still waiting for and ambers the feeds that lag', async () => {
     serve({ coverage: LAGGING })
     renderPage()
 
-    const spending = await screen.findByText(
-      `Spending through ${formatMonth(YEAR_MONTHS[6])} (Aug missing, Sep empty)`,
+    await waitFor(() =>
+      expect(statusValue('Spending through').textContent).toBe(`${formatMonth(YEAR_MONTHS[6])} (Aug missing, Sep empty)`),
     )
-    expect(spending.className).toContain('stale')
-    const balances = screen.getByText(`Balances through ${formatMonth(SEP)}`)
-    expect(balances.className).not.toContain('stale')
-    expect(screen.getByText(`Net pay through ${formatMonth(YEAR_MONTHS[6])}`).className).toContain(
-      'stale',
-    )
+    expect(statusValue('Spending through').className).toContain('stale')
+    expect(statusValue('Balances through').textContent).toBe(formatMonth(SEP))
+    expect(statusValue('Balances through').className).not.toContain('stale')
+    expect(statusValue('Net pay through').className).toContain('stale')
   })
 
   it('ambers a quote date that has gone stale — and the strip says the same thing', async () => {
@@ -927,12 +935,9 @@ describe('OverviewPage freshness', () => {
     serve({ holdings: holdingsOut({ as_of: quoted }) })
     renderPage()
 
-    const prices = await screen.findByText(`Prices as of ${formatDate(quoted)}`)
-    expect(prices.className).toContain('stale')
-    // Two registers for one fact: the freshness row states it, the strip makes it a task.
-    expect(
-      screen.getByRole('link', { name: /Quotes are stale/ }).getAttribute('href'),
-    ).toBe('/portfolio')
+    await waitFor(() => expect(statusValue('Prices as of').className).toContain('stale'))
+    // Two registers for one fact: the card states it, the strip makes it a task.
+    expect(screen.getByRole('link', { name: /Quotes are stale/ }).getAttribute('href')).toBe('/portfolio')
   })
 })
 
@@ -1167,14 +1172,13 @@ describe('OverviewPage on an empty database', () => {
     // The money-flow card refuses with the SERVER's sentence — no fourth chart.
     expect(screen.getByText(/No tax inputs are stored for 2031/)).toBeTruthy()
 
-    // Capitalized (unlike PortfolioPage's lowercase note): four peer clauses in one row,
-    // and the other three start with a capital. A feed that never started says so — a
-    // fresh database is not a late one, so none of these wears the amber.
-    expect(screen.getByText('Prices never refreshed')).toBeTruthy()
-    expect(screen.getByText('Balances — no months')).toBeTruthy()
-    expect(screen.getByText('Spending — no months')).toBeTruthy()
-    expect(screen.getByText('Net pay — no months')).toBeTruthy()
-    expect(document.querySelectorAll('.overview-freshness .stale')).toHaveLength(0)
+    // A feed that never started says so — a fresh database is not a late one, so none of these
+    // wears the amber.
+    expect(statusValue('Prices').textContent).toBe('never refreshed')
+    expect(statusValue('Balances').textContent).toBe('no months')
+    expect(statusValue('Spending').textContent).toBe('no months')
+    expect(statusValue('Net pay').textContent).toBe('no months')
+    expect(document.querySelectorAll('.overview-data-status .stale')).toHaveLength(0)
   })
 })
 

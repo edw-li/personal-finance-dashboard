@@ -15,7 +15,7 @@ import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import { chipAmount, eventKey } from '../components/calendar/calendarView'
 import { attentionItems } from '../components/overview/attention'
-import { freshnessClauses } from '../components/overview/freshness'
+import DataStatusCard from '../components/overview/DataStatusCard'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
 import { UP_NEXT_WINDOW_DAYS, rankUpNext, upNextLine } from '../components/overview/upNext'
 import { windowWords, ytdStats } from '../components/overview/ytd'
@@ -67,7 +67,6 @@ import type {
 } from '../types/api'
 import { formatCurrency, formatDate, formatMonth, formatPct } from '../utils/format'
 import { addDays, todayIso } from '../utils/months'
-import { isStaleQuote } from '../utils/staleness'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './OverviewPage.css'
@@ -730,31 +729,18 @@ export default function OverviewPage() {
 
                   {attention.length === 0 && reviewAttention.length === 0 && <p className="drill-hint">{wealth.data && investments.data && spending.data && planning.data ? 'No outstanding data checks.' : 'Additional checks are waiting for their data feeds.'}</p>}
                 </section>
+                <DataStatusCard
+                  asOf={asOf}
+                  coverage={data.coverage}
+                  comparison={
+                    spendingEvidence.data?.review
+                      ? { month: spendingEvidence.data.review.month, included: spendingEvidence.data.comparison.window?.included.length ?? 0 }
+                      : null
+                  }
+                />
               </aside>
             </div>
-            {spendingEvidence.data?.review && <p className="drill-hint">Living spending: {REVIEW_LABELS[spendingEvidence.data.review.state]} for {formatMonth(spendingEvidence.data.review.month)}. Comparison includes {spendingEvidence.data.comparison.window?.included.length ?? 0} eligible months.</p>}
             <div className="overview-deeper">{layout.cards.map(id => <Fragment key={id}>{deeperCards[id]}</Fragment>)}</div>
-            {/* Four clocks: quotes move daily, while balances, spending and net pay are
-                hand-entered and each stands on its OWN month (honest-numbers spec §3). A
-                feed a month or more behind the balances wears the same amber a stale quote
-                does — one visual language for "this number is older than it looks". */}
-            <div className="overview-freshness">
-              <span className={isStaleQuote(asOf) ? 'freshness stale' : 'freshness'}>
-                {/* Capitalized, a deliberate departure from PortfolioPage's lowercase pair
-                    ("prices as of …" / "prices never refreshed" — a note tucked beside its
-                    Refresh button). This row is four PEER clauses separated by dots, and
-                    the others capitalize; a lowercase one would read as a fragment. */}
-                {asOf ? `Prices as of ${formatDate(asOf)}` : 'Prices never refreshed'}
-              </span>
-              {(data.coverage ? freshnessClauses(data.coverage) : []).map((clause) => (
-                <Fragment key={clause.key}>
-                  <span aria-hidden="true">·</span>
-                  <span className={clause.lagging ? 'freshness stale' : 'freshness'}>
-                    {clause.text}
-                  </span>
-                </Fragment>
-              ))}
-            </div>
           </>
         )}
       </PageFrame>
