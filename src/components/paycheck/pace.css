@@ -245,3 +245,12 @@
       filter var(--t-fast) ease;
   }
 }
+
+/* ── Try changes: the match policy's disclosure ─────────────────────── */
+
+/* The disclosure spans the sandbox's knob grid; its four boxes lay out in their own grid inside
+   (.sandbox-disclosure-grid, sandbox.css). Declared HERE, not in sandbox.css: that sheet is the
+   sandbox lane's, and TryItPanel is the one card that mounts this disclosure. */
+.tryit-disclosure {
+  grid-column: 1 / -1;
+}

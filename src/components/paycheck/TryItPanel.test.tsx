@@ -131,7 +131,7 @@ afterEach(() => {
 describe('TryItPanel', () => {
   it('mounts closed and spends no request; opening runs the empty scenario against the shown profile', async () => {
     mount()
-    expect(screen.getByRole('heading', { name: /Try it — effective Jan 1, 2026/ })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /Try changes — effective Jan 1, 2026/ })).toBeTruthy()
     expect(toggle().getAttribute('aria-expanded')).toBe('false')
     expect(previewPaycheck).not.toHaveBeenCalled()
     fireEvent.click(toggle())
@@ -340,12 +340,30 @@ describe('TryItPanel', () => {
     mount()
     fireEvent.click(toggle())
     await waitFor(() => expect(previewPaycheck).toHaveBeenCalledTimes(1))
-    expect(screen.getByText('Employer match')).toBeTruthy()
+    // The shared primitive (2026-09-13 polish spec §11), named as the advanced knob group it is.
+    const summary = screen.getByText('Employer match (advanced)')
+    expect(summary.closest('details')?.classList.contains('disclosure')).toBe(true)
     const band = screen.getByLabelText('First match band') as HTMLInputElement
     fireEvent.focus(band)
     fireEvent.change(band, { target: { value: '8000' } })
     fireEvent.blur(band)
     // The knob reaches the server through the URL, like every other one on this panel.
     expect(url()).toBe('/paycheck?whatif=match_band_1%3A8000')
+  })
+
+  it('defaultOpen mounts the card open with no toggle, keeps Reset, and runs at once', async () => {
+    render(
+      <MemoryRouter initialEntries={['/paycheck']}>
+        <TryItPanel profileId={null} personId={null} breakdown={breakdown} onApply={vi.fn()} defaultOpen />
+      </MemoryRouter>,
+    )
+    // The Try changes tab IS the sandbox (2026-09-13 polish spec §8): no "Try it" gate, no Close.
+    expect(screen.queryByRole('button', { name: /^(Try it|Close)$/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Reset to actual' })).toBeTruthy()
+    // The eyebrow reads like the tab it lives on — not a third name for one thing (audit C2).
+    expect(screen.getByRole('heading', { name: /Try changes — effective Jan 1, 2026/ })).toBeTruthy()
+    await waitFor(() =>
+      expect(previewPaycheck).toHaveBeenCalledWith({ profile_id: null, person_id: null, overrides: {} }),
+    )
   })
 })
