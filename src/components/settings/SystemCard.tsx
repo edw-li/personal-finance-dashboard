@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { fetchCoverage } from '../../api/coverage'
 import { fetchSystemStatus } from '../../api/system'
@@ -50,18 +50,20 @@ function backupLine(status: SystemStatus): { text: string; className: string } {
   return { text, className }
 }
 
-// Compact last-5 trails (spec §B3): one line each, newest first — the server stores 10,
-// the card shows what fits on a line. '—' is the empty state, matching the alembic row.
-function backupRunsLine(runs: BackupRun[]): string {
-  if (runs.length === 0) return '—'
-  return runs
-    .slice(0, 5)
-    .map((run) => `${formatDateTime(run.at)} ${run.ok ? 'ok' : 'failed'}`)
-    .join(' · ')
+// Compact trail (spec §B3, reshaped 2026-09-13 spec §14 / audit S-8): the server stores 10 runs;
+// the card lists the newest three, one per line, and counts the rest. Joined into one dd they
+// wrapped to ten ragged lines in the half-width column.
+const TRAIL_SHOWN = 3
+function backupRunLines(runs: BackupRun[]): { lines: string[]; more: number } {
+  return {
+    lines: runs.slice(0, TRAIL_SHOWN).map((run) => `${formatDateTime(run.at)} ${run.ok ? 'ok' : 'failed'}`),
+    more: Math.max(0, runs.length - TRAIL_SHOWN),
+  }
 }
 
 function SystemFacts({ status, coverage }: { status: SystemStatus; coverage: CoverageOut }) {
   const backup = backupLine(status)
+  const trail = backupRunLines(status.backup_runs ?? [])
   return (
     <dl className="system-facts">
       {/* The SAME sentence the Overview footer prints, from the same pure module
@@ -71,15 +73,17 @@ function SystemFacts({ status, coverage }: { status: SystemStatus; coverage: Cov
           months is precisely the dishonesty this program removes — so they share the
           rule, not just the wording. A feed a month or more behind the balances wears
           this card's own amber, the one the backup row already uses. */}
-      <div className="system-fact">
+      {/* List-valued facts are lists (audit S-8) and take BOTH columns of the facts grid. */}
+      <div className="system-fact system-fact-wide">
         <dt>Data through</dt>
         <dd>
-          {freshnessClauses(coverage).map((clause, i) => (
-            <Fragment key={clause.key}>
-              {i > 0 && <span aria-hidden="true"> · </span>}
-              <span className={clause.lagging ? 'system-stale' : ''}>{clause.text}</span>
-            </Fragment>
-          ))}
+          <ul className="system-fact-list">
+            {freshnessClauses(coverage).map((clause) => (
+              <li key={clause.key} className={clause.lagging ? 'system-stale' : ''}>
+                {clause.text}
+              </li>
+            ))}
+          </ul>
         </dd>
       </div>
       <div className="system-fact">
@@ -88,9 +92,20 @@ function SystemFacts({ status, coverage }: { status: SystemStatus; coverage: Cov
           <span className={backup.className}>{backup.text}</span>
         </dd>
       </div>
-      <div className="system-fact">
+      <div className="system-fact system-fact-wide">
         <dt>Recent backups</dt>
-        <dd>{backupRunsLine(status.backup_runs ?? [])}</dd>
+        <dd>
+          {trail.lines.length === 0 ? (
+            '—'
+          ) : (
+            <ul className="system-fact-list">
+              {trail.lines.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+              {trail.more > 0 && <li className="system-fact-more">+{trail.more} more</li>}
+            </ul>
+          )}
+        </dd>
       </div>
       <div className="system-fact">
         <dt>Database size</dt>

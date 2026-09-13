@@ -452,12 +452,10 @@ describe('SettingsPage — password', () => {
       expect(vi.mocked(changePassword)).toHaveBeenCalledWith('old-pw', 'new-pw-12345'),
     )
     expect(await screen.findByText('Password changed.')).toBeTruthy()
-    // What the change actually DOES, said out loud on the page (2026-09-03 shell spec §10):
-    // the server bumps token_version, so every other session ends and only this one — which
-    // stored the token the response handed back — survives.
-    expect(
-      screen.getByText('Other devices are signed out; this one stays signed in.'),
-    ).toBeTruthy()
+    // What the change DOES is said once, in the heading's (i) (2026-09-13 spec §14, audit S-11):
+    // the note under the form repeated that sentence word for word.
+    expect(screen.queryByText('Other devices are signed out; this one stays signed in.')).toBeNull()
+    expect(screen.getByRole('button', { name: /^About Changes your login password/ })).toBeTruthy()
     // Nothing typed here may stay on screen after it has been used.
     expect(currentPwBox().value).toBe('')
     expect(newPwBox().value).toBe('')

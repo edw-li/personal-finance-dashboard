@@ -363,12 +363,6 @@ export default function SettingsPage() {
                       Password changed.
                     </p>
                   )}
-                  {/* What the change costs and what it does not: the server bumps token_version,
-                      which kills every token issued before it — including this tab's, which is
-                      why the response hands back a fresh one for changePassword to store. */}
-                  <p className="settings-note">
-                    Other devices are signed out; this one stays signed in.
-                  </p>
                 </form>
               </section>}
 </LocalSectionPanel>

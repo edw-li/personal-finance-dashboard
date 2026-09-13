@@ -98,7 +98,7 @@
 }
 
 /* Six facts down a half-width card is a long thin list; two columns fill it (spec §3.3), and
-   the label track has to give inside the narrower column. */
+   the label track has to give inside the narrower column. A list-valued fact takes both. */
 @media (min-width: 721px) {
   .system-facts {
     display: grid;
@@ -109,6 +109,24 @@
   .system-facts .system-fact {
     grid-template-columns: minmax(110px, 40%) 1fr;
   }
+
+  .system-facts .system-fact-wide {
+    grid-column: 1 / -1;
+  }
+}
+
+/* One line per value (audit S-8): timestamps and feed clauses, never a " · "-joined paragraph. */
+.system-fact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.system-fact-more {
+  color: var(--muted);
 }
 
 /* --- household / accounts / categories cards (2026-08-26 spec §6) --- */
@@ -350,7 +368,10 @@
   margin-top: 0.75rem;
 }
 
-.restore-arm label {
+/* The source picker's labels wear the same form register as every other label on the page
+   (audit S-6): 16px body text over a select read as a sentence, not a field. */
+.restore-arm label,
+.restore-source label {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
