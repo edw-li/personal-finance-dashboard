@@ -104,7 +104,7 @@ export const PLANNING_CARDS: GuideCard[] = [
         steps: [
           'Five tiles: **FI target**, **FI ratio**, **Investable balance**, **Projected FI date**, and the odds.',
           'Press **About this number** beside a tile for the figures behind it.',
-          'The words themselves are in this guide’s glossary.',
+          'FI target and FI ratio are defined in this guide’s glossary.',
         ],
         to: '/projection',
       },
@@ -287,7 +287,7 @@ export const PLANNING_CARDS: GuideCard[] = [
         where: 'Settings → Household → Accounts',
         steps: [
           'In **Owner**, pick a person to make the account theirs, or **Joint** to leave it shared.',
-          'The **Whose** chip reads a person as their own accounts plus the joint ones.',
+          'The **Whose** chip shows that person’s accounts together with the joint ones.',
           'Portfolio accounts have their own **Owner** column, one table down.',
         ],
         to: '/settings?section=household#accounts',
@@ -514,7 +514,7 @@ export const PLANNING_CARDS: GuideCard[] = [
         id: 'calendar-feed-pointer',
         title: 'Create a calendar subscription link',
         where: 'Settings → Integrations → Calendar feed',
-        steps: ['Feed links are minted, copied once and revoked on the **Calendar feed** card — the Calendar card in this guide walks it.'],
+        steps: ['The **Calendar feed** card mints, copies and revokes links — the Calendar card in this guide walks it.'],
         to: '/settings?section=integrations#calendar',
       },
       {

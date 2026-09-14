@@ -22,7 +22,7 @@ export const REFERENCE_CARDS: GuideCard[] = [
         steps: [
           'Accepted: a dollar sign, commas or spaces as grouping, a leading plus or minus, and accounting parentheses.',
           'Refused: exponents, a second decimal point, a sign inside parentheses.',
-          'The box turns invalid and names the problem.',
+          'The box turns invalid until you fix it.',
           'Blank means not entered. It never means zero.',
         ],
         keywords: ['dollar sign', 'commas', 'negative', 'format'],
@@ -276,7 +276,7 @@ export const REFERENCE_CARDS: GuideCard[] = [
         id: 'assistant-key-pointer',
         title: 'Set up the key',
         where: 'Settings → Integrations → Assistant',
-        steps: ['The key and the default model live on the **Assistant** card in Settings — the Settings card in this guide walks it.'],
+        steps: ['The key and the model live on the **Assistant** card — the Settings card in this guide walks it.'],
         to: '/settings?section=integrations#assistant',
       },
     ],
