@@ -74,3 +74,25 @@ recipe is in `docs/superpowers/plans/2026-09-14-guide-v-verify.md` Task 4 Step 5
 - [ ] Setup checklist and tax season are numbered rails; prose cards use fact grids; glossary is a grid; no empty right half at 1440.
 - [ ] Interactions animate on tokens; `motion.test.ts` green.
 - [ ] Gates green on local main; probe green; nothing pushed.
+
+## Hand-offs collected by the lead (do these in Task 2 before running the probe)
+
+From lane L1 (`guide/l1-md`), three probe fixes in `tools/probes/guide-v/smoke.mjs` — none are
+lane bugs:
+
+1. The "four chapter tabs" check must scope to `nav[aria-label="Guide chapters"] [role="tab"]`:
+   selector chips and rail rows are `role="tab"` now, and the Start-here checklist renders rows
+   in the first chapter.
+2. `details.guide-more` matches nothing any more — the fold is `button.guide-rail-more`
+   (click it; the fold is `.guide-rail-fold[data-open="true"]`).
+3. A selector chapter renders ONE card and the detail shows ONE task's `Go →`, so the link walk
+   cannot collect every link from the visible panel. Iterate: for each selector chip, click it,
+   then for each rail row (open the fold first) click it and collect the detail's links plus the
+   card's `Open … →`; for stacked chapters, walk each card's rows the same way. Alternatively read
+   `GUIDE` through a small vitest-free helper — but the DOM walk is the one that proves the UI.
+   Keep the collected-link count ≥ the previous run's 74 unique hrefs (more now, since the
+   checklist and tax season became linked tasks).
+
+Also from L1's Results: `selectedCardId` is exported from `CardSelector.tsx` (one sanctioned
+react-refresh warning, 26 total now); the numbered fixture card is `routine-checklist`, not
+`routine-monthly` — irrelevant to the probe (it walks real content).
