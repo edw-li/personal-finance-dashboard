@@ -882,3 +882,42 @@ plus `taxes-delete-year` and `taxes-marginal`); no cross-lane `/guide#…` ancho
 - **Product note, not fixed here:** the Paycheck pace row's "enter this year's limit" link
   goes to bare `/settings`, not to `/settings?section=planning#limits`, so it lands on the
   Household view. The guide step says "links to Settings" rather than naming a view.
+
+### Review round (2026-09-14) — `2899eeb`
+
+One commit, `src/guide/content/pages-income.tsx` only, every id unchanged. Gates after it:
+`npx vitest run src/guide` → 5 files, 23 passed / 1 skipped; `npx tsc -b` clean;
+`npx eslint src/guide` clean.
+
+**Important 1 — `comp-grant-add` watch was factually wrong.** The kind does not move the first
+vest date: `rsu_vesting.vest_dates` takes `first_vest_date` verbatim, and
+`vest_count(cliff) = 1 + (1 − cliff) / 6.25 %` (`backend/app/services/rsu_vesting.py:26-42`), so a
+new-hire grant filed as a refresh vests **6.25 % instead of 25 % on the date you typed** and runs
+**three quarters longer** (16 tranches against 13). The watch line now says that; the draft's
+"drops the first-year cliff and vests a year early" is gone.
+
+**Important 2 — Paycheck card watch, the over-100 % rule.** A *single* box over 100 is refused
+(`PaycheckPage.tsx:524, 543`); only the SUM of the four contribution percents warns and saves
+(`backend/app/api/paycheck.py:114, 548-551` — withholding is excluded from that sum). Line now
+reads "Percents that together exceed 100 % warn but save — one box over 100 is refused."
+
+**Minor 3 — pointer wording.** `paycheck-monthly-net-pointer`'s one step now names the guide
+card as spec §5.1 requires ("— see the Monthly update card in this guide") and bolds the
+**Spending** step. The estimate caveat it used to carry moved to the task's own `watch`, which
+keeps the pointer at exactly one step.
+
+**Minor 4 — one verbatim label.** `**Save as profile effective <date>…**` in one piece
+(`TryItPanel.tsx:315`), instead of splitting the label with prose.
+
+**Voice (§5.3).** "simply" removed twice (`comp-tc-read`, `espp-offering-add`). Three
+restatements of on-screen text rewritten to say HOW: `taxes-marginal` (the ladder needs this
+year's Federal and State tables), the What-if long/short step (press the toggle to switch the
+rate), and the ESPP sold-pair pair — its step now reads "To un-sell it, empty both boxes and
+save again", and its watch carries a rule the form does not print (a sold lot loses its Model
+sale link and cannot be a what-if leg). Six long steps tightened and the two three-action steps
+split (`paycheck-try-it`, `taxes-per-person-table`, plus `espp-model-sale`, `taxes-tables-clone`,
+`taxes-apply-vest`, `taxes-delete-year`): no step is now over 19 words. The Paycheck purpose is
+23 words. Both Settings paths spell `Settings → Planning → Plan assumptions`.
+
+No step is over 160 characters, no `watch` line uses `**` (they render as plain text), and the
+task counts and `views` are untouched.
