@@ -441,3 +441,27 @@ green. Nothing outside the three content files and this Results section was touc
   checklist; both are still reachable from the Pages chapter.
 - Plan checkboxes above were left unticked on purpose: the brief scoped this lane's edits to the
   three content files and this Results section.
+
+### Review round (applied, commit `e7c0092`)
+
+All five review points applied in one commit; `npx vitest run src/guide` 5 files / 23 tests passed,
+`npx tsc -b` and `npx eslint src/guide` clean.
+
+1. Nine list-item fragments gained a verb (Set/Press/Add/Enter/Open), labels and facts untouched —
+   `setup-calendar` ×2, `setup-cards`, `setup-portfolio`, `setup-accounts`, `setup-limits`,
+   `setup-snapshot`, `setup-taxes`, `season-owe`.
+2. All five dependency lines now read `Depends on: <n> · <title>` — the spec §5.1 literal.
+3. `setup-first-month` step 3 names the card instead of its position: "The full routine is The
+   monthly update, in Routines."
+4. Both claims I had dropped as unverified are TRUE and are back as `watch` lines: "Every year
+   starts Single." on `season-status` (reviewer: `TaxesPage.tsx:603-608`, `models/taxes.py:20`
+   default SINGLE) and "The Paycheck pace meters and the sandbox presets need these limits." on
+   `season-limits` (`PacePanel.tsx:197-201`, `paycheckScenario.ts:235-295`). Deviations 5 and 6
+   above are therefore withdrawn.
+5. Two corrections to the notes above:
+   - `setup-household` also lost a link: the current text's `<Link to="/taxes">Taxes</Link>` inside
+     "filing status is chosen per year on Taxes" is now plain prose (the task's own `to` is the
+     Settings household card), so the dropped-link list is five, not four.
+   - The Monday `watch` line on `setup-prices` ("the Monday run records the weekly performance
+     point") is an **addition**, not carried copy — corroborated by `ref-glossary`'s "Weekly
+     performance point" entry in `reference.tsx` and by `backend/app/models/portfolio.py`.
