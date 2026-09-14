@@ -106,4 +106,136 @@ export const TRACKING_CARDS: GuideCard[] = [
       'Spending and portfolio performance stay household-wide under every Whose chip — the numbers are not filtered.',
     ],
   },
+  {
+    id: 'page-net-worth',
+    title: 'Net worth',
+    purpose:
+      'Every account’s balance over time and the month-to-month story. Accounts are defined in Settings; balances are entered in the monthly update.',
+    to: '/net-worth',
+    views: ['Overview', 'Accounts'],
+    keywords: ['net worth', 'accounts', 'balances', 'assets', 'liabilities'],
+    tasks: [
+      {
+        id: 'networth-accounts-pointer',
+        title: 'Add or change an account',
+        where: 'Settings → Household → Accounts',
+        steps: [
+          'Accounts are added, owned, retired and nested as parent and component in Settings → Household → **Accounts** — see the Settings card in this guide.',
+        ],
+        to: '/settings?section=household#accounts',
+        keywords: ['add account', 'new account'],
+      },
+      {
+        id: 'networth-grain',
+        title: 'Read monthly or quarterly',
+        where: 'Net worth → Overview',
+        steps: [
+          'Press **Monthly** or **Quarterly** beside the title.',
+          'Under **Quarterly** a ribbon pick snaps to the last quarter that closed at or before it.',
+          'A month no quarter has closed by says so rather than drawing an empty chart.',
+        ],
+        to: '/net-worth',
+        keywords: ['quarterly', 'grain', 'monthly'],
+      },
+      {
+        id: 'networth-past-month',
+        title: 'Look at a past month’s balances',
+        where: 'Net worth → Accounts',
+        steps: [
+          'Click a month chip in the ribbon — the table and the tiles swap to that month.',
+          'The card heading names the month it shows; each chip carries that month’s net worth.',
+          'The ribbon’s **Edit ↗** link opens the selected month in the monthly update.',
+        ],
+        to: '/net-worth?section=accounts',
+        keywords: ['history', 'past month', 'balances table'],
+      },
+      {
+        id: 'networth-stack-by',
+        title: 'Change how the chart stacks',
+        where: 'Net worth → Overview → By group over time',
+        steps: [
+          'Pick **By group**, **By owner** or **Share %** in the chart’s controls.',
+          '**Share %** redraws the stack as percentages of assets and drops the net-worth line.',
+          '**By owner** is hidden while the household has one person.',
+        ],
+        to: '/net-worth',
+        keywords: ['stacked chart', 'composition', 'by owner'],
+      },
+      {
+        id: 'networth-what-moved',
+        title: 'See what moved this month',
+        where: 'Net worth → Overview → What moved',
+        steps: [
+          'Pick **Groups** or **Accounts** in the card’s controls.',
+          'The card compares the viewed snapshot with the one before it, so a ribbon pick moves it.',
+          'It appears once two snapshots exist — the first month has nothing to compare with.',
+        ],
+        to: '/net-worth',
+        keywords: ['movers', 'change', 'attribution'],
+      },
+      {
+        id: 'networth-drilldown',
+        title: 'Compare accounts over time',
+        where: 'Net worth → Accounts → Account drill-down',
+        steps: [
+          'Click rows in the accounts table, or the chips under the chart, to add an account.',
+          'Eight accounts is the cap — a further chip goes disabled instead of swallowing the click.',
+          'Each account keeps its colour, so removing one never repaints the survivors.',
+        ],
+        to: '/net-worth?section=accounts',
+        keywords: ['compare accounts', 'drill'],
+      },
+      {
+        id: 'networth-export',
+        title: 'Export a chart',
+        where: 'Any chart → Export',
+        steps: [
+          'Press **Export** and choose **PNG**, **Copy image** or **CSV**.',
+          '**Table** puts the same numbers under the chart as a table.',
+        ],
+        to: '/net-worth',
+        keywords: ['export', 'csv', 'png', 'download chart'],
+      },
+    ],
+    more: [
+      {
+        id: 'networth-window',
+        title: 'Set the time window',
+        where: 'Net worth → All · 1Y · YTD',
+        steps: [
+          'Pick **All**, **1Y** or **YTD** in the sticky row — both time charts share one axis.',
+          'Ctrl and the wheel zoom a chart; the next chip snaps that zoom away.',
+        ],
+        to: '/net-worth',
+        keywords: ['range', 'zoom', 'time window'],
+      },
+      {
+        id: 'networth-owner-scope',
+        title: 'Scope to one person',
+        where: 'Net worth → Whose',
+        steps: [
+          'Pick a person or **Joint** — tiles, both charts and the table follow.',
+          'A scope that owns no account gets one sentence and a link to **Settings → Accounts**, not zeros.',
+        ],
+        to: '/net-worth',
+        keywords: ['owner', 'joint', 'scope'],
+      },
+      {
+        id: 'networth-weekly-point',
+        title: 'Understand the weekly performance point',
+        where: 'Net worth · Portfolio',
+        steps: [
+          'The performance series records one point a week, after Monday’s close, on the product time zone.',
+          'A refresh on another weekday keeps quotes fresh and backfills any Monday the host slept through.',
+          'Re-importing the workbook overwrites Monday rows wherever the sheet reaches; later rows survive.',
+        ],
+        keywords: ['weekly', 'monday', 'performance history'],
+      },
+    ],
+    watch: [
+      'Liabilities are stored as negative numbers — a card balance typed positive inflates net worth.',
+      'A flat month reads neutral, not green — zero is neither good nor bad.',
+      'The weekly performance point is Monday-only — a refresh schedule that skips Mondays leaves gaps.',
+    ],
+  },
 ]

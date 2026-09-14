@@ -5,7 +5,6 @@
 // the array is empty and deletes this file and its import.
 export const PENDING_PAGES: readonly string[] = [
   '/update',
-  '/net-worth',
   '/portfolio',
   '/spending',
   '/credit-cards',
