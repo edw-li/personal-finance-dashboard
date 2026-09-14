@@ -750,4 +750,21 @@ describe('WhatIfPanel', () => {
     expect(vi.mocked(fetchHoldings)).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('button', { name: 'Reset to actual' })).toBeTruthy()
   })
+
+  it('degrades to a note when a 2xx what-if body has no delta or summary halves', async () => {
+    // Same class as TryItPanel's: a 200 whose body this card cannot draw threw during render, and
+    // because the What-if tab mounts the card open (spec §8) RouteBoundary took the whole Taxes
+    // route down with it — tabs gone, reload no help (lane V, 2026-09-13).
+    vi.mocked(runWhatIf).mockResolvedValue({} as unknown as WhatIfOut)
+    mount('/taxes?whatif=sale%3A7%3A40', { definitions: DEFS })
+    await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalled())
+    expect(
+      await screen.findByText(/Preview unavailable — the server answered without the two halves/),
+    ).toBeTruthy()
+    // The card survives: its heading, its Reset and its sale form are all still on screen, and
+    // Apply is withheld because there is no payload to write from.
+    expect(screen.getByRole('heading', { name: /What-if — 2024/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reset to actual' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Apply \d+ override/ })).toBeNull()
+  })
 })

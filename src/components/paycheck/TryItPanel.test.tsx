@@ -366,4 +366,26 @@ describe('TryItPanel', () => {
       expect(previewPaycheck).toHaveBeenCalledWith({ profile_id: null, person_id: null, overrides: {} }),
     )
   })
+
+  it('degrades to a note when a 2xx preview body has no pace or unit blocks', async () => {
+    // The wire is not a type: an older server or a trimming proxy can answer 200 with a body this
+    // card cannot draw. Before the guard, `result.pace.scenario` threw DURING RENDER — and since
+    // the Try changes tab mounts this card open (spec §8), RouteBoundary blanked the whole
+    // Paycheck route, tab strip and all, past a reload (lane V, 2026-09-13).
+    vi.mocked(previewPaycheck).mockResolvedValue({} as unknown as PaycheckPreviewOut)
+    render(
+      <MemoryRouter initialEntries={['/paycheck']}>
+        <TryItPanel profileId={null} personId={null} breakdown={breakdown} onApply={vi.fn()} defaultOpen />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(previewPaycheck).toHaveBeenCalledTimes(1))
+    // The card is still THERE — its heading, its knobs and its Reset — with one sentence where
+    // the compare table would be.
+    expect(
+      await screen.findByText(/Preview unavailable — the server answered without the lines/),
+    ).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /Try changes — effective Jan 1, 2026/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reset to actual' })).toBeTruthy()
+    expect(screen.getByLabelText('Traditional 401(k)')).toBeTruthy()
+  })
 })

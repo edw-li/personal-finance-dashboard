@@ -361,17 +361,41 @@ export default function WhatIfPanel({
     applyPreset,
   )
 
-  const taxTone = result === null ? 'neutral' : toneOf(result.delta.total_tax)
-  const takeHomeTone = result === null ? 'neutral' : toneOf(result.delta.take_home)
+  // A 2xx body is not a SHAPE guarantee (an older server, a proxy that trimmed the payload), and
+  // since 2026-09-13 §8 this card is the whole What-if tab — it renders on the tab's first paint,
+  // with no toggle to leave it shut. An unguarded second-level read therefore does not merely
+  // break the card: it throws during render, RouteBoundary blanks the entire Taxes route (tab
+  // strip included) and a reload lands on the same payload (lane V, 2026-09-13). So the payload
+  // is read as the wire may actually deliver it, and a body without the two halves this card
+  // compares degrades to one sentence.
+  const wire = result as Partial<WhatIfOut> | null
+  const previewUnusable =
+    result !== null &&
+    (wire?.delta === undefined || wire.baseline === undefined || wire.scenario === undefined)
+  const warnings = wire?.warnings ?? []
+  const saleDetails = wire?.sale_details ?? []
+  const esppSaleDetails = wire?.espp_sale_details ?? []
+  const changedInputs = wire?.changed_inputs ?? []
+
+  const taxTone = result === null || previewUnusable ? 'neutral' : toneOf(result.delta.total_tax)
+  const takeHomeTone =
+    result === null || previewUnusable ? 'neutral' : toneOf(result.delta.take_home)
   // A pin column compares SUMMARIES; the payload's own baseline half is the same for every
   // column, so a pin contributes its scenario side.
-  const pinSide = (r: PinResult<WhatIfOut>): PinResult<TaxSummaryOut> =>
-    r === 'pending' || 'error' in r ? r : r.scenario
+  const pinSide = (r: PinResult<WhatIfOut>): PinResult<TaxSummaryOut> => {
+    if (r === 'pending' || 'error' in r) return r
+    // A pin is its own request, so it carries its own shape risk — and a pin column that cannot
+    // be drawn is exactly what CompareTable's error face is for.
+    return (r as Partial<WhatIfOut>).scenario ?? { error: 'Preview unavailable' }
+  }
   const overrideCount = overrideKeys.length
   // "The result on screen IS this URL's answer": nothing in flight, nothing withheld, no
   // refusal standing. Apply reads both halves, so both have to describe one scenario.
   const settled =
     result !== null &&
+    // Apply writes the year's inputs from this payload: a body the card could not even draw is
+    // not one to PUT from.
+    !previewUnusable &&
     !sandbox.busy &&
     !sandbox.stale &&
     sandbox.error === null &&
@@ -396,7 +420,12 @@ export default function WhatIfPanel({
       staleNoun="this scenario"
       skeletonHeight={220}
       compare={
-        result === null ? null : (
+        result === null ? null : previewUnusable ? (
+          <p className="empty-note">
+            Preview unavailable — the server answered without the two halves this card compares.
+            Nothing was saved, and the stored year is untouched.
+          </p>
+        ) : (
           <div className="whatif-result">
             {/* Every figure is the server's, rendered as it arrived (global rule 9) — the
                 deltas are the endpoint's own subtraction of two quantized summaries. */}
@@ -456,16 +485,16 @@ export default function WhatIfPanel({
               }))}
               onUnpin={sandbox.unpin}
             />
-            {result.warnings.length > 0 && (
+            {warnings.length > 0 && (
               // Advisory, never an error banner: the scenario RAN — these are the honest
               // asterisks on what it ran with (the engine's own register).
               <div className="tax-warnings">
-                {result.warnings.map((warning, i) => (
+                {warnings.map((warning, i) => (
                   <p key={i}>{warning}</p>
                 ))}
               </div>
             )}
-            {result.sale_details.length > 0 && (
+            {saleDetails.length > 0 && (
               <div className="tax-section">
                 <h3 className="eyebrow">Sale legs</h3>
                 <table className="data-table">
@@ -481,7 +510,7 @@ export default function WhatIfPanel({
                     </tr>
                   </thead>
                   <tbody>
-                    {result.sale_details.map((detail, i) => (
+                    {saleDetails.map((detail, i) => (
                       <tr key={i}>
                         <td>{detail.ticker}</td>
                         <td className="num">{formatShares(detail.shares)}</td>
@@ -496,7 +525,7 @@ export default function WhatIfPanel({
                 </table>
               </div>
             )}
-            {result.espp_sale_details.length > 0 && (
+            {esppSaleDetails.length > 0 && (
               <div className="tax-section">
                 <h3 className="eyebrow">ESPP legs</h3>
                 <table className="data-table">
@@ -513,7 +542,7 @@ export default function WhatIfPanel({
                     </tr>
                   </thead>
                   <tbody>
-                    {result.espp_sale_details.map((detail, i) => (
+                    {esppSaleDetails.map((detail, i) => (
                       <tr key={i}>
                         <td>{formatDate(detail.purchase_date)}</td>
                         <td className="num">{formatShares(detail.shares)}</td>
@@ -531,11 +560,11 @@ export default function WhatIfPanel({
             )}
             <div className="tax-section">
               <h3 className="eyebrow">Inputs this scenario moved</h3>
-              {result.changed_inputs.length === 0 ? (
+              {changedInputs.length === 0 ? (
                 <p className="empty-note">Nothing moved — this scenario computes to the stored year.</p>
               ) : (
                 <ul className="whatif-changed">
-                  {result.changed_inputs.map((changed) => (
+                  {changedInputs.map((changed) => (
                     // An em dash, not a colon: the label is the definition table's own text
                     // and often carries a colon already ("LTCG: Brokerage Gain/Loss").
                     <li key={changed.key}>
@@ -561,7 +590,7 @@ export default function WhatIfPanel({
               className="button button-primary"
               disabled={!settled}
               title={settled ? undefined : 'Waiting for this scenario to finish running'}
-              onClick={() => onApplyOverrides({ ...scenario.overrides }, result?.changed_inputs ?? [])}
+              onClick={() => onApplyOverrides({ ...scenario.overrides }, changedInputs)}
             >
               Apply {overrideCount} override{overrideCount === 1 ? '' : 's'} to {year}
             </button>
