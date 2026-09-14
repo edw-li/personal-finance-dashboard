@@ -10,6 +10,8 @@ import InfoHint from '../InfoHint'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
+import SettingsGhost from './SettingsGhost'
+import { WARM, warmSource } from './settingsPrefetch'
 
 function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
@@ -60,9 +62,9 @@ export default function AssistantCard() {
 
   // A plain function over stable setters, called from the effect and from Retry — a
   // useCallback here would trip preserve-manual-memoization (SettingsPage's wall).
-  const load = () => {
+  const load = (initial = false) => {
     const seq = ++seqRef.current
-    fetchAssistantSettings()
+    warmSource(initial)(WARM.assistant, fetchAssistantSettings)
       .then((payload) => {
         if (seq !== seqRef.current) return
         // `adopt`'s three setters, inlined (see above).
@@ -78,7 +80,7 @@ export default function AssistantCard() {
   }
 
   useEffect(() => {
-    load()
+    load(true)
     // mount-only: a plain function over stable setters (house idiom)
   }, [])
 
@@ -134,10 +136,10 @@ export default function AssistantCard() {
       </h2>
       <FeedBanner
         error={loadError}
-        retry={load}
+        retry={() => load()}
         retryLabel="Retry loading the assistant settings"
       />
-      {settings === null && loadError === null && <p className="empty-note">Loading…</p>}
+      {settings === null && loadError === null && <SettingsGhost height={420} />}
       {settings !== null && key !== null && (
         <form
           className="settings-card-form"

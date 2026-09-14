@@ -14,6 +14,7 @@ vi.mock('../../api/taxes', async (importOriginal) => ({
   previewTaxInputs: vi.fn(),
 }))
 import { previewTaxInputs, putTaxInputs } from '../../api/taxes'
+import { expectInDocumentOrder } from '../../testing/domOrder'
 
 // A fresh object per call: two tests mutate their copy into the PUT echo. Three of the four
 // keys are per-person (the real definitions flag salary, the W-2 family, 401k, HSA and
@@ -968,5 +969,28 @@ describe('InputsForm', () => {
     expect(field('HSA Contributions — Alex').value).toBe('$4,150.00')
     // Sam's two editable lines plus the one shared line: three cells a keyed block may reach.
     expect(screen.getByText(/pasted 2 of 3 values · 1 unmatched: Not A Line/i)).toBeDefined()
+  })
+
+  it('keeps Save in a sticky footer bar that reads the change count and the shortcut while dirty', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    const bar = screen.getByRole('button', { name: 'Save inputs' }).closest('.tax-form-actions') as HTMLElement
+    // The wizard's class NAME on purpose (2026-09-13 polish spec §12): panels.css exempts a card
+    // holding .entry-footer from the reveal transform, which is what lets position: sticky work
+    // inside it — a transformed ancestor would drag the bar along and strand it mid-page.
+    expect(bar.classList.contains('entry-footer')).toBe(true)
+    expect(bar.textContent).toContain('No changes yet')
+    expect(bar.querySelector('kbd')).toBeNull()
+    expect(bar.classList.contains('is-dirty')).toBe(false)
+
+    fireEvent.change(screen.getByLabelText('Annual Salary'), { target: { value: '210000' } })
+    // "1 change to save · Save inputs · Ctrl+Enter", in that order.
+    expect(bar.textContent).toContain('1 change to save')
+    expect(bar.textContent).toContain('Ctrl+Enter')
+    expect(bar.classList.contains('is-dirty')).toBe(true)
+    expectInDocumentOrder(
+      screen.getByText('1 change to save'),
+      screen.getByRole('button', { name: 'Save inputs' }),
+      bar.querySelector('kbd') as HTMLElement,
+    )
   })
 })

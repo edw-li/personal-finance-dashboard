@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
 import { describeError } from '../api/client'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartCard from '../components/ChartCard'
+import BreakdownLegend from '../components/spending/BreakdownLegend'
 import type { EChartEventParams, EChartsInstance } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { FeedBanner } from '../components/shell/Feed'
@@ -29,6 +30,7 @@ import {
   heatmapOption,
   heatmapRows,
   monthPieCsv,
+  monthPieLegend,
   monthPieOption,
   savingsRateCsv,
   savingsRateOption,
@@ -437,6 +439,8 @@ export default function SpendingPage() {
       netPay: matrix.net_pay[focusIndex],
     }
   }, [matrix, focusIndex])
+  // The compared month's review state — the tile's badge when it is not closed (T3).
+  const reviewState = matrix?.review_state?.[focusIndex]
 
   // What each ribbon chip PRINTS. Which months are entered is the ScopeBar's own business
   // (it reads /coverage for the two-tone chips); this page contributes only the figure —
@@ -472,7 +476,9 @@ export default function SpendingPage() {
         }
         scopeRow={
           <ScopeBar
-            range
+            // The window applies to the time charts on Overview and Trends only (L5): Budgets
+            // reads the ribbon's month and History declares "Full recorded history".
+            range={views.section === 'overview' || views.section === 'trends'}
             month={{
               mode: 'view',
               figures: ribbonFigures,
@@ -509,6 +515,12 @@ export default function SpendingPage() {
             <StatTile
               label={`Living spending — ${formatMonth(kpis.month)}`}
               value={formatCurrency(kpis.total)}
+              // T3 (2026-09-13 audit): the cash triple that floated under the row as a bare line
+              // is this tile's own second line; the review state is its badge (closed = nothing
+              // to flag). Neutral tone — a split, not a judgment.
+              delta={`Cash outflow ${formatCurrency(matrix?.cash_outflow?.[focusIndex])} · tax ${formatCurrency(matrix?.tax_total?.[focusIndex])} · transfers ${formatCurrency(matrix?.transfer_total?.[focusIndex])}`}
+              tone="neutral"
+              badge={reviewState !== undefined && reviewState !== 'closed' ? REVIEW_LABELS[reviewState] : undefined}
               hint="Living categories only. Tax paid from take-home and transfers are shown separately."
               evidence={evidence.metric('living_spending')}
             />
@@ -533,7 +545,6 @@ export default function SpendingPage() {
             />
           </div>
         )}
-        {kpis && <p className="drill-hint spending-metric-context">{matrix?.review_state?.[focusIndex] && `${REVIEW_LABELS[matrix.review_state[focusIndex]]} · `}Tax paid from take-home {formatCurrency(matrix?.tax_total?.[focusIndex])} · Transfers {formatCurrency(matrix?.transfer_total?.[focusIndex])} · Cash outflow {formatCurrency(matrix?.cash_outflow?.[focusIndex])}. <Link to={`/update?month=${kpis.month}&step=review`}>Review month</Link></p>}
 
         <div className="card-grid">
           <ChartCard
@@ -555,9 +566,11 @@ export default function SpendingPage() {
               const index = selected.kind === 'period' && matrix ? matrix.months.indexOf(selected.period) : -1
               return <><SelectionDetail selection={selected} chartTitle="Monthly category entries" />{matrix && index >= 0 && <ChartCard
                 title={`${selected.label} breakdown`} hint="Positive categories make up this donut. Refunds are included in the totals above."
-                ariaLabel={`Donut chart of ${selected.label} categories`} option={monthPieOption(matrix, topIds, index)}
+                ariaLabel={`Donut chart of ${selected.label} categories`} option={monthPieOption(matrix, topIds, index, { compact: true })}
                 empty="No positive category amounts to draw." exportName={`spending-breakdown-${matrix.months[index]}`}
-                csv={() => monthPieCsv(matrix, topIds, index)} height={240} />}</>
+                csv={() => monthPieCsv(matrix, topIds, index)} height={240}
+                // W7: names beside the chart instead of leader labels that truncate in the dock.
+                aside={<BreakdownLegend rows={monthPieLegend(matrix, topIds, index)} label={`${selected.label} breakdown legend`} />} />}</>
             }}
             instanceRef={barsChartRef}
             onLegendChange={onLegendChange}

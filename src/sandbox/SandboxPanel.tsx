@@ -7,7 +7,8 @@ import type { Sandbox } from './useSandbox'
 import './sandbox.css'
 
 // The sandbox card frame (2026-09-03 planning-sandboxes spec §8.1): eyebrow with the hint
-// ("— nothing is saved"), a header toggle with aria-expanded, Reset to actual (disabled when
+// ("— nothing is saved"), a header toggle with aria-expanded (omitted under
+// `defaultOpen`, where the tab is the gate — 2026-09-13 polish spec §8), Reset to actual (disabled when
 // the scenario is empty), then — open — presets · controls · the compare region (through
 // Feed, so loading and stale states are the shell's) · the pin row · the Apply slot, which
 // renders only when the scenario is non-empty and the page provides one. Nothing here
@@ -18,6 +19,11 @@ export interface SandboxPanelProps<S extends object, R> {
   open: boolean
   onToggle: () => void
   toggleLabels?: { open: string; close: string }
+  /** The panel is the sole content of its own tab (2026-09-13 polish spec §8): it renders open
+   *  from the first paint and the open/close toggle is not rendered — the tab click was the ask.
+   *  "Reset to actual" stays. The page's `open` is still honoured when it is true (the URL-entries
+   *  arrival latch keeps working unchanged); `defaultOpen` only ever ADDS openness. */
+  defaultOpen?: boolean
   closedHint?: ReactNode
   sandbox: Sandbox<S, R>
   resetLabel?: string
@@ -38,6 +44,7 @@ export default function SandboxPanel<S extends object, R extends NonNullable<unk
   open,
   onToggle,
   toggleLabels = { open: 'Try it', close: 'Close' },
+  defaultOpen = false,
   closedHint,
   sandbox,
   resetLabel = 'Reset to actual',
@@ -49,6 +56,8 @@ export default function SandboxPanel<S extends object, R extends NonNullable<unk
   apply,
   hidePins = false,
 }: SandboxPanelProps<S, R>) {
+  // One truth for "is the card open": the page's state, or the tab-owns-it flag.
+  const isOpen = defaultOpen || open
   return (
     <section className="card sandbox-card">
       <div className="sandbox-header">
@@ -57,17 +66,21 @@ export default function SandboxPanel<S extends object, R extends NonNullable<unk
           <InfoHint text={hint} />
         </h2>
         <div className="sandbox-header-actions">
-          {open && (
+          {isOpen && (
             <button type="button" className="button" disabled={sandbox.empty} onClick={sandbox.reset}>
               {resetLabel}
             </button>
           )}
-          <button type="button" className="button" aria-expanded={open} onClick={onToggle}>
-            {open ? toggleLabels.close : toggleLabels.open}
-          </button>
+          {/* No second gate on a tab that IS the sandbox: the toggle only exists where the card
+              shares a page with other content. */}
+          {!defaultOpen && (
+            <button type="button" className="button" aria-expanded={isOpen} onClick={onToggle}>
+              {isOpen ? toggleLabels.close : toggleLabels.open}
+            </button>
+          )}
         </div>
       </div>
-      {!open ? (
+      {!isOpen ? (
         closedHint
       ) : (
         <>

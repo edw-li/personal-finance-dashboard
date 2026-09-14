@@ -212,6 +212,24 @@ function renderWizard() {
   return renderPage()
 }
 
+// The step card stays MOUNTED through a month switch now (dimmed, aria-busy, inert; 2026-09-13
+// polish §9), so a test that types into the month it has just moved to must wait for the new
+// seed to land instead of for a re-mounted input.
+async function landedBalanceCell(): Promise<HTMLInputElement> {
+  await waitFor(() =>
+    expect(screen.getByLabelText('Checking').closest('.card')?.getAttribute('aria-busy')).toBeNull(),
+  )
+  return screen.getByLabelText('Checking') as HTMLInputElement
+}
+
+// A promise settled by hand — the only way to hold one feed in flight while the page paints
+// (OverviewPage.test's helper).
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((res) => { resolve = res })
+  return { promise, resolve }
+}
+
 it('walks balances -> spending -> review and submits both PUTs', async () => {
   renderWizard()
   // Step 1: balance input pre-filled from the prior month (2026-07 snapshot).
@@ -358,19 +376,7 @@ it('offers starting the month after the latest covered month', async () => {
     notes: null,
     balances: month === current ? [{ account_id: 1, balance: '1500.00' }] : [],
   }))
-  vi.mocked(netWorthApi.fetchTimeseries).mockResolvedValue({
-    months: [current],
-    accounts: [account],
-    series: [{ account_id: 1, values: ['1500.00'] }],
-    group_totals: {
-      cash: ['1500.00'], pre_tax: ['0.00'], post_tax: ['0.00'], taxable: ['0.00'],
-      equity: ['0.00'], other: ['0.00'], liability: ['0.00'],
-    },
-    net_worth: ['1500.00'],
-    mom_pct: [null],
-    notes: [null],
-    owner_series: [],
-  })
+  vi.mocked(fetchCoverage).mockResolvedValue({ balances: [current], spending: [current], net_pay: [current] })
   render(
     <MemoryRouter initialEntries={[`/update?month=${current}`]}>
       <MonthlyUpdatePage />
@@ -680,6 +686,97 @@ it('offers a Retry instead of a dead form when the month fails to load', async (
   expect(screen.queryByRole('button', { name: /next: spending/i })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
   expect(((await screen.findByLabelText('Checking')) as HTMLInputElement).value).toBe('1500.00')
+})
+
+// F1 (2026-09-13 audit): every visit showed an empty body for the slowest feed's duration.
+it('ghosts the step card while the first month loads instead of leaving the body blank', async () => {
+  const gate = deferred<(typeof account)[]>()
+  vi.mocked(netWorthApi.fetchAccounts).mockImplementation(() => gate.promise)
+  renderWizard()
+  await screen.findByRole('heading', { level: 1, name: `Monthly update — ${formatMonth('2026-08-01')}` })
+  expect(document.querySelector('.page-skeleton')).not.toBeNull()
+  expect(screen.queryByLabelText('Checking')).toBeNull()
+  await act(async () => { gate.resolve([account]) })
+  expect(((await screen.findByLabelText('Checking')) as HTMLInputElement).value).toBe('1500.00')
+  expect(document.querySelector('.page-skeleton')).toBeNull()
+})
+
+it('keeps the step card mounted and busy through a month switch, swapping when the new month lands', async () => {
+  type Balances = Awaited<ReturnType<typeof netWorthApi.fetchMonthBalances>>
+  const june = deferred<Balances>()
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation((month: string) =>
+    month === '2026-06-01'
+      ? june.promise
+      : Promise.resolve({ month, exists: month === '2026-07-01', recorded_on: null, notes: null,
+          balances: month === '2026-07-01' ? [{ account_id: 1, balance: '1500.00' }] : [] }),
+  )
+  const { container } = renderWizard()
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
+  // Still on screen — dimmed, marked busy and inert — no skeleton, no blank, no height jump.
+  const card = screen.getByLabelText('Checking').closest('.card') as HTMLElement
+  expect(card.getAttribute('aria-busy')).toBe('true')
+  expect(card.hasAttribute('inert')).toBe(true)
+  expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+  expect(document.querySelector('.page-skeleton')).toBeNull()
+  await act(async () => {
+    june.resolve({ month: '2026-06-01', exists: true, recorded_on: null, notes: null, balances: [{ account_id: 1, balance: '900.00' }] })
+  })
+  await waitFor(() => expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('900.00'))
+  const landed = screen.getByLabelText('Checking').closest('.card') as HTMLElement
+  expect(landed.getAttribute('aria-busy')).toBeNull()
+  expect(landed.hasAttribute('inert')).toBe(false)
+  expect(container.querySelector('.loading-dim.is-loading')).toBeNull()
+})
+
+// P1 review round: a switch whose gating feed fails must not leave the PREVIOUS month's form
+// standing under the new month's title — undimmed, interactive, and saving nothing.
+it('shows the error view instead of the previous month’s form when a switch fails to load', async () => {
+  renderWizard()
+  await landedBalanceCell()
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => {
+    if (month === '2026-06-01') throw new ApiError('balances unavailable', 503)
+    return { month, exists: month === '2026-07-01', recorded_on: null, notes: null,
+      balances: month === '2026-07-01' ? [{ account_id: 1, balance: '1500.00' }] : [] }
+  })
+  fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
+  expect(await screen.findByRole('alert')).toBeTruthy()
+  expect(screen.getByText("Couldn't load this month — the server had a problem (HTTP 503)")).toBeTruthy()
+  // August's cells are GONE: a form for a month nobody is on is worse than no form at all.
+  expect(screen.queryByLabelText('Checking')).toBeNull()
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month, exists: true, recorded_on: null, notes: null, balances: [{ account_id: 1, balance: '900.00' }],
+  }))
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  // The retry is a load like any other: the dimmed, inert card comes back while it is in flight
+  // and carries June's figures the moment they land.
+  expect((await landedBalanceCell()).value).toBe('900.00')
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+// P1 review round: the owner walk is part of the SEED, not an aid — a late household flips a
+// one-section grid into per-owner sections, remounting every row (layout jump, stolen focus).
+it('waits for the household before painting the grid, so the owner sections never re-form under the caret', async () => {
+  type Household = Awaited<ReturnType<typeof householdApi.fetchHousehold>>
+  const gate = deferred<Household>()
+  vi.mocked(householdApi.fetchHousehold).mockImplementation(() => gate.promise)
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, samBrokerage, jointSavings])
+  renderWizard()
+  await screen.findByRole('heading', { level: 1, name: `Monthly update — ${formatMonth('2026-08-01')}` })
+  expect(screen.queryByLabelText('Checking')).toBeNull()
+  await act(async () => {
+    gate.resolve({ people: [{ id: 1, name: 'Me', is_primary: true }, { id: 2, name: 'Sam', is_primary: false }], marriage_date: '2026-09-12' })
+  })
+  expect(await screen.findByLabelText('Checking')).toBeTruthy()
+  // One paint, already grouped: the owner walk is there on the FIRST render of the grid.
+  expect([...document.querySelectorAll('tr.entry-owner-row')].map((r) => r.textContent)).toEqual(['Me', 'Sam', 'Joint'])
+})
+
+it('reads which months exist from /coverage rather than the whole net-worth timeseries', async () => {
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  await waitFor(() => expect(fetchCoverage).toHaveBeenCalled())
+  expect(netWorthApi.fetchTimeseries).not.toHaveBeenCalled()
 })
 
 it('retires a load failure the moment the ribbon moves to another month', async () => {
@@ -1170,10 +1267,16 @@ function renderWizardAt(entry: string) {
   )
 }
 
+// A2 (2026-09-13 audit): the delete arm-and-confirm lives behind the Review head's kebab.
+async function openMonthActions() {
+  fireEvent.click(await screen.findByRole('button', { name: 'Month actions' }))
+  return screen.getByRole('dialog', { name: 'Month actions' })
+}
+
 it('offers no delete on a month the server has never seen', async () => {
   renderWizardAt('/update?month=2026-08-01&step=review')
   await screen.findByRole('button', { name: 'Save progress' })
-  expect(screen.queryByRole('button', { name: 'Delete this month' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Month actions' })).toBeNull()
 })
 
 it('arms on the typed month, fires both deletes tolerating a 404, clears the draft', async () => {
@@ -1184,6 +1287,7 @@ it('arms on the typed month, fires both deletes tolerating a 404, clears the dra
   )
   sessionStorage.setItem('finance-update-draft:2026-07-01', '{"balances":{"1":"9.00"}}')
   renderWizardAt('/update?month=2026-07-01&step=review')
+  await openMonthActions()
   const button = (await screen.findByRole('button', {
     name: 'Delete this month',
   })) as HTMLButtonElement
@@ -1211,6 +1315,7 @@ it('arms on the typed month, fires both deletes tolerating a 404, clears the dra
 it('surfaces a non-404 delete failure, stops before the second leg, stays on the month', async () => {
   vi.mocked(netWorthApi.deleteMonthBalances).mockRejectedValue(new ApiError('db exploded', 500))
   renderWizardAt('/update?month=2026-07-01&step=review')
+  await openMonthActions()
   fireEvent.change(await screen.findByLabelText('Type 2026-07 to confirm'), {
     target: { value: '2026-07' },
   })
@@ -1234,6 +1339,7 @@ it('the delete toast carries Undo, which undoes the spending batch then the bala
     label: 'Undid: Deleted Jul 2026 spending', month: '2026-07-01', rows: 2, undoable: true, undone_by: null,
   })
   renderWizardAt('/update?month=2026-07-01&step=review')
+  await openMonthActions()
   const button = (await screen.findByRole('button', { name: 'Delete this month' })) as HTMLButtonElement
   fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
   fireEvent.click(button)
@@ -1261,6 +1367,7 @@ it('a 404 leg leaves no batch to undo, so Undo only fires the leg that wrote', a
     label: 'Undid: Deleted Jul 2026 balances', month: '2026-07-01', rows: 2, undoable: true, undone_by: null,
   })
   renderWizardAt('/update?month=2026-07-01&step=review')
+  await openMonthActions()
   await screen.findByRole('button', { name: 'Delete this month' })
   fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
   fireEvent.click(screen.getByRole('button', { name: 'Delete this month' }))
@@ -1282,6 +1389,7 @@ it('a partial undo still reloads — leg 1 landed even though leg 2 was refused'
     })
     .mockRejectedValueOnce(new ApiError('a later change touched these rows', 409))
   renderWizardAt('/update?month=2026-07-01&step=review')
+  await openMonthActions()
   await screen.findByRole('button', { name: 'Delete this month' })
   fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
   fireEvent.click(screen.getByRole('button', { name: 'Delete this month' }))
@@ -1362,6 +1470,23 @@ it('writes balances only when nothing was entered on the spending step, and says
   expect(spendingApi.putSpendingMonth).not.toHaveBeenCalled()
   expect(screen.getByText('Balances: 1 row (1 added, 0 changed, 0 unchanged).')).toBeTruthy()
   expect(screen.getByText('Spending: skipped — nothing entered.')).toBeTruthy()
+})
+
+// Bug F2 (2026-09-13 audit): Food has a $300 median in the fixture matrix; its seeded "0.00"
+// is not a −$300 difference until something is actually recorded for the month.
+it('lists no spending difference for a seeded category nobody touched, then lists it once entered', async () => {
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  await screen.findByText('No differences with an available recent reference.')
+  expect(screen.queryByRole('rowheader', { name: 'Food' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: /^back$/i }))
+  await enterSpending('250.00')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  expect(await screen.findByRole('rowheader', { name: 'Food' })).toBeTruthy()
+  expect(screen.getByText('−$50.00')).toBeTruthy()
 })
 
 it('net pay alone saves the cashflow row and not one blank category', async () => {
@@ -2265,7 +2390,7 @@ it('keeps the new month and its pending save intact when the prior month finishe
   await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
 
   fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
-  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '2200' } })
+  fireEvent.change(await landedBalanceCell(), { target: { value: '2200' } })
   fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'June draft' } })
   fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
   fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
@@ -2334,9 +2459,9 @@ it('rejects a response from an earlier load even after returning to the same mon
   fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
   fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
   fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
-  await screen.findByLabelText('Checking')
+  await landedBalanceCell()
   fireEvent.click(screen.getByRole('button', { name: /^Aug 2026/ }))
-  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1950' } })
+  fireEvent.change(await landedBalanceCell(), { target: { value: '1950' } })
 
   await act(async () => { pending.resolve(savedMonthResult('2026-08-01')) })
   expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('1950')
@@ -2357,7 +2482,7 @@ it('keeps a late save conflict out of the newly loaded month', async () => {
   fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
   fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
   fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
-  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '2300' } })
+  fireEvent.change(await landedBalanceCell(), { target: { value: '2300' } })
 
   await act(async () => { pending.reject(new ApiError('August changed during the save.', 409)) })
   expect(screen.queryByRole('alert')).toBeNull()
@@ -2366,4 +2491,51 @@ it('keeps a late save conflict out of the newly loaded month', async () => {
   expect(JSON.parse(sessionStorage.getItem('finance-update-draft:2026-06-01')!)).toMatchObject({ balances: { 1: '2300' } })
   fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
   expect((await screen.findByRole('button', { name: 'Save progress' }) as HTMLButtonElement).disabled).toBe(false)
+})
+
+// W5/T4 (2026-09-13 audit): the receipt reads like the Overview it feeds — four tiles, and the
+// close-gate sentence sits in the footer beside the button it explains.
+it('lays the Review step out as four tiles with the cash split and the close gate in the footer', async () => {
+  vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category, transferCategory, taxCategory])
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '250.00' } })
+  fireEvent.change(screen.getByLabelText('Brokerage deposit'), { target: { value: '100.00' } })
+  fireEvent.change(screen.getByLabelText('Tax payment'), { target: { value: '50.00' } })
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '1000.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  await screen.findByRole('heading', { name: /^Review & save/ })
+  const tile = (label: string) => screen.getByText(label).closest('.stat-tile') as HTMLElement
+  expect(tile('Net worth').querySelector('.stat-value')?.textContent).toBe('$1,500.00')
+  expect(tile('Living spending').querySelector('.stat-value')?.textContent).toBe('$250.00')
+  expect(tile('Cash outflow').querySelector('.stat-value')?.textContent).toBe('$300.00')
+  expect(tile('Cash outflow').querySelector('.stat-delta')?.textContent).toBe('tax $50.00 · transfers $100.00')
+  expect(tile('Cash saved').querySelector('.stat-value')?.textContent).toBe('70.0%')
+  expect(tile('Cash saved').querySelector('.stat-delta')?.textContent).toBe('$700.00 of $1,000.00 take-home')
+  // The gate sentence lives in the footer, next to the disabled primary.
+  const footer = screen.getByRole('button', { name: 'Save and close month' }).closest('.wizard-footer') as HTMLElement
+  expect(footer.textContent).toContain('To close, complete all three confirmations')
+  // The month is printed by the h1; the eyebrow does not repeat it.
+  expect(screen.queryByRole('heading', { name: /Review & save — / })).toBeNull()
+})
+
+it('the kebab opens the month-actions popover and Escape closes it back onto the button', async () => {
+  renderWizardAt('/update?month=2026-07-01&step=review')
+  const trigger = await screen.findByRole('button', { name: 'Month actions' })
+  expect(trigger.getAttribute('aria-expanded')).toBe('false')
+  expect(trigger.getAttribute('aria-haspopup')).toBe('dialog')
+  const dialog = await openMonthActions()
+  expect(trigger.getAttribute('aria-expanded')).toBe('true')
+  expect(dialog.className).toContain('popover-surface')
+  expect(within(dialog).getByRole('button', { name: 'Delete this month' })).toBeTruthy()
+  // A dialog takes the caret with it (P1 review round): the arm box is the first control.
+  expect(document.activeElement).toBe(screen.getByLabelText('Type 2026-07 to confirm'))
+  // A typed arm does not survive a close — reopening never shows a live Delete button.
+  fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
+  fireEvent.keyDown(dialog, { key: 'Escape' })
+  expect(screen.queryByRole('dialog', { name: 'Month actions' })).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+  await openMonthActions()
+  expect((screen.getByLabelText('Type 2026-07 to confirm') as HTMLInputElement).value).toBe('')
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Delete this month' }).disabled).toBe(true)
 })

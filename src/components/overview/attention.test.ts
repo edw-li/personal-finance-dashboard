@@ -10,8 +10,9 @@ import type {
   SystemStatus,
   TaxYearOut,
 } from '../../types/api'
-import { attentionItems } from './attention'
+import { attentionItems, reviewAttentionItems } from './attention'
 import type { AttentionInputs } from './attention'
+import type { ReviewState } from '../../api/monthReview'
 
 // The clock is INJECTED (todayIso param), so unlike the page tests nothing here depends
 // on the run's real date. Aug 18: past the day-7 nudge, current month '2026-08-01'.
@@ -416,5 +417,30 @@ describe('attentionItems — coverage honesty (honest-numbers spec §3)', () => 
       holdings: holdingsOut({ as_of: null }),
     })
     expect(keys(data)).toEqual(['update-due', 'spending-missing', 'prices-never'])
+  })
+})
+
+describe('reviewAttentionItems — past months as actions (2026-09-13 polish §14)', () => {
+  const review = (month: string, state: ReviewState) => ({ month, state })
+
+  it('turns open past months into to-dos, newest first, two at most', () => {
+    const items = reviewAttentionItems(
+      [review('2026-04-01', 'closed'), review('2026-05-01', 'ready_to_review'), review('2026-06-01', 'needs_review'), review('2026-07-01', 'in_progress')],
+      TODAY,
+    )
+    expect(items.map((i) => i.text)).toEqual(["Finish Jul 2026's update", 'Jun 2026 changed since review — reopen'])
+    expect(items[0]).toMatchObject({ key: 'review-2026-07-01', to: '/update?month=2026-07-01&step=review' })
+    expect(reviewAttentionItems([review('2026-05-01', 'ready_to_review')], TODAY)[0].text).toBe('May 2026 is ready to close')
+  })
+
+  it('leaves the current month alone before the nudge day and names it after', () => {
+    expect(reviewAttentionItems([review('2026-08-01', 'in_progress')], '2026-08-05')).toEqual([])
+    expect(reviewAttentionItems([review('2026-08-01', 'in_progress')], TODAY)[0].text).toBe("Finish Aug 2026's update")
+    expect(reviewAttentionItems([review('2026-09-01', 'in_progress')], TODAY)).toEqual([])
+  })
+
+  it('never lists closed, unreviewed-history or not-started months, and tolerates no coverage', () => {
+    expect(reviewAttentionItems([review('2026-06-01', 'closed'), review('2026-05-01', 'unreviewed_history'), review('2026-04-01', 'not_started')], TODAY)).toEqual([])
+    expect(reviewAttentionItems(undefined, TODAY)).toEqual([])
   })
 })

@@ -118,6 +118,7 @@ export default function WhatIfPanel({
   brackets = null,
   summary = null,
   onApplyOverrides,
+  defaultOpen = false,
 }: {
   year: number
   /** The year payload's input definitions (deduped by key, payload order) — the override
@@ -131,6 +132,10 @@ export default function WhatIfPanel({
   /** The page's write door: confirm before → after, PUT the inputs, remount the form. Absent
    *  → no Apply slot. */
   onApplyOverrides?: (overrides: Record<string, string | null>, changed: ChangedInput[]) => void
+  /** The What-if tab mounts this card as its sole content (2026-09-13 polish spec §8): open from
+   *  the first paint, no open/close toggle. The three feeds still load lazily — on this mount,
+   *  which LocalSectionPanel only performs on the tab's first visit. */
+  defaultOpen?: boolean
 }) {
   const [params] = useSearchParams()
   // The legacy deep links (`?whatif=TICKER`, `?whatif-lot=<id>`), pinned at MOUNT — the hook's
@@ -138,10 +143,11 @@ export default function WhatIfPanel({
   // in the initializer, before that runs. A ticker or lot id only means something against a
   // feed, so the rewrite rides the feeds' promise callback.
   const [legacy] = useState(() => ({ ticker: legacyTicker(params), lotId: legacyLotId(params) }))
-  // Arriving with a scenario opens the card (spec §6); otherwise it mounts closed (§8.1).
+  // Arriving with a scenario opens the card (spec §6); so does a tab that IS the sandbox
+  // (2026-09-13 polish spec §8); otherwise it mounts closed (§8.1).
   const entriesKey = readEntries(params).join(SEP)
   const [open, setOpen] = useState(
-    entriesKey !== '' || legacy.ticker !== null || legacy.lotId !== null,
+    defaultOpen || entriesKey !== '' || legacy.ticker !== null || legacy.lotId !== null,
   )
   // ...and so does a navigation INTO a scenario link while the page is already mounted. The
   // assistant's "Open in what-if" is exactly that, and when it names the year already on
@@ -373,10 +379,11 @@ export default function WhatIfPanel({
 
   return (
     <SandboxPanel
-      eyebrow={`What if — ${year}`}
+      eyebrow={`What-if — ${year}`}
       hint="Model prospective sales or input changes against this year's stored return — nothing is saved."
       open={open}
       onToggle={toggle}
+      defaultOpen={defaultOpen}
       toggleLabels={{ open: 'Open what-if', close: 'Close what-if' }}
       sandbox={sandbox}
       closedHint={

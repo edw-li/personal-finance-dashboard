@@ -21,6 +21,7 @@ import PlanAssumptionsCard from '../components/settings/PlanAssumptionsCard'
 import PriceRefreshCard from '../components/settings/PriceRefreshCard'
 import RestoreCard from '../components/settings/RestoreCard'
 import SystemCard from '../components/settings/SystemCard'
+import { prefetchSection, type SettingsSection } from '../components/settings/settingsPrefetch'
 import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import type { ImportReport, PersonOut } from '../types/api'
@@ -58,6 +59,39 @@ export default function SettingsPage() {
   // does no household fetching of its own — this is a relay, not a second source of truth.
   const [people, setPeople] = useState<PersonOut[]>([])
   const seqRef = useRef(0)
+
+  // Warm a task's data on tab hover or focus (2026-09-13 spec §9), so the click lands on filled
+  // cards. Delegated NATIVE listeners on the page root, not props on the tabs: the strip is the
+  // shell's (LocalSectionNav has no hover hooks) and this page edits no shell file. Once per
+  // section per mount, never for the section on screen or one already visited — its cards have
+  // fetched, and a primed result must never outlive a save (settingsPrefetch.ts).
+  const pageRef = useRef<HTMLDivElement>(null)
+  const primedRef = useRef(new Set<SettingsSection>())
+  const visitedRef = useRef(new Set<SettingsSection>())
+  useEffect(() => {
+    visitedRef.current.add(views.section)
+  }, [views.section])
+  useEffect(() => {
+    const root = pageRef.current
+    if (root === null) return
+    const onIntent = (event: Event) => {
+      const tab = event.target instanceof Element ? event.target.closest<HTMLElement>('[role="tab"]') : null
+      if (tab === null) return
+      // LocalSectionNav's tab ids end in `-tab-<section>` (useLocalSections.tabId).
+      const section = PAGE_SECTIONS.find((item) => tab.id.endsWith(`-tab-${item.id}`))?.id
+      if (section === undefined || visitedRef.current.has(section) || primedRef.current.has(section)) return
+      primedRef.current.add(section)
+      // The visited set travels too: a key a visited section can WRITE is not primed at all
+      // (settingsPrefetch.ts's WRITERS), so a hover can never park a body an edit has since moved.
+      prefetchSection(section, visitedRef.current)
+    }
+    root.addEventListener('pointerover', onIntent)
+    root.addEventListener('focusin', onIntent)
+    return () => {
+      root.removeEventListener('pointerover', onIntent)
+      root.removeEventListener('focusin', onIntent)
+    }
+  }, [])
 
   // ~15 setters: the load chain stays a PLAIN function called from the mount effect and
   // Retry — a useCallback here trips preserve-manual-memoization (Plan 3 wall).
@@ -229,7 +263,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="page settings-page">
+    <div className="page settings-page" ref={pageRef}>
       <PageFrame
         title="Settings"
         sections={<LocalSectionNav state={views} label="Settings views" />}
@@ -243,16 +277,15 @@ export default function SettingsPage() {
           busy: loading && loadedOnce,
           retry: retryLoad,
         }}
-        // The page's own shape: the Household section's three cards over the Planning
-        // section's pair (spec §3.6).
+        // The page's own shape: the Household section's three cards at the heights their ghosts
+        // will stand at (SettingsGhost heights minus the chrome PageSkeleton's card already draws),
+        // so the gate GET resolving swaps like for like instead of jumping.
         skeleton={{
           tiles: 0,
           cards: [
-            { span: 6, height: 220 },
-            { span: 6, height: 220 },
-            { span: 12, height: 260 },
-            { span: 6, height: 240 },
-            { span: 6, height: 240 },
+            { span: 4, height: 362 },
+            { span: 8, height: 842 },
+            { span: 12, height: 987 },
           ],
         }}
       >
@@ -266,18 +299,18 @@ export default function SettingsPage() {
         />
         <div className="card-grid">
 <LocalSectionPanel state={views} section="household" className="span-12 card-grid">
-{loadedOnce && <><h2 className="settings-section" id="sec-household">Household</h2>
+{loadedOnce && <><h2 className="settings-section visually-hidden" id="sec-household">Household</h2>
 <HouseholdCard onPeopleChange={setPeople} />
 <CategoriesCard />
 <AccountsCard people={people} /></>}
 </LocalSectionPanel>
 <LocalSectionPanel state={views} section="planning" className="span-12 card-grid">
-{loadedOnce && <><h2 className="settings-section" id="sec-planning">Planning</h2>
+{loadedOnce && <><h2 className="settings-section visually-hidden" id="sec-planning">Planning</h2>
 <LimitsCard />
 <PlanAssumptionsCard /></>}
 </LocalSectionPanel>
 <LocalSectionPanel state={views} section="account" className="span-12 card-grid">
-<h2 className="settings-section" id="sec-account">Account</h2>
+<h2 className="settings-section visually-hidden" id="sec-account">Account</h2>
 <AppearanceCard />
 {loadedOnce && <section className="card span-6" id="password">
                 <h2 className="eyebrow">
@@ -332,23 +365,17 @@ export default function SettingsPage() {
                       Password changed.
                     </p>
                   )}
-                  {/* What the change costs and what it does not: the server bumps token_version,
-                      which kills every token issued before it — including this tab's, which is
-                      why the response hands back a fresh one for changePassword to store. */}
-                  <p className="settings-note">
-                    Other devices are signed out; this one stays signed in.
-                  </p>
                 </form>
               </section>}
 </LocalSectionPanel>
 <LocalSectionPanel state={views} section="integrations" className="span-12 card-grid">
-{loadedOnce && <><h2 className="settings-section" id="sec-integrations">Integrations</h2>
+{loadedOnce && <><h2 className="settings-section visually-hidden" id="sec-integrations">Integrations</h2>
 <PriceRefreshCard />
 <AssistantCard />
 <CalendarFeedCard /></>}
 </LocalSectionPanel>
 <LocalSectionPanel state={views} section="data" className="span-12 card-grid">
-{loadedOnce && <><h2 className="settings-section" id="sec-data">Data</h2>
+{loadedOnce && <><h2 className="settings-section visually-hidden" id="sec-data">Data</h2>
 <section className="card span-12" id="import">
                 <h2 className="eyebrow">
                   Import workbook

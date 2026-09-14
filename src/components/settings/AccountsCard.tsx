@@ -14,6 +14,8 @@ import { useToast } from '../ToastProvider'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
+import SettingsGhost from './SettingsGhost'
+import { WARM, warmSource } from './settingsPrefetch'
 
 interface AccountFormState {
   name: string
@@ -58,6 +60,7 @@ function message(err: unknown, fallback: string): string {
 export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [accounts, setAccounts] = useState<AccountOut[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [settled, setSettled] = useState(false) // both mount fetches answered, either way
   // Two slots, because they have two different answers (2026-09-05 motion spec §9): a load
   // failure is fixed by asking again; a refused save or a typo is not.
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -79,9 +82,9 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const portfolioSeqRef = useRef(0)
   const toast = useToast()
 
-  const load = () => {
+  const load = (initial = false) => {
     const seq = ++seqRef.current
-    fetchAccounts()
+    return warmSource(initial)(WARM.accounts, fetchAccounts)
       .then((rows) => {
         if (seq !== seqRef.current) return
         setAccounts(rows)
@@ -94,9 +97,9 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       })
   }
 
-  const loadPortfolio = () => {
+  const loadPortfolio = (initial = false) => {
     const seq = ++portfolioSeqRef.current
-    fetchPortfolioAccounts()
+    return warmSource(initial)(WARM.portfolioAccounts, fetchPortfolioAccounts)
       .then((rows) => {
         if (seq !== portfolioSeqRef.current) return
         setPortfolioAccounts(rows)
@@ -123,8 +126,10 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   }
 
   useEffect(() => {
-    load()
-    loadPortfolio()
+    // ONE render when both feeds have SETTLED (2026-09-13 spec §9): the card used to grow twice —
+    // the roster landing 76ms before the portfolio labels pushed the second table 1118px down the
+    // page (audit S-5). Settled, not fulfilled: a feed that failed still lets the other render.
+    void Promise.allSettled([load(true), loadPortfolio(true)]).then(() => setSettled(true))
     // mount-only: two plain functions over stable setters (house idiom)
   }, [])
 
@@ -281,9 +286,9 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
         Accounts
         <InfoHint text="The net-worth roster. Owner blank = joint. Retire keeps an account out of the wizard and the charts without losing its history; delete only works while an account has no balances. The slug never changes — it is the workbook importer's key." />
       </h2>
-      <FeedBanner error={loadError} retry={load} retryLabel="Retry loading the accounts" />
-      {!loaded && loadError === null && <p className="empty-note">Loading…</p>}
-      {loaded && (
+      <FeedBanner error={loadError} retry={() => load()} retryLabel="Retry loading the accounts" />
+      {!settled && <SettingsGhost height={1045} />}
+      {settled && loaded && (
         <>
           <form
             className="accounts-form"
@@ -461,78 +466,79 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
         </>
       )}
 
-      {/* Portfolio accounts (2026-08-28 spec §5): the labels behind the positions ledger,
-          and the ONE place their ownership is edited. Rendered OUTSIDE the roster's
-          `loaded` gate on purpose — a net-worth GET that failed says nothing about the
-          portfolio router. */}
-      <h3 className="eyebrow portfolio-accounts-heading">
-        Portfolio accounts
-        <InfoHint text="The account labels your transactions and dividends are filed under. Owner blank = joint; a person's Portfolio view is their own labels plus the joint ones. Labels are fixed here — they are the positions' identity." />
-      </h3>
-      <FeedBanner
-        error={portfolioError}
-        retry={loadPortfolio}
-        retryLabel="Retry loading the portfolio accounts"
-      />
-      {!portfolioLoaded && portfolioError === null && (
-        <p className="empty-note">Loading portfolio accounts…</p>
-      )}
-      {portfolioLoaded &&
-        (portfolioAccounts.length === 0 ? (
-          <p className="empty-note">
-            No portfolio accounts yet — one appears the first time a transaction or dividend
-            names an account.
-          </p>
-        ) : (
-          <>
-            <div className="settings-scroll">
-              <table
-                className="data-table portfolio-accounts-table"
-                aria-label="Portfolio accounts"
-              >
-                <thead>
-                  <tr>
-                    <th>Label</th>
-                    <th>Owner</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {portfolioAccounts.map((account) => (
-                    <tr key={account.id}>
-                      {/* Read-only text, not an input: renaming a label would orphan every
-                          position filed under it, and the server refuses it. */}
-                      <td>{account.label}</td>
-                      <td>
-                        <select
-                          className="field-input"
-                          aria-label={`Owner for ${account.label}`}
-                          value={account.person_id === null ? '' : String(account.person_id)}
-                          disabled={portfolioBusy}
-                          onChange={(e) => retagPortfolioAccount(account, e.target.value)}
-                        >
-                          <option value="">Joint</option>
-                          {people.map((person) => (
-                            <option key={person.id} value={String(person.id)}>
-                              {person.name}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {/* Inline under the table the select lives in, and with NO Retry: the failure is a
-                write the server refused, which asking for the labels again cannot fix. */}
-            <FeedBanner error={portfolioFormError} />
-            <p className="settings-note">
-              A new account label typed on a transaction or dividend is created owned by{' '}
-              {primaryName} — re-tag it here. The labels themselves are fixed: they identify
-              the positions.
+      {settled && (
+        <>
+        {/* Portfolio accounts (2026-08-28 spec §5): the labels behind the positions ledger,
+            and the ONE place their ownership is edited. Gated on `settled`, never on the roster's
+            `loaded` — a net-worth GET that failed says nothing about the portfolio router, and
+            both tables arrive in the same render (2026-09-13 spec §9). */}
+        <h3 className="eyebrow portfolio-accounts-heading">
+          Portfolio accounts
+          <InfoHint text="The account labels your transactions and dividends are filed under. Owner blank = joint; a person's Portfolio view is their own labels plus the joint ones. Labels are fixed here — they are the positions' identity." />
+        </h3>
+        <FeedBanner
+          error={portfolioError}
+          retry={() => loadPortfolio()}
+          retryLabel="Retry loading the portfolio accounts"
+        />
+        {portfolioLoaded &&
+          (portfolioAccounts.length === 0 ? (
+            <p className="empty-note">
+              No portfolio accounts yet — one appears the first time a transaction or dividend
+              names an account.
             </p>
-          </>
-        ))}
+          ) : (
+            <>
+              <div className="settings-scroll">
+                <table
+                  className="data-table portfolio-accounts-table"
+                  aria-label="Portfolio accounts"
+                >
+                  <thead>
+                    <tr>
+                      <th>Label</th>
+                      <th>Owner</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {portfolioAccounts.map((account) => (
+                      <tr key={account.id}>
+                        {/* Read-only text, not an input: renaming a label would orphan every
+                            position filed under it, and the server refuses it. */}
+                        <td>{account.label}</td>
+                        <td>
+                          <select
+                            className="field-input"
+                            aria-label={`Owner for ${account.label}`}
+                            value={account.person_id === null ? '' : String(account.person_id)}
+                            disabled={portfolioBusy}
+                            onChange={(e) => retagPortfolioAccount(account, e.target.value)}
+                          >
+                            <option value="">Joint</option>
+                            {people.map((person) => (
+                              <option key={person.id} value={String(person.id)}>
+                                {person.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* Inline under the table the select lives in, and with NO Retry: the failure is a
+                  write the server refused, which asking for the labels again cannot fix. */}
+              <FeedBanner error={portfolioFormError} />
+              <p className="settings-note">
+                A new account label typed on a transaction or dividend is created owned by{' '}
+                {primaryName} — re-tag it here. The labels themselves are fixed: they identify
+                the positions.
+              </p>
+            </>
+          ))}
+        </>
+      )}
     </section>
   )
 }

@@ -867,6 +867,15 @@ on every visit and are never part of a link).
 
 ## Troubleshooting
 
+**Local development on Windows: every wizard load or month switch takes ~2 s** — the local
+`backend/.env` `DATABASE_URL` points at `localhost`, and on the Windows Proactor loop
+`asyncio.open_connection('localhost', …)` tries `::1` first while PostgreSQL listens on
+`127.0.0.1` only: every overflow pool connection past `pool_size=5` pays ~2,035 ms before
+falling back (measured 2026-09-13; nine parallel wizard feeds open several). Set the host to
+`127.0.0.1` in the local `DATABASE_URL` (`postgresql+asyncpg://…@127.0.0.1:5433/…`) and restart
+uvicorn; the wizard's first content then lands under a second. Production uses
+`host.docker.internal` on Linux, where a refused `::1` returns instantly.
+
 **Backend unhealthy / compose up fails** — `docker compose -f docker-compose.prod.yml
 logs backend`. Alembic or seed errors print there; the healthcheck exists precisely so
 these fail the deploy instead of 502ing.

@@ -8,6 +8,8 @@ import { useToast } from '../ToastProvider'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
+import SettingsGhost, { SETTINGS_CARD_CHROME_PX } from './SettingsGhost'
+import { WARM, warmSource } from './settingsPrefetch'
 
 function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
@@ -47,9 +49,9 @@ export default function LimitsCard() {
 
   // A plain function over stable setters, called from the effect and from Retry — a
   // useCallback here would trip preserve-manual-memoization (SettingsPage's wall).
-  const load = (forYear: number) => {
+  const load = (forYear: number, initial = false) => {
     const seq = ++seqRef.current
-    fetchLimits(forYear)
+    warmSource(initial)(WARM.limits(forYear), () => fetchLimits(forYear))
       .then((payload) => {
         if (seq !== seqRef.current) return
         setItems(payload.items)
@@ -67,7 +69,7 @@ export default function LimitsCard() {
   }
 
   useEffect(() => {
-    load(year)
+    load(year, true)
     // `year` only: `load` is a plain function over stable setters (house idiom).
   }, [year])
 
@@ -158,7 +160,8 @@ export default function LimitsCard() {
         retry={() => load(year)}
         retryLabel="Retry loading the contribution limits"
       />
-      {items === null && loadError === null && <p className="empty-note">Loading…</p>}
+      {/* The year chips above are already on screen, so the ghost is the card minus them too. */}
+      {items === null && loadError === null && <SettingsGhost height={415} chrome={SETTINGS_CARD_CHROME_PX + 42} />}
       {items !== null && (
         <form
           className="settings-card-form"

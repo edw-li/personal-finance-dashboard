@@ -189,9 +189,13 @@
   border-bottom-color: var(--border);
 }
 
-/* A strip-only block (Taxes, Comp, ESPP, Projection) already ends in the strip's own hairline;
-   the stuck hairline directly under it would read as a 2px rule. */
-.page-frame-scope.is-stuck:has(> .page-frame-sections:last-child) {
+/* A block that ENDS in the strip (Taxes, Comp, ESPP, Projection) already carries the strip's own
+   hairline; the stuck one 1px under it reads as a 2px rule. The test is "nothing renders BELOW the
+   strip", not ":last-child" (2026-09-13 review round): a page can declare a scope row that renders
+   nothing — a one-person household hides the owner chips — and the row ELEMENT is still there, so
+   the old selector saw a non-final strip and the double hairline came back. `:not(:empty)` is the
+   same test the row's own display: none rule above uses, which is what makes the two agree. */
+.page-frame-scope.is-stuck:not(:has(> .page-frame-scope-row:not(:empty))) {
   border-bottom-color: transparent;
 }
 

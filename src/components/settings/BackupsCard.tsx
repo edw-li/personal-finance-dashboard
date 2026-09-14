@@ -10,6 +10,8 @@ import { FeedBanner } from '../shell/Feed'
 import { useToast } from '../ToastProvider'
 import '../panels.css'
 import './settings.css'
+import SettingsGhost from './SettingsGhost'
+import { WARM, warmSource } from './settingsPrefetch'
 
 function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
@@ -34,9 +36,9 @@ export default function BackupsCard() {
   const toast = useToast()
 
   // A plain function over stable setters, called from the effect and Retry (house idiom).
-  const load = () => {
+  const load = (initial = false) => {
     const seq = ++seqRef.current
-    fetchSnapshots()
+    warmSource(initial)(WARM.snapshots, fetchSnapshots)
       .then((list) => {
         if (seq !== seqRef.current) return
         setEntries(list)
@@ -49,7 +51,7 @@ export default function BackupsCard() {
   }
 
   useEffect(() => {
-    load()
+    load(true)
     // mount-only (house idiom)
   }, [])
 
@@ -94,8 +96,8 @@ export default function BackupsCard() {
         </button>
       </div>
       <FeedBanner error={actionError} />
-      <FeedBanner error={error} retry={load} retryLabel="Retry loading snapshots" />
-      {entries === null && error === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner error={error} retry={() => load()} retryLabel="Retry loading snapshots" />
+      {entries === null && error === null && <SettingsGhost height={313} />}
       {entries !== null && entries.length === 0 && (
         <p className="empty-note">
           No stored snapshots yet — the nightly job writes the first one at 23:30 PT.

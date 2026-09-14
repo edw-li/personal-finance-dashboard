@@ -69,6 +69,8 @@ describe('PositionStrip', () => {
     const tile = screen.getByText('$25k limit used — 2024').closest('.stat-tile') as HTMLElement
     expect(tile.textContent).toContain('$18,917.13')
     expect(tile.textContent).toContain('$6,082.87 left')
+    // Five tiles, one row at 1440 (2026-09-13 polish spec §12; audit W2 — the fifth wrapped alone).
+    expect(document.querySelector('.kpi-row')?.classList.contains('kpi-row-5')).toBe(true)
   })
 
   it('treats a lots payload without totals (a pre-batch snapshot) as not loaded yet', () => {

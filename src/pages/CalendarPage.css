@@ -12,12 +12,6 @@
   margin-bottom: 0.75rem;
 }
 
-.cal-title {
-  margin: 0 0 0 0.5rem;
-  font-size: 1.05rem;
-  font-weight: 650;
-}
-
 /* The 7-col month grid. Chips need links and multi-event days, which is why this is
    CSS grid and not a chart surface. */
 .cal-grid {
@@ -35,8 +29,10 @@
   padding: 0 6px 4px;
 }
 
+/* 76px cells with rows that GROW for busy weeks (below): six rows of 92px for seven events was
+   a 587px card of empty boxes (audit C-6). */
 .cal-day {
-  min-height: 92px;
+  min-height: 76px;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px 6px;
@@ -287,12 +283,27 @@
   font-family: inherit;
 }
 
+/* The same form inside the shell's detail panel (2026-09-13 spec §12): fluid two-up columns in a
+   ~400px dock instead of the card's fixed 170px boxes, the note on a row of its own. */
+.cal-form-panel .cal-form-field {
+  flex: 1 1 160px;
+}
+
+.cal-form-panel .cal-form-field .cal-form-input {
+  width: 100%;
+}
+
+.cal-form-panel .cal-form-note {
+  flex-basis: 100%;
+}
+
 /* ── Calendar v2 (2026-09-03 calendar spec §7–§10) ───────────────────────── */
 
 /* Eight columns: seven days and the week gutter. Rows are ARIA rows with display: contents
    so the grid's columns still govern their cells. */
 .cal-grid {
   grid-template-columns: repeat(7, minmax(0, 1fr)) 84px;
+  grid-auto-rows: minmax(76px, auto);
 }
 
 .cal-grid-row {
@@ -303,8 +314,13 @@
   text-align: right;
 }
 
+/* In over out, two lines that never break (audit C-2); a lone em dash when nothing moves. */
 .cal-gutter {
-  min-height: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-height: 76px;
   padding: 4px 6px;
   border: 1px dashed var(--border);
   border-radius: 8px;
@@ -312,6 +328,11 @@
   color: var(--muted);
   text-align: right;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cal-gutter-line {
+  white-space: nowrap;
 }
 
 /* The control row rides the frame's sticky scope slot, which brings its own padding. */
@@ -402,11 +423,9 @@
   margin-bottom: 1rem;
 }
 
-/* Both footnotes are full-width rows under the tiles, not a fifth tile. */
-.cal-strip-asof,
-.cal-strip-unknown {
-  grid-column: 1 / -1;
-  margin: 0;
+/* The strip's footnotes, now the calendar card's last lines under the source-health list. */
+.cal-note {
+  margin: 0.5rem 0 0;
 }
 
 /* The health footer replaces the legend + caveat prose: one line per source. */

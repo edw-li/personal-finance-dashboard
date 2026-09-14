@@ -20,7 +20,7 @@ import { zeroLine } from '../../charts/markLine'
 import { budgetReference, referenceLine } from '../../charts/reference'
 import { divergingVisualMap, rowNormalize, sequentialVisualMap, vsAverage } from '../../charts/scales'
 import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
-import { rangeZoom } from '../../charts/timeZoom'
+import { rangeZoom, resolvedWindow } from '../../charts/timeZoom'
 import type { RangeState } from '../../charts/timeZoom'
 import { axisTooltip, itemTooltip } from '../../charts/tooltip'
 import type { SpendingMatrix } from '../../types/api'
@@ -103,7 +103,12 @@ export function spendingBarsOption({
   )
   const name = (id: number) => nameById.get(id) ?? String(id)
   const categoryNames = [...topIds.map(name), 'Other']
-  const hasBudget = matrix.total_budget.some((v) => v !== null)
+  // F5 (2026-09-13 audit): a single budgeted month in 38 drove a permanent legend entry. The step
+  // and its chip exist only when the DISPLAYED window shows at least two budgeted months — one
+  // point draws no step, and a book with no budgets in view has nothing to summon.
+  const { startValue, endValue } = resolvedWindow(matrix.months, range)
+  const budgetedInView = matrix.total_budget.slice(startValue, endValue + 1).filter((v) => v !== null).length
+  const hasBudget = budgetedInView >= 2
   const series = [
     // Stable ids: the drill-in pie morphs from/to these (universalTransition keys on id).
     ...topIds.map((id, slot) => ({
@@ -168,10 +173,17 @@ export function spendingBarsOption({
 
 /** One month's breakdown as the bars' drill-in: the SAME top-N fold and slots as the stack,
  *  morphing from the bar segments by id. Null when the month has nothing positive to draw. */
+export interface MonthPieOptions {
+  /** The dock variant (W7): no leader labels — they truncated to "Hous…" at 440px. The names
+   *  ride a legend list beside the chart instead (monthPieLegend + ChartCard `aside`). */
+  compact?: boolean
+}
+
 export function monthPieOption(
   matrix: Pick<SpendingMatrix, 'categories' | 'series'>,
   topIds: number[],
   monthIndex: number,
+  { compact = false }: MonthPieOptions = {},
 ): EChartsOption | null {
   if (monthIndex < 0) return null
   const slices = buildMonthSlices(matrix, topIds, monthIndex)
@@ -190,7 +202,7 @@ export function monthPieOption(
         type: 'pie' as const,
         radius: ['42%', '70%'],
         itemStyle: { borderColor: SURFACE, borderWidth: 2 },
-        label: { color: INK, formatter: '{b}  {d}%' },
+        label: compact ? { show: false } : { color: INK, formatter: '{b}  {d}%' },
         emphasis: { itemStyle: { borderColor: INK } },
         // Morph the month's bar segments into slices and back out on exit; a plain swap
         // under reduced motion (EChart forces animation off).
@@ -215,6 +227,19 @@ export function monthPieCsv(
     headers: ['Category', 'Amount'],
     rows: buildMonthSlices(matrix, topIds, monthIndex).map((s) => [s.name, s.value.toFixed(2)]),
   }
+}
+
+/** The legend list beside the dock donut: the drawn slices, each one's share of the month and
+ *  the palette slot it wears (null = the folded Other). The same fold as the pie, so the list and
+ *  the slices agree by construction. Display-only floats (format.ts's rule). */
+export function monthPieLegend(
+  matrix: Pick<SpendingMatrix, 'categories' | 'series'>,
+  topIds: number[],
+  monthIndex: number,
+): { name: string; value: number; share: number; slot: number | null }[] {
+  const slices = buildMonthSlices(matrix, topIds, monthIndex)
+  const total = slices.reduce((acc, slice) => acc + slice.value, 0)
+  return slices.map((slice) => ({ name: slice.name, value: slice.value, share: total === 0 ? 0 : slice.value / total, slot: slice.slot }))
 }
 
 export type HeatmapMode = 'absolute' | 'row' | 'vsAverage'

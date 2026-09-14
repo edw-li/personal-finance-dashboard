@@ -6,7 +6,7 @@ import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
-import { fetchSpendingEvidence } from '../api/monthReview'
+import { fetchSpendingEvidence, REVIEW_LABELS } from '../api/monthReview'
 vi.mock('../api/monthReview', async importOriginal => ({ ...await importOriginal<typeof import('../api/monthReview')>(), fetchSpendingEvidence: vi.fn() }))
 
 vi.mock('../api/spending', () => ({
@@ -666,11 +666,18 @@ describe('SpendingPage — reviewed-month metrics', () => {
     renderPage()
     expect(await screen.findByText('Where Jun 2026 went')).toBeTruthy()
     expect(tileValue('Living spending — Jun 2026')).toBe('$2,750.00')
-    expect(screen.getByText(/Closed · Tax paid from take-home/)).toBeTruthy()
+    const june = screen.getByText('Living spending — Jun 2026').closest('.stat-tile') as HTMLElement
+    expect(june.querySelector('.stat-badge')).toBeNull() // a closed month wears no badge
+    expect(june.querySelector('.stat-delta')?.textContent).toBe('Cash outflow $2,750.00 · tax $0.00 · transfers $0.00')
     fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
     expect(await screen.findByText('Where Jul 2026 went')).toBeTruthy()
     expect(tileValue('Living spending — Jul 2026')).toBe('$2,580.00')
-    expect(screen.getByText(/In progress · Tax paid from take-home/)).toBeTruthy()
+    const july = screen.getByText('Living spending — Jul 2026').closest('.stat-tile') as HTMLElement
+    expect(july.querySelector('.stat-badge')?.textContent).toBe(REVIEW_LABELS.in_progress)
+    expect(july.querySelector('.stat-delta')?.textContent).toBe('Cash outflow $2,580.00 · tax $0.00 · transfers $0.00')
+    // T3/L4: no bare line under the tiles and no third door into the wizard.
+    expect(document.querySelector('.spending-metric-context')).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Review month' })).toBeNull()
     await waitFor(() => expect(fetchSpendingEvidence).toHaveBeenLastCalledWith('2026-07-01'))
   })
 
@@ -715,6 +722,13 @@ describe('SpendingPage — shell scope', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
     expect(screen.getByTestId('location').textContent).toContain('month=2026-07')
     expect(await screen.findByText(/Jul 2026 breakdown/)).toBeTruthy()
+    // W7: the donut's names ride a legend list beside it (ChartCard aside).
+    const legend = screen.getByRole('list', { name: 'Jul 2026 breakdown legend' })
+    expect(within(legend).getByText('Rent')).toBeTruthy()
+    expect(within(legend).getByText('$2,000.00')).toBeTruthy()
+    expect(within(legend).getByText('77.5%')).toBeTruthy()
+    expect(within(legend).getByText('22.5%')).toBeTruthy()
+    expect(within(legend).getAllByRole('listitem')).toHaveLength(2) // Fun is $0.00 in July: not a slice
     fireEvent.click(screen.getByRole('button', { name: 'All months' }))
     expect(screen.getByTestId('location').textContent).not.toContain('month=')
   })
@@ -742,6 +756,19 @@ describe('SpendingPage — shell scope', () => {
     expect(
       await screen.findByRole('button', { name: /^Jul 2026 — \$2,580\.00 living — / }),
     ).toBeTruthy()
+  })
+
+  // L5 (2026-09-13 audit): All / 1Y / YTD stayed in the sticky row on views that ignore them.
+  it('hides the range chips on Budgets and History and shows them on Overview and Trends', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(document.querySelectorAll('[aria-label="Time range"]')).toHaveLength(1)
+    await openView('Budgets')
+    expect(document.querySelectorAll('[aria-label="Time range"]')).toHaveLength(0)
+    await openView('History')
+    expect(document.querySelectorAll('[aria-label="Time range"]')).toHaveLength(0)
+    await openView('Trends')
+    expect(document.querySelectorAll('[aria-label="Time range"]')).toHaveLength(1)
   })
 })
 

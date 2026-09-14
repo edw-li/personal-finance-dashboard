@@ -115,6 +115,18 @@
   overflow-wrap: anywhere;
 }
 
+/* The column-set toggle sits between the form and the table (2026-09-13 polish spec §7). */
+.comp-column-set {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.comp-column-set .eyebrow {
+  margin: 0;
+}
+
 /* ── Vesting schedule ──────────────────────────────────────────────── */
 
 /* Past tranches recede: the table is read forwards, and the rows that already happened are
@@ -128,9 +140,11 @@
    scroll away — with the header pinned so a row deep in 2029 still says what its columns are.
    Sticky cells are positioned, so they paint above the (non-positioned) rows without touching
    the codebase's one z-index (panels.css's InfoHint note); the background is what stops rows
-   showing through. */
+   showing through. Capped at a clamp rather than a fixed 420px (2026-09-13 polish spec §7 /
+   audit X2): one scroll usually suffices on a tall viewport, and a short one still gets a
+   scroller instead of a card that swallows the page. */
 .vest-scroll {
-  max-height: 420px;
+  max-height: clamp(420px, 60vh, 720px);
   overflow: auto;
 }
 

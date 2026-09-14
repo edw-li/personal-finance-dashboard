@@ -134,20 +134,35 @@ it('shows the load failure verbatim and retries into the rows', async () => {
   expect(screen.queryByRole('alert')).toBeNull()
 })
 
-it('renders the last-5 backup trail compactly', async () => {
+it('renders the backup trail as a list — three lines, then "+N more" — spanning both fact columns', async () => {
   vi.mocked(fetchSystemStatus).mockResolvedValue(
     systemOut({
       backup_runs: [
         { at: '2026-08-30T03:00:00+00:00', ok: true, object: 'backups/finance.sql.gz.gpg' },
         { at: '2026-08-29T03:00:00+00:00', ok: false, error: 'pg_dump: connection refused' },
+        { at: '2026-08-28T03:00:00+00:00', ok: true, object: 'backups/finance.sql.gz.gpg' },
+        { at: '2026-08-27T03:00:00+00:00', ok: true, object: 'backups/finance.sql.gz.gpg' },
+        { at: '2026-08-26T03:00:00+00:00', ok: true, object: 'backups/finance.sql.gz.gpg' },
       ],
     }),
   )
   render(<SystemCard />)
-  await screen.findByText(
-    `${formatDateTime('2026-08-30T03:00:00+00:00')} ok · ` +
-      `${formatDateTime('2026-08-29T03:00:00+00:00')} failed`,
-  )
+  const first = await screen.findByText(`${formatDateTime('2026-08-30T03:00:00+00:00')} ok`)
+  const list = first.closest('ul') as HTMLElement
+  expect(Array.from(list.querySelectorAll('li')).map((li) => li.textContent)).toEqual([
+    `${formatDateTime('2026-08-30T03:00:00+00:00')} ok`,
+    `${formatDateTime('2026-08-29T03:00:00+00:00')} failed`,
+    `${formatDateTime('2026-08-28T03:00:00+00:00')} ok`,
+    '+2 more',
+  ])
+  expect(list.closest('.system-fact')?.classList.contains('system-fact-wide')).toBe(true)
+})
+
+it('lists each hand-entered feed on its own line, the row spanning both columns', async () => {
+  render(<SystemCard />)
+  const balances = await screen.findByText('Balances through Sep 2026')
+  expect(balances.tagName).toBe('LI')
+  expect(balances.closest('.system-fact')?.classList.contains('system-fact-wide')).toBe(true)
 })
 
 // The verify phase (2026-09-03 data-lifecycle spec §8): "Last backup" now means "the dump

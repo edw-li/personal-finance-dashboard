@@ -122,4 +122,18 @@ describe('SandboxPanel', () => {
     expect(document.querySelector('.sandbox-pins')).toBeNull()
     expect(screen.getByRole('button', { name: 'Reset to derived' })).toBeTruthy()
   })
+
+  it('defaultOpen: open from the first paint, no open/close toggle, Reset still there', () => {
+    const sb = sandbox()
+    // The page hands `open: false` (its own state) — defaultOpen wins, and the closed hint is
+    // never drawn: the tab click WAS the ask (2026-09-13 polish spec §8).
+    const onToggle = mount(sb, { open: false, defaultOpen: true, closedHint: <p>Try a scenario.</p> })
+    expect(screen.queryByRole('button', { name: /^(Try it|Close)$/ })).toBeNull()
+    expect(screen.queryByText('Try a scenario.')).toBeNull()
+    expect(screen.getByTestId('controls')).toBeTruthy()
+    expect(screen.getByTestId('compare')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to actual' }))
+    expect(sb.reset).toHaveBeenCalledTimes(1)
+    expect(onToggle).not.toHaveBeenCalled()
+  })
 })

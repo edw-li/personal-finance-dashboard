@@ -79,6 +79,13 @@
   gap: 0.5rem;
 }
 
+/* A wash under the row the pointer is on (.row-click's spirit): in a form where a wrong cell is a
+   wrong tax figure, the eye needs to be sure which box belongs to which label. */
+.tax-input-row:hover {
+  background: var(--surface-2);
+  border-radius: 4px;
+}
+
 .tax-input-label {
   display: flex;
   align-items: center;
@@ -102,8 +109,13 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Married-joint rows: the label track is CAPPED and the row left-justified (2026-09-13 polish
+   spec §12; audit W4: a minmax(0, 1fr) track stretched to 675px and put 604px of nothing between
+   the label and its box on 46 rows). 40ch holds the longest label — "Sec 199A QBI deduction (20%
+   of qualified REIT/PTP dividends)" already ellipsises with a title fallback. */
 .tax-input-grid.is-split .tax-input-row {
-  grid-template-columns: minmax(0, 1fr) 120px 120px 170px;
+  grid-template-columns: minmax(0, 40ch) 120px 120px 170px;
+  justify-content: start;
 }
 
 .tax-input-grid.is-split .field-input.tax-input-wide,
@@ -203,6 +215,33 @@
   margin: 0;
 }
 
+/* The save bar rides the viewport bottom while the form scrolls (2026-09-13 polish spec §12). The
+   wizard's .entry-footer recipe, COPIED under this page's scope rather than imported —
+   MonthlyUpdatePage.css travels with its own screen. The class NAME is the wizard's on purpose:
+   panels.css exempts `.card:has(.entry-footer)` from the scroll-reveal transform, and a transformed
+   ancestor would drag a sticky child along with it and strand the bar mid-page. */
+.taxes-page .entry-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  margin-top: 1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.tax-save-shortcut kbd {
+  font-family: inherit;
+  font-size: 0.7rem;
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
 .bracket-block {
   margin-bottom: 1.25rem;
 }
@@ -210,6 +249,30 @@
 .bracket-block > .eyebrow {
   margin-bottom: 0.4rem;
   color: var(--text);
+}
+
+/* The jurisdictions as a grid (2026-09-13 polish spec §12; audit W3): two columns at 1440, three
+   at 1920, one on a narrow card. Each group is a form plus its optional per-person strip, so a
+   strip stays under the table it qualifies. align-items: start, because Federal and Medicare are
+   different heights and a stretched twin would be a void. The grid's gap carries the spacing the
+   blocks used to carry themselves. */
+.bracket-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(480px, 100%), 1fr));
+  gap: 1rem 2rem;
+  align-items: start;
+}
+
+.bracket-grid .bracket-block {
+  margin-bottom: 0;
+}
+
+.bracket-grid .bracket-block.has-person-strip {
+  margin-bottom: 0.55rem;
+}
+
+.bracket-grid .bracket-person-strip {
+  margin-bottom: 0;
 }
 
 .bracket-table {
@@ -426,10 +489,22 @@
   margin-left: 0.5rem;
 }
 
-/* The tab row sits between the card's hint and the first table: the .segmented treatment is
-   panels.css's, so only its placement is this file's business. */
-.bracket-status-tabs {
+/* The status row sits between the card's hint and the grid: an eyebrow naming what the control
+   is FOR, the .segmented (panels.css's), and the hint. Only its placement is this file's business. */
+.bracket-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
   margin-bottom: 1rem;
+}
+
+.bracket-status-row > .eyebrow {
+  margin: 0;
+}
+
+.bracket-status-tabs {
+  margin-bottom: 0;
 }
 
 .bracket-clone {
@@ -519,4 +594,69 @@
    top gap .tax-section does not carry (that class only spaces downward). */
 .tax-jurisdiction-detail {
   margin-top: 1.1rem;
+}
+
+/* --- the year menu (TaxYearMenu, in the frame's actions slot) --- */
+
+/* The create row that used to be TaxesPage.css's .new-year-form, moved here WITH the form: the
+   menu is a component now, and a component must not depend on the page sheet being in the
+   bundle (the note at the top of this file). The hint takes its own line under the row. */
+.new-year-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.new-year-form label {
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.new-year-form .field-input {
+  width: 110px;
+}
+
+.new-year-form .drill-hint {
+  margin: 0;
+  flex-basis: 100%;
+}
+
+/* The trigger anchors the popover (panels.css's .popover-surface is position: absolute); it
+   opens under the button's right edge, so it never runs off the page's right side. */
+.tax-year-menu {
+  position: relative;
+}
+
+.tax-year-menu .popover-surface {
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 22rem;
+}
+
+.tax-year-menu .error-banner {
+  margin-top: 0.6rem;
+}
+
+/* The delete door under a rule; armed, the question and its two answers appear beneath it. */
+.tax-year-delete {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.tax-year-delete-confirm {
+  margin-top: 0.6rem;
+}
+
+.tax-year-delete-confirm .drill-hint {
+  margin: 0 0 0.5rem;
+  max-width: 40ch;
+}
+
+.tax-year-delete-actions {
+  display: flex;
+  gap: 0.5rem;
 }

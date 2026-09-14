@@ -244,6 +244,11 @@ describe('ScenarioPanel', () => {
     mount()
     const button = await screen.findByRole('button', { name: 'Use my budgets · $61,752.00/yr' })
     expect(screen.getByText(/12 × the living-category budgets resolved for Sep 2026/)).toBeDefined()
+    // Button and sentence are flex items of one row, so the sentence wraps as a UNIT under the
+    // button in a narrow column instead of breaking mid-clause beside it (audit P-8).
+    const sentence = screen.getByText(/12 × the living-category budgets resolved for Sep 2026/)
+    expect(sentence.tagName).toBe('SPAN')
+    expect(sentence.parentElement?.classList.contains('projection-derived-preset')).toBe(true)
     fireEvent.click(button)
     await waitFor(() => expect(url()).toContain('61752'))
     const inUse = screen.getByRole('button', { name: 'using your budgets' }) as HTMLButtonElement

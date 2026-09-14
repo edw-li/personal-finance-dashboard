@@ -32,6 +32,7 @@ import { describeContext } from './contextLabel'
 import { isNavLink } from './navLink'
 import { AssistantMessageBody, ComputedSummary, SaveFindingButton, SavedFindings } from './AssistantEvidence'
 import AssistantDockMount from './AssistantDockMount'
+import Disclosure from '../Disclosure'
 import { useDetailPanel } from '../details/DetailPanelProvider'
 import { explainPrompt, onExplainSelection } from '../details/explainSelection'
 import Segmented from '../shell/Segmented'
@@ -840,19 +841,19 @@ export default function AssistantDrawer() {
                       </div>
                     )}
                   {item.thinking !== undefined && item.thinking !== '' && (
-                    // `open` flips true → undefined the instant the answer starts. React
-                    // writes the attribute only when the PROP changes, so that one flip
-                    // collapses the block and then hands it over: a reader who opens it back
-                    // up is never stamped shut again by the next token.
-                    <details
+                    // `open` flips true → undefined the instant the answer starts, which takes
+                    // the Disclosure from controlled to uncontrolled: that one flip collapses
+                    // the block and then hands it over — a reader who opens it back up is never
+                    // stamped shut again by the next token.
+                    <Disclosure
                       className="assistant-thinking"
                       open={item.content === '' ? true : undefined}
+                      summary={item.content === '' ? 'Reasoning…' : 'Reasoning'}
                     >
-                      <summary>{item.content === '' ? 'Reasoning…' : 'Reasoning'}</summary>
                       {/* Plain text, not markdown: a reasoning stream is half-formed by
                           definition, and a stray ``` or | would render as a broken table. */}
                       <div className="assistant-thinking-body">{item.thinking}</div>
-                    </details>
+                    </Disclosure>
                   )}
                   {item.content !== '' && <AssistantMessageBody text={item.content} metrics={item.evidence?.metrics} />}
                   {item.stopped && <p className="assistant-meta">Stopped.</p>}

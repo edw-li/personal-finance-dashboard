@@ -10,6 +10,8 @@ import ImportReportView from './ImportReportView'
 import RestoreReportView from './RestoreReportView'
 import '../panels.css'
 import './settings.css'
+import SettingsGhost from './SettingsGhost'
+import { WARM, warmSource } from './settingsPrefetch'
 
 const RUN_LABELS: Record<ActivityRun['kind'], string> = {
   import_xlsx: 'Import',
@@ -55,9 +57,9 @@ export default function ActivityCard() {
   const seqRef = useRef(0)
   const toast = useToast()
 
-  const load = () => {
+  const load = (initial = false) => {
     const seq = ++seqRef.current
-    fetchActivity()
+    warmSource(initial)(WARM.activity, () => fetchActivity())
       .then((pageOut) => {
         if (seq !== seqRef.current) return
         setEntries(pageOut.entries)
@@ -72,7 +74,7 @@ export default function ActivityCard() {
   }
 
   useEffect(() => {
-    load()
+    load(true)
     // mount-only (house idiom)
   }, [])
 
@@ -121,8 +123,8 @@ export default function ActivityCard() {
         Activity
         <InfoHint text="Every money-bearing change — month saves and deletes, account, category and budget edits, imports, restores, snapshots — newest first. Undo replays one change in reverse while nothing later touched the same rows; imports and restores are summaries and are undone by restoring a snapshot instead." />
       </h2>
-      <FeedBanner error={error} retry={load} retryLabel="Retry loading activity" />
-      {entries === null && error === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner error={error} retry={() => load()} retryLabel="Retry loading activity" />
+      {entries === null && error === null && <SettingsGhost height={487} />}
       {entries !== null && entries.length === 0 && <p className="empty-note">Nothing recorded yet.</p>}
       {/* Absolute timestamps, not "3 minutes ago": this repo has no relative-time formatter,
           and a trail of money-bearing writes is read AGAINST the clock — which month a save

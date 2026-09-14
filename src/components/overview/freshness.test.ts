@@ -149,3 +149,17 @@ describe('spendingGaps — only what comes AFTER the last entered month', () => 
     expect(spendingGaps(coverageOut({ spending_empty: [], spending_missing: [] }))).toBe('')
   })
 })
+
+describe('freshnessClauses — dt/dd split for the Data status card (2026-09-13 polish §10)', () => {
+  it('exposes a label and a detail whose concatenation is the sentence', () => {
+    const coverage: CoverageOut = {
+      balances: ['2026-07-01', '2026-08-01'], spending: ['2026-07-01'], net_pay: [],
+      spending_missing: ['2026-08-01'],
+      latest: { balances: '2026-08-01', spending: '2026-07-01', net_pay: null },
+    }
+    const [balances, spending, netPay] = freshnessClauses(coverage)
+    expect(balances).toMatchObject({ label: 'Balances through', detail: 'Aug 2026', text: 'Balances through Aug 2026', lagging: false })
+    expect(spending).toMatchObject({ label: 'Spending through', detail: 'Jul 2026 (Aug missing)', text: 'Spending through Jul 2026 (Aug missing)', lagging: true })
+    expect(netPay).toMatchObject({ label: 'Net pay', detail: 'no months', text: 'Net pay — no months', lagging: false })
+  })
+})

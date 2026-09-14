@@ -2702,3 +2702,167 @@ Acceptance items this lane moves (spec §15): #3 — the ORPHAN list on Overview
 5. *README dev section.* None exists (the README is the deployment runbook); the note lands in `## Troubleshooting`.
 6. *Data status `dl` rows.* `freshnessClauses` gains `label`/`detail` (keeping `text`) so the rows are honest `<dt>/<dd>` pairs ("Balances through" / "Jul 2026", "Balances" / "no months") instead of a sentence stuffed into a `dd`.
 7. *Error-only branch.* Spec §9's resource formula names only the loading branch; the plan keeps the existing error-only view for a first load that fails with nothing to show (`status: 'error'`), and uses ready+stale-line once a seed is on screen.
+
+---
+
+## Results
+
+Lane **P1 overview-update-spending**, worktree `.worktrees/polish-p1`, branch `polish/p1-overview`
+(from `main` @`895cdaf`, i.e. after F1 and F2 merged). Fifteen commits, one per task, nothing pushed.
+
+### Commits
+
+| Task | SHA | Subject |
+| --- | --- | --- |
+| 1 | `63b6dc8` | fix(review): compare only the categories the save records — an untouched $0.00 seed is not a spending difference (bug F2) |
+| 2 | `38385e6` | feat(update): skeleton on first load, two-tier feeds, keep the step card mounted and busy through a month switch, coverage instead of the timeseries (F1) |
+| 3 | `f341bb6` | feat(update): Review step as four tiles, notes attached to their tables and footer, pill background, eyebrow without the month (W5, T4, F3, C3) |
+| 4 | `ecaeaa1` | feat(update): month actions as a kebab popover in the Review head — the footer never moves (A2) |
+| 5 | `6a8bd9f` | feat(update): historical review as a card — coverage summary, Load history, years with Select all eligible, missing-feed reasons, Close selected months (A3, F4) |
+| 6 | `de2ea59` | feat(overview): Data status card — the four clocks as dl rows plus the comparison line; orphan sentence and freshness footer removed (T1, T2) |
+| 7 | `f7f3125` | feat(overview): Living spending tile — one-line label, review badge, month in the delta; ghost tiles while a group loads; GROUP_LABELS on the hero receipt (W2, L3, C4, §5) |
+| 8 | `ce87419` | feat(overview): deeper cards on the card grid, YTD Dividends label and unbreakable net-worth amount, YTD slot reserved while loading (W3, W4, §9) |
+| 9 | `9924f5d` | feat(overview): Needs attention review rows only for past months, phrased as actions; current month after the nudge day (C1) |
+| 10 | `3e05f2b` | feat(overview): Customize as a dismissable popover dialog with Done; label matches the Recent spending card (A4, §11) |
+| 11 | `d9f54cd` | feat(spending): cash split and review badge on the Living spending tile instead of a bare line; range chips only on Overview and Trends (T3, L4, L5, F4) |
+| 12 | `40ae165` | feat(spending): dock donut with a legend list instead of truncated leader labels; Total budget only with two budgeted months in view (W7, F5) |
+| 13 | `a4e27a5` | feat(spending): budgets — inline single-open editor from Set/Edit buttons, No budget yet section, seed sentence beside its button (A1, W6) |
+| 14 | `7a1846b` | fix(review): plain-language review states — Not yet reviewed, Changed since review, Reviewed (spec §14) |
+| 15 | `2220f66` | docs(readme): Windows dev note — DATABASE_URL host 127.0.0.1 avoids the ::1 stall on overflow pool connections |
+
+### Gates (Task 16)
+
+| Gate | Baseline (Task 0, @895cdaf) | After the lane |
+| --- | --- | --- |
+| `npx tsc -b` | clean | clean |
+| `npx vitest run` | 214 files / 2931 tests, **1 failed** (an unattributed flake; the file was not re-run) | **217 files / 2960 tests, 0 failed** |
+| `npx eslint .` | 25 warnings, 0 errors | **25 warnings, 0 errors** (no new warning; the lane's own paths carry exactly the one pre-existing `react-refresh/only-export-components` in `components/overview/OverviewChanges.tsx`) |
+| `npm run build` | — | `✓ built in 15.63s`, no TypeScript errors |
+| `src/theme` (motion/tokens) | — | 20 tests pass — no literal durations were added (every new rule is layout only) |
+
+Net +29 tests; the three new test files are `components/overview/DataStatusCard.test.tsx`,
+`components/overview/netWorthReceipt.test.ts` and `api/monthReview.test.ts`.
+
+### Deviations from the plan (all recorded, none silent)
+
+1. **Minus sign.** The plan's `ReviewChanges` / wizard tests assert `-$100.00` / `-$50.00` with an
+   ASCII hyphen; `ChangeTable` renders U+2212 (`−`). Both assertions use the component's own glyph.
+2. **Month-switch tests (Task 2).** Three existing wizard tests typed into the step card straight
+   after a ribbon click and relied on the old unmount/remount to wait for the new month. With the
+   card kept mounted they were writing into the month being LEFT. Added a `landedBalanceCell()`
+   helper (waits for `aria-busy` to clear) and used it in `'keeps the new month and its pending save
+   intact…'`, `'rejects a response from an earlier load…'` and `'keeps a late save conflict out…'`.
+3. **`HistoricalReview` month order (Task 5).** The plan's component sorted months newest-first
+   inside a year while the plan's own test pins calendar order (the disabled 2025-07 row at index 1).
+   Months now sort ascending within a year; years stay newest-first.
+4. **Hero count-up (Task 7).** Ghosting `net_worth` changes when `StatTile` mounts, and StatTile
+   captures `countUp` AT MOUNT — so spec §8's settle, which previously never ran on a normal load
+   (the tile was already on screen holding "—" when the feed landed), now actually runs. jsdom's rAF
+   stamps trail `performance.now()`, so a settling hero reads `$0.00` for the whole test. Three tests
+   adapted: the count-up gate test now pins the zero frame and is renamed (`'settles the hero up from
+   zero on a fresh paint, and never on a cached one'`); `'retries only the failed spending group…'`
+   asserts the hero is a real tile with a non-dash value instead of its exact string; `'labels a stale
+   spending group…'` seeds the snapshot cache first (the file's own idiom for pinning hero numbers).
+   **Worth a browser eyeball:** the Overview hero now counts up from $0 after the ghost on every
+   fresh paint. If that reads as too much flourish, the fix is one gate at the call site.
+5. **Budget editor stays open after a save (Task 13).** The plan added `setOpenEditor(null)` to
+   `save().then`, but the PUT's response history renders INSIDE the editor and is the save's only
+   receipt — two of the plan's own tests (`'saves through the PUT…'`, `'deletes a history row…'`)
+   require it. The line was dropped; "one editor at a time" is unchanged (the row button closes it).
+6. **Card-grid test (Task 8)** awaits the Year-to-date heading rather than `'Net worth trend'` — the
+   YTD card is the last of the four to land, so the earlier anchor raced it.
+7. **Popover placement (lead's mid-lane note).** Both popovers open LEFTWARD from their trigger
+   (`right: 0` inside a `position: relative` wrapper) and are width-clamped to the viewport:
+   `.overview-customize-menu { width: min(390px, 90vw) }`, `.month-actions-popover { width: min(440px, 90vw) }`.
+8. **CSS deletions beyond the plan's list:** `.danger-zone` / `.danger-zone .danger-row` (their only
+   consumer was the `<details class="month-actions">` block Task 4 removed; `.danger-button:not(:disabled)`
+   is kept), and `.month-actions summary` / `.budget-editor summary` / `.budget-unbudgeted summary`
+   (no `<summary>` left in either place). `.overview-freshness` and `.spending-metric-context` are gone
+   as the plan asks. No shared stylesheet was touched — everything is page/component-scoped.
+
+### Notes for lane V (acceptance)
+
+- **Orphans (accept #3).** `document.querySelector('.overview-freshness')`, `.spending-metric-context`
+  and the `Living spending: …` paragraph are all gone. The four clocks now live in
+  `section.card.overview-data-status` inside `aside.overview-agenda-column`; each row is
+  `.data-status-row > dt + dd`, and amber is `dd.stale` (`--warn`). The comparison sentence is
+  `p.data-status-note` ("Living spending compares Jul 2026 with 12 eligible months.").
+- **Wizard loading (accept #6).** `/update` renders `.page-skeleton` before its first card
+  (`skeleton.cards` = one 640px card, or 480+58 on the review step). During a month switch the step
+  card stays mounted: `.card[aria-busy="true"][inert]` under `.loading-dim.is-loading`, no
+  `.page-skeleton`, and it is replaced (React `key`) when the new seed lands — so the first cell's
+  autofocus still fires.
+- **Popovers / disclosures (accept #1).** `button[aria-haspopup="dialog"]` named **Customize**
+  (Overview page actions) opens `div.popover-surface[role="dialog"][aria-label="Customize overview"]`;
+  the wizard's Review head has `button[aria-label="Month actions"]` (existing months only) opening
+  `[aria-label="Month actions"]`. Budgets' "No budget yet (N)" is F2's `Disclosure` (`details.disclosure.budget-unbudgeted`)
+  when budgets exist and a plain `section.budget-unbudgeted` with an `h3.eyebrow` when none do.
+  There is no `details.budget-editor` anywhere any more.
+- **Overview ghosts (accept #6/§9).** A busy group with no data renders `.kpi-row .skeleton-tile`
+  (no delta block); the YTD slot reserves itself with `.overview-deeper .span-12 .loading-fallback`.
+- **Layout (accept #4).** `.overview-deeper` is now `div.overview-deeper.card-grid` with
+  `.card.span-6` on Portfolio performance and Recent spending, `.span-12` on Year to date and Money flow.
+- **Spending.** The range chips (`[aria-label="Time range"]`) render only on the Overview and Trends
+  views — 0 nodes on Budgets and History. The dock donut draws no leader labels; its names are
+  `ul.breakdown-legend[aria-label="… breakdown legend"]` in the ChartCard `aside`.
+
+### Follow-ups / carry-overs
+
+- The Overview hero count-up now fires for real (deviation 4) — eyeball it in a browser.
+- `HistoricalReview` still has no history GET; the card's summary before **Load history** comes from
+  `coverage.review_months`, so a backend that omits that field shows the generic sentence.
+- The wizard's first paint waits on six per-month feeds; the three household-wide aids (matrix,
+  household, coverage) land independently. If the Typical column or the owner walk ever becomes
+  load-bearing for the seed, they must move back into the gating `Promise.all`.
+
+### Review round (APPROVE WITH FIXES, applied)
+
+`main` @`4576025` (F2's review round) merged into the lane first — clean, no conflicts. Fixes in
+`8530629`, TDD, two new wizard tests plus assertions folded into the two popover tests.
+
+1. **IMPORTANT — a failed month switch left the previous month's form on screen.** After a landed
+   month, a switch whose gating feed rejected fell into the `ready / busy:false / error` branch, so
+   the month being LEFT stayed mounted, undimmed and interactive, under the new month's title. The
+   error-only branch now also fires when the seed on screen belongs to another month
+   (`const staleSeed = seeded !== null && seeded.month !== month`). While a load (or a Retry) is in
+   flight the stale card still shows — dimmed, `aria-busy`, `inert` — which is Task 2's design; only
+   the settled-error case is an error view. Test: `'shows the error view instead of the previous
+   month’s form when a switch fails to load'` (alert + Retry, no balance inputs, then June's cell
+   lands on Retry).
+2. **IMPORTANT — `fetchHousehold` is back in the gating `Promise.all`.** The owner walk decides
+   whether the grid renders one section or one per owner, so a late household re-formed every row on
+   a two-person book (production is Edward + Grace): layout jump and `autoFocus` yanking the caret
+   mid-typing. It keeps its `.catch(() => null)` fallback (a failure falls back to the flat walk);
+   matrix and coverage still land late. Test: `'waits for the household before painting the grid, so
+   the owner sections never re-form under the caret'`.
+3. **minor.** `closeActions` now clears `deleteArm`, so reopening the Month-actions popover can never
+   show an armed Delete (and `setStep` routes through it). Both popovers move focus into the surface
+   on open (`role="dialog"` contract; the arm box / the first checkbox) — `usePopoverDismiss` already
+   returned it to the trigger. Both `close` handlers are `useCallback`s, so the hook no longer
+   re-subscribes its document listeners on every keystroke. The wizard's `useCallback` lists
+   `[setActionsOpen, setDeleteArm]`: React Compiler's `preserve-manual-memoization` rejects `[]`
+   there (it infers the setters), and both are stable, so the identity is still constant.
+
+Hero count-up kept as implemented (reviewer and lead agree).
+
+**Gates after the round:** `npx tsc -b` clean · scoped eslint 0 errors / 1 pre-existing warning ·
+`npx eslint .` **25 warnings, 0 errors** (baseline) · scoped vitest 20 files / 431 tests pass ·
+full `npx vitest run` **217 files / 2968 tests, 0 failed** (+8 on the round) · `npm run build`
+✓ built in 15.66s.
+
+### Follow-up fix on merged main (`7ee53e5`)
+
+`main` @`1f02963` (P1 + P3 + P4) merged in; the full suite failed deterministically there on
+`'forgets the $0 intent on a month switch — consent is about one save'` (the wizard sat on Balances
+with the $0 checkbox out of reach). `coveredMonths` was derived from the LATE `/coverage` feed, so
+`selectMonth`'s step-survival rule (`coveredMonths.has(m) ? step : 'balances'`) — and the
+"Start {month}" button beside the ribbon — were scheduling-dependent. `fetchCoverage().catch(() => null)`
+now rides the gating `Promise.all` (set in the same `.then` batch as the seed; an empty set on
+failure, unchanged); matrix stays late and the household stays gated from the review round. The
+step-survival question also went through one reader, `hasBalances(m)`, which treats the month whose
+seed is ON SCREEN as covered when that month exists — a coverage feed that has not caught up with a
+just-saved month can no longer un-cover it. Gates: `npx tsc -b` clean · scoped eslint 0 errors /
+1 pre-existing warning · `npx vitest run src/pages/MonthlyUpdatePage.test.tsx` 112 pass · full
+`npx vitest run` **220 files / 3024 tests, 0 failed** (one run tripped the unrelated, not-ours
+`CreditCardsPage` auto-weight test; it passes alone and the re-run is clean — an order-dependent
+flake to watch).

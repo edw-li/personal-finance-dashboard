@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
@@ -6,7 +6,7 @@ import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import ToastProvider from '../components/ToastProvider'
 import { calendarEvent } from '../testing/calendarFixtures'
 import type { CalendarEvent, CalendarResponse } from '../types/api'
-import { formatDate, formatMonth } from '../utils/format'
+import { formatDate } from '../utils/format'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import { shiftMonth } from '../components/calendar/CalendarGrid'
 import CalendarPage from './CalendarPage'
@@ -21,6 +21,25 @@ vi.mock('../api/calendar', async (importOriginal) => ({
 }))
 vi.mock('../api/calendarFeed', () => ({ downloadCalendarIcs: vi.fn() }))
 vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
+
+type PanelApi = {
+  activeId: string | null
+  mode: 'dock' | 'overlay' | 'expanded'
+  open: ReturnType<typeof vi.fn>
+  update: ReturnType<typeof vi.fn>
+  close: ReturnType<typeof vi.fn>
+  back: ReturnType<typeof vi.fn>
+  setMode: ReturnType<typeof vi.fn>
+}
+const panelMock = vi.hoisted(() => ({ api: undefined as PanelApi | null | undefined }))
+vi.mock('../components/details/DetailPanelProvider', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../components/details/DetailPanelProvider')>()
+  return {
+    ...original,
+    useDetailPanel: () => (panelMock.api === undefined ? original.useDetailPanel() : panelMock.api),
+  }
+})
+import DetailPanelProvider from '../components/details/DetailPanelProvider'
 import {
   createCustomEvent,
   deleteCustomEvent,
@@ -90,6 +109,10 @@ function renderPage(events: CalendarEvent[] = fixtureEvents(), entry = '/calenda
 }
 
 const url = () => screen.getByTestId('url').textContent
+const monthBox = () => screen.getByLabelText('Jump to month') as HTMLInputElement
+/** The month on screen, read from the scope row's month box — the duplicate h2 beside it is gone
+ *  (2026-09-13 spec §12, audit C-5). */
+const shownMonth = (iso: string) => waitFor(() => expect(monthBox().value).toBe(iso.slice(0, 7)))
 const cell = (day: string) =>
   document.querySelector(`[role="gridcell"][data-day="${day}"]`) as HTMLElement
 /** The grid's ONE roving tab stop, as a day string — there must be exactly one, or the
@@ -125,7 +148,10 @@ beforeEach(() => {
     amount: null,
   })
 })
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  panelMock.api = undefined
+})
 
 describe('CalendarPage — month, views, grid', () => {
   it('fetches the month ± one and renders the ARIA grid with priced, capped chips', async () => {
@@ -147,7 +173,7 @@ describe('CalendarPage — month, views, grid', () => {
     renderPage(fixtureEvents(), `/calendar?month=${PREV.slice(0, 7)}`)
     await screen.findByRole('grid')
     expect(fetchCalendar).toHaveBeenCalledWith(...windowFor(PREV))
-    expect(screen.getByRole('heading', { name: formatMonth(PREV) })).toBeTruthy()
+    expect(monthBox().value).toBe(PREV.slice(0, 7))
     fireEvent.click(screen.getByRole('button', { name: 'Next month' }))
     expect(url()).toBe('/calendar') // the current month is never written
     await waitFor(() => expect(vi.mocked(fetchCalendar).mock.calls.at(-1)).toEqual(windowFor(MONTH)))
@@ -216,12 +242,12 @@ describe('CalendarPage — month, views, grid', () => {
     await screen.findByRole('grid')
     expect(cursor()).toBe(todayIso())
     fireEvent.click(screen.getByRole('button', { name: 'router jump' }))
-    await screen.findByRole('heading', { name: formatMonth('2027-03-01') })
+    await shownMonth('2027-03-01')
     // Today is not in March 2027, so the cursor is that month's first day.
     expect(cursor()).toBe('2027-03-01')
     // ...and Back is a month change too: today is in it, so the cursor is today.
     fireEvent.click(screen.getByRole('button', { name: 'router back' }))
-    await screen.findByRole('heading', { name: formatMonth(MONTH) })
+    await shownMonth(MONTH)
     expect(cursor()).toBe(todayIso())
   })
 
@@ -569,8 +595,84 @@ describe('CalendarPage — snapshot cache', () => {
     expect(chipIn(DAY_15, 'Car insurance')).toBeTruthy()
     expect(fetchCalendar).toHaveBeenCalledWith(...windowFor(MONTH))
     fireEvent.click(screen.getByRole('button', { name: 'Next month' }))
-    await screen.findByRole('heading', { name: formatMonth(NEXT) })
+    await shownMonth(NEXT)
     expect(chipIn(`${NEXT.slice(0, 8)}09`, 'Next-month seed')).toBeTruthy()
     await waitFor(() => expect(fetchCalendar).toHaveBeenCalledTimes(2))
+  })
+})
+
+describe('CalendarPage — Add event in the shared detail panel (2026-09-13 spec §12)', () => {
+  it('asks the shell panel for the form — id calendar-add, titled with the day — and mounts no inline card', async () => {
+    const open = vi.fn()
+    const close = vi.fn()
+    panelMock.api = { activeId: null, mode: 'dock', open, update: vi.fn(), close, back: vi.fn(), setMode: vi.fn() }
+    const { unmount } = renderPage(fixtureEvents(), `/calendar?add=1&date=${DAY_16}`)
+    await screen.findByRole('grid')
+    await waitFor(() => expect(open).toHaveBeenCalled())
+    expect(open.mock.calls.at(-1)?.[0]).toMatchObject({ id: 'calendar-add', title: `Add event on ${formatDate(DAY_16)}` })
+    // No card above the grid: the grid stays where it was (audit C-4 measured +206px).
+    expect(document.querySelector('.card .cal-form')).toBeNull()
+    expect((screen.getByRole('grid').closest('.card') as HTMLElement).previousElementSibling).toBeNull()
+    await waitFor(() => expect(url()).toBe('/calendar'))
+    // Leaving the page takes the panel with it.
+    unmount()
+    expect(close).toHaveBeenCalledWith('calendar-add')
+  })
+
+  it('hosts the form in a real provider: prefilled, focused, Cancel closes it', async () => {
+    vi.mocked(fetchCalendar).mockResolvedValue(payload())
+    render(
+      <MemoryRouter>
+        <DetailPanelProvider>
+          <ToastProvider>
+            <CalendarPage />
+          </ToastProvider>
+        </DetailPanelProvider>
+      </MemoryRouter>,
+    )
+    await screen.findByRole('grid')
+    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add event' })
+    const date = within(dialog).getByLabelText('Date') as HTMLInputElement
+    expect(date.value).toBe(MONTH)
+    // Exactly one form, and it is the panel's.
+    expect(document.querySelectorAll('.cal-form')).toHaveLength(1)
+    expect(dialog.contains(document.querySelector('.cal-form'))).toBe(true)
+    // Focus lands in the panel a frame after it opens (the provider focuses the aside first).
+    await waitFor(() => expect(document.activeElement).toBe(date))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('saves from the panel and closes it, landing on the saved day', async () => {
+    vi.mocked(fetchCalendar).mockResolvedValue(payload())
+    vi.mocked(createCustomEvent).mockResolvedValue({ id: 99, date: DAY_16, label: 'Trip', detail: null, person_id: null, amount: null, direction: 'neutral', recurrence: 'none', until: null })
+    render(
+      <MemoryRouter>
+        <DetailPanelProvider>
+          <ToastProvider>
+            <CalendarPage />
+          </ToastProvider>
+        </DetailPanelProvider>
+      </MemoryRouter>,
+    )
+    await screen.findByRole('grid')
+    fireEvent.click(screen.getByRole('button', { name: `Open ${formatDate(DAY_16)}` }))
+    fireEvent.click(screen.getByRole('button', { name: `Add event on ${formatDate(DAY_16)}` }))
+    const dialog = await screen.findByRole('dialog', { name: `Add event on ${formatDate(DAY_16)}` })
+    fireEvent.change(within(dialog).getByLabelText('Title'), { target: { value: 'Trip' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save event' }))
+    await waitFor(() => expect(createCustomEvent).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(cell(DAY_16).getAttribute('tabindex')).toBe('0')
+  })
+
+  it('falls back to the inline card when the shell provides no panel', async () => {
+    renderPage()
+    await screen.findByRole('grid')
+    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+    expect(screen.getByRole('heading', { name: 'Add event' })).toBeTruthy()
+    expect(document.querySelector('.card .cal-form')).not.toBeNull()
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 })

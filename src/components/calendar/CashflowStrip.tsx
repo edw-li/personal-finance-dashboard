@@ -22,8 +22,9 @@ export default function CashflowStrip({
   const s = monthSummary(events, month)
   const asOf = quoteAsOf === null ? '' : ` (quote as of ${formatDate(quoteAsOf)})`
   const estimateHint = `Includes estimates${asOf}`
+  // The tilde marks a leg that includes an estimate — unless the leg is nothing (spec §14).
   const money = (cents: number, estimated: boolean) =>
-    `${estimated ? '~' : ''}${cents < 0 ? '−' : ''}${formatCurrency(fromCents(Math.abs(cents)))}`
+    `${estimated && cents !== 0 ? '~' : ''}${cents < 0 ? '−' : ''}${formatCurrency(fromCents(Math.abs(cents)))}`
   const netEstimated = s.estimated.cashIn || s.estimated.cashOut
   const receipt = (id: 'cashIn' | 'cashOut' | 'net' | 'vesting', label: string, definition: string) => metricReceipt({
     id: `calendar_${id}`, label, definition, value: fromCents(s[id]), completeness: s.unknown ? 'partial_estimate' : 'scheduled_events',
@@ -71,20 +72,43 @@ export default function CashflowStrip({
         <StatTile
           label="Vesting"
           value={money(s.vesting, s.estimated.vesting)}
+          // The quote the estimates ride, on the tile itself (spec §10): a footnote row in the grid
+          // took a whole track and left the right third of the strip empty at 1920 (audit C-7).
+          delta={quoteAsOf === null ? undefined : `quote as of ${formatDate(quoteAsOf)}`}
           evidence={receipt('vesting', 'Vesting', 'Gross value of scheduled RSU vests using the employer quote shown. Withholding and sell-to-cover reduce the amount available to you; vest value is not cash in.')}
           hint={`Gross value of the month's RSU vests at the latest employer quote${asOf}; sell-to-cover is taken before it reaches you.`}
         />
       </div>
+    </div>
+  )
+}
+
+/** The strip's two footnotes, rendered by the PAGE inside the calendar card's footer (after the
+ *  source-health list) rather than between the tiles and the card: prose belongs inside a section
+ *  boundary (spec §10), and the audit's orphan check on this page must find nothing. Renders
+ *  nothing when there is nothing to say. */
+export function CashflowNotes({
+  events,
+  month,
+  quoteAsOf,
+}: {
+  events: CalendarEvent[]
+  month: string
+  quoteAsOf: string | null
+}) {
+  const s = monthSummary(events, month)
+  return (
+    <>
       {quoteAsOf !== null && (
-        <p className="drill-hint cal-strip-asof">
+        <p className="drill-hint cal-note">
           Vest estimates ride the employer quote as of {formatDate(quoteAsOf)}.
         </p>
       )}
       {s.unknown > 0 && (
-        <p className="drill-hint cal-strip-unknown">
+        <p className="drill-hint cal-note">
           {s.unknown} {s.unknown === 1 ? 'event has' : 'events have'} no knowable amount.
         </p>
       )}
-    </div>
+    </>
   )
 }

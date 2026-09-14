@@ -202,8 +202,10 @@ function Url() {
   return <span data-testid="url">{l.pathname + l.search}</span>
 }
 
-const openButton = () =>
-  screen.getByRole('button', { name: /^(Open|Close) what-if$/ }) as HTMLButtonElement
+// The What-if tab IS the sandbox (2026-09-13 polish spec §8): the card mounts open and renders
+// no Open/Close gate at all, so "is it open" is read off the body's own Reset button.
+const openGate = () => screen.queryByRole('button', { name: /^(Open|Close) what-if$/ })
+const resetButton = () => screen.getByRole('button', { name: 'Reset to actual' })
 
 beforeEach(() => {
   clearSnapshots()
@@ -242,7 +244,8 @@ describe('the assistant’s sandbox link, page and card together', () => {
 
     // Half two: the entries. The card is open on arrival and the leg is already in flight,
     // stamped with the linked year rather than the page's default.
-    await waitFor(() => expect(openButton().getAttribute('aria-expanded')).toBe('true'))
+    await waitFor(() => expect(resetButton()).toBeTruthy())
+    expect(openGate()).toBeNull()
     await waitFor(() =>
       expect(vi.mocked(runWhatIf)).toHaveBeenCalledWith({
         year: 2023,

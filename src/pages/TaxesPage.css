@@ -1,15 +1,11 @@
 /* Page-scoped rules ONLY (PortfolioPage.css's structure). The app-wide vocabulary
-   (.page, .page-header, .card, .eyebrow, .chip, .field-input, .button, .error-banner,
-   .empty-note, .loading-dim) lives in panels.css, and everything the two taxes components
-   consume lives in src/components/taxes/taxes.css — nothing either file defines is
-   redefined here. */
+   (.page, .card, .eyebrow, .segmented, .field-input, .button, .error-banner, .empty-note,
+   .loading-dim, .scope-bar, .scope-bar-group) lives in panels.css / shell.css, and everything the
+   taxes components consume — including the year menu's popover and form — lives in
+   src/components/taxes/taxes.css. Nothing either file defines is redefined here. */
 
 .taxes-page .card {
   margin-bottom: 1rem;
-}
-
-.taxes-page .chip-row {
-  margin-bottom: 0.75rem;
 }
 
 /* Page-local, deliberately NOT in panels.css: elsewhere the dim covers read-only panels,
@@ -19,52 +15,13 @@
   pointer-events: none;
 }
 
-.new-year-form {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.new-year-form label {
-  font-size: 0.72rem;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.new-year-form .field-input {
-  width: 110px;
-}
-
-.new-year-form .drill-hint {
-  margin: 0;
-}
-
-
-/* The year's filing status. Its own row under the chips, because it is a sentence ABOUT the
-   selected year rather than another year to select; the control itself is panels.css's
-   .segmented and is not redefined here. */
-.filing-status-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.filing-status-label {
-  font-size: 0.72rem;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
 /* Not an .error-banner — nothing failed — and not a chart warning either: the caveat belongs
-   to the YEAR, so it rides in the year card, toned with --warn because it qualifies every
-   figure below it rather than merely describing them. */
+   to the YEAR, so it rides the frame's subheader (2026-09-13 polish spec §12) under the title
+   and above the scope row that names the status it is about, toned with --warn because it
+   qualifies every figure below it rather than merely describing them. The subheader carries
+   the spacing, so the paragraph carries none. */
 .filing-status-caveat {
-  margin: 0 0 0.75rem;
+  margin: 0;
   padding: 0.6rem 0.75rem;
   border: 1px solid var(--border);
   border-left: 3px solid var(--warn);
@@ -72,7 +29,7 @@
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.45;
-  /* The sentence names a form number and a state; it wraps rather than pushing the card
+  /* The sentence names a form number and a state; it wraps rather than pushing the row
      sideways (taxes.css's .tax-warnings rule). */
   overflow-wrap: anywhere;
 }

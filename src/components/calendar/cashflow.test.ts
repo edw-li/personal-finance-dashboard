@@ -39,6 +39,9 @@ describe('cents', () => {
     expect(signedCompact(4120000, 'in', true)).toBe('~+$41.2k')
     expect(signedCompact(39500, 'out', false)).toBe('−$395')
     expect(signedCompact(30000, 'neutral', false)).toBe('$300')
+    // A zero is a zero (spec §14): no sign to carry, and an estimate of nothing is not "~".
+    expect(signedCompact(0, 'out', true)).toBe('$0')
+    expect(signedCompact(0, 'in', false)).toBe('$0')
   })
 })
 

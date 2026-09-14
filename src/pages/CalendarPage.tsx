@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import {
   createCustomEvent,
@@ -11,9 +12,9 @@ import { downloadCalendarIcs } from '../api/calendarFeed'
 import { ApiError, describeError } from '../api/client'
 import { fetchHousehold } from '../api/household'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
-import AmountInput from '../components/AmountInput'
+import AddEventForm, { type EventFields } from '../components/calendar/AddEventForm'
 import CalendarGrid, { dayInMonth } from '../components/calendar/CalendarGrid'
-import CashflowStrip from '../components/calendar/CashflowStrip'
+import CashflowStrip, { CashflowNotes } from '../components/calendar/CashflowStrip'
 import DayDrawer from '../components/calendar/DayDrawer'
 import EventDetails from '../components/calendar/EventDetails'
 import SourceHealth from '../components/calendar/SourceHealth'
@@ -25,23 +26,21 @@ import {
   stripPersonSuffix,
   visibleEvents,
 } from '../components/calendar/calendarView'
-import { FeedBanner } from '../components/shell/Feed'
+import { useDetailPanel } from '../components/details/DetailPanelProvider'
 import PageFrame from '../components/shell/PageFrame'
 import Segmented from '../components/shell/Segmented'
 import { useScope } from '../components/shell/useScope'
 import { useToast } from '../components/ToastProvider'
 import { useArrivalPair } from '../components/useArrivalParam'
 import type {
-  CalendarDirection,
   CalendarEvent,
   CalendarOverrideBody,
-  CalendarRecurrence,
   CalendarResponse,
   CustomEventBody,
   PersonOut,
 } from '../types/api'
 import { canonicalAmount, isAmount } from '../utils/amount'
-import { formatCurrency, formatDate, formatMonth } from '../utils/format'
+import { formatCurrency, formatDate } from '../utils/format'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import '../components/panels.css'
 import './CalendarPage.css'
@@ -62,18 +61,15 @@ const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/
 const ADD_ARRIVALS = ['1'] as const
 const ISO_MONTH = /^\d{4}-\d{2}$/
 type ViewMode = 'grid' | 'list'
-type FormState = { mode: 'add' } | { mode: 'edit'; id: number } | null
-interface Fields {
-  date: string
-  label: string
-  detail: string
-  person: string // '' = Household; a tag is always deliberate
-  amount: string
-  direction: CalendarDirection
-  recurrence: CalendarRecurrence
-  until: string
-}
-const EMPTY_FIELDS: Fields = {
+/** `day` is the day the form was opened FOR (the drawer's "Add event on …", ?add=1&date=) — the
+ *  panel's title; the date box itself is `fields.date` and may be edited away from it. */
+type FormState = { mode: 'add'; day?: string } | { mode: 'edit'; id: number } | null
+/** One surface for add and edit: reopening the id updates the panel instead of stacking a second. */
+const FORM_PANEL_ID = 'calendar-add'
+/** Every box empty. '' = unset; the form IS the body a save sends, so a field the PATCH replaces
+ *  has a box here even when the form does not show it (a one-off's `until`). Kept in the page, not
+ *  the form module: a value export beside a component costs a react-refresh warning. */
+const EMPTY_FIELDS: EventFields = {
   date: '',
   label: '',
   detail: '',
@@ -116,7 +112,7 @@ export default function CalendarPage() {
   const [formTick, setFormTick] = useState(0)
   const formDateRef = useRef<HTMLInputElement | null>(null)
   const [form, setForm] = useState<FormState>(null)
-  const [fields, setFields] = useState<Fields>(EMPTY_FIELDS)
+  const [fields, setFields] = useState<EventFields>(EMPTY_FIELDS)
   // Its own fetch, outside the per-month snapshot: the roster does not change with the
   // month, and folding it in would invalidate every cached month.
   const [people, setPeople] = useState<PersonOut[]>([])
@@ -128,6 +124,28 @@ export default function CalendarPage() {
   const popoverRef = useRef<HTMLDivElement | null>(null)
   const addEventBtnRef = useRef<HTMLButtonElement | null>(null)
   const toast = useToast()
+  // The add/edit form's surface (2026-09-13 polish spec §12): the shell's detail panel when the
+  // shell provides one — the grid narrows beside the dock instead of dropping 206px under a new
+  // card (audit C-4) — and the old inline card in tests and embeds, where useDetailPanel() is null.
+  const panel = useDetailPanel()
+  const hasPanel = panel !== null
+  const openPanel = panel?.open
+  const closePanel = panel?.close
+  // The panel receives a STABLE host node; the form itself is portaled into that node from this
+  // tree, so every keystroke re-renders the form in place without reopening the panel (ChartCard's
+  // detail-host idiom).
+  const [formHost] = useState(() => document.createElement('div'))
+  const formHostMount = useMemo(
+    () => (
+      <div
+        ref={(node) => {
+          if (node && formHost.parentNode !== node) node.appendChild(formHost)
+          else if (!node) formHost.parentNode?.removeChild(formHost)
+        }}
+      />
+    ),
+    [formHost],
+  )
   // Undo closures and the arrival handler can outlive a month change: they read the month
   // on screen through this ref (unkeyed effect, not a render-time assignment).
   const monthRef = useRef(month)
@@ -316,7 +334,7 @@ export default function CalendarPage() {
   // Defaults to the VIEWED month's first day, or the day handed in (spec §8). useCallback
   // over stable setters and a ref: the arrival effect depends on it.
   const openAddForm = useCallback((day?: string) => {
-    setForm({ mode: 'add' })
+    setForm({ mode: 'add', day })
     setFields({ ...EMPTY_FIELDS, date: day ?? monthRef.current })
     setFormError(null)
     setOpenKey(null)
@@ -324,11 +342,50 @@ export default function CalendarPage() {
     setFormTick((tick) => tick + 1)
   }, [])
 
-  // A DOM call, no state: the form's first field is mounted by the time this runs, and
-  // tick 0 is the initial render, where there is no form and nothing to steal focus from.
+  // The caret lands in the date box when the form opens; tick 0 is the initial render, where there
+  // is no form. Inline, the box is mounted by the time this runs. In the panel it is attached only
+  // once the provider has rendered the aside — and the provider's own effect then focuses the
+  // aside — so the move waits a frame and runs after it. A DOM call, no state.
+  const formShown = form !== null && (panel === null || panel.activeId === FORM_PANEL_ID)
   useEffect(() => {
-    if (formTick > 0) formDateRef.current?.focus()
-  }, [formTick])
+    if (formTick === 0 || !formShown) return
+    if (!hasPanel) {
+      formDateRef.current?.focus()
+      return
+    }
+    const frame = requestAnimationFrame(() => formDateRef.current?.focus())
+    return () => cancelAnimationFrame(frame)
+  }, [formTick, formShown, hasPanel])
+
+  // The panel follows the form: open (or retitle) it while a form is up, close it when the form
+  // goes. Save and Cancel end here; a close the panel itself started (×, Escape) has already
+  // cleared the form through onClose, and closePanel finds nothing to close.
+  const formTitle =
+    form === null
+      ? null
+      : form.mode === 'edit'
+        ? 'Edit event'
+        : form.day === undefined
+          ? 'Add event'
+          : `Add event on ${formatDate(form.day)}`
+  useEffect(() => {
+    if (openPanel === undefined || closePanel === undefined) return
+    if (formTitle === null) {
+      closePanel(FORM_PANEL_ID)
+      return
+    }
+    openPanel({
+      id: FORM_PANEL_ID,
+      title: formTitle,
+      content: formHostMount,
+      // Where focus lands when the panel closes: the header's Add event button — a landmark that
+      // outlives whichever button opened the form (the drawer's unmounts with the drawer).
+      returnTo: addEventBtnRef.current,
+      onClose: () => setForm(null),
+    })
+  }, [formTitle, openPanel, closePanel, formHostMount])
+  // Leaving the page takes the form's panel with it.
+  useEffect(() => () => closePanel?.(FORM_PANEL_ID), [closePanel])
 
   // ?add=1 (the palette) opens the form; ?add=1&date=YYYY-MM-DD prefills it and views that
   // day's month. Both params are consumed in ONE replace, and the month this jumps to rides
@@ -483,9 +540,24 @@ export default function CalendarPage() {
   )
 
   const field =
-    <K extends keyof Fields>(key: K) =>
-    (value: Fields[K]) =>
+    <K extends keyof EventFields>(key: K) =>
+    (value: EventFields[K]) =>
       setFields((current) => ({ ...current, [key]: value }))
+  const eventForm =
+    form === null ? null : (
+      <AddEventForm
+        mode={form.mode}
+        fields={fields}
+        onField={field}
+        people={orderedPeople}
+        error={formError}
+        saving={saving}
+        onSave={saveForm}
+        onCancel={() => setForm(null)}
+        dateRef={formDateRef}
+        hosted={hasPanel ? 'panel' : 'card'}
+      />
+    )
   // The list shows the SHOWN month only, hidden rows included (dimmed) so Unhide is reachable.
   const monthEvents = (shown?.events ?? []).filter((e) => e.date.slice(0, 7) === month.slice(0, 7))
   const listGroups = [...groupByDate(monthEvents).entries()]
@@ -552,7 +624,6 @@ export default function CalendarPage() {
                   goToMonth(`${e.target.value}-01`, `${e.target.value}-01`)
               }}
             />
-            <h2 className="cal-title">{formatMonth(month)}</h2>
             <Segmented
               variant="toggle"
               ariaLabel="Calendar view"
@@ -574,115 +645,10 @@ export default function CalendarPage() {
           <>
             <CashflowStrip events={visible} month={month} quoteAsOf={shown.quote_as_of} />
             <div className="card-grid">
-              {form !== null && (
+              {form !== null && !hasPanel && (
                 <section className="card span-12">
                   <h2 className="eyebrow">{form.mode === 'add' ? 'Add event' : 'Edit event'}</h2>
-                  <FeedBanner error={formError} />
-                  <div className="cal-form">
-                    <label className="cal-form-field">
-                      Date
-                      <input
-                        type="date"
-                        ref={formDateRef}
-                        className="field-input cal-form-input"
-                        value={fields.date}
-                        onChange={(e) => field('date')(e.target.value)}
-                      />
-                    </label>
-                    <label className="cal-form-field">
-                      Title
-                      <input
-                        className="field-input cal-form-input"
-                        value={fields.label}
-                        maxLength={120}
-                        onChange={(e) => field('label')(e.target.value)}
-                      />
-                    </label>
-                    <label className="cal-form-field cal-form-note">
-                      Note (optional)
-                      <input
-                        className="field-input cal-form-input"
-                        value={fields.detail}
-                        maxLength={300}
-                        onChange={(e) => field('detail')(e.target.value)}
-                      />
-                    </label>
-                    {orderedPeople.length > 1 && (
-                      <label className="cal-form-field">
-                        Person
-                        <select
-                          className="field-input cal-form-input"
-                          value={fields.person}
-                          onChange={(e) => field('person')(e.target.value)}
-                        >
-                          <option value="">Household</option>
-                          {orderedPeople.map((person) => (
-                            <option key={person.id} value={String(person.id)}>
-                              {person.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-                    <label className="cal-form-field">
-                      Amount (optional)
-                      <AmountInput
-                        kind="money"
-                        className="cal-form-input"
-                        value={fields.amount}
-                        onValueChange={field('amount')}
-                        aria-label="Amount (optional)"
-                        placeholder="$0.00"
-                      />
-                    </label>
-                    <label className="cal-form-field">
-                      Direction
-                      <select
-                        className="field-input cal-form-input"
-                        value={fields.direction}
-                        onChange={(e) => field('direction')(e.target.value as CalendarDirection)}
-                      >
-                        <option value="neutral">No direction</option>
-                        <option value="in">Money in</option>
-                        <option value="out">Money out</option>
-                      </select>
-                    </label>
-                    <label className="cal-form-field">
-                      Repeats
-                      <select
-                        className="field-input cal-form-input"
-                        value={fields.recurrence}
-                        onChange={(e) => field('recurrence')(e.target.value as CalendarRecurrence)}
-                      >
-                        <option value="none">Never</option>
-                        <option value="weekly">Weekly</option>
-                        <option value="monthly">Monthly</option>
-                        <option value="yearly">Yearly</option>
-                      </select>
-                    </label>
-                    {fields.recurrence !== 'none' && (
-                      <label className="cal-form-field">
-                        Until (optional)
-                        <input
-                          type="date"
-                          className="field-input cal-form-input"
-                          value={fields.until}
-                          onChange={(e) => field('until')(e.target.value)}
-                        />
-                      </label>
-                    )}
-                    <button
-                      type="button"
-                      className="button button-primary"
-                      disabled={saving || fields.label.trim() === '' || fields.date === ''}
-                      onClick={saveForm}
-                    >
-                      {form.mode === 'add' ? 'Save event' : 'Save changes'}
-                    </button>
-                    <button type="button" className="button" onClick={() => setForm(null)}>
-                      Cancel
-                    </button>
-                  </div>
+                  {eventForm}
                 </section>
               )}
               <section className="card span-12">
@@ -747,6 +713,7 @@ export default function CalendarPage() {
                   </ul>
                 )}
                 <SourceHealth sources={shown.sources} />
+                <CashflowNotes events={visible} month={month} quoteAsOf={shown.quote_as_of} />
                 {shown.events.length === 0 && (
                   <p className="empty-note">
                     No events in this window — vests, purchases, paydays and card dates appear once
@@ -759,6 +726,7 @@ export default function CalendarPage() {
           </>
         )}
       </PageFrame>
+      {form !== null && hasPanel && createPortal(eventForm, formHost)}
       {drawerDay !== null && (
         <DayDrawer
           day={drawerDay}

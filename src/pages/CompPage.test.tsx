@@ -322,16 +322,20 @@ describe('CompPage — events table', () => {
   it('renders the stored and computed columns from the server, nothing re-derived', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
 
-    expect(await screen.findByText('$601,854.46')).toBeTruthy() // 2026 tc_after
+    // Entered first — the default set (2026-09-13 polish spec §7): the typed columns and the note.
+    expect(await screen.findByText('FY26 refresh')).toBeTruthy()
+    expect(screen.getByText('1,822')).toBeTruthy() // unvested RSUs
+    expect(screen.getByText('$183.25')).toBeTruthy() // unvested price
+    expect(screen.queryByText('$601,854.46')).toBeNull() // tc_after waits for Computed or All
+
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    expect(screen.getByText('$601,854.46')).toBeTruthy() // 2026 tc_after
     expect(screen.getByText('$495,882.96')).toBeTruthy() // 2026 tc_before
     expect(screen.getByText('$333,882.96')).toBeTruthy() // unvested equity
     expect(screen.getByText('$79,041.50')).toBeTruthy() // equity delta
     expect(screen.getByText('$26,930.00')).toBeTruthy() // base delta
     expect(screen.getByText('+16.6%')).toBeTruthy() // base delta pct
     expect(screen.getByText('+23.7%')).toBeTruthy() // equity delta pct
-    expect(screen.getByText('1,822')).toBeTruthy() // unvested RSUs
-    expect(screen.getByText('$183.25')).toBeTruthy() // unvested price
-    expect(screen.getByText('FY26 refresh')).toBeTruthy()
 
     // ...and 2024's own row, so the table is not showing one event twice.
     expect(screen.getByText('$411,078.00')).toBeTruthy()
@@ -342,10 +346,14 @@ describe('CompPage — events table', () => {
     vi.mocked(fetchEvents).mockResolvedValue([event2027])
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
 
+    // Entered: new_base, unvested_rsus, unvested_price, refresh_rsus, grant_price, notes.
+    expect(await screen.findAllByText('$188,930.00')).toHaveLength(1) // the base alone
+    expect(screen.getAllByText('—')).toHaveLength(6)
+
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
     // tc_before / tc_after are never null, so they still carry figures.
-    expect(await screen.findAllByText('$188,930.00')).toHaveLength(3) // base + both TCs
-    // new_base, base_delta, base_delta_pct, unvested_rsus, unvested_price,
-    // unvested_equity, refresh_rsus, grant_price, equity_delta, equity_delta_pct, notes.
+    expect(screen.getAllByText('$188,930.00')).toHaveLength(3) // base + both TCs
+    // ...plus base_delta, base_delta_pct, unvested_equity, equity_delta, equity_delta_pct.
     expect(screen.getAllByText('—')).toHaveLength(11)
   })
 
@@ -366,12 +374,46 @@ describe('CompPage — events table', () => {
     expect(await screen.findByText('No comp events yet — add one in Manage.')).toBeTruthy()
     expect(screen.queryByTestId('echart')).toBeNull()
   })
+
+  it('shows the entered columns by default and reveals the computed ones on demand', async () => {
+    render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
+    await screen.findByText('FY26 refresh')
+    const headers = () => [...document.querySelectorAll('.comp-scroll thead th')].map((th) => th.textContent)
+
+    // Entered = what a reader typed, plus the note: nine columns fit 1440 without a scroll.
+    expect(headers()).toEqual([
+      'Year', 'Current base', 'New base', 'Unvested RSUs', 'Unvested price', 'Refresh RSUs',
+      'Grant price', 'Notes', '',
+    ])
+    fireEvent.click(screen.getByRole('button', { name: 'Computed' }))
+    // Computed = the server's: base and equity deltas, unvested equity, total comp.
+    expect(headers()).toEqual([
+      'Year', 'Base delta', 'Base delta %', 'Unvested equity', 'Equity delta', 'Equity delta %',
+      'TC before', 'TC after', '',
+    ])
+    expect(screen.queryByText('FY26 refresh')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    expect(headers()).toHaveLength(16)
+    // Year and the action cell frame the scroller whichever set is showing (spec §7).
+    expect(document.querySelector('.comp-scroll thead th.col-identity')?.textContent).toBe('Year')
+    expect(document.querySelector('.comp-scroll tbody td.col-identity')?.textContent).toBe('2024')
+    expect(document.querySelector('.comp-scroll tbody td.row-actions')).toBeTruthy()
+  })
+
+  it('offers a Manage door under an empty trajectory, and it switches the view', async () => {
+    vi.mocked(fetchEvents).mockResolvedValue([])
+    render(<MemoryRouter initialEntries={['/comp?section=summary']}><CompPage /></MemoryRouter>)
+    await screen.findByText('No comp events yet — add one in Manage.')
+    fireEvent.click(screen.getByRole('button', { name: 'Add a comp event in Manage' }))
+    expect(await screen.findByRole('heading', { name: 'Focal history' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Manage' }).getAttribute('aria-selected')).toBe('true')
+  })
 })
 
 describe('CompPage — writes', () => {
   it('posts a new event with every nullable column present', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     fillNewEvent()
     type('Unvested RSUs', '1900')
@@ -394,7 +436,7 @@ describe('CompPage — writes', () => {
 
   it('puts the caret back on the focal year after a save', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     fillNewEvent()
     fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
@@ -408,7 +450,7 @@ describe('CompPage — writes', () => {
 
   it('never resurrects the pre-reset text when the caret was still in a money box', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     type('Focal year', '2028')
     // A REAL focus, not fireEvent.focus: only this moves jsdom's activeElement, and the
@@ -432,7 +474,7 @@ describe('CompPage — writes', () => {
 
   it('PATCHes the FULL row, and a blanked column travels as an explicit null', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit the 2026 comp event' }))
     // The boxes seed from the row, verbatim — these are the server's own quantized strings.
@@ -470,7 +512,7 @@ describe('CompPage — writes', () => {
 
   it('clears the notes with an explicit null too', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit the 2026 comp event' }))
     type('Notes', '')
@@ -482,7 +524,7 @@ describe('CompPage — writes', () => {
 
   it('canonicalizes a grouped base at the wire boundary, with no blur', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     type('Focal year', '2028')
     type('Current base', '$188,930')
@@ -496,7 +538,7 @@ describe('CompPage — writes', () => {
 
   it('EVALUATES an =-expression typed into the money base — the other half of the split', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     type('Focal year', '2028')
     type('Current base', '=188000+930')
@@ -514,7 +556,7 @@ describe('CompPage — writes', () => {
 
   it('ships an =-expression typed into a COUNT box verbatim — the belt never evaluates it', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     fillNewEvent()
     type('Unvested RSUs', '=2*100')
@@ -537,7 +579,7 @@ describe('CompPage — writes', () => {
 
   it('deletes an event only after the confirm is accepted', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     confirmSpy.mockReturnValue(false)
     fireEvent.click(screen.getByRole('button', { name: 'Delete the 2026 comp event' }))
@@ -551,7 +593,7 @@ describe('CompPage — writes', () => {
 
   it('requires the two NOT NULL columns before spending a request', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     type('Focal year', '2028')
     fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
@@ -562,7 +604,7 @@ describe('CompPage — writes', () => {
 
   it('answers a mistyped focal year in the server’s own sentence', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     type('Focal year', '20268')
     type('Current base', '188930')
@@ -577,7 +619,7 @@ describe('CompPage — writes', () => {
       new ApiError('a comp event for 2028 already exists', 409),
     )
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     fillNewEvent()
     fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
@@ -593,7 +635,7 @@ describe('CompPage — writes', () => {
 describe('CompPage — orphaned equity operands', () => {
   it('names the operand left without its partner, without blocking the save', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     // The stored row has BOTH sides, so clearing one is this edit's own doing.
     fireEvent.click(screen.getByRole('button', { name: 'Edit the 2026 comp event' }))
@@ -616,7 +658,7 @@ describe('CompPage — orphaned equity operands', () => {
 
   it('names the other side of each pair too', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     // Both pairs are whole on the stored 2026 row, so either box cleared is a change.
     fireEvent.click(screen.getByRole('button', { name: 'Edit the 2026 comp event' }))
@@ -637,7 +679,7 @@ describe('CompPage — orphaned equity operands', () => {
 
   it('says nothing when a pair is whole, or gone entirely', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     // Both filled (the row as stored).
     fireEvent.click(screen.getByRole('button', { name: 'Edit the 2026 comp event' }))
@@ -679,7 +721,7 @@ describe('CompPage — orphaned equity operands', () => {
 
   it('names a half-filled pair typed into a NEW row, where there is nothing stored', async () => {
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     // Nothing is being edited, so the pair's stored state is "neither" — one side filled
     // is a change, and the product the user is expecting will not be computed.
@@ -701,7 +743,7 @@ describe('CompPage — loading', () => {
     expect(await screen.findByText("Couldn't load the comp events — the server had a problem (HTTP 503)")).toBeTruthy()
     // One banner for the page needs no disambiguating label (motion spec §9).
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-    expect(await screen.findByText('$601,854.46')).toBeTruthy()
+    expect(await screen.findByText('FY26 refresh')).toBeTruthy()
     expect(screen.queryByText("Couldn't load the comp events — the server had a problem (HTTP 503)")).toBeNull()
   })
 
@@ -710,7 +752,7 @@ describe('CompPage — loading', () => {
       .mockResolvedValueOnce(EVENTS)
       .mockRejectedValueOnce(new ApiError('comp unavailable', 503))
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     type('Notes', 'half-typed event')
     fireEvent.click(screen.getByRole('button', { name: 'Delete the 2027 comp event' }))
@@ -721,7 +763,7 @@ describe('CompPage — loading', () => {
         "Couldn't load the comp events — the server had a problem (HTTP 503). Showing earlier data for the comp events.",
       ),
     ).toBeTruthy()
-    expect(screen.getByText('$601,854.46')).toBeTruthy()
+    expect(screen.getByText('FY26 refresh')).toBeTruthy()
     expect(field('Notes').value).toBe('half-typed event')
   })
 
@@ -729,7 +771,7 @@ describe('CompPage — loading', () => {
     const slow = deferred<CompEventOut[]>()
     vi.mocked(fetchEvents).mockResolvedValueOnce(EVENTS).mockReturnValueOnce(slow.promise)
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete the 2027 comp event' }))
     await waitFor(() => expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(2))
@@ -760,7 +802,7 @@ describe('CompPage — loading', () => {
       .mockReturnValueOnce(slow.promise)
       .mockReturnValueOnce(fast.promise)
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    await screen.findByText('FY26 refresh')
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete the 2024 comp event' }))
     await waitFor(() => expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(2))
@@ -817,11 +859,16 @@ describe('CompPage — vesting schedule', () => {
     expect(within(tile('Vested this year')).queryByText('—')).toBeNull()
   })
 
-  it('surfaces the vest tiles at the page top, above the focal history (2026-08-31 audit)', async () => {
+  it('keeps the vest tiles off Manage and above the chart on Summary (2026-09-13 polish spec §12)', async () => {
     vi.mocked(fetchVestingSchedule).mockResolvedValue(SCHEDULE)
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
+    await screen.findByRole('heading', { name: 'Focal history' })
+    // The tiles have no bearing on the two forms, so Manage does not draw the strip.
+    expect(screen.queryByText('Next vest')).toBeNull()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
     const nextVest = await screen.findByText('Next vest')
-    expectInDocumentOrder(nextVest, screen.getByText('Focal history'))
+    expectInDocumentOrder(nextVest, screen.getByText('Base + unvested equity value'))
   })
 
   it('mounts the TC trajectory and the vesting calendar through ChartCard', async () => {
@@ -983,6 +1030,15 @@ describe('CompPage — vesting schedule', () => {
     // The offer grant's tens wear a marker in the shares cell; the quantum-1 refresh doesn't.
     expect(table.getByText('×10')).toBeTruthy()
     expect(table.queryByText('×1')).toBeNull()
+  })
+
+  it('offers a Manage door under an empty schedule, and it switches the view', async () => {
+    vi.mocked(fetchVestingSchedule).mockResolvedValue(EMPTY_SCHEDULE)
+    render(<MemoryRouter initialEntries={['/comp?section=vesting']}><CompPage /></MemoryRouter>)
+    await screen.findByText('No grants yet — add one in Manage to see the schedule.')
+    fireEvent.click(screen.getByRole('button', { name: 'Add a grant in Manage' }))
+    expect(await screen.findByText('RSU grants')).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Manage' }).getAttribute('aria-selected')).toBe('true')
   })
 })
 
@@ -1296,7 +1352,7 @@ describe('CompPage — the two feeds are independent', () => {
       await screen.findByText("Couldn't load the vesting schedule — the server had a problem (HTTP 503)"),
     ).toBeTruthy()
     // The other feed answered: a 503 on one entity must not blank the other.
-    expect(await screen.findByText('$601,854.46')).toBeTruthy()
+    expect(await screen.findByText('FY26 refresh')).toBeTruthy()
     // Nothing stale behind a FIRST-load failure, so no stale cue.
     expect(screen.queryByText(/Showing earlier data/)).toBeNull()
 
@@ -1318,8 +1374,11 @@ describe('CompPage — the two feeds are independent', () => {
     await waitFor(() => expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(2))
 
     expect(await screen.findByText(SCHEDULE_STALE)).toBeTruthy()
-    expect(within(tile('Unvested')).getByText('1,230 sh')).toBeTruthy()
     expect(field('Label').value).toBe('half-typed grant')
+    // The strip is not drawn on Manage any more (2026-09-13 polish spec §12), so the tiles it
+    // disclaims are read on the view that shows them — the banner is the frame's, above both.
+    fireEvent.click(screen.getByRole('tab', { name: 'Vesting' }))
+    expect(within(tile('Unvested')).getByText('1,230 sh')).toBeTruthy()
     // The stale cue leads the page's most prominent figures (2026-08-31 review round):
     // the banner sits ABOVE the hoisted tiles it disclaims, not below the fold.
     expectInDocumentOrder(
@@ -1331,7 +1390,8 @@ describe('CompPage — the two feeds are independent', () => {
   it('reloads BOTH feeds after a comp event write', async () => {
     vi.mocked(fetchVestingSchedule).mockResolvedValue(SCHEDULE)
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    await screen.findByText('$601,854.46')
+    // A grant carries the same label as the 2026 event's note, so the gate is the row's action.
+    await screen.findByRole('button', { name: 'Delete the 2026 comp event' })
 
     // A focal year is what the seed chips and the drift sentences are built from, so an
     // event write moves the schedule card even though it touches no grant.
@@ -1381,7 +1441,7 @@ describe('CompPage — snapshot cache (2026-08-27 spec §1)', () => {
     // Never-resolving fetch: whatever is on screen came from the seed alone.
     vi.mocked(fetchEvents).mockReturnValue(new Promise(() => {}))
     render(<MemoryRouter initialEntries={['/comp?section=manage']}><CompPage /></MemoryRouter>)
-    expect(screen.getByText('$601,854.46')).toBeTruthy() // 2026 tc_after
+    expect(screen.getByText('FY26 refresh')).toBeTruthy() // 2026's note
     fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
     expect(screen.getByTestId('echart').getAttribute('data-categories')).toBe('2024,2026,2027')
     // A cached paint renders its chart still, and the revalidation still went out.

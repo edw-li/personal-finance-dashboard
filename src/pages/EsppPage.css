@@ -67,6 +67,32 @@
   gap: 0.5rem;
 }
 
+/* A box with its own note (PaycheckPage.css's .paycheck-count-field shape): the note lives
+   OUTSIDE the label — a label's text is the box's accessible name — and reads in the form's
+   note register rather than the label's uppercase one. */
+.espp-form .espp-field {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+/* Sold date and sold price share one note: two tracks of the form grid, the note under both. */
+.espp-form .espp-sold-pair {
+  grid-column: span 2;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+  align-items: end;
+}
+
+.espp-form .espp-field-note {
+  grid-column: 1 / -1;
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
 /* The knobs are three fields and a button, not a dense entry grid. */
 .espp-knobs {
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));

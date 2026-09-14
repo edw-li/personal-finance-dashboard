@@ -58,7 +58,7 @@
 
 .ytd-facts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 10px 16px;
   margin: 0;
 }
@@ -77,6 +77,16 @@
   font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
   font-size: 1.05rem;
   font-variant-numeric: tabular-nums;
+  /* Value and sub-line are two children now (W4): the sub wraps under the amount instead of
+     breaking it mid-figure. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.35rem;
+}
+
+.ytd-fact .ytd-value {
+  white-space: nowrap;
 }
 
 .ytd-fact .ytd-sub {
@@ -85,22 +95,7 @@
   font-family: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
-.overview-freshness {
-  color: var(--muted);
-  font-size: 0.85rem;
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  margin-top: 1rem;
-}
-
-/* --warn (PALETTE[3] amber): index.css owns the token now; only the canvas copy in
-   charts/theme.ts stays a literal (CSS variables do not reach ECharts). */
-.overview-freshness .stale {
-  color: var(--warn);
-}
-
-/* Up-next strip: the forward-looking sibling of the freshness footer below it. */
+/* Up-next strip: the forward-looking sibling of the Data status card beside it. */
 .up-next {
   margin-top: 1.25rem;
 }
@@ -167,15 +162,29 @@
 .overview-movers li { display: flex; flex-direction: column; gap: .3rem; font-size: .85rem; }
 .overview-movers a { color: var(--text); }
 .overview-movers span { font-variant-numeric: tabular-nums; font-size: 1.05rem; }
-.overview-deeper { display: grid; gap: 1rem; margin-top: 1rem; }
+/* The card-grid class supplies the grid and the density gap (F2's layout grammar). */
+.overview-deeper { margin-top: 1rem; }
 .overview-deeper > .card { margin: 0; }
+/* Customize: the wrapper positions the shared .popover-surface; the surface supplies its own
+   background, border, shadow, padding, z-index and pop-in motion (panels.css, F2). It opens
+   LEFTWARD from its trigger (right edges aligned) so it stays inside the content column —
+   `.page`'s container-type makes the page a stacking context, so a surface that ran past the
+   column could not paint over a docked panel anyway. */
 .overview-customize { position: relative; }
-.overview-customize summary { list-style: none; cursor: pointer; }
-.overview-customize-menu { position: absolute; right: 0; top: calc(100% + .5rem); width: 390px; z-index: 40; padding: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px #0004; }
+.overview-customize-menu { right: 0; top: calc(100% + .5rem); width: min(390px, 90vw); }
+.overview-customize-actions { display: flex; justify-content: space-between; gap: .5rem; margin-top: .5rem; }
 .overview-customize-menu fieldset { border: 0; padding: 0; margin: 0 0 .85rem; }
 .overview-customize-menu legend { font-size: .8rem; font-weight: 600; margin-bottom: .4rem; }
 .overview-customize-row { display: flex; align-items: center; gap: .35rem; margin: .45rem 0; font-size: .8rem; }
 .overview-customize-row label { flex: 1; display: flex; gap: .45rem; align-items: center; }
 .overview-customize-row > span { color: var(--muted); font-size: .7rem; min-width: 2rem; text-align: center; }
 .overview-customize-row .button { padding: .25rem .45rem; }
-.spending-metric-context { margin: -.25rem 0 1rem; }
+
+/* Data status card: the four clocks as definition rows (2026-09-13 polish §10). Amber is the
+   advisory register (--warn) — a feed behind the ritual, a quote past its day. */
+.overview-data-status .data-status-list { margin: 0; display: grid; gap: .35rem; }
+.data-status-row { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; font-size: .85rem; }
+.data-status-row dt { color: var(--muted); }
+.data-status-row dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.overview-data-status .stale { color: var(--warn); }
+.data-status-note { margin: .6rem 0 0; }

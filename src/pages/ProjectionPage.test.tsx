@@ -237,7 +237,7 @@ describe('ProjectionPage', () => {
     renderPage()
     await loaded()
     const target = valueOf(tileFor('FI target'))
-    const probability = valueOf(tileFor('Reach FI target within 30 years'))
+    const probability = valueOf(tileFor('Reach FI within 30 yrs'))
     const requests = vi.mocked(fetchProjection).mock.calls.length
 
     fireEvent.click(screen.getByRole('button', { name: 'Future dollars' }))
@@ -249,7 +249,7 @@ describe('ProjectionPage', () => {
     }
     expect(box('Inflation').placeholder).toBe('3')
     expect(valueOf(tileFor('FI target'))).toBe(target)
-    expect(valueOf(tileFor('Reach FI target within 30 years'))).toBe(probability)
+    expect(valueOf(tileFor('Reach FI within 30 yrs'))).toBe(probability)
     expect(vi.mocked(fetchProjection)).toHaveBeenCalledTimes(requests)
     expect(url()).toBe('/projection')
 
@@ -432,7 +432,7 @@ describe('ProjectionPage', () => {
     expect(screen.queryAllByTestId('echart')).toHaveLength(0)
   })
 
-  it('renders the model warnings verbatim', async () => {
+  it('renders the model warnings verbatim, as the chart card’s lede', async () => {
     vi.mocked(fetchProjection).mockResolvedValue(
       projectionOut({
         warnings: ['no cashflow history — monthly contribution defaulted to 0'],
@@ -441,9 +441,12 @@ describe('ProjectionPage', () => {
     )
     renderPage()
 
-    expect(
-      await screen.findByText('no cashflow history — monthly contribution defaulted to 0'),
-    ).toBeTruthy()
+    const warning = await screen.findByText('no cashflow history — monthly contribution defaulted to 0')
+    // Inside the card, in the muted header strip — never a paragraph floating between two cards.
+    const card = warning.closest('.chart-card') as HTMLElement
+    expect(card).not.toBeNull()
+    expect(warning.closest('.chart-lede')).not.toBeNull()
+    expect(document.querySelector('.projection-warnings')).toBeNull()
   })
 
   it('opens on the planning model and loads historical exploration only when requested', async () => {
@@ -656,7 +659,7 @@ describe('ProjectionPage', () => {
     renderPage()
     await loaded()
 
-    const tile = tileFor('Reach FI target within 30 years')
+    const tile = tileFor('Reach FI within 30 yrs')
     expect(valueOf(tile)).toBe('—')
     expect(deltaOf(tile)).toBeNull() // no percentile months to name
   })
@@ -665,7 +668,7 @@ describe('ProjectionPage', () => {
     renderPage()
 
     await loaded()
-    const tile = tileFor('Reach FI target within 30 years')
+    const tile = tileFor('Reach FI within 30 yrs')
     expect(valueOf(tile)).toBe('62.0%')
     expect(deltaOf(tile)).toBe('Median reach: Oct 2055')
   })
@@ -674,7 +677,7 @@ describe('ProjectionPage', () => {
     vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_month_p10: null }))
     renderPage()
     await loaded()
-    expect(deltaOf(tileFor('Reach FI target within 30 years'))).toBe('Median reach: Oct 2055')
+    expect(deltaOf(tileFor('Reach FI within 30 yrs'))).toBe('Median reach: Oct 2055')
   })
 
   it('draws the fan under the lines when the payload carries bands', async () => {
@@ -985,5 +988,74 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
 
     expect(screen.getByText(/CURRENT monthly take-home/)).toBeTruthy()
     expect(screen.getByText(/Spending stays a household figure/)).toBeTruthy()
+  })
+})
+
+describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
+  it('lays the five outcomes out as one row and glues the FI tile’s (i) to its last word', async () => {
+    renderPage()
+    await loaded()
+    const band = document.querySelector('.projection-outcomes') as HTMLElement
+    // panels.css lays .kpi-row-5 out as five equal tracks above 1000px of container width.
+    expect(band.classList.contains('kpi-row')).toBe(true)
+    expect(band.classList.contains('kpi-row-5')).toBe(true)
+    expect(band.querySelectorAll('.stat-tile')).toHaveLength(5)
+    // One no-break space, between the figure and its unit, so "30" and "yrs" cannot be split
+    // across two lines. Nothing trails the label: F2's .stat-label-text already holds the words
+    // and their (i) in one nowrap unit, so a trailing space would only pad the row (P4 review).
+    const label = within(band).getByText('Reach FI within 30 yrs')
+    expect(label.textContent).toBe('Reach FI within 30\u00A0yrs')
+  })
+
+  it('measures the outcomes band into --projection-band-h so the chart column sticks under it', async () => {
+    // jsdom has no ResizeObserver; the stub is what lets the measurement path run at all.
+    class StubResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', StubResizeObserver)
+    try {
+      renderPage()
+      await loaded()
+      const band = document.querySelector('.projection-outcomes') as HTMLElement
+      // Written on the band's parent (the section panel) so .projection-chart-area inherits it;
+      // jsdom lays nothing out, so the measured value is 0px — the WIRING is what is under test.
+      expect(band.parentElement?.style.getPropertyValue('--projection-band-h')).toBe('0px')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('appends the method sentence to the chart card’s footer and renders no note outside it', async () => {
+    renderPage()
+    await loaded()
+    const card = screen.getByLabelText(/Projected investable balance over the next/).closest('.chart-card') as HTMLElement
+    const footer = card.querySelector('.chart-card-row-caption') as HTMLElement
+    expect(footer.textContent).toContain('Growth only excludes contributions.')
+    expect(footer.textContent).toContain('The central line uses a constant assumed return')
+    expect(document.querySelector('.projection-method-note')).toBeNull()
+  })
+
+  it('renders the trend intro as the trend card’s lede', async () => {
+    renderPage()
+    await openTrend()
+    const intro = await screen.findByText(/An exploratory fit of past net worth/)
+    expect(intro.closest('.chart-lede')).not.toBeNull()
+    expect(intro.closest('.chart-card')).not.toBeNull()
+    expect(document.querySelector('.projection-view-intro')).toBeNull()
+  })
+
+  it('keeps the assumptions fine print in the compare card, out of the knobs column', async () => {
+    renderPage()
+    await loaded()
+    const compare = document.querySelector('.projection-comparisons') as HTMLElement
+    expect(within(compare).getByText(/same random samples/)).toBeTruthy()
+    expect(within(compare).getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/settings')
+    // The household has two people in the fixture, so the retirement paragraph is there too.
+    expect(within(compare).getByText(/Blank means that person works for the whole horizon/)).toBeTruthy()
+    const knobs = document.getElementById('projection-assumptions') as HTMLElement
+    expect(within(knobs).queryByText(/same random samples/)).toBeNull()
+    expect(within(knobs).queryByText(/Blank means that person works/)).toBeNull()
   })
 })

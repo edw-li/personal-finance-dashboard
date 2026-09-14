@@ -3118,3 +3118,182 @@ has its command and expected outcome.
     date / Sold price pair (an `.espp-sold-pair` two-track group so the note spans both boxes).
 15. **WithholdingPanel L258** (the Apply confirm) says "reloads the Inputs view"; the vest sentence
     (L557) names "the Inputs view" and keeps its Apply chip rather than gaining a second button.
+
+---
+
+## Results (implementer, 2026-09-13)
+
+**Status: DONE.** Branch `polish/p3-income`, cut from `main` @`895cdaf` (F1 + F2 merged). Fourteen
+commits, never pushed, no file deleted.
+
+### Commits
+
+| Task | SHA | Subject |
+| --- | --- | --- |
+| 1 | `0ab2e1f` | feat(sandbox): SandboxPanel defaultOpen — open from the first paint, no toggle (spec §8) |
+| 2 | `c2715c2` | feat(paycheck): Try changes opens on its tab; Employer match is a Disclosure (spec §8, §11) |
+| 3 | `beb6a16` | feat(taxes): What-if opens on its tab; eyebrow matches the tab label (spec §8) |
+| 4 | `5a19a32` | feat(paycheck): breakdown beside its flow, household legs in the tile, Try changes open (spec §8, §10, §12) |
+| 5 | `e96e2c5` | feat(paycheck): profiles — split behind a Disclosure, policies first, two-sentence intro, sticky table edges (spec §7, §11, §14) |
+| 6 | `9e7d9bf` | feat(comp): focal history column sets, sticky edges, strip off Manage, Manage doors (spec §7, §12, §14) |
+| 6b | `61a4a0b` | fix(paycheck): the history scroller renders before its first row so useScrollEdges arms (spec §7) — lead note |
+| 7 | `841d659` | feat(espp): five-tile strip row, field-attached lot hints, Purchase model door, sticky table edges (spec §7, §12, §14) |
+| 8 | `774df1b` | fix(copy): taxes summary and marginal cards name the view instead of "below"; Open Tax tables door (spec §14) |
+| 9 | `d709bf1` | feat(taxes): Will I owe — methodology behind one Disclosure, server notes as sentences, view doors (spec §11, §14) |
+| 10 | `a9b6690` | feat(taxes): bracket tables as a jurisdiction grid, status control labelled, helper sentence once (spec §12, §14) |
+| 11 | `6dabde3` | feat(taxes): inputs form — 40ch label track, row wash, sticky save bar with count and shortcut (spec §12) |
+| 12 | `17bb01b` | feat(taxes): year and filing status in the scope row, New tax year popover with in-place delete confirm, MFS caveat as subheader, panel doors (spec §11, §12, §14) |
+| 13 | `3274ce9` | test(taxes): the sandbox-link walk reads the What-if card's open state off its body (spec §8) |
+
+36 files changed, 1738 insertions, 650 deletions.
+
+### Gates (Task 13)
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc -b` | clean, exit 0 |
+| `npx eslint <lane paths>` | **0 errors, 3 warnings** — all pre-existing `react-refresh/only-export-components` in `src/sandbox/DeltaChip.tsx` (×2) and `src/sandbox/SliderBox.tsx`; this lane added none |
+| `npx eslint .` | **25 problems (0 errors, 25 warnings)** — exactly the repo baseline of 25 |
+| scoped `npx vitest run` | 34 files, **772 passed** (Task 0 baseline 749 → **+23 new tests**) |
+| full `npx vitest run` | 214 files, **2953 passed**, 0 failed |
+| `npm run build` | `✓ built in 9.40s`, exit 0 |
+
+New-test count is 23, not the plan's predicted 24: the plan's PositionStrip item appends an
+assertion to an existing test rather than adding one.
+
+### Deviations (all in the plan's spirit, all recorded here)
+
+1. **`Disclosure` is a default export** and its `onToggle` is `(open: boolean) => void`, not
+   `() => void` as the Contracts block said. No call site in this lane passes `onToggle`, so
+   nothing moved; the three `import Disclosure from '…'` lines are as written.
+2. **Lead note: `useScrollEdges` arming.** The hook reads its ref once, at mount, so a scroller
+   that only renders with the first row would never arm. Rather than wait for the `active` second
+   argument, the four scrollers (`.paycheck-scroll`, `.comp-scroll`, ESPP lots `.espp-scroll`)
+   now render their wrapper `<div>` unconditionally with the row guard moved inside, around the
+   `<table>`. All three are bare `overflow-x: auto` boxes, so an empty one is invisible and
+   zero-height, and the hook's own `ResizeObserver` picks the table up when rows arrive. The
+   modeler's `.espp-scroll` was already inside a payload gate that mounts with its table.
+   **Single-arg calls throughout** — if F2's `useScrollEdges(ref, active)` lands, these four call
+   sites can take `active` and revert to a guarded wrapper, but they do not need it.
+3. **Task 4's card-grid test needed a pace fixture.** The golden breakdown fixture carries no
+   `pace` rows, so `PacePanel` drew nothing and `getByRole('region', { name: 'Contribution pace' })`
+   found nothing. The test now seeds one `limit_401k_elective` row (the same shape the existing
+   "renders the pace strip under the waterfall" test uses).
+4. **Task 4 also had to update an existing test.** `PaycheckPage.test.tsx`'s "adds the two
+   in-force nets into a household take-home tile" pinned the orphan caption
+   `'Me + Sam — the profile in force for each person.'`; it now pins the tile's
+   `.stat-delta` (`'Me $6,768.33 · Sam $5,231.34'`) instead. Updated in place, not deleted.
+5. **Task 6: 24 existing CompPage tests used `$601,854.46` as their arrival gate.** That is
+   `tc_after`, a *computed* column, which the default Entered set no longer renders. Every one of
+   them is a "the table has loaded / is still up" gate, so all 24 were re-pointed to
+   `'FY26 refresh'` (the 2026 row's own note, an Entered column). Two follow-ons:
+   - "reloads BOTH feeds after a comp event write" renders with a full `SCHEDULE`, whose grant
+     label is also "FY26 refresh" — its gate is now
+     `findByRole('button', { name: 'Delete the 2026 comp event' })`.
+   - "keeps the schedule up when a RELOAD of it fails" read `tile('Unvested')` and `'Next vest'`
+     on Manage, where the strip is now hidden by design; it clicks through to Vesting before
+     reading the tiles, keeping its banner-above-tiles order assertion intact.
+6. **Task 12: two more TaxesPage tests needed the popover.** "offers a delete affordance that is
+   shut until a year is selected" pinned the exact `Delete year…` label *before* the helper had
+   opened the popover (reordered, plus an assertion that a shut door asks nothing); "drops the
+   param with the year a delete removed" gained the `confirmDeleteButton()` click.
+7. **Task 13: `src/pages/TaxesPage.sandboxLink.test.tsx` is a third Taxes page test file** the
+   plan's scoped glob misses. Its `openButton()` helper reads the What-if Open/Close toggle, which
+   `defaultOpen` removes; it now reads openness off the card's own "Reset to actual" button and
+   asserts the gate is absent. Its own commit (`3274ce9`) so the change is legible.
+8. **Task 8: `taxSections.ts` import placement.** Put beside the other component-relative imports
+   (after `taxChartOptions`), above the `./taxes.css` line, so the sheet stays last.
+
+### Notes for lane V
+
+- **Taxes scope-row selectors.** `.page-frame-scope` → `.scope-bar.tax-scope-bar` with two
+  `.scope-bar-group`s: `role="group"` `aria-label="Tax year"` (chips, `aria-pressed`, `title` =
+  `"N inputs · M brackets"`) and `role="group"` `aria-label="Filing status"` (toggle). The
+  brackets editor renders a *different* group, `aria-label="Bracket filing status"`, inside
+  `.bracket-status-row` — scope any filing-status selector to `.page-frame-scope` or the two will
+  collide. The scope row renders only when `years.length > 0`.
+- **Year menu.** Trigger `button.button-primary[aria-haspopup="dialog"][aria-expanded]` named
+  `New tax year…`, inside `.page-frame-actions`; surface
+  `.tax-year-menu .popover-surface[role="dialog"][aria-label="New tax year"]`, anchored
+  `top: calc(100% + 6px); right: 0` so it opens **leftward from the trigger's right edge**, inside
+  the content column (lead note 2 — verified: nothing on the `.page-frame-header` chain clips it).
+  Delete is arm-and-confirm inside the popover (`Delete {year}…` → `Delete {year}` / `Keep
+  {year}`); **`window.confirm` is gone from the delete path** — the create path keeps its
+  `confirmDiscard()` confirm, which is about the editors' unsaved work.
+- **MFS caveat** is now `.page-frame-subheader > p.filing-status-caveat[role="note"]`.
+- **Sticky save bar**: `.tax-form-actions.entry-footer` (`.is-dirty` while `changedCount > 0`),
+  reading `N changes to save · Save inputs · Ctrl+Enter`. The `.entry-footer` rule is a scoped
+  copy in `taxes.css` under `.taxes-page` — `MonthlyUpdatePage.css` is not imported.
+- **Comp Manage** draws no vest tile strip; the column set defaults to **Entered** (nine columns),
+  so §15 item 5's "first row's last action button within the viewport" should be measured on that
+  default. `Segmented` `aria-label="Focal history columns"`.
+- **Row-action acceptance**: `.paycheck-scroll`, `.comp-scroll` and both `.espp-scroll` tables now
+  carry `td.col-identity` / `td.row-actions`; the first three render their wrapper even with no
+  rows, so an empty-state walk will find an empty `div.*-scroll`.
+
+### Copy sites that still say "below", legitimately (same card)
+
+Spec §14 lists none of these:
+
+- `BracketsEditor.tsx` — the clone paragraph's "…are then edited below" (the tables are directly
+  under it, in the same card).
+- `EsppPage.tsx` — the $25k chain hint's "Hover or focus a meter bar below" and the stale-chain
+  warning's "the chain below is stale" (both name the meter rows in the same card).
+- `PositionStrip.tsx` — "Unsaved period edits below" (the strip sits above the modeler card on the
+  Purchase model tab).
+- `VestingSchedulePanel.tsx` — "see the notes below" in the ChartCard `empty` string (the notes are
+  in that card's own footer).
+
+Everything else that matched `below` is a code comment.
+
+### Follow-ups (not this lane)
+
+- If F2 ships `useScrollEdges(ref, active)`, the four scrollers can go back to a guarded wrapper
+  plus `active={rows.length > 0}` (deviation 2). Purely cosmetic — today's shape is correct.
+- `TaxYearMenu` has no test file of its own; every behaviour is covered through
+  `TaxesPage.test.tsx`'s new describe (`scope row and year menu`). A focused unit file would let
+  the arm-and-confirm focus moves be asserted without the whole page.
+- Audit C5 (What-if caveat as a grid cell), D1 (Comp quote line with no grants), the Comp
+  "Save all" idea: out of scope by the plan's own list.
+
+### Review round (2026-09-13, verdict APPROVE WITH FIXES)
+
+Merged `main` @`4576025` first (`75b4c5e`, no conflicts) — that brings F2's review round and with
+it `useScrollEdges(ref, active = true)`. All four fixes in one commit, **`5b52666`**.
+
+1. **IMPORTANT — the modeler scroller never armed on a cold arrival.** `EsppPage.tsx` ~L917:
+   `ModelerCard` calls the hook above a `data !== null` gate, so on `/espp?section=purchase` with
+   no snapshot the ref is null when the effect runs and the widest table on the page went unmasked
+   for its whole life. Now `useScrollEdges(scrollRef, data !== null)`. Test:
+   `EsppPage.test.tsx` → "arms the period scroller on a COLD arrival, once the payload renders the
+   table" — a deferred `fetchModeler`, `.espp-scroll .data-table` asserted absent, then the payload
+   resolved, the box faked and a `scroll` dispatched; `data-scroll-more="right"` only appears if
+   the listener attached after the table arrived. **Verified failing** (`expected null to be
+   'right'`) with the argument removed.
+   The lane's other three scrollers keep the first shape the hook's own doc comment sanctions —
+   the wrapper renders unconditionally — so they need no `active`.
+2. **IMPORTANT — the armed delete could fire mid-create.** `TaxYearMenu.tsx`: the confirm button
+   now carries `disabled={deleteDisabled}`, the same gate the arm door has. Test: `TaxesPage.test.tsx`
+   → "shuts the armed delete while a create is in flight, and drops the arm when the year changes"
+   (arm against 2024, press Create behind a deferred `cloneBrackets`, assert the confirm goes
+   disabled). **Verified failing** (`expected false to be true`) with the prop removed.
+3. **minor — arm lifecycle and popover subscription.** `close` is now `useCallback`-wrapped, so
+   `usePopoverDismiss` no longer tears down and re-adds its document listeners on every keystroke
+   in the year box. The arm is dropped when `selectedYear` changes — **deviation from the review's
+   suggested shape**: the proposed `useEffect(… setArmedYear(null), [selectedYear, armedYear])`
+   trips this repo's `Calling setState synchronously within an effect can trigger cascading
+   renders` ESLint **error**, so it is written as a render-time adjustment
+   (`if (armedYear !== null && armedYear !== selectedYear) setArmedYear(null)`), which is this
+   codebase's own idiom for the same job (TryItPanel / WhatIfPanel's arrival latch) and behaves
+   identically — `armed` already read false in that window; this clears the state behind it. The
+   second half of the same new test pins it (switching to 2023 folds the question away, no DELETE
+   sent).
+4. **minor — prohibited naming.** `InputsForm.tsx`: the `aria-label="Ctrl+Enter saves"` is gone
+   from the bare `<span>`; the two `<kbd>`s already read. (The explanatory JSX comment moved
+   *above* the `{changedCount > 0 && (` line — a `{/* */}` cannot be the first child of a `&&`
+   expression.)
+
+**Gates after the round:** `tsc -b` clean · scoped eslint **0 errors / 3 warnings** (the same three
+pre-existing `react-refresh` ones) · `eslint .` **25 problems (0 errors, 25 warnings)** = repo
+baseline · scoped vitest **774 passed** (772 → +2 new) · full `npx vitest run` **2961 passed /
+214 files, 0 failed** · `npm run build` exit 0.

@@ -18,6 +18,7 @@ import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate } from '../../utils/format'
 import { currentMonthIso } from '../../utils/months'
 import AmountInput from '../AmountInput'
+import Disclosure from '../Disclosure'
 import Segmented from '../shell/Segmented'
 import PacePanel from './PacePanel'
 import {
@@ -102,6 +103,7 @@ export default function TryItPanel({
   personId,
   breakdown,
   onApply,
+  defaultOpen = false,
 }: {
   /** The page's two selectors — exactly what GET /breakdown was asked with. */
   profileId: number | null
@@ -110,11 +112,15 @@ export default function TryItPanel({
   breakdown: PaycheckBreakdownOut
   /** Apply: the page pre-fills its profile form with this seed. */
   onApply: (seed: ApplySeed) => void
+  /** The Try changes tab mounts this card as its sole content (2026-09-13 polish spec §8): open
+   *  from the first paint, with no open/close toggle. The URL-entries latch below still runs. */
+  defaultOpen?: boolean
 }) {
   const [params] = useSearchParams()
-  // Arriving with entries opens the panel (spec §6); otherwise closed by default (§8.1).
+  // Arriving with entries opens the panel (spec §6); a tab that IS the sandbox opens it too
+  // (2026-09-13 polish spec §8); otherwise closed by default (§8.1).
   const entriesKey = readEntries(params).join(SEP)
-  const [open, setOpen] = useState(entriesKey !== '')
+  const [open, setOpen] = useState(defaultOpen || entriesKey !== '')
   // ...and so does a navigation INTO a scenario link while the page is already mounted —
   // the assistant's deep links and the Portfolio drill-in are exactly that (spec §6, §12).
   // Adjusted DURING render, never from an effect body (the house rule): React re-renders
@@ -229,10 +235,11 @@ export default function TryItPanel({
 
   return (
     <SandboxPanel
-      eyebrow={`Try it — effective ${formatDate(profile.effective_date)}`}
+      eyebrow={`Try changes — effective ${formatDate(profile.effective_date)}`}
       hint="Move a percentage or an amount and see the check the server computes for it, against the profile shown above — nothing is saved."
       open={open}
       onToggle={() => setOpen((o) => !o)}
+      defaultOpen={defaultOpen}
       sandbox={sandbox}
       closedHint={
         <p className="drill-hint">
@@ -361,16 +368,16 @@ export default function TryItPanel({
       />
       {/* Behind a disclosure because the match is a POLICY that changes once a year, not a
           knob to drag — but it is the one input the 415(c) row cannot be reasoned about
-          without, so it is here rather than only on the profile form. */}
-      <details className="sandbox-disclosure">
-        <summary>Employer match</summary>
+          without, so it is here rather than only on the profile form. The shared primitive
+          (2026-09-13 polish spec §11); the class spans the knob grid (pace.css). */}
+      <Disclosure summary="Employer match (advanced)" className="tryit-disclosure">
         <div className="sandbox-disclosure-grid">
           <SliderBox id="tryit-match-rate-1" label="First match rate" kind="percent" value={scenario.match_rate_1 ?? ''} actual={profile.match_rate_1} min="0" max={KNOB_MAX.match_rate_1} step="0.05" onChange={knob('match_rate_1')} />
           <BoxKnob id="tryit-match-band-1" label="First match band" kind="money" value={scenario.match_band_1 ?? ''} actual={profile.match_band_1} validate={(text) => (acceptKnob('match_band_1', text) ? null : 'First match band must be a plain amount, like 6000')} onCommit={knob('match_band_1')} />
           <SliderBox id="tryit-match-rate-2" label="Second match rate" kind="percent" value={scenario.match_rate_2 ?? ''} actual={profile.match_rate_2} min="0" max={KNOB_MAX.match_rate_2} step="0.05" onChange={knob('match_rate_2')} />
           <BoxKnob id="tryit-match-band-2" label="Second match band" kind="money" value={scenario.match_band_2 ?? ''} actual={profile.match_band_2} validate={(text) => (acceptKnob('match_band_2', text) ? null : 'Second match band must be a plain amount, like 11000')} onCommit={knob('match_band_2')} />
         </div>
-      </details>
+      </Disclosure>
       <p className="drill-hint">
         Dental &amp; vision flows through unchanged. Percentages are of gross;{' '}
         <Link to="/taxes">the Taxes withholding card</Link> says what a rate change does to the

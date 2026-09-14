@@ -11,6 +11,8 @@ import InfoHint from '../InfoHint'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
+import SettingsGhost from './SettingsGhost'
+import { WARM, warmSource } from './settingsPrefetch'
 
 // The boxes a payload seeds, as pure string math at MODULE scope (SettingsPage's old
 // boxesFor, moved with the form): a component-scope helper would make `load` reactive and the
@@ -76,9 +78,14 @@ export default function PlanAssumptionsCard() {
   // the SystemCard contract: this card is ONE reading of the plan, and a match summary
   // standing on a profile read that failed beside a fresh settings read would be a card of two
   // instants.
-  const load = () => {
+  const load = (initial = false) => {
     const seq = ++seqRef.current
-    Promise.all([fetchAppSettings(), fetchProfiles(), fetchHousehold()])
+    const source = warmSource(initial)
+    Promise.all([
+      source(WARM.appSettings, fetchAppSettings),
+      source(WARM.profiles, fetchProfiles),
+      source(WARM.household, fetchHousehold),
+    ])
       .then(([stored, rows, household]) => {
         if (seq !== seqRef.current) return
         setSettings(stored)
@@ -94,7 +101,7 @@ export default function PlanAssumptionsCard() {
   }
 
   useEffect(() => {
-    load()
+    load(true)
     // mount-only: a plain function over stable setters (house idiom)
   }, [])
 
@@ -161,8 +168,8 @@ export default function PlanAssumptionsCard() {
         Plan assumptions
         <InfoHint text="The knobs the Projection, ESPP and Paycheck pages derive from. The employer match is set per person on the Paycheck page." />
       </h2>
-      <FeedBanner error={loadError} retry={load} retryLabel="Retry loading the plan assumptions" />
-      {settings === null && loadError === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner error={loadError} retry={() => load()} retryLabel="Retry loading the plan assumptions" />
+      {settings === null && loadError === null && <SettingsGhost height={415} />}
       {settings !== null && (
         <form
           className="settings-card-form"

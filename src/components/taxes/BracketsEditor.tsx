@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import {
   cloneBrackets,
@@ -258,6 +258,11 @@ export default function BracketsEditor({
   // The roster a return under THIS tab's status covers, and therefore the strip under each
   // per-worker table: everybody on a married-joint tab, the primary alone on a single one.
   const people = payload.people ?? []
+  // The first per-worker jurisdiction that draws a strip — where the one helper sentence goes.
+  const firstStripName =
+    people.length === 0
+      ? null
+      : (JURISDICTIONS.find((name) => PER_WORKER_JURISDICTIONS.includes(name)) ?? null)
 
   // The tab set: 'single' ALWAYS (the column default, the only status the importer writes and
   // the source every clone copies from), the year's own status (the one the engine walks,
@@ -650,24 +655,30 @@ export default function BracketsEditor({
       </p>
       {/* One tab per status this year can be filed as. The same six tables exist behind each
           one — a full replace is per (jurisdiction, status) — so the tab is what decides
-          which of them a Save rewrites. */}
-      <div
-        className="segmented bracket-status-tabs"
-        role="group"
-        aria-label="Bracket filing status"
-      >
-        {tabs.map((status) => (
-          <button
-            key={status}
-            type="button"
-            className={status === activeStatus ? 'active' : ''}
-            aria-pressed={status === activeStatus}
-            disabled={tabBusy || saving !== null}
-            onClick={() => openStatus(status)}
-          >
-            {FILING_STATUS_LABELS[status]}
-          </button>
-        ))}
+          which of them a Save rewrites. Labelled, because the scope row above carries the
+          YEAR's filing status in the same segmented look (audit S3): that one PATCHes the
+          year; this one only picks the tables this card edits. */}
+      <div className="bracket-status-row">
+        <span className="eyebrow">Editing tables for</span>
+        <div
+          className="segmented bracket-status-tabs"
+          role="group"
+          aria-label="Bracket filing status"
+        >
+          {tabs.map((status) => (
+            <button
+              key={status}
+              type="button"
+              className={status === activeStatus ? 'active' : ''}
+              aria-pressed={status === activeStatus}
+              disabled={tabBusy || saving !== null}
+              onClick={() => openStatus(status)}
+            >
+              {FILING_STATUS_LABELS[status]}
+            </button>
+          ))}
+        </div>
+        <InfoHint text="Which status' tables this card's Saves rewrite. The year's own filing status — the tables the engine walks — is set in the scope row at the top of the page." />
       </div>
       <FeedBanner error={tabError} />
       {activeStatus !== 'single' && isEmpty && (
@@ -684,100 +695,110 @@ export default function BracketsEditor({
           </button>
         </div>
       )}
-      {JURISDICTIONS.map((name) => {
-        const rows = tables[name] ?? []
-        const message = errors[name]
-        const perWorker = PER_WORKER_JURISDICTIONS.includes(name)
-        // Social Security and SDI are per-WORKER taxes: the table here is the default, and
-        // each earner the return covers may carry their own beneath it.
-        const strip = perWorker && people.length > 0
-        // One scope PER jurisdiction, matching the one Save each table has: Enter walks
-        // this table's rate/threshold cells and stops at its own Save, never wandering into
-        // the next jurisdiction's rows. A person's card is a scope of its own for the same
-        // reason — and a SIBLING of this form rather than a child, because forms do not nest.
-        return (
-          <Fragment key={name}>
-            <form
-              className={strip ? 'bracket-block has-person-strip' : 'bracket-block'}
-              data-entry-scope=""
-              onSubmit={(e) => {
-                e.preventDefault()
-                save(name)
-              }}
-            >
-              <h3 className="eyebrow">
-                {label(name)} brackets
-                {perWorker ? ' — default for everyone' : ''}
-                {badgeFor(name)}
-              </h3>
-              <FeedBanner error={message} />
-              <BracketRows
-                title={label(name)}
-                rows={rows}
-                onCell={(index, field, value) => setRow(name, index, field, value)}
-                onRemoveRow={(index) => removeRow(name, index)}
-              />
-              <div className="bracket-actions">
-                <button
-                  type="button"
-                  className="button"
-                  aria-label={`Add ${label(name)} bracket`}
-                  disabled={rows.length >= MAX_BRACKETS}
-                  onClick={() => addRow(name)}
-                >
-                  Add bracket
-                </button>
-                <button
-                  type="submit"
-                  data-entry-primary=""
-                  className="button button-primary"
-                  aria-label={`Save ${label(name)} brackets`}
-                  disabled={saving !== null}
-                >
-                  {saving?.key === name ? 'Saving…' : 'Save'}
-                </button>
-              </div>
-            </form>
-            {strip && (
-              <div className="bracket-person-strip">
-                {people.map((person) => personCard(name, person))}
-                <p className="drill-hint">
-                  Per-worker tax: the default applies to anyone without their own table. Add
-                  one for an earner on an employer&apos;s voluntary plan, or in a job exempt
-                  from Social Security.
-                </p>
-              </div>
-            )}
-          </Fragment>
-        )
-      })}
-      {extras.map((name) => (
-        <div key={name} className="bracket-block">
-          <h3 className="eyebrow">{label(name)} brackets</h3>
-          <p className="drill-hint">
-            Imported jurisdiction — the API only writes the six above, so this table is
-            read-only here.
-          </p>
-          <table className="data-table bracket-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th className="num">Rate %</th>
-                <th className="num">Threshold</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(tables[name] ?? []).map((row, index) => (
-                <tr key={index}>
-                  <td>{index + 1}</td>
-                  <td className="num">{row.rate}</td>
-                  <td className="num">{formatCurrency(row.threshold)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ))}
+      <div className="bracket-grid">
+        {JURISDICTIONS.map((name) => {
+          const rows = tables[name] ?? []
+          const message = errors[name]
+          const perWorker = PER_WORKER_JURISDICTIONS.includes(name)
+          // Social Security and SDI are per-WORKER taxes: the table here is the default, and
+          // each earner the return covers may carry their own beneath it.
+          const strip = perWorker && people.length > 0
+          // One scope PER jurisdiction, matching the one Save each table has: Enter walks
+          // this table's rate/threshold cells and stops at its own Save, never wandering into
+          // the next jurisdiction's rows. A person's card is a scope of its own for the same
+          // reason — and a SIBLING of this form rather than a child, because forms do not nest.
+          // The group is one grid cell: the table and the strip that qualifies it stay together
+          // (2026-09-13 polish spec §12).
+          return (
+            <div key={name} className="bracket-group">
+              <form
+                className={strip ? 'bracket-block has-person-strip' : 'bracket-block'}
+                data-entry-scope=""
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  save(name)
+                }}
+              >
+                <h3 className="eyebrow">
+                  {label(name)} brackets
+                  {perWorker ? ' — default for everyone' : ''}
+                  {badgeFor(name)}
+                </h3>
+                <FeedBanner error={message} />
+                <BracketRows
+                  title={label(name)}
+                  rows={rows}
+                  onCell={(index, field, value) => setRow(name, index, field, value)}
+                  onRemoveRow={(index) => removeRow(name, index)}
+                />
+                <div className="bracket-actions">
+                  <button
+                    type="button"
+                    className="button"
+                    aria-label={`Add ${label(name)} bracket`}
+                    disabled={rows.length >= MAX_BRACKETS}
+                    onClick={() => addRow(name)}
+                  >
+                    Add bracket
+                  </button>
+                  <button
+                    type="submit"
+                    data-entry-primary=""
+                    className="button button-primary"
+                    aria-label={`Save ${label(name)} brackets`}
+                    disabled={saving !== null}
+                  >
+                    {saving?.key === name ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </form>
+              {strip && (
+                <div className="bracket-person-strip">
+                  {/* The per-worker helper sentence, once, above the FIRST strip (2026-09-13
+                      polish spec §14; audit C3: it printed twice, verbatim, 300px apart). */}
+                  {name === firstStripName && (
+                    <p className="drill-hint">
+                      Per-worker tax: the default applies to anyone without their own table. Add
+                      one for an earner on an employer&apos;s voluntary plan, or in a job exempt
+                      from Social Security.
+                    </p>
+                  )}
+                  {people.map((person) => personCard(name, person))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+        {extras.map((name) => (
+          <div key={name} className="bracket-group">
+            <div className="bracket-block">
+              <h3 className="eyebrow">{label(name)} brackets</h3>
+              <p className="drill-hint">
+                Imported jurisdiction — the API only writes the six above, so this table is
+                read-only here.
+              </p>
+              <table className="data-table bracket-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th className="num">Rate %</th>
+                    <th className="num">Threshold</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(tables[name] ?? []).map((row, index) => (
+                    <tr key={index}>
+                      <td>{index + 1}</td>
+                      <td className="num">{row.rate}</td>
+                      <td className="num">{formatCurrency(row.threshold)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+      </div>
     </section>
   )
 }
