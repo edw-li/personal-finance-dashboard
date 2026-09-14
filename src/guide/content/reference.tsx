@@ -134,33 +134,49 @@ export const REFERENCE_CARDS: GuideCard[] = [
       'Three layers — the toast, the Activity log and snapshots — and a short list of things none of them reverses.',
     keywords: ['undo', 'safety', 'backup', 'restore'],
     tasks: [],
+    // The five layers as fact tiles (2026-09-15 polish spec §5.3): each bullet's bold lead is
+    // the tile's heading, the sentences under it unchanged.
     body: (
-      <ul className="guide-body">
-        <li>
-          <b>The toast.</b> Most saves and deletes raise one for six seconds carrying{' '}
-          <b className="guide-label">Undo</b>; the clock pauses while your pointer or your focus is on it.
-        </li>
-        <li>
-          <b>The Activity log.</b>{' '}
-          <Link to="/settings?section=data#activity">Settings → Data → Activity</Link> lists every
-          money-bearing change, newest first, with <b className="guide-label">Undo</b> — press once to
-          arm, again to fire — for as long as nothing later touched the same rows.
-        </li>
-        <li>
-          <b>Snapshots.</b> The app writes one nightly at 23:30 PT and keeps the newest fourteen; press{' '}
-          <b className="guide-label">Snapshot now</b> before an import or a big edit. A{' '}
-          <Link to="/settings?section=data#restore">restore</Link> writes a pre-restore point first, so
-          the step back is one more restore.
-        </li>
-        <li>
-          <b>Typed confirmations.</b> Deleting a month asks you to type the month as YYYY-MM; restoring
-          asks for the snapshot&apos;s date.
-        </li>
-        <li>
-          <b>Never undone.</b> A revoked calendar feed link, and the sign-outs a password change causes.
-          An import or a restore is undone only by restoring a snapshot.
-        </li>
-      </ul>
+      <div className="guide-facts">
+        <div className="guide-fact">
+          <h4>The toast</h4>
+          <p>
+            Most saves and deletes raise one for six seconds carrying <b className="guide-label">Undo</b>;
+            the clock pauses while your pointer or your focus is on it.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>The Activity log</h4>
+          <p>
+            <Link to="/settings?section=data#activity">Settings → Data → Activity</Link> lists every
+            money-bearing change, newest first, with <b className="guide-label">Undo</b> — press once to
+            arm, again to fire — for as long as nothing later touched the same rows.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>Snapshots</h4>
+          <p>
+            The app writes one nightly at 23:30 PT and keeps the newest fourteen; press{' '}
+            <b className="guide-label">Snapshot now</b> before an import or a big edit. A{' '}
+            <Link to="/settings?section=data#restore">restore</Link> writes a pre-restore point first, so
+            the step back is one more restore.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>Typed confirmations</h4>
+          <p>
+            Deleting a month asks you to type the month as YYYY-MM; restoring asks for the snapshot&apos;s
+            date.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>Never undone</h4>
+          <p>
+            A revoked calendar feed link, and the sign-outs a password change causes. An import or a restore
+            is undone only by restoring a snapshot.
+          </p>
+        </div>
+      </div>
     ),
   },
   {
@@ -170,34 +186,50 @@ export const REFERENCE_CARDS: GuideCard[] = [
       'Three sandboxes answer what-if questions from live data. The address bar holds the scenario, and nothing writes.',
     keywords: ['sandbox', 'what if', 'scenario', 'try changes'],
     tasks: [],
+    // Five facts, one tile each (2026-09-15 polish spec §5.3).
     body: (
-      <ul className="guide-body">
-        <li>
-          <Link to="/paycheck?section=changes">Paycheck → Try changes</Link>,{' '}
-          <Link to="/taxes?section=whatif">Taxes → What-if</Link> and{' '}
-          <Link to="/projection">Projection</Link>&apos;s planning assumptions — the{' '}
-          <Link to="/guide?section=pages#page-projection">Projection card</Link> in this guide walks the
-          third.
-        </li>
-        <li>
-          The live scenario rides in the address as repeated <code>whatif=</code> entries, so{' '}
-          <b className="guide-label">Copy link</b> hands someone the same run, and Back leaves the page
-          instead of replaying every slider move.
-        </li>
-        <li>
-          <b className="guide-label">Pin this scenario</b> keeps at most three per page in this browser
-          — the knobs only. A pin re-runs against live data at every visit and is never part of a link.
-        </li>
-        <li>
-          <b className="guide-label">Reset to actual</b>, or{' '}
-          <b className="guide-label">Reset to baseline</b> on Projection, clears the scenario.
-        </li>
-        <li>
-          Nothing in a sandbox writes. The doors out are explicit and few: Paycheck fills in the profile
-          form and you press its own <b className="guide-label">Add profile</b>; Taxes writes input
-          overrides after showing you before and after; Projection has no apply at all.
-        </li>
-      </ul>
+      <div className="guide-facts">
+        <div className="guide-fact">
+          <h4>The three sandboxes</h4>
+          <p>
+            <Link to="/paycheck?section=changes">Paycheck → Try changes</Link>,{' '}
+            <Link to="/taxes?section=whatif">Taxes → What-if</Link> and{' '}
+            <Link to="/projection">Projection</Link>&apos;s planning assumptions — the{' '}
+            <Link to="/guide?section=pages#page-projection">Projection card</Link> in this guide walks the
+            third.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>The scenario rides in the address</h4>
+          <p>
+            The live scenario rides in the address as repeated <code>whatif=</code> entries, so{' '}
+            <b className="guide-label">Copy link</b> hands someone the same run, and Back leaves the page
+            instead of replaying every slider move.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>Pinning</h4>
+          <p>
+            <b className="guide-label">Pin this scenario</b> keeps at most three per page in this browser —
+            the knobs only. A pin re-runs against live data at every visit and is never part of a link.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>Resetting</h4>
+          <p>
+            <b className="guide-label">Reset to actual</b>, or{' '}
+            <b className="guide-label">Reset to baseline</b> on Projection, clears the scenario.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>The doors out</h4>
+          <p>
+            Nothing in a sandbox writes. The doors out are explicit and few: Paycheck fills in the profile
+            form and you press its own <b className="guide-label">Add profile</b>; Taxes writes input
+            overrides after showing you before and after; Projection has no apply at all.
+          </p>
+        </div>
+      </div>
     ),
   },
   {
@@ -207,22 +239,35 @@ export const REFERENCE_CARDS: GuideCard[] = [
       'The address carries the view, the month, whose figures, the window and any scenario — copy it to share exactly what you are looking at.',
     keywords: ['link', 'url', 'share', 'deep link'],
     tasks: [],
+    // Four facts, one tile each (2026-09-15 polish spec §5.3).
     body: (
-      <ul className="guide-body">
-        <li>
-          <code>?section=</code> is the view on a tabbed page; <code>?month=YYYY-MM</code> is the month
-          on pages that carry a month ribbon.
-        </li>
-        <li>
-          <code>?owner=</code> is whose figures — everyone, joint, or one person; <code>?range=</code> is
-          the window. Owner and window are remembered as you move between pages; the month is not.
-        </li>
-        <li>
-          On <Link to="/settings">Settings</Link>, <code>#card</code> opens the tab that holds the card
-          and rings it. <code>whatif=</code> carries a sandbox scenario.
-        </li>
-        <li>Back and Forward restore the view, the month, the owner and the selection.</li>
-      </ul>
+      <div className="guide-facts">
+        <div className="guide-fact">
+          <h4>The view and the month</h4>
+          <p>
+            <code>?section=</code> is the view on a tabbed page; <code>?month=YYYY-MM</code> is the month on
+            pages that carry a month ribbon.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>Whose figures and the window</h4>
+          <p>
+            <code>?owner=</code> is whose figures — everyone, joint, or one person; <code>?range=</code> is
+            the window. Owner and window are remembered as you move between pages; the month is not.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>Settings cards and scenarios</h4>
+          <p>
+            On <Link to="/settings">Settings</Link>, <code>#card</code> opens the tab that holds the card and
+            rings it. <code>whatif=</code> carries a sandbox scenario.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>Back and Forward</h4>
+          <p>Back and Forward restore the view, the month, the owner and the selection.</p>
+        </div>
+      </div>
     ),
   },
   {
@@ -294,7 +339,7 @@ export const REFERENCE_CARDS: GuideCard[] = [
     keywords: ['glossary', 'definitions', 'terms', 'what does mean'],
     tasks: [],
     body: (
-      <dl className="guide-body guide-glossary">
+      <dl className="guide-body guide-glossary guide-glossary-grid">
         <dt>Living spending</dt>
         <dd>
           Spend in categories of kind Living — the lifestyle figure the budgets, the savings rate and the

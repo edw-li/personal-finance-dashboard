@@ -230,51 +230,87 @@ export const ROUTINE_CARDS: GuideCard[] = [
     purpose:
       'Once a year, when the IRS and the Franchise Tax Board publish the figures: a new tax year, its tables, this year’s contribution limits.',
     keywords: ['tax season', 'new year', 'brackets', 'yearly'],
-    tasks: [],
-    body: (
-      <ol className="guide-body">
-        <li>
-          <Link to="/taxes">Taxes</Link> → <b className="guide-label">New tax year…</b> → type the year →{' '}
-          <b className="guide-label">Create year</b>. The tables arrive as copies of the newest year you have,
-          so every figure still needs this year’s published number.
-        </li>
-        <li>
-          Scope row → <b className="guide-label">Filing status</b> — the status this year is filed as.
-        </li>
-        <li>
-          <Link to="/taxes?section=tables">Tax tables</Link> → enter or refresh Federal, State, Medicare, Social
-          Security, Disability and Capital gains for that status. Rates go in as percents, thresholds ascend
-          from 0, and no table takes more than twelve rows.
-        </li>
-        <li>
-          A married year: while its status tab is still empty, press{' '}
-          <b className="guide-label">Clone from &lt;year&gt; single tables</b>, then edit the tables badged
-          “review thresholds”. Social Security and Disability come across verbatim — they are per worker, not
-          per filing status.
-        </li>
-        <li>
-          An earner on a different plan: <b className="guide-label">Add a table for &lt;person&gt;</b> under
-          Social Security or Disability.
-        </li>
-        <li>
-          <Link to="/taxes?section=inputs">Inputs</Link> → the year’s line items. A row badged “derived”
-          computes itself; an <b className="guide-label">Apply</b> chip fills a box with its suggestion — last
-          year’s figure, or a formula’s.
-          Finish with <b className="guide-label">Save inputs</b>.
-        </li>
-        <li>
-          <Link to="/settings?section=planning#limits">Settings → Planning → Contribution limits</Link> → pick
-          the year, enter the published caps or press <b className="guide-label">Clone from &lt;year&gt;</b>,
-          then <b className="guide-label">Save limits</b>.
-        </li>
-        <li>
-          Through the year: <Link to="/taxes?section=summary">Summary</Link> →{' '}
-          <b className="guide-label">Will I owe?</b> Its <b className="guide-label">Apply</b> chip writes this
-          year’s vest income into the W-2 inputs, and the remedy line gives the figure to add on{' '}
-          <b className="guide-label">W-4 line 4c</b> or <b className="guide-label">DE 4</b>.
-        </li>
-      </ol>
-    ),
+    // The yearly sequence is a numbered rail, not prose (2026-09-15 polish spec §5.2): the
+    // eight steps of the ordered list, one task each, read in order.
+    numbered: true,
+    tasks: [
+      {
+        id: 'season-new-year',
+        title: 'Create the year',
+        where: 'Taxes → New tax year…',
+        steps: [
+          '**New tax year…** → type the year → **Create year**.',
+          'The tables arrive as copies of the newest year you have, so every figure still needs this year’s published number.',
+        ],
+        to: '/taxes',
+      },
+      {
+        id: 'season-status',
+        title: 'Set the filing status',
+        where: 'Taxes → Filing status',
+        steps: ['In the scope row, **Filing status** — the status this year is filed as.'],
+        to: '/taxes',
+        watch: ['Every year starts Single.'],
+      },
+      {
+        id: 'season-tables',
+        title: 'Enter the tables',
+        where: 'Taxes → Tax tables',
+        steps: [
+          'Enter or refresh Federal, State, Medicare, Social Security, Disability and Capital gains for that status.',
+          'Rates go in as percents, thresholds ascend from 0, and no table takes more than twelve rows.',
+        ],
+        to: '/taxes?section=tables',
+      },
+      {
+        id: 'season-clone',
+        title: 'Clone for a married year',
+        where: 'Taxes → Tax tables',
+        steps: [
+          'A married year: while its status tab is still empty, press **Clone from <year> single tables**.',
+          'Then edit the tables badged “review thresholds”.',
+          'Social Security and Disability come across verbatim — they are per worker, not per filing status.',
+        ],
+        to: '/taxes?section=tables',
+      },
+      {
+        id: 'season-per-person',
+        title: 'Add a per-worker table',
+        where: 'Taxes → Tax tables',
+        steps: ['An earner on a different plan: **Add a table for <person>** under Social Security or Disability.'],
+        to: '/taxes?section=tables',
+      },
+      {
+        id: 'season-inputs',
+        title: 'Enter the inputs',
+        where: 'Taxes → Inputs',
+        steps: [
+          'The year’s line items. A row badged “derived” computes itself.',
+          'An **Apply** chip fills a box with its suggestion — last year’s figure, or a formula’s.',
+          'Finish with **Save inputs**.',
+        ],
+        to: '/taxes?section=inputs',
+      },
+      {
+        id: 'season-limits',
+        title: 'Enter this year’s limits',
+        where: 'Settings → Planning → Contribution limits',
+        steps: ['Pick the year, enter the published caps or press **Clone from <year>**, then **Save limits**.'],
+        to: '/settings?section=planning#limits',
+        watch: ['The Paycheck pace meters and the sandbox presets need these limits.'],
+      },
+      {
+        id: 'season-owe',
+        title: 'Watch Will I owe? through the year',
+        where: 'Taxes → Summary → Will I owe?',
+        steps: [
+          'Open **Will I owe?** through the year.',
+          'Its **Apply** chip writes this year’s vest income into the W-2 inputs.',
+          'The remedy line gives the figure to add on **W-4 line 4c** or **DE 4**.',
+        ],
+        to: '/taxes?section=summary',
+      },
+    ],
     watch: [
       'The tab inside Tax tables only says which tables you are editing — a married year left on the Single toggle in the scope row still computes as Single.',
       'With no tables for the year’s filing status every figure reads “—”, never 0, and the card offers **Open Tax tables**.',
