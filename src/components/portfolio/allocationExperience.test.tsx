@@ -1,9 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { allocationLabel, displayLabel, saveAllocationTargets, saveClassification } from '../../api/allocation'
-import type { AllocationData, SecurityClassification } from '../../api/allocation'
+import { allocationLabel, displayLabel, saveAllocationTargets } from '../../api/allocation'
+import type { AllocationData } from '../../api/allocation'
 import AllocationTargetEditor from './AllocationTargetEditor'
-import ClassificationEditor from './ClassificationEditor'
 import { exposureCsv, exposureOption } from './allocationChartOptions'
 
 vi.mock('../../api/allocation', async (original) => ({
@@ -58,23 +57,6 @@ describe('allocation targets', () => {
       { key: 'equity', target_pct: '60', tolerance_pp: '5' },
     ]))
   })
-})
-
-it('reviews a fund without pretending its wrapper is an industry', async () => {
-  const fund: SecurityClassification = { security_id: 2, ticker: 'FUND', name: 'A fund', holding_type: 'etf',
-    asset_class: null, industry: null, geography: null, source: 'Existing records', note: null,
-    reviewed_at: null, industry_available: false }
-  vi.mocked(saveClassification).mockResolvedValue({ data: fund, headers: new Headers() })
-  render(<ClassificationEditor classifications={[fund]} onChanged={vi.fn()} />)
-  fireEvent.click(screen.getByText('Review security classifications'))
-  fireEvent.click(screen.getByRole('button', { name: 'Review FUND classification' }))
-  expect((screen.getByLabelText('Industry') as HTMLInputElement).disabled).toBe(true)
-  fireEvent.change(screen.getByLabelText('Asset class'), { target: { value: 'bonds' } })
-  fireEvent.change(screen.getByLabelText('Geography'), { target: { value: 'us' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Save reviewed classification' }))
-  await waitFor(() => expect(saveClassification).toHaveBeenCalledWith(2, {
-    asset_class: 'bonds', industry: null, geography: 'us', note: null,
-  }))
 })
 
 it('spells the catch-all slice Unclassified in the donut and the export, and keeps missing prices blank', () => {

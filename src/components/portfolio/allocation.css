@@ -12,19 +12,35 @@
 .allocation-category-button:hover { text-decoration: underline; }
 .allocation-category-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
 .allocation-unknown { background: var(--surface-2); }
-.allocation-target-form, .allocation-classification-form { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin: 12px 0; }
+.allocation-target-form { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin: 12px 0; }
 .allocation-target-form .field-input { max-width: 15ch; }
 .allocation-add-target { display: flex; align-items: end; gap: 8px; margin-top: 12px; }
-.allocation-add-target label, .allocation-search { display: flex; flex-direction: column; gap: 5px; font-size: 0.85rem; }
+.allocation-add-target label { display: flex; flex-direction: column; gap: 5px; font-size: 0.85rem; }
 .allocation-add-target .field-input { max-width: 32ch; }
 .allocation-employer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 .allocation-employer-grid > div + div { border-left: 1px solid var(--border); padding-left: 24px; }
-.allocation-employer h3, .allocation-classification-form h3 { font-size: 0.92rem; margin: 8px 0 12px; }
+.allocation-employer h3 { font-size: 0.92rem; margin: 8px 0 12px; }
 .allocation-employer strong { font-size: 1.35rem; font-variant-numeric: tabular-nums; }
 .allocation-employer p { font-size: 0.85rem; }
-.allocation-classifications > summary { padding: 4px 0; cursor: pointer; font-weight: 600; }
-.allocation-search { max-width: 30ch; margin: 14px 0; }
 .allocation-member { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .allocation-member small { grid-column: 1 / -1; color: var(--muted); }
 /* A dock can narrow a desktop workspace. Keep both sections usable without overflow. */
 @container (max-width: 900px) { .allocation-overview-grid { grid-template-columns: 1fr; } }
+
+/* Security classifications card (2026-09-13 polish §13). scroll-margin-top keeps the card's top
+   clear of the sticky tab strip when the classify action scrolls it in: --sticky-inset is what
+   PageFrame measures onto .page-frame-body, and custom properties inherit down to here. */
+.allocation-classifications { scroll-margin-top: calc(var(--sticky-inset, 0px) + 12px); }
+.allocation-coverage-sentence { margin: 0 0 6px; font-size: 0.95rem; }
+.classification-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 8px 0 12px; }
+.classification-search { max-width: 26ch; }
+/* Compact rows: ticker over name in the row header, boxes sized to their words, a saving row
+   dimmed rather than disabled (a disabled control drops the caret). */
+.classification-table th[scope='row'] { white-space: normal; }
+.classification-table th[scope='row'] .ticker { display: block; font-weight: 600; }
+.classification-table th[scope='row'] .sub { display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.classification-table .field-input { min-width: 11ch; }
+.classification-table select.field-input { max-width: 22ch; }
+.classification-table tr[aria-busy='true'] { opacity: 0.6; }
+.classification-row-error { display: block; margin-top: 4px; color: var(--negative); font-size: 0.78rem; white-space: normal; }
+.classification-source { color: var(--muted); font-size: 12px; }
