@@ -534,7 +534,7 @@ export default function SpendingPage() {
             <StatTile
               label="Savings rate — cash"
               value={kpis.savings === null ? '—' : formatPct(kpis.savings, { signed: false })}
-              hint="(net pay − living spend − tax paid) ÷ net pay for the viewed month. Payroll deductions are not in this one — the chart below draws both readings."
+              hint="(net pay − living spend − tax paid) ÷ net pay for the viewed month. Payroll deductions are not in this one — the Savings rate chart on Trends draws both readings."
               evidence={evidence.metric('cash_savings_rate')}
             />
             <StatTile

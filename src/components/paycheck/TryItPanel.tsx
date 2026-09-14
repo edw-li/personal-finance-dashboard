@@ -254,7 +254,7 @@ export default function TryItPanel({
   return (
     <SandboxPanel
       eyebrow={`Try changes — effective ${formatDate(profile.effective_date)}`}
-      hint="Move a percentage or an amount and see the check the server computes for it, against the profile shown above — nothing is saved."
+      hint="Move a percentage or an amount and see the check the server computes for it, against the profile named in this card's title — nothing is saved."
       open={open}
       onToggle={() => setOpen((o) => !o)}
       defaultOpen={defaultOpen}
