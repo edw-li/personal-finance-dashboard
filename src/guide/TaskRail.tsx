@@ -7,9 +7,9 @@ import type { GuideCard, GuideTask } from './types'
 // rows KEEP the task ids — palette hits, pointer links and the probe target `#<taskId>` land on
 // a row, and LocalSections' arrival effect focuses it (which scrolls the rail too). One measured
 // accent indicator, the LocalSectionNav idiom turned vertical. Every task is a row — the core
-// tasks first, a hairline, then the tail — and the rail scrolls, exactly like the setup
-// checklist's (the user retired the "More tasks" fold, 2026-09-15). Arrow keys move the
-// selection like the tab strip's do.
+// tasks first, then the tail, one uniform list — and the rail scrolls, exactly like the setup
+// checklist's (the user retired the "More tasks" fold and the divider, 2026-09-15). Arrow keys
+// move the selection like the tab strip's do.
 export default function TaskRail({
   card,
   selectedId,
@@ -25,9 +25,7 @@ export default function TaskRail({
   const indicatorRef = useRef<HTMLSpanElement>(null)
   // The FIRST placement is where the bar lives, not a move: data-placed goes on from the second.
   const placedRef = useRef(false)
-  const core = card.tasks
-  const tail = card.more ?? []
-  const all: GuideTask[] = [...core, ...tail]
+  const all: GuideTask[] = [...card.tasks, ...(card.more ?? [])]
 
   useLayoutEffect(() => {
     const place = () => {
@@ -95,14 +93,7 @@ export default function TaskRail({
     <div ref={listRef} className="guide-rail" role="tablist" aria-orientation="vertical" aria-label={`Tasks on ${card.title}`}>
       {/* Decorative: aria-selected already says which row is current. */}
       <span ref={indicatorRef} className="guide-rail-indicator" aria-hidden="true" />
-      {core.map((task, index) => row(task, index))}
-      {tail.length > 0 && (
-        <>
-          {/* A hairline between the core tasks and the tail: the authors' order, not a hidden set. */}
-          <span className="guide-rail-divider" aria-hidden="true" />
-          {tail.map((task, index) => row(task, core.length + index))}
-        </>
-      )}
+      {all.map((task, index) => row(task, index))}
     </div>
   )
 }

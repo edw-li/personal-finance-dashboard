@@ -265,15 +265,6 @@ ul.guide-body li {
   pointer-events: none;
 }
 
-/* Between the core tasks and the tail: a hairline, not a fold. Every row is in the rail and the
-   rail scrolls — the same shape as the setup checklist (user decision, 2026-09-15). */
-.guide-rail-divider {
-  flex: none;
-  height: 1px;
-  margin: 0.35rem 0.6rem;
-  background: var(--border);
-}
-
 .guide-detail {
   min-width: 0;
 }

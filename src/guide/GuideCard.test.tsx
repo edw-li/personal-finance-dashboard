@@ -61,11 +61,12 @@ describe('GuideCard (master–detail)', () => {
     expect(col.querySelector('ul.guide-watch b.guide-label')?.textContent).toBe('Example')
   })
 
-  it('lists every task in one rail — the core tasks, a hairline, then the tail — with no fold to open', () => {
+  it('lists every task in one uniform rail — the core tasks then the tail — with no fold or divider', () => {
     renderCard()
     const rows = Array.from(rail().querySelectorAll('[role="tab"]')).map((r) => r.id)
     expect(rows).toEqual(['example-add', 'example-export', 'example-table'])
-    expect(rail().querySelectorAll('.guide-rail-divider')).toHaveLength(1)
+    // Rows are the only children besides the indicator: nothing separates the tail from the core.
+    expect(Array.from(rail().children).filter((el) => el.getAttribute('role') !== 'tab' && !el.classList.contains('guide-rail-indicator'))).toHaveLength(0)
     expect(screen.queryByRole('button', { name: /More tasks/ })).toBeNull()
     fireEvent.click(document.getElementById('example-export') as HTMLElement)
     expect(document.getElementById('example-export')?.getAttribute('aria-selected')).toBe('true')

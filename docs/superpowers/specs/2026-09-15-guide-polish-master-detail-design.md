@@ -67,7 +67,7 @@ The `Disclosure`-based "More tasks" block and `GuideTaskList` are retired from t
 `GuideTaskList.tsx` is deleted (its only consumer was `GuideCard`).
 
 > **Amendment 2026-09-15 (user request after seeing the build):** the "More tasks (N)" fold is
-> retired. Every task — `card.tasks` first, a hairline `.guide-rail-divider`, then `card.more` —
+> retired. Every task — `card.tasks` first, then `card.more`, one uniform list with no divider —
 > is a row in the rail, and the rail scrolls (`max-height: min(70vh, 640px)`), so page cards
 > behave exactly like the setup checklist. `useTaskSelection` carries no fold state; a hash naming
 > any task selects it. The `more` split stays in the content model as the authors' "core first"
