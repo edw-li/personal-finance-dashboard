@@ -279,7 +279,7 @@ Each card's tasks, prerequisites and traps are catalogued in research §5 (S1–
 ## 6. Command palette Guide group (G5)
 
 - `PaletteKind` gains `'guide'`; `PaletteGroup['title']` gains `'Guide'`; `GROUP_ORDER` appends `'Guide'` **last** so pages, Settings cards and entities win an ambiguous query; `titleOf` maps `kind === 'guide'` → `'Guide'`.
-- `buildEntries` appends `guideEntries()` from `src/guide/palette.ts` after sections: one entry per task (`tasks` and `more`) —
+- **Loaded lazily, like entities** (G5 review, 2026-09-14): `paletteRegistry.buildEntries` stays free of guide content; `CommandPalette` imports `src/guide/palette.ts` on first open and appends `guideEntries()` to its entries, so the guide's text never rides in the shell chunk. One entry per task (`tasks` and `more`, pointer tasks skipped) —
 
 ```ts
 { kind: 'guide', id: `guide:${task.id}`, label: task.title, sub: `Guide · ${card.title}`,
@@ -288,7 +288,7 @@ Each card's tasks, prerequisites and traps are catalogued in research §5 (S1–
 ```
 
 - `CommandPalette.tsx` renders it like a section entry (label + `sub`); if it switches on kind for an icon, `guide` uses `BookOpen`.
-- `GROUP_CAP` (6) applies; fuzzy scoring is the existing `fuzzyScore` over label + keywords.
+- `GROUP_CAP` (6) applies; fuzzy scoring is the existing `fuzzyScore` over label + keywords, with one rule: **a guide entry's label match scores like an alias match** (no label bonus), so a page, Settings card or action that matches the same word wins the tie through registry order — typing `rsu` opens Comp, not "Add an RSU grant"; "add a card" still lands on the how-to because no destination matches it.
 - Tests (`paletteRegistry.test.ts`): the five-action pin is unchanged; a Guide group exists; the query `add a card` surfaces `guide:cards-add` in the Guide group; the query `settings` still ranks Settings sections above guide tasks; every guide entry's `to` starts with `/guide?section=`.
 
 ## 7. Fresh-database entry points (G5)
