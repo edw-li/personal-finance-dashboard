@@ -360,3 +360,11 @@ Both servers were **left running** (uvicorn 8000, vite 5173) for the morning eye
    as `ref-settings-map`). If that reads heavy, the Reference copy is the one to keep.
 7. **Scratch artefacts** (gitignored, delete whenever): `scratchpad/guide-v/` — gate logs,
    `report.json`, `token.txt`, 16 full-page screenshots and 5 eyeball crops.
+
+## Lead — end of night (2026-09-15)
+
+Cleanup done after lane V: `git worktree remove --force .worktrees/guide-g0…g5` and
+`git branch -d guide/*` (all six merged); `.worktrees/` is empty and only `main` remains. Nothing
+pushed. uvicorn 8000, vite 5173 and the Docker Postgres container are left running for the
+morning eyeball (`http://localhost:5173/guide`). The morning list above stands minus its
+worktree/branch item.
