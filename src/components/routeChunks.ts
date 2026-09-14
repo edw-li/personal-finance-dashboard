@@ -21,6 +21,7 @@ export const ROUTE_CHUNKS: Record<string, RouteChunk> = {
   '/calendar': () => import('../pages/CalendarPage'),
   '/projection': () => import('../pages/ProjectionPage'),
   '/settings': () => import('../pages/SettingsPage'),
+  '/guide': () => import('../pages/GuidePage'),
 }
 
 /** Warm one route's chunk (nav-link hover/focus). Fire-and-forget: a failed prefetch

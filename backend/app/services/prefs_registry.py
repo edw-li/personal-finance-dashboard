@@ -30,6 +30,7 @@ NAV_PATHS: tuple[str, ...] = (
     "/projection",
     "/calendar",
     "/settings",
+    "/guide",
 )
 THEMES = ("system", "dark", "light")
 DENSITIES = ("comfortable", "compact")

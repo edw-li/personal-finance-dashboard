@@ -29,6 +29,7 @@ const CompPage = lazy(ROUTE_CHUNKS['/comp'])
 const CalendarPage = lazy(ROUTE_CHUNKS['/calendar'])
 const ProjectionPage = lazy(ROUTE_CHUNKS['/projection'])
 const SettingsPage = lazy(ROUTE_CHUNKS['/settings'])
+const GuidePage = lazy(ROUTE_CHUNKS['/guide'])
 
 export default function App() {
   return (
@@ -63,6 +64,7 @@ export default function App() {
                   <Route path="/calendar" element={<CalendarPage />} />
                   <Route path="/projection" element={<ProjectionPage />} />
                   <Route path="/settings" element={<SettingsPage />} />
+                  <Route path="/guide" element={<GuidePage />} />
                   <Route path="*" element={<NotFoundPage />} />
                 </Route>
               </Route>
