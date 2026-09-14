@@ -18,7 +18,7 @@ vi.mock('./pages/LoginPage', async () => {
 vi.mock('./components/routeChunks', async () => {
   const { useLocation } = await import('react-router-dom')
   function Page() { return <h1>Page {useLocation().pathname}</h1> }
-  const routes = ['/', '/update', '/net-worth', '/spending', '/portfolio', '/credit-cards', '/taxes', '/espp', '/paycheck', '/comp', '/calendar', '/projection', '/settings']
+  const routes = ['/', '/update', '/net-worth', '/spending', '/portfolio', '/credit-cards', '/taxes', '/espp', '/paycheck', '/comp', '/calendar', '/projection', '/settings', '/guide']
   return { ROUTE_CHUNKS: Object.fromEntries(routes.map(route => [route, async () => ({ default: Page })])) }
 })
 vi.mock('./components/Layout', async () => {

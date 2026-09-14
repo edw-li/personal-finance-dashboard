@@ -206,7 +206,8 @@ describe('Layout — sidebar v2', () => {
     expect(within(nav).getByText('Tracking')).toBeTruthy()
     expect(within(nav).getByText('Income')).toBeTruthy()
     expect(within(nav).getByText('Planning')).toBeTruthy()
-    // The full order IS the contract: ungrouped pair, three groups, Settings last.
+    // The full order IS the contract: ungrouped pair, three groups, then the utility tail —
+    // Guide, then Settings last (2026-09-14 guide spec §2.1).
     expect(Array.from(nav.querySelectorAll('a')).map((a) => a.textContent)).toEqual([
       'Overview',
       'Monthly update',
@@ -220,6 +221,7 @@ describe('Layout — sidebar v2', () => {
       'Taxes',
       'Projection',
       'Calendar',
+      'Guide',
       'Settings',
     ])
     // The footer closes the sidebar — it carries the old separator's border, the identity

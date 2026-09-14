@@ -1,5 +1,6 @@
 import {
   Banknote,
+  BookOpen,
   Briefcase,
   CalendarCheck,
   CalendarDays,
@@ -24,7 +25,7 @@ export interface NavItem {
 }
 
 export interface NavSection {
-  /** null = ungrouped (the top pair, and Settings alone at the bottom). */
+  /** null = ungrouped (the top pair, and the utility tail at the bottom: Guide, then Settings). */
   heading: string | null
   items: NavItem[]
 }
@@ -128,6 +129,16 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     heading: null,
     items: [
+      // The guide sits with Settings in the utility tail (2026-09-14 guide spec §2.1): help
+      // beside preferences is where readers look for it, and the top pair stays the two
+      // destinations every visit starts from. BookOpen, not Info (already two meanings) and
+      // not CircleHelp (reserved for the metric-inspector trigger).
+      {
+        to: '/guide',
+        label: 'Guide',
+        icon: BookOpen,
+        keywords: ['help', 'how to', 'how do i', 'tutorial', 'manual', 'onboarding', 'docs', 'getting started', 'shortcuts', 'keyboard'],
+      },
       { to: '/settings', label: 'Settings', icon: Settings, keywords: ['preferences', 'options'] },
     ],
   },

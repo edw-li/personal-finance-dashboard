@@ -110,8 +110,8 @@ export function guideEntries(guide?: readonly GuideChapter[]): GuidePaletteEntry
 ```
 
 Content conventions (spec §5.3) the fences enforce: task/card ids kebab-case and unique; a task
-id ending in `-pointer` links into the guide (`to` starts with `/guide`) and resolves to a
-non-pointer id; `steps` ≤ 160 characters, labels as `**Label**`; page cards (a `to` that is a
+id ending in `-pointer` carries exactly one step and points at the REAL destination
+(`/settings?section=household#accounts`), never a `/guide` anchor (spec §5.1); `steps` ≤ 160 characters, labels as `**Label**`; page cards (a `to` that is a
 sidebar route) show 3–8 visible tasks and carry `views` equal to that page's tab labels.
 
 ## File map
@@ -146,12 +146,12 @@ sidebar route) show 3–8 visible tasks and carry `views` equal to that page's t
 - Create: `src/pages/GuidePage.tsx` (placeholder page so the route compiles — replaced in Task 8)
 - Test: `src/components/routeChunks.test.ts` (unchanged, must pass), `backend/tests/test_prefs_registry.py`
 
-- [ ] **Step 1: Run the two lockstep tests to see them green before the change**
+- [x] **Step 1: Run the two lockstep tests to see them green before the change**
 
 Run: `npx vitest run src/components/routeChunks.test.ts`
 Expected: PASS (2 tests).
 
-- [ ] **Step 2: Add the nav entry**
+- [x] **Step 2: Add the nav entry**
 
 In `src/components/navItems.ts`, add `BookOpen` to the lucide import (alphabetical: after
 `Banknote`, before `Briefcase`):
@@ -200,12 +200,12 @@ Replace the trailing section:
   },
 ```
 
-- [ ] **Step 3: Run the lockstep test to see it fail (nav has a path with no chunk)**
+- [x] **Step 3: Run the lockstep test to see it fail (nav has a path with no chunk)**
 
 Run: `npx vitest run src/components/routeChunks.test.ts`
 Expected: FAIL — the "every nav destination has a chunk" assertion names `/guide`.
 
-- [ ] **Step 4: Add the chunk and the route**
+- [x] **Step 4: Add the chunk and the route**
 
 `src/components/routeChunks.ts` — after the `/settings` line:
 
@@ -242,12 +242,12 @@ export default function GuidePage() {
 }
 ```
 
-- [ ] **Step 5: Run the lockstep test and the type-check**
+- [x] **Step 5: Run the lockstep test and the type-check**
 
 Run: `npx vitest run src/components/routeChunks.test.ts && npx tsc -b`
 Expected: PASS; tsc silent.
 
-- [ ] **Step 6: Backend twin — see the pinned test fail, then fix it**
+- [x] **Step 6: Backend twin — see the pinned test fail, then fix it**
 
 Run (from `backend/`): `./.venv/Scripts/python.exe -m pytest tests/test_prefs_registry.py -q`
 Expected: FAIL — the set-equality assertion reports `/guide` present in `navItems.ts` and absent
@@ -264,7 +264,7 @@ Edit `backend/app/services/prefs_registry.py` `NAV_PATHS` — append after `"/se
 Run again: `./.venv/Scripts/python.exe -m pytest tests/test_prefs_registry.py -q` → PASS.
 Run: `./.venv/Scripts/ruff.exe check app/services/prefs_registry.py && ./.venv/Scripts/ruff.exe format --check app/services/prefs_registry.py` → clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/components/navItems.ts src/components/routeChunks.ts src/App.tsx src/pages/GuidePage.tsx backend/app/services/prefs_registry.py
@@ -280,14 +280,14 @@ git commit -m "feat(guide): Guide destination in the sidebar's utility tail, /gu
 - Modify: `src/App.test.tsx:21`
 - Modify: `src/components/Layout.tsx:175` (comment)
 
-- [ ] **Step 1: Run the two suites to see the exact failures**
+- [x] **Step 1: Run the two suites to see the exact failures**
 
 Run: `npx vitest run src/components/Layout.test.tsx src/App.test.tsx`
 Expected: `Layout.test.tsx` FAILS on the nav-order `toEqual` (14 links rendered, 13 expected);
 `App.test.tsx` may pass (its mock has no `/guide`, so `/guide` renders the 404 in that suite) —
 it moves anyway so the mock stays the twin of the real map.
 
-- [ ] **Step 2: Update the nav-order pin**
+- [x] **Step 2: Update the nav-order pin**
 
 In `src/components/Layout.test.tsx` replace the comment and array:
 
@@ -312,7 +312,7 @@ In `src/components/Layout.test.tsx` replace the comment and array:
     ])
 ```
 
-- [ ] **Step 3: Update the route mock**
+- [x] **Step 3: Update the route mock**
 
 In `src/App.test.tsx` line 21:
 
@@ -320,17 +320,17 @@ In `src/App.test.tsx` line 21:
   const routes = ['/', '/update', '/net-worth', '/spending', '/portfolio', '/credit-cards', '/taxes', '/espp', '/paycheck', '/comp', '/calendar', '/projection', '/settings', '/guide']
 ```
 
-- [ ] **Step 4: Fix the stale comment**
+- [x] **Step 4: Fix the stale comment**
 
 In `src/components/Layout.tsx` line 175 change `12-link sidebar` to `14-link sidebar`.
 
-- [ ] **Step 5: Run the suites**
+- [x] **Step 5: Run the suites**
 
 Run: `npx vitest run src/components/Layout.test.tsx src/App.test.tsx src/components/usePageTitle.test.tsx src/components/paletteRegistry.test.ts`
 Expected: all PASS (the palette's page entries come from `NAV_ITEMS`, so `Guide` is already a
 Pages entry; the five-action pin is untouched).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/components/Layout.test.tsx src/App.test.tsx src/components/Layout.tsx
@@ -348,7 +348,7 @@ git commit -m "test(shell): nav order and route mock carry Guide before Settings
   `src/guide/content/reference.tsx`, `src/guide/content.tsx`, `src/guide/anchors.ts`
 - Test: `src/guide/anchors.test.ts`
 
-- [ ] **Step 1: Write the failing anchor-index test**
+- [x] **Step 1: Write the failing anchor-index test**
 
 `src/guide/anchors.test.ts`:
 
@@ -391,12 +391,12 @@ describe('buildAnchorIndex', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `npx vitest run src/guide/anchors.test.ts`
 Expected: FAIL — cannot resolve `./anchors` / `./types`.
 
-- [ ] **Step 3: Write the types**
+- [x] **Step 3: Write the types**
 
 `src/guide/types.ts`:
 
@@ -410,7 +410,8 @@ import type { ReactNode } from 'react'
 export type GuideChapterId = 'start' | 'routines' | 'pages' | 'reference'
 
 export interface GuideTask {
-  /** Stable anchor; kebab-case; unique across the whole guide. `-pointer` suffix = links into the guide. */
+  /** Stable anchor; kebab-case; unique across the whole guide. `-pointer` suffix = a one-step task
+   *  that points at the real place (its `to` is never a guide anchor) — spec §5.1. */
   id: string
   /** Verb first: 'Add a card', 'Close the month'. */
   title: string
@@ -454,7 +455,7 @@ export interface GuideChapter {
 }
 ```
 
-- [ ] **Step 4: Seed the content files**
+- [x] **Step 4: Seed the content files**
 
 `src/guide/content/pending.ts`:
 
@@ -622,12 +623,12 @@ export function allIds(): string[] {
 }
 ```
 
-- [ ] **Step 5: Run the test and the type-check**
+- [x] **Step 5: Run the test and the type-check**
 
 Run: `npx vitest run src/guide/anchors.test.ts && npx tsc -b`
 Expected: PASS; tsc silent (`noUnusedLocals` is satisfied — every import is used).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/guide
@@ -642,7 +643,7 @@ git commit -m "feat(guide): content model, per-lane content seeds with the Start
 - Create: `src/guide/renderSteps.tsx`
 - Test: `src/guide/renderSteps.test.tsx`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `src/guide/renderSteps.test.tsx`:
 
@@ -675,12 +676,12 @@ describe('renderSteps', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `npx vitest run src/guide/renderSteps.test.tsx`
 Expected: FAIL — cannot resolve `./renderSteps`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/guide/renderSteps.tsx`:
 
@@ -711,12 +712,12 @@ export function renderSteps(text: string): ReactNode[] {
 }
 ```
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `npx vitest run src/guide/renderSteps.test.tsx`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/guide/renderSteps.tsx src/guide/renderSteps.test.tsx
@@ -731,7 +732,7 @@ git commit -m "feat(guide): renderSteps — **Label** becomes a bold on-screen l
 - Create: `src/guide/testing/fixtures.ts`, `src/guide/GuideTaskList.tsx`, `src/guide/GuideCard.tsx`
 - Test: `src/guide/GuideCard.test.tsx`
 
-- [ ] **Step 1: Write the fixture**
+- [x] **Step 1: Write the fixture**
 
 `src/guide/testing/fixtures.ts` — a small fake guide with no real product words (used by the
 component and page tests; the real content is fenced separately):
@@ -804,7 +805,7 @@ export const FIXTURE_GUIDE: readonly GuideChapter[] = [
 ]
 ```
 
-- [ ] **Step 2: Write the failing component test**
+- [x] **Step 2: Write the failing component test**
 
 `src/guide/GuideCard.test.tsx`:
 
@@ -877,12 +878,12 @@ describe('GuideCard', () => {
 })
 ```
 
-- [ ] **Step 3: Run it to see it fail**
+- [x] **Step 3: Run it to see it fail**
 
 Run: `npx vitest run src/guide/GuideCard.test.tsx`
 Expected: FAIL — cannot resolve `./GuideCard`.
 
-- [ ] **Step 4: Implement the task list and the card**
+- [x] **Step 4: Implement the task list and the card**
 
 `src/guide/GuideTaskList.tsx`:
 
@@ -986,12 +987,12 @@ export default function GuideCard({ card }: { card: GuideCardData }) {
 (`card.watch!` is safe behind `hasWatch`; if eslint's `no-non-null-assertion` is on in this
 repo, write `{(card.watch ?? []).map(...)}` instead.)
 
-- [ ] **Step 5: Run the test, then lint**
+- [x] **Step 5: Run the test, then lint**
 
 Run: `npx vitest run src/guide/GuideCard.test.tsx && npx eslint src/guide`
 Expected: PASS (4 tests); eslint clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/guide/testing/fixtures.ts src/guide/GuideTaskList.tsx src/guide/GuideCard.tsx src/guide/GuideCard.test.tsx
@@ -1008,7 +1009,7 @@ git commit -m "feat(guide): GuideCard and GuideTaskList — Purpose · Do this �
   behaviour — a Link navigation that the section hook turns into scroll + focus — is a page
   concern)
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 `src/guide/GuidePageChips.tsx`:
 
@@ -1033,7 +1034,7 @@ export default function GuidePageChips({ chapter }: { chapter: GuideChapter }) {
 }
 ```
 
-- [ ] **Step 2: Type-check and commit**
+- [x] **Step 2: Type-check and commit**
 
 Run: `npx tsc -b`
 Expected: silent.
@@ -1050,7 +1051,7 @@ git commit -m "feat(guide): GuidePageChips — one jump chip per page card (spec
 **Files:**
 - Create: `src/pages/GuidePage.css`
 
-- [ ] **Step 1: Write the sheet**
+- [x] **Step 1: Write the sheet**
 
 ```css
 /* GuidePage.css — page-scoped rules only (OverviewPage.css's charter): .page/.card/.card-grid/
@@ -1183,12 +1184,12 @@ git commit -m "feat(guide): GuidePageChips — one jump chip per page card (spec
 }
 ```
 
-- [ ] **Step 2: Run the CSS gates**
+- [x] **Step 2: Run the CSS gates**
 
 Run: `npx vitest run src/theme/motion.test.ts src/theme/tokens.test.ts`
 Expected: PASS (no literal durations; no palette drift).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/pages/GuidePage.css
@@ -1203,7 +1204,7 @@ git commit -m "style(guide): GuidePage.css — card grammar, 72ch measure, house
 - Replace: `src/pages/GuidePage.tsx`
 - Test: `src/pages/GuidePage.test.tsx`
 
-- [ ] **Step 1: Write the failing page test**
+- [x] **Step 1: Write the failing page test**
 
 `src/pages/GuidePage.test.tsx`:
 
@@ -1285,12 +1286,12 @@ describe('GuidePage', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `npx vitest run src/pages/GuidePage.test.tsx`
 Expected: FAIL — no tabs (the placeholder page has no strip).
 
-- [ ] **Step 3: Replace the page**
+- [x] **Step 3: Replace the page**
 
 `src/pages/GuidePage.tsx`:
 
@@ -1344,7 +1345,7 @@ export default function GuidePage() {
 If `useLocalSections`'s generic cannot infer from `CHAPTERS` (a `{ id: GuideChapterId; label: string }[]`),
 type the constant explicitly: `const CHAPTERS: readonly { id: GuideChapterId; label: string }[] = …`.
 
-- [ ] **Step 4: Run the page test; then the neighbours that render tabbed pages**
+- [x] **Step 4: Run the page test; then the neighbours that render tabbed pages**
 
 Run: `npx vitest run src/pages/GuidePage.test.tsx src/pages/NotFoundPage.test.tsx src/components/shell/LocalSections.test.tsx`
 Expected: PASS. If the two focus assertions time out under jsdom, the arrival effect runs
@@ -1352,12 +1353,12 @@ inside `requestAnimationFrame`; wrap the render in `act` and keep `waitFor` (def
 the `SettingsPage.test.tsx` anchor tests use the same hook, so a real failure is in this
 page, not the hook.
 
-- [ ] **Step 5: Lint, type-check, the mounts audit**
+- [x] **Step 5: Lint, type-check, the mounts audit**
 
 Run: `npx eslint src/pages/GuidePage.tsx src/guide && npx tsc -b && npx vitest run src/charts/mounts.audit.test.ts`
 Expected: clean; PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/pages/GuidePage.tsx src/pages/GuidePage.test.tsx
@@ -1372,7 +1373,7 @@ git commit -m "feat(guide): /guide page — four tabbed chapters, hash-to-chapte
 - Create: `src/guide/palette.ts`
 - Test: `src/guide/palette.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `src/guide/palette.test.ts`:
 
@@ -1410,7 +1411,7 @@ describe('guideEntries', () => {
             keywords: ['card word'],
             tasks: [
               { id: 'x-do', title: 'Do X', where: 'W', steps: ['S.'], keywords: ['task word'] },
-              { id: 'x-pointer', title: 'X is elsewhere', where: 'W', steps: ['S.'], to: '/guide?section=pages#x-do' },
+              { id: 'x-pointer', title: 'X is elsewhere', where: 'W', steps: ['S.'], to: '/settings?section=household#accounts' },
             ],
           },
         ],
@@ -1423,12 +1424,12 @@ describe('guideEntries', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `npx vitest run src/guide/palette.test.ts`
 Expected: FAIL — cannot resolve `./palette`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/guide/palette.ts`:
 
@@ -1469,12 +1470,12 @@ export function guideEntries(guide: readonly GuideChapter[] = GUIDE): GuidePalet
 }
 ```
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `npx vitest run src/guide/palette.test.ts`
 Expected: PASS (2 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/guide/palette.ts src/guide/palette.test.ts
@@ -1491,7 +1492,7 @@ git commit -m "feat(guide): guideEntries — one palette destination per guide t
 These tests read the real `GUIDE` and the real page sources. They must be green at this commit
 (one exemplar card, thirteen pending routes) and stay green as content lands.
 
-- [ ] **Step 1: Write the fences**
+- [x] **Step 1: Write the fences**
 
 `src/guide/guideContent.test.ts`:
 
@@ -1723,7 +1724,7 @@ describe('guide content — required coverage (spec §5.4)', () => {
 })
 ```
 
-- [ ] **Step 2: Run the fences against the seeded content**
+- [x] **Step 2: Run the fences against the seeded content**
 
 Run: `npx vitest run src/guide/guideContent.test.ts`
 Expected: PASS — the exemplar links (`/settings?section=household`, `/update`, `/taxes`,
@@ -1733,14 +1734,14 @@ literal — check the exact spelling in `SettingsPage.tsx:34` (`{"id":"household
 and adjust the `"id":\s*"…",\s*"label":\s*"…"` pattern until it captures five sections; do
 not loosen it into matching anything else in the file.
 
-- [ ] **Step 3: Prove the fences bite (temporary, not committed)**
+- [x] **Step 3: Prove the fences bite (temporary, not committed)**
 
 Temporarily change the exemplar's `/settings?section=planning` to `/settings?section=plannin`
 and run the fences → the `?section=` test FAILS naming `start-what`. Revert. Temporarily add a
 task with `steps: ['Press **Frobnicate**.']` → the label fence FAILS naming it. Revert.
 `git diff --stat` must be empty before Step 4.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/guide/guideContent.test.ts
@@ -1751,19 +1752,19 @@ git commit -m "test(guide): fences — links resolve to real routes/views/anchor
 
 ## Task 11 — gates and hand-off
 
-- [ ] **Step 1: Full frontend gates**
+- [x] **Step 1: Full frontend gates**
 
 Run: `npx tsc -b && npx eslint . && npx vitest run && npm run build`
 Expected: tsc silent; eslint clean (the pre-existing `useAuth` react-refresh warning is
 sanctioned); vitest all green (the suite count grows by the new files); build succeeds with a
 new `GuidePage-*.js` chunk in `dist/assets/`.
 
-- [ ] **Step 2: Backend gates**
+- [x] **Step 2: Backend gates**
 
 Run (from `backend/`): `./.venv/Scripts/ruff.exe check . && ./.venv/Scripts/ruff.exe format --check . && ./.venv/Scripts/python.exe -m pytest tests/test_prefs_registry.py -q`
 Expected: clean; PASS.
 
-- [ ] **Step 3: Record results in this plan**
+- [x] **Step 3: Record results in this plan**
 
 Append a `## Results (implementer, <date>)` section: commits (hash + subject), gate outputs
 (test counts), deviations (none silent), and the hand-offs below.
@@ -1790,3 +1791,142 @@ Append a `## Results (implementer, <date>)` section: commits (hash + subject), g
   palette and fences; `chapterOf`/`allIds`/`buildAnchorIndex` named the same everywhere;
   `PENDING_PAGES` spelled identically in `pending.ts` and the fences; the palette entry shape in
   Task 9 matches spec §6 (`id`, `label`, `sub`, `keywords`, `to`; G5 adds `kind`).
+
+---
+
+## Results (implementer, 2026-09-14)
+
+Lane G0 is complete on `guide/g0-shell` (worktree `.worktrees/guide-g0`), ten commits on top of
+`6a0e835`, nothing pushed. TDD per task: every test below was seen red for the stated reason
+before the code that turns it green was written.
+
+### Commits
+
+| Hash | Subject |
+| --- | --- |
+| `e31217b` | feat(guide): Guide destination in the sidebar's utility tail, /guide route and chunk, NAV_PATHS twin (spec §2.1–2.2) |
+| `71be2a6` | test(shell): nav order and route mock carry Guide before Settings; skip-link comment counts 14 links |
+| `2a0dc76` | feat(guide): content model, per-lane content seeds with the Start-here exemplar, GUIDE assembler, anchor index (spec §4) |
+| `65982cc` | feat(guide): renderSteps — **Label** becomes a bold on-screen label, nothing else is markup (spec §3.2) |
+| `c445b1a` | feat(guide): GuideCard and GuideTaskList — Purpose · Do this · Watch out · More, anchored tasks, Go and Open links (spec §3.2) |
+| `cc9b915` | feat(guide): GuidePageChips — one jump chip per page card (spec §3.1) |
+| `4c21d8f` | style(guide): GuidePage.css — card grammar, 72ch measure, house focus ring, measured scroll margin (spec §3.3) |
+| `1ca8e8d` | feat(guide): /guide page — four tabbed chapters, hash-to-chapter resolution, page chip row (spec §3.1) |
+| `28edfde` | feat(guide): guideEntries — one palette destination per guide task (spec §6 builder; G5 wires it) |
+| `582dd79` | test(guide): fences — links resolve to real routes/views/anchors, bold labels exist in the UI, completeness with a pending escape hatch, shape and uniqueness (spec §8) |
+
+### Gates (Task 11)
+
+- `npx tsc -b` — silent.
+- `npx eslint .` — **0 errors**, 25 warnings, all pre-existing `react-refresh/only-export-components`
+  in sixteen files this lane never touched (`AuthContext`, `ThemeProvider`, `PageFrame`,
+  `LocalSections`, …). No warning in `src/guide/**` or `src/pages/GuidePage.tsx`.
+- `npx vitest run` — **231 files, 3093 passed, 1 skipped** (the skip is this lane's own §5.4
+  coverage guard, `it.skipIf(PENDING_PAGES.length > 0)`). New tests: 1 anchors · 3 renderSteps ·
+  4 GuideCard · 6 GuidePage · 2 palette · 14 fences (13 + the skip).
+- `npm run build` — built in 12.6 s; new chunks `dist/assets/GuidePage-JM6JtX0Q.js` and
+  `GuidePage-C6q_Tohl.css`. No chunk-size warning.
+- Backend: `ruff check .` → All checks passed; `ruff format --check .` → 318 files already
+  formatted; `python -m pytest tests/test_prefs_registry.py -q` → **11 passed**.
+- Scoped runs at the tasks: `routeChunks.test.ts` 7 ✓ · `Layout`/`App`/`usePageTitle`/
+  `paletteRegistry` 41 ✓ · `motion`/`tokens` 20 ✓ · `GuidePage`/`NotFoundPage`/`LocalSections`
+  17 ✓ · `mounts.audit` 15 ✓.
+
+### Deviations from the plan (all deliberate, none silent)
+
+1. **The plan was not in the worktree.** The branch was cut at `c9c03b7`, before the plans were
+   committed. The lead landed them on main as `6a0e835`; the worktree was fast-forwarded to it
+   (`git merge --ff-only main`) before Task 1. No code effect — only this file and its siblings
+   arrived.
+2. **Task 1 Step 1 — test count.** `src/components/routeChunks.test.ts` holds **7** tests, not 2
+   (the lockstep pair plus five prefetch/warm tests). Red and green were exactly as described:
+   `missing chunk for /guide: expected undefined to be defined`.
+3. **Task 5 Step 4 — no non-null assertion in `GuideCard`.** Written as `const watch = card.watch ?? []`
+   with `watch.length > 0` instead of `hasWatch` + `card.watch!` (the plan's own parenthetical
+   alternative). `@typescript-eslint/no-non-null-assertion` is *not* enabled here (the config
+   extends `recommended`, not `strict`), so this is style, not necessity: the nullish default
+   needs no assertion at all and `more` is already written that way.
+4. **Task 8 Step 1 — the mock factory had to import the fixture itself.** The plan's
+   `vi.mock('../guide/content', () => ({ GUIDE: FIXTURE_GUIDE }))` cannot work: `vi.mock` is
+   hoisted above the imports, and `GuidePage → anchors.ts → ./content` evaluates the mocked module
+   during the page's own module init, so the factory threw
+   `ReferenceError: Cannot access '__vi_import_4__' before initialization`. Replaced with the
+   repo's existing pattern (`src/App.test.tsx` mocks `routeChunks` this way): an `async` factory
+   that `await import('../guide/testing/fixtures')` itself, with the top-level fixture import
+   dropped (`noUnusedLocals`). The six assertions are unchanged and all pass.
+5. **Task 8 Step 3 — the typed `CHAPTERS` fallback was taken**, and the panel's class is
+   `card-grid`. `const CHAPTERS: readonly { id: GuideChapterId; label: string }[] = GUIDE.map(...)`
+   documents the shape the hook needs. Spec §3.1's snippet writes `className="span-12 card-grid"`;
+   `.page-frame-body` is not a grid, so `span-12` would be inert here — `CreditCardsPage` needs it
+   only because it nests its panels inside an outer `.card-grid`. The plan's `card-grid` is what
+   shipped.
+6. **Task 10 Step 3 — the plan's bite-proof recipe does not bite, a different one was used.**
+   The exemplar's `/settings?section=planning` lives in the card's `body` JSX, and `body` is
+   explicitly *not* fenced (§4's own doc comment); the fences walk `card.to` and `task.to` only,
+   so mangling that link changes nothing. Proved the fences bite by temporarily giving the
+   exemplar `to: '/settings?section=plannin'` and a task
+   `{ id: 'bite-task', where: 'Nowhere land', steps: ['Press **Frobnicate**.'] }` — three fences
+   failed, naming `start-what`, `bite-task: Frobnicate` and `bite-task: Nowhere land`. A positive
+   control (`?section=planning`, `**Add card**`, `Where: Settings → Planning`) then turned all
+   three green, which is also the proof the plan asked for that `pageSections('/settings')` really
+   reads the five sections out of `SettingsPage.tsx` (an empty read would have failed `planning`
+   too). Reverted with `git checkout --`; `git diff --stat` was empty before the commit.
+7. **Backend venv lives in the main checkout only.** `backend/.venv` is untracked, so the worktree
+   has none. The backend gates ran with the main checkout's `python.exe`/`ruff.exe` from the
+   *worktree's* `backend/` as cwd — `test_prefs_registry.py` resolves `navItems.ts` through
+   `Path(__file__).resolve().parents[2]`, i.e. the worktree's copy, which is what made it go red
+   (`Extra items in the left set: '/guide'`) before the `NAV_PATHS` edit and green after.
+8. **"eslint clean" is 0 errors, not 0 warnings.** The plan sanctions "the pre-existing `useAuth`
+   react-refresh warning"; the real baseline is 25 such warnings across sixteen files. None are
+   new.
+
+### Findings for the lanes that follow
+
+- **A page card's `to` must be the bare route** (`/credit-cards`, `/settings`), never a route with
+  a query. The completeness fence compares `card.to` to `NAV_ITEMS` routes as exact strings, so
+  `to: '/settings?section=planning'` satisfies nothing and trips nothing — the page would read as
+  still missing. Deep links with `?section=`/`#` belong on **tasks**.
+- The `views` fence is exact (`JSON.stringify` equality against the page's `PAGE_SECTIONS`
+  labels, in strip order), and it reads the literal out of the page source: a page whose strip
+  constant is not a `[...] as const` literal named in its `useLocalSections(...)` call returns
+  `[]`, which the fence reads as "no tab strip" and then forbids `views` on that card.
+- `GuidePage.test.tsx` mocks `../guide/content`, so it never sees real content: content lanes do
+  not need to touch it, and a broken card shows up in `guideContent.test.ts`, not there.
+
+### Hand-offs (not done in this lane — files other lanes own)
+
+- **G1–G4:** fill `src/guide/content/*.tsx`; delete your routes from `PENDING_PAGES`; keep the
+  fences green; do not edit `src/guide/*.tsx` renderers — report a needed renderer change here.
+  The exemplar `start-what` card is G1's to keep or rewrite.
+- **G5:** wire `guideEntries()` into `paletteRegistry.buildEntries` with `kind: 'guide'` and a
+  `'Guide'` group last in `GROUP_ORDER` (spec §6); Overview *Start here* card and wizard
+  zero-accounts note (spec §7); `tools/probes/motion-v/smoke.mjs` nav list (spec §10); the two
+  copy rewrites (spec §11).
+- **V:** delete `src/guide/content/pending.ts` and its import in `guideContent.test.ts`; turn
+  `it.skipIf(...)` into `it(...)`. Nothing else in this lane is temporary.
+
+### Review round (2026-09-14, one commit)
+
+Stage 1 compliant / Stage 2 approved, with four items fixed in place:
+
+1. *(Important)* `GuideTask.id`'s doc comment claimed `-pointer` "links into the guide" — the
+   opposite of spec §5.1 and of this lane's own fence. Reworded in `src/guide/types.ts`, in the
+   Contracts block above and in the plan's embedded types snippet; `palette.test.ts`'s
+   `x-pointer` fixture now carries a real destination (`/settings?section=household#accounts`)
+   and is still expected to be skipped by the builder. (Spec §8.3's last clause carries the same
+   stale sentence — the spec is not this lane's file; flagged for V.)
+2. `.guide-page a:focus-visible` beat `.chip:focus-visible` on specificity and flattened the
+   chip's 999px pill to 4px; the selector is now `…a:focus-visible:not(.chip)`.
+3. The label fence's `^(Any|Every|The) ` exemption applied to `**Label**` steps as well as `where`
+   segments, so "Every headline tile" would have passed as a control name. Split into
+   `placeholder` (steps: only `<>`, a leading digit or `$`) and `exemptSegment` (where: plus the
+   generic locations).
+4. "a chapter with no cards renders no chip row" passed only because the Pages panel was hidden.
+   It now mounts a second module registry (`vi.resetModules` + `vi.doMock`, unwound in a
+   `finally`) holding a GUIDE whose Pages chapter is empty, selects the Pages tab and asserts the
+   `<nav>` is absent — verified to bite: deleting `chapter.cards.length > 0` from `GuidePage.tsx`
+   fails that test and only that test.
+
+Gates after the round: `npx vitest run src/guide src/pages/GuidePage.test.tsx` → **29 passed,
+1 skipped** (6 files); `npx tsc -b` silent; `npx eslint src/guide src/pages/GuidePage.tsx` clean;
+`motion`/`tokens` 20 ✓.
