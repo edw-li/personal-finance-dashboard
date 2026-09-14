@@ -1438,21 +1438,21 @@ Expected: the commit lands on `main`; `0` (nothing else tracked changed — `scr
 
 | item | observed |
 | --- | --- |
-| `main` HEAD (short SHA) and commits since `ab92b91` | ← record |
-| `git diff --name-only ab92b91 HEAD -- backend` | ← record (empty → pytest skipped) |
-| servers listening (8000, 8010, 5173, 5174) | ← record |
-| tokens re-minted (bytes each; `/prefs` status on 8000 and 8010) | ← record |
-| accounts via 5174 / 8010 direct / 8000 direct | ← record |
+| `main` HEAD (short SHA) and commits since `ab92b91` | `aed59bd`, clean tree (`git status --porcelain` = 0 lines); **125** commits since `ab92b91`, 51 of them matching `merge\|polish\|lane\|f1\|f2\|p1\|p2\|p3\|p4` |
+| `git diff --name-only ab92b91 HEAD -- backend` | **empty** (no output; `git diff --stat` tail also empty) → backend untouched, pytest **not run** |
+| servers listening (8000, 8010, 5173, 5174) | all four: `127.0.0.1:8000` pid 12540, `127.0.0.1:8010` pid 12912, `[::1]:5173` pid 24336, `[::1]:5174` pid 2788 |
+| tokens re-minted (bytes each; `/prefs` status on 8000 and 8010) | `token-dev.txt` 129 bytes, `token-prod.txt` 129 bytes; `prod token on 8010: 200`, `dev token on 8000: 200` |
+| accounts via 5174 / 8010 direct / 8000 direct | **28 / 28 / 25** — 5174 matches 8010 (the clone), differs from 8000 (the dev book): the `VITE_API_PROXY` pin holds |
 
 ### Gates (Task 1)
 
 | gate | pre-batch baseline | observed on merged `main` |
 | --- | --- | --- |
-| `npx tsc -b` | exit 0 | ← record |
-| `npx eslint .` | `✖ 24 problems (0 errors, 24 warnings)`, all `react-refresh/only-export-components` (measured on `ab92b91`, 2026-09-13) | ← record (N, delta, any non-react-refresh rule with file:line) |
-| `npx vitest run` | 193 files / 2753 tests (2026-09-12) | ← record (files, tests, duration, failures) |
-| `npm run build` | tooltip chunk ≈ 748 kB | ← record (status, top three chunks) |
-| backend `pytest -q` | 1971 passed, 1 skipped (2026-09-12) — run only if the backend diff is non-empty | ← record ("not run — backend untouched" or the numbers) |
+| `npx tsc -b` | exit 0 | **exit 0**, `tsc.log` empty (no diagnostics) |
+| `npx eslint .` | `✖ 24 problems (0 errors, 24 warnings)`, all `react-refresh/only-export-components` (measured on `ab92b91`, 2026-09-13) | **`✖ 25 problems (0 errors, 25 warnings)`**, exit 0. All **25** are `react-refresh/only-export-components` (the grep for other rules returns only the summary line itself). Delta **+1** vs the pre-batch 24 = the accepted F1 baseline of 25. No new rule fires. |
+| `npx vitest run` | 193 files / 2753 tests (2026-09-12) | **224 files (223 passed, 1 failed) / 3061 tests (3060 passed, 1 failed)**, duration 118.99 s (run 1) and 120.62 s (run 2). Failure, reproducible **2/2** in the full suite and **passing 1/1 in isolation** (112/112 in 19.71 s): `src/pages/MonthlyUpdatePage.test.tsx › forgets the $0 intent on a month switch — consent is about one save` — `TestingLibraryElementError: Unable to find a label with the text of: Confirm remaining categories as $0`, thrown at test line **1708** (the assertion after the month switch), DOM shows the wizard still on step 1 **Balances**. See "Remaining deviations" #1. |
+| `npm run build` | tooltip chunk ≈ 748 kB | **`✓ built in 9.48s`**, exit 0. Top three chunks: `tooltip-DUPCZlZw.js` **758.05 kB** (gzip 257.32), `index-C-s71eZZ.js` **353.36 kB** (gzip 112.26), `TaxesPage-uejY6LD_.js` **82.73 kB** (gzip 26.87); then PortfolioPage 78.14, SettingsPage 68.22, EsppPage 47.66, CreditCardsPage 47.14, PaycheckPage 45.31. The tooltip chunk moved 748 → 758 kB (no new 100 kB boundary crossed); vite printed **no** `(!) Some chunks are larger than 500 kB` advisory in this run. |
+| backend `pytest -q` | 1971 passed, 1 skipped (2026-09-12) — run only if the backend diff is non-empty | **not run — backend untouched** (`git diff --name-only ab92b91 HEAD -- backend` prints nothing) |
 
 ### Driver (Task 2)
 
