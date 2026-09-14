@@ -5,7 +5,7 @@ import { NAV_ITEMS } from './navItems'
 // What the palette can reach (2026-09-03 shell spec §9): pages (with aliases), Settings
 // sections (anchored), actions, and lazily loaded entities. Matching is the house fuzzy
 // scorer over label + keywords (+ sub for entities).
-export type PaletteKind = 'page' | 'section' | 'action' | 'entity'
+export type PaletteKind = 'page' | 'section' | 'action' | 'entity' | 'guide'
 
 export interface PaletteEntry {
   kind: PaletteKind
@@ -23,10 +23,20 @@ export interface PaletteEntry {
 }
 
 export interface PaletteGroup {
-  title: 'Actions' | 'Pages' | 'Settings' | 'Holdings' | 'Accounts' | 'Categories' | 'Cards'
+  title:
+    | 'Actions'
+    | 'Pages'
+    | 'Settings'
+    | 'Holdings'
+    | 'Accounts'
+    | 'Categories'
+    | 'Cards'
+    | 'Guide'
   items: PaletteEntry[]
 }
 
+// Guide last (2026-09-14 guide spec §6): a task title can share words with a page, a Settings
+// card or a holding, and those are the destinations a reader means first.
 const GROUP_ORDER: PaletteGroup['title'][] = [
   'Actions',
   'Pages',
@@ -35,6 +45,7 @@ const GROUP_ORDER: PaletteGroup['title'][] = [
   'Accounts',
   'Categories',
   'Cards',
+  'Guide',
 ]
 export const GROUP_CAP = 6
 
@@ -109,7 +120,9 @@ export interface RegistryRunners {
 }
 
 /** The static half of the registry: pages, sections, actions. Entities are appended by the
- *  palette once loaded (see `entityEntries`). */
+ *  palette once loaded (see `entityEntries`), and so are the guide's how-tos — CommandPalette
+ *  imports `src/guide/palette` dynamically on the first open (2026-09-14 guide spec §6 review
+ *  round), so the guide's content module stays out of the shell's bundle. */
 export function buildEntries(opts: { month: string; run: RegistryRunners }): PaletteEntry[] {
   const pages: PaletteEntry[] = NAV_ITEMS.map((item) => ({
     kind: 'page',
@@ -223,8 +236,13 @@ function scoreEntry(query: string, entry: PaletteEntry): number | null {
     return s === null ? best : best === null ? s : Math.max(best, s)
   }, null)
   if (label === null && alias === null) return null
-  // A label hit outranks an alias hit of equal strength.
-  return Math.max(label === null ? -1 : label + 1, alias ?? -1)
+  // A label hit outranks an alias hit of equal strength — except a guide how-to's, which scores
+  // flat (2026-09-14 guide spec §6 review round). "rsu" means the Comp page, not the card that
+  // explains it: with no label bonus the how-to ties the destination's alias hit, and registry
+  // order (guide last) breaks the tie toward the place the reader asked for. A how-to still wins
+  // outright when nothing else answers the words at all — "add an example" has no destination.
+  const bonus = entry.kind === 'guide' ? 0 : 1
+  return Math.max(label === null ? -1 : label + bonus, alias ?? -1)
 }
 
 /** Ranked matches; the empty query returns everything with `recents` first. */
@@ -255,6 +273,7 @@ function titleOf(entry: PaletteEntry): PaletteGroup['title'] {
   if (entry.kind === 'action') return 'Actions'
   if (entry.kind === 'page') return 'Pages'
   if (entry.kind === 'section') return 'Settings'
+  if (entry.kind === 'guide') return 'Guide'
   return entry.group ?? 'Holdings'
 }
 

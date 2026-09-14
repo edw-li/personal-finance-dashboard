@@ -195,3 +195,10 @@
 .data-status-row dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .overview-data-status .stale { color: var(--warn); }
 .data-status-note { margin: .6rem 0 0; }
+
+/* Start here (2026-09-14 guide spec §7.1): the empty book's one card, first in the agenda
+   column. The column's three-row template above counts the cards that always ship, so the
+   fourth card gets its own row rather than pushing Data status into an implicit one. */
+.overview-agenda-column:has(.overview-start) { grid-template-rows: auto auto auto 1fr; }
+.overview-start p { margin: 0 0 .5rem; }
+.overview-start-steps { margin: 0 0 .6rem 1.1rem; padding: 0; display: grid; gap: .3rem; }

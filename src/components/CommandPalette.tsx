@@ -52,6 +52,8 @@ export default function CommandPalette() {
   const [active, setActive] = useState<number | null>(null)
   const [entities, setEntities] = useState<PaletteEntry[]>([])
   const entitiesLoadedAt = useRef(0)
+  const [guide, setGuide] = useState<PaletteEntry[]>([])
+  const guideRequested = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
 
@@ -74,6 +76,20 @@ export default function CommandPalette() {
   // allSettled, not all: one unreachable endpoint must cost only its own group.
   useEffect(() => {
     if (!open || Date.now() - entitiesLoadedAt.current < ENTITY_TTL_MS) return
+    // The guide's how-tos, once per mount (2026-09-14 guide spec §6 review round). Imported
+    // DYNAMICALLY: a static import would drag the whole guide content module — every task, every
+    // step string — into the shell's bundle, because this component ships with the shell. The
+    // entries arrive a tick after the first open, like the entity lists beside them, and a
+    // failed import costs the how-tos and nothing else — the latch is released again so a chunk
+    // lost to a flaky network (or a deploy mid-session) is retried on the next open.
+    if (!guideRequested.current) {
+      guideRequested.current = true
+      import('../guide/palette')
+        .then((m) => setGuide(m.guideEntries().map((e) => ({ kind: 'guide' as const, ...e }))))
+        .catch(() => {
+          guideRequested.current = false
+        })
+    }
     entitiesLoadedAt.current = Date.now()
     Promise.allSettled([
       fetchSecurities(),
@@ -139,8 +155,9 @@ export default function CommandPalette() {
         },
       }),
       ...entities,
+      ...guide,
     ],
-    [entities, navigate, toast],
+    [entities, guide, navigate, toast],
   )
 
   // Recency floats to the top of the FULL list only; a typed query ranks by score alone.

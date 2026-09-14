@@ -1434,7 +1434,18 @@ export default function MonthlyUpdatePage() {
             {/* One table, not a card per group: cells sit in a single visual column so the
                 Phase 1 Enter/arrow protocol (DOM order = this GROUP_ORDER walk) goes straight
                 down, the way the sheet's muscle memory expects (spec §4.2). */}
-            <table className="data-table entry-table">
+            {/* A book with no accounts: the table would be a header with nothing under it and a
+                disabled Next with no reason (2026-09-14 guide §7.2). accounts.length === 0 after a
+                finished load means exactly that — setAccounts only runs on success, and a FIRST
+                load that fails leaves seeded === null, which renders the error view, not this step. */}
+            {!loading && accounts.length === 0 && (
+              <p className="empty-note">
+                No accounts yet —{' '}
+                <Link to="/settings?section=household#accounts">add them in Settings → Household → Accounts</Link>, or{' '}
+                <Link to="/guide?section=start#start-setup">start with the guide</Link>.
+              </p>
+            )}
+            <table className="data-table entry-table" hidden={!loading && accounts.length === 0}>
               <thead>
                 <tr>
                   <th>Account</th>

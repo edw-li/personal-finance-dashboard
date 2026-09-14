@@ -640,3 +640,174 @@ deviations (selector adjustments in the probe are expected — record the final 
 - Types: `guideEntries` from `src/guide/palette.ts` returns `{ id, label, sub, keywords, to }`;
   spreading under `kind: 'guide'` yields a `PaletteEntry` ✓. `FIXTURE_GUIDE` ids (`update-close`,
   `example-add`, `example-export`) match G0's fixture ✓.
+
+---
+
+## Results (implementer, 2026-09-14)
+
+**Status: DONE.** Five task commits on `guide/g5-integration`, cut from `e0d289c` (lane G0's head);
+nothing pushed, no other worktree, database or dev server touched. The probe was `node --check`ed
+only — lane V runs it.
+
+### Commits
+
+| Commit | Task |
+| --- | --- |
+| `07f87e2` | Task 1 — `feat(palette): Guide group — one destination per guide task, sorted last (spec §6)` |
+| `8a1bff2` | Task 2 — `feat(overview): Start here card on an empty book — accounts, import or first month, the guide (spec §7.1)` |
+| `6952052` | Task 3 — `feat(wizard): zero accounts shows a pointer to Settings and the guide instead of an empty table (spec §7.2)` |
+| `0d0543c` | Task 4 — `fix(copy): two hints name the view instead of a direction — savings chart on Trends, try-it profile in the card title (spec §11)` |
+| `88e5c79` | Task 5 — `probe(guide): read-only guide walk (links, tabs, hash targets, palette group, screenshots); motion nav walk counts 14 links (spec §9–10)` |
+
+### Gates (Task 6, on `88e5c79`)
+
+- `npx tsc -b` — clean.
+- `npx eslint .` — **0 errors, 25 warnings**, all the pre-existing `react-refresh/only-export-components`
+  baseline; none of this lane's files appears in the report.
+- `npx vitest run` — **232 files, 3102 passed, 1 skipped**.
+- `npm run build` — `built in 12.28s`; `GuidePage` still its own chunk (3.05 kB js + 1.29 kB css).
+- Scoped runs along the way: palette trio 31/31; `OverviewPage` + `overviewCss` + `components/overview`
+  205/205; `MonthlyUpdatePage` 114/114; `SpendingPage` + `components/paycheck` 114/114; the four house
+  pins (`charts/motion`, `charts/mounts.audit`, `theme/motion`, `theme/tokens`) 44/44.
+- `node --check tools/probes/guide-v/smoke.mjs` and `tools/probes/motion-v/smoke.mjs` — silent.
+
+### Deviations
+
+1. **Task 1 test — async `vi.mock` factory.** The plan's synchronous
+   `vi.mock('../guide/content', () => ({ GUIDE: FIXTURE_GUIDE }))` cannot work: the factory is
+   hoisted above the imports and `anchors.ts` pulls `GUIDE` in at module init, so the fixture binding
+   does not exist yet. `paletteRegistry.guide.test.ts` uses G0's own pattern from `GuidePage.test.tsx`
+   — an async factory that does its own `await import('../guide/testing/fixtures')`. Same four
+   assertions, unchanged.
+2. **`PaletteGroup['title']` reformatted to one member per line.** Eight members exceeded the print
+   width; the union is otherwise identical to the plan's.
+3. **Task 2 test placement.** The plan says "inside the outer `describe`", but `serve`, `renderPage`
+   and `timeseriesOut` are module-level helpers in `OverviewPage.test.tsx` and every group in the file
+   is its own top-level `describe`. The three tests live in a new top-level
+   `describe('OverviewPage Start here (2026-09-14 guide spec §7.1)')`, placed before
+   `describe('OverviewPage failures')`. `'Up next'` **is** a stable text (the agenda eyebrow; its
+   `InfoHint` renders an icon-only button, so the `h2`'s text content is exactly `Up next`), so the
+   plan's fallback to `/Net worth — /` was not needed.
+4. **One extra CSS rule: `.overview-agenda-column:has(.overview-start)`.** `overviewCss.test.ts` pins
+   `.overview-agenda-column { grid-template-rows: auto auto 1fr; }` — three rows for the three cards
+   that always ship. A fourth card would have pushed Data status into an implicit row and stretched
+   Needs attention instead, so the sheet gains
+   `.overview-agenda-column:has(.overview-start) { grid-template-rows: auto auto auto 1fr; }`.
+   Added, never edited; `:has()` is already house grammar (`panels.css:247-280`). No durations, no
+   colours — `motion.test.ts` and `tokens.test.ts` stay green.
+5. **Task 3 — no `loadError === null` guard, and why.** The plan offered it as insurance. The file
+   says it is not needed and would in fact be wrong: `setAccounts` runs only in the success branch, and
+   a FIRST load that fails leaves `seeded === null`, which `PageFrame`'s `resource` renders as the
+   error view rather than this step (`MonthlyUpdatePage.tsx:1329-1337`). The only way to reach the step
+   with `loadError !== null` is a stale good seed — whose roster came from that good load. Adding the
+   guard would hide the note in exactly the case where it is true. The reasoning is in the code comment.
+6. **Task 3 test — `getByRole<HTMLButtonElement>` instead of a cast.** The file's own idiom
+   (`MonthlyUpdatePage.test.tsx` uses it throughout); same assertion.
+7. **Probe selectors, final (the plan asked for these to be recorded).**
+   - Palette input: **`.palette-input`** (`CommandPalette.tsx:241-244` — the `<input>` carries both
+     `className="palette-input"` and `role="combobox"`; the class is the narrower handle, and the
+     plan's `'[role="combobox"], .palette input'` pair was redundant). Group headers stay
+     `.palette-group-title` (`:272`).
+   - Theme storage: **a bare string**, not JSON — `localStorage.setItem('finance.theme', theme)`.
+     `prefsStore.ts:39` maps `theme` to `'finance.theme'` and `index.html`'s pre-paint script compares
+     `t === 'light'` / `t === 'system'` directly. The plan's `JSON.stringify(t)` would have made every
+     pass render dark.
+   - Sidebar: **`nav[aria-label="Primary"] a.nav-link`** (`Layout.tsx:191-211`); the `.nav-link` class
+     keeps the count off any future non-item anchor in that nav.
+   - Added beyond the plan: a `/api/v1/prefs` GET override that stamps the pass's theme into the
+     response (the house shape from `pace-v`/`sandbox-v`), so the server's stored preference cannot
+     flip the page after hydration; non-GET `/prefs` is fenced like everything else.
+8. **`tools/probes/README.md` — two edits, not one.** The new `guide-v` row, plus the `motion-v` row's
+   "all 13 nav clicks" changed to 14 (and the same count in that probe's own comment at `:155`), which
+   the `NAV` change made stale.
+9. **`node --check` the probes, never run them** — as instructed; the guide walk needs the dev stack.
+
+### Hand-offs
+
+- **V:** run `tools/probes/guide-v/smoke.mjs` against the dev stack after all content lanes merge.
+  The palette check needs lane G2's `cards-add` task on main (it queries `"add a card"` and asserts a
+  Guide group, not a specific id, so it passes with any Guide hit — but the spec's intent is the
+  cards task). `MAX_LINKS=n` trims the walk while iterating; `ONLY_THEME` halves it.
+- **V:** `paletteRegistry.test.ts` now builds its entries over the **real** `GUIDE`. Its four ranking
+  pins (`rsu` to the Comp page, `assistant` to the action, `password`/`backup`/`limits` to Settings
+  sections) are green today, but a G1–G4 task title sharing those words could outrank them. If one
+  goes red after a content merge, the fix is the task's wording, not the registry order — Guide is
+  already last in `GROUP_ORDER` and last in registry order, so it only wins on a strictly higher
+  fuzzy score.
+- **V / Phase 2:** `paletteRegistry.ts` now imports `src/guide/palette.ts` statically, which pulls the
+  whole content module into the **main** bundle (`CommandPalette` ships in the shell). That is what
+  spec §6's synchronous `buildEntries` asks for, and `GuidePage` keeps its own chunk, but once G1–G4
+  land ~200 tasks the shell carries their strings. If that ever matters, the seam is a lazily loaded
+  `guideEntries()` appended the way `entityEntries` already is.
+- **Phase 2 (unchanged):** nothing in this lane blocks the per-page title-row Guide link.
+
+### Review round (implementer, 2026-09-14) — commit `53f0f08`
+
+The review adopted two design changes and named three fixes. All four items landed as one commit,
+`fix(palette): guide how-tos load lazily on first open and never outrank a destination; probe checks
+the selected tab (G5 review round)`.
+
+**A. Ranking — a destination beats the how-to that explains it.** `scoreEntry` gave every label hit
+a `+1` over an alias hit of equal strength, which let `guide:comp-rsu-add` ("Add an RSU grant", a
+label hit) outrank the Comp page (an alias hit on `rsu`). The bonus is now
+`const bonus = entry.kind === 'guide' ? 0 : 1`, so a how-to's label ties the destination's alias and
+registry order — guide last — hands the tie to the destination. A how-to still wins outright when no
+destination answers the words at all. Three tests in `paletteRegistry.guide.test.ts`, all verified to
+FAIL against the old `+1` (checked by flipping the constant back): the synthetic `Comp`/`rsu` pair,
+every real Settings section ahead of the first guide hit for `settings`, and `add an example` still
+landing on the fixture task.
+
+**B. Bundle — the guide's how-tos load lazily.** `paletteRegistry.ts` no longer imports
+`src/guide/palette`, and `buildEntries` no longer spreads `guideEntries()`. `CommandPalette.tsx`
+gained `const [guide, setGuide] = useState<PaletteEntry[]>([])` plus a `guideRequested` ref, and the
+existing first-open effect now does a once-per-mount
+`import('../guide/palette').then((m) => setGuide(m.guideEntries().map((e) => ({ kind: 'guide' as const, ...e }))))`
+with a swallowed `.catch` — the setState sits in a promise callback inside the effect, exactly like
+the entity loads beside it, so the React Compiler rules hold. The entries memo appends `...guide`
+(deps `[entities, guide, navigate, toast]`). `kind: 'guide'`, the `'Guide'` group last in
+`GROUP_ORDER` and `titleOf` are untouched.
+
+Build proof (`npm run build`):
+
+| Chunk | Before (static import) | After (lazy) |
+| --- | --- | --- |
+| entry `dist/assets/index-*.js` | 355.87 kB (gzip 113.10 kB) | **354.62 kB (gzip 112.67 kB)** |
+| `dist/assets/content-*.js` (the guide content) | — (inside the entry) | **1.31 kB (gzip 0.69 kB)**, shared |
+| `dist/assets/palette-*.js` (the entry builder) | — | 0.41 kB (gzip 0.30 kB) |
+| `dist/assets/GuidePage-*.js` | 3.05 kB | 3.08 kB |
+
+The content chunk is imported by **both** `GuidePage-*.js` and `palette-*.js`; the only mention of it
+in the entry chunk is the `__vite__mapDeps` preload table (a filename string, not the module), and
+grepping the entry for guide content strings returns nothing. Today's saving is small because the
+content is still G0's exemplars — the point is that G1–G4's ~200 tasks now land in that shared chunk
+rather than in the shell.
+
+Tests followed: `paletteRegistry.guide.test.ts` drops `vi.mock` entirely and composes the halves the
+way the component does — `buildEntries(...)` plus `guideEntries(FIXTURE_GUIDE).map(...)` — and one new
+assertion, `statics.some((e) => e.kind === 'guide') === false`, is the bundle fence in test form.
+`CommandPalette.test.tsx` gained a case that opens the palette, proves the Guide group is **absent**
+at first paint and present a tick later, then types the fixture task title and presses Enter to land
+on `/guide?section=pages#example-add`; `../guide/palette` is mocked there with a single fixture entry
+whose words answer no other query in that file.
+
+**C. Probe — the selected tab must be the right one.** `tabSelected` no longer accepts "some tab is
+selected" (true of every tabbed page). It reads the selected tab's `aria-controls` and requires it to
+end with `-section-${wantSection}`, the `LocalSections.tsx:88` id format (`${id}-section-${value}`).
+A missing selected tab degrades to `''`, which fails the check.
+
+**Gates after the round** — `npx vitest run src/components/paletteRegistry.guide.test.ts
+src/components/paletteRegistry.test.ts src/components/CommandPalette.test.tsx
+src/pages/GuidePage.test.tsx`: **4 files, 41 passed**. `npx tsc -b` clean. `npx eslint
+src/components/paletteRegistry.ts src/components/CommandPalette.tsx` clean; `npx eslint .` still 0
+errors / 25 baseline warnings. `npm run build` green. `node --check tools/probes/guide-v/smoke.mjs`
+silent. Full suite re-run: **232 files, 3106 passed, 1 skipped** (up 4 from 3102: the three ranking
+tests plus the CommandPalette case).
+
+**D. Hand-off to V (added).** Spec §6 names a pin this lane cannot write yet: `paletteRegistry.test.ts`
+must assert that the query **`add a card` surfaces `guide:cards-add` in the Guide group**, over the
+REAL `GUIDE`. That task id belongs to lane G2, so the assertion can only be added once the content
+lanes have merged. V should add it then — and it is the same assertion `tools/probes/guide-v/smoke.mjs`
+step 4 makes in the browser, so the two should be turned on together. The related warning stands: the
+ranking rule above means a guide entry only reaches row one when no destination matches the query at
+all, so if `add a card` ever resolves to the Credit cards page instead, the fix is the task's wording
+(or a keyword on the task), not the registry order.

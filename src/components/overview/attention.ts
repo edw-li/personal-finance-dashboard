@@ -47,8 +47,8 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
   const currentMonth = `${todayIso.slice(0, 7)}-01`
   const dayOfMonth = Number(todayIso.slice(8, 10))
 
-  // Monthly update — only once a first month exists: a fresh database's empty states
-  // already say "enter your first month", and a reminder on top would double-message.
+  // Monthly update — only once a first month exists. The empty book is the Overview's own
+  // "Start here" card (2026-09-14 guide spec §7.1); a nudge on top of it would double-message.
   if (data.months && data.months.length > 0) {
     const prevMonth = addMonths(currentMonth, -1)
     const haveCurrent = data.months.includes(currentMonth)

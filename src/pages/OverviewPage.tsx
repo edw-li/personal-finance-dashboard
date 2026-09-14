@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { NavLink } from 'react-router-dom'
+import { Link, NavLink } from 'react-router-dom'
 import { fetchCalendar } from '../api/calendar'
 import { fetchCoverage } from '../api/coverage'
 import { fetchLots } from '../api/espp'
@@ -287,6 +287,11 @@ export default function OverviewPage() {
   const emptyScope = data.ts !== undefined && owner !== null && data.ts.accounts.length === 0
   const emptyScopeNote =
     emptyScope && owner !== null ? `No accounts for ${scopeName(owner)} yet` : null
+
+  // An empty book — no snapshot at all — gets one card that says what to do first (2026-09-14
+  // guide spec §7.1). Household scope only: a person or joint scope with nothing in it is the
+  // empty-scope note's case above, and a book with months but no accounts cannot exist.
+  const emptyBook = owner === null && data.ts !== undefined && data.ts.months.length === 0
 
   const summary = data?.summary
   // Rendered verbatim, never re-derived: these are the server's own totals fields (the
@@ -684,6 +689,29 @@ export default function OverviewPage() {
                 <OverviewChanges data={data.ts} />
               </div>
               <aside className="overview-agenda-column">
+                {emptyBook && (
+                  <section className="card overview-start" aria-labelledby="overview-start-title">
+                    <h2 className="eyebrow" id="overview-start-title">Start here</h2>
+                    <p>This dashboard is empty. Three steps get it going:</p>
+                    <ol className="overview-start-steps">
+                      <li>
+                        <Link to="/settings?section=household#accounts">Add your household and accounts</Link> — every
+                        balance needs an account to live in.
+                      </li>
+                      <li>
+                        <Link to="/settings?section=data#import">Import your workbook</Link> or{' '}
+                        <Link to="/update">enter your first month</Link>.
+                      </li>
+                      <li>
+                        <Link to="/guide">Read the guide</Link> — setup order, the monthly routine, every page.
+                      </li>
+                    </ol>
+                    <p className="drill-hint">
+                      After that: one <Link to="/guide?section=routines#routine-monthly">monthly update</Link> in the
+                      first days of each month.
+                    </p>
+                  </section>
+                )}
             <div className="card up-next overview-agenda">
               <h2 className="eyebrow">
                 Up next

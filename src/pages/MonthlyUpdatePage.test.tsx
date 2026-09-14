@@ -2540,3 +2540,22 @@ it('the kebab opens the month-actions popover and Escape closes it back onto the
   expect((screen.getByLabelText('Type 2026-07 to confirm') as HTMLInputElement).value).toBe('')
   expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Delete this month' }).disabled).toBe(true)
 })
+
+describe('zero accounts (2026-09-14 guide spec §7.2)', () => {
+  it('points at Settings and the guide instead of an empty table', async () => {
+    vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([])
+    renderWizard()
+    const note = await screen.findByText(/No accounts yet/)
+    const links = Array.from(note.closest('p')!.querySelectorAll('a')).map((a) => a.getAttribute('href'))
+    expect(links).toEqual(['/settings?section=household#accounts', '/guide?section=start#start-setup'])
+    expect(document.querySelector('table.entry-table')?.hasAttribute('hidden')).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next: spending' }).disabled).toBe(true)
+  })
+
+  it('is absent with one account', async () => {
+    renderWizard()
+    await screen.findByRole('button', { name: 'Next: spending' })
+    expect(screen.queryByText(/No accounts yet/)).toBeNull()
+    expect(document.querySelector('table.entry-table')?.hasAttribute('hidden')).toBe(false)
+  })
+})

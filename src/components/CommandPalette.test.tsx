@@ -8,6 +8,20 @@ vi.mock('../api/portfolio', () => ({ fetchSecurities: vi.fn() }))
 vi.mock('../api/netWorth', () => ({ fetchAccounts: vi.fn() }))
 vi.mock('../api/spending', () => ({ fetchCategories: vi.fn() }))
 vi.mock('../api/creditCards', () => ({ fetchCreditCards: vi.fn() }))
+// The guide's how-tos arrive through a DYNAMIC import on the first open (2026-09-14 guide spec
+// §6 review round), so the real content module never loads here. One fixture task is enough to
+// prove the wiring; its words answer no other query in this file.
+vi.mock('../guide/palette', () => ({
+  guideEntries: () => [
+    {
+      id: 'guide:example-add',
+      label: 'Add an example',
+      sub: 'Guide · Example',
+      keywords: ['how to', 'guide'],
+      to: '/guide?section=pages#example-add',
+    },
+  ],
+}))
 
 import { fetchCreditCards } from '../api/creditCards'
 import { fetchAccounts } from '../api/netWorth'
@@ -281,6 +295,22 @@ describe('CommandPalette', () => {
     fireEvent.keyDown(combo(), { key: 'Enter' })
     expect(screen.getByTestId('pathname').textContent).toBe('/portfolio')
     expect(screen.getByTestId('search').textContent).toBe('?ticker=NVDA')
+  })
+
+  it('loads the guide how-tos on the first open and files them last, under Guide', async () => {
+    renderPalette()
+    openPalette()
+    // Not present at the first paint — the import resolves a tick later, like the entity lists.
+    expect(screen.queryByRole('group', { name: 'Guide' })).toBeNull()
+    await screen.findByRole('group', { name: 'Guide' })
+    type('add an example')
+    const hit = within(screen.getByRole('group', { name: 'Guide' })).getAllByRole('option')[0]
+    expect(hit.textContent).toContain('Add an example')
+    expect(hit.textContent).toContain('Guide · Example')
+    fireEvent.keyDown(combo(), { key: 'Enter' })
+    expect(screen.getByTestId('pathname').textContent).toBe('/guide')
+    expect(screen.getByTestId('search').textContent).toBe('?section=pages')
+    expect(screen.getByTestId('hash').textContent).toBe('#example-add')
   })
 
   it('opens from the sidebar bus', () => {

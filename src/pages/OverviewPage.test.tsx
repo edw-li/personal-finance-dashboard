@@ -1246,6 +1246,44 @@ describe('OverviewPage on an empty database', () => {
   })
 })
 
+describe('OverviewPage Start here (2026-09-14 guide spec §7.1)', () => {
+  const emptyBook = () =>
+    serve({
+      ts: timeseriesOut({ months: [], net_worth: [], mom_pct: [], notes: [] }),
+      yearly: { years: [] },
+      dividends: [],
+    })
+
+  it('shows the Start here card with its three doors when no month exists', async () => {
+    emptyBook()
+    renderPage()
+    const card = (await screen.findByRole('heading', { name: 'Start here' })).closest('section') as HTMLElement
+    expect(card.className).toContain('overview-start')
+    const hrefs = Array.from(card.querySelectorAll('a')).map((a) => a.getAttribute('href'))
+    expect(hrefs).toEqual([
+      '/settings?section=household#accounts',
+      '/settings?section=data#import',
+      '/update',
+      '/guide',
+      '/guide?section=routines#routine-monthly',
+    ])
+  })
+
+  it('is absent once a month exists', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Up next')
+    expect(screen.queryByRole('heading', { name: 'Start here' })).toBeNull()
+  })
+
+  it('is absent under a person scope — the empty-scope note owns that case', async () => {
+    emptyBook()
+    renderPage('/?owner=2')
+    await screen.findByText('Up next')
+    expect(screen.queryByRole('heading', { name: 'Start here' })).toBeNull()
+  })
+})
+
 describe('OverviewPage failures', () => {
   it('names each failed resource group and refetches all groups on Refresh', async () => {
     failAll()

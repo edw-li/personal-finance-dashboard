@@ -47,8 +47,8 @@ const TOKEN = readFileSync(process.env.TOKEN_FILE ?? path.join(OUT, 'token.txt')
 const BASE = process.env.APP_BASE ?? 'http://localhost:5173'
 const EDGE = process.env.EDGE_PATH ?? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 const VIEWPORT = { width: 1440, height: 900 }
-// 13 links, the sidebar's own order (src/components/navItems.ts).
-const NAV = ['Overview', 'Monthly update', 'Net worth', 'Portfolio', 'Spending', 'Credit cards', 'Paycheck', 'Comp', 'ESPP', 'Taxes', 'Projection', 'Calendar', 'Settings']
+// 14 links, the sidebar's own order (src/components/navItems.ts).
+const NAV = ['Overview', 'Monthly update', 'Net worth', 'Portfolio', 'Spending', 'Credit cards', 'Paycheck', 'Comp', 'ESPP', 'Taxes', 'Projection', 'Calendar', 'Guide', 'Settings']
 const CLS_ROUTES = [['/paycheck', 'Paycheck'], ['/espp', 'ESPP'], ['/comp', 'Comp'], ['/net-worth', 'Net worth'], ['/', 'Overview']]
 const ENTRANCE = [['/net-worth', 'Net worth'], ['/taxes', 'Taxes'], ['/portfolio', 'Portfolio']]
 const THEMES = ['dark', 'light'].filter((t) => !process.env.ONLY_THEME || t === process.env.ONLY_THEME)
@@ -152,7 +152,7 @@ try {
       drain('entrance')
     }
 
-    // B. the 13 nav clicks: #main never empty, the old page holds until the new one paints.
+    // B. the 14 nav clicks: #main never empty, the old page holds until the new one paints.
     if (STEPS.includes('nav')) {
       await page.goto(BASE + '/', { waitUntil: 'networkidle' }); await sleep(1500)
       for (const label of NAV) {
