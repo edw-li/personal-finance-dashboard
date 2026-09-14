@@ -17,6 +17,12 @@ describe('guideEntries', () => {
     expect(add.keywords).toEqual(expect.arrayContaining(['how to', 'guide']))
   })
 
+  it('skips the tasks of a numbered card — checklist steps are a sequence, not how-tos', () => {
+    const entries = guideEntries(FIXTURE_GUIDE)
+    expect(entries.some((e) => e.id === 'guide:checklist-open')).toBe(false)
+    expect(entries.some((e) => e.id === 'guide:example-add')).toBe(true)
+  })
+
   it('merges task and card keywords and skips pointer tasks', () => {
     const guide: GuideChapter[] = [
       {

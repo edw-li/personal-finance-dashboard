@@ -1,8 +1,10 @@
 /* GuidePage.css — page-scoped rules only (OverviewPage.css's charter): .page/.card/.card-grid/
-   .eyebrow/.chip/.drill-hint/.empty-note live in panels.css and are never redefined here.
-   No transition or animation in this file — the shell's card entrance, stagger and reveal
-   already apply to every .card (2026-09-05 motion spec); a duration here would have to be a
-   var(--t-*) token anyway (motion.test.ts). */
+   .eyebrow/.chip/.drill-hint/.empty-note live in panels.css. One exception: the card selector's
+   chips state their SELECTED look here (spec §3), because panels.css says it with a
+   .active class and these chips are tabs that say it with aria-selected.
+   Every duration is a var(--t-*) token (motion.test.ts) and every motion-only rule sits under
+   prefers-reduced-motion: no-preference; the reduce block in index.css zeroes the tokens too
+   (2026-09-15 polish spec §6). */
 
 .guide-card-head {
   display: flex;
@@ -81,14 +83,6 @@ ul.guide-body li {
   color: var(--muted);
 }
 
-.guide-tasks {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  gap: 0.9rem;
-}
-
 .guide-task-title {
   margin: 0;
   font-size: 0.95rem;
@@ -137,10 +131,6 @@ ul.guide-body li {
   font-size: 0.85rem;
 }
 
-.guide-more {
-  margin-top: 0.75rem;
-}
-
 /* panels.css has no generic a:focus-visible; the guide's links get the house ring — except
    the chips, which already carry their own ring and a 999px pill this radius would flatten. */
 .guide-page a:focus-visible:not(.chip) {
@@ -149,18 +139,302 @@ ul.guide-body li {
   border-radius: 4px;
 }
 
-.guide-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin: 0 0 0.25rem;
-}
-
-.guide-chips a.chip {
-  text-decoration: none;
-}
-
 /* Anchors clear the sticky title/strip block by the measured inset (SettingsPage's form). */
 .guide-page [id] {
   scroll-margin-top: calc(var(--sticky-inset, 0px) + 0.75rem);
+}
+
+/* ── Master–detail (polish spec §2.5) ─────────────────────────────────────────────────────── */
+
+.guide-md {
+  display: grid;
+  grid-template-columns: minmax(240px, 34%) minmax(0, 1fr);
+  gap: 1.25rem 1.75rem;
+  align-items: start;
+  margin-top: 0.25rem;
+}
+
+.guide-rail-col .guide-h3 {
+  margin-top: 0.25rem;
+}
+
+/* The detail keeps reading while the rail scrolls. */
+.guide-detail-col {
+  position: sticky;
+  top: calc(var(--sticky-inset, 0px) + 1rem);
+  align-self: start;
+  min-width: 0;
+}
+
+.guide-detail-col .guide-h3 {
+  margin-top: 1.25rem;
+}
+
+/* The rail: every row reachable, none hidden — it scrolls inside the card past ~70vh. */
+.guide-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
+  padding: 0 0.25rem 0 0.6rem;
+  margin: 0 -0.25rem 0 -0.6rem;
+}
+
+.guide-rail-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.6rem;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  scroll-margin: 0.5rem;
+}
+
+.guide-rail-row:hover {
+  background: var(--fill);
+}
+
+.guide-rail-row[aria-selected='true'] {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.guide-rail-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.guide-rail-num {
+  min-width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  display: inline-grid;
+  place-items: center;
+  font-size: 0.7rem;
+  color: var(--muted);
+  align-self: center;
+}
+
+.guide-rail-row[aria-selected='true'] .guide-rail-num {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.guide-rail-text {
+  display: grid;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.guide-rail-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.guide-rail-where {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/* ONE accent bar for the rail, placed by TaskRail's measuring effect — the strip's indicator,
+   vertical. Absolute inside the scroller, so it scrolls with its row. */
+.guide-rail-indicator {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.guide-rail-more {
+  align-self: flex-start;
+  margin: 0.25rem 0 0;
+  padding: 0.35rem 0.6rem;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.guide-rail-more:hover {
+  background: var(--fill);
+  color: var(--text);
+}
+
+.guide-rail-more:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The fold: a grid-rows reveal, not a jump (spec §6). */
+.guide-rail-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  overflow: hidden;
+}
+
+.guide-rail-fold[data-open='true'] {
+  grid-template-rows: 1fr;
+}
+
+.guide-rail-fold-inner {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.guide-detail {
+  min-width: 0;
+}
+
+/* ── Card selector (spec §3): a sticky chip tablist; the hash is the selection ─────────── */
+
+.guide-selector {
+  position: sticky;
+  top: var(--sticky-inset, 0px);
+  z-index: 2;
+  background: var(--bg);
+  padding: 0.5rem 0 0.6rem;
+  margin: 0 0 0.25rem;
+}
+
+.guide-selector [role='tablist'] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.guide-selector .chip[aria-selected='true'] {
+  color: var(--text);
+  border-color: currentColor;
+}
+
+/* A selected card lands under the strip AND the selector. */
+.guide-selector ~ .guide-card {
+  scroll-margin-top: calc(var(--sticky-inset, 0px) + 3.5rem);
+}
+
+/* ── Fact grids and the glossary grid (spec §5, used by lane L2's content) ─────────────── */
+
+.guide-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem 1.5rem;
+  margin: 0.5rem 0 0.25rem;
+}
+
+.guide-fact {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.7rem 0.85rem;
+  background: var(--surface-2);
+  min-width: 0;
+}
+
+.guide-fact h4 {
+  margin: 0 0 0.25rem;
+  font-size: 0.9rem;
+}
+
+.guide-fact p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.guide-glossary-grid {
+  display: grid;
+  grid-template-columns: minmax(12rem, max-content) 1fr;
+  gap: 0.35rem 1.25rem;
+  max-width: none;
+}
+
+.guide-glossary-grid dt {
+  margin: 0;
+}
+
+.guide-glossary-grid dd {
+  margin: 0;
+}
+
+/* ── Motion (spec §6) — tokens only; the reduce block zeroes them ──────────────────────── */
+
+.guide-rail-row,
+.guide-rail-more,
+.guide-selector .chip {
+  transition:
+    background-color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out);
+}
+
+/* Only once placed at least once: the opening measurement lands instantly. */
+.guide-rail-indicator[data-placed] {
+  transition:
+    transform var(--t-nav) var(--ease-out),
+    height var(--t-nav) var(--ease-out);
+}
+
+.guide-rail-fold {
+  transition: grid-template-rows var(--t-page) var(--ease-out);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes guide-row-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* Rows arrive in a short cascade behind the card; --guide-i is the row's index, capped. */
+  .guide-rail-row {
+    animation: guide-row-in var(--t-enter) var(--ease-out) both;
+    animation-delay: calc(var(--guide-i, 0) * var(--t-stagger));
+  }
+}
+
+/* ── Narrow: the columns stack, the detail follows the rail (spec §2.5) ───────────────── */
+
+@media (max-width: 1000px) {
+  .guide-md {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-detail-col {
+    position: static;
+  }
+
+  .guide-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-glossary-grid {
+    grid-template-columns: 1fr;
+  }
 }

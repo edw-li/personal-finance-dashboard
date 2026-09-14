@@ -19,11 +19,25 @@ export const FIXTURE_GUIDE: readonly GuideChapter[] = [
           { id: 'update-close', title: 'Close the fixture', where: 'Review', steps: ['Press **Save and close month**.'], to: '/update?step=review' },
         ],
       },
+      // A checklist card: read in order, so its rail rows are numbered and the palette skips them
+      // (2026-09-15 polish spec §2.2). A card of its own rather than `numbered: true` on the
+      // monthly fixture, whose palette entry paletteRegistry.guide.test.ts pins.
+      {
+        id: 'routine-checklist',
+        title: 'The fixture checklist',
+        purpose: 'In order, once.',
+        numbered: true,
+        tasks: [
+          { id: 'checklist-open', title: 'Open the fixture', where: 'Setup', steps: ['Press **Start**.'], to: '/update' },
+          { id: 'checklist-after', title: 'Look afterwards', where: 'Overview', steps: ['Open **Overview**.'], to: '/' },
+        ],
+      },
     ],
   },
   {
     id: 'pages',
     label: 'Pages',
+    selector: true,
     cards: [
       {
         id: 'page-example',
@@ -60,6 +74,7 @@ export const FIXTURE_GUIDE: readonly GuideChapter[] = [
   {
     id: 'reference',
     label: 'Reference',
+    selector: true,
     cards: [{ id: 'ref-glossary', title: 'Words', purpose: 'Definitions.', tasks: [] }],
   },
 ]

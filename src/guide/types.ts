@@ -35,7 +35,7 @@ export interface GuideCard {
   views?: string[]
   /** Core tasks, visible. 3–8 for page cards. */
   tasks: GuideTask[]
-  /** Long tail behind the Disclosure. */
+  /** Long tail under the rail's "More tasks" fold. */
   more?: GuideTask[]
   /** Card-level traps. ≤ 5. */
   watch?: string[]
