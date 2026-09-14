@@ -139,8 +139,14 @@ import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 // written and take this file down with it.
 const CURRENT_YEAR = new Date().getFullYear()
 
+// LOCAL getters, exactly like utils/months.ts's todayIso() — the clock the page itself reads.
+// toISOString() would answer in UTC, so after 17:00 Pacific `daysAgo(1)` named the page's own
+// "today" and the quote line read "today" where the fixture expected a date (P2 review).
 function daysAgo(days: number): string {
-  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10)
+  const date = new Date(Date.now() - days * 86_400_000)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate(),
+  ).padStart(2, '0')}`
 }
 
 function monthsFrom(start: string, count: number): string[] {
