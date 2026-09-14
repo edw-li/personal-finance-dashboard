@@ -191,7 +191,7 @@ export const ROUTINE_CARDS: GuideCard[] = [
     watch: [
       'Saving progress and closing are different — only a closed month counts toward averages, comparisons and the month other pages open on.',
       'Balances arrive pre-filled from last month; spending arrives as 0.00 seeds, and an untouched seed is never written.',
-      'A month that really spent nothing needs the $0 confirmation — and that tick is forgotten when you switch months.',
+      'A month that really spent nothing needs **Confirm remaining categories as $0** — and that tick is forgotten when you switch months.',
       'Liabilities are entered as negative numbers — a positive card balance inflates net worth.',
       'Unsaved entries live in this browser tab only — another tab, or another browser, sees only what was saved.',
     ],
@@ -248,7 +248,7 @@ export const ROUTINE_CARDS: GuideCard[] = [
     ),
     watch: [
       'The tab inside Tax tables only says which tables you are editing — a married year left on the Single toggle in the scope row still computes as Single.',
-      'With no tables for the year’s filing status every figure reads “—”, never 0, and the card offers a button into Tax tables.',
+      'With no tables for the year’s filing status every figure reads “—”, never 0, and the card offers **Open Tax tables**.',
       'Married filing separately carries a standing caveat — California is community property, and this calculator does not split community income.',
     ],
   },
