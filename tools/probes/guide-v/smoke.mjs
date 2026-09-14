@@ -34,10 +34,12 @@ const CHAPTERS = ['start', 'routines', 'pages', 'reference']
 // inactive chapter stays mounted behind `hidden`, so `[role=tabpanel]:not([hidden])` on its own
 // would reach into both.
 const PANEL = '.guide-page .local-section-panel:not([hidden])'
-// The count the 2026-09-14 walk collected from the fully expanded cards. The polish only adds
-// destinations (the checklist and tax season became linked tasks), so it may not fall below it.
+// The count the 2026-09-14 walk collected from the fully expanded cards. The polish turned the
+// Pages chip ROW into a selector of buttons, so twelve `?section=pages#page-*` addresses stopped
+// being `<a href>`s — they are added below from each chip's aria-controls, because the reader can
+// still reach them and a deep link to a card must still land. Everything else only grew.
 const MIN_LINKS = 74
-const report = { generatedAt: new Date().toISOString(), base: BASE, themes: THEMES, checks: [], links: [], consoleErrors: [], writesBlocked: [], problems: [] }
+const report = { generatedAt: new Date().toISOString(), base: BASE, themes: THEMES, checks: [], destinations: {}, links: [], consoleErrors: [], writesBlocked: [], problems: [] }
 const problem = (m) => report.problems.push(m)
 const check = (theme, name, ok, observed) => { report.checks.push({ theme, name, ok, observed }); if (!ok) problem(`${theme}: ${name} — ${JSON.stringify(observed)}`) }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -89,6 +91,7 @@ try {
     // master–detail card shows ONE task's `Go →`, so scraping the rendered panel once would miss
     // most of them: drive the UI instead — every chip, then every rail row with the fold open.
     const links = new Set()
+    const seen = { cards: 0, rows: 0, chips: 0 }
     const addPanelLinks = async () => {
       const hrefs = await page.$$eval(`${PANEL} a[href^="/"]`, (as) => as.map((a) => a.getAttribute('href')))
       hrefs.forEach((h) => links.add(h))
@@ -96,6 +99,7 @@ try {
     const walkCards = async () => {
       const cardIds = await page.$$eval(`${PANEL} .guide-card`, (cs) => cs.map((c) => c.id))
       for (const cardId of cardIds) {
+        seen.cards += 1
         // Open the tail first, so its rows are reachable and their `Go →` links are collected.
         const more = await page.$(`#${cardId} button.guide-rail-more`)
         if (more !== null && (await more.getAttribute('aria-expanded')) !== 'true') {
@@ -105,6 +109,7 @@ try {
         // Rows keep the task ids (polish spec §2.2), so `#<taskId>` is the handle.
         const rowIds = await page.$$eval(`#${cardId} .guide-rail [role="tab"]`, (rs) => rs.map((r) => r.id))
         for (const rowId of rowIds) {
+          seen.rows += 1
           await page.click(`#${rowId}`, { timeout: 10000 })
           await page.waitForSelector(`#${cardId} .guide-detail[aria-labelledby="${rowId}"]`, { timeout: 10000 })
           const hrefs = await page.$$eval(`#${cardId} .guide-detail a[href^="/"]`, (as) => as.map((a) => a.getAttribute('href')))
@@ -131,6 +136,10 @@ try {
         await walkCards() // a stacked chapter renders every card at once
       } else {
         for (const chip of chips) {
+          seen.chips += 1
+          // A chip is a button now, so the address it selects has no href to scrape. It is still
+          // an address a reader reaches and a palette hit uses, so the walk below visits it.
+          links.add(`/guide?section=${chapter}#${chip.card}`)
           await page.click(`#${chip.id}`, { timeout: 10000 })
           await page.waitForSelector(`${PANEL} .guide-card#${chip.card}`, { timeout: 10000 })
           await sleep(120)
@@ -139,7 +148,8 @@ try {
         }
       }
     }
-    check(theme, `the guide renders at least ${MIN_LINKS} distinct destinations`, links.size >= MIN_LINKS, links.size)
+    check(theme, `the guide renders at least ${MIN_LINKS} distinct destinations`, links.size >= MIN_LINKS, { destinations: links.size, ...seen })
+    report.destinations = { ...(report.destinations ?? {}), [theme]: { ...seen, hrefs: Array.from(links).sort() } }
 
     // 3. Walk every link once.
     const list = Array.from(links).sort()
