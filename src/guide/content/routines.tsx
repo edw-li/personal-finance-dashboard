@@ -250,6 +250,7 @@ export const ROUTINE_CARDS: GuideCard[] = [
         where: 'Taxes → Filing status',
         steps: ['In the scope row, **Filing status** — the status this year is filed as.'],
         to: '/taxes',
+        watch: ['Every year starts Single.'],
       },
       {
         id: 'season-tables',
@@ -296,13 +297,14 @@ export const ROUTINE_CARDS: GuideCard[] = [
         where: 'Settings → Planning → Contribution limits',
         steps: ['Pick the year, enter the published caps or press **Clone from <year>**, then **Save limits**.'],
         to: '/settings?section=planning#limits',
+        watch: ['The Paycheck pace meters and the sandbox presets need these limits.'],
       },
       {
         id: 'season-owe',
         title: 'Watch Will I owe? through the year',
         where: 'Taxes → Summary → Will I owe?',
         steps: [
-          'Through the year: **Will I owe?**',
+          'Open **Will I owe?** through the year.',
           'Its **Apply** chip writes this year’s vest income into the W-2 inputs.',
           'The remedy line gives the figure to add on **W-4 line 4c** or **DE 4**.',
         ],

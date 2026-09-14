@@ -150,12 +150,12 @@ export const START_CARDS: GuideCard[] = [
         title: 'Add the accounts',
         where: 'Settings → Household → Accounts',
         steps: [
-          'Every account with its **Group** and **Owner**; leave **Owner** empty for a joint one.',
+          'Add every account with its **Group** and **Owner**; leave **Owner** empty for a joint one.',
           'Liabilities are entered as negative numbers.',
           'Until one account exists the monthly wizard cannot leave **Balances**.',
         ],
         to: '/settings?section=household#accounts',
-        watch: ['Depends on 3 · Add the household — a person before the things they own.'],
+        watch: ['Depends on: 3 · Add the household — a person before the things they own.'],
       },
       {
         id: 'setup-categories',
@@ -184,12 +184,12 @@ export const START_CARDS: GuideCard[] = [
         steps: [
           'Your first month: Balances → Spending → Review → **Save progress**.',
           'Then the confirmations and **Save and close month**.',
-          'The full routine is the Routines chapter’s first card.',
+          'The full routine is The monthly update, in Routines.',
         ],
         to: '/update',
         watch: [
-          'Depends on 4 · Add the accounts — the wizard needs at least one.',
-          'Depends on 5 · Add spending categories and their kinds — set the kinds before you enter months.',
+          'Depends on: 4 · Add the accounts — the wizard needs at least one.',
+          'Depends on: 5 · Add spending categories and their kinds — set the kinds before you enter months.',
         ],
       },
       {
@@ -208,7 +208,7 @@ export const START_CARDS: GuideCard[] = [
         title: 'Fill the portfolio',
         where: 'Portfolio → Manage',
         steps: [
-          'The securities the import did not carry (tick manual pricing for a private asset) and their dated transactions.',
+          'Add the securities the import did not carry (tick manual pricing for a private asset) and their dated transactions.',
           'Then **Allocation** for classifications and targets.',
         ],
         to: '/portfolio?section=manage',
@@ -218,7 +218,7 @@ export const START_CARDS: GuideCard[] = [
         title: 'Enter limits and plan assumptions',
         where: 'Settings → Planning',
         steps: [
-          '**Contribution limits** for this year, then **Save limits**.',
+          'Enter **Contribution limits** for this year, then **Save limits**.',
           'And **Plan assumptions** — withdrawal rate, ESPP ticker and discount.',
         ],
         to: '/settings?section=planning#limits',
@@ -228,11 +228,11 @@ export const START_CARDS: GuideCard[] = [
         title: 'Create the tax year',
         where: 'Taxes',
         steps: [
-          '**New tax year…**, **Filing status**, the tables, the inputs.',
+          'Press **New tax year…**, then **Filing status**, the tables, the inputs.',
           'The yearly version is Tax season, once a year, in the Routines chapter.',
         ],
         to: '/taxes',
-        watch: ['Depends on 6 · Import the workbook — do it before typing tax years the workbook covers.'],
+        watch: ['Depends on: 6 · Import the workbook — do it before typing tax years the workbook covers.'],
       },
       {
         id: 'setup-paycheck',
@@ -255,21 +255,21 @@ export const START_CARDS: GuideCard[] = [
         id: 'setup-cards',
         title: 'Add the credit cards',
         where: 'Credit cards → Manage',
-        steps: ['The cards with their **Opened** dates, then their categories and multipliers.'],
+        steps: ['Add the cards with their **Opened** dates, then their categories and multipliers.'],
         to: '/credit-cards?section=manage',
       },
       {
         id: 'setup-calendar',
         title: 'Set the calendar feed',
         where: 'Settings → Integrations → Calendar feed',
-        steps: ['A **Monthly update reminder day**.', 'And **New feed link** to subscribe a phone.'],
+        steps: ['Set a **Monthly update reminder day**.', 'Press **New feed link** to subscribe a phone.'],
         to: '/settings?section=integrations#calendar',
       },
       {
         id: 'setup-snapshot',
         title: 'Take a snapshot',
         where: 'Settings → Data → Backups & snapshots',
-        steps: ['**Snapshot now** once, then check the list gains a nightly entry.'],
+        steps: ['Press **Snapshot now** once, then check the list gains a nightly entry.'],
         to: '/settings?section=data#backups',
       },
       {
@@ -278,7 +278,7 @@ export const START_CARDS: GuideCard[] = [
         where: 'Spending → Budgets',
         steps: ['After three complete months: **Start from my averages**.'],
         to: '/spending?section=budgets',
-        watch: ['Depends on 7 · Enter the first month — only a closed month counts toward the averages.'],
+        watch: ['Depends on: 7 · Enter the first month — only a closed month counts toward the averages.'],
       },
       {
         id: 'setup-assistant',
