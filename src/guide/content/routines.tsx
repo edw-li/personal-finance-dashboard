@@ -196,4 +196,105 @@ export const ROUTINE_CARDS: GuideCard[] = [
       'Unsaved entries live in this browser tab only — another tab, or another browser, sees only what was saved.',
     ],
   },
+  {
+    id: 'routine-tax-season',
+    title: 'Tax season, once a year',
+    purpose:
+      'Once a year, when the IRS and the Franchise Tax Board publish the figures: a new tax year, its tables, this year’s contribution limits.',
+    keywords: ['tax season', 'new year', 'brackets', 'yearly'],
+    tasks: [],
+    body: (
+      <ol className="guide-body">
+        <li>
+          <Link to="/taxes">Taxes</Link> → <b className="guide-label">New tax year…</b> → type the year →{' '}
+          <b className="guide-label">Create year</b>. The tables arrive as copies of the newest year you have,
+          so every figure still needs this year’s published number.
+        </li>
+        <li>
+          Scope row → <b className="guide-label">Filing status</b> — the status this year is filed as.
+        </li>
+        <li>
+          <Link to="/taxes?section=tables">Tax tables</Link> → enter or refresh Federal, State, Medicare, Social
+          Security, Disability and Capital gains for that status. Rates go in as percents, thresholds ascend
+          from 0, and no table takes more than twelve rows.
+        </li>
+        <li>
+          A married year: while its status tab is still empty, press{' '}
+          <b className="guide-label">Clone from &lt;year&gt; single tables</b>, then edit the tables badged
+          “review thresholds”. Social Security and Disability come across verbatim — they are per worker, not
+          per filing status.
+        </li>
+        <li>
+          An earner on a different plan: <b className="guide-label">Add a table for &lt;person&gt;</b> under
+          Social Security or Disability.
+        </li>
+        <li>
+          <Link to="/taxes?section=inputs">Inputs</Link> → the year’s line items. A row badged “derived”
+          computes itself; an <b className="guide-label">Apply</b> chip fills a box with last year’s figure.
+          Finish with <b className="guide-label">Save inputs</b>.
+        </li>
+        <li>
+          <Link to="/settings?section=planning#limits">Settings → Planning → Contribution limits</Link> → pick
+          the year, enter the published caps or press <b className="guide-label">Clone from &lt;year&gt;</b>,
+          then <b className="guide-label">Save limits</b>.
+        </li>
+        <li>
+          Through the year: <Link to="/taxes?section=summary">Summary</Link> →{' '}
+          <b className="guide-label">Will I owe?</b> Its <b className="guide-label">Apply</b> chip writes this
+          year’s vest income into the W-2 inputs, and the remedy line gives the figure to add on{' '}
+          <b className="guide-label">W-4 line 4c</b> or <b className="guide-label">DE 4</b>.
+        </li>
+      </ol>
+    ),
+    watch: [
+      'The tab inside Tax tables only says which tables you are editing — a married year left on the Single toggle in the scope row still computes as Single.',
+      'With no tables for the year’s filing status every figure reads “—”, never 0, and the card offers a button into Tax tables.',
+      'Married filing separately carries a standing caveat — California is community property, and this calculator does not split community income.',
+    ],
+  },
+  {
+    id: 'routine-health',
+    title: 'Keeping it healthy',
+    purpose:
+      'A short loop for the weeks between updates: work the lists to empty, keep prices fresh, keep a restore point.',
+    keywords: ['health', 'maintenance', 'attention', 'backup'],
+    tasks: [
+      {
+        id: 'health-attention',
+        title: 'Work the Needs attention list',
+        where: 'Overview → Needs attention',
+        steps: [
+          'Each line is a condition the data proves — an overdue month, a stale quote, a failed ticker, a stale backup, a missing tax year.',
+          'Click the line to land where it is fixed.',
+          'An empty list reads **No outstanding data checks** — there is no all-clear badge.',
+        ],
+        to: '/',
+        keywords: ['overdue', 'stale', 'attention'],
+      },
+      {
+        id: 'health-about-number',
+        title: 'Check a number that looks wrong',
+        where: 'Any headline tile → About this number',
+        steps: [
+          'Press the ⓘ on the tile — its name is **About this number**.',
+          'Read the definition, the scope, the period, and the months counted or excluded.',
+          'Press **Explain this number** to hand that receipt to the assistant.',
+        ],
+        keywords: ['receipt', 'definition', 'wrong number', 'inspect'],
+      },
+    ],
+    body: (
+      <p className="guide-body">
+        Also: <Link to="/settings?section=data#health">Data health</Link> lists the server’s failing checks —
+        zero-filled months, gaps in the spending history, stale quotes, a backup that is old or unverified —
+        each with its fix beside it. On <Link to="/portfolio">Portfolio</Link>, a red chip under the refresh
+        line offers <b className="guide-label">Deactivate</b> for a ticker that keeps failing, and{' '}
+        <b className="guide-label">Refresh prices</b> re-runs the lookup. Take your own restore point with{' '}
+        <b className="guide-label">Snapshot now</b> on{' '}
+        <Link to="/settings?section=data#backups">Backups &amp; snapshots</Link> before an import or a large
+        edit. <Link to="/settings?section=data#activity">Activity</Link> is the undo of last resort: press a
+        row’s Undo once to arm it, once more to run it.
+      </p>
+    ),
+  },
 ]
