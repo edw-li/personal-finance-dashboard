@@ -90,7 +90,9 @@
 /* The utility tail (Guide, Settings) sits under a hairline, the same border the footer carries,
    so it reads as "the app's own pages", not a fourth group of the household's money. */
 .nav-section-tail {
-  margin-top: 0.6rem;
+  /* .sidebar nav already puts a 0.45rem gap above this section, so the margin is the remainder:
+     0.6rem of air above the line, 0.6rem below (measured 2026-09-15: 16.8px vs 9.6px before). */
+  margin-top: 0.15rem;
   padding-top: 0.6rem;
   border-top: 1px solid var(--border);
 }
