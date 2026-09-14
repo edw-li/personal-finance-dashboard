@@ -158,4 +158,98 @@ export const INCOME_CARDS: GuideCard[] = [
       'Deleting a profile asks once and cannot be undone.',
     ],
   },
+  {
+    id: 'page-comp',
+    title: 'Comp',
+    purpose:
+      'RSU grants and the vesting schedule they generate, focal-year history and the total-comp trajectory — one set for the household, not per person.',
+    to: '/comp',
+    views: ['Summary', 'Vesting', 'Manage'],
+    keywords: ['comp', 'rsu', 'grant', 'vest', 'vesting', 'equity', 'focal', 'total comp'],
+    tasks: [
+      {
+        id: 'comp-grant-add',
+        title: 'Add an RSU grant',
+        where: 'Comp → Manage → RSU grants',
+        steps: [
+          'Pick the **Kind** — **New hire** or **Refresh**. It carries the cliff, so there is no cliff box.',
+          'Fill **Label**, **Grant focal year**, **Shares**, **Price at grant**, **First vest** and **Vest rounding**.',
+          'Press **Add grant** — the schedule, the tiles and the calendar’s vest events are all computed from it.',
+        ],
+        to: '/comp?section=manage',
+        watch: ['The kind is the vest timing — a new-hire grant filed as a refresh drops the first-year cliff and vests a year early.'],
+        keywords: ['add grant', 'add vest', 'new grant', 'rsu grant'],
+      },
+      {
+        id: 'comp-grant-seed',
+        title: 'Seed a grant from a focal year',
+        where: 'Comp → Manage → RSU grants',
+        steps: [
+          'A focal year holding **Refresh RSUs** and a **Grant price**, with no grant yet, offers a chip naming both.',
+          'Press it — the form fills and nothing is saved. Check the boxes, then press **Add grant**.',
+        ],
+        to: '/comp?section=manage',
+        watch: ['The chip truncates a fractional share count, because a grant counts whole shares — read it before saving.'],
+        keywords: ['seed grant', 'refresh grant'],
+      },
+      {
+        id: 'comp-focal-add',
+        title: 'Record a focal year',
+        where: 'Comp → Manage → Focal history',
+        steps: [
+          'Fill **Focal year** and **Current base** — the two the form will not save without.',
+          'Add **New base**, **Unvested RSUs**, **Unvested price**, **Refresh RSUs** and **Grant price** as the letter gives them.',
+          'Press **Add event**; a stored row is then changed with **Edit** and **Save event**.',
+        ],
+        to: '/comp?section=manage',
+        watch: ['One row per focal year — a second row for a year already recorded is refused.'],
+        keywords: ['focal', 'annual review', 'base salary', 'comp event', 'focal information'],
+      },
+      {
+        id: 'comp-vesting-read',
+        title: 'Read the vesting schedule',
+        where: 'Comp → Vesting → Vesting schedule',
+        steps: [
+          'Start with the **Next vest**, **Unvested** and **Vested this year** tiles.',
+          'Press a vest date in the table to expand its per-grant tranches; opening another folds the first.',
+          'Nothing here is stored — every row is recomputed from the grants on each read.',
+        ],
+        to: '/comp?section=vesting',
+        keywords: ['vesting', 'schedule', 'next vest', 'unvested'],
+      },
+      {
+        id: 'comp-grant-edit-delete',
+        title: 'Edit or delete a grant',
+        where: 'Comp → Manage → RSU grants',
+        steps: [
+          'Press **Edit** on a row, change it, and press **Save grant**.',
+          '**Delete** removes it at once with no confirm — the toast’s **Undo** re-creates it.',
+        ],
+        to: '/comp?section=manage',
+        keywords: ['delete grant', 'edit grant'],
+      },
+    ],
+    more: [
+      {
+        id: 'comp-columns',
+        title: 'Show entered or computed columns',
+        where: 'Comp → Manage → Focal history',
+        steps: ['Pick **Entered**, **Computed** or **All** under **Columns** — a view choice, and not saved.'],
+        to: '/comp?section=manage',
+      },
+      {
+        id: 'comp-tc-read',
+        title: 'Read the total-comp chart',
+        where: 'Comp → Summary',
+        steps: ['One bar per focal year, drawn from **Focal history** — a year with no row simply has no bar.'],
+        to: '/comp',
+      },
+    ],
+    watch: [
+      'Comp is not per person — there is no owner chip, and grants and focal history are one household set.',
+      'A grant whose shares or price no longer match its focal row raises a drift note — the schedule follows the grant.',
+      'With no employer ticker in Settings → Plan assumptions, every future vest is unvalued.',
+      'Deleting a focal row asks once and cannot be undone; deleting a grant can be undone from its toast.',
+    ],
+  },
 ]
