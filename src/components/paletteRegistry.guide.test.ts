@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { guideEntries } from '../guide/palette'
 import { FIXTURE_GUIDE } from '../guide/testing/fixtures'
@@ -24,10 +26,17 @@ describe('paletteRegistry — Guide group (2026-09-14 guide spec §6)', () => {
     expect(guide.every((e) => e.to?.startsWith('/guide?section='))).toBe(true)
   })
 
-  it('keeps the five actions exactly as they were, and carries no guide entry of its own', () => {
+  it('keeps the five actions exactly as they were', () => {
     expect(statics.filter((e) => e.kind === 'action')).toHaveLength(5)
-    // The bundle fence in assertion form: a guide entry here would mean the static registry
-    // imports the guide content again (review round B).
+  })
+
+  // The bundle fence, read as TEXT (the technique paletteRegistry.test.ts:66-78 uses on the
+  // Settings sources): a static `import ... from '../guide/...'` here would pull the whole guide
+  // content module back into the shell's chunk, and nothing about the entries this module returns
+  // would change — so only the source can say it. CommandPalette imports it dynamically instead.
+  it('never imports the guide: the content module stays out of the shell bundle', () => {
+    const source = readFileSync(path.resolve(__dirname, 'paletteRegistry.ts'), 'utf8')
+    expect(source).not.toContain("from '../guide")
     expect(statics.some((e) => e.kind === 'guide')).toBe(false)
   })
 

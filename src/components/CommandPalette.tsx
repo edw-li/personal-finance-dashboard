@@ -80,12 +80,15 @@ export default function CommandPalette() {
     // DYNAMICALLY: a static import would drag the whole guide content module — every task, every
     // step string — into the shell's bundle, because this component ships with the shell. The
     // entries arrive a tick after the first open, like the entity lists beside them, and a
-    // failed import costs the how-tos and nothing else.
+    // failed import costs the how-tos and nothing else — the latch is released again so a chunk
+    // lost to a flaky network (or a deploy mid-session) is retried on the next open.
     if (!guideRequested.current) {
       guideRequested.current = true
       import('../guide/palette')
         .then((m) => setGuide(m.guideEntries().map((e) => ({ kind: 'guide' as const, ...e }))))
-        .catch(() => {})
+        .catch(() => {
+          guideRequested.current = false
+        })
     }
     entitiesLoadedAt.current = Date.now()
     Promise.allSettled([
