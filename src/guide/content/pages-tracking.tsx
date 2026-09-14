@@ -386,7 +386,7 @@ export const TRACKING_CARDS: GuideCard[] = [
       {
         id: 'portfolio-dimension',
         title: 'Switch the allocation dimension',
-        where: 'Portfolio → Allocation → Allocation dimension',
+        where: 'Portfolio → Allocation',
         steps: [
           'Pick a dimension in the toolbar — the chart and its member list follow.',
           'A member row’s **Open <TICKER>** button opens that holding under Holdings.',
@@ -537,7 +537,7 @@ export const TRACKING_CARDS: GuideCard[] = [
         steps: [
           'Every year with anything entered gets a column, category by category.',
           'Read **Months matched** first: it says how many months the four summary rows stand on.',
-          'They cover fewer months than **Total** does, so the two are not meant to reconcile.',
+          'They can cover fewer months than **Total** does, so the two are not meant to reconcile.',
         ],
         to: '/spending?section=history',
         keywords: ['yearly', 'rollup', 'savings rate'],
@@ -610,7 +610,7 @@ export const TRACKING_CARDS: GuideCard[] = [
         title: 'Choose who holds a card',
         where: 'Credit cards → Manage → Owner',
         steps: [
-          'Pick a person in **Owner**, or leave it on **Joint** for a card you both use.',
+          'Pick a person in **Owner**, or pick **Joint** for a card you both use — a new card starts on the primary person.',
           'Rewards, Credit lines and the tiles then follow the **Whose** chips.',
           'Manage is the one view the chips never narrow, because it is where ownership is edited.',
         ],
@@ -734,7 +734,6 @@ export const TRACKING_CARDS: GuideCard[] = [
     ],
     watch: [
       'The reward tiles read "—" until a category carries a weight — a matrix with no weights values every card at $0.',
-      'A blank multiplier means the card cannot be used for that category; it is not a zero.',
       'Deleting a card can be undone, but its matrix multipliers are not restored.',
       'Cards are dashboard-only — a workbook import never touches them.',
     ],
