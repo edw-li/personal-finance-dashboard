@@ -5,7 +5,6 @@ import { NAV_ITEMS } from '../components/navItems'
 import { SETTINGS_SECTIONS } from '../components/paletteRegistry'
 import { allIds, chapterOf } from './anchors'
 import { GUIDE } from './content'
-import { PENDING_PAGES } from './content/pending'
 import type { GuideCard, GuideTask } from './types'
 
 // The guide rots the moment a route, view, anchor or button label changes and nobody edits
@@ -166,15 +165,10 @@ describe('guide content — label fence (spec §8.2)', () => {
 })
 
 describe('guide content — completeness, shape and uniqueness (spec §8.3)', () => {
-  it('every sidebar page has a card somewhere in the guide, unless the lane that owns it is still pending', () => {
+  it('every sidebar page has a card somewhere in the guide', () => {
     const covered = new Set(allCards.map(({ card }) => card.to).filter(Boolean))
-    const missing = NAV_ITEMS.map((item) => item.to).filter((route) => route !== '/guide' && !covered.has(route) && !PENDING_PAGES.includes(route))
+    const missing = NAV_ITEMS.map((item) => item.to).filter((route) => route !== '/guide' && !covered.has(route))
     expect(missing).toEqual([])
-  })
-
-  it('a pending route has no card yet — the escape hatch is not a second way to list a page', () => {
-    const covered = new Set(allCards.map(({ card }) => card.to).filter(Boolean))
-    expect(PENDING_PAGES.filter((route) => covered.has(route))).toEqual([])
   })
 
   it('card and task ids are unique, kebab-case, and every id resolves to its chapter', () => {
@@ -211,8 +205,8 @@ describe('guide content — completeness, shape and uniqueness (spec §8.3)', ()
   })
 })
 
-// The user's coverage list (spec §5.4). Skipped until every content lane has landed — lane V
-// deletes PENDING_PAGES and this guard becomes a plain `it`.
+// The user's coverage list (spec §5.4). Live since lane V retired the pending list: every
+// content lane has landed, so a missing id is a hole in the guide, not a lane still working.
 describe('guide content — required coverage (spec §5.4)', () => {
   const REQUIRED = [
     'accounts-add', 'accounts-owner', 'cards-owner', 'paycheck-person', 'update-balances', 'update-spending', 'update-close',
@@ -221,7 +215,7 @@ describe('guide content — required coverage (spec §5.4)', () => {
     'espp-lot-sold', 'taxes-year-create', 'taxes-tables', 'taxes-inputs', 'taxes-will-i-owe', 'taxes-whatif-sale',
     'projection-assumptions', 'projection-retire-month', 'calendar-add-event', 'calendar-subscribe', 'assistant-ask', 'assistant-key',
   ]
-  it.skipIf(PENDING_PAGES.length > 0)('every task the owner asked for exists', () => {
+  it('every task the owner asked for exists', () => {
     expect(REQUIRED.filter((id) => !guideIds.has(id))).toEqual([])
   })
 })
