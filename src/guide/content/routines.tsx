@@ -82,7 +82,7 @@ export const ROUTINE_CARDS: GuideCard[] = [
         to: '/update?step=review',
         watch: [
           'Changes since last save counts the rows you changed, then lists the largest balance moves and the biggest gaps from your recent median.',
-          'The receipt counts rows added, changed and unchanged per feed, and names the categories left blank.',
+          'The receipt counts rows added, changed and unchanged per feed, and counts the categories left blank.',
           'The toast’s Undo lasts six seconds — after that the Activity card is the way back.',
         ],
         keywords: ['save', 'review', 'receipt', 'undo save'],
