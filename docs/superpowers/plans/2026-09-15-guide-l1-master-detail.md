@@ -1411,6 +1411,40 @@ and `tokens.test.ts` passed on the stylesheet as written — the `@keyframes` st
 - **D4 (Task 5) — one extra assertion.** The keyboard test also presses `End`, which the plan's
   rail implements but its test only mentioned in the title.
 
+### Review round (2026-09-14, commit `c334eac`)
+
+Eight review findings, all applied in one commit. Gate line
+`npx vitest run src/guide src/pages/GuidePage.test.tsx src/components/paletteRegistry.guide.test.ts src/theme/motion.test.ts`
+= **9 files / 60 tests passed**; `npx tsc -b` clean; `npx eslint src/guide src/pages/GuidePage.tsx`
+0 errors (the one D3 warning); the full `npx vitest run` re-confirmed at **3126 passed** (+5).
+
+1. **(Important) The chips are manually activated.** Arrows and Home/End moved the selection,
+   which navigates — and `useLocalSections`' arrival effect then pulls focus to the CARD a frame
+   later, so every arrow press after the first was thrown away. They now move FOCUS only
+   (`getElementById(chipId).focus`), and Enter/Space activate through the button's native click →
+   `onClick` → `go`. Click is unchanged. Fenced in `CardSelector.test.tsx` (ArrowRight moves focus
+   and leaves the hash alone; activating the focused chip writes it; End/Home reach the ends) and
+   end to end in `GuidePage.test.tsx` (ArrowRight then activation swaps the card).
+2. **(Important) An arrow-picked row is scrolled into the rail.** `focus({ preventScroll: true })`
+   deliberately holds the page still, which also meant the rail never scrolled — row 18 of the
+   setup checklist stayed out of sight. Followed by `el?.scrollIntoView?.({ block: 'nearest' })`
+   (optional call: jsdom has none). Fenced with a `scrollIntoView` spy on `Element.prototype`.
+3. **(Minor) The rail always has exactly one tab stop.** `tabStopId` falls back to the first
+   visible row when the selected row is folded away, and the arrow arithmetic clamps a `-1`
+   index to 0. This replaces D2's `focusable` parameter, which it subsumes. Fenced: select a
+   folded row, shut the fold, and the tab stop moves to the first visible row.
+4. **(Minor)** The "Do this" `h3` carries `id={`${card.id}-tasks`}` (spec §2.1).
+5. **(Minor)** `GuidePage.test.tsx` now asserts Reference is a selector chapter too — its own
+   chip tablist, one `.guide-card` in its panel.
+6. **(Minor)** One shared `hashTarget(hash)` in `anchors.ts` ('' on a decode failure) replaces the
+   two divergent inline try/catches in `useTaskSelection.ts` and `CardSelector.selectedCardId`,
+   with its own test.
+7. **(Nit)** `GuidePage.css`'s header now states the one panels.css exception (the selector chips'
+   selected look, said with `aria-selected` rather than `.active`); the triple blank lines the
+   deleted blocks left are collapsed.
+8. **(Nit)** Stale comments fixed: `guideContent.test.ts` said `GuideTaskList` (now `TaskDetail`),
+   `types.ts` said "behind the Disclosure" (now "under the rail's More tasks fold").
+
 ### Hand-off to lane V
 
 The probe `tools/probes/guide-v/smoke.mjs` needs three fixes before it can pass — none are bugs in
