@@ -739,3 +739,185 @@ label changed from the draft and why, deviations, hand-offs.
   `comp-grant-add`, `comp-focal-add`, `espp-offering-add`, `espp-lot-add`, `espp-lot-sold`,
   `taxes-year-create`, `taxes-tables`, `taxes-inputs`, `taxes-will-i-owe`, `taxes-whatif-sale` ✓.
 - Fences: `views` match; visible tasks 8/5/7/8; `watch` ≤ 5 (Taxes has 4); no cross-lane guide anchors.
+
+---
+
+## Results (implementer, 2026-09-14)
+
+**Status: DONE.** Four page cards written into `src/guide/content/pages-income.tsx`;
+`'/paycheck'`, `'/comp'`, `'/espp'`, `'/taxes'` deleted from `PENDING_PAGES`. No other file
+touched. Nothing pushed.
+
+### Commits (branch `guide/g3-income`, from `e0d289c`)
+
+| Commit | Task |
+| --- | --- |
+| `0eed7e9` | content(guide): Pages — Paycheck (spec §5.1) |
+| `3e62ffe` | content(guide): Pages — Comp (spec §5.1) |
+| `b13cbbc` | content(guide): Pages — ESPP (spec §5.1) |
+| `1dc21da` | content(guide): Pages — Taxes (spec §5.1) |
+
+### Gates
+
+Per card: `npx vitest run src/guide` → 5 files, 23 passed / 1 skipped (the §5.4 coverage
+guard, still skipped: `PENDING_PAGES` holds nine routes for G1/G2/G4); `npx tsc -b` clean;
+`npx eslint src/guide` clean.
+
+Final full gates on `1dc21da`:
+
+- `npx tsc -b` — clean.
+- `npx eslint .` — 0 errors, 25 warnings (all pre-existing `react-refresh/only-export-components`,
+  none under `src/guide`).
+- `npx vitest run` — **231 files, 3093 passed, 1 skipped**.
+- `npm run build` — built in 18.14s.
+
+Shape: visible tasks 8 / 5 / 7 / 8; `watch` 4 / 4 / 3 / 4; `views` equal to each page's
+`PAGE_SECTIONS` labels; every spec §5.1 required id present (Taxes 13 = 8 visible + 5 folded,
+plus `taxes-delete-year` and `taxes-marginal`); no cross-lane `/guide#…` anchors.
+
+### Labels and facts changed from the draft (source checked; draft wrong, or forbidden by §5.3)
+
+**Wrong in the draft — corrected against source**
+
+1. `comp-focal-add`: the focal form's buttons are **Add event** / **Save event**, not "Add"
+   (`CompPage.tsx:420-422`). Row actions **Edit** / **Delete** kept.
+2. `comp-focal-add`: "a half-filled RSU and price pair warns but saves" is **not true** —
+   `_validated_event` (`backend/app/api/comp.py:117-155`) has no pair rule and nothing warns.
+   Replaced with the real constraint: one row per focal year, a second is refused
+   (`_require_free_focal_year`, `comp.py:175-185`). Also named **Unvested price** and
+   **Grant price**, the form's own labels.
+3. `espp-lot-add`: the lot form's field is **Subscription**, not "Subscription price" — the
+   latter is the *offering* form's label (`EsppPage.tsx:371` vs `:733`).
+4. `espp-close-chip`: the chip offers the last stored close **on or before** the typed date,
+   not "that day's close" (`EsppPage.tsx:631-639`).
+5. `espp-purchase-model`: the three year knobs are **Subscription price**, **Purchase FMV**
+   and **Carry-forward** (`EsppPage.tsx:1104-1122`); the draft named only one.
+6. `taxes-whatif-apply`: the button reads **Apply (n) overrides to (year)** — written with
+   angle-bracket placeholders (`WhatIfPanel.tsx:595`), not a bare "Apply".
+7. `taxes-apply-vest`: the chip writes **W2: Stock/RSUs Sold** for the **primary** person
+   (`WithholdingPanel.tsx:628-636`) — the draft said "the stock and RSU W-2 input".
+8. `comp-grant-edit-delete`: a grant **Delete** has no confirm at all — it is instant with an
+   **Undo** toast (`RsuGrantsPanel.tsx:251-291`).
+9. `paycheck-profile-add`: named the form's verbatim labels **Withholding %**,
+   **Dental & vision**, **HSA**, **HSA coverage** (`PaycheckPage.tsx:229-235, 762-776`) in
+   place of the draft's prose list ("HSA per check" is not a label).
+10. `paycheck-withholding-split`: the tiles are **Federal balance**, **California balance**
+    and **Payroll taxes** (`WithholdingPanel.tsx:437-462`).
+
+**Where segments that would have failed the fence**
+
+11. `espp-model-sale`: `'ESPP → Lots → an unsold lot'` → `'ESPP → Lots'` ("an unsold lot" is
+    not UI text and is not exempt). `espp-lot-add` / `espp-lot-sold` likewise use
+    `'ESPP → Lots'` rather than `'… → Lots → Lots'`.
+12. `taxes-tables-clone`: `'Taxes → Tax tables → status tab'` → `'Taxes → Tax tables'`
+    ("status tab" is not UI text).
+
+**Rewritten because the draft restated on-screen copy (spec §5.3 rule 6)**
+
+13. `paycheck-pace`: dropped "hover or focus a bar" and the ESPP calendar-year sentence —
+    both verbatim `PacePanel` copy (`:314-319`). Replaced with "the ESPP row appears only
+    once the profile contributes to ESPP" (`paycheckScenario.ts:296`).
+14. `paycheck-read-breakdown` and the card watch: dropped the "net is authoritative, lines are
+    display-rounded" line — the breakdown card prints it twice already
+    (`PaycheckPage.tsx:92-101`). Kept the employer-match note, which is its own sentence.
+15. `paycheck-household-tile`: rewritten — "it ignores the person chip and any pinned row" is
+    the tile's own hint (`PaycheckPage.tsx:1486`).
+16. `comp-grant-add` watch: the 25 %/6.25 % cliff sentence is printed verbatim on the panel
+    (`RsuGrantsPanel.tsx:302-312`); replaced with its consequence (a wrong **Kind** re-times
+    every vest).
+17. `comp-vesting-read` and `comp-tc-read`: rewritten — the draft was the two ChartCard hints
+    (`VestingSchedulePanel.tsx:229, 315-318`; `CompPage.tsx:668`).
+18. `espp-offering-add` step 3 and `espp-read-charts`: rewritten — the draft was the offerings
+    drill-hint (`EsppPage.tsx:709-713`) and the two Summary ChartCard hints
+    (`LotAnatomyCard.tsx:67`, `EsppPriceCard.tsx:76`).
+19. `taxes-year-create` step 2: the draft was the menu's `createHint` (`TaxesPage.tsx:809`).
+20. `taxes-filing-status`: the draft was the scope row's InfoHint (`TaxesPage.tsx:783`); the
+    MFS watch line now states the consequence rather than quoting the standing caveat
+    (`TaxesPage.tsx:821-827`).
+21. `taxes-whatif-sale` watch and `taxes-inputs`: reworded off the panels' drill-hints
+    (`WhatIfPanel.tsx:604-609`, `InputsForm.tsx:632`).
+
+**Traps added (verified, and nowhere on screen until you hit them)**
+
+22. Card watch, Taxes: applying overrides is **refused** on a two-column year — a per-person
+    input must be edited in Tax inputs (`TaxesPage.tsx:536-547`). This replaced the draft's
+    "ESPP ordinary income raises payroll wage bases", which the What-if card already prints.
+23. `espp-lot-add` watch: a purchase date no offering covers pre-fills **neither** box
+    (`EsppPage.tsx:160-178`).
+24. `espp-purchase-model` watch: edited cells do not reach the chain until saved
+    (`EsppPage.tsx:1136-1143`).
+25. Card watch, ESPP: a capped purchase refunds the leftover and carries **nothing** forward
+    (`espp_calc.py:395-421`: `carry_next` is zero when `over_limit`).
+26. Card watch, Comp: the drift note when a grant no longer matches its focal row
+    (`comp.py:643-654`).
+27. Undo/confirm honesty (spec §5.3 rule 4) on every destructive action: paycheck profile
+    (confirm, no undo), focal row (confirm, no undo), grant (no confirm, undo), offering and
+    lot (confirm, no undo), tax year (armed confirm, no undo).
+
+### Deviations from the plan
+
+- None structural: ids, `views`, counts and commit messages are the plan's. The copy differs
+  wherever §5.3 or the source required it — every difference is itemised above.
+- The plan's rule 5 lists `?year=`, `?whatif=`, `?profile=`, `?lot=`, `?grant=` deep links;
+  none were used. Every task points at a view, never at one of the owner's rows, which also
+  keeps personal data out (spec §1). `?section=`, `/update?step=spending` and
+  `/settings?section=planning#plan-assumptions` are the only parameters used.
+
+### Hand-offs
+
+- **For G1/G2/G4 and lane V — `watch` lines are rendered as plain text.** `GuideCard.tsx:38`
+  and `GuideTaskList.tsx:24` render `watch` entries directly, not through `renderSteps`, so a
+  `**Label**` in a watch line would print literal asterisks (the label fence only reads
+  `steps`, so it would not catch it). No watch line in `pages-income.tsx` uses `**`.
+- **For G0's findings, confirmed here:** a page card's `to` must be the bare route, and
+  `views` must equal `PAGE_SECTIONS` labels exactly — both held for all four pages.
+- **For lane V:** `PENDING_PAGES` now holds `'/'`, `'/update'`, `'/net-worth'`, `'/portfolio'`,
+  `'/spending'`, `'/credit-cards'`, `'/projection'`, `'/calendar'`, `'/settings'`. The §5.4
+  coverage assertion stays skipped until those land.
+- **For lane V's cross-chapter anchor pass:** the Taxes tasks G1's `routine-tax-season` card
+  links to all exist with the spec's ids (`taxes-year-create`, `taxes-filing-status`,
+  `taxes-tables`, `taxes-tables-clone`, `taxes-per-person-table`, `taxes-inputs`,
+  `taxes-will-i-owe`, `taxes-apply-vest`), and `paycheck-person` is the canonical
+  one-person-per-profile task for the ownership thread.
+- **Product note, not fixed here:** the Paycheck pace row's "enter this year's limit" link
+  goes to bare `/settings`, not to `/settings?section=planning#limits`, so it lands on the
+  Household view. The guide step says "links to Settings" rather than naming a view.
+
+### Review round (2026-09-14) — `2899eeb`
+
+One commit, `src/guide/content/pages-income.tsx` only, every id unchanged. Gates after it:
+`npx vitest run src/guide` → 5 files, 23 passed / 1 skipped; `npx tsc -b` clean;
+`npx eslint src/guide` clean.
+
+**Important 1 — `comp-grant-add` watch was factually wrong.** The kind does not move the first
+vest date: `rsu_vesting.vest_dates` takes `first_vest_date` verbatim, and
+`vest_count(cliff) = 1 + (1 − cliff) / 6.25 %` (`backend/app/services/rsu_vesting.py:26-42`), so a
+new-hire grant filed as a refresh vests **6.25 % instead of 25 % on the date you typed** and runs
+**three quarters longer** (16 tranches against 13). The watch line now says that; the draft's
+"drops the first-year cliff and vests a year early" is gone.
+
+**Important 2 — Paycheck card watch, the over-100 % rule.** A *single* box over 100 is refused
+(`PaycheckPage.tsx:524, 543`); only the SUM of the four contribution percents warns and saves
+(`backend/app/api/paycheck.py:114, 548-551` — withholding is excluded from that sum). Line now
+reads "Percents that together exceed 100 % warn but save — one box over 100 is refused."
+
+**Minor 3 — pointer wording.** `paycheck-monthly-net-pointer`'s one step now names the guide
+card as spec §5.1 requires ("— see the Monthly update card in this guide") and bolds the
+**Spending** step. The estimate caveat it used to carry moved to the task's own `watch`, which
+keeps the pointer at exactly one step.
+
+**Minor 4 — one verbatim label.** `**Save as profile effective <date>…**` in one piece
+(`TryItPanel.tsx:315`), instead of splitting the label with prose.
+
+**Voice (§5.3).** "simply" removed twice (`comp-tc-read`, `espp-offering-add`). Three
+restatements of on-screen text rewritten to say HOW: `taxes-marginal` (the ladder needs this
+year's Federal and State tables), the What-if long/short step (press the toggle to switch the
+rate), and the ESPP sold-pair pair — its step now reads "To un-sell it, empty both boxes and
+save again", and its watch carries a rule the form does not print (a sold lot loses its Model
+sale link and cannot be a what-if leg). Six long steps tightened and the two three-action steps
+split (`paycheck-try-it`, `taxes-per-person-table`, plus `espp-model-sale`, `taxes-tables-clone`,
+`taxes-apply-vest`, `taxes-delete-year`): no step is now over 19 words. The Paycheck purpose is
+23 words. Both Settings paths spell `Settings → Planning → Plan assumptions`.
+
+No step is over 160 characters, no `watch` line uses `**` (they render as plain text), and the
+task counts and `views` are untouched.
