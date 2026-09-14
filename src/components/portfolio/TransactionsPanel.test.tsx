@@ -476,8 +476,12 @@ describe('TransactionsPanel entry session', () => {
     change(screen.getByLabelText(/shares/i), '11')
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() => expect(updateTransaction).toHaveBeenCalled())
-    // An edit is a one-off correction, not a session — today's full reset stands.
-    expect((screen.getByLabelText(/security/i) as HTMLSelectElement).value).toBe('')
+    // An edit is a one-off correction, not a session — today's full reset stands. The reset lands
+    // in the commit AFTER the PATCH resolves, so it is awaited rather than asserted on the same
+    // tick the call was seen (the old shape passed or failed on scheduling luck).
+    await waitFor(() =>
+      expect((screen.getByLabelText(/security/i) as HTMLSelectElement).value).toBe(''),
+    )
     expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('')
     expect((screen.getByLabelText(/date/i) as HTMLInputElement).value).toBe('')
     expect(screen.getByRole('button', { name: /add transaction/i })).toBeTruthy()
