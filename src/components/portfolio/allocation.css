@@ -44,3 +44,7 @@
 .classification-table tr[aria-busy='true'] { opacity: 0.6; }
 .classification-row-error { display: block; margin-top: 4px; color: var(--negative); font-size: 0.78rem; white-space: normal; }
 .classification-source { color: var(--muted); font-size: 12px; }
+
+/* "Unclassified holdings are 60.0% of the priced book — classify them first" beside its action. */
+.allocation-classify-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.allocation-classify { white-space: nowrap; }

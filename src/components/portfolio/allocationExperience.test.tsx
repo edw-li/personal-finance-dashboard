@@ -27,19 +27,30 @@ beforeEach(() => vi.clearAllMocks())
 afterEach(cleanup)
 
 describe('allocation targets', () => {
-  it('saves unfinished drafts with the chosen owner and requires exactly 100% to activate', async () => {
+  it('seeds only classified categories, offers no Unclassified target, and points at the classify path', async () => {
     vi.mocked(saveAllocationTargets).mockResolvedValue({ data: {} as never, headers: new Headers() })
     const onChanged = vi.fn()
-    render(<AllocationTargetEditor data={data} owner={7} onChanged={onChanged} />)
+    const onClassify = vi.fn()
+    render(<AllocationTargetEditor data={data} owner={7} onChanged={onChanged} onClassify={onClassify} unclassifiedCount={1} />)
     fireEvent.click(screen.getByRole('button', { name: 'Set targets' }))
+    // No __unknown__ row (spec §13): a gap to close, not a category to hold a weight.
+    expect(screen.queryByLabelText('Unknown target percent')).toBeNull()
+    expect(screen.queryByLabelText('Unclassified target percent')).toBeNull()
+    const add = screen.getByRole('combobox') as HTMLSelectElement
+    expect([...add.options].map((option) => option.textContent)).toEqual([
+      'Choose a category', 'Bonds', 'Cash / cash equivalents', 'Real assets', 'Mixed', 'Other',
+    ])
+    // 300 of the 500 priced book has no classification — the form says so and hands over the verb.
+    expect(screen.getByText(/Unclassified holdings are 60\.0% of the priced book — classify them first\./)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Classify these 1 holding' }))
+    expect(onClassify).toHaveBeenCalledOnce()
+    // Activation still needs exactly 100% — and stays available, drift stays honest.
     fireEvent.change(screen.getByLabelText('Equity target percent'), { target: { value: '60' } })
-    fireEvent.change(screen.getByLabelText('Unclassified target percent'), { target: { value: '39.9999' } })
     expect((screen.getByRole('button', { name: 'Activate targets' }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledOnce())
     expect(saveAllocationTargets).toHaveBeenCalledWith('asset_class', 7, 'draft', [
       { key: 'equity', target_pct: '60', tolerance_pp: '0' },
-      { key: '__unknown__', target_pct: '39.9999', tolerance_pp: '0' },
     ])
   })
 
@@ -47,15 +58,29 @@ describe('allocation targets', () => {
     vi.mocked(saveAllocationTargets).mockRejectedValue(new Error('Connection interrupted'))
     render(<AllocationTargetEditor data={data} owner={7} onChanged={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Set targets' }))
-    fireEvent.change(screen.getByLabelText('Equity target percent'), { target: { value: '60' } })
-    fireEvent.change(screen.getByLabelText('Unclassified target percent'), { target: { value: '40' } })
+    fireEvent.change(screen.getByLabelText('Equity target percent'), { target: { value: '100' } })
     fireEvent.change(screen.getByLabelText('Equity tolerance percentage points'), { target: { value: '5' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate targets' }))
     await screen.findByText('Connection interrupted')
-    expect((screen.getByLabelText('Equity target percent') as HTMLInputElement).value).toBe('60')
-    expect(saveAllocationTargets).toHaveBeenCalledWith('asset_class', 7, 'active', expect.arrayContaining([
-      { key: 'equity', target_pct: '60', tolerance_pp: '5' },
-    ]))
+    expect((screen.getByLabelText('Equity target percent') as HTMLInputElement).value).toBe('100')
+    expect(saveAllocationTargets).toHaveBeenCalledWith('asset_class', 7, 'active', [
+      { key: 'equity', target_pct: '100', tolerance_pp: '5' },
+    ])
+    // Without the callback the hint still states the share; only the action is absent.
+    expect(screen.getByText(/Unclassified holdings are 60\.0%/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Classify these/ })).toBeNull()
+  })
+
+  it('labels a saved Unclassified drift row by the page word, not the wire word', () => {
+    const drifted: AllocationData = { ...data, target_set: { id: 1, scope_key: 'person:7', dimension: 'asset_class', state: 'active', updated_at: '2026-09-01T00:00:00Z',
+      targets: [{ key: 'equity', target_pct: '40', tolerance_pp: '5' }, { key: '__unknown__', target_pct: '60', tolerance_pp: '5' }] },
+      drift: [
+        { key: 'equity', label: 'Equity', market_value: '200.00', weight_pct: '0.4', target_pct: '40', tolerance_pp: '5', drift_pp: '0.00', drift_amount: '0.00', outside_tolerance: false, has_unpriced: false },
+        { key: '__unknown__', label: 'Unknown', market_value: '300.00', weight_pct: '0.6', target_pct: '60', tolerance_pp: '5', drift_pp: '0.00', drift_amount: '0.00', outside_tolerance: false, has_unpriced: false },
+      ] }
+    render(<AllocationTargetEditor data={drifted} owner={7} onChanged={vi.fn()} />)
+    expect(screen.getByRole('rowheader', { name: 'Unclassified' })).toBeTruthy()
+    expect(screen.queryByRole('rowheader', { name: 'Unknown' })).toBeNull()
   })
 })
 

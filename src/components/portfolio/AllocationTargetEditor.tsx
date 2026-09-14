@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { allocationLabel, ASSET_CLASSES, GEOGRAPHIES, saveAllocationTargets, UNKNOWN_CLASSIFICATION } from '../../api/allocation'
+import { allocationLabel, ASSET_CLASSES, displayLabel, GEOGRAPHIES, saveAllocationTargets } from '../../api/allocation'
 import type { AllocationData, AllocationTarget } from '../../api/allocation'
 import type { OwnerScope } from '../../api/netWorth'
 import { errorDetail } from '../../api/client'
 import { undoBatch } from '../../api/lifecycle'
 import { formatCurrency, formatDate, formatPct } from '../../utils/format'
 import { useToast } from '../ToastProvider'
+import ClassifyButton from './ClassifyButton'
 
 function percentageUnits(raw: string): number | null {
   if (!/^\d{1,3}(\.\d{1,4})?$/.test(raw.trim())) return null
@@ -14,8 +15,12 @@ function percentageUnits(raw: string): number | null {
   return units <= 1_000_000 ? units : null
 }
 
-export default function AllocationTargetEditor({ data, owner, onChanged }: {
+export default function AllocationTargetEditor({ data, owner, onChanged, onClassify, unclassifiedCount = 0 }: {
   data: AllocationData; owner: OwnerScope; onChanged: () => void
+  /** The Security classifications card's focusUnclassified(), when the page has one. */
+  onClassify?: () => void
+  /** Members of the Unclassified slice — the N in "Classify these N holdings". */
+  unclassifiedCount?: number
 }) {
   const [editing, setEditing] = useState(false)
   const saved = data.draft_target_set ?? data.target_set
@@ -30,12 +35,12 @@ export default function AllocationTargetEditor({ data, owner, onChanged }: {
       {data.as_of ? ` · quotes from ${formatDate(data.as_of)}` : ''}. Positive drift means above target.</p>
     {data.draft_target_set && <p className="hint">An unfinished draft is saved. Current drift still uses your active targets.</p>}
     {editing && <TargetForm key={`${data.by}:${data.scope_key}:${saved?.updated_at ?? ''}`}
-      data={data} owner={owner} onSaved={() => { onChanged(); setEditing(false) }} />}
+      data={data} owner={owner} onSaved={() => { onChanged(); setEditing(false) }} onClassify={onClassify} unclassifiedCount={unclassifiedCount} />}
     {data.target_set ? <div className="holdings-scroll"><table className="port-table">
       <thead><tr><th scope="col">Category</th><th scope="col" className="num">Current</th><th scope="col" className="num">Target</th>
         <th scope="col" className="num">Tolerance (pp)</th><th scope="col" className="num">Drift (pp)</th><th scope="col" className="num">Dollar drift</th><th scope="col">Status</th></tr></thead>
       <tbody>{data.drift.map((row) => <tr key={row.key}>
-        <th scope="row">{row.label}</th><td className="num">{formatPct(row.weight_pct, { signed: false })}</td>
+        <th scope="row">{displayLabel(row.key, row.label)}</th><td className="num">{formatPct(row.weight_pct, { signed: false })}</td>
         <td className="num">{Number(row.target_pct).toLocaleString()}%</td><td className="num">±{Number(row.tolerance_pp).toLocaleString()}</td>
         <td className="num">{row.drift_pp === null ? '—' : `${Number(row.drift_pp) > 0 ? '+' : ''}${Number(row.drift_pp).toFixed(2)}`}</td>
         <td className="num">{formatCurrency(row.drift_amount)}</td>
@@ -46,15 +51,24 @@ export default function AllocationTargetEditor({ data, owner, onChanged }: {
   </section>
 }
 
-function TargetForm({ data, owner, onSaved }: { data: AllocationData; owner: OwnerScope; onSaved: () => void }) {
+function TargetForm({ data, owner, onSaved, onClassify, unclassifiedCount }: {
+  data: AllocationData; owner: OwnerScope; onSaved: () => void; onClassify?: () => void; unclassifiedCount: number
+}) {
   const saved = data.draft_target_set ?? data.target_set
   const [rows, setRows] = useState<AllocationTarget[]>(() => {
     const initial = [...(saved?.targets ?? [])]
-    for (const slice of data.slices) if (!initial.some((row) => row.key === slice.key)) {
+    // Unclassified is never SEEDED (spec §13): it is a gap to close, not a category to hold a
+    // weight. A row a user saved earlier is theirs to keep or Remove.
+    for (const slice of data.slices) if (!slice.is_unknown && !initial.some((row) => row.key === slice.key)) {
       initial.push({ key: slice.key, target_pct: '0', tolerance_pp: '0' })
     }
     return initial
   })
+  // The share of the priced book with no classification — from the coverage figures, so it is
+  // right whether or not an Unclassified slice is in the list.
+  const unknownShare = Number(data.coverage.unknown_market_value) > 0 && Number(data.total_market_value) > 0
+    ? Number(data.coverage.unknown_market_value) / Number(data.total_market_value)
+    : null
   const [category, setCategory] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -82,6 +96,10 @@ function TargetForm({ data, owner, onSaved }: { data: AllocationData; owner: Own
   }
   return <div className="allocation-target-form">
     <p className="hint">Save an unfinished draft at any total. Activate at exactly 100%. Tolerance is in percentage points: a 40% target with 5 pp tolerance allows 35–45%.</p>
+    {unknownShare !== null && <p className="hint allocation-classify-hint">
+      <span>Unclassified holdings are {formatPct(unknownShare, { signed: false })} of the priced book — classify them first.</span>
+      {onClassify && unclassifiedCount > 0 && <ClassifyButton count={unclassifiedCount} onClick={onClassify} className="button" />}
+    </p>}
     <div className="holdings-scroll"><table className="port-table">
       <thead><tr><th scope="col">Category</th><th scope="col">Target (%)</th><th scope="col">Tolerance (pp)</th><th /></tr></thead>
       <tbody>{rows.map((row) => <tr key={row.key}>
@@ -97,7 +115,7 @@ function TargetForm({ data, owner, onSaved }: { data: AllocationData; owner: Own
     <div className="allocation-add-target">
       <label>Add category {choices ? <select className="field-input" value={category} onChange={(e) => setCategory(e.target.value)}>
         <option value="">Choose a category</option>
-        {Object.entries({ ...choices, [UNKNOWN_CLASSIFICATION]: 'Unknown' }).filter(([key]) => !rows.some((r) => r.key === key))
+        {Object.entries(choices).filter(([key]) => !rows.some((r) => r.key === key))
           .map(([key, label]) => <option key={key} value={key}>{label}</option>)}
       </select> : <input className="field-input" value={category} maxLength={100} onChange={(e) => setCategory(e.target.value)} />}</label>
       <button className="button" disabled={!category.trim() || rows.some((r) => r.key === category.trim()) || rows.length >= 100 || busy}
