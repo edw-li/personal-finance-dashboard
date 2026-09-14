@@ -193,7 +193,13 @@ export default function Layout() {
                 announcement would read the same fact twice. */}
             <div className="nav-indicator" ref={indicatorRef} aria-hidden="true" />
             {NAV_SECTIONS.map((section, index) => (
-              <div className="nav-section" key={section.heading ?? `ungrouped-${index}`}>
+              // The utility tail (Guide, Settings) is the one ungrouped section that is not the
+              // top pair: a hairline above it says these two are not another tracking group
+              // (user request, 2026-09-15), the way the footer's own border sets it apart below.
+              <div
+                className={`nav-section${section.heading === null && index === NAV_SECTIONS.length - 1 ? ' nav-section-tail' : ''}`}
+                key={section.heading ?? `ungrouped-${index}`}
+              >
                 {section.heading !== null && (
                   <div className="nav-heading">{section.heading}</div>
                 )}

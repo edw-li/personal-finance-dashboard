@@ -87,6 +87,14 @@
   gap: 2px;
 }
 
+/* The utility tail (Guide, Settings) sits under a hairline, the same border the footer carries,
+   so it reads as "the app's own pages", not a fourth group of the household's money. */
+.nav-section-tail {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
 .nav-heading {
   margin: 0.35rem 0 0.1rem;
   padding: 0 0.75rem;

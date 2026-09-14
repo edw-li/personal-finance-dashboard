@@ -224,6 +224,11 @@ describe('Layout — sidebar v2', () => {
       'Guide',
       'Settings',
     ])
+    // The utility tail is the one section under a hairline (user request, 2026-09-15): Guide and
+    // Settings are the app's own pages, not a fourth money group. Exactly one section wears it.
+    const tails = Array.from(nav.querySelectorAll('.nav-section-tail'))
+    expect(tails).toHaveLength(1)
+    expect(Array.from(tails[0].querySelectorAll('a')).map((a) => a.textContent)).toEqual(['Guide', 'Settings'])
     // The footer closes the sidebar — it carries the old separator's border, the identity
     // block and Log out.
     expect(document.querySelector('.sidebar-footer')).not.toBeNull()
