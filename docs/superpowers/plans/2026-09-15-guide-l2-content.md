@@ -328,3 +328,116 @@ and the rest of the bullet the `<p>`, verbatim.
 - Spec §5.1 → Task 1; §5.3 (start) → Task 2; §5.2 → Task 3; §5.3 (reference) + §5.4 → Task 4.
 - Ids new and unique (`setup-*`, `season-*`); no cross-lane guide anchors introduced; every `to`
   is a real route/view/Settings card the fences accept.
+
+---
+
+## Results (implementer, 2026-09-15)
+
+**Status: complete.** Four content commits on `guide/l2-content`, all four tasks done, full gates
+green. Nothing outside the three content files and this Results section was touched; never pushed.
+
+### Commits
+
+| Commit | What |
+| --- | --- |
+| `5b16b99` | `content(guide): the setup checklist is an 18-step numbered rail (polish spec §5.1)` |
+| `2bb3b96` | `content(guide): Start here prose in two-column fact grids (polish spec §5.3)` |
+| `335e24d` | `content(guide): tax season is an 8-step numbered rail (polish spec §5.2)` |
+| `328a852` | `content(guide): Reference prose in fact grids; glossary as a term \| definition grid (polish spec §5.3–5.4)` |
+
+### Gates
+
+- Per task: `npx vitest run src/guide` → 5 files / 23 tests passed; `npx tsc -b` clean; `npx eslint src/guide` clean.
+- Final: `npx tsc -b` clean · `npx eslint .` 0 errors, 25 warnings (all pre-existing
+  `react-refresh/only-export-components`; none in `src/guide`) · `npx vitest run` **232 files /
+  3108 tests passed** · `npm run build` ✓ built in 8.9 s.
+- Also run on purpose: `npx vitest run src/components/paletteRegistry.test.ts` (11 passed) — it
+  pins "add a card" against the **real** guide, and this lane adds 26 task entries to the palette
+  (L1 excludes `numbered` cards later). "Add the credit cards" does not outrank `guide:cards-add`.
+
+### Structure delivered
+
+- `start-setup`: `numbered: true`, `body` dropped, 18 tasks `setup-appearance` → `setup-assistant`,
+  card `keywords` added. Four dependency `watch` lines (spec §5.1): on `setup-accounts` (people
+  before accounts), two on `setup-first-month` (accounts, and kinds before months), on `setup-taxes`
+  (import before UI tax edits), on `setup-budgets` (three complete months); plus the Monday trap on
+  `setup-prices`.
+- `routine-tax-season`: `numbered: true`, `body` dropped, 8 tasks `season-new-year` → `season-owe`;
+  `purpose`, `keywords` and the three card `watch` lines untouched.
+- Fact grids: `start-organized` (8 tiles), `start-next` (4), `ref-undo` (5), `ref-sandboxes` (5),
+  `ref-links` (4). Glossary `<dl>` gained `guide-glossary-grid`. `start-what`, `ref-settings-map`
+  and the Settings-map table untouched, as specified.
+
+### Deviations from the plan's drafts (the current sentences won, per the brief)
+
+1. **`setup-import` has no `watch`.** The plan drafted "Depends on 4 and 5 — the importer keys on
+   account and category slugs." Read `backend/app/importer/apply.py`: it matches existing accounts
+   by slug and **creates** the ones it does not find, so the import does not depend on tasks 4–5.
+   The ordering fact last night's content really states ("Do it before typing tax years the
+   workbook covers.") is kept as the task's second step.
+2. **`setup-taxes` watch** = "Depends on 6 · Import the workbook — do it before typing tax years the
+   workbook covers." (the current sentence), not the plan's "the sheet wins inside the years it
+   covers" — that claim is nowhere in the reviewed content.
+3. **`setup-first-month` carries two watch lines** (accounts, and "set the kinds before you enter
+   months") so the spec's "kinds before months" dependency is stated somewhere; the plan drafted
+   only the accounts one.
+4. **`setup-budgets` watch** ends "only a closed month counts toward the averages" — the wording
+   `routine-monthly`'s card watch already uses — rather than the plan's "three complete months,
+   closed".
+5. **`season-status`** keeps "the status this year is filed as" and drops the plan's "every year
+   starts Single": that is not in last night's content and I could not verify it.
+6. **`season-limits`** drops the plan's "The Paycheck pace meters and the sandbox presets need
+   them." — same reason.
+7. **`setup-paycheck`** uses **Withholding split** (the label the current content and the UI carry),
+   not the plan's "Withholding split (optional)".
+8. **`setup-portfolio`**, **`setup-cards`**, **`setup-snapshot`**, **`setup-categories`** keep the
+   current fragment openings ("The securities the import did not carry…", "The cards with their
+   **Opened** dates…") instead of the plan's re-verbed drafts, so the sentences stay as reviewed.
+
+### Sentences split or reworded (facts and labels intact)
+
+- Split into one sentence per step: `setup-accounts` (liabilities · "cannot leave **Balances**"),
+  `setup-prices`, `setup-limits`, `setup-calendar`, `setup-paycheck`, `setup-assistant`,
+  `season-new-year`, `season-clone`, `season-inputs`, `season-owe`.
+- A step cannot carry a `<Link>`, so four in-prose links became prose or a bold label:
+  `#routine-monthly` → "The full routine is the Routines chapter's first card.";
+  `/portfolio?section=allocation` → **Allocation** (task `to` stays `…?section=manage`);
+  `#plan-assumptions` → **Plan assumptions** (task `to` is `#limits`);
+  `/espp?section=lots` → **Lots** (task `to` is `/comp?section=manage`);
+  `#routine-tax-season` → "…in the Routines chapter". `season-owe`'s Summary link became its `to`.
+- `start-next` tiles: the bold lead became the `<h4>`, so each sentence now starts at what used to
+  be mid-sentence — "tax season" → "Tax season", "the monthly update" → "The … monthly update".
+  No other word changed.
+- `start-organized`'s first tile keeps **all five** sidebar bullets verbatim as five sentences in
+  one paragraph; the plan suggested condensing them to two or three, which would have rewritten
+  reviewed copy.
+- `ref-sandboxes` and `ref-links` bullets had no bold lead, so their tiles needed new headings:
+  "The three sandboxes", "The scenario rides in the address", "Pinning", "Resetting", "The doors
+  out"; "The view and the month", "Whose figures and the window", "Settings cards and scenarios",
+  "Back and Forward". The bullet text under each is unchanged.
+
+### Hand-offs for lane V
+
+- **Nothing here looks right until L1 merges.** `.guide-facts`, `.guide-fact` and
+  `.guide-glossary-grid` are L1's CSS and `numbered` is L1's renderer; on this branch alone the
+  tiles render as plain `div`/`h4`/`p` and the two rails render as ordinary task lists (last
+  night's `GuideTaskList`). Eyeball only after the merge.
+- **Eyeball first at 1440 px:** `start-organized`'s "The sidebar" tile is by far the tallest (five
+  sentences) — check it does not leave a hole beside it; the glossary's longest term ("Not started ·
+  In progress · Ready to review · Reviewed · Changed since review · Not yet reviewed") sets the
+  width of the term column; `ref-links` tiles are short, so four of them may look sparse.
+- **26 new ids** for the probe/palette: `setup-appearance`, `setup-password`, `setup-household`,
+  `setup-accounts`, `setup-categories`, `setup-import`, `setup-first-month`, `setup-prices`,
+  `setup-portfolio`, `setup-limits`, `setup-taxes`, `setup-paycheck`, `setup-comp-espp`,
+  `setup-cards`, `setup-calendar`, `setup-snapshot`, `setup-budgets`, `setup-assistant`;
+  `season-new-year`, `season-status`, `season-tables`, `season-clone`, `season-per-person`,
+  `season-inputs`, `season-limits`, `season-owe`. Both cards have no `to`, so the 3–8-task fence
+  does not apply to their 18 and 8.
+- **Palette:** until L1 excludes `numbered` cards, those 26 are Guide entries. `paletteRegistry`'s
+  "add a card" pin is green with them in; if L1's exclusion lands, that suite stays green either way.
+- **Probe link walk:** Start here now renders fewer in-card links (the four listed above became
+  task `to`s or prose), and 26 new `Go →` destinations appear instead — all fenced, all sidebar
+  routes. `/portfolio?section=allocation` and `/espp?section=lots` are no longer linked from the
+  checklist; both are still reachable from the Pages chapter.
+- Plan checkboxes above were left unticked on purpose: the brief scoped this lane's edits to the
+  three content files and this Results section.
