@@ -2515,3 +2515,182 @@ passes; `ClassifyButton({ count, onClick, className? })` (Task 7) is used identi
    which ARIA allows.
 10. **C13 (category-button affordance) and W2 (targets empty state)** — not adopted by the spec's
     §12–14; left as-is and not implemented here.
+
+---
+
+## Results
+
+Lane P2 (`polish/p2-portfolio`, worktree `.worktrees/polish-p2`), cut from main @`895cdaf` (F1 + F2 merged).
+Fourteen commits, one per task plus three hand-off fixes. Never pushed.
+
+### Commits
+
+| Task | SHA | Subject |
+| --- | --- | --- |
+| 0 | — | pre-flight only, no files modified |
+| 1 | `f1c8b60` | the catch-all slice reads Unclassified — `displayLabel`/`UNCLASSIFIED_LABEL`, donut and CSV routed through it |
+| 2 | `04c70a1` | `.panel`/`.panel-title`/`.tiles-row` retired for the shared `.card`/`.eyebrow`/`.kpi-row` grammar |
+| 3 | `21305ae` | Manage ledgers on a shell `Segmented` tablist, Clear selection, one-line price status |
+| 4 | `31423d0` | tiles only on Overview/Holdings/Allocation; five ghost tiles |
+| 5 | `2982c26` | industry heat treemap is a `ChartCard` under the holdings table (`HeatTreemapCard`) |
+| 6 | `c44b640` | Security classifications card — filter chips, inline PATCHing selects with Undo, `focusUnclassified()` |
+| 7 | `aebe47a` | targets never seed or offer Unclassified; the form names the share and hands over the action |
+| 8 | `b6bf194` | one allocation card — ranked table and coverage as the donut aside, Missing quotes as a `Disclosure` |
+| 9 | `ff10cb3` | Transactions and Securities ledgers scroll inside `.holdings-scroll` with `useScrollEdges` |
+| 10 | `513a148` | owner split as the By-group card lede, tiles on Overview only, Accounts card names its month |
+| 11 | `3ec946d` | tiles on Rewards and Credit lines only; four delta-less ghost tiles |
+| 12 | `80a7ec2` | `test(portfolio)`: await the post-edit reset (the assigned pre-existing flake) |
+| 12 | `d533754` | `docs(portfolio)`: the drill-in comments name Clear selection |
+| 12 | `33e3709` | `test(networth)`: the ghost-parity guard pins the By-group box with its owner lede row |
+
+### Gates (Task 12, from the worktree root)
+
+- `npx tsc -b` — silent.
+- `npx eslint <lane files>` — 0 errors, **1 warning** (`creditcards/CategoriesPanel.tsx` `react-refresh/only-export-components`), unchanged from the Task 0 baseline.
+- `npx eslint .` — 0 errors, **25 warnings** = the repo baseline of 25. This lane adds none
+  (`CLASSIFICATION_CARD_ID` is a constant export, which `allowConstantExport` permits).
+- `npx vitest run` — **2957 passed / 2959**, 217 files passed of 218. The single failure is
+  pre-existing and outside this lane (see below).
+- `npm run build` — built in 9.67s.
+
+### Deviations from the plan
+
+1. **Task 1 rippled into the target tests.** Making `allocationLabel('__unknown__')` return
+   "Unclassified" renamed the target row's `aria-label`, so the two existing `allocation targets`
+   tests failed at Task 1 (the plan only rewrites them at Task 7). Updated the two labels in place
+   at Task 1 (`Unknown target percent` to `Unclassified target percent`); Task 7 replaced the whole
+   block as planned.
+2. **`ClassificationEditor.tsx` renamed at Task 2 too.** The plan lists the `.panel` to `.card`
+   renames but omits this file, which still carried `details.panel`; renamed with the rest so no
+   component was left referencing a class Task 2 deleted. Task 6 replaced the file wholesale.
+3. **`HeatTreemapCard.test.tsx`'s `beforeEach` is a block, not an expression.** The plan's
+   `beforeEach(() => vi.mocked(fetchClassifications).mockResolvedValue([]))` implicitly *returns
+   the mock function*, and vitest treats a function returned from a hook as that hook's teardown —
+   so it called `fetchClassifications()` after every test, producing an unhandled rejection that
+   failed the reject-path test. Body wrapped in braces, with a comment.
+4. **A row's typed fields compare against what was last SENT, not against the prop.** The plan's
+   `saveText` compared `draft[field]` with `row[field]`, so a blur right after an Enter-save
+   re-PATCHed the same words (the server row still says the old value until the parent's refetch
+   lands) — the plan's own "an unchanged blur is not a request" assertion caught it. The draft now
+   carries a `sent` pair, re-based whenever the server row changes. Held in *state*, not a ref:
+   react-hooks v7's `refs` rule rejects both reading and writing a ref during render.
+5. **`HoldingsScroll` component instead of a hook call in each panel body (Task 9).** Per the
+   lead's mid-lane note, `useScrollEdges` never re-arms if its ref is null at mount, and both
+   ledgers render their table only once rows exist. The scroller is now a four-line component that
+   calls the hook itself, so the hook mounts with a non-null element. This needs no `active`
+   argument and will not conflict with the new two-arg signature.
+6. **Two existing NetWorth tests updated for the new arrangement (Task 10).** `reads the last
+   column at or before the pick...` asserted a *tile* while sitting on the Accounts view (tiles are
+   Overview-only now) — it clicks through to Overview for that line; `snaps a ribbon pick back...`
+   used a bare `document.querySelector('.chart-lede')` that now matches the new owner lede first —
+   scoped to the movers card, the idiom its sibling test already used.
+7. **One assertion in `src/components/PageSkeleton.test.tsx` (a lane-F2 file) updated.** Its
+   ghost-parity guard pins NetWorthPage's first skeleton card by exact string; the plan's mandated
+   `+ LEDE_ROW` changed it. The guard's intent (no bare literal) is intact — flagged for the lead
+   as this lane's only touch outside its file list.
+8. **Two stale comments** in `HoldingDetailPanel.{tsx,test.tsx}` named the "All holdings" button
+   that Task 3 renamed; updated to "Clear selection" (`d533754`).
+
+### Notes for lane V
+
+- **Classify button text, exactly:** `Classify these {N} holding` / `...{N} holdings` (singular at
+  N = 1). One component, `src/components/portfolio/ClassifyButton.tsx`, used by the ranked row, the
+  Unclassified slice detail (first, above the `Open {ticker}` buttons) and the targets form.
+- **Classifications card selector:** `#security-classifications`, also
+  `section.card.allocation-classifications[aria-label="Security classifications"]`. The chips are
+  a `Segmented variant="chips"` group named **"Classification filter"** (Unclassified / Not
+  reviewed / All, each with a count badge); the search box is `input[aria-label="Find a security"]`.
+  Row controls are `[aria-label="{TICKER} asset class"]`, `...geography`, `...industry`, `...note`.
+- **Acceptance §15 item 8** is exercised by `AllocationPanel.test.tsx` (button text, the filtered
+  row count, focus landing on a select, `scrollIntoView({ block: 'start' })`) and
+  `allocationExperience.test.tsx` (no `__unknown__` row, no Unknown option).
+- Portfolio's single subheader line is now `p.portfolio-status-line` inside
+  `.page-frame-subheader` — "Prices as of {date} · last refresh {datetime} ({trigger}) · {n} updated".
+- `panels.css`'s F2 sticky rule (`.port-table:has(td.row-actions) th:last-child`) now also sees the
+  allocation ranked table and the classification table. Neither has a `td.row-actions`, so the rule
+  is inert there — worth one eyeball.
+
+### Hand-off / follow-ups for the lead
+
+- **Now-unused shared pieces this lane could not touch (F2's files):** `PageSkeleton`'s `strip`
+  prop, `skeletonMetrics.OWNER_STRIP`, and `--m-owner-strip` / `.skeleton-strip` in `panels.css`.
+  NetWorth was their only caller. `PageSkeleton.test.tsx` still covers `strip` directly.
+- **Coordination with P1:** `HistoricalReview.tsx` still renders `details.panel`, and
+  `portfolio.css`'s `.panel` box is gone as of `04c70a1` — until P1 renames it to `.card` (spec
+  §12 assigns that), the Monthly-update accordion renders unstyled.
+- **Pre-existing failure, not this lane's:** `src/pages/OverviewPage.test.tsx > OverviewPage tiles
+  > renders the four tiles from one snapshot` fails whenever the run happens after 17:00 PDT. Its
+  `daysAgo()` helper computes in **UTC** (`new Date(...).toISOString()`), while `OverviewPage`
+  compares the quote day against `todayIso()`, a **local** calendar date — so once UTC rolls over,
+  the fixture's "yesterday" is the page's "today" and the tile reads " today" instead of
+  " on Sep 13, 2026". One-line fix in P1's file (build the fixture date locally); left untouched
+  here. Reproduces on the file alone, and nothing in this lane's diff is imported by that page.
+- **Known parallel-run flakes seen once each and green on re-run:** `CreditCardsPage.test.tsx`
+  ("an auto weight names the ENTERED months behind it", also flaky at the Task 0 baseline) and
+  `settings/CategoriesCard.test.tsx` ("retires and restores without touching the other columns").
+  `RestoreCard.test.tsx` never tripped.
+- **Deferred by the plan (§13 ambiguity 5):** after an Unclassified row is classified it leaves the
+  filtered table and the caret goes to the document; no focus-management machinery was added.
+
+### Review round (APPROVE WITH FIXES, applied 2026-09-13)
+
+Merged main @`b4063c5` into the lane first (`4c20ae2`, clean — no file overlap). Main's
+`useScrollEdges(ref, active = true)` and named `page` container both arrived; `HoldingsScroll`
+already had the documented shape, so nothing needed changing there.
+
+All five items applied TDD (failing test, run, implement, run) in one commit, `f3b24b9`:
+
+1. **Dimension-blind "Unclassified" (IMPORTANT).** `displayLabel(key, label, by)` now takes the
+   dimension and returns `UNCLASSIFIED_LABEL` only on `asset_class`; `allocationLabel` returns the
+   wire's "Unknown" on every other dimension. `data.by` is threaded from `exposureOption`,
+   `exposureCsv` (both the label column and the Classification column), the selection title and
+   `context.classification`, the ranked table and the drift rows. `ClassifyButton` (ranked row and
+   slice detail) and the targets "classify them first" hint render only when
+   `data.by === 'asset_class'` — a `classifiable` const in both `AllocationPanel` and
+   `AllocationAside`. Tests: `allocationExperience.test.tsx` pins the label/option/CSV on
+   `by: 'industry'` ("Unknown industry" survives); `AllocationPanel.test.tsx` switches the
+   dimension toggle to Industry and asserts the ranked names and that no classify button renders,
+   in the aside or behind the slice detail.
+2. **Dropped edits inside one round-trip (IMPORTANT).** `pick`/`saveText` no longer return early on
+   `busy`. Both go through `enqueue(next)`, which applies the optimistic draft and chains the PATCH
+   on a `useRef<Promise<void>>` queue (`queue.current = queue.current.then(() => save(next))`), read
+   and written in handlers only. The draft's `sent` now covers all four fields as display strings,
+   and a `serverKey` change folds the new row in **field by field** (`rebased()`): a field equal to
+   its last `sent` value takes the server's word, an unsent local edit is left alone. A failed PATCH
+   reverts only the fields that request carried. Tests: two picks inside one in-flight PATCH → both
+   shown, two PATCHes in order with the second carrying the first's value; a same-row refetch
+   mid-typing keeps the text while the untouched field adopts the server's.
+   *Lint note:* the `saveOnEnter(field)` factory was invoked during render, which react-hooks v7's
+   `refs` rule reads as handing a ref-touching function to render — the Enter handlers are inlined
+   now, matching the `onBlur` siblings that always linted clean.
+3. **Treemap staleness (IMPORTANT).** `AllocationPanel` gained `onClassificationsChanged?`, fired
+   from the classifications card's `onChanged` alongside its own `refresh`. `PortfolioPage` keeps a
+   `classificationsVersion` counter and passes it to `HeatTreemapCard` as `refreshKey`, which is in
+   that card's fetch effect deps. Tests: the card refetches when `refreshKey` bumps; the panel
+   calls `onClassificationsChanged` after an inline save.
+4. **Classify under an overlay panel (IMPORTANT).** `AllocationPanel` reads `useDetailPanel()`
+   (null-guarded) and its `classify` handler now does `detailPanel?.close(); setSelection(null);`
+   before `focusUnclassified()` — the page is `inert` under an overlay/reading panel, so the focus
+   was a no-op and the button read as dead. Test: a mocked provider records `close` before
+   `scrollIntoView`.
+5. **Minors.** `.allocation-workspace`'s `container-type: inline-size` removed (the two-column pair
+   it served is gone; the aside's query names ChartCard's own `.chart-card-has-aside` container) and
+   the sheet's header comment corrected. The three Manage `role="tabpanel"` wrappers carry
+   `aria-label="Transactions" / "Securities" / "Realized"`. The allocation card renders an
+   `AllocationAsideGhost` (bars only — no faked coverage sentence or ranked rows) while the first
+   payload is in flight, so the body is two columns from the first paint instead of flipping when
+   data lands; covered by a test.
+
+**Gates after the round:** `npx tsc -b` silent · scoped eslint 0 errors / 1 warning (the
+pre-existing `creditcards/CategoriesPanel.tsx`, unchanged) · scoped vitest 289/289 across the
+portfolio components and the three pages plus `motion.test.ts` · full `npx vitest run`
+**3060 passed / 3061**, 223 files of 224 · `npm run build` 9.79s.
+
+**The one failure is the same pre-existing, out-of-lane one reported before the round:**
+`src/pages/OverviewPage.test.tsx > OverviewPage tiles > renders the four tiles from one snapshot`.
+Its `daysAgo()` builds the fixture date in **UTC** while `OverviewPage` compares the quote day
+against `todayIso()`, a **local** calendar date, so after 17:00 PDT the fixture's "yesterday" is the
+page's "today" and the tile reads " today". It fails identically when that file is run alone, so it
+is not an ordering flake; nothing in this lane's diff is imported by that page. One-line fix in
+P1's file (build the fixture date locally). No other suite failed this round — the
+`CreditCardsPage` and `settings/CategoriesCard` order flakes seen earlier did not reappear.

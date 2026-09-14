@@ -266,6 +266,14 @@ describe('TransactionsPanel', () => {
     // the consumed toast now spends ToastProvider's exit window on screen before it goes.
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull())
   })
+
+  it('keeps the ledger in a .holdings-scroll scroller so the sticky row actions can pin (2026-09-13 polish §7)', () => {
+    const { container } = render(<TransactionsPanel securities={securities} transactions={[importTxn]} onChanged={() => {}} />)
+    const scroller = container.querySelector('.holdings-scroll') as HTMLElement
+    expect(scroller).not.toBeNull()
+    expect(scroller.querySelector('table.port-table')).not.toBeNull()
+    expect(scroller.querySelector('td.row-actions')).not.toBeNull()
+  })
 })
 
 // Spec §5.1: entering a lot is a SESSION — several lots of the same security, in the same
@@ -468,8 +476,12 @@ describe('TransactionsPanel entry session', () => {
     change(screen.getByLabelText(/shares/i), '11')
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() => expect(updateTransaction).toHaveBeenCalled())
-    // An edit is a one-off correction, not a session — today's full reset stands.
-    expect((screen.getByLabelText(/security/i) as HTMLSelectElement).value).toBe('')
+    // An edit is a one-off correction, not a session — today's full reset stands. The reset lands
+    // in the commit AFTER the PATCH resolves, so it is awaited rather than asserted on the same
+    // tick the call was seen (the old shape passed or failed on scheduling luck).
+    await waitFor(() =>
+      expect((screen.getByLabelText(/security/i) as HTMLSelectElement).value).toBe(''),
+    )
     expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('')
     expect((screen.getByLabelText(/date/i) as HTMLInputElement).value).toBe('')
     expect(screen.getByRole('button', { name: /add transaction/i })).toBeTruthy()

@@ -356,7 +356,7 @@ export default function CreditCardsPage() {
             load()
           },
         }}
-        skeleton={{ tiles: 3, cards: [{ span: 12, height: 320 }, { span: 12, height: 260 }] }}
+        skeleton={{ tiles: { count: 4, delta: false }, cards: [{ span: 12, height: 320 }, { span: 12, height: 260 }] }}
       >
         {activeCard ? (
           <CardDetail
@@ -373,7 +373,9 @@ export default function CreditCardsPage() {
           />
         ) : (
           <>
-            {kpis && (
+            {/* Tiles belong to a view's summary (2026-09-13 polish §12): Rewards and Credit lines
+                read the lineup; Manage edits it and gets none. */}
+            {kpis && views.section !== 'manage' && (
               <div className="kpi-row">
                 <StatTile
                   label="Total credit line"

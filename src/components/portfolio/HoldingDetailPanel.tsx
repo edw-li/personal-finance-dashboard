@@ -40,7 +40,7 @@ function tone(value: string | null): string {
  * fetched.
  *
  * A BODY, not a card: it renders IN PLACE of the holdings table inside the page's own
- * Holdings panel, whose header carries the ticker and the "All holdings" way back — so
+ * Holdings panel, whose header carries the ticker and the "Clear selection" way back — so
  * the drill-in never takes the user out of the section they acted in (the SpendingPage
  * bars-to-pie swap, holdings-flavoured). Mounted keyed by security, so a remount resets
  * the span and the feed.

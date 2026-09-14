@@ -92,7 +92,9 @@ describe('ghost parity (motion spec §7)', () => {
     expect(page('EsppPage')).toContain('height: FEED_SKELETON.esppOfferings')
     // All three cards, at the boxes they really occupy — an unghosted third card let the page
     // grow under the reader when the summary landed.
-    expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(360, { controls: true, zoomable: true }))')
+    // + LEDE_ROW, not a bare literal: the By-group card carries the owner lede now (2026-09-13
+    // polish §10), and chartCardBox — a lane-F2 file — has no lede option to ask for.
+    expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(360, { controls: true, zoomable: true }) + LEDE_ROW)')
     expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(255, { controls: true }))')
     expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(280, { zoomable: true, footer: true }))')
   })

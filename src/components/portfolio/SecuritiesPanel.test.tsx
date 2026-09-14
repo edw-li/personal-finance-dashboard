@@ -124,4 +124,12 @@ describe('SecuritiesPanel', () => {
     expect(screen.getByRole('button', { name: /add security/i })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
   })
+
+  it('keeps the ledger in a .holdings-scroll scroller so the sticky row actions can pin (2026-09-13 polish §7)', () => {
+    const { container } = render(<SecuritiesPanel securities={[autoPriced, manualPriced]} onChanged={vi.fn()} />)
+    const scroller = container.querySelector('.holdings-scroll') as HTMLElement
+    expect(scroller).not.toBeNull()
+    expect(scroller.querySelector('table.port-table')).not.toBeNull()
+    expect(scroller.querySelector('td.row-actions')).not.toBeNull()
+  })
 })

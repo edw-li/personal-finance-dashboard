@@ -1,18 +1,14 @@
-/* Page-scoped rules ONLY. Everything the five portfolio components consume lives in
-   src/components/portfolio/portfolio.css (imported by each of them); the app-wide
-   vocabulary (.page, .stat-tile, .error-banner, .empty-note, .loading-dim) lives in
-   panels.css, and the title row, subheader and sticky scope row belong to PageFrame's
-   shell.css. Nothing any of those files defines is redefined here. */
+/* Page-scoped rules ONLY. Everything the portfolio components consume lives in
+   src/components/portfolio/portfolio.css (imported by each of them); the app-wide vocabulary
+   (.page, .card, .kpi-row, .stat-tile, .error-banner, .empty-note, .loading-dim, .segmented)
+   lives in panels.css/shell.css, and the title row, subheader and sticky scope row belong to
+   PageFrame's shell.css. Nothing any of those files defines is redefined here. */
 
-/* The price clock reads under the title row now (2026-09-03 shell spec §5), on its own
-   line above the refresh note — the header-actions row it used to share retired with the
-   page's own header. */
-.portfolio-page .page-frame-subheader .as-of { display: block; margin-bottom: 4px; }
-.portfolio-page .as-of { color: var(--muted); font-size: 12px; }
-/* A4: the stale variant of the header clock — the shared amber advisory token (--warn,
-   PALETTE[3]) every other stale cue already wears; the title attribute carries the words. */
+/* The price clock and the scheduler's last run share ONE line under the title row (2026-09-13
+   polish §10) — a sentence, muted, with the stale variant in the shared amber advisory token
+   (--warn, PALETTE[3]) every other stale cue wears; the title attribute carries the words. */
+.portfolio-page .portfolio-status-line { margin: 0 0 4px; font-size: 12px; color: var(--muted); }
 .portfolio-page .as-of.stale { color: var(--warn); }
-.tiles-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 16px; }
 
 /* The refresh note keeps ONE element mounted so a live region exists before the first
    refresh — collapse its margin while it is empty. */
@@ -37,19 +33,15 @@
 .refresh-failure button:disabled { opacity: 0.5; cursor: not-allowed; }
 .refresh-failure button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-/* The page's own tab row. portfolio.css used to carry a twin (.toggle-row button, for
-   AllocationPanel's donut dimension); that control and its rules are gone, so this is now
-   the only copy of these declarations. */
-.tab-row { display: flex; gap: 8px; margin: 16px 0 8px; }
-.tab-row button { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); padding: 4px 12px; cursor: pointer; }
-.tab-row button[aria-pressed='true'] { color: var(--text); border-color: var(--accent); }
+/* Manage: the shell Segmented tablist above whichever ledger card is showing (the hidden
+   wrappers take no grid track). The old .tab-row idiom is gone (2026-09-13 polish §12, S3). */
+.portfolio-manage { display: grid; gap: 12px; }
 
 /* The refresh button carries no shared .button class — same tokens as panels.css .button. */
 .refresh-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font-size: 0.85rem; padding: 0.35rem 0.75rem; cursor: pointer; }
 .refresh-btn:hover { border-color: var(--muted); }
 .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.refresh-btn:focus-visible,
-.tab-row button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.refresh-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 @media (prefers-reduced-motion: no-preference) {
   /* Literal, not a token: an INFINITE spinner's period is a rate, not a grammar duration,

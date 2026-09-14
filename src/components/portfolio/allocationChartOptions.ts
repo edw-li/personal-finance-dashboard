@@ -2,6 +2,7 @@
 // builders belong in a module the tests can call directly, and the Overview page needs the
 // donut too — a second copy would be two things to keep in step.
 import type { EChartsOption } from '../../charts/echarts'
+import { displayLabel } from '../../api/allocation'
 import type { AllocationData } from '../../api/allocation'
 import { DIVERGING, INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { itemTooltip } from '../../charts/tooltip'
@@ -273,7 +274,7 @@ export function exposureOption(data: AllocationData): EChartsOption | null {
       selectedMode: 'single', selectedOffset: 8,
       label: { show: false },
       data: data.slices.filter((s) => Number(s.market_value) > 0).map((s, i) => ({
-        name: s.label, value: Number(s.market_value), allocationKey: s.key,
+        name: displayLabel(s.key, s.label, data.by), value: Number(s.market_value), allocationKey: s.key,
         itemStyle: { color: s.is_unknown ? OTHER_SERIES_COLOR : PALETTE[i % PALETTE.length] },
       })),
     }],
@@ -284,8 +285,8 @@ export function exposureCsv(data: AllocationData): ExportTable {
   return {
     headers: ['Category', 'Market value (USD)', 'Weight of priced holdings (%)', 'Classification', 'Owner scope', 'Oldest quote', 'Newest quote'],
     rows: [...data.slices.map((s) => [
-      s.label, s.market_value, (Number(s.weight_pct) * 100).toFixed(4),
-      s.is_unknown ? 'Unknown' : 'Classified', data.scope_key, data.as_of ?? '', data.latest_quote_at ?? '',
+      displayLabel(s.key, s.label, data.by), s.market_value, (Number(s.weight_pct) * 100).toFixed(4),
+      s.is_unknown ? displayLabel(s.key, 'Unknown', data.by) : 'Classified', data.scope_key, data.as_of ?? '', data.latest_quote_at ?? '',
     ]), ...data.coverage.unpriced_holdings.map((member) => [
       `Unpriced: ${member.ticker}${member.account ? ` (${member.account})` : ''}`, '', '',
       'Value unavailable', data.scope_key, '', '',

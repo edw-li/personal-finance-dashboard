@@ -22,8 +22,8 @@ export default function RealizedPanel({ realized }: { realized: RealizedResponse
     .filter((r) => Number(r.realized_gl) !== 0)
     .sort((a, b) => Number(b.realized_gl) - Number(a.realized_gl))
   return (
-    <section className="panel">
-      <h2 className="panel-title">
+    <section className="card">
+      <h2 className="eyebrow">
         Realized gains
         <InfoHint text="Lifetime realized gain or loss per security from sells, average-cost method." />
       </h2>

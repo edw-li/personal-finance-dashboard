@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Link, MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
@@ -18,6 +18,7 @@ import type {
   TransactionOut,
 } from '../types/api'
 import PortfolioPage from './PortfolioPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 
 // importOriginal spread: the panels below import mutation helpers from the same module,
 // and an unspread factory would blank them (AccountsCard.test.tsx's posture).
@@ -85,7 +86,7 @@ import {
   fetchTransactions,
 } from '../api/portfolio'
 import { fetchPriceHistory, fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
-import { formatDate } from '../utils/format'
+import { formatDate, formatDateTime } from '../utils/format'
 
 // The roster behind the two ledgers' Account boxes (2026-09-09 audit item 27).
 const ACCOUNTS: PortfolioAccountOut[] = [
@@ -344,11 +345,11 @@ it('focuses the visible record editor and preserves its draft through other view
   await waitFor(() => expect(document.activeElement).toBe(ticker))
   fireEvent.change(ticker, { target: { value: 'DRAFT' } })
   fireEvent.click(screen.getByRole('link', { name: 'Open transaction editor' }))
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Show transactions' }).getAttribute('aria-pressed')).toBe('true'))
+  await waitFor(() => expect(screen.getByRole('tab', { name: 'Transactions' }).getAttribute('aria-selected')).toBe('true'))
   expect(document.activeElement?.closest('[hidden]')).toBeNull()
   fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
   fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Show securities' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Securities' }))
   expect((screen.getByRole('textbox', { name: 'Ticker' }) as HTMLInputElement).value).toBe('DRAFT')
 })
 
@@ -356,7 +357,7 @@ it('opens the transaction editor when Manage follows a dividend arrival', async 
   renderPage('/portfolio?tab=dividends')
   await screen.findByRole('tab', { name: 'Income', selected: true })
   fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
-  expect(await screen.findByRole('button', { name: 'Show transactions', pressed: true })).toBeTruthy()
+  expect(await screen.findByRole('tab', { name: 'Transactions', selected: true })).toBeTruthy()
   expect(screen.getByRole('combobox', { name: 'Account' }).closest('[hidden]')).toBeNull()
 })
 
@@ -708,6 +709,8 @@ it('shows the alert alone on a failed first load and retries back into the skele
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
   expect(screen.queryByRole('alert')).toBeNull()
   expect(container.querySelector('.page-skeleton')).not.toBeNull()
+  // Ghost parity (spec §9): five real tiles, five ghosts.
+  expect(container.querySelectorAll('.page-skeleton .skeleton-tile')).toHaveLength(5)
 })
 
 // Pinned verbatim, both halves: together they are the page's only defence against reading
@@ -724,15 +727,23 @@ const HOUSEHOLD_HINT =
   '— not this chart, the sparklines or price refresh, which always cover the whole ' +
   'household. Person views omit the live price dot because the history is household-wide.'
 
-it('opens allocation charts from their task view while retaining performance', async () => {
+it('opens the allocation donut from its task view while retaining performance', async () => {
   renderPage()
   await screen.findByText('Performance')
   expect(screen.getByLabelText(/Line chart of portfolio value against cost basis/)).toBeTruthy()
   fireEvent.click(screen.getByRole('tab', { name: 'Allocation' }))
   await screen.findByLabelText('Portfolio allocation by asset class')
-  expect(screen.getByLabelText(/Holdings grouped by known industry/)).toBeTruthy()
-  expect(screen.getByLabelText(/Portfolio allocation by asset class/)).toBeTruthy()
   expect(screen.getByRole('group', { name: 'Export portfolio-performance', hidden: true })).toBeTruthy()
+  // The industry heat treemap lives with the holdings now (2026-09-13 polish §11), not here.
+  expect(screen.queryByLabelText(/Holdings grouped by known industry/)).toBeNull()
+  expect(document.querySelector('details.allocation-heat')).toBeNull()
+})
+
+it('draws the industry heat treemap under the holdings table with its own metric toggle', async () => {
+  renderPage('/portfolio?section=holdings')
+  const table = (await screen.findByRole('heading', { name: 'Holdings' })).closest('.card') as HTMLElement
+  const heat = (await screen.findByLabelText(/Holdings grouped by known industry/)).closest('.chart-card') as HTMLElement
+  expectInDocumentOrder(table, heat)
   expect(screen.getByRole('group', { name: 'Heat metric' })).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Day change' }))
   expect(screen.getByRole('button', { name: 'Day change' }).getAttribute('aria-pressed')).toBe('true')
@@ -781,8 +792,10 @@ it('renders the panels real empty notes for an owner who holds nothing', async (
   expect(await screen.findByText(NO_HOLDINGS_NOTE)).toBeTruthy()
   fireEvent.click(screen.getByRole('tab', { name: 'Allocation' }))
   await waitFor(() => expect(fetchAllocationData).toHaveBeenCalledWith('asset_class', SAM.id))
-  // The treemap and the donut both fall back to their notes rather than empty canvases.
-  await waitFor(() => expect(screen.getAllByText('No priced holdings yet.').length).toBe(2))
+  // The donut falls back to its note rather than an empty canvas. The heat treemap now lives in
+  // the Holdings view (2026-09-13 polish §11) and shows its own note THERE, so the count here is one.
+  const allocation = screen.getByRole('tabpanel', { name: 'Allocation' })
+  await waitFor(() => expect(within(allocation).getAllByText('No priced holdings yet.').length).toBe(1))
   // …and the heat-treemap's colour legend goes with the cells it describes: "Orange =
   // loss, blue = gain; the deeper the tone…" under an empty note is a key to nothing.
   expect(screen.queryByText(/Orange = loss, blue = gain/)).toBeNull()
@@ -841,7 +854,7 @@ it('tones the header amber when the oldest quote is stale and names both clocks'
   })
   renderPage()
   await screen.findByText('Portfolio value')
-  const header = screen.getByText(/^prices as of /)
+  const header = screen.getByText(/^Prices as of /)
   expect(header.className).toBe('as-of stale')
   expect(header.getAttribute('title')).toBe(
     `oldest quote across holdings — newest ${formatDate(isoDaysAgo(1))}`,
@@ -856,7 +869,7 @@ it('leaves a fresh header untoned and still names the newest clock', async () =>
   })
   renderPage()
   await screen.findByText('Portfolio value')
-  const header = screen.getByText(/^prices as of /)
+  const header = screen.getByText(/^Prices as of /)
   expect(header.className).toBe('as-of')
   expect(header.getAttribute('title')).toBe(
     `oldest quote across holdings — newest ${formatDate(isoDaysAgo(0))}`,
@@ -887,10 +900,10 @@ it('names an empty view instead of claiming prices were never refreshed', async 
     next_run_at: null,
   })
   renderPage()
-  expect(await screen.findByText('no priced holdings in this view')).toBeTruthy()
-  expect(screen.queryByText('prices never refreshed')).toBeNull()
+  expect(await screen.findByText('No priced holdings in this view')).toBeTruthy()
+  expect(screen.queryByText('Prices never refreshed')).toBeNull()
   // The refresh line is still there — the two sentences no longer contradict each other.
-  expect(screen.getByText(/^Last refresh /)).toBeTruthy()
+  expect(screen.getByText(/last refresh /)).toBeTruthy()
 })
 
 it('keeps "prices never refreshed" for a book that really has never run one', async () => {
@@ -902,7 +915,7 @@ it('keeps "prices never refreshed" for a book that really has never run one', as
     latest_quote_at: null,
   })
   renderPage()
-  expect(await screen.findByText('prices never refreshed')).toBeTruthy()
+  expect(await screen.findByText('Prices never refreshed')).toBeTruthy()
 })
 
 // ── Shell scope (2026-09-03 shell spec §5–§6) ─────────────────────────────────────────────
@@ -936,7 +949,7 @@ describe('PortfolioPage — shell scope', () => {
 
   it('renders the price status under the title row, not inside it', async () => {
     renderPage('/portfolio')
-    await screen.findByText(/prices as of|prices never refreshed/)
+    await screen.findByText(/Prices as of|Prices never refreshed/)
     expect(document.querySelector('.page-frame-subheader .as-of')).toBeTruthy()
     expect(document.querySelector('.page-header')).toBeNull()
     expect(
@@ -964,5 +977,72 @@ describe('PortfolioPage — shell scope', () => {
         "New account 'Fidelity Roth' will be created and assigned to Me — re-tag it in Settings → Accounts",
       ),
     ).toBeTruthy()
+  })
+})
+
+// ── Shared card grammar (2026-09-13 polish §12, M3) ───────────────────────────────────────
+// .panel/.panel-title/.tiles-row sat outside the motion, reveal and skeleton selectors, which
+// all key on .card and .kpi-row. Same tokens, shared names.
+describe('PortfolioPage — card vocabulary', () => {
+  it('renders every block as .card/.eyebrow and the tiles as a dense .kpi-row', async () => {
+    renderPage('/portfolio?section=holdings')
+    await screen.findByText('Portfolio value')
+    expect(document.querySelector('.panel, .panel-title, .tiles-row')).toBeNull()
+    expect(document.querySelector('.loading-dim > .kpi-row.kpi-row-dense')).not.toBeNull()
+    const holdings = screen.getByRole('heading', { name: 'Holdings' })
+    expect(holdings.className).toBe('eyebrow')
+    expect(holdings.closest('.card')).not.toBeNull()
+    expect(holdings.closest('.card-title-row')).not.toBeNull()
+  })
+
+  it('joins the price clock and the last refresh into one status line (2026-09-13 polish §10)', async () => {
+    vi.mocked(fetchRefreshStatus).mockResolvedValue({
+      last: { at: '2026-09-11T20:10:00Z', trigger: 'scheduled', updated: 36, failed: {}, skipped_manual: 0, history_appended: false },
+      next_run_at: null,
+    })
+    renderPage()
+    await screen.findByText('Portfolio value')
+    const line = document.querySelector('.page-frame-subheader .portfolio-status-line') as HTMLElement
+    expect(line.textContent).toBe(`Prices as of ${formatDate('2026-08-27T20:00:00Z')} · last refresh ${formatDateTime('2026-09-11T20:10:00Z')} (scheduled) · 36 updated`)
+    expect(document.querySelectorAll('.page-frame-subheader .refresh-status-line')).toHaveLength(1)
+  })
+
+  it('names the Manage records with shell tabs and clears a selection by its real verb', async () => {
+    renderPage('/portfolio?ticker=voo')
+    await screen.findByRole('heading', { name: /Holdings — VOO/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }))
+    expect(await screen.findByRole('heading', { name: 'Holdings' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
+    const tabs = screen.getByRole('tablist', { name: 'Portfolio records' })
+    expect(tabs.className).toContain('segmented-tabs')
+    expect([...tabs.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toEqual(['Transactions', 'Securities', 'Realized'])
+    expect(document.querySelector('.tab-row')).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Realized' }))
+    const panel = document.getElementById('portfolio-records-realized') as HTMLElement
+    expect(panel.hidden).toBe(false)
+    expect(screen.getByRole('tab', { name: 'Realized' }).getAttribute('aria-controls')).toBe('portfolio-records-realized')
+  })
+})
+
+// ── Tiles per view (2026-09-13 polish §12, S1/S7) ────────────────────────────────────────
+describe('PortfolioPage — tiles per view', () => {
+  it('shows the five tiles on Overview, Holdings and Allocation, and none on Income or Manage', async () => {
+    renderPage()
+    await screen.findByText('Portfolio value')
+    const pageTiles = () => document.querySelector('.loading-dim > .kpi-row')
+    expect(pageTiles()).not.toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Holdings' }))
+    expect(pageTiles()).not.toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Income' }))
+    expect(pageTiles()).toBeNull()
+    expect(screen.queryByText('Portfolio value')).toBeNull()
+    // The Dividends card's own tiles are the Income row (Trailing 12-mo / YTD / Projected).
+    const income = screen.getByRole('tabpanel', { name: 'Income' })
+    expect(within(income).getByRole('heading', { name: /Dividends/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
+    expect(pageTiles()).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Allocation' }))
+    expect(pageTiles()).not.toBeNull()
+    expect(screen.getByText('Portfolio value')).toBeTruthy()
   })
 })

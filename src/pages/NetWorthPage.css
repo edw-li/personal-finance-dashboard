@@ -1,25 +1,8 @@
 /* drill-hint and loading-dim are shared utilities — they live in panels.css. */
 
-/* D5: the per-owner split of the latest snapshot, under the KPI row. Typography borrowed
-   from the withholding card's facts list — the house shape for a few labelled figures. */
-.networth-owner-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 28px;
-  margin: 0 0 1rem;
-}
-
-.networth-owner-strip dt {
-  font-size: 0.7rem;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.networth-owner-strip dd {
-  margin: 2px 0 0;
-  font-variant-numeric: tabular-nums;
-}
+/* The per-owner split rides the By-group card's lede now (2026-09-13 polish §10); .chart-lede b
+   gives the figures text ink, this gives them the tiles' steady digits. */
+.networth-owner-lede .num { font-variant-numeric: tabular-nums; }
 
 /* The drill chips' slot hue. It rides a swatch rather than the chip's border, because the
    chips are a shared Segmented now and only their LABEL is the page's to compose. Reads

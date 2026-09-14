@@ -1,5 +1,5 @@
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
@@ -55,6 +55,11 @@ const MAX_DRILL = PALETTE.length
 // The three group tiles are one map over one shape, so they share one hint — three copies
 // of the same sentence would be three chances to edit only two of them.
 const GROUP_TILE_HINT = "This group's latest total and its change from the prior snapshot."
+
+// The By-group card's owner lede is one .chart-lede line: 0.82rem × 1.5 line height (19.7px)
+// plus its −0.25rem/0.6rem margins (5.6px) ≈ 25. Reserved here because skeletonMetrics'
+// chartCardBox knows no lede and shared files belong to lane F2 (2026-09-13 polish §1).
+const LEDE_ROW = 25
 
 function pctChange(curr: string | null, prev: string | null): number | null {
   if (curr === null || prev === null || Number(prev) === 0) return null
@@ -431,10 +436,11 @@ export default function NetWorthPage() {
         ? months.filter((m) => m <= viewedMonth).length - 1
         : months.indexOf(viewedMonth)
   const viewedIndex = selectedIndex >= 0 ? selectedIndex : months.length - 1
-  // …so the card heading names that month rather than claiming "latest" over it.
+  // …so the card heading names the month it shows — the viewed month, or the latest column when
+  // nothing is picked (2026-09-13 polish §14, C2) — never "latest" over a dated table.
   const viewedLabel =
-    selectedIndex >= 0
-      ? formatMonth(months[selectedIndex])
+    viewedIndex >= 0 && months[viewedIndex] !== undefined
+      ? formatMonth(months[viewedIndex])
       : `latest ${granularity === 'quarterly' ? 'quarter' : 'month'}`
   const momHeader = granularity === 'quarterly' ? 'QoQ %' : 'MoM %'
   // The two snapshots the movers card compares are whatever the grain on screen draws, so
@@ -493,6 +499,23 @@ export default function NetWorthPage() {
     viewedMonth !== null &&
     summary !== null &&
     summary.month === null
+
+  // D5's per-owner split of the viewed snapshot, now the lede of the By-group card (2026-09-13
+  // polish §10, W4): it explains that chart, and Accounts already answers ownership row by row.
+  // Ordered BY the chips (primary, others, Joint) so the two can never disagree; an owner with no
+  // owner_totals row is SKIPPED, never a fabricated $0.00. Under a person scope the server narrows
+  // owner_totals to that person + Joint, and the lede honestly narrows with it.
+  const ownerLede =
+    ownerScopes.length > 0 && summary !== null && summary.month && summary.owner_totals.length > 0
+      ? ownerScopes
+        .filter(({ ownerScope }) => ownerScope !== null)
+        .flatMap(({ ownerScope, label }) => {
+          const entry = summary.owner_totals.find((total) =>
+            ownerScope === 'joint' ? total.person_id === null : total.person_id === ownerScope,
+          )
+          return entry === undefined ? [] : [{ label, total: entry.total }]
+        })
+      : []
 
   // A scope that owns nothing (2026-09-09 audit item 11). Judged on the TIMESERIES, which
   // lists the accounts in scope, never on the summary's totals — those are zeros either way,
@@ -600,16 +623,15 @@ export default function NetWorthPage() {
             load()
           },
         }}
-        // strip: the owner row sits between the tiles and the first chart; unghosted it pushed both
-        // charts down when the summary landed. cards: the three boxes the page really draws —
-        // the stacked chart (360, two Segmented controls, zoomable), the What-moved movers (a
-        // six-row plot plus its lede line, one Segmented control) and the account drill-down
-        // (280, zoomable, with a footer).
+        // cards: the three boxes the page really draws — the stacked chart (360, two Segmented
+        // controls, zoomable, plus its owner lede line), the What-moved movers (a six-row plot
+        // plus its lede line, one Segmented control) and the account drill-down (280, zoomable,
+        // with a footer). The owner strip that used to sit between the tiles and the first chart
+        // is that lede now, so there is no strip to ghost.
         skeleton={{
           tiles: 4,
-          strip: true,
           cards: [
-            { span: 12, height: ghostCardBody(chartCardBox(360, { controls: true, zoomable: true })) },
+            { span: 12, height: ghostCardBody(chartCardBox(360, { controls: true, zoomable: true }) + LEDE_ROW) },
             { span: 12, height: ghostCardBody(chartCardBox(255, { controls: true })) },
             { span: 12, height: ghostCardBody(chartCardBox(280, { zoomable: true, footer: true })) },
           ],
@@ -640,7 +662,9 @@ export default function NetWorthPage() {
           </div>
         ) : (
           <>
-            {summary && summary.month && (
+            {/* Tiles belong to a view's summary (2026-09-13 polish §12): Overview only — the
+                Accounts table carries its own month column. */}
+            {views.section === 'overview' && summary && summary.month && (
               <div className="kpi-row">
                 <StatTile
                   hero
@@ -691,33 +715,6 @@ export default function NetWorthPage() {
               </div>
             )}
 
-            {/* D5 (2026-08-31): the latest snapshot split by owner — the same money the chips
-                above scope, read straight off the already-fetched summary. Ordered BY the chips
-                (primary, others, Joint) so the strip and the control can never disagree; an
-                owner with no owner_totals row is SKIPPED, never a fabricated $0.00. Under a
-                person scope the server narrows owner_totals to that person + Joint, and the
-                strip honestly narrows with it. */}
-            {ownerScopes.length > 0 && summary && summary.month && summary.owner_totals.length > 0 && (
-              <dl className="networth-owner-strip">
-                {ownerScopes
-                  .filter(({ ownerScope }) => ownerScope !== null)
-                  .map(({ ownerScope, label }) => {
-                    const entry = summary.owner_totals.find((total) =>
-                      ownerScope === 'joint'
-                        ? total.person_id === null
-                        : total.person_id === ownerScope,
-                    )
-                    if (entry === undefined) return null
-                    return (
-                      <div key={label}>
-                        <dt>{label}</dt>
-                        <dd>{formatCurrency(entry.total)}</dd>
-                      </div>
-                    )
-                  })}
-              </dl>
-            )}
-
             <div className="card-grid">
               <LocalSectionPanel state={views} section="overview" className="span-12 card-grid">
                 <ChartCard
@@ -747,6 +744,18 @@ export default function NetWorthPage() {
                   onLegendChange={onStackedLegendChange}
                   onDataZoom={onZoomWindow}
                   zoomWindow={zoomWindow}
+                  lede={
+                    ownerLede.length > 0 ? (
+                      <span className="networth-owner-lede">
+                        {ownerLede.map((entry, index) => (
+                          <Fragment key={entry.label}>
+                            {index > 0 && ' · '}
+                            {entry.label} <b className="num">{formatCurrency(entry.total)}</b>
+                          </Fragment>
+                        ))}
+                      </span>
+                    ) : undefined
+                  }
                   controls={
                     <>
                       <Segmented

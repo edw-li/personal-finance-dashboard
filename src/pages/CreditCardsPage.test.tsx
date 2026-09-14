@@ -866,3 +866,27 @@ describe('CreditCardsPage — shell scope (2026-09-03 spec §5–§6)', () => {
     expect(document.querySelector('.page-header')).toBeNull()
   })
 })
+
+// ── Tiles per view + ghost parity (2026-09-13 polish §9, §12 — S5/S7) ────────────────────
+describe('CreditCardsPage — tiles per view', () => {
+  it('shows the tiles on Rewards and Credit lines but not on Manage', async () => {
+    seedHappyPath()
+    renderPage()
+    await screen.findByText('Total credit line')
+    fireEvent.click(screen.getByRole('tab', { name: 'Credit lines' }))
+    expect(screen.getByText('Total credit line')).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Manage' }))
+    expect(screen.queryByText('Total credit line')).toBeNull()
+    expect(document.querySelector('.loading-dim > .kpi-row')).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Rewards' }))
+    expect(screen.getByText('Total credit line')).toBeTruthy()
+  })
+
+  it('ghosts four tiles without a delta line while the first payload is in flight', () => {
+    seedHappyPath()
+    vi.mocked(fetchCreditCards).mockReturnValue(new Promise(() => {}))
+    const { container } = renderPage()
+    expect(container.querySelectorAll('.page-skeleton .skeleton-tile')).toHaveLength(4)
+    expect(container.querySelector('.page-skeleton .skeleton-delta')).toBeNull()
+  })
+})
