@@ -901,7 +901,7 @@ draft was right about most of it; these are the corrections, with the source tha
 49. `health-about-number` step 1: since **About this number** is an accessible name on an ⓘ button,
     the step says "Press the ⓘ on the tile — its name is **About this number**."
 
-### Follow-up fact corrections (commit `pending`, after the coordinator relayed G4 and G2)
+### Follow-up fact corrections (commit `f89ae60`, after the coordinator relayed G4 and G2)
 
 50. **`marriage_date` does not drive filing status** (G4's finding, re-verified here): its only
     consumer is the "Married" mark line on the net-worth chart —
