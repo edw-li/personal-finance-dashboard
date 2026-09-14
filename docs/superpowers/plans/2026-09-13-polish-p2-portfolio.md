@@ -2631,3 +2631,66 @@ Fourteen commits, one per task plus three hand-off fixes. Never pushed.
   `RestoreCard.test.tsx` never tripped.
 - **Deferred by the plan (§13 ambiguity 5):** after an Unclassified row is classified it leaves the
   filtered table and the caret goes to the document; no focus-management machinery was added.
+
+### Review round (APPROVE WITH FIXES, applied 2026-09-13)
+
+Merged main @`b4063c5` into the lane first (`4c20ae2`, clean — no file overlap). Main's
+`useScrollEdges(ref, active = true)` and named `page` container both arrived; `HoldingsScroll`
+already had the documented shape, so nothing needed changing there.
+
+All five items applied TDD (failing test, run, implement, run) in one commit, `f3b24b9`:
+
+1. **Dimension-blind "Unclassified" (IMPORTANT).** `displayLabel(key, label, by)` now takes the
+   dimension and returns `UNCLASSIFIED_LABEL` only on `asset_class`; `allocationLabel` returns the
+   wire's "Unknown" on every other dimension. `data.by` is threaded from `exposureOption`,
+   `exposureCsv` (both the label column and the Classification column), the selection title and
+   `context.classification`, the ranked table and the drift rows. `ClassifyButton` (ranked row and
+   slice detail) and the targets "classify them first" hint render only when
+   `data.by === 'asset_class'` — a `classifiable` const in both `AllocationPanel` and
+   `AllocationAside`. Tests: `allocationExperience.test.tsx` pins the label/option/CSV on
+   `by: 'industry'` ("Unknown industry" survives); `AllocationPanel.test.tsx` switches the
+   dimension toggle to Industry and asserts the ranked names and that no classify button renders,
+   in the aside or behind the slice detail.
+2. **Dropped edits inside one round-trip (IMPORTANT).** `pick`/`saveText` no longer return early on
+   `busy`. Both go through `enqueue(next)`, which applies the optimistic draft and chains the PATCH
+   on a `useRef<Promise<void>>` queue (`queue.current = queue.current.then(() => save(next))`), read
+   and written in handlers only. The draft's `sent` now covers all four fields as display strings,
+   and a `serverKey` change folds the new row in **field by field** (`rebased()`): a field equal to
+   its last `sent` value takes the server's word, an unsent local edit is left alone. A failed PATCH
+   reverts only the fields that request carried. Tests: two picks inside one in-flight PATCH → both
+   shown, two PATCHes in order with the second carrying the first's value; a same-row refetch
+   mid-typing keeps the text while the untouched field adopts the server's.
+   *Lint note:* the `saveOnEnter(field)` factory was invoked during render, which react-hooks v7's
+   `refs` rule reads as handing a ref-touching function to render — the Enter handlers are inlined
+   now, matching the `onBlur` siblings that always linted clean.
+3. **Treemap staleness (IMPORTANT).** `AllocationPanel` gained `onClassificationsChanged?`, fired
+   from the classifications card's `onChanged` alongside its own `refresh`. `PortfolioPage` keeps a
+   `classificationsVersion` counter and passes it to `HeatTreemapCard` as `refreshKey`, which is in
+   that card's fetch effect deps. Tests: the card refetches when `refreshKey` bumps; the panel
+   calls `onClassificationsChanged` after an inline save.
+4. **Classify under an overlay panel (IMPORTANT).** `AllocationPanel` reads `useDetailPanel()`
+   (null-guarded) and its `classify` handler now does `detailPanel?.close(); setSelection(null);`
+   before `focusUnclassified()` — the page is `inert` under an overlay/reading panel, so the focus
+   was a no-op and the button read as dead. Test: a mocked provider records `close` before
+   `scrollIntoView`.
+5. **Minors.** `.allocation-workspace`'s `container-type: inline-size` removed (the two-column pair
+   it served is gone; the aside's query names ChartCard's own `.chart-card-has-aside` container) and
+   the sheet's header comment corrected. The three Manage `role="tabpanel"` wrappers carry
+   `aria-label="Transactions" / "Securities" / "Realized"`. The allocation card renders an
+   `AllocationAsideGhost` (bars only — no faked coverage sentence or ranked rows) while the first
+   payload is in flight, so the body is two columns from the first paint instead of flipping when
+   data lands; covered by a test.
+
+**Gates after the round:** `npx tsc -b` silent · scoped eslint 0 errors / 1 warning (the
+pre-existing `creditcards/CategoriesPanel.tsx`, unchanged) · scoped vitest 289/289 across the
+portfolio components and the three pages plus `motion.test.ts` · full `npx vitest run`
+**3060 passed / 3061**, 223 files of 224 · `npm run build` 9.79s.
+
+**The one failure is the same pre-existing, out-of-lane one reported before the round:**
+`src/pages/OverviewPage.test.tsx > OverviewPage tiles > renders the four tiles from one snapshot`.
+Its `daysAgo()` builds the fixture date in **UTC** while `OverviewPage` compares the quote day
+against `todayIso()`, a **local** calendar date, so after 17:00 PDT the fixture's "yesterday" is the
+page's "today" and the tile reads " today". It fails identically when that file is run alone, so it
+is not an ordering flake; nothing in this lane's diff is imported by that page. One-line fix in
+P1's file (build the fixture date locally). No other suite failed this round — the
+`CreditCardsPage` and `settings/CategoriesCard` order flakes seen earlier did not reappear.
