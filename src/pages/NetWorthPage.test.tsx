@@ -205,29 +205,26 @@ it('renders All / each person / Joint once a partner exists', async () => {
   ).toEqual(['All', 'Me', 'Sam', 'Joint'])
 })
 
-it('renders the per-owner strip in chip order, skipping owners the payload lacks', async () => {
+it('renders the per-owner lede on the By-group card in chip order, skipping owners the payload lacks', async () => {
   renderPage()
   await screen.findByRole('group', { name: 'Whose' })
-  const strip = document.querySelector('.networth-owner-strip')
-  expect(strip).not.toBeNull()
   // Me then Joint — the fixture's owner_totals has no SAM row, and a missing owner is
   // SKIPPED, never rendered as $0.00. Order comes from the chips, so the two agree.
-  expect([...strip!.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual([
-    'Me',
-    'Joint',
-  ])
-  expect([...strip!.querySelectorAll('dd')].map((dd) => dd.textContent)).toEqual([
-    '$150.00',
-    '$80.00',
-  ])
+  const lede = document.querySelector('.chart-lede .networth-owner-lede') as HTMLElement
+  expect(lede).not.toBeNull()
+  expect(lede.textContent).toBe('Me $150.00 · Joint $80.00')
+  expect([...lede.querySelectorAll('b.num')].map((b) => b.textContent)).toEqual(['$150.00', '$80.00'])
+  // It sits INSIDE the By-group card, not loose on the page (2026-09-13 polish §10, W4).
+  expect(lede.closest('.chart-card')?.querySelector('.eyebrow')?.textContent).toContain('By group over time')
+  expect(document.querySelector('.networth-owner-strip')).toBeNull()
 })
 
-it('hides the strip for a one-person household', async () => {
+it('hides the owner lede for a one-person household', async () => {
   vi.mocked(fetchHousehold).mockResolvedValue(household({ people: [ME] }))
   renderPage()
   await screen.findByText('Net worth')
   await waitFor(() => expect(fetchHousehold).toHaveBeenCalled())
-  expect(document.querySelector('.networth-owner-strip')).toBeNull()
+  expect(document.querySelector('.networth-owner-lede')).toBeNull()
 })
 
 it('scopes BOTH fetches to the picked owner, and back to the household on All', async () => {
@@ -628,7 +625,7 @@ describe('NetWorthPage — one failed feed never blanks the page', () => {
     expect(within(banner).getByRole('button', { name: 'Retry the month summary' })).toBeTruthy()
     // The parts that speak FOR the summary go quiet rather than stale …
     expect(screen.queryByText('Net worth — Aug 2026')).toBeNull()
-    expect(document.querySelector('.networth-owner-strip')).toBeNull()
+    expect(document.querySelector('.networth-owner-lede')).toBeNull()
     expect(document.querySelector('.chart-lede')).toBeNull()
     // … and the server's own words never reach the page.
     expect(screen.queryByText('boom')).toBeNull()
@@ -691,8 +688,8 @@ describe('NetWorthPage — a scope with no accounts', () => {
     // Nothing that would have to invent a number is on screen.
     expect(screen.queryAllByTestId('echart')).toHaveLength(0)
     expect(screen.queryByText('Net worth — Aug 2026')).toBeNull()
-    expect(screen.queryByText('Accounts — latest month')).toBeNull()
-    expect(document.querySelector('.networth-owner-strip')).toBeNull()
+    expect(screen.queryByText(/^Accounts — /)).toBeNull()
+    expect(document.querySelector('.networth-owner-lede')).toBeNull()
   })
 
   it('falls back to "this person" while the household payload is missing', async () => {
@@ -727,6 +724,8 @@ describe('NetWorthPage — the tiles follow the grain on screen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
     expect(await screen.findByText('Accounts — Mar 2026')).toBeTruthy()
+    // The tiles live on Overview now (2026-09-13 polish §12) — same snapped column, one view over.
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
     expect(screen.getByText('Net worth — Mar 2026')).toBeTruthy()
   })
 
@@ -801,7 +800,26 @@ describe('NetWorthPage — the tiles follow the grain on screen', () => {
     )
     fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
     expect(screen.getByText(/What moved — Jun 2026/)).toBeTruthy()
-    // …and the lede names the two quarter ends, not two months.
-    expect(document.querySelector('.chart-lede')?.textContent).toContain('Mar 2026')
+    // …and the lede names the two quarter ends, not two months. Scoped to the movers card: the
+    // By-group card above it carries the owner lede now (2026-09-13 polish §10).
+    const movers = screen.getByText(/What moved — Jun 2026/).closest('.chart-card') as HTMLElement
+    expect(movers.querySelector('.chart-lede')?.textContent).toContain('Mar 2026')
+  })
+})
+
+// ── Tiles per view (2026-09-13 polish §12) ───────────────────────────────────────────────
+describe('NetWorthPage — tiles per view', () => {
+  it('keeps the tiles and the owner lede to Overview, and names the month on the Accounts card', async () => {
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(document.querySelector('.networth-owner-lede')).not.toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Accounts' }))
+    expect(screen.queryByText('Net worth — Aug 2026')).toBeNull()
+    expect(document.querySelector('.loading-dim > .kpi-row')).toBeNull()
+    // The card names the month it shows (C2) — "latest" is reserved for a book with no column.
+    expect(screen.getByRole('heading', { name: /Accounts — Aug 2026/ })).toBeTruthy()
+    expect(screen.queryByText(/Accounts — latest month/)).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
+    expect(screen.getByText('Net worth — Aug 2026')).toBeTruthy()
   })
 })
