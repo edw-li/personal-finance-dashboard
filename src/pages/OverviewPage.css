@@ -151,8 +151,15 @@
 .up-next-line {
   margin-top: 0.35rem;
 }
-.overview-primary { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(310px, 1fr); gap: 1rem; align-items: start; }
+/* The two columns end on the same line (lane V: the agenda column ran 66px past the wealth
+   column at 1440 and 1920, over the 24px limit). `stretch` hands both columns the taller one's
+   height, and each column's LAST row takes the slack — so the difference lands INSIDE the last
+   card rather than as dead space under it. Row counts are exact: trend + changes, and up next +
+   needs attention + data status. */
+.overview-primary { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(310px, 1fr); gap: 1rem; align-items: stretch; }
 .overview-wealth-column, .overview-agenda-column { display: grid; gap: 1rem; min-width: 0; }
+.overview-wealth-column { grid-template-rows: auto 1fr; }
+.overview-agenda-column { grid-template-rows: auto auto 1fr; }
 .overview-primary .card { margin: 0; }
 .overview-primary .up-next { margin: 0; }
 .overview-agenda .up-next-list li { padding: .4rem 0; border-bottom: 1px solid var(--border); }

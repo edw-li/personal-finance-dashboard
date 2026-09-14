@@ -2866,3 +2866,25 @@ just-saved month can no longer un-cover it. Gates: `npx tsc -b` clean · scoped 
 `npx vitest run` **220 files / 3024 tests, 0 failed** (one run tripped the unrelated, not-ours
 `CreditCardsPage` auto-weight test; it passes alone and the re-run is clean — an order-dependent
 flake to watch).
+
+### Lane-V follow-ups (`542d34e`, on `main` @`206158d`)
+
+1. **`'forgets the $0 intent on a month switch'` (full-suite only, 2/2).** App behaviour is right —
+   the step primary is disabled while the switched month loads — so the TEST was fixed to wait:
+   `await landedBalanceCell()` instead of `await screen.findByLabelText('Checking')`, which had been
+   matching August's still-mounted dimmed card and clicking a disabled "Next: spending". Audited every
+   other ribbon click in the file: the remaining ones either only assert (`waitFor` on the value, the
+   notes, the location) or already go through `landedBalanceCell()`; the two that click a WIZARD STEP
+   button straight after a switch are safe because the step buttons carry no `disabled`.
+2. **`.overview-primary` columns share a bottom (lane V: agenda ended 66px low at 1440 and 1920).**
+   Took the CSS option, not the wireframe move: `align-items: stretch` on the pair, plus
+   `grid-template-rows: auto 1fr` (trend + changes) and `auto auto 1fr` (up next + needs attention +
+   data status), so each column's LAST card absorbs the slack; `.overview-primary .card { margin: 0 }`
+   kept. Both child counts are exact — `OverviewChanges` and `DataStatusCard` always render. Pinned in
+   the new `src/pages/overviewCss.test.ts` (settingsCss.test.ts idiom).
+
+Gates: `npx tsc -b` clean · scoped eslint 0 errors / 1 pre-existing warning ·
+`npx vitest run src/pages/MonthlyUpdatePage.test.tsx` 112 pass · full `npx vitest run` ×2 —
+**224 of 225 files, 3061 of 3062 tests pass on both**; the single failure on both runs is
+`src/pages/CreditCardsPage.test.tsx > 'an auto weight names the ENTERED months behind it'`, which is
+not this lane's file, passes in isolation (44/44), and is untouched by anything here.
