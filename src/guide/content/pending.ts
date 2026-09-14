@@ -7,5 +7,4 @@ export const PENDING_PAGES: readonly string[] = [
   '/calendar',
   '/projection',
   '/settings',
-  '/update',
 ]
