@@ -1,31 +1,45 @@
+/* Allocation view (AllocationPanel, ClassificationEditor, AllocationTargetEditor). Imported by
+   those components; nothing here depends on PortfolioPage.css. The inline-size container stays
+   for the ChartCard aside's own container query (panels.css .chart-card-with-aside). */
 .allocation-workspace { display: grid; gap: 16px; container-type: inline-size; }
 .allocation-toolbar { display: flex; flex-wrap: wrap; gap: 12px; }
-.allocation-overview-grid { display: grid; grid-template-columns: minmax(320px, 0.85fr) minmax(480px, 1.15fr); gap: 16px; }
-.allocation-overview-grid > .chart-card { grid-column: auto; }
-.allocation-book-value { font-size: 1.8rem; font-weight: 600; font-variant-numeric: tabular-nums; margin: 8px 0 12px; }
-.allocation-coverage { display: flex; gap: 20px; padding: 10px 0; border-block: 1px solid var(--border); font-size: 0.82rem; }
-.allocation-coverage span { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
-.allocation-coverage strong { color: var(--text); font-size: 0.98rem; }
-.allocation-ranked .port-table th:first-child { white-space: normal; }
+
+/* ONE card (2026-09-13 polish §12–13, W1): the ranked table rides the donut ChartCard's `aside`,
+   so there is no twin card to stretch to the canvas height. */
+.allocation-aside { display: grid; gap: 8px; align-content: start; font-size: 0.85rem; }
+.allocation-coverage-line { margin: 0; color: var(--muted); }
+.allocation-coverage-line b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.allocation-aside .hint { margin: 0; }
+.allocation-ranked-table th:first-child { white-space: normal; }
 .allocation-category-button { display: inline-flex; align-items: center; gap: 8px; background: transparent; color: var(--text); border: 0; font: inherit; padding: 5px 0; cursor: pointer; text-align: left; }
 .allocation-category-swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
 .allocation-category-button:hover { text-decoration: underline; }
 .allocation-category-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
 .allocation-unknown { background: var(--surface-2); }
+/* The classify action: its own full-width row under Unclassified, and first in the slice detail. */
+.allocation-classify-row td { padding-top: 0; padding-bottom: 10px; }
+.allocation-classify { white-space: nowrap; }
+.allocation-members > .allocation-classify { margin: 4px 0 8px; }
+
+/* Targets. */
 .allocation-target-form { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin: 12px 0; }
 .allocation-target-form .field-input { max-width: 15ch; }
 .allocation-add-target { display: flex; align-items: end; gap: 8px; margin-top: 12px; }
 .allocation-add-target label { display: flex; flex-direction: column; gap: 5px; font-size: 0.85rem; }
 .allocation-add-target .field-input { max-width: 32ch; }
+/* "Unclassified holdings are 60.0% of the priced book — classify them first" beside its action. */
+.allocation-classify-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+
+/* Employer equity. */
 .allocation-employer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 .allocation-employer-grid > div + div { border-left: 1px solid var(--border); padding-left: 24px; }
 .allocation-employer h3 { font-size: 0.92rem; margin: 8px 0 12px; }
 .allocation-employer strong { font-size: 1.35rem; font-variant-numeric: tabular-nums; }
 .allocation-employer p { font-size: 0.85rem; }
+
+/* Slice detail members. */
 .allocation-member { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .allocation-member small { grid-column: 1 / -1; color: var(--muted); }
-/* A dock can narrow a desktop workspace. Keep both sections usable without overflow. */
-@container (max-width: 900px) { .allocation-overview-grid { grid-template-columns: 1fr; } }
 
 /* Security classifications card (2026-09-13 polish §13). scroll-margin-top keeps the card's top
    clear of the sticky tab strip when the classify action scrolls it in: --sticky-inset is what
@@ -44,7 +58,3 @@
 .classification-table tr[aria-busy='true'] { opacity: 0.6; }
 .classification-row-error { display: block; margin-top: 4px; color: var(--negative); font-size: 0.78rem; white-space: normal; }
 .classification-source { color: var(--muted); font-size: 12px; }
-
-/* "Unclassified holdings are 60.0% of the priced book — classify them first" beside its action. */
-.allocation-classify-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.allocation-classify { white-space: nowrap; }
