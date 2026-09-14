@@ -170,8 +170,9 @@ ul.guide-body li {
   margin-top: 1.25rem;
 }
 
-/* The rail: every row reachable, none hidden — it scrolls inside the card past ~70vh.
-   The setup checklist is 18 rows against a 630px scrollport, so seven sit below the fold; the
+/* The rail: every task is a row, none hidden — it scrolls inside the card past ~70vh, on every
+   card (the "More tasks" fold was retired 2026-09-15 so page cards read like the checklist).
+   The setup checklist is 18 rows against a 630px scrollport, so seven sit below the edge; the
    browser's own scrollbar is what says so (measured: a 15px laid-out bar in the rail). Headless
    Chromium draws NO scrollbar at all, so a screenshot of this rail always reads as a list that
    simply ends — judge the affordance in a headed browser, not in the probe's shots (lane V). */
@@ -264,47 +265,13 @@ ul.guide-body li {
   pointer-events: none;
 }
 
-.guide-rail-more {
-  align-self: flex-start;
-  margin: 0.25rem 0 0;
-  padding: 0.35rem 0.6rem;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-
-.guide-rail-more:hover {
-  background: var(--fill);
-  color: var(--text);
-}
-
-.guide-rail-more:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-/* The fold: a grid-rows reveal, not a jump (spec §6). */
-.guide-rail-fold {
-  display: grid;
-  grid-template-rows: 0fr;
-  overflow: hidden;
-}
-
-.guide-rail-fold[data-open='true'] {
-  grid-template-rows: 1fr;
-}
-
-.guide-rail-fold-inner {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+/* Between the core tasks and the tail: a hairline, not a fold. Every row is in the rail and the
+   rail scrolls — the same shape as the setup checklist (user decision, 2026-09-15). */
+.guide-rail-divider {
+  flex: none;
+  height: 1px;
+  margin: 0.35rem 0.6rem;
+  background: var(--border);
 }
 
 .guide-detail {
@@ -388,7 +355,6 @@ ul.guide-body li {
 /* ── Motion (spec §6) — tokens only; the reduce block zeroes them ──────────────────────── */
 
 .guide-rail-row,
-.guide-rail-more,
 .guide-selector .chip {
   transition:
     background-color var(--t-fast) var(--ease-out),
@@ -401,10 +367,6 @@ ul.guide-body li {
   transition:
     transform var(--t-nav) var(--ease-out),
     height var(--t-nav) var(--ease-out);
-}
-
-.guide-rail-fold {
-  transition: grid-template-rows var(--t-page) var(--ease-out);
 }
 
 @media (prefers-reduced-motion: no-preference) {

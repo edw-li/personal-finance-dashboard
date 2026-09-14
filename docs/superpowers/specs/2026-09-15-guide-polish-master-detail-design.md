@@ -66,6 +66,13 @@ the restructuring in §5, changes to the palette or fresh-database entry points.
 The `Disclosure`-based "More tasks" block and `GuideTaskList` are retired from the card;
 `GuideTaskList.tsx` is deleted (its only consumer was `GuideCard`).
 
+> **Amendment 2026-09-15 (user request after seeing the build):** the "More tasks (N)" fold is
+> retired. Every task — `card.tasks` first, a hairline `.guide-rail-divider`, then `card.more` —
+> is a row in the rail, and the rail scrolls (`max-height: min(70vh, 640px)`), so page cards
+> behave exactly like the setup checklist. `useTaskSelection` carries no fold state; a hash naming
+> any task selects it. The `more` split stays in the content model as the authors' "core first"
+> order and for the palette; the fold-specific paragraphs below are superseded.
+
 ### 2.2 `TaskRail`
 
 - `<div className="guide-rail" role="tablist" aria-orientation="vertical" aria-label={`Tasks on ${card.title}`}>`

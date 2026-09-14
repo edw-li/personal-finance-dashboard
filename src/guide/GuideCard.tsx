@@ -48,14 +48,7 @@ export default function GuideCard({ card }: { card: GuideCardData }) {
             <h3 className="guide-h3" id={`${card.id}-tasks`}>
               Do this
             </h3>
-            <TaskRail
-              card={card}
-              selectedId={selected.id}
-              onSelect={selection.select}
-              foldOpen={selection.foldOpen}
-              onToggleFold={selection.toggleFold}
-              detailId={detailId}
-            />
+            <TaskRail card={card} selectedId={selected.id} onSelect={selection.select} detailId={detailId} />
           </div>
           <div className="guide-detail-col">
             <TaskDetail task={selected} id={detailId} />

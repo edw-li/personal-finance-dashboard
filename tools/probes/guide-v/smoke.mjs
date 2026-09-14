@@ -4,10 +4,10 @@
 // and answered from memory, so nothing persists and there is nothing to sweep.
 // What it proves, in both themes: the sidebar has 14 links with Guide before Settings; /guide
 // renders four chapter tabs; every link the guide can render — driven out of the UI by clicking
-// every selector chip and every rail row, folds opened — lands (same pathname, the ?section tab
-// selected where present, the #hash target focused or in view) with a clean console; a selector
-// chapter shows exactly one card, the chip names it and writes the hash, a rail row swaps the
-// detail, "More tasks" opens the fold in place and a deep link selects a numbered rail row; the
+// every selector chip and every rail row — lands (same pathname, the ?section tab selected where
+// present, the #hash target focused or in view) with a clean console; a selector chapter shows
+// exactly one card, the chip names it and writes the hash, a rail row swaps the detail, the rail
+// lists every task with no fold and scrolls, and a deep link selects a numbered rail row; the
 // palette answers "add a card" with a Guide group; screenshots of each chapter at 1440×900 and
 // 1920×1080 plus the master–detail, checklist and glossary shots.
 // Env: SMOKE_OUT, TOKEN_FILE, APP_BASE, EDGE_PATH, PLAYWRIGHT_CORE, ONLY_THEME, MAX_LINKS.
@@ -100,13 +100,8 @@ try {
       const cardIds = await page.$$eval(`${PANEL} .guide-card`, (cs) => cs.map((c) => c.id))
       for (const cardId of cardIds) {
         seen.cards += 1
-        // Open the tail first, so its rows are reachable and their `Go →` links are collected.
-        const more = await page.$(`#${cardId} button.guide-rail-more`)
-        if (more !== null && (await more.getAttribute('aria-expanded')) !== 'true') {
-          await more.click({ timeout: 10000 })
-          await page.waitForSelector(`#${cardId} .guide-rail-fold[data-open="true"]`, { timeout: 10000 })
-        }
-        // Rows keep the task ids (polish spec §2.2), so `#<taskId>` is the handle.
+        // Every task is a rail row (no fold since 2026-09-15); rows keep the task ids (polish
+        // spec §2.2), so `#<taskId>` is the handle.
         const rowIds = await page.$$eval(`#${cardId} .guide-rail [role="tab"]`, (rs) => rs.map((r) => r.id))
         for (const rowId of rowIds) {
           seen.rows += 1
@@ -240,17 +235,13 @@ try {
         check(theme, 'md: a rail row swaps the detail', after.title !== '' && after.title !== titleBefore && after.selected === 'true', { before: titleBefore, ...after })
       }
 
-      // The tail opens in place rather than on a second page.
-      const more = await page.$(`#${second.card} button.guide-rail-more`)
-      if (more === null) {
-        check(theme, 'md: More tasks opens the fold in place', true, `${second.card} has no folded tasks — nothing to open`)
-      } else {
-        await more.click({ timeout: 10000 })
-        const opened = await page.waitForSelector(`#${second.card} .guide-rail-fold[data-open="true"]`, { timeout: 10000 }).then(() => true).catch(() => false)
-        await sleep(400)
-        const foldRows = await page.$$eval(`#${second.card} .guide-rail-fold [role="tab"]`, (rs) => rs.length)
-        check(theme, 'md: More tasks opens the fold in place', opened && foldRows > 0, { opened, foldRows })
-      }
+      // Every task is a rail row — no "More tasks" fold anywhere (user decision, 2026-09-15).
+      const railShape = await page.evaluate((cardId) => ({
+        rows: document.querySelectorAll(`#${cardId} .guide-rail [role="tab"]`).length,
+        folds: document.querySelectorAll(`#${cardId} .guide-rail-more, #${cardId} .guide-rail-fold`).length,
+        scrolls: getComputedStyle(document.querySelector(`#${cardId} .guide-rail`)).overflowY,
+      }), second.card)
+      check(theme, 'md: the rail lists every task with no fold and scrolls', railShape.rows >= 3 && railShape.folds === 0 && /auto|scroll/.test(railShape.scrolls), railShape)
     }
     await page.screenshot({ path: path.join(OUT, `${theme}-md-pages.png`) })
 

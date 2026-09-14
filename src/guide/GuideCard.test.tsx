@@ -61,25 +61,21 @@ describe('GuideCard (master–detail)', () => {
     expect(col.querySelector('ul.guide-watch b.guide-label')?.textContent).toBe('Example')
   })
 
-  it('folds the long tail behind a More row that expands in place, and selecting a folded row shows it', () => {
+  it('lists every task in one rail — the core tasks, a hairline, then the tail — with no fold to open', () => {
     renderCard()
-    const more = screen.getByRole('button', { name: 'More tasks (2)' })
-    const fold = document.getElementById('page-example-fold') as HTMLElement
-    expect(more.getAttribute('aria-expanded')).toBe('false')
-    expect(fold.getAttribute('data-open')).toBe('false')
-    fireEvent.click(more)
-    expect(more.getAttribute('aria-expanded')).toBe('true')
-    expect(fold.getAttribute('data-open')).toBe('true')
-    expect(screen.getByRole('button', { name: 'Fewer tasks' })).toBeTruthy()
+    const rows = Array.from(rail().querySelectorAll('[role="tab"]')).map((r) => r.id)
+    expect(rows).toEqual(['example-add', 'example-export', 'example-table'])
+    expect(rail().querySelectorAll('.guide-rail-divider')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: /More tasks/ })).toBeNull()
     fireEvent.click(document.getElementById('example-export') as HTMLElement)
     expect(document.getElementById('example-export')?.getAttribute('aria-selected')).toBe('true')
     expect(within(detail()).getByRole('heading', { level: 4, name: 'Export the example' })).toBeTruthy()
   })
 
-  it('a hash naming a folded task selects it and opens the fold on arrival', () => {
+  it('a hash naming a task in the tail selects it on arrival', () => {
     renderCard(pageCard, '/guide?section=pages#example-table')
-    expect(document.getElementById('page-example-fold')?.getAttribute('data-open')).toBe('true')
     expect(document.getElementById('example-table')?.getAttribute('aria-selected')).toBe('true')
+    expect(document.getElementById('example-table')?.getAttribute('tabindex')).toBe('0')
     expect(within(detail()).getByRole('heading', { level: 4, name: 'Show the table' })).toBeTruthy()
   })
 
@@ -95,15 +91,16 @@ describe('GuideCard (master–detail)', () => {
     expect(document.getElementById('checklist-after')?.getAttribute('aria-selected')).toBe('true')
   })
 
-  it('keeps one tab stop in the rail: the first visible row when the selected one is folded away', () => {
+  it('keeps exactly one tab stop in the rail: the selected row, wherever it sits', () => {
     renderCard()
-    fireEvent.click(screen.getByRole('button', { name: 'More tasks (2)' }))
     fireEvent.click(document.getElementById('example-export') as HTMLElement)
-    expect(document.getElementById('example-export')?.getAttribute('tabindex')).toBe('0')
-    fireEvent.click(screen.getByRole('button', { name: 'Fewer tasks' }))
-    // The shut fold is aria-hidden, so its rows leave the tab order even though one is selected.
-    expect(document.getElementById('example-export')?.getAttribute('tabindex')).toBe('-1')
-    expect(document.getElementById('example-add')?.getAttribute('tabindex')).toBe('0')
+    const stops = Array.from(rail().querySelectorAll('[role="tab"][tabindex="0"]')).map((r) => r.id)
+    expect(stops).toEqual(['example-export'])
+    fireEvent.keyDown(document.getElementById('example-export') as HTMLElement, { key: 'End' })
+    expect(document.getElementById('example-table')?.getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(document.getElementById('example-table') as HTMLElement, { key: 'ArrowDown' })
+    // Wraps from the last row back to the first — the rail is one list, not two.
+    expect(document.getElementById('example-add')?.getAttribute('aria-selected')).toBe('true')
   })
 
   // The rail is its own scroller (max-height 70vh): focus with preventScroll holds the PAGE
