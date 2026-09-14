@@ -170,7 +170,11 @@ ul.guide-body li {
   margin-top: 1.25rem;
 }
 
-/* The rail: every row reachable, none hidden — it scrolls inside the card past ~70vh. */
+/* The rail: every row reachable, none hidden — it scrolls inside the card past ~70vh.
+   The setup checklist is 18 rows against a 630px scrollport, so seven sit below the fold; the
+   browser's own scrollbar is what says so (measured: a 15px laid-out bar in the rail). Headless
+   Chromium draws NO scrollbar at all, so a screenshot of this rail always reads as a list that
+   simply ends — judge the affordance in a headed browser, not in the probe's shots (lane V). */
 .guide-rail {
   position: relative;
   display: flex;
@@ -362,9 +366,13 @@ ul.guide-body li {
   font-size: 0.9rem;
 }
 
+/* A bare max-content term column is set by the ONE longest term — the six review states, 658px
+   at 1920 — so every short term was followed by half a screen of nothing before its definition
+   (lane V eyeball). fit-content caps that: the column is the widest term up to 24rem, and the
+   one term longer than that wraps rather than pushing the definitions off to the right. */
 .guide-glossary-grid {
   display: grid;
-  grid-template-columns: minmax(12rem, max-content) 1fr;
+  grid-template-columns: fit-content(24rem) 1fr;
   gap: 0.35rem 1.25rem;
   max-width: none;
 }
