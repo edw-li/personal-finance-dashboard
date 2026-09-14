@@ -18,6 +18,9 @@ export function guideEntries(guide: readonly GuideChapter[] = GUIDE): GuidePalet
   const entries: GuidePaletteEntry[] = []
   for (const chapter of guide) {
     for (const card of chapter.cards) {
+      // A numbered card is a checklist read in order (the setup steps, the tax season); its rows
+      // would duplicate the page tasks they point at, so the palette lists those instead.
+      if (card.numbered) continue
       for (const task of [...card.tasks, ...(card.more ?? [])]) {
         if (task.id.endsWith('-pointer')) continue
         entries.push({
