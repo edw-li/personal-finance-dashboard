@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import GuideCard from './GuideCard'
 import { FIXTURE_GUIDE } from './testing/fixtures'
 
@@ -93,6 +93,34 @@ describe('GuideCard (master–detail)', () => {
     expect(first.getAttribute('aria-selected')).toBe('true')
     fireEvent.keyDown(first, { key: 'End' })
     expect(document.getElementById('checklist-after')?.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('keeps one tab stop in the rail: the first visible row when the selected one is folded away', () => {
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'More tasks (2)' }))
+    fireEvent.click(document.getElementById('example-export') as HTMLElement)
+    expect(document.getElementById('example-export')?.getAttribute('tabindex')).toBe('0')
+    fireEvent.click(screen.getByRole('button', { name: 'Fewer tasks' }))
+    // The shut fold is aria-hidden, so its rows leave the tab order even though one is selected.
+    expect(document.getElementById('example-export')?.getAttribute('tabindex')).toBe('-1')
+    expect(document.getElementById('example-add')?.getAttribute('tabindex')).toBe('0')
+  })
+
+  // The rail is its own scroller (max-height 70vh): focus with preventScroll holds the PAGE
+  // still, so the row itself has to be brought into the rail's view.
+  it('brings the row an arrow key lands on into the rail\u2019s view', () => {
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView')
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true })
+    try {
+      renderCard(numberedCard, '/guide?section=routines')
+      fireEvent.keyDown(document.getElementById('checklist-open') as HTMLElement, { key: 'ArrowDown' })
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' })
+      expect(scrollIntoView.mock.instances[0]).toBe(document.getElementById('checklist-after'))
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, 'scrollIntoView', original)
+      else Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    }
   })
 
   it('a numbered card shows 1-based numbers on its rows', () => {

@@ -81,6 +81,19 @@ describe('GuidePage', () => {
     expect(document.getElementById('page-example')).toBeNull()
   })
 
+  it('the selector is manually activated: an arrow moves focus, activation swaps the card', () => {
+    renderAt('/guide?section=pages')
+    const selector = screen.getByRole('navigation', { name: 'Pages in this guide' })
+    fireEvent.keyDown(within(selector).getByRole('tab', { name: 'Example' }), { key: 'ArrowRight' })
+    const focused = document.activeElement as HTMLElement
+    expect(focused.textContent).toBe('Taxes fixture')
+    expect(document.getElementById('page-example')).toBeTruthy()
+    // Enter on the focused chip is a native click (no user-event in this repo).
+    fireEvent.click(focused)
+    expect(document.getElementById('page-taxes')).toBeTruthy()
+    expect(document.getElementById('page-example')).toBeNull()
+  })
+
   it('a stacked chapter renders every card; a task hash selects and focuses its rail row', async () => {
     renderAt('/guide#checklist-after')
     expect(screen.getByRole('tab', { name: 'Routines' }).getAttribute('aria-selected')).toBe('true')
@@ -97,6 +110,10 @@ describe('GuidePage', () => {
     expect(screen.getByRole('tab', { name: 'Reference' }).getAttribute('aria-selected')).toBe('true')
     expect(panelFor('Reference').hasAttribute('hidden')).toBe(false)
     expect(panelFor('Start here').hasAttribute('hidden')).toBe(true)
+    // Reference is a selector chapter too: its own chip tablist, and one card under it.
+    const selector = screen.getByRole('navigation', { name: 'Reference in this guide' })
+    expect(within(selector).getAllByRole('tab').map((t) => t.textContent)).toEqual(['Words'])
+    expect(panelFor('Reference').querySelectorAll('.guide-card')).toHaveLength(1)
     expect(document.getElementById('ref-glossary')).toBeTruthy()
   })
 

@@ -137,7 +137,7 @@ describe('guide content — label fence (spec §8.2)', () => {
   // is; a **Label** in a step names a control, and a control has a literal in the source.
   const exemptSegment = (text: string) => placeholder(text) || /^(Any|Every|The) /.test(text)
 
-  // Steps AND watch lines, card-level and task-level: GuideCard and GuideTaskList render all
+  // Steps AND watch lines, card-level and task-level: GuideCard and TaskDetail render all
   // three through renderSteps, so **Label** is a claim about the UI wherever it appears.
   const boldText: { owner: string; text: string }[] = [
     ...allTasks.flatMap(({ task }) => [...task.steps, ...(task.watch ?? [])].map((text) => ({ owner: task.id, text }))),

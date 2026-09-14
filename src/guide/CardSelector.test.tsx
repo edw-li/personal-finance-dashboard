@@ -53,9 +53,26 @@ describe('CardSelector', () => {
     expect(screen.getByTestId('hash').textContent).toBe('#page-taxes')
   })
 
-  it('ArrowRight and End move the selection through the hash', () => {
+  // Manual activation: the arrows are a way to REACH a chip, not to pick one. Picking as focus
+  // moved would navigate, and the page's arrival effect would then pull focus off the strip.
+  it('ArrowRight moves focus only, and activating the focused chip writes the hash', () => {
     renderAt('/guide?section=pages#page-example')
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Example' }), { key: 'ArrowRight' })
+    const focused = document.activeElement as HTMLElement
+    expect(focused.textContent).toBe('Taxes fixture')
+    expect(screen.getByTestId('hash').textContent).toBe('#page-example')
+    // Enter and Space on a focused <button> ARE a click; jsdom does not synthesise that and
+    // @testing-library/user-event is not a devDependency here (HoldingsTable.test.tsx:39).
+    fireEvent.click(focused)
     expect(screen.getByTestId('hash').textContent).toBe('#page-taxes')
+  })
+
+  it('End reaches the last chip and Home the first, still without navigating', () => {
+    renderAt('/guide?section=pages#page-example')
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Example' }), { key: 'End' })
+    expect((document.activeElement as HTMLElement).textContent).toBe('Taxes fixture')
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Home' })
+    expect((document.activeElement as HTMLElement).textContent).toBe('Example')
+    expect(screen.getByTestId('hash').textContent).toBe('#page-example')
   })
 })

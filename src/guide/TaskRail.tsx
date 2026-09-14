@@ -55,8 +55,13 @@ export default function TaskRail({
 
   // Arrows walk the rows a reader can see: the visible ones, plus the folded ones once open.
   const reachable: GuideTask[] = foldOpen ? [...visible, ...folded] : visible
+  // The rail always offers exactly one Tab landing. A selected row folded away cannot be it —
+  // a shut fold is aria-hidden, and a focusable element inside aria-hidden is a trap — so the
+  // first visible row holds the tab stop until the fold is opened again.
+  const tabStopId = reachable.some((t) => t.id === selectedId) ? selectedId : visible[0]?.id
   const onKey = (event: KeyboardEvent<HTMLButtonElement>, task: GuideTask) => {
-    const index = reachable.findIndex((t) => t.id === task.id)
+    // -1 when the focused row has just been folded away: walk from the top rather than the end.
+    const index = Math.max(0, reachable.findIndex((t) => t.id === task.id))
     const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0
     const nextIndex =
       event.key === 'Home' ? 0
@@ -67,13 +72,14 @@ export default function TaskRail({
     event.preventDefault()
     const next = reachable[nextIndex]
     onSelect(next.id)
-    document.getElementById(next.id)?.focus({ preventScroll: true })
+    const el = document.getElementById(next.id)
+    el?.focus({ preventScroll: true })
+    // preventScroll keeps the PAGE still; the rail is its own scroller, so the row eighteen down
+    // still has to be brought into it. Optional call: jsdom has no scrollIntoView.
+    el?.scrollIntoView?.({ block: 'nearest' })
   }
 
-  // `reachable` is false for a folded row while the fold is shut: the collapsed block is
-  // aria-hidden, and a focusable element inside aria-hidden is a trap — so the row that is
-  // still `selected` (picked, then folded away) drops out of the tab order with the rest.
-  const row = (task: GuideTask, index: number, focusable = true) => (
+  const row = (task: GuideTask, index: number) => (
     <button
       key={task.id}
       type="button"
@@ -82,7 +88,7 @@ export default function TaskRail({
       className="guide-rail-row"
       aria-selected={task.id === selectedId}
       aria-controls={detailId}
-      tabIndex={task.id === selectedId && focusable ? 0 : -1}
+      tabIndex={task.id === tabStopId ? 0 : -1}
       style={{ '--guide-i': Math.min(index, STAGGER_CAP) } as CSSProperties}
       onClick={() => onSelect(task.id)}
       onKeyDown={(event) => onKey(event, task)}
@@ -106,7 +112,7 @@ export default function TaskRail({
             {foldOpen ? 'Fewer tasks' : `More tasks (${folded.length})`}
           </button>
           <div id={foldId} className="guide-rail-fold" data-open={foldOpen} aria-hidden={!foldOpen}>
-            <div className="guide-rail-fold-inner">{folded.map((task, index) => row(task, visible.length + index, foldOpen))}</div>
+            <div className="guide-rail-fold-inner">{folded.map((task, index) => row(task, visible.length + index))}</div>
           </div>
         </>
       )}

@@ -1,5 +1,7 @@
 /* GuidePage.css — page-scoped rules only (OverviewPage.css's charter): .page/.card/.card-grid/
-   .eyebrow/.chip/.drill-hint/.empty-note live in panels.css and are never redefined here.
+   .eyebrow/.chip/.drill-hint/.empty-note live in panels.css. One exception: the card selector's
+   chips state their SELECTED look here (spec §3), because panels.css says it with a
+   .active class and these chips are tabs that say it with aria-selected.
    Every duration is a var(--t-*) token (motion.test.ts) and every motion-only rule sits under
    prefers-reduced-motion: no-preference; the reduce block in index.css zeroes the tokens too
    (2026-09-15 polish spec §6). */
@@ -81,7 +83,6 @@ ul.guide-body li {
   color: var(--muted);
 }
 
-
 .guide-task-title {
   margin: 0;
   font-size: 0.95rem;
@@ -130,7 +131,6 @@ ul.guide-body li {
   font-size: 0.85rem;
 }
 
-
 /* panels.css has no generic a:focus-visible; the guide's links get the house ring — except
    the chips, which already carry their own ring and a 999px pill this radius would flatten. */
 .guide-page a:focus-visible:not(.chip) {
@@ -138,7 +138,6 @@ ul.guide-body li {
   outline-offset: 2px;
   border-radius: 4px;
 }
-
 
 /* Anchors clear the sticky title/strip block by the measured inset (SettingsPage's form). */
 .guide-page [id] {

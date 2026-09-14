@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import { hashTarget } from './anchors'
 import type { GuideCard } from './types'
 
 export interface TaskSelection {
@@ -11,12 +12,7 @@ export interface TaskSelection {
 
 /** The task a `#hash` names on this card, and whether it is folded — or null. */
 export function taskFromHash(card: GuideCard, hash: string): { id: string; folded: boolean } | null {
-  let target = hash.replace(/^#/, '')
-  try {
-    target = decodeURIComponent(target)
-  } catch {
-    /* a malformed hash names nothing */
-  }
+  const target = hashTarget(hash)
   if (!target) return null
   if (card.tasks.some((task) => task.id === target)) return { id: target, folded: false }
   if ((card.more ?? []).some((task) => task.id === target)) return { id: target, folded: true }

@@ -29,6 +29,17 @@ export function buildAnchorIndex(guide: readonly GuideChapter[]): AnchorIndex {
   return { chapter, card }
 }
 
+/** The bare id a `#hash` names, decoded. '' when the hash is empty or malformed — one rule for
+ *  every reader of the hash, so a half-decoded target can never select one thing and address
+ *  another (2026-09-15 polish spec §4). */
+export function hashTarget(hash: string): string {
+  try {
+    return decodeURIComponent(hash.replace(/^#/, ''))
+  } catch {
+    return ''
+  }
+}
+
 const INDEX = buildAnchorIndex(GUIDE)
 
 /** The chapter a `#id` belongs to — how a bare /guide#accounts-add opens the right tab. */

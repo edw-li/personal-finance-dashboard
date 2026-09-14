@@ -45,7 +45,9 @@ export default function GuideCard({ card }: { card: GuideCardData }) {
       {hasTasks && selected ? (
         <div className="guide-md">
           <div className="guide-rail-col">
-            <h3 className="guide-h3">Do this</h3>
+            <h3 className="guide-h3" id={`${card.id}-tasks`}>
+              Do this
+            </h3>
             <TaskRail
               card={card}
               selectedId={selected.id}

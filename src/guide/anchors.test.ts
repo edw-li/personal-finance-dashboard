@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAnchorIndex } from './anchors'
+import { buildAnchorIndex, hashTarget } from './anchors'
 import type { GuideChapter } from './types'
 
 const guide: GuideChapter[] = [
@@ -19,6 +19,17 @@ const guide: GuideChapter[] = [
     ],
   },
 ]
+
+describe('hashTarget', () => {
+  it('decodes the bare id, and reads a malformed hash as no id at all', () => {
+    expect(hashTarget('#page-example')).toBe('page-example')
+    expect(hashTarget('page-example')).toBe('page-example')
+    expect(hashTarget('#caf%C3%A9')).toBe('caf\u00e9')
+    expect(hashTarget('#%E0%A4%A')).toBe('')
+    expect(hashTarget('#')).toBe('')
+    expect(hashTarget('')).toBe('')
+  })
+})
 
 describe('buildAnchorIndex', () => {
   const index = buildAnchorIndex(guide)
