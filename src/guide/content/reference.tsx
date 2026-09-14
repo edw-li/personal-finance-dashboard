@@ -21,7 +21,8 @@ export const REFERENCE_CARDS: GuideCard[] = [
         where: 'Any money box',
         steps: [
           'Accepted: a dollar sign, commas or spaces as grouping, a leading plus or minus, and accounting parentheses.',
-          'Refused: exponents, a second decimal point, and a sign inside parentheses — the box turns invalid and says so.',
+          'Refused: exponents, a second decimal point, a sign inside parentheses.',
+          'The box turns invalid and names the problem.',
           'Blank means not entered. It never means zero.',
         ],
         keywords: ['dollar sign', 'commas', 'negative', 'format'],
@@ -39,11 +40,11 @@ export const REFERENCE_CARDS: GuideCard[] = [
       {
         id: 'typing-move',
         title: 'Move between cells',
-        where: 'Any entry form',
+        where: 'Any wizard or tax entry form',
         steps: [
           'Focus selects the whole value, so typing replaces it.',
           'Enter commits and moves down; Shift+Enter moves up; the up and down arrows do the same.',
-          'Enter on the last cell moves to the step’s own button, so Enter twice finishes the step.',
+          'Enter on the last cell moves to the step’s button — Enter twice finishes it.',
           'Escape puts back the value the box held when you arrived.',
         ],
         keywords: ['enter key', 'next cell', 'keyboard entry'],
@@ -53,14 +54,16 @@ export const REFERENCE_CARDS: GuideCard[] = [
         title: 'Paste a column from a spreadsheet',
         where: 'Monthly update',
         steps: [
-          'Paste a single column into a cell and it fills downward from there, in the order the rows are drawn.',
-          'Paste name-and-value rows and each lands by name; a name that matches nothing is reported, never guessed.',
-          'Empty cells are skipped rather than blanked, and a line under the table counts what landed.',
+          'Paste a single column into a cell and it fills downward from there.',
+          'Paste name-and-value rows and each lands by name.',
+          'A name that matches nothing is reported, never guessed.',
+          'Empty cells are skipped, never blanked; a line under the table counts what landed.',
         ],
         to: '/update',
         keywords: ['paste', 'clipboard', 'spreadsheet'],
       },
     ],
+    watch: ['A ledger row keeps the browser’s own Enter — the cell-to-cell advance belongs to the wizard and the tax forms.'],
   },
   {
     id: 'ref-keyboard',
@@ -73,13 +76,16 @@ export const REFERENCE_CARDS: GuideCard[] = [
         id: 'keys-palette',
         title: 'Open the command palette',
         where: 'Any page',
-        steps: ['Ctrl+K, or ⌘K on a Mac — the same keys close it. Up and down move, Enter runs, Escape closes.'],
+        steps: [
+          'Ctrl+K, or ⌘K on a Mac — the same keys close it.',
+          'Up and down move, Enter runs, Escape closes.',
+        ],
         keywords: ['ctrl k', 'command palette', 'search'],
       },
       {
         id: 'keys-save',
         title: 'Save without reaching for the mouse',
-        where: 'Any entry form',
+        where: 'Any wizard or tax entry form',
         steps: ['Ctrl+Enter or Ctrl+S presses that step’s own button — the browser’s save dialog never opens.'],
         keywords: ['ctrl enter', 'ctrl s', 'save shortcut'],
       },
@@ -87,20 +93,27 @@ export const REFERENCE_CARDS: GuideCard[] = [
         id: 'keys-escape',
         title: 'Back out',
         where: 'Any page',
-        steps: ['Escape closes the palette, a hint bubble, a popover, a day drawer and the assistant — one level at a time.'],
+        steps: [
+          'Escape closes the palette, a hint bubble, a popover, a day drawer and the assistant.',
+          'It steps out one level at a time.',
+        ],
       },
       {
         id: 'keys-tabs',
         title: 'Move between a page’s views',
         where: 'Any tab strip',
-        steps: ['With a tab focused, left and right move and wrap, Home and End jump to the ends; the address changes without a new history entry.'],
+        steps: [
+          'With a tab focused, left and right move and wrap; Home and End jump to the ends.',
+          'The address changes without a new history entry.',
+        ],
       },
       {
         id: 'keys-calendar',
         title: 'Move in the calendar grid',
         where: 'Calendar',
         steps: [
-          'Left and right move a day, up and down a week, Home and End reach the week’s ends.',
+          'Left and right move a day; up and down move a week.',
+          'Home and End reach the week’s ends.',
           'PageUp and PageDown change month; Enter or Space opens the focused day.',
         ],
         to: '/calendar',
@@ -112,6 +125,7 @@ export const REFERENCE_CARDS: GuideCard[] = [
         steps: ['Tab once from the top of the page and press Enter on **Skip to content**.'],
       },
     ],
+    watch: ['Ctrl+Enter and Ctrl+S reach the wizard and the tax forms; a ledger row keeps the browser’s Enter.'],
   },
   {
     id: 'ref-undo',
@@ -229,11 +243,12 @@ export const REFERENCE_CARDS: GuideCard[] = [
       {
         id: 'assistant-ask',
         title: 'Ask a question about what you see',
-        where: 'Assistant → Ask the assistant',
+        where: 'Assistant → Conversation',
         steps: [
-          'Type the question and press **Send** — it knows the page, the view, and the month, owner or year you have selected.',
-          'The strip above the conversation says **Context:** in words, and expands into what it can see.',
-          'Figures in an answer are buttons: press one for its evidence, and follow the source link back to the page.',
+          'Type the question in the box at the bottom and press **Send**.',
+          'It knows the page you are on and the month, owner or year selected.',
+          'The strip above says **Context:** in words; open it to see the rows.',
+          'Press a figure in an answer for its evidence, then follow the source link back.',
         ],
         keywords: ['ask', 'question', 'explain', 'why did'],
       },
@@ -325,7 +340,7 @@ export const REFERENCE_CARDS: GuideCard[] = [
         <dt>Focal year</dt>
         <dd>The review year a grant or a raise belongs to — the column Focal history is keyed by.</dd>
         <dt>Marginal rate · effective rate · safe harbor</dt>
-        <dd>What the next dollar costs; total tax over gross income; the withholding floor that avoids a penalty.</dd>
+        <dd>What the next dollar costs; tax over its base; the withholding floor that avoids a penalty.</dd>
         <dt>FI target · FI ratio · withdrawal rate</dt>
         <dd>
           Annual spend divided by the withdrawal rate; the investable balance against that target; the
