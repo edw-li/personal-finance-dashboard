@@ -928,3 +928,269 @@ every label changed from the draft and why, deviations, hand-offs (renderer requ
   `portfolio-classify`, `cards-add`, `cards-multipliers`, `cards-credit-add`, `cards-owner` ✓.
 - Fences: `views` match each page's strip; visible tasks 4/7/8/8/8 (3–8 ✓); `watch` ≤ 5; pointer
   tasks link to real destinations with one step ✓; query keys `section`, `tab`, `step` ✓.
+
+---
+
+## Results (implementer, 2026-09-14)
+
+Status: **DONE**. All five Tracking cards written into `src/guide/content/pages-tracking.tsx`; the
+lane's five routes deleted from `PENDING_PAGES`; every fence, the full frontend suite and the build
+green. Nothing outside the two permitted files was touched.
+
+### Commits (branch `guide/g2-tracking`, cut from `e0d289c`)
+
+| Commit | Task |
+| --- | --- |
+| `dca6721` | content(guide): Pages — Overview (spec §5.1) |
+| `f218d90` | content(guide): Pages — Net worth (spec §5.1) |
+| `ff2dbb0` | content(guide): Pages — Portfolio (spec §5.1) |
+| `daf9710` | content(guide): Pages — Spending (spec §5.1) |
+| `6a528b2` | content(guide): Pages — Credit cards (spec §5.1) |
+| `8b4f626` | content(guide): Pages — Tracking voice pass (no InfoHint echoes, purpose and step length) |
+
+The sixth commit is the §5.3 self-review pass described under *Voice pass* below; it is content-only
+and touches the same one file.
+
+### Gates
+
+- Per-card, after every task: `npx vitest run src/guide` → **5 files, 23 passed, 1 skipped** (the
+  required-coverage assertion stays skipped while `PENDING_PAGES` is non-empty — G1/G3/G4 routes remain).
+  `npx tsc -b` clean, `npx eslint src/guide` clean.
+- Final full gates: `npx tsc -b` clean · `npx eslint .` **0 errors, 25 warnings** (all pre-existing
+  `react-refresh/only-export-components`, none in `src/guide`) · `npx vitest run` **231 files,
+  3093 passed, 1 skipped** · `npm run build` ✓ (12.17 s).
+- `PENDING_PAGES` now: `/update`, `/paycheck`, `/comp`, `/espp`, `/taxes`, `/projection`, `/calendar`,
+  `/settings` — this lane's five are gone and the "pending route has no card" fence passes.
+
+### Shape
+
+| Card | `views` | Visible tasks | More | Card watch |
+| --- | --- | --- | --- | --- |
+| `page-overview` | none (no tab strip) | 4 | 3 | 3 |
+| `page-net-worth` | Overview · Accounts | 7 | 3 | 3 |
+| `page-portfolio` | Overview · Holdings · Allocation · Income · Manage | 8 | 5 | 4 |
+| `page-spending` | Overview · Trends · Budgets · History | 8 | 3 | 4 |
+| `page-credit-cards` | Rewards · Credit lines · Manage | 8 | 4 | 4 |
+
+Every spec §5.1 required id is present; `portfolio-deactivate`, `cards-categories-seed` and
+`cards-archive-delete` sit under *More* as the plan allowed. Every `to` on a page card is the bare
+route (lane G0's finding); query keys used are `section`, `tab`, `step` only.
+
+### Labels and facts changed from the plan's draft copy
+
+Each was verified with `grep -rnF -- "<label>" src --include=*.tsx --include=*.ts | grep -v test`
+against the Source lines the plan lists; the draft is wrong wherever this table says so.
+
+**Overview**
+
+1. `overview-customize` — the popover is not "tiles and cards … move them with the arrows": the real
+   labels are the **Summary tiles** and **Deeper views** fieldsets, per-item ↑/↓ buttons,
+   **Reset to defaults** and **Done** (`OverviewCustomize.tsx:29-46`). Step rewritten around them.
+2. `overview-customize` — draft: layout "kept in this browser and follows your account at the next
+   sign-in". `setLocal` writes storage *and* debounce-PATCHes the pref to the server
+   (`prefsStore.ts:212-229`), so the step now says it saves to your account, not to this browser alone.
+3. `overview-customize` watch — the disable rule applies to `tiles` only, not cards
+   (`OverviewCustomize.tsx:35`): "The last remaining **summary** tile cannot be unticked".
+4. `overview-attention` — draft: "The card is absent when nothing is wrong". **False.** The card is
+   always rendered; only the attention strip is conditional, and the empty state reads
+   **No outstanding data checks** (`OverviewPage.tsx:739-754`). Rewritten, and the condition list split
+   off into its own step so no step runs past 22 words.
+5. `overview-drill` — draft implied pressing a label straight off the chart. The real path is
+   `selectionAdapter` → detail panel → `ApplicationSourceLink` (`OverviewPage.tsx:606-611, 671-676`;
+   `SelectionDetail.tsx:22`); **Open net worth records** and **Open spending** are that link's labels.
+6. `overview-data-status` — draft: amber when "a month or more behind **the others**". Amber is
+   measured against the **balances** alone (`freshness.ts:20-23`). Corrected.
+7. `overview-up-next` — draft: "then at most one payday" reads as ordering. The payday rule is a *cap*
+   after the soon-deadline sort (`upNext.ts:14-31`); `UP_NEXT_WINDOW_DAYS = 45` and `UP_NEXT_LIMIT = 5`
+   confirmed. Added **Open calendar** (`OverviewPage.tsx:733`) as the third step.
+
+**Net worth**
+
+8. `networth-stack-by` — draft chips "**Group**, **Owner**, **Share %**". Real labels: **By group**,
+   **By owner**, **Share %** (`netWorthChartOptions.ts:82-86`). Also stopped bolding *Stack by*: it is
+   the Segmented's `ariaLabel`, not visible text.
+9. `networth-what-moved` — draft chips "**Group** / **Account**" under *Break down by*. Real labels:
+   **Groups** / **Accounts** (`netWorthChartOptions.ts:367`). The draft's second step restated the
+   card's InfoHint nearly verbatim, so it was replaced with the viewed-month rule and the
+   two-snapshots precondition (`NetWorthPage.tsx:775`).
+10. `networth-past-month` — draft: "The pencil on a chip opens the monthly update". There is no
+    per-chip pencil; the ribbon carries one **Edit ↗** link for the selected month
+    (`MonthRibbon.tsx:166-173`). Corrected.
+11. `networth-drilldown` — the eight-account cap is real (`MAX_DRILL = PALETTE.length`, and
+    `palette` is an eight-tuple, `theme/tokens.ts:48, 82`); the "never recolours the survivors"
+    claim is real (per-account slot in `toggleDrill`, `NetWorthPage.tsx:474-492`). Wording changed only
+    to avoid echoing the card's own footer hint.
+12. Card `watch` — dropped the draft's "net worth is the plain sum of every non-component balance":
+    the Accounts InfoHint already says component accounts are excluded (§5.3 r6). Kept the liability
+    sign trap in the spec's own em-dash form.
+
+**Portfolio**
+
+13. `portfolio-transaction` — submit is **Add transaction**, becoming **Add another** once the form
+    has carried fields forward (`TransactionsPanel.tsx:420-430`); draft said "**Add**". Type options
+    are **Buy**/**Sell**/**Split**, and a split takes a **Factor** instead of shares and price
+    (`:364-396`). Carry-forward of security, account, type and date confirmed at `:215-221`.
+14. `portfolio-transaction` watch — the draft's "Performance math (XIRR) needs dated transactions —
+    imported rows have none until you add dates" is the Holdings InfoHint almost word for word.
+    Rewritten as the money-weighted return column staying blank.
+15. `portfolio-security` — submit is **Add security**, not "Add"; the fields are **Ticker**, **Name**,
+    **Industry**, **Holding type** and the **Manual price** tick, with **Annual dividend** and
+    **Active** appearing only while editing (`SecuritiesPanel.tsx:180-250`). The draft's field list was
+    a paraphrase and is now verbatim.
+16. `portfolio-manual-price` — the row's button is **Set price**, which opens a **Price** box with
+    **Save price** (`:294-327`); the draft skipped **Set price** entirely.
+17. `portfolio-dividend` — submit is **Add dividend**; fields are **Security**, **Account**,
+    **Pay date**, **Amount** (`DividendsPanel.tsx:287-346`). The draft's second step restated the
+    card's InfoHint; rewritten. The auto/manual trap moved to a watch line grounded in
+    `undoable = dividend.source !== 'auto'` (`:176-180`) — deleting an auto row cannot be undone.
+18. `portfolio-targets` — the button is **Set targets** (none saved) / **Edit targets** (some saved) /
+    **Close editor**, not "**Edit**" (`AllocationTargetEditor.tsx:29-33`). Rows take **Target (%)** and
+    **Tolerance (pp)**; **Add category** is a label beside its own **Add** button. The exactly-100 %
+    activation rule confirmed (`totalUnits !== 1_000_000`, `:128-133`).
+19. `portfolio-classify` — added the real filter chips **Unclassified** / **Not reviewed** and the
+    **Find a security** box; **Show all securities** appears only when a filter or search empties the
+    table, not as a general "lift the filter" button (`ClassificationEditor.tsx:75-85`).
+20. `portfolio-benchmarks` — the whole draft was the Performance InfoHint restated. Rewritten around
+    the four real series names **Portfolio value**, **Cost basis**, **S&P 500 baseline**,
+    **VOO (your contributions)** and the **Live** dot (`historyChartOptions.ts:246-252, 277`), plus
+    the legend and the All-scope rule.
+21. `portfolio-deactivate` — draft: "a red chip under the title". It is a listed ticker with its
+    reason on hover, in the subheader under the status line (`PortfolioPage.tsx:545-564`). The revival
+    path is the **Active** checkbox on the security, not a vague "bring it back from Manage".
+22. `portfolio-holding-detail` — dropped the draft's "switching owner closes it too": nothing in the
+    source closes the drill on a scope change (the panel only folds when the ticker is absent from the
+    scoped holdings, `PortfolioPage.tsx:218-226`).
+23. `portfolio-import-order` — sharpened with the real override rule: a re-import rewrites rows the
+    sheet covers, and rows dated past its last date survive (`importer/apply.py:351-360`).
+24. Card `watch` — dropped the draft's "A holding's industry comes from its classification, not the
+    price feed": a security carries its own **Industry** field too, so the claim is not cleanly true.
+    Replaced with the dated-transactions rule.
+
+**Spending**
+
+25. `spending-flow-window` `where` — the card title is templated (``Where ${flowPeriod.label} went``,
+    `SpendingPage.tsx:643`), so the draft's segment *Where the period went* does not exist in the UI
+    and would have failed the where fence. Changed to `Where <period> went` (angle-bracket placeholder,
+    exempt).
+26. `spending-heatmap` — the strip order is **Absolute**, **Row**, **vs average**
+    (`spendingChartOptions.HEATMAP_MODES`), not the draft's Row/vs average/Absolute. A cell click opens
+    a panel carrying **Open monthly entries** (`SpendingPage.tsx:815-818`), which the draft omitted.
+27. `spending-trends` — the category chips exist only in the **Compare** view (`:752-766`), so that is
+    now step 1. The dashed-budget and own-scale sentences were the card's InfoHint verbatim; both
+    rewritten.
+28. `spending-budget-seed` — **Start from my averages** is the *empty-state* button and
+    **Re-seed from averages** replaces it once budgets exist (`BudgetPanel.tsx:345-358, 417-431`); the
+    draft read as though both were always present. `MIN_SEED_MONTHS = 3` confirmed (`budgetSeed.ts:7`).
+29. `spending-budget-set` / `-end` `where` — dropped the draft's "→ a category row" segment (not UI
+    text). The **Effective from** default is the focused month (`:96-101`) ✓. The watch line was
+    reworded off the on-screen editor hint so the guide is not a second copy of it.
+30. `spending-yearly` — rewritten: the draft restated the Yearly rollups InfoHint. Now uses the real
+    row labels **Months matched** and **Total** (`:925-958`).
+31. `spending-movers` — the draft's single sentence was the InfoHint again; rewritten around the real
+    columns (month, vs prior month, vs 12-mo avg, vs budget when budgets exist). `MOVERS_TOP = 5`
+    confirmed (`:57`).
+32. Card `watch` — added the kind-change trap ("recomputes every month, chart and projection that
+    reads it", `settings/CategoriesCard.tsx:224`), and named the kinds **Living**/**Tax**/**Transfer**
+    as rendered (`:29-32`).
+
+**Credit cards**
+
+33. `cards-add` — the title-row button reads **+ Add card** while the form's submit reads **Add card**
+    (`CreditCardsPage.tsx:330-335`; `CardsPanel.tsx:420-423`); the draft used "Add card" for both. The
+    point-value label is **Point value (¢)**, not "Point value" (`CardsPanel.tsx:352`).
+34. `cards-opened-date` — draft: "year two is badged as falling off 5/24". There is no roster badge;
+    the *year-2 anniversary calendar event's detail* carries the note
+    (`calendar/generators/cards.py:16, 45-56`). Corrected to say so.
+35. `cards-owner` — the Owner select's empty option is *labelled* **Joint** (`CardsPanel.tsx:369`), so
+    "leave **Owner** blank" is wrong. The draft's scope sentence also restated the page's `ownerHint`
+    verbatim (`CreditCardsPage.tsx:344`); rewritten around the Manage exception (`:182-197`).
+36. `cards-category-add` — the real label is **Spending category (for auto weight)**
+    (`CategoriesPanel.tsx:331`); submit is **Add category** (`:362`). **Pin to card** confirmed.
+37. `cards-multipliers` — **Clear cell** resets the draft cell to blank = N/A
+    (`RewardsMatrix.tsx:341-380`), so "makes the card unusable for that category" was reworded to the
+    N/A rule. **Multiplier** / **Effective %** are two buttons in one group, not a single toggle.
+38. `cards-detail` `where` — the draft's "a card's column header" is not UI text and would have failed
+    the where fence; changed to `Rewards matrix`. Added the fact that the drill deliberately ignores
+    the **Whose** chips (`CreditCardsPage.tsx:190-197`).
+39. `cards-credit-add` — the toggle reads **Counts ✓**, not "Counts" (`CardDetail.tsx:342`); the label
+    box is **Credit label** (`:366-370`). Added the watch that an anniversary reset needs the opened
+    date before it reaches the calendar (`cards.py:81-84`).
+40. `cards-limit-add` — **the draft put this on the wrong view.** The limit form lives in the card
+    detail, which opens from the **Rewards** matrix; the **Credit lines** view carries only the
+    *Credit line history* chart (`CreditCardsPage.tsx:484-497`; `CardDetail.tsx:398-476`). `where` and
+    `to` corrected (`to: '/credit-cards'`, not `?section=lines`). The **New limit** placeholder named;
+    the one-event-per-date rule confirmed as a DB constraint
+    (`UniqueConstraint("card_id", "effective_date")`, `models/credit_cards.py:139`).
+41. `cards-categories-seed` — dropped "fourteen rows" (a fact, not a rule — §5.3 r5), though
+    `SEED_CATEGORIES` does have fourteen entries.
+42. `cards-utilization` `where` — same correction as 40: the section is inside the card detail on
+    **Rewards**.
+43. Card `watch` — added "Cards are dashboard-only — a workbook import never touches them"
+    (`CardsPanel.tsx:304`). The undo trap is exact: Undo re-creates the card, its credits and its limit
+    events, and the toast itself says multipliers were not restored (`CardsPanel.tsx:248-288`).
+
+### Voice pass (`8b4f626`)
+
+A script extracted every `InfoHint text=` / `hint=` string in non-test `src/` (239 of them) and
+compared every five-word span against all 178 quoted lines in this file (§5.3 r8). Six lines came back
+as verbatim echoes and were rewritten: the Category-trends dashed-step and own-scale lines, the
+credit-card "either of you can hold" line, the securities-delete watch line, and two Yearly-rollups
+lines. The scan now returns **zero** overlaps.
+
+Also in that commit: the Credit cards `purpose` trimmed 27 → 24 words (§5.3 r9, ≤ 25); the Overview
+attention step and the Portfolio refresh step each split in two so no step exceeds 22 words (all steps
+are well under the 160-character fence; the longest is 148). Checked and clean: no "simply"/marketing
+words, no exclamation marks, no "below"/"above", no personal data (the only tickers named are the
+product's own benchmark series labels **S&P 500 baseline** / **VOO (your contributions)**, and the
+per-member button is written `**Open <TICKER>**`).
+
+### Deviations from the plan
+
+- **Four `where` strings in the draft name text that does not exist in the UI** and would have failed
+  the where fence: *Where the period went*, *a category row*, *a card's column header*, *Card detail*.
+  All replaced (items 25, 29, 38, 40/42 above).
+- **`cards-limit-add`'s `to` changed** from `/credit-cards?section=lines` to `/credit-cards` — the form
+  is not on that view (item 40).
+- Several tasks gained a step (never more than five, the type's limit is six) where the draft merged
+  two distinct actions into one sentence.
+- `watch` lines are **plain prose with no `**Label**` spans**, per the coordinator's mid-task note
+  (GuideCard/GuideTaskList do not run watch lines through `renderSteps` today, so asterisks would print
+  literally). Nothing in this file needs the renderer change to read correctly.
+
+### Hand-offs
+
+- **Lane V** — watch lines here are prose-only, so V's fence extension has nothing to check in this
+  file and the renderer change cannot regress it. If V decides watch lines *should* name controls in
+  bold once `renderSteps` is wired, the candidates in this file are `Living spending` (Overview),
+  `Whose` (Overview), `Delete` (Portfolio) and `Monthly budget` (Spending) — all verbatim in source.
+- **Lane V** — `page-overview` deliberately has **no `views` key**: Overview has no tab strip, and the
+  fence rejects `views` on such a page. Not an omission.
+- **Lane V** — the required-coverage assertion (§5.4) is still `skipIf`-skipped; this lane's share of
+  its ids (`portfolio-transaction`, `portfolio-security`, `portfolio-classify`, `cards-add`,
+  `cards-multipliers`, `cards-credit-add`, `cards-owner`) all exist.
+- **Lanes G1/G4** — pointer targets this lane relies on are the real destinations, not guide anchors:
+  `/settings?section=household#accounts` (from `networth-accounts-pointer`),
+  `/update?step=spending` (from `spending-enter-pointer`), `/settings?section=data#import` (from
+  `portfolio-import-order`). If G4 renames a Settings card id, this file's links move with it.
+- **No renderer requests.** Nothing in `src/guide/*.tsx` needed to change for this content.
+
+### Review round (`cda822f`)
+
+All four findings applied in `src/guide/content/pages-tracking.tsx`; ids, `views` and task counts
+unchanged.
+
+1. **(Important)** `cards-owner` — "leave it on **Joint**" was false: a fresh roster form starts on
+   the primary person (`CardsPanel.tsx:40-43, 88-90`; `OWNER_UNSET` resolves to `is_primary`, and '' is
+   a real value meaning Joint). Now: "…or pick **Joint** for a card you both use — a new card starts on
+   the primary person." The card-level `watch` lines were checked: none repeats the claim, and the two
+   other `Joint` mentions (Overview, Net worth) are ScopeBar chips, not an Owner default.
+2. `portfolio-dimension` `where` — *Allocation dimension* is only the Segmented's `ariaLabel`, so the
+   segment is now `Portfolio → Allocation`.
+3. `spending-yearly` — "cover fewer months than **Total**" → "**can** cover fewer months", since they
+   cover at most as many.
+4. Credit cards `watch` — dropped "A blank multiplier means the card cannot be used for that
+   category…": it paraphrased the matrix's own note (`RewardsMatrix.tsx:391`), and `cards-multipliers`
+   step 3 already states the N/A rule as a how-to. That card now carries three `watch` lines.
+
+Gates after the round: `npx vitest run src/guide` → 5 files, 23 passed, 1 skipped; `npx tsc -b` clean;
+`npx eslint src/guide` clean.
