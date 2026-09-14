@@ -73,7 +73,7 @@ const POINTS: PriceHistoryResponse = {
   ],
 }
 
-// The "All holdings" way back is the PAGE's (the panel is a body swapped into the
+// The "Clear selection" way back is the PAGE’s (the panel is a body swapped into the
 // Holdings card), so there is no close affordance to exercise here. Under a router because
 // the what-if deep link is a <Link>, which has no meaning outside one.
 function renderPanel(over: {
