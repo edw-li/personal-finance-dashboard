@@ -10,7 +10,6 @@ export const PENDING_PAGES: readonly string[] = [
   '/portfolio',
   '/spending',
   '/credit-cards',
-  '/paycheck',
   '/comp',
   '/espp',
   '/taxes',
