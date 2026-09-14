@@ -13,9 +13,12 @@ export const UNKNOWN_CLASSIFICATION = '__unknown__'
  *  card is where that gets fixed. The wire keeps "Unknown" (portfolio_allocation.dimension_label);
  *  nothing here changes what the server sends. */
 export const UNCLASSIFIED_LABEL = 'Unclassified'
-/** Every slice and drift row's label passes through here so the page speaks in one voice. */
-export function displayLabel(key: string, label: string): string {
-  return key === UNKNOWN_CLASSIFICATION ? UNCLASSIFIED_LABEL : label
+/** Every slice and drift row's label passes through here so the page speaks in one voice — but
+ *  ONLY on asset_class. "Unclassified" names the gap the Security classifications card closes;
+ *  on industry, geography, account or type the catch-all is the server's own word for a fact it
+ *  does not have, and renaming it would promise a fix this page cannot offer. */
+export function displayLabel(key: string, label: string, by: AllocationDimension): string {
+  return key === UNKNOWN_CLASSIFICATION && by === 'asset_class' ? UNCLASSIFIED_LABEL : label
 }
 export const ASSET_CLASSES: Record<string, string> = {
   equity: 'Equity', bonds: 'Bonds', cash: 'Cash / cash equivalents',
@@ -100,7 +103,7 @@ export function fetchEmployerExposure(owner: OwnerScope): Promise<EmployerExposu
 }
 
 export function allocationLabel(key: string, dimension: AllocationDimension): string {
-  if (key === UNKNOWN_CLASSIFICATION) return UNCLASSIFIED_LABEL
+  if (key === UNKNOWN_CLASSIFICATION) return dimension === 'asset_class' ? UNCLASSIFIED_LABEL : 'Unknown'
   const labels: Record<string, Record<string, string>> = {
     asset_class: ASSET_CLASSES, geography: GEOGRAPHIES,
     type: { stock: 'Stock', etf: 'ETF', mutual_fund: 'Mutual fund', private: 'Private' },

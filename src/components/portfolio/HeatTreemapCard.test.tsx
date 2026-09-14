@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { fetchClassifications } from '../../api/allocation'
@@ -37,6 +37,16 @@ it('draws the treemap as a plain chart card with its colour key and metric toggl
   expect(screen.getByRole('group', { name: 'Heat metric' })).toBeTruthy()
   expect(document.querySelector('details')).toBeNull()
   expect(fetchClassifications).toHaveBeenCalledTimes(1)
+})
+
+// The classifications card sets the industry this treemap groups by, and it lives on another view
+// (P2 review round 3): without a version to key on, an inline edit never reached these cells.
+it('refetches the industry records when the page says a classification changed', async () => {
+  const { rerender } = render(<MemoryRouter><HeatTreemapCard holdings={[VOO]} refreshKey={0} /></MemoryRouter>)
+  await screen.findByLabelText('Holdings grouped by known industry and unknown exposure')
+  expect(fetchClassifications).toHaveBeenCalledTimes(1)
+  rerender(<MemoryRouter><HeatTreemapCard holdings={[VOO]} refreshKey={1} /></MemoryRouter>)
+  await waitFor(() => expect(fetchClassifications).toHaveBeenCalledTimes(2))
 })
 
 it('says so on the card when the industry records cannot be fetched', async () => {

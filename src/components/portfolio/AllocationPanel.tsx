@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ALLOCATION_DIMENSIONS, displayLabel, fetchAllocationData, fetchClassifications, fetchEmployerExposure, UNCLASSIFIED_LABEL,
+  ALLOCATION_DIMENSIONS, displayLabel, fetchAllocationData, fetchClassifications, fetchEmployerExposure,
 } from '../../api/allocation'
 import type { AllocationData, AllocationDimension, EmployerExposure, ExposureSlice, SecurityClassification } from '../../api/allocation'
 import type { OwnerScope } from '../../api/netWorth'
@@ -9,6 +9,7 @@ import type { AllocationResponse, HoldingOut } from '../../types/api'
 import type { ChartSelection } from '../../types/metrics'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../../utils/format'
 import ChartCard from '../ChartCard'
+import { useDetailPanel } from '../details/DetailPanelProvider'
 import Disclosure from '../Disclosure'
 import Segmented from '../shell/Segmented'
 import SelectionDetail from '../details/SelectionDetail'
@@ -28,12 +29,15 @@ interface Props {
   owner?: OwnerScope
   refreshKey?: number
   onSelectTicker: (ticker: string) => void
+  /** A classification was edited here. The industry it sets also colours the Holdings treemap, so
+   *  the page bumps a version other views key their own fetches on (P2 review round 3). */
+  onClassificationsChanged?: () => void
 }
 
 // The Allocation view (2026-09-13 polish §12–13): ONE allocation card (donut + ranked aside),
 // then the Security classifications card, then targets, then employer equity. Every
 // "Classify these N holdings" button on the view drives the classifications card's handle.
-export default function AllocationPanel({ holdings, owner = null, refreshKey = 0, onSelectTicker }: Props) {
+export default function AllocationPanel({ holdings, owner = null, refreshKey = 0, onSelectTicker, onClassificationsChanged }: Props) {
   const [dimension, setDimension] = useState<AllocationDimension>('asset_class')
   const [reload, setReload] = useState(0)
   const [result, setResult] = useState<{ key: string; data: AllocationData } | null>(null)
@@ -44,6 +48,7 @@ export default function AllocationPanel({ holdings, owner = null, refreshKey = 0
   const [employerError, setEmployerError] = useState<{ owner: OwnerScope; message: string } | null>(null)
   const [selection, setSelection] = useState<ChartSelection | null>(null)
   const classificationsCard = useRef<ClassificationEditorHandle>(null)
+  const detailPanel = useDetailPanel()
   const dataKey = `${owner ?? 'household'}:${dimension}`
   const scopeLabel = ownerScopeLabel(owner)
   const holdingsRevision = holdings.map((h) => `${h.security_id}:${h.shares}:${h.price}:${h.quoted_at}`).join('|')
@@ -73,18 +78,28 @@ export default function AllocationPanel({ holdings, owner = null, refreshKey = 0
   const error = failure?.key === dataKey ? failure.message : null
   const option = useMemo(() => data ? exposureOption(data) : null, [data])
   const refresh = () => setReload((value) => value + 1)
-  const classify = () => classificationsCard.current?.focusUnclassified()
+  // The panel first (P2 review round 4): in overlay and reading mode the page beneath it is
+  // `inert`, so focusing a select down there would be a no-op — the button would look dead. The
+  // slice detail that hosted the click goes with it; the classifications card is the new subject.
+  const classify = () => {
+    detailPanel?.close()
+    setSelection(null)
+    classificationsCard.current?.focusUnclassified()
+  }
   const unknownSlice = data?.slices.find((slice) => slice.is_unknown) ?? null
+  // The classify path answers the asset-class question only (P2 review round 1): the Security
+  // classifications card sets an asset class, so an Industry or Account catch-all has no fix here.
+  const classifiable = data?.by === 'asset_class'
   const scopedSource = () => `/portfolio?section=holdings${owner === null ? '' : `&owner=${owner}`}`
   const sliceSelection = (slice: ExposureSlice): ChartSelection => ({
-    kind: 'entity', id: `${dataKey}:${slice.key}`, label: displayLabel(slice.key, slice.label), entityType: 'allocation', entityId: slice.key,
+    kind: 'entity', id: `${dataKey}:${slice.key}`, label: displayLabel(slice.key, slice.label, data?.by ?? dimension), entityType: 'allocation', entityId: slice.key,
     scope: scopeLabel, values: [
       { label: 'Priced market value', value: slice.market_value, unit: 'USD' },
       { label: 'Share of priced holdings', value: slice.weight_pct, unit: 'ratio' },
       { label: 'Holdings', value: slice.holdings },
       { label: 'Oldest quote', value: data?.as_of ? formatDate(data.as_of) : null },
     ], source: { href: scopedSource(), label: 'Open holdings' },
-    context: { dimension, owner, classification: slice.is_unknown ? UNCLASSIFIED_LABEL : 'Classified', pricedDenominator: data?.total_market_value ?? null },
+    context: { dimension, owner, classification: slice.is_unknown ? displayLabel(slice.key, 'Unknown', data?.by ?? dimension) : 'Classified', pricedDenominator: data?.total_market_value ?? null },
   })
   return <div className="allocation-workspace">
     <div className="allocation-toolbar"><Segmented ariaLabel="Allocation dimension" variant="toggle" options={ALLOCATION_DIMENSIONS}
@@ -99,7 +114,9 @@ export default function AllocationPanel({ holdings, owner = null, refreshKey = 0
       exportName={`allocation-${dimension}`} csv={data ? () => exposureCsv(data) : undefined}
       height={330} busy={data === null && error === null} error={error}
       caption={data ? `${scopeLabel} · priced book ${formatCurrency(data.total_market_value)} · ${formatDate(data.as_of)}` : undefined}
-      aside={data ? <AllocationAside data={data} onSelect={(slice) => setSelection(sliceSelection(slice))} onClassify={classify} onSelectTicker={onSelectTicker} /> : undefined}
+      aside={data
+        ? <AllocationAside data={data} onSelect={(slice) => setSelection(sliceSelection(slice))} onClassify={classify} onSelectTicker={onSelectTicker} />
+        : error === null ? <AllocationAsideGhost /> : undefined}
       selection={selection} onSelectionChange={setSelection} selectionScopeKey={dataKey}
       selectionAdapter={(event) => {
         const key = (event as unknown as { data?: { allocationKey?: string } }).data?.allocationKey
@@ -111,7 +128,7 @@ export default function AllocationPanel({ holdings, owner = null, refreshKey = 0
         return <><SelectionDetail selection={selected} chartTitle="Portfolio allocation" onClear={() => setSelection(null)} />
           {slice && <div className="allocation-members">
             {/* The classify action sits FIRST; the per-holding Open buttons stay (spec §13). */}
-            {slice.is_unknown && slice.members.length > 0 && <ClassifyButton count={slice.members.length} onClick={classify} />}
+            {classifiable && slice.is_unknown && slice.members.length > 0 && <ClassifyButton count={slice.members.length} onClick={classify} />}
             <h3>Holdings in this category</h3>
             {slice.members.map((member) => <div key={`${member.security_id}:${member.account}`} className="allocation-member">
               <button className="button" onClick={() => onSelectTicker(member.ticker)}>Open {member.ticker}</button>
@@ -123,11 +140,22 @@ export default function AllocationPanel({ holdings, owner = null, refreshKey = 0
       }} />
     {classificationError && <p className="error-banner">Classification records unavailable: {classificationError} <button className="button" onClick={refresh}>Retry</button></p>}
     {/* Directly after the allocation card, before the targets (spec §13). */}
-    <ClassificationEditor ref={classificationsCard} classifications={classificationRows} onChanged={refresh} />
+    <ClassificationEditor ref={classificationsCard} classifications={classificationRows} onChanged={() => { refresh(); onClassificationsChanged?.() }} />
     {data && <AllocationTargetEditor key={dataKey} data={data} owner={owner} onChanged={refresh}
       onClassify={classify} unclassifiedCount={unknownSlice?.members.length ?? 0} />}
     {employer?.owner === owner ? <EmployerPanel value={employer.data} onSelectTicker={onSelectTicker} /> : employerError?.owner === owner
       ? <p className="error-banner">Employer exposure unavailable: {employerError.message} <button className="button" onClick={refresh}>Retry</button></p> : null}
+  </div>
+}
+
+// The aside's own ghost (P2 review round 5). Without it the card's body went from one column to
+// two the moment the payload landed — the donut jumped left under the reader. Bars only: the
+// coverage sentence and the ranked rows are the answer, and a ghost never pretends to know it.
+function AllocationAsideGhost() {
+  return <div className="allocation-aside allocation-aside-ghost" aria-hidden="true">
+    <div className="skeleton" style={{ height: 14, width: '85%' }} />
+    <div className="skeleton" style={{ height: 12, width: '70%' }} />
+    {[0, 1, 2, 3].map((row) => <div key={row} className="skeleton" style={{ height: 18 }} />)}
   </div>
 }
 
@@ -141,6 +169,8 @@ function AllocationAside({ data, onSelect, onClassify, onSelectTicker }: {
   onSelectTicker: (ticker: string) => void
 }) {
   const { coverage } = data
+  // The classify path belongs to the asset-class question alone (P2 review round 1).
+  const classifiable = data.by === 'asset_class'
   return <div className="allocation-aside">
     <p className="allocation-coverage-line">
       <b>{coverage.priced_count} of {coverage.holding_count}</b> holdings priced ·{' '}
@@ -161,12 +191,12 @@ function AllocationAside({ data, onSelect, onClassify, onSelectTicker }: {
           <th scope="row"><button type="button" className="allocation-category-button" onClick={() => onSelect(slice)}>
             <span className="allocation-category-swatch" aria-hidden="true"
               style={{ backgroundColor: slice.is_unknown ? 'var(--other-series)' : `var(--chart-${index % 8 + 1})` }} />
-            {displayLabel(slice.key, slice.label)}
+            {displayLabel(slice.key, slice.label, data.by)}
           </button></th>
           <td className="num">{formatCurrency(slice.market_value)}</td>
           <td className="num">{formatPct(slice.weight_pct, { signed: false })}</td>
         </tr>
-        {slice.is_unknown && slice.members.length > 0 && <tr className="allocation-unknown allocation-classify-row">
+        {classifiable && slice.is_unknown && slice.members.length > 0 && <tr className="allocation-unknown allocation-classify-row">
           <td colSpan={3}><ClassifyButton count={slice.members.length} onClick={onClassify} /></td>
         </tr>}
       </Fragment>)}</tbody>

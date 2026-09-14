@@ -156,6 +156,10 @@ export default function PortfolioPage() {
   // Ticker being deactivated from the failed-refresh row (the old manual-psql ritual for
   // a delisted symbol, one click now); single-flight like the panels' busy flags.
   const [deactivating, setDeactivating] = useState<string | null>(null)
+  // Bumped when the Allocation view saves a classification (P2 review round 3). The Holdings
+  // treemap groups by the security's industry, which no holdings payload carries — without this
+  // it kept drawing the classification the user just changed.
+  const [classificationsVersion, setClassificationsVersion] = useState(0)
   const [tab, setTab] = useState<Tab>('transactions')
   // Arrival deep link (?tab=dividends — the palette's "Add dividend" lands on the
   // dividends ledger, spec §4 item 9). A hook, not a useState initializer: the palette
@@ -752,7 +756,7 @@ export default function PortfolioPage() {
               </section>
               {/* The industry heat treemap (2026-09-13 polish §11): a card under the table it
                   colours, no longer a closed <details> at the foot of Allocation. */}
-              <HeatTreemapCard holdings={holdings.holdings} owner={scope.owner} />
+              <HeatTreemapCard holdings={holdings.holdings} owner={scope.owner} refreshKey={classificationsVersion} />
             </LocalSectionPanel>
             <LocalSectionPanel state={views} section="allocation">
               <AllocationPanel
@@ -761,6 +765,7 @@ export default function PortfolioPage() {
                 byType={byType}
                 byAccount={byAccount}
                 onSelectTicker={(ticker) => { setDetailTicker(ticker); views.setSection('holdings') }}
+                onClassificationsChanged={() => setClassificationsVersion((value) => value + 1)}
               />
             </LocalSectionPanel>
             {/* The ?tab= arrival's scroll-and-focus target: the strip alone would leave the
@@ -785,7 +790,7 @@ export default function PortfolioPage() {
                     onChange={setTab}
                     panelIds={RECORD_PANEL_IDS}
                   />
-                  <div id={RECORD_PANEL_IDS.transactions} role="tabpanel" hidden={tab !== 'transactions'}>
+                  <div id={RECORD_PANEL_IDS.transactions} role="tabpanel" aria-label="Transactions" hidden={tab !== 'transactions'}>
                     <TransactionsPanel
                       securities={securities}
                       transactions={transactions}
@@ -794,8 +799,8 @@ export default function PortfolioPage() {
                       onChanged={reload}
                     />
                   </div>
-                  <div id={RECORD_PANEL_IDS.securities} role="tabpanel" hidden={tab !== 'securities'}><SecuritiesPanel securities={securities} onChanged={reload} /></div>
-                  <div id={RECORD_PANEL_IDS.realized} role="tabpanel" hidden={tab !== 'realized'}>{realized && <RealizedPanel realized={realized} />}</div>
+                  <div id={RECORD_PANEL_IDS.securities} role="tabpanel" aria-label="Securities" hidden={tab !== 'securities'}><SecuritiesPanel securities={securities} onChanged={reload} /></div>
+                  <div id={RECORD_PANEL_IDS.realized} role="tabpanel" aria-label="Realized" hidden={tab !== 'realized'}>{realized && <RealizedPanel realized={realized} />}</div>
                 </div>
               </LocalSectionPanel></div>
           </>

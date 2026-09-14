@@ -19,7 +19,14 @@ import './portfolio.css'
 // verbatim; only the mount moved. It fetches the classification records itself because
 // industry lives on the security's classification, not on the holding — a failed fetch
 // degrades to "Unknown industry" cells and SAYS so on the card (card-local advisory).
-export default function HeatTreemapCard({ holdings, owner = null }: { holdings: HoldingOut[]; owner?: OwnerScope }) {
+export default function HeatTreemapCard({ holdings, owner = null, refreshKey = 0 }: {
+  holdings: HoldingOut[]
+  owner?: OwnerScope
+  /** Bumped by the page when the Allocation view edits a classification (P2 review round 3): the
+   *  industry these cells group by lives on the security's record, not on the holding, so a
+   *  holdings-only revision key would leave this chart showing the classification before the edit. */
+  refreshKey?: number
+}) {
   const [metric, setMetric] = useState<HeatMetric>('unrealized')
   const [classifications, setClassifications] = useState<SecurityClassification[]>([])
   const [classificationError, setClassificationError] = useState<string | null>(null)
@@ -32,7 +39,7 @@ export default function HeatTreemapCard({ holdings, owner = null }: { holdings: 
       if (!cancelled) { setClassifications(rows); setClassificationError(null) }
     }).catch((err) => { if (!cancelled) setClassificationError(errorDetail(err)) })
     return () => { cancelled = true }
-  }, [holdingsRevision])
+  }, [holdingsRevision, refreshKey])
   const industryHoldings = useMemo(() => {
     const byId = new Map(classifications.map((row) => [row.security_id, row]))
     return holdings.map((holding) => ({ ...holding, industry: byId.get(holding.security_id)?.industry ?? null }))

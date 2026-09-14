@@ -40,7 +40,7 @@ export default function AllocationTargetEditor({ data, owner, onChanged, onClass
       <thead><tr><th scope="col">Category</th><th scope="col" className="num">Current</th><th scope="col" className="num">Target</th>
         <th scope="col" className="num">Tolerance (pp)</th><th scope="col" className="num">Drift (pp)</th><th scope="col" className="num">Dollar drift</th><th scope="col">Status</th></tr></thead>
       <tbody>{data.drift.map((row) => <tr key={row.key}>
-        <th scope="row">{displayLabel(row.key, row.label)}</th><td className="num">{formatPct(row.weight_pct, { signed: false })}</td>
+        <th scope="row">{displayLabel(row.key, row.label, data.by)}</th><td className="num">{formatPct(row.weight_pct, { signed: false })}</td>
         <td className="num">{Number(row.target_pct).toLocaleString()}%</td><td className="num">±{Number(row.tolerance_pp).toLocaleString()}</td>
         <td className="num">{row.drift_pp === null ? '—' : `${Number(row.drift_pp) > 0 ? '+' : ''}${Number(row.drift_pp).toFixed(2)}`}</td>
         <td className="num">{formatCurrency(row.drift_amount)}</td>
@@ -66,7 +66,10 @@ function TargetForm({ data, owner, onSaved, onClassify, unclassifiedCount }: {
   })
   // The share of the priced book with no classification — from the coverage figures, so it is
   // right whether or not an Unclassified slice is in the list.
-  const unknownShare = Number(data.coverage.unknown_market_value) > 0 && Number(data.total_market_value) > 0
+  // Asset class only (P2 review round 1): "classify them first" points at the Security
+  // classifications card, which sets an asset class — it closes no gap on any other dimension.
+  const unknownShare = data.by === 'asset_class'
+    && Number(data.coverage.unknown_market_value) > 0 && Number(data.total_market_value) > 0
     ? Number(data.coverage.unknown_market_value) / Number(data.total_market_value)
     : null
   const [category, setCategory] = useState('')

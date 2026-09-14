@@ -95,6 +95,22 @@ it('spells the catch-all slice Unclassified in the donut and the export, and kee
   expect(csv.rows[2].slice(0, 4)).toEqual(['Unpriced: GAP', '', '', 'Value unavailable'])
   expect(csv.rows[1]).toContain('person:7')
   expect(allocationLabel('__unknown__', 'asset_class')).toBe('Unclassified')
-  expect(displayLabel('__unknown__', 'Unknown')).toBe('Unclassified')
-  expect(displayLabel('equity', 'Equity')).toBe('Equity')
+  expect(displayLabel('__unknown__', 'Unknown', 'asset_class')).toBe('Unclassified')
+  expect(displayLabel('equity', 'Equity', 'asset_class')).toBe('Equity')
+})
+
+// "Unclassified" is a claim about the ASSET CLASS gap the classifications card closes. On every
+// other dimension the catch-all is the server's own word for a missing fact, and renaming it
+// would promise a fix this page does not offer (P2 review round 1).
+it('leaves the catch-all in the wire’s words on every dimension but asset class', () => {
+  expect(displayLabel('__unknown__', 'Unknown industry', 'industry')).toBe('Unknown industry')
+  expect(displayLabel('__unknown__', 'Unknown', 'account')).toBe('Unknown')
+  expect(allocationLabel('__unknown__', 'industry')).toBe('Unknown')
+  expect(allocationLabel('__unknown__', 'geography')).toBe('Unknown')
+  const byIndustry: AllocationData = { ...data, by: 'industry',
+    slices: [{ ...data.slices[0], key: 'semis', label: 'Semiconductors' },
+      { ...data.slices[1], label: 'Unknown industry' }] }
+  const option = exposureOption(byIndustry) as unknown as { series: { data: { name: string }[] }[] }
+  expect(option.series[0].data.map((row) => row.name)).toEqual(['Semiconductors', 'Unknown industry'])
+  expect(exposureCsv(byIndustry).rows[1].slice(0, 4)).toEqual(['Unknown industry', '300.00', '60.0000', 'Unknown'])
 })

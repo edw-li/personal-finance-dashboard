@@ -101,6 +101,37 @@ describe('Security classifications card', () => {
     expect(saveClassification).toHaveBeenCalledTimes(2)
   })
 
+  // A round-trip is not a lock (P2 review round 2). Dropping the second edit was invisible: the
+  // controlled select snapped back to the draft and the landing save re-based over it.
+  it('serializes two picks made inside one round-trip instead of dropping the second', async () => {
+    const resolvers: ((value: { data: SecurityClassification; headers: Headers }) => void)[] = []
+    vi.mocked(saveClassification).mockImplementation(() => new Promise((resolve) => { resolvers.push(resolve) }))
+    render(<ClassificationEditor classifications={[fund]} onChanged={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('FUND asset class'), { target: { value: 'bonds' } })
+    await waitFor(() => expect(saveClassification).toHaveBeenCalledTimes(1))
+    // A second pick while the first PATCH is still in flight: it shows at once …
+    fireEvent.change(screen.getByLabelText('FUND geography'), { target: { value: 'us' } })
+    expect((screen.getByLabelText('FUND geography') as HTMLSelectElement).value).toBe('us')
+    // … and waits its turn rather than racing the first.
+    expect(saveClassification).toHaveBeenCalledTimes(1)
+    await act(async () => { resolvers[0]({ data: fund, headers: new Headers() }) })
+    await waitFor(() => expect(saveClassification).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(saveClassification).mock.calls[0][1]).toEqual({ asset_class: 'bonds', geography: null, industry: null, note: null })
+    expect(vi.mocked(saveClassification).mock.calls[1][1]).toEqual({ asset_class: 'bonds', geography: 'us', industry: null, note: null })
+    expect((screen.getByLabelText('FUND asset class') as HTMLSelectElement).value).toBe('bonds')
+    expect((screen.getByLabelText('FUND geography') as HTMLSelectElement).value).toBe('us')
+  })
+
+  it('keeps half-typed text when a refetch of the same row lands under it', () => {
+    const { rerender } = render(<ClassificationEditor classifications={[stock]} onChanged={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('NVDA note'), { target: { value: 'half typed' } })
+    // The parent refetched (another row saved) and this security came back with a new industry.
+    rerender(<ClassificationEditor classifications={[{ ...stock, industry: 'Semiconductors' }]} onChanged={vi.fn()} />)
+    // The field nobody was editing takes the server's word; the unsent local edit survives.
+    expect((screen.getByLabelText('NVDA industry') as HTMLInputElement).value).toBe('Semiconductors')
+    expect((screen.getByLabelText('NVDA note') as HTMLInputElement).value).toBe('half typed')
+  })
+
   it('focusUnclassified() pins the Unclassified chip, scrolls the card in and focuses the first select', () => {
     // jsdom implements no scrollIntoView (PortfolioPage.test.tsx's idiom).
     const scrollIntoView = vi.fn()

@@ -1,5 +1,5 @@
 import { useEffect, useImperativeHandle, useRef, useState } from 'react'
-import type { KeyboardEvent, Ref } from 'react'
+import type { Ref } from 'react'
 import { ASSET_CLASSES, GEOGRAPHIES, saveClassification, UNCLASSIFIED_LABEL } from '../../api/allocation'
 import type { ClassificationInput, SecurityClassification } from '../../api/allocation'
 import { errorDetail } from '../../api/client'
@@ -94,45 +94,70 @@ export default function ClassificationEditor({ classifications, onChanged, ref }
   </section>
 }
 
-// One draft per row, reset only when THIS row's server values change (its own save landing, an
-// undo) — an unrelated row's refetch never wipes what is being typed here.
+// One draft per row. The four editable fields as the user sees them (empty string, never null,
+// so a draft value and its baseline compare directly) plus `sent`: the values this row last
+// transmitted. `sent` is what "unchanged" is measured against — the server row still says the old
+// thing until the parent's refetch lands, so comparing against the prop would re-PATCH the same
+// words on the next blur.
+const FIELD_NAMES = ['asset_class', 'geography', 'industry', 'note'] as const
+type FieldName = (typeof FIELD_NAMES)[number]
+type Fields = Record<FieldName, string>
+interface Draft extends Fields { key: string; sent: Fields }
+
 const serverKey = (row: SecurityClassification) =>
   `${row.asset_class}|${row.geography}|${row.industry}|${row.note}|${row.reviewed_at}`
-const draftOf = (row: SecurityClassification) => ({
-  key: serverKey(row),
+const fieldsOf = (row: SecurityClassification): Fields => ({
   asset_class: row.asset_class ?? '', geography: row.geography ?? '',
   industry: row.industry ?? '', note: row.note ?? '',
-  // What this row has actually SENT for its typed fields. A blur right after an Enter-save must
-  // not re-PATCH the same words: the server row still says the old value until the parent's
-  // refetch lands, so "unchanged" is measured against the last request, not against the prop.
-  sent: { industry: row.industry, note: row.note } as { industry: string | null; note: string | null },
+})
+const draftOf = (row: SecurityClassification): Draft => {
+  const fields = fieldsOf(row)
+  return { key: serverKey(row), ...fields, sent: fields }
+}
+/** A new server row for this security, folded in FIELD BY FIELD (P2 review round 2): a field the
+ *  user has not touched since its last send takes the server's word, and a half-typed note is
+ *  left alone. Wiping the whole draft lost text to an unrelated row's refetch. */
+function rebased(current: Draft, row: SecurityClassification): Draft {
+  const server = fieldsOf(row)
+  const next: Draft = { ...current, key: serverKey(row), sent: { ...current.sent } }
+  for (const field of FIELD_NAMES) {
+    if (current[field] === current.sent[field]) {
+      next[field] = server[field]
+      next.sent[field] = server[field]
+    }
+  }
+  return next
+}
+const bodyOf = (fields: Fields): ClassificationInput => ({
+  asset_class: fields.asset_class || null, geography: fields.geography || null,
+  industry: fields.industry.trim() || null, note: fields.note.trim() || null,
 })
 
-// The selects are optimistic: the pick shows at once, the PATCH follows, a failure reverts it
-// beside an inline alert. The typed fields save on blur or Enter when they differ from the
-// server. Nothing is disabled while saving — disabling a focused control drops the caret, and
-// the classify path is a keyboard walk down this table — the row is aria-busy instead and a
-// second edit waits for the first to land.
+// The selects are optimistic: the pick shows at once, the PATCH follows, a failure reverts just
+// that field beside an inline alert. The typed fields save on blur or Enter when they differ from
+// what was last sent. Nothing is disabled while saving — disabling a focused control drops the
+// caret, and the classify path is a keyboard walk down this table. The row is aria-busy instead,
+// and a second edit inside one round-trip is QUEUED behind the first rather than dropped, so the
+// PATCHes land in the order the user made them.
 function ClassificationRow({ row, onChanged }: { row: SecurityClassification; onChanged: () => void }) {
   const [draft, setDraft] = useState(() => draftOf(row))
-  // Adjust-during-render (the codebase's prop→state idiom): a new server row for this security
-  // replaces the draft before anything paints, and re-bases what counts as already sent.
-  if (draft.key !== serverKey(row)) setDraft(draftOf(row))
+  // Adjust-during-render (the codebase's prop→state idiom): the fold happens before anything paints.
+  if (draft.key !== serverKey(row)) setDraft((current) => rebased(current, row))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const toast = useToast()
-  async function save(patch: Partial<ClassificationInput>) {
+  // The serial tail of this row's saves. Read and written in event handlers only — never during
+  // render — so the react-hooks refs rule holds.
+  const queue = useRef<Promise<void>>(Promise.resolve())
+  async function save(fields: Fields) {
     setBusy(true)
     setError(null)
-    // The body is the row as the USER sees it (draft + this change), so two quick edits to one
-    // row cannot send the second PATCH with the first field's stale server value.
-    const body: ClassificationInput = {
-      asset_class: draft.asset_class || null, geography: draft.geography || null,
-      industry: draft.industry.trim() || null, note: draft.note.trim() || null, ...patch,
-    }
+    // The body is the row as the USER saw it when they acted, so a queued second edit carries the
+    // first one's value rather than the server's stale one.
+    const body = bodyOf(fields)
     try {
       const result = await saveClassification(row.security_id, body)
-      setDraft((current) => ({ ...current, sent: { industry: body.industry, note: body.note } }))
+      setDraft((current) => ({ ...current, sent: { ...fields } }))
       const id = result.headers.get('X-Change-Batch')
       toast.success(`${row.ticker} classification saved`, id ? { action: { label: 'Undo', onAction: () => {
         void undoBatch(id).then(onChanged).catch((err) => toast.error(errorDetail(err)))
@@ -140,23 +165,32 @@ function ClassificationRow({ row, onChanged }: { row: SecurityClassification; on
       onChanged()
     } catch (err) {
       setError(errorDetail(err))
-      setDraft(draftOf(row)) // the pick did not land — the select goes back to the truth
+      // Only the fields this request carried go back to the truth — a later queued edit to another
+      // field is still on its way and must not be reverted with them.
+      setDraft((current) => {
+        const server = fieldsOf(row)
+        const reverted: Draft = { ...current, sent: { ...current.sent } }
+        for (const field of FIELD_NAMES) {
+          if (fields[field] !== current.sent[field]) { reverted[field] = server[field]; reverted.sent[field] = server[field] }
+        }
+        return reverted
+      })
     } finally {
       setBusy(false)
     }
   }
+  /** Apply the edit optimistically and queue its PATCH behind whatever is already in flight. */
+  const enqueue = (next: Fields) => {
+    setDraft((current) => ({ ...current, ...next }))
+    queue.current = queue.current.then(() => save(next))
+  }
   const pick = (field: 'asset_class' | 'geography', value: string) => {
-    if (busy) return
-    setDraft((current) => ({ ...current, [field]: value }))
-    void save({ [field]: value || null })
+    enqueue({ asset_class: draft.asset_class, geography: draft.geography, industry: draft.industry, note: draft.note, [field]: value })
   }
   const saveText = (field: 'industry' | 'note') => {
-    if (busy) return
-    const next = draft[field].trim() || null
-    if (next !== draft.sent[field]) void save({ [field]: next })
-  }
-  const saveOnEnter = (field: 'industry' | 'note') => (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') { event.preventDefault(); saveText(field) }
+    const next = draft[field].trim()
+    if (next === draft.sent[field]) return
+    enqueue({ asset_class: draft.asset_class, geography: draft.geography, industry: draft.industry, note: draft.note, [field]: next })
   }
   return <tr className={isUnclassified(row) ? 'allocation-unknown' : undefined} aria-busy={busy || undefined}>
     <th scope="row">
@@ -177,11 +211,13 @@ function ClassificationRow({ row, onChanged }: { row: SecurityClassification; on
     <td>{row.industry_available
       ? <input className="field-input" aria-label={`${row.ticker} industry`} value={draft.industry} maxLength={80} placeholder="Industry"
           onChange={(event) => setDraft((current) => ({ ...current, industry: event.target.value }))}
-          onBlur={() => saveText('industry')} onKeyDown={saveOnEnter('industry')} />
+          onBlur={() => saveText('industry')}
+          onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); saveText('industry') } }} />
       : <span className="sub">Fund holdings not loaded</span>}</td>
     <td><input className="field-input" aria-label={`${row.ticker} note`} value={draft.note} maxLength={500} placeholder="Add a note"
       onChange={(event) => setDraft((current) => ({ ...current, note: event.target.value }))}
-      onBlur={() => saveText('note')} onKeyDown={saveOnEnter('note')} /></td>
+      onBlur={() => saveText('note')}
+      onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); saveText('note') } }} /></td>
     {/* The raw server source rides the title; the cell says the one thing that matters (§14). */}
     <td className="classification-source" title={row.source}>
       {row.reviewed_at ? `Reviewed ${formatDate(row.reviewed_at)}` : 'Import · not reviewed'}

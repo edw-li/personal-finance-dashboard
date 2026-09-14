@@ -1,7 +1,9 @@
 /* Allocation view (AllocationPanel, ClassificationEditor, AllocationTargetEditor). Imported by
-   those components; nothing here depends on PortfolioPage.css. The inline-size container stays
-   for the ChartCard aside's own container query (panels.css .chart-card-with-aside). */
-.allocation-workspace { display: grid; gap: 16px; container-type: inline-size; }
+   those components; nothing here depends on PortfolioPage.css. No container of its own: the
+   two-column pair that needed one is gone, and the aside's query names ChartCard's own
+   .chart-card-has-aside container (panels.css). A stray container-type here would only make this
+   div the containing block for anything fixed inside it. */
+.allocation-workspace { display: grid; gap: 16px; }
 .allocation-toolbar { display: flex; flex-wrap: wrap; gap: 12px; }
 
 /* ONE card (2026-09-13 polish §12–13, W1): the ranked table rides the donut ChartCard's `aside`,
@@ -58,3 +60,7 @@
 .classification-table tr[aria-busy='true'] { opacity: 0.6; }
 .classification-row-error { display: block; margin-top: 4px; color: var(--negative); font-size: 0.78rem; white-space: normal; }
 .classification-source { color: var(--muted); font-size: 12px; }
+
+/* The aside's ghost while the first payload is in flight (P2 review round 5) — same grid as the
+   real aside, so the card is two columns from the first paint and the donut never jumps left. */
+.allocation-aside-ghost { gap: 10px; }
