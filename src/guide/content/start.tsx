@@ -99,104 +99,182 @@ export const START_CARDS: GuideCard[] = [
     title: 'Set up once',
     purpose:
       'The first-time checklist, in the order the data depends on — people before what they own, accounts before the first month, category kinds before history.',
-    tasks: [],
-    body: (
-      <ol className="guide-body">
-        <li>
-          <Link to="/settings?section=account#appearance">Appearance</Link> —{' '}
-          <b className="guide-label">Theme</b>, <b className="guide-label">Density</b> and{' '}
-          <b className="guide-label">Landing page</b>. Works before any data exists.
-        </li>
-        <li>
-          <Link to="/settings?section=account#password">Password</Link> — replace the seeded one before this
-          server is reachable from anywhere else.
-        </li>
-        <li>
-          <Link to="/settings?section=household#household">Household</Link> —{' '}
-          <b className="guide-label">Add member</b> for each person, then{' '}
-          <b className="guide-label">Marriage date</b> if you are married — it marks the net-worth trend and
-          nothing else; filing status is chosen per year on <Link to="/taxes">Taxes</Link>. Adding a person
-          backfills nothing: their accounts and balances start where you enter them.
-        </li>
-        <li>
-          <Link to="/settings?section=household#accounts">Accounts</Link> — every account with its{' '}
-          <b className="guide-label">Group</b> and <b className="guide-label">Owner</b>; leave{' '}
-          <b className="guide-label">Owner</b> empty for a joint one. Liabilities are entered as negative
-          numbers, and until one account exists the monthly wizard cannot leave{' '}
-          <b className="guide-label">Balances</b>.
-        </li>
-        <li>
-          <Link to="/settings?section=household#categories">Spending categories</Link> — add each one and set
-          its kind (<b className="guide-label">Living</b> · <b className="guide-label">Tax</b> ·{' '}
-          <b className="guide-label">Transfer</b>) before you enter months — changing a kind later recomputes
-          every month, chart and projection.
-        </li>
-        <li>
-          If you have the workbook: <Link to="/settings?section=data#import">Import workbook</Link> —{' '}
-          <b className="guide-label">Dry run</b>, read the diff, then{' '}
-          <b className="guide-label">Apply import</b>. Do it before typing tax years the workbook covers.
-        </li>
-        <li>
-          <Link to="/update">Monthly update</Link> — your first month: Balances → Spending → Review →{' '}
-          <b className="guide-label">Save progress</b>, then the confirmations and{' '}
-          <b className="guide-label">Save and close month</b>. The full routine is{' '}
-          <Link to="/guide?section=routines#routine-monthly">The monthly update</Link>.
-        </li>
-        <li>
-          <Link to="/settings?section=integrations#price-refresh">Price refresh</Link> — a five-field cron in
-          day names, <b className="guide-label">Save schedule</b>, then{' '}
-          <b className="guide-label">Refresh now</b> for the first prices.
-        </li>
-        <li>
-          <Link to="/portfolio?section=manage">Portfolio → Manage</Link> — the securities the import did not
-          carry (tick manual pricing for a private asset) and their dated transactions. Then{' '}
-          <Link to="/portfolio?section=allocation">Allocation</Link> for classifications and targets.
-        </li>
-        <li>
-          <Link to="/settings?section=planning#limits">Contribution limits</Link> for this year, then{' '}
-          <b className="guide-label">Save limits</b>; and{' '}
-          <Link to="/settings?section=planning#plan-assumptions">Plan assumptions</Link> — withdrawal rate,
-          ESPP ticker and discount.
-        </li>
-        <li>
-          <Link to="/taxes">Taxes</Link> — <b className="guide-label">New tax year…</b>,{' '}
-          <b className="guide-label">Filing status</b>, the tables, the inputs. The yearly version is{' '}
-          <Link to="/guide?section=routines#routine-tax-season">Tax season, once a year</Link>.
-        </li>
-        <li>
-          <Link to="/paycheck?section=profiles">Paycheck → Profiles</Link> — one profile per person: salary,
-          pay periods, contribution percentages, HSA, employer match, and the optional{' '}
-          <b className="guide-label">Withholding split</b>.
-        </li>
-        <li>
-          <Link to="/comp?section=manage">Comp → Manage</Link> for grants and focal history;{' '}
-          <Link to="/espp?section=lots">ESPP → Lots</Link> for offerings and lots.
-        </li>
-        <li>
-          <Link to="/credit-cards?section=manage">Credit cards → Manage</Link> — the cards with their{' '}
-          <b className="guide-label">Opened</b> dates, then their categories and multipliers.
-        </li>
-        <li>
-          <Link to="/settings?section=integrations#calendar">Calendar feed</Link> — a{' '}
-          <b className="guide-label">Monthly update reminder day</b>, and{' '}
-          <b className="guide-label">New feed link</b> to subscribe a phone.
-        </li>
-        <li>
-          <Link to="/settings?section=data#backups">Backups &amp; snapshots</Link> —{' '}
-          <b className="guide-label">Snapshot now</b> once, then check the list gains a nightly entry.
-        </li>
-        <li>
-          After three complete months: <Link to="/spending?section=budgets">Spending → Budgets</Link> →{' '}
-          <b className="guide-label">Start from my averages</b>.
-        </li>
-        <li>
-          Optional, and last because everything above feeds it:{' '}
-          <Link to="/settings?section=integrations#assistant">Assistant</Link> — paste an{' '}
-          <b className="guide-label">NVIDIA API key</b> and press{' '}
-          <b className="guide-label">Save assistant settings</b> to turn the drawer on.
-        </li>
-      </ol>
-    ),
+    // The checklist is a numbered rail, not prose (2026-09-15 polish spec §5.1): one task per
+    // step, read in order, with the dependencies that make the order matter as `watch` lines.
+    numbered: true,
+    keywords: ['setup', 'checklist', 'first time', 'getting started'],
+    tasks: [
+      {
+        id: 'setup-appearance',
+        title: 'Pick a theme and a landing page',
+        where: 'Settings → Account → Appearance',
+        steps: ['Choose **Theme**, **Density** and **Landing page**.', 'Works before any data exists.'],
+        to: '/settings?section=account#appearance',
+      },
+      {
+        id: 'setup-password',
+        title: 'Change the password',
+        where: 'Settings → Account → Password',
+        steps: ['Replace the seeded one before this server is reachable from anywhere else.'],
+        to: '/settings?section=account#password',
+      },
+      {
+        id: 'setup-household',
+        title: 'Add the household',
+        where: 'Settings → Household → Household',
+        steps: [
+          'Press **Add member** for each person.',
+          'Then **Marriage date** if you are married — it marks the net-worth trend and nothing else; filing status is chosen per year on Taxes.',
+          'Adding a person backfills nothing: their accounts and balances start where you enter them.',
+        ],
+        to: '/settings?section=household#household',
+      },
+      {
+        id: 'setup-accounts',
+        title: 'Add the accounts',
+        where: 'Settings → Household → Accounts',
+        steps: [
+          'Every account with its **Group** and **Owner**; leave **Owner** empty for a joint one.',
+          'Liabilities are entered as negative numbers.',
+          'Until one account exists the monthly wizard cannot leave **Balances**.',
+        ],
+        to: '/settings?section=household#accounts',
+        watch: ['Depends on 3 · Add the household — a person before the things they own.'],
+      },
+      {
+        id: 'setup-categories',
+        title: 'Add spending categories and their kinds',
+        where: 'Settings → Household → Spending categories',
+        steps: [
+          'Add each one and set its kind (**Living** · **Tax** · **Transfer**) before you enter months.',
+          'Changing a kind later recomputes every month, chart and projection.',
+        ],
+        to: '/settings?section=household#categories',
+      },
+      {
+        id: 'setup-import',
+        title: 'Import the workbook',
+        where: 'Settings → Data → Import workbook',
+        steps: [
+          'If you have the workbook: **Dry run**, read the diff, then **Apply import**.',
+          'Do it before typing tax years the workbook covers.',
+        ],
+        to: '/settings?section=data#import',
+      },
+      {
+        id: 'setup-first-month',
+        title: 'Enter the first month',
+        where: 'Monthly update',
+        steps: [
+          'Your first month: Balances → Spending → Review → **Save progress**.',
+          'Then the confirmations and **Save and close month**.',
+          'The full routine is the Routines chapter’s first card.',
+        ],
+        to: '/update',
+        watch: [
+          'Depends on 4 · Add the accounts — the wizard needs at least one.',
+          'Depends on 5 · Add spending categories and their kinds — set the kinds before you enter months.',
+        ],
+      },
+      {
+        id: 'setup-prices',
+        title: 'Set the price refresh',
+        where: 'Settings → Integrations → Price refresh',
+        steps: [
+          'A five-field cron in day names, then **Save schedule**.',
+          'Then **Refresh now** for the first prices.',
+        ],
+        to: '/settings?section=integrations#price-refresh',
+        watch: ['Keep Mondays covered — the Monday run records the weekly performance point.'],
+      },
+      {
+        id: 'setup-portfolio',
+        title: 'Fill the portfolio',
+        where: 'Portfolio → Manage',
+        steps: [
+          'The securities the import did not carry (tick manual pricing for a private asset) and their dated transactions.',
+          'Then **Allocation** for classifications and targets.',
+        ],
+        to: '/portfolio?section=manage',
+      },
+      {
+        id: 'setup-limits',
+        title: 'Enter limits and plan assumptions',
+        where: 'Settings → Planning',
+        steps: [
+          '**Contribution limits** for this year, then **Save limits**.',
+          'And **Plan assumptions** — withdrawal rate, ESPP ticker and discount.',
+        ],
+        to: '/settings?section=planning#limits',
+      },
+      {
+        id: 'setup-taxes',
+        title: 'Create the tax year',
+        where: 'Taxes',
+        steps: [
+          '**New tax year…**, **Filing status**, the tables, the inputs.',
+          'The yearly version is Tax season, once a year, in the Routines chapter.',
+        ],
+        to: '/taxes',
+        watch: ['Depends on 6 · Import the workbook — do it before typing tax years the workbook covers.'],
+      },
+      {
+        id: 'setup-paycheck',
+        title: 'Add paycheck profiles',
+        where: 'Paycheck → Profiles',
+        steps: [
+          'One profile per person: salary, pay periods, contribution percentages, HSA, employer match.',
+          'And the optional **Withholding split**.',
+        ],
+        to: '/paycheck?section=profiles',
+      },
+      {
+        id: 'setup-comp-espp',
+        title: 'Add grants and ESPP offerings',
+        where: 'Comp → Manage · ESPP → Lots',
+        steps: ['Comp → **Manage** for grants and focal history.', 'ESPP → **Lots** for offerings and lots.'],
+        to: '/comp?section=manage',
+      },
+      {
+        id: 'setup-cards',
+        title: 'Add the credit cards',
+        where: 'Credit cards → Manage',
+        steps: ['The cards with their **Opened** dates, then their categories and multipliers.'],
+        to: '/credit-cards?section=manage',
+      },
+      {
+        id: 'setup-calendar',
+        title: 'Set the calendar feed',
+        where: 'Settings → Integrations → Calendar feed',
+        steps: ['A **Monthly update reminder day**.', 'And **New feed link** to subscribe a phone.'],
+        to: '/settings?section=integrations#calendar',
+      },
+      {
+        id: 'setup-snapshot',
+        title: 'Take a snapshot',
+        where: 'Settings → Data → Backups & snapshots',
+        steps: ['**Snapshot now** once, then check the list gains a nightly entry.'],
+        to: '/settings?section=data#backups',
+      },
+      {
+        id: 'setup-budgets',
+        title: 'Seed budgets',
+        where: 'Spending → Budgets',
+        steps: ['After three complete months: **Start from my averages**.'],
+        to: '/spending?section=budgets',
+        watch: ['Depends on 7 · Enter the first month — only a closed month counts toward the averages.'],
+      },
+      {
+        id: 'setup-assistant',
+        title: 'Turn on the assistant',
+        where: 'Settings → Integrations → Assistant',
+        steps: [
+          'Optional, and last because everything above feeds it.',
+          'Paste an **NVIDIA API key** and press **Save assistant settings** to turn the drawer on.',
+        ],
+        to: '/settings?section=integrations#assistant',
+      },
+    ],
   },
   {
     id: 'start-next',
