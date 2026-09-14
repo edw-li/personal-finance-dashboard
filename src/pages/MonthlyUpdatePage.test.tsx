@@ -1701,8 +1701,9 @@ it('forgets the $0 intent on a month switch — consent is about one save', asyn
   fireEvent.click(await screen.findByLabelText('Confirm remaining categories as $0'))
   fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
   // June has no balances yet, so the switch lands on Balances (item 18); walk back to
-  // the checkbox from there.
-  await screen.findByLabelText('Checking')
+  // the checkbox from there — once June has LANDED, because the step primary is disabled
+  // while the switched month loads (the dimmed card is still August's).
+  await landedBalanceCell()
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   expect(
     ((await screen.findByLabelText('Confirm remaining categories as $0')) as HTMLInputElement).checked,
