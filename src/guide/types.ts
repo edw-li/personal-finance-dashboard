@@ -43,10 +43,14 @@ export interface GuideCard {
   body?: ReactNode
   /** Extra palette aliases applied to every task in this card ('credit card', 'rewards'). */
   keywords?: string[]
+  /** Rail rows show their 1-based number — a checklist read in order (2026-09-15 polish spec §2.2). */
+  numbered?: boolean
 }
 
 export interface GuideChapter {
   id: GuideChapterId
   label: string
   cards: GuideCard[]
+  /** One card at a time behind a sticky chip selector, the hash carrying the card (2026-09-15 polish spec §3). */
+  selector?: boolean
 }
