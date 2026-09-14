@@ -34,64 +34,80 @@ export const START_CARDS: GuideCard[] = [
     purpose:
       'The sidebar in five groups, a tab strip on most pages, one sticky row for scope, and a few shell controls that work everywhere.',
     tasks: [],
+    // Two-column fact grid (2026-09-15 polish spec §5.3): the same sentences and labels the
+    // list and the paragraphs carried, one tile each, so the card's right half is used.
     body: (
-      <>
-        <ul className="guide-body">
-          <li>
+      <div className="guide-facts">
+        <div className="guide-fact">
+          <h4>The sidebar</h4>
+          <p>
             <b className="guide-label">Overview</b> and <b className="guide-label">Monthly update</b> sit on
-            top: the briefing, and the one place data is entered.
-          </li>
-          <li>
+            top: the briefing, and the one place data is entered.{' '}
             <b className="guide-label">Tracking</b> — Net worth, Portfolio, Spending, Credit cards: what you
-            have and what you spend.
-          </li>
-          <li>
-            <b className="guide-label">Income</b> — Paycheck, Comp, ESPP: what you earn and how it arrives.
-          </li>
-          <li>
-            <b className="guide-label">Planning</b> — Taxes, Projection, Calendar: what is ahead.
-          </li>
-          <li>
-            <b className="guide-label">Guide</b> and <b className="guide-label">Settings</b> close the sidebar.
-          </li>
-        </ul>
-        <p className="guide-body">
-          Most pages carry tabs under their title — their views. The address keeps the view, so Back works and
-          a link opens the same view for someone else.
-        </p>
-        <p className="guide-body">
-          The sticky row under the title holds the scope: <b className="guide-label">Whose</b> (All, each
-          person, Joint), the time window (<b className="guide-label">All</b> ·{' '}
-          <b className="guide-label">1Y</b> · <b className="guide-label">YTD</b>) and, on pages that have one,
-          the month ribbon — twelve chips whose left half fills once the month has balances and right half once
-          it has spending, with a ring on the current month.
-        </p>
-        <p className="guide-body">
-          <b className="guide-label">Ctrl K</b> (⌘K on a Mac) opens the command palette: pages, Settings cards,
-          actions, holdings, accounts, categories, cards — and every task in this guide.
-        </p>
-        <p className="guide-body">
-          An ⓘ beside a title explains that card in a sentence — hover to open it, click to pin it. The ⓘ on a
-          headline tile is a different button, <b className="guide-label">About this number</b>: it opens that
-          figure’s receipt, and <b className="guide-label">Explain this number</b> hands the receipt to the
-          assistant.
-        </p>
-        <p className="guide-body">
-          The sparkle button at the bottom right (<b className="guide-label">Open assistant</b>) needs a key
-          saved in{' '}
-          <Link to="/settings?section=integrations#assistant">Settings → Integrations → Assistant</Link>.
-          Nothing is sent until you ask a question.
-        </p>
-        <p className="guide-body">
-          A save shows a toast for six seconds; many carry <b className="guide-label">Undo</b>. Once it is
-          gone, <Link to="/settings?section=data#activity">Settings → Data → Activity</Link> is where a
-          money-bearing change is reversed.
-        </p>
-        <p className="guide-body">
-          The sidebar footer shows who is signed in, which deployment this is, a theme toggle and{' '}
-          <b className="guide-label">Log out</b>.
-        </p>
-      </>
+            have and what you spend. <b className="guide-label">Income</b> — Paycheck, Comp, ESPP: what you
+            earn and how it arrives. <b className="guide-label">Planning</b> — Taxes, Projection, Calendar:
+            what is ahead. <b className="guide-label">Guide</b> and <b className="guide-label">Settings</b>{' '}
+            close the sidebar.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>Views</h4>
+          <p>
+            Most pages carry tabs under their title — their views. The address keeps the view, so Back works
+            and a link opens the same view for someone else.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>The scope row</h4>
+          <p>
+            The sticky row under the title holds the scope: <b className="guide-label">Whose</b> (All, each
+            person, Joint), the time window (<b className="guide-label">All</b> ·{' '}
+            <b className="guide-label">1Y</b> · <b className="guide-label">YTD</b>) and, on pages that have
+            one, the month ribbon — twelve chips whose left half fills once the month has balances and right
+            half once it has spending, with a ring on the current month.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>The command palette</h4>
+          <p>
+            <b className="guide-label">Ctrl K</b> (⌘K on a Mac) opens the command palette: pages, Settings
+            cards, actions, holdings, accounts, categories, cards — and every task in this guide.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>ⓘ and About this number</h4>
+          <p>
+            An ⓘ beside a title explains that card in a sentence — hover to open it, click to pin it. The ⓘ
+            on a headline tile is a different button, <b className="guide-label">About this number</b>: it
+            opens that figure’s receipt, and <b className="guide-label">Explain this number</b> hands the
+            receipt to the assistant.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>The assistant</h4>
+          <p>
+            The sparkle button at the bottom right (<b className="guide-label">Open assistant</b>) needs a key
+            saved in{' '}
+            <Link to="/settings?section=integrations#assistant">Settings → Integrations → Assistant</Link>.
+            Nothing is sent until you ask a question.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>Toasts and Undo</h4>
+          <p>
+            A save shows a toast for six seconds; many carry <b className="guide-label">Undo</b>. Once it is
+            gone, <Link to="/settings?section=data#activity">Settings → Data → Activity</Link> is where a
+            money-bearing change is reversed.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>The footer</h4>
+          <p>
+            The sidebar footer shows who is signed in, which deployment this is, a theme toggle and{' '}
+            <b className="guide-label">Log out</b>.
+          </p>
+        </div>
+      </div>
     ),
   },
   {
@@ -281,33 +297,45 @@ export const START_CARDS: GuideCard[] = [
     title: 'What happens next',
     purpose: 'Three rhythms after setup: every month, every year, and whenever something changes.',
     tasks: [],
+    // The four rhythms as fact tiles (2026-09-15 polish spec §5.3): each bullet's bold lead is
+    // the tile's heading, the sentence under it unchanged.
     body: (
-      <ul className="guide-body">
-        <li>
-          <b>Every month</b> — the{' '}
-          <Link to="/guide?section=routines#routine-monthly">monthly update</Link> in the first days of the
-          month, then a look at <Link to="/">Overview → Needs attention</Link>.
-        </li>
-        <li>
-          <b>Every year</b> — <Link to="/guide?section=routines#routine-tax-season">tax season</Link>: a new
-          tax year, its tables, this year’s contribution limits.
-        </li>
-        <li>
-          <b>Whenever</b> — a raise or an election change: a new{' '}
-          <Link to="/paycheck?section=profiles">paycheck profile</Link>. A grant:{' '}
-          <Link to="/comp?section=manage">Comp</Link>. An enrollment window:{' '}
-          <Link to="/espp?section=lots">ESPP</Link>. A new card:{' '}
-          <Link to="/credit-cards?section=manage">Credit cards</Link>. A question about the future:{' '}
-          <Link to="/guide?section=reference#ref-sandboxes">the sandboxes</Link> on{' '}
-          <Link to="/paycheck?section=changes">Paycheck</Link>,{' '}
-          <Link to="/taxes?section=whatif">Taxes</Link> and <Link to="/projection">Projection</Link> — nothing
-          in them is saved.
-        </li>
-        <li>
-          <b>When a number looks wrong</b> —{' '}
-          <Link to="/guide?section=routines#routine-health">Keeping it healthy</Link>.
-        </li>
-      </ul>
+      <div className="guide-facts">
+        <div className="guide-fact">
+          <h4>Every month</h4>
+          <p>
+            The <Link to="/guide?section=routines#routine-monthly">monthly update</Link> in the first days of
+            the month, then a look at <Link to="/">Overview → Needs attention</Link>.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>Every year</h4>
+          <p>
+            <Link to="/guide?section=routines#routine-tax-season">Tax season</Link>: a new tax year, its
+            tables, this year’s contribution limits.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>Whenever</h4>
+          <p>
+            A raise or an election change: a new{' '}
+            <Link to="/paycheck?section=profiles">paycheck profile</Link>. A grant:{' '}
+            <Link to="/comp?section=manage">Comp</Link>. An enrollment window:{' '}
+            <Link to="/espp?section=lots">ESPP</Link>. A new card:{' '}
+            <Link to="/credit-cards?section=manage">Credit cards</Link>. A question about the future:{' '}
+            <Link to="/guide?section=reference#ref-sandboxes">the sandboxes</Link> on{' '}
+            <Link to="/paycheck?section=changes">Paycheck</Link>,{' '}
+            <Link to="/taxes?section=whatif">Taxes</Link> and <Link to="/projection">Projection</Link> —
+            nothing in them is saved.
+          </p>
+        </div>
+        <div className="guide-fact">
+          <h4>When a number looks wrong</h4>
+          <p>
+            <Link to="/guide?section=routines#routine-health">Keeping it healthy</Link>.
+          </p>
+        </div>
+      </div>
     ),
   },
 ]
