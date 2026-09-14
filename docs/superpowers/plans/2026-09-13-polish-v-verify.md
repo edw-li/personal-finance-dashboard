@@ -1434,7 +1434,90 @@ Expected: the commit lands on `main`; `0` (nothing else tracked changed — `scr
 
 ## Results (filled by Tasks 0–14; every `← record` cell is replaced with the observed value)
 
-> **Status of this lane: verification complete, and the batch is NOT clean.** Gates: `tsc` and `eslint` pass, `vite build` passes, **`vitest` is red on `main`** (1 of 3061). Acceptance: **186 checks, 3 problems** at 1440 dark (motion, strip, orphans, tables, loading and light are 100 % green) and **70 checks, 1 problem** at 1920. Two whole-route crashes were found that no gate covers. Five deviations (plus one minor, 2b) are listed below for the lead; lane V changed **no source file**.
+> **Status after the re-check of 2026-09-14 (HEAD `70237e4`): the batch is CLEAN.** The lead landed three follow-up fixes (P1 Overview columns + wizard test, P2 Credit-cards test, P3 sandbox shape tolerance) and lane V re-ran everything against them. All four gates green, **`vitest` 225 files / 3064 tests / 0 failures**, and the acceptance driver is down to the two documented non-problems. Deviations 1, 2 and 3 are **resolved and re-verified**; see "Re-check" immediately below. The narrative further down records the **first** run (2026-09-13, HEAD `aed59bd`) verbatim — that is what found the defects, and it is kept so the fixes have something to be measured against.
+>
+> First-run status, for the record: gates `tsc`/`eslint`/`build` green, **`vitest` red** (1 of 3061); acceptance **186 checks, 3 problems** at 1440 dark and **70 checks, 1 problem** at 1920; two whole-route crashes found that no gate covered. Lane V changed **no source file** in either pass.
+
+### Re-check (2026-09-14, HEAD `70237e4`, after the lead's three follow-up fixes)
+
+`git log --oneline -1` → **`70237e4 merge(polish): lane P3 V follow-up — sandbox preview bodies without pace/delta degrade to a note instead of blanking the Paycheck/Taxes route`**. Tree clean, **9 commits** since lane V's `206158d`, and `git diff --name-only ab92b91 HEAD -- backend` is **still empty** (no pytest). Token and proxy re-verified before the run: `/prefs` on 8010 → 200, accounts via 5174 → **28** (the clone, not the dev book).
+
+**What the fixes were, as read from the diffs:**
+
+- `542d34e` (**P1**, deviation 3): `.overview-primary` goes `align-items: start` → **`stretch`**, and each column gets an explicit track list — `.overview-wealth-column { grid-template-rows: auto 1fr }`, `.overview-agenda-column { grid-template-rows: auto auto 1fr }` — so the slack lands *inside* each column's last card instead of as dead space beneath it. A new `src/pages/overviewCss.test.ts` pins all four declarations (jsdom computes no layout, so the rule itself is the assertion). Same commit makes the wizard month-switch tests wait for the landed month (deviation 1).
+- `fdb9d5c` (**P2**, deviation 1's sibling flake): the Credit-cards auto-weight month test clears the snapshot cache between its two books and waits for the fetched value.
+- `f60252f` (**P3**, deviation 2): both sandbox cards now read the wire as `Partial<…>` — `const wire = result as Partial<PaycheckPreviewOut> | null; const pace = wire?.pace` in `TryItPanel`, the same shape in `WhatIfPanel` — and every second-level read goes through it. A body without the lines the card draws renders one `p.empty-note` inside the card's `compare` slot ("Preview unavailable — the server answered without the lines this card draws. Nothing was saved…") instead of throwing during render. The commit's own comment names lane V and the RouteBoundary as the reason. Focused tests were added to both panels, plus an allowance in `mounts.audit.test.ts`.
+
+**Gates on `70237e4`:**
+
+| gate | previous run (`aed59bd`) | **re-check (`70237e4`)** |
+| --- | --- | --- |
+| `npx tsc -b` | exit 0 | **exit 0**, log empty |
+| `npx eslint .` | `✖ 25 problems (0 errors, 25 warnings)` | **`✖ 25 problems (0 errors, 25 warnings)`**, exit 0 — all 25 still `react-refresh/only-export-components`, no new rule, unchanged against the accepted baseline |
+| `npx vitest run` | 224 files / 3061 tests, **1 failed** | **225 files passed (225) / 3064 tests passed (3064)**, exit 0, 122.21 s — **green**, and one file / three tests larger than before (the two new pinning tests plus `overviewCss.test.ts`). The lead's estimate was 3063; the actual is **3064**. |
+| `npm run build` | ✓ 9.48 s | **`✓ built in 9.88s`**, exit 0. Top three: `tooltip` **758.05 kB** (unchanged), `index` **353.36 kB** (unchanged), `TaxesPage` **83.06 kB** (was 82.73 — the +0.33 kB is P3's degrade branch). No new 100 kB boundary, no size advisory. |
+| backend `pytest` | not run | **not run** — backend still untouched |
+
+**Acceptance on `70237e4`** (same `accept.mjs`, unchanged since the first run — no check was loosened to make anything pass):
+
+| run | previous (`aed59bd`) | **re-check (`70237e4`)** |
+| --- | --- | --- |
+| 1440 dark, all eight groups | 186 checks, **3 problems**, exit 1 | **186 checks, 2 problems**, 0 findings, `writesBlocked 2`, 40 PNGs, exit 1 — and **both survivors are the documented non-problems**. Per group: motion **20/0**, strip **52/0**, orphans **25/0**, tables **11/0**, loading **13/0**, light **36/0**, layout 17/1, allocation 10/1. |
+| 1920 dark, `layout` only | 17 checks, 1 problem | **18 checks, 0 problems — `ACCEPT OK`, exit 0.** |
+
+**The three deviations, re-measured:**
+
+| # | was | **now** | verdict |
+| --- | --- | --- | --- |
+| 1 | `vitest` 3060/3061, `MonthlyUpdatePage.test.tsx › forgets the $0 intent on a month switch` failing 2/2 in the full suite | **3064/3064 passed, 225/225 files, exit 0** | **RESOLVED** |
+| 2 | Paycheck → Try changes and Taxes → What-if both blanked into the RouteBoundary; `[orphans] /paycheck [changes]` FAIL, `tab "profiles"` FAIL, two `CONSOLE:` TypeErrors, three after-captures lost | `[orphans] /paycheck [summary]`, `[changes]` **and** `[profiles]` all **`ok … {"orphans":[],"allowlisted":0}`**; the whole orphans group is **25/0**; no console error anywhere in the 1440 walk | **RESOLVED** |
+| 3 | `.overview-primary` `gap 66` at 1440 and 1920 (limit 24) | **`gap 0`** at both widths — 1440 `{"wealthBottom":896,"agendaBottom":896,"gap":0}`, 1920 `{"wealthBottom":879,"agendaBottom":879,"gap":0}`; `agendaCards` still `["Up next","Needs attention","Data status"]` | **RESOLVED** — an exact shared edge, not merely inside tolerance |
+
+**The two remaining problems are the documented non-problems, unchanged and still not defects:**
+
+- `[layout] .projection-outcomes renders one row (height ≤ 130px) at 1440` — `{"h":133,"tiles":5,"rows":1,"position":"sticky","classes":"kpi-row kpi-row-5 projection-outcomes"}`. Spec §15.4 asks for "one row" and gets it (`rows: 1`); only this plan's own 130 px proxy misses, by 3 px, and at 1920 the same band measures **121 px** and passes. Deviation 4.
+- `[allocation] Classify: the Unclassified filter lists exactly N rows` — `{"rows":12,"n":10,"filter":["Unclassified12"],"selectsPerRow":2}`. Two correct counts over two different populations (10 priced holdings in the ranked Unclassified slice vs 12 securities with no asset class); a copy/scoping decision, not a bug. Deviation 5.
+
+**`audit.mjs` re-run on `70237e4`** (same untouched driver, same greps on both sides — this is the independent confirmation of deviation 2, since `audit.mjs` still answers fenced non-GETs with `200 {}` and therefore exercises P3's new degrade path rather than an `ApiError`):
+
+| summary | before | after (first run, `aed59bd`) | **after (re-check, `70237e4`)** |
+| --- | --- | --- | --- |
+| ORPHAN dark / light | 26 / 26 | 7 / 7 | **5 / 5** |
+| GAP | 1 / 1 | 2 / 2 | **2 / 2** |
+| HOLLOW | 6 / 4 | 0 / 0 | **1 / 1** |
+| DETAILS | 27 / 27 | 1 / 1 | **3 / 3** |
+| DETAILS not `.disclosure` | 27 / 27 | 0 / 0 | **0 / 0** |
+| "Loading…" notes | 2 / 8 | 0 / 0 | **0 / 0** |
+| WIDE | 5 / 5 | 2 / 2 | **3 / 3** |
+| CONSOLE | 0 / 0 | 3 / 2 | **0 / 0** |
+| driver problems | 0 / 0 | 4 / 3 | **0 / 0** |
+
+Run headlines: dark `pages 13, interactions 17, writesBlocked 7, problems 0`; light `pages 13, interactions 0, writesBlocked 4, problems 0`. **All four dark problems and all three light problems are gone** — no `settle timeout at /paycheck?section=changes`, no `no tab for profiles`, no `no tab for inputs/tables`. View counts are back to the pre-batch shape: **`walked dark-1440-paycheck (3 views)`** (was 2) and **`walked dark-1440-taxes (4 views)`** (was 2), same in light.
+
+Reading the four columns that moved *up* since the first after-run — each is a view that simply did not exist before, because its route was blanked:
+
+- **ORPHAN 7 → 5:** the two `div.route-fallback` "This page failed to load" lines are gone. The remaining **5 are only the documented 1×1 `visually-hidden` Settings bands** (`h2#sec-household/planning/account/integrations/data`), which Task 5's refined check skips — so the **real orphan count is 0** and all 26 pre-batch lines are cleared.
+- **CONSOLE 3/2 → 0:** both TypeErrors are gone. The walk is now console-clean in both themes.
+- **DETAILS 1 → 3, all still `.disclosure`:** `details.disclosure.tryit-disclosure` "EMPLOYER MATCH (ADVANCED)" and `details.disclosure.paycheck-split` "WITHHOLDING SPLIT (OPTIONAL)" now render because Paycheck → Try changes works again; the third is the pre-existing `details.disclosure.withholding-method`. Non-`.disclosure` is still **0**.
+- **WIDE 2 → 3:** the third is the Paycheck profiles table, which now renders. Its row-action cell is not among the out-of-viewport nodes (§7's sticky cell holds it).
+- **HOLLOW 0 → 1:** `HOLLOW [section.card.overview-changes] slack=75 … @y=663 h=233`. This is the **documented cost of the deviation-3 fix**: `grid-template-rows: auto 1fr` makes "Changes worth understanding" the wealth column's stretching row, so the 66 px that used to sit as dead space *under* the column now sits *inside* that card. The commit says so in as many words ("the difference lands INSIDE the last card rather than as dead space under it"). Confirmed visually in `after/shots/after-dark-1440-overview-default.png`: both columns now bottom out on the same line, with the slack showing as padding under the three movement figures. Judgement call for the lead — dead space inside a card reads better than a ragged column, but it is not nothing.
+- **GAP still 2:** unchanged, and still the two Settings voids of deviation 2b (Integrations 168 px, Data 45 px). The pre-batch Overview `GAP` stays gone.
+
+**Before/after index rebuilt:** `wrote …\after\INDEX.md — dark: 59 before, **55 paired, 4 missing**; light: 59 before, **40 paired, 0 missing**, 19 walk-only; acceptance captures: 40`. 122 table rows. The three captures deviation 2 had destroyed — `paycheck-profiles`, `taxes-inputs`, `taxes-tables` — **are back**, and the dark "missing" list is now exactly the four genuinely retired selectors: `assistant-findings`, `inspector-expanded`, `inspector-overlay`, `taxes-years-open`. Light is missing **nothing**. Shot counts: `after-dark-1440-*` **55** (was 52), `after-light-1440-*` **40** (was 37).
+
+**Re-captured for the lead, as asked:** `after-dark-1440-paycheck-changes.png` and `after-dark-1440-paycheck-changes-open.png` (the Try-changes card renders, no boundary), `after-dark-1440-taxes-whatif.png` (all four tabs present), `after-dark-1440-overview-default.png` (the shared bottom edge), plus their light twins and the full 55/40 walk.
+
+**Other re-check observations worth keeping:** dock open still produces **17** distinct frames inside 300 ms; the Spending frame budget passed with `frames 46, long [], worst 32`; all ten strips still `1151/1151`; Settings `#household` slack **15 px**; the four Settings ghosts still answer in 43–65 ms; all 26 light contrast pairs still **1.198**; Paycheck Profiles now reports `overflow: true, scrollWidth 1520, cellPosition: sticky, scrollMore: "right"`. `writesBlocked` is still exactly the two `POST /api/v1/paycheck/preview` — the fence refuses them and, with P3's fix, the card now degrades instead of taking the route down.
+
+**What is left for the lead after this re-check — three items, none of them blocking:**
+
+1. **Deviation 4** — `.projection-outcomes` 133 px vs this plan's 130 px proxy at 1440 (121 px at 1920). Spec-level pass. Either raise the proxy to 140 px or shave 3 px.
+2. **Deviation 5** — the Allocation button says 10, the classification card says 12. Decide which population the button's N names, then re-word spec §15.8 (which predicted 12).
+3. **Deviation 2b** — the two Settings voids from §12's `align-items: start` (Integrations 168 px, Data 45 px), plus the **new** 75 px of internal slack in Overview's "Changes worth understanding" card that the deviation-3 fix deliberately traded for the shared bottom edge.
+
+Also still open and unchanged: the eyeball note that the assistant launcher FAB overlaps the bottom-right of the **Data status** card and clips "Net pay through  Aug 202…" — visible again in the re-captured `after-dark-1440-overview-default.png`.
+
+**Verdict of the re-check: the 2026-09-13 polish batch passes.** Four gates green including a full `vitest`, acceptance green apart from two items that are documented judgement calls rather than defects, the audit walk console-clean in both themes with zero driver problems, and every capture in the before/after index accounted for. Lane V still changed **no source file**; `git diff --name-only aed59bd HEAD -- src backend` contains nothing this lane wrote.
 >
 > Task 14 Step 1's `grep -c '← record'` will report **3**, not 0: after the fill the phrase survives only in this heading, in the Task 14 instruction that defines the grep, and in the self-review's placeholder note. No Results cell is unfilled — `awk 'NR>=1435' … | grep '← record'` returns nothing but those prose lines.
 
