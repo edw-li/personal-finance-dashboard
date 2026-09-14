@@ -43,7 +43,8 @@ export const TRACKING_CARDS: GuideCard[] = [
         title: 'Act on Needs attention',
         where: 'Overview → Needs attention',
         steps: [
-          'Each line is a condition the data proves — an overdue update, missing spending, stale quotes, a failed ticker, a stale backup, a missing tax year.',
+          'Each line in the strip is a condition the data itself proves.',
+          'Overdue updates, missing spending, stale quotes, failed tickers, a stale backup and a missing tax year all show here.',
           'Click a line to land on the page that fixes it.',
           'With nothing outstanding the card reads **No outstanding data checks**.',
         ],
@@ -253,7 +254,8 @@ export const TRACKING_CARDS: GuideCard[] = [
         where: 'Portfolio → Refresh prices',
         steps: [
           'Press **Refresh prices** in the title row, or **Refresh now** under Settings → Integrations → **Price refresh**.',
-          'The status line then reads the price date, the last run and its trigger, the updated and failed counts, and the next run.',
+          'The status line then reads the price date and the last run with its trigger.',
+          'It also carries the updated and failed counts, and the next scheduled run.',
           'A Monday run also records that week’s performance point.',
         ],
         to: '/portfolio',
@@ -417,7 +419,7 @@ export const TRACKING_CARDS: GuideCard[] = [
     ],
     watch: [
       'The two benchmark legs answer different questions — read their names before calling a gap outperformance.',
-      'Deleting a security is refused while records reference it; deactivating is how a ticker retires.',
+      'A security with transactions or dividends behind it cannot be deleted — deactivate it to retire the ticker.',
       'Auto dividend rows are rewritten by every refresh — a deleted one returns on the next run.',
       'Performance figures need dated transactions; imported rows carry none until you date them.',
     ],
@@ -471,8 +473,8 @@ export const TRACKING_CARDS: GuideCard[] = [
         where: 'Spending → Trends → Category trends',
         steps: [
           'Leave the view on **Compare** and pick up to three category chips.',
-          'A picked category’s budget rides along as a dashed step.',
-          '**All categories** redraws every category as its own small chart, each on its own scale.',
+          'A category that has a budget also gets a dashed reference line.',
+          '**All categories** swaps in one small chart per category, each with its own vertical scale.',
         ],
         to: '/spending?section=trends',
         keywords: ['trend', 'category over time'],
@@ -534,8 +536,8 @@ export const TRACKING_CARDS: GuideCard[] = [
         where: 'Spending → History → Yearly rollups',
         steps: [
           'Every year with anything entered gets a column, category by category.',
-          'Read **Months matched** first: it sizes **Living spend**, **Tax paid**, **Transfers** and both savings rates.',
-          'Those rows stand on fewer months than **Total** does, so the two are not meant to reconcile.',
+          'Read **Months matched** first: it says how many months the four summary rows stand on.',
+          'They cover fewer months than **Total** does, so the two are not meant to reconcile.',
         ],
         to: '/spending?section=history',
         keywords: ['yearly', 'rollup', 'savings rate'],
@@ -572,7 +574,7 @@ export const TRACKING_CARDS: GuideCard[] = [
     id: 'page-credit-cards',
     title: 'Credit cards',
     purpose:
-      'Which card to use for what, what each card is worth after its fee, and the household’s credit lines — from a roster you keep under Manage.',
+      'Which card to use for what, what each is worth after its fee, and the household’s credit lines — all from the Manage roster.',
     to: '/credit-cards',
     views: ['Rewards', 'Credit lines', 'Manage'],
     keywords: ['credit card', 'cards', 'rewards', 'points', 'annual fee', 'credit line'],
@@ -608,7 +610,7 @@ export const TRACKING_CARDS: GuideCard[] = [
         title: 'Choose who holds a card',
         where: 'Credit cards → Manage → Owner',
         steps: [
-          'Pick a person in **Owner**, or leave it on **Joint** when either of you can hold the card.',
+          'Pick a person in **Owner**, or leave it on **Joint** for a card you both use.',
           'Rewards, Credit lines and the tiles then follow the **Whose** chips.',
           'Manage is the one view the chips never narrow, because it is where ownership is edited.',
         ],
