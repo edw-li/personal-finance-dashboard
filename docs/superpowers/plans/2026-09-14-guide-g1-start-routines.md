@@ -901,6 +901,25 @@ draft was right about most of it; these are the corrections, with the source tha
 49. `health-about-number` step 1: since **About this number** is an accessible name on an ⓘ button,
     the step says "Press the ⓘ on the tile — its name is **About this number**."
 
+### Follow-up fact corrections (commit `pending`, after the coordinator relayed G4 and G2)
+
+50. **`marriage_date` does not drive filing status** (G4's finding, re-verified here): its only
+    consumer is the "Married" mark line on the net-worth chart —
+    `netWorthChartOptions.ts:64-72` fed from `NetWorthPage.tsx:458`; nothing in `backend/app` reads
+    it beyond `api/household.py`'s own get/put. The draft's "It drives joint filing" had already
+    been dropped in commit `5f36aed` (item 8) as unverifiable, but the checklist then said nothing
+    about what the date *is* for. `start-setup` 3 now reads "**Marriage date** if you are married —
+    it marks the net-worth trend and nothing else; filing status is chosen per year on Taxes", with
+    a link to `/taxes`. `grep -n "filing" src/guide/content/{start,routines}.tsx` shows the only
+    other mentions are the per-year **Filing status** control on Taxes and the MFS caveat, both
+    correct.
+51. **The Needs attention card is never absent** (G2's finding, matching item 48 above).
+    `health-attention` step 3 was already corrected in commit `c3b91a3`; it now states the
+    persistence explicitly: "The card never goes away: with nothing outstanding it reads
+    **No outstanding data checks**." The exact string is `OverviewPage.tsx:753`
+    (`'No outstanding data checks.'`). `start-next` and `update-after` were checked and make no
+    absence claim — they only say to look at, and clear, the list.
+
 ### Deviations from the plan
 
 - **Task 1 Step 4's predicted three hash-fence failures never happened.** The link fence walks

@@ -114,8 +114,9 @@ export const START_CARDS: GuideCard[] = [
         <li>
           <Link to="/settings?section=household#household">Household</Link> —{' '}
           <b className="guide-label">Add member</b> for each person, then{' '}
-          <b className="guide-label">Marriage date</b> if you are married. Adding a person backfills nothing:
-          their accounts and balances start where you enter them.
+          <b className="guide-label">Marriage date</b> if you are married — it marks the net-worth trend and
+          nothing else; filing status is chosen per year on <Link to="/taxes">Taxes</Link>. Adding a person
+          backfills nothing: their accounts and balances start where you enter them.
         </li>
         <li>
           <Link to="/settings?section=household#accounts">Accounts</Link> — every account with its{' '}

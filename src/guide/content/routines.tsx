@@ -266,7 +266,7 @@ export const ROUTINE_CARDS: GuideCard[] = [
         steps: [
           'Each line is a condition the data proves — an overdue month, a stale quote, a failed ticker, a stale backup, a missing tax year.',
           'Click the line to land where it is fixed.',
-          'An empty list reads **No outstanding data checks** — there is no all-clear badge.',
+          'The card never goes away: with nothing outstanding it reads **No outstanding data checks**.',
         ],
         to: '/',
         keywords: ['overdue', 'stale', 'attention'],
