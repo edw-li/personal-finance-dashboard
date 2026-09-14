@@ -172,7 +172,7 @@ export default function Layout() {
       }}
     >
       <div className="layout">
-        {/* The app's first tabbable: a keyboard user clears the 12-link sidebar in one Tab. */}
+        {/* The app's first tabbable: a keyboard user clears the 14-link sidebar in one Tab. */}
         <a className="skip-link" href="#main">
           Skip to content
         </a>
