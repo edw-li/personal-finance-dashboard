@@ -12,6 +12,6 @@ import { REFERENCE_CARDS } from './content/reference'
 export const GUIDE: readonly GuideChapter[] = [
   { id: 'start', label: 'Start here', cards: START_CARDS },
   { id: 'routines', label: 'Routines', cards: ROUTINE_CARDS },
-  { id: 'pages', label: 'Pages', cards: [...TRACKING_CARDS, ...INCOME_CARDS, ...PLANNING_CARDS] },
-  { id: 'reference', label: 'Reference', cards: REFERENCE_CARDS },
+  { id: 'pages', label: 'Pages', selector: true, cards: [...TRACKING_CARDS, ...INCOME_CARDS, ...PLANNING_CARDS] },
+  { id: 'reference', label: 'Reference', selector: true, cards: REFERENCE_CARDS },
 ]
