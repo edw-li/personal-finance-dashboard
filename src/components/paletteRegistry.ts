@@ -1,3 +1,4 @@
+import { guideEntries } from '../guide/palette'
 import { formatMonth } from '../utils/format'
 import { fuzzyScore } from '../utils/fuzzy'
 import { NAV_ITEMS } from './navItems'
@@ -5,7 +6,7 @@ import { NAV_ITEMS } from './navItems'
 // What the palette can reach (2026-09-03 shell spec §9): pages (with aliases), Settings
 // sections (anchored), actions, and lazily loaded entities. Matching is the house fuzzy
 // scorer over label + keywords (+ sub for entities).
-export type PaletteKind = 'page' | 'section' | 'action' | 'entity'
+export type PaletteKind = 'page' | 'section' | 'action' | 'entity' | 'guide'
 
 export interface PaletteEntry {
   kind: PaletteKind
@@ -23,10 +24,20 @@ export interface PaletteEntry {
 }
 
 export interface PaletteGroup {
-  title: 'Actions' | 'Pages' | 'Settings' | 'Holdings' | 'Accounts' | 'Categories' | 'Cards'
+  title:
+    | 'Actions'
+    | 'Pages'
+    | 'Settings'
+    | 'Holdings'
+    | 'Accounts'
+    | 'Categories'
+    | 'Cards'
+    | 'Guide'
   items: PaletteEntry[]
 }
 
+// Guide last (2026-09-14 guide spec §6): a task title can share words with a page, a Settings
+// card or a holding, and those are the destinations a reader means first.
 const GROUP_ORDER: PaletteGroup['title'][] = [
   'Actions',
   'Pages',
@@ -35,6 +46,7 @@ const GROUP_ORDER: PaletteGroup['title'][] = [
   'Accounts',
   'Categories',
   'Cards',
+  'Guide',
 ]
 export const GROUP_CAP = 6
 
@@ -165,7 +177,11 @@ export function buildEntries(opts: { month: string; run: RegistryRunners }): Pal
       run: opts.run.askAssistant,
     },
   ]
-  return [...actions, ...pages, ...sections]
+  // One destination per guide task (src/guide/palette.ts builds them from GUIDE), so
+  // "add a card" typed here lands on the how-to, not only on the Credit cards page. Last in
+  // registry order too, so an equal score breaks toward the page a reader already asked for.
+  const guides: PaletteEntry[] = guideEntries().map((entry) => ({ kind: 'guide', ...entry }))
+  return [...actions, ...pages, ...sections, ...guides]
 }
 
 export interface EntitySources {
@@ -255,6 +271,7 @@ function titleOf(entry: PaletteEntry): PaletteGroup['title'] {
   if (entry.kind === 'action') return 'Actions'
   if (entry.kind === 'page') return 'Pages'
   if (entry.kind === 'section') return 'Settings'
+  if (entry.kind === 'guide') return 'Guide'
   return entry.group ?? 'Holdings'
 }
 
