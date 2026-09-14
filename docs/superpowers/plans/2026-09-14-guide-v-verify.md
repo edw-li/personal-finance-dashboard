@@ -161,3 +161,18 @@ morning eyeball).
 - [ ] Every guide deep link lands (probe + fence); every bold label exists (fence).
 - [ ] An empty Overview shows *Start here*; a zero-account wizard shows the pointer; both absent with data (tests).
 - [ ] Gates green on local main; nothing pushed; no database or API behaviour changed beyond `NAV_PATHS`.
+
+## Hand-offs collected by the lead during the night (do these in Task 3)
+
+- **Renderer (from G3):** `GuideCard.tsx` and `GuideTaskList.tsx` render `watch` lines as plain
+  text; route them through `renderSteps` so `**Label**` in a watch line renders bold like a step,
+  and extend the label fence in `guideContent.test.ts` to cover `watch` lines (card-level and
+  task-level) with the same `placeholder` exemption as steps. Add one assertion to
+  `GuideCard.test.tsx` (a fixture watch line with `**Example**` renders `b.guide-label`).
+- **Product note (from G3), morning list only:** the Paycheck pace row's "enter this year's limit"
+  link goes to bare `/settings` (lands on Household) — it should deep-link
+  `/settings?section=planning#limits`. Not this batch's file; record for the morning.
+- **From G5:** `paletteRegistry.test.ts` now ranks against the real GUIDE; if a pin flips after the
+  content merges, apply the ranking rule the G5 review settles on (destination before how-to),
+  not a test rewrite. The guide content is statically imported by `paletteRegistry.ts` — the G5
+  review's recommendation on lazy loading applies here if it was deferred.
