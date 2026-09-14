@@ -1173,3 +1173,24 @@ per-member button is written `**Open <TICKER>**`).
   `/update?step=spending` (from `spending-enter-pointer`), `/settings?section=data#import` (from
   `portfolio-import-order`). If G4 renames a Settings card id, this file's links move with it.
 - **No renderer requests.** Nothing in `src/guide/*.tsx` needed to change for this content.
+
+### Review round (`cda822f`)
+
+All four findings applied in `src/guide/content/pages-tracking.tsx`; ids, `views` and task counts
+unchanged.
+
+1. **(Important)** `cards-owner` — "leave it on **Joint**" was false: a fresh roster form starts on
+   the primary person (`CardsPanel.tsx:40-43, 88-90`; `OWNER_UNSET` resolves to `is_primary`, and '' is
+   a real value meaning Joint). Now: "…or pick **Joint** for a card you both use — a new card starts on
+   the primary person." The card-level `watch` lines were checked: none repeats the claim, and the two
+   other `Joint` mentions (Overview, Net worth) are ScopeBar chips, not an Owner default.
+2. `portfolio-dimension` `where` — *Allocation dimension* is only the Segmented's `ariaLabel`, so the
+   segment is now `Portfolio → Allocation`.
+3. `spending-yearly` — "cover fewer months than **Total**" → "**can** cover fewer months", since they
+   cover at most as many.
+4. Credit cards `watch` — dropped "A blank multiplier means the card cannot be used for that
+   category…": it paraphrased the matrix's own note (`RewardsMatrix.tsx:391`), and `cards-multipliers`
+   step 3 already states the N/A rule as a how-to. That card now carries three `watch` lines.
+
+Gates after the round: `npx vitest run src/guide` → 5 files, 23 passed, 1 skipped; `npx tsc -b` clean;
+`npx eslint src/guide` clean.
