@@ -266,6 +266,14 @@ describe('TransactionsPanel', () => {
     // the consumed toast now spends ToastProvider's exit window on screen before it goes.
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull())
   })
+
+  it('keeps the ledger in a .holdings-scroll scroller so the sticky row actions can pin (2026-09-13 polish §7)', () => {
+    const { container } = render(<TransactionsPanel securities={securities} transactions={[importTxn]} onChanged={() => {}} />)
+    const scroller = container.querySelector('.holdings-scroll') as HTMLElement
+    expect(scroller).not.toBeNull()
+    expect(scroller.querySelector('table.port-table')).not.toBeNull()
+    expect(scroller.querySelector('td.row-actions')).not.toBeNull()
+  })
 })
 
 // Spec §5.1: entering a lot is a SESSION — several lots of the same security, in the same

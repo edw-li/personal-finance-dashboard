@@ -12,6 +12,7 @@ import type { SecurityOut, TransactionOut, TransactionType } from '../../types/a
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
 import { FeedBanner } from '../shell/Feed'
+import HoldingsScroll from './HoldingsScroll'
 import './portfolio.css'
 
 interface FormState {
@@ -450,7 +451,7 @@ export default function TransactionsPanel({
       {transactions.length === 0 ? (
         <p className="empty-note">No transactions yet.</p>
       ) : (
-        <table className="port-table">
+        <HoldingsScroll><table className="port-table">
           <thead>
             <tr>
               <th>Ticker</th><th>Account</th><th>Type</th><th>Date</th>
@@ -505,7 +506,7 @@ export default function TransactionsPanel({
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></HoldingsScroll>
       )}
     </section>
   )

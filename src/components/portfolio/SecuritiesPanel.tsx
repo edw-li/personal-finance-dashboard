@@ -8,6 +8,7 @@ import type { HoldingType, SecurityOut } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate } from '../../utils/format'
 import { FeedBanner } from '../shell/Feed'
+import HoldingsScroll from './HoldingsScroll'
 import './portfolio.css'
 
 const HOLDING_TYPES: HoldingType[] = ['etf', 'mutual_fund', 'stock', 'private']
@@ -269,7 +270,7 @@ export default function SecuritiesPanel({
       {securities.length === 0 ? (
         <p className="empty-note">No securities yet.</p>
       ) : (
-        <table className="port-table">
+        <HoldingsScroll><table className="port-table">
           <thead>
             <tr>
               <th>Ticker</th><th>Name</th><th>Industry</th><th>Type</th>
@@ -330,7 +331,7 @@ export default function SecuritiesPanel({
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></HoldingsScroll>
       )}
     </section>
   )
