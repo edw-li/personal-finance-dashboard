@@ -31,7 +31,7 @@ describe('guideEntries', () => {
             keywords: ['card word'],
             tasks: [
               { id: 'x-do', title: 'Do X', where: 'W', steps: ['S.'], keywords: ['task word'] },
-              { id: 'x-pointer', title: 'X is elsewhere', where: 'W', steps: ['S.'], to: '/guide?section=pages#x-do' },
+              { id: 'x-pointer', title: 'X is elsewhere', where: 'W', steps: ['S.'], to: '/settings?section=household#accounts' },
             ],
           },
         ],

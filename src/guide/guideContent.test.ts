@@ -132,9 +132,11 @@ describe('guide content — link fence (spec §8.1)', () => {
 })
 
 describe('guide content — label fence (spec §8.2)', () => {
-  // Placeholders (<Month>, <person>), figures ($X, 15 %) and generic locations ("Any chart",
-  // "Every headline tile") are prose, not labels — the reviewer judges those.
-  const exempt = (label: string) => /[<>]/.test(label) || /^[\d$]/.test(label) || /^(Any|Every|The) /.test(label)
+  // Placeholders (<Month>, <person>) and figures ($X, 15 %) are prose in either position.
+  const placeholder = (text: string) => /[<>]/.test(text) || /^[\d$]/.test(text)
+  // Generic locations ("Any chart", "Every headline tile") only ever describe WHERE a reader
+  // is; a **Label** in a step names a control, and a control has a literal in the source.
+  const exemptSegment = (text: string) => placeholder(text) || /^(Any|Every|The) /.test(text)
 
   it('every **Label** in a step is text that exists somewhere in the UI', () => {
     const missing: string[] = []
@@ -142,7 +144,7 @@ describe('guide content — label fence (spec §8.2)', () => {
       for (const step of task.steps) {
         for (const match of step.matchAll(/\*\*(.+?)\*\*/g)) {
           const label = match[1]
-          if (!exempt(label) && !UI_TEXT.includes(label)) missing.push(`${task.id}: ${label}`)
+          if (!placeholder(label) && !UI_TEXT.includes(label)) missing.push(`${task.id}: ${label}`)
         }
       }
     }
@@ -154,7 +156,7 @@ describe('guide content — label fence (spec §8.2)', () => {
     for (const { task } of allTasks) {
       // ' → ' walks into a place; ' · ' lists alternatives ('Overview · Spending · Net worth').
       for (const segment of task.where.split(/ → | · /).map((s) => s.trim())) {
-        if (!segment || exempt(segment)) continue
+        if (!segment || exemptSegment(segment)) continue
         if (NAV_LABELS.has(segment) || VIEW_LABELS.has(segment) || UI_TEXT.includes(segment)) continue
         missing.push(`${task.id}: ${segment}`)
       }

@@ -72,8 +72,28 @@ describe('GuidePage', () => {
     expect(document.getElementById('ref-glossary')).toBeTruthy()
   })
 
-  it('a chapter with no cards renders its panel without cards and no chip row', () => {
-    renderAt('/guide?section=routines')
-    expect(screen.queryByRole('navigation', { name: 'Pages in this guide' })).toBeNull()
+  // The state the app ships in until G2–G4 land their cards, and the one the fixture above can
+  // never reach: an empty Pages chapter must render its panel with no chip row at all, not a
+  // <nav> with nothing in it. A second module registry is the only way to hold a second GUIDE.
+  it('renders no chip row when the Pages chapter has no cards yet', async () => {
+    vi.resetModules()
+    vi.doMock('../guide/content', async () => {
+      const { FIXTURE_GUIDE } = await import('../guide/testing/fixtures')
+      return { GUIDE: FIXTURE_GUIDE.map((chapter) => (chapter.id === 'pages' ? { ...chapter, cards: [] } : chapter)) }
+    })
+    try {
+      const { default: EmptyPagesGuidePage } = await import('./GuidePage')
+      render(
+        <MemoryRouter initialEntries={['/guide?section=pages']}>
+          <EmptyPagesGuidePage />
+        </MemoryRouter>,
+      )
+      expect(screen.getByRole('tab', { name: 'Pages' }).getAttribute('aria-selected')).toBe('true')
+      expect(screen.queryByRole('navigation', { name: 'Pages in this guide' })).toBeNull()
+      expect(document.querySelector('.guide-card')).toBeNull()
+    } finally {
+      vi.doUnmock('../guide/content')
+      vi.resetModules()
+    }
   })
 })

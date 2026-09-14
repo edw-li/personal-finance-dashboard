@@ -110,8 +110,8 @@ export function guideEntries(guide?: readonly GuideChapter[]): GuidePaletteEntry
 ```
 
 Content conventions (spec §5.3) the fences enforce: task/card ids kebab-case and unique; a task
-id ending in `-pointer` links into the guide (`to` starts with `/guide`) and resolves to a
-non-pointer id; `steps` ≤ 160 characters, labels as `**Label**`; page cards (a `to` that is a
+id ending in `-pointer` carries exactly one step and points at the REAL destination
+(`/settings?section=household#accounts`), never a `/guide` anchor (spec §5.1); `steps` ≤ 160 characters, labels as `**Label**`; page cards (a `to` that is a
 sidebar route) show 3–8 visible tasks and carry `views` equal to that page's tab labels.
 
 ## File map
@@ -410,7 +410,8 @@ import type { ReactNode } from 'react'
 export type GuideChapterId = 'start' | 'routines' | 'pages' | 'reference'
 
 export interface GuideTask {
-  /** Stable anchor; kebab-case; unique across the whole guide. `-pointer` suffix = links into the guide. */
+  /** Stable anchor; kebab-case; unique across the whole guide. `-pointer` suffix = a one-step task
+   *  that points at the real place (its `to` is never a guide anchor) — spec §5.1. */
   id: string
   /** Verb first: 'Add a card', 'Close the month'. */
   title: string
@@ -1410,7 +1411,7 @@ describe('guideEntries', () => {
             keywords: ['card word'],
             tasks: [
               { id: 'x-do', title: 'Do X', where: 'W', steps: ['S.'], keywords: ['task word'] },
-              { id: 'x-pointer', title: 'X is elsewhere', where: 'W', steps: ['S.'], to: '/guide?section=pages#x-do' },
+              { id: 'x-pointer', title: 'X is elsewhere', where: 'W', steps: ['S.'], to: '/settings?section=household#accounts' },
             ],
           },
         ],
@@ -1903,3 +1904,29 @@ before the code that turns it green was written.
   copy rewrites (spec §11).
 - **V:** delete `src/guide/content/pending.ts` and its import in `guideContent.test.ts`; turn
   `it.skipIf(...)` into `it(...)`. Nothing else in this lane is temporary.
+
+### Review round (2026-09-14, one commit)
+
+Stage 1 compliant / Stage 2 approved, with four items fixed in place:
+
+1. *(Important)* `GuideTask.id`'s doc comment claimed `-pointer` "links into the guide" — the
+   opposite of spec §5.1 and of this lane's own fence. Reworded in `src/guide/types.ts`, in the
+   Contracts block above and in the plan's embedded types snippet; `palette.test.ts`'s
+   `x-pointer` fixture now carries a real destination (`/settings?section=household#accounts`)
+   and is still expected to be skipped by the builder. (Spec §8.3's last clause carries the same
+   stale sentence — the spec is not this lane's file; flagged for V.)
+2. `.guide-page a:focus-visible` beat `.chip:focus-visible` on specificity and flattened the
+   chip's 999px pill to 4px; the selector is now `…a:focus-visible:not(.chip)`.
+3. The label fence's `^(Any|Every|The) ` exemption applied to `**Label**` steps as well as `where`
+   segments, so "Every headline tile" would have passed as a control name. Split into
+   `placeholder` (steps: only `<>`, a leading digit or `$`) and `exemptSegment` (where: plus the
+   generic locations).
+4. "a chapter with no cards renders no chip row" passed only because the Pages panel was hidden.
+   It now mounts a second module registry (`vi.resetModules` + `vi.doMock`, unwound in a
+   `finally`) holding a GUIDE whose Pages chapter is empty, selects the Pages tab and asserts the
+   `<nav>` is absent — verified to bite: deleting `chapter.cards.length > 0` from `GuidePage.tsx`
+   fails that test and only that test.
+
+Gates after the round: `npx vitest run src/guide src/pages/GuidePage.test.tsx` → **29 passed,
+1 skipped** (6 files); `npx tsc -b` silent; `npx eslint src/guide src/pages/GuidePage.tsx` clean;
+`motion`/`tokens` 20 ✓.

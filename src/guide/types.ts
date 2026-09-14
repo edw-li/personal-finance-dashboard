@@ -7,7 +7,8 @@ import type { ReactNode } from 'react'
 export type GuideChapterId = 'start' | 'routines' | 'pages' | 'reference'
 
 export interface GuideTask {
-  /** Stable anchor; kebab-case; unique across the whole guide. `-pointer` suffix = links into the guide. */
+  /** Stable anchor; kebab-case; unique across the whole guide. `-pointer` suffix = a one-step task
+   *  that points at the real place (its `to` is never a guide anchor) — spec §5.1. */
   id: string
   /** Verb first: 'Add a card', 'Close the month'. */
   title: string
