@@ -1264,3 +1264,43 @@ Reference
    to keep — it is the one the palette's "where is X" queries should land on.
 6. **Eyeball list for the browser walk:** the Projection card's four watch lines and the glossary
    `<dl>` are the longest blocks this lane adds; the Settings map is the only table in the guide.
+
+### Review round (2026-09-14) — `fe970ca`
+
+Stage 1 (facts) passed; Stage 2 raised two Important copy items and six minors. All fixed in
+`src/guide/content/pages-planning.tsx` and `reference.tsx` only — **every id, `views` list and task
+count is unchanged**; the edits touch `steps`, two `where`s, and `watch` lines.
+
+**Important 1 — §5.3 rule 6, no restating an InfoHint or on-page prose (28 + 11 edits).** Every
+flagged span now keeps the press/type action and drops the "what it is" clause, or points at where
+the app already says it: `projection-use-budgets` (was ScenarioPanel.tsx:43), `projection-retire-month`
+(the ScenarioHints paragraph, incl. its `watch`), `projection-window` (the chart footer),
+`projection-outcomes` (the three tiles' own hints — now names the tiles, sends the reader to
+**About this number** and to this guide's glossary), `calendar-reminder-day` (CalendarFeedCard's note),
+`calendar-subscribe` (the "link is the credential" hint — the trap now lives once, on the card's
+`watch`), `categories-add` and `categories-kind` (CategoriesCard's hint and its three printed
+definitions), `limits-enter`, `plan-assumptions`, `household-marriage-date` (the backfill note),
+`accounts-owner` (the roster's own note), `accounts-retire-delete` (AccountsCard's hint),
+`import-workbook`, `snapshot-now` (BackupsCard's nightly sentence), `restore-snapshot` (the
+pre-restore point), `activity-undo` (the undo rule and the import caveat — the `watch` is now a
+pointer to the Reference undo card), `health-checks` (the logged-and-undoable clause).
+
+**Important 2 — step length.** Nothing is ≥ 18 words now; the longest step in either file is 17.
+`pages-planning.tsx` 96 steps, 17 over 15 words (82 % ≤ 15); `reference.tsx` 33 steps, 7 over
+(79 % ≤ 15). Splits were made at the semicolon or dash, one idea per step.
+
+**Minors.** (a) the "re-saved the file" advice is gone — no source in `src`. (b) `**Jump to month**`
+→ "the header's month box", and `where: 'Assistant → Ask the assistant'` → `'Assistant → Conversation'`
+(both were aria-labels; the reviewer's suggested `'Assistant → message box'` does not exist anywhere
+in `src`, so it would have failed the `where` fence — the visible tab label is used instead).
+(c) effective rate is now "tax over its base" (`tax_service.py:803-809`). (d) the feed-link credential
+trap appears once. (e) `where: 'Any entry form'` → `'Any wizard or tax entry form'` on `typing-move`
+and `keys-save`, with the ledger-row exception added as a card-level `watch` on **both** `ref-typing`
+and `ref-keyboard`. (f) "history never gates the planning model" → "the projection never waits for it".
+
+**Gates after the round:** `npx vitest run src/guide` → 5 files, **23 passed / 1 skipped**;
+`npx tsc -b` clean; `npx eslint src/guide` clean.
+
+**Note for lane V:** this round removed three task-level `watch` lines and added two card-level ones;
+the three `**Label**` watch lines flagged in the first hand-off are unchanged and still verbatim
+(`No direction`, `Unhide`, `Roll-up`).
