@@ -2694,3 +2694,37 @@ page's "today" and the tile reads " today". It fails identically when that file 
 is not an ordering flake; nothing in this lane's diff is imported by that page. One-line fix in
 P1's file (build the fixture date locally). No other suite failed this round — the
 `CreditCardsPage` and `settings/CategoriesCard` order flakes seen earlier did not reappear.
+
+### Follow-up: the auto-weight month test made deterministic (2026-09-13)
+
+Merged main first — a fast-forward to `90667e3`, no merge commit and no conflicts. Fixed in `fdb9d5c`.
+
+**Root cause — a module-level cache leaking between two renders inside ONE test, not a clock or a
+fixture problem.** `CreditCardsPage.tsx:71` seeds its state from `getSnapshot(SNAPSHOT_KEY)`
+(`api/snapshotCache`), and `CreditCardsPage.test.tsx`'s `beforeEach` calls `clearSnapshots()`
+between *tests* — but this test renders the page **twice within one test**: once with two reward
+categories sharing a Food pool (each row $900, "1/2 share"), then, after `cleanup()` and a new
+mock, once with a single category (expecting $1,800). The second render therefore painted the
+first render's snapshot, `await screen.findByText('Categories & weights')` resolved off that stale
+paint, and the bare assertion beneath it raced the new fetch. Whether it passed depended purely on
+whether the second fetch's microtasks flushed first, which is why it was an occasional flake at
+baseline and went constant once merged-tree scheduling shifted.
+
+**Proof, before and after.** Stalling the second `fetchRewardCategories` by 30ms and logging the
+second render's first paint printed exactly the reported failure string —
+`Groceries$900.00 auto · 1/2 share · from 2 entered months` — and the test failed with
+`expected … to contain '$1,800.00'`. After the fix the same perturbation (stretched to 60ms) passes.
+
+**Fix — no assertion weakened.** `clearSnapshots()` after each mid-test `cleanup()` (both sites:
+this test and `shows the advantage tile only when merging genuinely wins`, which had the same
+latent hazard), because each second render models a *different book* and must not inherit the
+previous one's snapshot; plus the `$1,800.00` assertion now waits (`waitFor`) for the value the
+fetch answers, so it cannot outrun the payload even if a cache is reintroduced. Both full strings
+are asserted unchanged, including `auto · from 2 entered months`.
+
+**Not a production bug.** Painting a cached snapshot and then refreshing is the page's intended
+behaviour within a session; only the test crossed two different books in one module realm.
+
+**Verification:** full `npx vitest run` twice — **3062 passed / 3062, 225 files** both times (the
+`OverviewPage` UTC/local failure reported earlier is gone too, fixed by P1 on main). `tsc -b`
+silent; eslint on the touched file clean.
