@@ -1360,3 +1360,87 @@ Then `git rm src/guide/GuidePageChips.tsx`.
   `AnchorIndex` shape consistent between Task 1's code and test; fixture ids (`example-add`,
   `example-export`, `example-table`, `taxes-fixture`, `update-close`, `update-after`) consistent
   across Tasks 2, 5, 7, 8.
+
+---
+
+## Results (implementer, 2026-09-14)
+
+**Status: DONE.** Eight task commits on `guide/l1-md`, cut from `d574b52`:
+
+| Commit | Task |
+| --- | --- |
+| `f28e67d` | 1 — anchor index maps every id to its card as well as its chapter |
+| `69652a5` | 2 — fixtures gain selector chapters and a numbered card; palette skips checklist rows |
+| `0da2536` | 3 — `useTaskSelection` + crossfading `TaskDetail` |
+| `5041644` | 4 — `TaskRail` |
+| `c05cde0` | 5 — `GuideCard` is master–detail (`GuideTaskList.tsx` deleted) |
+| `56accd7` | 6 — the stylesheet |
+| `1c45672` | 7 — `CardSelector` |
+| `fd28644` | 8 — Pages and Reference show one card at a time (`GuidePageChips.tsx` deleted) |
+
+**Gates (Task 9, all from the worktree root):** `npx tsc -b` clean · `npx eslint .` **0 errors**, 26
+warnings (25 pre-existing `react-refresh/only-export-components` + the one in D3 below; `lint` is a
+bare `eslint .`, no `--max-warnings`) · `npx vitest run` **233 files / 3121 tests passed** ·
+`npm run build` built in 12.96s. Scoped suites were run red-then-green per task; `motion.test.ts`
+and `tokens.test.ts` passed on the stylesheet as written — the `@keyframes` stayed inside the
+`prefers-reduced-motion: no-preference` block, so the fallback the plan offered was not needed.
+
+### Deviations
+
+- **D1 (Task 2) — the numbered fixture card is a NEW card, not `routine-monthly`.** The plan set
+  `numbered: true` on `routine-monthly` and added `update-after` to it. That breaks
+  `src/components/paletteRegistry.guide.test.ts:20`, which pins `guide:update-close` in the
+  fixture-derived palette — and `src/components/` is outside this lane. The fixture instead gains
+  a second Routines card, `routine-checklist` (`numbered: true`, tasks `checklist-open` and
+  `checklist-after`), and `routine-monthly` is untouched. Same intent (a numbered card whose rows
+  the palette skips), no collateral. Knock-ons: `palette.test.ts`'s first test keeps its
+  `guide:update-close` expectation (the plan's "change the first test" step was unnecessary);
+  `GuideCard.test.tsx`'s `numberedCard` is `FIXTURE_GUIDE[1].cards[1]` and its keyboard/number
+  tests use the `checklist-*` ids; `GuidePage.test.tsx`'s stacked-chapter test uses
+  `#checklist-after` and now also asserts BOTH Routines cards render and that no selector appears.
+- **D2 (Task 4) — a folded row is not focusable while the fold is shut.** The plan's row set
+  `tabIndex={task.id === selectedId ? 0 : -1}` unconditionally. Select a folded row, then press
+  "Fewer tasks", and that `tabIndex=0` button sits inside a block the same plan marks
+  `aria-hidden` — a focusable element inside `aria-hidden`. `row()` takes a third argument
+  (`focusable`, default `true`) and the folded rows pass `foldOpen`. The indicator effect already
+  anticipated this state ("a selected row inside a closed fold has no height to mark").
+- **D3 (Task 7) — `selectedCardId` stays exported from `CardSelector.tsx`.** eslint warns
+  (`react-refresh/only-export-components`) because the file then exports a non-component. Kept:
+  the plan's published contract and `GuidePage.tsx` both import it from there, the rule is a
+  warning not an error, and 25 identical warnings already ship in `src/`.
+- **D4 (Task 5) — one extra assertion.** The keyboard test also presses `End`, which the plan's
+  rail implements but its test only mentioned in the title.
+
+### Hand-off to lane V
+
+The probe `tools/probes/guide-v/smoke.mjs` needs three fixes before it can pass — none are bugs in
+this lane, they are the probe reading the old DOM:
+
+1. **`[role="tab"]` is no longer only the chapter strip.** Line 78's "four chapter tabs" check
+   collects every `[role=tab]` on the page; selector chips and rail rows are tabs now, and the real
+   `start-setup` card renders rail rows in the chapter that loads first. Scope it to
+   `nav[aria-label="Guide chapters"] [role="tab"]`.
+2. **Line 80's `details.guide-more` matches nothing.** The `<details>` fold is gone; open the tail
+   by clicking every `button.guide-rail-more` instead.
+3. **The link harvest now sees one card and one task at a time.** A selector chapter renders a
+   single `.guide-card`, and `.guide-detail` shows a single task's `Go →`. To keep walking every
+   `to` in the guide, iterate the selector chips and then the rail rows (or read the destinations
+   from `GUIDE` directly) rather than scraping one rendered panel.
+
+New checks the spec asks for (§7) map onto these DOM contracts, all verified green in jsdom:
+`.guide-selector [role=tab][aria-selected=true]` (its `aria-controls` is the card id), exactly one
+`.guide-card` inside a selector chapter's panel, `.guide-rail [role=tab]#<taskId>` with
+`aria-selected` on the current row, `.guide-detail .guide-task-title` for the selected task.
+
+### Hand-off to lane L2
+
+- `.guide-facts`, `.guide-fact` (an `h4` + `p` tile) and `.guide-glossary-grid` (put it on the
+  `<dl>`) are live in `GuidePage.css`, two columns above 1000px and one below.
+- A card's `body` still renders in full width above the rail, so prose and fact grids are unchanged
+  in placement.
+- **`numbered: true` removes that card's tasks from the command palette** (`palette.ts`, spec
+  §2.2): once `start-setup` and `routine-tax-season` are numbered, their steps stop appearing in
+  Ctrl/⌘+K by design. `guideContent.test.ts`'s required-coverage fence checks task *ids*, not
+  palette entries, so it is unaffected.
+- `src/guide/content.tsx` (this lane) now carries `selector: true` on `pages` and `reference`; L2
+  owns only `src/guide/content/*.tsx`, so the merge is disjoint.
