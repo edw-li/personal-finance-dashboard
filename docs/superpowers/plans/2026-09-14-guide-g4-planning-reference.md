@@ -1080,3 +1080,187 @@ and `.guide-map` rule are likely wanted — report them for V rather than editin
 - Fences: Projection `views` match; Calendar has none; both Settings cards `to: '/settings'` with
   identical `views`; visible tasks 6/7/8/8; `watch` ≤ 5; pointer tasks have one step and a real
   destination; `?add=1` and `?section=trend` are allowed params.
+
+---
+
+## Results (implementer, 2026-09-14)
+
+Worktree `.worktrees/guide-g4`, branch `guide/g4-planning`, cut from G0's head `e0d289c`. Four
+content commits plus this one; nothing pushed; no file outside the lane's list touched.
+
+### Commits
+
+| SHA | Task | Message |
+| --- | --- | --- |
+| `440ba36` | 1 | `content(guide): Pages — Projection (spec §5.1)` |
+| `dc97b56` | 2 | `content(guide): Pages — Calendar (spec §5.1)` |
+| `2939e86` | 3 | `content(guide): Pages — Settings (Household & Planning; Account, Integrations & Data) with the Settings map (spec §5.1)` |
+| `ced8ed4` | 4 | `content(guide): Reference — typing, keyboard, undo, sandboxes, links, assistant, glossary, Settings map (spec §5.1)` |
+
+Files: `src/guide/content/pages-planning.tsx` (4 cards), `src/guide/content/reference.tsx`
+(8 cards), new `src/guide/content/settingsMap.tsx`, and `src/guide/content/pending.ts`
+(`'/projection'`, `'/calendar'`, `'/settings'` deleted — `PENDING_PAGES` now holds G1–G3's ten).
+
+### Gates
+
+Per card: `npx vitest run src/guide` → 5 files, **23 passed / 1 skipped** (the skipped one is the
+§5.4 required-coverage fence, still gated on `PENDING_PAGES`); `npx tsc -b` and
+`npx eslint src/guide` clean each time.
+
+Final, on `ced8ed4`:
+
+- `npx tsc -b` — clean.
+- `npx eslint .` — **0 errors, 25 warnings**, all pre-existing `react-refresh/only-export-components`
+  (none in `src/guide`).
+- `npx vitest run` — **231 files, 3093 passed / 1 skipped**, 172 s.
+- `npm run build` — ✓ 15.78 s; the `GuidePage` chunk is 41.49 kB (13.31 kB gzip).
+
+### Labels and facts changed from the plan's draft (with the source that settled it)
+
+Projection
+
+1. **Horizon** → **Horizon (years)** — the slider's label (`ScenarioPanel.tsx:36`); bare `Horizon`
+   is only the scenario chip/compare-row label (`projectionScenario.ts:152`).
+2. `where: 'Projection → chart controls'` → `'Projection → Projected investable balance'` (twice).
+   "chart controls" exists nowhere in source and would have failed the `where` fence; the toggles
+   live in that ChartCard's header (`ProjectionPage.tsx:136-160`).
+3. `projection-assumptions`: the draft's one knob-listing step was 172 chars (fence: 160), so it is
+   two steps; "blank means derived" now names the badge's three sources verbatim —
+   **From your records** / **Settings** / **Planning default** (`ScenarioPanel.tsx:172`).
+4. "Enter 5 for 5 %" → "Enter 5 for 5%" (`ScenarioHints`, `ScenarioPanel.tsx:300`).
+5. `projection-outcomes`: one 185-char step → three, with the tiles named verbatim (**FI target**,
+   **FI ratio**, **Investable balance**, **Projected FI date**). The fifth tile's label is composed
+   at runtime (`Reach FI within {years} yrs`), so it is described, never bolded.
+6. `projection-historical`: the span toggle sets how far the fit runs **forward** (SPANS = 1/5/10/40
+   years of extension, `ProjectionTrendPanel.tsx:11,40`), not how much history is shown — the draft
+   said "span chips widen it". Added "mounted the first time you open the tab" (the component's own
+   docstring) and the under-three-snapshots behaviour (`:42`).
+
+Calendar
+
+7. **Save** → **Save event** (add) and **Save changes** (edit) — `AddEventForm.tsx:152`.
+8. The add form's fields are now verbatim: **Date**, **Title**, **Note (optional)**, **Person**
+   (with **Household** as the shared option), **Amount (optional)**, **Direction**, **Repeats**,
+   **Until (optional)** (`AddEventForm.tsx:54-144`).
+9. "the direction is forced to neutral" → "saved as **No direction**", the option's own label
+   (`AddEventForm.tsx:117`, rule at `CalendarPage.tsx:455`).
+10. `calendar-override`: **Mark done**/**Reopen** exist only on deadlines and **Hide**/**Unhide**
+    on any generated event (`EventDetails.tsx:126-143`); the figure form's box is
+    **Amount you paid** (`:181`).
+11. `calendar-export-ics`: the file is the month on screen **plus one either side**
+    (`windowFor`, `CalendarPage.tsx:50-52`) — the draft said "the visible months" — and it is a
+    snapshot, not a subscription (the distinction the next task turns on).
+12. `where` paths that named invisible things: `'Calendar → event popover'` → `'Calendar → Grid'`
+    and `'Calendar → footer'` → `'Calendar → Sources'`. **Grid**/**List** are the view toggle's
+    labels (`CalendarPage.tsx:82-85`); the health list is `aria-label="Sources"`
+    (`SourceHealth.tsx:10`). Neither "event popover" nor a visible "footer" exists.
+13. `calendar-subscribe`: the Google/Apple routes are the card's own sentence
+    (`CalendarFeedCard.tsx:159-162`), with its arrows rewritten as commas so the step reads as prose.
+
+Settings
+
+14. "**Owner** blank means joint" → "pick **Joint**" — the select's first option is literally
+    **Joint** and the table prints `Joint` (`AccountsCard.tsx:328, 411-414`). The "mine and ours"
+    rule is verified in `net_worth_calc.py:28-45` (a person selects their accounts **plus** the
+    joint ones), and the same sentence covers **Portfolio accounts**' own **Owner** column (`:511`).
+15. `household-marriage-date`: **dropped "it drives married filing" — it does not.** `marriage_date`
+    reaches exactly one consumer in the app, the net-worth chart's "Married" mark line
+    (`NetWorthPage.tsx:458` → `netWorthChartOptions.ts:66-74`); filing status is a per-year choice on
+    Taxes. The step now says that, and keeps the card's own "nothing is backfilled".
+16. `restore-snapshot` and `system-status` `where`s use the cards' own headings — **Restore** and
+    **System** — not the palette spellings the plan named (deviation D1 below).
+17. `import-workbook`: added the picker's label **Workbook (.xlsx)**; the overwrite rule moved from a
+    step into the task's `watch`, where a trap belongs, and the confirm dialog is named
+    (`SettingsPage.tsx:258-262, 380-420`).
+18. `health-checks`: the snapshot fix's button label comes from the **server** (`fix.label`,
+    `HealthCard.tsx:127-129`), so it is described rather than bolded; the zero-month fix is
+    `Delete <Month>`, armed on the first press (`:120`).
+19. `limits-enter`: **Clone from** is dynamic (`Clone from ${year - 1}`, `LimitsCard.tsx:195`), so the
+    step bolds the stable half and says "the year before".
+
+Reference
+
+20. `assistant-ask`: the composer's button is **Send** — "Ask the assistant" is the textarea's
+    accessible name, so it became the `where` instead (`AssistantDrawer.tsx:896, 910`). Added the
+    **Context:** strip (`:720-726`) and the evidence buttons behind a cited figure
+    (`AssistantEvidence.tsx:16-20`).
+21. Added `assistant-findings` — **Save finding**, **Saved findings**, **Remove saved finding**
+    (`AssistantEvidence.tsx:61-95`, `AssistantDrawer.tsx:63-66`). A real affordance the draft missed.
+22. Glossary, month-review row: the draft's "Closed · … · Needs review · Unreviewed history" was
+    wrong on three of five. The rendered labels are Not started · In progress · Ready to review ·
+    **Reviewed** · **Changed since review** · **Not yet reviewed** (`api/monthReview.ts:52-55`).
+23. Glossary "Cash saved · savings rate" → "Cash saved · **Savings rate — cash**", the wizard's own
+    name for it (`MonthlyUpdatePage.tsx:1789, 1885`); cash outflow = living + tax is confirmed in
+    `backend/app/api/spending.py:472`.
+24. Glossary "Typical" → the median of the up-to-3 latest **entered** months (`utils/spending.ts:100`),
+    and "Eligible months" → a **mean** over the entered months inside the previous 12 calendar months,
+    **excluding** the one on screen (`SpendingPage.tsx:530-531`).
+25. Glossary: **dropped "Cliff"** — "cliff" appears only in code and on the wire (`cliff_pct`), never
+    as UI text. "Focal year" stays (a real column and section head, `CompPage.tsx:323, 354`).
+    "Basis" is named for what the badge prints: the basis word, or `your figure`
+    (`calendarView.ts:125`).
+26. `typing-formats`: added "a sign inside parentheses" to the refused list (`amount.ts:87-92`) and
+    spaces/NBSP to the accepted grouping (`amount.ts:33`).
+27. `typing-paste` moved from "Any entry form" to **Monthly update** — the paste handler lives on that
+    page's tables alone (`MonthlyUpdatePage.tsx:1179-1236`) — and "fills downward in table order"
+    became "from the pasted-into cell onward", which is what the code does (`:1193-1195`).
+28. `keys-palette`: the same chord closes it (`CommandPalette.tsx:174-191`). `keys-tabs`: the arrows
+    **wrap**, and the write is `replace`, hence "no new history entry"
+    (`LocalSections.tsx:139-147`). `keys-calendar`: arrows move a day or a **week**, Home/End reach
+    the week's ends, Enter **or Space** opens the day (`CalendarGrid.tsx:99-135`).
+29. `ref-undo`, "never undone": **dropped "a card's matrix multipliers after a card Undo"** — nothing
+    in source supports it and credit cards are lane G2's ground; asserting it would be a guess. The
+    revoked feed link, the password sign-outs and the import/restore rule are all sourced
+    (`CalendarFeedCard.tsx:98`, `SettingsPage.tsx:318`, `ActivityCard.tsx:124`).
+30. `ref-sandboxes`: the tabs are **Try changes** and **What-if** (`PaycheckPage.tsx:1018`,
+    `TaxesPage.tsx:137`), not the README's older "Try it"/"What if". Everything else in that card is
+    README §"Sandboxes" verbatim-in-substance: `whatif=` in the URL, three pins per page in
+    `localStorage`, knobs only, and the three doors out.
+
+### Deviations from the plan
+
+- **D1 — `where` spelling for two Settings cards.** The plan's writing rule 5 said to use the palette
+  spellings `Restore a snapshot` and `System status`. I used the cards' own headings, **Restore**
+  (`RestoreCard.tsx:205`) and **System** (`SystemCard.tsx`), because `types.ts` defines `where` as the
+  path in **on-screen labels** and spec §5.3 rule 2 asks for the label as rendered; a reader walking
+  Settings → Data sees those two words. Both spellings pass the label fence, and the palette
+  spellings remain reachable as palette entries. The Settings map table uses the same headings.
+- **D2 — one task beyond the draft** (`assistant-findings`, §5.1 lists the four assistant ids as
+  required, not exclusive) and extra steps in six tasks where the draft packed two facts into one
+  step over the 160-char fence.
+- **D3 — no `views` on Calendar** (as planned) and **both Settings cards carry the identical five
+  `views`** (as planned); the completeness fence is satisfied by either `to: '/settings'`, and the
+  Pages chapter is still in sidebar order (fence green).
+- **D4 — the draft's `page-settings` watch repeated a task step** ("the primary member can be renamed
+  but never removed" appeared in both `household-rename` and `watch`). Kept once, in `watch`; the
+  third watch line is now the trap that matters — nothing on this card is per-year, so re-owning an
+  account rewrites how every month reads.
+
+### Hand-offs (lane V)
+
+1. **CSS — not edited here, as instructed.** `GuidePage.css` wants three rules for this lane's prose:
+   - `.guide-glossary dt { font-weight: 600; margin-top: 0.5rem }` and
+     `.guide-glossary dd { margin: 0 0 0 1rem; color: var(--muted) }` — a bare `<dl>` renders terms in
+     body weight and indents definitions by the UA's 40 px.
+   - `ul.guide-body { margin: 0.4rem 0; padding-left: 1.2rem }` — the UA's 40 px is deeper than
+     `.guide-watch`'s 1.1 rem, so the four Reference lists sit out of line with the rest of the card.
+   - `.guide-map { max-width: 72ch }` — `.data-table` is full width, and the map is prose beside a
+     link; at 1920 px it stretches past the 72ch measure every other guide block keeps.
+2. **Watch lines.** Per the coordinator's mid-lane note (watch lines are rendered as plain text today;
+   V routes them through `renderSteps` and extends the label fence), three of this lane's watch lines
+   name a control and carry `**Label**`, each verbatim from source: `No direction`
+   (`AddEventForm.tsx:117`), `Unhide` (`EventDetails.tsx:143`), `Roll-up` (`AccountsCard.tsx:399`).
+   They will pass the extended fence; until V lands they print literal asterisks.
+3. **Coverage.** `PENDING_PAGES` still holds G1–G3's ten routes, so the §5.4 fence stays skipped. The
+   eight required ids this lane owns all exist: `accounts-add`, `accounts-owner`,
+   `projection-assumptions`, `projection-retire-month`, `calendar-add-event`, `calendar-subscribe`,
+   `assistant-ask`, `assistant-key`.
+4. **Cross-chapter anchors** (forbidden for content lanes; candidates for V's one short list):
+   `calendar-feed-pointer` → `#calendar-subscribe`, `calendar-reminder-pointer` →
+   `#calendar-reminder-day`, `assistant-key-pointer` → `#assistant-key`, and `ref-sandboxes`'
+   Projection link → `#page-projection`.
+5. **`settingsMap.tsx` renders twice on `/guide`** by design (spec §5.1): as `page-settings-data`'s
+   body and as `ref-settings-map`. If the visual pass finds that heavy, the Reference copy is the one
+   to keep — it is the one the palette's "where is X" queries should land on.
+6. **Eyeball list for the browser walk:** the Projection card's four watch lines and the glossary
+   `<dl>` are the longest blocks this lane adds; the Settings map is the only table in the guide.
