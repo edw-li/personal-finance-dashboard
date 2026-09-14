@@ -18,6 +18,7 @@ import type {
   TransactionOut,
 } from '../types/api'
 import PortfolioPage from './PortfolioPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 
 // importOriginal spread: the panels below import mutation helpers from the same module,
 // and an unspread factory would blank them (AccountsCard.test.tsx's posture).
@@ -726,15 +727,23 @@ const HOUSEHOLD_HINT =
   '— not this chart, the sparklines or price refresh, which always cover the whole ' +
   'household. Person views omit the live price dot because the history is household-wide.'
 
-it('opens allocation charts from their task view while retaining performance', async () => {
+it('opens the allocation donut from its task view while retaining performance', async () => {
   renderPage()
   await screen.findByText('Performance')
   expect(screen.getByLabelText(/Line chart of portfolio value against cost basis/)).toBeTruthy()
   fireEvent.click(screen.getByRole('tab', { name: 'Allocation' }))
   await screen.findByLabelText('Portfolio allocation by asset class')
-  expect(screen.getByLabelText(/Holdings grouped by known industry/)).toBeTruthy()
-  expect(screen.getByLabelText(/Portfolio allocation by asset class/)).toBeTruthy()
   expect(screen.getByRole('group', { name: 'Export portfolio-performance', hidden: true })).toBeTruthy()
+  // The industry heat treemap lives with the holdings now (2026-09-13 polish §11), not here.
+  expect(screen.queryByLabelText(/Holdings grouped by known industry/)).toBeNull()
+  expect(document.querySelector('details.allocation-heat')).toBeNull()
+})
+
+it('draws the industry heat treemap under the holdings table with its own metric toggle', async () => {
+  renderPage('/portfolio?section=holdings')
+  const table = (await screen.findByRole('heading', { name: 'Holdings' })).closest('.card') as HTMLElement
+  const heat = (await screen.findByLabelText(/Holdings grouped by known industry/)).closest('.chart-card') as HTMLElement
+  expectInDocumentOrder(table, heat)
   expect(screen.getByRole('group', { name: 'Heat metric' })).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Day change' }))
   expect(screen.getByRole('button', { name: 'Day change' }).getAttribute('aria-pressed')).toBe('true')
@@ -783,8 +792,10 @@ it('renders the panels real empty notes for an owner who holds nothing', async (
   expect(await screen.findByText(NO_HOLDINGS_NOTE)).toBeTruthy()
   fireEvent.click(screen.getByRole('tab', { name: 'Allocation' }))
   await waitFor(() => expect(fetchAllocationData).toHaveBeenCalledWith('asset_class', SAM.id))
-  // The treemap and the donut both fall back to their notes rather than empty canvases.
-  await waitFor(() => expect(screen.getAllByText('No priced holdings yet.').length).toBe(2))
+  // The donut falls back to its note rather than an empty canvas. The heat treemap now lives in
+  // the Holdings view (2026-09-13 polish §11) and shows its own note THERE, so the count here is one.
+  const allocation = screen.getByRole('tabpanel', { name: 'Allocation' })
+  await waitFor(() => expect(within(allocation).getAllByText('No priced holdings yet.').length).toBe(1))
   // …and the heat-treemap's colour legend goes with the cells it describes: "Orange =
   // loss, blue = gain; the deeper the tone…" under an empty note is a key to nothing.
   expect(screen.queryByText(/Orange = loss, blue = gain/)).toBeNull()

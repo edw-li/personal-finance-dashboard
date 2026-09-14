@@ -13,8 +13,7 @@ import { HOUSEHOLD_SNAPSHOT } from '../shell/ScopeBar'
 import SelectionDetail from '../details/SelectionDetail'
 import AllocationTargetEditor from './AllocationTargetEditor'
 import ClassificationEditor from './ClassificationEditor'
-import { HEAT_METRICS, exposureCsv, exposureOption, heatTreemapCsv, heatTreemapOption } from './allocationChartOptions'
-import type { HeatMetric } from './allocationChartOptions'
+import { exposureCsv, exposureOption } from './allocationChartOptions'
 import './portfolio.css'
 import './allocation.css'
 
@@ -29,7 +28,6 @@ interface Props {
 
 export default function AllocationPanel({ holdings, owner = null, refreshKey = 0, onSelectTicker }: Props) {
   const [dimension, setDimension] = useState<AllocationDimension>('asset_class')
-  const [metric, setMetric] = useState<HeatMetric>('unrealized')
   const [reload, setReload] = useState(0)
   const [result, setResult] = useState<{ key: string; data: AllocationData } | null>(null)
   const [classificationRows, setClassificationRows] = useState<SecurityClassification[]>([])
@@ -67,11 +65,6 @@ export default function AllocationPanel({ holdings, owner = null, refreshKey = 0
   const data = result?.key === dataKey ? result.data : null
   const error = failure?.key === dataKey ? failure.message : null
   const option = useMemo(() => data ? exposureOption(data) : null, [data])
-  const industryHoldings = useMemo(() => {
-    const byId = new Map(classificationRows.map((row) => [row.security_id, row]))
-    return holdings.map((holding) => ({ ...holding, industry: byId.get(holding.security_id)?.industry ?? null }))
-  }, [holdings, classificationRows])
-  const heat = useMemo(() => heatTreemapOption(industryHoldings, metric), [industryHoldings, metric])
   const refresh = () => setReload((value) => value + 1)
   const scopedSource = (ticker?: string) => `/portfolio?section=holdings${owner === null ? '' : `&owner=${owner}`}${ticker ? `&ticker=${encodeURIComponent(ticker)}` : ''}`
   const sliceSelection = (slice: ExposureSlice): ChartSelection => ({
@@ -84,15 +77,6 @@ export default function AllocationPanel({ holdings, owner = null, refreshKey = 0
     ], source: { href: scopedSource(), label: 'Open holdings' },
     context: { dimension, owner, classification: slice.is_unknown ? 'Unknown' : 'Classified', pricedDenominator: data?.total_market_value ?? null },
   })
-  const holdingSelection = (ticker: string): ChartSelection | null => {
-    const holding = holdings.find((h) => h.ticker === ticker)
-    if (!holding) return null
-    return { kind: 'entity', id: `${owner}:${ticker}`, label: ticker, entityType: 'security', entityId: holding.security_id,
-      scope: scopeLabel, context: { owner }, source: { href: scopedSource(ticker), label: `Open ${ticker} holding` },
-      values: [{ label: 'Market value', value: holding.market_value, unit: 'USD' },
-        { label: 'Shares', value: holding.shares }, { label: 'Quoted', value: formatDate(holding.quoted_at) }],
-    }
-  }
   return <div className="allocation-workspace">
     <div className="allocation-toolbar"><Segmented ariaLabel="Allocation dimension" variant="toggle" options={ALLOCATION_DIMENSIONS}
       value={dimension} onChange={(next) => { setSelection(null); setDimension(next) }} /></div>
@@ -151,18 +135,6 @@ export default function AllocationPanel({ holdings, owner = null, refreshKey = 0
     {data && <AllocationTargetEditor key={dataKey} data={data} owner={owner} onChanged={refresh} />}
     {employer?.owner === owner ? <EmployerPanel value={employer.data} onSelectTicker={onSelectTicker} /> : employerError?.owner === owner
       ? <p className="error-banner">Employer exposure unavailable: {employerError.message} <button className="button" onClick={refresh}>Retry</button></p> : null}
-    <details className="allocation-heat"><summary>Explore holding performance by industry</summary>
-      <ChartCard title="Holding performance · industry coverage" hint="Area is priced market value; color is performance. Fund industries remain unknown. Select a ticker to inspect it."
-        ariaLabel="Holdings grouped by known industry and unknown exposure" option={heat} empty="No priced holdings yet."
-        exportName="holdings-industry-performance" csv={() => heatTreemapCsv(industryHoldings)} height={360}
-        controls={<Segmented variant="toggle" size="sm" ariaLabel="Heat metric" options={HEAT_METRICS} value={metric} onChange={setMetric} />}
-        selectionScopeKey={String(owner ?? 'household')}
-        selectionAdapter={(event) => {
-          const ticker = (event as unknown as { data?: { ticker?: string } }).data?.ticker
-          return ticker ? holdingSelection(ticker) : null
-        }} rowSelection={(row) => holdingSelection(String(row[1]))}
-        footer={heat !== null ? <p className="hint">Orange = loss, blue = gain, with color capped at ±50%. Unknown industries remain visible.</p> : undefined} />
-    </details>
     {classificationError && <p className="error-banner">Classification records unavailable: {classificationError} <button className="button" onClick={refresh}>Retry</button></p>}
     <ClassificationEditor classifications={classificationRows} onChanged={refresh} />
   </div>

@@ -30,6 +30,7 @@ import {
   portfolioHistoryCsv,
   portfolioHistoryOption,
 } from '../components/portfolio/historyChartOptions'
+import HeatTreemapCard from '../components/portfolio/HeatTreemapCard'
 import HoldingDetailPanel from '../components/portfolio/HoldingDetailPanel'
 import HoldingsTable from '../components/portfolio/HoldingsTable'
 import RealizedPanel from '../components/portfolio/RealizedPanel'
@@ -749,6 +750,9 @@ export default function PortfolioPage() {
                   </>
                 )}
               </section>
+              {/* The industry heat treemap (2026-09-13 polish §11): a card under the table it
+                  colours, no longer a closed <details> at the foot of Allocation. */}
+              <HeatTreemapCard holdings={holdings.holdings} owner={scope.owner} />
             </LocalSectionPanel>
             <LocalSectionPanel state={views} section="allocation">
               <AllocationPanel

@@ -22,8 +22,7 @@
 .allocation-employer h3, .allocation-classification-form h3 { font-size: 0.92rem; margin: 8px 0 12px; }
 .allocation-employer strong { font-size: 1.35rem; font-variant-numeric: tabular-nums; }
 .allocation-employer p { font-size: 0.85rem; }
-.allocation-classifications > summary, .allocation-heat > summary { padding: 4px 0; cursor: pointer; font-weight: 600; }
-.allocation-heat[open] > summary { margin-bottom: 12px; }
+.allocation-classifications > summary { padding: 4px 0; cursor: pointer; font-weight: 600; }
 .allocation-search { max-width: 30ch; margin: 14px 0; }
 .allocation-member { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .allocation-member small { grid-column: 1 / -1; color: var(--muted); }
