@@ -185,11 +185,22 @@ export default function TryItPanel({
     )
   }
 
+  // A 2xx body is not a SHAPE guarantee (an older server, a proxy that trimmed the payload), and
+  // since 2026-09-13 §8 this card is the whole Try changes tab — it renders on the tab's first
+  // paint, with no toggle to leave it shut. An unguarded second-level read therefore does not
+  // merely break the card: it throws during render, RouteBoundary blanks the entire Paycheck
+  // route (tab strip included) and a reload lands on the same payload (lane V, 2026-09-13). So
+  // the payload is read as the wire may actually deliver it, and a body without the lines this
+  // card draws degrades to one sentence.
+  const wire = result as Partial<PaycheckPreviewOut> | null
+  const pace = wire?.pace
+  const warnings = wire?.warnings ?? []
+
   // The scenario's own salary/periods/coverage size the presets; limits come from the pace
   // rows already in the payload — the scenario's first (its coverage may differ), then the
   // check's own. null → the chip is disabled with a sentence naming what to enter.
   const paceRow = (key: string) => {
-    for (const rows of [result?.pace.scenario, result?.pace.baseline, breakdown.pace]) {
+    for (const rows of [pace?.scenario, pace?.baseline, breakdown.pace]) {
       const row = rows?.find((r) => r.key === key)
       if (row !== undefined && row.limit !== null) return row
     }
@@ -203,7 +214,7 @@ export default function TryItPanel({
   // whole strip — a cap nobody has entered must not hide how much year is left (a null here
   // is "the server did not walk this payload", which the chips word differently).
   const walkedRow = () => {
-    for (const rows of [result?.pace.scenario, result?.pace.baseline, breakdown.pace]) {
+    for (const rows of [pace?.scenario, pace?.baseline, breakdown.pace]) {
       const row = rows?.find((r) => r.remaining_checks !== null && r.remaining_checks !== undefined)
       if (row !== undefined) return row
     }
@@ -228,9 +239,16 @@ export default function TryItPanel({
     (patch) => sandbox.set(patch, { immediate: true }),
   )
 
-  const block = result === null ? null : result[unit]
-  const pinSide = (r: PinResult<PaycheckPreviewOut>): PinResult<PaycheckPreviewLines> =>
-    r === 'pending' || 'error' in r ? r : r[unit].scenario
+  const block = wire?.[unit] ?? null
+  // A payload that came back without this card's two halves: the compare slot says so instead of
+  // drawing half a table.
+  const previewUnusable = result !== null && (block === null || pace?.scenario === undefined)
+  const pinSide = (r: PinResult<PaycheckPreviewOut>): PinResult<PaycheckPreviewLines> => {
+    if (r === 'pending' || 'error' in r) return r
+    // A pin is its own request, so it carries its own shape risk — and a pin column that cannot
+    // be drawn is exactly what CompareTable's error face is for.
+    return (r as Partial<PaycheckPreviewOut>)[unit]?.scenario ?? { error: 'Preview unavailable' }
+  }
   const nextMonth = applySeedFor(profile, scenario, currentMonthIso()).effective_date
 
   return (
@@ -251,7 +269,12 @@ export default function TryItPanel({
       staleNoun="this scenario"
       skeletonHeight={220}
       compare={
-        block !== null && result !== null ? (
+        previewUnusable ? (
+          <p className="empty-note">
+            Preview unavailable — the server answered without the lines this card draws. Nothing
+            was saved, and the check above is unchanged.
+          </p>
+        ) : block !== null && result !== null ? (
           <>
             <Segmented
               variant="toggle"
@@ -272,14 +295,14 @@ export default function TryItPanel({
             />
             {/* The engine's advisory sentences, in the waterfall's own shape — the rule lives
                 in PaycheckPage.css, which the one page that mounts this card always loads. */}
-            {result.warnings.length > 0 && (
+            {warnings.length > 0 && (
               <div className="paycheck-warnings">
-                {result.warnings.map((warning) => (
+                {warnings.map((warning) => (
                   <p key={warning}>{warning}</p>
                 ))}
               </div>
             )}
-            {!sandbox.empty && <PacePanel items={result.pace.scenario} />}
+            {!sandbox.empty && <PacePanel items={pace?.scenario ?? []} />}
           </>
         ) : null
       }

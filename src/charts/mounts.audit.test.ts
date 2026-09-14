@@ -128,12 +128,18 @@ const PANEL_TITLE_ROW_ALLOWED = new Set([
   path.join('components', 'portfolio', 'AllocationTargetEditor.tsx'),
 ])
 
-// A page-level PREREQUISITE gate is not a chart fallback: ProjectionPage has no projection
-// at all until a net-worth snapshot exists, so its `missing` branch replaces the tiles, the
-// tables AND the charts with one sentence — and that sentence carries a <Link to="/update">,
-// which the card's `empty: string` cannot hold. Counted rather than waved through: a SECOND
-// note sharing an expression with a chart in this file still fails the audit.
-const PREREQUISITE_GATES = new Map([[path.join('pages', 'ProjectionPage.tsx'), 1]])
+// A PREREQUISITE gate is not a chart fallback. ProjectionPage has no projection at all until a
+// net-worth snapshot exists, so its `missing` branch replaces the tiles, the tables AND the charts
+// with one sentence — and that sentence carries a <Link to="/update">, which the card's
+// `empty: string` cannot hold. WhatIfPanel's is the same species (2026-09-13, lane V): a 2xx body
+// without `delta`/`baseline`/`scenario` is a payload the whole comparison cannot be built from, so
+// one sentence stands in for four tiles, the delta bars, the compare table and both detail blocks
+// — the card's own `empty` speaks for one chart and could not say it. Counted rather than waved
+// through: a SECOND note sharing an expression with a chart in either file still fails the audit.
+const PREREQUISITE_GATES = new Map([
+  [path.join('pages', 'ProjectionPage.tsx'), 1],
+  [path.join('components', 'taxes', 'WhatIfPanel.tsx'), 1],
+])
 
 const sources: Source[] = tsxFiles(SRC).map((file) => ({
   file: path.relative(SRC, file),
