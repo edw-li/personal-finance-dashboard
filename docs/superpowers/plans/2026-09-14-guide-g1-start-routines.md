@@ -960,3 +960,31 @@ draft was right about most of it; these are the corrections, with the source tha
 - **Renderer:** no change needed. `ol.guide-body` renders the seventeen-item setup checklist
   acceptably as a plain ordered list; if V wants tighter list spacing that is a `GuidePage.css`
   edit in G0's files, not this lane's.
+
+### Review round (commit `fce0b4f`)
+
+All four findings applied, in the two content files only.
+
+- **1 (Important, fact).** Tax season step 6: the **Apply** chip writes the cell's *suggestion*,
+  which is a carry-forward ("last year's …") or a formula result ("suggested …")
+  (`InputsForm.tsx:678-697`). Now: "an **Apply** chip fills a box with its suggestion — last
+  year's figure, or a formula's."
+- **2 (Important, §5.3 rule 1).** Nine tasks restructured so every step is an action and no step
+  exceeds 16 words; the explanations moved to task-level `watch`. `update-pick-month` 3→2 steps
+  (+2 watch), `update-balances` 6 steps (+1 watch), `update-spending` 6→4 (+2),
+  `update-review-save` 5 (+3), `update-historical-close` 4 (+1), `update-delete-month` 4→3 (+2),
+  `update-paste` 3→2 (+3), `update-phantom` 2 (+2), `update-drafts` 2 (+2), `update-conflict` 2
+  (+1), `health-attention` 3→2 (+2). Audited afterwards: all 15 tasks 1–6 steps, no step over 16
+  words or 160 chars; `routine-monthly` still 6 visible tasks and 5 card-level traps. Watch lines
+  are plain prose except three verbatim bold labels (**Balances**, **No outstanding data checks**,
+  and the two already noted above).
+- **3 (Minor).** `update-review-save`: the save receipt renders at the top of the PAGE, above
+  whichever step card shows (`MonthlyUpdatePage.tsx:1373`) — step now says "at the top of the
+  page", with the row counts moved to `watch`.
+- **4 (Minor).** `start-setup` purpose 26 → 25 words ("the order the data depends on").
+- **Optional, taken.** `start-setup` gains item 18 — the assistant key: Settings → Integrations →
+  **Assistant**, **NVIDIA API key**, **Save assistant settings** (`AssistantCard.tsx:152,205`),
+  placed last and marked optional. No id changed anywhere.
+
+Gates after the round: `npx vitest run src/guide` → 5 files, 23 passed / 1 skipped; `npx tsc -b`
+clean; `npx eslint src/guide` clean.
