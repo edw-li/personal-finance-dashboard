@@ -1,4 +1,3 @@
-import { guideEntries } from '../guide/palette'
 import { formatMonth } from '../utils/format'
 import { fuzzyScore } from '../utils/fuzzy'
 import { NAV_ITEMS } from './navItems'
@@ -121,7 +120,9 @@ export interface RegistryRunners {
 }
 
 /** The static half of the registry: pages, sections, actions. Entities are appended by the
- *  palette once loaded (see `entityEntries`). */
+ *  palette once loaded (see `entityEntries`), and so are the guide's how-tos — CommandPalette
+ *  imports `src/guide/palette` dynamically on the first open (2026-09-14 guide spec §6 review
+ *  round), so the guide's content module stays out of the shell's bundle. */
 export function buildEntries(opts: { month: string; run: RegistryRunners }): PaletteEntry[] {
   const pages: PaletteEntry[] = NAV_ITEMS.map((item) => ({
     kind: 'page',
@@ -177,11 +178,7 @@ export function buildEntries(opts: { month: string; run: RegistryRunners }): Pal
       run: opts.run.askAssistant,
     },
   ]
-  // One destination per guide task (src/guide/palette.ts builds them from GUIDE), so
-  // "add a card" typed here lands on the how-to, not only on the Credit cards page. Last in
-  // registry order too, so an equal score breaks toward the page a reader already asked for.
-  const guides: PaletteEntry[] = guideEntries().map((entry) => ({ kind: 'guide', ...entry }))
-  return [...actions, ...pages, ...sections, ...guides]
+  return [...actions, ...pages, ...sections]
 }
 
 export interface EntitySources {
@@ -239,8 +236,13 @@ function scoreEntry(query: string, entry: PaletteEntry): number | null {
     return s === null ? best : best === null ? s : Math.max(best, s)
   }, null)
   if (label === null && alias === null) return null
-  // A label hit outranks an alias hit of equal strength.
-  return Math.max(label === null ? -1 : label + 1, alias ?? -1)
+  // A label hit outranks an alias hit of equal strength — except a guide how-to's, which scores
+  // flat (2026-09-14 guide spec §6 review round). "rsu" means the Comp page, not the card that
+  // explains it: with no label bonus the how-to ties the destination's alias hit, and registry
+  // order (guide last) breaks the tie toward the place the reader asked for. A how-to still wins
+  // outright when nothing else answers the words at all — "add an example" has no destination.
+  const bonus = entry.kind === 'guide' ? 0 : 1
+  return Math.max(label === null ? -1 : label + bonus, alias ?? -1)
 }
 
 /** Ranked matches; the empty query returns everything with `recents` first. */

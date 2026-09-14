@@ -1,21 +1,19 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
+import { guideEntries } from '../guide/palette'
+import { FIXTURE_GUIDE } from '../guide/testing/fixtures'
 import { buildEntries, groupMatches, matchEntries, type PaletteEntry } from './paletteRegistry'
 
-// The real GUIDE is content the lanes are still writing; the fixture keeps this suite
-// deterministic. The factory imports the fixture itself — vi.mock is hoisted above the imports,
-// so a top-level binding would not exist yet when anchors.ts pulls GUIDE in at module init
-// (GuidePage.test.tsx mocks the same module the same way).
-vi.mock('../guide/content', async () => {
-  const { FIXTURE_GUIDE } = await import('../guide/testing/fixtures')
-  return { GUIDE: FIXTURE_GUIDE }
-})
-
+// The registry no longer imports the guide (CommandPalette pulls src/guide/palette in on the
+// first open, so the content module stays out of the shell's bundle), so this suite composes
+// the two halves the way the component does — over the FIXTURE, which keeps it independent of
+// the content the lanes are still writing.
 const noop = () => {}
-const entries = buildEntries({ month: '2026-09-01', run: { refreshPrices: noop, askAssistant: noop } })
+const statics = buildEntries({ month: '2026-09-01', run: { refreshPrices: noop, askAssistant: noop } })
+const guide: PaletteEntry[] = guideEntries(FIXTURE_GUIDE).map((e) => ({ kind: 'guide' as const, ...e }))
+const entries = [...statics, ...guide]
 
 describe('paletteRegistry — Guide group (2026-09-14 guide spec §6)', () => {
-  it('registers one guide entry per task with the guide anchor as destination', () => {
-    const guide = entries.filter((e) => e.kind === 'guide')
+  it('registers one entry per task with the guide anchor as destination', () => {
     expect(guide.map((e) => e.id)).toEqual(
       expect.arrayContaining(['guide:update-close', 'guide:example-add', 'guide:example-export']),
     )
@@ -26,8 +24,11 @@ describe('paletteRegistry — Guide group (2026-09-14 guide spec §6)', () => {
     expect(guide.every((e) => e.to?.startsWith('/guide?section='))).toBe(true)
   })
 
-  it('keeps the five actions exactly as they were', () => {
-    expect(entries.filter((e) => e.kind === 'action')).toHaveLength(5)
+  it('keeps the five actions exactly as they were, and carries no guide entry of its own', () => {
+    expect(statics.filter((e) => e.kind === 'action')).toHaveLength(5)
+    // The bundle fence in assertion form: a guide entry here would mean the static registry
+    // imports the guide content again (review round B).
+    expect(statics.some((e) => e.kind === 'guide')).toBe(false)
   })
 
   it('a task title typed into the palette lands on the guide task, under a Guide group', () => {
@@ -44,5 +45,53 @@ describe('paletteRegistry — Guide group (2026-09-14 guide spec §6)', () => {
       { kind: 'page', id: 'nav:/', label: 'Overview', keywords: [], to: '/' },
     ]
     expect(groupMatches(synthetic).map((g) => g.title)).toEqual(['Pages', 'Cards', 'Guide'])
+  })
+})
+
+// A how-to is a place to READ about the thing, never the thing itself. scoreEntry drops the
+// label bonus for kind 'guide', so a guide title ties — rather than beats — the destination
+// whose alias answers the same words, and registry order (guide last) hands the tie to the
+// destination.
+describe('paletteRegistry — a destination outranks the how-to that explains it (§6 review round)', () => {
+  it('ranks the page above the guide task when both answer the query', () => {
+    const synthetic: PaletteEntry[] = [
+      { kind: 'page', id: 'nav:/comp', label: 'Comp', keywords: ['rsu'], to: '/comp' },
+      {
+        kind: 'guide',
+        id: 'guide:comp-rsu-add',
+        label: 'Add an RSU grant',
+        sub: 'Guide · Comp',
+        keywords: [],
+        to: '/guide?section=pages#comp-rsu-add',
+      },
+    ]
+    const hits = matchEntries('rsu', synthetic)
+    expect(hits[0].kind).toBe('page')
+    expect(hits[0].id).toBe('nav:/comp')
+  })
+
+  it('keeps every Settings section above the first guide hit for "settings"', () => {
+    const withGuide: PaletteEntry[] = [
+      ...statics,
+      {
+        kind: 'guide',
+        id: 'guide:settings-change',
+        label: 'Change a setting in Settings',
+        sub: 'Guide · Settings',
+        keywords: [],
+        to: '/guide?section=pages#settings-change',
+      },
+    ]
+    const hits = matchEntries('settings', withGuide)
+    const firstGuide = hits.findIndex((e) => e.kind === 'guide')
+    expect(firstGuide).toBeGreaterThan(-1)
+    expect(hits.filter((e) => e.kind === 'section')).not.toHaveLength(0)
+    expect(hits.every((e, i) => e.kind !== 'section' || i < firstGuide)).toBe(true)
+  })
+
+  it('still answers a query no destination matches with the task itself', () => {
+    const hits = matchEntries('add an example', entries)
+    expect(hits[0].kind).toBe('guide')
+    expect(hits[0].id).toBe('guide:example-add')
   })
 })

@@ -102,9 +102,16 @@ try {
       await sleep(400) // arrival effects (rAF + MutationObserver retry) settle
       const landed = new URL(page.url())
       const samePath = landed.pathname === url.pathname
-      const tabSelected = wantSection
-        ? await page.$eval('[role="tab"][aria-selected="true"]', (t) => !!t).catch(() => false)
-        : true
+      // The SELECTED tab must control the panel the link asked for — "some tab is selected" is
+      // true of every page with a tab strip, including the chapter the reader did not ask for.
+      // LocalSections ids are `${id}-section-${value}` (LocalSections.tsx:88).
+      let tabSelected = true
+      if (wantSection) {
+        const controls = await page
+          .$eval('[role="tab"][aria-selected="true"]', (t) => t.getAttribute('aria-controls') ?? '')
+          .catch(() => '')
+        tabSelected = controls.endsWith(`-section-${wantSection}`)
+      }
       const sectionKept = wantSection ? landed.searchParams.get('section') === wantSection : true
       const target = wantHash
         ? await page.evaluate((id) => {
