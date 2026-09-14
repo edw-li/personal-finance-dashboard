@@ -3297,3 +3297,42 @@ it `useScrollEdges(ref, active = true)`. All four fixes in one commit, **`5b5266
 pre-existing `react-refresh` ones) · `eslint .` **25 problems (0 errors, 25 warnings)** = repo
 baseline · scoped vitest **774 passed** (772 → +2 new) · full `npx vitest run` **2961 passed /
 214 files, 0 failed** · `npm run build` exit 0.
+
+### Shape tolerance in the two sandbox cards (2026-09-13, lane V follow-up) — `f60252f`
+
+Merged `main` @`206158d` first (fast-forward; the lane was already merged there). Lane V found that
+`TryItPanel` read `result?.pace.scenario` and `WhatIfPanel` read `result.delta.total_tax` — the top
+level guarded, the next level not — so a 2xx preview body without `pace`/`delta` threw DURING
+RENDER and RouteBoundary blanked the whole Paycheck / Taxes route, tab strip included, past a
+reload. §8 opening both cards on their tab's first paint is what grew the blast radius.
+
+Both now read the payload as `Partial<…>` (a 2xx is not a shape guarantee) and degrade to one
+sentence — "Preview unavailable — the server answered without the lines this card draws" /
+"…without the two halves this card compares" — with the card, its knobs and its Reset all still on
+screen. Every sibling `result.*` read went with it: `pace?.scenario`/`pace?.baseline`, the unit
+block (`wire?.[unit] ?? null`), `warnings`, `sale_details`, `espp_sale_details`, `changed_inputs`,
+and both `pinSide` helpers (a pin is its own request, so it carries its own shape risk — an
+undrawable pin column now returns `{ error: 'Preview unavailable' }`, CompareTable's error face).
+What-if's `settled` gate is false under an unusable payload, so Apply cannot PUT from a body the
+card could not even draw.
+
+Tests: one per panel, feeding a 2xx `{}` (`TryItPanel.test.tsx` "degrades to a note when a 2xx
+preview body has no pace or unit blocks"; `WhatIfPanel.test.tsx` "…no delta or summary halves").
+**Both verified failing** against the old reads before the guards went in.
+
+**One out-of-lane file touched, reported:** `src/charts/mounts.audit.test.ts`. What-if's fallback
+sentence stands in for four tiles, the delta bars, the compare table and both detail blocks, so it
+shares its ternary with a `ChartCard` and tripped "no empty-note fallback shares a ternary with a
+ChartCard". That audit already has the mechanism for exactly this — `PREREQUISITE_GATES`, whose
+existing entry is ProjectionPage's `missing` branch, documented as "a page-level PREREQUISITE gate
+is not a chart fallback" — so `components/taxes/WhatIfPanel.tsx` was added to it with the reason
+written out. Its companion test ("every named prerequisite gate still exists") keeps the allowance
+honest: a SECOND note beside a chart in that file still fails.
+
+**Gates:** `tsc -b` clean · scoped eslint **0 errors / 3 warnings** (the same pre-existing
+`react-refresh` three) · `eslint .` **25 problems (0 errors, 25 warnings)** = repo baseline · scoped
+vitest **776 passed** (774 → +2) · full `npx vitest run` **3061 passed / 3063**, the two failures
+out of lane: `CategoriesCard` "retires and restores without touching the other columns" (passed on
+re-run — flake) and `CreditCardsPage` "an auto weight names the ENTERED months behind it"
+(**reproduced on clean `main` @206158d with none of this work applied** — pre-existing, clock- or
+month-boundary dependent; not this lane's) · `npm run build` exit 0.
