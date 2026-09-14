@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { guideEntries } from '../guide/palette'
 import {
   SETTINGS_SECTIONS,
   buildEntries,
@@ -114,5 +115,18 @@ describe('paletteRegistry', () => {
     ] as const) {
       expect(matchEntries(query, entries).some((e) => e.to === `/settings#${id}`), query).toBe(true)
     }
+  })
+
+  // The pin against the REAL guide (2026-09-14 guide spec §6). paletteRegistry no longer
+  // imports the content module — CommandPalette appends guideEntries() on the first open —
+  // so the composition is done here the way the component does it. "add a card" has no
+  // destination that answers it: no page, section or action is called that, so the how-to
+  // wins outright and lands on the task, not on the Credit cards page.
+  it('answers "add a card" with the guide task that walks it', () => {
+    const withGuide = [...entries, ...guideEntries().map((e) => ({ kind: 'guide' as const, ...e }))]
+    const hits = matchEntries('add a card', withGuide)
+    expect(hits[0].id).toBe('guide:cards-add')
+    expect(hits[0].to).toBe('/guide?section=pages#cards-add')
+    expect(groupMatches(hits).at(-1)?.title).toBe('Guide')
   })
 })

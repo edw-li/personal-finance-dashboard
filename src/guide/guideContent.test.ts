@@ -137,14 +137,19 @@ describe('guide content — label fence (spec §8.2)', () => {
   // is; a **Label** in a step names a control, and a control has a literal in the source.
   const exemptSegment = (text: string) => placeholder(text) || /^(Any|Every|The) /.test(text)
 
-  it('every **Label** in a step is text that exists somewhere in the UI', () => {
+  // Steps AND watch lines, card-level and task-level: GuideCard and GuideTaskList render all
+  // three through renderSteps, so **Label** is a claim about the UI wherever it appears.
+  const boldText: { owner: string; text: string }[] = [
+    ...allTasks.flatMap(({ task }) => [...task.steps, ...(task.watch ?? [])].map((text) => ({ owner: task.id, text }))),
+    ...allCards.flatMap(({ card }) => (card.watch ?? []).map((text) => ({ owner: card.id, text }))),
+  ]
+
+  it('every **Label** in a step or a watch line is text that exists somewhere in the UI', () => {
     const missing: string[] = []
-    for (const { task } of allTasks) {
-      for (const step of task.steps) {
-        for (const match of step.matchAll(/\*\*(.+?)\*\*/g)) {
-          const label = match[1]
-          if (!placeholder(label) && !UI_TEXT.includes(label)) missing.push(`${task.id}: ${label}`)
-        }
+    for (const { owner, text } of boldText) {
+      for (const match of text.matchAll(/\*\*(.+?)\*\*/g)) {
+        const label = match[1]
+        if (!placeholder(label) && !UI_TEXT.includes(label)) missing.push(`${owner}: ${label}`)
       }
     }
     expect(missing).toEqual([])

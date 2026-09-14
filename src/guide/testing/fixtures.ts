@@ -45,7 +45,7 @@ export const FIXTURE_GUIDE: readonly GuideChapter[] = [
           { id: 'example-export', title: 'Export the example', where: 'Any chart', steps: ['Press **Export**.'] },
           { id: 'example-table', title: 'Show the table', where: 'Any chart', steps: ['Press **Table**.'] },
         ],
-        watch: ['The example is entered as a negative number — a positive one inflates the total.'],
+        watch: ['The example is entered as a negative number — a positive one inflates the total.', 'Press **Example** again and the second entry replaces the first.'],
       },
       {
         id: 'page-taxes',

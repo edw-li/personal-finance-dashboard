@@ -29,6 +29,8 @@ describe('GuideCard', () => {
     expect(within(card).getByRole('heading', { level: 3, name: 'Do this' })).toBeTruthy()
     expect(within(card).getByRole('heading', { level: 3, name: 'Watch out' })).toBeTruthy()
     expect(within(card).getByText('The example is entered as a negative number — a positive one inflates the total.')).toBeTruthy()
+    // A watch line goes through renderSteps too, so a trap can name the control it is about.
+    expect(card.querySelector('ul.guide-watch b.guide-label')?.textContent).toBe('Example')
   })
 
   it('renders each task with its own anchor, title, where, bold-label steps, task traps and a Go link', () => {

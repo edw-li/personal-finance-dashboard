@@ -34,6 +34,43 @@
   font-size: 0.95rem;
 }
 
+/* A body list's UA indent is 40px — deeper than .guide-watch's 1.1rem and .guide-steps'
+   1.2rem, so an unstyled <ul> in a card body sits out of line with everything around it
+   (G4 hand-off). The per-item margin gives a multi-line bullet room to breathe. */
+ol.guide-body,
+ul.guide-body {
+  padding-left: 1.2rem;
+}
+
+ol.guide-body li,
+ul.guide-body li {
+  margin: 0.2rem 0;
+}
+
+/* The glossary is a bare <dl>: a UA renders its terms in body weight and indents each
+   definition by 40px. Terms carry the weight; definitions sit one step in, in the muted
+   tone the rest of the guide's secondary prose uses. */
+.guide-glossary dt {
+  font-weight: 600;
+  margin-top: 0.5rem;
+}
+
+.guide-glossary dd {
+  margin: 0 0 0.25rem 1rem;
+  color: var(--muted);
+}
+
+/* The Settings map is the guide's only table. .data-table is full width; the map is prose
+   beside a link, so it keeps the same 72ch measure as every other block, and its cells sit
+   at the top so a wrapped description does not float beside a one-line name. */
+.guide-map {
+  max-width: 72ch;
+}
+
+.guide-map td {
+  vertical-align: top;
+}
+
 /* One level under the eyebrow — the same small caps, an h3 so the outline stays honest. */
 .guide-h3 {
   margin: 1rem 0 0.4rem;

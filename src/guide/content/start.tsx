@@ -219,8 +219,9 @@ export const START_CARDS: GuideCard[] = [
           <Link to="/paycheck?section=profiles">paycheck profile</Link>. A grant:{' '}
           <Link to="/comp?section=manage">Comp</Link>. An enrollment window:{' '}
           <Link to="/espp?section=lots">ESPP</Link>. A new card:{' '}
-          <Link to="/credit-cards?section=manage">Credit cards</Link>. A question about the future: the
-          sandboxes on <Link to="/paycheck?section=changes">Paycheck</Link>,{' '}
+          <Link to="/credit-cards?section=manage">Credit cards</Link>. A question about the future:{' '}
+          <Link to="/guide?section=reference#ref-sandboxes">the sandboxes</Link> on{' '}
+          <Link to="/paycheck?section=changes">Paycheck</Link>,{' '}
           <Link to="/taxes?section=whatif">Taxes</Link> and <Link to="/projection">Projection</Link> — nothing
           in them is saved.
         </li>

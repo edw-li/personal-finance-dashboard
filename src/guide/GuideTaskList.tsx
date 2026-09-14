@@ -22,7 +22,8 @@ export default function GuideTaskList({ tasks }: { tasks: GuideTask[] }) {
           {task.watch && task.watch.length > 0 && (
             <ul className="guide-task-watch">
               {task.watch.map((line) => (
-                <li key={line}>{line}</li>
+                // Same markup as a step: a trap that names a control renders it bold.
+                <li key={line}>{renderSteps(line)}</li>
               ))}
             </ul>
           )}

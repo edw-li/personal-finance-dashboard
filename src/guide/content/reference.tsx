@@ -175,7 +175,9 @@ export const REFERENCE_CARDS: GuideCard[] = [
         <li>
           <Link to="/paycheck?section=changes">Paycheck → Try changes</Link>,{' '}
           <Link to="/taxes?section=whatif">Taxes → What-if</Link> and{' '}
-          <Link to="/projection">Projection</Link>&apos;s planning assumptions.
+          <Link to="/projection">Projection</Link>&apos;s planning assumptions — the{' '}
+          <Link to="/guide?section=pages#page-projection">Projection card</Link> in this guide walks the
+          third.
         </li>
         <li>
           The live scenario rides in the address as repeated <code>whatif=</code> entries, so{' '}

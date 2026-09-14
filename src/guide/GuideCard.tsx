@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import Disclosure from '../components/Disclosure'
 import GuideTaskList from './GuideTaskList'
+import { renderSteps } from './renderSteps'
 import type { GuideCard as GuideCardData } from './types'
 
 // The four-part card grammar (2026-09-14 guide spec §3.2): Purpose · Do this · Watch out ·
@@ -36,7 +37,9 @@ export default function GuideCard({ card }: { card: GuideCardData }) {
           <h3 className="guide-h3">Watch out</h3>
           <ul className="guide-watch">
             {watch.map((line) => (
-              <li key={line}>{line}</li>
+              // A trap names controls as often as a step does, so it gets the same one
+              // piece of markup — **Label** in bold (lane V, from G3's hand-off).
+              <li key={line}>{renderSteps(line)}</li>
             ))}
           </ul>
         </>

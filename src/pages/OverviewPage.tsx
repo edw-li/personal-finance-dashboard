@@ -766,8 +766,10 @@ export default function OverviewPage() {
 
                 <section className="card overview-attention"><h2 className="eyebrow">Needs attention</h2>
             {/* The dashboard's to-do list: each line is a condition the snapshot itself
-                proves and a link to where it gets fixed. Absent when nothing needs doing —
-                an "all clear" badge would be one more thing to read every morning. */}
+                proves and a link to where it gets fixed. The card always renders: with an
+                empty list it reads "No outstanding data checks.", or says which feeds have
+                not answered yet — a card that vanished would read the same as one that
+                failed to load. */}
             {attention.length > 0 && (
               <nav className="attention-strip" aria-label="Needs attention">
                 {attention.map((item) => (
