@@ -1,4 +1,5 @@
 import type { GuideCard } from '../types'
+import { SettingsMapTable } from './settingsMap'
 
 // Chapter: Pages — Projection, Calendar, Settings (two cards) (2026-09-14 guide spec §5.1).
 // Written by lane G4 from research §5.3 P10–P12; every bold label and every `where` segment
@@ -238,6 +239,301 @@ export const PLANNING_CARDS: GuideCard[] = [
       'A subscription link is a credential — revoke it when a device is gone.',
       'Done, hide and your figure apply to generated events; your own events are edited directly.',
       'Hidden events are reachable only from the list view — that is where **Unhide** lives.',
+    ],
+  },
+  {
+    id: 'page-settings',
+    title: 'Settings — Household & Planning',
+    purpose:
+      'Who the dashboard tracks and what they own — people, accounts, spending categories — plus the year’s contribution limits and the planning assumptions other pages derive from.',
+    to: '/settings',
+    views: ['Household', 'Planning', 'Account', 'Integrations', 'Data'],
+    keywords: ['settings', 'household', 'accounts', 'categories', 'limits', 'people'],
+    tasks: [
+      {
+        id: 'household-add-member',
+        title: 'Add a household member',
+        where: 'Settings → Household → Household',
+        steps: [
+          'Type the name under **Add a household member** and press **Add member**.',
+          'The person is selectable at once as an owner on accounts, portfolio accounts, paycheck profiles and cards.',
+        ],
+        to: '/settings?section=household#household',
+        keywords: ['partner', 'spouse', 'add person', 'household member'],
+      },
+      {
+        id: 'accounts-add',
+        title: 'Add an account',
+        where: 'Settings → Household → Accounts',
+        steps: [
+          'Type the **Account name** and pick the **Group**: Cash, Pre-tax, Post-tax, Taxable, Equity, Other or Liabilities.',
+          'Pick the **Owner**, set the **Sort order**, and press **Add account**.',
+          'The account appears in the monthly update and in the net-worth charts from the next entry on.',
+        ],
+        to: '/settings?section=household#accounts',
+        watch: ['A Liabilities account holds negative balances — a positive card balance inflates net worth.'],
+        keywords: ['add account', 'new account', 'bank account', 'brokerage account', '401k account'],
+      },
+      {
+        id: 'accounts-owner',
+        title: 'Assign single or joint ownership',
+        where: 'Settings → Household → Accounts',
+        steps: [
+          'In **Owner**, pick a person to make the account theirs, or **Joint** to leave it shared.',
+          'The **Whose** chip on Net worth, Portfolio and Overview reads a person as their own accounts plus the joint ones.',
+          'Portfolio accounts have their own **Owner** column under **Portfolio accounts** — the same choice, one table down.',
+        ],
+        to: '/settings?section=household#accounts',
+        watch: ['A new label typed on a transaction or dividend is owned by the primary person until you re-tag it here.'],
+        keywords: ['joint', 'ownership', 'owner', 'whose account', 'single owner'],
+      },
+      {
+        id: 'accounts-parent-component',
+        title: 'Link component accounts to a parent',
+        where: 'Settings → Household → Accounts',
+        steps: [
+          'On the component, pick the **Parent account** and tick **Component of the parent** — both halves, or the save is refused.',
+          'In the monthly update you type the components; the parent is derived and read-only.',
+        ],
+        to: '/settings?section=household#accounts',
+        watch: ['The **Roll-up** column says who sums whom — a component whose parent is retired counts nowhere.'],
+        keywords: ['component', 'parent account', 'derived'],
+      },
+      {
+        id: 'categories-add',
+        title: 'Add a spending category',
+        where: 'Settings → Household → Spending categories',
+        steps: [
+          'Type the **Category name** and a **Sort order**, then press **Add category**.',
+          'Per row: **Edit**, **Retire** or **Delete** — delete works only while a category has no monthly rows.',
+        ],
+        to: '/settings?section=household#categories',
+        keywords: ['category', 'new category', 'spending category'],
+      },
+      {
+        id: 'categories-kind',
+        title: 'Set a category’s kind',
+        where: 'Settings → Household → Spending categories',
+        steps: [
+          'Pick **Living**, **Tax** or **Transfer** on the row.',
+          'Living left the household; Tax is income tax paid from take-home; Transfer stayed yours.',
+          'Only Living counts as spending in the budgets, the savings rate and the projection.',
+        ],
+        to: '/settings?section=household#categories',
+        watch: ['A kind change recomputes every month, chart and projection — set kinds before entering history.'],
+        keywords: ['living', 'transfer', 'tax category', 'kind'],
+      },
+      {
+        id: 'limits-enter',
+        title: 'Enter contribution limits',
+        where: 'Settings → Planning → Contribution limits',
+        steps: [
+          'Pick the year chip, type each limit, press **Save limits** — or press **Clone from** the year before.',
+          'The dashboard ships no figures of its own: a blank box means not entered, and the Paycheck pace meters say so.',
+        ],
+        to: '/settings?section=planning#limits',
+        keywords: ['limits', '401k limit', 'hsa limit', 'irs limits', 'contribution limit'],
+      },
+      {
+        id: 'plan-assumptions',
+        title: 'Set the plan assumptions',
+        where: 'Settings → Planning → Plan assumptions',
+        steps: [
+          'Type **Withdrawal rate (% / year)**, **ESPP ticker** and **ESPP discount (%)**, then press **Save assumptions**.',
+          'Projection derives its FI target from the rate; ESPP and Paycheck price their figures from the ticker and the discount.',
+        ],
+        to: '/settings?section=planning#plan-assumptions',
+        keywords: ['withdrawal rate', 'swr', 'espp ticker', 'plan assumptions'],
+      },
+    ],
+    more: [
+      {
+        id: 'household-marriage-date',
+        title: 'Set the marriage date',
+        where: 'Settings → Household → Household',
+        steps: [
+          'Type the **Marriage date** and press **Save marriage date** — the net-worth chart marks that month.',
+          'Nothing is backfilled: a partner’s accounts and balances start when you enter them.',
+          'Filing status is a separate choice, made per year on Taxes.',
+        ],
+        to: '/settings?section=household#household',
+        keywords: ['marriage', 'married', 'wedding'],
+      },
+      {
+        id: 'accounts-retire-delete',
+        title: 'Retire or delete an account',
+        where: 'Settings → Household → Accounts',
+        steps: [
+          '**Retire** keeps the history and takes the account out of the monthly update and the charts; **Restore** brings it back.',
+          '**Delete** works only while an account has no balances — otherwise the server refuses it and says so.',
+        ],
+        to: '/settings?section=household#accounts',
+        keywords: ['retire account', 'delete account', 'close account'],
+      },
+      {
+        id: 'household-rename',
+        title: 'Rename a person',
+        where: 'Settings → Household → Household',
+        steps: ['Press **Rename**, type the new name, press **Save name**.'],
+        to: '/settings?section=household#household',
+      },
+    ],
+    watch: [
+      'Delete is refused for accounts with balances and categories with rows — retire those instead.',
+      'The primary member can be renamed, but never changed or removed.',
+      'Nothing here is per-year except the limits — re-owning an account rewrites how every month reads at once.',
+    ],
+  },
+  {
+    id: 'page-settings-data',
+    title: 'Settings — Account, Integrations & Data',
+    purpose:
+      'Your password and appearance, the integrations — prices, assistant, calendar feed — and the data lifecycle: import, snapshots, restore, health, activity.',
+    to: '/settings',
+    views: ['Household', 'Planning', 'Account', 'Integrations', 'Data'],
+    keywords: ['settings', 'backup', 'restore', 'import', 'api key', 'theme', 'password'],
+    tasks: [
+      {
+        id: 'appearance',
+        title: 'Change theme, density and landing page',
+        where: 'Settings → Account → Appearance',
+        steps: [
+          'Pick a **Theme** — **System** follows the operating system — a **Density**, **Chart patterns**, and a **Landing page**.',
+          'They paint in this browser at once and follow your account at the next sign-in elsewhere.',
+        ],
+        to: '/settings?section=account#appearance',
+        keywords: ['theme', 'dark mode', 'light mode', 'density', 'landing page', 'appearance'],
+      },
+      {
+        id: 'password',
+        title: 'Change the password',
+        where: 'Settings → Account → Password',
+        steps: [
+          'Type **Current password**, then **New password** and **Confirm new password**; press **Change password**.',
+          'Every other device is signed out; this one stays signed in.',
+        ],
+        to: '/settings?section=account#password',
+        keywords: ['password', 'sign out devices'],
+      },
+      {
+        id: 'price-refresh-schedule',
+        title: 'Set the price refresh schedule',
+        where: 'Settings → Integrations → Price refresh',
+        steps: [
+          'Type a five-field cron with day names into **Price refresh cron** and press **Save schedule** — it applies at once.',
+          'Press **Refresh now** for a run outside the schedule.',
+        ],
+        to: '/settings?section=integrations#price-refresh',
+        watch: [
+          'Keep Mondays covered — the Monday run is what records the weekly performance point.',
+          'A schedule that would fire more often than hourly is refused.',
+        ],
+        keywords: ['cron', 'schedule', 'price refresh', 'scheduler'],
+      },
+      {
+        id: 'assistant-key',
+        title: 'Set up the assistant',
+        where: 'Settings → Integrations → Assistant',
+        steps: [
+          'Paste the key into **NVIDIA API key**, pick a **Default model**, press **Save assistant settings**.',
+          'Press **Test key** to probe the models; **Remove saved key** falls back to the key in the server’s .env.',
+        ],
+        to: '/settings?section=integrations#assistant',
+        watch: ['Asking the assistant sends the figures behind your question to the provider under this key.'],
+        keywords: ['api key', 'assistant setup', 'nvidia', 'model'],
+      },
+      {
+        id: 'import-workbook',
+        title: 'Import the workbook',
+        where: 'Settings → Data → Import workbook',
+        steps: [
+          'Choose the **Workbook (.xlsx)**, press **Dry run**, and read the per-sheet diff — nothing is written yet.',
+          'Press **Apply import** and confirm the sentence it shows.',
+          'If you re-saved the file after choosing it, pick it again.',
+        ],
+        to: '/settings?section=data#import',
+        watch: ['Sheet values overwrite imported rows: taxes work done here for sheet-covered years is reset to the sheet.'],
+        keywords: ['import', 'xlsx', 'spreadsheet', 'workbook', 'migrate'],
+      },
+      {
+        id: 'snapshot-now',
+        title: 'Write and download a snapshot',
+        where: 'Settings → Data → Backups & snapshots',
+        steps: [
+          'Press **Snapshot now** before an import or a big edit — it writes an export ZIP on the server at once.',
+          'Nightly at 23:30 PT the app writes one by itself and keeps the newest fourteen.',
+          'Press **Download snapshot (.zip)** to keep a copy off the server.',
+        ],
+        to: '/settings?section=data#backups',
+        keywords: ['backup', 'snapshot', 'export', 'download data'],
+      },
+      {
+        id: 'restore-snapshot',
+        title: 'Restore a snapshot',
+        where: 'Settings → Data → Restore',
+        steps: [
+          'Pick a file or a stored snapshot and press **Dry run** — it writes nothing and reports what would change.',
+          'A clean dry run asks you to type the snapshot’s date; then press **Restore** and confirm.',
+          'A pre-restore point is written first, so the step back is one more restore.',
+        ],
+        to: '/settings?section=data#restore',
+        keywords: ['restore', 'recover', 'rollback'],
+      },
+      {
+        id: 'activity-undo',
+        title: 'Undo a change from the log',
+        where: 'Settings → Data → Activity',
+        steps: [
+          'Find the change — newest first — and press **Undo** twice: once to arm, once to fire.',
+          'It works while nothing later touched the same rows; **Load more** reaches further back.',
+        ],
+        to: '/settings?section=data#activity',
+        watch: ['Imports and restores are summaries here — they are undone by restoring a snapshot instead.'],
+        keywords: ['undo', 'activity log', 'revert', 'change log'],
+      },
+    ],
+    more: [
+      {
+        id: 'health-checks',
+        title: 'Fix a data-health problem',
+        where: 'Settings → Data → Data health',
+        steps: [
+          'Every failing check carries its own fix — a link to the page that owns it, or a button.',
+          'A zero-filled month offers **Delete** for that month: press once to arm, again to run. The repair is logged and undoable.',
+        ],
+        to: '/settings?section=data#health',
+        keywords: ['health', 'zero month', 'checks', 'data health'],
+      },
+      {
+        id: 'calendar-feed-pointer',
+        title: 'Create a calendar subscription link',
+        where: 'Settings → Integrations → Calendar feed',
+        steps: ['Feed links are minted, copied once and revoked on the **Calendar feed** card — the Calendar card in this guide walks it.'],
+        to: '/settings?section=integrations#calendar',
+      },
+      {
+        id: 'calendar-reminder-pointer',
+        title: 'Set the monthly reminder day',
+        where: 'Settings → Integrations → Calendar feed',
+        steps: ['The reminder day sits on the same **Calendar feed** card — the Calendar card in this guide walks it.'],
+        to: '/settings?section=integrations#calendar',
+      },
+      {
+        id: 'system-status',
+        title: 'Read the system card',
+        where: 'Settings → Data → System',
+        steps: [
+          '**Data through** names the month each hand-entered feed reaches; **Last backup** and **Recent backups** cover the nightly dump.',
+          '**Database size**, **Alembic head** and **Environment** finish it. The card is read-only.',
+        ],
+        to: '/settings?section=data#system',
+      },
+    ],
+    body: <SettingsMapTable />,
+    watch: [
+      'An apply that failed may still have written — restore the snapshot you took first.',
+      'The cron takes day names (mon-fri); numbers there mean something else.',
+      'A key saved on the Assistant card overrides the one in the server’s .env.',
     ],
   },
 ]
