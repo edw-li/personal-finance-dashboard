@@ -508,9 +508,17 @@ describe('CreditCardsPage', () => {
       { ...CATEGORIES[0], annual_spend: null, spending_category_id: 7 },
     ])
     cleanup()
+    // A DIFFERENT book below (one reward category, not two), so it must not inherit the last
+    // one's snapshot: the page seeds its state from the module-level cache (CreditCardsPage.tsx's
+    // `getSnapshot(SNAPSHOT_KEY)`), which beforeEach clears between TESTS but not between two
+    // renders inside one. Without this the second render painted the first's "$900.00 · 1/2
+    // share" row, 'Categories & weights' resolved off that stale paint, and the assertion below
+    // raced the new fetch — losing whenever full-suite scheduling delayed it.
+    clearSnapshots()
     renderPage('/credit-cards?section=manage')
     await screen.findByText('Categories & weights')
-    expect(categoriesRow('Groceries').textContent).toContain('$1,800.00')
+    // findBy/waitFor, not a bare read: the row is what the fetch answers, so it is awaited.
+    await waitFor(() => expect(categoriesRow('Groceries').textContent).toContain('$1,800.00'))
     expect(categoriesRow('Groceries').textContent).toContain('auto · from 2 entered months')
   })
 
@@ -783,6 +791,9 @@ describe('CreditCardsPage — owner chips and the household advantage', () => {
     expect(screen.queryByText('Household wallet advantage')).toBeNull()
 
     cleanup()
+    // Another new book, same reason as above: the page would otherwise paint the previous
+    // lineup's snapshot before this one's cards land.
+    clearSnapshots()
     // Give Sam a card that wins a category nobody else can: 5x Groceries at 1¢ = 5%.
     const winner: CreditCardOut = { ...RH, id: 4, name: 'Sam Grocery', slug: 'sam-grocery' }
     vi.mocked(fetchCreditCards).mockResolvedValue([vx(), SAVOR, winner])
