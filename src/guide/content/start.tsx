@@ -98,7 +98,7 @@ export const START_CARDS: GuideCard[] = [
     id: 'start-setup',
     title: 'Set up once',
     purpose:
-      'The first-time checklist, in the order the data depends on itself — people before what they own, accounts before the first month, category kinds before history.',
+      'The first-time checklist, in the order the data depends on — people before what they own, accounts before the first month, category kinds before history.',
     tasks: [],
     body: (
       <ol className="guide-body">
@@ -188,6 +188,12 @@ export const START_CARDS: GuideCard[] = [
         <li>
           After three complete months: <Link to="/spending?section=budgets">Spending → Budgets</Link> →{' '}
           <b className="guide-label">Start from my averages</b>.
+        </li>
+        <li>
+          Optional, and last because everything above feeds it:{' '}
+          <Link to="/settings?section=integrations#assistant">Assistant</Link> — paste an{' '}
+          <b className="guide-label">NVIDIA API key</b> and press{' '}
+          <b className="guide-label">Save assistant settings</b> to turn the drawer on.
         </li>
       </ol>
     ),

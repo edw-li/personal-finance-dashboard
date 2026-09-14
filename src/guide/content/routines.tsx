@@ -25,11 +25,14 @@ export const ROUTINE_CARDS: GuideCard[] = [
         title: 'Pick the month',
         where: 'Monthly update',
         steps: [
-          'Click a month chip in the scope row — a filled left half means balances, a filled right half spending.',
+          'Click a month chip in the scope row.',
           'For the next uncovered month, press **Start <Month>** beside the ribbon.',
-          'The step you were on survives the switch, unless the new month has no balances yet.',
         ],
         to: '/update',
+        watch: [
+          'A chip fills its left half once the month has balances, its right half once it has spending.',
+          'The step you were on survives a month switch — except on a month with no balances, which opens on **Balances**.',
+        ],
         keywords: ['which month', 'ribbon', 'start month'],
       },
       {
@@ -41,10 +44,11 @@ export const ROUTINE_CARDS: GuideCard[] = [
           'Enter card and loan balances as negative numbers — a positive one offers **Flip sign**.',
           'Type into the component rows; a parent badged **derived** sums them and takes no typing.',
           'Set **Recorded on**, and a **Notes** line if the month needs one.',
-          'Paste a column from a spreadsheet into the first cell to fill; the status line says what landed.',
+          'Paste a spreadsheet column into the first cell you want filled.',
           'Press **Next: spending**, or press Enter twice from the last cell.',
         ],
         to: '/update?step=balances',
+        watch: ['The status line under the table says what a paste landed and what it skipped.'],
         keywords: ['balances', 'account balance', 'net worth entry', 'liability'],
       },
       {
@@ -52,14 +56,16 @@ export const ROUTINE_CARDS: GuideCard[] = [
         title: 'Enter spending and take-home',
         where: 'Monthly update → Spending',
         steps: [
-          'Type the month’s take-home in **Household take-home** — one household figure, not one per person.',
+          'Type the month’s take-home in **Household take-home** — one figure, never per person.',
           'Type each category’s spend in **This month**; **Typical (3-mo median)** sits beside it.',
-          'A category left at its 0.00 seed is skipped, not recorded as a zero.',
           'To record a month that really spent nothing, tick **Confirm remaining categories as $0**.',
-          'A budgeted category shows its budget underneath and turns red when over — advisory, never a block.',
           'Press **Next: review**.',
         ],
         to: '/update?step=spending',
+        watch: [
+          'A category left at its 0.00 seed is skipped, not recorded as a zero.',
+          'A budgeted category shows its budget underneath and turns red when over — advisory, never a block.',
+        ],
         keywords: ['spending', 'take-home', 'net pay', 'categories', 'zero month'],
       },
       {
@@ -68,12 +74,17 @@ export const ROUTINE_CARDS: GuideCard[] = [
         where: 'Monthly update → Review',
         steps: [
           'Read the four tiles: **Net worth**, **Living spending**, **Cash outflow**, **Cash saved**.',
-          'Read **Changes since last save** — the largest balance moves and the biggest gaps from your recent median.',
+          'Read **Changes since last save** before you commit.',
           'Press **Save progress** — one save writes balances and spending together.',
-          'Read the receipt at the top of the step: rows added, changed, unchanged, categories left blank.',
-          'Undo the whole save from the toast for six seconds; after that, from **Activity**.',
+          'Read the receipt at the top of the page.',
+          'Undo the whole save from the toast, or later from **Activity**.',
         ],
         to: '/update?step=review',
+        watch: [
+          'Changes since last save counts the rows you changed, then lists the largest balance moves and the biggest gaps from your recent median.',
+          'The receipt counts rows added, changed and unchanged per feed, and names the categories left blank.',
+          'The toast’s Undo lasts six seconds — after that the Activity card is the way back.',
+        ],
         keywords: ['save', 'review', 'receipt', 'undo save'],
       },
       {
@@ -111,11 +122,12 @@ export const ROUTINE_CARDS: GuideCard[] = [
         where: 'Monthly update → Review → Review historical months',
         steps: [
           'Press **Load history**.',
-          'Tick the months to close, or **Select all eligible** for one year — a row missing a feed is disabled.',
+          'Tick the months to close, or **Select all eligible** for one year.',
           'Tick the confirmation under the list.',
           'Press **Close selected months**.',
         ],
         to: '/update?step=review',
+        watch: ['A month missing a feed cannot be ticked — its row names the feed it lacks.'],
         keywords: ['batch close', 'history', 'unreviewed'],
       },
       {
@@ -123,12 +135,15 @@ export const ROUTINE_CARDS: GuideCard[] = [
         title: 'Delete a month',
         where: 'Monthly update → Review → Month actions',
         steps: [
-          'Open the ⋯ menu beside the review status — **Month actions**, offered only on a saved month.',
+          'Open the ⋯ menu beside the review status — **Month actions**.',
           'Type the month as YYYY-MM to arm the button, then press **Delete this month**.',
-          'Balances, spending and take-home go together — Net worth and Spending lose the month.',
-          'Undo from the toast for six seconds, or later from **Activity**.',
+          'Undo from the toast, or later from **Activity**.',
         ],
         to: '/update?step=review',
+        watch: [
+          'The menu is offered only on a month that was already saved.',
+          'Balances, spending and take-home go together — Net worth and Spending lose the month.',
+        ],
         keywords: ['delete month', 'remove month'],
       },
       {
@@ -147,11 +162,15 @@ export const ROUTINE_CARDS: GuideCard[] = [
         title: 'Paste from a spreadsheet',
         where: 'Monthly update → Balances · Spending',
         steps: [
-          'Copy one column of numbers, click the first cell to fill, then paste — values run down the table order.',
-          'Copy two columns (name, then value) and paste anywhere — rows match by name, and a miss is listed, never guessed.',
-          'An empty pasted cell skips its target instead of blanking it; the status line counts what landed.',
+          'Copy one column of numbers, click the first cell to fill, then paste.',
+          'Or copy two columns — name, then value — and paste anywhere.',
         ],
         to: '/update',
+        watch: [
+          'A one-column paste fills downward in table order from the cell you clicked.',
+          'A two-column paste matches rows by name; an unmatched name is listed, never guessed.',
+          'An empty pasted cell skips its target instead of blanking it, and the status line counts what landed.',
+        ],
         keywords: ['paste', 'spreadsheet', 'clipboard'],
       },
       {
@@ -159,10 +178,14 @@ export const ROUTINE_CARDS: GuideCard[] = [
         title: 'Repair a month saved with no spending',
         where: 'Monthly update → Spending',
         steps: [
-          'A month whose spending is all zeros with no take-home opens with a repair banner.',
-          'Enter the real figures, or press **Delete the empty month** to drop the zero rows and keep the balances.',
+          'Enter the month’s real spending, then save.',
+          'Or press **Delete the empty month** to drop the zero rows.',
         ],
         to: '/update?step=spending',
+        watch: [
+          'A month whose spending is all zeros with no take-home opens with a repair banner.',
+          'Deleting keeps the month’s balances — only the zero spending rows go.',
+        ],
         keywords: ['phantom month', 'zero month', 'repair'],
       },
       {
@@ -170,10 +193,14 @@ export const ROUTINE_CARDS: GuideCard[] = [
         title: 'Recover unsaved entries',
         where: 'Monthly update',
         steps: [
-          'Typing is kept in this browser tab; reopening the month shows **Restored unsaved entries**.',
-          'Keep going and save them, or press **Discard restored entries** to return to the stored figures.',
+          'Reopen the month — a banner says **Restored unsaved entries**.',
+          'Keep going and save them, or press **Discard restored entries**.',
         ],
         to: '/update',
+        watch: [
+          'Typing is kept in this browser tab, not on the server.',
+          'Discarding returns every box to the figures the server holds.',
+        ],
         keywords: ['draft', 'unsaved', 'restore entries'],
       },
       {
@@ -181,10 +208,11 @@ export const ROUTINE_CARDS: GuideCard[] = [
         title: 'Resolve a save conflict',
         where: 'Monthly update',
         steps: [
-          'If the month changed on the server while you typed, the save is refused and a banner appears.',
-          'Press **Reload latest and compare draft** — your typing is kept beside the fresh figures.',
+          'Press **Reload latest and compare draft** in the banner.',
+          'Check your draft against the fresh figures, then save again.',
         ],
         to: '/update',
+        watch: ['A save is refused when the month changed on the server while you typed.'],
         keywords: ['conflict', 'save refused', 'stale month'],
       },
     ],
@@ -230,7 +258,8 @@ export const ROUTINE_CARDS: GuideCard[] = [
         </li>
         <li>
           <Link to="/taxes?section=inputs">Inputs</Link> → the year’s line items. A row badged “derived”
-          computes itself; an <b className="guide-label">Apply</b> chip fills a box with last year’s figure.
+          computes itself; an <b className="guide-label">Apply</b> chip fills a box with its suggestion — last
+          year’s figure, or a formula’s.
           Finish with <b className="guide-label">Save inputs</b>.
         </li>
         <li>
@@ -264,11 +293,14 @@ export const ROUTINE_CARDS: GuideCard[] = [
         title: 'Work the Needs attention list',
         where: 'Overview → Needs attention',
         steps: [
-          'Each line is a condition the data proves — an overdue month, a stale quote, a failed ticker, a stale backup, a missing tax year.',
-          'Click the line to land where it is fixed.',
-          'The card never goes away: with nothing outstanding it reads **No outstanding data checks**.',
+          'Click a line to land where it is fixed.',
+          'Work the list until it reads **No outstanding data checks**.',
         ],
         to: '/',
+        watch: [
+          'Every line is a condition the data proves — an overdue month, a stale quote, a failed ticker, a stale backup, a missing tax year.',
+          'The card never goes away; with nothing outstanding it says so instead.',
+        ],
         keywords: ['overdue', 'stale', 'attention'],
       },
       {
