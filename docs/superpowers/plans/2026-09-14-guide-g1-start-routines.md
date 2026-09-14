@@ -737,3 +737,207 @@ changed from the draft and why (the reviewer reads this list first), deviations,
   `#routine-tax-season`, `#routine-health`) — no cross-lane anchors.
 - Fences: `routine-monthly` has `to: '/update'`, six visible tasks (3–8 ✓), five `watch` lines
   (≤ 5 ✓), no `views` (the page has no strip ✓); every `to` uses allowed params (`step`) ✓.
+
+---
+
+## Results (implementer, 2026-09-14)
+
+### Commits (branch `guide/g1-start`, cut from `e0d289c`)
+
+| SHA | Message |
+| --- | --- |
+| `5f36aed` | content(guide): Start here — how it is organized, the first-time setup checklist, what happens next (spec §5.1) |
+| `1075dc8` | content(guide): Routines — the monthly update, thirteen tasks and the five traps; /update leaves the pending list (spec §5.1) |
+| `c3b91a3` | content(guide): Routines — tax season and keeping it healthy (spec §5.1) |
+| `c9622d3` | content(guide): Routines — name the two controls in watch lines as \*\*Label\*\*, ready for lane V's renderSteps pass (G3 hand-off) |
+
+Files touched: `src/guide/content/start.tsx`, `src/guide/content/routines.tsx`,
+`src/guide/content/pending.ts` (the `'/update',` line only). Nothing else.
+
+### Gates
+
+- Per task: `npx vitest run src/guide` → 5 files, **23 passed / 1 skipped** (the §5.4 coverage
+  guard, still skipped because `PENDING_PAGES` has twelve routes left); `npx tsc -b` clean;
+  `npx eslint src/guide` clean. Run after Task 1, Task 2, Task 3 and the watch-line follow-up.
+- Final: `npx tsc -b` clean · `npx eslint .` → **0 errors, 25 warnings** (all pre-existing
+  `react-refresh/only-export-components`, none in `src/guide`) · `npx vitest run` → **231 files,
+  3093 passed, 1 skipped** · `npm run build` → built in 20.59s (`GuidePage` chunk 27.81 kB).
+
+### Labels and facts changed from the draft copy
+
+Every bold label and every `where` segment was grepped against non-test `src/**/*.ts(x)`. The
+draft was right about most of it; these are the corrections, with the source that forced each.
+
+**Start here**
+
+1. `start-what` **purpose trimmed 29 → 25 words** (coordinator note, spec §5.3 rule 9): the
+   trailing "and everything else is computed from those entries" became "everything else is
+   computed". No other change to the exemplar.
+2. `start-organized` purpose "Thirteen pages in four groups" → **"The sidebar in five groups"**.
+   `navItems.ts` now has FIVE `NAV_SECTIONS` and FOURTEEN items — G0 added `/guide` — so both
+   numbers in the draft were stale. The body's own list has five bullets, which now agree.
+3. The ⓘ paragraph was **split in two**: `InfoHint`'s ⓘ (hover opens, click pins —
+   `InfoHint.tsx:28-32`) and `MetricInfoButton`'s ⓘ are different buttons, and
+   **About this number** is the latter's *accessible name* on a `StatTile` that carries evidence
+   (`MetricInspector.tsx:90`, `StatTile.tsx:119`). The draft read as if one control did both.
+4. "The ✦ button" → "the sparkle button … (**Open assistant**)": the icon is lucide `Sparkles`
+   and `Open assistant` is the aria-label (`AssistantDrawer.tsx:923`); the launcher is
+   `position: fixed; right/bottom: 1.25rem` (`assistant.css:8-19`), so "bottom right" stands.
+5. Activity sentence rewritten — the draft's "keeps every money-bearing change with a durable
+   Undo" restates `ActivityCard.tsx:124`'s InfoHint (rule 6). Now: "Once it is gone, … is where a
+   money-bearing change is reversed."
+6. `start-setup` 1: named the real controls **Theme** · **Density** · **Landing page**
+   (`AppearanceCard.tsx:49,59,80`).
+7. `start-setup` 2 (Password): dropped "Every other device is signed out" — verbatim from the
+   card's InfoHint (`SettingsPage.tsx:318`).
+8. `start-setup` 3: added **Marriage date**; dropped "It drives joint filing" (nothing in the card
+   says so) and reworded the backfill clause off `HouseholdCard.tsx:231-233`'s own sentence.
+9. `start-setup` 4: "**Owner** (blank = joint)" → "leave **Owner** empty for a joint one" —
+   "Owner blank = joint." is `AccountsCard.tsx:287`'s InfoHint sentence, and `accounts-owner` is
+   its canonical home anyway (spec §5.1). Dropped "and sort order" (no such labelled field on the
+   form). Kept the no-accounts fact: `accounts.length === 0` disables **Next: spending**
+   (`MonthlyUpdatePage.tsx:1643`).
+10. `start-setup` 8 (Price refresh): dropped "keep Mondays covered (the Monday run records the
+    weekly performance point)" — verbatim InfoHint (`PriceRefreshCard.tsx:124`). Added
+    **Save schedule** and "a five-field cron in day names".
+11. `start-setup` 9: manual pricing is a **security** flag on Portfolio → Manage → Securities
+    (`SecuritiesPanel.tsx:95`), not a separate destination — reworded.
+12. `start-setup` 10 (Limits): dropped "(the app ships none; blank means not entered)" — verbatim
+    InfoHint (`LimitsCard.tsx:138`). Added **Save limits**.
+13. `start-setup` 12: added the real disclosure label **Withholding split** (`PaycheckPage.tsx:845`).
+14. `start-setup` 15: named **Monthly update reminder day** and **New feed link**
+    (`CalendarFeedCard.tsx:198,212`).
+15. `start-setup` 16: the card is **Backups & snapshots**; "confirm the nightly 23:30 PT job
+    writes" dropped as an InfoHint restatement (`BackupsCard.tsx:83`) → "check the list gains a
+    nightly entry".
+
+**Routines — the monthly update**
+
+16. Card **purpose trimmed 30 → 22 words** (rule 9); "do it in the first days of the month" moved
+    into `body`.
+17. `body`: dropped "with an alarm three days before" — the ICS alarm is `-P2DT15H`
+    (`backend/app/services/calendar/ics.py:18`) and the event is titled "Monthly update — enter
+    <Month>" (`ritual.py:48`). Now: "puts a Monthly update event on any calendar subscribed to the
+    feed."
+18. **`update-pick-month` where 'Monthly update → month ribbon' → 'Monthly update'** — "month
+    ribbon" exists only in `shell.css`, and the where fence reads `.ts`/`.tsx` only, so the draft
+    would have failed the fence.
+19. `update-pick-month` step 2: **Start <Month>** sits in the **scope row beside the ribbon**, not
+    the title row (`MonthlyUpdatePage.tsx:1314-1320`).
+20. `update-balances` step 3: a rolled-up parent carries a **derived** badge (`:1500-1503`).
+21. **`update-balances` step 6 was wrong**: Enter on the last cell *focuses* the primary; a second
+    Enter clicks it (`AmountInput.tsx:128-133`). Now "press Enter twice from the last cell".
+22. **`update-spending` step 3 was wrong**: cells do not start blank — they seed at `'0.00'`
+    (`MonthlyUpdatePage.tsx:578`). What is true is that an untouched zero with no stored row is
+    never sent (`sentCategories`, `:737-748`). Rewritten as "A category left at its 0.00 seed is
+    skipped, not recorded as a zero."
+23. `update-spending`: added the closing step **Next: review** (`:1803`).
+24. **`update-review-save` step 1 was wrong**: `ReviewChanges` shows a changed-row COUNT plus two
+    "largest" tables, not "every row you changed, before and after" (`ReviewChanges.tsx:49-63`).
+25. **`update-review-save` step 2 was wrong**: there is no "items to review" list on the Review
+    step. Replaced with the four real tiles — **Net worth**, **Living spending**, **Cash outflow**,
+    **Cash saved** (`MonthlyUpdatePage.tsx:1862-1888`).
+26. `update-review-save` step 5: "Settings → Data → Activity" → the bold label **Activity**, so
+    the label fence holds it.
+27. `update-close` step 1: the gate is spending + take-home + the three ticks + `month <= current`
+    (`canRequestClose`, `:962-964`); balances alone never block. Reworded.
+28. `update-close` step 2: the draft quoted all three confirmation sentences (158 chars, ~26 words)
+    — replaced with "Tick the three boxes under **Confirm this month is complete** — balances,
+    spending, take-home." (rule 1). The sentences themselves are on screen.
+29. `update-close` step 5: the state label is **Changed since review**, not "Needs review"
+    (`api/monthReview.ts:54`).
+30. `update-after` steps 2-3 reworded off the two hint sentences on those cards
+    (`SpendingPage.tsx:609`, `NetWorthPage.tsx:778`).
+31. `update-delete-month` step 1: **Month actions** is an aria-label on an ⋯ icon button in the
+    review header (`:1821-1834`) — the step now says which control to press. It renders only when
+    the month was already saved.
+32. `update-delete-month` step 3 reworded off the popover's own sentence, and now names what loses
+    the month (rule 10).
+33. **`update-phantom` where → 'Monthly update → Spending'** and **`update-conflict` where →
+    'Monthly update'**: "repair banner" and "conflict banner" appear in no source text, so both
+    would have failed the where fence.
+34. `update-conflict` step 1: the save is *refused* (409 → `setReviewConflict`, `:950`), which the
+    draft only implied.
+35. `update-paste`: a keyed paste takes the **last** cell as the value (`utils/paste.ts:26,44`) and
+    the blank-skip is per cell (`:1201-1207`) — steps reworded to match.
+36. Card `watch` 1: "comparisons, averages and projection defaults" → "averages, comparisons and
+    the month other pages open on", which is what `eligible_spending = closed or legacy_eligible`
+    and `ReviewBook.default_month` actually drive
+    (`backend/app/services/month_review.py:53-57,135`).
+37. Card `watch` 3 (follow-up commit `c9622d3`, per G3's hand-off): the $0 consent is now named
+    verbatim as **Confirm remaining categories as $0** so lane V's fence extension can hold it.
+    Today it prints literal asterisks; V routes `watch` through `renderSteps`.
+
+**Routines — tax season · keeping it healthy**
+
+38. Step 1: "The newest year that has tables is cloned" restated `createHint`
+    (`TaxesPage.tsx:810`) — rewritten as its consequence ("so every figure still needs this year's
+    published number").
+39. Step 2: dropped "Every year starts Single" — verbatim from the scope-row InfoHint
+    (`TaxesPage.tsx:783`).
+40. Step 4: **Clone from** → **Clone from <year> single tables**, the real template
+    (`BracketsEditor.tsx:694`), plus the condition that the button shows only while that status tab
+    is still empty (`:683`).
+41. Step 5: **Add a table for** → **Add a table for <person>** (`:573`); it appears under Social
+    Security and Disability only (`PER_WORKER_JURISDICTIONS`, `api/taxes.ts:34-36`).
+42. Step 6: added the **derived** badge (`InputsForm.tsx:717`) and described **Apply** as filling a
+    box with last year's figure (`:789-797`).
+43. Step 7: added **Save limits**; **Clone from** → **Clone from <year>** (`LimitsCard.tsx:195`).
+44. Step 8: linked `/taxes?section=summary` (the Will I owe? card lives on Summary,
+    `TaxesPage.tsx:884-898`) and named the forms verbatim — **W-4 line 4c** and **DE 4**
+    (`WithholdingPanel.tsx:441,447`).
+45. `watch` 1 rewritten with a consequence clause so it is not `BracketsEditor.tsx:681`'s InfoHint
+    sentence: "a married year left on the Single toggle in the scope row still computes as Single."
+    `watch` 2 now names **Open Tax tables** verbatim (`SummaryPanel.tsx:303`) for V's fence.
+46. **`routine-health` body: "orphaned feeds" is not a health check.** The real ones are zero-filled
+    spending, spending gaps, net-pay-without-spending, stale quotes, two identical months, backup
+    state and snapshot age (`backend/app/services/health_checks.py`). Listed accurately.
+47. `routine-health` body: dropped "while nothing later touched the same rows" — verbatim from
+    `ActivityCard.tsx:124`'s InfoHint — and replaced it with the arm-then-run behaviour
+    (`ActivityCard.tsx:152`).
+48. **`health-attention` step 3 was wrong**: the Needs attention card is NOT absent when empty. It
+    always renders and prints "No outstanding data checks." (`OverviewPage.tsx:739,753`); only the
+    inner `nav` is conditional. The stale claim comes from the comment at `:741-742`.
+49. `health-about-number` step 1: since **About this number** is an accessible name on an ⓘ button,
+    the step says "Press the ⓘ on the tile — its name is **About this number**."
+
+### Deviations from the plan
+
+- **Task 1 Step 4's predicted three hash-fence failures never happened.** The link fence walks
+  `card.to` and `task.to` only (`allLinks`, `guideContent.test.ts:76-80`); `body` is unfenced by
+  design ("Prose for Start here / Reference cards; may contain `<Link>`s. Not fenced." —
+  `types.ts:41`). So Tasks 1-3 could be, and were, committed separately with the plan's own
+  messages while every gate stayed green.
+- Task 2 Step 3's completeness failure is real; `'/update'` was deleted from `PENDING_PAGES` in the
+  Task 2 commit, as the plan permits.
+- `start-what` was edited (purpose only) on the coordinator's instruction; the plan had it as
+  "kept".
+- A fourth commit was added after G3's hand-off about `watch` rendering (item 37/45).
+- Fence shape re-checked on the merged content: `routine-monthly` counts as a page card
+  (`to: '/update'` is a sidebar route) — 6 visible tasks, 5 `watch` lines, no `views` (Monthly
+  update has no tab strip). `routine-tax-season` and `routine-health` have no `to`, so the
+  page-card rules do not apply. No pointer tasks in this lane. 7 cards, 15 tasks, all ids unique
+  and kebab-case, every step ≤ 160 chars.
+
+### Hand-offs
+
+- **V:** `start-next`'s sandbox sentence should link `/guide?section=reference#ref-sandboxes` once
+  G4 lands (spec §9). Candidates for the same pass: `start-setup` 4 → `#accounts-add`,
+  `start-setup` 14 → `#cards-add`, `routine-health` body → `#health-checks` / `#snapshot-now` /
+  `#activity-undo` / `#portfolio-deactivate` / `#portfolio-refresh`.
+- **V:** when `watch` lines start going through `renderSteps`, this lane already carries three
+  `**Label**` spans in watch text (`update-monthly` trap 3, `routine-tax-season` traps 2) — all
+  verified verbatim against source, so the extended fence should pass unchanged.
+- **V / G5 dependency:** `start-organized` tells the reader the palette lists "every task in this
+  guide". That is only true once G5 wires the Guide group (spec §6) — if G5 is cut or deferred,
+  that clause must come out.
+- **G5 (`OverviewPage.tsx`):** the comment at `:741-742` claims the Needs attention card is
+  "Absent when nothing needs doing", which the code below it contradicts (`:753` prints "No
+  outstanding data checks."). Not this lane's file; worth a comment fix where that file is already
+  open.
+- **G4 (Settings cards):** `accounts-owner` still owes the "Owner blank = joint" rule and
+  `categories-kind` the "changing a kind recomputes all history" rule — G1 deliberately kept its
+  setup checklist off those InfoHint sentences rather than pre-empting the canonical tasks.
+- **Renderer:** no change needed. `ol.guide-body` renders the seventeen-item setup checklist
+  acceptably as a plain ordered list; if V wants tighter list spacing that is a `GuidePage.css`
+  edit in G0's files, not this lane's.
