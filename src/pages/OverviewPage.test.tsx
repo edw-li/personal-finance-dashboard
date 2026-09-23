@@ -90,6 +90,14 @@ vi.mock('../api/monthReview', async importOriginal => ({
 // factory keeps the JSX runtime out of the hoisted scope.
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
+  // Which option OBJECT a chart was handed: the real EChart repaints on a new one, already-drawn,
+  // even when it is byte-identical — and a repaint mid-entrance cuts it (code re-review 2).
+  const optionIds = new WeakMap<object, number>()
+  let handed = 0
+  const optionId = (option: object) => {
+    if (!optionIds.has(option)) optionIds.set(option, ++handed)
+    return optionIds.get(option)
+  }
   return {
     default: ({
       option,
@@ -120,6 +128,7 @@ vi.mock('../components/EChart', async () => {
         onClick: () => onClick?.({ dataIndex: 0 }),
         // The weekly axis's label set, counted; a right-click stands in for a 630px measurement.
         'data-xlabels': String(option.xAxis?.axisLabel?.customValues?.length ?? ''),
+        'data-option': String(optionId(option)),
         onContextMenu: () => onWidth?.(630),
       }),
   }
@@ -1894,6 +1903,23 @@ describe('OverviewPage — shell frame and owner scope', () => {
     await waitFor(() => expect(perf().getAttribute('data-xlabels')).toBe('12')) // quarter starts
     fireEvent.contextMenu(perf())
     await waitFor(() => expect(perf().getAttribute('data-xlabels')).toBe('6')) // half-years on a half card
+  })
+
+  // Code re-review 2: the page's data merges four feeds that land independently. The spending
+  // feed landing after the investments used to hand the performance chart a new, byte-identical
+  // option — and the chart repainted it already-drawn, cutting the entrance it had just begun.
+  it("keeps the performance chart's option when another of the page's feeds lands", async () => {
+    const payload = serve()
+    let landSpending: (matrix: typeof payload.matrix) => void = () => {}
+    vi.mocked(fetchMatrix).mockImplementation(() => new Promise((resolve) => { landSpending = resolve }))
+    renderPage()
+    const perf = () => screen.getByLabelText(/Line chart of portfolio value against cost basis/)
+    await waitFor(() => expect(perf().getAttribute('data-series')).toContain('Portfolio value'))
+    const drawn = perf().getAttribute('data-option')
+    expect(screen.queryByLabelText(/Bar chart of living spending/)).toBeNull()
+    await act(async () => landSpending(payload.matrix))
+    await screen.findByLabelText(/Bar chart of living spending/)
+    expect(perf().getAttribute('data-option')).toBe(drawn)
   })
 
   it('draws the portfolio against the same deposits in VOO only — no starting-balance line', async () => {

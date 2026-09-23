@@ -264,6 +264,9 @@ export default function OverviewPage() {
   // F5): the starting-balance line invited "we beat the S&P nine-fold". Portfolio keeps it,
   // legend-off, for the reader who asks for it.
   // The weekly axis takes as many month labels as the card's plot fits (code review 5).
+  // Keyed on the two feeds it draws, not on `data`: that merges four feeds landing on their own,
+  // and the spending feed landing after the investments handed the chart a new, byte-identical
+  // option — repainted already-drawn, cutting the entrance it had just begun (code re-review 2).
   const [perfLabels, setPerfLabels] = useState<number | undefined>(undefined)
   const onPerfWidth = useCallback((width: number) => setPerfLabels(weeklyLabelCapacity(width)), [])
   const perf = useMemo(
@@ -276,7 +279,7 @@ export default function OverviewPage() {
             { startingBalance: 'omit', labels: perfLabels },
           )
         : null,
-    [data, owner, perfLabels],
+    [data.history, data.holdings, owner, perfLabels],
   )
   // The card states the honest benchmark's answer over the whole history it draws
   // (2026-09-23 spec §C8; shell F5): "Ahead of the same deposits in VOO by $263.7K".
