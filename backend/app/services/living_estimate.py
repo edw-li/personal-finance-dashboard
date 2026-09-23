@@ -28,6 +28,7 @@ from app.schemas.metrics import MetricEvidence
 from app.services.budgets import living_budget_totals
 from app.services.metrics import average_evidence
 from app.services.month_review import load_review_book, month_shift
+from app.services.paycheck_calc import half_up2
 from app.services.savings import load_month_savings
 
 LivingBasis = Literal["budget", "average"]
@@ -36,7 +37,9 @@ LivingBasis = Literal["budget", "average"]
 @dataclass(frozen=True)
 class LivingEstimate:
     month: date
-    amount: Decimal  # cents, as the budgets and the evidence emit them
+    # Exactly 2 dp, half-up, whatever the source carried: the client's toCents refuses any
+    # other shape rather than guess (2026-09-23 lane B1 review, M12).
+    amount: Decimal
     basis: LivingBasis
     # How many eligible months the mean read (1–12); None on a budget.
     months_in_average: int | None
@@ -76,12 +79,14 @@ async def living_estimates(
     for month in months:
         budget = budgets[month]
         if budget is not None:
-            estimates.append(LivingEstimate(month, budget, "budget", None))
+            estimates.append(LivingEstimate(month, half_up2(budget), "budget", None))
             continue
         evidence = averages[average_anchor(month, today)]
         if evidence.value is None or evidence.window is None:
             continue
         estimates.append(
-            LivingEstimate(month, evidence.value, "average", len(evidence.window.included))
+            LivingEstimate(
+                month, half_up2(evidence.value), "average", len(evidence.window.included)
+            )
         )
     return estimates

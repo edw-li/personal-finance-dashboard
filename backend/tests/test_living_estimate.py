@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 
 from app.models import CategoryBudget, MonthlySpending, SpendingCategory
+from app.services import living_estimate as living_estimate_module
 from app.services.budgets import living_budget_total, living_budget_totals
 from app.services.living_estimate import average_anchor, living_estimates, months_overlapping
 from app.services.metrics import load_spending_metrics
@@ -197,6 +198,28 @@ async def test_get_calendar_answers_living_per_month(auth_client, db):
     # A window inside one month asks about that month alone.
     one = (await auth_client.get(f"{CALENDAR}?start=2026-09-10&end=2026-09-20")).json()
     assert [row["month"] for row in one["living"]] == ["2026-09-01"]
+
+
+async def test_every_amount_is_two_decimal_places_whatever_its_source(auth_client, db, monkeypatch):
+    """The client's toCents refuses anything but a 2 dp decimal — it would rather throw than
+    guess — so the server quantizes every estimate half-up, a budget sum or an average that
+    ever carried more digits (or fewer) included (2026-09-23 lane B1 review, M12)."""
+    await book(db, flat_year())
+
+    async def ragged_totals(_db, months):
+        return {month: {AUG: None, SEP: D("2650.005"), OCT: D("2600")}[month] for month in months}
+
+    real_average = living_estimate_module.average_evidence
+
+    def ragged_average(rows, review_book, anchor):
+        evidence = real_average(rows, review_book, anchor)
+        return evidence.model_copy(update={"value": evidence.value + D("0.004")})
+
+    monkeypatch.setattr(living_estimate_module, "living_budget_totals", ragged_totals)
+    monkeypatch.setattr(living_estimate_module, "average_evidence", ragged_average)
+    resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-10-31")
+    assert resp.status_code == 200, resp.text
+    assert [row["amount"] for row in resp.json()["living"]] == ["2500.00", "2650.01", "2600.00"]
 
 
 async def test_get_calendar_living_is_empty_on_an_empty_book(auth_client):
