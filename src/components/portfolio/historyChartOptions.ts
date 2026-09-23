@@ -4,7 +4,7 @@
 // benchmarkLede.ts (code review 10). Number() here is display-only — the server's Decimal strings
 // are parsed once and never handed back to the API (format.ts's rule).
 import type { EChartsOption } from '../../charts/echarts'
-import { LINE, WASH, dateAxis, grid, moneyAxis } from '../../charts/grammar'
+import { LINE, MONEY_GRID, WASH, dateAxis, grid, moneyAxis } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { resolvedWindow } from '../../charts/timeZoom'
@@ -64,22 +64,37 @@ export interface HistoryOptionSettings {
    *  which the weekly axis picks its label stride from (review round 1). The page still spreads
    *  the matching dataZoom on itself. Absent (the Overview card): the whole series. */
   range?: RangeState
+  /** How many month labels the plot is wide enough for — weeklyLabelCapacity(the chart's
+   *  measured width) (code review 5). Absent: twelve. */
+  labels?: number
 }
 
 /** Month strides the weekly axis steps through, finest first — each lands on Januaries. */
-const MONTH_STRIDES = [1, 3, 6, 12, 24, 60, 120] as const
-/** The most month labels a stride may put in the window; hideOverlap still guards a narrow card. */
+const MONTH_STRIDES = [1, 2, 3, 6, 12, 24, 60, 120] as const
+/** The most month labels a stride may put in the window when the chart's width is not known. */
 const MOST_LABELS = 12
 /** Under this many month starts in the window, its weekly checkpoints carry the axis instead. */
 const FEWEST_LABELS = 3
+/** The plot width one month label needs: a "Sep 2026" and the space around it — and months are
+ *  four or five weekly checkpoints, so the four-week ones sit an eighth closer than the mean. */
+const LABEL_SLOT_PX = 72
+
+/** How many month labels a performance chart this wide fits evenly (code review 5): its plot —
+ *  the money grid's width inside the chart — over the slot each label needs, never under three.
+ *  Pages feed it the chart's measured width; a whole number, so they re-render only when it moves. */
+export function weeklyLabelCapacity(chartWidth: number): number {
+  const plot = chartWidth - MONEY_GRID.left - MONEY_GRID.right
+  return Math.max(FEWEST_LABELS, Math.floor(plot / LABEL_SLOT_PX))
+}
 
 /**
  * The weekly axis (2026-09-23 spec §C4, §C8; charts F6, shell F5; review round 1): labels where a
  * month begins — "Oct 2023", never an arbitrary Monday like "Oct 23, 2023 · Jan 22, 2024" — while
  * the category itself stays the exact date, so the tooltip header keeps the checkpoint's day. The
  * stride is chosen from the WINDOW the chart shows (the range chip's, or one dragged out with
- * ctrl+wheel; the whole series on the Overview): every month, else quarter starts, half-years,
- * Januaries… — the finest that puts at most twelve in the window. A whole-series stride left 1Y
+ * ctrl+wheel; the whole series on the Overview): every month, else every other month, quarter
+ * starts, half-years, Januaries… — the finest that puts no more labels in the window than the
+ * plot is wide enough for (`most`, from the chart's measured width). A whole-series stride left 1Y
  * with four labels on this book, a single "Jan" on a longer one, and a zoom between two quarter
  * starts with none. A window holding fewer than three month starts (year to date in February)
  * labels its weekly checkpoints instead ("Jan 12"; a month start keeps "Jan 2026"). The set rides
@@ -88,7 +103,7 @@ const FEWEST_LABELS = 3
  * action. The formatter depends on nothing but the category. hideOverlap is the last guard on a
  * narrow card: a label that would still touch its neighbour is dropped, never smeared.
  */
-function weeklyAxis(categories: string[], isoDates: string[], window: ZoomWindow) {
+function weeklyAxis(categories: string[], isoDates: string[], window: ZoomWindow, most: number) {
   // The first checkpoint of each calendar month: where a month label may stand.
   const monthStarts = isoDates.flatMap((iso, i) =>
     i === 0 || iso.slice(0, 7) !== isoDates[i - 1].slice(0, 7) ? [i] : [],
@@ -101,7 +116,7 @@ function weeklyAxis(categories: string[], isoDates: string[], window: ZoomWindow
     monthStarts.filter(inWindow).length < FEWEST_LABELS
       ? isoDates.flatMap((_, i) => (inWindow(i) ? [i] : []))
       : onStride(
-          MONTH_STRIDES.find((stride) => onStride(stride).filter(inWindow).length <= MOST_LABELS) ??
+          MONTH_STRIDES.find((stride) => onStride(stride).filter(inWindow).length <= most) ??
             MONTH_STRIDES[MONTH_STRIDES.length - 1],
         )
   const starts = new Set(monthStarts)
@@ -125,7 +140,7 @@ export function portfolioHistoryOption(
   history: PortfolioHistory,
   live: LivePoint | null,
   events: PerformanceEvents | null = null,
-  { selected, startingBalance = 'legend-off', range }: HistoryOptionSettings = {},
+  { selected, startingBalance = 'legend-off', range, labels = MOST_LABELS }: HistoryOptionSettings = {},
 ): EChartsOption | null {
   if (history.dates.length < 2) return null
   const lastDate = history.dates[history.dates.length - 1]
@@ -244,6 +259,7 @@ export function portfolioHistoryOption(
       range === undefined
         ? { startValue: 0, endValue: categories.length - 1 }
         : resolvedWindow(history.dates, range, categories.length),
+      labels,
     ),
     // No scale:true — a washed area over a visible axis needs the honest zero baseline.
     yAxis: moneyAxis(),

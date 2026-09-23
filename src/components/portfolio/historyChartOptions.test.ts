@@ -11,6 +11,7 @@ import {
   portfolioHistoryCsv,
   portfolioHistoryOption,
   STARTING_BALANCE_SERIES,
+  weeklyLabelCapacity,
 } from './historyChartOptions'
 import { BUYS_SERIES, DIVIDENDS_SERIES, EXDIV_SERIES } from './performanceEvents'
 import type { PerformanceEvents } from './performanceEvents'
@@ -339,6 +340,31 @@ describe('the weekly axis (2026-09-23 spec §C4, §C8, review round 1)', () => {
       'Jan 2016', 'Jan 2017', 'Jan 2018', 'Jan 2019', 'Jan 2020', 'Jan 2021', 'Jan 2022',
       'Jan 2023', 'Jan 2024', 'Jan 2025', 'Jan 2026',
     ])
+  })
+
+  // Code review 5: how many labels a window takes depends on the plot's WIDTH. At an 800px chart a
+  // year of months put four-week months 59px apart — closer than a label — and hideOverlap dropped
+  // every other one: gaps of one month, then two.
+  it('takes as many labels as the chart is wide enough for, evenly', () => {
+    expect(weeklyLabelCapacity(800)).toBe(9) // a 706px plot, a label every 72px
+    expect(weeklyLabelCapacity(1230)).toBe(15)
+    expect(weeklyLabelCapacity(200)).toBe(3) // never under three
+    const real = mondays('2023-10-23', 153)
+    const yearStart = real.dates.indexOf('2025-09-22')
+    const narrow = axisOf(
+      portfolioHistoryOption(real, null, null, { range: { preset: '1y' }, labels: weeklyLabelCapacity(800) }),
+    )
+    // Every other month, Jan-aligned — even gaps, and all of them fit.
+    expect(shown(narrow, yearStart)).toEqual([
+      'Nov 2025', 'Jan 2026', 'Mar 2026', 'May 2026', 'Jul 2026', 'Sep 2026',
+    ])
+    const wide = axisOf(
+      portfolioHistoryOption(real, null, null, { range: { preset: '1y' }, labels: weeklyLabelCapacity(1230) }),
+    )
+    expect(shown(wide, yearStart)).toHaveLength(12)
+    // The whole series on a half-width card: half-years.
+    const half = axisOf(portfolioHistoryOption(real, null, null, { labels: weeklyLabelCapacity(630) }))
+    expect(shown(half)).toEqual(['Jan 2024', 'Jul 2024', 'Jan 2025', 'Jul 2025', 'Jan 2026', 'Jul 2026'])
   })
 
   it('labels every checkpoint in a window holding fewer than three month starts', () => {

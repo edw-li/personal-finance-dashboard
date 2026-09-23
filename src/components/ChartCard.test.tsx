@@ -7,8 +7,8 @@ import { hintLabel } from './InfoHint'
 vi.mock('./EChart', async () => {
   const { createElement } = await import('react')
   return {
-    default: ({ ariaLabel, animateEntrance = true, group, height, onClick, onDataZoom }: { ariaLabel?: string; animateEntrance?: boolean; group?: string; height?: number | 'fill'; onClick?: (params: { dataIndex: number; seriesIndex: number }) => void; onDataZoom?: (window: { startValue: number; endValue: number }) => void }) =>
-      createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel, 'data-animate': String(animateEntrance), 'data-group': group ?? '', 'data-height': String(height), style: { height }, onClick: () => onClick?.({ dataIndex: 1, seriesIndex: 0 }), onDoubleClick: () => onDataZoom?.({ startValue: 1, endValue: 2 }) }),
+    default: ({ ariaLabel, animateEntrance = true, group, height, onClick, onDataZoom, onWidth }: { ariaLabel?: string; animateEntrance?: boolean; group?: string; height?: number | 'fill'; onClick?: (params: { dataIndex: number; seriesIndex: number }) => void; onDataZoom?: (window: { startValue: number; endValue: number }) => void; onWidth?: (width: number) => void }) =>
+      createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel, 'data-animate': String(animateEntrance), 'data-group': group ?? '', 'data-height': String(height), style: { height }, onClick: () => onClick?.({ dataIndex: 1, seriesIndex: 0 }), onDoubleClick: () => onDataZoom?.({ startValue: 1, endValue: 2 }), onContextMenu: () => onWidth?.(640) }),
   }
 })
 vi.mock('../utils/download', () => ({ toCsv: vi.fn(() => 'CSV'), downloadDataUrl: vi.fn(), downloadText: vi.fn() }))
@@ -283,6 +283,13 @@ describe('ChartCard persistent interactions', () => {
       expect(document.querySelector('.detail-panel')).toBeTruthy()
       expect(holdPosition).not.toHaveBeenCalled()
     })
+  })
+  // Code review 5: a card whose option depends on its width hears the chart's measurement.
+  it("passes the chart's measured width through", () => {
+    const onWidth = vi.fn()
+    render(<ChartCard {...base} option={OPTION} onWidth={onWidth} />)
+    fireEvent.contextMenu(screen.getByTestId('echart'))
+    expect(onWidth).toHaveBeenCalledWith(640)
   })
   it('expanded → the chart fills the dialog; collapsed → the card height comes back', () => {
     render(<ChartCard {...base} option={OPTION} height={320} />)

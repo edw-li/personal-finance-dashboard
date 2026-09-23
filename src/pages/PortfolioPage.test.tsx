@@ -57,15 +57,20 @@ vi.mock('../components/EChart', async () => {
       option,
       ariaLabel,
       animateEntrance = true,
+      onWidth,
     }: {
-      option: { series?: { name?: string }[] }
+      option: { series?: { name?: string }[]; xAxis?: { axisLabel?: { customValues?: unknown[] } } }
       ariaLabel?: string
       animateEntrance?: boolean
+      onWidth?: (width: number) => void
     }) =>
       createElement('div', {
         'data-testid': 'echart',
         'aria-label': ariaLabel,
         'data-series': (option.series ?? []).map((s) => s.name ?? '').join('|'),
+        // The weekly axis's label set, counted; a right-click stands in for an 800px measurement.
+        'data-xlabels': String(option.xAxis?.axisLabel?.customValues?.length ?? ''),
+        onContextMenu: () => onWidth?.(800),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
       }),
@@ -94,6 +99,7 @@ import {
 } from '../api/portfolio'
 import { fetchPriceHistory, fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
 import { formatDate, formatDateTime } from '../utils/format'
+import { addDays } from '../utils/months'
 
 // The roster behind the two ledgers' Account boxes (2026-09-09 audit item 27).
 const ACCOUNTS: PortfolioAccountOut[] = [
@@ -881,6 +887,21 @@ it('keeps the chart events across range changes: they are built from the ledgers
   )
   await waitFor(() => expect(card().querySelector('.chart-lede')?.textContent).toMatch(/^Behind|^Ahead|^Level/))
   expect(vi.mocked(buildPerformanceEvents).mock.calls.length).toBe(built)
+})
+
+// Code review 5: the weekly axis takes as many month labels as the chart is wide enough for.
+it("labels the weekly axis for the chart's measured width", async () => {
+  // Forty-four Mondays from Nov 3, 2025: ten month starts, Nov through Aug.
+  const mondays = Array.from({ length: 44 }, (_, i) => addDays('2025-11-03', 7 * i))
+  const flat = mondays.map(() => '1.00')
+  vi.mocked(fetchHistory).mockResolvedValue({ dates: mondays, market_value: flat, cost_basis: flat, sp500: flat, benchmark: flat })
+  renderPage()
+  const chart = () => screen.getAllByTestId('echart')[0]
+  // At no known width: every month start.
+  await waitFor(() => expect(chart().getAttribute('data-xlabels')).toBe('10'))
+  fireEvent.contextMenu(chart()) // the chart measures 800px: a plot for nine labels
+  // Every other month now, Jan-aligned: Nov, Jan, Mar, May, Jul.
+  await waitFor(() => expect(chart().getAttribute('data-xlabels')).toBe('5'))
 })
 
 // ── Performance events on a rug (2026-09-23 spec §C8) ─────────────────────────────────────

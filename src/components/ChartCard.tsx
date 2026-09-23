@@ -71,6 +71,8 @@ export interface ChartCardProps {
   instanceRef?: { current: EChartsInstance | null }
   onLegendChange?: (selected: Record<string, boolean>) => void
   onDataZoom?: (window: { startValue: number; endValue: number }) => void
+  /** The chart's measured width, for an option whose labels depend on it (code review 5). */
+  onWidth?: (width: number) => void
   zoomWindow?: ZoomWindow
   /** Domain adapters read source data and attach real identifiers/source links. */
   selectionAdapter?: (params: EChartEventParams) => ChartSelection | null
@@ -87,7 +89,7 @@ export interface ChartCardProps {
 export default function ChartCard({
   title, hint, ariaLabel, option, empty, exportName, csv, caption, height = 320, controls, actions, footer, lede, aside,
   zoomable = false, group, busy = false, error = null, span = 12,
-  onClick, onHover, onHoverEnd, instanceRef, onLegendChange, onDataZoom, zoomWindow,
+  onClick, onHover, onHoverEnd, instanceRef, onLegendChange, onDataZoom, onWidth, zoomWindow,
   selectionAdapter, rowSelection, selection, onSelectionChange, renderSelection, selectionScopeKey = '', independentRangeLabel, allowExpand = true,
 }: ChartCardProps) {
   const { fromCache } = usePageFrame()
@@ -231,6 +233,7 @@ export default function ChartCard({
           instanceRef={chartRef}
           onLegendChange={onLegendChange}
           onDataZoom={handleZoom}
+          onWidth={onWidth}
           zoomWindow={zoomWindow}
         />
       </div>

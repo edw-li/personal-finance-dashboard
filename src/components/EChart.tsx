@@ -55,6 +55,7 @@ export default function EChart({
   instanceRef,
   onLegendChange,
   onDataZoom,
+  onWidth,
   animateEntrance = true,
   zoomWindow,
   group,
@@ -81,6 +82,9 @@ export default function EChart({
   onLegendChange?: (selected: Record<string, boolean>) => void
   /** Mirrors a ctrl+wheel/drag-pan window into page state, as category-axis indices. */
   onDataZoom?: (window: { startValue: number; endValue: number }) => void
+  /** The container's measured width, on first measure and every resize — for an option whose
+   *  labels depend on it (the portfolio's weekly axis, code review 5). Pages quantize it. */
+  onWidth?: (width: number) => void
   /** false = paint the option already-drawn (cached revisits must not replay the
    *  entrance dance — 2026-08-27 spec §1). Default true. Merged after the page's
    *  option, exactly like the reduced-motion force. */
@@ -130,6 +134,7 @@ export default function EChart({
   const onHoverEndRef = useRef(onHoverEnd)
   const onLegendChangeRef = useRef(onLegendChange)
   const onDataZoomRef = useRef(onDataZoom)
+  const onWidthRef = useRef(onWidth)
   const legendSelectionRef = useRef<Record<string, boolean>>({})
   const manualZoomRef = useRef<ZoomWindow | null>(null)
   const requestedZoomRef = useRef<string | null>(null)
@@ -144,6 +149,7 @@ export default function EChart({
     onHoverEndRef.current = onHoverEnd
     onLegendChangeRef.current = onLegendChange
     onDataZoomRef.current = onDataZoom
+    onWidthRef.current = onWidth
   })
 
   useEffect(() => {
@@ -195,6 +201,7 @@ export default function EChart({
       if (el.clientWidth !== chart.getWidth() || el.clientHeight !== chart.getHeight()) {
         chart.resize({ animation: { duration: 0 } })
       }
+      onWidthRef.current?.(el.clientWidth)
     })
     observer.observe(el)
     return () => {

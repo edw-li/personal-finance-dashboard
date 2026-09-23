@@ -29,6 +29,7 @@ import {
   liveFromHoldings,
   portfolioHistoryCsv,
   portfolioHistoryOption,
+  weeklyLabelCapacity,
 } from '../components/portfolio/historyChartOptions'
 import { buildPerformanceEvents } from '../components/portfolio/performanceEvents'
 import HeatTreemapCard from '../components/portfolio/HeatTreemapCard'
@@ -527,6 +528,12 @@ export default function PortfolioPage() {
     )
   }, [history, holdings, securities, transactions, dividends, dividendEvents, householdLedgers])
 
+  // How many month labels the chart's plot fits (code review 5), from the chart's own measured
+  // width — a whole number, so the page re-renders only when it moves, not on every frame of the
+  // dock's margin transition.
+  const [axisLabels, setAxisLabels] = useState<number | undefined>(undefined)
+  const onChartWidth = useCallback((width: number) => setAxisLabels(weeklyLabelCapacity(width)), [])
+
   const performanceOption = useMemo(() => {
     if (!history || !holdings) return null
     // A3 (2026-08-31 tier-1): the ping is derived from the OWNER-FILTERED holdings, but
@@ -541,7 +548,7 @@ export default function PortfolioPage() {
       history,
       owner === null ? liveFromHoldings(holdings) : null,
       performanceEvents,
-      { selected: legendSelected, range },
+      { selected: legendSelected, range, labels: axisLabels },
     )
     return base === null
       ? null
@@ -551,7 +558,7 @@ export default function PortfolioPage() {
         // END, so the indices are unshifted and the window runs out to the ping.
         dataZoom: rangeZoom(history.dates, range),
       }
-  }, [history, holdings, performanceEvents, range, legendSelected, owner])
+  }, [history, holdings, performanceEvents, range, legendSelected, owner, axisLabels])
 
   // The card states the honest benchmark's answer over the window the chart is showing — the
   // chip's, or one dragged out with ctrl+wheel (2026-09-23 spec §C8; wealth PF-1).
@@ -784,6 +791,7 @@ export default function PortfolioPage() {
                 zoomable
                 onLegendChange={onLegendChange}
                 onDataZoom={onZoomWindow}
+                onWidth={onChartWidth}
                 zoomWindow={zoomWindow}
                 footer={
                   <>

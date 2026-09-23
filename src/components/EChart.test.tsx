@@ -615,6 +615,22 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
   })
 })
 
+// Code review 5: a chart whose labels depend on its width (the portfolio's weekly axis) reads the
+// container's measured width from the same observer that refits the engine.
+describe('EChart width signal', () => {
+  it("reports the container's width on first measure and on every resize", () => {
+    const onWidth = vi.fn()
+    const { container } = render(<EChart ariaLabel="test chart" option={OPTION} onWidth={onWidth} />)
+    const box = container.querySelector('[aria-label="test chart"]') as HTMLElement
+    Object.defineProperty(box, 'clientWidth', { configurable: true, value: 1230 })
+    resizeNotify.forEach((fire) => fire())
+    expect(onWidth).toHaveBeenLastCalledWith(1230)
+    Object.defineProperty(box, 'clientWidth', { configurable: true, value: 800 })
+    resizeNotify.forEach((fire) => fire())
+    expect(onWidth).toHaveBeenLastCalledWith(800)
+  })
+})
+
 describe('EChart resize guard (spec §6)', () => {
   it('ignores the notification that only echoes the size the engine already holds', () => {
     render(<EChart ariaLabel="test chart" option={OPTION} />)

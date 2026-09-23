@@ -36,6 +36,7 @@ import {
   liveFromHoldings,
   portfolioHistoryCsv,
   portfolioHistoryOption,
+  weeklyLabelCapacity,
 } from '../components/portfolio/historyChartOptions'
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
@@ -261,6 +262,9 @@ export default function OverviewPage() {
   // The home card compares against the same deposits in VOO only (2026-09-23 spec §C8, shell
   // F5): the starting-balance line invited "we beat the S&P nine-fold". Portfolio keeps it,
   // legend-off, for the reader who asks for it.
+  // The weekly axis takes as many month labels as the card's plot fits (code review 5).
+  const [perfLabels, setPerfLabels] = useState<number | undefined>(undefined)
+  const onPerfWidth = useCallback((width: number) => setPerfLabels(weeklyLabelCapacity(width)), [])
   const perf = useMemo(
     () =>
       data.history && data.holdings
@@ -268,10 +272,10 @@ export default function OverviewPage() {
             data.history,
             owner === null ? liveFromHoldings(data.holdings) : null,
             null,
-            { startingBalance: 'omit' },
+            { startingBalance: 'omit', labels: perfLabels },
           )
         : null,
-    [data, owner],
+    [data, owner, perfLabels],
   )
   // The card states the honest benchmark's answer over the whole history it draws
   // (2026-09-23 spec §C8; shell F5): "Ahead of the same deposits in VOO by $263.7K".
@@ -594,6 +598,7 @@ export default function OverviewPage() {
                 option={perf}
                 empty="No performance history yet."
                 exportName="portfolio-performance"
+                onWidth={onPerfWidth}
                 csv={data.history ? () => portfolioHistoryCsv(data.history!, { startingBalance: 'omit' }) : undefined}
                 height={280}
                 busy={investments.busy} error={investments.error} selectionScopeKey={String(owner)}

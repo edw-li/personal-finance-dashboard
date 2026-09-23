@@ -96,11 +96,13 @@ vi.mock('../components/EChart', async () => {
       ariaLabel,
       onClick,
       animateEntrance = true,
+      onWidth,
     }: {
-      option: { xAxis?: { data?: unknown[] }; series?: { type?: string; name?: string; data?: unknown[] }[] }
+      option: { xAxis?: { data?: unknown[]; axisLabel?: { customValues?: unknown[] } }; series?: { type?: string; name?: string; data?: unknown[] }[] }
       ariaLabel?: string
       onClick?: (params: { dataIndex?: number }) => void
       animateEntrance?: boolean
+      onWidth?: (width: number) => void
     }) =>
       createElement('div', {
         'data-testid': 'echart',
@@ -116,6 +118,9 @@ vi.mock('../components/EChart', async () => {
         // enough to walk the click-through door without a canvas (SpendingPage.test's
         // idiom). Charts given no handler stay inert, like the real thing.
         onClick: () => onClick?.({ dataIndex: 0 }),
+        // The weekly axis's label set, counted; a right-click stands in for a 630px measurement.
+        'data-xlabels': String(option.xAxis?.axisLabel?.customValues?.length ?? ''),
+        onContextMenu: () => onWidth?.(630),
       }),
   }
 })
@@ -1876,6 +1881,19 @@ describe('OverviewPage — shell frame and owner scope', () => {
     // No chart yet — the card is its skeleton, found by its title.
     const card = screen.getByText('Portfolio performance').closest('section') as HTMLElement
     expect(card.querySelector('.chart-lede')?.textContent).toBe(' ')
+  })
+
+  // Code review 5: the card's weekly axis takes as many month labels as the card is wide for.
+  it('labels its weekly axis for the width the card measures', async () => {
+    const dates = Array.from({ length: 153 }, (_, i) => addDays('2023-10-23', 7 * i))
+    const flat = dates.map(() => '1.00')
+    serve({ history: historyOut({ dates, market_value: flat, cost_basis: flat, sp500: flat, benchmark: flat }) })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    const perf = () => screen.getByLabelText(/Line chart of portfolio value against cost basis/)
+    await waitFor(() => expect(perf().getAttribute('data-xlabels')).toBe('12')) // quarter starts
+    fireEvent.contextMenu(perf())
+    await waitFor(() => expect(perf().getAttribute('data-xlabels')).toBe('6')) // half-years on a half card
   })
 
   it('draws the portfolio against the same deposits in VOO only — no starting-balance line', async () => {
