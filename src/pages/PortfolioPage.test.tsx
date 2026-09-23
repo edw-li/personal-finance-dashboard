@@ -822,6 +822,9 @@ it('draws ex-dividend notices on the rug only for securities the page holds', as
   const performance = () => screen.getAllByTestId('echart')[0]
   await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
   cleanup()
+  // The page paints a revisit from its snapshot cache and revalidates underneath: without the
+  // clear, the first render's notices would paint first and race the assertion below.
+  clearSnapshots()
   vi.mocked(fetchDividendEvents).mockResolvedValue([
     { security_id: 99, ex_date: '2026-08-19', per_share: '2.000000' },
   ])
