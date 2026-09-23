@@ -450,6 +450,14 @@ describe('the month the card reads (spec §B5)', () => {
     await waitFor(() => expect(document.activeElement).toBe(heading()))
   })
 
+  // Review nit: under "your 13 budgets start Sep 2026", a list headed "No budget yet" said the
+  // opposite of the sentence above it.
+  it('heads the list of categories as having no budget in force THAT month, not "no budget yet"', () => {
+    renderBook(SEP_BOOK, 1)
+    expect(screen.getByRole('heading', { name: 'No budget in force for Aug 2026 (2)' })).toBeDefined()
+    expect(screen.queryByText(/No budget yet/)).toBeNull()
+  })
+
   it('names budgets that ended, and budgets that resume, in their own words', () => {
     const ended: SpendingMatrix = {
       ...SEP_BOOK,

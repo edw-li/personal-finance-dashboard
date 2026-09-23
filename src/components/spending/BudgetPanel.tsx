@@ -557,7 +557,12 @@ export default function BudgetPanel({
         </div>
       )}
       {unbudgeted.length > 0 && (() => {
-        const title = `No budget yet (${unbudgeted.length})`
+        // Where budgets exist in other months, "No budget yet" would contradict the sentence
+        // above it ("your 13 budgets start Sep 2026"): name the month instead (spec §B5).
+        const title =
+          elsewhere === null
+            ? `No budget yet (${unbudgeted.length})`
+            : `No budget in force for ${formatMonth(month)} (${unbudgeted.length})`
         const rows = (
           <div className="budget-rows">
             {unbudgeted.map(({ category, budget }) => (
