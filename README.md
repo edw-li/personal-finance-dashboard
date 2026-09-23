@@ -467,6 +467,11 @@ run. The encrypted path is exercised here, on the server, the first time you run
 script after setting it — the dev box has no OCI credentials, so this check happens at
 deploy time by design.
 
+Keep `.env` at mode 600 (`chmod 600 .env`) — it holds every secret on the box, the
+passphrase included. The script hands the passphrase to gpg on a file descriptor, never on
+the command line, so it never shows in `ps` while a backup runs, and Settings › Data ›
+System warns whenever the latest backup was uploaded unencrypted.
+
 ```bash
 sudo apt-get install -y python3-boto3
 chmod +x backend/scripts/backup_db.sh
@@ -536,7 +541,13 @@ Expected at revision `f12026091203`: `PASS: 41 tables identical` and `[drill] PA
 database and its temporary data directory on the way out, whichever way it exits. The nightly files
 live on the `finance-data` volume (`docker volume inspect personal-finance-dashboard_finance-data`
 for the host path); the same ZIP restores from the UI — Restore card → Dry run → type the date →
-Restore — with a pre-restore point written first.
+Restore — with a pre-restore point written first. Those restore points (one saved before every
+restore and every import; the newest three kept) are listed in Settings › Data under Backups &
+snapshots and in the Restore card's picker, downloadable and restorable the same way, and the
+success toast's **Roll back…** pre-selects the one just saved (it only selects: the dry run and
+the typed date still stand between you and the write). Restoring even the oldest of the three
+works, and a failed attempt keeps it: the file being restored is protected from rotation until
+the apply commits, so a retry finds it where it was.
 
 **The nightly dump (disaster recovery — schema-agnostic, survives any app state).**
 

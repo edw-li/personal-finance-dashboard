@@ -240,6 +240,12 @@ class BreakdownOut(BaseModel):
     # limits. Empty only if the profile somehow yields no rows at all — the two 401(k)
     # rows are unconditional.
     pace: list[PaceItemOut]
+    # 2026-09-23 spec §B1: does THIS person's pace strip grade the household's stored ESPP
+    # purchases? The ESPP tables have no owner column (income INC-21), so the stored periods
+    # belong to the people enrolled in any profile, or to the primary when nobody is.
+    espp_participant: bool
+    # Those participants' names, primary first: whose plan the ESPP presets model.
+    espp_participants: list[str]
 
 
 class ProfileOverrides(BaseModel):
@@ -332,3 +338,7 @@ class PreviewOut(BaseModel):
     changed: list[ChangedField]
     # Scenario-side advisories only (CONTRIBUTIONS_WARNING / NEGATIVE_NET_WARNING).
     warnings: list[str]
+    # BreakdownOut's pair, for the same person (2026-09-23 spec §B1): whether the stored ESPP
+    # purchases are theirs to grade, and whose plan the ESPP presets model.
+    espp_participant: bool
+    espp_participants: list[str]

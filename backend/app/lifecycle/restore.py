@@ -14,6 +14,7 @@ preserved rows come back, and a summary change-log row plus a `restore` run reco
 Any exception rolls the transaction back; the restore point (its own committed run) stays.
 """
 
+import asyncio
 import hashlib
 import io
 import json
@@ -37,9 +38,13 @@ from app.services.price_service import LAST_REFRESH_KEY, REFRESH_RUNS_KEY
 from app.services.snapshot import (
     EXPORTED_TABLES,
     REDACTED_ROWS,
+    RESTORE_POINT_NAME_RE,
+    RESTORE_POINTS_KEEP,
     csv_for_rows,
     parse_cell,
+    restore_points_dir,
     row_dict,
+    trim_directory,
     write_restore_point,
 )
 
@@ -447,14 +452,17 @@ async def apply_restore(
     server_head: str | None,
     source_name: str | None,
     size_bytes: int | None,
+    protect_point: str | None = None,
 ) -> RestoreReport:
     """The seven steps of spec §7, one transaction after the restore point. The caller
     rolls back on any exception (the router and the CLI both do); the restore point's run
-    was committed on its own and stays listed."""
+    was committed on its own and stays listed. `protect_point` is the stored restore point
+    this restore reads FROM, if any: the new point must not rotate it out before the apply
+    commits, or a failure here would delete the one file a retry needs."""
     schema = check_schema(snapshot, server_head)
     parsed = parse_tables(snapshot, user_id=user_id)
     # (1) The current database, kept: commits its own run; raising here means nothing below ran.
-    point = await write_restore_point(db, actor=actor)
+    point = await write_restore_point(db, actor=actor, protect=protect_point)
     # (2) This server's operational rows, read before the truncate.
     preserved_rows = [
         (setting.key, setting.value)
@@ -557,4 +565,13 @@ async def apply_restore(
     run.report = report.model_dump(mode="json")
     await db.commit()
     logger.info("restored snapshot %s: %s", source_name, counts)
+    if protect_point is not None:
+        # Committed: the source has done its job, and "newest three kept" holds again. Never a
+        # reason to report a committed restore as failed — a volume hiccup here only logs.
+        try:
+            await asyncio.to_thread(
+                trim_directory, restore_points_dir(), RESTORE_POINT_NAME_RE, RESTORE_POINTS_KEEP
+            )
+        except OSError:
+            logger.warning("could not trim restore points after restoring %s", source_name)
     return report

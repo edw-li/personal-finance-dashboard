@@ -19,7 +19,13 @@ import DataStatusCard from '../components/overview/DataStatusCard'
 import { netWorthComponents } from '../components/overview/netWorthReceipt'
 import { GhostTile, SkeletonCard } from '../components/PageSkeleton'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
-import { UP_NEXT_WINDOW_DAYS, rankUpNext, upNextLine } from '../components/overview/upNext'
+import {
+  UP_NEXT_WINDOW_DAYS,
+  type UpNextMoney,
+  rankUpNext,
+  upNextMoney,
+  upNextWindow,
+} from '../components/overview/upNext'
 import { windowWords, ytdStats } from '../components/overview/ytd'
 import {
   netWorthTrendCsv,
@@ -52,6 +58,7 @@ import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
 import { getLocal, setLocal, subscribe } from '../prefs/prefsStore'
 import type {
   CalendarEvent,
+  CalendarLiving,
   CoverageOut,
   DividendOut,
   EsppLotsResponse,
@@ -68,7 +75,7 @@ import type {
   TaxYearOut,
 } from '../types/api'
 import { formatCurrency, formatDate, formatMonth, formatPct } from '../utils/format'
-import { addDays, todayIso } from '../utils/months'
+import { todayIso } from '../utils/months'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './OverviewPage.css'
@@ -120,8 +127,32 @@ function upNextKey(): string {
   return `overview:upnext:${todayIso()}`
 }
 
+// The up-next card's one read (2026-09-23 spec §B2): the window's events and its living-cost
+// estimates are ONE response, cached together under the day key so they are never two instants.
+interface UpNextData {
+  events: CalendarEvent[]
+  living: CalendarLiving[]
+}
+
 function flowKey(year: number | null): string {
   return `overview:flow:${year ?? 'auto'}`
+}
+
+/** The money the window actually moves — the list is capped, this is not. Each piece is one
+ *  unbroken span, the "·" glued to the clause before it, so a narrow card wraps between clauses
+ *  and never inside a figure (2026-09-23 spec §B2). */
+function UpNextMoneyLine({ money }: { money: UpNextMoney }) {
+  return (
+    <p className="drill-hint up-next-line">
+      <span className="up-next-clause">{money.lead}</span>
+      {money.clauses.map((clause, index) => (
+        <Fragment key={index}>
+          {index === 0 ? ' ' : <>&nbsp;&middot; </>}
+          <span className="up-next-clause">{clause}</span>
+        </Fragment>
+      ))}
+    </p>
+  )
 }
 
 /** Whose view this is, in words (audit item 11). The scope row fetched the household for
@@ -161,25 +192,26 @@ export default function OverviewPage() {
   // The agenda has its own day-keyed cache and failure state, independent of the four
   // groups above. A failed refresh keeps the last loaded schedule with a notice;
   // without a previous answer, the card reports that upcoming events are unavailable.
-  const [upNext, setUpNext] = useState<CalendarEvent[] | null>(
-    () => getSnapshot<CalendarEvent[]>(upNextKey()) ?? null,
+  const [upNext, setUpNext] = useState<UpNextData | null>(
+    () => getSnapshot<UpNextData>(upNextKey()) ?? null,
   )
   const [upNextFailed, setUpNextFailed] = useState(false)
   const upNextSeq = useRef(0)
 
   const loadUpNext = () => {
     const seq = ++upNextSeq.current
-    const today = todayIso()
-    fetchCalendar(today, addDays(today, UP_NEXT_WINDOW_DAYS))
+    // The line's own window (exactly 45 days, today included), so what is fetched is what is summed.
+    const { start, end } = upNextWindow(todayIso())
+    fetchCalendar(start, end)
       .then((data) => {
         if (seq !== upNextSeq.current) return
         const key = upNextKey()
-        const previous = getSnapshot<CalendarEvent[]>(key)
-        setSnapshot(key, data.events)
+        const next: UpNextData = { events: data.events, living: data.living ?? [] }
+        const previous = getSnapshot<UpNextData>(key)
+        setSnapshot(key, next)
         setUpNextFailed(false)
-        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data.events))
-          return
-        setUpNext(data.events)
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(next)) return
+        setUpNext(next)
       })
       .catch(() => {
         if (seq !== upNextSeq.current) return
@@ -292,6 +324,10 @@ export default function OverviewPage() {
   // guide spec §7.1). Household scope only: a person or joint scope with nothing in it is the
   // empty-scope note's case above, and a book with months but no accounts cannot exist.
   const emptyBook = owner === null && data.ts !== undefined && data.ts.months.length === 0
+
+  // The 45-day money line, one reading for both of the agenda's branches (spec §B2).
+  const upNextMoneyNow =
+    upNext === null ? null : upNextMoney(upNext.events, upNext.living, todayIso())
 
   const summary = data?.summary
   // Rendered verbatim, never re-derived: these are the server's own totals fields (the
@@ -723,16 +759,23 @@ export default function OverviewPage() {
                   <button type="button" className="button" onClick={loadUpNext}>Retry upcoming events</button>
                 </p>
               )}
-              {upNext === null ? !upNextFailed && <p className="drill-hint">Loading upcoming events...</p> : rankUpNext(upNext, todayIso()).length === 0 ? (
-                <p className="drill-hint">
-                  {upNextFailed
-                    ? `The last loaded schedule had no events in the next ${UP_NEXT_WINDOW_DAYS} days.`
-                    : `Nothing scheduled in the next ${UP_NEXT_WINDOW_DAYS} days.`}
-                </p>
+              {upNext === null ? !upNextFailed && <p className="drill-hint">Loading upcoming events...</p> : rankUpNext(upNext.events, todayIso()).length === 0 ? (
+                <>
+                  <p className="drill-hint">
+                    {upNextFailed
+                      ? `The last loaded schedule had no events in the next ${UP_NEXT_WINDOW_DAYS} days.`
+                      : `Nothing scheduled in the next ${UP_NEXT_WINDOW_DAYS} days.`}
+                  </p>
+                  {/* Nothing dated, but the days still cost money: the line stands on its own
+                      whenever there is a living estimate to show (lane B1 review, M5). */}
+                  {upNextMoneyNow !== null && upNextMoneyNow.living && (
+                    <UpNextMoneyLine money={upNextMoneyNow} />
+                  )}
+                </>
               ) : (
                 <>
                   <ul className="up-next-list">
-                    {rankUpNext(upNext, todayIso()).map((event) => {
+                    {rankUpNext(upNext.events, todayIso()).map((event) => {
                       const amount = chipAmount(event)
                       const row = (
                         <>
@@ -755,8 +798,7 @@ export default function OverviewPage() {
                       )
                     })}
                   </ul>
-                  {/* The money the window actually moves — the list is capped, this is not. */}
-                  <p className="drill-hint up-next-line">{upNextLine(upNext, todayIso())}</p>
+                  {upNextMoneyNow !== null && <UpNextMoneyLine money={upNextMoneyNow} />}
                 </>
               )}
               <NavLink className="drill-hint" to="/calendar">

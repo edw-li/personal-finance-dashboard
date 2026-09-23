@@ -53,6 +53,7 @@ from app.schemas.calendar import (
     FeedTokenCreated,
     FeedTokenIn,
     FeedTokenOut,
+    LivingEstimateOut,
     OverrideIn,
     OverrideOut,
     SourceHealthOut,
@@ -71,6 +72,7 @@ from app.services.calendar.ics import render
 from app.services.calendar.model import KEY_RE, Event, Window
 from app.services.calendar.overrides import Override
 from app.services.espp_calc import OfferingInfo, StoredPeriod
+from app.services.living_estimate import living_estimates
 from app.services.money import MONEY_MAX_ABS_12_2, quantize_money
 from app.services.paycheck_calc import breakdown, half_up2
 from app.services.people import load_people, primary_person
@@ -568,11 +570,26 @@ async def get_calendar(start: date, end: date, db: AsyncSession = Depends(get_db
     """{events, sources, quote_as_of} for [start, end] INCLUSIVE, sorted by (date, type,
     label). 422 on a reversed pair or a span past 400 days."""
     _validated_span(start, end)
-    # The product clock, never the container's UTC day: the reminder date and the
-    # fold's "today" must agree with the product-zone day (services/clock.py).
-    events, health, quoted_at = await _compose_for(db, start, end, clock.product_today())
+    # The product clock, never the container's UTC day, read ONCE: the reminder date, the
+    # fold's "today" and the living estimate's current month must all be the same
+    # product-zone day (services/clock.py).
+    today = clock.product_today()
+    events, health, quoted_at = await _compose_for(db, start, end, today)
+    # The day-to-day spending the dated events never include (2026-09-23 spec §B2).
+    living = await living_estimates(db, start, end, today)
     return CalendarOut(
-        events=[_event_out(event) for event in events], sources=health, quote_as_of=quoted_at
+        events=[_event_out(event) for event in events],
+        sources=health,
+        quote_as_of=quoted_at,
+        living=[
+            LivingEstimateOut(
+                month=item.month,
+                amount=item.amount,
+                basis=item.basis,
+                months_in_average=item.months_in_average,
+            )
+            for item in living
+        ],
     )
 
 

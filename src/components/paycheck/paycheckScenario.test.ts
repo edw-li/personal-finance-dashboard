@@ -4,6 +4,7 @@ import type { PaycheckScenario, PresetContext } from './paycheckScenario'
 import {
   applySeedFor,
   decodePaycheck,
+  esppPlanReason,
   LIMIT_ESPP_423,
   encodePaycheck,
   isEmptyPaycheck,
@@ -154,9 +155,40 @@ describe('paycheck scenario codec', () => {
       toCapRate: '0.129033021',
       toCapPerCheck: '179.16',
       remainingChecks: 8,
+      esppParticipant: true,
+      esppParticipants: ['Edward'],
       ...over,
     }
   }
+
+  it('turns both ESPP chips off for a non-participant, naming whose plan they model', () => {
+    const apply = vi.fn()
+    // A sandbox rate on screen, so Stop ESPP's own "already 0%" rule is not what disables it.
+    const presets = paycheckPresets(
+      ctx({ esppParticipant: false, esppParticipants: ['Edward'], esppPct: '0.05' }),
+      apply,
+    )
+    const reason = "ESPP presets model the household's ESPP plan (Edward's)."
+    for (const chip of [presets[2], presets[3]]) {
+      expect(chip.disabled).toBe(true)
+      expect(chip.title).toBe(reason)
+      chip.apply()
+    }
+    expect(apply).not.toHaveBeenCalled()
+    // The two cap chips are about this person's own pay and stay live.
+    expect(presets[0].disabled).toBe(false)
+    expect(presets[1].disabled).toBe(false)
+  })
+
+  it('names every participant in the plan sentence', () => {
+    expect(esppPlanReason(['Edward', 'Grace'])).toBe(
+      "ESPP presets model the household's ESPP plan (Edward's and Grace's).",
+    )
+    expect(esppPlanReason(['A', 'B', 'C'])).toBe(
+      "ESPP presets model the household's ESPP plan (A's, B's and C's).",
+    )
+    expect(esppPlanReason([])).toBe("ESPP presets model the household's ESPP plan.")
+  })
 
   it('applies the server’s cap targets, and disables the chips with no datum behind them', () => {
     const apply = vi.fn()

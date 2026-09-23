@@ -3,6 +3,8 @@ snapshot service builds. Thin by design (2026-09-03 data-lifecycle spec §6) —
 list, the cell spellings and the archive layout live in services/snapshot.py, shared with
 the nightly stored snapshot, the restore points and the restore itself."""
 
+from collections.abc import Iterator
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,18 +12,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.services.snapshot import build_snapshot_zip
+from app.services.snapshot_store import DOWNLOAD_CHUNK_BYTES
 
 router = APIRouter(prefix="/export", tags=["export"], dependencies=[Depends(get_current_user)])
+
+
+def _slices(payload: bytes) -> Iterator[bytes]:
+    """The built ZIP in DOWNLOAD_CHUNK_BYTES blocks — a Windows dev-box mitigation: there one
+    whole-payload write lost its tail when the client asked to close the connection, which
+    prod's Linux stack does not do (see the constant)."""
+    for start in range(0, len(payload), DOWNLOAD_CHUNK_BYTES):
+        yield payload[start : start + DOWNLOAD_CHUNK_BYTES]
 
 
 @router.get("/snapshot")
 async def export_snapshot(db: AsyncSession = Depends(get_db)) -> StreamingResponse:
     snap = await build_snapshot_zip(db)
     return StreamingResponse(
-        iter([snap.payload]),
+        _slices(snap.payload),
         media_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{snap.filename}"',
             "Content-Length": str(len(snap.payload)),
+            # The whole database: never left in a browser or proxy cache (2026-09-23 lane B1
+            # review, M3 — the stored-file download sends the same).
+            "Cache-Control": "no-store",
         },
     )

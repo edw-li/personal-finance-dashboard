@@ -13,6 +13,7 @@ import type {
   SystemStatus,
 } from '../types/api'
 import SettingsPage from './SettingsPage'
+import ToastProvider from '../components/ToastProvider'
 import { expectInDocumentOrder } from '../testing/domOrder'
 import { resetWarmForTests } from '../components/settings/settingsPrefetch'
 
@@ -103,6 +104,7 @@ vi.mock('../api/limits', async (importOriginal) => ({
 vi.mock('../api/lifecycle', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/lifecycle')>()),
   fetchSnapshots: vi.fn(),
+  fetchRestorePoints: vi.fn(),
   createSnapshot: vi.fn(),
   restoreUpload: vi.fn(),
   restoreStored: vi.fn(),
@@ -111,7 +113,7 @@ vi.mock('../api/lifecycle', async (importOriginal) => ({
   undoBatch: vi.fn(),
   fetchHealth: vi.fn(),
 }))
-import { createSnapshot, fetchSnapshots } from '../api/lifecycle'
+import { createSnapshot, fetchRestorePoints, fetchSnapshots } from '../api/lifecycle'
 // CalendarFeedCard owns a mount fetch of its own, for the same reason as the cards above:
 // unmocked it would make a real network call from every test here and banner the failure as
 // a second role="alert". Its own behaviour is pinned in CalendarFeedCard.test.tsx.
@@ -235,10 +237,13 @@ const SPENDING_DIFF = {
 }
 
 const STALE_FILE_HINT = 'If you changed the workbook after choosing it, pick the file again.'
+// Not "This cannot be undone" any more (2026-09-23 spec §B3): the apply saves a restore point
+// first, and the sentence points at the control that restores it.
 const CLOBBER_WARNING =
   'Apply this workbook to the live database? Sheet values overwrite imported rows — ' +
   'taxes inputs and brackets you edited in the UI for sheet-covered years WILL be ' +
-  'reset to the sheet. This cannot be undone.'
+  'reset to the sheet. A restore point of your current data is saved first — you can ' +
+  'roll back from Settings › Data › Restore.'
 const APPLIED_NOTE = 'Other pages load the new data on their next visit.'
 
 const xlsx = (name = 'finances.xlsx') => new File(['xlsx bytes'], name)
@@ -310,6 +315,8 @@ beforeEach(() => {
   // Empty volume: the Backups card settles into its own empty note without adding a row,
   // a link or a banner to any of this file's queries.
   vi.mocked(fetchSnapshots).mockResolvedValue([])
+  // No restore points either (2026-09-23 spec §B3): the Backups and Restore cards read both lists.
+  vi.mocked(fetchRestorePoints).mockResolvedValue([])
   vi.mocked(fetchHousehold).mockResolvedValue({ people: [ME], marriage_date: null })
   // No profile: the Plan assumptions card settles into "no paycheck profile yet" without
   // adding a row, a link or a banner to any of this file's queries.
@@ -697,6 +704,52 @@ describe('SettingsPage — xlsx import', () => {
     // An applied report arms nothing: applying the same workbook twice means dry-running
     // it again, which is also the only way to see what the second pass would do.
     expect(applyButton().disabled).toBe(true)
+  })
+
+  it('toasts the restore point an applied import saved, and Roll back… pre-selects it in Restore', async () => {
+    const point = 'pre-restore-20260904-161500-123456.zip'
+    vi.mocked(importXlsx)
+      .mockResolvedValueOnce(makeReport(SPENDING_DIFF))
+      .mockResolvedValueOnce({ ...makeReport(SPENDING_DIFF, true), restore_point: point })
+    render(
+      <MemoryRouter initialEntries={['/settings?section=data']}>
+        <ToastProvider>
+          <SettingsPage />
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+    await screen.findByLabelText('Workbook (.xlsx)')
+    pick(xlsx())
+    fireEvent.click(dryButton())
+    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    // From the moment the apply returns, the point is on the volume: every later read lists it.
+    vi.mocked(fetchRestorePoints).mockResolvedValue([
+      {
+        name: point,
+        at: '2026-09-04T16:15:00.123456+00:00',
+        size_bytes: 1024,
+        alembic_head: null,
+        restorable: true,
+        kind: 'restore_point',
+      },
+    ])
+    fireEvent.click(applyButton())
+    expect(
+      await screen.findByText(/^Workbook imported\. The data it replaced is saved as a restore point \(/),
+    ).toBeTruthy()
+    // The applied report names the file too, in the Restore report's own words.
+    expect(screen.getByText(`Restore point written: ${point}`)).toBeTruthy()
+    // The Backups card lists the new point without a reload: the page told both cards the
+    // volume changed when the apply settled.
+    const backups = document.getElementById('backups') as HTMLElement
+    expect(await within(backups).findByText(point)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back…' }))
+    await waitFor(() =>
+      expect((screen.getByLabelText('Stored snapshot') as HTMLSelectElement).value).toBe(point),
+    )
+    // Selected, never restored: nothing but the import itself was uploaded.
+    expect(vi.mocked(importXlsx)).toHaveBeenCalledTimes(2)
   })
 
   it('renders a refused upload verbatim in the card error slot', async () => {

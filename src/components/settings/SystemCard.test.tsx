@@ -259,3 +259,25 @@ it('leaves the scheduler facts to the Price refresh card (2026-09-06 spec §3.3)
     expect(screen.getByText(label)).toBeTruthy()
   }
 })
+
+it('warns, in words, when the latest backup left the box unencrypted (2026-09-23 spec §B4)', async () => {
+  const warning = 'Off-box backups are not encrypted — set BACKUP_PASSPHRASE (README 5.3).'
+  vi.mocked(fetchSystemStatus).mockResolvedValue(
+    systemOut({ backup: { ...backupOut(10), encrypted: false } }),
+  )
+  render(<SystemCard />)
+  expect(await screen.findByText(warning)).toBeTruthy()
+  expect(screen.getByText('Encryption')).toBeTruthy()
+  cleanup()
+  // Only an explicit false: an encrypted run, or a marker an older script wrote (no field at
+  // all), says nothing either way.
+  for (const encrypted of [true, null, undefined]) {
+    vi.mocked(fetchSystemStatus).mockResolvedValue(
+      systemOut({ backup: { ...backupOut(10), encrypted } }),
+    )
+    render(<SystemCard />)
+    await screen.findByText('Database size')
+    expect(screen.queryByText(warning)).toBeNull()
+    cleanup()
+  }
+})

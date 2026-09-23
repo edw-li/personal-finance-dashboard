@@ -9,6 +9,7 @@ import { getLocal, resetPrefsStoreForTests, STORAGE_KEYS } from '../prefs/prefsS
 import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
 import type {
   CalendarEvent,
+  CalendarLiving,
   CalendarEventType,
   CoverageOut,
   DividendOut,
@@ -27,6 +28,8 @@ import type {
   TaxYearOut,
 } from '../types/api'
 import { calendarEvent } from '../testing/calendarFixtures'
+import { formatCompactCents, proratedLivingCents } from '../components/calendar/cashflow'
+import { upNextWindow } from '../components/overview/upNext'
 import { formatDate, formatMonth } from '../utils/format'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import OverviewPage from './OverviewPage'
@@ -1393,6 +1396,10 @@ it('renders a custom event as a plain row — no page to open (spec §9.2)', asy
   expect(screen.getByText(/Upcoming event 1/).closest('a')?.getAttribute('href')).toBe('/paycheck')
 })
 
+/** The 45-day line as a reader sees it: its spans' text, whitespace as spaces. */
+const upNextText = () =>
+  document.querySelector('.up-next-line')?.textContent?.replace(/\s+/g, ' ') ?? null
+
 // The ranking and the 45-day line (2026-09-03 calendar spec §14): a deadline that is close
 // leads, a second payday is dropped from the LIST, and the line still sums the whole window.
 it('ranks Up next with one payday and prints the 45-day line with amounts', async () => {
@@ -1414,7 +1421,65 @@ it('ranks Up next with one payday and prints the 45-day line with amounts', asyn
   expect(items[0]).toContain('Tax deadline — Q3') // a deadline within 14 days leads
   expect(items[0]).toContain('~−$1.2k')
   // Both paydays are in the window even though only one is listed.
-  expect(screen.getByText('Next 45 days: +$13.6k in · ~−$1.2k out')).toBeTruthy()
+  expect(upNextText()).toBe('Next 45 days: +$13.6k scheduled in · ~−$1.2k scheduled out')
+  // Each clause is one unbreakable span: a narrow card wraps between clauses, never inside
+  // one ("≈ −" / "$8.2k living costs" was a line break inside a figure).
+  expect(
+    Array.from(document.querySelectorAll('.up-next-line .up-next-clause')).map((el) => el.textContent),
+  ).toEqual(['Next 45 days:', '+$13.6k scheduled in', '~−$1.2k scheduled out'])
+})
+
+// 2026-09-23 spec §B2: the line also says what day-to-day living will cost over the window —
+// each month's server estimate spread over its days inside the window, in integer cents.
+it('adds the living costs of the next 45 days to the line', async () => {
+  serve()
+  const today = todayIso()
+  // Exactly 45 days, today included (lane B1 review, M5): the fetch asks for that window.
+  const end = addDays(today, 44)
+  expect(upNextWindow(today)).toEqual({ start: today, end })
+  // One budget-basis estimate for every month the window touches, whatever day this runs.
+  const living: CalendarLiving[] = []
+  for (let month = `${today.slice(0, 7)}-01`; month <= end; month = addMonths(month, 1)) {
+    living.push({ month, amount: '3000.00', basis: 'budget', months_in_average: null })
+  }
+  vi.mocked(fetchCalendar).mockResolvedValue({
+    sources: [],
+    quote_as_of: null,
+    living,
+    events: [
+      calendarEvent({ date: addDays(today, 3), type: 'payday', label: 'Payday', amount: '6812.44', direction: 'in' }),
+    ],
+  })
+  renderPage()
+  const spread = formatCompactCents(proratedLivingCents(living, today, end) ?? 0)
+  await waitFor(() =>
+    expect(upNextText()).toBe(`Next 45 days: +$6.8k scheduled in · ≈ −${spread} living costs`),
+  )
+  expect(vi.mocked(fetchCalendar)).toHaveBeenCalledWith(today, end)
+})
+
+// Review M5 (a): an empty agenda still costs money — the living clause stands on its own under
+// "Nothing scheduled…", and only when there is an estimate to show.
+it('shows the living clause under an empty agenda, and nothing more when there is no estimate', async () => {
+  serve()
+  const today = todayIso()
+  const end = addDays(today, 44)
+  const living: CalendarLiving[] = []
+  for (let month = `${today.slice(0, 7)}-01`; month <= end; month = addMonths(month, 1)) {
+    living.push({ month, amount: '3000.00', basis: 'budget', months_in_average: null })
+  }
+  vi.mocked(fetchCalendar).mockResolvedValue({ sources: [], quote_as_of: null, living, events: [] })
+  const view = renderPage()
+  await screen.findByText('Nothing scheduled in the next 45 days.')
+  const spread = formatCompactCents(proratedLivingCents(living, today, end) ?? 0)
+  await waitFor(() => expect(upNextText()).toBe(`Next 45 days: ≈ −${spread} living costs`))
+  expect(document.querySelectorAll('.up-next-list li')).toHaveLength(0)
+  view.unmount()
+  clearSnapshots()
+  vi.mocked(fetchCalendar).mockResolvedValue({ sources: [], quote_as_of: null, living: [], events: [] })
+  renderPage()
+  await screen.findByText('Nothing scheduled in the next 45 days.')
+  expect(upNextText()).toBeNull()
 })
 
 it('a calendar failure dents only the strip, never the snapshot', async () => {
@@ -1430,7 +1495,7 @@ it('a calendar failure dents only the strip, never the snapshot', async () => {
 
 it('keeps cached upcoming events after a failed refresh and replaces them only when retry succeeds', async () => {
   serve()
-  setSnapshot(`overview:upnext:${todayIso()}`, upNextEvents(2))
+  setSnapshot(`overview:upnext:${todayIso()}`, { events: upNextEvents(2), living: [] })
   vi.mocked(fetchCalendar).mockRejectedValueOnce(new ApiError('calendar down', 500))
     .mockResolvedValueOnce({ events: [], sources: [], quote_as_of: null })
   renderPage()
@@ -1447,7 +1512,7 @@ it('keeps cached upcoming events after a failed refresh and replaces them only w
 
 it('labels a cached empty agenda as the last loaded schedule when refresh fails', async () => {
   serve()
-  setSnapshot(`overview:upnext:${todayIso()}`, [])
+  setSnapshot(`overview:upnext:${todayIso()}`, { events: [], living: [] })
   vi.mocked(fetchCalendar).mockRejectedValue(new ApiError('calendar down', 500))
   renderPage()
   await screen.findByText(/Couldn't refresh upcoming events/)
@@ -1587,7 +1652,7 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
     seedOverview(snapshotOf(payload))
     pendAllSnapshotFetches()
     // todayIso() is LOCAL-date based (utils/months) — the UTC slice would miss by a day.
-    setSnapshot(`overview:upnext:${todayIso()}`, upNextEvents())
+    setSnapshot(`overview:upnext:${todayIso()}`, { events: upNextEvents(), living: [] })
     vi.mocked(fetchCalendar).mockImplementation(() => new Promise(() => {}))
     renderPage()
     // The strip is up before the calendar answers — its own key, its own fetch.

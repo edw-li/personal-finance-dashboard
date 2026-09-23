@@ -8,6 +8,7 @@ from decimal import Decimal
 from app.models import (
     Account,
     AccountBalance,
+    CategoryBudget,
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
@@ -388,6 +389,30 @@ async def test_spending_context_carries_both_savings_definitions(db):
     assert section["total_savings_rate"] == ["0.714286", "0.700000"]
     # The yearly rollup rides along with its new fields, so the model can quote a year.
     assert section["yearly"]["years"][0]["months_matched"] == 2
+
+
+async def test_overview_and_calendar_carry_the_living_estimates_their_pages_show(db, monkeypatch):
+    """Up next's "≈ living costs" and the Calendar strip's Living costs tile both price
+    day-to-day spending (2026-09-23 spec §B2); the builders fetched the calendar payload and
+    dropped that half (lane B1 review, M6). One small row per month the window touches."""
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 9, 23))
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    db.add(rent)
+    await db.flush()
+    september = date(2026, 9, 1)
+    db.add(CategoryBudget(category_id=rent.id, effective_month=september, amount=Decimal("2650")))
+    await db.commit()
+    expected = [
+        {"month": month, "amount": "2650.00", "basis": "budget", "months_in_average": None}
+        for month in ("2026-09-01", "2026-10-01", "2026-11-01")
+    ]
+    overview = (await build_context(db, route="/", search={}, view={}))["overview"]
+    calendar = (await build_context(db, route="/calendar", search={}, view={}))["calendar"]
+    for section in (overview, calendar):
+        assert section["living"] == expected
+        assert "absent" in section["living_note"] and len(section["living_note"]) < 300
+    # Nothing else moved: the events are still the calendar's own.
+    assert "events" in calendar and "up_next" in overview
 
 
 async def test_household_context_carries_the_latest_savings_figures(db):

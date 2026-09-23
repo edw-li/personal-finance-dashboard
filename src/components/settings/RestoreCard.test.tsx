@@ -9,10 +9,16 @@ import RestoreCard from './RestoreCard'
 vi.mock('../../api/lifecycle', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/lifecycle')>()),
   fetchSnapshots: vi.fn(),
+  fetchRestorePoints: vi.fn(),
   restoreUpload: vi.fn(),
   restoreStored: vi.fn(),
 }))
-import { fetchSnapshots, restoreStored, restoreUpload } from '../../api/lifecycle'
+import {
+  fetchRestorePoints,
+  fetchSnapshots,
+  restoreStored,
+  restoreUpload,
+} from '../../api/lifecycle'
 
 // Every date this card shows or asks for is now read off the LOCAL clock (the one the
 // select's own rows use), so the file's expectations only mean something with a timezone
@@ -56,6 +62,16 @@ const OTHER: SnapshotEntry = {
   size_bytes: 1_048_576,
   alembic_head: 'c3a7e19d5b42',
   restorable: true,
+}
+
+// A restore point (2026-09-23 spec §B3): written at 16:15 UTC, which is 9:15 AM in Los Angeles.
+const POINT: SnapshotEntry = {
+  name: 'pre-restore-20260904-161500-123456.zip',
+  at: '2026-09-04T16:15:00.123456+00:00',
+  size_bytes: 1_572_864,
+  alembic_head: 'c3a7e19d5b42',
+  restorable: true,
+  kind: 'restore_point',
 }
 
 // The 23:30 PT nightly, whose stamp has already crossed UTC midnight: the select lists it
@@ -121,6 +137,7 @@ const banner = () => within(screen.getByRole('region', { name: 'Restore' })).fin
 
 beforeEach(() => {
   vi.mocked(fetchSnapshots).mockResolvedValue([STORED])
+  vi.mocked(fetchRestorePoints).mockResolvedValue([])
   vi.mocked(restoreStored).mockResolvedValue(report())
   vi.mocked(restoreUpload).mockResolvedValue(report())
   confirmSpy.mockReturnValue(true)
@@ -132,6 +149,113 @@ afterEach(() => {
 })
 
 describe('RestoreCard', () => {
+  it('offers restore points in their own group, on the local clock, and dry-runs one by name', async () => {
+    vi.mocked(fetchRestorePoints).mockResolvedValue([POINT])
+    mount()
+    await waitFor(() => expect(select().options).toHaveLength(3))
+    expect(Array.from(select().querySelectorAll('optgroup')).map((group) => group.label)).toEqual([
+      'Snapshots',
+      'Restore points (saved before a restore or import)',
+    ])
+    const option = select().querySelector('optgroup:last-of-type option') as HTMLOptionElement
+    expect(option.textContent).toContain('Sep 4, 2026, 9:15 AM')
+    fireEvent.change(select(), { target: { value: POINT.name } })
+    fireEvent.click(dryButton())
+    await waitFor(() => expect(restoreStored).toHaveBeenCalledWith(POINT.name, true))
+  })
+
+  it('tells the page an apply wrote a restore point, and re-reads the volume when told', async () => {
+    const onStoredChanged = vi.fn()
+    vi.mocked(restoreStored)
+      .mockResolvedValueOnce(report())
+      .mockResolvedValueOnce(
+        report({ dry_run: false, applied: true, restore_point: POINT.name, batch_id: 'b-1' }),
+      )
+    const view = render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <ToastProvider>
+          <RestoreCard onStoredChanged={onStoredChanged} />
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(select().options).toHaveLength(2))
+    fireEvent.change(select(), { target: { value: STORED.name } })
+    fireEvent.click(dryButton())
+    await screen.findByText('Dry run — nothing was written.')
+    // A dry run writes nothing, so nobody is told anything.
+    expect(onStoredChanged).not.toHaveBeenCalled()
+    fireEvent.change(dateBox(), { target: { value: '2026-09-02' } })
+    fireEvent.click(restoreButton())
+    await screen.findByText('Restored.')
+    expect(onStoredChanged).toHaveBeenCalledTimes(1)
+    // The page answers with a new revision; the card reads both lists again.
+    vi.mocked(fetchRestorePoints).mockResolvedValue([POINT])
+    view.rerender(
+      <MemoryRouter initialEntries={['/settings']}>
+        <ToastProvider>
+          <RestoreCard onStoredChanged={onStoredChanged} revision={1} />
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(select().options).toHaveLength(3))
+    // The applied report stands: a re-read of the lists is not a new selection.
+    expect(screen.getByText('Restored.')).toBeTruthy()
+  })
+
+  it('tells the page after a FAILED apply too — the server saved (and rotated) a point before it failed', async () => {
+    // 2026-09-23 lane B1 review, M4: the lists went stale on failure as well, and a stale
+    // Restore card would go on offering a point the rotation had already deleted.
+    const onStoredChanged = vi.fn()
+    vi.mocked(restoreStored)
+      .mockResolvedValueOnce(report())
+      .mockRejectedValueOnce(new ApiError('Restore failed and nothing was changed', 500))
+    render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <ToastProvider>
+          <RestoreCard onStoredChanged={onStoredChanged} />
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(select().options).toHaveLength(2))
+    fireEvent.change(select(), { target: { value: STORED.name } })
+    fireEvent.click(dryButton())
+    await screen.findByText('Dry run — nothing was written.')
+    expect(onStoredChanged).not.toHaveBeenCalled()
+    fireEvent.change(dateBox(), { target: { value: '2026-09-02' } })
+    fireEvent.click(restoreButton())
+    expect((await banner()).textContent).toContain('Restore failed and nothing was changed')
+    await waitFor(() => expect(onStoredChanged).toHaveBeenCalledTimes(1))
+  })
+
+  it('names the restore point an apply saved, and Roll back… pre-selects it without writing', async () => {
+    vi.mocked(restoreStored)
+      .mockResolvedValueOnce(report())
+      .mockResolvedValueOnce(
+        report({ dry_run: false, applied: true, restore_point: POINT.name, batch_id: 'b-1' }),
+      )
+    mount()
+    await waitFor(() => expect(select().options).toHaveLength(2))
+    fireEvent.change(select(), { target: { value: STORED.name } })
+    fireEvent.click(dryButton())
+    await screen.findByText('Dry run — nothing was written.')
+    fireEvent.change(dateBox(), { target: { value: '2026-09-02' } })
+    fireEvent.click(restoreButton())
+    expect(
+      await screen.findByText(/saved as a restore point \(Sep 4, 2026, 9:15 AM\)/),
+    ).toBeTruthy()
+    // The new point is only on the server until the card looks again.
+    vi.mocked(fetchRestorePoints).mockResolvedValue([POINT])
+    // "Roll back…", not "Undo": the app's other Undo toasts reverse at once, and this one only
+    // opens the way back — a dry run and the typed date still stand between (review M8).
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back…' }))
+    await waitFor(() => expect(select().value).toBe(POINT.name))
+    await waitFor(() => expect(url()).toBe('/settings#restore'))
+    // Pre-selected, never applied: the reader still dry-runs it and types its date.
+    expect(restoreStored).toHaveBeenCalledTimes(2)
+    expect(restoreButton().disabled).toBe(true)
+  })
+
   it('offers the stored snapshots and arms Dry run once one is chosen', async () => {
     mount()
     expect(await screen.findByRole('region', { name: 'Restore' })).toBeTruthy()
@@ -186,9 +310,12 @@ describe('RestoreCard', () => {
     expect(
       screen.getByText('Restore point written: pre-restore-20260904-091500-123456.zip'),
     ).toBeTruthy()
+    // The toast names the point the apply saved, on the local clock (09:15 UTC is 2:15 AM
+    // in Los Angeles) — the way back, said at the moment it exists.
     expect(
       screen.getByText(
-        'Restored snapshot from Sep 2, 2026 — other pages reload on their next visit',
+        'Restored snapshot from Sep 2, 2026. The data it replaced is saved as a restore point ' +
+          '(Sep 4, 2026, 2:15 AM). Other pages reload on their next visit.',
       ),
     ).toBeTruthy()
     // An applied report arms nothing: dry-run again to restore again.

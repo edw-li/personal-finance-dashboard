@@ -17,7 +17,8 @@ from app.importer import ImportReport, InvalidWorkbookError, run_import
 from app.lifecycle.restore import SnapshotError, apply_restore, load_snapshot, plan_restore
 from app.models import User
 from app.schemas.lifecycle import RestoreReport
-from app.services.snapshot import SNAPSHOT_NAME_RE, alembic_head, snapshots_dir
+from app.services.snapshot import RESTORE_POINT_NAME_RE, alembic_head
+from app.services.snapshot_store import read_stored_file
 
 logger = logging.getLogger(__name__)
 
@@ -68,23 +69,32 @@ async def import_stored_snapshot(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RestoreReport:
-    # The name grammar IS the path-safety check, and it runs BEFORE any path is built from
-    # the untrusted name: a match can carry neither a separator nor a dot segment, so
-    # nothing but a stored snapshot is ever opened.
-    missing = f"No stored snapshot named {name!r}"
-    if SNAPSHOT_NAME_RE.fullmatch(name) is None:
-        raise HTTPException(status_code=404, detail=missing)
-    directory = snapshots_dir()
-    path = directory / name
-    # Belt-and-braces on the join itself: only reachable if the grammar above ever loosens.
-    if not path.is_relative_to(directory) or not await asyncio.to_thread(path.is_file):
-        raise HTTPException(status_code=404, detail=missing)
-    data = await asyncio.to_thread(path.read_bytes)
-    return await _restore(data, dry_run=dry_run, user=user, db=db, source_name=name)
+    # The name grammars (a stored snapshot's, or a restore point's — 2026-09-23 spec §B3) ARE
+    # the path-safety check: they are matched BEFORE any path is built from the untrusted name,
+    # the join must stay inside its directory, and the open itself refuses a symlink, a FIFO
+    # and anything but a regular file (O_NOFOLLOW, O_NONBLOCK and fstat where the platform has
+    # them — prod's Linux; see snapshot_store._open_regular), so nothing but a stored file of
+    # ours is read. Read in FULL, from that one handle, before the restore starts.
+    data = await asyncio.to_thread(read_stored_file, name)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"No stored snapshot named {name!r}")
+    # The apply writes its own restore point first, and that rotation must not delete the
+    # point being restored FROM until the apply commits — a failed retry needs the file. A
+    # stored snapshot is never in that rotation, so it asks for no protection.
+    protect = name if RESTORE_POINT_NAME_RE.fullmatch(name) is not None else None
+    return await _restore(
+        data, dry_run=dry_run, user=user, db=db, source_name=name, protect_point=protect
+    )
 
 
 async def _restore(
-    data: bytes, *, dry_run: bool, user: User, db: AsyncSession, source_name: str
+    data: bytes,
+    *,
+    dry_run: bool,
+    user: User,
+    db: AsyncSession,
+    source_name: str,
+    protect_point: str | None = None,
 ) -> RestoreReport:
     # Read BEFORE the apply: it expunges every loaded instance, this User included.
     user_id, actor = user.id, user.email
@@ -101,6 +111,7 @@ async def _restore(
             server_head=head,
             source_name=source_name,
             size_bytes=len(data),
+            protect_point=protect_point,
         )
     except SnapshotError as exc:
         await db.rollback()

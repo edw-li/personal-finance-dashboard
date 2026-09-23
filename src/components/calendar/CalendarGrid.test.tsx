@@ -170,12 +170,15 @@ describe('CalendarGrid', () => {
     expect(lines(gutters[4])).toEqual(['—']) // Sep 27 - Oct 3: nothing
   })
 
-  it('helpers: shiftMonth clamps to month end; gutterLines prints a zero side as $0', () => {
+  it('helpers: shiftMonth clamps to month end; gutterLines prints only the sides that moved', () => {
     expect(shiftMonth('2026-01-31', 1)).toBe('2026-02-28')
     expect(shiftMonth('2026-03-15', -1)).toBe('2026-02-15')
     expect(shiftMonth('2026-12-31', 1)).toBe('2027-01-31')
     expect(gutterLines(summarize([]))).toEqual(['—'])
+    // A "$0" under every payday week was noise the audit counted (2026-09-23 spec §B2).
     const paydayOnly = [calendarEvent({ date: SEP15, type: 'payday', label: 'Payday', amount: '6812.44', direction: 'in' })]
-    expect(gutterLines(summarize(paydayOnly))).toEqual(['+$6.8k', '$0'])
+    expect(gutterLines(summarize(paydayOnly))).toEqual(['+$6.8k'])
+    const taxOnly = [calendarEvent({ date: SEP15, type: 'tax_deadline', label: 'Q3', amount: '395.00', direction: 'out', basis: 'estimated' })]
+    expect(gutterLines(summarize(taxOnly))).toEqual(['~−$395'])
   })
 })
