@@ -278,6 +278,70 @@ describe('holding a deep link where it lands (2026-09-23 spec §C11)', () => {
     expect(release).toHaveBeenCalledTimes(1)
   })
 
+  // Code re-review 1: the Guide's CardSelector picks a card with a REPLACE of its own — the same
+  // section, the card's hash — and this landing is what scrolls the card under the sticky block
+  // and focuses it. Only a REPLACE that keeps the landed target is the reader still on the link.
+  describe("the Guide's card chips: a same-section REPLACE to a card", () => {
+    function ChipHarness() {
+      const state = useLocalSections(SECTIONS, 'summary', {
+        resolveLegacy: ({ hash }) => (hash.length > 1 ? { section: 'inputs', targetId: hash.slice(1) } : null),
+      })
+      const location = useLocation()
+      const navigate = useNavigate()
+      // CardSelector's go(), in shape.
+      const go = (id: string) =>
+        navigate({ pathname: location.pathname, search: location.search, hash: `#${id}` }, { replace: true, preventScrollReset: true })
+      return <>
+        <LocalSectionPanel state={state} section="summary"><p>Summary content</p></LocalSectionPanel>
+        <LocalSectionPanel state={state} section="inputs">
+          <section id="card-a">Card A</section>
+          <section id="card-b">Card B</section>
+          <section id="card-c">Card C</section>
+        </LocalSectionPanel>
+        <button type="button" onClick={() => go('card-b')}>Chip B</button>
+        <button type="button" onClick={() => go('card-c')}>Chip C</button>
+      </>
+    }
+    const frame = () => act(() => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()) }))
+    const landings = () => ({
+      scrolled: scrollIntoView.mock.contexts.map((element) => (element as HTMLElement).id),
+      held: vi.mocked(holdPosition).mock.calls.map(([element]) => element.id),
+      focused: document.activeElement?.id,
+    })
+
+    it('a chip after a deep link lands the chosen card, and takes over the hold', async () => {
+      render(<MemoryRouter initialEntries={['/guide?section=inputs#card-a']}><ChipHarness /></MemoryRouter>)
+      await frame()
+      expect(landings()).toEqual({ scrolled: ['card-a'], held: ['card-a'], focused: 'card-a' })
+      fireEvent.click(screen.getByRole('button', { name: 'Chip B' }))
+      await frame()
+      expect(landings()).toEqual({ scrolled: ['card-a', 'card-b'], held: ['card-a', 'card-b'], focused: 'card-b' })
+      expect(release).toHaveBeenCalledTimes(1) // card A's hold, let go for card B's
+    })
+
+    it('a second chip lands its card too', async () => {
+      render(<MemoryRouter initialEntries={['/guide?section=inputs']}><ChipHarness /></MemoryRouter>)
+      await frame()
+      fireEvent.click(screen.getByRole('button', { name: 'Chip B' }))
+      await frame()
+      fireEvent.click(screen.getByRole('button', { name: 'Chip C' }))
+      await frame()
+      expect(landings()).toEqual({ scrolled: ['card-b', 'card-c'], held: ['card-b', 'card-c'], focused: 'card-c' })
+    })
+
+    // The same address asked for again, as a hash link to the current hash would be: the chosen
+    // chip, clicked again, brings its card back (what every landing did before code review 8).
+    it('the chip already chosen, clicked again, brings its card back', async () => {
+      render(<MemoryRouter initialEntries={['/guide?section=inputs']}><ChipHarness /></MemoryRouter>)
+      await frame()
+      fireEvent.click(screen.getByRole('button', { name: 'Chip B' }))
+      await frame()
+      fireEvent.click(screen.getByRole('button', { name: 'Chip B' }))
+      await frame()
+      expect(landings()).toEqual({ scrolled: ['card-b', 'card-b'], held: ['card-b', 'card-b'], focused: 'card-b' })
+    })
+  })
+
   it('a page without a deep link holds nothing', async () => {
     render(<MemoryRouter initialEntries={['/guide']}><TargetHarness /></MemoryRouter>)
     await act(() => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()) }))

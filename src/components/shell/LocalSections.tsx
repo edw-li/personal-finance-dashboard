@@ -56,23 +56,30 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
   }, [sections, section, location.pathname, location.search, location.hash, navigate])
 
   // The landed deep link's hold, released by a real navigation or the page going away — never by
-  // an effect re-run as such (code review 8).
+  // an effect re-run as such (code review 8) — and the target it holds.
   const landedHold = useRef<(() => void) | null>(null)
+  const landedTarget = useRef<string | null>(null)
   useEffect(() => () => landedHold.current?.(), [])
+  const address = `${location.pathname}${location.search}${location.hash}`
+  const priorAddress = useRef(address)
 
   useEffect(() => {
     const keyChanged = priorLocation.current !== location.key
     // null on the first run: the page's arrival is Layout's business, not a section change.
     const sectionChanged = priorSection.current !== null && priorSection.current !== section
+    // A new entry for the address already shown: the reader asked for it again.
+    const sameAddress = priorAddress.current === address
     priorLocation.current = location.key
     priorSection.current = section
-    // An arrival hook consuming its ?param replaces the entry right after a deep link lands. That
-    // is not a navigation — the reader is still on the link — so the landing stays held and is not
-    // made twice. A new section, a PUSH or a POP is one, and lets go.
-    const arrivalReplace = keyChanged && !sectionChanged && navigationType === 'REPLACE'
-    if ((keyChanged || sectionChanged) && !arrivalReplace) {
+    priorAddress.current = address
+    // A REPLACE on the same section is not a navigation away: an arrival hook consuming its
+    // ?param right after a deep link lands leaves the reader on the link, so the landing stays
+    // held (code review 8). A new section, a PUSH or a POP is one, and lets go.
+    const sameSectionReplace = keyChanged && !sectionChanged && navigationType === 'REPLACE'
+    if ((keyChanged || sectionChanged) && !sameSectionReplace) {
       landedHold.current?.()
       landedHold.current = null
+      landedTarget.current = null
     }
     let observer: MutationObserver | undefined
     let timeout: ReturnType<typeof setTimeout> | undefined
@@ -87,6 +94,7 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
       // under it (2026-09-23 spec §C11). Held from here, it stays where it landed.
       landedHold.current?.()
       landedHold.current = holdPosition(target)
+      landedTarget.current = targetId
       if (!target.hasAttribute('tabindex') && !target.matches('input,button,select,textarea,a[href]')) target.setAttribute('tabindex', '-1')
       target.focus({ preventScroll: true })
       observer?.disconnect()
@@ -95,8 +103,11 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
     }
     const frame = requestAnimationFrame(() => {
       if (targetId) {
-        // Already landed, and the address only lost its arrival param: nothing to land again.
-        if (arrivalReplace && landedHold.current !== null) return
+        // Only the address rewritten around the target already landed — an arrival hook's
+        // consume — has nothing to land. A REPLACE to a NEW target is a pick: the Guide's card
+        // chips land their card this way (code re-review 1). And the same address asked for again
+        // (the chosen chip, clicked again) brings its card back, as a link to the current hash does.
+        if (sameSectionReplace && landedTarget.current === targetId && !sameAddress) return
         if (!focusTarget() && typeof MutationObserver !== 'undefined') {
           observer = new MutationObserver(focusTarget)
           observer.observe(document.body, { childList: true, subtree: true })
@@ -118,7 +129,7 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
       }
     })
     return () => { cancelAnimationFrame(frame); observer?.disconnect(); if (timeout) clearTimeout(timeout) }
-  }, [location.key, section, targetId, navigationType])
+  }, [location.key, address, section, targetId, navigationType])
 
   return { section, sections, setSection, panelId: (value) => `${id}-section-${value}`, tabId: (value) => `${id}-tab-${value}` }
 }
