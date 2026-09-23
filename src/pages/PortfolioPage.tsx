@@ -396,6 +396,8 @@ export default function PortfolioPage() {
     setLedgerRevision((revision) => revision + 1)
     // The household view's own save refreshes its snapshot (portfolio:all), which is then
     // fresher than any ledgers fetched earlier for a person's chart: those must not shadow it.
+    // This render's `owner`, not the latest, on purpose: every caller runs this render's load()
+    // next, and that refreshes THIS owner's snapshot — also when a refresh lands after a switch.
     if (owner === null) setHousehold(null)
   }
 
