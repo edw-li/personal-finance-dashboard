@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Link, MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
@@ -1318,6 +1318,60 @@ describe('PortfolioPage — shell scope', () => {
     expect(handle.getAttribute('aria-disabled')).toBe('true')
     land(holdingsOut())
     await waitFor(() => expect(handle.getAttribute('aria-disabled')).toBeNull())
+  })
+
+  // Lane R3's review: a load the page has already discarded (seqRef) must not lift the dim —
+  // CreditCardsPage's `loading` guard. Only the newest load does, once the data it shows is in.
+  it('keeps the dim and the ledger grips until the NEWEST load lands — a discarded one settling first lifts neither', async () => {
+    const second: TransactionOut = {
+      ...TRANSACTIONS[0],
+      id: 12,
+      account: 'Joint Taxable',
+      sort_index: 10,
+    }
+    setSnapshot('portfolio:all', {
+      holdings: holdingsOut(),
+      securities: SECURITIES,
+      accounts: ACCOUNTS,
+      primaryName: 'Me',
+      transactions: [TRANSACTIONS[0], second],
+      dividends: DIVIDENDS,
+      dividendEvents: [],
+      byType: allocationOut('type'),
+      byAccount: allocationOut('account'),
+      sparklines: {},
+      history: HISTORY,
+      realized: REALIZED,
+      refreshStatus: STATUS,
+    })
+    vi.mocked(fetchTransactions).mockResolvedValue([TRANSACTIONS[0], second])
+    let answerMount: (value: HoldingsResponse) => void = () => {}
+    let answerSam: (value: HoldingsResponse) => void = () => {}
+    const mountHoldings = new Promise<HoldingsResponse>((resolve) => {
+      answerMount = resolve
+    })
+    const samHoldings = new Promise<HoldingsResponse>((resolve) => {
+      answerSam = resolve
+    })
+    vi.mocked(fetchHoldings).mockImplementation((scope) =>
+      scope === SAM.id ? samHoldings : mountHoldings,
+    )
+    const { container } = renderPage('/portfolio?section=manage')
+    const dimmed = () => container.querySelector('.loading-dim.is-loading') !== null
+    const handle = () => screen.getByRole('button', { name: 'Reorder VOO buy, Fidelity Brokerage' })
+    // The cached paint revalidates under the dim, and a scope switch starts a newer load while
+    // the mount's is still out.
+    expect(dimmed()).toBe(true)
+    fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
+    await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith(SAM.id))
+    // The mount's load — discarded — answers first: it lifts nothing.
+    await act(async () => answerMount(holdingsOut()))
+    expect(dimmed()).toBe(true)
+    expect(handle().getAttribute('aria-disabled')).toBe('true')
+    // The newest lands: the dim lifts and the grips wake.
+    await act(async () => answerSam(holdingsOut()))
+    await waitFor(() => expect(dimmed()).toBe(false))
+    expect(handle().getAttribute('aria-disabled')).toBeNull()
   })
 })
 

@@ -1092,7 +1092,29 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
       await waitFor(() => expect(escaped).toHaveBeenCalled())
       expect(escaped.mock.calls[0][0]).toBeInstanceOf(TypeError)
-      expect(screen.queryByText(/Couldn't restore the order/)).toBeNull()
+      expect(screen.queryByText(/Couldn't undo the move/)).toBeNull()
+    } finally {
+      process.off('unhandledRejection', escaped)
+    }
+  })
+
+  it('has the page reload before it reads the answer — a restore whose answer is malformed still reloads', async () => {
+    const escaped = vi.fn()
+    process.on('unhandledRejection', escaped)
+    try {
+      answerWith()
+      const { onChanged } = renderLedger()
+      keyboardMove(NVDA_BUY, 'ArrowDown')
+      await screen.findByText(QUIET_NVDA)
+      expect(onChanged).toHaveBeenCalledTimes(1)
+      // The server restored the order, but its answer carries nothing to read.
+      vi.mocked(reorderTransactions).mockResolvedValueOnce(
+        undefined as unknown as TransactionOrderOut,
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+      await waitFor(() => expect(escaped).toHaveBeenCalled())
+      // The page still reloads: the holdings and the order come back from the server.
+      expect(onChanged).toHaveBeenCalledTimes(2)
     } finally {
       process.off('unhandledRejection', escaped)
     }
@@ -1102,10 +1124,12 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
     {
       status: 500,
       detail: 'Internal Server Error',
-      text: "Couldn't restore the order — the server had a problem (HTTP 500).",
+      text: "Couldn't undo the move — the server had a problem (HTTP 500).",
       reloads: 1,
     },
     { status: 409, detail: STALE, text: STALE, reloads: 2 },
+    // Any refusal of the server's is its own sentence, verbatim (spec §8.1).
+    { status: 422, detail: 'ids lists 21 more than once.', text: 'ids lists 21 more than once.', reloads: 1 },
   ])('says why an Undo was refused ($status), reloading a stale list', async ({ status, detail, text, reloads }) => {
     answerWith()
     const { onChanged } = renderLedger()
@@ -1182,6 +1206,25 @@ describe('TransactionsPanel reorder — a save that fails (spec §5, §8.1, §8.
       expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
       // The saved order stays on screen — nothing is "back to how it was".
       expect(order()).toEqual(['22', '21', '23'])
+    } finally {
+      process.off('unhandledRejection', escaped)
+    }
+  })
+
+  it('has the page reload before it reads the answer — a save whose answer has no transactions still reloads', async () => {
+    const escaped = vi.fn()
+    process.on('unhandledRejection', escaped)
+    try {
+      // The order saved, but the answer carries nothing to read — no rows, no figures.
+      vi.mocked(reorderTransactions).mockResolvedValueOnce(
+        undefined as unknown as TransactionOrderOut,
+      )
+      const { onChanged } = renderLedger()
+      keyboardMove(NVDA_BUY, 'ArrowDown')
+      await waitFor(() => expect(escaped).toHaveBeenCalled())
+      // The page still reloads: the holdings, the gains and the order come back from the server.
+      expect(onChanged).toHaveBeenCalledTimes(1)
+      expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
     } finally {
       process.off('unhandledRejection', escaped)
     }

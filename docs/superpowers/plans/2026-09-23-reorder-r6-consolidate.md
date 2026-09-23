@@ -263,8 +263,84 @@ Commit each.
 
 ## Results (filled in by the implementer)
 
-- New module tests: …
-- Per-panel test counts (before → after): …
-- Undo-failure expectations changed: …
-- Full vitest / tsc / eslint / build: …
-- Lines removed from the five panels: …
+- **Branch:** `feat/reorder-consolidate`, cut from `feat/reorder-base` @665a8d7c. Baseline of every test
+  file the lane touches: 289 green (CategoriesCard 31, AccountsCard 45, TransactionsPanel 63,
+  CreditCardsPage 93, PortfolioPage 51, ActivityCard 6).
+- **Commits:**
+  - modules: 2c17e1f4 (`orderCopy`) · 865141cd (`useRequestCount`) · 9c4d5149 (`useLatest`);
+  - panels: 3207dafe (CategoriesCard) · aa22dc50 (AccountsCard) · cc1f744c (TransactionsPanel) ·
+    51325576 (CardsPanel) · dc25b3af (CategoriesPanel);
+  - guards: 56b6e331 (PortfolioPage `reloading`) · b2b15041 (Transactions reloads before reading the
+    answer) · b783e9dc (ActivityCard test waits for the list).
+- **New module tests: 10.**
+  - `orderCopy.test.ts` (4): the §8.1 sentences; `clause`; any 4xx verbatim (400, 409 ×2, 422 with its
+    own stop), and ours around `errorDetail` for a 500, a status-0 timeout, a `TypeError` and a
+    non-Error; an empty refusal reads "HTTP 409", never an empty toast.
+  - `useRequestCount.test.tsx` (5): idle at rest; busy until the request settles, its answer handed
+    on; still busy when the first of two overlapping requests settles; a rejection counts down and
+    reaches the caller; a synchronous throw is counted straight back out and rethrown (a later request
+    still returns to idle).
+  - `useLatest.test.tsx` (1): a callback made in render 1 reads render 2's value; the plain closure
+    beside it still reads render 1's.
+- **Per-panel test counts (before → after):**
+  - CategoriesCard 31 → 31; AccountsCard 45 → 45;
+  - TransactionsPanel 63 → 66 (+1 422 Undo row, +2 malformed-answer guards);
+  - CreditCardsPage, which holds the CardsPanel and CategoriesPanel tests, 93 → 95 (+2 422 Undo rows);
+  - PortfolioPage 51 → 52 (+1 `reloading` guard); ActivityCard 6 → 6.
+  - At each panel's first run after its refactor, the only failing test was its Undo-failure string
+    (R2's cards: none — they already spoke the §8.1 sentence).
+- **Undo-failure expectations changed** (R3's and R5's tests only):
+  - `TransactionsPanel.test.tsx`: the 500 row "Couldn't restore the order — the server had a problem
+    (HTTP 500)." → "Couldn't undo the move — …"; its negative twin `/Couldn't restore the order/` →
+    `/Couldn't undo the move/`, so it still guards something.
+  - `CreditCardsPage.test.tsx`, for the roster and for Categories & weights each: the same 500 row, the
+    same negative twin, and the test title "never \"Couldn't restore the order\"" → "never \"Couldn't
+    undo the move\"".
+  - New in all three tables: a 422 row whose server sentence is shown verbatim (the old code said
+    "Couldn't restore the order — ids lists … more than once.").
+- **Full vitest / tsc / eslint / build:**
+  - The ONE full `npx vitest run --maxWorkers=2`: **265 files / 3847 tests, all passed** (350 s, run
+    beside another job's vitest in the main checkout). Neither known flake tripped.
+  - The Task 6 targeted run: 57 files / 861 tests, green.
+  - `npx tsc -b`: 0.
+  - `npx eslint .`: 0 errors, 26 warnings, none new. The only one in this lane's files is
+    CategoriesPanel's pre-existing `SEED_CATEGORIES` export warning.
+  - `npm run build`: exit 0. The new modules ship as their own 0.62 kB chunk.
+    - Its one advisory is not this lane's: the echarts `tooltip` chunk is 763.29 kB against the
+      760 kB limit. Built from the base's six source files, the same chunk measures 763.29 kB, so the
+      overage predates R6.
+- **Scope check:** `git diff --stat feat/reorder-base...HEAD` lists the file map's files, the three
+  module tests, and `src/pages/PortfolioPage.test.tsx` (the Task 5 page guard's test).
+- **Lines removed from the five panels:** 3200 → 3109, **−91** (whitespace-insensitive +150/−241).
+  - CategoriesCard 457 → 434 · AccountsCard 722 → 699 · TransactionsPanel 755 → 742 (after gaining
+    the Task 5 guard's comment) · CardsPanel 698 → 682 · CategoriesPanel 568 → 552.
+  - The raw diff is larger (+348/−439): a chain wrapped in `track(() => …)` moves two spaces right.
+- **Adaptations to `client.ts` (Task 1):**
+  - `ApiError` is `(message, status)`, so the tests construct it that way.
+  - `undoFailureText(err)` takes the error alone, as the file map names it. The reason is
+    `errorDetail(err)`. `describeError(err, noun)` is the load-failure sentence ("Couldn't load {noun}
+    — …"), and wrapping it would have read "Couldn't undo the move — Couldn't load the order — …".
+  - The 4xx branch returns `errorDetail(err)` too. That is the server's sentence verbatim whenever it
+    sent one (R2's `err.message` and R3/R5's `errorDetail` agree), and "HTTP 409" when it sent none.
+- **Decisions and deviations:**
+  - **Kept per panel, as planned:** the optimistic layers; the Undo mechanisms; the Transactions
+    success toast; each 409 save path (R2 `err.message`, R3/R5 `errorDetail`); `message()` (form,
+    delete and retag copy); AccountsCard's `portfolioBusy`, the portfolio-labels feed's own flag and
+    not the roster's counter; the Transactions delete-Undo re-POST, which was never counted.
+  - **The `reloading` guard lives in `load()`**, as CreditCardsPage's does. Guarding only the two
+    callers would have left the dim up for good whenever a refresh's or a deactivation's `load()`
+    superseded a reload. Those paths call `load()` directly and never raised the dim themselves.
+  - **The plan's page test says "the older settles last"**, but the guard only shows when the
+    discarded load settles FIRST. When it settles last, the newest has already lifted the dim, before
+    and after the fix. So the test settles the older first, as c7a9337c's test does. It failed before
+    the fix at the first assertion after the discarded load.
+  - **Task 5.2 is extended to the Undo's success handler**, which had the same shape: the server has
+    applied the order either way, so the page must reload. It has its own test.
+    - In both handlers `onChanged` runs right after the pending layer is dropped and before the
+      answer is read. A throwing `onChanged` therefore cannot strand a pending layer, which only an
+      answer retires.
+  - **ActivityCard:** with the page answering at once, the old wait passed alone, because a `findBy*`
+    drains one tick and the page landed in it. The test's page now lands 25 ms after the first paint.
+    With the region wait that failed 3/3 at `.activity-list`; `findByRole('list')` passes 3/3.
+- **Behaviour changes found:** none. No expectation outside the Undo-failure strings moved, and no
+  code had to be changed back.

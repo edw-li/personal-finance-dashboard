@@ -67,11 +67,21 @@ describe('ActivityCard', () => {
   it('caps the feed with a scroll region that carries Load more inside it', async () => {
     // The cursor is set HERE rather than in the file's beforeEach: the suite's first test
     // pins that Load more is absent without one, and a page-wide default would break it.
-    vi.mocked(fetchActivity).mockResolvedValue(
-      page([SAVE, RESTORE_RUN, IMPORT_RUN, SUMMARY], '2026-09-01T00:00:00+00:00'),
+    // The page lands a beat after the card's first paint, as over the network — later than the
+    // tick a findBy* drains after it resolves, which is how the race showed under suite load.
+    vi.mocked(fetchActivity).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(
+            () => resolve(page([SAVE, RESTORE_RUN, IMPORT_RUN, SUMMARY], '2026-09-01T00:00:00+00:00')),
+            25,
+          )
+        }),
     )
     mount()
-    await screen.findByRole('region', { name: 'Activity' })
+    // The list itself, not the region: the region and its scroll box stand around a ghost from
+    // the card's first paint, before the page has landed.
+    await screen.findByRole('list')
     const scroll = document.querySelector('.settings-scroll')
     // The container first: `null?.querySelector()` is undefined, which a bare not.toBeNull()
     // would happily accept from a card that grew no scroll region at all.

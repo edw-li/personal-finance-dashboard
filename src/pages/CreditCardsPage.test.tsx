@@ -1396,10 +1396,12 @@ describe('CreditCardsPage — Categories & weights: Undo, and a save that fails 
     {
       status: 500,
       detail: 'Internal Server Error',
-      text: "Couldn't restore the order — the server had a problem (HTTP 500).",
+      text: "Couldn't undo the move — the server had a problem (HTTP 500).",
       fetches: 2,
     },
     { status: 409, detail: STALE_CATEGORIES, text: STALE_CATEGORIES, fetches: 3 },
+    // Any refusal of the server's is its own sentence, verbatim (spec §8.1).
+    { status: 422, detail: 'ids lists 11 more than once.', text: 'ids lists 11 more than once.', fetches: 2 },
   ])('says why an Undo was refused ($status), reloading a stale list', async ({ status, detail, text, fetches }) => {
     serveCategories()
     renderManage()
@@ -1518,7 +1520,7 @@ describe('CreditCardsPage — Categories & weights: late answers and overlapping
     await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
   })
 
-  it("a throw in the Undo's success path is a bug on the console, never \"Couldn't restore the order\"", async () => {
+  it("a throw in the Undo's success path is a bug on the console, never \"Couldn't undo the move\"", async () => {
     const rejections = collectRejections()
     serveCategories()
     renderManage()
@@ -1531,7 +1533,7 @@ describe('CreditCardsPage — Categories & weights: late answers and overlapping
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
     await waitFor(() => expect(rejections).toHaveLength(1))
     expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
-    expect(screen.queryByText(/Couldn't restore the order/)).toBeNull()
+    expect(screen.queryByText(/Couldn't undo the move/)).toBeNull()
   })
 })
 
@@ -1832,10 +1834,12 @@ describe('CreditCardsPage — the card roster: Undo, and a save that fails (spec
     {
       status: 500,
       detail: 'Internal Server Error',
-      text: "Couldn't restore the order — the server had a problem (HTTP 500).",
+      text: "Couldn't undo the move — the server had a problem (HTTP 500).",
       fetches: 2,
     },
     { status: 409, detail: STALE_CARDS, text: STALE_CARDS, fetches: 3 },
+    // Any refusal of the server's is its own sentence, verbatim (spec §8.1).
+    { status: 422, detail: 'ids lists 1 more than once.', text: 'ids lists 1 more than once.', fetches: 2 },
   ])('says why an Undo was refused ($status), reloading a stale roster', async ({ status, detail, text, fetches }) => {
     serveCards()
     renderManage()
@@ -1991,7 +1995,7 @@ describe('CreditCardsPage — the card roster: late answers and overlapping requ
     await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
   })
 
-  it("a throw in the Undo's success path is a bug on the console, never \"Couldn't restore the order\"", async () => {
+  it("a throw in the Undo's success path is a bug on the console, never \"Couldn't undo the move\"", async () => {
     const rejections = collectRejections()
     serveCards()
     renderManage()
@@ -2004,7 +2008,7 @@ describe('CreditCardsPage — the card roster: late answers and overlapping requ
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
     await waitFor(() => expect(rejections).toHaveLength(1))
     expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
-    expect(screen.queryByText(/Couldn't restore the order/)).toBeNull()
+    expect(screen.queryByText(/Couldn't undo the move/)).toBeNull()
   })
 })
 
