@@ -1800,15 +1800,87 @@ git commit -m "docs(plan): lane R4 — results, gates and browser check"
 
 ## Results (filled in by the implementer)
 
-- Preflight (Task 1): R0 commit(s) on the base …; baseline …
-- Component tests (`OverviewCustomize.test.tsx`): … / 15
-- Page tests (`OverviewPage.test.tsx`): …
-- Guide line (Task 5): applied / not approved
-- Full vitest: … files / … tests
-- tsc / eslint . / build: …
-- Scope check: …
-- Browser check: `R4 CUSTOMIZE CHECK OK — … checks, … screenshots`; screenshot notes: …
-- Notes for the controller / lane V: …
+- Preflight (Task 1): the branch was cut at `0d805010` (the lane R0 merge into `feat/reorder-base`,
+  which also holds main through lane B2). All seven R0 modules, their tests and
+  `src/testing/pointer.ts` were present, and the grep printed exactly the five exports. Baseline
+  `src/components/reorder` + `OverviewPage.test.tsx`: 6 files / 167 tests pass.
+- R0's final API matched this plan's imports and calls verbatim, so no code deviated from it. The
+  pointer test already advances `MOTION_MS.fast` before asserting the commit.
+- Red before green, as planned:
+  - Task 2: all 7 list tests failed, plus "persists…" and "falls back…" (no "Reorder Net worth"
+    button).
+  - Task 3: exactly one failure (the inert boxes, `expected false to be true`).
+  - Task 4: the three CSS pins failed for the three predicted reasons.
+- Component tests (`OverviewCustomize.test.tsx`): **16 / 16** — the plan's 15, plus one pin (see
+  Corrections 1).
+- Page tests (`OverviewPage.test.tsx`): 81 / 81 — the 80 existing tests (two of them rewritten per
+  Task 2) plus the new "Escape while a tile is lifted…" test.
+- Guide line (Task 5): applied (approved). `src/guide` + `GuidePage.test.tsx` +
+  `paletteRegistry.guide.test.ts`: 8 files / 55 tests pass. The longest step is 148 characters.
+- Lane set (Task 6 step 1): 13 files / 221 tests pass.
+- Full vitest: **245 files / 3380 tests, exit 0.**
+  - Neither known load flake fired.
+  - The only stderr was jsdom "Not implemented" noise from two unrelated existing suites
+    (`exportImage.test.ts` canvas, `LotAnatomyCard.test.tsx` navigation).
+- tsc / eslint . / build:
+  - `tsc -b` exit 0. Because `tsc -b`'s buildinfo lives in the shared `node_modules` junction, both
+    projects were also checked with no cache: `tsc -p tsconfig.app.json --noEmit --incremental false`
+    and the same for `tsconfig.node.json`, both exit 0.
+  - `eslint .` exit 0: 0 errors, and the 26 pre-existing `react-refresh/only-export-components`
+    warnings, none in a file this lane touched.
+  - `npm run build` exit 0.
+- Scope check: `git diff --stat feat/reorder-base...HEAD` lists exactly `OverviewCustomize.tsx`,
+  `OverviewCustomize.test.tsx`, `OverviewPage.css`, `OverviewPage.test.tsx` and
+  `src/guide/content/pages-tracking.tsx`. The CSS diff is the Customize row block alone (the old
+  four lines became the commented row, grip, hidden-row, label and divider rules).
+- Browser check: **`R4 CUSTOMIZE CHECK OK — 112 checks, 20 screenshots`**.
+  - Run on the lane's own 8094/5194 against `finance_reorder_r4` (29 accounts, at head
+    `f12026091203`).
+  - Measured in all four passes (dark/light × 1280/1600):
+    - every Customize row is 28 px, with or without a grip;
+    - every box stands at one x (805 px at 1280, 1125 px at 1600);
+    - the lifted row travelled exactly the pointer's 98.4 px (clamped at the list's end);
+    - three peers shifted, and `html.reorder-active` was on mid-drag.
+  - No write was blocked. The 12 `PATCH /prefs` (3 per pass: the drop, the hide, the re-show) all
+    carried `overview_layout` alone.
+  - The console was clean in all 8 browser contexts.
+  - The driver put the private copy's layout back to the defaults (verified with a read-only query).
+  - Both servers were stopped. Vite's node child outlived its shell and was stopped with
+    `taskkill //F //T` (the plan's fallback).
+- Screenshot notes (both themes, both widths):
+  - the grips stand in one column beside the boxes;
+  - `dragging`: the lifted row wears the raised surface with its accent grip, and its shadow is not
+    clipped by the popover. Its own list's boxes are greyed (inert) while Deeper views stays live;
+  - `hidden`: "Hidden" is a small muted word with a hairline, quieter than the bold legends, and
+    level with them on the left. The hidden row's box sits under the boxes above;
+  - `dropped` and `fresh-browser`: the tiles are in the new order (Portfolio · Living spending ·
+    Estimated tax · Net worth), in a fresh browser too.
+  - Not this lane's: the Net worth tile keeps its hero styling wherever it is placed. Tiles are keyed
+    by identity, so this is pre-existing behaviour.
+- Corrections to this plan:
+  1. **One added pin, welcomed by the controller:** "keeps the console quiet through a tick and a
+     drag". It spies on `console.error` through open → tick → Space/Home/Space and asserts no call at
+     all. That covers R0's development contract check (each list is one range with no carries) and
+     any React warning, such as `flushSync` inside `toggle`. With it, Task 3 ends at 13 tests (plan:
+     12) and Task 4 at 16 (plan: 15).
+  2. **The browser driver's server check was key-order sensitive.**
+     - The first run failed only "the server holds the new layout", in all four passes.
+     - The observed value was exactly `EXPECTED`, but JSONB hands its keys back as
+       `{cards, tiles}`, and `same()` compares JSON strings.
+     - The driver (gitignored scratch) now compares a stored layout list by list (`sameLayout`).
+       The re-run passed all 112 checks. The reload and fresh-browser checks had passed in both runs.
+  3. **Decision 5's wording.** With R0's final code, a change to the items under a *live* lift is not
+     silent: the hook cancels at once and the live region says "Cancelled — the list changed."
+     (spec §2.3.7, amended at R0's review).
+     - Reset cannot reach a live lift in practice: a click on it first blurs the lifted grip, and
+       blur cancels.
+     - The path that can is a server pref adoption landing mid-lift (`subscribe('overview_layout', …)`
+       in `OverviewPage.tsx`).
+- Notes for the controller / lane V:
+  - `src/pages/OverviewPage.tsx` is untouched.
+  - The DOM this lane publishes is as listed under "DOM this lane publishes".
+  - The browser driver stays in `scratchpad/reorder-r4/` (gitignored), with `report.json` and the 20
+    PNGs next to it.
 
 ## Notes for the controller (outside this lane — found while planning it)
 
