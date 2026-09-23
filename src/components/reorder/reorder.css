@@ -129,7 +129,12 @@ table.reorder-table {
    (reorderDom.ts's dropLineLayer) — 3 for a list in the page, over the row in hand's 2 and the
    sticky headers' 1; 21 inside the Customize popover (20). `.page` is not a stacking context, so
    the page's layers stack in the root, and one fixed number above the popover would also lift the
-   line over the sticky scope row (8), the assistant drawer (15) and the dock (16). */
+   line over the sticky scope row (8), the assistant drawer (15) and the dock (16).
+   ASSUMED: `.page` is not a stacking context, and dropLineLayer cannot see one made without a
+   z-index. Were `.page` made one (`isolation: isolate`, `contain`, a transform …), the whole page —
+   PageFrame's sticky scope row included — would paint as ONE root layer beneath this <body> line,
+   which would then cover the scope row and the bubbles, and from 21 up the drawer and the dock. That
+   change must move the line inside `.page` with it. */
 .reorder-drop-line {
   position: fixed;
   height: 2px;

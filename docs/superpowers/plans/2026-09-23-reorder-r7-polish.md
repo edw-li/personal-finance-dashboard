@@ -149,8 +149,14 @@ row, or the Accounts group heading, under the header. At 1280, Categories & weig
    palette (20) or toasts (30)". In Edge it is not one. `.popover-surface` (20) competes in the root
    with the drawer (15) and the dock (16), and outranks both. That was measured on the Customize
    popover; the month-actions popover shares the class, so it is inferred there. That comment and
-   `OverviewPage.css`'s note that leans on it deserve a correction, or a real `isolation: isolate` if
-   the containment was meant.
+   `OverviewPage.css`'s note that leans on it deserve a correction.
+   - **Do NOT "fix" this by making `.page` a stacking context** (`isolation: isolate`, `contain`, …)
+     on its own. The whole page, PageFrame's sticky scope row included, would then paint as one root
+     layer beneath the drop line on `<body>`. The line at 3 or 21 would cover the scope row and the
+     bubbles, and from 21 up the drawer and the dock.
+   - Such a change must move the line inside `.page` with it. `dropLineLayer` assumes `.page` is not
+     a stacking context and cannot see one made without a z-index; its comment and `reorder.css` say
+     so (R7 review 1).
 2. **Residual (pre-existing):** a page-scrolled list (the ledger, the card roster, Customize) has no
    sticky header in its band. The page's own sticky scope row is not counted: the page's auto-scroll
    zone and the keyboard's keep-in-view measure from the window's top, and the row can come to rest

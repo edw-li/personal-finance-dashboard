@@ -176,6 +176,12 @@ export const LIFTED_LAYER = 2
  *  Customize popover (z-index 20) needs 21. One fixed number that high would lift every other list's
  *  line over the sticky scope row (8), the assistant drawer (15) and the dock (16).
  *
+ *  ASSUMED: `.page` is not a stacking context — and this cannot see one made without a z-index
+ *  (below). Were `.page` made one (`isolation: isolate`, `contain`, a transform …), the whole page,
+ *  PageFrame's sticky scope row included, would paint as ONE root layer beneath this line on <body>,
+ *  which would then cover the scope row and the bubbles — and from 21 up the drawer and the dock. Such
+ *  a change must move the line inside `.page` with it (R7 review 1).
+ *
  *  A heuristic, with limits — it reads z-indexes on POSITIONED ancestors only, so it cannot see:
  *  - a flex or grid item's z-index, which makes a layer without any positioning;
  *  - a stacking context made WITHOUT a z-index — opacity below 1, a transform, a filter,
