@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { EChartsOption } from '../charts/echarts'
@@ -132,11 +132,18 @@ export default function ChartCard({
   // instead of the 520 it left, and "Open spending" at 65 instead of the page's top.
   const settledAtRef = useRef<number | null>(null)
   const drawn = option !== null
+  // Expanded, the card sits in the modal dialog's top layer, where no page scroll can move it: a
+  // hold there only ran the page behind it away (code review: 1200 → 739). Synced in a LAYOUT
+  // effect so the passive cleanup that closes the dock on Expand already reads it.
+  const expandedRef = useRef(expanded)
+  useLayoutEffect(() => {
+    expandedRef.current = expanded
+  }, [expanded])
   // Asked by the detail panel at the moment the dock moves the page (its open, its last close).
-  const holdAnchor = useCallback((): HTMLElement | null => {
+  const anchorIfInView = useCallback((): HTMLElement | null => {
     const card = cardRef.current
     const settledAt = settledAtRef.current
-    if (card === null || settledAt === null || !inputSince(settledAt)) return null
+    if (card === null || expandedRef.current || settledAt === null || !inputSince(settledAt)) return null
     const { top, bottom } = card.getBoundingClientRect()
     return bottom > 0 && top < window.innerHeight ? card : null
   }, [])
@@ -153,7 +160,7 @@ export default function ChartCard({
   const inspect = (next: ChartSelection) => {
     setPinned({ scope: selectionScopeKey, value: next })
     onSelectionChange?.(next)
-    if (!expanded && activeView) openPanel?.({ id: panelId, title: next.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: holdAnchor })
+    if (!expanded && activeView) openPanel?.({ id: panelId, title: next.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: anchorIfInView })
   }
   const selectionContent = useMemo(() => selected === null ? null : renderSelection
     ? renderSelection(selected)
@@ -161,8 +168,8 @@ export default function ChartCard({
   [selected, renderSelection, title, clearSelection])
   useEffect(() => {
     if (!selected || expanded || !activeView) return
-    openPanel?.({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: holdAnchor })
-  }, [selected, expanded, activeView, openPanel, panelId, title, panelContent, selectionScopeKey, holdAnchor])
+    openPanel?.({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: anchorIfInView })
+  }, [selected, expanded, activeView, openPanel, panelId, title, panelContent, selectionScopeKey, anchorIfInView])
   // AFTER the open effect on purpose: a commit that opens the panel still reads what the commit
   // before it left, so the open that arrives with the page, with the chart's first drawing or
   // with its section never holds. Stamped once per settling, not per render.
@@ -276,7 +283,7 @@ export default function ChartCard({
       {selected && <div className="chart-selection-summary">
         {/* Live region on the TEXT only (audit D3): each pin announces "Pinned: …", never the buttons. */}
         <span role="status">Pinned: {selected.label}</span>
-        {panel && !expanded && <button type="button" className="button" onClick={() => panel.open({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: holdAnchor })}>Show details</button>}
+        {panel && !expanded && <button type="button" className="button" onClick={() => panel.open({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: anchorIfInView })}>Show details</button>}
         <button type="button" className="button" onClick={clearSelection}>Clear selection</button>
       </div>}
       {selected && (!panel || expanded) && <div className="chart-inline-selection">{selectionContent}</div>}

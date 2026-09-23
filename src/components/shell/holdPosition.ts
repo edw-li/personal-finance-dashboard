@@ -81,8 +81,21 @@ export function holdPosition(
     const drift = element.getBoundingClientRect().top - origin
     // Sub-pixel drift is layout rounding, not movement: correcting it would jitter.
     if (Math.abs(drift) >= 1) {
+      const before = window.scrollY
       window.scrollBy({ top: drift, behavior: 'instant' })
       expectedY = window.scrollY
+      // The element must have moved exactly as far as the window did (a page end may cut the
+      // scroll short). One that does not follow the page — sticky while pinned, fixed, in the top
+      // layer like the Expand dialog — keeps its drift whatever the window does, and re-applying
+      // it every frame ran the page away (code review: 2000 → 342 under Projection's pinned
+      // chart). Give that scroll back and let go.
+      const moved = expectedY - before
+      if (Math.abs(element.getBoundingClientRect().top - origin - (drift - moved)) >= 1) {
+        window.scrollTo({ top: before, behavior: 'instant' })
+        expectedY = before
+        stop()
+        return
+      }
     }
     if (performance.now() >= until) {
       stop()

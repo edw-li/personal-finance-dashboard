@@ -255,6 +255,19 @@ describe('ChartCard persistent interactions', () => {
       expect(holdPosition).not.toHaveBeenCalled()
     })
 
+    // Code review: Expand moves the card into the modal dialog, which closes the docked panel — and
+    // the page behind the dialog cannot bring a top-layer card back (1200 → 739, 35 corrections).
+    it('holds nothing while the card is expanded — it sits in the modal dialog', () => {
+      place(120, 560)
+      render(<DetailPanelProvider><ChartCard {...base} option={history} selectionAdapter={() => selection} /></DetailPanelProvider>)
+      fireEvent.click(screen.getByTestId('echart'))
+      expect(holdPosition).toHaveBeenCalledTimes(1) // the drill itself
+      vi.mocked(holdPosition).mockClear()
+      fireEvent.click(screen.getByRole('button', { name: 'Expand Net worth' }))
+      expect(document.querySelector('.detail-panel')).toBeNull() // the dock let go…
+      expect(holdPosition).not.toHaveBeenCalled() // …and nothing was held for it
+    })
+
     it('holds nothing when its section comes into view with a selection', () => {
       place(120, 560)
       const view = (visible: boolean) => (

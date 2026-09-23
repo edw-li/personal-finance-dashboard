@@ -32,6 +32,8 @@ describe('inputSince', () => {
 describe('holdPosition', () => {
   let top = 100
   let now = 0
+  // The window's scroll position, which every scroll below moves.
+  let y = 400
   let el: HTMLElement
   const frames: FrameRequestCallback[] = []
   const flush = () => frames.splice(0).forEach((run) => run(now))
@@ -39,19 +41,29 @@ describe('holdPosition', () => {
   beforeEach(() => {
     top = 100
     now = 0
+    y = 400
     el = document.createElement('section')
     document.body.appendChild(el)
     el.getBoundingClientRect = () => ({ top }) as DOMRect
+    Object.defineProperty(window, 'scrollY', { configurable: true, get: () => y })
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation((run) => frames.push(run))
     vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
     vi.spyOn(performance, 'now').mockImplementation(() => now)
     // Scrolling the page moves the element back up by exactly what was scrolled.
     vi.spyOn(window, 'scrollBy').mockImplementation(((options: ScrollToOptions) => {
+      y += options.top ?? 0
       top -= options.top ?? 0
     }) as typeof window.scrollBy)
+    vi.spyOn(window, 'scrollTo').mockImplementation(((options: ScrollToOptions) => {
+      top += y - (options.top ?? y)
+      y = options.top ?? y
+    }) as typeof window.scrollTo)
   })
   afterEach(() => {
+    // A key ends every hold a test left running, so none leaks its suspended anchoring into the next.
+    window.dispatchEvent(new Event('keydown'))
     vi.restoreAllMocks()
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 0, writable: true })
     el.remove()
     frames.length = 0
   })
@@ -101,23 +113,63 @@ describe('holdPosition', () => {
     expect(window.scrollBy).not.toHaveBeenCalled()
   })
 
+  // Code review: an element that does not move with the page — sticky while pinned (Projection's
+  // chart column under its band), fixed, in the top layer (the Expand dialog) — keeps its drift
+  // whatever the window does, so the hold re-applied it every frame for 600 ms and ran the page
+  // away (2000 → 342 on the pinned chart, 1200 → 739 behind the dialog, 35 corrections).
+  describe('an element that does not follow the page', () => {
+    const ignoreScroll = () =>
+      vi.mocked(window.scrollBy).mockImplementation(((options: ScrollToOptions) => {
+        y += options.top ?? 0 // the window moves; the element stays where it is on screen
+      }) as typeof window.scrollBy)
+
+    it('gives the scroll back and lets go after the first correction that did not take', () => {
+      ignoreScroll()
+      holdPosition(el, 500)
+      top = 160 // the band above the pinned chart went static
+      flush()
+      expect(window.scrollBy).toHaveBeenCalledTimes(1)
+      expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 400, behavior: 'instant' })
+      expect(y).toBe(400)
+      expect(frames).toHaveLength(0)
+      expect(document.documentElement.style.overflowAnchor).toBe('')
+    })
+
+    it('does the same for a card that has moved into the modal dialog', () => {
+      ignoreScroll()
+      const dialog = document.createElement('dialog')
+      dialog.setAttribute('open', '')
+      document.body.appendChild(dialog)
+      dialog.appendChild(el)
+      holdPosition(el, 500)
+      top = 85 // the dialog's entrance moves it; the page behind it cannot bring it back
+      flush()
+      now = 100
+      flush()
+      expect(window.scrollBy).toHaveBeenCalledTimes(1)
+      expect(y).toBe(400)
+      dialog.remove()
+    })
+
+    it('counts a correction the page end cut short as followed — the element moved as far as the window', () => {
+      vi.mocked(window.scrollBy).mockImplementation(((options: ScrollToOptions) => {
+        const moved = Math.min(options.top ?? 0, 30) // only 30px of page left below
+        y += moved
+        top -= moved
+      }) as typeof window.scrollBy)
+      holdPosition(el, 500)
+      top = 160
+      flush()
+      expect(y).toBe(430)
+      expect(window.scrollTo).not.toHaveBeenCalled()
+      expect(frames).toHaveLength(1) // still holding
+    })
+  })
+
   // Review round 1: a scrollbar drag fires no input event, and a restore or a focus scroll is not
   // the reader's either — the window moving anywhere the hold did not put it means someone else is
   // scrolling, and the hold gets out of the way.
   describe('yielding to scrolls it did not make', () => {
-    let y = 0
-    beforeEach(() => {
-      y = 400
-      Object.defineProperty(window, 'scrollY', { configurable: true, get: () => y })
-      vi.mocked(window.scrollBy).mockImplementation(((options: ScrollToOptions) => {
-        y += options.top ?? 0
-        top -= options.top ?? 0
-      }) as typeof window.scrollBy)
-    })
-    afterEach(() => {
-      Object.defineProperty(window, 'scrollY', { configurable: true, value: 0, writable: true })
-    })
-
     it('keeps correcting after its own scrolls, and lets go the moment another one moves the page', () => {
       holdPosition(el, 500)
       top = 160
