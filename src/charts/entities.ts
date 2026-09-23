@@ -61,6 +61,13 @@
 // identities needs 11+ distinct hues and the validated palette has eight, two of them
 // reserved. The two columns are never adjacent and never linked, and every node is labelled;
 // within each column, and between every linked pair of columns, no two entities share a hue.
+//
+// ONE ACCEPTED NEAR PAIR: in the paycheck sankey, HSA (P4) sits near Withholding (P7) — OKLab
+// ΔE×100 7.8 / 6.1 normal and 7.5 / 5.9 CVD (dark / light), under the normal-vision floor of 15.
+// Accepted: the two are in different columns and never linked (HSA leaves Gross, Withholding
+// leaves Taxable), both are labelled, and it is the same P4/P7 pair the calendar already draws
+// as its card and tax chips. PAYCHECK LINES above is why HSA is on P4 — the stacked
+// neighbours win. Pinned in entities.test.ts; do not "fix" it without those measurements.
 // Depends on: charts/theme.ts.
 import type { SpendingMatrix } from '../types/api'
 import { toCents } from '../utils/cents'

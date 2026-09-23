@@ -143,6 +143,17 @@ describe("the registry's measured separations", () => {
     // The deficit texture's reason (charts/partial.ts DEFICIT_DECAL): 4.4 dark, 2.5 light.
     expect(tenth(ENTITY.tax, NEGATIVE)).toEqual([4.4, 2.5])
   })
+
+  // The header's ONE ACCEPTED NEAR PAIR (the code-quality re-review): kept on purpose, measured
+  // here so a change to either hue, or to the reasoning, starts from the numbers.
+  it("the accepted near pair: the paycheck's HSA beside Withholding, the calendar's card chip beside tax", () => {
+    const { dark, light } = separation(ENTITY.hsa, ENTITY.tax)
+    expect([dark.normal, light.normal, dark.cvd, light.cvd].map((value) => Number(value.toFixed(1)))).toEqual([
+      7.8, 6.1, 7.5, 5.9,
+    ])
+    // The same P4/P7 pair the calendar already draws side by side, labelled there too.
+    expect([ENTITY.hsa, ENTITY.tax]).toEqual([ENTITY.card, PALETTE[7]])
+  })
 })
 
 describe('the category fold', () => {
