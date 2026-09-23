@@ -4,6 +4,7 @@ import type { ComponentProps } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
+import { MOTION_MS } from '../../theme/motion'
 import type {
   PositionChange,
   SecurityOut,
@@ -746,15 +747,32 @@ describe('TransactionsPanel reorder — saving the replay order (spec §5)', () 
   })
 
   it('reports a move that changed no figures, flashes the moved row and has the page reload', async () => {
-    answerWith()
-    const { onChanged } = renderLedger()
-    keyboardMove(VOO_BUY, 'ArrowUp')
-    expect(await screen.findByText(QUIET_VOO)).toBeTruthy()
-    // The household view sends null: the client turns it into no owner param at all.
-    expect(reorderTransactions).toHaveBeenCalledWith([22, 21, 23], null)
-    expect(onChanged).toHaveBeenCalledTimes(1)
-    expect(tableRow(22).hasAttribute('data-reorder-saved')).toBe(true)
-    await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
+    // A fake clock: the saved flash lasts MOTION_MS.flash, and a real-clock check can land after
+    // it has gone on a loaded machine.
+    vi.useFakeTimers()
+    try {
+      answerWith()
+      const { onChanged } = renderLedger()
+      keyboardMove(VOO_BUY, 'ArrowUp')
+      // The answer settles inside an async act, which waits the promise chain out.
+      await act(async () => {})
+      expect(screen.getByText(QUIET_VOO)).toBeTruthy()
+      // The household view sends null: the client turns it into no owner param at all.
+      expect(reorderTransactions).toHaveBeenCalledWith([22, 21, 23], null)
+      expect(onChanged).toHaveBeenCalledTimes(1)
+      expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull()
+      expect(tableRow(22).hasAttribute('data-reorder-saved')).toBe(true)
+      act(() => {
+        vi.advanceTimersByTime(MOTION_MS.flash - 1)
+      })
+      expect(tableRow(22).hasAttribute('data-reorder-saved')).toBe(true)
+      act(() => {
+        vi.advanceTimersByTime(1)
+      })
+      expect(tableRow(22).hasAttribute('data-reorder-saved')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("keeps the server's order up until the page's next fetch, then shows the page's rows", async () => {
