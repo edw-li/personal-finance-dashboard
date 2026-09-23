@@ -88,6 +88,12 @@ describe('the entity registry', () => {
       other: OTHER_SERIES_COLOR,
       card: PALETTE[4],
       ritual: PALETTE[6],
+      // The paycheck's deduction lines reuse slots whose entities that chart never draws (the
+      // header's "paycheck lines" row), chosen by measurement (paycheckSankeyOptions.test.ts).
+      dentalVision: PALETTE[0],
+      hsa: PALETTE[4],
+      roth401k: PALETTE[1],
+      afterTax401k: PALETTE[6],
     })
     // The per-earner salary tints are the salary hue and two steps of its own ramp.
     expect(SALARY_TINTS).toEqual([PALETTE[0], SEQUENTIAL_BLUE[9], SEQUENTIAL_BLUE[3]])

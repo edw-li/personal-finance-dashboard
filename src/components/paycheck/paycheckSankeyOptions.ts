@@ -8,7 +8,7 @@ import type { EChartsOption } from '../../charts/echarts'
 import { ENTITY } from '../../charts/entities'
 import { SANKEY_MARKS, makeSankeyTooltipFormatter, sankeyCsv } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
-import { MUTED, PALETTE } from '../../charts/theme'
+import { MUTED } from '../../charts/theme'
 import type { PaycheckBreakdownOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 
@@ -27,18 +27,20 @@ type FlowKey = Exclude<keyof PaycheckBreakdownOut, 'profile' | 'warnings' | 'mon
 // pay is take-home, the STRUCTURAL grey it wears on the money flow (it is not kept money yet,
 // so POSITIVE — Saved's — stays off it and the old "two greens" beside After-tax 401(k) are
 // gone); Withholding is tax, on the one tax hue; ESPP on its registry hue; Traditional 401(k)
-// on the pre-tax-savings green. The other lines take the remaining slots, fixed per LINE so
-// an omitted zero branch never reshuffles its neighbours' hues, and no two lines share one.
+// on the pre-tax-savings green. The other four lines wear their own registry entries (entities.ts
+// PAYCHECK LINES: reused slots, picked so no two touching lines collapse for a colour-blind
+// reader), fixed per LINE so an omitted zero branch never reshuffles its neighbours' hues, and
+// no two lines share one.
 const FLOW_NODES: { key: FlowKey; label: string; depth: 0 | 1 | 2 | 3; color: string }[] = [
   { key: 'gross', label: 'Gross', depth: 0, color: MUTED },
   { key: 'taxable', label: 'Taxable', depth: 1, color: MUTED },
   { key: 'post_tax', label: 'Post-tax', depth: 2, color: MUTED },
   { key: 'trad_401k', label: 'Traditional 401(k)', depth: 1, color: ENTITY.preTaxSavings },
-  { key: 'dental_vision', label: 'Dental & vision', depth: 1, color: PALETTE[1] },
-  { key: 'hsa', label: 'HSA', depth: 1, color: PALETTE[0] },
+  { key: 'dental_vision', label: 'Dental & vision', depth: 1, color: ENTITY.dentalVision },
+  { key: 'hsa', label: 'HSA', depth: 1, color: ENTITY.hsa },
   { key: 'withholding', label: 'Withholding', depth: 2, color: ENTITY.tax },
-  { key: 'roth_401k', label: 'Roth 401(k)', depth: 3, color: PALETTE[4] },
-  { key: 'after_tax_401k', label: 'After-tax 401(k)', depth: 3, color: PALETTE[6] },
+  { key: 'roth_401k', label: 'Roth 401(k)', depth: 3, color: ENTITY.roth401k },
+  { key: 'after_tax_401k', label: 'After-tax 401(k)', depth: 3, color: ENTITY.afterTax401k },
   { key: 'espp', label: 'ESPP', depth: 3, color: ENTITY.espp },
   { key: 'net_pay', label: 'Net pay', depth: 3, color: ENTITY.structural },
 ]

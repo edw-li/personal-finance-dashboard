@@ -27,8 +27,20 @@
 //   home, retained equity, estimates, refunds                      spending sankeys
 //   Other (a fold)                            OTHER gray           every stack and sankey
 //   cards · monthly update (calendar only)    PALETTE[4] · [6]     calendar
+//   paycheck lines — Dental & vision · HSA ·  PALETTE[0] · [4] ·   paycheck sankey
+//   Roth 401(k) · After-tax 401(k)            [1] · [6]
 //   spending categories                       the fold below       every spending chart, the
 //                                                                  money flow, trends
+//
+// PAYCHECK LINES: every slot is spoken for, so the paycheck sankey's four deduction lines reuse
+// slots whose entities that chart never draws (it has no salary, RSU, card or calendar node —
+// Gross is structural). The pick is measured, not arbitrary: with layoutIterations 0 a column
+// stacks in data order (Taxable, Traditional 401(k), Dental & vision, HSA · Roth, After-tax,
+// ESPP, Net pay), and this is the one assignment whose every touching pair — a zero line's
+// removal included — clears the normal-vision floor and the CVD target in both themes
+// (normal/CVD, dark · light: 401(k)–Dental 30/27 · 29/27, Dental–HSA 27/16 · 27/18, Roth–After
+// 27/26 · 29/27, After–ESPP 25/17 · 25/20, 401(k)–HSA 34/13 · 31/9, Roth–ESPP 27/9 · 25/10;
+// paycheckSankeyOptions.test.ts). The earlier Dental-on-P1 sat under the 401(k) green at CVD 3.
 //
 // RESERVATIONS (§C2.3), measured with the dataviz validator (OKLab ΔE×100): PALETTE[2] sits
 // 4.2 (light) / 8.9 (dark) from POSITIVE and PALETTE[5] 3.7 (light) from it — both are the
@@ -79,6 +91,11 @@ export const ENTITY = {
   other: OTHER_SERIES_COLOR,
   card: PALETTE[4],
   ritual: PALETTE[6],
+  // The paycheck sankey's deduction lines (PAYCHECK LINES above).
+  dentalVision: PALETTE[0],
+  hsa: PALETTE[4],
+  roth401k: PALETTE[1],
+  afterTax401k: PALETTE[6],
 } as const
 
 /** The salary hue FAMILY, per earner in split order. Slot 0 is the salary hue itself; the rest
