@@ -1478,3 +1478,50 @@ describe('CreditCardsPage — Categories & weights: late answers and overlapping
     expect(screen.queryByText(/Couldn't restore the order/)).toBeNull()
   })
 })
+
+describe('CreditCardsPage — Categories & weights: the rows and the form around a drag', () => {
+  beforeEach(() => {
+    vi.mocked(reorderRewardCategories).mockReset()
+  })
+
+  it("shuts the rows' own buttons while a row is lifted; Escape opens them again and saves nothing", async () => {
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    const rowButtons = () =>
+      CATEGORIES.flatMap(({ name }) =>
+        [`Edit ${name}`, `Hide ${name}`, `Delete ${name}`].map(
+          (label) => screen.getByRole('button', { name: label }) as HTMLButtonElement,
+        ),
+      )
+    grip('Dining').focus()
+    fireEvent.keyDown(grip('Dining'), { key: ' ' })
+    expect(rowButtons().every((button) => button.disabled)).toBe(true)
+    fireEvent.keyDown(grip('Dining'), { key: 'Escape' })
+    expect(rowButtons().every((button) => !button.disabled)).toBe(true)
+    expect(reorderRewardCategories).not.toHaveBeenCalled()
+  })
+
+  it('a new category names no position — the server appends it after the last row', async () => {
+    serveCategories()
+    vi.mocked(createRewardCategory).mockResolvedValue({
+      ...CATEGORIES[2],
+      id: 13,
+      name: 'Gas',
+      slug: 'gas',
+      sort_order: 3,
+    })
+    renderManage()
+    await screen.findByText('Categories & weights')
+    fireEvent.change(screen.getByLabelText('Category name'), { target: { value: 'Gas' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    await waitFor(() => expect(createRewardCategory).toHaveBeenCalledTimes(1))
+    // Exactly the four columns the form owns — no sort_order (2026-09-23 reorder spec §3.3).
+    expect(vi.mocked(createRewardCategory).mock.calls[0][0]).toStrictEqual({
+      name: 'Gas',
+      annual_spend: null,
+      spending_category_id: null,
+      pinned_card_id: null,
+    })
+  })
+})

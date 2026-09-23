@@ -172,12 +172,10 @@ export default function CategoriesPanel({
     const request =
       editingId !== null
         ? updateRewardCategory(editingId, body)
-        : // Append, don't default to 0: a new row would otherwise tie the first seeded
-          // row's sort_order and id-break to the top of the matrix (final review M3).
-          createRewardCategory({
-            ...body,
-            sort_order: categories.reduce((acc, c) => Math.max(acc, c.sort_order + 1), 0),
-          })
+        : // No position: the server appends a new row after the last one (2026-09-23 reorder
+          // spec §3.3). A number worked out here from the props could lag a reorder whose
+          // reload has not landed yet.
+          createRewardCategory(body)
     request
       .then(() => {
         document.getElementById('reward-category-name')?.focus()
@@ -523,12 +521,14 @@ export default function CategoriesPanel({
                     <td>
                       <span className="badge">{category.is_active ? 'Active' : 'Hidden'}</span>
                     </td>
+                    {/* Shut while a row is lifted, as during a save (lane R0 consumer rule 5): a
+                        click mid-drag would act on a row that is about to move. */}
                     <td className="row-actions">
                       <button
                         type="button"
                         className="button"
                         aria-label={`Edit ${category.name}`}
-                        disabled={busy}
+                        disabled={busy || reorder.active}
                         onClick={() => startEdit(category)}
                       >
                         Edit
@@ -539,7 +539,7 @@ export default function CategoriesPanel({
                         aria-label={
                           category.is_active ? `Hide ${category.name}` : `Show ${category.name}`
                         }
-                        disabled={busy}
+                        disabled={busy || reorder.active}
                         onClick={() => toggleActive(category)}
                       >
                         {category.is_active ? 'Hide' : 'Show'}
@@ -548,7 +548,7 @@ export default function CategoriesPanel({
                         type="button"
                         className="button"
                         aria-label={`Delete ${category.name}`}
-                        disabled={busy}
+                        disabled={busy || reorder.active}
                         onClick={() => remove(category)}
                       >
                         Delete
