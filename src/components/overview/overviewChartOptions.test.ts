@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { GRID_VARIANTS } from '../../charts/grammar'
+import { GRID_VARIANTS, partialItemStyle } from '../../charts/grammar'
 import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
 import type { CoverageOut, TaxSummaryOut } from '../../types/api'
@@ -465,5 +465,70 @@ describe('pickTaxSummary', () => {
 
   it('returns null when no year has been touched yet', () => {
     expect(pickTaxSummary([], 2026)).toBeNull()
+  })
+})
+
+// 2026-09-23 spec §C5: the month in progress (its last day still ahead of today) is drawn as
+// partial: hatched under Appearance › Chart patterns, faded otherwise, a dashed outline both
+// ways. Its label carries the mark and its tooltip head says so. The average leaves it out,
+// exactly as before.
+describe('recentSpendOption: the month in progress (2026-09-23 spec §C5)', () => {
+  const feed = { months: monthsFrom('2026-07-01', 3), totals: ['4000.00', '4200.00', '2072.23'] }
+  const today = '2026-09-23'
+  const labelOf = (option: EChartsOption | null) =>
+    (option as unknown as { xAxis: { axisLabel: { formatter: (value: string, index: number) => string } } }).xAxis
+      .axisLabel.formatter
+  const headOf = (option: EChartsOption | null, label: string, dataIndex: number, value: number) =>
+    tooltipRows(
+      tooltipOf(option).formatter([
+        { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: label, dataIndex, value, color: PALETTE[1] },
+      ]),
+    ).head
+
+  it('fades the month under way behind a dashed outline, and hatches it under Chart patterns', () => {
+    expect(seriesOf(recentSpendOption(feed, 12, undefined, { todayIso: today }))[0].data).toEqual([
+      4000,
+      4200,
+      { value: 2072.23, itemStyle: { borderColor: PALETTE[1], borderWidth: 1, borderType: 'dashed', opacity: 0.45 } },
+    ])
+    expect(seriesOf(recentSpendOption(feed, 12, undefined, { todayIso: today, patterns: true }))[0].data?.[2]).toEqual({
+      value: 2072.23,
+      itemStyle: partialItemStyle(PALETTE[1], true),
+    })
+  })
+
+  it('draws a finished month plainly: on its last day, and whenever no today is given', () => {
+    expect(seriesOf(recentSpendOption(feed, 12, undefined, { todayIso: '2026-09-30' }))[0].data).toEqual([4000, 4200, 2072.23])
+    expect(seriesOf(recentSpendOption(feed))[0].data).toEqual([4000, 4200, 2072.23])
+    expect(labelOf(recentSpendOption(feed))('Sep 2026', 2)).toBe('Sep 2026')
+  })
+
+  it('marks its axis label and says so in the tooltip head', () => {
+    const option = recentSpendOption(feed, 12, undefined, { todayIso: today })
+    expect(labelOf(option)('Sep 2026', 2)).toBe('Sep 2026*')
+    expect(labelOf(option)('Aug 2026', 1)).toBe('Aug 2026')
+    expect(headOf(option, 'Sep 2026', 2, 2072.23)).toBe('Sep 2026 — month to date (in progress)')
+    expect(headOf(option, 'Aug 2026', 1, 4200)).toBe('Aug 2026')
+    // A draft entered ahead of time is in progress too, and says which kind.
+    const draft = { months: monthsFrom('2026-08-01', 3), totals: ['4200.00', '2072.23', '310.00'] }
+    expect(headOf(recentSpendOption(draft, 12, undefined, { todayIso: today }), 'Oct 2026', 2, 310)).toBe(
+      'Oct 2026 — future month (in progress)',
+    )
+  })
+
+  it('keeps the average line exactly where it was', () => {
+    const noted = seriesOf(recentSpendOption(feed, 12, undefined, { todayIso: today }))
+    expect(noted[1].data).toEqual(seriesOf(recentSpendOption(feed))[1].data)
+  })
+
+  it('keeps a month nobody entered hollow while it is under way, its label marked all the same', () => {
+    const empty = { months: feed.months, totals: ['4000.00', '4200.00', '0.00'] }
+    const option = recentSpendOption(empty, 12, new Set(['2026-09-01']), { todayIso: today })
+    expect(seriesOf(option)[0].data?.[2]).toEqual({
+      value: 0,
+      itemStyle: { color: 'transparent', borderColor: PALETTE[1], borderWidth: 1.5 },
+    })
+    expect(axisDataOf(option)[2]).toEqual({ value: 'Sep 2026', textStyle: { color: OTHER_SERIES_COLOR } })
+    expect(labelOf(option)('Sep 2026', 2)).toBe('Sep 2026*')
   })
 })

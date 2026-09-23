@@ -23,9 +23,12 @@ import {
   LINE,
   compactMoney,
   grid,
+  isPartialMonth,
   moneyAxis,
   monthAxis,
   offScaleMarkPoint,
+  partialItemStyle,
+  partialNote,
   pctAxis,
   robustMax,
   stagger,
@@ -93,6 +96,15 @@ const toNumber = (value: string | null | undefined): number | null =>
  *  label line and a hair), so two clipped series never print over each other. */
 const OFF_SCALE_LIFT = 13
 
+/** The months in progress (2026-09-23 spec §C5, the grammar's objective rule), one flag per
+ *  matrix month; all false without a today. */
+const partialMonths = (months: readonly string[], todayIso: string | null | undefined): boolean[] =>
+  months.map((month) => typeof todayIso === 'string' && isPartialMonth(month, todayIso))
+
+/** The labels a month axis marks as in progress. */
+const markedLabels = (labels: readonly string[], partial: readonly boolean[]): Set<string> =>
+  new Set(labels.filter((_, i) => partial[i]))
+
 export interface SpendingBarsInput {
   matrix: SpendingMatrix
   /** The page's fold: `ids` order IS the bar seriesIndex; `colors` carries each hue. */
@@ -101,21 +113,32 @@ export interface SpendingBarsInput {
   monthLabels: string[]
   range: RangeState
   selected: Record<string, boolean>
+  /** The product's today (utils/months todayIso): the month in progress is drawn partial
+   *  (2026-09-23 spec §C5). Absent, no month is. */
+  todayIso?: string | null
+  /** Appearance › Chart patterns (useChartDecals): the month in progress hatched, not faded. */
+  patterns?: boolean
 }
 
 /**
  * Top-N category stacks + Other under the INK net-pay line, the dashed sustainable-spend
  * reference and (when any month has one) the total-budget step. Lifted from SpendingPage's
  * `barsOption`; the series ORDER is load-bearing — the heatmap hover highlights bar segments
- * by positional seriesIndex, so nothing may be inserted ahead of the budget step.
+ * by positional seriesIndex, so the stacks come first and nothing may be inserted among them.
+ * The month in progress (spec §C5) adds only the net-pay marker, right after its line.
  */
 export function spendingBarsOption({
-  matrix, fold, nameById, monthLabels, range, selected,
+  matrix, fold, nameById, monthLabels, range, selected, todayIso = null, patterns = false,
 }: SpendingBarsInput): EChartsOption | null {
   if (matrix.months.length === 0) return null
   const topIds = fold.ids
   const topSet = new Set(topIds)
   const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
+  // 2026-09-23 spec §C5: every segment of the month in progress wears the partial look in its
+  // own colour (a gap stays a gap — A6), so the stack reads as a figure still growing.
+  const partial = partialMonths(matrix.months, todayIso)
+  const drawn = (values: (number | null)[], color: string) =>
+    values.map((v, i) => (v === null || !partial[i] ? v : { value: v, itemStyle: partialItemStyle(color, patterns) }))
   // A6: absent ≠ zero. Nulls flow THROUGH to the series so an unentered month gaps the bar;
   // Other sums the folded rows' non-null values and is itself null when none exist.
   const otherPerMonth = matrix.months.map((_, i) =>
@@ -167,6 +190,23 @@ export function spendingBarsOption({
     robust === null ? undefined : offScaleMarkPoint(clippedBars, { edge: robust.max, direction: 'up', color: MUTED, unit: 'money' })
   const payMarks =
     robust === null ? undefined : offScaleMarkPoint(clippedPay, { edge: robust.max, direction: 'up', color: INK, unit: 'money' })
+  // The month-to-date net pay leaves the line (spec §C5): joined to a whole month's pay it would
+  // draw a fall that is only the calendar. It stays on the chart as a lone marker under the SAME
+  // name, so the legend toggles both and the tooltip lists one Net pay row (the line's gap drops
+  // out). Always the faded form: a hatch says nothing on an 8px dot.
+  const partialPay = netPay.map((v, i) => (partial[i] ? v : null))
+  const payMarker = partialPay.some((v) => v !== null)
+    ? [{
+        ...LINE,
+        id: 'net-pay-partial',
+        name: 'Net pay',
+        color: INK,
+        z: 10,
+        data: partialPay.map((v) =>
+          v === null ? null : { value: v, symbol: 'circle', symbolSize: 8, itemStyle: partialItemStyle(INK, false) },
+        ),
+      }]
+    : []
   const series = [
     // Stable ids: the drill-in pie morphs from/to these (universalTransition keys on id).
     ...topIds.map((id, slot) => ({
@@ -178,7 +218,7 @@ export function spendingBarsOption({
       ...stagger(slot),
       color: foldColor(fold, id),
       universalTransition: true,
-      data: (valuesById.get(id) ?? []).map((v) => (v === null ? null : Number(v))),
+      data: drawn((valuesById.get(id) ?? []).map((v) => (v === null ? null : Number(v))), foldColor(fold, id)),
     })),
     {
       id: 'other',
@@ -189,7 +229,7 @@ export function spendingBarsOption({
       ...stagger(topIds.length),
       color: ENTITY.other,
       universalTransition: true,
-      data: otherPerMonth,
+      data: drawn(otherPerMonth, ENTITY.other),
       // The stack's top segment carries the clipped-bar markers (spec §C3).
       ...(barMarks === undefined ? {} : { markPoint: barMarks }),
     },
@@ -200,9 +240,12 @@ export function spendingBarsOption({
       color: INK,
       z: 10,
       connectNulls: false,
-      data: netPay,
+      data: netPay.map((v, i) => (partial[i] ? null : v)),
       ...(payMarks === undefined ? {} : { markPoint: payMarks }),
     },
+    // Right after its line: the categories and Other keep their positional seriesIndex (the
+    // heatmap hover), and the budget step stays last.
+    ...payMarker,
     referenceLine(
       SUSTAINABLE_SPEND,
       matrix.four_pct_rule.map((v) => (v === null ? null : Number(v))),
@@ -225,8 +268,9 @@ export function spendingBarsOption({
       references: [SUSTAINABLE_SPEND, 'Total budget'],
       absentText: 'no spending entered',
       pointer: 'shadow',
+      headNote: (i) => (typeof todayIso === 'string' && partial[i] ? partialNote(matrix.months[i], todayIso) : null),
     }),
-    xAxis: monthAxis(monthLabels, { gap: true }),
+    xAxis: monthAxis(monthLabels, { gap: true, marked: markedLabels(monthLabels, partial) }),
     yAxis: moneyAxis({ robust }),
     series,
   }
@@ -342,6 +386,11 @@ export interface HeatmapInput {
   nameById: Map<number, string>
   monthLabels: string[]
   mode: HeatmapMode
+  /** The product's today: the month in progress's column is drawn partial (2026-09-23 spec
+   *  §C5). Absent, no column is. */
+  todayIso?: string | null
+  /** Appearance › Chart patterns: that column hatched, not faded. */
+  patterns?: boolean
 }
 
 /**
@@ -351,10 +400,15 @@ export interface HeatmapInput {
  * exist. Hover keeps the RAW dollars in the lead; the mode's reading is the sub-line.
  */
 export function heatmapOption({
-  matrix, order, nameById, monthLabels, mode,
+  matrix, order, nameById, monthLabels, mode, todayIso = null, patterns = false,
 }: HeatmapInput): EChartsOption | null {
   if (matrix.months.length === 0 || order.length === 0) return null
   const raw = heatmapMatrix(matrix, order)
+  // 2026-09-23 spec §C5: the month in progress's column wears the partial look (the cell's
+  // colour is the scale's, so the dashed outline is the neutral one). In the vs-average reading
+  // it stays blank: a month to date against a whole month's average would read as a false
+  // "below average" — the same reason the averages leave it out.
+  const partial = partialMonths(matrix.months, todayIso)
   const legacyAverage = mode === 'vsAverage' ? vsAverage(raw) : []
   const comparison = mode === 'vsAverage' ? order.map((categoryId, row) => {
     const source = matrix.series.find(series => series.category_id === categoryId)
@@ -366,14 +420,17 @@ export function heatmapOption({
     })
   }) : []
   const values = mode === 'absolute' ? raw : mode === 'row' ? rowNormalize(raw) : comparison
-  const cells: [number, number, number][] = []
+  const triples: [number, number, number][] = []
   values.forEach((row, r) =>
     row.forEach((v, c) => {
-      if (v !== null) cells.push([c, r, v])
+      if (v !== null && !(partial[c] && mode === 'vsAverage')) triples.push([c, r, v])
     }),
   )
+  const cells = triples.map((cell) =>
+    partial[cell[0]] ? { value: cell, itemStyle: partialItemStyle(MUTED, patterns) } : cell,
+  )
   const rawMax = raw.reduce((m, row) => row.reduce<number>((mm, v) => (v === null ? mm : Math.max(mm, v)), m), 0)
-  const maxAbs = cells.reduce((m, [, , v]) => Math.max(m, Math.abs(v)), 0)
+  const maxAbs = triples.reduce((m, [, , v]) => Math.max(m, Math.abs(v)), 0)
   const visualMap =
     mode === 'absolute'
       ? sequentialVisualMap({ min: 0, max: Math.max(rawMax, 1), formatter: compactMoney })
@@ -397,13 +454,15 @@ export function heatmapOption({
         const [c, r, v] = (Array.isArray(p.value) ? p.value : []) as [number, number, number]
         const dollars = raw[r]?.[c]
         if (dollars === null || dollars === undefined) return null
-        const label = `${name(r)} · ${monthLabels[c] ?? ''}`
+        // The in-progress words ride the month, as on the bars' tooltip head (spec §C5).
+        const note = typeof todayIso === 'string' && partial[c] ? partialNote(matrix.months[c], todayIso) : null
+        const label = `${name(r)} · ${monthLabels[c] ?? ''}${note === null ? '' : ` — ${note}`}`
         if (mode === 'absolute') return { value: dollars, label }
         if (mode === 'row') return { value: dollars, label, sub: `${Math.round(v * 100)}% of this category’s busiest month` }
         return { value: dollars, label, sub: `${formatPct(v, { decimals: 0 })} vs its trailing 12-month average` }
       },
     }),
-    xAxis: monthAxis(monthLabels, { gap: true, rotate: 45 }),
+    xAxis: monthAxis(monthLabels, { gap: true, rotate: 45, marked: markedLabels(monthLabels, partial) }),
     yAxis: { type: 'category', data: order.map((_, r) => name(r)), inverse: true, axisLabel: { width: 118, overflow: 'truncate' as const } },
     visualMap,
     series: [{ type: 'heatmap' as const, data: cells, itemStyle: { borderColor: SURFACE, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: INK, borderWidth: 1 } } }],

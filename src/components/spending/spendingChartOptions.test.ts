@@ -3,7 +3,7 @@ import { tooltipRows } from '../../testing/tooltipRows'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { CATEGORY_HUES, ENTITY } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
-import { GRID_VARIANTS, compactMoney, percentLabel } from '../../charts/grammar'
+import { GRID_VARIANTS, compactMoney, partialItemStyle, percentLabel } from '../../charts/grammar'
 import { DIVERGING, INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
 import type { SpendingMatrix } from '../../types/api'
 import {
@@ -558,5 +558,122 @@ describe('categorySmallMultiplesOption', () => {
   })
   it('is null with nothing to draw', () => {
     expect(categorySmallMultiplesOption({ matrix: matrixFixture({ months: [] }), order: [1], fold: FOLD, nameById: NAMES, monthLabels: [] })).toBeNull()
+  })
+})
+
+// 2026-09-23 spec §C5: on Monthly entries every segment of the month in progress wears the
+// partial look in its own colour, its label is marked, its tooltip head says so, and its net pay
+// leaves the line for a lone marker (a month-to-date paycheck joined to a whole one reads as a
+// fall in pay).
+describe('spendingBarsOption: the month in progress (2026-09-23 spec §C5)', () => {
+  const inProgress = () =>
+    matrixFixture({
+      months: ['2026-08-01', '2026-09-01'],
+      series: [
+        { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, null] },
+        { category_id: 2, values: ['600.00', '250.00'], budgets: [null, null] },
+        { category_id: 3, values: ['150.00', '40.00'], budgets: [null, null] },
+      ],
+      totals: ['2750.00', '2290.00'],
+      net_pay: ['6000.00', '3000.00'],
+    })
+  const input = (over: Record<string, unknown> = {}) => ({
+    ...barsInput(inProgress()),
+    monthLabels: ['Aug 2026', 'Sep 2026'],
+    todayIso: '2026-09-23',
+    ...over,
+  })
+
+  it('draws every segment of the month under way partial, each in its own colour', () => {
+    const [rent, groceries, other] = read(spendingBarsOption(input())).series
+    expect(rent.data).toEqual([2000, { value: 2000, itemStyle: partialItemStyle(CATEGORY_HUES[0], false) }])
+    expect(groceries.data).toEqual([600, { value: 250, itemStyle: partialItemStyle(CATEGORY_HUES[1], false) }])
+    expect(other.data).toEqual([150, { value: 40, itemStyle: partialItemStyle(OTHER_SERIES_COLOR, false) }])
+    const [hatched] = read(spendingBarsOption(input({ patterns: true }))).series
+    expect(hatched.data?.[1]).toEqual({ value: 2000, itemStyle: partialItemStyle(CATEGORY_HUES[0], true) })
+  })
+
+  it('keeps an absent segment a gap while its month is under way (A6)', () => {
+    const [, groceries, other] = read(spendingBarsOption(input({ matrix: matrixFixture({ months: ['2026-08-01', '2026-09-01'] }) }))).series
+    expect(groceries.data).toEqual([600, null])
+    expect(other.data).toEqual([150, null])
+  })
+
+  it('detaches the month-to-date net pay from the line into a lone marker under the same name', () => {
+    const option = read(spendingBarsOption(input()))
+    expect(option.series.map((s) => s.id)).toEqual([
+      'cat-1', 'cat-2', 'other', 'net-pay', 'net-pay-partial', 'sustainable-spend', 'budget-Total budget',
+    ])
+    const [line, marker] = option.series.slice(3, 5)
+    expect(line.data).toEqual([6000, null])
+    expect(marker).toMatchObject({ type: 'line', name: 'Net pay', color: INK, z: 10 })
+    expect(marker.data).toEqual([null, { value: 3000, symbol: 'circle', symbolSize: 8, itemStyle: partialItemStyle(INK, false) }])
+  })
+
+  it('adds no marker when the month under way has no net pay yet', () => {
+    const option = read(spendingBarsOption(input({ matrix: { ...inProgress(), net_pay: ['6000.00', null] } })))
+    expect(option.series.map((s) => s.id)).not.toContain('net-pay-partial')
+    expect(option.series[3].data).toEqual([6000, null])
+  })
+
+  it('marks the label and names the month in the tooltip head, one Net pay row', () => {
+    const option = read(spendingBarsOption(input()))
+    const formatter = (option.xAxis.axisLabel as { formatter: (value: string, index: number) => string }).formatter
+    expect(formatter('Sep 2026', 1)).toBe('Sep 2026*')
+    expect(formatter('Aug 2026', 0)).toBe('Aug 2026')
+    const parsed = tooltipRows(option.tooltip.formatter([
+      { seriesName: 'Rent', seriesType: 'bar', axisValueLabel: 'Sep 2026', dataIndex: 1, value: 2000, color: CATEGORY_HUES[0] },
+      { seriesName: 'Net pay', seriesType: 'line', dataIndex: 1, value: null, color: INK },
+      { seriesName: 'Net pay', seriesType: 'line', dataIndex: 1, value: 3000, color: INK },
+    ]))
+    expect(parsed.head).toBe('Sep 2026 — month to date (in progress)')
+    expect(parsed.rows.filter((r) => r.label === 'Net pay').map((r) => r.value)).toEqual(['$3,000.00'])
+  })
+
+  it('draws nothing partial without a today, or once the month is done', () => {
+    for (const todayIso of [undefined, '2026-09-30']) {
+      const option = read(spendingBarsOption(input({ todayIso })))
+      expect(option.series[0].data).toEqual([2000, 2000])
+      expect(option.series[3].data).toEqual([6000, 3000])
+      expect(option.series.map((s) => s.id)).not.toContain('net-pay-partial')
+    }
+  })
+})
+
+// 2026-09-23 spec §C5: the heatmap's column for the month in progress wears the partial look;
+// in the vs-average reading it stays blank (a month to date against a whole month's average
+// would read as a false "below average").
+describe('heatmapOption: the month in progress (2026-09-23 spec §C5)', () => {
+  const MONTH_LABELS = ['Jan 2026', 'Feb 2026', 'Mar 2026', 'Apr 2026', 'May 2026', 'Jun 2026', 'Jul 2026', 'Aug 2026']
+  const input = { matrix: longMatrix(), order: [1, 2], nameById: NAMES, monthLabels: MONTH_LABELS, todayIso: '2026-08-12' }
+  const cellsOf = (option: unknown) => (option as { series: { data: unknown[] }[] }).series[0].data
+
+  it('draws the column under way partial in the absolute and row readings', () => {
+    const absolute = cellsOf(heatmapOption({ ...input, mode: 'absolute' }))
+    expect(absolute).toContainEqual({ value: [7, 1, 50], itemStyle: partialItemStyle(MUTED, false) })
+    // Finished months stay plain triples.
+    expect(absolute).toContainEqual([6, 0, 150])
+    expect(cellsOf(heatmapOption({ ...input, mode: 'row', patterns: true }))).toContainEqual({
+      value: [7, 1, 1],
+      itemStyle: partialItemStyle(MUTED, true),
+    })
+  })
+
+  it('leaves the column blank in the vs-average reading', () => {
+    expect(cellsOf(heatmapOption({ ...input, mode: 'vsAverage' }))).toEqual([[6, 0, 0.5], [6, 1, 0]])
+  })
+
+  it('marks the label and names the month in the tooltip', () => {
+    const option = readHeat(heatmapOption({ ...input, mode: 'row' }))
+    const formatter = (option.xAxis.axisLabel as unknown as { formatter: (value: string, index: number) => string }).formatter
+    expect(formatter('Aug 2026', 7)).toBe('Aug 2026*')
+    expect(formatter('Jul 2026', 6)).toBe('Jul 2026')
+    const noted = tooltipRows(option.tooltip.formatter({ value: [7, 1, 1] }))
+    expect([noted.lead, noted.label, noted.sub]).toEqual([
+      '$50.00',
+      'Groceries &lt;b&gt;&amp; more&lt;/b&gt; · Aug 2026 — month to date (in progress)',
+      '100% of this category’s busiest month',
+    ])
+    expect(tooltipRows(option.tooltip.formatter({ value: [6, 0, 1] })).label).toBe('Rent · Jul 2026')
   })
 })

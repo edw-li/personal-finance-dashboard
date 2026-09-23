@@ -19,6 +19,7 @@ import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../compone
 import type { ChartSelection } from '../types/metrics'
 import SelectionDetail from '../components/details/SelectionDetail'
 import { useArrivalValue } from '../components/useArrivalParam'
+import { useChartDecals } from '../components/useChartDecals'
 import Segmented from '../components/shell/Segmented'
 import BudgetPanel from '../components/spending/BudgetPanel'
 import {
@@ -49,6 +50,7 @@ import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
+import { todayIso } from '../utils/months'
 import { hasVsBudget, monthMovers } from '../utils/spending'
 import '../components/panels.css'
 import './SpendingPage.css'
@@ -256,6 +258,10 @@ export default function SpendingPage() {
   }, [load])
 
   const monthLabels = useMemo(() => matrix?.months.map(formatMonth) ?? [], [matrix])
+  // The month in progress is drawn as such on the bars and the heatmap (2026-09-23 spec §C5):
+  // judged against the product's today, hatched or faded by Appearance › Chart patterns.
+  const today = todayIso()
+  const patterns = useChartDecals()
 
   // The all-time ranking decides the fold — every category colour on this page — AND the
   // heatmap row order (biggest at top). ONE ranking, shared with the Overview money flow
@@ -287,8 +293,10 @@ export default function SpendingPage() {
     () =>
       matrix === null
         ? null
-        : spendingBarsOption({ matrix, fold, nameById, monthLabels, range, selected: legendSelected }),
-    [matrix, fold, nameById, monthLabels, range, legendSelected],
+        : spendingBarsOption({
+            matrix, fold, nameById, monthLabels, range, selected: legendSelected, todayIso: today, patterns,
+          }),
+    [matrix, fold, nameById, monthLabels, range, legendSelected, today, patterns],
   )
 
   const detailIndex = useMemo(
@@ -375,8 +383,10 @@ export default function SpendingPage() {
     () =>
       matrix === null
         ? null
-        : heatmapOption({ matrix, order: heatRows.visible, nameById, monthLabels, mode: heatmapMode }),
-    [matrix, heatRows, nameById, monthLabels, heatmapMode],
+        : heatmapOption({
+            matrix, order: heatRows.visible, nameById, monthLabels, mode: heatmapMode, todayIso: today, patterns,
+          }),
+    [matrix, heatRows, nameById, monthLabels, heatmapMode, today, patterns],
   )
 
   const savingsOption = useMemo(

@@ -40,6 +40,7 @@ import {
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
+import { useChartDecals } from '../components/useChartDecals'
 import StatTile from '../components/StatTile'
 import useOverviewResource from '../components/overview/useOverviewResource'
 import useSpendingEvidence from '../components/metrics/useSpendingEvidence'
@@ -275,9 +276,16 @@ export default function OverviewPage() {
     () => (data.matrix && data.coverage ? notEnteredMonths(data.matrix, data.coverage) : new Set<string>()),
     [data],
   )
+  // The month in progress is drawn as such (2026-09-23 spec §C5): judged against the product's
+  // today, hatched or faded by Appearance › Chart patterns.
+  const spendToday = todayIso()
+  const patterns = useChartDecals()
   const bars = useMemo(
-    () => (data.matrix ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered) : null),
-    [data, notEntered],
+    () =>
+      data.matrix
+        ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered, { todayIso: spendToday, patterns })
+        : null,
+    [data, notEntered, spendToday, patterns],
   )
   // The money flow's category colours are the Spending page's own (2026-09-23 spec §C2): the
   // fold comes from the same all-time ranking over the matrix this page already loads.

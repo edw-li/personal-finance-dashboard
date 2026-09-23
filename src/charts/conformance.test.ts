@@ -30,6 +30,8 @@ const ROSTER = [
   'netWorthMoversAccounts',
   'overviewNetWorthTrend',
   'overviewRecentSpend',
+  // …and with the month in progress (2026-09-23 spec §C5): the partial bar and marked label.
+  'overviewRecentSpendPartial',
   'moneyFlow',
   // …and the same builder on a year whose take-home is only part entered: the muted dashed
   // estimate node, a branch the fully-entered fixture never reaches.
@@ -43,9 +45,14 @@ const ROSTER = [
   // …and over a window holding one import-artefact month (2026-09-23 spec §C3): the capped
   // axis and its edge marker.
   'spendingBarsOffScale',
+  // …and with the month in progress under Chart patterns (2026-09-23 spec §C5): hatched
+  // segments and the detached net-pay marker series.
+  'spendingBarsPartial',
   'spendingMonthPie',
   'spendingHeatmapRow',
   'spendingHeatmapVsAverage',
+  // …and the heatmap's in-progress column (§C5): partial cells and the marked rotated label.
+  'spendingHeatmapPartial',
   'spendingSavings',
   // …and the same builder without the server's total rate (an older backend): one muted
   // line on the noLegend grid, a shape the two-line fixture never reaches.
