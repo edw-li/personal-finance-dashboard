@@ -49,6 +49,7 @@ from app.models import (
     User,
 )
 from app.security import hash_password
+from app.services.portfolio_calc import fold_transactions
 from app.tax_keys import DERIVED_KEYS
 from tests.portfolio_factories import acct
 from tests.workbook_builder import (
@@ -545,6 +546,53 @@ async def test_identical_trades_match_stably_while_still_and_when_shifted(db):
     report = await import_positions(db, shifted)  # and once shifted, it stands still
     assert txn_counts(report) == (0, 0, 0, 5)
     assert await import_rows(db) == after
+
+
+def acme_row(type_: str, shares: float, price: float) -> list:
+    return ["RH Taxable", type_, "Acme ETF", shares, price, None, None, 0, 0, 0, 0, 0]
+
+
+async def test_a_typo_fixed_to_match_a_later_row_is_an_edit_not_a_steal(db):
+    """The R1 re-review's scenario. Fixing the typo at key 30 makes that row identical to the
+    trade at key 40, which never moved. Rows still holding their own identical trade are
+    matched first, so key 30 is ONE in-place edit. Otherwise key 30 would have claimed key
+    40's row: key 30's own row deleted (its position lost), key 40's re-keyed, and a copy
+    appended after the sell, which then exceeds the held shares."""
+    header = default_positions_rows()[0]
+    sheet = [
+        header,
+        acme_row("Buy", 1.0, 400.0),  # key 20
+        acme_row("Buy", 1.0, 4000.0),  # key 30: the typo
+        acme_row("Buy", 1.0, 400.0),  # key 40
+        acme_row("Sell", 3.0, 500.0),  # key 50
+    ]
+    await import_positions(db, sheet)
+    first = await import_rows(db)
+    sheet[2] = acme_row("Buy", 1.0, 400.0)  # the typo fixed
+    report = await import_positions(db, sheet)
+    assert txn_counts(report) == (0, 1, 0, 3)
+    assert any(s.startswith("position_transactions[30]: price ") for s in report.samples)
+    assert await import_rows(db) == first  # every id, key and replay position kept
+    [position] = fold_transactions(
+        list((await db.execute(select(PositionTransaction))).scalars())
+    ).values()
+    assert (position.shares, position.warnings) == (Decimal("0"), [])  # three in, three out
+
+
+async def test_two_trades_that_swap_sheet_rows_swap_keys_and_keep_their_places(db):
+    """Keys pass between two kept rows: each is cleared before either is written, or the
+    partial unique index would refuse the first write mid-flush."""
+    await import_positions(db)  # keys 20 Acme buy, 40 Fido sell, 50 Mystery buy
+    first = {id_: index for id_, _, index in await import_rows(db)}
+    trades_before = await trades(db)
+    sheet = default_positions_rows()
+    sheet[1], sheet[4] = sheet[4], sheet[1]  # the Acme and Mystery buys trade sheet rows
+    report = await import_positions(db, sheet)
+    assert txn_counts(report) == (0, 2, 0, 1)
+    assert "position_transactions[20]: kept (was 50)" in report.samples
+    assert "position_transactions[50]: kept (was 20)" in report.samples
+    assert {id_: index for id_, _, index in await import_rows(db)} == first
+    assert await trades(db) == trades_before
 
 
 async def test_a_first_import_creates_every_row_in_sheet_order(db):

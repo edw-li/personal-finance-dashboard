@@ -267,18 +267,27 @@ async def apply_positions(
     # it `sort_index`), and a row inserted or deleted mid-sheet shifts every key below it.
     # Matched by key alone, one trade's fields would be poured into another trade's row — a
     # row that keeps the replay position the user gave the OLD trade.
-    # 1. Content: an identical trade is the same row, wherever the sheet now has it. Of
-    #    identical candidates, the one already holding this key, else the earliest replayed.
+    # 1. Content: an identical trade is the same row, wherever the sheet now has it.
     by_trade: dict[_Trade, list[PositionTransaction]] = {}
-    for row in imported:
+    for row in imported:  # replay order, so each list's first row is the earliest replayed
         by_trade.setdefault(_Trade.of(row), []).append(row)
     matched: dict[int, PositionTransaction] = {}  # sheet key -> the row it is
+    #    1a. Over EVERY sheet row first: the identical trade still holding its own key. Were
+    #        the rows taken in sheet order instead, an earlier row made identical to a later
+    #        one (a typo fixed) would claim the later row while it sits unchanged at its own
+    #        key — the fixed row deleted, its position lost, a copy appended at the end.
     for txn, _fields, trade in incoming:
-        candidates = by_trade.get(trade)
-        if candidates:
-            row = next((c for c in candidates if c.import_key == txn.sort_index), candidates[0])
+        candidates = by_trade.get(trade, [])
+        row = next((c for c in candidates if c.import_key == txn.sort_index), None)
+        if row is not None:
             candidates.remove(row)
             matched[txn.sort_index] = row
+    #    1b. Then, for the rows still unmatched, an identical trade at another key — the
+    #        sheet moved it — the earliest in replay order first.
+    for txn, _fields, trade in incoming:
+        candidates = by_trade.get(trade)
+        if candidates and txn.sort_index not in matched:
+            matched[txn.sort_index] = candidates.pop(0)
     # 2. The same key AND the same security, account and type: a sheet edit of that trade,
     #    made in place — the row keeps its id and its replay position.
     taken = {row.id for row in matched.values()}
