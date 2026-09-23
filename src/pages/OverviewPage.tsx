@@ -11,6 +11,7 @@ import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
+import { categoryFold } from '../charts/entities'
 import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import { chipAmount, eventKey } from '../components/calendar/calendarView'
@@ -278,6 +279,10 @@ export default function OverviewPage() {
     () => (data.matrix ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered) : null),
     [data, notEntered],
   )
+  // The money flow's category colours are the Spending page's own (2026-09-23 spec §C2): the
+  // fold comes from the same all-time ranking over the matrix this page already loads.
+  const matrix = data.matrix
+  const flowFold = useMemo(() => (matrix ? categoryFold(matrix) : null), [matrix])
 
   // Audit item 11: the server answers an owner with no accounts with zero TOTALS, and a
   // page of $0.00 tiles over a flat line reads as "you have nothing" rather than "there is
@@ -627,6 +632,10 @@ export default function OverviewPage() {
                 failed={flowFailed}
                 onRetry={() => loadFlow(flowYear)}
                 onYearChange={showFlowYear}
+                fold={flowFold}
+                // Wait for the fold rather than draw once in the payload's own ranking and
+                // recolour a moment later; a failed spending feed falls back to that ranking.
+                foldPending={matrix === undefined && spending.busy}
               />
     ),
   }

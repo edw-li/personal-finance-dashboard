@@ -97,7 +97,7 @@ vi.mock('../components/EChart', async () => {
       onClick,
       animateEntrance = true,
     }: {
-      option: { xAxis?: { data?: unknown[] }; series?: { type?: string; data?: unknown[] }[] }
+      option: { xAxis?: { data?: unknown[] }; series?: { type?: string; data?: unknown[] }[] } | null
       ariaLabel?: string
       onClick?: (params: { dataIndex?: number }) => void
       animateEntrance?: boolean
@@ -106,8 +106,13 @@ vi.mock('../components/EChart', async () => {
         'data-testid': 'echart',
         // ChartCard hands every mount its house sentence (F11) — the page test reads it.
         'aria-label': ariaLabel,
-        'data-categories': (option.xAxis?.data ?? []).join(','),
-        'data-spending-points': JSON.stringify(option.series?.find(series => series.type === 'bar')?.data ?? []),
+        'data-categories': (option?.xAxis?.data ?? []).join(','),
+        'data-spending-points': JSON.stringify(option?.series?.find(series => series.type === 'bar')?.data ?? []),
+        // The money-flow sankey's nodes as name:colour — which fold coloured the fan.
+        'data-sankey': ((option?.series?.find((series) => series.type === 'sankey')?.data ?? []) as { name?: string; depth?: number; itemStyle?: { color?: string } }[])
+          .filter((node) => node.depth === 3)
+          .map((node) => `${node.name}:${node.itemStyle?.color}`)
+          .join(','),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
         // A click stands in for a click on the chart's FIRST point (dataIndex 0) —
@@ -118,6 +123,8 @@ vi.mock('../components/EChart', async () => {
   }
 })
 import { fetchCalendar } from '../api/calendar'
+import { CATEGORY_HUES } from '../charts/entities'
+import { POSITIVE } from '../charts/theme'
 import { fetchCoverage } from '../api/coverage'
 import { fetchLots } from '../api/espp'
 import { fetchHousehold } from '../api/household'
@@ -2039,5 +2046,38 @@ describe('OverviewPage chart cards (charts C2)', () => {
     expect(screen.getAllByRole('group', { name: /Export/ }).length).toBeGreaterThanOrEqual(3)
     expect(screen.getByRole('link', { name: 'Open net worth →' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open spending →' })).toBeTruthy()
+  })
+})
+
+// 2026-09-23 spec §C2: the money flow folds by the SPENDING PAGE's category set, in the same
+// colours — so a category is one colour on the Overview and on /spending, whatever this year's
+// own ranking says.
+it('folds the money flow by the Spending page\u2019s all-time categories, in their colours', async () => {
+  const categories = [
+    { id: 1, name: 'Rent', slug: 'rent', sort_order: 1, is_active: true, kind: 'living' as const },
+    { id: 2, name: 'Food', slug: 'food', sort_order: 2, is_active: true, kind: 'living' as const },
+  ]
+  serve({
+    // Food is the ALL-TIME leader; Rent leads the flow's own year.
+    matrix: matrixOut({
+      categories,
+      series: [
+        { category_id: 1, values: Array<string>(12).fill('100.00'), budgets: Array<null>(12).fill(null) },
+        { category_id: 2, values: Array<string>(12).fill('900.00'), budgets: Array<null>(12).fill(null) },
+      ],
+    }),
+    flow: moneyFlowOut({
+      category_totals: [
+        { category_id: 1, name: 'Rent', kind: 'living', amount: '24000.00' },
+        { category_id: 2, name: 'Food', kind: 'living', amount: '6000.00' },
+      ],
+    }),
+  })
+  renderPage()
+  await waitFor(() => {
+    const flow = screen.getAllByTestId('echart').find((chart) => (chart.getAttribute('data-sankey') ?? '') !== '')
+    expect(flow?.getAttribute('data-sankey')).toBe(
+      `Food:${CATEGORY_HUES[0]},Rent:${CATEGORY_HUES[1]},Saved:${POSITIVE}`,
+    )
   })
 })

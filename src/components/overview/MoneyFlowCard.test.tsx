@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
+import type { CategoryFold } from '../../charts/entities'
 import type { MoneyFlowOut } from '../../types/api'
 
 // echarts needs a real canvas and is never rendered in jsdom (house law); what the chart
@@ -62,9 +63,13 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-function renderCard(flow: MoneyFlowOut | null, failed = false) {
+function renderCard(
+  flow: MoneyFlowOut | null,
+  failed = false,
+  fold: { fold?: CategoryFold | null; foldPending?: boolean } = {},
+) {
   return render(
-    <MoneyFlowCard flow={flow} failed={failed} onRetry={onRetry} onYearChange={onYearChange} />,
+    <MoneyFlowCard flow={flow} failed={failed} onRetry={onRetry} onYearChange={onYearChange} {...fold} />,
   )
 }
 
@@ -143,4 +148,54 @@ it('skeletons while the first fetch is in flight', () => {
   renderCard(null, false)
   // Nothing to hold under a dim on a first paint, so the card shows its own skeleton.
   expect(document.querySelector('.chart-card-skeleton')).toBeTruthy()
+})
+
+// --- one window on the right (2026-09-23 spec §C1) ---
+
+const YEAR = Array.from({ length: 12 }, (_, i) => `2026-${String(i + 1).padStart(2, '0')}-01`)
+
+it('names the right-hand window above the chart', () => {
+  renderCard(flowOut({ matched_months: YEAR.slice(0, 8) }))
+  expect(screen.getByText('Spending and saved: Jan–Aug')).toBeDefined()
+})
+
+it('says so when no month has both feeds yet', () => {
+  renderCard(flowOut({ matched_months: [] }))
+  expect(
+    screen.getByText('Spending and saved: no month of 2026 has both take-home and spending entered yet'),
+  ).toBeDefined()
+})
+
+it('names the spending left out of the fan, ahead of the warnings', () => {
+  renderCard(
+    flowOut({
+      matched_months: YEAR.slice(0, 8),
+      spending_unmatched_months: ['2026-09-01'],
+      spending_unmatched_total: '2072.23',
+      warnings: ['net pay entered 8/12 months', 'spending entered 9/12 months'],
+    }),
+  )
+  const note = screen.getByText('Sep 2026 spending ($2,072.23) is shown once its take-home is entered.')
+  const warnings = screen.getByText('net pay entered 8/12 months · spending entered 9/12 months')
+  // Document order: the sentence about the chart's own window reads first.
+  expect(note.compareDocumentPosition(warnings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  renderCard(
+    flowOut({
+      matched_months: YEAR.slice(0, 7),
+      spending_unmatched_months: ['2026-08-01', '2026-09-01'],
+      spending_unmatched_total: '7072.23',
+    }),
+  )
+  expect(screen.getByText('Aug–Sep 2026 spending ($7,072.23) is shown once their take-home is entered.')).toBeDefined()
+})
+
+it('holds the chart while the Spending fold loads, so no category changes colour on arrival', () => {
+  renderCard(flowOut(), false, { foldPending: true })
+  expect(screen.queryByTestId('echart')).toBeNull()
+  expect(document.querySelector('.chart-card-skeleton')).toBeTruthy()
+})
+
+it('draws with the payload’s own fold when the Spending fold is unavailable', () => {
+  renderCard(flowOut(), false, { fold: null, foldPending: false })
+  expect(screen.getByTestId('echart')).toBeDefined()
 })
