@@ -1216,9 +1216,14 @@ describe('portfolio.css and reorder.css — the reorderable ledger', () => {
 
   it('lifts the pinned actions cell with its row and draws the drop line across it', () => {
     // panels.css pins `.port-table td.row-actions` (0,2,1) with its own surface and a left
-    // hairline; each row state outranks it and keeps that hairline.
+    // hairline; each row state outranks it and keeps that hairline. The lifted cell draws its own
+    // edge first, then the row's top and bottom edges — which a ledger row, a unit of one, has
+    // both of (R0 round 4 composes them through --reorder-edge-*).
+    expect(reorderCss).toMatch(
+      /\.reorder-table tr\[data-reorder='lifted'\] > td\.row-actions \{ background: var\(--surface-2\); box-shadow: -1px 0 0 var\(--border\), var\(--reorder-edge-top\), var\(--reorder-edge-bottom\); \}/,
+    )
     expect(reorderCss).toContain(
-      ".reorder-table tr[data-reorder='lifted'] > td.row-actions { background: var(--surface-2); box-shadow: -1px 0 0 var(--border), inset 0 1px 0 var(--border), inset 0 -1px 0 var(--border); }",
+      ".reorder-table tr[data-reorder='lifted'] { --reorder-edge-top: inset 0 1px 0 var(--border); --reorder-edge-bottom: inset 0 -1px 0 var(--border); }",
     )
     expect(reorderCss).toContain(
       ".reorder-table tr[data-reorder-drop='before'] > td.row-actions { box-shadow: -1px 0 0 var(--border), inset 0 2px 0 var(--accent); }",
