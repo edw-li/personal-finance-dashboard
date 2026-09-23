@@ -757,7 +757,8 @@ describe('CreditCardsPage', () => {
   })
 
   it('reordering a category is one PUT of the whole new order, and a second move before the refetch diffs against the optimistic order', async () => {
-    serveCategories()
+    // Rent is hidden: it keeps its place and rides in every PUT (spec §9).
+    serveCategories([CATEGORIES[0], CATEGORIES[1], { ...CATEGORIES[2], is_active: false }])
     renderPage('/credit-cards?section=manage')
     await screen.findByText('Categories & weights')
     // The page's reload never lands in this test: every move below has only the rows on screen
@@ -1633,7 +1634,8 @@ describe('CreditCardsPage — reorder the card roster (2026-09-23 drag-to-reorde
   })
 
   it('saves one drop as one PUT of every card id, shows it at once, and parks the grips until it answers', async () => {
-    serveCards()
+    // RH Gold is archived: it keeps its place and rides in the PUT (spec §9).
+    serveCards([vx(), SAVOR, { ...RH, is_active: false }])
     vi.mocked(reorderCreditCards).mockReturnValue(new Promise<never>(() => {}))
     renderManage()
     await screen.findByText('Card roster')
@@ -1646,6 +1648,20 @@ describe('CreditCardsPage — reorder the card roster (2026-09-23 drag-to-reorde
     // focusable: the keyboard drop left focus on the moved grip.
     expect(grip('RH Gold').getAttribute('aria-disabled')).toBe('true')
     expect(document.activeElement).toBe(grip('Venture X'))
+  })
+
+  it('moves an archived card like any other — its own drop is one PUT of every card id (spec §9)', async () => {
+    serveCards([vx(), SAVOR, { ...RH, is_active: false }])
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('RH Gold', 'ArrowUp')
+    expect(reorderCreditCards).toHaveBeenCalledWith([1, 3, 2])
+    expect(await screen.findByText('Moved RH Gold')).toBeTruthy()
+    expect(rowIds('.roster-table')).toEqual(['1', '3', '2'])
+    // Still archived where it now stands: a reorder moves the row and nothing else.
+    expect(
+      document.querySelector('.roster-table tr[data-reorder-id="3"] .badge')?.textContent,
+    ).toBe('Archived')
   })
 
   it('flashes the moved row, says "Moved Venture X", and the page reloads — the matrix follows', async () => {
