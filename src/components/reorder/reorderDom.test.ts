@@ -59,6 +59,9 @@ function scrolledTable(boxTop: number, sticks: 'cells' | 'thead' | 'nothing'): H
   return box
 }
 
+/** The first body row of a box's table — the row a drag would lift. */
+const bodyRow = (box: HTMLElement) => box.querySelector('tbody tr')
+
 function setBox(element: HTMLElement, box: { scrollHeight?: number; clientHeight?: number; scrollTop?: number }) {
   for (const [key, value] of Object.entries(box)) {
     Object.defineProperty(element, key, { value, writable: true, configurable: true })
@@ -139,7 +142,7 @@ describe('listY / unitExtent / visibleBounds', () => {
   })
 
   it("an element's band starts below its sticky header: rows under the header are not seen", () => {
-    const band = (box: HTMLElement) => visibleBounds(box, stickyHeaderOf(box))
+    const band = (box: HTMLElement) => visibleBounds(box, stickyHeaderOf(bodyRow(box), box))
     expect(band(scrolledTable(120, 'cells'))).toEqual({ top: 166, bottom: 540 })
     expect(band(scrolledTable(120, 'thead'))).toEqual({ top: 166, bottom: 540 })
     // A header that does not stick scrolled away with its rows: the band is the whole box.
@@ -147,7 +150,7 @@ describe('listY / unitExtent / visibleBounds', () => {
   })
 
   it('the header counts only where the window shows it', () => {
-    const band = (box: HTMLElement) => visibleBounds(box, stickyHeaderOf(box))
+    const band = (box: HTMLElement) => visibleBounds(box, stickyHeaderOf(bodyRow(box), box))
     expect(band(scrolledTable(-20, 'cells'))).toEqual({ top: 26, bottom: 400 })
     expect(band(scrolledTable(-100, 'cells'))).toEqual({ top: 0, bottom: 320 })
   })
@@ -157,7 +160,7 @@ describe('stickyHeaderOf / headerBottom / stickyInset', () => {
   it('finds what sticks — the cells, the house rule — and measures THEM: the thead keeps its box where the header began', () => {
     // The thead's rect is still 200px above the box (scrolled away); the cells stand at its top.
     const box = scrolledTable(120, 'cells')
-    const header = stickyHeaderOf(box)
+    const header = stickyHeaderOf(bodyRow(box), box)
     expect(header).toEqual([...box.querySelectorAll('th')])
     expect(headerBottom(header)).toBe(166)
     expect(stickyInset(box, header)).toBe(46)
@@ -165,7 +168,7 @@ describe('stickyHeaderOf / headerBottom / stickyInset', () => {
 
   it('finds a thead that sticks itself', () => {
     const box = scrolledTable(120, 'thead')
-    const header = stickyHeaderOf(box)
+    const header = stickyHeaderOf(bodyRow(box), box)
     expect(header).toEqual([box.querySelector('thead')])
     expect(headerBottom(header)).toBe(166)
     expect(stickyInset(box, header)).toBe(46)
@@ -173,7 +176,7 @@ describe('stickyHeaderOf / headerBottom / stickyInset', () => {
 
   it('reads where the header stands NOW — found once, measured every time', () => {
     const box = scrolledTable(120, 'cells')
-    const header = stickyHeaderOf(box)
+    const header = stickyHeaderOf(bodyRow(box), box)
     box.getBoundingClientRect = () => rect(90, 420) // the page scrolled 30px: the box and its header rose
     box.querySelectorAll('th').forEach((th) => {
       th.getBoundingClientRect = () => rect(90, 46)
@@ -183,12 +186,31 @@ describe('stickyHeaderOf / headerBottom / stickyInset', () => {
   })
 
   it('is empty — no bottom, an inset of 0 — without a sticky header, and for the page', () => {
-    expect(stickyHeaderOf(scrolledTable(120, 'nothing'))).toEqual([])
+    const box = scrolledTable(120, 'nothing')
+    expect(stickyHeaderOf(bodyRow(box), box)).toEqual([])
     expect(headerBottom([])).toBeNull()
-    expect(stickyInset(scrolledTable(120, 'nothing'), [])).toBe(0)
-    expect(stickyHeaderOf(document.createElement('div'))).toEqual([])
-    expect(stickyHeaderOf(null)).toEqual([])
+    expect(stickyInset(box, [])).toBe(0)
+    expect(stickyHeaderOf(bodyRow(box), null)).toEqual([])
+    expect(stickyHeaderOf(null, box)).toEqual([])
     expect(stickyInset(null, [])).toBe(0)
+  })
+
+  it("reads the row's OWN table header — not the first thead in its box", () => {
+    document.body.innerHTML =
+      '<div id="box" style="overflow-y: auto">' +
+      '<table><thead><tr><th>Other</th></tr></thead><tbody><tr><td>x</td></tr></tbody></table>' +
+      '<table><thead><tr><th id="own" style="position: sticky; top: 0">Name</th></tr></thead>' +
+      '<tbody><tr id="row"><td>y</td></tr></tbody></table></div>'
+    const box = document.getElementById('box') as HTMLElement
+    expect(stickyHeaderOf(document.getElementById('row'), box)).toEqual([document.getElementById('own')])
+  })
+
+  it('a header outside the box does not stick in it — a table whose body scrolls keeps its header above', () => {
+    document.body.innerHTML =
+      '<table><thead><tr><th style="position: sticky; top: 0">Name</th></tr></thead>' +
+      '<tbody id="box" style="overflow-y: auto"><tr id="row"><td>y</td></tr></tbody></table>'
+    const box = document.getElementById('box') as HTMLElement
+    expect(stickyHeaderOf(document.getElementById('row'), box)).toEqual([])
   })
 })
 
@@ -216,7 +238,7 @@ describe('ensureVisible', () => {
 
   it('keeps the unit clear of the edge zone BELOW a sticky header — never parked under it', () => {
     const scroller = scrolledTable(120, 'cells') // a 46px header over a 400px view
-    const header = stickyHeaderOf(scroller)
+    const header = stickyHeaderOf(bodyRow(scroller), scroller)
     setBox(scroller, { clientHeight: 400, scrollTop: 300 })
     ensureVisible(scroller, 320, 40, header) // top 320 above 300 + 46 + 40 → up by 66
     expect(scroller.scrollTop).toBe(234)
@@ -340,7 +362,7 @@ describe('the drop line', () => {
   it("hides while the edge is outside the band the reader sees of the scroller — under its sticky header, or past the window", () => {
     const box = scrolledTable(120, 'cells') // the band: 166..540
     const row = box.querySelector('tbody tr') as HTMLElement
-    const frame: ListFrame = { scroller: box, header: stickyHeaderOf(box), clips: [] }
+    const frame: ListFrame = { scroller: box, header: stickyHeaderOf(bodyRow(box), box), clips: [] }
     const line = createDropLine(row)
     row.getBoundingClientRect = () => rect(140, 40) // its top under the header, its bottom below it
     placeDropLine(line, row, 'before', frame)

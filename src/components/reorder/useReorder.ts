@@ -491,8 +491,9 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
   const lift = (drag: Drag<K>) => {
     measure(drag)
     // Once, here: every frame and move after reads only these elements' rects (R7 review 7).
-    drag.header = stickyHeaderOf(drag.scroller)
-    drag.clips = sideClipsOf(rows.current.get(drag.id) ?? null)
+    const row = rows.current.get(drag.id) ?? null
+    drag.header = stickyHeaderOf(row, drag.scroller)
+    drag.clips = sideClipsOf(row)
     drag.phase = 'lifted'
     markRows(drag)
     if (drag.mode === 'pointer') {

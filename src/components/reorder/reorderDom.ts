@@ -54,11 +54,13 @@ export interface ListFrame {
   clips: readonly HTMLElement[]
 }
 
-/** What sticks of the scroller's table header — the thead itself, or its cells (settings.css's and
- *  categories.css's `thead th { position: sticky; top: 0 }`) — or nothing: the page never has one. */
-export function stickyHeaderOf(scroller: Scroller): Element[] {
-  const head = scroller?.querySelector('thead') ?? null
-  if (head === null) return []
+/** What sticks of `row`'s OWN table header inside the scroller — the thead itself, or its cells
+ *  (settings.css's and categories.css's `thead th { position: sticky; top: 0 }`) — or nothing: the
+ *  page never has one, and a header outside the box (a table whose body scrolls) stands above it
+ *  rather than over its rows. Never the box's first thead, which may be another table's. */
+export function stickyHeaderOf(row: Element | null, scroller: Scroller): Element[] {
+  const head = row?.closest('table')?.tHead ?? null
+  if (head === null || scroller === null || !scroller.contains(head)) return []
   return [head, ...head.querySelectorAll('th, td')].filter(
     (element) => getComputedStyle(element).position === 'sticky',
   )
