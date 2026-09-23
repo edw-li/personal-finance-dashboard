@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { ApiError } from '../../api/client'
+import { flushSync } from 'react-dom'
+import { ApiError, errorDetail } from '../../api/client'
 import {
   createCardCredit,
   createCreditCard,
@@ -54,6 +55,12 @@ const EMPTY_CARD: CardFormState = {
 function message(err: unknown, fallback: string): string {
   // 404/409/422 details are the server's own sentences — rendered verbatim (house note).
   return err instanceof ApiError ? err.message : fallback
+}
+
+/** A server sentence used inside one of ours: its closing stop goes, ours closes it (the
+ *  reorder toasts' rule, lane R3's `clause`). */
+function clause(text: string): string {
+  return text.replace(/[.\s]+$/, '')
 }
 
 /**
@@ -315,6 +322,47 @@ export default function CardsPanel({
       .finally(() => setBusy(false))
   }
 
+  // A failed save puts the rows back (spec §7, as §4.1). Moving them can blur the grip a
+  // keyboard drop left focus on — reverting an upward move moves that grip's own row — so
+  // focus is handed back once the DOM has moved (flushSync: the move has happened by the next
+  // line). Lane R3's dropPendingOrder.
+  const dropPendingOrder = () => {
+    const focused = document.activeElement
+    flushSync(() => setPendingOrder(null))
+    if (
+      focused instanceof HTMLElement &&
+      focused.isConnected &&
+      document.activeElement !== focused
+    ) {
+      focused.focus()
+    }
+  }
+
+  // Undo re-sends the order that stood before the drop (spec §7): the route is not
+  // change-logged, so the client holds the previous order. The server's answer shows at once,
+  // as the saved order — it replaces the drop's, so the rows on screen are the restored ones
+  // even when the page's reload hands down nothing new (lane R3's browser find: an Undo's
+  // reload can match what the page already holds). A roster that changed since answers 409,
+  // and the page's reload shows what is there now.
+  const restoreOrder = (ids: number[]) => {
+    setBusy(true)
+    reorderCreditCards(ids)
+      .then((restored) => {
+        setSavedOrder(restored)
+        onChanged()
+        toast.info('Order restored')
+      })
+      .catch((err: unknown) => {
+        if (err instanceof ApiError && err.status === 409) {
+          toast.error(errorDetail(err))
+          onChanged()
+          return
+        }
+        toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
+      })
+      .finally(() => setBusy(false))
+  }
+
   // One drop, one PUT (spec §7): every card, active and archived, in its new order. The
   // matrix columns, the tiles and the credit-line legend read the page's list, so they follow
   // once the page reloads. `reorder` is read only when the PUT answers, long after the render
@@ -322,6 +370,7 @@ export default function CardsPanel({
   const saveOrder = (next: number[], moved: number) => {
     const card = cardById.get(moved)
     if (card === undefined) return // the hook commits only ids it was handed
+    const previous = ordered.map((row) => row.id)
     // Synchronously: the hook calls onCommit inside flushSync, so the new DOM order and the
     // cleared drag transforms land in one frame (lane R0 consumer rule 3).
     setPendingOrder(
@@ -337,9 +386,23 @@ export default function CardsPanel({
         setSavedOrder(saved)
         onChanged()
         reorder.markSaved(moved)
-        toast.success(`Moved ${card.name}`)
+        toast.success(`Moved ${card.name}`, {
+          action: { label: 'Undo', onAction: () => restoreOrder(previous) },
+        })
       })
-      .catch(() => setPendingOrder(null))
+      .catch((err: unknown) => {
+        dropPendingOrder()
+        if (err instanceof ApiError && err.status === 409) {
+          // The server's sentence says what happened; the reload shows the rows it means.
+          toast.error(errorDetail(err))
+          onChanged()
+          return
+        }
+        // The toast layer, never the form's banner: the table is not the form (spec §4.1).
+        toast.error(
+          `Couldn't save the new order — ${clause(errorDetail(err))}. The list is back to how it was.`,
+        )
+      })
       .finally(() => setBusy(false))
   }
 

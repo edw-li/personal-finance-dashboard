@@ -210,9 +210,10 @@ function matrixRow(name: string): HTMLElement {
 
 // ── Drag-to-reorder helpers (2026-09-23 drag-to-reorder spec §7) ─────────────────────────────
 
-// Lane R1's stale-list sentence for the reward categories (spec §8.3).
+// Lane R1's stale-list sentences (spec §8.3).
 const STALE_CATEGORIES =
   'The reward categories changed since this list was loaded — nothing was moved.'
+const STALE_CARDS = 'The cards changed since this list was loaded — nothing was moved.'
 
 /** The page inside a ToastProvider, on Manage — the reorder toasts and their Undo live there. */
 function renderManage() {
@@ -1672,5 +1673,126 @@ describe('CreditCardsPage — reorder the card roster (2026-09-23 drag-to-reorde
       answer([{ ...SAVOR, sort_order: 0 }, { ...vx(), sort_order: 1 }, { ...RH, sort_order: 2 }])
     })
     expect(rowIds('.roster-table')).toEqual(['2', '1', '3'])
+  })
+})
+
+describe('CreditCardsPage — the card roster: Undo, and a save that fails (spec §7, §8.1, §8.3)', () => {
+  beforeEach(() => {
+    vi.mocked(reorderCreditCards).mockReset()
+  })
+
+  it('Undo re-sends the order that stood before the drop, shows it and says so', async () => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByText('Order restored')).toBeTruthy()
+    expect(vi.mocked(reorderCreditCards).mock.calls).toEqual([[[2, 1, 3]], [[1, 2, 3]]])
+    // The server's answer shows at once, and the page reloads behind it.
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+    expect(fetchCreditCards).toHaveBeenCalledTimes(3)
+  })
+
+  // Lane R3's browser find, as for Categories & weights: the drop's reload never lands and the
+  // Undo's returns exactly what the page first loaded, which the page skips as already shown.
+  it('drop → Undo → drag again saves the order the user sees, even when the page skips an identical reload', async () => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    const firstLoad = getSnapshot('credit-cards')
+    // The drop's reload never lands …
+    vi.mocked(fetchCreditCards).mockReturnValueOnce(new Promise<never>(() => {}))
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Order restored')
+    // … and the Undo's lands with the rows of the first load, so the page keeps its props.
+    await waitFor(() => expect(getSnapshot('credit-cards')).not.toBe(firstLoad))
+    expect(JSON.stringify(getSnapshot('credit-cards'))).toBe(JSON.stringify(firstLoad))
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+    keyboardMove('RH Gold', 'ArrowUp')
+    expect(reorderCreditCards).toHaveBeenLastCalledWith([1, 3, 2])
+  })
+
+  // …and no saved order outlives a reload that returns the first load's rows: every reorder
+  // PUT drops the page's snapshot (api() → invalidateForMutation), so the reload always hands
+  // the roster fresh rows. Here another tab puts the old order back before this tab reloads.
+  it("retires the saved order on the next reload even when it returns the first load's rows (another tab put them back)", async () => {
+    let stored = [vx(), SAVOR, RH]
+    vi.mocked(fetchCreditCards).mockImplementation(async () => stored.map((card) => ({ ...card })))
+    vi.mocked(reorderCreditCards).mockImplementation(async (ids) => {
+      const byId = new Map(stored.map((card) => [card.id, card]))
+      const answer = ids.flatMap((id, index) => {
+        const card = byId.get(id)
+        return card === undefined ? [] : [{ ...card, sort_order: index }]
+      })
+      stored = [vx(), SAVOR, RH] // the other tab's order, back where it was
+      invalidateForMutation('/credit-cards/order')
+      return answer
+    })
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    await waitFor(() => expect(rowIds('.roster-table')).toEqual(['1', '2', '3']))
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    keyboardMove('RH Gold', 'ArrowUp')
+    expect(reorderCreditCards).toHaveBeenLastCalledWith([1, 3, 2])
+  })
+
+  it.each([
+    { status: 500, detail: 'Internal Server Error', reason: 'the server had a problem (HTTP 500)' },
+    // A server sentence that brings its own stop: ours closes it, once.
+    { status: 422, detail: 'ids lists 3 more than once.', reason: 'ids lists 3 more than once' },
+  ])('puts the rows back, keeps the grip focused and says why ($status)', async ({ status, detail, reason }) => {
+    serveCards()
+    vi.mocked(reorderCreditCards).mockRejectedValueOnce(new ApiError(detail, status))
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('RH Gold', 'ArrowUp')
+    expect(
+      await screen.findByText(
+        `Couldn't save the new order — ${reason}. The list is back to how it was.`,
+      ),
+    ).toBeTruthy()
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+    expect(document.activeElement).toBe(grip('RH Gold'))
+    expect(fetchCreditCards).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+  })
+
+  it("shows a stale roster's server sentence, puts the rows back and reloads (409)", async () => {
+    serveCards()
+    vi.mocked(reorderCreditCards).mockRejectedValueOnce(new ApiError(STALE_CARDS, 409))
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    expect(await screen.findByText(STALE_CARDS)).toBeTruthy()
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+    expect(fetchCreditCards).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
+  })
+
+  it.each([
+    {
+      status: 500,
+      detail: 'Internal Server Error',
+      text: "Couldn't restore the order — the server had a problem (HTTP 500).",
+      fetches: 2,
+    },
+    { status: 409, detail: STALE_CARDS, text: STALE_CARDS, fetches: 3 },
+  ])('says why an Undo was refused ($status), reloading a stale roster', async ({ status, detail, text, fetches }) => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    vi.mocked(reorderCreditCards).mockRejectedValueOnce(new ApiError(detail, status))
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByText(text)).toBeTruthy()
+    expect(fetchCreditCards).toHaveBeenCalledTimes(fetches)
   })
 })
