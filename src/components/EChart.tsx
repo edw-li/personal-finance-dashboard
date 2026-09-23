@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { echarts, registerThemeVersion } from '../charts/echarts'
 import type { EChartsOption } from '../charts/echarts'
 import { defaultCursor, pinSeriesMotion, quiesceRipples } from '../charts/motion'
@@ -82,8 +82,9 @@ export default function EChart({
   onLegendChange?: (selected: Record<string, boolean>) => void
   /** Mirrors a ctrl+wheel/drag-pan window into page state, as category-axis indices. */
   onDataZoom?: (window: { startValue: number; endValue: number }) => void
-  /** The container's measured width, on first measure and every resize — for an option whose
-   *  labels depend on it (the portfolio's weekly axis, code review 5). Pages quantize it. */
+  /** The container's measured width, on mount (before the first paint) and every resize — for an
+   *  option whose labels depend on it (the portfolio's weekly axis, code review 5). Pages
+   *  quantize it. */
   onWidth?: (width: number) => void
   /** false = paint the option already-drawn (cached revisits must not replay the
    *  entrance dance — 2026-08-27 spec §1). Default true. Merged after the page's
@@ -151,6 +152,16 @@ export default function EChart({
     onDataZoomRef.current = onDataZoom
     onWidthRef.current = onWidth
   })
+
+  // The width, reported in the mount's own commit, before the held first paint (code re-review
+  // 2): a page whose option reads it (the Overview's weekly axis) then builds the right option
+  // before the chart paints. Left to the observer's first delivery, a frame later, it arrived
+  // after the entrance had started, and the rebuilt option repainted the chart already-drawn —
+  // cutting the entrance. The observer below reports every later change.
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (el && onWidthRef.current) onWidthRef.current(el.clientWidth)
+  }, [])
 
   useEffect(() => {
     const el = containerRef.current

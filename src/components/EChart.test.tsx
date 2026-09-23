@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EChartsOption } from '../charts/echarts'
@@ -618,16 +619,20 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
 // Code review 5: a chart whose labels depend on its width (the portfolio's weekly axis) reads the
 // container's measured width from the same observer that refits the engine.
 describe('EChart width signal', () => {
-  it("reports the container's width on first measure and on every resize", () => {
-    const onWidth = vi.fn()
-    const { container } = render(<EChart ariaLabel="test chart" option={OPTION} onWidth={onWidth} />)
-    const box = container.querySelector('[aria-label="test chart"]') as HTMLElement
-    Object.defineProperty(box, 'clientWidth', { configurable: true, value: 1230 })
-    resizeNotify.forEach((fire) => fire())
-    expect(onWidth).toHaveBeenLastCalledWith(1230)
-    Object.defineProperty(box, 'clientWidth', { configurable: true, value: 800 })
-    resizeNotify.forEach((fire) => fire())
-    expect(onWidth).toHaveBeenLastCalledWith(800)
+  it("reports the container's width on mount, before any observer delivery, and on every resize", () => {
+    const measured = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(1230)
+    try {
+      const onWidth = vi.fn()
+      const { container } = render(<EChart ariaLabel="test chart" option={OPTION} onWidth={onWidth} />)
+      // Code re-review 2: measured in the mount's commit, not a frame later by the observer.
+      expect(onWidth.mock.calls).toEqual([[1230]])
+      const box = container.querySelector('[aria-label="test chart"]') as HTMLElement
+      Object.defineProperty(box, 'clientWidth', { configurable: true, value: 800 })
+      resizeNotify.forEach((fire) => fire())
+      expect(onWidth).toHaveBeenLastCalledWith(800)
+    } finally {
+      measured.mockRestore()
+    }
   })
 })
 
@@ -707,6 +712,34 @@ describe('EChart first paint waits for visibility (spec §6)', () => {
     render(<EChart ariaLabel="test chart" option={{ series: [] } as EChartsOption} animateEntrance={false} />)
     const [only] = lastChart().setOption.mock.calls[0] as [Record<string, unknown>]
     expect(only.animationDuration).toBe(0)
+  })
+  // Code re-review 2: the Overview's weekly axis reads the card's width. Learned from the
+  // observer's first delivery — a frame after the entrance had started — the rebuilt option
+  // repainted the chart already-drawn and cut the entrance. Measured on mount, before the held
+  // first paint, the page's option is already the right one when the card scrolls in.
+  it('an option that reads the measured width paints once, at that width, as the entrance', () => {
+    const measured = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(1230)
+    try {
+      function Page() {
+        const [width, setWidth] = useState<number | null>(null)
+        const option = useMemo(
+          () => ({ xAxis: { axisLabel: { customValues: width === null ? [] : [width] } }, series: [{ type: 'line', data: [1] }] }) as EChartsOption,
+          [width],
+        )
+        return <EChart ariaLabel="test chart" option={option} onWidth={setWidth} />
+      }
+      render(<Page />)
+      const chart = lastChart()
+      act(() => notify.forEach((fire) => fire([{ isIntersecting: true, intersectionRatio: 1 }])))
+      // The observer's own first delivery follows, carrying the width already reported.
+      act(() => resizeNotify.forEach((fire) => fire()))
+      expect(chart.setOption).toHaveBeenCalledTimes(1)
+      const [only] = chart.setOption.mock.calls[0] as [{ xAxis: { axisLabel: { customValues: number[] } } }]
+      expect(only.xAxis.axisLabel.customValues).toEqual([1230])
+      expect('animationDuration' in only).toBe(false) // the entrance, whole
+    } finally {
+      measured.mockRestore()
+    }
   })
   it('the entrance is the mount’s only one — the next paint is already-drawn', () => {
     const bars = (v: number) => ({ series: [{ type: 'bar', data: [v] }] }) as EChartsOption
