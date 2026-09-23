@@ -52,8 +52,10 @@ ZERO_CENTS = Decimal("0.00")
 # paid from take-home. Transfers are money that stayed yours, so they are not spending here.
 CASH_OUTFLOW_KINDS = (LIVING, TAX)
 MONTHS_IN_YEAR = 12
-# The /spending pages' fold width (SpendingPage's TOP_N): top 7 categories by the year's
-# sum, the positive remainder folded into "Other".
+# The payload's OWN fold (`categories` + `other_spend`): the top 7 categories by the window's
+# sum, the positive remainder folded into "Other". It is the legacy shape, kept for older
+# clients and the export. The card re-folds `category_totals` by the Spending page's all-time
+# fold (charts/entities.ts, 2026-09-23 spec §C2), so this width no longer mirrors any page.
 TOP_N_CATEGORIES = 7
 
 # The named source definitions (spec §5's node table). Investment income is the engine's
