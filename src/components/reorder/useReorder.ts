@@ -29,6 +29,7 @@ import { useReducedMotion } from '../useReducedMotion'
 import {
   announce,
   autoScrollSpeed,
+  autoScrollWithin,
   clampOffset,
   contractProblems,
   keyboardTarget,
@@ -300,7 +301,8 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     const delta = listY(drag.scroller, drag.lastClientY) - drag.startListY
     drag.offset = clampOffset(drag.extents, drag.from, delta)
     const self = drag.extents[drag.from]
-    const to = slotFor(drag.extents, drag.from, self.top + drag.offset + self.height / 2)
+    const top = self.top + drag.offset
+    const to = slotFor(drag.extents, drag.from, top, top + self.height)
     paint(drag, to)
     if (to !== drag.to) {
       drag.to = to
@@ -417,10 +419,23 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
   }
 
   const autoScroll = (drag: Drag<K>) => {
+    const first = drag.extents[0]
+    const last = drag.extents[drag.extents.length - 1]
+    // The range the unit is clamped to: once its far end shows, scrolling on would only carry the
+    // held unit out of view.
+    const range = { top: first.top, bottom: last.top + last.height }
     const step = () => {
       if (machine.current.drag !== drag || drag.phase !== 'lifted') return
+      // One band for both questions: the part of the scroller the reader can SEE, clipped to the
+      // window. A 420px Settings box can hang past the window's bottom; judged in the whole box, the
+      // stop would come while the range's end still sat below the window, out of the pointer's reach.
       const bounds = visibleBounds(drag.scroller)
-      const speed = autoScrollSpeed(drag.lastClientY, bounds.top, bounds.bottom)
+      const seen = { top: listY(drag.scroller, bounds.top), height: bounds.bottom - bounds.top }
+      const speed = autoScrollWithin(
+        autoScrollSpeed(drag.lastClientY, bounds.top, bounds.bottom),
+        range,
+        seen,
+      )
       if (speed !== 0) scrollByY(drag.scroller, speed)
       drag.frame = nextFrame(step)
     }
