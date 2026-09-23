@@ -663,8 +663,16 @@ describe('SpendingPage — reviewed-month metrics', () => {
 
   it('defaults to the eligible month supplied by the server and lets a user inspect a newer incomplete month', async () => {
     vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ default_month: '2026-06-01', review_state: ['closed', 'in_progress'] }))
+    // The server answers the default request for ITS default month and `?month=` for the month
+    // asked. (The file-wide mock claims July for every call, which would let the default answer
+    // serve the July drill below with no request at all — 2026-09-23 spec §P3.)
+    const base = await fetchSpendingEvidence()
+    vi.mocked(fetchSpendingEvidence).mockClear()
+    vi.mocked(fetchSpendingEvidence).mockImplementation(async (month) => ({ ...base, month: month ?? '2026-06-01' }))
     renderPage()
     expect(await screen.findByText('Where Jun 2026 went')).toBeTruthy()
+    // One evidence request on load: the default answer IS June's.
+    expect(vi.mocked(fetchSpendingEvidence).mock.calls).toEqual([[]])
     expect(tileValue('Living spending — Jun 2026')).toBe('$2,750.00')
     const june = screen.getByText('Living spending — Jun 2026').closest('.stat-tile') as HTMLElement
     expect(june.querySelector('.stat-badge')).toBeNull() // a closed month wears no badge
@@ -679,6 +687,7 @@ describe('SpendingPage — reviewed-month metrics', () => {
     expect(document.querySelector('.spending-metric-context')).toBeNull()
     expect(screen.queryByRole('link', { name: 'Review month' })).toBeNull()
     await waitFor(() => expect(fetchSpendingEvidence).toHaveBeenLastCalledWith('2026-07-01'))
+    expect(vi.mocked(fetchSpendingEvidence).mock.calls).toEqual([[], ['2026-07-01']]) // the drill: one more
   })
 
   it('shows no invented default headline when there is no eligible month', async () => {
