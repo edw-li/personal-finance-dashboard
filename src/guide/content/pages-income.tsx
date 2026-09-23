@@ -471,7 +471,8 @@ export const INCOME_CARDS: GuideCard[] = [
         title: 'Try a different input',
         where: 'Taxes → What-if',
         steps: [
-          'Press **Add override**, pick an input, and type a value — blank clears that input in the scenario.',
+          'Press **Add override** and pick an input — it starts at the stored value and changes nothing until you type a different one.',
+          'Tick **Clear this input** to model the input cleared; a blank box never clears it.',
           'Or take a chip: **Max 401(k)**, **Max HSA — <tier>**, **Sell all <TICKER>**, **Realize gains to the 15% ceiling**.',
           'A shut chip says in its tooltip what has to be entered before it can size itself.',
         ],

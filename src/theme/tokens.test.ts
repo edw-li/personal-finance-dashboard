@@ -62,6 +62,15 @@ describe('tokens', () => {
     expect(contrastRatio(t.onAccent, t.accent)).toBeGreaterThanOrEqual(4.5)
   })
 
+  // 2026-09-23 spec §B9: the keyboard focus ring is --accent drawn just OUTSIDE the focused
+  // element, so it has to read at 3:1 (WCAG 1.4.11, non-text contrast) against every surface it
+  // can land on — the page, a card, a nested panel and the pressed/hover fill.
+  it.each(surfaces)('%s: the focus ring reads at 3:1 on every surface it can sit on', (_name, t) => {
+    for (const surface of [t.bg, t.surface, t.surface2, t.fill]) {
+      expect(contrastRatio(t.accent, surface), `accent on ${surface}`).toBeGreaterThanOrEqual(3)
+    }
+  })
+
   it.each(surfaces)('%s: every chart slot and the Other gray read at 3:1', (_name, t) => {
     for (const slot of [...t.palette, t.otherSeries]) {
       expect(contrastRatio(slot, t.bg)).toBeGreaterThanOrEqual(3)

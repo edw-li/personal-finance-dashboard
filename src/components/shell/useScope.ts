@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { OwnerScope } from '../../api/netWorth'
 import type { RangePreset } from '../../charts/timeZoom'
-import { STORAGE_KEYS, getLocal, setLocal } from '../../prefs/prefsStore'
+import { STORAGE_KEYS, getLocal, setLocal, subscribe } from '../../prefs/prefsStore'
 
 // The ONE scope rule (2026-09-03 shell spec §6): the URL is the source of truth, localStorage
 // remembers owner and range across pages, defaults fill whatever is left. `month` is never
@@ -86,6 +86,15 @@ function writeMemory(next: ScopeMemory): void {
   setLocal('scope', next)
 }
 
+/**
+ * One adoption, several writers (2026-09-23 spec §B8). The store notifies every mounted
+ * instance — the page's and its scope row's — in one synchronous loop, and each builds its URL
+ * from its OWN render's params: left alone, the second write would restore the owner the first
+ * had just replaced. The first write parks its URL here, and an instance whose render is still
+ * at that same base builds on it instead. Gone at the end of the tick.
+ */
+let adoptionDraft: { base: string; next: URLSearchParams } | null = null
+
 export function useScope(uses: ScopeUses = {}): {
   scope: Scope
   setScope: (partial: Partial<Scope>) => void
@@ -100,6 +109,10 @@ export function useScope(uses: ScopeUses = {}): {
   // second would drop the first's key. The ref carries the uncommitted params until the URL
   // catches up: `base` is the URL the write was computed from, `next` is what it will become.
   const pendingRef = useRef<{ base: string; next: URLSearchParams } | null>(null)
+  // 2026-09-23 spec §B8: the owner/range values arrival normalisation wrote in THIS page view —
+  // the only URL values the account's scope may replace when it is adopted after the first
+  // render. A deep link never lands here, and a pick deletes its key (setScope).
+  const normalizedRef = useRef<{ owner?: string; range?: string }>({})
   useEffect(() => {
     // Landed (the URL is what we wrote) or superseded (the URL moved elsewhere): either way the
     // ref is no longer ahead of the URL. Only "URL still at the base" means in flight — which
@@ -133,10 +146,12 @@ export function useScope(uses: ScopeUses = {}): {
     let changed = false
     if (uses.owner && rawOwner !== ownerToParam(scope.owner)) {
       next.set('owner', ownerToParam(scope.owner))
+      normalizedRef.current.owner = ownerToParam(scope.owner)
       changed = true
     }
     if (uses.range && rawRange !== scope.range) {
       next.set('range', scope.range)
+      normalizedRef.current.range = scope.range
       changed = true
     }
     if (uses.month && rawMonth !== null) {
@@ -155,18 +170,71 @@ export function useScope(uses: ScopeUses = {}): {
     }
   }, [uses.owner, uses.range, uses.month, rawOwner, rawRange, rawMonth, scope, searchParams, setSearchParams])
 
+  // Adoption (2026-09-23 spec §B8). Memory is read once per URL change, so on a new browser the
+  // first page normalised the DEFAULTS into the URL — and when the account's `scope` landed a
+  // moment later, only the next page used it: Whose and the range switched under the reader
+  // with no click. Now an adopted scope re-normalises, with replace, every key this page view's
+  // arrival normalisation wrote and the reader has not touched since. Refreshed after every
+  // render (the useSandbox refs idiom) so the listener always sees the current URL and `uses`.
+  const adoptRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    adoptRef.current = () => {
+      const base = searchParams.toString()
+      const draft = adoptionDraft !== null && adoptionDraft.base === base ? adoptionDraft.next : null
+      const seed = draft ?? pendingRef.current?.next ?? searchParams
+      const memory = readMemory()
+      const record = normalizedRef.current
+      const next = new URLSearchParams(seed)
+      let changed = false
+      // A key qualifies only while the URL still carries what normalisation wrote there.
+      if (uses.owner && record.owner !== undefined && seed.get('owner') === record.owner && memory.owner !== undefined) {
+        const owner = ownerToParam(memory.owner)
+        if (owner !== record.owner) {
+          next.set('owner', owner)
+          record.owner = owner
+          changed = true
+        }
+      }
+      if (uses.range && record.range !== undefined && seed.get('range') === record.range && memory.range !== undefined) {
+        if (memory.range !== record.range) {
+          next.set('range', memory.range)
+          record.range = memory.range
+          changed = true
+        }
+      }
+      if (!changed) return
+      adoptionDraft = { base, next }
+      queueMicrotask(() => {
+        adoptionDraft = null
+      })
+      pendingRef.current = { base, next }
+      setSearchParams(next, { replace: true })
+    }
+  })
+  useEffect(() => {
+    const off = subscribe('scope', () => adoptRef.current())
+    // An answer that landed between this page's first render and its effects is already in
+    // memory, and no notification is coming for it: reconcile once, now.
+    adoptRef.current()
+    return off
+  }, [])
+
   const setScope = useCallback(
     (partial: Partial<Scope>) => {
       const seed = pendingRef.current?.next ?? searchParams
       const next = new URLSearchParams(seed)
       const memory = readMemory()
+      // A pick is the reader's own choice — even one that re-picks the normalised value — so an
+      // adoption landing afterwards must leave that key alone (spec §B8).
       if (partial.owner !== undefined) {
         next.set('owner', ownerToParam(partial.owner))
         memory.owner = partial.owner
+        delete normalizedRef.current.owner
       }
       if (partial.range !== undefined) {
         next.set('range', partial.range)
         memory.range = partial.range
+        delete normalizedRef.current.range
       }
       // `month: undefined` means "leave the month alone" (the field is simply absent from a
       // partial); only an explicit null clears it, and a string has to survive parseMonth.

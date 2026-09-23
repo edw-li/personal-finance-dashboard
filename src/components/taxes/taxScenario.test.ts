@@ -9,6 +9,7 @@ import {
   encodeTax,
   isEmptyTax,
   labelForTax,
+  storedHouseholdValue,
   summaryValue,
   taxPresets,
   toWhatIfBody,
@@ -197,5 +198,51 @@ describe('tax scenario codec', () => {
       const presets = taxPresets({ year: 2024, limits, inputs, holdings: many, brackets, summary }, vi.fn())
       expect(presets.filter((p) => p.id.startsWith('sell-'))).toHaveLength(6)
     })
+  })
+})
+
+// 2026-09-23 spec §B7: choosing an override key pre-fills the value the stored year holds, so the
+// row starts at "no change" instead of at a blank the engine reads as zero.
+describe('storedHouseholdValue — the override row prefill', () => {
+  const item = (key: string, personId: number | null, value: string | null) => ({
+    key, label: key, sort_order: 1, is_derived: false, unit: 'money' as const, suggestion_source: null,
+    formula: null, is_per_person: personId !== null, person_id: personId, value, suggested: null,
+  })
+  const inputs: TaxInputsOut = {
+    year: 2026,
+    filing_status: 'married_joint',
+    people: [{ id: 1, name: 'Me' }, { id: 2, name: 'Partner' }],
+    sections: [
+      {
+        section: 'income',
+        items: [
+          item('annual_salary', 1, '150000.00'),
+          item('annual_salary', 2, '62930.00'),
+          item('interest_income', null, '120.50'),
+          item('bonus', 1, null),
+          item('bonus', 2, null),
+          item('other_w2_income', 1, '0.00'),
+          item('other_w2_income', 2, null),
+        ],
+      },
+    ],
+  }
+
+  it('sums a per-person key over its columns, exactly — the household figure an override replaces', () => {
+    expect(storedHouseholdValue(inputs, 'annual_salary')).toBe('212930')
+  })
+
+  it('reads a household key as stored', () => {
+    expect(storedHouseholdValue(inputs, 'interest_income')).toBe('120.5')
+  })
+
+  it('is null when no column carries a value — absent is not zero', () => {
+    expect(storedHouseholdValue(inputs, 'bonus')).toBeNull()
+    expect(storedHouseholdValue(inputs, 'no_such_key')).toBeNull()
+    expect(storedHouseholdValue(null, 'annual_salary')).toBeNull()
+  })
+
+  it('keeps a stored zero as a value', () => {
+    expect(storedHouseholdValue(inputs, 'other_w2_income')).toBe('0')
   })
 })

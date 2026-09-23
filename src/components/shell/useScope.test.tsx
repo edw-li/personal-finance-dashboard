@@ -1,8 +1,14 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { useEffect, useRef } from 'react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetPrefsStoreForTests, syncFromServer } from '../../prefs/prefsStore'
 import { SCOPE_KEY, useScope, type Scope, type ScopeUses } from './useScope'
+
+// The account's copy of the scope (2026-09-23 spec §B8): GET /prefs is stubbed so a test can say
+// when — and whether — the server's answer lands.
+vi.mock('../../api/prefs', () => ({ fetchPrefs: vi.fn(), patchPrefs: vi.fn(), deletePref: vi.fn() }))
+import { fetchPrefs, patchPrefs } from '../../api/prefs'
 
 /** A Plan 2/3-shaped consumer: a CHILD that picks a month from its own effect on arrival.
  *  Child effects run before the parent's, so this write is parked before useScope's own
@@ -186,5 +192,121 @@ describe('useScope', () => {
     // The URL never moved, so a pending write based on it could never clear itself.
     view.setUses({ owner: true, range: true })
     expect(url()).toBe('/net-worth?owner=all&range=1y')
+  })
+})
+
+// 2026-09-23 spec §B8: a new browser read an empty memory, normalised the defaults into the URL,
+// and never looked again — the account's `scope` landed a moment later and only the NEXT page
+// used it, so Whose and the range switched under the reader with no click.
+describe('useScope — the remembered scope, adopted from the account', () => {
+  const account = (value: unknown) => ({
+    prefs: { scope: { value, updated_at: '2026-09-23T07:00:00+00:00' } },
+  })
+  // The session's one sync, as SessionPrefs runs it after /auth/me.
+  const accountAnswers = () =>
+    act(async () => {
+      await syncFromServer()
+    })
+
+  beforeEach(() => {
+    localStorage.clear()
+    resetPrefsStoreForTests()
+    vi.mocked(fetchPrefs).mockResolvedValue(account({ owner: 2, range: 'all' }))
+    vi.mocked(patchPrefs).mockResolvedValue({ prefs: {} })
+  })
+
+  it('an answer that lands before the page mounts is simply its memory', async () => {
+    await accountAnswers()
+    mount('/net-worth', { owner: true, range: true })
+    expect(url()).toBe('/net-worth?owner=2&range=all')
+  })
+
+  it('an answer that lands after mount replaces what arrival normalisation wrote', async () => {
+    mount('/net-worth', { owner: true, range: true })
+    expect(url()).toBe('/net-worth?owner=all&range=1y')
+    await accountAnswers()
+    expect(url()).toBe('/net-worth?owner=2&range=all')
+    expect(scope()).toBe('2|all|null')
+  })
+
+  it('never overrides a deep link', async () => {
+    mount('/net-worth?owner=joint&range=ytd', { owner: true, range: true })
+    await accountAnswers()
+    expect(url()).toBe('/net-worth?owner=joint&range=ytd')
+  })
+
+  it('a link that names one key keeps it; the key it left to normalisation follows the account', async () => {
+    mount('/net-worth?owner=joint', { owner: true, range: true })
+    expect(url()).toBe('/net-worth?owner=joint&range=1y')
+    await accountAnswers()
+    expect(url()).toBe('/net-worth?owner=joint&range=all')
+  })
+
+  it('a pick made before the answer is kept — the store lets the browser win', async () => {
+    mount('/net-worth', { owner: true, range: true })
+    act(() => screen.getByText('ytd').click())
+    await accountAnswers()
+    expect(url()).toBe('/net-worth?owner=all&range=ytd')
+  })
+
+  it('a later adoption moves only the keys normalisation wrote, never the one the reader picked', async () => {
+    mount('/net-worth', { owner: true, range: true })
+    act(() => screen.getByText('ytd').click())
+    await accountAnswers() // the browser wins this one and seeds the account
+    await accountAnswers() // a later sync in the same tab adopts the account's copy
+    expect(url()).toBe('/net-worth?owner=2&range=ytd')
+  })
+
+  it('a pick that lands back on the normalised value is still the reader’s pick', async () => {
+    mount('/net-worth', { owner: true, range: true })
+    // Grace, then back to All: the URL reads owner=all exactly as normalisation left it, but
+    // this time the reader chose it.
+    act(() => screen.getByText('owner 2 then back').click())
+    expect(url()).toBe('/net-worth?owner=all&range=1y')
+    await accountAnswers()
+    await accountAnswers()
+    expect(url()).toBe('/net-worth?owner=all&range=all')
+  })
+
+  it('an answer that never lands leaves the defaults standing', async () => {
+    vi.mocked(fetchPrefs).mockRejectedValue(new Error('offline'))
+    mount('/net-worth', { owner: true, range: true })
+    await accountAnswers()
+    expect(url()).toBe('/net-worth?owner=all&range=1y')
+  })
+
+  it('a page that does not use a key is not handed it', async () => {
+    mount('/credit-cards', { owner: true })
+    await accountAnswers()
+    expect(url()).toBe('/credit-cards?owner=2')
+  })
+
+  it('the page and its scope row adopt together, neither undoing the other', async () => {
+    // The shapes that could clobber: two hook instances with DIFFERENT keys, a child (the scope
+    // row) and its parent (the page). Each writes the URL from its own render's params, so the
+    // second write must build on the first rather than restore the pre-adoption owner.
+    function OwnerRow() {
+      useScope({ owner: true })
+      return null
+    }
+    function RangePage() {
+      useScope({ range: true })
+      const location = useLocation()
+      return (
+        <>
+          <OwnerRow />
+          <span data-testid="twin-url">{location.search}</span>
+        </>
+      )
+    }
+    render(
+      <MemoryRouter initialEntries={['/portfolio']}>
+        <RangePage />
+      </MemoryRouter>,
+    )
+    const params = () => new URLSearchParams(screen.getByTestId('twin-url').textContent ?? '')
+    expect([params().get('owner'), params().get('range')]).toEqual(['all', '1y'])
+    await accountAnswers()
+    expect([params().get('owner'), params().get('range')]).toEqual(['2', 'all'])
   })
 })
