@@ -21,6 +21,9 @@ import {
   portfolioHistoryCsv,
   portfolioHistoryOption,
   STARTING_BALANCE_SERIES,
+  benchmarkLede,
+  benchmarkLedeText,
+  performanceLede,
 } from './historyChartOptions'
 import type { PerformanceEvents } from './historyChartOptions'
 
@@ -337,6 +340,73 @@ describe('the weekly axis (2026-09-23 spec §C4, §C8)', () => {
       .xAxis as unknown as Axis
     expect(axis.data.at(-1)).toBe('Sep 1, 2026')
     expect(shown(axis)).toEqual(['Jul 2026', 'Aug 2026', 'Sep 2026'])
+  })
+})
+
+describe('the benchmark lede (2026-09-23 spec §C8)', () => {
+  it("is the value's change minus the VOO leg's over the window, in cents", () => {
+    // finance_realdata, Oct 23, 2023 → Sep 21, 2026: 53,619.00 → 848,870.10, against the same
+    // deposits in VOO 53,619.00 → 585,187.87 — the household is $263,682.23 ahead.
+    const real = history({
+      dates: ['2023-10-23', '2026-09-21'],
+      market_value: ['53619.00', '848870.10'],
+      cost_basis: ['53619.00', '512413.42'],
+      sp500: ['53619.00', '98583.76'],
+      benchmark: ['53619.00', '585187.87'],
+    })
+    expect(benchmarkLede(real)).toEqual({ direction: 'ahead', amount: 263682.23 })
+    expect(benchmarkLedeText(benchmarkLede(real)!)).toEqual({
+      text: 'Ahead of the same deposits in VOO by',
+      amount: '$263.7K',
+    })
+  })
+
+  it('says behind for a negative gap and level for none, and follows a window', () => {
+    const h = history({
+      market_value: ['4400.00', '4450.00', '4500.00'],
+      benchmark: ['4350.00', '4400.00', '4480.00'],
+    })
+    // +100 against +130: thirty dollars behind.
+    expect(benchmarkLede(h)).toEqual({ direction: 'behind', amount: 30 })
+    expect(benchmarkLedeText(benchmarkLede(h)!, 'Over 1Y')).toEqual({
+      text: 'Over 1Y: behind the same deposits in VOO by',
+      amount: '$30',
+    })
+    // +50 against +50 over the first two weeks.
+    expect(benchmarkLede(h, 0, 1)).toEqual({ direction: 'level', amount: 0 })
+    expect(benchmarkLedeText({ direction: 'level', amount: 0 })).toEqual({
+      text: 'Level with the same deposits in VOO',
+      amount: null,
+    })
+  })
+
+  it('says nothing when an end of the VOO leg is absent or the window is empty — absent is not zero', () => {
+    expect(benchmarkLede(history({ benchmark: [null, '1.00', '2.00'] }))).toBeNull()
+    expect(benchmarkLede(history({ benchmark: ['1.00', '2.00', null] }))).toBeNull()
+    expect(
+      benchmarkLede({ ...history(), benchmark: undefined } as unknown as PortfolioHistory),
+    ).toBeNull()
+    expect(benchmarkLede(history(), 2, 2)).toBeNull()
+    expect(benchmarkLede(EMPTY)).toBeNull()
+  })
+
+  it("names the chip's window, or the one the reader dragged out", () => {
+    const h = history()
+    expect(performanceLede(h, { preset: 'all' })?.text).toMatch(/^Ahead of/)
+    expect(performanceLede(h, { preset: '1y' })?.text).toMatch(/^Over 1Y: ahead of/)
+    expect(performanceLede(h, { preset: 'ytd' })?.text).toMatch(/^Year to date: ahead of/)
+    // The chart echoes a chip's own window back through datazoom (and the live ping's category
+    // sits one past the dates): still the chip's words.
+    expect(
+      performanceLede(h, { preset: 'all', window: { startValue: 0, endValue: 3 } })?.text,
+    ).toMatch(/^Ahead of/)
+    expect(
+      performanceLede(h, { preset: 'all', window: { startValue: 1, endValue: 2 } })?.text,
+    ).toMatch(/^Aug 3, 2026 – Aug 10, 2026: ahead of/)
+    expect(
+      performanceLede(h, { preset: 'all', window: { startValue: 0, endValue: 1 } })?.text,
+    ).toMatch(/^Jul 27, 2026 – Aug 3, 2026: ahead of/)
+    expect(performanceLede(history({ benchmark: [null, null, null] }), { preset: 'all' })).toBeNull()
   })
 })
 

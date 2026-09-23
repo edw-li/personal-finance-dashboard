@@ -6,6 +6,8 @@ import type { EChartsOption } from '../../charts/echarts'
 import { LINE, WASH, dateAxis, grid, moneyAxis } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
+import { rangeStartIndex, resolvedWindow } from '../../charts/timeZoom'
+import type { RangeState } from '../../charts/timeZoom'
 import { axisTooltip } from '../../charts/tooltip'
 import type { AxisTooltipParam } from '../../charts/tooltip'
 import type {
@@ -19,6 +21,7 @@ import type { ExportTable } from '../../utils/download'
 import {
   escapeHtml,
   formatCurrency,
+  formatCurrencyCompact,
   formatDate,
   formatMonth,
   formatShares,
@@ -530,6 +533,88 @@ export function portfolioHistoryOption(
     }),
     series,
   }
+}
+
+export interface BenchmarkLede {
+  direction: 'ahead' | 'behind' | 'level'
+  /** Dollars, ≥ 0 — the size of the gap; `direction` carries its sign. */
+  amount: number
+}
+
+const toCents = (raw: string): number => Math.round(Number(raw) * 100)
+
+/**
+ * "Ahead of the same deposits in VOO by $263.7K" (2026-09-23 spec §C8; wealth PF-1): over a
+ * window of the weekly checkpoints, the portfolio's change minus the VOO leg's change. Both legs
+ * received the same inferred deposits, so what is left is the market's work alone — no XIRR, no
+ * realized figures, only the history points already in the payload. Integer cents: each string
+ * is parsed once and never floated through a subtraction chain. Null — no sentence at all — when
+ * either end of the VOO leg is absent (a degraded or pre-benchmark payload: absent is not zero)
+ * or the window has no length.
+ */
+export function benchmarkLede(
+  history: PortfolioHistory,
+  start = 0,
+  end = history.dates.length - 1,
+): BenchmarkLede | null {
+  const s = Math.max(0, start)
+  const e = Math.min(end, history.dates.length - 1)
+  if (e <= s) return null
+  const leg = history.benchmark ?? []
+  const from = leg[s]
+  const to = leg[e]
+  if (from === null || from === undefined || to === null || to === undefined) return null
+  const gap =
+    toCents(history.market_value[e]) - toCents(history.market_value[s]) - (toCents(to) - toCents(from))
+  return {
+    direction: gap > 0 ? 'ahead' : gap < 0 ? 'behind' : 'level',
+    amount: Math.abs(gap) / 100,
+  }
+}
+
+/** The lede as words and a figure — "Over 1Y: ahead of the same deposits in VOO by" · "$67.6K" —
+ *  so a page can set the figure in the strip's bold ink. */
+export function benchmarkLedeText(
+  lede: BenchmarkLede,
+  prefix: string | null = null,
+): { text: string; amount: string | null } {
+  const phrase =
+    lede.direction === 'ahead'
+      ? 'ahead of the same deposits in VOO by'
+      : lede.direction === 'behind'
+        ? 'behind the same deposits in VOO by'
+        : 'level with the same deposits in VOO'
+  return {
+    text: prefix === null ? phrase[0].toUpperCase() + phrase.slice(1) : `${prefix}: ${phrase}`,
+    amount: lede.direction === 'level' ? null : formatCurrencyCompact(lede.amount),
+  }
+}
+
+/**
+ * The Portfolio card's lede, following the chart's own window (2026-09-23 spec §C8): the range
+ * chip's words ("Over 1Y", "Year to date"; nothing on All), or the dates of a window the reader
+ * dragged out with ctrl+wheel. The chart echoes every window back through datazoom — a chip's
+ * own included, one category past the dates when the live ping is appended — so "dragged" means
+ * a window that differs from the chip's, not merely one that exists.
+ */
+export function performanceLede(
+  history: PortfolioHistory,
+  range: RangeState,
+): { text: string; amount: string | null } | null {
+  const last = history.dates.length - 1
+  const window = resolvedWindow(history.dates, range)
+  const end = Math.min(window.endValue, last)
+  const lede = benchmarkLede(history, window.startValue, end)
+  if (lede === null) return null
+  const dragged = window.startValue !== rangeStartIndex(history.dates, range.preset) || end < last
+  const prefix = dragged
+    ? `${formatDate(history.dates[window.startValue])} – ${formatDate(history.dates[end])}`
+    : range.preset === '1y'
+      ? 'Over 1Y'
+      : range.preset === 'ytd'
+        ? 'Year to date'
+        : null
+  return benchmarkLedeText(lede, prefix)
 }
 
 /** The performance chart as a table (2026-08-25 spec §2a): date rows × the series in the

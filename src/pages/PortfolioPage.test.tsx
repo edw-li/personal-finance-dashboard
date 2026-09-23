@@ -810,6 +810,31 @@ it('renders the panels real empty notes for an owner who holds nothing', async (
 // from the OWNER-FILTERED holdings — plotting a person's total at the end of the household
 // series drew a fake cliff. The ping (and its dashed connector, which rides the Live
 // series' markLine) renders only on the All view.
+// ── The performance lede (2026-09-23 spec §C8) ───────────────────────────────────────────
+// The chart had the honest benchmark and hid its answer; the card now states it, over the
+// window the chart is showing. HISTORY: 4,400 → 4,500 against the same deposits in VOO
+// 4,350 → 4,480 — thirty dollars behind.
+it('states the gap to the same deposits in VOO above the chart, following the range chip', async () => {
+  renderPage()
+  const card = () => screen.getByText('Performance').closest('section') as HTMLElement
+  // The scope row opens on 1Y, so the sentence says which window it measured.
+  await waitFor(() =>
+    expect(card().querySelector('.chart-lede')?.textContent).toBe(
+      'Over 1Y: behind the same deposits in VOO by $30',
+    ),
+  )
+  // The figure wears the strip's bold ink; the words stay muted.
+  expect(card().querySelector('.chart-lede b')?.textContent).toBe('$30')
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Time range' })).getByRole('button', { name: 'All' }),
+  )
+  await waitFor(() =>
+    expect(card().querySelector('.chart-lede')?.textContent).toBe(
+      'Behind the same deposits in VOO by $30',
+    ),
+  )
+})
+
 // ── Performance events on a rug (2026-09-23 spec §C8) ─────────────────────────────────────
 // The provider's ex-dividend notices cover every security the book ever named; the chart
 // keeps only those for a security held then or now — "now" is this page's own holdings.

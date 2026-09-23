@@ -33,6 +33,7 @@ import {
 } from '../components/overview/overviewChartOptions'
 import {
   liveFromHoldings,
+  performanceLede,
   portfolioHistoryCsv,
   portfolioHistoryOption,
 } from '../components/portfolio/historyChartOptions'
@@ -112,7 +113,7 @@ const loadPlanning = async () => { const [taxes, lots, taxYears, system] = await
 const SPENDING_HINT =
   "Living spending for the latest eligible month, compared with eligible months within the previous 12 calendar months. Tax paid from take-home and transfers are separate."
 const PERFORMANCE_HINT =
-  "Portfolio value vs cost basis, checkpointed weekly after Monday's close; the pinging dot is live. Same deposits in VOO invests every inferred contribution in VOO as it lands — the fair comparison."
+  "Portfolio value vs cost basis, checkpointed weekly after Monday's close; the pinging dot is live. Same deposits in VOO invests every inferred contribution in VOO as it lands — the fair comparison, and the line above the chart states the gap since the first checkpoint."
 
 // The up-next window slides with the calendar day — key it by today so a date rollover
 // misses cleanly instead of painting yesterday's window.
@@ -271,6 +272,12 @@ export default function OverviewPage() {
           )
         : null,
     [data, owner],
+  )
+  // The card states the honest benchmark's answer over the whole history it draws
+  // (2026-09-23 spec §C8; shell F5): "Ahead of the same deposits in VOO by $263.7K".
+  const perfLede = useMemo(
+    () => (data.history ? performanceLede(data.history, { preset: 'all' }) : null),
+    [data],
   )
   // The months whose "0.00" is an absence rather than a figure (audit item 14). Memoized
   // beside the options it feeds, not recomputed per render: it rides INTO the bars' memo,
@@ -590,6 +597,23 @@ export default function OverviewPage() {
                 csv={data.history ? () => portfolioHistoryCsv(data.history!, { startingBalance: 'omit' }) : undefined}
                 height={280}
                 busy={investments.busy} error={investments.error} selectionScopeKey={String(owner)}
+                // The row is reserved while the feed is in flight, so the card does not grow
+                // by a line — and shove the cards below it — the moment the sentence lands.
+                lede={
+                  perfLede !== null ? (
+                    <>
+                      {perfLede.text}
+                      {perfLede.amount !== null && (
+                        <>
+                          {' '}
+                          <b>{perfLede.amount}</b>
+                        </>
+                      )}
+                    </>
+                  ) : investments.busy ? (
+                    ' '
+                  ) : undefined
+                }
                 footer={
                   <NavLink className="drill-hint" to="/portfolio">
                     Open portfolio →

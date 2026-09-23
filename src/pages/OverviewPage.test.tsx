@@ -1851,6 +1851,19 @@ describe('OverviewPage — shell frame and owner scope', () => {
 
   // 2026-09-23 spec §C8 (shell F5): the starting-balance line invited "we beat the S&P nine-fold";
   // the home card compares only against the same deposits in VOO.
+  it('states the gap to the same deposits in VOO on the performance card', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    // historyOut(): 700,000.00 → 718,422.07 against 96,000.00 → 99,001.13 — $15,420.94 ahead.
+    const card = screen
+      .getByLabelText(/Line chart of portfolio value against cost basis/)
+      .closest('section') as HTMLElement
+    expect(card.querySelector('.chart-lede')?.textContent).toBe(
+      'Ahead of the same deposits in VOO by $15.4K',
+    )
+  })
+
   it('draws the portfolio against the same deposits in VOO only — no starting-balance line', async () => {
     serve()
     renderPage()

@@ -27,6 +27,7 @@ import DividendsPanel from '../components/portfolio/DividendsPanel'
 import {
   buildPerformanceEvents,
   liveFromHoldings,
+  performanceLede,
   portfolioHistoryCsv,
   portfolioHistoryOption,
 } from '../components/portfolio/historyChartOptions'
@@ -477,6 +478,13 @@ export default function PortfolioPage() {
       }
   }, [history, holdings, securities, transactions, dividends, dividendEvents, range, legendSelected, owner])
 
+  // The card states the honest benchmark's answer over the window the chart is showing — the
+  // chip's, or one dragged out with ctrl+wheel (2026-09-23 spec §C8; wealth PF-1).
+  const performanceLedeLine = useMemo(
+    () => (history === null ? null : performanceLede(history, range)),
+    [history, range],
+  )
+
   // Resolved target for EChart's animated zoom path — memoized so the wrapper's
   // fingerprint compare runs only when the window can actually have moved. Reads the
   // BUILT option's axis, not history.dates: the live ping appends one category past
@@ -678,9 +686,22 @@ export default function PortfolioPage() {
             <LocalSectionPanel state={views} section="overview">
               <ChartCard
                 title="Performance"
-                hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. Same deposits in VOO invests every inferred contribution in VOO as it lands — the fair comparison. S&P 500 — starting balance only invests just the first week's balance; it stays off until you pick it in the legend. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Dated buys and sells ride the line; the ticks along the bottom mark weeks with logged dividends and older ex-dividend dates of securities held then or now (per-share only — dollar amounts that old are unknowable from undated imports)."
+                hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. Same deposits in VOO invests every inferred contribution in VOO as it lands — the fair comparison; the line above the chart states the gap over the range you picked (market growth only, since both received the same deposits). S&P 500 — starting balance only invests just the first week's balance; it stays off until you pick it in the legend. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Dated buys and sells ride the line; the ticks along the bottom mark weeks with logged dividends and older ex-dividend dates of securities held then or now (per-share only — dollar amounts that old are unknowable from undated imports)."
                 ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
                 option={performanceOption}
+                lede={
+                  performanceLedeLine === null ? undefined : (
+                    <>
+                      {performanceLedeLine.text}
+                      {performanceLedeLine.amount !== null && (
+                        <>
+                          {' '}
+                          <b>{performanceLedeLine.amount}</b>
+                        </>
+                      )}
+                    </>
+                  )
+                }
                 empty="No performance history yet — import your workbook in Settings to load it."
                 exportName="portfolio-performance"
                 csv={history === null ? undefined : () => portfolioHistoryCsv(history)}
