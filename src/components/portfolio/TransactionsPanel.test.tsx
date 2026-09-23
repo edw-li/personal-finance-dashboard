@@ -1211,7 +1211,7 @@ describe('TransactionsPanel reorder — a save that fails (spec §5, §8.1, §8.
     }
   })
 
-  it('has the page reload before it reads the answer — a save whose answer has no transactions still reloads', async () => {
+  it('has the page reload before it reads the answer — a save with a malformed answer still reloads', async () => {
     const escaped = vi.fn()
     process.on('unhandledRejection', escaped)
     try {
