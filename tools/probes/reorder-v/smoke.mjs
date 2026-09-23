@@ -14,7 +14,8 @@
 // Per width (1600×1000, then 1280×800), in real Edge with real pointer events, on each of the six
 // lists — Settings › Spending categories, Settings › Accounts, Portfolio › Manage › Transactions,
 // Overview › Customize, Credit Cards › Card roster, Credit Cards › Categories & weights:
-//   - the resting table against the collapsed border model it replaced, pixel for pixel;
+//   - the resting table against the collapsed border model it replaced: one hairline per row
+//     boundary in both, and every pixel within that model's half-pixel row offset;
 //   - a real mouse drag: the lifted row follows the pointer, exactly the peers it passes make
 //     room, its cells carry their own hairline, it lands where the gap was, the order survives a
 //     reload;
