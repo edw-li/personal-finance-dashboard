@@ -199,12 +199,20 @@ reorder.liftedId         // K | null
    - It is marked `data-reorder="lifted"`: raised surface and shadow, `position: relative; z-index: 2`.
    - `html.reorder-active` sets `cursor: grabbing` and `user-select: none` for the drag's duration.
    - Row buttons are disabled mid-drag.
-4. **The target slot.** The target is the number of *other* peers whose original midpoint lies above the
-   lifted unit's current centre. Peers between the start and the target shift by the lifted unit's
+4. **The target slot.** The target is the number of *other* peers the lifted unit has passed, judged by
+   its **leading edge** against each peer's original midpoint:
+   - a peer below counts once the unit's bottom edge reaches its midpoint;
+   - a peer above stops counting once the unit's top edge rises strictly above its midpoint.
+
+   So a unit clamped at either end of its range lands at that end, and a tall unit (a parent carrying
+   components) can pass a short peer. (Amended 2026-09-23 after lane R2's real-browser check; the
+   earlier centre-vs-midpoint rule could never move a 172 px unit past a 43 px last peer.) Peers between the start and the target shift by the lifted unit's
    height (`data-reorder="shifting"`, `transition: transform var(--t-fast) var(--ease-out)`).
 5. **Auto-scroll.** Within 40 px of the container's visible top or bottom edge (or the viewport's, for
-   the page), the container scrolls at `18 × (1 − d/40)²` px per frame. It stops at the ends and when
-   the pointer leaves the zone.
+   the page), the container scrolls at `18 × (1 − d/40)²` px per frame. It stops at the ends, when the
+   pointer leaves the zone, and once the unit's range end is already inside the band the reader can
+   see (the scroller's box clipped to the window), less the edge margin. So a held row never scrolls
+   out of view past its own group. (Amended 2026-09-23 after lanes R2/R0 review.)
 6. **Drop.**
    - On `pointerup` the unit eases from under the pointer into its gap over `--t-fast`. Only then
      does `onCommit` fire, inside `flushSync`, so the DOM reorder lands on rows that already stand
