@@ -240,12 +240,15 @@ For EACH of `src/components/settings/CategoriesCard.tsx`, `src/components/settin
 1. **`PortfolioPage.tsx`:** the `reloading` flag is cleared in `.finally` even by a load that `seqRef`
    has discarded (R3 review, PortfolioPage.tsx ~:383/:391). Clear it only when
    `seq === seqRef.current`. Mirror CreditCardsPage's `loading` guard (R5, c7a9337c).
-   - Test: two overlapping loads where the older settles last, and grips/dim stay until the newest
-     settles.
-2. **`TransactionsPanel.tsx`:** in the save's success handler, call `onChangedRef.current()` FIRST,
-   before reading `result.transactions`, so a malformed answer still reloads (R3 review, optional
-   hardening).
-   - Test: a success answer without `transactions` still triggers `onChanged`.
+   - Test: two overlapping loads where the older (discarded) one settles FIRST, and grips/dim stay
+     until the newest settles. (Amended 2026-09-23 at lane R6's review: this said "settles last",
+     which the guard cannot show — by then the newest has already lifted the dim.)
+2. **`TransactionsPanel.tsx`:** in the save's AND the Undo's success handlers, call
+   `onChangedRef.current()` before reading `result.transactions` (the save drops its pending layer
+   first), so a malformed answer still reloads (R3 review, optional hardening). (Amended 2026-09-23
+   at lane R6's review: this named only the save; the Undo's handler has the same shape.)
+   - Test: a save and an Undo each answered with a malformed (body-less) answer still trigger
+     `onChanged`.
 3. **`ActivityCard.test.tsx`:** the "caps the feed with a scroll region that carries Load more inside
    it" test waits for the list itself before asserting. It raced the list's load under suite load
    twice today.
@@ -324,23 +327,46 @@ Commit each.
     sent one (R2's `err.message` and R3/R5's `errorDetail` agree), and "HTTP 409" when it sent none.
 - **Decisions and deviations:**
   - **Kept per panel, as planned:** the optimistic layers; the Undo mechanisms; the Transactions
-    success toast; each 409 save path (R2 `err.message`, R3/R5 `errorDetail`); `message()` (form,
-    delete and retag copy); AccountsCard's `portfolioBusy`, the portfolio-labels feed's own flag and
-    not the roster's counter; the Transactions delete-Undo re-POST, which was never counted.
+    success toast; what each 409 save does after its toast (the Settings cards reload through
+    `load()`, the rest through `onChanged`); `message()` (form, delete and retag copy); AccountsCard's
+    `portfolioBusy`, the portfolio-labels feed's own flag and not the roster's counter. (The 409
+    sentence itself and the Transactions delete-Undo's count were unified in the review round below.)
   - **The `reloading` guard lives in `load()`**, as CreditCardsPage's does. Guarding only the two
     callers would have left the dim up for good whenever a refresh's or a deactivation's `load()`
     superseded a reload. Those paths call `load()` directly and never raised the dim themselves.
-  - **The plan's page test says "the older settles last"**, but the guard only shows when the
-    discarded load settles FIRST. When it settles last, the newest has already lifted the dim, before
-    and after the fix. So the test settles the older first, as c7a9337c's test does. It failed before
-    the fix at the first assertion after the discarded load.
-  - **Task 5.2 is extended to the Undo's success handler**, which had the same shape: the server has
-    applied the order either way, so the page must reload. It has its own test.
-    - In both handlers `onChanged` runs right after the pending layer is dropped and before the
-      answer is read. A throwing `onChanged` therefore cannot strand a pending layer, which only an
-      answer retires.
+  - **Task 5.1's page test settles the discarded load FIRST** (the task text is amended to match):
+    settling last, the newest has already lifted the dim, before and after the fix. c7a9337c's test
+    does the same. It failed before the fix at the first assertion after the discarded load.
+  - **Task 5.2 covers the Undo's success handler too** (the task text is amended to match): the
+    server has applied the order either way, so the page must reload. It has its own test.
+    - In both handlers `onChanged` runs before the answer is read. The save drops its pending layer
+      first, so a throwing `onChanged` cannot strand a layer that only an answer retires.
   - **ActivityCard:** with the page answering at once, the old wait passed alone, because a `findBy*`
     drains one tick and the page landed in it. The test's page now lands 25 ms after the first paint.
     With the region wait that failed 3/3 at `.activity-list`; `findByRole('list')` passes 3/3.
 - **Behaviour changes found:** none. No expectation outside the Undo-failure strings moved, and no
   code had to be changed back.
+- **Review round (2026-09-23, after the merge at 58f048c4; the branch fast-forwarded to it):**
+  - cf20aaa6 (item 1): the scroll-cap test finds Load more by name inside the box — the rows' own Undo
+    and View report buttons satisfied the bare `button` query.
+  - c3ad27ab (item 2): the feed's first test waits for its rows (`findAllByRole('listitem')`).
+  - a62645e9 (item 3): a 503 Undo on each Settings card says "Couldn't undo the move — the server had
+    a problem (HTTP 503)." — all five call sites now pin the one sentence.
+  - 83e7ab31 (item 5): the save guard's title says "a malformed answer".
+  - 481da9c2 (item 6): `Probe`'s click handler is `launch`, no longer shadowing `start`.
+  - 192afc7a (item 7): the Transactions delete-Undo re-POST runs through `track`, as CardsPanel's and
+    CategoriesPanel's do. Its test failed before the fix: the grips woke at once.
+  - 6ab63932 (item 8): `orderCopy.staleListText(err)` — the server's sentence verbatim, else
+    `errorDetail` ("HTTP 409") — at every 409 save path of the five panels. The Settings cards showed
+    `err.message`, so an empty body toasted nothing; their new empty-body tests failed before the fix.
+    R3/R5's words are unchanged.
+  - This commit (item 4): Task 5's two lines amended, and these Results brought up to date.
+  - **Counts:** orderCopy 4 → 5; CategoriesCard 31 → 33; AccountsCard 45 → 47; TransactionsPanel
+    66 → 67; ActivityCard 6; useRequestCount 5; CreditCardsPage 95 — all green (targeted runs,
+    `--maxWorkers=2`). `npx tsc -b` 0; eslint on the touched files 0 errors (the one warning is
+    CategoriesPanel's pre-existing `SEED_CATEGORIES`).
+  - **A load flake for lane V's list:** `TransactionsPanel entry session › a successful edit still
+    resets the whole form — carry-forward is create-only` failed once while another job's full vitest
+    ran beside this one, then passed 3/3 alone. It clicks Edit as soon as `onChanged` has fired, and
+    `busy` (which disables Edit) clears one microtask later. This predates R6: the chain is as deep as
+    before. The fix would be to wait for Edit to be enabled before clicking.

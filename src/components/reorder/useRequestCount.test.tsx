@@ -35,7 +35,7 @@ function Probe({
   onThrew: (err: unknown) => void
 }) {
   const { busy, track } = useRequestCount()
-  const start = (run: () => Promise<string>) => {
+  const launch = (run: () => Promise<string>) => {
     let tracked: Promise<string>
     try {
       tracked = track(run)
@@ -52,7 +52,7 @@ function Probe({
     <>
       <p data-testid="busy">{busy ? 'busy' : 'idle'}</p>
       {runs.map((run, index) => (
-        <button key={index} type="button" onClick={() => start(run)}>
+        <button key={index} type="button" onClick={() => launch(run)}>
           {`request ${index + 1}`}
         </button>
       ))}
