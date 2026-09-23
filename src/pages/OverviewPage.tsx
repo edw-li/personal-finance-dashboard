@@ -31,9 +31,9 @@ import {
   recentSpendOption,
   spendStats,
 } from '../components/overview/overviewChartOptions'
+import { performanceLede } from '../components/portfolio/benchmarkLede'
 import {
   liveFromHoldings,
-  performanceLede,
   portfolioHistoryCsv,
   portfolioHistoryOption,
 } from '../components/portfolio/historyChartOptions'

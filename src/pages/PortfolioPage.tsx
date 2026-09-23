@@ -24,13 +24,13 @@ import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
 import DividendsPanel from '../components/portfolio/DividendsPanel'
+import { performanceLede } from '../components/portfolio/benchmarkLede'
 import {
-  buildPerformanceEvents,
   liveFromHoldings,
-  performanceLede,
   portfolioHistoryCsv,
   portfolioHistoryOption,
 } from '../components/portfolio/historyChartOptions'
+import { buildPerformanceEvents } from '../components/portfolio/performanceEvents'
 import HeatTreemapCard from '../components/portfolio/HeatTreemapCard'
 import HoldingDetailPanel from '../components/portfolio/HoldingDetailPanel'
 import HoldingsTable from '../components/portfolio/HoldingsTable'

@@ -10,8 +10,8 @@ import { axisTooltip } from '../../charts/tooltip'
 import type { PricePoint } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatDate } from '../../utils/format'
-import { EVENTS_SERIES, eventLines } from './historyChartOptions'
-import type { ChartEventPoint } from './historyChartOptions'
+import { EVENTS_SERIES, eventLines } from './performanceEvents'
+import type { ChartEventPoint } from './performanceEvents'
 
 /** Fetch windows (they move the REQUEST — ?days=), not zooms. All replaces the Max chip (F13). */
 export const PRICE_SPANS = [
