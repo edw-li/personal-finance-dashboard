@@ -100,4 +100,53 @@ describe('holdPosition', () => {
     flush()
     expect(window.scrollBy).not.toHaveBeenCalled()
   })
+
+  // Review round 1: a scrollbar drag fires no input event, and a restore or a focus scroll is not
+  // the reader's either — the window moving anywhere the hold did not put it means someone else is
+  // scrolling, and the hold gets out of the way.
+  describe('yielding to scrolls it did not make', () => {
+    let y = 0
+    beforeEach(() => {
+      y = 400
+      Object.defineProperty(window, 'scrollY', { configurable: true, get: () => y })
+      vi.mocked(window.scrollBy).mockImplementation(((options: ScrollToOptions) => {
+        y += options.top ?? 0
+        top -= options.top ?? 0
+      }) as typeof window.scrollBy)
+    })
+    afterEach(() => {
+      Object.defineProperty(window, 'scrollY', { configurable: true, value: 0, writable: true })
+    })
+
+    it('keeps correcting after its own scrolls, and lets go the moment another one moves the page', () => {
+      holdPosition(el, 500)
+      top = 160
+      flush()
+      expect(window.scrollBy).toHaveBeenCalledTimes(1) // its own correction: y 400 → 460
+      top = 130
+      now = 100
+      flush()
+      expect(window.scrollBy).toHaveBeenCalledTimes(2) // still holding after its own move
+      // A scrollbar drag: the window moves, no event says so.
+      y += 250
+      top -= 250
+      now = 200
+      flush()
+      expect(window.scrollBy).toHaveBeenCalledTimes(2)
+      expect(frames).toHaveLength(0)
+    })
+
+    it('switches scroll anchoring off on the root while any hold runs, and back on after the last', () => {
+      document.documentElement.style.overflowAnchor = ''
+      const first = holdPosition(el, 500)
+      const second = holdPosition(el, 500)
+      // Chromium's own anchoring would move the page during the reflow — a departure the hold did
+      // not make, and the hold's job anyway.
+      expect(document.documentElement.style.overflowAnchor).toBe('none')
+      first()
+      expect(document.documentElement.style.overflowAnchor).toBe('none')
+      second()
+      expect(document.documentElement.style.overflowAnchor).toBe('')
+    })
+  })
 })

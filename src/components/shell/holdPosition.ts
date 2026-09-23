@@ -22,14 +22,36 @@ export function inputSince(time: number): boolean {
 /** The dock's margin transition (--t-page), then ECharts' refit and a settle frame. */
 export const HOLD_MS = MOTION_MS.page + 360
 
+// Chromium's scroll anchoring moves the scroll position itself when content above the viewport
+// changes size. During a hold that would read as someone else's scroll — and keeping the page
+// still through the reflow is the hold's own job — so it is off on the root while any hold runs.
+// A count, so overlapping holds (a deep link landing as a drill docks) restore it once.
+let anchoringOff = 0
+let anchoringBefore = ''
+function suspendScrollAnchoring(): () => void {
+  const root = document.documentElement
+  if (anchoringOff++ === 0) {
+    anchoringBefore = root.style.overflowAnchor
+    root.style.overflowAnchor = 'none'
+  }
+  let resumed = false
+  return () => {
+    if (resumed) return
+    resumed = true
+    if (--anchoringOff === 0) root.style.overflowAnchor = anchoringBefore
+  }
+}
+
 /**
  * Keeps `element`'s top edge where it is on screen while the layout around it settles
  * (2026-09-23 spec §C10, charts F1): a chart drill docks the detail panel, the page narrows over
  * --t-page, text above the chart rewraps, and the clicked chart used to slide ~350px down under
  * the pointer. Measures NOW — call it before the change — then corrects the window's scroll each
- * frame until `durationMs` has passed, the element leaves the page, or the reader scrolls, types
- * or points. Under reduced motion the margin lands in one commit and the first frame corrects it
- * before paint. Returns the cancel.
+ * frame until `durationMs` has passed, the element leaves the page, the reader scrolls, types or
+ * points, or the window moves anywhere the hold did not put it (review round 1: a scrollbar drag
+ * fires no input event, and a restore or a focus scroll is someone else's too). Under reduced
+ * motion the margin lands in one commit and the first frame corrects it before paint. Returns the
+ * cancel.
  */
 export function holdPosition(
   element: HTMLElement | null | undefined,
@@ -38,23 +60,30 @@ export function holdPosition(
   if (!element || typeof requestAnimationFrame !== 'function') return () => {}
   const origin = element.getBoundingClientRect().top
   const until = performance.now() + durationMs
+  // Where the window stands now, and after each of the hold's own corrections.
+  let expectedY = window.scrollY
+  const resumeAnchoring = suspendScrollAnchoring()
   let frame = 0
   let done = false
   const stop = () => {
     if (done) return
     done = true
     cancelAnimationFrame(frame)
+    resumeAnchoring()
     for (const type of INPUT_EVENTS) window.removeEventListener(type, stop, true)
   }
   const tick = () => {
     if (done) return
-    if (!element.isConnected) {
+    if (!element.isConnected || Math.abs(window.scrollY - expectedY) >= 1) {
       stop()
       return
     }
     const drift = element.getBoundingClientRect().top - origin
     // Sub-pixel drift is layout rounding, not movement: correcting it would jitter.
-    if (Math.abs(drift) >= 1) window.scrollBy({ top: drift, behavior: 'instant' })
+    if (Math.abs(drift) >= 1) {
+      window.scrollBy({ top: drift, behavior: 'instant' })
+      expectedY = window.scrollY
+    }
     if (performance.now() >= until) {
       stop()
       return
