@@ -80,6 +80,23 @@ describe('reorder.css', () => {
     expect(stripComments(css)).not.toMatch(/(^|[,{}])\s*tr\[data-reorder/)
   })
 
+  it('draws a lifted multi-row unit as one block: its rows meet on one hairline, never two', () => {
+    const lifted = declarationsFor(css, ".reorder-table tr[data-reorder='lifted']")
+    expect(lifted).toContain('--reorder-edge-top: inset 0 1px 0 var(--border);')
+    expect(lifted).toContain('--reorder-edge-bottom: inset 0 -1px 0 var(--border);')
+    // Right after another lifted row: no top edge. Right before one: no bottom edge. A middle row
+    // (a parent's second of three components) matches both and draws neither.
+    expect(
+      declarationsFor(css, ".reorder-table tr[data-reorder='lifted'] + tr[data-reorder='lifted']"),
+    ).toContain('--reorder-edge-top: 0 0 transparent;')
+    expect(
+      declarationsFor(css, ".reorder-table tr[data-reorder='lifted']:has(+ tr[data-reorder='lifted'])"),
+    ).toContain('--reorder-edge-bottom: 0 0 transparent;')
+    expect(declarationsFor(css, ".reorder-table tr[data-reorder='lifted'] > td")).toContain(
+      'box-shadow: var(--reorder-edge-top), var(--reorder-edge-bottom);',
+    )
+  })
+
   it.each([
     ['row-actions', '-1px 0 0 var(--border)'],
     ['col-identity', '1px 0 0 var(--border)'],
@@ -87,7 +104,7 @@ describe('reorder.css', () => {
     const lifted = declarationsFor(css, `.reorder-table tr[data-reorder='lifted'] > td.${cell}`)
     expect(lifted).toContain('background: var(--surface-2);')
     expect(lifted).toContain(
-      `box-shadow: ${hairline}, inset 0 1px 0 var(--border), inset 0 -1px 0 var(--border);`,
+      `box-shadow: ${hairline}, var(--reorder-edge-top), var(--reorder-edge-bottom);`,
     )
     expect(declarationsFor(css, `.reorder-table tr[data-reorder-drop='before'] > td.${cell}`)).toContain(
       `box-shadow: ${hairline}, inset 0 2px 0 var(--accent);`,

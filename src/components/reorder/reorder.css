@@ -88,9 +88,27 @@ table.reorder-table {
 .reorder-table tr[data-reorder='lifted'] > td,
 :not(tr)[data-reorder='lifted'] {
   background: var(--surface-2);
-  box-shadow:
-    inset 0 1px 0 var(--border),
-    inset 0 -1px 0 var(--border);
+}
+
+/* A lifted row's top and bottom hairlines. A unit of several rows (a parent and its components)
+   reads as ONE block: where two of its rows meet, the lower drops its top edge and the upper its
+   bottom edge, so a middle row draws neither. Every lifted cell — pinned ones too, beside their own
+   edge hairline — draws whichever edges its row has left. */
+.reorder-table tr[data-reorder='lifted'] {
+  --reorder-edge-top: inset 0 1px 0 var(--border);
+  --reorder-edge-bottom: inset 0 -1px 0 var(--border);
+}
+
+.reorder-table tr[data-reorder='lifted'] + tr[data-reorder='lifted'] {
+  --reorder-edge-top: 0 0 transparent;
+}
+
+.reorder-table tr[data-reorder='lifted']:has(+ tr[data-reorder='lifted']) {
+  --reorder-edge-bottom: 0 0 transparent;
+}
+
+.reorder-table tr[data-reorder='lifted'] > td {
+  box-shadow: var(--reorder-edge-top), var(--reorder-edge-bottom);
 }
 
 /* A list of boxes (Overview › Customize) lifts with a real shadow — the theme's token, bare
@@ -118,8 +136,8 @@ table.reorder-table {
   background: var(--surface-2);
   box-shadow:
     -1px 0 0 var(--border),
-    inset 0 1px 0 var(--border),
-    inset 0 -1px 0 var(--border);
+    var(--reorder-edge-top),
+    var(--reorder-edge-bottom);
 }
 
 .reorder-table tr[data-reorder-drop='before'] > td.row-actions {
@@ -138,8 +156,8 @@ table.reorder-table {
   background: var(--surface-2);
   box-shadow:
     1px 0 0 var(--border),
-    inset 0 1px 0 var(--border),
-    inset 0 -1px 0 var(--border);
+    var(--reorder-edge-top),
+    var(--reorder-edge-bottom);
 }
 
 .reorder-table tr[data-reorder-drop='before'] > td.col-identity {
