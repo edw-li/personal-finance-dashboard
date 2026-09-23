@@ -541,7 +541,11 @@ Expected at revision `f12026091203`: `PASS: 41 tables identical` and `[drill] PA
 database and its temporary data directory on the way out, whichever way it exits. The nightly files
 live on the `finance-data` volume (`docker volume inspect personal-finance-dashboard_finance-data`
 for the host path); the same ZIP restores from the UI — Restore card → Dry run → type the date →
-Restore — with a pre-restore point written first.
+Restore — with a pre-restore point written first. Those restore points (one saved before every
+restore and every import; the newest three kept) are listed in Settings › Data under Backups &
+snapshots and in the Restore card's picker, downloadable and restorable the same way, and the
+success toast's Undo pre-selects the one just saved. Restoring even the oldest of the three works:
+its bytes are read before the apply's own new point rotates it out.
 
 **The nightly dump (disaster recovery — schema-agnostic, survives any app state).**
 
