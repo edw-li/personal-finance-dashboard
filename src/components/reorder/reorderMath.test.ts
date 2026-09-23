@@ -126,27 +126,35 @@ describe('moveUnit', () => {
 describe('slotFor', () => {
   const four = stacked([40, 40, 40, 40])
 
-  it('counts the other peers whose original midpoint is above the lifted centre', () => {
-    expect(slotFor(four, 0, 20)).toBe(0)
-    expect(slotFor(four, 0, 65)).toBe(1)
-    expect(slotFor(four, 0, 105)).toBe(2)
-    expect(slotFor(four, 0, 159)).toBe(3)
-    expect(slotFor(four, 3, 95)).toBe(2)
-    expect(slotFor(four, 3, 15)).toBe(0)
+  it('counts the other peers that stay above: a peer below is passed when the bottom edge reaches its midpoint, a peer above when the top edge rises past it', () => {
+    expect(slotFor(four, 0, 0, 40)).toBe(0) // at rest
+    expect(slotFor(four, 0, 45, 85)).toBe(1)
+    expect(slotFor(four, 0, 85, 125)).toBe(2)
+    expect(slotFor(four, 0, 139, 179)).toBe(3)
+    expect(slotFor(four, 3, 75, 115)).toBe(2)
+    expect(slotFor(four, 3, -5, 35)).toBe(0)
   })
 
-  it('resolves a tie toward the edge the unit came from, so a unit clamped to an end lands there', () => {
-    expect(slotFor(four, 0, 140)).toBe(3) // clamped to the bottom: lands last
-    expect(slotFor(four, 3, 20)).toBe(0) // clamped to the top: lands first
-    expect(slotFor(four, 1, 100)).toBe(2) // dragged down exactly onto C's midpoint: has passed C
-    expect(slotFor(four, 2, 60)).toBe(1) // dragged up exactly onto B's midpoint: has not passed B
+  it('lands a unit clamped to either end at that end, and settles each edge tie', () => {
+    expect(slotFor(four, 0, 120, 160)).toBe(3) // clamped to the bottom: lands last
+    expect(slotFor(four, 3, 0, 40)).toBe(0) // clamped to the top: lands first
+    expect(slotFor(four, 1, 60, 100)).toBe(2) // B's bottom edge exactly on C's midpoint: has passed C
+    expect(slotFor(four, 1, 59, 99)).toBe(1) // a pixel short of it: has not
+    expect(slotFor(four, 2, 60, 100)).toBe(2) // C's top edge exactly on B's midpoint: has not passed B
+    expect(slotFor(four, 2, 59, 99)).toBe(1) // a pixel above it: has
   })
 
-  it("uses each unit's own midpoint when heights differ", () => {
-    // A parent carrying two components (120px), then a plain account (40px) lifted from below.
+  it('lets a tall unit pass a short peer, and a short one a tall peer, by their leading edges', () => {
+    // Settings › Accounts: a 401(k) carrying three components (172px) above a plain IRA (43px), the
+    // last of Pre-tax. Clamped, its bottom stops on the IRA's bottom: its CENTRE could never pass
+    // the IRA's midpoint (193.5), its bottom edge does.
+    const tallFirst = stacked([172, 43])
+    expect(slotFor(tallFirst, 0, 43, 215)).toBe(1) // clamped at +43
+    expect(slotFor(tallFirst, 0, 21, 193)).toBe(0) // its bottom just short of the midpoint
+    // A plain account (40px) lifted from below a parent carrying two components (120px).
     const tall = stacked([120, 40])
-    expect(slotFor(tall, 1, 70)).toBe(1)
-    expect(slotFor(tall, 1, 50)).toBe(0)
+    expect(slotFor(tall, 1, 65, 105)).toBe(1) // its top still below the parent's midpoint (60)
+    expect(slotFor(tall, 1, 55, 95)).toBe(0) // risen past it
   })
 })
 

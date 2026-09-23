@@ -613,6 +613,34 @@ describe('useReorder — pointer', () => {
     expect(document.documentElement.classList.contains('reorder-active')).toBe(false)
   })
 
+  it('a tall unit passes a short last peer: its leading edge decides, not its centre', () => {
+    const onCommit = vi.fn()
+    // Settings › Accounts' shape: a parent carrying three components, then one short peer at the
+    // end of the range.
+    const items: ReorderItem<string>[] = [
+      { id: 'P', range: 'g', carries: ['C1', 'C2', 'C3'] },
+      { id: 'C1', range: 'parent:P' },
+      { id: 'C2', range: 'parent:P' },
+      { id: 'C3', range: 'parent:P' },
+      { id: 'Q', range: 'g' },
+    ]
+    render(<Stateful initial={items} onCommit={onCommit} />)
+    layoutRows() // P's unit 200..360 (four rows), Q 360..400 (midpoint 380)
+    fireEvent.pointerDown(grip('Parent'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Parent'), { pointerId: 1, clientY: 420 }) // clamped at +40
+    // Its centre stops at 320, short of Q's midpoint; its bottom edge, at 400, is past it.
+    expect(row('P').style.transform).toBe('translateY(40px)')
+    expect(row('C3').style.transform).toBe('translateY(40px)')
+    expect(row('Q').style.transform).toBe('translateY(-160px)')
+    expect(live()).toBe('Parent, position 2 of 2.')
+    fireEvent.pointerUp(grip('Parent'), { pointerId: 1, clientY: 420 })
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(onCommit).toHaveBeenCalledTimes(1)
+    expect(onCommit).toHaveBeenCalledWith(['Q', 'P', 'C1', 'C2', 'C3'], 'P')
+  })
+
   it('clamps the unit to the list', () => {
     render(<Stateful initial={flat('A', 'B', 'C', 'D')} />)
     layoutRows()
@@ -711,7 +739,7 @@ describe('useReorder — pointer', () => {
     for (const abandon of abandons) {
       fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
       fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 290 })
-      expect(live()).toBe('Alpha, position 2 of 3.')
+      expect(live()).toBe('Alpha, position 3 of 3.') // +70: its bottom (310) is past C's midpoint (300)
       abandon()
       expect(live()).toBe('Cancelled. Alpha is back at position 1 of 3.')
       expectEasedHome(['A', 'B'])

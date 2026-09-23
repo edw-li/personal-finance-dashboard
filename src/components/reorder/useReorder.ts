@@ -300,7 +300,8 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     const delta = listY(drag.scroller, drag.lastClientY) - drag.startListY
     drag.offset = clampOffset(drag.extents, drag.from, delta)
     const self = drag.extents[drag.from]
-    const to = slotFor(drag.extents, drag.from, self.top + drag.offset + self.height / 2)
+    const top = self.top + drag.offset
+    const to = slotFor(drag.extents, drag.from, top, top + self.height)
     paint(drag, to)
     if (to !== drag.to) {
       drag.to = to
