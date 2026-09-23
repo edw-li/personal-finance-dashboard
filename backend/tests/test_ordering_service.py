@@ -21,6 +21,7 @@ from app.services.ordering import (
     moved_ids,
     next_sort_index,
     next_sort_order,
+    order_lock,
     position_changes,
     renumber,
     subset_in_slots,
@@ -177,6 +178,18 @@ async def test_next_sort_order_appends_after_the_max_and_starts_at_zero(db):
     )
     await db.commit()
     assert (await db.execute(next_sort_order(Account.sort_order))).scalar_one() == 30
+
+
+# ── order_lock ───────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("model", [Account, PositionTransaction], ids=["accounts", "ledger"])
+def test_order_lock_is_a_transaction_scoped_advisory_lock_named_for_its_list(model):
+    # Transaction-scoped (xact): the commit or rollback releases it, so no request can leak
+    # it. Named by table, so every path of one list takes the SAME lock without a spelling.
+    compiled = order_lock(model).compile()
+    assert str(compiled) == "SELECT pg_advisory_xact_lock(hashtext(:key))"
+    assert compiled.params == {"key": f"reorder:{model.__tablename__}"}
 
 
 # ── next_sort_index ──────────────────────────────────────────────────────────────────

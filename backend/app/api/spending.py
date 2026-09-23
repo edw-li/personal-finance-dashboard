@@ -50,6 +50,7 @@ from app.services.ordering import (
     in_list_order,
     moved_ids,
     next_sort_order,
+    order_lock,
 )
 from app.services.savings import (
     LIVING,
@@ -79,8 +80,11 @@ async def reorder_categories(
     its new order. sort_order becomes 0…n−1 and only rows whose value moves are written, as
     ONE change batch (§8.4 labels). An unchanged order writes and logs nothing.
 
+    Serialized per list like the accounts (decision 16): the order lock comes first.
+
     Declared before the /categories/{category_id} routes so a later PUT on that path can
     never shadow it."""
+    await db.execute(order_lock(SpendingCategory))
     categories = list((await db.execute(in_list_order(SpendingCategory))).scalars())
     before = {category.id: row_image(category) for category in categories}
     ordered, changed = apply_order(categories, body.ids, stale_detail=STALE_CATEGORIES)
@@ -130,7 +134,9 @@ async def create_category(
         raise HTTPException(status_code=409, detail=f"category {slug!r} already exists")
     sort_order = body.sort_order
     if sort_order is None:
-        # No position given: append after the last category (2026-09-23 reorder spec §3.3).
+        # No position given: append after the last category (2026-09-23 reorder spec §3.3),
+        # under the list's lock (decision 16).
+        await db.execute(order_lock(SpendingCategory))
         sort_order = (await db.execute(next_sort_order(SpendingCategory.sort_order))).scalar_one()
     category = SpendingCategory(name=body.name, slug=slug, sort_order=sort_order, kind=body.kind)
     db.add(category)

@@ -44,7 +44,7 @@ from app.models import (
     TaxYear,
 )
 from app.seed import seed_tax_definitions
-from app.services.ordering import SORT_INDEX_STEP, next_sort_index
+from app.services.ordering import SORT_INDEX_STEP, next_sort_index, order_lock
 from app.services.people import load_people, primary_person
 from app.services.portfolio_accounts import resolve_portfolio_account
 from app.services.spending_guard import records_something
@@ -64,6 +64,20 @@ def _diff_update(obj, fields: dict, counts, report: SheetReport, sample_key: str
         report.add_sample(f"{sample_key}: " + "; ".join(changed))
     else:
         counts.skips += 1
+
+
+# The three lists whose order a reorder PUT owns and this importer appends to (2026-09-23
+# reorder spec §3.4, amended). Fixed order: two imports take them the same way round.
+ORDERED_LISTS = (PositionTransaction, Account, SpendingCategory)
+
+
+async def lock_ordered_lists(db: AsyncSession) -> None:
+    """Take the three lists' order locks (services.ordering.order_lock), once, before any
+    applier reads them: the importer's creates append after each list's max, so they
+    serialize with the reorder routes like every other append (plan decision 16). Held
+    until the import's commit or rollback — dry runs included, whose reads then match."""
+    for model in ORDERED_LISTS:
+        await db.execute(order_lock(model))
 
 
 async def apply_reference_data(

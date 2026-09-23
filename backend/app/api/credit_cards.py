@@ -45,6 +45,7 @@ from app.services.ordering import (
     apply_order,
     in_list_order,
     next_sort_order,
+    order_lock,
 )
 
 router = APIRouter(
@@ -122,7 +123,9 @@ async def create_reward_category(
     await _validated_category_refs(db, body.spending_category_id, body.pinned_card_id)
     sort_order = body.sort_order
     if sort_order is None:
-        # No position given: append after the last row (2026-09-23 reorder spec §3.3).
+        # No position given: append after the last row (2026-09-23 reorder spec §3.3), under
+        # the list's lock (decision 16).
+        await db.execute(order_lock(RewardCategory))
         sort_order = (await db.execute(next_sort_order(RewardCategory.sort_order))).scalar_one()
     category = RewardCategory(
         name=body.name,
@@ -144,7 +147,9 @@ async def reorder_reward_categories(
     """Drag-to-reorder the Categories & weights rows (2026-09-23 spec §3.2): `ids` is every
     reward category in its new order; sort_order becomes 0…n−1 in ONE transaction, and only
     rows whose value moves are written. Unlogged like the rest of this router — the client's
-    Undo re-sends the previous order. Declared before /categories/{category_id}."""
+    Undo re-sends the previous order. Serialized per list (decision 16): the order lock
+    comes first. Declared before /categories/{category_id}."""
+    await db.execute(order_lock(RewardCategory))
     categories = list((await db.execute(in_list_order(RewardCategory))).scalars())
     ordered, changed = apply_order(categories, body.ids, stale_detail=STALE_REWARD_CATEGORIES)
     if changed:  # the order as stored writes nothing
@@ -447,7 +452,9 @@ async def create_credit_card(
 ) -> CreditCardOut:
     values = await _validated_card_values(db, body, card_id=None)
     if values["sort_order"] is None:
-        # No position given: append after the last card (2026-09-23 reorder spec §3.3).
+        # No position given: append after the last card (2026-09-23 reorder spec §3.3), under
+        # the list's lock (decision 16).
+        await db.execute(order_lock(CreditCard))
         values["sort_order"] = (
             await db.execute(next_sort_order(CreditCard.sort_order))
         ).scalar_one()
@@ -464,8 +471,9 @@ async def reorder_credit_cards(
     """Drag-to-reorder the card list (2026-09-23 spec §3.2): `ids` is every card, active
     and inactive, in its new order; sort_order becomes 0…n−1 in ONE transaction, and only
     rows whose value moves are written. Answers exactly as the list GET does. Unlogged like
-    the rest of this router — the client's Undo re-sends the previous order. Declared
-    before the /{card_id} routes."""
+    the rest of this router — the client's Undo re-sends the previous order. Serialized per
+    list (decision 16): the order lock comes first. Declared before the /{card_id} routes."""
+    await db.execute(order_lock(CreditCard))
     cards = list((await db.execute(in_list_order(CreditCard))).scalars())
     ordered, changed = apply_order(cards, body.ids, stale_detail=STALE_CARDS)
     if changed:  # the order as stored writes nothing

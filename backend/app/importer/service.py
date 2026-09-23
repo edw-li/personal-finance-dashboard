@@ -128,6 +128,8 @@ async def run_import(
         await write_restore_point(db, actor=actor)
     batch_id: UUID | None = None
     try:
+        # Before the first applier reads a reorderable list (plan decision 16).
+        await appliers.lock_ordered_lists(db)
         by_name = await appliers.apply_reference_data(
             db, parsed["reference_data"], report.sheets["reference_data"]
         )

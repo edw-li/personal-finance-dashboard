@@ -141,9 +141,19 @@ find out why before changing anything.
 15. **`reorderTransactions(ids, owner)` takes `owner` as REQUIRED** (no `= null` default, unlike
     `fetchTransactions`): the server judges the ids against the scope's rows, so a forgotten scope
     should be a type error, not a 409.
-16. **No row locking.** Two concurrent reorders of one list both pass the permutation check and the
-    later commit wins — the single-user posture `put_category_budget` documents. A change committed
-    elsewhere before the read is the 409 path.
+16. **Serialized per list; the later request wins whole.** (Amended 2026-09-23 at the R1 code
+    review, which reproduced the original "no row locking" rule merging two overlapping account
+    reorders row by row into `B0 D0 A1 C3`, with a change batch whose Undo produced an order that
+    never existed.) Every reorder route takes its list's transaction-scoped advisory lock —
+    `services.ordering.order_lock(model)`, key `reorder:<table>` — as its FIRST statement. Every
+    path that appends to the same list takes it before reading the max: the four creates without a
+    `sort_order`, an account PATCH that changes `group` (it locks before reading the row, so the
+    before-image is fresh too), the UI transaction create, and the importer (all three lists, once,
+    at the start of its apply phase). A reorder that arrives while another is in flight waits, then
+    reads what the first committed, so its batch logs fresh before-images. A change committed
+    elsewhere before the read is still the 409 path. Renames and other edits, deletes and the
+    Activity card's Undo do not take the lock: a write of theirs landing inside a reorder's few
+    milliseconds stays the single-user posture `put_category_budget` documents.
 17. **Test files.** One new test file per router (`test_reorder_accounts_api.py`,
     `…_categories_…`, `…_transactions_…`, `…_credit_cards_…`), plus `tests/ordering_helpers.py` (a
     flush listener that proves "only changed rows are written") and `tests/test_reorder_route_order.py`

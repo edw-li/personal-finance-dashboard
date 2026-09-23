@@ -42,6 +42,7 @@ from app.services.ordering import (
     in_list_order,
     moved_ids,
     next_sort_order,
+    order_lock,
 )
 
 router = APIRouter(
@@ -136,8 +137,13 @@ async def reorder_accounts(
     column indexes — and only rows whose value moves are written, as ONE change batch the
     Activity card can undo. An unchanged order writes and logs nothing.
 
+    Serialized per list (decision 16): the order lock is the first statement, so a reorder
+    in flight commits before this one reads — the later request wins whole, and its batch
+    records fresh before-images.
+
     Declared before the /accounts/{account_id} routes so a later PUT on that path can never
     shadow it."""
+    await db.execute(order_lock(Account))
     accounts = list((await db.execute(in_list_order(Account))).scalars())
     before = {account.id: row_image(account) for account in accounts}
     ordered, changed = apply_order(accounts, body.ids, stale_detail=STALE_ACCOUNTS)
@@ -184,7 +190,9 @@ async def create_account(
     sort_order = body.sort_order
     if sort_order is None:
         # No position given: append after the last account (2026-09-23 reorder spec §3.3),
-        # never 0 — 0 put every new account at the top of its group.
+        # never 0 — 0 put every new account at the top of its group. Under the list's lock
+        # (decision 16): a reorder in flight commits before the max is read.
+        await db.execute(order_lock(Account))
         sort_order = (await db.execute(next_sort_order(Account.sort_order))).scalar_one()
     account = Account(
         name=body.name,
@@ -217,7 +225,6 @@ async def update_account(
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> Account:
-    account = await _get_account(db, account_id)
     # Every patchable account column is NOT NULL *except* the two in
     # NULLABLE_ACCOUNT_FIELDS, so an explicit null is a no-op request for the rest
     # ("name": null must never reach the ORM) and a real write for those two.
@@ -226,6 +233,12 @@ async def update_account(
         for field, value in body.model_dump(exclude_unset=True).items()
         if value is not None or field in NULLABLE_ACCOUNT_FIELDS
     }
+    if "group" in updates and "sort_order" not in updates:
+        # A group change appends (below), so take the list's lock BEFORE the row is read
+        # (decision 16): the max and the before-image are then both read after any reorder
+        # in flight commits. A same-group PATCH holds it for nothing — harmless.
+        await db.execute(order_lock(Account))
+    account = await _get_account(db, account_id)
     new_name = updates.get("name")
     if new_name is not None and not slugify(new_name):
         # Same rule as create: PATCH must not produce a blank/whitespace display name.

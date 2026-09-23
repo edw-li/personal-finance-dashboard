@@ -11,7 +11,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
 from fastapi import HTTPException
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, TextClause, func, select, text
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.models import PositionTransaction
@@ -31,6 +31,23 @@ STALE_REWARD_CATEGORIES = (
 # The ledger's spacing: PUT /portfolio/transactions/order renumbers 10, 20, …, and a new
 # transaction — UI or import — lands one step after the whole ledger's max.
 SORT_INDEX_STEP = 10
+
+
+def order_lock(model: type) -> TextClause:
+    """`SELECT pg_advisory_xact_lock(hashtext('reorder:<table>'))` — one list's order lock
+    (spec §3.4 amended; plan decision 16). Every reorder route takes it as its FIRST
+    statement, and every path that APPENDS to the same list takes it before it reads the
+    max: the creates without a sort_order, an account's group-change append, the UI
+    transaction create and the importer. Two tabs' reorders therefore run one after the
+    other — the later request wins whole, with fresh before-images — instead of merging row
+    by row, and a create never takes a number a reorder is about to write.
+
+    Transaction-scoped, so the commit or rollback releases it and no request can leak it;
+    keyed by table name, so no path can spell another's key. The statement, not the call:
+    this module stays I/O-free (the allocation-target save's lock is the precedent)."""
+    return text("SELECT pg_advisory_xact_lock(hashtext(:key))").bindparams(
+        key=f"reorder:{model.__tablename__}"
+    )
 
 
 def check_permutation(current_ids: Sequence[int], ids: Sequence[int], *, stale_detail: str) -> None:

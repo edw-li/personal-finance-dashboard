@@ -65,6 +65,7 @@ from app.services.ordering import (
     STALE_TRANSACTIONS,
     check_permutation,
     next_sort_index,
+    order_lock,
     position_changes,
     renumber,
     subset_in_slots,
@@ -382,9 +383,13 @@ async def reorder_transactions(
     logged reorder after an unlogged edit of a moved row would silently revert that edit.
     The client's Undo re-sends the previous order through this same route instead.
 
+    Serialized per ledger (decision 16): the order lock is the first statement, so two tabs'
+    replay orders never blend into one neither sent — the later request wins whole.
+
     Declared before the /transactions/{txn_id} routes so a later PUT on that path can never
     shadow it."""
     owner_filter = _owner_filter(owner)  # 422 on a garbage owner before anything is read
+    await db.execute(order_lock(PositionTransaction))
     ledger = list((await db.execute(_ledger_query(None))).scalars())
     visible = (
         ledger
@@ -428,10 +433,14 @@ async def create_transaction(
     fields = _validated_txn_fields(body.type, body.shares, body.price, body.fees, body.split_factor)
     if body.txn_date is not None:
         require_reasonable_date(body.txn_date, "txn_date")
+    label = _validated_account(body.account)
+    # The append position, under the ledger's lock (decision 16): a reorder in flight
+    # commits before the max is read, so this row never lands on a number it is writing.
+    await db.execute(order_lock(PositionTransaction))
     sort_index = (await db.execute(next_sort_index())).scalar_one()
     # Resolve only after every 422 above: get-or-create flushes, and a label minted for a
     # request that then fails validation would be a row nobody asked for.
-    account = await resolve_portfolio_account(db, _validated_account(body.account))
+    account = await resolve_portfolio_account(db, label)
     # UI rows fold chronologically LAST (locked decision) until the user drags them
     # elsewhere (PUT /transactions/order). A later import appends its new sheet rows after
     # the ledger's max the same way — import_key, not sort_index, is the importer's identity.
