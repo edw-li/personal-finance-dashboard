@@ -10,7 +10,13 @@ import type { OwnerScope } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
-import { ORDER_RESTORED, clause, orderSaveFailed, undoFailureText } from '../reorder/orderCopy'
+import {
+  ORDER_RESTORED,
+  clause,
+  orderSaveFailed,
+  staleListText,
+  undoFailureText,
+} from '../reorder/orderCopy'
 import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
 import { useLatest } from '../reorder/useLatest'
 import { useReorder } from '../reorder/useReorder'
@@ -342,7 +348,7 @@ export default function TransactionsPanel({
           setPendingOrder(null)
           if (err instanceof ApiError && err.status === 409) {
             // The server's sentence says what happened; the reload shows the rows it means.
-            toast.error(errorDetail(err))
+            toast.error(staleListText(err))
             onChangedRef.current()
             return
           }

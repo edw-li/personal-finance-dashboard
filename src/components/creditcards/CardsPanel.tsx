@@ -12,7 +12,13 @@ import {
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
-import { ORDER_RESTORED, movedToast, orderSaveFailed, undoFailureText } from '../reorder/orderCopy'
+import {
+  ORDER_RESTORED,
+  movedToast,
+  orderSaveFailed,
+  staleListText,
+  undoFailureText,
+} from '../reorder/orderCopy'
 import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
 import { useLatest } from '../reorder/useLatest'
 import { useReorder } from '../reorder/useReorder'
@@ -408,7 +414,7 @@ export default function CardsPanel({
           dropPendingOrder()
           if (err instanceof ApiError && err.status === 409) {
             // The server's sentence says what happened; the reload shows the rows it means.
-            toast.error(errorDetail(err))
+            toast.error(staleListText(err))
             reload()
             return
           }

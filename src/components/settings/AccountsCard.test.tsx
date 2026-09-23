@@ -929,6 +929,22 @@ it("a stale roster (409) shows the server's sentence and reloads the current row
   expect(vi.mocked(fetchAccounts)).toHaveBeenCalledTimes(2)
 })
 
+it('a stale-roster 409 that brought no sentence names its status — never an empty toast', async () => {
+  vi.mocked(fetchAccounts).mockResolvedValue(ROSTER)
+  vi.mocked(reorderAccounts).mockRejectedValue(new ApiError('', 409))
+  render(
+    <ToastProvider>
+      <AccountsCard people={[ME]} />
+    </ToastProvider>,
+  )
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+  press('Fidelity Traditional 401(k)', ' ', 'ArrowUp', ' ')
+
+  const toast = await screen.findByText('HTTP 409')
+  expect(toast.className).toBe('toast-message')
+  await waitFor(() => expect(vi.mocked(fetchAccounts)).toHaveBeenCalledTimes(2))
+})
+
 it('keeps the grips parked until the reload a write started has landed — no drop diffs against rows the write moved past', async () => {
   const reload = deferred<AccountOut[]>()
   vi.mocked(fetchAccounts).mockResolvedValueOnce(ROSTER).mockReturnValueOnce(reload.promise)

@@ -5,6 +5,7 @@ import {
   clause,
   movedToast,
   orderSaveFailed,
+  staleListText,
   undoFailed,
   undoFailureText,
 } from './orderCopy'
@@ -52,5 +53,11 @@ describe('orderCopy (spec §8.1)', () => {
 
   it('a refusal that brought no sentence names its status rather than showing nothing', () => {
     expect(undoFailureText(new ApiError('', 409))).toBe('HTTP 409')
+  })
+
+  it("a stale list's 409 on a save is the server's sentence verbatim, and never an empty toast (spec §8.3)", () => {
+    const stale = 'The spending categories changed since this list was loaded — nothing was moved.'
+    expect(staleListText(new ApiError(stale, 409))).toBe(stale)
+    expect(staleListText(new ApiError('', 409))).toBe('HTTP 409')
   })
 })

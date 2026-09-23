@@ -519,6 +519,21 @@ it("a stale list (409) shows the server's sentence and reloads the current rows 
   expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2)
 })
 
+it('a stale-list 409 that brought no sentence names its status — never an empty toast', async () => {
+  vi.mocked(reorderCategories).mockRejectedValue(new ApiError('', 409))
+  render(
+    <ToastProvider>
+      <CategoriesCard />
+    </ToastProvider>,
+  )
+  await screen.findByRole('table')
+  press('Pets', ' ', 'ArrowUp', ' ')
+
+  const toast = await screen.findByText('HTTP 409')
+  expect(toast.className).toBe('toast-message')
+  await waitFor(() => expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2))
+})
+
 it('keeps the grips parked until the reload a write started has landed — no drop diffs against rows the write moved past', async () => {
   const reload = deferred<CategoryOut[]>()
   vi.mocked(fetchCategories)
