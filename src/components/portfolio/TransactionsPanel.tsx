@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, errorDetail } from '../../api/client'
 import {
   createTransaction,
@@ -232,6 +232,15 @@ export default function TransactionsPanel({
   const [busy, setBusy] = useState(false)
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
   const toast = useToast()
+  // The page's reload AS IT STANDS NOW, for every request's answer: `onChanged` closes over the
+  // page's scope, so a save, delete or Undo that answers after a scope switch must not call the
+  // one from the render that sent it — that refetches the OLD scope, supersedes the new scope's
+  // load and paints the whole page with the old scope under the new chips (useReorder's
+  // `latest` idiom).
+  const onChangedRef = useRef(onChanged)
+  useLayoutEffect(() => {
+    onChangedRef.current = onChanged
+  })
   const accountNote = newAccountNote(form.account, accounts, primaryName)
   const tickerOf = (txn: TransactionOut) => tickers.get(txn.security_id) ?? '?'
 
@@ -274,13 +283,13 @@ export default function TransactionsPanel({
     reorderTransactions(ids, scope)
       .then((result) => {
         setSavedOrder({ scope, rows: result.transactions })
-        onChanged()
+        onChangedRef.current()
         toast.info('Order restored')
       })
       .catch((err: unknown) => {
         if (err instanceof ApiError && err.status === 409) {
           toast.error(errorDetail(err))
-          onChanged()
+          onChangedRef.current()
           return
         }
         toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
@@ -312,7 +321,7 @@ export default function TransactionsPanel({
         setPendingOrder(null)
         setSavedOrder({ scope, rows: result.transactions })
         // Holdings, realized gains and the tiles stand on this order: the page reloads them.
-        onChanged()
+        onChangedRef.current()
         reorder.markSaved(moved)
         toast.success(movedMessage(txn, tickerOf(txn), result.changed_positions), {
           action: { label: 'Undo', onAction: () => restoreOrder(previous, scope) },
@@ -327,7 +336,7 @@ export default function TransactionsPanel({
         if (err instanceof ApiError && err.status === 409) {
           // The server's sentence says what happened; the reload shows the rows it means.
           toast.error(errorDetail(err))
-          onChanged()
+          onChangedRef.current()
           return
         }
         toast.error(
@@ -425,7 +434,7 @@ export default function TransactionsPanel({
           setEditingId(null)
           setKept(false)
         }
-        onChanged()
+        onChangedRef.current()
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Save failed')
@@ -452,7 +461,7 @@ export default function TransactionsPanel({
         }
         // The ledger just changed under the cue — whatever entry session it narrated is over.
         setKept(false)
-        onChanged()
+        onChangedRef.current()
         toast.success(`Deleted the ${ticker} ${txn.type}`, {
           action: {
             label: 'Undo',
@@ -470,7 +479,7 @@ export default function TransactionsPanel({
                 split_factor: txn.split_factor,
                 notes: txn.notes,
               })
-                .then(() => onChanged())
+                .then(() => onChangedRef.current())
                 .catch(() => toast.error(`Could not restore the ${ticker} ${txn.type}`))
             },
           },

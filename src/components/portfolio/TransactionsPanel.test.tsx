@@ -796,6 +796,27 @@ describe('TransactionsPanel reorder — saving the replay order (spec §5)', () 
     // down nothing new to push it off (PortfolioPage skips a payload it is already showing).
     expect(order()).toEqual(['22'])
   })
+
+  it("reloads through the page's current onChanged when a save answers after a scope switch", async () => {
+    let answer: (value: TransactionOrderOut) => void = () => {}
+    vi.mocked(reorderTransactions).mockReturnValueOnce(
+      new Promise<TransactionOrderOut>((resolve) => {
+        answer = resolve
+      }),
+    )
+    const { onChanged: before, rerender } = renderLedger({ owner: 1 })
+    keyboardMove(NVDA_BUY, 'ArrowDown')
+    // The switch hands down the new scope's reload: the page's `reload` closes over its scope, and
+    // an old one would refetch scope 1 — superseding the joint load and painting scope 1 under the
+    // joint chips.
+    const after = vi.fn()
+    rerender({ owner: 'joint', transactions: [vooBuy], onChanged: after })
+    await act(async () => {
+      answer({ transactions: [vooBuy, nvdaBuy, nvdaSell], changed_positions: [] })
+    })
+    expect(after).toHaveBeenCalledTimes(1)
+    expect(before).not.toHaveBeenCalled()
+  })
 })
 
 /** A holding the server reports as changed — every figure equal unless a case says otherwise. */
@@ -971,6 +992,23 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
     await screen.findByText('Order restored')
     expect(order()).toEqual(['21', '22', '23'])
+  })
+
+  it("reloads through the page's current onChanged when Undo is pressed after a scope switch", async () => {
+    answerWith()
+    const { onChanged: before, rerender } = renderLedger({ owner: 1 })
+    keyboardMove(NVDA_BUY, 'ArrowDown')
+    await screen.findByText(QUIET_NVDA)
+    expect(before).toHaveBeenCalledTimes(1)
+    const after = vi.fn()
+    rerender({ owner: 'joint', transactions: [vooBuy], onChanged: after })
+    // The toast outlives the switch; its Undo still re-sends scope 1's order, in scope 1…
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Order restored')
+    expect(vi.mocked(reorderTransactions).mock.calls[1]).toEqual([[21, 22, 23], 1])
+    // …and the reload it asks for is the page's current one.
+    expect(after).toHaveBeenCalledTimes(1)
+    expect(before).toHaveBeenCalledTimes(1)
   })
 
   it.each([
