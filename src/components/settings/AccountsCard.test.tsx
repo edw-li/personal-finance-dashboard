@@ -948,6 +948,48 @@ it('an Undo holds the grips until the order it restored is on screen — a drop 
   expect(rowIds()).toEqual(['10', '11', '20', '21', '22'])
 })
 
+it('an older toast’s Undo overlapping a later save: the grips wait for BOTH, and the overtaken save is read back, not drawn', async () => {
+  vi.mocked(fetchAccounts).mockResolvedValue(ROSTER)
+  render(
+    <ToastProvider>
+      <AccountsCard people={[ME]} />
+    </ToastProvider>,
+  )
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+  // A first move, saved, with its Undo on screen.
+  press('Fidelity Traditional 401(k)', ' ', 'ArrowUp', ' ')
+  await screen.findByText('Moved Fidelity Traditional 401(k)')
+  await waitFor(() => expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBeNull())
+  expect(rowIds()).toEqual(['10', '20', '21', '22', '11'])
+  // A second move, its save held on the wire…
+  const save = deferred<{ data: AccountOut[]; batchId: string | null }>()
+  vi.mocked(reorderAccounts).mockReturnValueOnce(save.promise)
+  press('Traditional employer match', ' ', 'ArrowUp', ' ')
+  expect(rowIds()).toEqual(['10', '20', '22', '21', '11'])
+  // …while the first move's Undo runs, and the reload after it lands.
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await screen.findByText('Order restored')
+  await waitFor(() => expect(rowIds()).toEqual(['10', '11', '20', '21', '22']))
+  // The Undo is done, the second save is not: the grips stay parked.
+  expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBe('true')
+
+  // The save answers last. Its answer is older than the reload's (asked for before it), so it is
+  // not drawn — and since it may have committed after that reload read, the roster is read again.
+  const reread = deferred<AccountOut[]>()
+  vi.mocked(fetchAccounts).mockReturnValueOnce(reread.promise)
+  await act(async () => {
+    save.resolve({ data: [CHECKING, TRAD, TRAD_MATCH, TRAD_PRETAX, HSA], batchId: 'batch-10' })
+  })
+  expect(rowIds()).toEqual(['10', '11', '20', '21', '22'])
+  expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBe('true')
+  await act(async () => {
+    reread.resolve([CHECKING, TRAD, TRAD_MATCH, TRAD_PRETAX, HSA])
+  })
+  await waitFor(() => expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBeNull())
+  expect(rowIds()).toEqual(['10', '20', '22', '21', '11'])
+  expect(vi.mocked(fetchAccounts)).toHaveBeenCalledTimes(3)
+})
+
 it('parks the grips while the roster on screen failed to reload, until a Retry brings it back', async () => {
   vi.mocked(fetchAccounts)
     .mockResolvedValueOnce(ROSTER)

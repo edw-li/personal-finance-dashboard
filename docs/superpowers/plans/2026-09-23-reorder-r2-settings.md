@@ -273,8 +273,14 @@ export async function reorderCategories(ids: number[]): Promise<{ data: Category
      was dropped. That bump did discard the reload, but it could not stop the drop that follows.
      After an Undo, a quick drop PUT the pre-Undo order and silently re-applied the undone move.
    - A list that failed to reload also parks the grips (`disabled: busy || loadError !== null`).
+   - `busy` is a request COUNT (review I2): `track()` wraps every write, the toast's Undo
+     included. An Undo from an older toast can overlap a save, and a flag handed the grips back
+     when the first of the two settled.
+   - The save takes a turn in load's sequence, so an older answer never lands last: the save's
+     rows are drawn only if nothing was asked for after it. An overtaken save reads the list once
+     more instead, because the later reload may have read before this save committed.
    - Pinned per card: the grips stay parked until a write's reload lands; an Undo window test; a
-     failed-reload test.
+     failed-reload test; an older toast's Undo overlapping a later save.
 4. **Undo parks the grips until its reload lands.** "Order restored" is said as soon as the undo
    succeeds; the reload follows, and the grips come back once it has landed.
 5. **A save that logged nothing** (`batchId === null`) toasts "Moved {name}" with no Undo — the

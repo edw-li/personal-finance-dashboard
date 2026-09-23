@@ -149,7 +149,10 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   // failure is fixed by asking again; a refused save or a typo is not.
   const [loadError, setLoadError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  // How many of the roster's requests are still out. A count, not a flag: an Undo from an older
+  // toast can run beside a save, and a flag would hand the grips back when the FIRST one settled.
+  const [pending, setPending] = useState(0)
+  const busy = pending > 0
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState<AccountFormState>(EMPTY_ACCOUNT)
   // A drop renders its order AT ONCE; the order is retired the moment the server's rows land —
@@ -229,6 +232,15 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     // mount-only: two plain functions over stable setters (house idiom)
   }, [])
 
+  // Every roster write goes through here, its reload chained inside it: the card is busy from the
+  // request until the rows it changed are back on screen. The chains end in their own catch, so
+  // `request` never rejects — the second handler is belt and braces.
+  const track = (request: Promise<unknown>) => {
+    setPending((count) => count + 1)
+    const settle = () => setPending((count) => count - 1)
+    void request.then(settle, settle)
+  }
+
   const setText =
     (field: 'name' | 'person_id' | 'parent_account_id') => (value: string) => {
       setForm((f) => ({ ...f, [field]: value }))
@@ -279,41 +291,41 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       person_id: form.person_id === '' ? null : Number(form.person_id),
       parent_account_id: form.parent_account_id === '' ? null : Number(form.parent_account_id),
     }
-    setBusy(true)
     setFormError(null)
     const request = editingId !== null ? updateAccount(editingId, body) : createAccount(body)
-    request
-      .then(() => {
-        cancelEdit()
-        return load()
-      })
-      .catch((err: unknown) => setFormError(message(err, 'Save failed')))
-      .finally(() => setBusy(false))
+    track(
+      request
+        .then(() => {
+          cancelEdit()
+          return load()
+        })
+        .catch((err: unknown) => setFormError(message(err, 'Save failed'))),
+    )
   }
 
   // ONLY is_active on the wire: every other column is untouched here, and sending the
   // whole row back would let a stale render overwrite a concurrent edit (CardsPanel's rule).
   const toggleActive = (account: AccountOut) => {
-    setBusy(true)
     setFormError(null)
-    updateAccount(account.id, { is_active: !account.is_active })
-      .then(() => load())
-      .catch((err: unknown) => setFormError(message(err, 'Update failed')))
-      .finally(() => setBusy(false))
+    track(
+      updateAccount(account.id, { is_active: !account.is_active })
+        .then(() => load())
+        .catch((err: unknown) => setFormError(message(err, 'Update failed'))),
+    )
   }
 
   const remove = (account: AccountOut) => {
-    setBusy(true)
     // The guard sentence belongs to the SERVER ("account has N balance rows — deactivate it
     // instead") and it is about a row far down the table, so it rides the toast layer
     // rather than the form-level banner above the form.
-    deleteAccount(account.id)
-      .then(() => {
-        if (account.id === editingId) cancelEdit()
-        return load()
-      })
-      .catch((err: unknown) => toast.error(message(err, 'Delete failed')))
-      .finally(() => setBusy(false))
+    track(
+      deleteAccount(account.id)
+        .then(() => {
+          if (account.id === editingId) cancelEdit()
+          return load()
+        })
+        .catch((err: unknown) => toast.error(message(err, 'Delete failed'))),
+    )
   }
 
   const ownerName = new Map(people.map((p) => [p.id, p.name]))
@@ -395,14 +407,14 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   // The reorder route logs its batch (spec §3.2), so Undo is the change log's: the server
   // writes every renumbered row back, then the roster is read again — and the grips wait for it.
   const undoOrder = (batchId: string) => {
-    setBusy(true)
-    undoBatch(batchId)
-      .then(() => {
-        toast.info('Order restored')
-        return load()
-      })
-      .catch((err: unknown) => toast.error(undoFailed(err)))
-      .finally(() => setBusy(false))
+    track(
+      undoBatch(batchId)
+        .then(() => {
+          toast.info('Order restored')
+          return load()
+        })
+        .catch((err: unknown) => toast.error(undoFailed(err))),
+    )
   }
 
   // One PUT with EVERY account — active and retired, every group — in the new display order
@@ -410,33 +422,36 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   // never the form banner (remove's rule above).
   const saveOrder = (ids: number[], moved: number) => {
     const name = byId.get(moved)?.name ?? 'the account'
-    // A reload already on the wire describes the order BEFORE this drop; its answer must not
-    // land on top of the one this save brings back (load's seq guard drops it).
-    seqRef.current += 1
-    setBusy(true)
-    reorderAccounts(ids)
-      .then(({ data, batchId }) => {
-        setAccounts(data)
-        reorder.markSaved(moved)
-        toast.success(
-          `Moved ${name}`,
-          // No batch = nothing was logged, so there is nothing to undo (the wizard's contract).
-          batchId === null
-            ? undefined
-            : { action: { label: 'Undo', onAction: () => undoOrder(batchId) } },
-        )
-      })
-      .catch((err: unknown) => {
-        setPendingOrder(null) // back to the last order the server confirmed…
-        // …then read again, whatever the failure: a 409 means the roster changed under this one
-        // (another tab — the server's own sentence, spec §8.3), and a 5xx can arrive after the
-        // write committed. Either way the rows drawn next are the server's.
-        toast.error(
-          err instanceof ApiError && err.status === 409 ? err.message : orderSaveFailed(err),
-        )
-        return load()
-      })
-      .finally(() => setBusy(false))
+    // The save takes a turn in load's sequence, so an older answer never lands last: its rows are
+    // drawn only if nothing was asked for after it. Something that was — the reload after an
+    // older toast's Undo — may have read the roster BEFORE this save committed, so an overtaken
+    // save reads the roster once more instead of drawing its own answer.
+    const seq = ++seqRef.current
+    track(
+      reorderAccounts(ids)
+        .then(({ data, batchId }) => {
+          toast.success(
+            `Moved ${name}`,
+            // No batch = nothing was logged, so there is nothing to undo (the wizard's contract).
+            batchId === null
+              ? undefined
+              : { action: { label: 'Undo', onAction: () => undoOrder(batchId) } },
+          )
+          if (seq !== seqRef.current) return load()
+          setAccounts(data)
+          reorder.markSaved(moved)
+        })
+        .catch((err: unknown) => {
+          setPendingOrder(null) // back to the last order the server confirmed…
+          // …then read again, whatever the failure: a 409 means the roster changed under this
+          // one (another tab — the server's own sentence, spec §8.3), and a 5xx can arrive after
+          // the write committed. Either way the rows drawn next are the server's.
+          toast.error(
+            err instanceof ApiError && err.status === 409 ? err.message : orderSaveFailed(err),
+          )
+          return load()
+        }),
+    )
   }
 
   const reorder = useReorder({

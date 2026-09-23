@@ -543,6 +543,47 @@ it('an Undo holds the grips until the order it restored is on screen — a drop 
   expect(rowIds()).toEqual(['5', '6', '7'])
 })
 
+it('an older toast’s Undo overlapping a later save: the grips wait for BOTH, and the overtaken save is read back, not drawn', async () => {
+  render(
+    <ToastProvider>
+      <CategoriesCard />
+    </ToastProvider>,
+  )
+  await screen.findByRole('table')
+  // A first move, saved, with its Undo on screen.
+  press('Pets', ' ', 'ArrowUp', ' ')
+  await screen.findByText('Moved Pets')
+  await waitFor(() => expect(grip('Taxes').getAttribute('aria-disabled')).toBeNull())
+  expect(rowIds()).toEqual(['6', '5', '7'])
+  // A second move, its save held on the wire…
+  const save = deferred<{ data: CategoryOut[]; batchId: string | null }>()
+  vi.mocked(reorderCategories).mockReturnValueOnce(save.promise)
+  press('Taxes', ' ', 'ArrowUp', ' ')
+  expect(rowIds()).toEqual(['6', '7', '5'])
+  // …while the first move's Undo runs, and the reload after it lands.
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await screen.findByText('Order restored')
+  await waitFor(() => expect(rowIds()).toEqual(['5', '6', '7']))
+  // The Undo is done, the second save is not: the grips stay parked.
+  expect(grip('Groceries').getAttribute('aria-disabled')).toBe('true')
+
+  // The save answers last. Its answer is older than the reload's (asked for before it), so it is
+  // not drawn — and since it may have committed after that reload read, the list is read again.
+  const reread = deferred<CategoryOut[]>()
+  vi.mocked(fetchCategories).mockReturnValueOnce(reread.promise)
+  await act(async () => {
+    save.resolve({ data: [PETS, TAXES, GROCERIES], batchId: 'batch-8' })
+  })
+  expect(rowIds()).toEqual(['5', '6', '7'])
+  expect(grip('Groceries').getAttribute('aria-disabled')).toBe('true')
+  await act(async () => {
+    reread.resolve([PETS, TAXES, GROCERIES])
+  })
+  await waitFor(() => expect(grip('Groceries').getAttribute('aria-disabled')).toBeNull())
+  expect(rowIds()).toEqual(['6', '7', '5'])
+  expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(3)
+})
+
 it('parks the grips while the list on screen failed to reload, until a Retry brings it back', async () => {
   vi.mocked(fetchCategories)
     .mockResolvedValueOnce([GROCERIES, PETS, TAXES])

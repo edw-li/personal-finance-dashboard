@@ -77,7 +77,10 @@ export default function CategoriesCard() {
   // failure is fixed by asking again; a refused save or a typo is not.
   const [loadError, setLoadError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  // How many of the card's requests are still out. A count, not a flag: an Undo from an older
+  // toast can run beside a save, and a flag would hand the grips back when the FIRST one settled.
+  const [pending, setPending] = useState(0)
+  const busy = pending > 0
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState<CategoryFormState>(EMPTY_CATEGORY)
   // A drop renders its order AT ONCE; the order is retired the moment the server's rows land —
@@ -118,6 +121,15 @@ export default function CategoriesCard() {
     // mount-only: a plain function over stable setters (house idiom)
   }, [])
 
+  // Every write goes through here, its reload chained inside it: the card is busy from the
+  // request until the rows it changed are back on screen. The chains end in their own catch, so
+  // `request` never rejects — the second handler is belt and braces.
+  const track = (request: Promise<unknown>) => {
+    setPending((count) => count + 1)
+    const settle = () => setPending((count) => count - 1)
+    void request.then(settle, settle)
+  }
+
   const setText = (field: keyof CategoryFormState) => (value: string) => {
     setForm((f) => ({ ...f, [field]: value }))
     setFormError(null)
@@ -137,26 +149,26 @@ export default function CategoriesCard() {
     // The name alone: the position is the table's now — a new category lands at the end and
     // is dragged into place (2026-09-23 reorder spec §3.3, §4.1).
     const body = { name }
-    setBusy(true)
     setFormError(null)
     const request = editingId !== null ? updateCategory(editingId, body) : createCategory(body)
-    request
-      .then(() => {
-        cancelEdit()
-        return load()
-      })
-      .catch((err: unknown) => setFormError(message(err, 'Save failed')))
-      .finally(() => setBusy(false))
+    track(
+      request
+        .then(() => {
+          cancelEdit()
+          return load()
+        })
+        .catch((err: unknown) => setFormError(message(err, 'Save failed'))),
+    )
   }
 
   // ONLY is_active on the wire: the name and position are untouched columns here.
   const toggleActive = (category: CategoryOut) => {
-    setBusy(true)
     setFormError(null)
-    updateCategory(category.id, { is_active: !category.is_active })
-      .then(() => load())
-      .catch((err: unknown) => setFormError(message(err, 'Update failed')))
-      .finally(() => setBusy(false))
+    track(
+      updateCategory(category.id, { is_active: !category.is_active })
+        .then(() => load())
+        .catch((err: unknown) => setFormError(message(err, 'Update failed'))),
+    )
   }
 
   // ONLY kind on the wire — toggleActive's rule: the name and position are untouched columns
@@ -165,38 +177,38 @@ export default function CategoriesCard() {
   // change-log batch offering to "undo" it (L2 hooks cover PATCH /categories, spec §6).
   const setKind = (category: CategoryOut, next: CategoryKind) => {
     if (next === category.kind) return
-    setBusy(true)
     setFormError(null)
-    updateCategory(category.id, { kind: next })
-      .then(() => load())
-      .catch((err: unknown) => setFormError(message(err, 'Update failed')))
-      .finally(() => setBusy(false))
+    track(
+      updateCategory(category.id, { kind: next })
+        .then(() => load())
+        .catch((err: unknown) => setFormError(message(err, 'Update failed'))),
+    )
   }
 
   const remove = (category: CategoryOut) => {
-    setBusy(true)
     // The server's guard sentence names the monthly-row count; it is about a table row,
     // so it rides the toast layer rather than the form banner (AccountsCard's rule).
-    deleteCategory(category.id)
-      .then(() => {
-        if (category.id === editingId) cancelEdit()
-        return load()
-      })
-      .catch((err: unknown) => toast.error(message(err, 'Delete failed')))
-      .finally(() => setBusy(false))
+    track(
+      deleteCategory(category.id)
+        .then(() => {
+          if (category.id === editingId) cancelEdit()
+          return load()
+        })
+        .catch((err: unknown) => toast.error(message(err, 'Delete failed'))),
+    )
   }
 
   // The reorder route logs its batch (spec §3.2), so Undo is the change log's: the server
   // writes every renumbered row back, then the list is read again — and the grips wait for it.
   const undoOrder = (batchId: string) => {
-    setBusy(true)
-    undoBatch(batchId)
-      .then(() => {
-        toast.info('Order restored')
-        return load()
-      })
-      .catch((err: unknown) => toast.error(undoFailed(err)))
-      .finally(() => setBusy(false))
+    track(
+      undoBatch(batchId)
+        .then(() => {
+          toast.info('Order restored')
+          return load()
+        })
+        .catch((err: unknown) => toast.error(undoFailed(err))),
+    )
   }
 
   // One PUT with every category — active and retired — in the dropped order (spec §4.1). Its
@@ -204,33 +216,36 @@ export default function CategoriesCard() {
   // banner (the delete guard's rule above).
   const saveOrder = (ids: number[], moved: number) => {
     const name = nameOf.get(moved) ?? 'the category'
-    // A reload already on the wire describes the order BEFORE this drop; its answer must not
-    // land on top of the one this save brings back (load's seq guard drops it).
-    seqRef.current += 1
-    setBusy(true)
-    reorderCategories(ids)
-      .then(({ data, batchId }) => {
-        setCategories(data)
-        reorder.markSaved(moved)
-        toast.success(
-          `Moved ${name}`,
-          // No batch = nothing was logged, so there is nothing to undo (the wizard's contract).
-          batchId === null
-            ? undefined
-            : { action: { label: 'Undo', onAction: () => undoOrder(batchId) } },
-        )
-      })
-      .catch((err: unknown) => {
-        setPendingOrder(null) // back to the last order the server confirmed…
-        // …then read again, whatever the failure: a 409 means the list changed under this one
-        // (another tab — the server's own sentence, spec §8.3), and a 5xx can arrive after the
-        // write committed. Either way the rows drawn next are the server's.
-        toast.error(
-          err instanceof ApiError && err.status === 409 ? err.message : orderSaveFailed(err),
-        )
-        return load()
-      })
-      .finally(() => setBusy(false))
+    // The save takes a turn in load's sequence, so an older answer never lands last: its rows are
+    // drawn only if nothing was asked for after it. Something that was — the reload after an
+    // older toast's Undo — may have read the list BEFORE this save committed, so an overtaken
+    // save reads the list once more instead of drawing its own answer.
+    const seq = ++seqRef.current
+    track(
+      reorderCategories(ids)
+        .then(({ data, batchId }) => {
+          toast.success(
+            `Moved ${name}`,
+            // No batch = nothing was logged, so there is nothing to undo (the wizard's contract).
+            batchId === null
+              ? undefined
+              : { action: { label: 'Undo', onAction: () => undoOrder(batchId) } },
+          )
+          if (seq !== seqRef.current) return load()
+          setCategories(data)
+          reorder.markSaved(moved)
+        })
+        .catch((err: unknown) => {
+          setPendingOrder(null) // back to the last order the server confirmed…
+          // …then read again, whatever the failure: a 409 means the list changed under this one
+          // (another tab — the server's own sentence, spec §8.3), and a 5xx can arrive after the
+          // write committed. Either way the rows drawn next are the server's.
+          toast.error(
+            err instanceof ApiError && err.status === 409 ? err.message : orderSaveFailed(err),
+          )
+          return load()
+        }),
+    )
   }
 
   const reorder = useReorder({
