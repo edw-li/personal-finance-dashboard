@@ -74,15 +74,16 @@ vi.mock('../components/EChart', async () => {
         'data-bar-data': JSON.stringify(
           (option.series ?? []).filter((s) => s.type === 'bar').map((s) => s.data ?? []),
         ),
-        // A7: the y-axis clamps, sampled at a fixed extent so the pin reads numbers.
+        // The y-axis clamps: a fixed number (2026-09-23 spec §C3's robust axes), or a function
+        // sampled at a fixed extent so the pin reads numbers either way.
         'data-y-floor':
           typeof option.yAxis?.min === 'function'
             ? String(option.yAxis.min({ min: -1.8, max: 0.6 }))
-            : '',
+            : typeof option.yAxis?.min === 'number' ? String(option.yAxis.min) : '',
         'data-y-ceiling':
           typeof option.yAxis?.max === 'function'
             ? String(option.yAxis.max({ min: -1.8, max: 0.6 }))
-            : '',
+            : typeof option.yAxis?.max === 'number' ? String(option.yAxis.max) : '',
         onClick: () => onClick?.({ dataIndex: 0 }),
         onMouseEnter: () => onLegendChange?.({ 'Net pay': false, 'Sustainable spend': true }),
         // A SECOND legendselectchanged shape, carrying a map disjoint from mouseEnter's:
@@ -599,17 +600,19 @@ describe('SpendingPage — absent ≠ zero and axis honesty (2026-08-31 tier-1 A
     expect(screen.getByText('$2,665.00')).toBeTruthy()
   })
 
-  it('lets the savings-rate floor follow the data below −100%, ceiling capped (A7)', async () => {
+  it('clamps the savings-rate floor at −100% and tops it a nice step above the data (§C3)', async () => {
+    // 2026-09-23 spec §C3 replaces A7's expanding floor: one −1,073% month set the axis to
+    // −1100% and flattened three years into a band. The floor is FIXED now (a month below it
+    // draws off the edge with a marker), and the top is the next nice step over the best
+    // month (57% → 100%), never the data max itself.
     renderPage()
     await screen.findByText('Where Jul 2026 went')
     await openView('Trends')
     const savings = screen
       .getAllByTestId('echart')
       .find((el) => (el.getAttribute('data-y-floor') ?? '') !== '')
-    // Sampled at extent {min: −1.8, max: 0.6}: the floor expands to the whole −200% step
-    // (Math.min(−1, Math.floor(−1.8))); the ceiling keeps hugging the data under +100%.
-    expect(savings?.getAttribute('data-y-floor')).toBe('-2')
-    expect(savings?.getAttribute('data-y-ceiling')).toBe('0.6')
+    expect(savings?.getAttribute('data-y-floor')).toBe('-1')
+    expect(savings?.getAttribute('data-y-ceiling')).toBe('1')
   })
 })
 
