@@ -16,11 +16,10 @@ import type {
   PersonOut,
   PortfolioAccountOut,
 } from '../../types/api'
-import { nestComponents } from '../../utils/accounts'
+import { rosterGroups, rosterItems } from '../../utils/accounts'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
 import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
-import type { ReorderItem } from '../reorder/reorderMath'
 import { useReorder } from '../reorder/useReorder'
 import { useToast } from '../ToastProvider'
 import { FeedBanner } from '../shell/Feed'
@@ -79,53 +78,6 @@ function undoFailed(err: unknown): string {
   return err instanceof ApiError && err.status >= 400 && err.status < 500
     ? err.message
     : `Couldn't undo the move — ${reason(err)}.`
-}
-
-/** One drag unit of the roster (2026-09-23 reorder spec §4.2): a top-level account and the
- *  components nested under it, which travel with it and move only among themselves. */
-interface RosterUnit {
-  account: AccountOut
-  components: AccountOut[]
-  /** nestComponents could not place it — its parent is itself nested (a chain) or the link
-   *  loops back (a cycle). Kept at the END of its group with a grip that has nowhere to go:
-   *  the roster is where that link gets fixed, and the order PUT must name every account. */
-  unplaced: boolean
-}
-
-interface RosterGroup {
-  group: AccountGroup
-  units: RosterUnit[]
-}
-
-/**
- * The roster the way the Monthly update walks it (spec §4.2): one block per non-empty group in
- * GROUP_ORDER, API order inside it, components nested under their parent by nestComponents run
- * PER GROUP — so a component whose parent sits in another group stays top-level in its own
- * (nestComponents' contract for an absent parent), and one whose parent is retired stays
- * nested, because a retired parent is still listed here.
- */
-function rosterGroups(accounts: AccountOut[]): RosterGroup[] {
-  return GROUP_ORDER.flatMap((group) => {
-    const members = accounts.filter((account) => account.group === group)
-    if (members.length === 0) return []
-    const present = new Set(members.map((account) => account.id))
-    const units: RosterUnit[] = []
-    for (const account of nestComponents(members)) {
-      // nestComponents emits each parent followed by its nested components, so a nested row
-      // always belongs to the unit opened just before it.
-      const nested = account.parent_account_id !== null && present.has(account.parent_account_id)
-      const carrier = units.at(-1)
-      if (nested && carrier !== undefined) carrier.components.push(account)
-      else units.push({ account, components: [], unplaced: false })
-    }
-    const placed = new Set(
-      units.flatMap((unit) => [unit.account.id, ...unit.components.map((c) => c.id)]),
-    )
-    for (const account of members) {
-      if (!placed.has(account.id)) units.push({ account, components: [], unplaced: true })
-    }
-    return [{ group, units }]
-  })
 }
 
 /**
@@ -388,21 +340,12 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   // primary person, and this table is the only place that can be undone.
   const primaryName = people.find((p) => p.is_primary)?.name ?? 'the primary person'
 
-  // What the table draws: the dropped order while its save is in flight, else the server's.
+  // What the table draws: the dropped order while its save is in flight, else the server's —
+  // grouped the way the Monthly update walks it, and the hook's items derived from exactly those
+  // rows every render (src/utils/accounts.ts).
   const shown = pendingOrder ?? accounts
   const groups = rosterGroups(shown)
-  // The hook's items, in DISPLAY order (reorder spec §2.2): a top-level account ranges over its
-  // group and carries its components; a component ranges over its siblings only.
-  const items: ReorderItem<number>[] = groups.flatMap(({ group, units }) =>
-    units.flatMap(({ account, components, unplaced }) => [
-      {
-        id: account.id,
-        range: unplaced ? `unplaced:${account.id}` : group,
-        carries: components.map((component) => component.id),
-      },
-      ...components.map((component) => ({ id: component.id, range: `parent:${account.id}` })),
-    ]),
-  )
+  const items = rosterItems(groups)
 
   // The reorder route logs its batch (spec §3.2), so Undo is the change log's: the server
   // writes every renumbered row back, then the roster is read again — and the grips wait for it.

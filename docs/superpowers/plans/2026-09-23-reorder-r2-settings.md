@@ -338,6 +338,10 @@ export async function reorderCategories(ids: number[]): Promise<{ data: Category
 18. **`rangeLabelOf` answers `undefined` for an `unplaced:` range**, so the announcement has no
     range clause. It answers the group label for a group and `{parent}'s components` for a
     `parent:` range (§8.2).
+19. **The roster derivation is pure and lives beside `nestComponents`.** (Code-quality review M3,
+    an approved fence extension.) `rosterGroups(accounts)` and `rosterItems(groups)` are in
+    `src/utils/accounts.ts`, unit-tested in `accounts.test.ts`, including against R0's
+    `contractProblems`. The card calls both on the rows it draws, every render.
 
 ---
 
