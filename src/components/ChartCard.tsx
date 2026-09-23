@@ -16,6 +16,7 @@ import ChartSurface from './ChartSurface'
 import { useDetailPanel } from './details/DetailPanelProvider'
 import SelectionDetail from './details/SelectionDetail'
 import { usePageFrame } from './shell/PageFrame'
+import { inputSince } from './shell/holdPosition'
 import { useLocalSectionVisible } from './shell/localSectionContext'
 import './panels.css'
 
@@ -123,6 +124,22 @@ export default function ChartCard({
   // The card itself: what a drill asks the detail panel to hold in place while the dock opens
   // and the page narrows around it (2026-09-23 spec §C10).
   const cardRef = useRef<HTMLElement>(null)
+  // Since when the card has been in view with a drawn chart (review round 1); null while it is not.
+  // The hold is for a selection the READER changes under a chart already in front of them — a
+  // click, Show details, a month-ribbon pick: an input after this moment. On arrival — a new page,
+  // Back, a section coming into view, a ?month= the URL carried landing after the data — the page's
+  // own scroll restore has to win: holding the chart there put Back to /spending?month=… at 583
+  // instead of the 520 it left, and "Open spending" at 65 instead of the page's top.
+  const settledAtRef = useRef<number | null>(null)
+  const drawn = option !== null
+  // Asked by the detail panel at the moment the dock moves the page (its open, its last close).
+  const holdAnchor = useCallback((): HTMLElement | null => {
+    const card = cardRef.current
+    const settledAt = settledAtRef.current
+    if (card === null || settledAt === null || !inputSince(settledAt)) return null
+    const { top, bottom } = card.getBoundingClientRect()
+    return bottom > 0 && top < window.innerHeight ? card : null
+  }, [])
   const showTable = tableOpen && csv !== undefined && option !== null
   const table = showTable && csv ? csv() : null
   const dismissSelection = useCallback(() => {
@@ -136,7 +153,7 @@ export default function ChartCard({
   const inspect = (next: ChartSelection) => {
     setPinned({ scope: selectionScopeKey, value: next })
     onSelectionChange?.(next)
-    if (!expanded && activeView) openPanel?.({ id: panelId, title: next.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: cardRef.current })
+    if (!expanded && activeView) openPanel?.({ id: panelId, title: next.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: holdAnchor })
   }
   const selectionContent = useMemo(() => selected === null ? null : renderSelection
     ? renderSelection(selected)
@@ -144,8 +161,14 @@ export default function ChartCard({
   [selected, renderSelection, title, clearSelection])
   useEffect(() => {
     if (!selected || expanded || !activeView) return
-    openPanel?.({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: cardRef.current })
-  }, [selected, expanded, activeView, openPanel, panelId, title, panelContent, selectionScopeKey])
+    openPanel?.({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: holdAnchor })
+  }, [selected, expanded, activeView, openPanel, panelId, title, panelContent, selectionScopeKey, holdAnchor])
+  // AFTER the open effect on purpose: a commit that opens the panel still reads what the commit
+  // before it left, so the open that arrives with the page, with the chart's first drawing or
+  // with its section never holds. Stamped once per settling, not per render.
+  useEffect(() => {
+    settledAtRef.current = activeView && drawn ? performance.now() : null
+  }, [activeView, drawn])
   useEffect(() => {
     if (previousScope.current !== selectionScopeKey) {
       previousScope.current = selectionScopeKey
@@ -253,7 +276,7 @@ export default function ChartCard({
       {selected && <div className="chart-selection-summary">
         {/* Live region on the TEXT only (audit D3): each pin announces "Pinned: …", never the buttons. */}
         <span role="status">Pinned: {selected.label}</span>
-        {panel && !expanded && <button type="button" className="button" onClick={() => panel.open({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: cardRef.current })}>Show details</button>}
+        {panel && !expanded && <button type="button" className="button" onClick={() => panel.open({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: holdAnchor })}>Show details</button>}
         <button type="button" className="button" onClick={clearSelection}>Clear selection</button>
       </div>}
       {selected && (!panel || expanded) && <div className="chart-inline-selection">{selectionContent}</div>}

@@ -343,6 +343,26 @@ describe('holding the drilled element while the dock reflows the page', () => {
     expect(holdPosition).toHaveBeenLastCalledWith(screen.getByTestId('chart'))
   })
 
+  it('reads a getter anchor when the dock moves the page, and holds nothing when it answers null', () => {
+    let answer: HTMLElement | null = null
+    function GetterHarness() {
+      const panel = useDetailPanel()!
+      return <>
+        <section data-testid="chart">chart</section>
+        <button type="button" onClick={() => panel.open({ id: 'chart', title: 'August', content: <p>detail</p>, anchor: () => answer })}>Drill</button>
+      </>
+    }
+    render(<DetailPanelProvider><GetterHarness /></DetailPanelProvider>)
+    // The requester declines at open time (ChartCard on arrival): nothing is held at all.
+    fireEvent.click(screen.getByRole('button', { name: 'Drill' }))
+    expect(holdPosition).not.toHaveBeenCalled()
+    // …but is asked again when the dock lets go, and holds what it names then.
+    answer = screen.getByTestId('chart')
+    fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
+    expect(holdPosition).toHaveBeenCalledTimes(1)
+    expect(holdPosition).toHaveBeenLastCalledWith(screen.getByTestId('chart'))
+  })
+
   it('does not hold again for the surface already open, and never for an overlay', () => {
     render(<DetailPanelProvider><AnchoredHarness /></DetailPanelProvider>)
     fireEvent.click(screen.getByRole('button', { name: 'Drill' }))

@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EChartsOption } from '../charts/echarts'
 import { hintLabel } from './InfoHint'
 
@@ -13,7 +13,11 @@ vi.mock('./EChart', async () => {
 })
 vi.mock('../utils/download', () => ({ toCsv: vi.fn(() => 'CSV'), downloadDataUrl: vi.fn(), downloadText: vi.fn() }))
 // The anchoring loop is holdPosition's own unit; here only WHAT the card asks it to hold matters.
-vi.mock('./shell/holdPosition', () => ({ holdPosition: vi.fn(() => () => {}) }))
+// The reader's-input clock stays real: pressing things is how these tests say who changed what.
+vi.mock('./shell/holdPosition', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./shell/holdPosition')>()),
+  holdPosition: vi.fn(() => () => {}),
+}))
 
 import ChartCard from './ChartCard'
 import PageFrame from './shell/PageFrame'
@@ -21,6 +25,7 @@ import { CHART_CARD_ROWS } from './skeletonMetrics'
 import DetailPanelProvider, { useDetailPanel } from './details/DetailPanelProvider'
 import type { ChartSelection } from '../types/metrics'
 import { holdPosition } from './shell/holdPosition'
+import { LocalSectionVisibility } from './shell/localSectionContext'
 
 const OPTION = { series: [] } as EChartsOption
 const base = { title: 'Net worth', hint: 'What it shows.', ariaLabel: 'Line chart of net worth', empty: 'No snapshots yet.', exportName: 'net-worth' }
@@ -181,18 +186,90 @@ describe('ChartCard persistent interactions', () => {
     expect(document.querySelector('.detail-panel')).toBeTruthy()
   })
   // 2026-09-23 spec §C10: a drill docks the detail panel and the page narrows around the chart —
-  // the card names ITSELF as the element to hold in place while that happens.
-  it('names its own card as the anchor a drill holds in place', () => {
-    const width = window.innerWidth
-    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true }) // wide enough to dock
-    try {
+  // the card names ITSELF as the element to hold in place while that happens. Review round 1: only
+  // for a selection that changes UNDER a chart already on screen. On arrival — a new page, Back,
+  // a section coming into view — the page's own scroll restore must win, so nothing is held.
+  describe('holding the drilled chart (2026-09-23 spec §C10)', () => {
+    const card = () => document.querySelector('section.chart-card') as HTMLElement
+    // jsdom lays nothing out; the card sits where each test says.
+    const place = (top: number, bottom: number) =>
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+        return (this.matches('section.chart-card') ? { top, bottom } : { top: 0, bottom: 0 }) as DOMRect
+      })
+    let width = 0
+    beforeEach(() => {
+      width = window.innerWidth
+      Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true }) // wide enough to dock
       vi.mocked(holdPosition).mockClear()
+    })
+    afterEach(() => {
+      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true })
+      vi.restoreAllMocks()
+    })
+
+    it('holds its own card when the reader drills into the chart', () => {
+      place(120, 560)
       render(<DetailPanelProvider><ChartCard {...base} option={history} selectionAdapter={() => selection} /></DetailPanelProvider>)
       fireEvent.click(screen.getByTestId('echart'))
-      expect(holdPosition).toHaveBeenCalledWith(document.querySelector('section.chart-card'))
-    } finally {
-      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true })
-    }
+      expect(holdPosition).toHaveBeenCalledWith(card())
+    })
+
+    it('opens a selection it arrived with without holding the page', () => {
+      place(120, 560)
+      render(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} /></DetailPanelProvider>)
+      expect(document.querySelector('.detail-panel')).toBeTruthy()
+      expect(holdPosition).not.toHaveBeenCalled()
+    })
+
+    it('holds the card when the reader changes its selection after it drew — a month-ribbon pick', () => {
+      place(120, 560)
+      const { rerender } = render(<DetailPanelProvider><ChartCard {...base} option={history} selection={null} /></DetailPanelProvider>)
+      fireEvent.pointerDown(document.body) // the ribbon chip, pressed
+      rerender(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} /></DetailPanelProvider>)
+      expect(holdPosition).toHaveBeenCalledWith(card())
+    })
+
+    it('holds nothing for a selection the page lands on its own after the chart drew — Back, a link', () => {
+      // /spending?month=… : the chart draws, then the month's figures land, with no input between.
+      place(120, 560)
+      const { rerender } = render(<DetailPanelProvider><ChartCard {...base} option={history} selection={null} /></DetailPanelProvider>)
+      rerender(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} /></DetailPanelProvider>)
+      expect(document.querySelector('.detail-panel')).toBeTruthy()
+      expect(holdPosition).not.toHaveBeenCalled()
+    })
+
+    it('holds nothing for a selection that arrives with the chart’s first drawing', () => {
+      place(120, 560)
+      const { rerender } = render(<DetailPanelProvider><ChartCard {...base} option={null} busy selection={null} /></DetailPanelProvider>)
+      rerender(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} /></DetailPanelProvider>)
+      expect(document.querySelector('.detail-panel')).toBeTruthy()
+      expect(holdPosition).not.toHaveBeenCalled()
+    })
+
+    it('holds nothing for a chart scrolled out of view', () => {
+      place(-900, -40)
+      const { rerender } = render(<DetailPanelProvider><ChartCard {...base} option={history} selection={null} /></DetailPanelProvider>)
+      fireEvent.pointerDown(document.body)
+      rerender(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} /></DetailPanelProvider>)
+      expect(document.querySelector('.detail-panel')).toBeTruthy()
+      expect(holdPosition).not.toHaveBeenCalled()
+    })
+
+    it('holds nothing when its section comes into view with a selection', () => {
+      place(120, 560)
+      const view = (visible: boolean) => (
+        <DetailPanelProvider>
+          <LocalSectionVisibility.Provider value={visible}>
+            <ChartCard {...base} option={history} selection={selection} />
+          </LocalSectionVisibility.Provider>
+        </DetailPanelProvider>
+      )
+      const { rerender } = render(view(false))
+      fireEvent.pointerDown(document.body) // the section's tab, pressed
+      rerender(view(true))
+      expect(document.querySelector('.detail-panel')).toBeTruthy()
+      expect(holdPosition).not.toHaveBeenCalled()
+    })
   })
   it('expanded → the chart fills the dialog; collapsed → the card height comes back', () => {
     render(<ChartCard {...base} option={OPTION} height={320} />)

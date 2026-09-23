@@ -3,6 +3,22 @@ import { MOTION_MS } from '../../theme/motion'
 // The reader's own input ends a hold at once: their scroll always wins over ours.
 const INPUT_EVENTS = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const
 
+// When the reader last pressed, pointed or typed anywhere on the page (review round 1). A drill
+// holds its chart only for a change THEY made after the chart was already in front of them — a
+// click, Show details, a month-ribbon pick — never for one the page made on its own: a new page,
+// Back, a ?month= the URL arrived with landing after the data does. ChartCard reads it.
+let lastInput = Number.NEGATIVE_INFINITY
+if (typeof window !== 'undefined') {
+  for (const type of ['pointerdown', 'keydown', 'click'] as const) {
+    window.addEventListener(type, () => { lastInput = performance.now() }, { capture: true, passive: true })
+  }
+}
+
+/** Whether the reader has pressed, pointed or typed since `time` (a performance.now() stamp). */
+export function inputSince(time: number): boolean {
+  return lastInput > time
+}
+
 /** The dock's margin transition (--t-page), then ECharts' refit and a settle frame. */
 export const HOLD_MS = MOTION_MS.page + 360
 

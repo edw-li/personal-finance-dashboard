@@ -1,5 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { holdPosition } from './holdPosition'
+import { holdPosition, inputSince } from './holdPosition'
+
+// Review round 1: a drill holds the chart only for a change the READER made. The page landing on
+// a ?month= it arrived with (a new page, Back, a link) comes with no press after the chart drew.
+describe('inputSince', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('answers whether the reader pressed, pointed or typed after a moment', () => {
+    let now = 1000
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const settled = now
+    expect(inputSince(settled)).toBe(false)
+    now = 1200
+    window.dispatchEvent(new Event('pointerdown'))
+    expect(inputSince(settled)).toBe(true)
+    // A later moment has seen no input yet…
+    now = 1500
+    expect(inputSince(now)).toBe(false)
+    // …until a key or a click.
+    now = 1600
+    window.dispatchEvent(new Event('keydown'))
+    expect(inputSince(1500)).toBe(true)
+    now = 1700
+    window.dispatchEvent(new Event('click'))
+    expect(inputSince(1650)).toBe(true)
+  })
+})
 
 // 2026-09-23 spec §C10 (charts F1): a chart drill docks a detail panel, the page narrows, text
 // above the chart rewraps and the clicked chart used to slide ~350px down under the pointer.
