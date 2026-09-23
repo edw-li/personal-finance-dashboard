@@ -282,7 +282,7 @@ describe('OverviewCustomize — dragging (2026-09-23 spec §6, §2.3–§2.4)', 
     expect(onChange).not.toHaveBeenCalled()
   })
 
-  it('lifting a row makes every box of its own list inert until it lands', () => {
+  it('lifting a row makes every box of its own list inert until the lift ends', () => {
     render(<Harness initial={{ tiles: ['net_worth', 'portfolio'], cards: ['ytd'] }} />)
     openPopover()
     layoutRows()
@@ -313,9 +313,12 @@ describe('OverviewCustomize — dragging (2026-09-23 spec §6, §2.3–§2.4)', 
     expect(live('Summary tiles')).toBe('Net worth, position 4 of 4.')
     fireEvent.pointerUp(grip('Net worth'), { pointerId: 1, clientY: 900 })
     expect(onChange).not.toHaveBeenCalled() // still easing into its gap
+    // The lift lasts through the settle: a tick now would still pull the list out from under it.
+    expect(box('Portfolio').disabled).toBe(true)
     act(() => {
       vi.advanceTimersByTime(MOTION_MS.fast)
     })
+    expect(box('Portfolio').disabled).toBe(false)
     expect(onChange).toHaveBeenCalledTimes(1)
     expect(onChange).toHaveBeenCalledWith({
       tiles: ['portfolio', 'living_spending', 'tax', 'net_worth'],
