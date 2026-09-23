@@ -72,7 +72,14 @@ vi.mock('../components/EChart', async () => {
   }
 })
 
+// The real builder, watched: a zoom or a range chip must not rebuild the chart's events.
+vi.mock('../components/portfolio/performanceEvents', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../components/portfolio/performanceEvents')>()
+  return { ...actual, buildPerformanceEvents: vi.fn(actual.buildPerformanceEvents) }
+})
+
 import { fetchHousehold } from '../api/household'
+import { buildPerformanceEvents } from '../components/portfolio/performanceEvents'
 import { fetchAllocationData, fetchClassifications, fetchEmployerExposure } from '../api/allocation'
 import {
   fetchAllocation,
@@ -859,6 +866,21 @@ it('says since when the history is shorter than the range chip', async () => {
       'Since Aug 17, 2026: behind the same money in VOO by $30',
     ),
   )
+})
+
+// Code review 4: the events depend on the ledgers and the dates, never on the window — a range
+// chip, a ctrl+wheel zoom or a pan used to rebuild every one of them.
+it('keeps the chart events across range changes: they are built from the ledgers, not the window', async () => {
+  renderPage()
+  const card = () => screen.getByText('Performance').closest('section') as HTMLElement
+  await waitFor(() => expect(card().querySelector('.chart-lede')?.textContent).toMatch(/^Since/))
+  const built = vi.mocked(buildPerformanceEvents).mock.calls.length
+  expect(built).toBeGreaterThan(0)
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Time range' })).getByRole('button', { name: 'All' }),
+  )
+  await waitFor(() => expect(card().querySelector('.chart-lede')?.textContent).toMatch(/^Behind|^Ahead|^Level/))
+  expect(vi.mocked(buildPerformanceEvents).mock.calls.length).toBe(built)
 })
 
 // ── Performance events on a rug (2026-09-23 spec §C8) ─────────────────────────────────────

@@ -504,18 +504,20 @@ export default function PortfolioPage() {
   // effect on [option], so a fresh object per render would redraw the chart on every tab
   // click. The zoom is spread on here rather than inside the builder, which stays pure and
   // shared with OverviewPage (whose copy is a fixed snapshot, no chips).
-  const performanceOption = useMemo(() => {
+  // Markers come from the ledgers this page ALREADY fetches in the same Promise.all —
+  // Overview keeps the short call and never starts fetching them (spec Decision log).
+  // Dividends and ex-dividend notices go to the rug; a notice survives only for a security
+  // held then or now (2026-09-23 spec §C8). The chart is the HOUSEHOLD's whatever the Whose
+  // chip says, so in a person's view every event and both "held" tests read the household's
+  // ledgers (review round 1); on the household view the page's own already are. Their own memo,
+  // keyed on the ledgers and the dates alone: a range chip, a zoom or a pan changes the window,
+  // never the events (code review 4).
+  const performanceEvents = useMemo(() => {
     if (!history || !holdings) return null
-    // Markers come from the ledgers this page ALREADY fetches in the same Promise.all —
-    // Overview keeps the short call and never starts fetching them (spec Decision log).
-    // Dividends and ex-dividend notices go to the rug; a notice survives only for a security
-    // held then or now (2026-09-23 spec §C8). The chart is the HOUSEHOLD's whatever the Whose
-    // chip says, so in a person's view every event and both "held" tests read the household's
-    // ledgers (review round 1); on the household view the page's own already are.
     const tickerById = new Map(securities.map((s) => [s.id, s.ticker]))
     const ledgers = householdLedgers ?? { holdings, transactions, dividends }
     const heldNow = new Set(ledgers.holdings.holdings.map((h) => h.security_id))
-    const events = buildPerformanceEvents(
+    return buildPerformanceEvents(
       history,
       ledgers.transactions,
       ledgers.dividends,
@@ -523,6 +525,10 @@ export default function PortfolioPage() {
       dividendEvents,
       heldNow,
     )
+  }, [history, holdings, securities, transactions, dividends, dividendEvents, householdLedgers])
+
+  const performanceOption = useMemo(() => {
+    if (!history || !holdings) return null
     // A3 (2026-08-31 tier-1): the ping is derived from the OWNER-FILTERED holdings, but
     // /portfolio/history is household-wide by design — plotting a person's total at the
     // end of the household series drew a fake cliff. Only the All view bridges to "now";
@@ -534,7 +540,7 @@ export default function PortfolioPage() {
     const base = portfolioHistoryOption(
       history,
       owner === null ? liveFromHoldings(holdings) : null,
-      events,
+      performanceEvents,
       { selected: legendSelected, range },
     )
     return base === null
@@ -545,7 +551,7 @@ export default function PortfolioPage() {
         // END, so the indices are unshifted and the window runs out to the ping.
         dataZoom: rangeZoom(history.dates, range),
       }
-  }, [history, holdings, securities, transactions, dividends, dividendEvents, householdLedgers, range, legendSelected, owner])
+  }, [history, holdings, performanceEvents, range, legendSelected, owner])
 
   // The card states the honest benchmark's answer over the window the chart is showing — the
   // chip's, or one dragged out with ctrl+wheel (2026-09-23 spec §C8; wealth PF-1).
