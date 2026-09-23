@@ -1,5 +1,6 @@
 """Deterministic, dated metric receipts consumed by pages, exports and assistant tools."""
 
+from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal
 
@@ -82,22 +83,39 @@ def planning_window(
     return window_rows(rows, book, book.default_month, inclusive=True, matched=True)
 
 
+def category_amounts(book: ReviewBook) -> dict[date, dict[int, Decimal]]:
+    """Each month's entered spending by category, indexed ONCE per request (2026-09-23 spec
+    §P4). The matrix compares every category in every month with its twelve prior months; a
+    scan of the month's list per lookup made that ~19 × 39 × 12 linear searches. The FIRST
+    entry per category wins, as `next(...)` did — a month holds one row per category anyway
+    ((month, category_id) is unique)."""
+    index: dict[date, dict[int, Decimal]] = {}
+    for month, data in book.inputs.items():
+        amounts: dict[int, Decimal] = {}
+        for item in data["spending"]:
+            amounts.setdefault(item["category_id"], item["amount"])
+        index[month] = amounts
+    return index
+
+
 def category_comparison(
-    book: ReviewBook, category_id: int, focus: date
+    book: ReviewBook,
+    category_id: int,
+    focus: date,
+    amounts: Mapping[date, Mapping[int, Decimal]] | None = None,
 ) -> tuple[Decimal | None, int]:
-    """The same prior-calendar eligibility policy, retaining missing category cells."""
+    """The same prior-calendar eligibility policy, retaining missing category cells. A caller
+    comparing many cells of one book passes `category_amounts(book)` once."""
+    amounts = category_amounts(book) if amounts is None else amounts
     values = []
     for offset in range(-12, 0):
         month = month_shift(focus, offset)
         state = book.months.get(month)
         if not state or not state.eligible_spending:
             continue
-        entry = next(
-            (item for item in book.inputs[month]["spending"] if item["category_id"] == category_id),
-            None,
-        )
-        if entry is not None:
-            values.append(entry["amount"])
+        month_amounts = amounts[month]
+        if category_id in month_amounts:
+            values.append(month_amounts[category_id])
     count = len(values)
     return (half_up2(sum(values, ZERO) / count) if count else None), count
 

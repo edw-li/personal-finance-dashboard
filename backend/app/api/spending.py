@@ -34,7 +34,7 @@ from app.schemas.spending import (
 from app.services import clock
 from app.services.budgets import MIN_SEED_MONTHS, load_suggestions, resolve_budgets
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
-from app.services.metrics import average_evidence, category_comparison
+from app.services.metrics import average_evidence, category_amounts, category_comparison
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     quantize_money,
@@ -439,8 +439,9 @@ async def matrix(
     review_book = await cached_review_book(db)
     full_history = await cached_month_savings(db)
     comparisons = [average_evidence(full_history, review_book, month) for month in months]
+    amounts = category_amounts(review_book)  # indexed once, read ~19 × 39 × 12 times (§P4)
     category_averages = {
-        c.id: [category_comparison(review_book, c.id, month) for month in months]
+        c.id: [category_comparison(review_book, c.id, month, amounts) for month in months]
         for c in categories
     }
     return MatrixOut(
