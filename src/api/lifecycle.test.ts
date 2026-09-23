@@ -4,6 +4,7 @@ import {
   fetchActivity,
   fetchActivityRun,
   fetchHealth,
+  fetchRestorePoints,
   fetchSnapshots,
   restoreStored,
   restoreUpload,
@@ -28,6 +29,11 @@ it('lists and creates stored snapshots', async () => {
   await createSnapshot()
   expect(call(1)[0]).toBe('/system/snapshots')
   expect(call(1)[1]?.method).toBe('POST')
+})
+
+it('lists the restore points', async () => {
+  await fetchRestorePoints()
+  expect(call()).toEqual(['/system/restore-points'])
 })
 
 it('uploads a snapshot as multipart with the dry-run flag and a long timeout', async () => {

@@ -2028,6 +2028,9 @@ export interface ImportReport {
   dry_run: boolean
   applied: boolean
   sheets: Record<string, ImportSheetReport>
+  /** The restore point an APPLY saved before its first write (2026-09-23 spec §B3); null on a
+   *  dry run or a blocked apply. Absent on a report from before that batch. */
+  restore_point?: string | null
 }
 
 // --- app settings ---
@@ -2450,6 +2453,10 @@ export interface SnapshotEntry {
   alembic_head: string | null
   /** Head equals this server's — the only entries the Restore card offers to apply. */
   restorable: boolean
+  /** Which list the file belongs to (2026-09-23 spec §B3): a stored snapshot (nightly or
+   *  Snapshot now) or a restore point saved before a restore or import. Absent on a pre-batch
+   *  payload, which only ever listed snapshots. */
+  kind?: 'snapshot' | 'restore_point'
 }
 
 export type ChangeSource = 'ui' | 'import' | 'restore' | 'scheduler' | 'repair' | 'undo'
