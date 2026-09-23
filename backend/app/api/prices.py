@@ -1,9 +1,9 @@
 import time as time_module
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import DateTime, cast, func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -130,6 +130,37 @@ async def history(
     )
 
 
+async def weekly_closes(
+    db: AsyncSession, held_ids: set[int], since: date
+) -> list[tuple[int, date, Decimal]]:
+    """(security_id, price_date, close) for the LAST bar of every ISO week since `since`,
+    ordered (security, date) — the sparklines' downsampling done in SQL (2026-09-23 spec §P1)
+    instead of hydrating a year of ORM rows per holding and bucketing them in Python.
+
+    date_trunc('week') truncates to the ISO week's Monday, and one Monday names exactly one
+    (ISO year, ISO week) — so this is the old isocalendar() bucketing, year boundaries and
+    week 53 included. The cast to a timestamp WITHOUT time zone keeps that Monday independent
+    of the session's TimeZone (a bare date would be promoted to timestamptz). `since` filters
+    in WHERE, before DISTINCT ON, so a window that starts mid-week keeps the last bar of that
+    partial week, as before; the newest bar always survives as the last of its own week.
+    The unit is a literal, not a bound parameter: DISTINCT ON must repeat the leading ORDER BY
+    expression exactly, and two bind parameters are two different expressions to Postgres."""
+    week = func.date_trunc(literal_column("'week'"), cast(PriceHistory.price_date, DateTime()))
+    last_of_week = (
+        select(PriceHistory.security_id, PriceHistory.price_date, PriceHistory.close)
+        .where(PriceHistory.security_id.in_(held_ids), PriceHistory.price_date >= since)
+        .distinct(PriceHistory.security_id, week)
+        .order_by(PriceHistory.security_id, week, PriceHistory.price_date.desc())
+        .subquery()
+    )
+    rows = await db.execute(
+        select(
+            last_of_week.c.security_id, last_of_week.c.price_date, last_of_week.c.close
+        ).order_by(last_of_week.c.security_id, last_of_week.c.price_date)
+    )
+    return [(security_id, price_date, close) for security_id, price_date, close in rows]
+
+
 @router.get("/sparklines", response_model=dict[str, list[PricePoint]])
 async def sparklines(
     days: int = Query(default=365, ge=1, le=3650),
@@ -158,23 +189,10 @@ async def sparklines(
         for s in (await db.execute(select(Security).where(Security.id.in_(held_ids)))).scalars()
     }
     since = clock.product_today() - timedelta(days=days)
-    rows = (
-        await db.execute(
-            select(PriceHistory)
-            .where(PriceHistory.security_id.in_(held_ids), PriceHistory.price_date >= since)
-            .order_by(PriceHistory.security_id, PriceHistory.price_date)
-        )
-    ).scalars()
     out: dict[str, list[PricePoint]] = {}
-    # Last bar per ISO week — the latest bar is always kept because it is by
-    # definition the last bar of its own (possibly partial) week.
-    week_last: dict[tuple[int, int, int], PriceHistory] = {}
-    for row in rows:
-        iso = row.price_date.isocalendar()
-        week_last[(row.security_id, iso.year, iso.week)] = row
-    for row in sorted(week_last.values(), key=lambda r: (r.security_id, r.price_date)):
-        ticker = securities[row.security_id].ticker
-        out.setdefault(ticker, []).append(PricePoint(d=row.price_date, c=row.close))
+    # (security, date) order, so the JSON object's tickers keep their security-id order.
+    for security_id, price_date, close in await weekly_closes(db, held_ids, since):
+        out.setdefault(securities[security_id].ticker, []).append(PricePoint(d=price_date, c=close))
     return out
 
 
