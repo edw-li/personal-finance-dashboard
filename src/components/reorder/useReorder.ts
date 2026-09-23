@@ -442,7 +442,9 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     // drag re-tracks; any other scroll (the page under a Settings box, a keyboard lift's
     // keep-in-view, a wheel) moves only where the drop line's edge stands, and the line is fixed.
     const onScroll = (event: Event) => {
-      if (drag.phase !== 'lifted') return
+      // Only the live drag: a direct commit (a keyboard or reduced-motion drop) leaves its phase
+      // 'lifted', so a listener that ever outlived its drag would re-paint rows and re-make a line.
+      if (machine.current.drag !== drag || drag.phase !== 'lifted') return
       // The page's own scroll targets the document (or the window), never an element.
       const own =
         drag.scroller === null ? !(event.target instanceof Element) : event.target === drag.scroller

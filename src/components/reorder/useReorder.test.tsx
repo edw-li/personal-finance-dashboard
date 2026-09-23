@@ -1233,6 +1233,48 @@ describe('useReorder — reduced motion (spec §2.5)', () => {
     expect(linePlacement()).toEqual(['179px', '0px', '300px'])
   })
 
+  it('a scroll listener that outlives its drag draws nothing — after a drop that commits at once, and after a cancel', () => {
+    reduceMotion()
+    // As if a drag's detach never ran: the window keeps every scroll listener it is given (put back
+    // when the test ends). A direct commit leaves the drag's phase 'lifted', so only a guard on the
+    // machine's live drag stops such a listener re-painting the list and re-making its line.
+    const add = window.addEventListener.bind(window)
+    const remove = window.removeEventListener.bind(window)
+    const kept: EventListenerOrEventListenerObject[] = []
+    vi.spyOn(window, 'addEventListener').mockImplementation((type, listener, options) => {
+      if (type === 'scroll' && listener !== null) kept.push(listener)
+      add(type, listener, options)
+    })
+    vi.spyOn(window, 'removeEventListener').mockImplementation((type, listener, options) => {
+      if (type !== 'scroll') remove(type, listener, options)
+    })
+    onTestFinished(() => kept.forEach((listener) => remove('scroll', listener, true)))
+    const onCommit = vi.fn()
+    render(<Stateful initial={flat('A', 'B', 'C', 'D')} onCommit={onCommit} />)
+    const untouched = () => {
+      expect(lines()).toEqual([])
+      for (const id of ['A', 'B', 'C', 'D']) expect(row(id).style.transform).toBe('')
+    }
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 }) // commits at once
+    expect(onCommit).toHaveBeenCalledTimes(1)
+    act(() => {
+      window.dispatchEvent(new Event('scroll'))
+    })
+    untouched()
+    layoutRows()
+    fireEvent.pointerDown(grip('Bravo'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Bravo'), { pointerId: 1, clientY: 305 })
+    fireEvent.keyDown(grip('Bravo'), { key: 'Escape' }) // a cancel
+    act(() => {
+      window.dispatchEvent(new Event('scroll'))
+    })
+    untouched()
+    expect(kept.length).toBeGreaterThan(0) // the listeners really were kept
+  })
+
   it('the line is gone once the drag lets go — a drop, a cancel, a hard reset, an unmount', () => {
     reduceMotion()
     const onCommit = vi.fn()
