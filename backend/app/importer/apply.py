@@ -7,7 +7,7 @@ caller (service.py) owns the transaction: nothing here commits.
 
 from datetime import UTC, date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.importer.cells import slugify, synthetic_ticker
@@ -162,14 +162,24 @@ async def apply_positions(
             )
     await db.flush()
 
-    existing = {
-        t.sort_index: t
-        for t in (
+    # Sheet rows are matched by import_key — the sheet key the parser still calls
+    # `sort_index` (row x 10) — never by the stored sort_index, which since 2026-09-23 is the
+    # user's replay order (drag-to-reorder spec §3.4). UI rows are invisible here throughout.
+    imported = list(
+        (
             await db.execute(
-                select(PositionTransaction).where(PositionTransaction.source == "import")
+                select(PositionTransaction)
+                .where(PositionTransaction.source == "import")
+                .order_by(PositionTransaction.id)
             )
         ).scalars()
-    }
+    )
+    existing = {t.import_key: t for t in imported if t.import_key is not None}
+    # New sheet rows land at the END of the ledger in sheet order, exactly where a UI row
+    # lands; the user drags them into place. Existing rows never move.
+    last_index = (
+        await db.execute(select(func.coalesce(func.max(PositionTransaction.sort_index), 0)))
+    ).scalar_one()
     # One get-or-create per DISTINCT sheet label, not per row: a re-import of ~200 position
     # rows touches a handful of platforms. New labels land owned by the primary person;
     # a label the user re-tagged in Settings keeps its owner (resolve_portfolio_account).
@@ -177,9 +187,9 @@ async def apply_positions(
         label: await resolve_portfolio_account(db, label)
         for label in sorted({txn.account for txn in parsed.transactions})
     }
-    incoming_indexes: set[int] = set()
+    incoming_keys: set[int] = set()
     for txn in parsed.transactions:
-        incoming_indexes.add(txn.sort_index)
+        incoming_keys.add(txn.sort_index)
         fields = {
             "security_id": lookup[txn.name].id,
             # The relationship, not the id: _diff_update's sample prints the row's
@@ -195,7 +205,12 @@ async def apply_positions(
         }
         row = existing.get(txn.sort_index)
         if row is None:
-            db.add(PositionTransaction(sort_index=txn.sort_index, source="import", **fields))
+            last_index += 10
+            db.add(
+                PositionTransaction(
+                    import_key=txn.sort_index, sort_index=last_index, source="import", **fields
+                )
+            )
             txn_counts.creates += 1
             report.add_sample(
                 f"position_transactions[{txn.sort_index}]: {txn.type} "
@@ -209,15 +224,14 @@ async def apply_positions(
                 report,
                 f"position_transactions[{txn.sort_index}]",
             )
-    # Sync: importer-owned rows (source='import') whose sheet row disappeared are deleted.
-    # UI-created rows (source='ui') are invisible to the sync at ANY sort_index (Plan 4
-    # contract, superseding Plan 2's sort_index-0 rule) — so a sheet row may land on a UI
-    # row's sort_index; both survive and cost-basis folding tie-breaks the pair on id.
-    for sort_index, row in existing.items():
-        if sort_index not in incoming_indexes:
+    # Sync: an importer-owned row (source='import') whose sheet key left the sheet is
+    # deleted. A row with no key cannot be matched to any sheet row, so it reads as having
+    # left too. UI-created rows (source='ui') are never loaded here (Plan 4 contract).
+    for row in imported:
+        if row.import_key is None or row.import_key not in incoming_keys:
             await db.delete(row)
             txn_counts.deletes += 1
-            report.add_sample(f"position_transactions[{sort_index}]: deleted (row left sheet)")
+            report.add_sample(f"position_transactions[{row.import_key}]: deleted (row left sheet)")
 
 
 # The five Net Worth source-bucket columns whose sums ALSO appear as their own sheet
@@ -245,6 +259,10 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
     balance_counts = report.counts("account_balances")
 
     existing_accounts = {a.slug: a for a in (await db.execute(select(Account))).scalars()}
+    # The importer no longer owns order (2026-09-23 drag-to-reorder spec §3.4): sort_order
+    # is set at CREATE only, appended after the current last account in sheet order, and a
+    # re-import never moves an existing row. An empty database gets the sheet's order.
+    next_order = max((a.sort_order for a in existing_accounts.values()), default=-1) + 1
     accounts_by_name: dict[str, Account] = {}
     seen_slugs: set[str] = set()
     created_component_slugs: list[str] = []
@@ -264,11 +282,12 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
             continue
         seen_slugs.add(slug)
         account = existing_accounts.get(slug)
-        fields = {"name": column.name, "group": column.group, "sort_order": column.sort_order}
+        fields = {"name": column.name, "group": column.group}
         if account is None:
             is_component = slug in COMPONENT_SLUGS_AT_CREATE
             # is_active default True; both flags are user-owned after creation
-            account = Account(slug=slug, is_component=is_component, **fields)
+            account = Account(slug=slug, is_component=is_component, sort_order=next_order, **fields)
+            next_order += 1
             db.add(account)
             account_counts.creates += 1
             if is_component:
@@ -403,6 +422,8 @@ async def apply_spending(db: AsyncSession, parsed: ParsedSpending, report: Sheet
     existing_categories = {
         c.slug: c for c in (await db.execute(select(SpendingCategory))).scalars()
     }
+    # Same order rule as the accounts (spec §3.4): set at create only, appended in sheet order.
+    next_order = max((c.sort_order for c in existing_categories.values()), default=-1) + 1
     categories_by_name: dict[str, SpendingCategory] = {}
     seen_slugs: set[str] = set()
     for column in parsed.categories:
@@ -421,9 +442,10 @@ async def apply_spending(db: AsyncSession, parsed: ParsedSpending, report: Sheet
             continue
         seen_slugs.add(slug)
         category = existing_categories.get(slug)
-        fields = {"name": column.name, "sort_order": column.sort_order}
+        fields = {"name": column.name}
         if category is None:
-            category = SpendingCategory(slug=slug, **fields)
+            category = SpendingCategory(slug=slug, sort_order=next_order, **fields)
+            next_order += 1
             db.add(category)
             category_counts.creates += 1
             report.add_sample(f"spending_categories[{slug}]: created")

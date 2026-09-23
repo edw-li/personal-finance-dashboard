@@ -149,7 +149,9 @@ async def test_apply_positions_full_flow(db):
         .scalars()
         .all()
     )
-    assert [t.sort_index for t in txns] == [20, 40, 50]
+    # The sheet key (row x 10) is the row's identity; the replay order is appended from the
+    # ledger's max (0 on an empty ledger) in sheet order (2026-09-23 reorder spec §3.4).
+    assert [(t.import_key, t.sort_index) for t in txns] == [(20, 10), (40, 20), (50, 30)]
     assert txns[0].shares == Decimal("10.123457")
 
     # Idempotent second pass
@@ -178,6 +180,7 @@ async def test_apply_positions_deletes_importer_strays_keeps_ui_rows(db):
             shares=Decimal("1"),
             price=Decimal("1"),
             sort_index=990,
+            import_key=990,
             source="import",
         )
     )
@@ -251,13 +254,15 @@ async def test_apply_positions_marks_created_rows_import(db):
     await db.commit()
     row = (await db.execute(select(PositionTransaction))).scalar_one()
     assert row.source == "import"
-    assert row.sort_index > 0  # sheet row order preserved; no longer an ownership signal
+    assert row.import_key == 20  # sheet row 2 x 10: the identity the next import matches
+    assert row.sort_index > 0  # the replay order; never an ownership signal
 
 
-async def test_apply_positions_sort_index_collision_leaves_ui_row_alone(db):
-    """An incoming sheet row whose sort_index equals a UI row's must create a NEW
-    import row, not adopt/mutate the UI row."""
-    wb = sheets(positions=default_positions_rows()[:2])  # header + one row -> sort_index 20
+async def test_apply_positions_sheet_key_matching_a_ui_sort_index_leaves_ui_row_alone(db):
+    """An incoming sheet row whose sheet key equals a UI row's sort_index must create a
+    NEW import row — appended after the ledger, keyed by import_key — never adopt or mutate
+    the UI row."""
+    wb = sheets(positions=default_positions_rows()[:2])  # header + one row -> sheet key 20
     report = SheetReport()
     by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
     await db.commit()
@@ -269,7 +274,7 @@ async def test_apply_positions_sort_index_collision_leaves_ui_row_alone(db):
             type="sell",
             shares=Decimal("3"),
             price=Decimal("7"),
-            sort_index=20,  # collides with the incoming sheet row (folding tie-breaks on id)
+            sort_index=20,  # the same number as the incoming sheet key
             source="ui",
         )
     )
@@ -281,11 +286,119 @@ async def test_apply_positions_sort_index_collision_leaves_ui_row_alone(db):
         .scalars()
         .all()
     )
-    assert sorted(r.source for r in rows) == ["import", "ui"]
-    assert [r.sort_index for r in rows] == [20, 20]
+    assert [(r.source, r.import_key, r.sort_index) for r in rows] == [
+        ("ui", None, 20),
+        ("import", 20, 30),  # appended after the ledger's max, keyed by its sheet key
+    ]
     assert report.entities["position_transactions"].creates == 1
     ui_row = next(r for r in rows if r.source == "ui")
     assert (ui_row.account, ui_row.type, ui_row.shares) == ("UI Acct", "sell", Decimal("3.000000"))
+
+
+async def test_a_dragged_sheet_row_survives_a_reimport_without_a_duplicate(db):
+    """The user drags the replay order after an import (spec §3.4): the next import matches
+    every sheet row by import_key — no duplicate, no delete, and nothing moves back."""
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    rows = {t.import_key: t for t in (await db.execute(select(PositionTransaction))).scalars()}
+    # What PUT /portfolio/transactions/order writes for "the Mystery Fund buy to the top".
+    rows[50].sort_index, rows[20].sort_index, rows[40].sort_index = 10, 20, 30
+    await db.commit()
+
+    wb2 = sheets()
+    report2 = SheetReport()
+    by_name2 = await apply_reference_data(db, parse_reference_data(wb2["ReferenceData"]), report2)
+    await apply_positions(db, parse_positions(wb2["Positions"]), by_name2, report2)
+    await db.commit()
+    counts = report2.entities["position_transactions"]
+    assert (counts.creates, counts.updates, counts.deletes, counts.skips) == (0, 0, 0, 3)
+    after = await db.execute(
+        select(PositionTransaction.import_key, PositionTransaction.sort_index).order_by(
+            PositionTransaction.sort_index
+        )
+    )
+    assert [tuple(row) for row in after] == [(50, 10), (20, 20), (40, 30)]
+
+
+async def test_a_new_sheet_row_appends_after_the_whole_ledger(db):
+    """A row added to the sheet lands at the END — after the UI rows too, exactly where a
+    UI row lands — in sheet order; the user drags it into place (spec §3.4)."""
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    acme_id = (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one().id
+    db.add(
+        PositionTransaction(
+            security_id=acme_id,
+            portfolio_account=acct("UI Acct"),
+            type="buy",
+            shares=Decimal("1"),
+            price=Decimal("1"),
+            sort_index=40,  # the UI's own append: max 30 + 10
+            source="ui",
+        )
+    )
+    await db.commit()
+
+    rows = default_positions_rows()
+    # Sheet row 3 (the zero-share placeholder) becomes a real row: sheet key 30.
+    rows[2] = ["Fido", "Buy", "Div Corp", 3.0, 40.0, None, None, 0, 0, 0, 0, 0]
+    wb2 = sheets(positions=rows)
+    report2 = SheetReport()
+    by_name2 = await apply_reference_data(db, parse_reference_data(wb2["ReferenceData"]), report2)
+    await apply_positions(db, parse_positions(wb2["Positions"]), by_name2, report2)
+    await db.commit()
+    counts = report2.entities["position_transactions"]
+    assert (counts.creates, counts.updates, counts.deletes) == (1, 0, 0)
+    ordered = await db.execute(
+        select(
+            PositionTransaction.source,
+            PositionTransaction.import_key,
+            PositionTransaction.sort_index,
+        ).order_by(PositionTransaction.sort_index, PositionTransaction.id)
+    )
+    assert [tuple(row) for row in ordered] == [
+        ("import", 20, 10),
+        ("import", 40, 20),
+        ("import", 50, 30),
+        ("ui", None, 40),
+        ("import", 30, 50),
+    ]
+    # Report samples keep naming the SHEET key.
+    assert any(s.startswith("position_transactions[30]: buy") for s in report2.samples)
+
+
+async def test_an_import_row_without_a_key_is_swept_as_left_the_sheet(db):
+    """No sheet row can match a keyless import row, so the sync treats it as gone — the
+    same answer a missing sheet key gets."""
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await db.commit()
+    acme_id = (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one().id
+    db.add(
+        PositionTransaction(
+            security_id=acme_id,
+            portfolio_account=acct("Keyless"),
+            type="buy",
+            shares=Decimal("1"),
+            price=Decimal("1"),
+            sort_index=5,
+            source="import",
+        )
+    )
+    await db.commit()
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    assert report.entities["position_transactions"].deletes == 1
+    assert "position_transactions[None]: deleted (row left sheet)" in report.samples
+    keys = (await db.execute(select(PositionTransaction.import_key))).scalars().all()
+    assert sorted(keys) == [20, 40, 50]
 
 
 async def test_apply_positions_creates_primary_owned_portfolio_accounts(db):
@@ -350,7 +463,8 @@ async def test_apply_net_worth_accounts_snapshots_balances(db):
     assert report.entities["net_worth_snapshots"].creates == 2
     assert report.entities["account_balances"].creates == 6
     checking = (await db.execute(select(Account).where(Account.slug == "checking"))).scalar_one()
-    assert checking.group == "cash" and checking.sort_order == 3
+    # The first sheet column on an empty database: order 0, not its column index (spec §3.4).
+    assert checking.group == "cash" and checking.sort_order == 0
     january = (
         await db.execute(select(NetWorthSnapshot).where(NetWorthSnapshot.month == date(2024, 1, 1)))
     ).scalar_one()
@@ -414,6 +528,72 @@ async def test_apply_spending_categories_months_cashflow(db):
     await db.commit()
     assert report2.entities["monthly_spending"].creates == 0
     assert report2.entities["monthly_spending"].skips == 4
+
+
+async def test_an_empty_database_gets_the_sheet_order(db):
+    report = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets()["Net Worth"]), report)
+    await apply_spending(db, parse_spending(sheets()["Spending"]), report)
+    await db.commit()
+    accounts = await db.execute(select(Account.slug, Account.sort_order).order_by(Account.id))
+    assert [tuple(row) for row in accounts] == [("checking", 0), ("ira", 1), ("credit-card", 2)]
+    categories = await db.execute(
+        select(SpendingCategory.slug, SpendingCategory.sort_order).order_by(SpendingCategory.id)
+    )
+    assert [tuple(row) for row in categories] == [("food", 0), ("rent", 1)]
+
+
+async def test_custom_orders_survive_a_reimport_and_new_columns_append(db):
+    """The importer stops owning order (spec §3.4): a re-import never moves an existing
+    account or category, and a new sheet column is appended after the current last row."""
+    from tests.workbook_builder import default_net_worth_rows, default_spending_rows
+
+    report = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets()["Net Worth"]), report)
+    await apply_spending(db, parse_spending(sheets()["Spending"]), report)
+    await db.commit()
+    # The user's drags — what the two reorder routes write.
+    accounts = {a.slug: a for a in (await db.execute(select(Account))).scalars()}
+    accounts["credit-card"].sort_order = 0
+    accounts["checking"].sort_order = 1
+    accounts["ira"].sort_order = 2
+    categories = {c.slug: c for c in (await db.execute(select(SpendingCategory))).scalars()}
+    categories["rent"].sort_order = 0
+    categories["food"].sort_order = 1
+    await db.commit()
+
+    nw_rows = default_net_worth_rows()
+    # A new CASH column "Savings" right after Checking's % column.
+    nw_rows[0].insert(4, None)
+    nw_rows[1].insert(4, "Savings")
+    for row in nw_rows[2:]:
+        row.insert(4, None)
+    sp_rows = default_spending_rows()
+    # A new "Pets" column before TOTAL; blank in every month.
+    sp_rows[0].insert(3, "Pets")
+    for row in sp_rows[1:]:
+        row.insert(3, None)
+    report2 = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets(net_worth=nw_rows)["Net Worth"]), report2)
+    await apply_spending(db, parse_spending(sheets(spending=sp_rows)["Spending"]), report2)
+    await db.commit()
+    assert report2.entities["accounts"].updates == 0
+    assert report2.entities["spending_categories"].updates == 0
+    accounts = await db.execute(
+        select(Account.slug, Account.sort_order).order_by(Account.sort_order)
+    )
+    assert [tuple(row) for row in accounts] == [
+        ("credit-card", 0),
+        ("checking", 1),
+        ("ira", 2),
+        ("savings", 3),
+    ]
+    categories = await db.execute(
+        select(SpendingCategory.slug, SpendingCategory.sort_order).order_by(
+            SpendingCategory.sort_order
+        )
+    )
+    assert [tuple(row) for row in categories] == [("rent", 0), ("food", 1), ("pets", 2)]
 
 
 async def test_refdata_rename_keeps_positions_attached(db):
@@ -1069,7 +1249,7 @@ async def test_reimport_preserves_user_owned_is_component(db):
     account = (
         await db.execute(select(Account).where(Account.slug == "traditional-401-k"))
     ).scalar_one()
-    assert account.is_component is True  # importer diff-fields are {name, group, sort_order} only
+    assert account.is_component is True  # importer diff-fields are {name, group} only
 
 
 async def test_fresh_import_flags_known_component_accounts_at_create(db):
@@ -1447,11 +1627,12 @@ async def test_importer_never_writes_category_budgets(db):
     delete a row — even while it UPDATES the very category the budget hangs off."""
     from app.importer.service import run_import
 
-    # Slug "food" matches the workbook's Food column, and sort_order 99 does NOT match:
-    # the import diff-updates the category row itself, which makes the pin sharp — the
-    # parent table moves, the budgets table must not (categories are upserted by slug,
-    # never deleted, so the CASCADE can't fire through an import).
-    cat = SpendingCategory(name="Food", slug="food", sort_order=99)
+    # Slug "food" matches the workbook's Food column, and the name "FOOD" does NOT match:
+    # the import diff-updates the category row itself (its name — sort_order is no longer
+    # the importer's since 2026-09-23), which makes the pin sharp — the parent table moves,
+    # the budgets table must not (categories are upserted by slug, never deleted, so the
+    # CASCADE can't fire through an import).
+    cat = SpendingCategory(name="FOOD", slug="food", sort_order=99)
     db.add(cat)
     await db.flush()
     db.add(
@@ -1537,8 +1718,8 @@ async def test_importer_never_writes_credit_card_tables(db):
     from app.importer.service import run_import
 
     # Map onto a category the workbook WILL diff-update (the budgets pin's trick):
-    # slug "food" matches the workbook's Food column, sort_order 99 does not.
-    spending = SpendingCategory(name="Food", slug="food", sort_order=99)
+    # slug "food" matches the workbook's Food column, the name "FOOD" does not.
+    spending = SpendingCategory(name="FOOD", slug="food", sort_order=99)
     db.add(spending)
     await db.flush()
     card = CreditCard(
