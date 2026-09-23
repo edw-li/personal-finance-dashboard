@@ -707,16 +707,33 @@ async def test_waiters_share_an_unstable_build_that_is_never_cached(db, engine, 
     await seed(db)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     real = read_cache.load_review_book_snapshot
+    real_fingerprint = read_cache._fingerprint
     calls = {"n": 0}
+    fingerprints = {"n": 0}
+    all_fingerprinted = asyncio.Event()
+
+    async def counting_fingerprint(session, statement):
+        # The three callers' BEFORE fingerprints are the first three taken: the builder's own
+        # after-check only runs once its build (below) has returned.
+        value = await real_fingerprint(session, statement)
+        fingerprints["n"] += 1
+        if fingerprints["n"] == 3:
+            all_fingerprinted.set()
+        return value
 
     async def build_across_a_commit(session, **kwargs):
         calls["n"] += 1
-        await asyncio.sleep(0.05)
+        # The write lands only after every caller has fingerprinted the pre-write data — the
+        # deterministic form of "a write committed mid-build". A fixed sleep here raced the
+        # other callers' fingerprint queries on a loaded machine: a caller fingerprinting
+        # AFTER the commit takes a different key and builds on its own (a flake, not a bug).
+        await asyncio.wait_for(all_fingerprinted.wait(), timeout=30)
         async with sessions() as writer:
             writer.add(MonthlyCashflow(month=date(2026, 11, 1), net_pay=D("77.00")))
             await writer.commit()
         return await real(session, **kwargs)
 
+    monkeypatch.setattr(read_cache, "_fingerprint", counting_fingerprint)
     monkeypatch.setattr(read_cache, "load_review_book_snapshot", build_across_a_commit)
     books = await asyncio.gather(*await concurrently(engine, 3, read_cache.cached_review_book))
     assert calls["n"] == 1 and len({id(book) for book in books}) == 1
