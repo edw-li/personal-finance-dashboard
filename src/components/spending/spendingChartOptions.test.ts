@@ -547,9 +547,24 @@ describe('categoryTrendOption', () => {
     ]))
     expect(rows.rows.map((r) => [r.kind, r.label])).toEqual([['row', 'Groceries &lt;b&gt;&amp; more&lt;/b&gt;'], ['ref', 'Groceries &lt;b&gt;&amp; more&lt;/b&gt; budget']])
   })
-  it('a pick outside the fold wears the Other grey — and never shares a line colour with another pick', () => {
+  it('a pick outside the fold wears the Other grey', () => {
     const option = read(categoryTrendOption({ matrix: matrixFixture(), trend: [{ categoryId: 3 }, { categoryId: 1 }], fold: FOLD, nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' }, selected: {} }))
     expect(option.series.map((s) => [s.name, s.color])).toEqual([['Fun', OTHER_SERIES_COLOR], ['Rent', CATEGORY_HUES[0]]])
+  })
+  // Review (spec §C2.1): two picks outside the fold are both the Other grey (no fold hue is ever
+  // borrowed) and are told apart by a marker on the second line, a non-hue channel that is not
+  // the dashed stroke the budget references wear.
+  it('two picks outside the fold share the grey and are told apart by markers, never a borrowed hue', () => {
+    const fold: CategoryFold = { ids: [1], colors: new Map([[1, CATEGORY_HUES[0]]]) }
+    const option = read(categoryTrendOption({ matrix: matrixFixture(), trend: [{ categoryId: 2 }, { categoryId: 3 }], fold, nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' }, selected: {} })) as unknown as {
+      series: { name: string; color: string; symbol?: string; symbolSize?: number; showSymbol?: boolean; lineStyle?: { type?: string } }[]
+    }
+    const [groceries, fun] = option.series
+    expect([groceries.color, fun.color]).toEqual([OTHER_SERIES_COLOR, OTHER_SERIES_COLOR])
+    expect(groceries.symbol).toBe('none')
+    expect(fun).toMatchObject({ symbol: 'triangle', symbolSize: 7, showSymbol: true })
+    // Solid strokes: dashed is the budget reference's grammar.
+    expect([groceries.lineStyle?.type, fun.lineStyle?.type]).toEqual([undefined, undefined])
   })
   it('is null with no picks; exports the picked categories', () => {
     expect(categoryTrendOption({ matrix: matrixFixture(), trend: [], fold: FOLD, nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' }, selected: {} })).toBeNull()

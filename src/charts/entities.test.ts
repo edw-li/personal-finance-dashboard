@@ -9,7 +9,7 @@ import {
   foldColor,
   orderedPeople,
   personSlot,
-  pickColors,
+  pickColors, pickStyles,
   rankCategories,
   slotColor,
 } from './entities'
@@ -169,19 +169,32 @@ describe('the category fold', () => {
   })
 })
 
-describe('pickColors (Spending › Trends)', () => {
-  it('folded picks wear their fold colour; the first outsider is Other grey, the next a free hue', () => {
-    const fold = foldCategories([
-      { id: 1, kind: 'living', totalCents: 900 },
-      { id: 2, kind: 'living', totalCents: 800 },
+describe('pickStyles (Spending › Trends)', () => {
+  // Review (spec §C2.1): a second outsider used to borrow the first hue no pick wore — on prod,
+  // Travel + Bills & Utilities drew Bills in Housing's blue: one colour, two entities. Outside
+  // the fold there is no hue to borrow; outsiders are the Other grey, told apart by a marker.
+  const fold = foldCategories([
+    { id: 1, kind: 'living', totalCents: 900 },
+    { id: 2, kind: 'living', totalCents: 800 },
+  ])
+  it('folded picks wear their fold colour; every outsider is the Other grey, told apart by its marker', () => {
+    const styles = pickStyles([2, 7, 8], fold)
+    expect(styles.get(2)).toEqual({ color: CATEGORY_HUES[1], marker: null })
+    expect(styles.get(7)).toEqual({ color: OTHER_SERIES_COLOR, marker: null })
+    expect(styles.get(8)).toEqual({ color: OTHER_SERIES_COLOR, marker: 'triangle' })
+    const three = pickStyles([7, 8, 9], fold)
+    expect([...three.values()]).toEqual([
+      { color: OTHER_SERIES_COLOR, marker: null },
+      { color: OTHER_SERIES_COLOR, marker: 'triangle' },
+      { color: OTHER_SERIES_COLOR, marker: 'diamond' },
     ])
-    const colors = pickColors([2, 7, 8], fold)
-    expect(colors.get(2)).toBe(CATEGORY_HUES[1])
-    expect(colors.get(7)).toBe(OTHER_SERIES_COLOR)
-    // CATEGORY_HUES[0] is Category 1's, but Category 1 is not in THIS chart: the first hue no
-    // pick here wears is the free one.
-    expect(colors.get(8)).toBe(CATEGORY_HUES[0])
-    expect(new Set(colors.values()).size).toBe(3)
+    // No outsider ever wears a fold hue, and no two picks share colour AND marker.
+    const outsiders = [...three.values(), styles.get(7), styles.get(8)]
+    expect(outsiders.every((style) => !CATEGORY_HUES.includes(style!.color as (typeof CATEGORY_HUES)[number]))).toBe(true)
+    expect(new Set([...three.values()].map((style) => `${style.color}:${style.marker}`)).size).toBe(3)
+  })
+  it('pickColors is the colour half, for the chip borders', () => {
+    expect([...pickColors([2, 7, 8], fold).values()]).toEqual([CATEGORY_HUES[1], OTHER_SERIES_COLOR, OTHER_SERIES_COLOR])
   })
 })
 

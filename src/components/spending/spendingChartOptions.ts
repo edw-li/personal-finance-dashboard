@@ -16,7 +16,7 @@
 // fold — the page's all-time ranking decided once — on the bars, the pie and its legend, the
 // trends and the small multiples alike; outside the fold a category is the Other gray.
 import type { EChartsOption } from '../../charts/echarts'
-import { ENTITY, foldColor, pickColors } from '../../charts/entities'
+import { ENTITY, foldColor, pickStyles } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
 import {
   BAR_MARKS,
@@ -616,14 +616,15 @@ export interface CategoryTrendInput {
   selected: Record<string, boolean>
 }
 
-/** Up to three categories' histories in their own colours (pickColors: the fold's hue, the
- *  Other gray for a pick outside it, a free hue for a second outsider), each with its budget as
- *  a dashed step named "{category} budget" so the axis tooltip disambiguates. */
+/** Up to three categories' histories in their own colours (pickStyles: the fold's hue, or the
+ *  Other gray for any pick outside it, a second or third outsider told apart by its markers),
+ *  each with its budget as a dashed step named "{category} budget" so the axis tooltip
+ *  disambiguates. */
 export function categoryTrendOption({
   matrix, trend, fold, nameById, monthLabels, range, selected,
 }: CategoryTrendInput): EChartsOption | null {
   if (matrix.months.length === 0 || trend.length === 0) return null
-  const colors = pickColors(trend.map((pick) => pick.categoryId), fold)
+  const styles = pickStyles(trend.map((pick) => pick.categoryId), fold)
   const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
   const budgetsById = new Map(matrix.series.map((s) => [s.category_id, s.budgets]))
   const name = (id: number) => nameById.get(id) ?? String(id)
@@ -632,13 +633,19 @@ export function categoryTrendOption({
     return b === undefined || !b.some((v) => v !== null) ? [] : [budgetReference(`${name(categoryId)} budget`, b)]
   })
   const series = [
-    ...trend.map(({ categoryId }) => ({
-      ...LINE,
-      name: name(categoryId),
-      color: colors.get(categoryId) ?? ENTITY.other,
-      connectNulls: false,
-      data: (valuesById.get(categoryId) ?? []).map((v) => (v === null ? null : Number(v))),
-    })),
+    ...trend.map(({ categoryId }) => {
+      const style = styles.get(categoryId)
+      return {
+        ...LINE,
+        name: name(categoryId),
+        color: style?.color ?? ENTITY.other,
+        // An outsider's marker rides every point, echarts thinning them where they crowd; the
+        // legend draws it too, so the key tells the two grey lines apart as well.
+        ...(style?.marker ? { symbol: style.marker, symbolSize: 7, showSymbol: true, showAllSymbol: 'auto' as const } : {}),
+        connectNulls: false,
+        data: (valuesById.get(categoryId) ?? []).map((v) => (v === null ? null : Number(v))),
+      }
+    }),
     ...budgets,
   ]
   return {

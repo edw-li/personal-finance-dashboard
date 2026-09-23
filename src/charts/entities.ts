@@ -176,32 +176,40 @@ export function foldColor(fold: CategoryFold, id: number): string {
   return fold.colors.get(id) ?? ENTITY.other
 }
 
+/** How a picked line looks: its colour, and a marker (null = the plain line). */
+export interface PickStyle {
+  color: string
+  marker: 'triangle' | 'diamond' | null
+}
+
+/** The markers that tell outsiders apart, in pick order: the first plain, then triangles, then
+ *  diamonds. Trends holds three picks at most, so three are enough. */
+const OUTSIDER_MARKERS: readonly PickStyle['marker'][] = [null, 'triangle', 'diamond']
+
 /** Spending › Trends, where a reader picks categories explicitly: a folded pick wears its fold
- *  colour; the first pick outside the fold wears the Other gray; any further outsider borrows
- *  the first CATEGORY_HUE no pick in THIS chart wears. Outside the fold there is no app-wide
- *  identity to keep, and two picks must never share a line colour (spec §C2.2). */
-export function pickColors(picks: readonly number[], fold: CategoryFold): Map<number, string> {
-  const out = new Map<number, string>()
-  const used = new Set<string>()
+ *  colour; EVERY pick outside the fold wears the Other gray (spec §C2.1). There is no hue to
+ *  borrow: a fold hue on an outsider would name another category's colour. Outsiders are told
+ *  apart by a marker, a non-hue channel that is not the dashed stroke the budget references wear,
+ *  so two picks never share both colour and marker (spec §C2.2). */
+export function pickStyles(picks: readonly number[], fold: CategoryFold): Map<number, PickStyle> {
+  const out = new Map<number, PickStyle>()
+  let outsiders = 0
   for (const id of picks) {
     const color = fold.colors.get(id)
-    if (color === undefined) continue
-    out.set(id, color)
-    used.add(color)
-  }
-  let grayTaken = false
-  for (const id of picks) {
-    if (out.has(id)) continue
-    if (!grayTaken) {
-      out.set(id, ENTITY.other)
-      grayTaken = true
+    if (color !== undefined) {
+      out.set(id, { color, marker: null })
       continue
     }
-    const spare = CATEGORY_HUES.find((hue) => !used.has(hue)) ?? ENTITY.other
-    out.set(id, spare)
-    used.add(spare)
+    const marker = OUTSIDER_MARKERS[Math.min(outsiders, OUTSIDER_MARKERS.length - 1)]
+    out.set(id, { color: ENTITY.other, marker })
+    outsiders += 1
   }
   return out
+}
+
+/** The colour half of pickStyles, for the chip borders beside the chart. */
+export function pickColors(picks: readonly number[], fold: CategoryFold): Map<number, string> {
+  return new Map([...pickStyles(picks, fold)].map(([id, style]) => [id, style.color]))
 }
 
 // Token hex → the CSS custom property that follows the theme (index.css declares them). The
