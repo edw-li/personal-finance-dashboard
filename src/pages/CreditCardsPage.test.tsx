@@ -78,6 +78,7 @@ import {
   fetchRewardCategories,
   fetchRewardRates,
   putRewardRates,
+  reorderCreditCards,
   reorderRewardCategories,
   updateCardCredit,
   updateCreditCard,
@@ -289,6 +290,22 @@ function serveCategories(initial: RewardCategoryOut[] = CATEGORIES): void {
     stored = ids.flatMap((id, index) => {
       const category = byId.get(id)
       return category === undefined ? [] : [{ ...category, sort_order: index }]
+    })
+    return stored
+  })
+}
+
+/** A tiny server for the card list: the GET answers the stored order (fresh rows every time,
+ *  as serveCategories'); the reorder PUT stores the order it is sent — renumbered 0…n−1, as lane
+ *  R1's route does — and answers with it. */
+function serveCards(initial: CreditCardOut[] = [vx(), SAVOR, RH]): void {
+  let stored = initial
+  vi.mocked(fetchCreditCards).mockImplementation(async () => stored.map((card) => ({ ...card })))
+  vi.mocked(reorderCreditCards).mockImplementation(async (ids) => {
+    const byId = new Map(stored.map((card) => [card.id, card]))
+    stored = ids.flatMap((id, index) => {
+      const card = byId.get(id)
+      return card === undefined ? [] : [{ ...card, sort_order: index }]
     })
     return stored
   })
@@ -863,8 +880,9 @@ describe('CreditCardsPage — card ownership', () => {
     renderPage('/credit-cards?section=manage')
     await screen.findByText('Card roster')
     const roster = document.querySelector('.roster-table') as HTMLElement
+    // The grip column comes first (2026-09-23 drag-to-reorder spec §7): Owner is the third cell.
     const owners = Array.from(roster.querySelectorAll('tbody tr')).map(
-      (tr) => tr.querySelectorAll('td')[1].textContent,
+      (tr) => tr.querySelectorAll('td')[2].textContent,
     )
     expect(owners).toEqual(['Ed', 'Ed', 'Sam'])
     // The fresh form follows the roster once /household lands — Joint must be a CHOICE.
@@ -1523,5 +1541,136 @@ describe('CreditCardsPage — Categories & weights: the rows and the form around
       spending_category_id: null,
       pinned_card_id: null,
     })
+  })
+})
+
+describe('CreditCardsPage — reorder the card roster (2026-09-23 drag-to-reorder spec §7)', () => {
+  beforeEach(() => {
+    vi.mocked(reorderCreditCards).mockReset()
+  })
+
+  it('puts a grip first on every card row — archived ones too — on a reorderable table', async () => {
+    // One range, no carried rows: lane R0's development-only contract check stays silent.
+    const errors = vi.spyOn(console, 'error')
+    onTestFinished(() => errors.mockRestore())
+    serveCards([vx({ is_active: false }), SAVOR, RH])
+    renderManage()
+    await screen.findByText('Card roster')
+    const table = document.querySelector('.roster-table') as HTMLTableElement
+    expect(table.className).toBe('data-table roster-table reorder-table')
+    const head = table.querySelector('thead tr')?.firstElementChild
+    expect(head?.className).toBe('reorder-grip-cell')
+    expect(head?.getAttribute('aria-hidden')).toBe('true')
+    for (const row of table.querySelectorAll('tbody tr')) {
+      expect(row.firstElementChild?.className).toBe('reorder-grip-cell')
+    }
+    expect(
+      [...table.querySelectorAll('tbody .reorder-grip')].map((button) =>
+        button.getAttribute('aria-label'),
+      ),
+    ).toEqual(['Reorder Venture X', 'Reorder SavorOne', 'Reorder RH Gold'])
+    // An archived card keeps its place and moves like any other (spec §9).
+    expect((grip('Venture X') as HTMLButtonElement).disabled).toBe(false)
+    // One description for the list's grips, outside the table (lane R0 consumer rule 6).
+    const instructions = document.getElementById(
+      grip('Venture X').getAttribute('aria-describedby') ?? '',
+    )
+    expect(instructions?.textContent).toBe(
+      'Press Space or Enter to pick up. Use the arrow keys to move, Home or End to jump, Space or Enter to drop, Escape to cancel.',
+    )
+    expect(table.contains(instructions)).toBe(false)
+    expect(errors.mock.calls.filter(([first]) => String(first).startsWith('useReorder:'))).toEqual([])
+  })
+
+  it('gives a lone card a disabled grip, and an empty roster no table at all (spec §9)', async () => {
+    serveCards([vx()])
+    renderManage()
+    await screen.findByText('Card roster')
+    expect((grip('Venture X') as HTMLButtonElement).disabled).toBe(true)
+    cleanup()
+    clearSnapshots()
+    serveCards([])
+    renderManage()
+    await screen.findByText(/No cards yet/)
+    expect(document.querySelector('.roster-table')).toBeNull()
+  })
+
+  it('saves one drop as one PUT of every card id, shows it at once, and parks the grips until it answers', async () => {
+    serveCards()
+    vi.mocked(reorderCreditCards).mockReturnValue(new Promise<never>(() => {}))
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    expect(reorderCreditCards).toHaveBeenCalledTimes(1)
+    expect(reorderCreditCards).toHaveBeenCalledWith([2, 1, 3])
+    // Optimistic: the dropped order is on screen before the server answers (spec §7).
+    expect(rowIds('.roster-table')).toEqual(['2', '1', '3'])
+    // Inert until it answers, so a second drop cannot race the first (spec §9) — but still
+    // focusable: the keyboard drop left focus on the moved grip.
+    expect(grip('RH Gold').getAttribute('aria-disabled')).toBe('true')
+    expect(document.activeElement).toBe(grip('Venture X'))
+  })
+
+  it('flashes the moved row, says "Moved Venture X", and the page reloads — the matrix follows', async () => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    expect(await screen.findByText('Moved Venture X')).toBeTruthy()
+    expect(
+      document.querySelector('.roster-table tr[data-reorder-id="1"]')?.hasAttribute('data-reorder-saved'),
+    ).toBe(true)
+    // The mount's fetch, then the reload the save asked for.
+    expect(fetchCreditCards).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    expect(rowIds('.roster-table')).toEqual(['2', '1', '3'])
+    // The matrix reads the page's list, so its columns follow the new order by construction.
+    fireEvent.click(screen.getByRole('tab', { name: 'Rewards' }))
+    expect([...document.querySelectorAll('[id^="card-col-"]')].map((button) => button.id)).toEqual(
+      ['card-col-2', 'card-col-1', 'card-col-3'],
+    )
+  })
+
+  it('keeps the grips focusable but inert while any request of the roster is in flight', async () => {
+    serveCards()
+    // An archive that never settles: the roster stays busy for the rest of the test.
+    vi.mocked(updateCreditCard).mockReturnValueOnce(new Promise<never>(() => {}))
+    renderManage()
+    await screen.findByText('Card roster')
+    fireEvent.click(screen.getByRole('button', { name: 'Archive RH Gold' }))
+    const handle = grip('SavorOne') as HTMLButtonElement
+    expect(handle.getAttribute('aria-disabled')).toBe('true')
+    expect(handle.disabled).toBe(false)
+    handle.focus()
+    fireEvent.keyDown(handle, { key: ' ' })
+    expect(handle.getAttribute('aria-pressed')).toBeNull()
+    expect(reorderCreditCards).not.toHaveBeenCalled()
+  })
+
+  it('never lets a reload that lands mid-save show the old order over the dropped one', async () => {
+    serveCards()
+    let answer: (cards: CreditCardOut[]) => void = () => {}
+    vi.mocked(reorderCreditCards).mockReturnValueOnce(
+      new Promise<CreditCardOut[]>((resolve) => {
+        answer = resolve
+      }),
+    )
+    const hidden = { ...CATEGORIES[2], is_active: false }
+    vi.mocked(updateRewardCategory).mockResolvedValue(hidden)
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    // Another panel's save reloads the page mid-flight: a fresh card list, still in the old
+    // order (the server has not moved it yet), beside the change that panel made.
+    vi.mocked(fetchCreditCards).mockResolvedValue([vx(), SAVOR, RH])
+    vi.mocked(fetchRewardCategories).mockResolvedValue([CATEGORIES[0], CATEGORIES[1], hidden])
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Rent' }))
+    await screen.findByRole('button', { name: 'Show Rent' })
+    expect(rowIds('.roster-table')).toEqual(['2', '1', '3'])
+    // The PUT answers: the server's order stands until the page's next fetch.
+    await act(async () => {
+      answer([{ ...SAVOR, sort_order: 0 }, { ...vx(), sort_order: 1 }, { ...RH, sort_order: 2 }])
+    })
+    expect(rowIds('.roster-table')).toEqual(['2', '1', '3'])
   })
 })

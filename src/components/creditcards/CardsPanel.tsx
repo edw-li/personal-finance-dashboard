@@ -5,10 +5,14 @@ import {
   createCreditCard,
   createLimitEvent,
   deleteCreditCard,
+  reorderCreditCards,
   updateCreditCard,
 } from '../../api/creditCards'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
+import DragHandle from '../reorder/DragHandle'
+import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
+import { useReorder } from '../reorder/useReorder'
 import { useToast } from '../ToastProvider'
 import type {
   AccountOut,
@@ -75,6 +79,25 @@ export default function CardsPanel({
   // Single-flight across the panel (SecuritiesPanel's busy flag).
   const [busy, setBusy] = useState(false)
   const toast = useToast()
+
+  // Drag to reorder (2026-09-23 drag-to-reorder spec §7). Two layers sit over the page's
+  // `cards`, and only a reorder sets either:
+  //   pendingOrder — the dropped order, from the moment the grip lets go until the PUT
+  //                  answers (optimistic), cleared either way when it does;
+  //   savedOrder   — the server's answer, until the page's next fetch replaces `cards`
+  //                  (retired during render — CategoriesPanel's adjust-during-render
+  //                  pattern, no effect, so react-hooks/set-state-in-effect stays clean).
+  // So a reload that lands mid-save never flashes a row back to where it came from, and the
+  // rows on screen carry the server's renumbered sort_order the moment it answers.
+  const [pendingOrder, setPendingOrder] = useState<CreditCardOut[] | null>(null)
+  const [savedOrder, setSavedOrder] = useState<CreditCardOut[] | null>(null)
+  const [lastCards, setLastCards] = useState(cards)
+  if (lastCards !== cards) {
+    setLastCards(cards)
+    setSavedOrder(null)
+  }
+  const ordered = pendingOrder ?? savedOrder ?? cards
+  const cardById = new Map(ordered.map((card) => [card.id, card]))
 
   // A card is paid from a LIABILITY account and nothing else — offering the cash and
   // taxable accounts would only be a way to link the wrong row.
@@ -292,6 +315,43 @@ export default function CardsPanel({
       .finally(() => setBusy(false))
   }
 
+  // One drop, one PUT (spec §7): every card, active and archived, in its new order. The
+  // matrix columns, the tiles and the credit-line legend read the page's list, so they follow
+  // once the page reloads. `reorder` is read only when the PUT answers, long after the render
+  // that declares it below has returned.
+  const saveOrder = (next: number[], moved: number) => {
+    const card = cardById.get(moved)
+    if (card === undefined) return // the hook commits only ids it was handed
+    // Synchronously: the hook calls onCommit inside flushSync, so the new DOM order and the
+    // cleared drag transforms land in one frame (lane R0 consumer rule 3).
+    setPendingOrder(
+      next.flatMap((id) => {
+        const row = cardById.get(id)
+        return row === undefined ? [] : [row]
+      }),
+    )
+    setBusy(true)
+    reorderCreditCards(next)
+      .then((saved) => {
+        setPendingOrder(null)
+        setSavedOrder(saved)
+        onChanged()
+        reorder.markSaved(moved)
+        toast.success(`Moved ${card.name}`)
+      })
+      .catch(() => setPendingOrder(null))
+      .finally(() => setBusy(false))
+  }
+
+  const reorder = useReorder({
+    items: ordered.map((card) => ({ id: card.id })),
+    labelOf: (id) => cardById.get(id)?.name ?? 'this card',
+    // Any request of the roster in flight — a save, an archive, a delete, a reorder — leaves
+    // the grips focusable but inert (lane R0 consumer rule 4), so a drop never races a save.
+    disabled: busy,
+    onCommit: saveOrder,
+  })
+
   // A card with no opened date has no anniversary, so the calendar can date neither its
   // fee nor an anniversary-cadence credit reset (2026-09-03 calendar spec §6) — the one
   // stored gap on this page that silently costs events elsewhere, so the roster says so.
@@ -433,88 +493,103 @@ export default function CardsPanel({
           )}
         </div>
       </form>
-      {cards.length === 0 ? (
+      {ordered.length === 0 ? (
         <p className="empty-note">No cards yet — add your first card above.</p>
       ) : (
-        <table className="data-table roster-table">
-          <thead>
-            <tr>
-              <th>Card</th>
-              <th>Owner</th>
-              <th>Holder</th>
-              <th>Auth. users</th>
-              <th>Opened</th>
-              <th className="num">Limit</th>
-              <th>Linked account</th>
-              <th>Status</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {cards.map((card) => (
-              <tr key={card.id} className={card.id === editingId ? 'is-editing' : undefined}>
-                <td>
-                  {card.name}
-                  {/* The card's economics ride the name cell rather than owning two more
-                      columns. A 1¢ point value is the cash identity and says nothing. */}
-                  <span className="sub">
-                    {formatCurrency(card.annual_fee)} · {card.rewards_currency}
-                    {Number(card.point_value_cents) !== 1 && ` ${Number(card.point_value_cents)}¢`}
-                  </span>
-                </td>
-                {/* NULL is JOINT, never "unknown": the migration backfilled every
-                    pre-existing card to the primary person. `Holder` beside it is the
-                    embossed name — informational, and no longer editable here. */}
-                <td>
-                  {card.person_id === null ? 'Joint' : (ownerName.get(card.person_id) ?? '—')}
-                </td>
-                <td>{card.primary_holder ?? '—'}</td>
-                <td>{card.authorized_users ?? '—'}</td>
-                <td>{card.opened_on ? formatDate(card.opened_on) : '—'}</td>
-                {/* The SERVER's latest limit event, never re-derived here (global rule 9). */}
-                <td className="num">
-                  {card.current_limit === null ? '—' : formatCurrency(card.current_limit)}
-                </td>
-                <td>{card.account_id === null ? '—' : (accountName.get(card.account_id) ?? '—')}</td>
-                <td>
-                  <span className="badge">{card.is_active ? 'Active' : 'Archived'}</span>
-                </td>
-                <td className="row-actions">
-                  <button
-                    type="button"
-                    className="button"
-                    aria-label={`Edit ${card.name}`}
-                    // Shut mid-flight like every other button here: this fills the form from
-                    // the row, and a save landing a moment later resets it out from under
-                    // the click.
-                    disabled={busy}
-                    onClick={() => startEdit(card)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="button"
-                    aria-label={card.is_active ? `Archive ${card.name}` : `Unarchive ${card.name}`}
-                    disabled={busy}
-                    onClick={() => toggleArchive(card)}
-                  >
-                    {card.is_active ? 'Archive' : 'Unarchive'}
-                  </button>
-                  <button
-                    type="button"
-                    className="button"
-                    aria-label={`Delete ${card.name}`}
-                    disabled={busy}
-                    onClick={() => remove(card)}
-                  >
-                    Delete
-                  </button>
-                </td>
+        <>
+          {/* Once per list and outside the table — a <span> is not a valid child of one (lane
+              R0 consumer rule 6). Every grip points its aria-describedby at the instructions. */}
+          <ReorderInstructions id={reorder.instructionsId} />
+          <ReorderLiveRegion text={reorder.announcement} />
+          <table className="data-table roster-table reorder-table">
+            <thead>
+              <tr>
+                <th className="reorder-grip-cell" aria-hidden="true" />
+                <th>Card</th>
+                <th>Owner</th>
+                <th>Holder</th>
+                <th>Auth. users</th>
+                <th>Opened</th>
+                <th className="num">Limit</th>
+                <th>Linked account</th>
+                <th>Status</th>
+                <th />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {ordered.map((card) => (
+                <tr
+                  key={card.id}
+                  {...reorder.itemProps(card.id)}
+                  className={card.id === editingId ? 'is-editing' : undefined}
+                >
+                  {/* Every card, archived ones included, keeps its place and moves (spec §9). */}
+                  <td className="reorder-grip-cell">
+                    <DragHandle name={card.name} {...reorder.handleProps(card.id)} />
+                  </td>
+                  <td>
+                    {card.name}
+                    {/* The card's economics ride the name cell rather than owning two more
+                        columns. A 1¢ point value is the cash identity and says nothing. */}
+                    <span className="sub">
+                      {formatCurrency(card.annual_fee)} · {card.rewards_currency}
+                      {Number(card.point_value_cents) !== 1 && ` ${Number(card.point_value_cents)}¢`}
+                    </span>
+                  </td>
+                  {/* NULL is JOINT, never "unknown": the migration backfilled every
+                      pre-existing card to the primary person. `Holder` beside it is the
+                      embossed name — informational, and no longer editable here. */}
+                  <td>
+                    {card.person_id === null ? 'Joint' : (ownerName.get(card.person_id) ?? '—')}
+                  </td>
+                  <td>{card.primary_holder ?? '—'}</td>
+                  <td>{card.authorized_users ?? '—'}</td>
+                  <td>{card.opened_on ? formatDate(card.opened_on) : '—'}</td>
+                  {/* The SERVER's latest limit event, never re-derived here (global rule 9). */}
+                  <td className="num">
+                    {card.current_limit === null ? '—' : formatCurrency(card.current_limit)}
+                  </td>
+                  <td>{card.account_id === null ? '—' : (accountName.get(card.account_id) ?? '—')}</td>
+                  <td>
+                    <span className="badge">{card.is_active ? 'Active' : 'Archived'}</span>
+                  </td>
+                  <td className="row-actions">
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={`Edit ${card.name}`}
+                      // Shut mid-flight like every other button here: this fills the form from
+                      // the row, and a save landing a moment later resets it out from under
+                      // the click.
+                      disabled={busy}
+                      onClick={() => startEdit(card)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={card.is_active ? `Archive ${card.name}` : `Unarchive ${card.name}`}
+                      disabled={busy}
+                      onClick={() => toggleArchive(card)}
+                    >
+                      {card.is_active ? 'Archive' : 'Unarchive'}
+                    </button>
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={`Delete ${card.name}`}
+                      disabled={busy}
+                      onClick={() => remove(card)}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
       {/* Sibling of the ternary, not inside it: `undated` derives from `cards`, so it is
           empty exactly when the empty-note above is showing. */}
