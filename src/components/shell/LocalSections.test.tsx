@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -217,4 +219,13 @@ describe('LocalSectionPanel fade (2026-09-13 polish §2.4)', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
     expect(animate).not.toHaveBeenCalled()
   })
+})
+
+// 2026-09-23 spec §C11: a local-section deep link lands its target under the sticky row by the
+// row's MEASURED height (--sticky-inset, the house rule settings and the guide already use) — a
+// hard-coded 7rem left it under the row on a taller strip and under the top scrim on every page.
+it('lands a local-section deep link under the sticky row, by its measured height', () => {
+  const css = readFileSync(path.join(__dirname, 'localSections.css'), 'utf8')
+  expect(css).toContain('.local-section-panel [id] { scroll-margin-top: calc(var(--sticky-inset, 0px) + 0.75rem); }')
+  expect(css).not.toContain('scroll-margin-top: 7rem')
 })

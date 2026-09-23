@@ -90,3 +90,11 @@ it('no stylesheet states a finite duration as a literal', () => {
   }
   expect(offenders).toEqual([])
 })
+
+// 2026-09-23 spec §C11 (shell F10, charts F8): at 120px and full strength the scrims washed out
+// the Overview's Year-to-date figures at rest, and at 1280×800 the sticky row plus both scrims
+// covered 44 % of the window. A hint that there is more, never a veil over what is there.
+it('keeps the scrims a hint, never a veil: at most 32px deep and half strength', () => {
+  expect(Number.parseInt(SCRIM.height, 10)).toBeLessThanOrEqual(32)
+  expect(Number(SCRIM.alpha)).toBeLessThanOrEqual(0.5)
+})
