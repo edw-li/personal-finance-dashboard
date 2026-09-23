@@ -7,7 +7,7 @@ caller (service.py) owns the transaction: nothing here commits.
 
 from datetime import UTC, date, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.importer.cells import slugify, synthetic_ticker
@@ -44,6 +44,7 @@ from app.models import (
     TaxYear,
 )
 from app.seed import seed_tax_definitions
+from app.services.ordering import SORT_INDEX_STEP, next_sort_index
 from app.services.people import load_people, primary_person
 from app.services.portfolio_accounts import resolve_portfolio_account
 from app.services.spending_guard import records_something
@@ -177,9 +178,7 @@ async def apply_positions(
     existing = {t.import_key: t for t in imported if t.import_key is not None}
     # New sheet rows land at the END of the ledger in sheet order, exactly where a UI row
     # lands; the user drags them into place. Existing rows never move.
-    last_index = (
-        await db.execute(select(func.coalesce(func.max(PositionTransaction.sort_index), 0)))
-    ).scalar_one()
+    next_index = (await db.execute(next_sort_index())).scalar_one()
     # One get-or-create per DISTINCT sheet label, not per row: a re-import of ~200 position
     # rows touches a handful of platforms. New labels land owned by the primary person;
     # a label the user re-tagged in Settings keeps its owner (resolve_portfolio_account).
@@ -205,12 +204,12 @@ async def apply_positions(
         }
         row = existing.get(txn.sort_index)
         if row is None:
-            last_index += 10
             db.add(
                 PositionTransaction(
-                    import_key=txn.sort_index, sort_index=last_index, source="import", **fields
+                    import_key=txn.sort_index, sort_index=next_index, source="import", **fields
                 )
             )
+            next_index += SORT_INDEX_STEP
             txn_counts.creates += 1
             report.add_sample(
                 f"position_transactions[{txn.sort_index}]: {txn.type} "

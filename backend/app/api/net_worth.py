@@ -38,10 +38,10 @@ from app.services.net_worth_calc import (
 )
 from app.services.ordering import (
     STALE_ACCOUNTS,
-    check_permutation,
+    apply_order,
+    in_list_order,
     moved_ids,
     next_sort_order,
-    renumber,
 )
 
 router = APIRouter(
@@ -100,8 +100,7 @@ def _check_component_link(is_component: bool | None, parent_account_id: int | No
 
 @router.get("/accounts", response_model=list[AccountOut])
 async def list_accounts(db: AsyncSession = Depends(get_db)) -> list[Account]:
-    result = await db.execute(select(Account).order_by(Account.sort_order, Account.id))
-    return list(result.scalars().all())
+    return list((await db.execute(in_list_order(Account))).scalars())
 
 
 def _reorder_label(accounts: list[Account], moved: list[int]) -> str:
@@ -139,18 +138,14 @@ async def reorder_accounts(
 
     Declared before the /accounts/{account_id} routes so a later PUT on that path can never
     shadow it."""
-    accounts = list(
-        (await db.execute(select(Account).order_by(Account.sort_order, Account.id))).scalars()
-    )
-    current = [account.id for account in accounts]
-    check_permutation(current, body.ids, stale_detail=STALE_ACCOUNTS)
-    if body.ids == current:
-        return accounts
-    by_id = {account.id: account for account in accounts}
-    ordered = [by_id[account_id] for account_id in body.ids]
+    accounts = list((await db.execute(in_list_order(Account))).scalars())
     before = {account.id: row_image(account) for account in accounts}
-    for account, _old, _new in renumber(ordered, "sort_order", start=0, step=1):
+    ordered, changed = apply_order(accounts, body.ids, stale_detail=STALE_ACCOUNTS)
+    if not changed:  # the order as stored: nothing written, nothing logged
+        return ordered
+    for account, _old, _new in changed:
         batch.record_update(account, before[account.id])
+    current = [account.id for account in accounts]
     batch.label = _reorder_label(accounts, moved_ids(current, body.ids))
     # The header only when rows were logged — the allocation routes' rule; batch_header
     # spells it the way the month DELETEs already do.

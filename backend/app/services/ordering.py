@@ -8,11 +8,13 @@ that needs the database is BUILT here and awaited by the router.
 from bisect import bisect_left
 from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Protocol
 
 from fastapi import HTTPException
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import InstrumentedAttribute
 
+from app.models import PositionTransaction
 from app.schemas.portfolio import PositionChangeOut
 from app.services.portfolio_calc import MONEY_Q, SHARE_Q, Position, PositionKey
 
@@ -25,6 +27,10 @@ STALE_CARDS = "The cards changed since this list was loaded — nothing was move
 STALE_REWARD_CATEGORIES = (
     "The reward categories changed since this list was loaded — nothing was moved."
 )
+
+# The ledger's spacing: PUT /portfolio/transactions/order renumbers 10, 20, …, and a new
+# transaction — UI or import — lands one step after the whole ledger's max.
+SORT_INDEX_STEP = 10
 
 
 def check_permutation(current_ids: Sequence[int], ids: Sequence[int], *, stale_detail: str) -> None:
@@ -70,6 +76,32 @@ def renumber[R](
     return changed
 
 
+class ListRow(Protocol):
+    """A row of one of the four sort_order lists: accounts, spending categories, credit
+    cards, reward categories."""
+
+    id: int
+    sort_order: int
+
+
+def apply_order[R: ListRow](
+    rows: Sequence[R], ids: Sequence[int], *, stale_detail: str
+) -> tuple[list[R], list[tuple[R, int, int]]]:
+    """The four sort_order reorder PUTs, minus their I/O (spec §3.2). `rows` is the list in
+    its stored order (in_list_order), `ids` the requested order. The ids are judged first
+    (check_permutation: 422 repeated, 409 stale). An unchanged order comes back exactly as
+    stored, with nothing set — no normalization on a no-op (decision 10). Otherwise the rows
+    come back in their new order with sort_order renumbered 0…n−1 where it differs, plus
+    renumber's (row, old, new) for every row it set: never empty for a changed order."""
+    current = [row.id for row in rows]
+    check_permutation(current, ids, stale_detail=stale_detail)
+    if list(ids) == current:
+        return list(rows), []
+    by_id = {row.id: row for row in rows}
+    ordered = [by_id[row_id] for row_id in ids]
+    return ordered, renumber(ordered, "sort_order", start=0, step=1)
+
+
 def moved_ids(old_order: Sequence[int], new_order: Sequence[int]) -> list[int]:
     """The fewest rows whose moves explain old_order -> new_order: every row outside a
     longest increasing subsequence of old positions, read in new order.
@@ -110,6 +142,21 @@ def next_sort_order(column: InstrumentedAttribute[int]) -> Select[tuple[int]]:
     sort_order takes (spec §3.3). The statement, not the value, so this module stays free
     of I/O: the router awaits it inside its own transaction."""
     return select(func.coalesce(func.max(column), -1) + 1)
+
+
+def next_sort_index() -> Select[tuple[int]]:
+    """`SELECT coalesce(max(sort_index), 0) + 10` over the WHOLE ledger, UI and import rows
+    alike — the replay position a new transaction takes (spec §3.4): after everything, from
+    where the user drags it into place. The statement, not the value (next_sort_order's
+    posture); the UI create and the importer both read it."""
+    return select(func.coalesce(func.max(PositionTransaction.sort_index), 0) + SORT_INDEX_STEP)
+
+
+def in_list_order[M](model: type[M]) -> Select[tuple[M]]:
+    """`SELECT … ORDER BY sort_order, id` — a sort_order list in the order its page shows
+    it. Each of the four lists' GET and its reorder PUT read through this one builder, so
+    "the rows the page shows" and "the rows the PUT must name" cannot drift apart."""
+    return select(model).order_by(model.sort_order, model.id)
 
 
 def _q(value: Decimal, quantum: Decimal) -> Decimal:

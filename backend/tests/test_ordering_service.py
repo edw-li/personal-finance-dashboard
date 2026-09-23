@@ -7,21 +7,26 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.models import Account
+from app.models import Account, PositionTransaction, Security
 from app.services.ordering import (
+    SORT_INDEX_STEP,
     STALE_ACCOUNTS,
     STALE_CARDS,
     STALE_CATEGORIES,
     STALE_REWARD_CATEGORIES,
     STALE_TRANSACTIONS,
+    apply_order,
     check_permutation,
+    in_list_order,
     moved_ids,
+    next_sort_index,
     next_sort_order,
     position_changes,
     renumber,
     subset_in_slots,
 )
 from app.services.portfolio_calc import Position
+from tests.portfolio_factories import acct
 
 # ── the §8.3 sentences ───────────────────────────────────────────────────────────────
 
@@ -95,11 +100,13 @@ def test_subset_in_slots_refuses_rows_that_are_not_a_subset(visible):
 
 
 class Recorder:
-    """A row that remembers every attribute SET — renumber must not set an unchanged one."""
+    """A row that remembers every attribute SET after it was built — renumber and
+    apply_order must not set an unchanged one."""
 
-    def __init__(self, id_: int, value: int) -> None:
+    def __init__(self, id_: int, **attrs: int) -> None:
         object.__setattr__(self, "id", id_)
-        object.__setattr__(self, "value", value)
+        for name, value in attrs.items():
+            object.__setattr__(self, name, value)
         object.__setattr__(self, "sets", 0)
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -108,7 +115,7 @@ class Recorder:
 
 
 def test_renumber_writes_only_the_rows_whose_value_moves():
-    rows = [Recorder(1, 0), Recorder(2, 5), Recorder(3, 2)]
+    rows = [Recorder(1, value=0), Recorder(2, value=5), Recorder(3, value=2)]
     changed = renumber(rows, "value", start=0, step=1)
     assert [(row.id, old, new) for row, old, new in changed] == [(2, 5, 1)]
     assert [row.value for row in rows] == [0, 1, 2]
@@ -170,6 +177,79 @@ async def test_next_sort_order_appends_after_the_max_and_starts_at_zero(db):
     )
     await db.commit()
     assert (await db.execute(next_sort_order(Account.sort_order))).scalar_one() == 30
+
+
+# ── next_sort_index ──────────────────────────────────────────────────────────────────
+
+
+async def test_next_sort_index_appends_one_step_after_the_whole_ledger(db):
+    assert SORT_INDEX_STEP == 10  # the ledger's spacing: reorders renumber 10, 20, …
+    assert (await db.execute(next_sort_index())).scalar_one() == 10  # an empty ledger
+    sec = Security(ticker="NSI", name="Next Sort Index", holding_type="stock")
+    db.add(sec)
+    await db.flush()
+
+    def row(source: str, sort_index: int) -> PositionTransaction:
+        return PositionTransaction(
+            security_id=sec.id,
+            portfolio_account=acct("Fido"),
+            type="buy",
+            shares=Decimal("1"),
+            price=Decimal("1"),
+            sort_index=sort_index,
+            source=source,
+        )
+
+    db.add_all([row("import", 30), row("ui", 7)])  # UI rows count: one ledger, one max
+    await db.commit()
+    assert (await db.execute(next_sort_index())).scalar_one() == 40
+
+
+# ── in_list_order ────────────────────────────────────────────────────────────────────
+
+
+async def test_in_list_order_is_sort_order_then_id(db):
+    db.add_all(
+        [
+            Account(name="C", slug="c", group="cash", sort_order=5),
+            Account(name="A", slug="a", group="cash", sort_order=3),
+            Account(name="B", slug="b", group="cash", sort_order=3),  # the tie breaks on id
+        ]
+    )
+    await db.commit()
+    listed = (await db.execute(in_list_order(Account))).scalars().all()
+    assert [account.name for account in listed] == ["A", "B", "C"]
+
+
+# ── apply_order ──────────────────────────────────────────────────────────────────────
+
+
+def test_apply_order_leaves_an_unchanged_order_exactly_as_stored():
+    rows = [Recorder(1, sort_order=3), Recorder(2, sort_order=3), Recorder(3, sort_order=29)]
+    ordered, changed = apply_order(rows, [1, 2, 3], stale_detail="stale")
+    assert ordered == rows
+    assert changed == []
+    assert [row.sort_order for row in rows] == [3, 3, 29]  # the tie and the gap stay
+    assert [row.sets for row in rows] == [0, 0, 0]
+
+
+def test_apply_order_renumbers_the_new_order_and_sets_only_what_moves():
+    rows = [Recorder(1, sort_order=0), Recorder(2, sort_order=1), Recorder(3, sort_order=2)]
+    ordered, changed = apply_order(rows, [1, 3, 2], stale_detail="stale")
+    assert [row.id for row in ordered] == [1, 3, 2]
+    assert [(row.id, old, new) for row, old, new in changed] == [(3, 2, 1), (2, 1, 2)]
+    assert [row.sets for row in rows] == [0, 1, 1]
+
+
+@pytest.mark.parametrize(
+    ("ids", "status"), [([1, 1, 2], 422), ([2], 409)], ids=["repeated", "stale"]
+)
+def test_apply_order_judges_the_ids_before_touching_a_row(ids, status):
+    rows = [Recorder(1, sort_order=0), Recorder(2, sort_order=1)]
+    with pytest.raises(HTTPException) as caught:
+        apply_order(rows, ids, stale_detail="stale")
+    assert caught.value.status_code == status
+    assert [row.sets for row in rows] == [0, 0]
 
 
 # ── position_changes ─────────────────────────────────────────────────────────────────

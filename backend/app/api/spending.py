@@ -46,10 +46,10 @@ from app.services.month_writes import write_spending
 from app.services.net_worth_calc import get_swr_pct, investable_bases
 from app.services.ordering import (
     STALE_CATEGORIES,
-    check_permutation,
+    apply_order,
+    in_list_order,
     moved_ids,
     next_sort_order,
-    renumber,
 )
 from app.services.savings import (
     LIVING,
@@ -65,10 +65,7 @@ router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(
 
 @router.get("/categories", response_model=list[CategoryOut])
 async def list_categories(db: AsyncSession = Depends(get_db)) -> list[SpendingCategory]:
-    result = await db.execute(
-        select(SpendingCategory).order_by(SpendingCategory.sort_order, SpendingCategory.id)
-    )
-    return list(result.scalars().all())
+    return list((await db.execute(in_list_order(SpendingCategory))).scalars())
 
 
 @router.put("/categories/order", response_model=list[CategoryOut])
@@ -84,25 +81,16 @@ async def reorder_categories(
 
     Declared before the /categories/{category_id} routes so a later PUT on that path can
     never shadow it."""
-    categories = list(
-        (
-            await db.execute(
-                select(SpendingCategory).order_by(SpendingCategory.sort_order, SpendingCategory.id)
-            )
-        ).scalars()
-    )
-    current = [category.id for category in categories]
-    check_permutation(current, body.ids, stale_detail=STALE_CATEGORIES)
-    if body.ids == current:
-        return categories
-    by_id = {category.id: category for category in categories}
-    ordered = [by_id[category_id] for category_id in body.ids]
+    categories = list((await db.execute(in_list_order(SpendingCategory))).scalars())
     before = {category.id: row_image(category) for category in categories}
-    for category, _old, _new in renumber(ordered, "sort_order", start=0, step=1):
+    ordered, changed = apply_order(categories, body.ids, stale_detail=STALE_CATEGORIES)
+    if not changed:  # the order as stored: nothing written, nothing logged
+        return ordered
+    for category, _old, _new in changed:
         batch.record_update(category, before[category.id])
-    moved = moved_ids(current, body.ids)
+    moved = moved_ids([category.id for category in categories], body.ids)
     batch.label = (
-        f"Moved category {by_id[moved[0]].name}"
+        f"Moved category {next(c.name for c in categories if c.id == moved[0])}"
         if len(moved) == 1
         else f"Reordered {len(moved)} categories"
     )

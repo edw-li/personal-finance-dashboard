@@ -42,9 +42,9 @@ from app.services.money import (
 from app.services.ordering import (
     STALE_CARDS,
     STALE_REWARD_CATEGORIES,
-    check_permutation,
+    apply_order,
+    in_list_order,
     next_sort_order,
-    renumber,
 )
 
 router = APIRouter(
@@ -92,10 +92,7 @@ def _validated_annual_spend(value: Decimal | None) -> Decimal | None:
 
 @router.get("/categories", response_model=list[RewardCategoryOut])
 async def list_reward_categories(db: AsyncSession = Depends(get_db)) -> list[RewardCategory]:
-    result = await db.execute(
-        select(RewardCategory).order_by(RewardCategory.sort_order, RewardCategory.id)
-    )
-    return list(result.scalars().all())
+    return list((await db.execute(in_list_order(RewardCategory))).scalars())
 
 
 @router.post("/categories", response_model=RewardCategoryOut, status_code=201)
@@ -148,21 +145,10 @@ async def reorder_reward_categories(
     reward category in its new order; sort_order becomes 0…n−1 in ONE transaction, and only
     rows whose value moves are written. Unlogged like the rest of this router — the client's
     Undo re-sends the previous order. Declared before /categories/{category_id}."""
-    categories = list(
-        (
-            await db.execute(
-                select(RewardCategory).order_by(RewardCategory.sort_order, RewardCategory.id)
-            )
-        ).scalars()
-    )
-    current = [category.id for category in categories]
-    check_permutation(current, body.ids, stale_detail=STALE_REWARD_CATEGORIES)
-    if body.ids == current:
-        return categories
-    by_id = {category.id: category for category in categories}
-    ordered = [by_id[category_id] for category_id in body.ids]
-    renumber(ordered, "sort_order", start=0, step=1)
-    await db.commit()
+    categories = list((await db.execute(in_list_order(RewardCategory))).scalars())
+    ordered, changed = apply_order(categories, body.ids, stale_detail=STALE_REWARD_CATEGORIES)
+    if changed:  # the order as stored writes nothing
+        await db.commit()
     return ordered
 
 
@@ -452,12 +438,7 @@ async def _validated_card_values(db: AsyncSession, body: CreditCardIn, card_id: 
 
 @router.get("", response_model=list[CreditCardOut])
 async def list_credit_cards(db: AsyncSession = Depends(get_db)) -> list[CreditCardOut]:
-    cards = list(
-        (await db.execute(select(CreditCard).order_by(CreditCard.sort_order, CreditCard.id)))
-        .scalars()
-        .all()
-    )
-    return await _cards_out(db, cards)
+    return await _cards_out(db, list((await db.execute(in_list_order(CreditCard))).scalars()))
 
 
 @router.post("", response_model=CreditCardOut, status_code=201)
@@ -485,19 +466,11 @@ async def reorder_credit_cards(
     rows whose value moves are written. Answers exactly as the list GET does. Unlogged like
     the rest of this router — the client's Undo re-sends the previous order. Declared
     before the /{card_id} routes."""
-    cards = list(
-        (await db.execute(select(CreditCard).order_by(CreditCard.sort_order, CreditCard.id)))
-        .scalars()
-        .all()
-    )
-    current = [card.id for card in cards]
-    check_permutation(current, body.ids, stale_detail=STALE_CARDS)
-    if body.ids != current:
-        by_id = {card.id: card for card in cards}
-        cards = [by_id[card_id] for card_id in body.ids]
-        renumber(cards, "sort_order", start=0, step=1)
+    cards = list((await db.execute(in_list_order(CreditCard))).scalars())
+    ordered, changed = apply_order(cards, body.ids, stale_detail=STALE_CARDS)
+    if changed:  # the order as stored writes nothing
         await db.commit()
-    return await _cards_out(db, cards)
+    return await _cards_out(db, ordered)
 
 
 @router.patch("/{card_id}", response_model=CreditCardOut)

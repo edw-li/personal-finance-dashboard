@@ -61,8 +61,10 @@ from app.services.money import (
     require_reasonable_date,
 )
 from app.services.ordering import (
+    SORT_INDEX_STEP,
     STALE_TRANSACTIONS,
     check_permutation,
+    next_sort_index,
     position_changes,
     renumber,
     subset_in_slots,
@@ -403,7 +405,12 @@ async def reorder_transactions(
     by_id = {txn.id: txn for txn in ledger}
     before = fold_transactions(ledger)  # folded BEFORE renumber touches a row
     new_order = subset_in_slots([txn.id for txn in ledger], body.ids)
-    renumber([by_id[txn_id] for txn_id in new_order], "sort_index", start=10, step=10)
+    renumber(
+        [by_id[txn_id] for txn_id in new_order],
+        "sort_index",
+        start=SORT_INDEX_STEP,
+        step=SORT_INDEX_STEP,
+    )
     changed = position_changes(before, fold_transactions(ledger), tickers)
     await db.commit()
     return TransactionOrderOut(
@@ -421,9 +428,7 @@ async def create_transaction(
     fields = _validated_txn_fields(body.type, body.shares, body.price, body.fees, body.split_factor)
     if body.txn_date is not None:
         require_reasonable_date(body.txn_date, "txn_date")
-    max_index = (
-        await db.execute(select(func.coalesce(func.max(PositionTransaction.sort_index), 0)))
-    ).scalar_one()
+    sort_index = (await db.execute(next_sort_index())).scalar_one()
     # Resolve only after every 422 above: get-or-create flushes, and a label minted for a
     # request that then fails validation would be a row nobody asked for.
     account = await resolve_portfolio_account(db, _validated_account(body.account))
@@ -436,7 +441,7 @@ async def create_transaction(
         portfolio_account=account,
         type=body.type,
         txn_date=body.txn_date,
-        sort_index=max_index + 10,
+        sort_index=sort_index,
         source="ui",
         notes=body.notes,
         **fields,
