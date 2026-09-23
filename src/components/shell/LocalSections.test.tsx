@@ -251,6 +251,32 @@ describe('holding a deep link where it lands (2026-09-23 spec §C11)', () => {
     expect(release).toHaveBeenCalledTimes(1)
   })
 
+  // Code review 8: an arrival hook consumes its ?param with a REPLACE right after the landing. That
+  // is not a navigation — the reader is still on the deep link — so the hold stays, and the target
+  // is not landed a second time. A real navigation (PUSH, POP, another section) lets go.
+  it("keeps holding through an arrival hook's REPLACE, and lets go on a real navigation", async () => {
+    function ArrivalHarness() {
+      const location = useLocation()
+      const navigate = useNavigate()
+      return <>
+        <TargetHarness />
+        <button type="button" onClick={() => navigate({ search: '', hash: location.hash }, { replace: true })}>Consume arrival</button>
+        <button type="button" onClick={() => navigate('/guide?section=summary')}>Go elsewhere</button>
+      </>
+    }
+    const frame = () => act(() => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()) }))
+    render(<MemoryRouter initialEntries={['/guide?from=palette#deep']}><ArrivalHarness /></MemoryRouter>)
+    await waitFor(() => expect(holdPosition).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Consume arrival' }))
+    await frame()
+    await frame()
+    expect(holdPosition).toHaveBeenCalledTimes(1) // not landed twice
+    expect(release).not.toHaveBeenCalled() // still held
+    fireEvent.click(screen.getByRole('button', { name: 'Go elsewhere' }))
+    await frame()
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
   it('a page without a deep link holds nothing', async () => {
     render(<MemoryRouter initialEntries={['/guide']}><TargetHarness /></MemoryRouter>)
     await act(() => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()) }))
