@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type {
@@ -71,7 +71,9 @@ vi.mock('../components/EChart', async () => {
 import {
   createCardCredit,
   createCreditCard,
+  createRewardCategory,
   deleteCreditCard,
+  deleteRewardCategory,
   fetchCreditCards,
   fetchRewardCategories,
   fetchRewardRates,
@@ -85,6 +87,7 @@ import { fetchHousehold } from '../api/household'
 import { fetchAccounts, fetchMonthBalances, fetchSummary } from '../api/netWorth'
 import { fetchCategories, fetchMatrix } from '../api/spending'
 import ToastProvider from '../components/ToastProvider'
+import CategoriesPanel from '../components/creditcards/CategoriesPanel'
 
 // --- fixtures: the valuation-flip scenario straight from the spec -----------------------
 // VX: 2x miles @1.7¢ on Groceries (3.4%) — beats Savor's 3x cash (3.0%).
@@ -231,6 +234,41 @@ function keyboardMove(name: string, key: 'ArrowUp' | 'ArrowDown'): void {
   fireEvent.keyDown(grip(name), { key: ' ' })
   fireEvent.keyDown(grip(name), { key })
   fireEvent.keyDown(grip(name), { key: ' ' })
+}
+
+/** Unhandled rejections raised during the test, collected rather than failing the run: vitest
+ *  steps aside when another listener exists. A throw in a save's success path must surface as
+ *  one of these — a bug, loud on the console — never as a failed-save toast (lane R3 review). */
+function collectRejections(): unknown[] {
+  const reasons: unknown[] = []
+  const listener = (reason: unknown) => {
+    reasons.push(reason)
+  }
+  process.on('unhandledRejection', listener)
+  onTestFinished(() => {
+    process.off('unhandledRejection', listener)
+  })
+  return reasons
+}
+
+/** CategoriesPanel on its own, so a test can hand it a new onChanged between renders — the
+ *  page's own `load` never changes, so only a direct render shows which one a late answer calls.
+ *  Returns the rerender. */
+function renderCategoriesPanel(onChanged: () => void): (next: () => void) => void {
+  const panel = (callback: () => void) => (
+    <ToastProvider>
+      <CategoriesPanel
+        categories={CATEGORIES}
+        cards={[vx(), SAVOR, RH]}
+        spendingCategories={[]}
+        suggested={new Map()}
+        enteredMonths={new Map()}
+        onChanged={callback}
+      />
+    </ToastProvider>
+  )
+  const view = render(panel(onChanged))
+  return (next) => view.rerender(panel(next))
 }
 
 /** A table's row ids, top to bottom, as rendered. */
@@ -1316,5 +1354,127 @@ describe('CreditCardsPage — Categories & weights: Undo, and a save that fails 
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
     expect(await screen.findByText(text)).toBeTruthy()
     expect(fetchRewardCategories).toHaveBeenCalledTimes(fetches)
+  })
+})
+
+// Lane R3's code-quality review, applied to the same save/Undo shape (coordinator, 2026-09-23):
+// a late answer reloads through the page as it is now; requests are counted, not flagged; and
+// a throw in a success path is never reported as a failed request.
+describe('CreditCardsPage — Categories & weights: late answers and overlapping requests (lane R3 review)', () => {
+  /** The reward categories in `ids` order, renumbered as lane R1's route answers them. */
+  const categoriesIn = (ids: number[]): RewardCategoryOut[] =>
+    ids.flatMap((id, index) =>
+      CATEGORIES.filter((category) => category.id === id).map((category) => ({
+        ...category,
+        sort_order: index,
+      })),
+    )
+
+  beforeEach(() => {
+    vi.mocked(reorderRewardCategories).mockReset()
+  })
+
+  it("reloads through the latest render's onChanged — a save, its Undo and a delete's Undo that answer late", async () => {
+    const onChanged = [vi.fn(), vi.fn(), vi.fn(), vi.fn()]
+    let answer: (rows: RewardCategoryOut[]) => void = () => {}
+    vi.mocked(reorderRewardCategories)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve
+          }),
+      )
+      .mockImplementationOnce(async (ids) => categoriesIn(ids))
+    vi.mocked(deleteRewardCategory).mockResolvedValue(undefined)
+    vi.mocked(createRewardCategory).mockResolvedValue(CATEGORIES[2])
+    const rerenderWith = renderCategoriesPanel(onChanged[0])
+    keyboardMove('Dining', 'ArrowUp')
+    // The page renders again while the PUT is out, handing down a new onChanged.
+    rerenderWith(onChanged[1])
+    await act(async () => answer(categoriesIn([11, 10, 12])))
+    // The toast's Undo is clicked after yet another render.
+    rerenderWith(onChanged[2])
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await screen.findByText('Order restored')
+    // A delete (reloading through the render it was clicked in), then its Undo after another.
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Rent' }))
+    const deleted = (await screen.findByText('Deleted Rent and its multipliers')).closest(
+      '.toast',
+    ) as HTMLElement
+    rerenderWith(onChanged[3])
+    fireEvent.click(within(deleted).getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Restored Rent — multipliers were not restored')
+    expect(onChanged.map((callback) => callback.mock.calls.length)).toEqual([0, 1, 2, 1])
+  })
+
+  it("keeps the grips parked until every request is back — a drop's Undo clicked while a later drop's save is out", async () => {
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Dining', 'ArrowUp') // drop A, answered at once
+    await screen.findByText('Moved Dining')
+    await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
+    let answerDrop: (rows: RewardCategoryOut[]) => void = () => {}
+    let answerUndo: (rows: RewardCategoryOut[]) => void = () => {}
+    vi.mocked(reorderRewardCategories)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerDrop = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerUndo = resolve
+          }),
+      )
+    keyboardMove('Rent', 'ArrowUp') // drop B, left out
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' })) // A's Undo, left out too
+    expect(vi.mocked(reorderRewardCategories).mock.calls.slice(1)).toEqual([
+      [[11, 12, 10]],
+      [[10, 11, 12]],
+    ])
+    await act(async () => answerDrop(categoriesIn([11, 12, 10])))
+    // B is back and A's Undo is not: the grips stay parked.
+    expect(grip('Rent').getAttribute('aria-disabled')).toBe('true')
+    await act(async () => answerUndo(categoriesIn([10, 11, 12])))
+    await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
+    expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
+  })
+
+  it("a throw in the save's success path is a bug on the console, never 'The list is back to how it was.'", async () => {
+    const rejections = collectRejections()
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    // The page's reload throws before it returns a promise: a synchronous throw inside the
+    // success handler, with the saved order already on screen.
+    vi.mocked(fetchRewardCategories).mockImplementationOnce(() => {
+      throw new Error('the reload threw')
+    })
+    keyboardMove('Dining', 'ArrowUp')
+    await waitFor(() => expect(rejections).toHaveLength(1))
+    expect(rejections[0]).toEqual(new Error('the reload threw'))
+    expect(rowIds('.categories-table')).toEqual(['11', '10', '12'])
+    expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
+    // The request is back whatever its success path did: the grips wake.
+    await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
+  })
+
+  it("a throw in the Undo's success path is a bug on the console, never \"Couldn't restore the order\"", async () => {
+    const rejections = collectRejections()
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Dining', 'ArrowUp')
+    await screen.findByText('Moved Dining')
+    vi.mocked(fetchRewardCategories).mockImplementationOnce(() => {
+      throw new Error('the reload threw')
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(rejections).toHaveLength(1))
+    expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
+    expect(screen.queryByText(/Couldn't restore the order/)).toBeNull()
   })
 })
