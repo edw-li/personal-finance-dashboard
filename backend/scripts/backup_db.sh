@@ -188,14 +188,20 @@ DUMP_SIZE="$(du -h "$DUMP_FILE" | cut -f1)"
 echo "[$(date)] Dump complete: ${DUMP_FILE} (${DUMP_SIZE})"
 
 # Upload to OCI Object Storage and delete the backups (both flavors) that aged past
-# retention
-python3 - "$S3_ENDPOINT" "$OCI_REGION" "$OCI_ACCESS_KEY" "$OCI_SECRET_KEY" \
+# retention. The two OCI keys ride the ENVIRONMENT, never argv: a command line is readable by
+# every user on the box through ps or /proc/<pid>/cmdline for the whole upload (2026-09-23
+# spec §B4, the passphrase's rule applied to the keys). `export` makes that explicit however
+# the values arrived — the .env above is sourced under `set -a`, a caller's may not be.
+export OCI_ACCESS_KEY OCI_SECRET_KEY
+python3 - "$S3_ENDPOINT" "$OCI_REGION" \
   "$OCI_BUCKET" "$DUMP_FILE" "$OBJECT_KEY" "$EXPIRED_KEY_PLAIN" "$EXPIRED_KEY_GPG" <<'PYEOF'
-import sys, boto3
+import os, sys, boto3
 from botocore.config import Config
 
-endpoint, region, access_key, secret_key, bucket, dump_file, obj_key = sys.argv[1:8]
-expired_keys = sys.argv[8:10]
+endpoint, region, bucket, dump_file, obj_key = sys.argv[1:6]
+expired_keys = sys.argv[6:8]
+access_key = os.environ["OCI_ACCESS_KEY"]
+secret_key = os.environ["OCI_SECRET_KEY"]
 
 # region_name is REQUIRED: without it boto3 signs with us-east-1 in the SigV4
 # credential scope, which OCI only tolerates in the tenancy's home region

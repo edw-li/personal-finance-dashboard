@@ -3,9 +3,13 @@ these pins keep their CONTRACTS visible to the suite — the marker fields the s
 schema parses, the verify phase's shape, the drill's steps — and syntax-check them with
 Git Bash when it is installed."""
 
+import json
+import os
 import re
 import shutil
 import subprocess
+import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -108,6 +112,18 @@ def _function(text: str, name: str) -> str:
     return match.group(0)
 
 
+def _gpg_bash() -> str:
+    """Git Bash (or the runner's bash) with gpg, gpgconf, gzip and gunzip — or a skip.
+    gunzip too: decrypt_dump pipes into it."""
+    bash = _find_bash()
+    if bash is None:
+        pytest.skip("no usable bash found")
+    tools = " && ".join(f"command -v {tool}" for tool in ("gpg", "gpgconf", "gzip", "gunzip"))
+    if subprocess.run([bash, "-c", tools], capture_output=True).returncode != 0:
+        pytest.skip("gpg, gpgconf, gzip or gunzip not available to bash")
+    return bash
+
+
 def test_backup_hands_gpg_the_passphrase_on_a_file_descriptor():
     """Anything on a command line is readable by every user on the box through ps or
     /proc/<pid>/cmdline for as long as the dump runs (2026-09-23 spec §B4)."""
@@ -117,6 +133,11 @@ def test_backup_hands_gpg_the_passphrase_on_a_file_descriptor():
     assert text.count('3<<<"$BACKUP_PASSPHRASE"') == 2
     # The dump pipeline encrypts through the same function the round trip below exercises.
     assert re.search(r'\| gzip \\\n\s+\| encrypt_stream "\$DUMP_FILE"', text)
+    # The upload's OCI keys ride the environment too (lane B1 review, Important 3) — pinned
+    # here because the end-to-end run below skips wherever gpg is missing.
+    assert '"$OCI_ACCESS_KEY" "$OCI_SECRET_KEY"' not in text
+    assert "export OCI_ACCESS_KEY OCI_SECRET_KEY" in text
+    assert 'os.environ["OCI_ACCESS_KEY"]' in text and 'os.environ["OCI_SECRET_KEY"]' in text
     _bash_syntax_ok(BACKUP)
 
 
@@ -124,15 +145,7 @@ def test_backup_round_trips_through_its_own_functions_without_the_passphrase_in_
     """The script's OWN two functions, lifted verbatim and run through a real gpg: what goes
     in comes back out, and a shim first on PATH proves the passphrase never rode argv. Runs
     wherever bash and gpg exist (CI's ubuntu runner, Git Bash here); skips elsewhere."""
-    bash = _find_bash()
-    if bash is None:
-        pytest.skip("no usable bash found")
-    probe = subprocess.run(
-        [bash, "-c", "command -v gpg && command -v gpgconf && command -v gzip"],
-        capture_output=True,
-    )
-    if probe.returncode != 0:
-        pytest.skip("gpg, gpgconf or gzip not available to bash")
+    bash = _gpg_bash()
     text = BACKUP.read_text(encoding="utf-8")
     shim = tmp_path / "shim"
     shim.mkdir()
@@ -171,6 +184,198 @@ def test_backup_round_trips_through_its_own_functions_without_the_passphrase_in_
     assert argv.count("--passphrase-fd") == 2
     assert passphrase not in argv
     assert b"CREATE TABLE" not in (tmp_path / "dump.sql.gz.gpg").read_bytes()
+
+
+def test_backup_decrypt_refuses_a_wrong_passphrase_and_still_reads_an_argv_era_dump(tmp_path):
+    """The fd-3 decrypt is only half of §B4's promise: a wrong passphrase must fail loudly
+    with no plaintext on stdout, and every .sql.gz.gpg already in the bucket — written by the
+    old `--passphrase "$BACKUP_PASSPHRASE"` command line — must still decrypt (2026-09-23 lane
+    B1 review, M10). Each step gets a fresh GNUPGHOME: gpg-agent caches symmetric passphrases,
+    and a cached right one would let the wrong-passphrase step pass for the wrong reason."""
+    bash = _gpg_bash()
+    text = BACKUP.read_text(encoding="utf-8")
+    passphrase = "s3cr3t with spaces & $igns"
+    script = "\n".join(
+        [
+            "set -uo pipefail",
+            'HOMES=""',
+            "fresh_home() {",
+            "  gpgconf --kill gpg-agent >/dev/null 2>&1 || true",
+            '  GNUPGHOME="$(mktemp -d)"; export GNUPGHOME; HOMES="$HOMES $GNUPGHOME"',
+            "}",
+            "trap 'gpgconf --kill gpg-agent >/dev/null 2>&1 || true; rm -rf $HOMES' EXIT",
+            _function(text, "encrypt_stream"),
+            _function(text, "decrypt_dump"),
+            "fresh_home",
+            'BACKUP_PASSPHRASE="$1"; DUMP_FILE="new.sql.gz.gpg"',
+            "printf 'CREATE TABLE secret_rows();\\n' | gzip"
+            ' | encrypt_stream "$DUMP_FILE" || exit 3',
+            "fresh_home",
+            'BACKUP_PASSPHRASE="wrong $1"',
+            "if decrypt_dump > wrong.out 2> wrong.err; then echo WRONG-PASSPHRASE-DECRYPTED; fi",
+            "fresh_home",
+            'BACKUP_PASSPHRASE="$1"; DUMP_FILE="old.sql.gz.gpg"',
+            # The exact pre-§B4 pipeline tail (git show 7c70bc3:backend/scripts/backup_db.sh).
+            "printf 'CREATE TABLE old_rows();\\n' | gzip | gpg --symmetric --batch --yes"
+            ' --cipher-algo AES256 --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE"'
+            ' -o "$DUMP_FILE" || exit 4',
+            "fresh_home",
+            "decrypt_dump || exit 5",
+        ]
+    )
+    result = subprocess.run(
+        [bash, "-c", script, "bash", passphrase],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "WRONG-PASSPHRASE-DECRYPTED" not in result.stdout
+    assert "secret_rows" not in (tmp_path / "wrong.out").read_text(errors="replace")
+    assert result.stdout.endswith("CREATE TABLE old_rows();\n"), result.stdout
+
+
+FAKE_BOTO3 = """import json, os
+
+
+def _log(entry):
+    with open(os.environ["BOTO_LOG"], "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry) + "\\n")
+
+
+class _Client:
+    def upload_file(self, filename, bucket, key):
+        _log({"upload": [bucket, key]})
+
+    def delete_object(self, Bucket, Key):
+        _log({"delete": [Bucket, Key]})
+
+
+def client(service, **kwargs):
+    _log({
+        "client": service,
+        "access": kwargs.get("aws_access_key_id"),
+        "secret": kwargs.get("aws_secret_access_key"),
+        "region": kwargs.get("region_name"),
+    })
+    return _Client()
+"""
+
+# Every external command the script runs with arguments worth reading, first on PATH: each
+# records `== <name>` and its argv, one argument per line, then plays its part.
+SHIMS = {
+    "pg_dump": "printf 'CREATE TABLE t();\\n'",
+    "psql": "\n".join(
+        [
+            'for arg in "$@"; do [ "$arg" = "-Atc" ] && { echo 3; exit 0; }; done',
+            'for arg in "$@"; do [ "$arg" = "-c" ] && exit 0; done',
+            "cat > /dev/null",
+        ]
+    ),
+    "createdb": "exit 0",
+    "dropdb": "exit 0",
+    "gpg": 'exec "$REAL_GPG" "$@"',
+    "python3": 'exec "$REAL_PYTHON" "$@"',
+}
+
+
+def test_the_backup_run_puts_no_secret_on_any_command_line(tmp_path):
+    """The whole script, end to end, against shims: pg_dump, psql, createdb, dropdb, gpg and
+    python3 each record their argv, the upload runs the script's real Python against a fake
+    boto3, and the secrets come from a .env the way prod's cron sees them. None of the four —
+    OCI access key, OCI secret key, backup passphrase, database password — may appear in any
+    argv: `ps` and /proc/<pid>/cmdline are world-readable (2026-09-23 spec §B4; lane B1
+    review, Important 3 — the upload used to take both OCI keys as arguments)."""
+    bash = _gpg_bash()
+    root = tmp_path / "root"
+    scripts = root / "backend" / "scripts"
+    scripts.mkdir(parents=True)
+    # A copy, so SCRIPT_DIR/../../.env is THIS test's .env and never a real one on the box.
+    shutil.copy(BACKUP, scripts / "backup_db.sh")
+    db = f"b1ops_{uuid.uuid4().hex[:10]}"
+    secrets = {
+        "OCI_ACCESS_KEY": "AKIA-access-4f1e9c",
+        "OCI_SECRET_KEY": "sk/9Qe+secret=Zt7",
+        "BACKUP_PASSPHRASE": "pass phrase & $igns 42",
+        "POSTGRES_PASSWORD": "pg-pw-8d3b",
+    }
+    env_lines = [
+        f"POSTGRES_DB={db}",
+        "POSTGRES_USER=finance",
+        "OCI_REGION=us-ashburn-1",
+        "OCI_NAMESPACE=nsx",
+        "OCI_BUCKET_NAME=bucket-x",
+        *(f"{key}='{value}'" for key, value in secrets.items()),
+    ]
+    (root / ".env").write_text("\n".join(env_lines) + "\n", encoding="utf-8", newline="\n")
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    for name, body in SHIMS.items():
+        (shim / name).write_text(
+            f'#!/bin/bash\n{{ echo "== {name}"; printf \'%s\\n\' "$@"; }} >> "$ARGV_LOG"\n{body}\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+    fakes = tmp_path / "fakes"
+    (fakes / "boto3").mkdir(parents=True)
+    (fakes / "botocore").mkdir()
+    (fakes / "boto3" / "__init__.py").write_text(FAKE_BOTO3, encoding="utf-8")
+    (fakes / "botocore" / "__init__.py").write_text("", encoding="utf-8")
+    (fakes / "botocore" / "config.py").write_text(
+        "class Config:\n    def __init__(self, **kwargs):\n        self.kwargs = kwargs\n",
+        encoding="utf-8",
+    )
+    argv_log = tmp_path / "argv.log"
+    boto_log = tmp_path / "boto.log"
+    runner = "\n".join(
+        [
+            'export REAL_GPG="$(command -v gpg)"',
+            'export GNUPGHOME="$(mktemp -d)"',
+            "trap 'gpgconf --kill gpg-agent >/dev/null 2>&1 || true; rm -rf \"$GNUPGHOME\"' EXIT",
+            # $PWD (the shim's parent), not the Windows-shaped path: a drive colon splits PATH.
+            'chmod +x "$PWD"/shim/* && export PATH="$PWD/shim:$PATH"',
+            'bash "$1"',
+        ]
+    )
+    env = {
+        **{key: value for key, value in os.environ.items() if key not in secrets},
+        "ARGV_LOG": argv_log.as_posix(),
+        "BOTO_LOG": boto_log.as_posix(),
+        "REAL_PYTHON": Path(sys.executable).as_posix(),
+        "PYTHONPATH": str(fakes),
+    }
+    result = subprocess.run(
+        [bash, "-c", runner, "bash", (scripts / "backup_db.sh").as_posix()],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Verify OK" in result.stdout and "Backup complete." in result.stdout, result.stdout
+    argv = argv_log.read_text(encoding="utf-8")
+    # The shims were really in the path of every call the check is about.
+    for name in SHIMS:
+        assert f"== {name}\n" in argv, name
+    for key, value in secrets.items():
+        assert value not in argv, key
+    calls = [json.loads(line) for line in boto_log.read_text(encoding="utf-8").splitlines()]
+    # ...and the upload still got its keys — from the environment.
+    assert calls[0] == {
+        "client": "s3",
+        "access": secrets["OCI_ACCESS_KEY"],
+        "secret": secrets["OCI_SECRET_KEY"],
+        "region": "us-ashburn-1",
+    }
+    assert calls[1]["upload"][0] == "bucket-x"
+    key = calls[1]["upload"][1]
+    assert re.fullmatch(rf"backups/{db}_\d{{4}}-\d{{2}}-\d{{2}}\.sql\.gz\.gpg", key), key
+    # Retention sweeps both flavors of the expired day.
+    expired = [call["delete"][1] for call in calls[2:]]
+    assert [name.startswith(f"backups/{db}_") for name in expired] == [True, True]
+    assert [Path(name).suffix for name in expired] == [".gz", ".gpg"]
 
 
 def test_restore_drill_exists_and_runs_the_four_steps():
