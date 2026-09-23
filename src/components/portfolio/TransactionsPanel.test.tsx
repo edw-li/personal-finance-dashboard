@@ -773,3 +773,143 @@ describe('TransactionsPanel reorder — saving the replay order (spec §5)', () 
     expect(order()).toEqual(['22', '21', '23'])
   })
 })
+
+/** A holding the server reports as changed — every figure equal unless a case says otherwise. */
+function position(over: Partial<PositionChange> = {}): PositionChange {
+  return {
+    security_id: 1,
+    ticker: 'NVDA',
+    account: 'Schwab ESPP',
+    shares_before: '6.000000',
+    shares_after: '6.000000',
+    cost_basis_before: '600.00',
+    cost_basis_after: '600.00',
+    realized_gl_before: '200.00',
+    realized_gl_after: '200.00',
+    warnings_added: [],
+    ...over,
+  }
+}
+
+const AAPL_JOINT = { security_id: 9, ticker: 'AAPL', account: 'RH Joint Taxable' }
+const MSFT_JOINT = { security_id: 10, ticker: 'MSFT', account: 'RH Joint Taxable' }
+
+interface ToastCase {
+  what: string
+  move: string
+  key: 'ArrowUp' | 'ArrowDown'
+  changes: PositionChange[]
+  text: string
+}
+
+// Spec §8.1: "Moved the {TICKER} {type}. {TICKER} at {account}: {figure} {before} → {after}."
+// plus " And N more holdings changed." — {figure} is the first of realized gain, cost basis and
+// shares that changed; a position that only gained a warning says "{TICKER} at {account} now
+// warns: {warning}." The figure named is the MOVED ROW'S OWN holding's (security AND account),
+// or the first listed one when the moved row's holding did not change.
+const TOAST_CASES: ToastCase[] = [
+  {
+    what: 'the realized gain first, when it moved',
+    move: NVDA_SELL,
+    key: 'ArrowUp',
+    changes: [
+      position({
+        realized_gl_after: '600.00',
+        cost_basis_after: '1000.00',
+        warnings_added: ['txn 23: sell with no held shares'],
+      }),
+    ],
+    text: 'Moved the NVDA sell. NVDA at Schwab ESPP: realized gain $200.00 → $600.00.',
+  },
+  {
+    what: 'the cost basis when the realized gain held',
+    move: NVDA_BUY,
+    key: 'ArrowDown',
+    changes: [position({ cost_basis_after: '1000.00' })],
+    text: 'Moved the NVDA buy. NVDA at Schwab ESPP: cost basis $600.00 → $1,000.00.',
+  },
+  {
+    what: 'the shares when only they moved',
+    move: NVDA_BUY,
+    key: 'ArrowDown',
+    changes: [position({ shares_after: '60.000000' })],
+    text: 'Moved the NVDA buy. NVDA at Schwab ESPP: shares 6 → 60.',
+  },
+  {
+    what: 'a new warning when no figure moved',
+    move: NVDA_SELL,
+    key: 'ArrowUp',
+    changes: [position({ warnings_added: ['txn 23: sell exceeds held shares'] })],
+    text: 'Moved the NVDA sell. NVDA at Schwab ESPP now warns: txn 23: sell exceeds held shares.',
+  },
+  {
+    what: 'a warning that brings its own full stop, with one stop only',
+    move: NVDA_SELL,
+    key: 'ArrowUp',
+    changes: [position({ warnings_added: ['txn 23: sell with no held shares.'] })],
+    text: 'Moved the NVDA sell. NVDA at Schwab ESPP now warns: txn 23: sell with no held shares.',
+  },
+  {
+    what: 'a loss as the house formats it',
+    move: NVDA_SELL,
+    key: 'ArrowUp',
+    changes: [position({ realized_gl_before: '-50.00', realized_gl_after: '10.00' })],
+    text: 'Moved the NVDA sell. NVDA at Schwab ESPP: realized gain -$50.00 → $10.00.',
+  },
+  {
+    what: "the moved row's own holding before an earlier-listed one, plus one more",
+    move: NVDA_SELL,
+    key: 'ArrowUp',
+    changes: [
+      position({ ...AAPL_JOINT, realized_gl_after: '75.00' }),
+      position({ cost_basis_after: '1000.00' }),
+    ],
+    text: 'Moved the NVDA sell. NVDA at Schwab ESPP: cost basis $600.00 → $1,000.00. And 1 more holding changed.',
+  },
+  {
+    what: 'the count of the others, in the plural',
+    move: NVDA_SELL,
+    key: 'ArrowUp',
+    changes: [
+      position({ ...AAPL_JOINT, realized_gl_after: '75.00' }),
+      position({ ...MSFT_JOINT, shares_after: '7.000000' }),
+      position({ realized_gl_after: '600.00' }),
+    ],
+    text: 'Moved the NVDA sell. NVDA at Schwab ESPP: realized gain $200.00 → $600.00. And 2 more holdings changed.',
+  },
+  {
+    what: "the first listed holding when the moved row's own did not change",
+    move: VOO_BUY,
+    key: 'ArrowDown',
+    changes: [position({ realized_gl_after: '600.00' })],
+    text: 'Moved the VOO buy. NVDA at Schwab ESPP: realized gain $200.00 → $600.00.',
+  },
+  {
+    what: 'the own holding by security AND account, not by ticker alone',
+    move: NVDA_BUY,
+    key: 'ArrowDown',
+    changes: [
+      position({ account: 'Schwab RSU', realized_gl_after: '1.00' }),
+      position({ cost_basis_after: '1000.00' }),
+    ],
+    text: 'Moved the NVDA buy. NVDA at Schwab ESPP: cost basis $600.00 → $1,000.00. And 1 more holding changed.',
+  },
+  {
+    what: 'a listed holding with nothing to name, plainly',
+    move: NVDA_BUY,
+    key: 'ArrowDown',
+    changes: [position()],
+    text: 'Moved the NVDA buy. NVDA at Schwab ESPP changed.',
+  },
+]
+
+describe('TransactionsPanel reorder — what the toast says (spec §8.1)', () => {
+  reorderHooks()
+
+  it.each(TOAST_CASES)('names $what', async ({ move, key, changes, text }) => {
+    answerWith(changes)
+    renderLedger()
+    keyboardMove(move, key)
+    expect(await screen.findByText(text)).toBeTruthy()
+  })
+})

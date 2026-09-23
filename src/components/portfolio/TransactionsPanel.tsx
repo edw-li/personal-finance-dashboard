@@ -132,14 +132,63 @@ function rowName(txn: TransactionOut, ticker: string): string {
   return `${ticker} ${txn.type}, ${txn.account}`
 }
 
-/** The success toast (2026-09-23 drag-to-reorder spec §8.1). */
+/** A server sentence used inside one of ours: its closing stop goes, ours closes it. */
+function clause(text: string): string {
+  return text.replace(/[.\s]+$/, '')
+}
+
+/** One changed holding, in words (2026-09-23 drag-to-reorder spec §8.1): the FIRST of realized
+ *  gain, cost basis and shares that moved — the server's figures, formatted the house way — or,
+ *  when only a warning was added, that warning. The server quantizes both sides and never sends
+ *  a negative zero, so comparing its strings is comparing its figures; nothing is recomputed. */
+function changeSentence(change: PositionChange): string {
+  const where = `${change.ticker} at ${change.account}`
+  const figures = [
+    {
+      name: 'realized gain',
+      before: change.realized_gl_before,
+      after: change.realized_gl_after,
+      format: formatCurrency,
+    },
+    {
+      name: 'cost basis',
+      before: change.cost_basis_before,
+      after: change.cost_basis_after,
+      format: formatCurrency,
+    },
+    { name: 'shares', before: change.shares_before, after: change.shares_after, format: formatShares },
+  ]
+  const figure = figures.find((candidate) => candidate.before !== candidate.after)
+  if (figure !== undefined) {
+    return `${where}: ${figure.name} ${figure.format(figure.before)} → ${figure.format(figure.after)}.`
+  }
+  if (change.warnings_added.length > 0) {
+    return `${where} now warns: ${clause(change.warnings_added[0])}.`
+  }
+  // The contract lists a holding only when one of the above moved; said plainly if it ever
+  // does not.
+  return `${where} changed.`
+}
+
+/** The success toast (spec §8.1). The list order IS the replay order, so the toast says what
+ *  the move did to the book: nothing, or the moved row's OWN holding (security and account —
+ *  the fold's position key; the first listed holding when its own did not change), plus a count
+ *  of the rest. */
 function movedMessage(
   txn: TransactionOut,
   ticker: string,
   changes: readonly PositionChange[],
 ): string {
   const head = `Moved the ${ticker} ${txn.type}.`
-  return changes.length === 0 ? `${head} No holding's figures changed.` : head
+  if (changes.length === 0) return `${head} No holding's figures changed.`
+  const own =
+    changes.find(
+      (change) => change.security_id === txn.security_id && change.account === txn.account,
+    ) ?? changes[0]
+  const others = changes.length - 1
+  const tail =
+    others === 0 ? '' : ` And ${others} more ${others === 1 ? 'holding' : 'holdings'} changed.`
+  return `${head} ${changeSentence(own)}${tail}`
 }
 
 export default function TransactionsPanel({
