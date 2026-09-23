@@ -260,6 +260,12 @@ async function openPanel() {
   await waitFor(() => expect(addSale()).toBeTruthy())
 }
 
+// The legs and override rows render only once the three feeds land (holdings, lots, limits),
+// and the arrival run can answer FIRST — on a loaded runner it does, and a test that waited for
+// the run alone then found no form (a race that predates the 2026-09-23 override rows: main's
+// own tests failed 2 runs in 18 under a six-way concurrent stress). Touch the form after this.
+const formReady = () => screen.findByRole('button', { name: 'Add sale' })
+
 // The last body runWhatIf was asked for.
 const lastBody = () => vi.mocked(runWhatIf).mock.calls.at(-1)?.[0]
 
@@ -350,6 +356,7 @@ describe('WhatIfPanel', () => {
   it('refuses an oversell / zero / bad price in the box’s words, spending no request and leaving the URL alone', async () => {
     mount('/taxes?whatif=sale%3A7%3A40')
     await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
+    await formReady()
     fireEvent.change(field('Sale 1 shares'), { target: { value: '200' } })
     fireEvent.blur(field('Sale 1 shares'))
     expect(screen.getByRole('alert').textContent).toContain('selling 200 VTI — only 100.0000 held')
@@ -432,6 +439,7 @@ describe('WhatIfPanel', () => {
   it('keeps the last result under the stale line when a run fails, in the server’s words', async () => {
     mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
     await screen.findByText('Δ total tax')
+    await formReady()
     vi.mocked(runWhatIf).mockRejectedValueOnce(new ApiError('unknown input key: nope', 422))
     fireEvent.click(within(screen.getByRole('group', { name: 'Sale 1 term' })).getByRole('button', { name: 'Short' }))
     const alert = await screen.findByRole('alert')
@@ -683,6 +691,7 @@ describe('WhatIfPanel', () => {
   it('a legacy ?whatif=key:null link arrives as an explicit clear row, meaning unchanged', async () => {
     mount('/taxes?whatif=annual_salary%3Anull', { definitions: DEFS, inputs: INPUTS })
     await waitFor(() => expect(lastBody()?.overrides).toEqual({ annual_salary: null }))
+    await formReady()
     expect(keyPicker().value).toBe('annual_salary')
     expect(clearBox().checked).toBe(true)
     expect(url()).toBe('/taxes?whatif=annual_salary%3Anull')
@@ -693,6 +702,7 @@ describe('WhatIfPanel', () => {
       screen.getByRole('button', { name: 'Apply 1 override to 2024' }) as HTMLButtonElement
     mount('/taxes?whatif=annual_salary%3A250000', { definitions: DEFS, inputs: INPUTS })
     await screen.findByText('Δ total tax')
+    await formReady()
     expect(apply().disabled).toBe(false)
     fireEvent.click(addOverride())
     expect(apply().disabled).toBe(true)
@@ -724,6 +734,7 @@ describe('WhatIfPanel', () => {
   it('Reset to actual clears every override row, the unfinished ones too', async () => {
     mount('/taxes?whatif=annual_salary%3A250000', { definitions: DEFS, inputs: INPUTS })
     await screen.findByText('Δ total tax')
+    await formReady()
     fireEvent.click(addOverride())
     fireEvent.click(screen.getByRole('button', { name: 'Reset to actual' }))
     expect(url()).toBe('/taxes')
@@ -733,6 +744,7 @@ describe('WhatIfPanel', () => {
   it('refuses a duplicated key and a garbled value in the box’s words, spending no request', async () => {
     mount('/taxes?whatif=annual_salary%3A210000&whatif=itemized_deduction%3A30000', { definitions: DEFS })
     await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
+    await formReady()
     // The other row's key is offered, but not as a second row for it.
     expect(
       within(keyPicker(1)).getByRole('option', { name: 'Annual Salary (annual_salary)' }),
@@ -775,6 +787,7 @@ describe('WhatIfPanel', () => {
       definitions: DEFS,
     })
     await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
+    await formReady()
     const before = url()
 
     for (const bad of ['.5', '+5', '5.']) {
@@ -822,6 +835,7 @@ describe('WhatIfPanel', () => {
   it('pins the live scenario and shows it as a compare column; Reset empties the URL', async () => {
     mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
     await screen.findByText('Δ total tax')
+    await formReady() // the label's ticker comes from the holdings feed
     fireEvent.click(screen.getByRole('button', { name: 'Pin this scenario' }))
     // Two doors offer it: the pin row's chip and the compare column's own header.
     expect(screen.getAllByRole('button', { name: 'Unpin Sell 100.0000 VTI' })).toHaveLength(2)
@@ -839,6 +853,7 @@ describe('WhatIfPanel', () => {
       definitions: DEFS,
     })
     await screen.findByText('Δ total tax')
+    await formReady()
     expect(applyButton().disabled).toBe(false)
 
     // Apply confirms `changed_inputs` from the run ON SCREEN but PUTs the URL's overrides —
@@ -871,6 +886,7 @@ describe('WhatIfPanel', () => {
   it('Apply hands the overrides and the changed inputs up, and renders only with overrides present', async () => {
     const { onApplyOverrides } = mount('/taxes?whatif=sale%3A7%3A40', { definitions: DEFS })
     await screen.findByText('Δ total tax')
+    await formReady()
     expect(screen.queryByRole('button', { name: /^Apply \d+ override/ })).toBeNull()
     fireEvent.click(addOverride())
     fireEvent.change(keyPicker(), { target: { value: 'annual_salary' } })
