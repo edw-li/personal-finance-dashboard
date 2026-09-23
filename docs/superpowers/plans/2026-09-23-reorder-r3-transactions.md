@@ -292,7 +292,7 @@ export function reorderTransactions(ids: number[], owner: OwnerScope): Promise<T
 
 | File | Change |
 |---|---|
-| `src/components/portfolio/TransactionsPanel.tsx` | `owner` prop; grip column; `.reorder-table`; instructions + live region; hint sentence; `pendingOrder`/`savedOrder`; `saveOrder` / `restoreOrder` / `dropPendingOrder`; toast copy helpers (`rowName`, `clause`, `changeSentence`, `movedMessage`) |
+| `src/components/portfolio/TransactionsPanel.tsx` | `owner` prop; grip column; `.reorder-table`; instructions + live region; hint sentence; `pendingOrder`/`savedOrder`; `saveOrder` / `restoreOrder`; toast copy helpers (`rowName`, `clause`, `changeSentence`, `movedMessage`) |
 | `src/components/portfolio/TransactionsPanel.test.tsx` | mock factory gains `reorderTransactions`; reorder fixtures + helpers; six new `describe` blocks (grip column, saving, toast copy, Undo, failures, CSS pins) |
 | `src/components/portfolio/portfolio.css` | five rules appended (border model, grip cell, pinned actions cell × 3 states) |
 | `src/pages/PortfolioPage.tsx` | `owner={owner}` on `<TransactionsPanel>` (one line) |

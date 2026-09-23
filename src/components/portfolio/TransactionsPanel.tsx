@@ -463,7 +463,7 @@ export default function TransactionsPanel({
   }
 
   const remove = (txn: TransactionOut) => {
-    const ticker = tickers.get(txn.security_id) ?? '?'
+    const ticker = tickerOf(txn)
     // Instant + Undo (2026-08-25 polish §8): the confirm interrupt is gone and the
     // recovery affordance replaces it — Undo re-POSTs the captured row (new id, by
     // design). Only this low-risk flow converts; cascade deletes elsewhere keep confirm.
