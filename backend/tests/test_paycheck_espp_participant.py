@@ -1,8 +1,8 @@
 """Whose ESPP the pace strip grades (2026-09-23 spec §B1, income audit INC-01).
 
 The ESPP tables have no owner column (income INC-21), so the stored purchase periods belong
-to the household's ESPP participants: everyone with espp_pct > 0 in ANY of their profiles,
-or the primary when nobody has one. Grace's paycheck used to read "ESPP §423 · $21.7K /
+to the household's ESPP participants: everyone with espp_pct > 0 in a profile effective on
+or before today (never a future one), or the primary when nobody has one. Grace's paycheck used to read "ESPP §423 · $21.7K /
 $21.3K · 102.26 % over" for purchases Edward made; a non-participant now sees an ESPP row
 only when their OWN scenario sets a rate. Both payloads say which case a person is in, so
 the Try-changes presets never re-derive the rule."""
@@ -138,6 +138,41 @@ async def test_two_participants_both_keep_the_stored_purchases(auth_client, hous
         assert espp_row(body["pace"])["annualized"] == "21731.15"
         assert body["espp_participant"] is True
         assert body["espp_participants"] == ["Edward", "Grace"]
+
+
+async def test_a_future_enrollment_is_not_participation_yet(auth_client, household):
+    """Grace enrolls from next January: until that profile takes effect she has funded none
+    of the stored purchases, so her strip must not grade them (2026-09-23 lane B1 review,
+    M9). Only profiles effective on or before today count."""
+    edward, grace = household
+    await add_profile(auth_client, edward, espp_pct="0.11")
+    await add_profile(auth_client, grace, annual_salary="24000", espp_pct="0")
+    await add_profile(
+        auth_client, grace, annual_salary="24000", espp_pct="0.05", effective_date="2027-01-01"
+    )
+    body = await breakdown_for(auth_client, grace)
+    assert espp_row(body["pace"]) is None
+    assert (body["espp_participant"], body["espp_participants"]) == (False, ["Edward"])
+    mine = await breakdown_for(auth_client, edward)
+    assert (mine["espp_participant"], mine["espp_participants"]) == (True, ["Edward"])
+
+
+async def test_only_a_future_enrollment_leaves_the_primary_holding_the_purchases(
+    auth_client, household
+):
+    edward, grace = household
+    await add_profile(auth_client, edward, espp_pct="0")
+    await add_profile(auth_client, grace, annual_salary="24000", espp_pct="0")
+    await add_profile(
+        auth_client, grace, annual_salary="24000", espp_pct="0.05", effective_date="2027-01-01"
+    )
+    # Nobody is enrolled TODAY, so the fallback holds: the primary keeps the purchases.
+    mine = await breakdown_for(auth_client, edward)
+    theirs = await breakdown_for(auth_client, grace)
+    assert espp_row(mine["pace"])["annualized"] == "21731.15"
+    assert (mine["espp_participant"], mine["espp_participants"]) == (True, ["Edward"])
+    assert espp_row(theirs["pace"]) is None
+    assert (theirs["espp_participant"], theirs["espp_participants"]) == (False, ["Edward"])
 
 
 async def test_a_non_participants_own_rate_draws_an_estimated_only_row(auth_client, household):
