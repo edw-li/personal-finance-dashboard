@@ -169,7 +169,11 @@ export default function CreditCardsPage() {
         if (seq !== loadSeq.current) return
         setError(describeError(err, 'credit cards'))
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        // Only the newest load lifts the revalidation dim: an older one settling first would
+        // lift it while the page is still waiting for the data it will show.
+        if (seq === loadSeq.current) setLoading(false)
+      })
   }, [])
 
   useEffect(() => {

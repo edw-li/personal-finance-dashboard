@@ -2035,3 +2035,61 @@ describe('CreditCardsPage — an older reload never overwrites a newer one (the 
     expect(reorderCreditCards).toHaveBeenLastCalledWith([1, 3, 2])
   })
 })
+
+// Lane R5's review, item 3: a superseded load neither reports its failure nor lifts the page's
+// revalidation dim — only the newest load speaks.
+describe('CreditCardsPage — loads that overtake each other (lane R5 review)', () => {
+  it('an older load that fails after a newer one landed shows no error', async () => {
+    setSnapshot('credit-cards', snapshotFixture())
+    let failMount: (err: Error) => void = () => {}
+    vi.mocked(fetchCreditCards).mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          failMount = reject
+        }),
+    )
+    vi.mocked(updateRewardCategory).mockResolvedValue({ ...CATEGORIES[2], is_active: false })
+    renderPage('/credit-cards?section=manage')
+    await screen.findByText('Categories & weights')
+    const seeded = getSnapshot('credit-cards')
+    // A panel's save reloads the page while the mount's load is still out, and that newer load
+    // lands first …
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Rent' }))
+    await waitFor(() => expect(getSnapshot('credit-cards')).not.toBe(seeded))
+    // … then the mount's load fails.
+    await act(async () => failMount(new Error('the old request timed out')))
+    expect(screen.queryByText(/Showing earlier data/)).toBeNull()
+    expect(screen.queryByText(/the old request timed out/)).toBeNull()
+  })
+
+  it('keeps the revalidation dim up until the newest load lands — an older one settling first does not lift it', async () => {
+    setSnapshot('credit-cards', snapshotFixture())
+    let answerMount: (cards: CreditCardOut[]) => void = () => {}
+    let answerNewer: (cards: CreditCardOut[]) => void = () => {}
+    vi.mocked(fetchCreditCards)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerMount = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerNewer = resolve
+          }),
+      )
+    vi.mocked(updateRewardCategory).mockResolvedValue({ ...CATEGORIES[2], is_active: false })
+    const { container } = renderPage('/credit-cards?section=manage')
+    await screen.findByText('Categories & weights')
+    // The seeded paint revalidates under the house dim.
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Rent' }))
+    await waitFor(() => expect(fetchCreditCards).toHaveBeenCalledTimes(2))
+    // The mount's load answers after the newer one started: it is superseded, and the dim stays.
+    await act(async () => answerMount([vx(), SAVOR, RH]))
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+    await act(async () => answerNewer([vx(), SAVOR, RH]))
+    await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+  })
+})
