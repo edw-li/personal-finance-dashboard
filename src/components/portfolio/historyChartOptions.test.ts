@@ -404,14 +404,24 @@ describe('portfolioHistoryOption with events (2026-09-23 spec §C8)', () => {
       type: 'scatter', color: INK, symbol: 'rect', symbolSize: [2, 10], z: 13,
     })
     expect(byName.get(DIVIDENDS_SERIES)!.data).toBe(EVENTS.dividends)
+    // Code review 6: the provider's notices differ from the ledger's ticks by SHAPE as well as tone
+    // — a dot on the floor — so the two kinds never rest on colour alone.
     expect(byName.get(EXDIV_SERIES)).toMatchObject({
-      type: 'scatter', color: MUTED, symbol: 'rect', symbolSize: [2, 10], z: 12,
+      type: 'scatter', color: MUTED, symbol: 'circle', symbolSize: 6, z: 12,
     })
     expect(byName.get(EXDIV_SERIES)!.data).toBe(EVENTS.exDividends)
     // Every kind is on by default and toggles from its own legend entry.
-    expect((option as unknown as { legend: { selected?: unknown } }).legend.selected).toEqual({
-      [STARTING_BALANCE_SERIES]: false,
-    })
+    const legend = (option as unknown as {
+      legend: { selected?: unknown; data?: (string | { name: string; icon?: string })[] }
+    }).legend
+    expect(legend.selected).toEqual({ [STARTING_BALANCE_SERIES]: false })
+    // …and each rug entry's legend icon is its mark: a tick, a dot. The rest keep the house icon.
+    expect(legend.data).toEqual([
+      'Portfolio value', 'Cost basis', 'Same deposits in VOO', 'S&P 500 — starting balance only',
+      BUYS_SERIES,
+      { name: DIVIDENDS_SERIES, icon: 'path://M4 0h2v10h-2z' },
+      { name: EXDIV_SERIES, icon: 'circle' },
+    ])
   })
 
   it('lists a rug tick\'s events in the tooltip, never a y value', () => {

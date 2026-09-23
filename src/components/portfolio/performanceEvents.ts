@@ -286,13 +286,22 @@ export function eventLines(param: AxisTooltipParam): string[] {
   ]
 }
 
+/** The rug's two marks, one per kind, and the legend icon each wears (code review 6): the
+ *  household's own dividends a 2px × 10px TICK in INK, the provider's ex-dividend notices a 6px
+ *  DOT in MUTED — shape as well as tone, so the two kinds never rest on colour alone. The legend
+ *  shows the same marks (the house legend icon is a rounded square for every other entry). */
+export const RUG_MARKS = {
+  [DIVIDENDS_SERIES]: { symbol: 'rect' as const, symbolSize: [2, 10] as [number, number], icon: 'path://M4 0h2v10h-2z' },
+  [EXDIV_SERIES]: { symbol: 'circle' as const, symbolSize: 6, icon: 'circle' },
+}
+
 /** The performance chart's event layers (2026-09-23 spec §C8). Buys and sells: plain scatter in
  *  MUTED riding the value line — an annotation layer, not a data hue, and the ripple stays the
- *  live ping's (the net-worth notes-diamond rule). The rug: 2px × 10px ticks at y 0 that straddle
- *  the x-axis line, so they cross the plot only where the lines themselves are lowest; neutral
- *  tones by kind (INK for the household's own ledger, MUTED for provider notices), because no
- *  money-entity colour can then collide with them inside this chart, and the ledger draws on
- *  top where a week has both. An empty kind draws no series and lists no legend entry. */
+ *  live ping's (the net-worth notes-diamond rule). The rug at y 0 straddles the x-axis line, so it
+ *  crosses the plot only where the lines themselves are lowest; neutral tones by kind (INK for the
+ *  household's own ledger, MUTED for provider notices), because no money-entity colour can then
+ *  collide with them inside this chart, and the ledger draws on top where a week has both. An
+ *  empty kind draws no series and lists no legend entry. */
 export function eventSeries(events: PerformanceEvents) {
   const marker = (name: string, data: ChartEventPoint[]) => ({
     type: 'scatter' as const,
@@ -303,12 +312,12 @@ export function eventSeries(events: PerformanceEvents) {
     z: 11,
     data,
   })
-  const rug = (name: string, data: RugPoint[], color: string, z: number) => ({
+  const rug = (name: keyof typeof RUG_MARKS, data: RugPoint[], color: string, z: number) => ({
     type: 'scatter' as const,
     name,
     color,
-    symbol: 'rect' as const,
-    symbolSize: [2, 10] as [number, number],
+    symbol: RUG_MARKS[name].symbol,
+    symbolSize: RUG_MARKS[name].symbolSize,
     z,
     data,
   })

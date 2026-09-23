@@ -17,6 +17,7 @@ import {
   BUYS_SERIES,
   DIVIDENDS_SERIES,
   EXDIV_SERIES,
+  RUG_MARKS,
   SELLS_SERIES,
   eventLines,
   eventSeries,
@@ -230,6 +231,11 @@ export function portfolioHistoryOption(
         startingBalance === 'omit' ? selected : { [STARTING_BALANCE_SERIES]: false, ...selected },
       ),
       inactiveColor: OTHER_SERIES_COLOR,
+      // Listed explicitly (legendFor's rule for builders that do) so each rug entry wears its
+      // own mark — the tick, the dot — where the house icon would make them twins (code review 6).
+      data: series.map(({ name }) =>
+        name === DIVIDENDS_SERIES || name === EXDIV_SERIES ? { name, icon: RUG_MARKS[name].icon } : name,
+      ),
     },
     xAxis: weeklyAxis(
       categories,
