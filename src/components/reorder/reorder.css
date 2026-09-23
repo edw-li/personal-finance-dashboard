@@ -167,3 +167,20 @@ table.reorder-table {
 :not(tr)[data-reorder-saved] {
   animation: reorder-saved var(--t-flash) var(--ease-out);
 }
+
+/* A pinned cell is opaque on purpose — the columns scrolled sideways slide beneath it — so its wash
+   is mixed over, and ends on, the cell's own --surface (panels.css) instead of fading to transparent. */
+@keyframes reorder-saved-pinned {
+  from {
+    background-color: var(--surface-2);
+    background-color: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  }
+  to {
+    background-color: var(--surface);
+  }
+}
+
+.reorder-table tr[data-reorder-saved] > td.row-actions,
+.reorder-table tr[data-reorder-saved] > td.col-identity {
+  animation: reorder-saved-pinned var(--t-flash) var(--ease-out);
+}

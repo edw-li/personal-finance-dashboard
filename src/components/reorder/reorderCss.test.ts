@@ -97,6 +97,18 @@ describe('reorder.css', () => {
     )
   })
 
+  it('flashes a pinned cell on its own opaque background — nothing scrolled beneath it shows through', () => {
+    for (const cell of ['row-actions', 'col-identity']) {
+      expect(declarationsFor(css, `.reorder-table tr[data-reorder-saved] > td.${cell}`)).toContain(
+        'animation: reorder-saved-pinned var(--t-flash) var(--ease-out);',
+      )
+    }
+    const pinned = /@keyframes reorder-saved-pinned\s*\{([\s\S]*?)\n\}/.exec(stripComments(css))?.[1] ?? ''
+    expect(pinned).toContain('color-mix(in srgb, var(--accent) 22%, var(--surface))')
+    expect(pinned).toMatch(/to\s*\{\s*background-color: var\(--surface\);\s*\}/)
+    expect(pinned).not.toContain('transparent')
+  })
+
   it('flashes a saved row for --t-flash and draws the reduced-motion drop line in the accent', () => {
     const plain = stripComments(css)
     expect(plain).toMatch(/animation:\s*reorder-saved var\(--t-flash\)/)
