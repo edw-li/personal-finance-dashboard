@@ -27,9 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.metrics import MetricEvidence
 from app.services.budgets import living_budget_totals
 from app.services.metrics import average_evidence
-from app.services.month_review import load_review_book, month_shift
+from app.services.month_review import month_shift
 from app.services.paycheck_calc import half_up2
-from app.services.savings import load_month_savings
+from app.services.read_cache import cached_month_savings, cached_review_book
 
 LivingBasis = Literal["budget", "average"]
 
@@ -69,10 +69,11 @@ async def living_estimates(
     unbudgeted = [month for month in months if budgets[month] is None]
     averages: dict[date, MetricEvidence] = {}
     if unbudgeted:
-        # The Spending page's own read path. Lane P's cached read-path loader replaces this
-        # call at merge time (2026-09-23 spec §P4): the same book, the same answer.
-        book = await load_review_book(db, today=today)
-        rows = await load_month_savings(db)
+        # The Spending page's own read path, through the read cache (2026-09-23 spec §P4): the
+        # same book and savings the metrics GETs read, built once per data version — so the
+        # Calendar's unbudgeted months and the assistant's context no longer rebuild them.
+        book = await cached_review_book(db, today=today)
+        rows = await cached_month_savings(db)
         for anchor in sorted({average_anchor(month, today) for month in unbudgeted}):
             averages[anchor] = average_evidence(rows, book, anchor)
     estimates: list[LivingEstimate] = []
