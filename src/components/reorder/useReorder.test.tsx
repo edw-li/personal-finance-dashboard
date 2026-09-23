@@ -230,12 +230,13 @@ describe('useReorder — keyboard', () => {
     layoutRows()
     fireEvent.keyDown(grip('Alpha'), { key: ' ' })
     fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
-    fireEvent.keyDown(grip('Alpha'), { key: ' ', repeat: true }) // the lift's Space, still held
+    // The lift's Space, still held — swallowed (false: defaultPrevented), never a button click.
+    expect(fireEvent.keyDown(grip('Alpha'), { key: ' ', repeat: true })).toBe(false)
     expect(onCommit).not.toHaveBeenCalled()
     expect(grip('Alpha').getAttribute('aria-pressed')).toBe('true')
     fireEvent.keyDown(grip('Alpha'), { key: ' ' }) // a fresh press drops
     expect(onCommit).toHaveBeenCalledTimes(1)
-    fireEvent.keyDown(grip('Alpha'), { key: 'Enter', repeat: true }) // held past the drop
+    expect(fireEvent.keyDown(grip('Alpha'), { key: 'Enter', repeat: true })).toBe(false) // held past the drop
     expect(grip('Alpha').getAttribute('aria-pressed')).toBeNull()
     expect(live()).toBe('Dropped Alpha at position 2 of 3.')
   })

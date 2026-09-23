@@ -495,8 +495,13 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
 
   const onKeyDown = (id: K, event: ReactKeyboardEvent<HTMLButtonElement>) => {
     // Only a fresh press picks up or drops: a held Space/Enter repeats, and must not lift, drop and
-    // lift again. (Held arrows repeat on purpose.)
-    const pick = (event.key === ' ' || event.key === 'Enter') && !event.repeat
+    // lift again — nor click the <button> it sits on (a click per repeated Enter, one on Space's
+    // keyup), so a repeat is swallowed whole. (Held arrows repeat on purpose.)
+    if (event.repeat && (event.key === ' ' || event.key === 'Enter')) {
+      event.preventDefault()
+      return
+    }
+    const pick = event.key === ' ' || event.key === 'Enter'
     const drag = machine.current.drag
     if (drag === null) {
       if (!pick) return

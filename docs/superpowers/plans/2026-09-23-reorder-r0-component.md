@@ -2471,7 +2471,9 @@ git commit -m "docs(plan): lane R0 — results and gates"
      error propagates.
   9. Focus goes back to the moved grip whenever it held focus, pointer drops included, and is never
      taken from elsewhere.
-  10. A held Space/Enter (`event.repeat`) neither lifts nor drops.
+  10. A held Space/Enter (`event.repeat`) neither lifts nor drops. It is swallowed whole
+      (`preventDefault`, then return), so the `<button>` never clicks: no click per repeated Enter,
+      none on Space's keyup. The test pins both repeats as `defaultPrevented`.
   11. Test hygiene: `onTestFinished` removes the popover listeners, `vi.restoreAllMocks()` runs, and
       only `reorder-active` is cleared.
   12. `stopDrag` is now `releaseDrag`, and the header has a phase/transition table.
