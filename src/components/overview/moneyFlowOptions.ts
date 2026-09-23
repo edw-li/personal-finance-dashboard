@@ -166,7 +166,7 @@ export function estimateSentence(
       const words = runWords(months)
       const plural = months.length > 1
       if (nature === 'before') {
-        return `${words} predate tracking (it began ${trackingStart === null ? '' : formatMonth(trackingStart)})`
+        return `${words} ${plural ? 'predate' : 'predates'} tracking (it began ${trackingStart === null ? '' : formatMonth(trackingStart)})`
       }
       if (nature === 'current') return `${words} is still in progress`
       if (nature === 'future') return `${words} ${plural ? 'are' : 'is'} not earned yet`
@@ -191,7 +191,10 @@ interface Slice {
 /** The fan's category slices: the fold's categories in fold order (positive totals only — a
  *  link cannot be negative; net refunds come back through the Refunds node), then the Other
  *  bucket of everything outside the fold. A payload from before the window carries no
- *  per-category totals: its own top-7 fold stands in, with `other_spend` added to Other. */
+ *  per-category totals: its own top-7 stands in, with `other_spend` added to Other — and it is
+ *  folded by its own ranking even when the Spending fold is at hand, because that fold's
+ *  category ids cannot name categories the payload never identified (the 2026-09-23 code
+ *  review, 4: every category poured into Other). */
 function fanSlices(flow: MoneyFlowOut, fold: CategoryFold | null, taken: Set<string>): Slice[] {
   const totals: MoneyFlowCategoryTotal[] =
     flow.category_totals ??
@@ -202,15 +205,17 @@ function fanSlices(flow: MoneyFlowOut, fold: CategoryFold | null, taken: Set<str
       amount: category.amount,
     }))
   const byId = new Map(totals.map((total, index) => [total.category_id ?? -(index + 1), total]))
-  // Without the Spending page's fold (it loads beside this card), fold by the payload's own
-  // ranking through the SAME function — biggest cents first, ties by name.
+  // Without the Spending page's fold (it loads beside this card), or with a payload whose
+  // categories carry no ids, fold by the payload's own ranking through the SAME function —
+  // biggest cents first, ties by name.
   const effective =
-    fold ??
-    foldCategories(
-      [...byId.entries()]
-        .map(([id, total]) => ({ id, kind: total.kind, totalCents: toCents(total.amount), name: total.name }))
-        .sort((a, b) => b.totalCents - a.totalCents || a.name.localeCompare(b.name)),
-    )
+    fold !== null && flow.category_totals !== undefined
+      ? fold
+      : foldCategories(
+          [...byId.entries()]
+            .map(([id, total]) => ({ id, kind: total.kind, totalCents: toCents(total.amount), name: total.name }))
+            .sort((a, b) => b.totalCents - a.totalCents || a.name.localeCompare(b.name)),
+        )
   const slices: Slice[] = []
   const inFold = new Set<number>()
   for (const id of effective.ids) {

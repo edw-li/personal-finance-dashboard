@@ -711,6 +711,16 @@ describe('moneyFlowOption — one window on the right', () => {
       ['Saved', 76000],
     ])
     expect(sumLinks(series, (l) => l.source === 'Take-home cash')).toBe(120000)
+    // Code review 4: the page hands the Spending fold whenever the matrix has loaded, and its
+    // ids cannot name a payload that carries no category ids — so a pre-window payload folds by
+    // its own ranking even then, instead of pouring every category into Other.
+    const withFold = draw(legacy, FOLD)
+    expect((withFold.data ?? []).filter((n) => n.depth === 3).map((n) => [n.name, n.value, n.itemStyle?.color])).toEqual([
+      ['Rent', 24000, CATEGORY_HUES[0]],
+      ['Food', 6000, CATEGORY_HUES[1]],
+      ['Other', 14000, ENTITY.other],
+      ['Saved', 76000, POSITIVE],
+    ])
   })
 })
 
@@ -743,6 +753,8 @@ describe('the window’s words', () => {
     expect(estimateSentence(['2023-01-01', '2023-02-01'], '2023-08-01', '2026-09-23')).toBe(
       'Jan–Feb predate tracking (it began Aug 2023)',
     )
+    // Code review 5: one month agrees in the singular.
+    expect(estimateSentence(['2023-07-01'], '2023-08-01', '2026-09-23')).toBe('Jul predates tracking (it began Aug 2023)')
     expect(estimateSentence(['2026-03-01', '2026-06-01', '2026-07-01'], '2023-08-01', '2026-09-23')).toBe(
       'Mar has no take-home entered; Jun–Jul have no take-home entered',
     )
