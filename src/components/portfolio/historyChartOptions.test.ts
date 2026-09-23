@@ -16,6 +16,7 @@ import {
   liveFromHoldings,
   portfolioHistoryCsv,
   portfolioHistoryOption,
+  STARTING_BALANCE_SERIES,
 } from './historyChartOptions'
 
 // Wire shape of GET /portfolio/history — Decimal strings, parallel arrays.
@@ -85,26 +86,52 @@ describe('portfolioHistoryOption', () => {
     ).toBeNull()
   })
 
-  it('draws four lines in fixed palette slots with a wash under value only', () => {
+  it('draws the four lines under their honest names, in fixed palette slots, with a wash under value only', () => {
     const option = portfolioHistoryOption(history(), null)
     expect(option).not.toBeNull()
     const series = seriesOf(option!)
+    // 2026-09-23 spec §C8: the fair comparison sits beside value and cost under a name that
+    // says what it is; the starting-balance line comes last, named for what it leaves out.
     expect(series.map((s) => s.name)).toEqual([
       'Portfolio value',
       'Cost basis',
-      'S&P 500 baseline',
-      'VOO (your contributions)',
+      'Same deposits in VOO',
+      'S&P 500 — starting balance only',
     ])
-    expect(series.map((s) => s.color)).toEqual([PALETTE[0], PALETTE[1], PALETTE[2], PALETTE[3]])
+    // Colours stay with the ENTITY, not the position.
+    expect(series.map((s) => s.color)).toEqual([PALETTE[0], PALETTE[1], PALETTE[3], PALETTE[2]])
     expect(series[0].areaStyle?.opacity).toBeGreaterThan(0)
-    expect(series[1].areaStyle).toBeUndefined()
-    expect(series[2].areaStyle).toBeUndefined()
-    // No wash on the benchmark either — the wash rides the value line only (spec §4).
-    expect(series[3].areaStyle).toBeUndefined()
+    // No wash anywhere else — the wash rides the value line only (spec §4).
+    expect(series.slice(1).every((s) => s.areaStyle === undefined)).toBe(true)
     // Number() at the boundary, once
     expect(series[0].data).toEqual([700000, 710000.5, 718422.07])
-    expect(series[3].data).toEqual([96000, 97250, 99001.13])
+    expect(series[2].data).toEqual([96000, 97250, 99001.13])
+    expect(series[3].data).toEqual([96000, 97000, 98636.7])
     expect(categoriesOf(option!)).toEqual(['Jul 27, 2026', 'Aug 3, 2026', 'Aug 10, 2026'])
+  })
+
+  it('lists the starting-balance line legend-off by default, and omits it on request (2026-09-23 §C8)', () => {
+    const legend = (option: unknown) =>
+      (option as { legend: { selected?: Record<string, boolean> } }).legend
+    expect(legend(portfolioHistoryOption(history(), null)).selected).toEqual({
+      [STARTING_BALANCE_SERIES]: false,
+    })
+    // The page's own pick wins — a reader who switched it on keeps it on.
+    expect(
+      legend(
+        portfolioHistoryOption(history(), null, null, {
+          selected: { [STARTING_BALANCE_SERIES]: true },
+        }),
+      ).selected,
+    ).toEqual({ [STARTING_BALANCE_SERIES]: true })
+    // The Overview card does not draw it at all (shell F5).
+    const overview = portfolioHistoryOption(history(), null, null, { startingBalance: 'omit' })!
+    expect(seriesOf(overview).map((s) => s.name)).toEqual([
+      'Portfolio value',
+      'Cost basis',
+      'Same deposits in VOO',
+    ])
+    expect(legend(overview).selected).toBeUndefined()
   })
 
   it('appends a pinging live category with a dashed connector when the quote is newer', () => {
@@ -120,8 +147,8 @@ describe('portfolioHistoryOption', () => {
     // Lines end at the last IMPORTED point — the live category is never extrapolated.
     expect(series[0].data).toEqual([700000, 710000.5, 718422.07, null])
     expect(series[1].data).toEqual([395000, 399542.36, 400243.74, null])
-    expect(series[2].data).toEqual([96000, 97000, 98636.7, null])
-    expect(series[3].data).toEqual([96000, 97250, 99001.13, null])
+    expect(series[2].data).toEqual([96000, 97250, 99001.13, null])
+    expect(series[3].data).toEqual([96000, 97000, 98636.7, null])
     const live = series[4]
     expect(live.type).toBe('effectScatter')
     expect(live.name).toBe('Live')
@@ -140,7 +167,7 @@ describe('portfolioHistoryOption', () => {
     const series = seriesOf(option!)
     expect(series).toHaveLength(5)
     expect(series[0].data).toEqual([700000, 710000.5, 718422.07]) // no null padding
-    expect(series[3].data).toEqual([96000, 97250, 99001.13])
+    expect(series[2].data).toEqual([96000, 97250, 99001.13])
     expect(series[4].data).toEqual([['Aug 10, 2026', 720000]])
     expect(series[4].markLine).toBeUndefined()
   })
@@ -167,7 +194,7 @@ describe('portfolioHistoryOption', () => {
     expect(seriesOf(portfolioHistoryOption(legacy, null)!).map((s) => s.name)).toEqual([
       'Portfolio value',
       'Cost basis',
-      'S&P 500 baseline',
+      'S&P 500 — starting balance only',
     ])
     // The server's no-VOO-bars degradation: all-null. An all-null line would draw
     // nothing yet still ghost-occupy the legend, so the series is omitted outright.
@@ -175,7 +202,7 @@ describe('portfolioHistoryOption', () => {
       seriesOf(portfolioHistoryOption(history({ benchmark: [null, null, null] }), null)!).map(
         (s) => s.name,
       ),
-    ).toEqual(['Portfolio value', 'Cost basis', 'S&P 500 baseline'])
+    ).toEqual(['Portfolio value', 'Cost basis', 'S&P 500 — starting balance only'])
   })
 })
 
@@ -199,9 +226,12 @@ describe('portfolioHistoryOption — grammar', () => {
     expect(option.xAxis.axisLabel).toEqual({ interval: 0 }) // three points
     expect(option.yAxis.axisLabel.formatter).toBe(compactMoney)
     expect(option.legend.type).toBe('plain')
-    expect(option.legend.selected).toEqual({ 'Cost basis': false })
+    // The page's picks ride on top of the starting-balance line's legend-off default.
+    expect(option.legend.selected).toEqual({
+      [STARTING_BALANCE_SERIES]: false,
+      'Cost basis': false,
+    })
     expect(option.series[0].emphasis).toEqual({ focus: 'series' })
-    expect(read(portfolioHistoryOption(history(), null)).legend.selected).toBeUndefined()
   })
 
   it('F7: value rows in series order, null rows dropped, Events expand into escaped lines with a count', () => {
@@ -425,7 +455,7 @@ describe('portfolioHistoryOption with events', () => {
     const option = portfolioHistoryOption(history(), null, EVENT_POINTS)
     const series = seriesOf(option!)
     expect(series.map((s) => s.name)).toEqual([
-      'Portfolio value', 'Cost basis', 'S&P 500 baseline', 'VOO (your contributions)',
+      'Portfolio value', 'Cost basis', 'Same deposits in VOO', 'S&P 500 — starting balance only',
       EVENTS_SERIES,
     ])
     const events = series[4] as SeriesLike & { z?: number }
@@ -433,9 +463,9 @@ describe('portfolioHistoryOption with events', () => {
     expect(events.color).toBe(MUTED)
     expect(events.z).toBe(11)
     expect(events.data).toBe(EVENT_POINTS)
-    // No legend.selected entry: on by default, toggleable like any series.
+    // No legend.selected entry of its own: on by default, toggleable like any series.
     expect((option as unknown as { legend: { selected?: unknown } }).legend.selected)
-      .toBeUndefined()
+      .toEqual({ [STARTING_BALANCE_SERIES]: false })
   })
 
   it('draws no Events series for an empty or omitted list (Overview keeps the two-arg call)', () => {
@@ -445,19 +475,28 @@ describe('portfolioHistoryOption with events', () => {
 })
 
 describe('portfolioHistoryCsv', () => {
-  it('lays out date rows × the four series, verbatim strings', () => {
+  it('lays out date rows × the four series in the legend order, verbatim strings', () => {
     expect(portfolioHistoryCsv(history())).toEqual({
-      headers: ['Date', 'Portfolio value', 'Cost basis', 'S&P 500 baseline', 'VOO (your contributions)'],
+      headers: [
+        'Date', 'Portfolio value', 'Cost basis', 'Same deposits in VOO',
+        'S&P 500 — starting balance only',
+      ],
       rows: [
         ['2026-07-27', '700000.00', '395000.00', '96000.00', '96000.00'],
-        ['2026-08-03', '710000.50', '399542.36', '97000.00', '97250.00'],
-        ['2026-08-10', '718422.07', '400243.74', '98636.70', '99001.13'],
+        ['2026-08-03', '710000.50', '399542.36', '97250.00', '97000.00'],
+        ['2026-08-10', '718422.07', '400243.74', '99001.13', '98636.70'],
       ],
     })
   })
 
+  it('drops the starting-balance column where the chart does not draw it (the Overview card)', () => {
+    const table = portfolioHistoryCsv(history(), { startingBalance: 'omit' })
+    expect(table.headers).toEqual(['Date', 'Portfolio value', 'Cost basis', 'Same deposits in VOO'])
+    expect(table.rows[2]).toEqual(['2026-08-10', '718422.07', '400243.74', '99001.13'])
+  })
+
   it('empties the VOO cells on a degraded or stale-payload benchmark', () => {
     const rows = portfolioHistoryCsv(history({ benchmark: [null, null, null] })).rows
-    expect(rows.map((r) => r[4])).toEqual(['', '', ''])
+    expect(rows.map((r) => r[3])).toEqual(['', '', ''])
   })
 })

@@ -112,7 +112,7 @@ const loadPlanning = async () => { const [taxes, lots, taxYears, system] = await
 const SPENDING_HINT =
   "Living spending for the latest eligible month, compared with eligible months within the previous 12 calendar months. Tax paid from take-home and transfers are separate."
 const PERFORMANCE_HINT =
-  "Portfolio value vs cost basis, checkpointed weekly after Monday's close; the pinging dot is live. The S&P 500 line invests only the starting balance; VOO (your contributions) invests every inferred contribution instead."
+  "Portfolio value vs cost basis, checkpointed weekly after Monday's close; the pinging dot is live. Same deposits in VOO invests every inferred contribution in VOO as it lands — the fair comparison."
 
 // The up-next window slides with the calendar day — key it by today so a date rollover
 // misses cleanly instead of painting yesterday's window.
@@ -257,12 +257,17 @@ export default function OverviewPage() {
   // this guard since 2026-08-31 (A3); this copy is the same rule, one page later — null
   // also suppresses the dashed connector and the "Live" legend entry, both inside the
   // builder's livePt branch.
+  // The home card compares against the same deposits in VOO only (2026-09-23 spec §C8, shell
+  // F5): the starting-balance line invited "we beat the S&P nine-fold". Portfolio keeps it,
+  // legend-off, for the reader who asks for it.
   const perf = useMemo(
     () =>
       data.history && data.holdings
         ? portfolioHistoryOption(
             data.history,
             owner === null ? liveFromHoldings(data.holdings) : null,
+            null,
+            { startingBalance: 'omit' },
           )
         : null,
     [data, owner],
@@ -582,7 +587,7 @@ export default function OverviewPage() {
                 option={perf}
                 empty="No performance history yet."
                 exportName="portfolio-performance"
-                csv={data.history ? () => portfolioHistoryCsv(data.history!) : undefined}
+                csv={data.history ? () => portfolioHistoryCsv(data.history!, { startingBalance: 'omit' }) : undefined}
                 height={280}
                 busy={investments.busy} error={investments.error} selectionScopeKey={String(owner)}
                 footer={

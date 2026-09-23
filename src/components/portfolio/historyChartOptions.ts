@@ -46,6 +46,25 @@ export function liveFromHoldings(holdings: {
 // (NetWorthPage's NOTES_SERIES idiom).
 export const EVENTS_SERIES = 'Events'
 
+export const VALUE_SERIES = 'Portfolio value'
+export const COST_SERIES = 'Cost basis'
+/** Every inferred contribution, bought into VOO as it lands — the fair comparison, named for
+ *  what it is (2026-09-23 spec §C8, wealth PF-1; it was "VOO (your contributions)"). */
+export const VOO_LEG_SERIES = 'Same deposits in VOO'
+/** The first week's balance alone, compounded — named for what it leaves out. Never the fair
+ *  comparison (a flat line under a $1M axis read as "we beat the S&P nine-fold"), so legend-off
+ *  by default on Portfolio and not drawn at all on the Overview card (2026-09-23 spec §C8,
+ *  shell F5; it was "S&P 500 baseline"). */
+export const STARTING_BALANCE_SERIES = 'S&P 500 — starting balance only'
+
+export interface HistoryOptionSettings {
+  /** The page's mirrored legend picks (F9); they win over the defaults below. */
+  selected?: Record<string, boolean>
+  /** 'legend-off' — Portfolio: the starting-balance line is listed but hidden until picked.
+   *  'omit' — the Overview card: not drawn, not listed, not in the table. */
+  startingBalance?: 'legend-off' | 'omit'
+}
+
 export interface ChartEventPoint {
   /** [category label, y] — the marker rides the portfolio-value line at its bar. */
   value: [string, number]
@@ -198,7 +217,7 @@ export function portfolioHistoryOption(
   history: PortfolioHistory,
   live: LivePoint | null,
   events: ChartEventPoint[] | null = null,
-  { selected }: { selected?: Record<string, boolean> } = {},
+  { selected, startingBalance = 'legend-off' }: HistoryOptionSettings = {},
 ): EChartsOption | null {
   if (history.dates.length < 2) return null
   const lastDate = history.dates[history.dates.length - 1]
@@ -223,10 +242,10 @@ export function portfolioHistoryOption(
     return extendAxis ? [...parsed, null] : parsed
   }
 
-  // Fixed validated palette slots (charts/theme.ts law): value=slot 1 blue, cost
-  // basis=slot 2 orange, S&P=slot 3 aqua, contribution benchmark=slot 4 yellow. The wash
-  // rides the value line ONLY — the Excel original's three overlapping opaque areas
-  // occlude each other (spec: rejected).
+  // Fixed validated palette slots (charts/theme.ts law), by ENTITY not position: value=slot 1
+  // blue, cost basis=slot 2 orange, the VOO leg=slot 4 yellow, the starting balance=slot 3
+  // aqua. The wash rides the value line ONLY — the Excel original's three overlapping opaque
+  // areas occlude each other (spec: rejected).
   // LINE carries the 2px/no-symbol/focus posture (§9); WASH is the house visible-axis fill.
   const lineSeries = (name: string, values: (string | null)[], color: string, wash: boolean) => ({
     ...LINE,
@@ -243,14 +262,14 @@ export function portfolioHistoryOption(
   const showBenchmark = benchmark.some((v) => v !== null)
 
   const series = [
-    lineSeries('Portfolio value', history.market_value, PALETTE[0], true),
-    lineSeries('Cost basis', history.cost_basis, PALETTE[1], false),
-    lineSeries('S&P 500 baseline', history.sp500, PALETTE[2], false),
-    // Legend-only disambiguation (spec §4): the two benchmark names must explain
-    // themselves side by side — "baseline" = starting balance only, this = every flow.
-    ...(showBenchmark
-      ? [lineSeries('VOO (your contributions)', benchmark, PALETTE[3], false)]
-      : []),
+    lineSeries(VALUE_SERIES, history.market_value, PALETTE[0], true),
+    lineSeries(COST_SERIES, history.cost_basis, PALETTE[1], false),
+    // The fair comparison straight after value and cost; the two names explain themselves
+    // side by side — every deposit here, the starting balance alone below (§C8).
+    ...(showBenchmark ? [lineSeries(VOO_LEG_SERIES, benchmark, PALETTE[3], false)] : []),
+    ...(startingBalance === 'omit'
+      ? []
+      : [lineSeries(STARTING_BALANCE_SERIES, history.sp500, PALETTE[2], false)]),
     ...(events !== null && events.length > 0
       ? [
           {
@@ -307,7 +326,12 @@ export function portfolioHistoryOption(
 
   return {
     grid: grid(),
-    legend: legendFor(series.length, selected),
+    // Listed but hidden until picked; the page's own picks (F9) ride on top, so a reader who
+    // switched it on keeps it on across refetches and theme swaps.
+    legend: legendFor(
+      series.length,
+      startingBalance === 'omit' ? selected : { [STARTING_BALANCE_SERIES]: false, ...selected },
+    ),
     xAxis: dateAxis(categories),
     // No scale:true — a washed area over a visible axis needs the honest zero baseline.
     yAxis: moneyAxis(),
@@ -322,25 +346,30 @@ export function portfolioHistoryOption(
   }
 }
 
-/** The performance chart as a table (2026-08-25 spec §2a): date rows × the four series,
- * verbatim server strings; degraded/stale benchmark cells go empty. The live ping stays
- * out — it is a quote, not a history row. */
-export function portfolioHistoryCsv(history: PortfolioHistory): ExportTable {
+/** The performance chart as a table (2026-08-25 spec §2a): date rows × the series in the
+ * legend's order, verbatim server strings; degraded/stale benchmark cells go empty. The live
+ * ping stays out — it is a quote, not a history row. Where the chart omits the starting
+ * balance (the Overview card), so does its table (2026-09-23 spec §C8). */
+export function portfolioHistoryCsv(
+  history: PortfolioHistory,
+  { startingBalance = 'legend-off' }: Pick<HistoryOptionSettings, 'startingBalance'> = {},
+): ExportTable {
   const benchmark = history.benchmark ?? []
+  const withStart = startingBalance !== 'omit'
   return {
     headers: [
       'Date',
-      'Portfolio value',
-      'Cost basis',
-      'S&P 500 baseline',
-      'VOO (your contributions)',
+      VALUE_SERIES,
+      COST_SERIES,
+      VOO_LEG_SERIES,
+      ...(withStart ? [STARTING_BALANCE_SERIES] : []),
     ],
     rows: history.dates.map((date, i) => [
       date,
       history.market_value[i],
       history.cost_basis[i],
-      history.sp500[i],
       benchmark[i] ?? '',
+      ...(withStart ? [history.sp500[i]] : []),
     ]),
   }
 }

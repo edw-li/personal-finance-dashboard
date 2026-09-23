@@ -97,7 +97,7 @@ vi.mock('../components/EChart', async () => {
       onClick,
       animateEntrance = true,
     }: {
-      option: { xAxis?: { data?: unknown[] }; series?: { type?: string; data?: unknown[] }[] }
+      option: { xAxis?: { data?: unknown[] }; series?: { type?: string; name?: string; data?: unknown[] }[] }
       ariaLabel?: string
       onClick?: (params: { dataIndex?: number }) => void
       animateEntrance?: boolean
@@ -108,6 +108,8 @@ vi.mock('../components/EChart', async () => {
         'aria-label': ariaLabel,
         'data-categories': (option.xAxis?.data ?? []).join(','),
         'data-spending-points': JSON.stringify(option.series?.find(series => series.type === 'bar')?.data ?? []),
+        // The series a chart draws, by name (PortfolioPage.test's marker) — 2026-09-23 spec §C8.
+        'data-series': (option.series ?? []).map((series) => series.name ?? '').join('|'),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
         // A click stands in for a click on the chart's FIRST point (dataIndex 0) —
@@ -1845,6 +1847,16 @@ describe('OverviewPage — shell frame and owner scope', () => {
     await screen.findByText('Net worth — Aug 2026')
     // Same holdings payload, same history: only the scope changed, and the ping is gone.
     expect(categoriesOf(perfChart())).not.toContain(livePoint)
+  })
+
+  // 2026-09-23 spec §C8 (shell F5): the starting-balance line invited "we beat the S&P nine-fold";
+  // the home card compares only against the same deposits in VOO.
+  it('draws the portfolio against the same deposits in VOO only — no starting-balance line', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    const perf = screen.getByLabelText(/Line chart of portfolio value against cost basis/)
+    expect(perf.getAttribute('data-series')).toBe('Portfolio value|Cost basis|Same deposits in VOO|Live')
   })
 
   it('says so on the two cards an owner scope cannot reach, and nothing when it is All', async () => {

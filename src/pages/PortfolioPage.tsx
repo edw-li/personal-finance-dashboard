@@ -668,7 +668,7 @@ export default function PortfolioPage() {
             <LocalSectionPanel state={views} section="overview">
               <ChartCard
                 title="Performance"
-                hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance; VOO (your contributions) invests every inferred contribution instead. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Event markers annotate dated buys and sells, logged dividends, and older ex-dividend dates (per-share only — dollar amounts that old are unknowable from undated imports)."
+                hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. Same deposits in VOO invests every inferred contribution in VOO as it lands — the fair comparison. S&P 500 — starting balance only invests just the first week's balance; it stays off until you pick it in the legend. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Event markers annotate dated buys and sells, logged dividends, and older ex-dividend dates (per-share only — dollar amounts that old are unknowable from undated imports)."
                 ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
                 option={performanceOption}
                 empty="No performance history yet — import your workbook in Settings to load it."
@@ -694,13 +694,14 @@ export default function PortfolioPage() {
                         because the history is household-wide.
                       </p>
                     )}
-                    {/* Two benchmark legs, one distinction: the baseline invests only the
-                      STARTING balance; the contribution-matched line adds every inferred
-                      flow. Said here so neither gap reads as outperformance. */}
+                    {/* Two benchmark legs, one distinction: the contribution-matched line adds
+                      every inferred flow; the other invests only the STARTING balance. Said
+                      here so neither gap reads as outperformance (2026-09-23 spec §C8). */}
                     <p className="hint">
-                      S&amp;P 500 baseline tracks the starting balance invested in VOO — later
-                      contributions are not added to it. VOO (your contributions) adds each
-                      inferred contribution as it lands.
+                      Same deposits in VOO adds each inferred contribution to VOO as it lands —
+                      the fair comparison. S&amp;P 500 — starting balance only invests just the
+                      first week&rsquo;s balance; later contributions are not added to it, which
+                      is why it is off until you pick it in the legend.
                     </p>
                   </>
                 }

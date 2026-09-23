@@ -819,7 +819,7 @@ it('renders the live ping only on the All view', async () => {
   // before the history window, so no Events series muddies the name list.)
   await waitFor(() =>
     expect(performance().getAttribute('data-series')).toBe(
-      'Portfolio value|Cost basis|S&P 500 baseline|VOO (your contributions)|Live',
+      'Portfolio value|Cost basis|Same deposits in VOO|S&P 500 — starting balance only|Live',
     ),
   )
 
@@ -827,7 +827,7 @@ it('renders the live ping only on the All view', async () => {
   // The scoped holdings still carry a quote — the OWNER is what retires the ping.
   await waitFor(() =>
     expect(performance().getAttribute('data-series')).toBe(
-      'Portfolio value|Cost basis|S&P 500 baseline|VOO (your contributions)',
+      'Portfolio value|Cost basis|Same deposits in VOO|S&P 500 — starting balance only',
     ),
   )
 

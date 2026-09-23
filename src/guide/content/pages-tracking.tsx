@@ -376,7 +376,8 @@ export const TRACKING_CARDS: GuideCard[] = [
         title: 'Read the performance chart',
         where: 'Portfolio → Overview → Performance',
         steps: [
-          'Four lines are drawn: **Portfolio value**, **Cost basis**, **S&P 500 baseline** and **VOO (your contributions)**.',
+          'Lines: **Portfolio value**, **Cost basis** and **Same deposits in VOO** — every contribution bought into VOO as it landed, the fair comparison.',
+          '**S&P 500 — starting balance only** stays off until you pick it in the legend; it invests just the first week’s balance.',
           'Click a legend name to drop a line; the axis refits to what is left.',
           'The **Live** dot appears on the All scope only, because the history is household-wide.',
         ],
