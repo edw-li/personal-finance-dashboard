@@ -9,7 +9,7 @@ fingerprint. Any committed write by any writer (ORM, a Core undo or restore, the
 CLI, another process, psql) changes it, so a cached value is only ever served for the table
 contents it was built from: no event hooks, TTLs or triggers to keep in step.
 
-Three rules keep that promise airtight:
+Four rules keep that promise airtight and the first paint fast:
 
 1. Store only if stable. A miss fingerprints again after building and stores only when
    nothing moved. Under READ COMMITTED every statement of the build sees fresh commits, so a
@@ -19,15 +19,20 @@ Three rules keep that promise airtight:
    Core fingerprint does not; a session carrying new, dirty or deleted objects keeps today's
    exact semantics. (Read paths never carry any.)
 3. Read paths only. Write paths (month save/close, batch close, adoption) keep the uncached,
-   lock-protected `load_review_book`, whose ORM rows they update in place. A cached book
-   holds frozen ReviewSnapshot values in read-only mappings — nothing bound to a request's
-   session — and is shared between requests, so a caller must treat it as immutable.
+   lock-protected `load_review_book`, whose ORM rows they update in place. A cached value
+   holds no session-bound object — the book carries frozen ReviewSnapshot values in
+   read-only mappings, the savings frozen rows read as plain columns — and it is shared
+   between requests, so a caller must treat it as immutable.
+4. Single-flight. The Overview asks for the book three times at once (coverage, metrics,
+   matrix); on a cold key the first request builds and the others await that build instead
+   of building their own.
 
 Per process, at most CACHE_SIZE entries per value; conftest clears both between tests.
 """
 
+import asyncio
 from collections import OrderedDict
-from collections.abc import Hashable, Iterable
+from collections.abc import Awaitable, Callable, Hashable, Iterable
 from datetime import date
 
 from sqlalchemy import TextClause, text
@@ -70,28 +75,32 @@ MONTH_SAVINGS_TABLES: tuple[str, ...] = tuple(
     for model in (MonthlySpending, SpendingCategory, MonthlyCashflow, PaycheckProfile)
 )
 
+type Fingerprint = tuple[str, ...]
+type BookKey = tuple[Fingerprint, date, tuple[date, ...]]
+type Savings = tuple[MonthSavings, ...]
 
-class LRU:
-    """A tiny least-recently-used map. No lock: the event loop is the only thread, and two
-    requests that miss together just build twice and store equal values."""
+
+class LRU[K: Hashable, V]:
+    """A tiny least-recently-used map for one value type. No lock: the event loop is the only
+    thread (the scheduler's jobs are coroutines on it too)."""
 
     def __init__(self, size: int) -> None:
         self.size = size
-        self._entries: OrderedDict[Hashable, object] = OrderedDict()
+        self._entries: OrderedDict[K, V] = OrderedDict()
 
-    def get(self, key: Hashable):
+    def get(self, key: K) -> V | None:
         value = self._entries.get(key)
         if value is not None:
             self._entries.move_to_end(key)
         return value
 
-    def put(self, key: Hashable, value: object) -> None:
+    def put(self, key: K, value: V) -> None:
         self._entries[key] = value
         self._entries.move_to_end(key)
         while len(self._entries) > self.size:
             self._entries.popitem(last=False)
 
-    def keys(self) -> list[Hashable]:
+    def keys(self) -> list[K]:
         return list(self._entries)
 
     def clear(self) -> None:
@@ -101,13 +110,18 @@ class LRU:
         return len(self._entries)
 
 
-REVIEW_BOOKS = LRU(CACHE_SIZE)
-MONTH_SAVINGS = LRU(CACHE_SIZE)
+REVIEW_BOOKS: LRU[BookKey, ReviewBook] = LRU(CACHE_SIZE)
+MONTH_SAVINGS: LRU[Fingerprint, Savings] = LRU(CACHE_SIZE)
+# The builds in flight, per key: the single-flight half of each cache (rule 4).
+_BOOK_BUILDS: dict[BookKey, asyncio.Future[ReviewBook]] = {}
+_SAVINGS_BUILDS: dict[Fingerprint, asyncio.Future[Savings]] = {}
 
 
 def clear_read_caches() -> None:
     REVIEW_BOOKS.clear()
     MONTH_SAVINGS.clear()
+    _BOOK_BUILDS.clear()
+    _SAVINGS_BUILDS.clear()
 
 
 def _fingerprint_statement(tables: Iterable[str]) -> TextClause:
@@ -127,12 +141,62 @@ _REVIEW_BOOK_FINGERPRINT = _fingerprint_statement(REVIEW_BOOK_TABLES)
 _MONTH_SAVINGS_FINGERPRINT = _fingerprint_statement(MONTH_SAVINGS_TABLES)
 
 
-async def _fingerprint(db: AsyncSession, statement: TextClause) -> tuple[str, ...]:
+async def _fingerprint(db: AsyncSession, statement: TextClause) -> Fingerprint:
     return tuple((await db.execute(statement)).one())
 
 
 def _has_pending_changes(db: AsyncSession) -> bool:
     return bool(db.new or db.dirty or db.deleted)
+
+
+class _BuildAbandoned(Exception):
+    """What a build's waiters see when the builder was cancelled. Never CancelledError: in a
+    waiter that would read as the waiter's OWN cancellation."""
+
+
+async def _memoised[K: Hashable, V](
+    db: AsyncSession,
+    cache: LRU[K, V],
+    builds: dict[K, asyncio.Future[V]],
+    key: K,
+    before: Fingerprint,
+    statement: TextClause,
+    build: Callable[[], Awaitable[V]],
+) -> V:
+    """The value for `key`: cached, awaited from a build already in flight, or built here.
+
+    Waiters take the builder's value even when its stability check failed — under READ
+    COMMITTED that is exactly what each would have built itself — but only a stable build
+    is cached (rule 1). A waiter shields the shared build, so its own cancellation cannot
+    cancel it. When a build fails or is abandoned, its waiters look again: the first to wake
+    builds and the rest await that one."""
+    while True:
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        in_flight = builds.get(key)
+        if in_flight is None:
+            break
+        try:
+            return await asyncio.shield(in_flight)
+        except Exception:
+            continue  # that build failed or was abandoned
+    flight: asyncio.Future[V] = asyncio.get_running_loop().create_future()
+    builds[key] = flight
+    try:
+        value = await build()
+        stable = await _fingerprint(db, statement) == before
+    except BaseException as error:
+        flight.set_exception(error if isinstance(error, Exception) else _BuildAbandoned())
+        flight.exception()  # retrieved: no "never retrieved" log when nobody was waiting
+        raise
+    finally:
+        if builds.get(key) is flight:
+            del builds[key]
+    if stable:
+        cache.put(key, value)
+    flight.set_result(value)
+    return value
 
 
 async def cached_review_book(
@@ -155,14 +219,15 @@ async def cached_review_book(
     base = REVIEW_BOOKS.get((before, today, ()))
     if base is not None and all(month in base.months for month in extras):
         return base
-    key = (before, today, extras)
-    hit = REVIEW_BOOKS.get(key)
-    if hit is not None:
-        return hit
-    book = await load_review_book_snapshot(db, extra_months=list(extras), today=today)
-    if await _fingerprint(db, _REVIEW_BOOK_FINGERPRINT) == before:
-        REVIEW_BOOKS.put(key, book)
-    return book
+    return await _memoised(
+        db,
+        REVIEW_BOOKS,
+        _BOOK_BUILDS,
+        (before, today, extras),
+        before,
+        _REVIEW_BOOK_FINGERPRINT,
+        lambda: load_review_book_snapshot(db, extra_months=list(extras), today=today),
+    )
 
 
 async def cached_month_savings(db: AsyncSession) -> list[MonthSavings]:
@@ -172,10 +237,11 @@ async def cached_month_savings(db: AsyncSession) -> list[MonthSavings]:
     if _has_pending_changes(db):
         return await load_month_savings(db)
     before = await _fingerprint(db, _MONTH_SAVINGS_FINGERPRINT)
-    hit = MONTH_SAVINGS.get(before)
-    if hit is not None:
-        return list(hit)
-    rows = await load_month_savings(db)
-    if await _fingerprint(db, _MONTH_SAVINGS_FINGERPRINT) == before:
-        MONTH_SAVINGS.put(before, tuple(rows))
-    return rows
+
+    async def build() -> Savings:
+        return tuple(await load_month_savings(db))
+
+    savings = await _memoised(
+        db, MONTH_SAVINGS, _SAVINGS_BUILDS, before, before, _MONTH_SAVINGS_FINGERPRINT, build
+    )
+    return list(savings)

@@ -1,6 +1,8 @@
 """Read-path memoisation (2026-09-23 spec §P4): equal to the uncached answer, invalidated by
 every write to every table it reads, never handed to a write path, never session-bound."""
 
+import asyncio
+import gc
 import re
 from contextlib import contextmanager
 from dataclasses import fields, replace
@@ -553,6 +555,163 @@ async def test_held_identities_never_poison_the_shared_book(db, engine):
         assert_same_book(served, await load_review_book(next_request))
     assert served.adopted_on == date(2026, 8, 20)
     assert {r.closed_by for r in served.reviews.values()} == {"another writer"}
+
+
+# --- single-flight: concurrent cold requests share one build (review of §P4) ---
+
+
+@contextmanager
+def unretrieved_future_errors():
+    """Collects the loop's "exception was never retrieved" reports while the block runs."""
+    loop = asyncio.get_running_loop()
+    reported: list[str] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context.get("message", "")))
+    try:
+        yield reported
+    finally:
+        gc.collect()  # a dropped future logs from its finaliser
+        loop.set_exception_handler(previous)
+
+
+def counting_build(monkeypatch, name: str, *, fail_first: str | None = None, hang_first=False):
+    """Replace read_cache.<name> with a slow counting wrapper: every call holds its flight open
+    for 50 ms; the first call can raise RuntimeError(fail_first) or hang until cancelled.
+    A fresh exception per raise: one reused from this closure would keep its traceback, the
+    builder's frame and so the flight alive for the whole test."""
+    real = getattr(read_cache, name)
+    state = {"calls": 0, "first_task": None, "first_started": asyncio.Event()}
+
+    async def build(session, **kwargs):
+        state["calls"] += 1
+        first = state["calls"] == 1
+        if first:
+            state["first_task"] = asyncio.current_task()
+            state["first_started"].set()
+            if hang_first:
+                await asyncio.sleep(3600)  # until the test cancels this task
+        await asyncio.sleep(0.05)
+        if first and fail_first is not None:
+            raise RuntimeError(fail_first)
+        return await real(session, **kwargs)
+
+    monkeypatch.setattr(read_cache, name, build)
+    return state
+
+
+async def concurrently(engine, count, call):
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def one():
+        async with sessions() as session:
+            return await call(session)
+
+    return [asyncio.create_task(one()) for _ in range(count)]
+
+
+async def test_concurrent_cold_requests_build_the_book_once(db, engine, monkeypatch):
+    await seed(db)
+    state = counting_build(monkeypatch, "load_review_book_snapshot")
+    books = await asyncio.gather(*await concurrently(engine, 5, read_cache.cached_review_book))
+    assert state["calls"] == 1
+    assert len({id(book) for book in books}) == 1 and len(REVIEW_BOOKS) == 1
+    assert_same_book(books[0], await load_review_book(db))
+
+
+async def test_concurrent_cold_requests_compose_the_savings_once(db, engine, monkeypatch):
+    await seed(db)
+    state = counting_build(monkeypatch, "load_month_savings")
+    answers = await asyncio.gather(*await concurrently(engine, 5, read_cache.cached_month_savings))
+    assert state["calls"] == 1 and len(read_cache.MONTH_SAVINGS) == 1
+    truth = await load_month_savings(db)
+    assert all(answer == truth for answer in answers)
+    assert len({id(answer) for answer in answers}) == 5  # still one list per caller
+
+
+async def test_when_the_builder_fails_its_waiters_still_get_a_book(db, engine, monkeypatch):
+    await seed(db)
+    state = counting_build(monkeypatch, "load_review_book_snapshot", fail_first="build failed")
+    with unretrieved_future_errors() as reported:
+        results = await asyncio.gather(
+            *await concurrently(engine, 3, read_cache.cached_review_book), return_exceptions=True
+        )
+    failures = [r for r in results if isinstance(r, BaseException)]
+    books = [r for r in results if not isinstance(r, BaseException)]
+    assert [str(f) for f in failures] == ["build failed"]  # only the builder sees its error
+    assert len(books) == 2 and books[0] is books[1]  # the waiters rebuilt once, together
+    assert state["calls"] == 2 and len(REVIEW_BOOKS) == 1
+    assert not [message for message in reported if "never retrieved" in message]
+
+
+async def test_a_lone_failed_build_raises_to_its_caller_and_logs_nothing(db, monkeypatch):
+    """No waiter ever retrieves this flight's exception; the builder must, or asyncio logs
+    "Future exception was never retrieved" when the flight is collected."""
+    await seed(db)
+    counting_build(monkeypatch, "load_review_book_snapshot", fail_first="down")
+    raised = None
+    with unretrieved_future_errors() as reported:
+        try:
+            await read_cache.cached_review_book(db)
+        except RuntimeError as error:  # not pytest.raises: its traceback would keep the
+            raised = str(error)  # builder's frame, and so the flight, alive past the GC below
+    assert raised == "down"
+    assert not [message for message in reported if "never retrieved" in message]
+    assert len(REVIEW_BOOKS) == 0 and not read_cache._BOOK_BUILDS
+    assert await read_cache.cached_review_book(db) is not None  # the next request builds
+
+
+async def test_when_the_builder_is_cancelled_its_waiters_proceed(db, engine, monkeypatch):
+    await seed(db)
+    state = counting_build(monkeypatch, "load_review_book_snapshot", hang_first=True)
+    with unretrieved_future_errors() as reported:
+        tasks = await concurrently(engine, 3, read_cache.cached_review_book)
+        await state["first_started"].wait()
+        await asyncio.sleep(0.05)  # the other two reach the flight and wait on it
+        state["first_task"].cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    cancelled = [r for r in results if isinstance(r, asyncio.CancelledError)]
+    books = [r for r in results if not isinstance(r, BaseException)]
+    assert len(cancelled) == 1 and len(books) == 2 and books[0] is books[1]
+    assert state["calls"] == 2 and len(REVIEW_BOOKS) == 1
+    assert not [message for message in reported if "never retrieved" in message]
+
+
+async def test_a_cancelled_waiter_leaves_the_shared_build_running(db, engine, monkeypatch):
+    await seed(db)
+    state = counting_build(monkeypatch, "load_review_book_snapshot")
+    tasks = await concurrently(engine, 3, read_cache.cached_review_book)
+    await state["first_started"].wait()
+    await asyncio.sleep(0.01)  # the waiters are parked on the flight
+    waiter = next(task for task in tasks if task is not state["first_task"])
+    waiter.cancel()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    assert sum(isinstance(r, asyncio.CancelledError) for r in results) == 1
+    books = [r for r in results if not isinstance(r, BaseException)]
+    assert len(books) == 2 and books[0] is books[1]
+    assert state["calls"] == 1 and len(REVIEW_BOOKS) == 1
+
+
+async def test_waiters_share_an_unstable_build_that_is_never_cached(db, engine, monkeypatch):
+    """A write committed mid-build: every caller gets what the builder built (under READ
+    COMMITTED that is what each would have built itself), and nothing is filed."""
+    await seed(db)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    real = read_cache.load_review_book_snapshot
+    calls = {"n": 0}
+
+    async def build_across_a_commit(session, **kwargs):
+        calls["n"] += 1
+        await asyncio.sleep(0.05)
+        async with sessions() as writer:
+            writer.add(MonthlyCashflow(month=date(2026, 11, 1), net_pay=D("77.00")))
+            await writer.commit()
+        return await real(session, **kwargs)
+
+    monkeypatch.setattr(read_cache, "load_review_book_snapshot", build_across_a_commit)
+    books = await asyncio.gather(*await concurrently(engine, 3, read_cache.cached_review_book))
+    assert calls["n"] == 1 and len({id(book) for book in books}) == 1
+    assert date(2026, 11, 1) in books[0].months
+    assert len(REVIEW_BOOKS) == 0
 
 
 # --- read paths read through the cache; write paths never do ---
