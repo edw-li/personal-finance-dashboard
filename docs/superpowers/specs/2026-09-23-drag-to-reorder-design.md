@@ -213,10 +213,14 @@ reorder.liftedId         // K | null
    pointer leaves the zone, and once the unit's range end is already inside the band the reader can
    see (the scroller's box clipped to the window), less the edge margin. So a held row never scrolls
    out of view past its own group. (Amended 2026-09-23 after lanes R2/R0 review.)
-   - The band starts below the scroller's sticky header (a `thead` whose cells stick, measured on the
-     cells), so the zone, the stop and the keyboard's keep-in-view all count from where the rows
-     show: the range's first row — and the Accounts group heading above it — never rests under the
+   - The band starts below the scroller's sticky header (the lifted row's own table's `thead`, or
+     its cells, whatever sticks — measured on what sticks), so the zone, the stop and the keyboard's
+     keep-in-view all count from where the rows show: the range's first row never rests under the
      header. (Amended 2026-09-23 by lane R7, after lane V's finding 2.)
+   - The Accounts group heading above that row stays clear of the header only because the 40 px
+     edge margin exceeds the heading row (about 37 px): the stop leaves the range's first slot at
+     least 40 px below the header's foot, and the heading sits in that gap. A heading taller than the
+     margin would rest partly under the header again. (R7 review.)
 6. **Drop.**
    - On `pointerup` the unit eases from under the pointer into its gap over `--t-fast`. Only then
      does `onCommit` fire, inside `flushSync`, so the DOM reorder lands on rows that already stand
@@ -282,6 +286,18 @@ reorder.liftedId         // K | null
     every paint and scroll, and removed when the drag lets go. (Amended 2026-09-23 by lane R7, after
     lane V's finding 1: the first design's inset box-shadow in the target's cells hid under the row in
     hand for about half of each slot's travel.)
+  - Under forced colors (Windows High Contrast) the line takes the system `Highlight`: forced colors
+    paint an author background as the canvas colour, which would erase it.
+  - Two limits of the overlay (R7 review):
+    - **A list inside a modal `<dialog>`** — the top layer — would need the line appended inside
+      that dialog: nothing on `<body>` paints over the top layer. No reorderable list lives in one
+      today.
+    - **It relies on `.page` not being a stacking context.** The line's layer is one above the
+      highest z-index among the list's positioned ancestors (3 in the page, 21 in the Customize
+      popover), and that reading cannot see a stacking context made without a z-index. Were `.page`
+      made one (`isolation: isolate`, containment, a transform), the whole page would paint as one
+      root layer beneath the line, which would then cover the sticky scope row and the bubbles, and
+      from 21 up the drawer and the dock. That change must move the line inside `.page` with it.
   - The lifted unit still follows the pointer: direct manipulation, not animation.
   - A keyboard lift under reduced motion moves only the drop line.
 - **Saved flash:** `markSaved(id)` sets `data-reorder-saved` on the unit's rows for `MOTION_MS.flash`
