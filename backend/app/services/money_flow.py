@@ -193,10 +193,9 @@ class FlowMonth:
 @dataclass
 class MoneyFlowCategoryTotal:
     """A category's matched-month total — signed (a refund category can net negative).
-    `category_id` is what the card folds by (the Spending page's all-time category set);
-    None only on the pure tests' name-keyed shorthand."""
+    `category_id` is what the card folds by (the Spending page's all-time category set)."""
 
-    category_id: int | None
+    category_id: int
     name: str
     kind: str
     amount: Decimal
@@ -264,7 +263,7 @@ def matched_window(
     # An exact-zero total draws nothing; biggest first, so the payload reads like the card.
     category_totals = sorted(
         (entry for entry in totals.values() if entry.amount != 0),
-        key=lambda entry: (-entry.amount, entry.name, entry.category_id or 0),
+        key=lambda entry: (-entry.amount, entry.name, entry.category_id),
     )
     pay_only = [m for m in in_year if m.net_pay is not None and m.spending is None]
     spend_only = [m for m in in_year if m.net_pay is None and m.spending is not None]
@@ -337,17 +336,16 @@ def compose_money_flow(
     year: int,
     inputs: dict[str, Decimal],
     brackets: dict[str, list[Bracket]],
-    category_sums: dict[str, Decimal],
     net_pay_sum: Decimal,
     net_pay_months: int,
     spending_months: int,
     available_years: list[int],
     *,
+    window: MatchedWindow,
     filing_status: str = SINGLE,
     earners: list[EarnerWages] | None = None,
     brackets_missing_for_status: list[str] | tuple[str, ...] = (),
     salary_by_person: list[tuple[str, Decimal]] | None = None,
-    window: MatchedWindow | None = None,
 ) -> MoneyFlow:
     """One reconciled year of money flow (spec §5's node table).
 
@@ -359,9 +357,9 @@ def compose_money_flow(
     state-AGI capital-gains fold rides along for free).
 
     The right-hand side comes from `window` (2026-09-23 spec §C1): its matched-month
-    category totals, take-home and cash saved. The router always hands one. Without a
-    window — the pure tests' complete-year shorthand — every entered month counts as
-    matched and `category_sums` (SIGNED per-category spend by name) is the right side.
+    category totals, take-home and cash saved. It is required — the one right side there
+    is (the 2026-09-23 code review retired a window-less, name-keyed shorthand that only the
+    pure tests used; they build a complete-year window instead).
 
     `filing_status`/`earners` are passed STRAIGHT THROUGH to the engine, so the card's tax
     decomposition is the same arithmetic the Taxes summary shows — with the defaults, that
@@ -425,15 +423,8 @@ def compose_money_flow(
     # Saved. It used to be every entered spending month against every entered take-home
     # month, so a rent-only month in progress was charged against pay that had not been
     # entered for it (production 2026: Saved $148.74 beside the YTD card's $2,220.97).
-    if window is None:
-        right = [
-            MoneyFlowCategoryTotal(None, name, LIVING, amount)
-            for name, amount in category_sums.items()
-        ]
-        take_home_matched = net_pay_sum
-    else:
-        right = list(window.category_totals)
-        take_home_matched = window.take_home_matched
+    right = list(window.category_totals)
+    take_home_matched = window.take_home_matched
 
     # Top-7 + Other fold, positive-only (buildYearSlices' documented rule: a link cannot
     # be negative, so net-refund categories are excluded and the fold restates spending
@@ -453,11 +444,9 @@ def compose_money_flow(
     # A net-refund category cannot be a link; its money came BACK, so it funds the fan as
     # an explicit inflow beside take-home, and the right side conserves with Saved netted.
     refunds = -sum((entry.amount for entry in right if entry.amount < 0), ZERO)
-    # SIGNED: the builder draws Saved or Drawdown. With a window this is the savings
-    # module's own cash saved — the YTD card's figure — taken verbatim, never re-derived.
-    saved = (
-        window.cash_savings if window is not None else take_home_matched - (total_spend - refunds)
-    )
+    # SIGNED: the builder draws Saved or Drawdown. This is the savings module's own cash
+    # saved — the YTD card's figure — taken verbatim, never re-derived.
+    saved = window.cash_savings
 
     # Engine warnings first (the summary serializer's convention), ours appended after.
     warnings: list[str] = [
@@ -561,18 +550,12 @@ def compose_money_flow(
         warnings=warnings,
         take_home_matched=take_home_matched,
         refunds=refunds,
-        matched_months=[] if window is None else list(window.matched_months),
-        take_home_pending_months=[] if window is None else list(window.take_home_pending_months),
-        take_home_unmatched=ZERO_CENTS if window is None else window.take_home_unmatched,
-        take_home_unmatched_months=(
-            [] if window is None else list(window.take_home_unmatched_months)
-        ),
-        spending_unmatched_months=(
-            [] if window is None else list(window.spending_unmatched_months)
-        ),
-        spending_unmatched_total=(
-            ZERO_CENTS if window is None else window.spending_unmatched_total
-        ),
+        matched_months=list(window.matched_months),
+        take_home_pending_months=list(window.take_home_pending_months),
+        take_home_unmatched=window.take_home_unmatched,
+        take_home_unmatched_months=list(window.take_home_unmatched_months),
+        spending_unmatched_months=list(window.spending_unmatched_months),
+        spending_unmatched_total=window.spending_unmatched_total,
         category_totals=[entry for entry in right if entry.amount != 0],
-        tracking_start=None if window is None else window.tracking_start,
+        tracking_start=window.tracking_start,
     )

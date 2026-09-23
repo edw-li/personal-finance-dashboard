@@ -44,8 +44,9 @@ class MoneyFlowCategoryTotalOut(BaseModel):
     refund category can net negative. The card folds these by the Spending page's own
     category set (by id), so a category keeps one colour on every chart."""
 
-    category_id: int | None
+    category_id: int
     name: str
+    # "living" or "tax": the kinds cash saved subtracts — transfers are never listed.
     kind: str
     amount: Decimal
 
@@ -103,7 +104,8 @@ class MoneyFlowOut(BaseModel):
     # named in the card's footer. Living + tax, netted — the kinds Saved subtracts.
     spending_unmatched_months: list[date] = Field(default_factory=list)
     spending_unmatched_total: Decimal
-    # Every category's matched-month total (exact zeros omitted), biggest first.
+    # Every living and tax category's matched-month total — transfers excluded (they stay
+    # yours, as the YTD card's cash saved has it), exact zeros omitted — biggest first.
     category_totals: list[MoneyFlowCategoryTotalOut] = Field(default_factory=list)
     # The book's first take-home month: pending months before it predate tracking.
     tracking_start: date | None = None

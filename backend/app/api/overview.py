@@ -219,9 +219,6 @@ async def money_flow(year: YearQuery = None, db: AsyncSession = Depends(get_db))
         year=year,
         inputs=feed.inputs,
         brackets=feed.tables,
-        # The window's own totals by name — consistent with `window`, which is what the
-        # service reads for the right-hand side whenever one is handed over.
-        category_sums={entry.name: entry.amount for entry in window.category_totals},
         net_pay_sum=net_pay_sum,
         net_pay_months=len(pay_by_month),
         spending_months=len(cells),

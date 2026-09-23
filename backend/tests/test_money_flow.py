@@ -10,6 +10,10 @@ and the main fixture is deliberately CG-free so even its engine figures are stab
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
+import pytest
+from pydantic import ValidationError
+
+from app.schemas.overview import MoneyFlowCategoryTotalOut
 from app.services.money_flow import (
     NEGATIVE_RESIDUAL_REASON,
     NEGATIVE_TAXES_REASON,
@@ -85,18 +89,48 @@ CATEGORY_SUMS = {
 }
 
 
+NET_PAY_SUM = D("120000.00")
+
+
+def complete_year(category_sums=None, net_pay_sum=NET_PAY_SUM, year=2026):
+    """The pure tests' complete-year shorthand, as the MatchedWindow the router would build for
+    a year whose every month has both feeds (the 2026-09-23 code review, 3: the service's own
+    window-less branch is gone). `category_sums` is SIGNED spend by name, all living, ids in
+    insertion order; the fan is funded by all of take-home, and cash saved is what the savings
+    module makes of it — take-home minus every category, refunds netted."""
+    category_sums = CATEGORY_SUMS if category_sums is None else category_sums
+    return MatchedWindow(
+        matched_months=[date(year, n, 1) for n in range(1, 13)],
+        take_home_matched=net_pay_sum,
+        take_home_unmatched=D("0.00"),
+        take_home_unmatched_months=[],
+        spending_unmatched_months=[],
+        spending_unmatched_total=D("0.00"),
+        take_home_pending_months=[],
+        category_totals=[
+            MoneyFlowCategoryTotal(index, name, "living", amount)
+            for index, (name, amount) in enumerate(category_sums.items(), start=1)
+        ],
+        cash_savings=net_pay_sum - sum(category_sums.values(), D("0.00")),
+        tracking_start=None,
+    )
+
+
 def compose(**over):
+    # `category_sums` (default CATEGORY_SUMS) feeds the complete-year window unless a test
+    # hands its own `window`.
+    category_sums = over.pop("category_sums", None)
     kwargs = dict(
         year=2026,
         inputs=INPUTS,
         brackets=BRACKETS,
-        category_sums=CATEGORY_SUMS,
-        net_pay_sum=D("120000.00"),
+        net_pay_sum=NET_PAY_SUM,
         net_pay_months=12,
         spending_months=12,
         available_years=[2024, 2025, 2026],
     )
     kwargs.update(over)
+    kwargs.setdefault("window", complete_year(category_sums, kwargs["net_pay_sum"], kwargs["year"]))
     return compose_money_flow(**kwargs)
 
 
@@ -388,7 +422,7 @@ def test_filing_status_and_earners_reach_the_engine():
         year=2026,
         inputs=inputs,
         brackets=brackets,
-        category_sums={},
+        window=complete_year({}, D("0")),
         net_pay_sum=D("0"),
         net_pay_months=0,
         spending_months=0,
@@ -398,7 +432,7 @@ def test_filing_status_and_earners_reach_the_engine():
         year=2026,
         inputs=inputs,
         brackets=brackets,
-        category_sums={},
+        window=complete_year({}, D("0")),
         net_pay_sum=D("0"),
         net_pay_months=0,
         spending_months=0,
@@ -419,7 +453,7 @@ def test_missing_status_brackets_refuse_to_render():
         year=2026,
         inputs=INPUTS,
         brackets={},
-        category_sums={"Groceries": D("1000")},
+        window=complete_year({"Groceries": D("1000")}, D("50000")),
         net_pay_sum=D("50000"),
         net_pay_months=12,
         spending_months=12,
@@ -775,13 +809,40 @@ def test_a_window_with_nothing_matched_saves_nothing_rather_than_everything():
     assert flow.take_home_unmatched == D("240000.00")
 
 
-def test_without_a_window_every_entered_month_is_matched():
-    # The pure tests' complete-year shorthand: the right side is `category_sums`, the fan is
-    # funded by all of take-home, and the new fields carry the no-window defaults.
+def test_the_complete_year_shorthand_is_a_window_like_any_other():
+    # The 2026-09-23 code review (3): there is no window-less branch left in the service. The
+    # shorthand every test above composes with is a real MatchedWindow (complete_year): every
+    # month matched, the fan funded by all of take-home, every total naming its category.
     flow = compose()
     assert flow.take_home_matched == flow.take_home_cash
     assert flow.take_home_unmatched == D("0.00")
-    assert flow.matched_months == []
+    assert flow.matched_months == [date(2026, n, 1) for n in range(1, 13)]
     assert flow.take_home_pending_months == []
     assert flow.tracking_start is None
-    assert {t.name for t in flow.category_totals} == set(CATEGORY_SUMS)
+    assert [t.name for t in flow.category_totals] == list(CATEGORY_SUMS)
+    assert [t.category_id for t in flow.category_totals] == list(range(1, len(CATEGORY_SUMS) + 1))
+
+
+def test_the_window_is_required_and_the_name_keyed_sums_are_gone():
+    # The router always handed one; the service no longer pretends it might not.
+    base = dict(
+        year=2026,
+        inputs=INPUTS,
+        brackets=BRACKETS,
+        net_pay_sum=D("0"),
+        net_pay_months=0,
+        spending_months=0,
+        available_years=[2026],
+    )
+    with pytest.raises(TypeError):
+        compose_money_flow(**base)
+    with pytest.raises(TypeError):
+        compose_money_flow(**base, category_sums={}, window=complete_year({}, D("0")))
+
+
+def test_a_category_total_on_the_wire_always_names_its_category():
+    # The id-less total existed only for the window-less shorthand; the card folds by id.
+    total = MoneyFlowCategoryTotalOut(category_id=7, name="Rent", kind="living", amount=D("1.00"))
+    assert total.category_id == 7
+    with pytest.raises(ValidationError):
+        MoneyFlowCategoryTotalOut(category_id=None, name="Rent", kind="living", amount=D("1.00"))
