@@ -644,12 +644,16 @@ export function categorySmallMultiplesOption({
       textStyle: { color: MUTED, fontSize: 11, fontWeight: 600 as const },
     })),
     // Only the bottom row prints month labels: three columns of dates would out-shout the
-    // shapes the grid exists to compare.
-    xAxis: order.map((_, i) => ({
-      ...monthAxis(monthLabels),
-      gridIndex: i,
-      axisLabel: { show: i >= order.length - SM_COLUMNS, interval: 'auto' as const },
-    })),
+    // shapes the grid exists to compare. The month grammar's formatter stays on every cell's
+    // axis (2026-09-23 spec §C4), so EChart fits the printed row to its cell's width.
+    xAxis: order.map((_, i) => {
+      const axis = monthAxis(monthLabels)
+      return {
+        ...axis,
+        gridIndex: i,
+        axisLabel: { ...axis.axisLabel, show: i >= order.length - SM_COLUMNS, interval: 'auto' as const },
+      }
+    }),
     yAxis: order.map((_, i) => ({ ...moneyAxis(), gridIndex: i, splitNumber: 2 })),
     tooltip: axisTooltip({ unit: 'money' }),
     series: order.map((id, i) => ({

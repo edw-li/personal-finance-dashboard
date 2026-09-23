@@ -211,7 +211,9 @@ describe('spendingBarsOption', () => {
   it('grid, axes, legend: money grid, every month labelled, compact money ticks, Total budget deselected under the page picks', () => {
     const option = read(spendingBarsOption(barsInput(matrixFixture(), { 'Net pay': false })))
     expect(option.grid).toEqual(GRID_VARIANTS.default)
-    expect(option.xAxis).toEqual({ type: 'category', data: LABELS, axisLabel: { interval: 0 } })
+    // Every month labelled (≤ 12), through the month grammar EChart fits to the card (§C4).
+    expect(option.xAxis).toMatchObject({ type: 'category', data: LABELS, axisLabel: { interval: 0, hideOverlap: true } })
+    expect(option.xAxis.boundaryGap).toBeUndefined()
     expect(option.yAxis.axisLabel.formatter).toBe(compactMoney)
     expect(option.legend.type).toBe('plain')
     expect(option.legend.selected).toEqual({ 'Total budget': false, 'Net pay': false })
@@ -541,6 +543,11 @@ describe('categorySmallMultiplesOption', () => {
     }
     expect(option.grid).toHaveLength(3)
     expect(option.xAxis.map((a) => a.gridIndex)).toEqual([0, 1, 2])
+    // Only the bottom row prints months — through the month grammar, so EChart fits them (§C4).
+    const smAxes = option.xAxis as unknown as { axisLabel: { show: boolean; interval: string; formatter?: (v: string, i: number) => string } }[]
+    expect(smAxes.map((axis) => axis.axisLabel.show)).toEqual([true, true, true])
+    expect(smAxes[0].axisLabel.formatter?.('Jun 2026', 0)).toBe('Jun 2026')
+    expect(smAxes[0].axisLabel.interval).toBe('auto')
     expect(option.yAxis.every((a) => a.axisLabel.formatter === compactMoney)).toBe(true)
     expect(option.title.map((t) => t.text)).toEqual(['Rent', 'Groceries <b>& more</b>', 'Fun'])
     expect(option.series.map((s) => [s.name, s.xAxisIndex, s.yAxisIndex])).toEqual([['Rent', 0, 0], ['Groceries <b>& more</b>', 1, 1], ['Fun', 2, 2]])

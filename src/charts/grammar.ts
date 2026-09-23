@@ -196,15 +196,84 @@ export function offScaleMarkPoint(
   }
 }
 
+// ── Month labels that never collide (2026-09-23 spec §C4) ──────────────────────────────────
+// A builder cannot know pixels, so a MONTH axis carries a branded formatter and EChart fits it
+// to the measured card (fitMonthAxes) before every paint, on resize and on every zoom. The
+// thresholds are the chart font's own measurements (12px Segoe UI, the widest of each form):
+// "Sep 2026*" 53.9px · "May '26" 41.7px beside a 17.9px "Jun" · "2026" 25.9px · "May" 22.7px,
+// each plus a ~4px gap between neighbouring labels.
+const MONTH_LABEL = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$/
+
+/** "Oct 2025" on every month. */
+export const MONTH_LABEL_FULL_PX = 56
+/** "Oct" — the first visible label and each January as "Oct '25" / "Jan '26". */
+export const MONTH_LABEL_SHORT_PX = 34
+/** "Oct" — the first visible label and each January replaced by the year itself, "2026". */
+export const MONTH_LABEL_COMPACT_PX = 27
+/** The partial-period marker a month label carries (spec §C5); the tooltip says the words. */
+export const PARTIAL_MARK = '*'
+
+/** full · short · compact as above; sparse: every label "Oct '25", and echarts thins them. */
+export type MonthLabelMode = 'full' | 'short' | 'compact' | 'sparse'
+
+/** The form a month label takes when each month gets `spacing` pixels. */
+export function monthLabelMode(spacing: number): MonthLabelMode {
+  if (spacing >= MONTH_LABEL_FULL_PX) return 'full'
+  if (spacing >= MONTH_LABEL_SHORT_PX) return 'short'
+  if (spacing >= MONTH_LABEL_COMPACT_PX) return 'compact'
+  return 'sparse'
+}
+
+/** The text one month category prints. `index` is its position inside the VISIBLE window —
+ *  echarts hands category formatters `tick - windowStart` — so "the first label" is the first
+ *  one on screen. Tooltips keep the full month: they read the category, not this text. A label
+ *  that is not "Mmm YYYY" passes through untouched. */
+export function monthTick(label: string, index: number, mode: MonthLabelMode, marked = false): string {
+  const match = MONTH_LABEL.exec(label)
+  if (match === null) return label
+  const mark = marked ? PARTIAL_MARK : ''
+  if (mode === 'full') return `${label}${mark}`
+  const [, month, year] = match
+  const anchor = index === 0 || month === 'Jan'
+  if (mode === 'compact') return `${anchor ? year : month}${mark}`
+  const withYear = mode === 'sparse' || anchor
+  return `${withYear ? `${month} '${year.slice(2)}` : month}${mark}`
+}
+
+interface MonthAxisMeta {
+  marked: ReadonlySet<string>
+  rotated: boolean
+}
+// The brand: a WeakMap from formatter to its axis facts — invisible to EChart's JSON
+// fingerprint and to recolor (functions pass through both by identity).
+const MONTH_AXES = new WeakMap<object, MonthAxisMeta>()
+const NO_MARKS: ReadonlySet<string> = new Set<string>()
+
+function monthFormatter(mode: MonthLabelMode, meta: MonthAxisMeta) {
+  const formatter = (value: string, index: number) => monthTick(value, index, mode, meta.marked.has(value))
+  MONTH_AXES.set(formatter, meta)
+  return formatter
+}
+
 /** Category axis of month (or date) labels. Lines touch the card edges (`boundaryGap:
  *  false`, the default); bars pass `gap: true` and keep echarts' default gap — the key is
- *  omitted so today's bar options stay byte-identical. Twelve categories or fewer label
- *  every one (a year of months must not skip alternate labels). */
+ *  omitted so a bar option's axis stays as it was. Twelve categories or fewer label every one
+ *  (a year of months must not skip alternate labels) until EChart fits the axis to its width.
+ *  Month labels ("Mmm YYYY") get the grammar's formatter — full until fitted — and the
+ *  overlap guard; `marked` months (in progress, spec §C5) carry PARTIAL_MARK. Any other
+ *  labels (years, steps, dates) keep exactly the axis they always had. */
 export function monthAxis(
   labels: string[],
-  { gap = false, rotate }: { gap?: boolean; rotate?: number } = {},
+  { gap = false, rotate, marked }: { gap?: boolean; rotate?: number; marked?: ReadonlySet<string> } = {},
 ) {
+  const months = labels.length > 0 && labels.every((label) => MONTH_LABEL.test(label))
   const axisLabel = {
+    ...(months
+      ? {
+          formatter: monthFormatter('full', { marked: marked ?? NO_MARKS, rotated: rotate !== undefined }),
+          hideOverlap: true,
+        }
+      : {}),
     ...(labels.length <= 12 ? { interval: 0 } : {}),
     ...(rotate === undefined ? {} : { rotate }),
   }
@@ -218,6 +287,65 @@ export function monthAxis(
 
 /** Daily-date categories read exactly like months: no gap, every label under 13 points. */
 export const dateAxis = (labels: string[]) => monthAxis(labels)
+
+/** A grid length in pixels: a number, or a percent of the container. */
+function gridPx(value: unknown, width: number): number {
+  if (typeof value === 'number') return value
+  if (typeof value === 'string') {
+    const n = parseFloat(value)
+    if (!Number.isFinite(n)) return 0
+    return value.trim().endsWith('%') ? (width * n) / 100 : n
+  }
+  return 0
+}
+
+/** Fit every month axis in `option` to a container `width` pixels wide (spec §C4): each
+ *  month gets plot width ÷ visible months (÷ one fewer on a line, whose ends sit on the
+ *  plot's edges), and its label form follows monthLabelMode — every label shown while they
+ *  fit, echarts' own thinning (plus the overlap guard) once they cannot. `zoom` is the live
+ *  window EChart reads back; the option's own dataZoom otherwise. Rotated axes (the heatmap)
+ *  and non-month axes are left alone; so is everything when the width is unknown (0). The
+ *  input is never mutated. `key` names the fitted forms, so a caller refits only on change. */
+export function fitMonthAxes(
+  option: object,
+  width: number,
+  zoom?: { startValue: number; endValue: number } | null,
+): { option: typeof option; key: string } {
+  if (!(width > 0)) return { option, key: '' }
+  const o = option as Record<string, unknown>
+  const single = !Array.isArray(o.xAxis)
+  const axes = (single ? (o.xAxis === undefined ? [] : [o.xAxis]) : o.xAxis) as Record<string, unknown>[]
+  const grids = (Array.isArray(o.grid) ? o.grid : [o.grid ?? {}]) as Record<string, unknown>[]
+  const zooms = (Array.isArray(o.dataZoom) ? o.dataZoom : o.dataZoom === undefined ? [] : [o.dataZoom]) as {
+    startValue?: unknown
+    endValue?: unknown
+  }[]
+  const keys: string[] = []
+  let fitted = false
+  const next = axes.map((axis, index) => {
+    const label = (axis.axisLabel ?? {}) as Record<string, unknown>
+    const meta = typeof label.formatter === 'function' ? MONTH_AXES.get(label.formatter) : undefined
+    const count = Array.isArray(axis.data) ? axis.data.length : 0
+    if (meta === undefined || meta.rotated || count === 0) {
+      keys.push('-')
+      return axis
+    }
+    const grid = grids[typeof axis.gridIndex === 'number' ? axis.gridIndex : 0] ?? {}
+    const plot = grid.width !== undefined ? gridPx(grid.width, width) : width - gridPx(grid.left, width) - gridPx(grid.right, width)
+    // The zoom a single-axis chart carries applies to its first axis (rangeZoom's contract).
+    const preset = zooms[0]
+    const start = index === 0 ? (zoom?.startValue ?? (typeof preset?.startValue === 'number' ? preset.startValue : 0)) : 0
+    const end = index === 0 ? (zoom?.endValue ?? (typeof preset?.endValue === 'number' ? preset.endValue : count - 1)) : count - 1
+    const visible = Math.max(1, Math.min(end, count - 1) - Math.max(start, 0) + 1)
+    const spacing = plot / (axis.boundaryGap === false ? Math.max(visible - 1, 1) : visible)
+    const mode = monthLabelMode(spacing)
+    keys.push(mode)
+    fitted = true
+    return { ...axis, axisLabel: { ...label, formatter: monthFormatter(mode, meta), interval: mode === 'sparse' ? 'auto' : 0 } }
+  })
+  if (!fitted) return { option, key: '' }
+  return { option: { ...o, xAxis: single ? next[0] : next }, key: keys.join('|') }
+}
 
 /** Every bar: the surface hairline that separates stack segments (and insets a lone bar so
  *  it reads as the same family), the 22px cap, INK on hover, and series focus (§9). */
