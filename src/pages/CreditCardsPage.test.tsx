@@ -622,8 +622,10 @@ describe('CreditCardsPage', () => {
       rewards_currency: 'cash',
       point_value_cents: '1',
       is_active: true,
-      sort_order: 0,
     })
+    // No position: the server appends a new card after the last one (2026-09-23 reorder spec
+    // §3.3, §7) — a 0 here would put it first.
+    expect(vi.mocked(createCreditCard).mock.calls[0][0]).not.toHaveProperty('sort_order')
   })
 
   it('toggling a credit\'s "counts" PATCHes the full credit body', async () => {
@@ -1794,5 +1796,50 @@ describe('CreditCardsPage — the card roster: Undo, and a save that fails (spec
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
     expect(await screen.findByText(text)).toBeTruthy()
     expect(fetchCreditCards).toHaveBeenCalledTimes(fetches)
+  })
+})
+
+describe('CreditCardsPage — the card roster: the rows and the form around a drag', () => {
+  beforeEach(() => {
+    vi.mocked(reorderCreditCards).mockReset()
+  })
+
+  it("shuts the rows' own buttons while a row is lifted; Escape opens them again and saves nothing", async () => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    const rowButtons = () =>
+      ['Venture X', 'SavorOne', 'RH Gold'].flatMap((name) =>
+        [`Edit ${name}`, `Archive ${name}`, `Delete ${name}`].map(
+          (label) => screen.getByRole('button', { name: label }) as HTMLButtonElement,
+        ),
+      )
+    grip('SavorOne').focus()
+    fireEvent.keyDown(grip('SavorOne'), { key: ' ' })
+    expect(rowButtons().every((button) => button.disabled)).toBe(true)
+    fireEvent.keyDown(grip('SavorOne'), { key: 'Escape' })
+    expect(rowButtons().every((button) => !button.disabled)).toBe(true)
+    expect(reorderCreditCards).not.toHaveBeenCalled()
+  })
+
+  it("an edit after a reorder sends the card's renumbered sort_order, never the one it loaded with", async () => {
+    serveCards()
+    vi.mocked(updateCreditCard).mockResolvedValue(vx())
+    renderManage()
+    await screen.findByText('Card roster')
+    // The page's reload never lands: only the PUT's own answer knows the new numbers.
+    vi.mocked(fetchCreditCards).mockReturnValue(new Promise<never>(() => {}))
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Venture X' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save card' }))
+    await waitFor(() => expect(updateCreditCard).toHaveBeenCalledTimes(1))
+    // Venture X loaded as 0 and now stands second, renumbered 1 by the server. The full-replace
+    // PATCH still names a position (spec §7), and a stale 0 would tie SavorOne's new 0.
+    expect(vi.mocked(updateCreditCard).mock.calls[0]).toEqual([
+      1,
+      expect.objectContaining({ sort_order: 1 }),
+    ])
   })
 })

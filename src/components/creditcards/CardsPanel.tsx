@@ -143,8 +143,8 @@ export default function CardsPanel({
     })
   }
 
-  /** The full-replace body, preserving fields the form doesn't show (is_active,
-   *  sort_order) from the stored row when editing. */
+  /** The full-replace body, preserving fields the form doesn't show from the stored row when
+   *  editing: is_active always, sort_order on an edit only (a new card names no position). */
   const buildBody = (stored: CreditCardOut | undefined): CreditCardIn | null => {
     const name = form.name.trim()
     if (!name) {
@@ -171,7 +171,7 @@ export default function CardsPanel({
       setError('point_value_cents must be positive')
       return null
     }
-    return {
+    const body: CreditCardIn = {
       name,
       // The wire belt: blur usually canonicalized already, but a submit reached without one
       // (a mouse user who types and clicks Save) must not ship "$95" to a Decimal column.
@@ -189,20 +189,23 @@ export default function CardsPanel({
       primary_holder: stored?.primary_holder ?? null,
       authorized_users: form.authorized_users.trim() || null,
       opened_on: form.opened_on || null,
-      // The two columns this form has no box for. On a full-replace PATCH an omitted or
-      // guessed value would silently unarchive a card, or shuffle the roster's order, on
-      // every unrelated edit — so they come from the STORED row and only Archive moves
-      // is_active.
+      // One of the two columns this form has no box for. On a full-replace PATCH an omitted
+      // or guessed is_active would silently unarchive a card on every unrelated edit — so it
+      // comes from the STORED row and only Archive moves it.
       is_active: stored?.is_active ?? true,
       account_id: form.account_id === '' ? null : Number(form.account_id),
       notes: form.notes.trim() || null,
-      sort_order: stored?.sort_order ?? 0,
     }
+    // The other is the position, which the roster's drag owns (2026-09-23 drag-to-reorder spec
+    // §7). An edit sends the stored value back, as a full replace names every column; a new
+    // card names none, and the server appends it after the last card (spec §3.3).
+    return stored === undefined ? body : { ...body, sort_order: stored.sort_order }
   }
 
   const submit = () => {
-    // The row as the SERVER has it, looked up in the current feed.
-    const stored = cards.find((c) => c.id === editingId)
+    // The row as the SERVER has it, as rendered: after a reorder the PUT's answer — its
+    // renumbered sort_order included — stands here before the page's reload lands.
+    const stored = ordered.find((card) => card.id === editingId)
     const body = buildBody(stored)
     if (body === null) return
     setBusy(true)
@@ -623,8 +626,9 @@ export default function CardsPanel({
                       aria-label={`Edit ${card.name}`}
                       // Shut mid-flight like every other button here: this fills the form from
                       // the row, and a save landing a moment later resets it out from under
-                      // the click.
-                      disabled={busy}
+                      // the click. Shut while a row is lifted too (lane R0 consumer rule 5): a
+                      // click mid-drag would act on a row that is about to move.
+                      disabled={busy || reorder.active}
                       onClick={() => startEdit(card)}
                     >
                       Edit
@@ -633,7 +637,7 @@ export default function CardsPanel({
                       type="button"
                       className="button"
                       aria-label={card.is_active ? `Archive ${card.name}` : `Unarchive ${card.name}`}
-                      disabled={busy}
+                      disabled={busy || reorder.active}
                       onClick={() => toggleArchive(card)}
                     >
                       {card.is_active ? 'Archive' : 'Unarchive'}
@@ -642,7 +646,7 @@ export default function CardsPanel({
                       type="button"
                       className="button"
                       aria-label={`Delete ${card.name}`}
-                      disabled={busy}
+                      disabled={busy || reorder.active}
                       onClick={() => remove(card)}
                     >
                       Delete
