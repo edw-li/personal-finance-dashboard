@@ -29,7 +29,7 @@ import type {
 } from '../types/api'
 import { calendarEvent } from '../testing/calendarFixtures'
 import { formatCompactCents, proratedLivingCents } from '../components/calendar/cashflow'
-import { UP_NEXT_WINDOW_DAYS } from '../components/overview/upNext'
+import { upNextWindow } from '../components/overview/upNext'
 import { formatDate, formatMonth } from '../utils/format'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import OverviewPage from './OverviewPage'
@@ -1434,7 +1434,9 @@ it('ranks Up next with one payday and prints the 45-day line with amounts', asyn
 it('adds the living costs of the next 45 days to the line', async () => {
   serve()
   const today = todayIso()
-  const end = addDays(today, UP_NEXT_WINDOW_DAYS)
+  // Exactly 45 days, today included (lane B1 review, M5): the fetch asks for that window.
+  const end = addDays(today, 44)
+  expect(upNextWindow(today)).toEqual({ start: today, end })
   // One budget-basis estimate for every month the window touches, whatever day this runs.
   const living: CalendarLiving[] = []
   for (let month = `${today.slice(0, 7)}-01`; month <= end; month = addMonths(month, 1)) {
@@ -1453,6 +1455,31 @@ it('adds the living costs of the next 45 days to the line', async () => {
   await waitFor(() =>
     expect(upNextText()).toBe(`Next 45 days: +$6.8k scheduled in · ≈ −${spread} living costs`),
   )
+  expect(vi.mocked(fetchCalendar)).toHaveBeenCalledWith(today, end)
+})
+
+// Review M5 (a): an empty agenda still costs money — the living clause stands on its own under
+// "Nothing scheduled…", and only when there is an estimate to show.
+it('shows the living clause under an empty agenda, and nothing more when there is no estimate', async () => {
+  serve()
+  const today = todayIso()
+  const end = addDays(today, 44)
+  const living: CalendarLiving[] = []
+  for (let month = `${today.slice(0, 7)}-01`; month <= end; month = addMonths(month, 1)) {
+    living.push({ month, amount: '3000.00', basis: 'budget', months_in_average: null })
+  }
+  vi.mocked(fetchCalendar).mockResolvedValue({ sources: [], quote_as_of: null, living, events: [] })
+  const view = renderPage()
+  await screen.findByText('Nothing scheduled in the next 45 days.')
+  const spread = formatCompactCents(proratedLivingCents(living, today, end) ?? 0)
+  await waitFor(() => expect(upNextText()).toBe(`Next 45 days: ≈ −${spread} living costs`))
+  expect(document.querySelectorAll('.up-next-list li')).toHaveLength(0)
+  view.unmount()
+  clearSnapshots()
+  vi.mocked(fetchCalendar).mockResolvedValue({ sources: [], quote_as_of: null, living: [], events: [] })
+  renderPage()
+  await screen.findByText('Nothing scheduled in the next 45 days.')
+  expect(upNextText()).toBeNull()
 })
 
 it('a calendar failure dents only the strip, never the snapshot', async () => {
