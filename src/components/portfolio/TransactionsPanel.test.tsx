@@ -1045,6 +1045,27 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
     await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
   })
 
+  it('never calls a restore that succeeded a failure — a throw after it escapes the failure path', async () => {
+    const escaped = vi.fn()
+    process.on('unhandledRejection', escaped)
+    try {
+      answerWith()
+      renderLedger()
+      keyboardMove(NVDA_BUY, 'ArrowDown')
+      await screen.findByText(QUIET_NVDA)
+      // A malformed answer to the restore: the server restored, but no rows came back.
+      vi.mocked(reorderTransactions).mockResolvedValueOnce(
+        undefined as unknown as TransactionOrderOut,
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+      await waitFor(() => expect(escaped).toHaveBeenCalled())
+      expect(escaped.mock.calls[0][0]).toBeInstanceOf(TypeError)
+      expect(screen.queryByText(/Couldn't restore the order/)).toBeNull()
+    } finally {
+      process.off('unhandledRejection', escaped)
+    }
+  })
+
   it.each([
     {
       status: 500,
@@ -1111,6 +1132,27 @@ describe('TransactionsPanel reorder — a save that fails (spec §5, §8.1, §8.
     keyboardMove(NVDA_SELL, 'ArrowUp')
     await screen.findByText(/^Couldn't save the new order/)
     expect(order()).toEqual(['22', '21', '23'])
+  })
+
+  it('never calls a save that succeeded a failure — a throw after the save escapes the failure path', async () => {
+    // Our own listener: vitest leaves an unhandled rejection to user code when one is listening.
+    const escaped = vi.fn()
+    process.on('unhandledRejection', escaped)
+    try {
+      // A malformed answer: the order saved, but the toast cannot be worded from it.
+      vi.mocked(reorderTransactions).mockResolvedValueOnce({
+        transactions: [vooBuy, nvdaBuy, nvdaSell],
+      } as unknown as TransactionOrderOut)
+      renderLedger()
+      keyboardMove(NVDA_BUY, 'ArrowDown')
+      await waitFor(() => expect(escaped).toHaveBeenCalled())
+      expect(escaped.mock.calls[0][0]).toBeInstanceOf(TypeError)
+      expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
+      // The saved order stays on screen — nothing is "back to how it was".
+      expect(order()).toEqual(['22', '21', '23'])
+    } finally {
+      process.off('unhandledRejection', escaped)
+    }
   })
 })
 

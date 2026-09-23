@@ -286,20 +286,23 @@ export default function TransactionsPanel({
   // is there now.
   const restoreOrder = (ids: number[], scope: OwnerScope) => {
     requestStarted()
+    // Two-argument then, as in saveOrder: only the request's own failure is a failed restore.
     reorderTransactions(ids, scope)
-      .then((result) => {
-        setSavedOrder({ scope, rows: result.transactions })
-        onChangedRef.current()
-        toast.info('Order restored')
-      })
-      .catch((err: unknown) => {
-        if (err instanceof ApiError && err.status === 409) {
-          toast.error(errorDetail(err))
+      .then(
+        (result) => {
+          setSavedOrder({ scope, rows: result.transactions })
           onChangedRef.current()
-          return
-        }
-        toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
-      })
+          toast.info('Order restored')
+        },
+        (err: unknown) => {
+          if (err instanceof ApiError && err.status === 409) {
+            toast.error(errorDetail(err))
+            onChangedRef.current()
+            return
+          }
+          toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
+        },
+      )
       .finally(requestSettled)
   }
 
@@ -322,33 +325,38 @@ export default function TransactionsPanel({
       }),
     })
     requestStarted()
+    // Two-argument then: only the request's own failure reaches the failure branch. A throw
+    // while wording the success (a malformed answer) escapes as an error instead of printing
+    // "back to how it was" over the order the server just saved.
     reorderTransactions(next, scope)
-      .then((result) => {
-        setPendingOrder(null)
-        setSavedOrder({ scope, rows: result.transactions })
-        // Holdings, realized gains and the tiles stand on this order: the page reloads them.
-        onChangedRef.current()
-        reorder.markSaved(moved)
-        toast.success(movedMessage(txn, tickerOf(txn), result.changed_positions), {
-          action: { label: 'Undo', onAction: () => restoreOrder(previous, scope) },
-        })
-      })
-      .catch((err: unknown) => {
-        // A failed save puts the rows back (spec §5, as §4.1) — to the newest order the server
-        // confirmed. Reverting an upward move re-inserts the dropped row, and a moved node loses
-        // focus; React DOM's commit re-focuses whatever held focus before its DOM moves, so the
-        // keyboard reader's grip keeps it without a hand-back here.
-        setPendingOrder(null)
-        if (err instanceof ApiError && err.status === 409) {
-          // The server's sentence says what happened; the reload shows the rows it means.
-          toast.error(errorDetail(err))
+      .then(
+        (result) => {
+          setPendingOrder(null)
+          setSavedOrder({ scope, rows: result.transactions })
+          // Holdings, realized gains and the tiles stand on this order: the page reloads them.
           onChangedRef.current()
-          return
-        }
-        toast.error(
-          `Couldn't save the new order — ${clause(errorDetail(err))}. The list is back to how it was.`,
-        )
-      })
+          reorder.markSaved(moved)
+          toast.success(movedMessage(txn, tickerOf(txn), result.changed_positions), {
+            action: { label: 'Undo', onAction: () => restoreOrder(previous, scope) },
+          })
+        },
+        (err: unknown) => {
+          // A failed save puts the rows back (spec §5, as §4.1) — to the newest order the server
+          // confirmed. Reverting an upward move re-inserts the dropped row, and a moved node loses
+          // focus; React DOM's commit re-focuses whatever held focus before its DOM moves, so the
+          // keyboard reader's grip keeps it without a hand-back here.
+          setPendingOrder(null)
+          if (err instanceof ApiError && err.status === 409) {
+            // The server's sentence says what happened; the reload shows the rows it means.
+            toast.error(errorDetail(err))
+            onChangedRef.current()
+            return
+          }
+          toast.error(
+            `Couldn't save the new order — ${clause(errorDetail(err))}. The list is back to how it was.`,
+          )
+        },
+      )
       .finally(requestSettled)
   }
 
