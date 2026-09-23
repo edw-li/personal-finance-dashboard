@@ -37,19 +37,20 @@ export function rankUpNext(events: CalendarEvent[], todayIso: string): CalendarE
   return picked
 }
 
-/** "Next 45 days: +$12.4k scheduled in · −$50 scheduled out · ≈ −$8.2k living costs"
- *  (2026-09-23 spec §B2). The dated legs are the calendar strip's own cents arithmetic, named
- *  "scheduled" because that is all they are; the living leg spreads each month's server estimate
- *  over its days inside the window (today's month counts only what is left of it) and appears
- *  only when every month the window touches has an estimate — a partial sum would understate the
- *  very spending it is there to show. It sums the whole WINDOW, not the five listed rows: the
- *  list is about attention, the line is about money, and a second payday the list dropped still
- *  lands in the account. Vesting is not cash; the calendar's own strip reports that leg. */
-export function upNextLine(
+/** The 45-day line's pieces (2026-09-23 spec §B2): the lead, then one clause per leg —
+ *  "+$12.4k scheduled in", "−$50 scheduled out", "≈ −$8.2k living costs". The dated legs are the
+ *  calendar strip's own cents arithmetic, named "scheduled" because that is all they are; the
+ *  living leg spreads each month's server estimate over its days inside the window (today's
+ *  month counts only what is left of it) and appears only when every month the window touches
+ *  has an estimate — a partial sum would understate the very spending it is there to show. It
+ *  sums the whole WINDOW, not the five listed rows: the list is about attention, the line is
+ *  about money, and a second payday the list dropped still lands in the account. Vesting is not
+ *  cash; the calendar's own strip reports that leg. The card renders each piece unbroken. */
+export function upNextClauses(
   events: CalendarEvent[],
   living: readonly CalendarLiving[],
   todayIso: string,
-): string {
+): string[] {
   const end = addDays(todayIso, UP_NEXT_WINDOW_DAYS)
   const s = windowSummary(events, todayIso, end)
   const parts: string[] = []
@@ -62,10 +63,19 @@ export function upNextLine(
     // Spending leaves the account: a minus, like the scheduled-out leg's.
     parts.push(`≈ ${livingCents > 0 ? '−' : '+'}${formatCompactCents(livingCents)} living costs`)
   }
-  if (parts.length === 0) {
-    return `Next ${UP_NEXT_WINDOW_DAYS} days: ${s.unknown > 0 ? 'amounts unknown' : 'nothing due'}`
-  }
-  return `Next ${UP_NEXT_WINDOW_DAYS} days: ${parts.join(' · ')}`
+  if (parts.length === 0) parts.push(s.unknown > 0 ? 'amounts unknown' : 'nothing due')
+  return [`Next ${UP_NEXT_WINDOW_DAYS} days:`, ...parts]
+}
+
+/** "Next 45 days: +$12.4k scheduled in · −$50 scheduled out · ≈ −$8.2k living costs" — the
+ *  same pieces as one plain sentence. */
+export function upNextLine(
+  events: CalendarEvent[],
+  living: readonly CalendarLiving[],
+  todayIso: string,
+): string {
+  const [lead, ...parts] = upNextClauses(events, living, todayIso)
+  return `${lead} ${parts.join(' · ')}`
 }
 
 /** Kept for callers that only trim (the assistant's context builder mirrors it server-side). */

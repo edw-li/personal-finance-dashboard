@@ -1396,6 +1396,10 @@ it('renders a custom event as a plain row — no page to open (spec §9.2)', asy
   expect(screen.getByText(/Upcoming event 1/).closest('a')?.getAttribute('href')).toBe('/paycheck')
 })
 
+/** The 45-day line as a reader sees it: its spans' text, whitespace as spaces. */
+const upNextText = () =>
+  document.querySelector('.up-next-line')?.textContent?.replace(/\s+/g, ' ') ?? null
+
 // The ranking and the 45-day line (2026-09-03 calendar spec §14): a deadline that is close
 // leads, a second payday is dropped from the LIST, and the line still sums the whole window.
 it('ranks Up next with one payday and prints the 45-day line with amounts', async () => {
@@ -1417,7 +1421,12 @@ it('ranks Up next with one payday and prints the 45-day line with amounts', asyn
   expect(items[0]).toContain('Tax deadline — Q3') // a deadline within 14 days leads
   expect(items[0]).toContain('~−$1.2k')
   // Both paydays are in the window even though only one is listed.
-  expect(screen.getByText('Next 45 days: +$13.6k scheduled in · ~−$1.2k scheduled out')).toBeTruthy()
+  expect(upNextText()).toBe('Next 45 days: +$13.6k scheduled in · ~−$1.2k scheduled out')
+  // Each clause is one unbreakable span: a narrow card wraps between clauses, never inside
+  // one ("≈ −" / "$8.2k living costs" was a line break inside a figure).
+  expect(
+    Array.from(document.querySelectorAll('.up-next-line .up-next-clause')).map((el) => el.textContent),
+  ).toEqual(['Next 45 days:', '+$13.6k scheduled in', '~−$1.2k scheduled out'])
 })
 
 // 2026-09-23 spec §B2: the line also says what day-to-day living will cost over the window —
@@ -1441,9 +1450,9 @@ it('adds the living costs of the next 45 days to the line', async () => {
   })
   renderPage()
   const spread = formatCompactCents(proratedLivingCents(living, today, end) ?? 0)
-  expect(
-    await screen.findByText(`Next 45 days: +$6.8k scheduled in · ≈ −${spread} living costs`),
-  ).toBeTruthy()
+  await waitFor(() =>
+    expect(upNextText()).toBe(`Next 45 days: +$6.8k scheduled in · ≈ −${spread} living costs`),
+  )
 })
 
 it('a calendar failure dents only the strip, never the snapshot', async () => {

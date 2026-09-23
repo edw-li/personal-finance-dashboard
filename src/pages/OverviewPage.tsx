@@ -19,7 +19,7 @@ import DataStatusCard from '../components/overview/DataStatusCard'
 import { netWorthComponents } from '../components/overview/netWorthReceipt'
 import { GhostTile, SkeletonCard } from '../components/PageSkeleton'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
-import { UP_NEXT_WINDOW_DAYS, rankUpNext, upNextLine } from '../components/overview/upNext'
+import { UP_NEXT_WINDOW_DAYS, rankUpNext, upNextClauses } from '../components/overview/upNext'
 import { windowWords, ytdStats } from '../components/overview/ytd'
 import {
   netWorthTrendCsv,
@@ -763,9 +763,17 @@ export default function OverviewPage() {
                       )
                     })}
                   </ul>
-                  {/* The money the window actually moves — the list is capped, this is not. */}
+                  {/* The money the window actually moves — the list is capped, this is not. Each
+                      piece is one unbroken span, the "·" glued to the clause before it, so a narrow
+                      card wraps between clauses and never inside a figure (2026-09-23 spec §B2). */}
                   <p className="drill-hint up-next-line">
-                    {upNextLine(upNext.events, upNext.living, todayIso())}
+                    {upNextClauses(upNext.events, upNext.living, todayIso()).map((clause, index) => (
+                      <Fragment key={index}>
+                        {index === 1 && ' '}
+                        {index > 1 && <>&nbsp;&middot; </>}
+                        <span className="up-next-clause">{clause}</span>
+                      </Fragment>
+                    ))}
                   </p>
                 </>
               )}

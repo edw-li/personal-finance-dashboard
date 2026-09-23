@@ -20,6 +20,13 @@ function declarationsFor(css: string, selector: string): string {
 const overview = readFileSync(path.resolve(__dirname, 'OverviewPage.css'), 'utf8')
 
 describe('OverviewPage.css', () => {
+  // 2026-09-23 spec §B2: the 45-day line grew a living-costs clause, and at 1600 the card broke
+  // it inside a figure ("≈ −" / "$8.2k living costs") — U+2212 and "$" are both prefix
+  // characters, which a non-breaking space cannot glue. Each clause is a nowrap span instead.
+  it('keeps each Up next clause on one line', () => {
+    expect(declarationsFor(overview, '.up-next-clause')).toContain('white-space: nowrap;')
+  })
+
   // Lane V measured the agenda column ending 66px below the wealth column at 1440 and 1920
   // (the limit is 24px). jsdom computes no layout, so the rules that close that gap — stretch
   // the columns to the taller one, then let each column's LAST row absorb the slack — can only

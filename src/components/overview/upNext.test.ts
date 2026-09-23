@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { calendarEvent } from '../../testing/calendarFixtures'
 import type { CalendarLiving } from '../../types/api'
-import { UP_NEXT_LIMIT, UP_NEXT_WINDOW_DAYS, rankUpNext, upNextLine } from './upNext'
+import { UP_NEXT_LIMIT, UP_NEXT_WINDOW_DAYS, rankUpNext, upNextClauses, upNextLine } from './upNext'
 
 const TODAY = '2026-08-24'
 const payday = (date: string) =>
@@ -80,6 +80,21 @@ describe('rankUpNext', () => {
       'Next 45 days: +$6.8k scheduled in',
     )
     expect(upNextLine([], living, today)).toBe('Next 45 days: ≈ −$8.2k living costs')
+  })
+
+  it('upNextClauses hands the card the pieces it keeps whole: the lead, then each clause', () => {
+    const living: CalendarLiving[] = ['2026-09-01', '2026-10-01', '2026-11-01'].map((month) => ({
+      month,
+      amount: '5478.00',
+      basis: 'budget',
+      months_in_average: null,
+    }))
+    expect(upNextClauses([payday('2026-09-30')], living, '2026-09-23')).toEqual([
+      'Next 45 days:',
+      '+$6.8k scheduled in',
+      '≈ −$8.2k living costs',
+    ])
+    expect(upNextClauses([], [], TODAY)).toEqual(['Next 45 days:', 'nothing due'])
   })
 
   it('leaves vesting out of the cash line — a vest is not money in the bank', () => {
