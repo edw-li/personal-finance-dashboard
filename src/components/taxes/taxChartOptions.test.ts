@@ -772,6 +772,21 @@ describe('taxTrendCsv', () => {
       legacy.totals.total_tax,
     ])
   })
+
+  // Review round 1: the table view marks the year still in progress, as the chart's axis does. A
+  // trailing column, so every earlier column keeps its position, and the Year cell stays the bare
+  // year — the table's row drill parses it.
+  it('marks the year still in progress in a trailing Status column when it knows the date', () => {
+    const csv = taxTrendCsv([summaryFixture(2025), summaryFixture(2026)], { today: '2026-09-23' })
+    expect(csv.headers.at(-1)).toBe('Status')
+    expect(csv.headers).toHaveLength(10)
+    expect(csv.rows.map((r) => [r[0], r.at(-1)])).toEqual([
+      [2025, ''],
+      [2026, 'Estimate — year in progress'],
+    ])
+    // Without the date nothing is claimed either way.
+    expect(taxTrendCsv([summaryFixture(2026)]).headers).toHaveLength(9)
+  })
 })
 
 describe('marginalLadderOption', () => {

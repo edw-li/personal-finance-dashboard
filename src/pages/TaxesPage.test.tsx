@@ -1562,6 +1562,39 @@ describe('?comp= composition drill (2026-08-25 spec §2d)', () => {
     }
   })
 
+  // Review round 1: the hint's estimate sentence and the table's mark exist only while a charted
+  // year is still in progress — never as boilerplate on a book of finished years.
+  it('says a year is an estimate — in the hint and the table — only while one is charted', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2024, 5, 15)) // mid-June 2024
+    const hint = () => {
+      fireEvent.click(screen.getByRole('button', { name: /^About Tax composition per year/ }))
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      fireEvent.keyDown(window, { key: 'Escape' })
+      return text
+    }
+    const card = () => screen.getByText('Tax composition by year').closest('section') as HTMLElement
+    try {
+      vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [summaryFor(2023), summaryFor(2024)] })
+      renderPage()
+      await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
+      expect(hint()).toContain('The current year is still in progress')
+      fireEvent.click(within(card()).getByRole('button', { name: /table/i }))
+      const table = within(card()).getByRole('table')
+      expect(within(table).getByRole('columnheader', { name: 'Status' })).toBeTruthy()
+      expect(within(table).getByText('Estimate — year in progress')).toBeTruthy()
+      cleanup()
+      vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [summaryFor(2022), summaryFor(2023)] })
+      renderPage()
+      await waitFor(() => expect(trendCategories()).toBe('2022,2023'))
+      expect(hint()).not.toContain('in progress')
+      fireEvent.click(within(card()).getByRole('button', { name: /table/i }))
+      expect(within(card()).queryByText('Estimate — year in progress')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('ignores a garbled or unknown year — the trend renders as usual', async () => {
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
       years: [summaryFor(2023), summaryFor(2024)],

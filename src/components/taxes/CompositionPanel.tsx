@@ -114,6 +114,8 @@ export default function CompositionPanel({
   // mark it. A string, so the memo below holds for the whole day.
   const today = todayIso()
   const patterns = useChartDecals()
+  // Whether any charted year is still in progress — the hint says so only then (review round 1).
+  const hasEstimate = chartable?.some((y) => isEstimateYear(y.year, today)) ?? false
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every
   // render replays the chart on unrelated state flips (AllocationPanel's note).
   const trend = useMemo(
@@ -150,12 +152,12 @@ export default function CompositionPanel({
   return (
     <ChartCard
       title="Tax composition by year"
-      hint="Tax composition per year stacked by jurisdiction, with the year's effective rate on each cap. Select a year to inspect its breakdown beside this history. The current year is still in progress, so its bar is an estimate, marked (est.)."
+      hint={`Tax composition per year stacked by jurisdiction, with the year's effective rate on each cap. Select a year to inspect its breakdown beside this history.${hasEstimate ? ' The current year is still in progress, so its bar is an estimate, marked (est.).' : ''}`}
       ariaLabel="Stacked bar chart of tax by jurisdiction per year, with the effective rate on each cap"
       option={trend}
       empty={flaggedYears.length > 0 ? 'No comparable years yet — every year with stored inputs is missing bracket tables for its filing status.' : 'No years with stored inputs to compare yet.'}
       exportName="tax-trend"
-      csv={chartable === null ? undefined : () => taxTrendCsv(chartable)}
+      csv={chartable === null ? undefined : () => taxTrendCsv(chartable, { today })}
       independentRangeLabel="All recorded years"
       height={320}
       busy={years === null && error === null}

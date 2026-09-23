@@ -349,10 +349,20 @@ export function yearPieCsv(summary: TaxSummaryOut): ExportTable {
 
 /** The trend chart as a table (2026-08-25 spec §2a): year rows × TAX_LABELS order plus
  * the server's own total_tax, ascending like the chart's axis, verbatim strings. */
-export function taxTrendCsv(years: TaxSummaryOut[]): ExportTable {
+export function taxTrendCsv(
+  years: TaxSummaryOut[],
+  { today }: { today?: string } = {},
+): ExportTable {
   const ordered = [...years].sort((a, b) => a.year - b.year)
+  // Given the date, the table marks the year still in progress, as the chart's axis does
+  // (review round 1) — in a TRAILING column, so every earlier column keeps its position, and
+  // the Year cell stays the bare year the table's row drill parses.
+  const status =
+    today === undefined
+      ? null
+      : (year: number) => (isEstimateYear(year, today) ? 'Estimate — year in progress' : '')
   return {
-    headers: ['Year', ...TAX_LABELS, 'Total tax'],
+    headers: ['Year', ...TAX_LABELS, 'Total tax', ...(status === null ? [] : ['Status'])],
     rows: ordered.map((y) => [
       y.year, y.federal.tax, y.state.tax, y.medicare.tax, y.social_security.tax,
       y.disability.tax, y.capital_gains.tax,
@@ -360,6 +370,7 @@ export function taxTrendCsv(years: TaxSummaryOut[]): ExportTable {
       // header row
       y.niit?.tax ?? '0.00',
       y.totals.total_tax,
+      ...(status === null ? [] : [status(y.year)]),
     ]),
   }
 }
