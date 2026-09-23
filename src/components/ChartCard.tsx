@@ -120,6 +120,9 @@ export default function ChartCard({
   // object handed to EChart is stable — a fresh one would re-init the chart every render.
   const ownRef = useRef<EChartsInstance | null>(null)
   const chartRef = instanceRef ?? ownRef
+  // The card itself: what a drill asks the detail panel to hold in place while the dock opens
+  // and the page narrows around it (2026-09-23 spec §C10).
+  const cardRef = useRef<HTMLElement>(null)
   const showTable = tableOpen && csv !== undefined && option !== null
   const table = showTable && csv ? csv() : null
   const dismissSelection = useCallback(() => {
@@ -133,7 +136,7 @@ export default function ChartCard({
   const inspect = (next: ChartSelection) => {
     setPinned({ scope: selectionScopeKey, value: next })
     onSelectionChange?.(next)
-    if (!expanded && activeView) openPanel?.({ id: panelId, title: next.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey })
+    if (!expanded && activeView) openPanel?.({ id: panelId, title: next.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: cardRef.current })
   }
   const selectionContent = useMemo(() => selected === null ? null : renderSelection
     ? renderSelection(selected)
@@ -141,7 +144,7 @@ export default function ChartCard({
   [selected, renderSelection, title, clearSelection])
   useEffect(() => {
     if (!selected || expanded || !activeView) return
-    openPanel?.({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey })
+    openPanel?.({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: cardRef.current })
   }, [selected, expanded, activeView, openPanel, panelId, title, panelContent, selectionScopeKey])
   useEffect(() => {
     if (previousScope.current !== selectionScopeKey) {
@@ -208,7 +211,7 @@ export default function ChartCard({
     <>
     {selected && panel && !expanded && createPortal(selectionContent, detailHost)}
     <ChartSurface title={title} expanded={expanded} onClose={() => setExpanded(false)} span={span}>
-    <section className={`card chart-card span-${span}${aside !== undefined ? ' chart-card-has-aside' : ''}`}>
+    <section ref={cardRef} className={`card chart-card span-${span}${aside !== undefined ? ' chart-card-has-aside' : ''}`}>
       <div className="chart-card-header">
         <h2 className="eyebrow">
           {title}
@@ -250,7 +253,7 @@ export default function ChartCard({
       {selected && <div className="chart-selection-summary">
         {/* Live region on the TEXT only (audit D3): each pin announces "Pinned: …", never the buttons. */}
         <span role="status">Pinned: {selected.label}</span>
-        {panel && !expanded && <button type="button" className="button" onClick={() => panel.open({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey })}>Show details</button>}
+        {panel && !expanded && <button type="button" className="button" onClick={() => panel.open({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: cardRef.current })}>Show details</button>}
         <button type="button" className="button" onClick={clearSelection}>Clear selection</button>
       </div>}
       {selected && (!panel || expanded) && <div className="chart-inline-selection">{selectionContent}</div>}

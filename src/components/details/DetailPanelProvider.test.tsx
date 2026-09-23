@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DetailPanelProvider, { defaultPanelWidth, MODE_STORAGE_KEY, panelGeometry, useDetailPanel, WIDTH_STORAGE_KEY } from './DetailPanelProvider'
 import { MOTION_MS } from '../../theme/motion'
 
+// The anchoring loop is holdPosition's own unit (shell/holdPosition.test.ts); here only WHEN the
+// provider asks for it matters.
+vi.mock('../shell/holdPosition', () => ({ holdPosition: vi.fn(() => () => {}) }))
+import { holdPosition } from '../shell/holdPosition'
+
 function Harness() {
   const panel = useDetailPanel()!
   return <button type="button" onClick={() => panel.open({ id: 'chart', title: 'August spending', content: <>
@@ -312,5 +317,45 @@ describe('coordinated detail panels', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+// 2026-09-23 spec §C10 (charts F1): a docked panel narrows the page, text above the drilled
+// chart rewraps and the chart slid ~350px under the pointer. A request can name the element to
+// hold in place while the dock opens — and again while it lets go.
+describe('holding the drilled element while the dock reflows the page', () => {
+  function AnchoredHarness() {
+    const panel = useDetailPanel()!
+    return <>
+      <section data-testid="chart">chart</section>
+      <button type="button" onClick={() => panel.open({ id: 'chart', title: 'August', content: <p>detail</p>, anchor: screen.getByTestId('chart') })}>Drill</button>
+    </>
+  }
+  beforeEach(() => vi.mocked(holdPosition).mockClear())
+
+  it('holds the anchor when the dock opens, and again when it closes', () => {
+    render(<DetailPanelProvider><AnchoredHarness /></DetailPanelProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Drill' }))
+    expect(holdPosition).toHaveBeenCalledTimes(1)
+    expect(holdPosition).toHaveBeenLastCalledWith(screen.getByTestId('chart'))
+    fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
+    expect(holdPosition).toHaveBeenCalledTimes(2)
+    expect(holdPosition).toHaveBeenLastCalledWith(screen.getByTestId('chart'))
+  })
+
+  it('does not hold again for the surface already open, and never for an overlay', () => {
+    render(<DetailPanelProvider><AnchoredHarness /></DetailPanelProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Drill' }))
+    // A second drill updates the open surface in place: the dock does not move.
+    fireEvent.click(screen.getByRole('button', { name: 'Drill' }))
+    expect(holdPosition).toHaveBeenCalledTimes(1)
+    cleanup()
+    vi.mocked(holdPosition).mockClear()
+    // Too narrow to dock: an overlay floats over the page, which does not reflow under it.
+    setViewport(1000)
+    render(<DetailPanelProvider><AnchoredHarness /></DetailPanelProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Drill' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close details' }))
+    expect(holdPosition).not.toHaveBeenCalled()
   })
 })

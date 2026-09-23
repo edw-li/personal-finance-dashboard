@@ -12,12 +12,15 @@ vi.mock('./EChart', async () => {
   }
 })
 vi.mock('../utils/download', () => ({ toCsv: vi.fn(() => 'CSV'), downloadDataUrl: vi.fn(), downloadText: vi.fn() }))
+// The anchoring loop is holdPosition's own unit; here only WHAT the card asks it to hold matters.
+vi.mock('./shell/holdPosition', () => ({ holdPosition: vi.fn(() => () => {}) }))
 
 import ChartCard from './ChartCard'
 import PageFrame from './shell/PageFrame'
 import { CHART_CARD_ROWS } from './skeletonMetrics'
 import DetailPanelProvider, { useDetailPanel } from './details/DetailPanelProvider'
 import type { ChartSelection } from '../types/metrics'
+import { holdPosition } from './shell/holdPosition'
 
 const OPTION = { series: [] } as EChartsOption
 const base = { title: 'Net worth', hint: 'What it shows.', ariaLabel: 'Line chart of net worth', empty: 'No snapshots yet.', exportName: 'net-worth' }
@@ -176,6 +179,20 @@ describe('ChartCard persistent interactions', () => {
     expect(screen.getByTestId('echart')).toBe(canvas)
     expect(screen.getByText('Pinned: August')).toBeTruthy()
     expect(document.querySelector('.detail-panel')).toBeTruthy()
+  })
+  // 2026-09-23 spec §C10: a drill docks the detail panel and the page narrows around the chart —
+  // the card names ITSELF as the element to hold in place while that happens.
+  it('names its own card as the anchor a drill holds in place', () => {
+    const width = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true }) // wide enough to dock
+    try {
+      vi.mocked(holdPosition).mockClear()
+      render(<DetailPanelProvider><ChartCard {...base} option={history} selectionAdapter={() => selection} /></DetailPanelProvider>)
+      fireEvent.click(screen.getByTestId('echart'))
+      expect(holdPosition).toHaveBeenCalledWith(document.querySelector('section.chart-card'))
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true })
+    }
   })
   it('expanded → the chart fills the dialog; collapsed → the card height comes back', () => {
     render(<ChartCard {...base} option={OPTION} height={320} />)
