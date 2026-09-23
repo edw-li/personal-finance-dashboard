@@ -6,11 +6,12 @@ router: the app mounts routers lazily, so `app.routes` is not a flat list."""
 import pytest
 from fastapi.routing import APIRoute
 
-from app.api import net_worth, spending
+from app.api import net_worth, portfolio, spending
 
 ORDER_ROUTES = (
     (net_worth.router, "/net-worth/accounts/order"),
     (spending.router, "/spending/categories/order"),
+    (portfolio.router, "/portfolio/transactions/order"),
 )
 
 
