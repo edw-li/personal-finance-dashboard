@@ -384,6 +384,12 @@ export default function PortfolioPage() {
         if (seq !== seqRef.current) return
         setError(describeError(err, 'the portfolio'))
       })
+      .finally(() => {
+        // Only the newest load lifts the reload dim (and the ledger's grips with it): an older
+        // one settling first — a scope switch's predecessor, a superseded reload — would lift it
+        // while the page is still waiting for the data it will show (CreditCardsPage's guard).
+        if (seq === seqRef.current) setReloading(false)
+      })
   }, [owner, applySnapshotState])
 
   // The household's own ledgers for the household-wide performance chart in a person's view (the
@@ -406,15 +412,15 @@ export default function PortfolioPage() {
   const reload = () => {
     ledgersMoved()
     setReloading(true)
-    load().finally(() => setReloading(false))
+    void load()
   }
 
   // Mount AND every owner switch: `load` changes identity with the scope, which is what
   // re-runs this effect. A cache hit revalidates under the reload dim (raised by
-  // `reloading`'s initializer on mount, by the adoption block on a switch); the trailing
-  // release is a no-op on a cold mount, where `reloading` never went up.
+  // `reloading`'s initializer on mount, by the adoption block on a switch); load's own release
+  // is a no-op on a cold mount, where `reloading` never went up.
   useEffect(() => {
-    load().finally(() => setReloading(false))
+    void load()
   }, [load])
 
   const onRefresh = () => {
