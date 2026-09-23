@@ -111,13 +111,9 @@ interface PortfolioSnapshot {
   history: PortfolioHistory
   realized: RealizedResponse
   refreshStatus: RefreshStatus
-  // The household's own ledgers, fetched only while the page shows a person (review round 1):
-  // the performance chart is household-wide, so its events — and the held-then-or-now filter on
-  // the provider's ex-dividend notices — read these, never the person's. Absent or null on the
-  // household view, where the page's own ledgers ARE the household's.
-  householdLedgers?: HouseholdLedgers | null
 }
 
+/** The household's own ledgers, for the household-wide performance chart in a person's view. */
 interface HouseholdLedgers {
   holdings: HoldingsResponse
   transactions: TransactionOut[]
@@ -164,9 +160,6 @@ export default function PortfolioPage() {
   const [realized, setRealized] = useState<RealizedResponse | null>(cached?.realized ?? null)
   const [refreshStatus, setRefreshStatus] = useState<RefreshStatus | null>(
     cached?.refreshStatus ?? null,
-  )
-  const [householdLedgers, setHouseholdLedgers] = useState<HouseholdLedgers | null>(
-    cached?.householdLedgers ?? null,
   )
   // Ticker being deactivated from the failed-refresh row (the old manual-psql ritual for
   // a delisted symbol, one click now); single-flight like the panels' busy flags.
@@ -301,7 +294,6 @@ export default function PortfolioPage() {
     setHistory(snap.history)
     setRealized(snap.realized)
     setRefreshStatus(snap.refreshStatus)
-    setHouseholdLedgers(snap.householdLedgers ?? null)
   }, [])
 
   // The mirror, from a committed render rather than from render itself. Every apply — the
@@ -358,14 +350,8 @@ export default function PortfolioPage() {
       // rule). A null roster offers no completions and warns about nothing.
       fetchPortfolioAccounts().catch(() => null),
       fetchHousehold().catch(() => null),
-      // The household-wide chart's own ledgers, only while the page shows a person.
-      owner === null
-        ? Promise.resolve(null)
-        : Promise.all([fetchHoldings(null), fetchTransactions(null), fetchDividends(null)]).then(
-            ([holdings, transactions, dividends]): HouseholdLedgers => ({ holdings, transactions, dividends }),
-          ),
     ])
-      .then(([h, secs, txns, divs, typ, acct, spark, hist, real, status, divEvents, roster, people, household]) => {
+      .then(([h, secs, txns, divs, typ, acct, spark, hist, real, status, divEvents, roster, people]) => {
         if (seq !== seqRef.current) return
         const snapshot: PortfolioSnapshot = {
           holdings: h,
@@ -383,9 +369,6 @@ export default function PortfolioPage() {
           history: hist,
           realized: real,
           refreshStatus: status,
-          // Only in a person's view: the household view's snapshot keeps its old shape, so its
-          // identical-payload skip below still recognises a warm cache.
-          ...(household === null ? {} : { householdLedgers: household }),
         }
         setSnapshot(portfolioKey(owner), snapshot)
         setError(null)
@@ -458,6 +441,36 @@ export default function PortfolioPage() {
       })
       .finally(() => setDeactivating(null))
   }
+
+  // The household's own ledgers for the household-wide performance chart in a person's view
+  // (review round 1). Fetched on their OWN, never inside load(): they decorate one chart, so they
+  // can neither fail the person's page (load() swallows its other decorations the same way) nor
+  // hold it — household holdings alone took 1.4 s. Fetched only while the chart's view (Overview)
+  // is showing, and again after every snapshot the page applies (a save here moves the
+  // household's ledgers too). Until they land, the household view's cached snapshot stands in
+  // when there is one; failing or pending with none, the chart keeps the person's own ledgers.
+  const showingChart = views.section === 'overview'
+  const [fetchedHousehold, setFetchedHousehold] = useState<HouseholdLedgers | null>(null)
+  useEffect(() => {
+    if (owner === null || !showingChart) return
+    let current = true
+    Promise.all([fetchHoldings(null), fetchTransactions(null), fetchDividends(null)])
+      .then(([holdings, transactions, dividends]) => {
+        if (current) setFetchedHousehold({ holdings, transactions, dividends })
+      })
+      .catch(() => null)
+    return () => {
+      current = false
+    }
+  }, [owner, showingChart, applied])
+  const cachedHousehold = owner === null ? undefined : getSnapshot<PortfolioSnapshot>(portfolioKey(null))
+  const householdLedgers = useMemo((): HouseholdLedgers | null => {
+    if (owner === null) return null
+    if (fetchedHousehold !== null) return fetchedHousehold
+    return cachedHousehold === undefined
+      ? null
+      : { holdings: cachedHousehold.holdings, transactions: cachedHousehold.transactions, dividends: cachedHousehold.dividends }
+  }, [owner, fetchedHousehold, cachedHousehold])
 
   // The page's only memoized values (OverviewPage's rule): EChart keys its setOption
   // effect on [option], so a fresh object per render would redraw the chart on every tab

@@ -913,6 +913,73 @@ it("annotates the household chart from the household's ledgers in a person's vie
   expect(fetchRealized).not.toHaveBeenCalledWith(null)
 })
 
+// Review round 1 re-review: the household's ledgers decorate one chart, so they must never cost
+// the person's view its page — not by failing, not by being slow — and they are fetched only while
+// the chart's view is showing.
+describe("the household's ledgers never hold a person's view", () => {
+  const exdivOnVoo = () =>
+    vi.mocked(fetchDividendEvents).mockResolvedValue([
+      { security_id: 1, ex_date: '2026-08-18', per_share: '1.000000' },
+    ])
+  const performance = () => screen.getAllByTestId('echart')[0]
+
+  it("renders the person's tiles and chart when the household's request fails, on the person's events", async () => {
+    // Sam holds VOO himself; the household's holdings request fails.
+    vi.mocked(fetchHoldings).mockImplementation((scope) =>
+      scope === null ? Promise.reject(new ApiError('Portfolio service down', 500)) : Promise.resolve(holdingsOut()),
+    )
+    exdivOnVoo()
+    renderPage('/portfolio?owner=2')
+    await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith(null))
+    expect(await screen.findByText('Portfolio value')).toBeTruthy()
+    await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it("paints the person's view without waiting for the household's ledgers", async () => {
+    vi.mocked(fetchHoldings).mockImplementation((scope) =>
+      scope === null ? new Promise(() => {}) : Promise.resolve(holdingsOut()),
+    )
+    renderPage('/portfolio?owner=2')
+    expect(await screen.findByText('Portfolio value')).toBeTruthy()
+    await waitFor(() => expect(performance().getAttribute('data-series')).toContain('Portfolio value'))
+  })
+
+  it("reuses the household's cached snapshot at once, and fetches only while the chart's view shows", async () => {
+    // The household view was visited: its ledgers are warm. Sam holds nothing; the household VOO.
+    setSnapshot('portfolio:all', {
+      holdings: holdingsOut(),
+      securities: SECURITIES,
+      accounts: ACCOUNTS,
+      primaryName: 'Me',
+      transactions: TRANSACTIONS,
+      dividends: DIVIDENDS,
+      dividendEvents: [],
+      byType: allocationOut('type'),
+      byAccount: allocationOut('account'),
+      sparklines: {},
+      history: HISTORY,
+      realized: REALIZED,
+      refreshStatus: STATUS,
+    })
+    vi.mocked(fetchHoldings).mockImplementation((scope) =>
+      scope === null ? new Promise(() => {}) : Promise.resolve(EMPTY_HOLDINGS),
+    )
+    vi.mocked(fetchTransactions).mockImplementation((scope) =>
+      Promise.resolve(scope === SAM.id ? [] : TRANSACTIONS),
+    )
+    exdivOnVoo()
+    // Holdings is showing: the household chart is not, so its ledgers are not fetched.
+    renderPage('/portfolio?owner=2&section=holdings')
+    expect(await screen.findByText(NO_HOLDINGS_NOTE)).toBeTruthy()
+    expect(fetchHoldings).not.toHaveBeenCalledWith(null)
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
+    await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith(null))
+    // The fetch never lands, yet the warm household ledgers already annotate the chart.
+    await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+  })
+})
+
 it('renders the live ping only on the All view', async () => {
   renderPage()
   await screen.findByRole('group', { name: 'Whose' })
