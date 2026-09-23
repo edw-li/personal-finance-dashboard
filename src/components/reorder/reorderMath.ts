@@ -56,6 +56,39 @@ export function rangeSizes<K extends ReorderKey>(
   return sizes
 }
 
+/** What `items` owes the hook (spec §2.2), as one sentence per breach — none when well-formed:
+ *  - an item's `carries` are the items right after it, in that order;
+ *  - each range's units stand side by side: a peer starts right after the previous peer's rows
+ *    (its carried rows included), with no other range's row between them.
+ *  Both are what the preview's shifts assume; the hook reports breaches in development only. */
+export function contractProblems<K extends ReorderKey>(items: readonly ReorderItem<K>[]): string[] {
+  const problems: string[] = []
+  items.forEach((item, at) => {
+    const carries = item.carries ?? []
+    const after = items.slice(at + 1, at + 1 + carries.length).map((next) => String(next.id))
+    if (carries.some((id, k) => after[k] !== String(id))) {
+      problems.push(
+        `${String(item.id)} carries ${carries.join(', ')}, but the rows right after it are ` +
+          `${after.join(', ') || 'none'}. Carried rows must follow their carrier, in order.`,
+      )
+    }
+  })
+  const previous = new Map<string, { id: K; end: number }>()
+  items.forEach((item, at) => {
+    const range = rangeOf(item)
+    const last = previous.get(range)
+    if (last !== undefined && at !== last.end + 1) {
+      const name = range === '' ? 'the default range' : `range "${range}"`
+      problems.push(
+        `${name} is not one block: ${String(item.id)} does not follow ${String(last.id)}'s rows. ` +
+          `A range's rows must stand together.`,
+      )
+    }
+    previous.set(range, { id: item.id, end: at + (item.carries?.length ?? 0) })
+  })
+  return problems
+}
+
 /** A content signature: a drag started against one list must never drop onto another (spec §2.3 —
  *  data landing under a live drag cancels it). */
 export function signatureOf<K extends ReorderKey>(items: readonly ReorderItem<K>[]): string {

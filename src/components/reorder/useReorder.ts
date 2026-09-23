@@ -20,7 +20,7 @@
 //      flushSync, so the DOM reorder and the cleared transforms land in one frame — then save, then
 //      `markSaved(moved)` on success (restore the server order on failure).
 //   4. Pass `disabled: busy`; disable the row's own buttons while `active`.
-import { useId, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { flushSync } from 'react-dom'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
@@ -29,6 +29,7 @@ import {
   announce,
   autoScrollSpeed,
   clampOffset,
+  contractProblems,
   keyboardTarget,
   moveUnit,
   peersOf,
@@ -117,9 +118,9 @@ interface Snapshot<K extends ReorderKey> {
 
 const REORDER_ATTRIBUTES = ['data-reorder', 'data-reorder-mode', 'data-reorder-drop'] as const
 
-function fullSignature<K extends ReorderKey>(items: readonly ReorderItem<K>[], disabled: boolean): string {
+function fullSignature(rowsSignature: string, disabled: boolean): string {
   // `disabled` rides the signature: a list that turns busy under a live drag cancels it.
-  return `${signatureOf(items)}#${disabled ? 'busy' : 'idle'}`
+  return `${rowsSignature}#${disabled ? 'busy' : 'idle'}`
 }
 
 function clearRow(element: HTMLElement): void {
@@ -146,7 +147,8 @@ function releaseDrag<K extends ReorderKey>(drag: Drag<K>): void {
 export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>): UseReorder<K> {
   const reduced = useReducedMotion()
   const instructionsId = useId()
-  const signature = fullSignature(options.items, options.disabled === true)
+  const rowsSignature = signatureOf(options.items)
+  const signature = fullSignature(rowsSignature, options.disabled === true)
   const sizes = rangeSizes(options.items)
   const [snap, setSnap] = useState<Snapshot<K>>({ liftedId: null, announcement: '', signature: null })
 
@@ -169,10 +171,22 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
   const savedTimers = useRef(new Map<K, number>())
   const machine = useRef<Machine<K>>({ drag: null })
   const latest = useRef({ options, reduced })
+  const reported = useRef<string | null>(null)
 
   useLayoutEffect(() => {
     latest.current = { options, reduced }
   })
+
+  // Development only: a list that breaks the items contract (spec §2.2, contractProblems) previews
+  // one order and commits another. Say so on the console — once per change of its rows, StrictMode's
+  // second effect run included — and never throw.
+  useEffect(() => {
+    if (!import.meta.env.DEV || reported.current === rowsSignature) return
+    reported.current = rowsSignature
+    for (const problem of contractProblems(latest.current.options.items)) {
+      console.error(`useReorder: ${problem}`)
+    }
+  }, [rowsSignature])
 
   useLayoutEffect(() => {
     const state = machine.current
@@ -428,7 +442,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
       from,
       to: from,
       offset: 0,
-      signature: fullSignature(current.items, false),
+      signature: fullSignature(signatureOf(current.items), false),
       frame: null,
       timer: null,
       detach: null,

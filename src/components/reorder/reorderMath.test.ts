@@ -5,6 +5,7 @@ import {
   announce,
   autoScrollSpeed,
   clampOffset,
+  contractProblems,
   keyboardTarget,
   moveUnit,
   peersOf,
@@ -63,6 +64,38 @@ describe('unitOf / peersOf / rangeSizes', () => {
   it('an unknown id has no unit and no peers', () => {
     expect(unitOf(flat, 'Z')).toEqual([])
     expect(peersOf(flat, 'Z')).toEqual([])
+  })
+})
+
+describe('contractProblems', () => {
+  it('finds nothing wrong with a well-formed list — carried rows right after their carrier', () => {
+    expect(contractProblems(flat)).toEqual([])
+    expect(contractProblems(grouped)).toEqual([])
+  })
+
+  it('names a range split apart by another', () => {
+    const split: ReorderItem<string>[] = [
+      { id: 'A', range: 'x' },
+      { id: 'B', range: 'y' },
+      { id: 'C', range: 'x' },
+    ]
+    expect(contractProblems(split)).toEqual([
+      'range "x" is not one block: C does not follow A\'s rows. A range\'s rows must stand together.',
+    ])
+    expect(contractProblems([{ id: 'A' }, { id: 'B', range: 'y' }, { id: 'C' }])).toEqual([
+      'the default range is not one block: C does not follow A\'s rows. A range\'s rows must stand together.',
+    ])
+  })
+
+  it('names carried rows that do not follow their carrier, in order', () => {
+    const astray: ReorderItem<number>[] = [
+      { id: 10, range: 'g', carries: [11, 12] },
+      { id: 12, range: 'parent:10' },
+      { id: 11, range: 'parent:10' },
+    ]
+    expect(contractProblems(astray)).toEqual([
+      '10 carries 11, 12, but the rows right after it are 12, 11. Carried rows must follow their carrier, in order.',
+    ])
   })
 })
 

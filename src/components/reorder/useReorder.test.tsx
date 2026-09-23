@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { useLayoutEffect, useState } from 'react'
+import { StrictMode, useLayoutEffect, useState } from 'react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { installPointerEvents } from '../../testing/pointer'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
@@ -729,6 +729,44 @@ describe('useReorder — pointer', () => {
     expect(document.documentElement.classList.contains('reorder-active')).toBe(true)
     unmount()
     expect(document.documentElement.classList.contains('reorder-active')).toBe(false)
+  })
+})
+
+describe('useReorder — development contract checks', () => {
+  const reportsIn = (error: { mock: { calls: unknown[][] } }) =>
+    error.mock.calls.filter(([message]) => String(message).startsWith('useReorder:'))
+
+  it('reports a list that breaks the items contract — once per change of its rows, StrictMode or not', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const broken: ReorderItem<string>[] = [
+      { id: 'A', range: 'x' },
+      { id: 'B', range: 'y' },
+      { id: 'C', range: 'x' },
+    ]
+    const { rerender } = render(
+      <StrictMode>
+        <List items={broken} onCommit={vi.fn()} />
+      </StrictMode>,
+    )
+    expect(reportsIn(error)).toEqual([[expect.stringContaining('range "x" is not one block')]])
+    rerender(
+      <StrictMode>
+        <List items={[...broken]} onCommit={vi.fn()} disabled />
+      </StrictMode>,
+    ) // the same rows, only busy now: not again
+    expect(reportsIn(error)).toHaveLength(1)
+  })
+
+  it('stays quiet for a well-formed list, carried rows included', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const items: ReorderItem<string>[] = [
+      { id: 'P', range: 'g', carries: ['C1', 'C2'] },
+      { id: 'C1', range: 'parent:P' },
+      { id: 'C2', range: 'parent:P' },
+      { id: 'Q', range: 'g' },
+    ]
+    render(<List items={items} onCommit={vi.fn()} />)
+    expect(reportsIn(error)).toEqual([])
   })
 })
 
