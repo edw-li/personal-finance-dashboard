@@ -11,7 +11,7 @@
 //      flushSync, so the DOM reorder and the cleared transforms land in one frame — then save, then
 //      `markSaved(moved)` on success (restore the server order on failure).
 //   4. Pass `disabled: busy`; disable the row's own buttons while `active`.
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { flushSync } from 'react-dom'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
@@ -173,7 +173,9 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     clearRows(rows.current)
   }, [signature])
 
-  useEffect(() => {
+  // Unmount: a drag in flight is torn down INSIDE the unmounting commit — its timers, listeners and
+  // the page's grabbing cursor — not a passive tick later.
+  useLayoutEffect(() => {
     const state = machine.current
     const rowMap = rows.current
     const timers = savedTimers.current

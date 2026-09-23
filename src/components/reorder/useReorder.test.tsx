@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { installPointerEvents } from '../../testing/pointer'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
@@ -617,6 +617,32 @@ describe('useReorder — pointer', () => {
     fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 2, clientY: 220 })
     fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 300 })
     expect(live()).toBe('')
+  })
+
+  it('unmounting tears a live drag down inside the same commit, not a passive tick later', () => {
+    const seen: boolean[] = []
+    // A sibling's layout effect runs in the very commit that unmounts the list.
+    function Probe() {
+      useLayoutEffect(() => {
+        seen.push(document.documentElement.classList.contains('reorder-active'))
+      })
+      return null
+    }
+    function Host({ show }: { show: boolean }) {
+      return (
+        <>
+          {show && <Stateful initial={flat('A', 'B')} />}
+          <Probe />
+        </>
+      )
+    }
+    const { rerender } = render(<Host show />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 250 })
+    expect(document.documentElement.classList.contains('reorder-active')).toBe(true)
+    rerender(<Host show={false} />)
+    expect(seen.at(-1)).toBe(false)
   })
 
   it('unmounting mid-drag leaves no cursor class behind', () => {
