@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { flushSync } from 'react-dom'
 import { ApiError, errorDetail } from '../../api/client'
 import {
@@ -12,8 +12,11 @@ import {
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
+import { ORDER_RESTORED, movedToast, orderSaveFailed, undoFailureText } from '../reorder/orderCopy'
 import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
+import { useLatest } from '../reorder/useLatest'
 import { useReorder } from '../reorder/useReorder'
+import { useRequestCount } from '../reorder/useRequestCount'
 import { useToast } from '../ToastProvider'
 import type {
   AccountOut,
@@ -57,12 +60,6 @@ function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
 
-/** A server sentence used inside one of ours: its closing stop goes, ours closes it (the
- *  reorder toasts' rule, lane R3's `clause`). */
-function clause(text: string): string {
-  return text.replace(/[.\s]+$/, '')
-}
-
 /**
  * Card roster: add/edit form + table. Archive = full-object PATCH flipping is_active
  * (history kept, optimizer ignores it). Delete = instant + Undo; Undo re-POSTs the
@@ -85,19 +82,13 @@ export default function CardsPanel({
   const [error, setError] = useState<string | null>(null)
   // Requests in flight across the panel — counted, never flagged (lane R3 review): a toast's
   // Undo clicked while a later drop's PUT is out settles on its own, and whichever answers
-  // first must not wake the grips while the other is still out. Every request calls begin()
-  // and settles in its `.finally`.
-  const [inFlight, setInFlight] = useState(0)
-  const busy = inFlight > 0
-  const begin = () => setInFlight((count) => count + 1)
-  const settle = () => setInFlight((count) => count - 1)
-  // The page's onChanged as of the LATEST render (useReorder's `latest` idiom): a save or an
-  // Undo answers long after the render that sent it — a toast stands for 6 s — and must reload
-  // through the page as it is now, never as it was at the drop.
-  const onChangedRef = useRef(onChanged)
-  useLayoutEffect(() => {
-    onChangedRef.current = onChanged
-  })
+  // first must not wake the grips while the other is still out. Every request runs through
+  // `track`, its whole chain inside.
+  const { busy, track } = useRequestCount()
+  // The page's onChanged as of the LATEST render: a save or an Undo answers long after the
+  // render that sent it — a toast stands for 6 s — and must reload through the page as it is
+  // now, never as it was at the drop.
+  const onChangedRef = useLatest(onChanged)
   const reload = () => onChangedRef.current()
   const toast = useToast()
 
@@ -222,126 +213,126 @@ export default function CardsPanel({
     const stored = ordered.find((card) => card.id === editingId)
     const body = buildBody(stored)
     if (body === null) return
-    begin()
     setError(null)
     // The FULL row on both verbs: the router validates the MERGED card, so a delta PATCH
     // would 422 on a stored field this form never touched. The nullable columns travel as
     // explicit nulls — which on PATCH is what CLEARS them.
     const request =
       editingId !== null ? updateCreditCard(editingId, body) : createCreditCard(body)
-    request
-      .then(() => {
-        // The next entry starts here — the sheet's row-to-row rhythm.
-        // BEFORE the reset, and that order is load-bearing: the caret can still be sitting
-        // in an AmountInput when this lands, and moving focus BLURS that box synchronously.
-        // The blur's commit closes over the box's PRE-reset text, so focusing first aims
-        // that write at the state the reset below then replaces; the other order lets it
-        // land on the emptied form and resurrect the fee of the card just saved.
-        document.getElementById('card-name')?.focus()
-        setForm(EMPTY_CARD)
-        setEditingId(null)
-        reload()
-      })
-      .catch((err: unknown) => setError(message(err, 'Save failed')))
-      .finally(settle)
+    void track(() =>
+      request
+        .then(() => {
+          // The next entry starts here — the sheet's row-to-row rhythm.
+          // BEFORE the reset, and that order is load-bearing: the caret can still be sitting
+          // in an AmountInput when this lands, and moving focus BLURS that box synchronously.
+          // The blur's commit closes over the box's PRE-reset text, so focusing first aims
+          // that write at the state the reset below then replaces; the other order lets it
+          // land on the emptied form and resurrect the fee of the card just saved.
+          document.getElementById('card-name')?.focus()
+          setForm(EMPTY_CARD)
+          setEditingId(null)
+          reload()
+        })
+        .catch((err: unknown) => setError(message(err, 'Save failed'))),
+    )
   }
 
   const toggleArchive = (card: CreditCardOut) => {
-    begin()
     setError(null)
     // The stored row with ONE bit flipped — not the form's, which may be mid-edit on some
     // other card. Archiving keeps every credit and limit event; it only takes the card out
     // of the matrix and the optimizer's math.
-    updateCreditCard(card.id, {
-      name: card.name,
-      annual_fee: card.annual_fee,
-      rewards_currency: card.rewards_currency,
-      point_value_cents: card.point_value_cents,
-      // VERBATIM REBUILD 1 of 2. Every nullable column must be listed: this is a
-      // full-replace PATCH, so a column omitted here is CLEARED, and a cleared person_id
-      // silently turns the card joint (2026-08-26 audit §3.6).
-      person_id: card.person_id,
-      primary_holder: card.primary_holder,
-      authorized_users: card.authorized_users,
-      opened_on: card.opened_on,
-      is_active: !card.is_active,
-      account_id: card.account_id,
-      notes: card.notes,
-      sort_order: card.sort_order,
-    })
-      .then(() => reload())
-      .catch((err: unknown) => setError(message(err, 'Archive failed')))
-      .finally(settle)
+    void track(() =>
+      updateCreditCard(card.id, {
+        name: card.name,
+        annual_fee: card.annual_fee,
+        rewards_currency: card.rewards_currency,
+        point_value_cents: card.point_value_cents,
+        // VERBATIM REBUILD 1 of 2. Every nullable column must be listed: this is a
+        // full-replace PATCH, so a column omitted here is CLEARED, and a cleared person_id
+        // silently turns the card joint (2026-08-26 audit §3.6).
+        person_id: card.person_id,
+        primary_holder: card.primary_holder,
+        authorized_users: card.authorized_users,
+        opened_on: card.opened_on,
+        is_active: !card.is_active,
+        account_id: card.account_id,
+        notes: card.notes,
+        sort_order: card.sort_order,
+      })
+        .then(() => reload())
+        .catch((err: unknown) => setError(message(err, 'Archive failed'))),
+    )
   }
 
   const remove = (card: CreditCardOut) => {
-    begin()
     // Cleared on entry like submit's: a delete that succeeds must not leave the previous
     // save's 409 sitting over the panel as if it still described the table.
     setError(null)
     // Instant + Undo (2026-08-25 polish §8): the confirm interrupt is gone.
-    deleteCreditCard(card.id)
-      .then(() => {
-        // The edited row is gone — a stale editingId would PATCH a 404 on the next save.
-        // Reset on SUCCESS only.
-        if (card.id === editingId) {
-          setEditingId(null)
-          setForm(EMPTY_CARD)
-        }
-        reload()
-        toast.success(`Deleted ${card.name}`, {
-          action: {
-            label: 'Undo',
-            onAction: () => {
-              // Re-create the card, then its cascaded children. Matrix cells are NOT
-              // restored (they reference the old card id) — the toast says so. Counted like
-              // any request of the roster, so no drop races the card coming back. (One
-              // catch stays: a credit or limit event that fails to come back is a failed
-              // restore, and says so.)
-              begin()
-              createCreditCard({
-                name: card.name,
-                annual_fee: card.annual_fee,
-                rewards_currency: card.rewards_currency,
-                point_value_cents: card.point_value_cents,
-                // VERBATIM REBUILD 2 of 2 — same hazard as toggleArchive's.
-                person_id: card.person_id,
-                primary_holder: card.primary_holder,
-                authorized_users: card.authorized_users,
-                opened_on: card.opened_on,
-                is_active: card.is_active,
-                account_id: card.account_id,
-                notes: card.notes,
-                sort_order: card.sort_order,
-              })
-                .then(async (restored) => {
-                  // Sequential, not Promise.all: the limits endpoint returns the card's
-                  // whole history and the server orders by effective date, so a burst of
-                  // parallel POSTs would race for the "latest" that becomes current_limit.
-                  for (const credit of card.credits)
-                    await createCardCredit(restored.id, {
-                      label: credit.label,
-                      annual_value: credit.annual_value,
-                      counts: credit.counts,
-                      reset_cadence: credit.reset_cadence,
+    void track(() =>
+      deleteCreditCard(card.id)
+        .then(() => {
+          // The edited row is gone — a stale editingId would PATCH a 404 on the next save.
+          // Reset on SUCCESS only.
+          if (card.id === editingId) {
+            setEditingId(null)
+            setForm(EMPTY_CARD)
+          }
+          reload()
+          toast.success(`Deleted ${card.name}`, {
+            action: {
+              label: 'Undo',
+              onAction: () => {
+                // Re-create the card, then its cascaded children. Matrix cells are NOT
+                // restored (they reference the old card id) — the toast says so. Counted like
+                // any request of the roster, so no drop races the card coming back. (One
+                // catch stays: a credit or limit event that fails to come back is a failed
+                // restore, and says so.)
+                void track(() =>
+                  createCreditCard({
+                    name: card.name,
+                    annual_fee: card.annual_fee,
+                    rewards_currency: card.rewards_currency,
+                    point_value_cents: card.point_value_cents,
+                    // VERBATIM REBUILD 2 of 2 — same hazard as toggleArchive's.
+                    person_id: card.person_id,
+                    primary_holder: card.primary_holder,
+                    authorized_users: card.authorized_users,
+                    opened_on: card.opened_on,
+                    is_active: card.is_active,
+                    account_id: card.account_id,
+                    notes: card.notes,
+                    sort_order: card.sort_order,
+                  })
+                    .then(async (restored) => {
+                      // Sequential, not Promise.all: the limits endpoint returns the card's
+                      // whole history and the server orders by effective date, so a burst of
+                      // parallel POSTs would race for the "latest" that becomes current_limit.
+                      for (const credit of card.credits)
+                        await createCardCredit(restored.id, {
+                          label: credit.label,
+                          annual_value: credit.annual_value,
+                          counts: credit.counts,
+                          reset_cadence: credit.reset_cadence,
+                        })
+                      for (const event of card.limit_events)
+                        await createLimitEvent(restored.id, {
+                          effective_date: event.effective_date,
+                          limit_amount: event.limit_amount,
+                          note: event.note,
+                        })
+                      reload()
+                      toast.info(`Restored ${card.name} — matrix multipliers were not restored`)
                     })
-                  for (const event of card.limit_events)
-                    await createLimitEvent(restored.id, {
-                      effective_date: event.effective_date,
-                      limit_amount: event.limit_amount,
-                      note: event.note,
-                    })
-                  reload()
-                  toast.info(`Restored ${card.name} — matrix multipliers were not restored`)
-                })
-                .catch(() => toast.error(`Could not restore ${card.name}`))
-                .finally(settle)
+                    .catch(() => toast.error(`Could not restore ${card.name}`)),
+                )
+              },
             },
-          },
+          })
         })
-      })
-      .catch((err: unknown) => setError(message(err, 'Delete failed')))
-      .finally(settle)
+        .catch((err: unknown) => setError(message(err, 'Delete failed'))),
+    )
   }
 
   // A failed save puts the rows back (spec §7, as §4.1). Moving them can blur the grip a
@@ -365,28 +356,24 @@ export default function CardsPanel({
   // as the saved order — it replaces the drop's, so the rows on screen are the restored ones
   // even when the page's reload hands down nothing new (lane R3's browser find: an Undo's
   // reload can match what the page already holds). A roster that changed since answers 409,
-  // and the page's reload shows what is there now. Two-argument `then` (lane R3 review): only
-  // the request's own failure takes the failure branch — a throw in the success branch is a
-  // bug for the console, never "Couldn't restore the order".
+  // and the page's reload shows what is there now; any refusal is the server's own sentence
+  // (§8.1). Two-argument `then` (lane R3 review): only the request's own failure takes the
+  // failure branch — a throw in the success branch is a bug for the console, never "Couldn't
+  // undo the move".
   const restoreOrder = (ids: number[]) => {
-    begin()
-    reorderCreditCards(ids)
-      .then(
+    void track(() =>
+      reorderCreditCards(ids).then(
         (restored) => {
           setSavedOrder(restored)
           reload()
-          toast.info('Order restored')
+          toast.info(ORDER_RESTORED)
         },
         (err: unknown) => {
-          if (err instanceof ApiError && err.status === 409) {
-            toast.error(errorDetail(err))
-            reload()
-            return
-          }
-          toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
+          toast.error(undoFailureText(err))
+          if (err instanceof ApiError && err.status === 409) reload()
         },
-      )
-      .finally(settle)
+      ),
+    )
   }
 
   // One drop, one PUT (spec §7): every card, active and archived, in its new order. The
@@ -406,15 +393,14 @@ export default function CardsPanel({
         return row === undefined ? [] : [row]
       }),
     )
-    begin()
-    reorderCreditCards(next)
-      .then(
+    void track(() =>
+      reorderCreditCards(next).then(
         (saved) => {
           setPendingOrder(null)
           setSavedOrder(saved)
           reload()
           reorder.markSaved(moved)
-          toast.success(`Moved ${card.name}`, {
+          toast.success(movedToast(card.name), {
             action: { label: 'Undo', onAction: () => restoreOrder(previous) },
           })
         },
@@ -427,12 +413,10 @@ export default function CardsPanel({
             return
           }
           // The toast layer, never the form's banner: the table is not the form (spec §4.1).
-          toast.error(
-            `Couldn't save the new order — ${clause(errorDetail(err))}. The list is back to how it was.`,
-          )
+          toast.error(orderSaveFailed(errorDetail(err)))
         },
-      )
-      .finally(settle)
+      ),
+    )
   }
 
   const reorder = useReorder({
