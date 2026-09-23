@@ -5,6 +5,7 @@ import { installPointerEvents } from '../../testing/pointer'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
 import DragHandle from './DragHandle'
 import { ReorderInstructions, ReorderLiveRegion } from './ReorderStatus'
+import { AUTO_SCROLL_MAX } from './reorderMath'
 import type { ReorderItem } from './reorderMath'
 import { useReorder } from './useReorder'
 
@@ -587,6 +588,62 @@ describe('useReorder — pointer', () => {
     expect(document.activeElement).toBe(elsewhere)
   })
 
+  it('auto-scroll stops once the end of the range is in view — the held row never scrolls away', () => {
+    let scrollY = 0
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => scrollY)
+    const scrollBy = vi.fn((_x: number, dy: number) => {
+      scrollY += dy
+    })
+    window.scrollBy = scrollBy as unknown as typeof window.scrollBy
+    render(<Stateful initial={flat('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J')} />)
+    layoutRows(40, 500) // the range: 500..900 in list coordinates, past jsdom's 768px window
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 520 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 750 }) // held in the bottom zone
+    act(() => {
+      vi.advanceTimersByTime(2000)
+    })
+    // The page scrolled until the range's end (900) showed clear of the bottom zone,
+    // 900 − (768 − 40) = 172, and by at most one more step.
+    expect(scrollY).toBeGreaterThanOrEqual(172)
+    expect(scrollY).toBeLessThan(172 + AUTO_SCROLL_MAX)
+    const scrolls = scrollBy.mock.calls.length
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(scrollBy.mock.calls.length).toBe(scrolls) // still held in the zone: the page stays put
+  })
+
+  it("judges the range's end in the band the reader sees: a scroller hanging past the window scrolls on until that end clears the window's bottom zone", () => {
+    render(
+      <div data-testid="scroller" style={{ overflowY: 'auto' }}>
+        <Stateful initial={flat('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J')} />
+      </div>,
+    )
+    const scroller = screen.getByTestId('scroller')
+    Object.defineProperty(scroller, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(scroller, 'clientHeight', { value: 420, configurable: true })
+    Object.defineProperty(scroller, 'scrollTop', { value: 0, writable: true, configurable: true })
+    // The box runs 600..1020, past jsdom's 768px window: the reader sees only its 600..768.
+    scroller.getBoundingClientRect = () =>
+      ({ top: 600, bottom: 1020, height: 420, left: 0, right: 300, width: 300, x: 0, y: 600, toJSON: () => ({}) }) as DOMRect
+    layoutRows(40, 600) // the range: 0..400 of the scroller's content
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 620 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 750 }) // held in the window's bottom zone
+    act(() => {
+      vi.advanceTimersByTime(3000)
+    })
+    // The end (400) must clear the WINDOW's bottom zone: 400 − (768 − 600 − 40) = 272. Judged in the
+    // box, it cleared at 20 — while still 212px below the window, out of the pointer's reach.
+    expect(scroller.scrollTop).toBeGreaterThanOrEqual(272)
+    expect(scroller.scrollTop).toBeLessThan(272 + AUTO_SCROLL_MAX)
+    const held = scroller.scrollTop
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(scroller.scrollTop).toBe(held)
+    expect(window.scrollBy).not.toHaveBeenCalled()
+  })
+
   it('a throwing onCommit still leaves every row clean, and its error is rethrown after', () => {
     render(
       <Stateful
@@ -611,6 +668,34 @@ describe('useReorder — pointer', () => {
       expect(row(id).hasAttribute('data-reorder')).toBe(false)
     }
     expect(document.documentElement.classList.contains('reorder-active')).toBe(false)
+  })
+
+  it('a tall unit passes a short last peer: its leading edge decides, not its centre', () => {
+    const onCommit = vi.fn()
+    // Settings › Accounts' shape: a parent carrying three components, then one short peer at the
+    // end of the range.
+    const items: ReorderItem<string>[] = [
+      { id: 'P', range: 'g', carries: ['C1', 'C2', 'C3'] },
+      { id: 'C1', range: 'parent:P' },
+      { id: 'C2', range: 'parent:P' },
+      { id: 'C3', range: 'parent:P' },
+      { id: 'Q', range: 'g' },
+    ]
+    render(<Stateful initial={items} onCommit={onCommit} />)
+    layoutRows() // P's unit 200..360 (four rows), Q 360..400 (midpoint 380)
+    fireEvent.pointerDown(grip('Parent'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Parent'), { pointerId: 1, clientY: 420 }) // clamped at +40
+    // Its centre stops at 320, short of Q's midpoint; its bottom edge, at 400, is past it.
+    expect(row('P').style.transform).toBe('translateY(40px)')
+    expect(row('C3').style.transform).toBe('translateY(40px)')
+    expect(row('Q').style.transform).toBe('translateY(-160px)')
+    expect(live()).toBe('Parent, position 2 of 2.')
+    fireEvent.pointerUp(grip('Parent'), { pointerId: 1, clientY: 420 })
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(onCommit).toHaveBeenCalledTimes(1)
+    expect(onCommit).toHaveBeenCalledWith(['Q', 'P', 'C1', 'C2', 'C3'], 'P')
   })
 
   it('clamps the unit to the list', () => {
@@ -711,7 +796,7 @@ describe('useReorder — pointer', () => {
     for (const abandon of abandons) {
       fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
       fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 290 })
-      expect(live()).toBe('Alpha, position 2 of 3.')
+      expect(live()).toBe('Alpha, position 3 of 3.') // +70: its bottom (310) is past C's midpoint (300)
       abandon()
       expect(live()).toBe('Cancelled. Alpha is back at position 1 of 3.')
       expectEasedHome(['A', 'B'])

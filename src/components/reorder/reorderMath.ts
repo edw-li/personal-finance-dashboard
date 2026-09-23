@@ -122,17 +122,25 @@ export function moveUnit<K extends ReorderKey>(
   return [...rest.slice(0, insertAt), ...unit, ...rest.slice(insertAt)]
 }
 
-/** The lifted unit's landing slot: how many OTHER peers have their original midpoint above the
- *  lifted unit's current centre. Measured against where rows stood at lift, so heights may differ.
- *  Ties resolve toward the edge the unit came from: a peer below the start counts when the centre
- *  reaches its midpoint, a peer above only once the centre is past it — so a unit clamped to either
- *  end of the list (its centre exactly on the end peer's midpoint) lands at that end. */
-export function slotFor(extents: readonly Extent[], from: number, liftedCentre: number): number {
+/** The lifted unit's landing slot: how many OTHER peers stay above it, judged by the unit's LEADING
+ *  edge against each peer's original midpoint — the sortable-list rule. A peer below the start is
+ *  passed once the unit's bottom edge reaches its midpoint; a peer above, once the unit's top edge
+ *  rises strictly above its midpoint. Edges, not the centre: a tall unit clamped at the end of its
+ *  range (its bottom on the last peer's bottom) must still pass a short last peer whose midpoint
+ *  its centre could never reach (Settings › Accounts: a 401(k) and its three components over one
+ *  IRA). Clamped at either end, a unit therefore lands at that end. Measured against where rows
+ *  stood at lift, so heights may differ. */
+export function slotFor(
+  extents: readonly Extent[],
+  from: number,
+  liftedTop: number,
+  liftedBottom: number,
+): number {
   let slot = 0
   extents.forEach((extent, index) => {
     if (index === from) return
     const mid = extent.top + extent.height / 2
-    if (index < from ? mid < liftedCentre : mid <= liftedCentre) slot += 1
+    if (index < from ? mid <= liftedTop : mid <= liftedBottom) slot += 1
   })
   return slot
 }
@@ -205,6 +213,20 @@ export function autoScrollSpeed(pointerY: number, top: number, bottom: number): 
     return AUTO_SCROLL_MAX * closeness ** 2
   }
   return 0
+}
+
+/** The auto-scroll speed a range allows: none further down once the range's bottom already shows
+ *  clear of the bottom edge zone, none further up once its top shows clear of the top zone. The held
+ *  unit is clamped to its range, so scrolling on would only carry it out of view. List coordinates:
+ *  `view` is what the scroller shows — its scroll offset and visible height. */
+export function autoScrollWithin(
+  speed: number,
+  range: { top: number; bottom: number },
+  view: { top: number; height: number },
+): number {
+  if (speed > 0 && range.bottom <= view.top + view.height - AUTO_SCROLL_EDGE) return 0
+  if (speed < 0 && range.top >= view.top + AUTO_SCROLL_EDGE) return 0
+  return speed
 }
 
 /** The live region's sentences (spec §8.2). */

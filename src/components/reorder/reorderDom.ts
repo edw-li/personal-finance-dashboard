@@ -51,6 +51,14 @@ export function visibleBounds(scroller: Scroller): { top: number; bottom: number
   return { top: Math.max(box.top, 0), bottom: Math.min(box.bottom, window.innerHeight) }
 }
 
+/** What the scroller shows, in list coordinates: its scroll offset and its visible height (the
+ *  page's scrollY and viewport). */
+export function scrollView(scroller: Scroller): { top: number; height: number } {
+  return scroller === null
+    ? { top: window.scrollY, height: window.innerHeight }
+    : { top: scroller.scrollTop, height: scroller.clientHeight }
+}
+
 export function scrollByY(scroller: Scroller, dy: number): void {
   if (scroller === null) window.scrollBy(0, dy)
   else scroller.scrollTop += dy
@@ -64,11 +72,10 @@ export function ensureVisible(
   height: number,
   margin = AUTO_SCROLL_EDGE,
 ): void {
-  const viewTop = scroller === null ? window.scrollY : scroller.scrollTop
-  const viewHeight = scroller === null ? window.innerHeight : scroller.clientHeight
-  if (top < viewTop + margin) scrollByY(scroller, top - (viewTop + margin))
-  else if (top + height > viewTop + viewHeight - margin) {
-    scrollByY(scroller, top + height - (viewTop + viewHeight - margin))
+  const view = scrollView(scroller)
+  if (top < view.top + margin) scrollByY(scroller, top - (view.top + margin))
+  else if (top + height > view.top + view.height - margin) {
+    scrollByY(scroller, top + height - (view.top + view.height - margin))
   }
 }
 

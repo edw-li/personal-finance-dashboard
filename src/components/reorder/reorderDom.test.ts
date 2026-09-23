@@ -4,6 +4,7 @@ import {
   keepOnScreen,
   listY,
   scrollParentOf,
+  scrollView,
   unitExtent,
   viewportDelta,
   visibleBounds,
@@ -100,6 +101,16 @@ describe('listY / unitExtent / visibleBounds', () => {
     expect(visibleBounds(scroller)).toEqual({ top: 600, bottom: window.innerHeight })
     scroller.getBoundingClientRect = () => rect(-100, 420) // its top scrolled off above the viewport
     expect(visibleBounds(scroller)).toEqual({ top: 0, bottom: 320 })
+  })
+})
+
+describe('scrollView', () => {
+  it("is what a scroller shows in list coordinates: the page's scroll and viewport, an element's offset and client height", () => {
+    vi.spyOn(window, 'scrollY', 'get').mockReturnValue(250)
+    expect(scrollView(null)).toEqual({ top: 250, height: window.innerHeight })
+    const scroller = document.createElement('div')
+    setBox(scroller, { scrollTop: 80, clientHeight: 420 })
+    expect(scrollView(scroller)).toEqual({ top: 80, height: 420 })
   })
 })
 
