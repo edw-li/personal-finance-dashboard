@@ -95,9 +95,12 @@ export default function CategoriesCard() {
   const shown = pendingOrder ?? categories
   const nameOf = new Map(shown.map((category) => [category.id, category.name]))
 
+  // Returns its promise: every write RETURNS the reload it starts, so the card stays busy — grips
+  // parked — until the list it changed is back on screen. Released any earlier, a drop could
+  // diff against rows the write has already moved past (after an Undo: PUT the undone move back).
   const load = (initial = false) => {
     const seq = ++seqRef.current
-    warmSource(initial)(WARM.categories, fetchCategories)
+    return warmSource(initial)(WARM.categories, fetchCategories)
       .then((rows) => {
         if (seq !== seqRef.current) return
         setCategories(rows)
@@ -140,7 +143,7 @@ export default function CategoriesCard() {
     request
       .then(() => {
         cancelEdit()
-        load()
+        return load()
       })
       .catch((err: unknown) => setFormError(message(err, 'Save failed')))
       .finally(() => setBusy(false))
@@ -177,20 +180,20 @@ export default function CategoriesCard() {
     deleteCategory(category.id)
       .then(() => {
         if (category.id === editingId) cancelEdit()
-        load()
+        return load()
       })
       .catch((err: unknown) => toast.error(message(err, 'Delete failed')))
       .finally(() => setBusy(false))
   }
 
   // The reorder route logs its batch (spec §3.2), so Undo is the change log's: the server
-  // writes every renumbered row back, then the list is read again.
+  // writes every renumbered row back, then the list is read again — and the grips wait for it.
   const undoOrder = (batchId: string) => {
     setBusy(true)
     undoBatch(batchId)
       .then(() => {
-        load()
         toast.info('Order restored')
+        return load()
       })
       .catch((err: unknown) => toast.error(undoFailed(err)))
       .finally(() => setBusy(false))
@@ -218,15 +221,14 @@ export default function CategoriesCard() {
         )
       })
       .catch((err: unknown) => {
-        setPendingOrder(null) // back to the last order the server confirmed
-        if (err instanceof ApiError && err.status === 409) {
-          // The list changed under this one (another tab): the server's sentence, then the
-          // current rows (spec §8.3).
-          toast.error(err.message)
-          load()
-          return
-        }
-        toast.error(orderSaveFailed(err))
+        setPendingOrder(null) // back to the last order the server confirmed…
+        // …then read again, whatever the failure: a 409 means the list changed under this one
+        // (another tab — the server's own sentence, spec §8.3), and a 5xx can arrive after the
+        // write committed. Either way the rows drawn next are the server's.
+        toast.error(
+          err instanceof ApiError && err.status === 409 ? err.message : orderSaveFailed(err),
+        )
+        return load()
       })
       .finally(() => setBusy(false))
   }
@@ -234,8 +236,9 @@ export default function CategoriesCard() {
   const reorder = useReorder({
     items: shown.map((category) => ({ id: category.id })),
     labelOf: (id) => nameOf.get(id) ?? String(id),
-    // Every request of the card parks the grips: a drop cannot race a save (spec §9).
-    disabled: busy,
+    // Every request of the card parks the grips — a drop cannot race a save (spec §9) — and so
+    // does a list that failed to reload: the rows on screen may be behind the server's.
+    disabled: busy || loadError !== null,
     onCommit: (next, moved) => {
       const byId = new Map(shown.map((category) => [category.id, category]))
       setPendingOrder(

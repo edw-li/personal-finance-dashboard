@@ -175,6 +175,9 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     setPendingOrder(null)
   }
 
+  // Returns its promise: every write RETURNS the reload it starts, so the card stays busy — grips
+  // parked — until the roster it changed is back on screen. Released any earlier, a drop could
+  // diff against rows the write has already moved past (after an Undo: PUT the undone move back).
   const load = (initial = false) => {
     const seq = ++seqRef.current
     return warmSource(initial)(WARM.accounts, fetchAccounts)
@@ -282,7 +285,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     request
       .then(() => {
         cancelEdit()
-        load()
+        return load()
       })
       .catch((err: unknown) => setFormError(message(err, 'Save failed')))
       .finally(() => setBusy(false))
@@ -307,7 +310,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     deleteAccount(account.id)
       .then(() => {
         if (account.id === editingId) cancelEdit()
-        load()
+        return load()
       })
       .catch((err: unknown) => toast.error(message(err, 'Delete failed')))
       .finally(() => setBusy(false))
@@ -390,13 +393,13 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   )
 
   // The reorder route logs its batch (spec §3.2), so Undo is the change log's: the server
-  // writes every renumbered row back, then the roster is read again.
+  // writes every renumbered row back, then the roster is read again — and the grips wait for it.
   const undoOrder = (batchId: string) => {
     setBusy(true)
     undoBatch(batchId)
       .then(() => {
-        load()
         toast.info('Order restored')
+        return load()
       })
       .catch((err: unknown) => toast.error(undoFailed(err)))
       .finally(() => setBusy(false))
@@ -424,15 +427,14 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
         )
       })
       .catch((err: unknown) => {
-        setPendingOrder(null) // back to the last order the server confirmed
-        if (err instanceof ApiError && err.status === 409) {
-          // The roster changed under this one (another tab): the server's sentence, then the
-          // current rows (spec §8.3).
-          toast.error(err.message)
-          load()
-          return
-        }
-        toast.error(orderSaveFailed(err))
+        setPendingOrder(null) // back to the last order the server confirmed…
+        // …then read again, whatever the failure: a 409 means the roster changed under this one
+        // (another tab — the server's own sentence, spec §8.3), and a 5xx can arrive after the
+        // write committed. Either way the rows drawn next are the server's.
+        toast.error(
+          err instanceof ApiError && err.status === 409 ? err.message : orderSaveFailed(err),
+        )
+        return load()
       })
       .finally(() => setBusy(false))
   }
@@ -449,8 +451,9 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       const group = GROUP_ORDER.find((candidate) => candidate === range)
       return group === undefined ? undefined : GROUP_LABELS[group]
     },
-    // Every request of the roster parks the grips: a drop cannot race a save (spec §9).
-    disabled: busy,
+    // Every request of the roster parks the grips — a drop cannot race a save (spec §9) — and
+    // so does a roster that failed to reload: the rows on screen may be behind the server's.
+    disabled: busy || loadError !== null,
     onCommit: (next, moved) => {
       // `next` is the whole roster flattened group by group, each parent followed by its
       // components — exactly the order the PUT sends.

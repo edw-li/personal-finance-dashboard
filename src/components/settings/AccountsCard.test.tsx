@@ -856,7 +856,7 @@ it("a refused Undo shows the server's own sentence (spec §9)", async () => {
   expect(vi.mocked(fetchAccounts)).toHaveBeenCalledTimes(1)
 })
 
-it('a failed save snaps back to the last server order and says why (spec §8.1)', async () => {
+it('a failed save snaps back to the last server order, says why, and reads the roster again (spec §8.1)', async () => {
   vi.mocked(fetchAccounts).mockResolvedValue(ROSTER)
   vi.mocked(reorderAccounts).mockRejectedValue(new ApiError('database unavailable', 503))
   render(
@@ -872,8 +872,11 @@ it('a failed save snaps back to the last server order and says why (spec §8.1)'
   )
   expect(toast.className).toBe('toast-message')
   expect(rowIds()).toEqual(['10', '11', '20', '21', '22'])
-  // A failure is not a stale list: nothing to reload.
-  expect(vi.mocked(fetchAccounts)).toHaveBeenCalledTimes(1)
+  // A 5xx can come AFTER the write committed, so the roster is read again: what the table shows
+  // is the server's order, whichever it is — and the grips wait for it.
+  await waitFor(() => expect(vi.mocked(fetchAccounts)).toHaveBeenCalledTimes(2))
+  await waitFor(() => expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBeNull())
+  expect(rowIds()).toEqual(['10', '11', '20', '21', '22'])
 })
 
 it("a stale roster (409) shows the server's sentence and reloads the current rows (spec §8.3)", async () => {
@@ -895,27 +898,80 @@ it("a stale roster (409) shows the server's sentence and reloads the current row
   expect(vi.mocked(fetchAccounts)).toHaveBeenCalledTimes(2)
 })
 
-it('a reload still in flight when the order is saved cannot put the old order back', async () => {
+it('keeps the grips parked until the reload a write started has landed — no drop diffs against rows the write moved past', async () => {
   const reload = deferred<AccountOut[]>()
   vi.mocked(fetchAccounts).mockResolvedValueOnce(ROSTER).mockReturnValueOnce(reload.promise)
   render(<AccountsCard people={[ME]} />)
   await screen.findByRole('table', { name: 'Net-worth accounts' })
 
-  // Saving an edit answers at once; the reload it starts is still on the wire when a row moves.
+  // Saving an edit answers at once; the roster it changed is still on the wire.
   fireEvent.click(screen.getByRole('button', { name: 'Edit Fidelity HSA' }))
   fireEvent.click(screen.getByRole('button', { name: 'Save account' }))
   await waitFor(() => expect(vi.mocked(fetchAccounts)).toHaveBeenCalledTimes(2))
-  await waitFor(() => expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBeNull())
+  expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBe('true')
   press('Fidelity Traditional 401(k)', ' ', 'ArrowUp', ' ')
-  await waitFor(() => expect(vi.mocked(reorderAccounts)).toHaveBeenCalledTimes(1))
-  await waitFor(() => expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBeNull())
-  expect(rowIds()).toEqual(['10', '20', '21', '22', '11'])
+  expect(vi.mocked(reorderAccounts)).not.toHaveBeenCalled()
 
-  // The late answer describes the roster before the drop: it is dropped, not drawn.
+  await act(async () => {
+    reload.resolve([CHECKING, { ...HSA, name: 'Fidelity HSA (renamed)' }, TRAD, TRAD_PRETAX, TRAD_MATCH])
+  })
+  await waitFor(() => expect(grip('Fidelity HSA (renamed)').getAttribute('aria-disabled')).toBeNull())
+})
+
+it('an Undo holds the grips until the order it restored is on screen — a drop in that window sends no PUT', async () => {
+  vi.mocked(fetchAccounts).mockResolvedValue(ROSTER)
+  render(
+    <ToastProvider>
+      <AccountsCard people={[ME]} />
+    </ToastProvider>,
+  )
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+  press('Fidelity Traditional 401(k)', ' ', 'ArrowUp', ' ')
+  await screen.findByText('Moved Fidelity Traditional 401(k)')
+  await waitFor(() => expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBeNull())
+  const reload = deferred<AccountOut[]>()
+  vi.mocked(fetchAccounts).mockReturnValueOnce(reload.promise)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await screen.findByText('Order restored')
+
+  // The undo has answered; the order it restored is still on the wire. A drop now would diff
+  // against the pre-Undo rows and PUT the undone move straight back.
+  expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBe('true')
+  press('Fidelity HSA', ' ', 'ArrowUp', ' ')
+  expect(vi.mocked(reorderAccounts)).toHaveBeenCalledTimes(1)
+
   await act(async () => {
     reload.resolve(ROSTER)
   })
-  expect(rowIds()).toEqual(['10', '20', '21', '22', '11'])
+  await waitFor(() => expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBeNull())
+  expect(rowIds()).toEqual(['10', '11', '20', '21', '22'])
+})
+
+it('parks the grips while the roster on screen failed to reload, until a Retry brings it back', async () => {
+  vi.mocked(fetchAccounts)
+    .mockResolvedValueOnce(ROSTER)
+    .mockRejectedValueOnce(new ApiError('accounts unavailable', 503))
+    .mockResolvedValue(ROSTER)
+  vi.mocked(reorderAccounts).mockRejectedValue(new ApiError('database unavailable', 503))
+  render(
+    <ToastProvider>
+      <AccountsCard people={[ME]} />
+    </ToastProvider>,
+  )
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+  press('Fidelity Traditional 401(k)', ' ', 'ArrowUp', ' ')
+
+  // The save failed and so did the read after it: the rows on screen may be behind the server,
+  // and a drop diffed against them would PUT an order nobody chose.
+  expect(
+    await screen.findByText("Couldn't load the accounts — the server had a problem (HTTP 503)"),
+  ).toBeTruthy()
+  await waitFor(() => expect(vi.mocked(fetchAccounts)).toHaveBeenCalledTimes(2))
+  expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBe('true')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading the accounts' }))
+  await waitFor(() => expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBeNull())
 })
 
 it('parks every grip while another request of the roster is in flight (spec §4.1 Busy)', async () => {

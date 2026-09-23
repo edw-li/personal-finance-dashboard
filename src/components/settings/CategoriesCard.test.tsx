@@ -451,7 +451,7 @@ it("a refused Undo shows the server's own sentence (spec §9)", async () => {
   expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(1)
 })
 
-it('a failed save snaps back to the last server order and says why (spec §8.1)', async () => {
+it('a failed save snaps back to the last server order, says why, and reads the list again (spec §8.1)', async () => {
   vi.mocked(reorderCategories).mockRejectedValue(new ApiError('database unavailable', 503))
   render(
     <ToastProvider>
@@ -466,8 +466,11 @@ it('a failed save snaps back to the last server order and says why (spec §8.1)'
   )
   expect(toast.className).toBe('toast-message')
   expect(rowIds()).toEqual(['5', '6', '7'])
-  // A failure is not a stale list: nothing to reload.
-  expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(1)
+  // A 5xx can come AFTER the write committed, so the rows are read again: what the table shows
+  // is the server's order, whichever it is — and the grips wait for it.
+  await waitFor(() => expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2))
+  await waitFor(() => expect(grip('Pets').getAttribute('aria-disabled')).toBeNull())
+  expect(rowIds()).toEqual(['5', '6', '7'])
 })
 
 it("a stale list (409) shows the server's sentence and reloads the current rows (spec §8.3)", async () => {
@@ -489,7 +492,7 @@ it("a stale list (409) shows the server's sentence and reloads the current rows 
   expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2)
 })
 
-it('a reload still in flight when the order is saved cannot put the old order back', async () => {
+it('keeps the grips parked until the reload a write started has landed — no drop diffs against rows the write moved past', async () => {
   const reload = deferred<CategoryOut[]>()
   vi.mocked(fetchCategories)
     .mockResolvedValueOnce([GROCERIES, PETS, TAXES])
@@ -497,20 +500,73 @@ it('a reload still in flight when the order is saved cannot put the old order ba
   render(<CategoriesCard />)
   await screen.findByRole('table')
 
-  // Retire answers at once; the reload it starts is still on the wire when a row is moved.
+  // Retire answers at once; the list it changed is still on the wire.
   fireEvent.click(screen.getByRole('button', { name: 'Retire Groceries' }))
   await waitFor(() => expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2))
-  await waitFor(() => expect(grip('Pets').getAttribute('aria-disabled')).toBeNull())
+  expect(grip('Pets').getAttribute('aria-disabled')).toBe('true')
   press('Pets', ' ', 'ArrowUp', ' ')
-  await waitFor(() => expect(vi.mocked(reorderCategories)).toHaveBeenCalledTimes(1))
-  await waitFor(() => expect(grip('Pets').getAttribute('aria-disabled')).toBeNull())
-  expect(rowIds()).toEqual(['6', '5', '7'])
+  expect(vi.mocked(reorderCategories)).not.toHaveBeenCalled()
 
-  // The late answer describes the list before the drop: it is dropped, not drawn.
+  await act(async () => {
+    reload.resolve([{ ...GROCERIES, is_active: false }, PETS, TAXES])
+  })
+  await waitFor(() => expect(grip('Pets').getAttribute('aria-disabled')).toBeNull())
+  expect(within(screen.getByRole('table')).getAllByText('Retired')).toHaveLength(2)
+})
+
+it('an Undo holds the grips until the order it restored is on screen — a drop in that window sends no PUT', async () => {
+  render(
+    <ToastProvider>
+      <CategoriesCard />
+    </ToastProvider>,
+  )
+  await screen.findByRole('table')
+  press('Pets', ' ', 'ArrowUp', ' ')
+  await screen.findByText('Moved Pets')
+  await waitFor(() => expect(grip('Groceries').getAttribute('aria-disabled')).toBeNull())
+  const reload = deferred<CategoryOut[]>()
+  vi.mocked(fetchCategories).mockReturnValueOnce(reload.promise)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await screen.findByText('Order restored')
+
+  // The undo has answered; the order it restored is still on the wire. A drop now would diff
+  // against the pre-Undo rows and PUT the undone move straight back.
+  expect(grip('Groceries').getAttribute('aria-disabled')).toBe('true')
+  press('Groceries', ' ', 'ArrowDown', ' ')
+  expect(vi.mocked(reorderCategories)).toHaveBeenCalledTimes(1)
+
   await act(async () => {
     reload.resolve([GROCERIES, PETS, TAXES])
   })
-  expect(rowIds()).toEqual(['6', '5', '7'])
+  await waitFor(() => expect(grip('Groceries').getAttribute('aria-disabled')).toBeNull())
+  expect(rowIds()).toEqual(['5', '6', '7'])
+})
+
+it('parks the grips while the list on screen failed to reload, until a Retry brings it back', async () => {
+  vi.mocked(fetchCategories)
+    .mockResolvedValueOnce([GROCERIES, PETS, TAXES])
+    .mockRejectedValueOnce(new ApiError('categories unavailable', 503))
+    .mockResolvedValue([GROCERIES, PETS, TAXES])
+  vi.mocked(reorderCategories).mockRejectedValue(new ApiError('database unavailable', 503))
+  render(
+    <ToastProvider>
+      <CategoriesCard />
+    </ToastProvider>,
+  )
+  await screen.findByRole('table')
+  press('Pets', ' ', 'ArrowUp', ' ')
+
+  // The save failed and so did the read after it: the rows on screen may be behind the server,
+  // and a drop diffed against them would PUT an order nobody chose.
+  expect(
+    await screen.findByText("Couldn't load the categories — the server had a problem (HTTP 503)"),
+  ).toBeTruthy()
+  await waitFor(() => expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2))
+  expect(grip('Pets').getAttribute('aria-disabled')).toBe('true')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading the categories' }))
+  await waitFor(() => expect(grip('Pets').getAttribute('aria-disabled')).toBeNull())
 })
 
 it('parks every grip while another request of the card is in flight (spec §4.1 Busy)', async () => {

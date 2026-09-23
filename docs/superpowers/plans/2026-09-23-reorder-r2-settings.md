@@ -261,17 +261,22 @@ export async function reorderCategories(ids: number[]): Promise<{ data: Category
    - A stored `sort_order` sent back could undo a drag made since the form was filled.
    - Leaving it out is what lets a group change append server-side (spec §3.3, R1's append table).
 2. **The optimistic order is a rows array.** `pendingOrder` is retired by the adjust-during-render
-   idiom whenever the server list's identity changes. A failure clears it; a 409 clears it and
-   reloads.
-3. **A save bumps the card's load sequence.** A reload already on the wire cannot then land over
-   the saved order.
-   - Several paths clear `busy` before the reload they start has answered:
-     - both cards' `submit` and `remove`;
-     - the categories card's Retire and kind paths, because its `load` returns nothing to wait on.
-   - So a drop can follow a Save or a Retire within that window.
-   - Found while planning; pinned by one test per card.
-4. **Undo parks the grips** (`busy`) for its own request. "Order restored" is said as soon as the
-   undo succeeds; the reload runs alongside it.
+   idiom whenever the server list's identity changes. ANY failure clears it and reloads: a 409
+   because the list changed elsewhere, a 5xx because it may have arrived after the write
+   committed. (Amended at the code-quality review, I1: "a failure clears it; a 409 clears it and
+   reloads" left the table on a guess after a 5xx.)
+3. **A write holds the grips until its reload lands.** (Rewritten at the code-quality review, I1.)
+   - `load` returns its promise, and every write returns the reload it starts: submit, Retire /
+     Restore, the kind picker, Delete, Undo, and a failed save. So `busy` covers the reload too,
+     and no drop can diff against rows a write has already moved past.
+   - The planned version bumped the load sequence at each save so that a reload still on the wire
+     was dropped. That bump did discard the reload, but it could not stop the drop that follows.
+     After an Undo, a quick drop PUT the pre-Undo order and silently re-applied the undone move.
+   - A list that failed to reload also parks the grips (`disabled: busy || loadError !== null`).
+   - Pinned per card: the grips stay parked until a write's reload lands; an Undo window test; a
+     failed-reload test.
+4. **Undo parks the grips until its reload lands.** "Order restored" is said as soon as the undo
+   succeeds; the reload follows, and the grips come back once it has landed.
 5. **A save that logged nothing** (`batchId === null`) toasts "Moved {name}" with no Undo — the
    house contract (BudgetPanel's seed).
 6. **An Undo that got no answer** (network, 5xx) says `Couldn't undo the move — {reason}.`
