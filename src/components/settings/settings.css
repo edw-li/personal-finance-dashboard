@@ -345,8 +345,24 @@
   gap: 0.35rem 0.75rem;
 }
 
-.backups-row .button {
+/* Two lists in one card (2026-09-23 spec §B3): snapshots, then restore points. The row leads
+   with the local time; the UTC file name is the secondary line; its buttons sit together at the
+   row's end. */
+.backups-heading {
+  margin: 1rem 0 0;
+}
+
+.backups-when {
+  font-weight: 600;
+}
+
+.backups-actions {
   margin-left: auto;
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+.backups-actions .button {
   padding: 0.3rem 0.6rem;
   font-size: 0.78rem;
 }
