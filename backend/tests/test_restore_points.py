@@ -273,3 +273,21 @@ async def test_an_applied_import_names_the_restore_point_it_saved(auth_client, d
     applied = (await auth_client.post("/api/v1/import/xlsx?dry_run=false", files=files)).json()
     assert applied["applied"] is True
     assert (restore_points_dir() / applied["restore_point"]).is_file()
+
+
+def test_the_name_grammars_are_ascii_only():
+    """`\d` matches every Unicode digit; a fullwidth "２０２６…" name must be as foreign as any
+    other (2026-09-23 lane B1 review, M1)."""
+    from app.services.snapshot import SNAPSHOT_NAME_RE
+
+    wide = "２０２６０９０４"
+    point = f"pre-restore-{wide}-091500-123456.zip"
+    snap = f"finance-export-{wide}-233000.zip"
+    assert RESTORE_POINT_NAME_RE.fullmatch(point) is None
+    assert SNAPSHOT_NAME_RE.fullmatch(snap) is None
+    restore_points_dir().mkdir(parents=True)
+    snapshots_dir().mkdir(parents=True)
+    (restore_points_dir() / point).write_bytes(zipped(None))
+    (snapshots_dir() / snap).write_bytes(zipped(None))
+    assert stored_file(point) is None and stored_file(snap) is None
+    assert list_restore_points(None) == []

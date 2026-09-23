@@ -133,9 +133,10 @@ REDACTED_ROWS: dict[str, frozenset[str]] = {"app_settings": frozenset({KEY_SETTI
 # File-name grammar for the data volume (spec §8). Stored snapshots carry SECONDS (the
 # download filename keeps HHMM) so a manual "Snapshot now" in the nightly's minute cannot
 # overwrite it; restore points add microseconds for the same reason. Both anchored, so a
-# name from a URL can never carry a path separator.
-SNAPSHOT_NAME_RE = re.compile(r"^finance-export-(\d{8})-(\d{6})\.zip$")
-RESTORE_POINT_NAME_RE = re.compile(r"^pre-restore-(\d{8})-(\d{6})-(\d{6})\.zip$")
+# name from a URL can never carry a path separator — and ASCII-only (re.ASCII), because a bare
+# `\d` also matches every Unicode digit ("２０２６…"), which is nobody's file name here.
+SNAPSHOT_NAME_RE = re.compile(r"^finance-export-(\d{8})-(\d{6})\.zip$", re.ASCII)
+RESTORE_POINT_NAME_RE = re.compile(r"^pre-restore-(\d{8})-(\d{6})-(\d{6})\.zip$", re.ASCII)
 RESTORE_POINTS_KEEP = 3
 
 
