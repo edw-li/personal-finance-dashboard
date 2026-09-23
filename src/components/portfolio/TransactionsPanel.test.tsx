@@ -1098,6 +1098,28 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
     }
   })
 
+  it('has the page reload before it reads the answer — a restore whose answer is malformed still reloads', async () => {
+    const escaped = vi.fn()
+    process.on('unhandledRejection', escaped)
+    try {
+      answerWith()
+      const { onChanged } = renderLedger()
+      keyboardMove(NVDA_BUY, 'ArrowDown')
+      await screen.findByText(QUIET_NVDA)
+      expect(onChanged).toHaveBeenCalledTimes(1)
+      // The server restored the order, but its answer carries nothing to read.
+      vi.mocked(reorderTransactions).mockResolvedValueOnce(
+        undefined as unknown as TransactionOrderOut,
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+      await waitFor(() => expect(escaped).toHaveBeenCalled())
+      // The page still reloads: the holdings and the order come back from the server.
+      expect(onChanged).toHaveBeenCalledTimes(2)
+    } finally {
+      process.off('unhandledRejection', escaped)
+    }
+  })
+
   it.each([
     {
       status: 500,
@@ -1184,6 +1206,25 @@ describe('TransactionsPanel reorder — a save that fails (spec §5, §8.1, §8.
       expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
       // The saved order stays on screen — nothing is "back to how it was".
       expect(order()).toEqual(['22', '21', '23'])
+    } finally {
+      process.off('unhandledRejection', escaped)
+    }
+  })
+
+  it('has the page reload before it reads the answer — a save whose answer has no transactions still reloads', async () => {
+    const escaped = vi.fn()
+    process.on('unhandledRejection', escaped)
+    try {
+      // The order saved, but the answer carries nothing to read — no rows, no figures.
+      vi.mocked(reorderTransactions).mockResolvedValueOnce(
+        undefined as unknown as TransactionOrderOut,
+      )
+      const { onChanged } = renderLedger()
+      keyboardMove(NVDA_BUY, 'ArrowDown')
+      await waitFor(() => expect(escaped).toHaveBeenCalled())
+      // The page still reloads: the holdings, the gains and the order come back from the server.
+      expect(onChanged).toHaveBeenCalledTimes(1)
+      expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
     } finally {
       process.off('unhandledRejection', escaped)
     }

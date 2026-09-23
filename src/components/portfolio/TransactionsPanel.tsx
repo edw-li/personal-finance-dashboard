@@ -285,8 +285,10 @@ export default function TransactionsPanel({
     void track(() =>
       reorderTransactions(ids, scope).then(
         (result) => {
-          setSavedOrder({ scope, rows: result.transactions })
+          // The page reloads BEFORE the answer is read: the order is restored whatever the answer
+          // holds, so a malformed one still brings the holdings back up to date (saveOrder's rule).
           onChangedRef.current()
+          setSavedOrder({ scope, rows: result.transactions })
           toast.info(ORDER_RESTORED)
         },
         (err: unknown) => {
@@ -322,9 +324,11 @@ export default function TransactionsPanel({
       reorderTransactions(next, scope).then(
         (result) => {
           setPendingOrder(null)
-          setSavedOrder({ scope, rows: result.transactions })
-          // Holdings, realized gains and the tiles stand on this order: the page reloads them.
+          // Holdings, realized gains and the tiles stand on this order: the page reloads them —
+          // BEFORE the answer is read, since the order is saved whatever the answer holds, so a
+          // malformed one (no rows, no figures) still reloads (lane R3's review).
           onChangedRef.current()
+          setSavedOrder({ scope, rows: result.transactions })
           reorder.markSaved(moved)
           toast.success(movedMessage(txn, tickerOf(txn), result.changed_positions), {
             action: { label: 'Undo', onAction: () => restoreOrder(previous, scope) },
