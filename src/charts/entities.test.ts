@@ -13,6 +13,7 @@ import {
   rankCategories,
   slotColor,
 } from './entities'
+import { deltaEBothThemes, separation } from '../testing/perceptual'
 import {
   GROUP_COLORS,
   MUTED,
@@ -100,6 +101,41 @@ describe('the entity registry', () => {
     expect(new Set(CATEGORY_HUES).size).toBe(CATEGORY_HUES.length)
     // The validated adjacency chain, in stack order after the tax hue (see entities.ts).
     expect(CATEGORY_HUES).toEqual([PALETTE[0], PALETTE[1], PALETTE[6], PALETTE[4], PALETTE[3]])
+  })
+})
+
+// The 2026-09-23 code review (12): the header's quoted separations, measured. OKLab ΔE × 100
+// under normal vision and under CVD — the worse of protanopia and deuteranopia, Machado 2009 at
+// full severity (the validator's model) — on the dark tokens and, through the recolor map, the
+// light ones. Pinned so a token change that moves a figure fails here instead of leaving the
+// comment quoting a palette that no longer exists.
+describe("the registry's measured separations", () => {
+  const figures = (a: string, b: string) => {
+    const { dark, light } = separation(a, b)
+    return [dark.normal, dark.cvd, light.normal, light.cvd].map(Math.round)
+  }
+
+  it('the fold chain in stack order: tax, P0, P1, P6, P4, P3, then Other (normal/CVD, dark · light)', () => {
+    const chain = [ENTITY.tax, ...CATEGORY_HUES, OTHER_SERIES_COLOR]
+    expect(chain.slice(1).map((hue, i) => figures(chain[i], hue))).toEqual([
+      [29, 19, 30, 23], // tax P7–P0
+      [32, 27, 33, 28], // P0–P1
+      [27, 26, 29, 27], // P1–P6
+      [20, 16, 21, 17], // P6–P4
+      [19, 13, 17, 10], // P4–P3
+      [20, 17, 17, 16], // P3–Other
+    ])
+  })
+
+  it('the reservations: the kept greens beside POSITIVE, and the tax hue beside NEGATIVE', () => {
+    const tenth = (a: string, b: string) => {
+      const { dark, light } = deltaEBothThemes(a, b)
+      return [dark, light].map((value) => Number(value.toFixed(1)))
+    }
+    expect(tenth(PALETTE[2], POSITIVE)).toEqual([8.9, 4.2])
+    expect(tenth(PALETTE[5], POSITIVE)[1]).toBe(3.7)
+    // The deficit texture's reason (charts/partial.ts DEFICIT_DECAL): 4.4 dark, 2.5 light.
+    expect(tenth(ENTITY.tax, NEGATIVE)).toEqual([4.4, 2.5])
   })
 })
 
