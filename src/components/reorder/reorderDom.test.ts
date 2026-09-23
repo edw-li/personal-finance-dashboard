@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  createDropLine,
+  DROP_LINE_PX,
   ensureVisible,
   keepOnScreen,
   listY,
+  placeDropLine,
   scrollParentOf,
   scrollView,
   stickyHeaderBottom,
@@ -10,6 +13,7 @@ import {
   unitExtent,
   viewportDelta,
   visibleBounds,
+  visibleSpan,
 } from './reorderDom'
 
 function rect(top: number, height: number, left = 0, width = 100): DOMRect {
@@ -239,5 +243,73 @@ describe('keepOnScreen', () => {
     const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
     keepOnScreen(null, 5000, 40)
     expect(scrollBy).not.toHaveBeenCalled()
+  })
+})
+
+describe('visibleSpan', () => {
+  it("is the box clipped to the window when nothing clips it sideways", () => {
+    const row = document.createElement('tr')
+    document.body.append(row)
+    expect(visibleSpan(row, rect(200, 40, -10, 1200))).toEqual({ left: 0, right: window.innerWidth })
+    expect(visibleSpan(row, rect(200, 40, 40, 600))).toEqual({ left: 40, right: 640 })
+  })
+
+  it('stops at an ancestor that actually scrolls sideways (a wide ledger in .holdings-scroll)', () => {
+    document.body.innerHTML =
+      '<div id="wrap" style="overflow-x: auto"><table><tbody><tr id="row"><td>x</td></tr></tbody></table></div>'
+    const wrap = document.getElementById('wrap') as HTMLElement
+    wrap.getBoundingClientRect = () => rect(180, 400, 100, 600)
+    Object.defineProperty(wrap, 'clientWidth', { value: 600, configurable: true })
+    Object.defineProperty(wrap, 'scrollWidth', { value: 1400, configurable: true })
+    const row = document.getElementById('row') as HTMLElement
+    expect(visibleSpan(row, rect(200, 40, 100, 1400))).toEqual({ left: 100, right: 700 })
+    // The same box with nothing to scroll clips nothing: the row fits inside it.
+    Object.defineProperty(wrap, 'scrollWidth', { value: 600, configurable: true })
+    expect(visibleSpan(row, rect(200, 40, 100, 590))).toEqual({ left: 100, right: 690 })
+  })
+})
+
+describe('the drop line', () => {
+  it('is one hidden, aria-hidden overlay on <body> until it is placed', () => {
+    const line = createDropLine()
+    expect(line.parentElement).toBe(document.body)
+    expect(line.className).toBe('reorder-drop-line')
+    expect(line.getAttribute('aria-hidden')).toBe('true')
+    expect(line.hidden).toBe(true)
+  })
+
+  it('sits centred on the edge it marks — a row top for "before", a row bottom for "after" — as wide as the row', () => {
+    const line = createDropLine()
+    const row = document.createElement('tr')
+    document.body.append(row)
+    row.getBoundingClientRect = () => rect(300, 40, 24, 900)
+    placeDropLine(line, row, 'before', null)
+    expect(line.hidden).toBe(false)
+    expect([line.style.top, line.style.left, line.style.width]).toEqual([
+      `${300 - DROP_LINE_PX / 2}px`,
+      '24px',
+      '900px',
+    ])
+    placeDropLine(line, row, 'after', null)
+    expect(line.style.top).toBe(`${340 - DROP_LINE_PX / 2}px`)
+  })
+
+  it("hides while the edge is outside the band the reader sees of the scroller — under its sticky header, or past the window", () => {
+    const box = scrolledTable(120, 'cells') // the band: 166..540
+    const line = createDropLine()
+    const row = box.querySelector('tbody tr') as HTMLElement
+    row.getBoundingClientRect = () => rect(140, 40) // its top under the header, its bottom below it
+    placeDropLine(line, row, 'before', box)
+    expect(line.hidden).toBe(true)
+    placeDropLine(line, row, 'after', box)
+    expect(line.hidden).toBe(false)
+    expect(line.style.top).toBe(`${180 - DROP_LINE_PX / 2}px`)
+    // An edge within half the line of the band still draws: half of it shows.
+    row.getBoundingClientRect = () => rect(165, 40)
+    placeDropLine(line, row, 'before', box)
+    expect(line.hidden).toBe(false)
+    row.getBoundingClientRect = () => rect(900, 40) // on a page-scrolled list, past the window's 768px
+    placeDropLine(line, row, 'before', null)
+    expect(line.hidden).toBe(true)
   })
 })

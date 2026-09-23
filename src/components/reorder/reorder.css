@@ -1,8 +1,9 @@
 /* Drag to reorder (2026-09-23 spec §2). One stylesheet for every reorderable list: the grip, the
    row states the hook writes as data-reorder* ATTRIBUTES (never classes — `.is-dragging` belongs to
-   the detail-panel resizer, details.css), the table border model and the mid-drag cursor. Tokens
-   only: --t-fast/--ease-out move rows (index.css zeroes them under reduced motion, and the hook stops
-   shifting peers there — spec §2.5), --t-flash times the saved flash, the colours are theme tokens. */
+   the detail-panel resizer, details.css), reduced motion's drop line, the table border model and the
+   mid-drag cursor. Tokens only: --t-fast/--ease-out move rows (index.css zeroes them under reduced
+   motion, and the hook stops shifting peers there — spec §2.5), --t-flash times the saved flash, the
+   colours are theme tokens. */
 
 .reorder-grip {
   display: inline-flex;
@@ -118,20 +119,27 @@ table.reorder-table {
   box-shadow: 0 4px 14px rgb(var(--shadow));
 }
 
-/* Reduced motion: peers stay put and an accent line marks the landing edge instead. */
-.reorder-table tr[data-reorder-drop='before'] > td,
-:not(tr)[data-reorder-drop='before'] {
-  box-shadow: inset 0 2px 0 var(--accent);
-}
-
-.reorder-table tr[data-reorder-drop='after'] > td,
-:not(tr)[data-reorder-drop='after'] {
-  box-shadow: inset 0 -2px 0 var(--accent);
+/* Reduced motion: peers stay put and ONE accent line marks the landing edge instead (spec §2.5 as
+   amended by lane R7). The row in hand follows the pointer across its target at z-index 2, so a line
+   drawn inside the target's cells hid beneath it for half of every slot's travel (lane V's finding
+   1). The hook draws it as an overlay on <body> instead — positioned from the target row's rect,
+   hidden with the `hidden` attribute (so no `display` here), and gone when the drag lets go. The row
+   keeps `data-reorder-drop`, which nothing here styles.
+   z-index 14, deliberately: above `.page`, the ONE stacking context every page layer paints in
+   (panels.css: the sticky table headers at 1, the lifted row at 2, the scope row at 8 and the
+   Customize popover at 20 all order only inside it), and under the chrome that may cover the page —
+   the assistant drawer and launcher (15), the detail dock (16), the palette (20), toasts (30). */
+.reorder-drop-line {
+  position: fixed;
+  z-index: 14;
+  height: 2px;
+  background: var(--accent);
+  pointer-events: none;
 }
 
 /* The pinned cells (panels.css: the right-sticky td.row-actions, the left-sticky td.col-identity)
-   draw their edge hairline as a box-shadow, so every row state that sets a box-shadow restates the
-   hairline beside its own: a pinned cell keeps its edge while its row is lifted or marked. */
+   draw their edge hairline as a box-shadow, so the lifted state, which sets a box-shadow, restates
+   the hairline beside its own: a pinned cell keeps its edge while its row is lifted. */
 .reorder-table tr[data-reorder='lifted'] > td.row-actions {
   background: var(--surface-2);
   box-shadow:
@@ -140,36 +148,12 @@ table.reorder-table {
     var(--reorder-edge-bottom);
 }
 
-.reorder-table tr[data-reorder-drop='before'] > td.row-actions {
-  box-shadow:
-    -1px 0 0 var(--border),
-    inset 0 2px 0 var(--accent);
-}
-
-.reorder-table tr[data-reorder-drop='after'] > td.row-actions {
-  box-shadow:
-    -1px 0 0 var(--border),
-    inset 0 -2px 0 var(--accent);
-}
-
 .reorder-table tr[data-reorder='lifted'] > td.col-identity {
   background: var(--surface-2);
   box-shadow:
     1px 0 0 var(--border),
     var(--reorder-edge-top),
     var(--reorder-edge-bottom);
-}
-
-.reorder-table tr[data-reorder-drop='before'] > td.col-identity {
-  box-shadow:
-    1px 0 0 var(--border),
-    inset 0 2px 0 var(--accent);
-}
-
-.reorder-table tr[data-reorder-drop='after'] > td.col-identity {
-  box-shadow:
-    1px 0 0 var(--border),
-    inset 0 -2px 0 var(--accent);
 }
 
 /* Saved: one accent wash fading out (the pasted-cell flash's language, MonthlyUpdatePage.css). */

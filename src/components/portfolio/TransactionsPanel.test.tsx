@@ -1295,7 +1295,7 @@ describe('portfolio.css and reorder.css — the reorderable ledger', () => {
     expect(reorderCss).toMatch(/\.reorder-table \.reorder-grip-cell \{[^}]*padding-right: 0;/)
   })
 
-  it('lifts the pinned actions cell with its row and draws the drop line across it', () => {
+  it('lifts the pinned actions cell with its row; the drop line is drawn over it, never inside it', () => {
     // panels.css pins `.port-table td.row-actions` (0,2,1) with its own surface and a left
     // hairline; each row state outranks it and keeps that hairline. The lifted cell draws its own
     // edge first, then the row's top and bottom edges — which a ledger row, a unit of one, has
@@ -1306,11 +1306,9 @@ describe('portfolio.css and reorder.css — the reorderable ledger', () => {
     expect(reorderCss).toContain(
       ".reorder-table tr[data-reorder='lifted'] { --reorder-edge-top: inset 0 1px 0 var(--border); --reorder-edge-bottom: inset 0 -1px 0 var(--border); }",
     )
-    expect(reorderCss).toContain(
-      ".reorder-table tr[data-reorder-drop='before'] > td.row-actions { box-shadow: -1px 0 0 var(--border), inset 0 2px 0 var(--accent); }",
-    )
-    expect(reorderCss).toContain(
-      ".reorder-table tr[data-reorder-drop='after'] > td.row-actions { box-shadow: -1px 0 0 var(--border), inset 0 -2px 0 var(--accent); }",
-    )
+    // Reduced motion's drop line is one fixed overlay above every cell (lane R7): no drop state
+    // restyles the pinned cell, so its hairline never has to be restated for one.
+    expect(reorderCss).toMatch(/\.reorder-drop-line \{ position: fixed;/)
+    expect(reorderCss).not.toContain('data-reorder-drop')
   })
 })

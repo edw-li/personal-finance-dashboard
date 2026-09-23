@@ -1,7 +1,8 @@
 // Drag to reorder — the React half (2026-09-23 spec §2). A pointer + keyboard state machine for ONE
 // list. Per-frame work — transforms, data-reorder* attributes — is written straight onto the rows the
-// list registered through `itemProps`: React never renders a transform, so a 60fps drag costs no
-// renders. The only React state is who is lifted and what the live region says.
+// list registered through `itemProps` (and, under reduced motion, onto one drop-line overlay on
+// <body>): React never renders a transform, so a 60fps drag costs no renders. The only React state
+// is who is lifted and what the live region says.
 //
 // Phases (Drag.phase) and what moves a drag between them:
 //   pressing → lifted              the pointer travels 4px (a keyboard lift passes straight through)
@@ -44,10 +45,12 @@ import {
 import type { AnnounceContext, Extent, ReorderItem, ReorderKey } from './reorderMath'
 import {
   cancelFrame,
+  createDropLine,
   ensureVisible,
   keepOnScreen,
   listY,
   nextFrame,
+  placeDropLine,
   scrollByY,
   scrollParentOf,
   unitExtent,
@@ -107,6 +110,15 @@ interface Drag<K extends ReorderKey> {
   detach: (() => void) | null
   /** A moved pointer drop easing into its gap: the order it still owes onCommit. Null otherwise. */
   pendingNext: K[] | null
+  /** Reduced motion's drop line (spec §2.5): made at the first landing slot, gone when the drag lets
+   *  go. Null until then — and always, with motion allowed. */
+  line: HTMLElement | null
+}
+
+/** The row a reduced-motion drop line marks, and which of its edges. */
+interface DropEdge {
+  element: HTMLElement
+  side: 'before' | 'after'
 }
 
 interface Machine<K extends ReorderKey> {
@@ -138,7 +150,8 @@ function clearRows<K extends ReorderKey>(rows: Map<K, HTMLElement>): void {
   document.documentElement.classList.remove('reorder-active')
 }
 
-/** Let go of everything a drag holds outside React: its window listeners, its frame, its timer. */
+/** Let go of everything a drag holds outside React: its window listeners, its frame, its timer and
+ *  its drop line. Every way out of a drag passes here — a drop, a cancel, a hard reset, an unmount. */
 function releaseDrag<K extends ReorderKey>(drag: Drag<K>): void {
   drag.detach?.()
   drag.detach = null
@@ -146,6 +159,8 @@ function releaseDrag<K extends ReorderKey>(drag: Drag<K>): void {
   drag.frame = null
   if (drag.timer !== null) window.clearTimeout(drag.timer)
   drag.timer = null
+  drag.line?.remove()
+  drag.line = null
 }
 
 export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>): UseReorder<K> {
@@ -273,9 +288,31 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     })
   }
 
+  // Under reduced motion, the edge slot `to` lands on: the target unit's first row's top for a move
+  // up, its last row's bottom for a move down. Null with motion allowed, or back home.
+  const dropEdge = (drag: Drag<K>, to: number): DropEdge | null => {
+    if (!latest.current.reduced || to === drag.from) return null
+    const target = drag.units[to]
+    const side = to < drag.from ? 'before' : 'after'
+    const element = rows.current.get(side === 'before' ? target[0] : target[target.length - 1])
+    return element === undefined ? null : { element, side }
+  }
+
+  // The drop line on that edge, as the row stands NOW (lane V's finding 1): an overlay above every
+  // page layer, so the row in hand never covers it. Made at the first edge; hidden with none.
+  const drawLine = (drag: Drag<K>, edge: DropEdge | null) => {
+    if (edge === null) {
+      if (drag.line !== null) drag.line.hidden = true
+      return
+    }
+    drag.line ??= createDropLine()
+    placeDropLine(drag.line, edge.element, edge.side, drag.scroller)
+  }
+
   // Draw the drag at slot `to`: the lifted unit under the pointer (or, from the keyboard, at its
   // landing slot); peers shifted to make room — or, under reduced motion, left alone with an accent
-  // drop line on the landing edge instead (spec §2.5).
+  // drop line on the landing edge instead (spec §2.5). The row keeps `data-reorder-drop` — the
+  // contract the tests and the probe read — while the line itself is drawn by drawLine.
   const paint = (drag: Drag<K>, to: number) => {
     const still = latest.current.reduced
     const shifts = shiftsFor(drag.extents, drag.from, to)
@@ -290,11 +327,9 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
         element.removeAttribute('data-reorder-drop')
       }
     })
-    if (still && to !== drag.from) {
-      const target = drag.units[to]
-      const edge = to < drag.from ? target[0] : target[target.length - 1]
-      rows.current.get(edge)?.setAttribute('data-reorder-drop', to < drag.from ? 'before' : 'after')
-    }
+    const edge = dropEdge(drag, to)
+    edge?.element.setAttribute('data-reorder-drop', edge.side)
+    drawLine(drag, edge)
   }
 
   const track = (drag: Drag<K>) => {
@@ -402,19 +437,27 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
       cancel(drag)
     }
     const onAbandon = () => cancel(drag)
-    const onScroll = () => {
-      if (drag.mode === 'pointer' && drag.phase === 'lifted') track(drag)
+    // Every scroll in the document reaches here — scroll events do not bubble, but they cross
+    // window's capture phase. The list's own scroller moves the list under a pointer, so a pointer
+    // drag re-tracks; any other scroll (the page under a Settings box, a keyboard lift's
+    // keep-in-view, a wheel) moves only where the drop line's edge stands, and the line is fixed.
+    const onScroll = (event: Event) => {
+      if (drag.phase !== 'lifted') return
+      // The page's own scroll targets the document (or the window), never an element.
+      const own =
+        drag.scroller === null ? !(event.target instanceof Element) : event.target === drag.scroller
+      if (own && drag.mode === 'pointer') track(drag)
+      else drawLine(drag, dropEdge(drag, drag.to))
     }
-    const scrollTarget: HTMLElement | Window = drag.scroller ?? window
     window.addEventListener('keydown', onKey, true)
     window.addEventListener('blur', onAbandon)
     window.addEventListener('resize', onAbandon)
-    scrollTarget.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true })
     drag.detach = () => {
       window.removeEventListener('keydown', onKey, true)
       window.removeEventListener('blur', onAbandon)
       window.removeEventListener('resize', onAbandon)
-      scrollTarget.removeEventListener('scroll', onScroll)
+      window.removeEventListener('scroll', onScroll, true)
     }
   }
 
@@ -483,6 +526,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
       timer: null,
       detach: null,
       pendingNext: null,
+      line: null,
     }
     machine.current.drag = drag
     return drag
@@ -557,13 +601,14 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     if (to === null) return
     event.preventDefault()
     drag.to = to
-    paint(drag, to)
     // Keep the landing slot in view — in the scroller's own view, then on screen, for a scroller
-    // hanging past the window edge.
+    // hanging past the window edge — and only then paint: both scrolls are computed from list
+    // coordinates, while the drop line is measured, so it must see the rows where they now stand.
     const self = drag.extents[drag.from]
     const landing = self.top + shiftsFor(drag.extents, drag.from, to)[drag.from]
     ensureVisible(drag.scroller, landing, self.height)
     keepOnScreen(drag.scroller, landing, self.height)
+    paint(drag, to)
     const message = announce.move(context(drag, to))
     setSnap((current) => ({ ...current, announcement: message }))
   }

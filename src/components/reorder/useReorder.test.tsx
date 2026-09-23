@@ -188,6 +188,17 @@ function row(id: string): HTMLElement {
   return element
 }
 
+/** Every drop line in the document — reduced motion's overlay (spec §2.5 as amended by lane R7). */
+const lines = () => [...document.querySelectorAll<HTMLElement>('.reorder-drop-line')]
+/** The one drop line's placement: [top, left, width], or null when it is hidden. */
+function linePlacement(): [string, string, string] | null {
+  const all = lines()
+  expect(all).toHaveLength(1)
+  const [line] = all
+  expect(line.parentElement).toBe(document.body)
+  return line.hidden ? null : [line.style.top, line.style.left, line.style.width]
+}
+
 const grip = (name: string) => screen.getByRole('button', { name: `Reorder ${name}` })
 const order = () =>
   [...document.querySelectorAll('[data-reorder-id]')].map((element) => element.getAttribute('data-reorder-id'))
@@ -234,6 +245,8 @@ afterEach(() => {
   // vitest runs without globals here, so RTL never registers its own afterEach cleanup. First, so a
   // list unmounts (and clears its drag's timers) while the test's clock is still the one it armed.
   cleanup()
+  // No test may leave a drop line behind: every list has unmounted, whatever state its drag was in.
+  expect(lines()).toEqual([])
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -1099,14 +1112,19 @@ describe('useReorder — reduced motion (spec §2.5)', () => {
     expect(row('A').style.transform).toBe('')
     expect(row('B').style.transform).toBe('')
     expect(row('C').getAttribute('data-reorder-drop')).toBe('after')
+    // The line is the overlay, centred on C's bottom (320), as wide as the row.
+    expect(linePlacement()).toEqual(['319px', '0px', '300px'])
     fireEvent.keyDown(grip('Alpha'), { key: 'ArrowUp' })
     fireEvent.keyDown(grip('Alpha'), { key: 'ArrowUp' })
     fireEvent.keyDown(grip('Alpha'), { key: 'ArrowUp' })
     expect(row('C').hasAttribute('data-reorder-drop')).toBe(false)
+    expect(linePlacement()).toBeNull() // back in its own slot: nothing to mark
     fireEvent.keyDown(grip('Alpha'), { key: 'End' })
+    expect(linePlacement()).toEqual(['359px', '0px', '300px'])
     fireEvent.keyDown(grip('Alpha'), { key: ' ' })
     expect(onCommit).toHaveBeenCalledWith(['B', 'C', 'D', 'A'], 'A')
     expect(row('D').hasAttribute('data-reorder-drop')).toBe(false)
+    expect(lines()).toEqual([])
   })
 
   it('pointer: the unit still follows the pointer; the line marks a move upward on the top edge', () => {
@@ -1119,10 +1137,134 @@ describe('useReorder — reduced motion (spec §2.5)', () => {
     expect(row('D').style.transform).toBe('translateY(-85px)')
     expect(row('B').style.transform).toBe('')
     expect(row('B').getAttribute('data-reorder-drop')).toBe('before')
+    expect(linePlacement()).toEqual(['239px', '0px', '300px']) // on B's top (240)
     fireEvent.pointerUp(grip('Delta'), { pointerId: 1, clientY: 255 })
     fireEvent.lostPointerCapture(grip('Delta'), { pointerId: 1 }) // the browser's implicit release
     expect(onCommit).toHaveBeenCalledTimes(1)
     expect(onCommit).toHaveBeenCalledWith(['A', 'D', 'B', 'C'], 'D')
     expect(live()).toBe('Dropped Delta at position 2 of 4.')
+    expect(lines()).toEqual([])
+  })
+
+  it('pointer: ONE line, drawn once there is a landing slot — it moves with the slot and hides back home', () => {
+    reduceMotion()
+    render(<Stateful initial={flat('A', 'B', 'C', 'D')} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 230 }) // lifted, still in its own slot
+    expect(row('A').getAttribute('data-reorder')).toBe('lifted')
+    expect(lines()).toEqual([])
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 }) // position 3: after C
+    expect(linePlacement()).toEqual(['319px', '0px', '300px'])
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 265 }) // position 2: after B
+    expect(linePlacement()).toEqual(['279px', '0px', '300px'])
+    expect(row('B').getAttribute('data-reorder-drop')).toBe('after')
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 225 }) // home: no landing edge
+    expect(linePlacement()).toBeNull()
+    expect(document.querySelector('[data-reorder-drop]')).toBeNull()
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 225 })
+    expect(lines()).toEqual([])
+  })
+
+  it('keyboard: the line is measured after the keep-in-view scroll, and follows any later scroll', () => {
+    reduceMotion()
+    render(
+      <div data-testid="scroller" style={{ overflowY: 'auto' }}>
+        <Stateful initial={flat('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J')} />
+      </div>,
+    )
+    // A 190px box at 100 over rows 0..400 of its content, scrolled to its top.
+    const scroller = scrollBox({ top: 100, height: 190 })
+    fireEvent.keyDown(grip('Alpha'), { key: ' ' })
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    expect(scroller.scrollTop).toBe(0)
+    expect(linePlacement()).toEqual(['219px', '0px', '300px']) // after C: 100 + 120
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    // Landing at 120..160, past 190 − 40: the box scrolls 10 — and the line marks D's bottom where
+    // it stands AFTER that scroll (100 + 160 − 10), not before it (260).
+    expect(scroller.scrollTop).toBe(10)
+    expect(linePlacement()).toEqual(['249px', '0px', '300px'])
+    // Any later scroll — a wheel under a keyboard lift — takes the line along with its edge.
+    scroller.scrollTop = 80
+    fireEvent.scroll(scroller)
+    expect(linePlacement()).toEqual(['179px', '0px', '300px'])
+    fireEvent.keyDown(grip('Alpha'), { key: 'Escape' })
+    expect(lines()).toEqual([])
+  })
+
+  it("the line hides while its edge is under the box's sticky header — the attribute still marks the slot", () => {
+    vi.useFakeTimers() // the pointer rests in the top zone: no real frame may scroll mid-test
+    reduceMotion()
+    const ids = Array.from({ length: 12 }, (_, index) => `r${index}`)
+    render(<TableList items={flat(...ids)} />)
+    // A 420px box at 100 under a 60px header, scrolled 60: r0 at 100..140 and r1 at 140..180 have
+    // their tops under the header (100..160); r2 stands at 180..220, r3 at 220..260.
+    scrollBox({ top: 100, height: 420, header: 60, scrollTop: 60 })
+    fireEvent.pointerDown(grip('r3'), { pointerId: 1, button: 0, clientY: 240 })
+    fireEvent.pointerMove(grip('r3'), { pointerId: 1, clientY: 130 }) // position 1: before r0
+    expect(row('r0').getAttribute('data-reorder-drop')).toBe('before')
+    expect(linePlacement()).toBeNull()
+    fireEvent.pointerMove(grip('r3'), { pointerId: 1, clientY: 200 }) // position 3: before r2
+    expect(row('r2').getAttribute('data-reorder-drop')).toBe('before')
+    expect(linePlacement()).toEqual(['179px', '0px', '300px'])
+  })
+
+  it('the line is gone once the drag lets go — a drop, a cancel, a hard reset, an unmount', () => {
+    reduceMotion()
+    const onCommit = vi.fn()
+    const toPositionThree = () => {
+      fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+      fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 })
+      expect(linePlacement()).toEqual(['319px', '0px', '300px'])
+    }
+    const { rerender, unmount } = render(<List items={flat('A', 'B', 'C', 'D')} onCommit={onCommit} />)
+    layoutRows()
+    toPositionThree()
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 }) // a drop commits at once
+    expect(onCommit).toHaveBeenCalledTimes(1)
+    expect(lines()).toEqual([])
+    toPositionThree()
+    fireEvent.keyDown(grip('Alpha'), { key: 'Escape' }) // a cancel
+    expect(lines()).toEqual([])
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    toPositionThree()
+    rerender(<List items={flat('A', 'B', 'C', 'D', 'E')} onCommit={onCommit} />) // data landed: a hard reset
+    expect(live()).toBe('Cancelled — the list changed.')
+    expect(lines()).toEqual([])
+    layoutRows()
+    toPositionThree()
+    unmount()
+    expect(lines()).toEqual([])
+    expect(onCommit).toHaveBeenCalledTimes(1)
+  })
+
+  it('with motion allowed no line is ever created — the peers make room instead', () => {
+    vi.useFakeTimers()
+    const observer = new MutationObserver(() => {})
+    observer.observe(document.body, { childList: true, subtree: true })
+    render(<Stateful initial={flat('A', 'B', 'C', 'D')} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    expect(row('B').style.transform).toBe('translateY(-40px)')
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 265 })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 265 })
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(order()).toEqual(['B', 'A', 'C', 'D'])
+    layoutRows()
+    fireEvent.keyDown(grip('Charlie'), { key: ' ' })
+    fireEvent.keyDown(grip('Charlie'), { key: 'Home' })
+    fireEvent.keyDown(grip('Charlie'), { key: ' ' })
+    expect(order()).toEqual(['C', 'B', 'A', 'D'])
+    const created = observer
+      .takeRecords()
+      .flatMap((record) => [...record.addedNodes])
+      .filter((node) => node instanceof HTMLElement && node.classList.contains('reorder-drop-line'))
+    observer.disconnect()
+    expect(created).toEqual([])
+    expect(lines()).toEqual([])
   })
 })

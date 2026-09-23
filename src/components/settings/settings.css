@@ -612,8 +612,8 @@
 /* --- drag to reorder: the Accounts and Spending categories tables (2026-09-23 reorder spec §4) --- */
 
 /* reorder.css owns what every reorderable table shares — the separate border model
-   (table.reorder-table) and the lifted / drop-line states of the sticky Actions cell. Only what is
-   particular to these two Settings tables lives here. */
+   (table.reorder-table), the lifted state of the sticky Actions cell and the reduced-motion drop
+   line. Only what is particular to these two Settings tables lives here. */
 
 /* The Accounts table is grouped (spec §4.2): one <tbody> per non-empty group, headed by a row that
    carries what the Group column used to say, in the Monthly update's register (.entry-group-row:

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { DROP_LINE_PX } from './reorderDom'
 
 /** Comments first, over the WHOLE file (settingsCss.test.ts's rule). */
 function stripComments(css: string): string {
@@ -24,6 +25,8 @@ function declarationsFor(css: string, selector: string): string {
 }
 
 const css = readFileSync(path.resolve(__dirname, 'reorder.css'), 'utf8')
+const sheet = (file: string) => readFileSync(path.resolve(__dirname, file), 'utf8')
+const zIndexOf = (declarations: string) => Number(/z-index: (\d+);/.exec(declarations)?.[1] ?? NaN)
 
 describe('reorder.css', () => {
   it('gives each cell of a reorderable table its own hairline (a collapsed border stays behind)', () => {
@@ -60,24 +63,43 @@ describe('reorder.css', () => {
     expect(declarationsFor(css, ".reorder-table tr[data-reorder='lifted'] > td")).toContain(
       'background: var(--surface-2);',
     )
-    expect(declarationsFor(css, ".reorder-table tr[data-reorder-drop='before'] > td")).toContain(
-      'box-shadow: inset 0 2px 0 var(--accent);',
-    )
-    expect(declarationsFor(css, ".reorder-table tr[data-reorder-drop='after'] > td")).toContain(
-      'box-shadow: inset 0 -2px 0 var(--accent);',
-    )
     expect(declarationsFor(css, ".reorder-table tr[data-reorder-saved] > td")).toContain(
       'animation: reorder-saved var(--t-flash) var(--ease-out);',
     )
     expect(declarationsFor(css, ":not(tr)[data-reorder='lifted']")).toContain('border-radius: 6px;')
-    expect(declarationsFor(css, ":not(tr)[data-reorder-drop='before']")).toContain(
-      'box-shadow: inset 0 2px 0 var(--accent);',
-    )
-    expect(declarationsFor(css, ":not(tr)[data-reorder-drop='after']")).toContain(
-      'box-shadow: inset 0 -2px 0 var(--accent);',
+    expect(declarationsFor(css, ':not(tr)[data-reorder-saved]')).toContain(
+      'animation: reorder-saved var(--t-flash) var(--ease-out);',
     )
     // An unscoped `tr[data-reorder…] > td` (0,1,2) loses to panels.css's pinned cells (0,2,1).
     expect(stripComments(css)).not.toMatch(/(^|[,{}])\s*tr\[data-reorder/)
+  })
+
+  it('draws the reduced-motion drop line as ONE fixed overlay — never inside a cell, where the row in hand covered it', () => {
+    const line = declarationsFor(css, '.reorder-drop-line')
+    expect(line).toContain('position: fixed;')
+    expect(line).toContain('z-index: 14;')
+    expect(line).toContain(`height: ${DROP_LINE_PX}px;`) // the thickness the hook centres on the edge
+    expect(line).toContain('background: var(--accent);')
+    expect(line).toContain('pointer-events: none;')
+    // The hook hides it with the `hidden` attribute, which any `display` here would override.
+    expect(line).not.toContain('display')
+    // The row keeps `data-reorder-drop` (the tested contract), but nothing styles it any more: the
+    // inset box-shadow line — in the target's cells, pinned ones too — is gone.
+    expect(stripComments(css)).not.toContain('data-reorder-drop')
+    expect(stripComments(css)).not.toMatch(/inset 0 -?2px 0 var\(--accent\)/)
+  })
+
+  it("sits the line above every page layer and under the chrome: .page is the one stacking context the page paints in", () => {
+    // panels.css: `.page`'s container query applies layout containment, which makes .page a stacking
+    // context — so the sticky headers (1), the lifted row (2), the scope row (8) and the Customize
+    // popover (20) order only inside it, and the line on <body> clears them all with any z-index.
+    expect(declarationsFor(sheet('../panels.css'), '.page')).toContain('container: page / inline-size;')
+    const line = zIndexOf(declarationsFor(css, '.reorder-drop-line'))
+    // The chrome that may cover the page still covers the line.
+    expect(zIndexOf(declarationsFor(sheet('../assistant/assistant.css'), '.assistant-drawer'))).toBeGreaterThan(line)
+    expect(zIndexOf(declarationsFor(sheet('../details/details.css'), '.detail-panel-layer'))).toBeGreaterThan(line)
+    expect(zIndexOf(declarationsFor(sheet('../CommandPalette.css'), '.palette-overlay'))).toBeGreaterThan(line)
+    expect(zIndexOf(declarationsFor(sheet('../toast.css'), '.toast-region'))).toBeGreaterThan(line)
   })
 
   it('draws a lifted multi-row unit as one block: its rows meet on one hairline, never two', () => {
@@ -100,17 +122,11 @@ describe('reorder.css', () => {
   it.each([
     ['row-actions', '-1px 0 0 var(--border)'],
     ['col-identity', '1px 0 0 var(--border)'],
-  ])('a pinned td.%s keeps its own hairline under every row state', (cell, hairline) => {
+  ])('a pinned td.%s keeps its own hairline while its row is lifted', (cell, hairline) => {
     const lifted = declarationsFor(css, `.reorder-table tr[data-reorder='lifted'] > td.${cell}`)
     expect(lifted).toContain('background: var(--surface-2);')
     expect(lifted).toContain(
       `box-shadow: ${hairline}, var(--reorder-edge-top), var(--reorder-edge-bottom);`,
-    )
-    expect(declarationsFor(css, `.reorder-table tr[data-reorder-drop='before'] > td.${cell}`)).toContain(
-      `box-shadow: ${hairline}, inset 0 2px 0 var(--accent);`,
-    )
-    expect(declarationsFor(css, `.reorder-table tr[data-reorder-drop='after'] > td.${cell}`)).toContain(
-      `box-shadow: ${hairline}, inset 0 -2px 0 var(--accent);`,
     )
   })
 
@@ -126,12 +142,8 @@ describe('reorder.css', () => {
     expect(pinned).not.toContain('transparent')
   })
 
-  it('flashes a saved row for --t-flash and draws the reduced-motion drop line in the accent', () => {
-    const plain = stripComments(css)
-    expect(plain).toMatch(/animation:\s*reorder-saved var\(--t-flash\)/)
-    expect(plain).toContain("[data-reorder-drop='before']")
-    expect(plain).toContain('inset 0 2px 0 var(--accent)')
-    expect(plain).toContain('inset 0 -2px 0 var(--accent)')
+  it('flashes a saved row for --t-flash', () => {
+    expect(stripComments(css)).toMatch(/animation:\s*reorder-saved var\(--t-flash\)/)
   })
 
   it("lifts a list of boxes on the theme's shadow token, never a raw colour", () => {

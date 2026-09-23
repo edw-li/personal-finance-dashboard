@@ -74,7 +74,7 @@ describe('settings.css', () => {
     expect(name).toContain('color: var(--muted);')
   })
 
-  it("reorder.css lifts the sticky Actions cell with its row and runs the drop line through it, keeping the cell's own hairline", () => {
+  it("reorder.css lifts the sticky Actions cell with its row, keeping the cell's own hairline — and draws the drop line over it, never inside it", () => {
     expectActionsCell(reorderCss)
   })
 
@@ -109,7 +109,9 @@ function pinned(css: string, selector: string): string {
 }
 
 // The two dependency pins on reorder.css (lane R0's sheet): the separate border model, and the
-// lifted / drop-line states of the sticky Actions cell keeping the cell's own -1px hairline.
+// lifted state of the sticky Actions cell keeping the cell's own -1px hairline. The reduced-motion
+// drop line is one fixed overlay over every cell since lane R7, so no row state restyles the cell
+// for it — and none may, or the cell would lose its hairline under the line.
 function expectBorderModel(css: string) {
   const table = pinned(css, 'table.reorder-table')
   expect(table).toContain(normalize('border-collapse: separate;'))
@@ -120,10 +122,6 @@ function expectActionsCell(css: string) {
   const lifted = pinned(css, ".reorder-table tr[data-reorder='lifted'] > td.row-actions")
   expect(lifted).toContain(normalize('background: var(--surface-2);'))
   expect(lifted).toContain(normalize('-1px 0 0 var(--border),'))
-  const before = pinned(css, ".reorder-table tr[data-reorder-drop='before'] > td.row-actions")
-  expect(before).toContain(normalize('-1px 0 0 var(--border),'))
-  expect(before).toContain(normalize('inset 0 2px 0 var(--accent);'))
-  const after = pinned(css, ".reorder-table tr[data-reorder-drop='after'] > td.row-actions")
-  expect(after).toContain(normalize('-1px 0 0 var(--border),'))
-  expect(after).toContain(normalize('inset 0 -2px 0 var(--accent);'))
+  expect(pinned(css, '.reorder-drop-line')).toContain(normalize('position: fixed;'))
+  expect(normalize(css)).not.toContain('data-reorder-drop')
 }

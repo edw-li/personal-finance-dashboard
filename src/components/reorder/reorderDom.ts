@@ -139,6 +139,64 @@ export function keepOnScreen(scroller: Scroller, top: number, height: number): v
   if (delta !== 0) window.scrollBy(0, delta)
 }
 
+/** The reduced-motion drop line's thickness, px (reorder.css draws it; placeDropLine centres it). */
+export const DROP_LINE_PX = 2
+
+/** Reduced motion's landing cue (spec §2.5 as amended by lane R7): ONE overlay per drag, appended to
+ *  <body> and fixed above the page's layers (reorder.css), so the row in hand — which follows the
+ *  pointer across its target — can never cover it (lane V's finding 1). Hidden until placed. */
+export function createDropLine(): HTMLElement {
+  const line = document.createElement('div')
+  line.className = 'reorder-drop-line'
+  line.setAttribute('aria-hidden', 'true')
+  line.hidden = true
+  document.body.append(line)
+  return line
+}
+
+/** The x-extent the reader can see of `box` (the client rect of `element`): clipped by every
+ *  ancestor that actually scrolls sideways — a ledger wider than its .holdings-scroll — and by the
+ *  window. A box with nothing to scroll clips nothing: the row fits inside it. */
+export function visibleSpan(element: Element, box: DOMRect): { left: number; right: number } {
+  let left = Math.max(box.left, 0)
+  let right = Math.min(box.right, window.innerWidth)
+  let node = element.parentElement
+  while (node !== null && node !== document.body && node !== document.documentElement) {
+    const overflowX = getComputedStyle(node).overflowX
+    const clips = overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'hidden' || overflowX === 'clip'
+    if (clips && node.scrollWidth - node.clientWidth > 1) {
+      const inner = node.getBoundingClientRect().left + node.clientLeft
+      left = Math.max(left, inner)
+      right = Math.min(right, inner + node.clientWidth)
+    }
+    node = node.parentElement
+  }
+  return { left, right }
+}
+
+/** Put the drop line on `edge`'s top ('before') or bottom ('after') as the row stands NOW — centred
+ *  on that edge, as wide as the row shows — or hide it while that edge is outside the band the reader
+ *  can see of the scroller (below its sticky header, inside the window). An edge within half the
+ *  line of the band still draws: half of it shows. Positions are measured, so every paint and every
+ *  scroll places it again. */
+export function placeDropLine(
+  line: HTMLElement,
+  edge: Element,
+  side: 'before' | 'after',
+  scroller: Scroller,
+): void {
+  const box = edge.getBoundingClientRect()
+  const y = side === 'before' ? box.top : box.bottom
+  const band = visibleBounds(scroller)
+  const span = visibleSpan(edge, box)
+  const half = DROP_LINE_PX / 2
+  line.hidden = y < band.top - half || y > band.bottom + half || span.right <= span.left
+  if (line.hidden) return
+  line.style.top = `${y - half}px`
+  line.style.left = `${span.left}px`
+  line.style.width = `${span.right - span.left}px`
+}
+
 /** requestAnimationFrame when the environment has it (jsdom may not), a 16ms timer otherwise. */
 export function nextFrame(callback: () => void): number {
   return typeof window.requestAnimationFrame === 'function'
