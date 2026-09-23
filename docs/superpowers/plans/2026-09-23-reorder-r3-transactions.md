@@ -2823,6 +2823,53 @@ then this Results commit.
   4. **Task 1's scope-switch test** also asserts R0's final "Cancelled — the list changed."
   5. **The full vitest and the build ran after the browser check,** not before it (the memory
      constraint allows one full run, and it had to cover the fix).
+- **Code-quality review round (2026-09-23).** Every item was test-first and committed on its own:
+  1. **700b05da — the page's current `onChanged`.** All seven async call sites go through a
+     layout-effect-synced ref (useReorder's `latest` idiom): the save and 409 paths of drop and
+     Undo, submit, delete and its toast Undo. Before, an answer that landed after a scope switch
+     called the old render's `reload`, which refetched the OLD scope and superseded the new one.
+     Two tests: a save and an Undo, each answering after a switch — the new `onChanged` is called,
+     the old one never.
+  2. **5f120dea — a request counter.** `inFlight` counts the four request paths in and out in
+     `.finally`; `busy = inFlight > 0`. Test: drop A answered, drop B pending, A's Undo pressed,
+     B resolves — the grips stay `aria-disabled` until the restore settles.
+  3. **b178307e — two-argument `then`.** saveOrder and restoreOrder use
+     `.then(onSaved, onFailed)`. A throw while wording a success (a malformed answer) now escapes
+     as an error instead of printing a failure over the saved order. Two tests catch the escape
+     with their own `unhandledRejection` listener: vitest leaves an unhandled rejection to user
+     code when one is listening.
+  4. **2803bb78 — `reloading`.** The page's existing `reloading` flag (the frame's `.loading-dim`)
+     reaches the panel in one more additive prop line, and the hook gets `disabled: busy ||
+     reloading`. A panel test and a page test, the latter a cached paint whose revalidation keeps
+     the grips inert until the data lands.
+     - Consequence: after every save the grips also stay inert through the page's reload, not
+       just until the PUT answers. Decision 2's two-layer window for a second keyboard drop is
+       therefore mostly closed. The layers still carry the order through that reload and through
+       failures.
+  5. **b2dd66db — fake-timer flash.** The saved flash is checked on a fake clock: set on the
+     answer, still set at `MOTION_MS.flash − 1`, gone at `MOTION_MS.flash`. A hardening, so it was
+     green at once.
+  6. **613a9633 — nits.** The delete toast uses `tickerOf`, and the file map no longer lists
+     `dropPendingOrder`.
+  - **Merge.** 49adcb59 brings in `feat/reorder-base` @ d5efe2d9 (R0 round 4: the leading-edge
+    slot rule, the auto-scroll range-end stop, one hairline inside a lifted unit). It merged
+    cleanly. fa1a2831 re-pins the lifted actions cell against R0's new `--reorder-edge-*`
+    variables: its own `-1px` hairline first, then the row's edges, both present for a unit of
+    one.
+  - **Browser re-run after the merge** (dark, 1280, `OUT_DIR=out-r0round4`): OK, 37 checks, 0
+    problems.
+    - Page auto-scroll 639 px; the row travelled from slot 0 to 18.
+    - The pointer drag landed exactly under the leading-edge rule: offset = dy, 3 rows made room,
+      and the actions cell stayed on the lifted surface.
+    - The keyboard drop kept focus on its grip, and focus survived the forced 500's revert; the
+      409 showed the server's sentence.
+    - The frame shows build fa1a2831. Servers stopped afterwards.
+  - **Gates.**
+    - Lane files: TransactionsPanel.test.tsx **63**, PortfolioPage.test.tsx **39**, all pass.
+    - `npx tsc -b` 0; eslint on the four touched files 0.
+    - ONE full `npx vitest run --maxWorkers=2`: 246 files / 3442 tests, **3441 passed, 1
+      failed** — the known under-load flake `CategoriesCard … retires and restores` (Settings,
+      untouched by this lane). Alone, its file passes 13/13.
 - **Notes for R0 / R2 / V:**
   - **R2 / R5:** any optimistic or saved layer retired only on fresh props can stick. A parent
     that skips identical payloads, or a client Undo that re-sends an old order, hands down nothing
