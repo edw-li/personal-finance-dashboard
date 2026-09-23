@@ -28,11 +28,11 @@ import type {
   HoldingsResponse,
   LimitsOut,
   TaxBracketsOut,
+  TaxInputUnit,
   TaxInputsOut,
   TaxSummaryOut,
   WhatIfOut,
 } from '../../types/api'
-import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../../utils/format'
 import { toneOf } from '../../utils/tone'
 import type { Tone } from '../../utils/tone'
@@ -41,6 +41,7 @@ import ChartCard from '../ChartCard'
 import InfoHint from '../InfoHint'
 import { FeedBanner } from '../shell/Feed'
 import StatTile from '../StatTile'
+import { UNIT_KINDS, figureText, isEntry, toBox, toWire } from './inputUnits'
 import { whatIfDeltaBarOption } from './taxChartOptions'
 import {
   COMPARE_ROWS,
@@ -411,6 +412,19 @@ export default function WhatIfPanel({
   // screen and out of the URL.
   const labelOf = (key: string) => definitions.find((d) => d.key === key)?.label ?? key
   const storedOf = (key: string) => storedHouseholdValue(inputs, key)
+  // The input's own unit, off the year's items: the box and the note speak it (a percent as a
+  // percent, a count as a whole number — the house rule), while the wire keeps the engine's
+  // form, so a percent travels as the fraction it multiplies by. Money when nothing says.
+  const unitOf = (key: string): TaxInputUnit => {
+    for (const section of inputs?.sections ?? [])
+      for (const item of section.items) if (item.key === key) return item.unit
+    return 'money'
+  }
+  const INVALID_WORDS: Record<TaxInputUnit, string> = {
+    money: 'enter a number like 210000',
+    percent: 'enter a percent like 97.53',
+    count: 'enter a whole number like 26',
+  }
   const updateRow = (id: number, change: Partial<OverrideRow>) =>
     setOverrideRows((state) => ({
       ...state,
@@ -953,6 +967,7 @@ export default function WhatIfPanel({
                   const label = key === null ? 'This override' : labelOf(key)
                   const cleared = row.committed && row.cleared
                   const stored = key === null ? null : storedOf(key)
+                  const unit = key === null ? 'money' : unitOf(key)
                   const pickerId = `whatif-override-key-${row.id}`
                   return (
                     // The row's own id, never its key or position: a row keeps its DOM — and the
@@ -986,12 +1001,13 @@ export default function WhatIfPanel({
                       </select>
                       <DraftAmount
                         ariaLabel={`Override ${index + 1} value`}
+                        unit={unit}
                         value={cleared ? '' : row.draft}
                         disabled={key === null || cleared}
                         placeholder={key === null ? 'choose an input' : cleared ? 'cleared' : 'amount'}
                         onCommit={(canonical) => commitValue(row, canonical)}
                         onInvalid={() =>
-                          setFormError(`${label}: enter a number like 210000 — or tick “Clear this input”`)
+                          setFormError(`${label}: ${INVALID_WORDS[unit]} — or tick “Clear this input”`)
                         }
                       />
                       <label className="whatif-clear">
@@ -1016,7 +1032,7 @@ export default function WhatIfPanel({
                           Not in the scenario yet —{' '}
                           {stored === null
                             ? 'nothing is stored for it; enter a value'
-                            : `change it from the stored ${formatCurrency(stored)}`}{' '}
+                            : `change it from the stored ${figureText(unit, stored)}`}{' '}
                           or tick Clear this input.
                         </span>
                       )}
@@ -1124,9 +1140,12 @@ function DraftInput({
 
 /** The override value box: AmountInput's tolerant grammar ("$1,600") canonicalized at commit
  *  (InputsForm's boundary). A blank commits null, which the ROW reads as "no change" — clearing
- *  an input is the row's explicit checkbox since 2026-09-23 (spec §B7), never an empty box. */
+ *  an input is the row's explicit checkbox since 2026-09-23 (spec §B7), never an empty box.
+ *  `value` and the commit are WIRE values; the box shows and takes the input's own unit
+ *  (inputUnits.ts, the Inputs form's rule), so "97.53%" in the box is "0.9753" on the wire. */
 function DraftAmount({
   ariaLabel,
+  unit = 'money',
   value,
   disabled = false,
   placeholder,
@@ -1134,6 +1153,7 @@ function DraftAmount({
   onInvalid,
 }: {
   ariaLabel: string
+  unit?: TaxInputUnit
   value: string
   disabled?: boolean
   placeholder?: string
@@ -1154,15 +1174,16 @@ function DraftAmount({
       onCommit(null, true)
       return
     }
-    // isAmount is the TOLERANT grammar ("$1,600"); canonicalAmount strips the dressing but
-    // passes ".5", "+5" and "5." through unchanged — and formatOverride would then write an
-    // entry parseOverride refuses. Gate on the codec's own accept, like the leg boxes above.
-    const canonical = isAmount(trimmed) ? canonicalAmount(trimmed) : ''
-    if (!isWireDecimal(canonical)) {
+    // isEntry is the TOLERANT grammar ("$1,600", "97.53%") plus the count's whole-number rule;
+    // toWire strips the dressing (and shifts a percent to its fraction) but passes ".5", "+5"
+    // and "5." through unchanged — and formatOverride would then write an entry parseOverride
+    // refuses. Gate on the codec's own accept, like the leg boxes above.
+    const wire = isEntry(unit, trimmed) ? toWire(unit, trimmed) : ''
+    if (!isWireDecimal(wire)) {
       onInvalid()
       return
     }
-    onCommit(canonical, true)
+    onCommit(wire, true)
   }
   return (
     <span
@@ -1176,7 +1197,8 @@ function DraftAmount({
     >
       <AmountInput
         aria-label={ariaLabel}
-        value={draft ?? value}
+        kind={UNIT_KINDS[unit]}
+        value={draft ?? toBox(unit, value)}
         disabled={disabled}
         placeholder={placeholder}
         onValueChange={(next) => {

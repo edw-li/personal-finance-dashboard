@@ -737,6 +737,52 @@ describe('WhatIfPanel', () => {
     expect(field('Override 1 value').value).toBe('$212,930.00')
   })
 
+  // House rule — percents are percents: a percent input showed its stored fraction as "$0.98"
+  // and a count of pay periods as "$26.00".
+  it('reads and writes each input in its own unit: a percent as a percent, a count as a whole number', async () => {
+    const unitDefs = [
+      { key: 'pay_periods', label: 'Pay Periods' },
+      { key: 'unq_div_state_exempt_pct', label: 'State-exempt Dividend Share' },
+    ]
+    const item = (key: string, unit: 'count' | 'percent', personId: number | null, value: string) => ({
+      key, label: key, sort_order: 1, is_derived: false, unit, suggestion_source: null, formula: null,
+      is_per_person: personId !== null, person_id: personId, value, suggested: null,
+    })
+    const unitInputs: TaxInputsOut = {
+      ...INPUTS,
+      sections: [
+        {
+          section: 'income',
+          items: [
+            item('pay_periods', 'count', 1, '26.0000'),
+            item('pay_periods', 'count', 2, '26.0000'),
+            item('unq_div_state_exempt_pct', 'percent', null, '0.9753'),
+          ],
+        },
+      ],
+    }
+    mount('/taxes', { definitions: unitDefs, inputs: unitInputs })
+    await openPanel()
+    fireEvent.click(addOverride())
+    fireEvent.change(keyPicker(), { target: { value: 'unq_div_state_exempt_pct' } })
+    expect(field('Override 1 value').value).toBe('97.53%')
+    expect(screen.getByText(/change it from the stored 97\.53% or tick/)).toBeTruthy()
+    // Typed as a percent, sent as the fraction the engine multiplies by.
+    typeOverride('Override 1 value', '95')
+    expect(url()).toBe('/taxes?whatif=unq_div_state_exempt_pct%3A0.95')
+
+    fireEvent.click(addOverride())
+    fireEvent.change(keyPicker(1), { target: { value: 'pay_periods' } })
+    expect(field('Override 2 value').value).toBe('52') // both people's 26, the engine's own sum
+    expect(screen.getByText(/change it from the stored 52 or tick/)).toBeTruthy()
+    typeOverride('Override 2 value', '24.5')
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Pay Periods: enter a whole number like 26 — or tick “Clear this input”',
+    )
+    typeOverride('Override 2 value', '48')
+    expect(url()).toBe('/taxes?whatif=pay_periods%3A48&whatif=unq_div_state_exempt_pct%3A0.95')
+  })
+
   it('a row follows the URL when a link changes its value — to a clear, and back to a figure', async () => {
     render(
       <MemoryRouter initialEntries={['/taxes?whatif=annual_salary%3A250000']}>
