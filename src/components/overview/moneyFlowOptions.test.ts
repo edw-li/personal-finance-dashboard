@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { CATEGORY_HUES, ENTITY, SALARY_TINTS } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
+import { DEFICIT_DECAL } from '../../charts/grammar'
+import { NORMAL_VISION_FLOOR, deltaEBothThemes, distinguishable } from '../../testing/perceptual'
 import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE, SEQUENTIAL_BLUE } from '../../charts/theme'
 import type { MoneyFlowCategoryTotal, MoneyFlowOut } from '../../types/api'
 import {
@@ -112,6 +114,8 @@ function tooltipOf(option: EChartsOption): (params: unknown) => string {
 }
 const draw = (flow: MoneyFlowOut, fold: CategoryFold | null = FOLD, todayIso = '2026-09-23') =>
   sankeyOf(moneyFlowOption(flow, { fold, todayIso })!)
+/** A node as a reader sees it (testing/perceptual): its colour and any texture. */
+const markOf = (node: NodeLike) => ({ color: node.itemStyle?.color ?? '', decal: (node.itemStyle as { decal?: unknown } | undefined)?.decal })
 const colorOf = (series: SankeyLike, name: string) =>
   series.data?.find((n) => n.name === name)?.itemStyle?.color
 const sumLinks = (series: SankeyLike, pick: (link: LinkLike) => boolean) =>
@@ -210,6 +214,44 @@ describe('moneyFlowOption — the four pinned columns', () => {
     // The documented exemption (charts/entities.ts): the income column and the fan are never
     // adjacent and never linked, and eleven identities do not fit eight validated hues.
     expect(column(0)).toContain(CATEGORY_HUES[0])
+    // Perceptually (2026-09-23 review): hex identity passes two different hexes that read as
+    // one. Neighbours in a column clear the normal-vision floor in BOTH themes; the sanctioned
+    // repeats stay exempt (the greys, the per-earner salary tints).
+    const greys = new Set([MUTED, OTHER_SERIES_COLOR])
+    const tints = SALARY_TINTS as readonly string[]
+    for (const depth of [0, 1, 2, 3]) {
+      const nodes = (series.data ?? []).filter((n) => n.depth === depth)
+      for (let i = 0; i + 1 < nodes.length; i += 1) {
+        const [a, b] = [nodes[i], nodes[i + 1]]
+        const [ca, cb] = [a.itemStyle?.color ?? '', b.itemStyle?.color ?? '']
+        if ((greys.has(ca) && greys.has(cb)) || (tints.includes(ca) && tints.includes(cb))) continue
+        expect(distinguishable(markOf(a), markOf(b)), `${a.name} / ${b.name}`).toBe(true)
+      }
+    }
+  })
+
+  // 2026-09-23 review: the deficit red is 2.5 (light) / 4.4 (dark) from the tax hue and under
+  // the floor from PALETTE[1] and [4] too, and a deficit year draws them all at once. The
+  // texture is what keeps Drawdown from reading as Taxes.
+  it('keeps Drawdown apart from every other node: textured where its colour alone is under the floor', () => {
+    const series = draw(
+      flowOut({
+        take_home_cash: '22000.00',
+        take_home_matched: '22000.00',
+        retained_equity: '191183.95',
+        category_totals: [...TOTALS, { category_id: 10, name: 'Taxes', kind: 'tax', amount: '500.00' }],
+        total_spend: '44500.00',
+        saved: '-22500.00',
+      }),
+      { ids: [10, 1, 2, 3, 4, 5], colors: new Map([[10, ENTITY.tax], ...[1, 2, 3, 4, 5].map((id, i) => [id, CATEGORY_HUES[i]] as [number, string])]) },
+    )
+    const tax = deltaEBothThemes(ENTITY.tax, ENTITY.deficit)
+    expect(Math.min(tax.dark, tax.light)).toBeLessThan(NORMAL_VISION_FLOOR) // colour alone fails
+    const drawdown = series.data!.find((n) => n.name === 'Drawdown')!
+    for (const node of series.data ?? []) {
+      if (node === drawdown) continue
+      expect(distinguishable(markOf(drawdown), markOf(node)), node.name).toBe(true)
+    }
   })
 
   it('keeps each category on its fold colour whatever this year ranks it (stability)', () => {
@@ -273,7 +315,7 @@ describe('moneyFlowOption — the four pinned columns', () => {
       flowOut({ take_home_cash: '22000.00', take_home_matched: '22000.00', retained_equity: '191183.95', saved: '-22000.00' }),
     )
     const drawdown = series.data?.find((n) => n.name === 'Drawdown')
-    expect(drawdown).toEqual({ name: 'Drawdown', value: 22000, depth: 2, itemStyle: { color: NEGATIVE } })
+    expect(drawdown).toEqual({ name: 'Drawdown', value: 22000, depth: 2, itemStyle: { color: NEGATIVE, decal: DEFICIT_DECAL } })
     expect(series.data?.map((n) => n.name)).not.toContain('Saved')
     // 22000 take-home over 44000 spend: exactly half of every category from each source.
     expect(series.links).toContainEqual({ source: 'Take-home cash', target: 'Rent', value: 12000 })

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { CATEGORY_HUES } from '../../charts/entities'
+import { CATEGORY_HUES, ENTITY } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
+import { DEFICIT_DECAL } from '../../charts/grammar'
+import { distinguishable } from '../../testing/perceptual'
 import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, POSITIVE } from '../../charts/theme'
 import type { SpendingMatrix, SpendingYearly } from '../../types/api'
 import {
@@ -219,7 +221,7 @@ describe('spendingSankeyOption — deficit and degenerate periods', () => {
       'Rent',
       'Groceries <b>& more</b>',
     ])
-    expect(series.data?.[1]?.itemStyle?.color).toBe(NEGATIVE)
+    expect(series.data?.[1]?.itemStyle).toEqual({ color: NEGATIVE, decal: DEFICIT_DECAL })
     expect(series.data?.[1]?.value).toBe(1580)
     // Pro-rata: net pay funds 1000/2580 of each category, the drawdown the rest — money
     // is fungible, so no category is singled out as "the drawdown one". Inflows equal
@@ -230,6 +232,31 @@ describe('spendingSankeyOption — deficit and degenerate periods', () => {
       { source: 'Net pay', target: 'Groceries <b>& more</b>', value: 224.81 },
       { source: 'Drawdown', target: 'Groceries <b>& more</b>', value: 355.19 },
     ])
+  })
+
+  // 2026-09-23 review, "Where Apr 2026 went" on prod: Drawdown −$3,193.55 linked into Taxes
+  // $5,044 on the tax hue, which the deficit red is 2.5 / 4.4 away from. The texture is what
+  // keeps them apart, and from the warm category hues too.
+  it('keeps Drawdown apart from every other node: textured where its colour alone is under the floor', () => {
+    const withTax = matrix({
+      categories: [
+        ...matrix().categories,
+        { id: 4, name: 'Taxes', slug: 'taxes', sort_order: 3, is_active: true, kind: 'tax' },
+      ],
+      series: [...matrix().series, { category_id: 4, values: ['0.00', '5044.00'], budgets: [null, null] }],
+    })
+    const fold: CategoryFold = { ids: [4, 1, 2], colors: new Map([[4, ENTITY.tax], [1, CATEGORY_HUES[0]], [2, CATEGORY_HUES[1]]]) }
+    const series = sankeyOf(spendingSankeyOption(spendingFlowPeriod(withTax, YEARLY, fold, 1, 'month')!)!)
+    const markOf = (node: { itemStyle?: { color?: string } }) => ({
+      color: node.itemStyle?.color ?? '',
+      decal: (node.itemStyle as { decal?: unknown } | undefined)?.decal,
+    })
+    const drawdown = series.data!.find((n) => n.name === 'Drawdown')!
+    expect(series.data!.some((n) => n.itemStyle?.color === ENTITY.tax)).toBe(true)
+    for (const node of series.data ?? []) {
+      if (node === drawdown) continue
+      expect(distinguishable(markOf(drawdown), markOf(node)), node.name).toBe(true)
+    }
   })
 
   it('funds a zero-net-pay deficit period entirely from Drawdown', () => {

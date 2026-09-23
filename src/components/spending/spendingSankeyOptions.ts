@@ -9,6 +9,7 @@
 import type { EChartsOption } from '../../charts/echarts'
 import { ENTITY, foldColor } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
+import { DEFICIT_DECAL } from '../../charts/grammar'
 import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter, sankeyCsv } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
 import type { CategoryOut, SpendingMatrix, SpendingYearly, YearRollup } from '../../types/api'
@@ -102,7 +103,7 @@ const cents = (value: number) => Math.round(value * 100) / 100
 
 /**
  * "Where {period} went": Net pay fans out into the period's categories, and what is left
- * lands on a green Saved node. A deficit period adds a red Drawdown source instead —
+ * lands on a green Saved node. A deficit period adds a hatched red Drawdown source instead —
  * links cannot be negative — with every category link split pro-rata between the two
  * sources: money is fungible, and a greedy fill that named WHICH categories the drawdown
  * funded would fabricate causality. Null = nothing drawable; the page picks the
@@ -140,7 +141,9 @@ export function spendingSankeyOption(period: SpendingFlowPeriod): EChartsOption 
     nodes.push({ name: NET_PAY, value: netPay, itemStyle: { color: ENTITY.structural } })
   }
   if (deficit) {
-    nodes.push({ name: DRAWDOWN, value: shortfall, itemStyle: { color: ENTITY.deficit } })
+    // Hatched as well as red: the deficit red reads as the tax hue a category may wear
+    // (grammar DEFICIT_DECAL, 2026-09-23 review).
+    nodes.push({ name: DRAWDOWN, value: shortfall, itemStyle: { color: ENTITY.deficit, decal: DEFICIT_DECAL } })
   }
   for (const slice of slices) {
     nodes.push({

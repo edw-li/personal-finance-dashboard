@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { INK, MUTED, SURFACE } from './theme'
 import {
   BAR_MARKS, GRID_VARIANTS, LINE, MONEY_GRID, STACK_WASH, WASH, capLabel, cents, compactMoney,
-  ESTIMATE_DECAL, apportionCents, dateAxis, fanCents, fitMonthAxes, grid, isGridVariant, isPartialMonth, moneyAxis, monthAxis,
+  DEFICIT_DECAL, ESTIMATE_DECAL, apportionCents, dateAxis, fanCents, fitMonthAxes, grid, isGridVariant, isPartialMonth, moneyAxis, monthAxis,
   monthLabelMode, monthTick, niceStep, offScaleMarkPoint, offScaleMarks, partialItemStyle, partialNote, pctAxis,
   percentLabel, robustMax, roundTo, stagger,
 } from './grammar'
@@ -414,5 +414,15 @@ describe('cent-exact splits', () => {
     // One source takes everything; no sources, nothing.
     expect(fanCents([300], [100, 200])).toEqual([[100, 200]])
     expect(fanCents([], [100])).toEqual([])
+  })
+})
+
+// 2026-09-23 review: the deficit red reads as the tax hue (ΔE 2.5 light / 4.4 dark), so a flow
+// chart that draws both textures the deficit instead of trusting colour.
+describe('the deficit texture', () => {
+  it('is the other diagonal from the estimate hatch, in the surface colour', () => {
+    expect(DEFICIT_DECAL).toMatchObject({ dashArrayX: [1, 0], dashArrayY: [2, 4], color: SURFACE })
+    expect(DEFICIT_DECAL.rotation).toBeCloseTo(Math.PI / 4)
+    expect(DEFICIT_DECAL.rotation).not.toBe(ESTIMATE_DECAL.rotation)
   })
 })

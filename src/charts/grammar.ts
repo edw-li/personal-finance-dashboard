@@ -454,6 +454,13 @@ export const ESTIMATE_DECAL = {
   color: SURFACE,
 }
 
+/** The deficit's texture (2026-09-23 review): a flow chart's Drawdown is money drawn from savings,
+ *  and its red sits under the normal-vision floor from the tax hue (OKLab ΔE 2.5 light / 4.4
+ *  dark) and from PALETTE[1] and [4]. Colour alone cannot keep it apart from the Taxes node it
+ *  often funds, so it is hatched: the estimate hatch's other diagonal, so the two textures never
+ *  read as one. */
+export const DEFICIT_DECAL = { ...ESTIMATE_DECAL, rotation: Math.PI / 4 }
+
 /** The partial look on one bar, cell or point in `color` (its outline's). */
 export function partialItemStyle(color: string, patterns: boolean) {
   const outline = { borderColor: color, borderWidth: 1, borderType: 'dashed' as const }

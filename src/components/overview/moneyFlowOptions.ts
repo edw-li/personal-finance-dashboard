@@ -16,7 +16,7 @@
 import type { EChartsOption } from '../../charts/echarts'
 import { ENTITY, SALARY_TINTS, foldCategories, foldColor } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
-import { fanCents } from '../../charts/grammar'
+import { DEFICIT_DECAL, fanCents } from '../../charts/grammar'
 import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter, sankeyCsv } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
 import { brandTooltip } from '../../charts/tooltip'
@@ -387,7 +387,8 @@ export function moneyFlowOption(
   const deficit = saved <= -A_CENT
   const drawsRefunds = refunds >= A_CENT
   if (drawsRefunds) nodes.push({ name: REFUNDS, value: cents(refunds), depth: 2, itemStyle: { color: ENTITY.structural } })
-  if (deficit) nodes.push({ name: DRAWDOWN, value: cents(-saved), depth: 2, itemStyle: { color: ENTITY.deficit } })
+  // Hatched as well as red: the deficit red reads as the tax hue beside it (grammar DEFICIT_DECAL).
+  if (deficit) nodes.push({ name: DRAWDOWN, value: cents(-saved), depth: 2, itemStyle: { color: ENTITY.deficit, decal: DEFICIT_DECAL } })
 
   const slices = fanSlices(flow, fold, taken)
   // In whole cents and exact on both sides (grammar fanCents): every source's links sum to its

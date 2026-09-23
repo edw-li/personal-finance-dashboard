@@ -644,7 +644,7 @@ export default function SpendingPage() {
           {flowPeriod && (
             <ChartCard
               title={`Where ${flowPeriod.label} went`}
-              hint="Net pay fanned out across the period's categories, wearing the stacked chart's colors; green Saved is what was left. A deficit period adds a red Drawdown source covering the overspend."
+              hint="Net pay fanned out across the period's categories, wearing the stacked chart's colors; green Saved is what was left. A deficit period adds a hatched red Drawdown source covering the overspend."
               ariaLabel={`Sankey flow of where ${flowPeriod.label} went, from net pay into categories and savings`}
               option={flowOption}
               empty={
