@@ -424,7 +424,10 @@ describe('useReorder — pointer', () => {
     expect(live()).toBe('Alpha, position 3 of 4.')
 
     fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    // A browser releases the capture right after every up: the settling drop must ride it out.
+    fireEvent.lostPointerCapture(grip('Alpha'), { pointerId: 1 })
     expect(row('A').style.transform).toBe('translateY(80px)') // easing into its gap
+    expect(live()).toBe('Alpha, position 3 of 4.')
     expect(onCommit).not.toHaveBeenCalled()
     act(() => {
       vi.advanceTimersByTime(MOTION_MS.fast)
@@ -458,6 +461,35 @@ describe('useReorder — pointer', () => {
     expect(order()).toEqual(['A', 'B', 'C', 'D', 'E'])
   })
 
+  it('auto-scrolls near the window edge, and the lifted unit rides the scroll under the pointer', () => {
+    render(<Stateful initial={flat('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J')} />)
+    layoutRows(40, 500) // ten rows, 500..900: the list runs past jsdom's 768px window
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 520 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 750 }) // inside the bottom 40px
+    expect(row('A').style.transform).toBe('translateY(230px)')
+    act(() => {
+      vi.advanceTimersByTime(32) // fake rAF: two frames
+    })
+    const scrolls = vi.mocked(window.scrollBy).mock.calls
+    expect(scrolls.length).toBeGreaterThan(0)
+    for (const [x, y] of scrolls) {
+      expect(x).toBe(0)
+      expect(y).toBeGreaterThan(0)
+    }
+    // The stubbed scrollBy moves nothing, so the test scrolls the page itself: the pointer now sits
+    // 100px further down the list and the unit follows it — clamped at the list's end.
+    const scrollY = vi.spyOn(window, 'scrollY', 'get').mockReturnValue(100)
+    act(() => {
+      window.dispatchEvent(new Event('scroll'))
+    })
+    expect(row('A').style.transform).toBe('translateY(330px)')
+    scrollY.mockReturnValue(400)
+    act(() => {
+      window.dispatchEvent(new Event('scroll'))
+    })
+    expect(row('A').style.transform).toBe('translateY(360px)') // J's bottom, 900, less A's, 540
+  })
+
   it('clamps the unit to the list', () => {
     render(<Stateful initial={flat('A', 'B', 'C', 'D')} />)
     layoutRows()
@@ -478,7 +510,8 @@ describe('useReorder — pointer', () => {
     fireEvent.pointerMove(grip('Bravo'), { pointerId: 1, clientY: 270 })
     fireEvent.pointerMove(grip('Bravo'), { pointerId: 1, clientY: 262 })
     fireEvent.pointerUp(grip('Bravo'), { pointerId: 1, clientY: 262 })
-    expect(live()).toBe('Dropped Bravo where it was.')
+    fireEvent.lostPointerCapture(grip('Bravo'), { pointerId: 1 }) // the browser's implicit release
+    expect(live()).toBe('Dropped Bravo where it was.') // not a cancel
     expectEasedHome(['B'])
     expect(onCommit).not.toHaveBeenCalled()
   })
@@ -618,6 +651,9 @@ describe('useReorder — reduced motion (spec §2.5)', () => {
     expect(row('B').style.transform).toBe('')
     expect(row('B').getAttribute('data-reorder-drop')).toBe('before')
     fireEvent.pointerUp(grip('Delta'), { pointerId: 1, clientY: 255 })
+    fireEvent.lostPointerCapture(grip('Delta'), { pointerId: 1 }) // the browser's implicit release
+    expect(onCommit).toHaveBeenCalledTimes(1)
     expect(onCommit).toHaveBeenCalledWith(['A', 'D', 'B', 'C'], 'D')
+    expect(live()).toBe('Dropped Delta at position 2 of 4.')
   })
 })
