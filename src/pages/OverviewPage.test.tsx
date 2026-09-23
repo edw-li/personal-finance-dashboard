@@ -2057,6 +2057,10 @@ describe('OverviewPage chart cards (charts C2)', () => {
     renderPage()
     const card = (await screen.findByRole('heading', { name: /Recent spending/ })).closest('.card') as HTMLElement
     await waitFor(() => expect(within(card).getByText('* Month in progress')).toBeTruthy())
+    // One caption line: the footnote runs inline before the drill link (the row reserves one).
+    const line = within(card).getByText('* Month in progress').closest('p')
+    expect(line).not.toBeNull()
+    expect(within(line as HTMLElement).getByRole('link', { name: 'Open spending →' })).toBeTruthy()
     fireEvent.click(within(card).getByRole('button', { name: 'Table' }))
     const table = within(card).getByRole('table')
     expect(within(table).getByRole('columnheader', { name: 'Period' })).toBeTruthy()

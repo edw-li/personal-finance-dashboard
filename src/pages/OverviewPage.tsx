@@ -631,18 +631,20 @@ export default function OverviewPage() {
                   return month ? { kind: 'period', id: `living:${month}`, period: month, label: formatMonth(month), scope: 'Household', values: [{ label: 'Living spending', value: data.matrix.living_total?.[index] ?? null, unit: 'USD' }], source: { href: `/spending?month=${month}`, label: 'Open spending' } } : null
                 }}
                 footer={
-                  <>
-                    {/* The '*' in words (code review 13, spec §C5) — inline before the link, so
-                        the caption row keeps the one line it reserves in every state. */}
-                    {spendPartial && (
-                      <span className="drill-hint">
-                        <span>{PARTIAL_FOOTNOTE}</span> ·{' '}
-                      </span>
-                    )}
+                  spendPartial ? (
+                    // The '*' in words (code review 13, spec §C5): one line with the drill link,
+                    // so the caption row keeps the one line it reserves in every state.
+                    <p className="drill-hint chart-footnote-line">
+                      <span>{PARTIAL_FOOTNOTE}</span> ·{' '}
+                      <NavLink className="drill-hint" to="/spending">
+                        Open spending →
+                      </NavLink>
+                    </p>
+                  ) : (
                     <NavLink className="drill-hint" to="/spending">
                       Open spending →
                     </NavLink>
-                  </>
+                  )
                 }
               />
     ),
