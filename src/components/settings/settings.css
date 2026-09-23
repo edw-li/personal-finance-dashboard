@@ -586,3 +586,35 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* --- drag to reorder: the Accounts and Spending categories tables (2026-09-23 reorder spec §4) --- */
+
+/* reorder.css owns what every reorderable table shares — the separate border model
+   (table.reorder-table) and the lifted / drop-line states of the sticky Actions cell. Only what is
+   particular to these two Settings tables lives here. */
+
+/* The Accounts table is grouped (spec §4.2): one <tbody> per non-empty group, headed by a row that
+   carries what the Group column used to say, in the Monthly update's register (.entry-group-row:
+   the column headers' type with a 0.9rem lead-in). panels.css pins a row-actions table's
+   `th:last-child` sticky with a hairline (0,3,2) — and this full-width heading is its row's last
+   child — so the row's class plus `tbody >` (0,3,3) put it back in the flow without leaning on
+   sheet order. */
+.data-table.accounts-table tbody > tr.accounts-group-row > th {
+  position: static;
+  box-shadow: none;
+  padding-top: 0.9rem;
+}
+
+/* The grip column comes first now, so panels.css's component indent (`tr.component-row
+   td:first-child`, 0,3,2) would land on the grip. The grip cell gets the plain cell padding back —
+   with reorder.css's narrow right edge, like every other grip — and the indent, with its muted
+   name, moves to the Account cell (spec §4.2). */
+.data-table.accounts-table tr.component-row > td.reorder-grip-cell {
+  padding: var(--density-cell-pad);
+  padding-right: 0;
+}
+
+.data-table.accounts-table tr.component-row > td.accounts-name-cell {
+  padding-left: 1.6rem;
+  color: var(--muted);
+}

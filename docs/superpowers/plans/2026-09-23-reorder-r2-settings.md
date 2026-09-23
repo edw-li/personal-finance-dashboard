@@ -261,17 +261,28 @@ export async function reorderCategories(ids: number[]): Promise<{ data: Category
    - A stored `sort_order` sent back could undo a drag made since the form was filled.
    - Leaving it out is what lets a group change append server-side (spec §3.3, R1's append table).
 2. **The optimistic order is a rows array.** `pendingOrder` is retired by the adjust-during-render
-   idiom whenever the server list's identity changes. A failure clears it; a 409 clears it and
-   reloads.
-3. **A save bumps the card's load sequence.** A reload already on the wire cannot then land over
-   the saved order.
-   - Several paths clear `busy` before the reload they start has answered:
-     - both cards' `submit` and `remove`;
-     - the categories card's Retire and kind paths, because its `load` returns nothing to wait on.
-   - So a drop can follow a Save or a Retire within that window.
-   - Found while planning; pinned by one test per card.
-4. **Undo parks the grips** (`busy`) for its own request. "Order restored" is said as soon as the
-   undo succeeds; the reload runs alongside it.
+   idiom whenever the server list's identity changes. ANY failure clears it and reloads: a 409
+   because the list changed elsewhere, a 5xx because it may have arrived after the write
+   committed. (Amended at the code-quality review, I1: "a failure clears it; a 409 clears it and
+   reloads" left the table on a guess after a 5xx.)
+3. **A write holds the grips until its reload lands.** (Rewritten at the code-quality review, I1.)
+   - `load` returns its promise, and every write returns the reload it starts: submit, Retire /
+     Restore, the kind picker, Delete, Undo, and a failed save. So `busy` covers the reload too,
+     and no drop can diff against rows a write has already moved past.
+   - The planned version bumped the load sequence at each save so that a reload still on the wire
+     was dropped. That bump did discard the reload, but it could not stop the drop that follows.
+     After an Undo, a quick drop PUT the pre-Undo order and silently re-applied the undone move.
+   - A list that failed to reload also parks the grips (`disabled: busy || loadError !== null`).
+   - `busy` is a request COUNT (review I2): `track()` wraps every write, the toast's Undo
+     included. An Undo from an older toast can overlap a save, and a flag handed the grips back
+     when the first of the two settled.
+   - The save takes a turn in load's sequence, so an older answer never lands last: the save's
+     rows are drawn only if nothing was asked for after it. An overtaken save reads the list once
+     more instead, because the later reload may have read before this save committed.
+   - Pinned per card: the grips stay parked until a write's reload lands; an Undo window test; a
+     failed-reload test; an older toast's Undo overlapping a later save.
+4. **Undo parks the grips until its reload lands.** "Order restored" is said as soon as the undo
+   succeeds; the reload follows, and the grips come back once it has landed.
 5. **A save that logged nothing** (`batchId === null`) toasts "Moved {name}" with no Undo — the
    house contract (BudgetPanel's seed).
 6. **An Undo that got no answer** (network, 5xx) says `Couldn't undo the move — {reason}.`
@@ -297,10 +308,15 @@ export async function reorderCategories(ids: number[]): Promise<{ data: Category
     - Without this they would vanish from the one place their link can be fixed, and every PUT
       would 409 for want of their ids.
     - The real book has none: all 5 components' parents are top-level.
-11. **The group heading is `<th scope="colgroup" colSpan={6}>`** (§4.2 verbatim).
+11. **The group heading is `<th scope="rowgroup" colSpan={6}>`, the first row of its group's own
+    `<tbody>`.** (Amended at the code-quality review, M1.)
+    - §4.2's `scope="colgroup"` without a `<colgroup>` is invalid HTML, and screen readers expose
+      it as a column header over every column. The coordinator corrects the spec on base.
+    - The hook moves rows only within a group, so a drag never crosses a `<tbody>`.
     - It is drawn in the Monthly update's `.entry-group-row` register.
-    - It is taken out of panels.css's sticky `th:last-child` rule, which a row-actions table
-      applies to every last header cell of every row.
+    - It is taken out of panels.css's sticky `th:last-child` rule (0,3,2), which a row-actions
+      table applies to every last header cell of every row. The override is keyed on the row's
+      class, `tbody > tr.accounts-group-row > th` (0,3,3), not on the scope attribute.
 12. **The instructions and the live region** render once per card, right after the table's
     scroller, and only when the table renders.
 13. **The order note sits directly under the table.** For categories it is above the kind
@@ -322,6 +338,10 @@ export async function reorderCategories(ids: number[]): Promise<{ data: Category
 18. **`rangeLabelOf` answers `undefined` for an `unplaced:` range**, so the announcement has no
     range clause. It answers the group label for a group and `{parent}'s components` for a
     `parent:` range (§8.2).
+19. **The roster derivation is pure and lives beside `nestComponents`.** (Code-quality review M3,
+    an approved fence extension.) `rosterGroups(accounts)` and `rosterItems(groups)` are in
+    `src/utils/accounts.ts`, unit-tested in `accounts.test.ts`, including against R0's
+    `contractProblems`. The card calls both on the rows it draws, every render.
 
 ---
 
@@ -4454,21 +4474,194 @@ git commit -m "docs(plan): lane R2 — results, gates and the browser check"
 ## Results (filled in by the implementer)
 
 - Task 0 preflight:
-  - R1/R0 merges on the base …; `reorderAccounts`/`reorderCategories` signatures …;
-  - baseline CategoriesCard 13 / AccountsCard 22 / settingsCss 2 …
-- Lane tests (Task 8 Step 1): CategoriesCard … / 27, AccountsCard … / 42, settingsCss … / 6;
-  SettingsPage …; guide …
-- Full vitest: … files / … tests (exit …); pre-existing failures, if any: …
-- tsc -b / eslint . / npm run build: …
-- Scope check: …
-- Browser check (`scratchpad/reorder-r2/report.json`):
-  - `checks: … ok, … failed`; problems …;
-  - per pass (dark/light × 1280/1600): …;
-  - auto-scroll distance: …;
-  - screenshot notes: …
-- Heights (Task 10): dark-1440 categories … (ghost 900), accounts … (ghost 1045); constants changed:
-  yes/no → …
-- For the controller / R0 / V: …
+  - The branch was cut at `da1a3e44` on `feat/reorder-base`: R1 merged (`dd62aa6c`), R0 merged
+    (`0d805010`) with its unmount follow-up (`11a4cda0`), R4 (`cca4d9cf`), and main through lane B2
+    (`d7a16e6a`). All seven R0 modules and their tests are present. Each `grep` printed one line,
+    and both signatures are exactly `Promise<{ data: …[]; batchId: string | null }>`.
+  - `finance_reorder_r2` read `29|19|f12026092301`: already at R1's head, so the controller's
+    migration step was skipped.
+  - Baseline (settings + SettingsPage + guide + reorder): 31 files / 335 tests pass —
+    CategoriesCard 13, AccountsCard 22, settingsCss 2.
+- R0's final API matched this plan's code verbatim (`useReorder`, `UseReorder`, `handleProps`,
+  `itemProps`, `markSaved`, the two helpers). No code deviated from it.
+  - `items` (and so every `carries`) is re-derived from the rows being rendered on every render.
+  - R0's dev-only contract check printed nothing in any test run or in the real browser.
+- Red before green, every task, with exactly the failures the plan predicts:
+  - T1: 3 failed / 11 passed;
+  - T2: 4 / 20, then the Guide fence `['accounts-add: Sort order', 'categories-add: Sort order']`;
+  - T3: 11 / 14;
+  - T4: 2 / 25;
+  - T5: 18 / 22;
+  - T6: 2 / 40;
+  - T7 (per A1): 2 / 4 — the group heading and the component indent. The two reorder.css pins passed
+    at once, as the dependency guard;
+  - T10: 2 / 68 on the two ghost pins.
+  - (T3's and T5's last test failed "no table" only as a cascade: the failing reload test leaves its
+    `mockReturnValueOnce` queued, and `vi.clearAllMocks` does not drain it.)
+- Lane tests (Task 8 Step 1): 31 files / 373 tests pass — CategoriesCard 27/27, AccountsCard
+  42/42, settingsCss 6/6, SettingsPage 47/47, guide 6 files / 37. After Task 10, CategoriesCard is
+  28 (the ghost pin).
+  - Task 2's set (`src/guide` + GuidePage + paletteRegistry.guide + both cards): 10 files / 93.
+  - The Guide's two new steps are 106 and 114 characters.
+- Full vitest: ONE run at the end, on the final code (`--maxWorkers=2`, the controller's memory
+  rule). 246 files / 3431 tests: 245 files, 3430 tests pass.
+  - The one failure is the known load flake `PaycheckPage … names the employer match under the
+    waterfall` (`expected <p class="drill-hint"></p> to be null`).
+  - `PaycheckPage.test.tsx` re-run alone: 84/84, exit 0. This lane never touches it.
+- tsc / eslint / build, on the final HEAD:
+  - `tsc -b` exit 0. Its buildinfo lives in the shared `node_modules` junction, so both projects
+    were also checked with no cache (`tsc -p tsconfig.app.json --noEmit --incremental false`, and
+    the same for `tsconfig.node.json`): both exit 0.
+  - `eslint .` exit 0: 0 errors, the 26 pre-existing warnings, none in a file this lane touched.
+  - `npm run build` exit 0, with no chunk warning.
+- Scope check: the seven fenced files, plus `src/pages/SettingsPage.tsx` (the two skeleton
+  numbers, 842 → 637 and 987 → 1056, under the controller-approved Task 10 extension). Nothing under
+  `src/api`, `src/types` or `src/components/reorder` changed.
+- Browser check (`scratchpad/reorder-r2/report.json`; real headless Edge, vite 5192 → uvicorn 8092
+  → `finance_reorder_r2`):
+  - Result: `checks: 101 ok, 0 failed`, plus 4 problems. All four are the same one:
+    `accounts-carry: locator.waitFor: Timeout 10000ms exceeded`, once per pass.
+    - The plan's downward carry drag (Fidelity Traditional 401(k) below Fidelity Traditional IRA)
+      never moves. The drop is "where it was", so no toast arrives.
+    - Cause: R0's slot math, not this lane — see "For the controller / R0 / V" item 1.
+  - 0 blocked writes; 44 allowed writes (12 category PUTs, 12 account PUTs, 20 undos).
+  - The final PUTs put both orders back exactly (the cleanup check passed, and psql reads the
+    census order).
+  - Per pass (dark/light × 1280/1600), all green:
+    - open: theme painted; both tables `border-collapse: separate`;
+    - categories-drag: 5/5 — follows, 3 peers shift, lands, Undo, survives a reload;
+    - categories-keyboard: 4/4 — lifted in keyboard mode, 2 places down, focus kept, Undo;
+    - accounts-autoscroll: 3/3;
+    - console: clean in every pass.
+  - Lane additions (the smoke is gitignored, so they are recorded here), all green in every pass:
+    - 5b carry-up, 4/4: Fidelity Traditional IRA dragged above the 401(k). The 4-row unit is
+      displaced as one block (one transform), its components stay nested, and Undo restores.
+    - 5c carry-keyboard, 5/5: the 401(k) moved down one place by keyboard. The 4 rows lift and move
+      together, land below the IRA still nested, focus stays on its grip, and Undo restores.
+  - Also changed in the smoke: every step has its own try/catch, and each pass has a console check.
+  - Auto-scroll (Costco CC, the last of Liabilities, 7 units): scrollTop 1120 → 454 / 454 / 463 / 382,
+    i.e. 666 / 666 / 657 / 738 px while held. Costco CC then lands first in Liabilities, and Undo
+    restores.
+  - Screenshot notes (both themes, 1280 and 1600):
+    - Resting tables: the grip column is narrow and muted, and the Sort and Group columns are gone.
+      The Accounts headings (CASH, PRE-TAX…) are uppercase, muted, with the 0.9rem lead-in.
+      Component names are indented and muted in the Account cell, not the grip cell. The sticky
+      Actions column keeps its hairline. Each order note sits right under its table.
+    - Categories mid-drag: the lifted row is on `--surface-2` across every cell, Actions included,
+      with an accent grip, and its peers are moved up. One peer is caught mid-transition.
+    - Dropped frames: the saved flash covers the whole unit, Actions cells included. The toasts
+      read "Moved {name} · Undo" and "Order restored".
+    - `07-accounts-carry-mid-drag`: the 4-row unit sits clamped at the bottom of Pre-tax, and the
+      two peers it covers have NOT moved up — the defect below, made visible.
+    - The pale band over two Portfolio rows in the full-card shots is a fixed page overlay, caught
+      while the 1114px element was stitched into the 900px viewport.
+- Heights (Task 10): dark-1440 categories **695** (ghost 900), accounts **1114** (ghost 1045).
+  - Both were off by more than 2 px, so the constants changed: 900 → 695 and 1045 → 1114, the
+    skeleton 842 → 637 and 987 → 1056, and the Accounts pin and a new Categories pin (`4fb1e9ec`).
+  - The ghosts were already stale on the real book before this lane. With the pre-lane layout
+    simulated in the live DOM (the Sort order field put back, the order note removed), the same
+    page measures 723 / 1142 at 1440.
+  - So this lane's own change is −28 px on each card. The rest is data: all three tables fill
+    their 420px scrollers here, and there are 8 portfolio labels.
+  - The other widths: 1280 is 731 / 1132, and 1600 is 677 / 1114.
+- For the controller / R0 / V:
+  1. **R0 defect — a tall unit cannot be dragged down past short peers near the end of its range.**
+     - `clampOffset` stops the unit's bottom at the last peer's bottom, and `slotFor` compares the
+       unit's CENTRE with each peer's original midpoint. A unit of height H therefore passes the
+       next peer below (height h, with R px of peers after it) only if H ≤ 2R + h.
+     - In the real book, the Pre-tax 401(k) (4 rows, 171.9px) has the IRA and the HSA (one row
+       each) below it. Its clamped centre reaches 171.9px; the IRA's midpoint is at 193.4px.
+     - So no pointer drag can move it down at all. The keyboard path works (5c), as does moving the
+       peer up past it (5b).
+     - R0's tests cover only a short unit moving up past a tall one (`slotFor(stacked([120, 40]),
+       1, …)`).
+     - A fix is R0's call. Options: compare the unit's leading edge (its bottom when moving down,
+       its top when moving up) with peer midpoints, or clamp the centre instead of the extent.
+       Pin it with `slotFor` on `stacked([160, 40, 40])` from slot 0.
+     - Not patched here (spec §11; plan Task 9 step 8).
+     - **Resolved** by R0 round 4 (`d5efe2d9`, the leading-edge slot rule), verified in browser
+       round 2 below.
+  2. Auto-scroll does not stop at the unit's range. Holding at the top edge scrolled the 420px
+     roster about 660px, well past Liabilities, so the clamped lifted row left the view. The drop
+     was still right. A minor UX note for R0/V. **Resolved** by R0 round 4 (the range-end stop),
+     verified below.
+  3. In a multi-row lifted unit (a parent with components), each row draws its own inset top and
+     bottom hairline, so the internal separators read doubled (`09-*-keyboard-lifted`). Cosmetic
+     (reorder.css). **Resolved** by R0 round 4 (one hairline inside a lifted unit), verified below.
+  4. `src/pages/SettingsPage.test.tsx:883` still has a comment saying both tables carry a "Sort
+     order" box. It is only a comment, outside the fence, and was left alone.
+  5. The cleanup restored the ORDER exactly. The stored `sort_order` values are now normalized
+     0…n−1, instead of the importer's 3…55 with its two ties, as after any reorder.
+  6. Plan-text deviations:
+     - All vitest runs used `--maxWorkers=2`, and the full run came once, at the end, after Task
+       10, rather than in Task 8.
+     - Task 7 follows A1: the two tests pin reorder.css and the grip override keeps
+       `padding-right: 0`. Its commit message was reworded to say so.
+     - The smoke additions above.
+
+### Code-quality review round (2026-09-23): approved after fixes
+
+- One commit per item, each test-first (the red runs are in brackets):
+  - `81101883` **I1** — a write holds the grips until its reload lands. `load` returns its
+    promise and every write returns it; any failed save reloads, not only a 409; and
+    `disabled: busy || loadError !== null`. The early-release tests are rewritten; there is an
+    Undo-window test and a failed-reload test. [4 failures per card: the reload never called,
+    grips not parked ×2, no reload banner.]
+  - `f8c2e65f` **I2** — `busy` is a request count, with `track()` around every write, the toast's
+    Undo included. The save's answer takes a turn in load's sequence. [1 failure per card: an
+    older toast's Undo overlapping a later save handed the grips back when the Undo settled.]
+  - `d0603579` **M1** — one `<tbody>` per group, headed by `<th scope="rowgroup">`. The CSS
+    override is keyed on the row's class (`tbody > tr.accounts-group-row > th`, 0,3,3).
+    [2 failures: the tbody count, and the CSS block.]
+  - `52dd8a1f` **M3** — `rosterGroups` / `rosterItems` are pure functions in
+    `src/utils/accounts.ts`, with 8 unit tests, including R0's `contractProblems` on the derived
+    items. [8 failures: the missing exports.] The roster table was NOT extracted into its own
+    component (optional, and not quick).
+  - `1dd7deb8` **M4** — `vi.resetAllMocks()` in both card test files, and the `reorder.css` pins
+    match normalized CSS, with a test that runs them against a reformatted copy of the sheet.
+    [1 failure: the reformatted sheet.]
+  - M2 (duplication between the two cards) is deferred to the consolidation step after R3 and R5,
+    as the coordinator decided.
+- One addition beyond the letter of I2: an OVERTAKEN save reads the list again instead of
+  simply dropping its answer. The later request (the reload after an older toast's Undo) may have
+  read the list before this save committed, so dropping alone could strand the table one move
+  behind the server. The overlap test pins it: the save's answer is not drawn, a third GET follows,
+  and the grips wait for it.
+- `e453a8c1` merges `feat/reorder-base` @ `d5efe2d9` (R0 round 4, plus the §4.2 spec correction).
+  The merge was clean: base touched only R0's files and docs, and my reorder.css pins still hold.
+- Tests on the final HEAD:
+  - CategoriesCard 31, AccountsCard 45, settingsCss 7, utils/accounts 11.
+  - The targeted set (settings, SettingsPage, guide, reorder, utils/accounts): 32 files / 400.
+  - No expectation moved with the leading-edge rule. The card tests drive the keyboard; R0's own
+    suite passes at 40 / 26 / 16 / 14.
+  - The ONE full `npx vitest run --maxWorkers=2`: **246 files / 3454 tests, exit 0.** No known
+    flake fired.
+  - `tsc -b` exit 0; eslint on every touched file exit 0.
+- Browser check, round 2 (after the merge; `scratchpad/reorder-r2/report.json`, rounds 1 and 2
+  kept beside it as `report-run1.json` / `report-run2.json`): **149 ok, 0 failed —
+  `R2 SETTINGS SMOKE OK`.** 0 blocked writes, console clean, both orders restored.
+  - The 4 formerly failing drags (Fidelity Traditional 401(k) below the IRA): 16/16. The
+    clamped unit's bottom now reaches 257.8px against the IRA midpoint's 193.4.
+  - The smoke's carry drags now aim by the leading edge (bottom edge 4px past the sibling's
+    midpoint). The plan's `sibling.mid − parent.mid + 4` was the centre rule's travel; under the
+    new rule it also passes the HSA, and the 4-row unit then lands last — correct for that pointer
+    position, but not "below the IRA". The categories three-row drag lands three places down under
+    both rules, so it is unchanged.
+  - Auto-scroll, two cases:
+    - (a) The plan's case, Liabilities, now scrolls 0px. It ends the list, so at full depth its
+      first row already shows 118.7px below the visible top, clear of the zone. The held row stays
+      in view, lands first, and Undo restores it.
+    - (b) Taxable, whose first row can be hidden: the list scrolls 123–127px, stops with that row
+      43.3–47.3px below the visible top, and is still stopped 500ms later. The held row stays in
+      view at its group's top, lands first, and Undo restores it.
+  - The lifted 4-row block draws its top hairline on the first row and its bottom one on the last,
+    with none between (computed shadows, all 4 passes). The screenshot shows a single hairline
+    between its rows.
+  - Heights at 1440 are unchanged by this round: 695 / 1114.
+- For R0 / V: when auto-scroll stops at a group's end, the group's heading row sits mostly under
+  the Settings table's sticky column header (about 38px). The 40px zone is measured from the
+  scroller's top, not from the header's bottom. The held row is fully visible, so this is cosmetic
+  (`06b-accounts-autoscroll-stop-held`).
 
 ---
 
