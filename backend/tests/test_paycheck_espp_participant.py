@@ -2,10 +2,10 @@
 
 The ESPP tables have no owner column (income INC-21), so the stored purchase periods belong
 to the household's ESPP participants: everyone with espp_pct > 0 in a profile effective on
-or before today (never a future one), or the primary when nobody has one. Grace's paycheck used to read "ESPP §423 · $21.7K /
-$21.3K · 102.26 % over" for purchases Edward made; a non-participant now sees an ESPP row
-only when their OWN scenario sets a rate. Both payloads say which case a person is in, so
-the Try-changes presets never re-derive the rule."""
+or before today (never a future one), or the primary when nobody has one. Grace's paycheck
+used to read "ESPP §423 · $21.7K / $21.3K · 102.26 % over" for purchases Edward made; a
+non-participant now sees an ESPP row only when their OWN scenario sets a rate. Both payloads
+say which case a person is in, so the Try-changes presets never re-derive the rule."""
 
 from datetime import date
 from decimal import Decimal
