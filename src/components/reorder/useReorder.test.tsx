@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installPointerEvents } from '../../testing/pointer'
-import { MOTION_MS } from '../../theme/motion'
+import { EASE_OUT, MOTION_MS } from '../../theme/motion'
 import DragHandle from './DragHandle'
 import { ReorderInstructions, ReorderLiveRegion } from './ReorderStatus'
 import type { ReorderItem } from './reorderMath'
@@ -117,6 +117,22 @@ const order = () =>
   [...document.querySelectorAll('[data-reorder-id]')].map((element) => element.getAttribute('data-reorder-id'))
 const live = () => document.querySelector('[aria-live="assertive"]')?.textContent ?? ''
 
+/** A cancel eases the moved rows home: until MOTION_MS.fast has passed they carry the settle
+ *  transition and keep their state; then both are gone. (Fake timers.) */
+function expectEasedHome(ids: string[]) {
+  for (const id of ids) {
+    expect(row(id).style.transition).toBe(`transform ${MOTION_MS.fast}ms ${EASE_OUT}`)
+    expect(row(id).hasAttribute('data-reorder')).toBe(true)
+  }
+  act(() => {
+    vi.advanceTimersByTime(MOTION_MS.fast)
+  })
+  for (const id of ids) {
+    expect(row(id).style.transition).toBe('')
+    expect(row(id).hasAttribute('data-reorder')).toBe(false)
+  }
+}
+
 function reduceMotion() {
   vi.stubGlobal(
     'matchMedia',
@@ -229,10 +245,7 @@ describe('useReorder — keyboard', () => {
     expect(live()).toBe('Cancelled. Bravo is back at position 2 of 3.')
     expect(row('B').style.transform).toBe('')
     expect(row('A').style.transform).toBe('')
-    act(() => {
-      vi.advanceTimersByTime(MOTION_MS.fast)
-    })
-    expect(row('B').hasAttribute('data-reorder')).toBe(false)
+    expectEasedHome(['A', 'B'])
     expect(order()).toEqual(['A', 'B', 'C'])
     document.removeEventListener('keydown', popoverKeys, true)
   })
@@ -339,8 +352,13 @@ describe('useReorder — keyboard', () => {
     render(<Stateful initial={flat('A', 'B', 'C')} />)
     fireEvent.click(screen.getByRole('button', { name: 'mark Bravo saved' }))
     expect(row('B').hasAttribute('data-reorder-saved')).toBe(true)
+    expect(row('A').hasAttribute('data-reorder-saved')).toBe(false)
     act(() => {
-      vi.advanceTimersByTime(MOTION_MS.flash)
+      vi.advanceTimersByTime(MOTION_MS.flash - 1)
+    })
+    expect(row('B').hasAttribute('data-reorder-saved')).toBe(true)
+    act(() => {
+      vi.advanceTimersByTime(1)
     })
     expect(row('B').hasAttribute('data-reorder-saved')).toBe(false)
   })
@@ -439,11 +457,8 @@ describe('useReorder — pointer', () => {
     fireEvent.pointerMove(grip('Bravo'), { pointerId: 1, clientY: 262 })
     fireEvent.pointerUp(grip('Bravo'), { pointerId: 1, clientY: 262 })
     expect(live()).toBe('Dropped Bravo where it was.')
-    act(() => {
-      vi.advanceTimersByTime(MOTION_MS.fast)
-    })
+    expectEasedHome(['B'])
     expect(onCommit).not.toHaveBeenCalled()
-    expect(row('B').hasAttribute('data-reorder')).toBe(false)
   })
 
   it('pointercancel and Escape abandon the drag; a second pointer is ignored', () => {
@@ -456,18 +471,14 @@ describe('useReorder — pointer', () => {
     expect(row('A').style.transform).toBe('translateY(70px)')
     fireEvent.pointerCancel(grip('Alpha'), { pointerId: 1 })
     expect(live()).toBe('Cancelled. Alpha is back at position 1 of 3.')
-    act(() => {
-      vi.advanceTimersByTime(MOTION_MS.fast)
-    })
+    expectEasedHome(['A', 'B'])
 
     fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
     fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 290 })
     fireEvent.keyDown(grip('Alpha'), { key: 'Escape' })
     expect(live()).toBe('Cancelled. Alpha is back at position 1 of 3.')
-    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 290 })
-    act(() => {
-      vi.advanceTimersByTime(MOTION_MS.fast)
-    })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 290 }) // mid-settle: changes nothing
+    expectEasedHome(['A', 'B'])
     expect(onCommit).not.toHaveBeenCalled()
     expect(order()).toEqual(['A', 'B', 'C'])
   })
@@ -525,10 +536,7 @@ describe('useReorder — pointer', () => {
       expect(live()).toBe('Alpha, position 2 of 3.')
       abandon()
       expect(live()).toBe('Cancelled. Alpha is back at position 1 of 3.')
-      act(() => {
-        vi.advanceTimersByTime(MOTION_MS.fast)
-      })
-      expect(row('A').hasAttribute('data-reorder')).toBe(false)
+      expectEasedHome(['A', 'B'])
       expect(document.documentElement.classList.contains('reorder-active')).toBe(false)
     }
     expect(onCommit).not.toHaveBeenCalled()
