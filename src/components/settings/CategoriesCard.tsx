@@ -11,9 +11,11 @@ import {
 import type { CategoryKind, CategoryOut } from '../../types/api'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
+import { ORDER_RESTORED, movedToast, orderSaveFailed, undoFailureText } from '../reorder/orderCopy'
 import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
 import { useReorder } from '../reorder/useReorder'
 import type { UseReorder } from '../reorder/useReorder'
+import { useRequestCount } from '../reorder/useRequestCount'
 import { useToast } from '../ToastProvider'
 import { FeedBanner } from '../shell/Feed'
 import Segmented from '../shell/Segmented'
@@ -41,26 +43,6 @@ function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
 
-// errorDetail's reason with any closing stop folded away: the two sentences below end on their
-// own (describeLoadFailures' rule in client.ts).
-function reason(err: unknown): string {
-  return errorDetail(err).replace(/[.\s]+$/, '')
-}
-
-/** A drop the server did not take (2026-09-23 reorder spec §8.1), said once the rows have
- *  already snapped back. A 409 never reaches this: its own sentence is shown verbatim. */
-function orderSaveFailed(err: unknown): string {
-  return `Couldn't save the new order — ${reason(err)}. The list is back to how it was.`
-}
-
-/** A refused Undo is the server's own sentence ("Later changes touched these rows — undo those
- *  first", spec §9); a request that got no answer at all says what failed and why. */
-function undoFailed(err: unknown): string {
-  return err instanceof ApiError && err.status >= 400 && err.status < 500
-    ? err.message
-    : `Couldn't undo the move — ${reason(err)}.`
-}
-
 /**
  * The Settings Spending-categories card (2026-08-26 spec §6). The CRUD endpoints have
  * existed since Plan 3 with no caller at all (audit §3.1), so the category axis was fixed
@@ -77,10 +59,10 @@ export default function CategoriesCard() {
   // failure is fixed by asking again; a refused save or a typo is not.
   const [loadError, setLoadError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
-  // How many of the card's requests are still out. A count, not a flag: an Undo from an older
-  // toast can run beside a save, and a flag would hand the grips back when the FIRST one settled.
-  const [pending, setPending] = useState(0)
-  const busy = pending > 0
+  // Every write goes through `track`, its reload chained inside it: the card is busy from the
+  // request until the rows it changed are back on screen — counted, since an Undo from an older
+  // toast can run beside a save. The chains end in their own catch, so none of them rejects.
+  const { busy, track } = useRequestCount()
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState<CategoryFormState>(EMPTY_CATEGORY)
   // A drop renders its order AT ONCE; the order is retired the moment the server's rows land —
@@ -121,15 +103,6 @@ export default function CategoriesCard() {
     // mount-only: a plain function over stable setters (house idiom)
   }, [])
 
-  // Every write goes through here, its reload chained inside it: the card is busy from the
-  // request until the rows it changed are back on screen. The chains end in their own catch, so
-  // `request` never rejects — the second handler is belt and braces.
-  const track = (request: Promise<unknown>) => {
-    setPending((count) => count + 1)
-    const settle = () => setPending((count) => count - 1)
-    void request.then(settle, settle)
-  }
-
   const setText = (field: keyof CategoryFormState) => (value: string) => {
     setForm((f) => ({ ...f, [field]: value }))
     setFormError(null)
@@ -151,7 +124,7 @@ export default function CategoriesCard() {
     const body = { name }
     setFormError(null)
     const request = editingId !== null ? updateCategory(editingId, body) : createCategory(body)
-    track(
+    void track(() =>
       request
         .then(() => {
           cancelEdit()
@@ -164,7 +137,7 @@ export default function CategoriesCard() {
   // ONLY is_active on the wire: the name and position are untouched columns here.
   const toggleActive = (category: CategoryOut) => {
     setFormError(null)
-    track(
+    void track(() =>
       updateCategory(category.id, { is_active: !category.is_active })
         .then(() => load())
         .catch((err: unknown) => setFormError(message(err, 'Update failed'))),
@@ -178,7 +151,7 @@ export default function CategoriesCard() {
   const setKind = (category: CategoryOut, next: CategoryKind) => {
     if (next === category.kind) return
     setFormError(null)
-    track(
+    void track(() =>
       updateCategory(category.id, { kind: next })
         .then(() => load())
         .catch((err: unknown) => setFormError(message(err, 'Update failed'))),
@@ -188,7 +161,7 @@ export default function CategoriesCard() {
   const remove = (category: CategoryOut) => {
     // The server's guard sentence names the monthly-row count; it is about a table row,
     // so it rides the toast layer rather than the form banner (AccountsCard's rule).
-    track(
+    void track(() =>
       deleteCategory(category.id)
         .then(() => {
           if (category.id === editingId) cancelEdit()
@@ -200,14 +173,16 @@ export default function CategoriesCard() {
 
   // The reorder route logs its batch (spec §3.2), so Undo is the change log's: the server
   // writes every renumbered row back, then the list is read again — and the grips wait for it.
+  // A refusal ("Later changes touched these rows — undo those first", spec §9) is the server's
+  // own sentence (§8.1).
   const undoOrder = (batchId: string) => {
-    track(
+    void track(() =>
       undoBatch(batchId)
         .then(() => {
-          toast.info('Order restored')
+          toast.info(ORDER_RESTORED)
           return load()
         })
-        .catch((err: unknown) => toast.error(undoFailed(err))),
+        .catch((err: unknown) => toast.error(undoFailureText(err))),
     )
   }
 
@@ -221,11 +196,11 @@ export default function CategoriesCard() {
     // older toast's Undo — may have read the list BEFORE this save committed, so an overtaken
     // save reads the list once more instead of drawing its own answer.
     const seq = ++seqRef.current
-    track(
+    void track(() =>
       reorderCategories(ids)
         .then(({ data, batchId }) => {
           toast.success(
-            `Moved ${name}`,
+            movedToast(name),
             // No batch = nothing was logged, so there is nothing to undo (the wizard's contract).
             batchId === null
               ? undefined
@@ -241,7 +216,9 @@ export default function CategoriesCard() {
           // (another tab — the server's own sentence, spec §8.3), and a 5xx can arrive after the
           // write committed. Either way the rows drawn next are the server's.
           toast.error(
-            err instanceof ApiError && err.status === 409 ? err.message : orderSaveFailed(err),
+            err instanceof ApiError && err.status === 409
+              ? err.message
+              : orderSaveFailed(errorDetail(err)),
           )
           return load()
         }),
