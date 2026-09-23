@@ -5,9 +5,11 @@ live flag, database facts read with raw SQL, and the backup marker backup_db.sh
 upserts. Every stored shape degrades to None rather than a 500."""
 
 import asyncio
+from collections.abc import Iterator
+from typing import BinaryIO
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +34,7 @@ from app.services.snapshot import alembic_head
 from app.services.snapshot_store import (
     list_restore_points,
     list_snapshots,
-    stored_file,
+    open_stored_file,
     write_snapshot,
 )
 
@@ -43,6 +45,10 @@ BACKUP_RUNS_KEY = "backup_runs"
 # Keep-10 agrees in THREE places: this reader, price_service.REFRESH_RUNS_KEEP, and the
 # jsonpath literal '$[0 to 9]' inside backup_db.sh's upsert — bump all three together.
 RUNS_LIMIT = 10
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+# A whole-database ZIP must never sit in a browser or proxy cache (2026-09-23 lane B1 review,
+# M3). export.py's live export sends the same header.
+NO_STORE = "no-store"
 
 
 async def _read_backup_status(db: AsyncSession) -> BackupStatusOut | None:
@@ -124,21 +130,38 @@ async def restore_points(db: AsyncSession = Depends(get_db)) -> list[SnapshotEnt
     return await asyncio.to_thread(list_restore_points, head)
 
 
+def _chunks(handle: BinaryIO) -> Iterator[bytes]:
+    """The opened file, in blocks, closed when the stream ends. A sync generator: Starlette
+    iterates it in its threadpool, so no read blocks the event loop."""
+    with handle:
+        while block := handle.read(DOWNLOAD_CHUNK_BYTES):
+            yield block
+
+
 # `:path` so a traversal-shaped name ("..%2Fx.zip") reaches THIS handler and 404s in the same
 # words as any other foreign name (import_.py's reason), not as Starlette's bare "Not Found".
 @router.get(
     "/snapshots/{name:path}/download",
-    response_class=FileResponse,
+    response_class=StreamingResponse,
     responses={200: {"content": {"application/zip": {}}}},
 )
-async def download_stored(name: str) -> FileResponse:
+async def download_stored(name: str) -> StreamingResponse:
     """A stored snapshot OR a restore point, byte for byte (2026-09-23 spec §B3): the
-    shell-free way to take either off the box. `stored_file` is the one gate both this and
-    restore-from-stored pass through."""
-    path = await asyncio.to_thread(stored_file, name)
-    if path is None:
+    shell-free way to take either off the box. `open_stored_file` is the one gate both this
+    and restore-from-stored pass through; the bytes stream from the handle it opened, so a
+    rotation that deletes the name mid-request cannot turn the 200 into a 500 (review M2)."""
+    stored = await asyncio.to_thread(open_stored_file, name)
+    if stored is None:
         raise HTTPException(status_code=404, detail=f"No stored snapshot named {name!r}")
-    return FileResponse(path, media_type="application/zip", filename=name)
+    return StreamingResponse(
+        _chunks(stored.handle),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{stored.name}"',
+            "Content-Length": str(stored.size),
+            "Cache-Control": NO_STORE,
+        },
+    )
 
 
 @router.post("/snapshots", response_model=SnapshotEntryOut, status_code=201)

@@ -18,7 +18,7 @@ from app.lifecycle.restore import SnapshotError, apply_restore, load_snapshot, p
 from app.models import User
 from app.schemas.lifecycle import RestoreReport
 from app.services.snapshot import alembic_head
-from app.services.snapshot_store import stored_file
+from app.services.snapshot_store import read_stored_file
 
 logger = logging.getLogger(__name__)
 
@@ -70,17 +70,16 @@ async def import_stored_snapshot(
     db: AsyncSession = Depends(get_db),
 ) -> RestoreReport:
     # The name grammars (a stored snapshot's, or a restore point's — 2026-09-23 spec §B3) ARE
-    # the path-safety check: `stored_file` matches them BEFORE any path is built from the
-    # untrusted name, keeps the join inside its directory and never follows a symlink, so
-    # nothing but a stored file of ours is ever opened.
-    path = await asyncio.to_thread(stored_file, name)
-    if path is None:
+    # the path-safety check: they are matched BEFORE any path is built from the untrusted name,
+    # the join must stay inside its directory, and the open itself refuses a symlink and
+    # anything but a regular file (O_NOFOLLOW + fstat where the platform has them — prod's
+    # Linux; see snapshot_store._open_regular), so nothing but a stored file of ours is read.
+    # Read in FULL, from that one handle, before the restore starts.
+    data = await asyncio.to_thread(read_stored_file, name)
+    if data is None:
         raise HTTPException(status_code=404, detail=f"No stored snapshot named {name!r}")
-    # Read in FULL before the restore starts: the apply's own restore point rotates the
-    # oldest of three out of the directory, and restoring FROM that oldest point is exactly
-    # the undo a bad restore needs — its bytes must already be in memory when the file goes.
-    data = await asyncio.to_thread(path.read_bytes)
-    # A restore point stays protected from its own apply's rotation until that apply commits.
+    # The apply writes its own restore point first, and that rotation must not delete the
+    # point being restored FROM until the apply commits — a failed retry needs the file.
     return await _restore(
         data, dry_run=dry_run, user=user, db=db, source_name=name, protect_point=name
     )

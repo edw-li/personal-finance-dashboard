@@ -23,5 +23,8 @@ async def export_snapshot(db: AsyncSession = Depends(get_db)) -> StreamingRespon
         headers={
             "Content-Disposition": f'attachment; filename="{snap.filename}"',
             "Content-Length": str(len(snap.payload)),
+            # The whole database: never left in a browser or proxy cache (2026-09-23 lane B1
+            # review, M3 — the stored-file download sends the same).
+            "Cache-Control": "no-store",
         },
     )

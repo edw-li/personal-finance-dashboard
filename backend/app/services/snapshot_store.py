@@ -12,11 +12,14 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
+import stat
 import zipfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import BinaryIO, Literal
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,15 +44,53 @@ SNAPSHOTS_KEEP = 14
 CHANGE_LOG_RETENTION_DAYS = 400
 ERROR_SNIPPET_LEN = 500
 
+# O_NOFOLLOW makes the open itself refuse a symlink (Linux, where prod runs). Windows has no
+# such flag: there the opener checks is_symlink first — creating a symlink on Windows takes a
+# privilege the app never holds, so that residual window is not one an attacker can reach.
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_BINARY = getattr(os, "O_BINARY", 0)
 
-def _head_of(path: Path) -> tuple[bool, str | None]:
+
+@dataclass(frozen=True)
+class StoredFile:
+    """A stored file opened by the gate: read (or stream) THIS handle, never the path again —
+    rotation may unlink the name at any moment, and a handle outlives its name."""
+
+    name: str
+    handle: BinaryIO
+    size: int
+
+
+def _open_regular(path: Path) -> tuple[BinaryIO, int] | None:
+    """(handle, size) for a regular file at `path` that is not a symlink, or None — missing
+    (rotated out since the directory read), a symlink, a directory, anything else. The open
+    IS the check: the type and size come from fstat on the opened descriptor, so nothing can
+    swap the file between a check and the read. Sync — callers ride asyncio.to_thread."""
+    try:
+        if not _NOFOLLOW and path.is_symlink():
+            return None
+        fd = os.open(path, os.O_RDONLY | _NOFOLLOW | _BINARY)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+    except OSError:
+        os.close(fd)
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        os.close(fd)
+        return None
+    return os.fdopen(fd, "rb"), info.st_size
+
+
+def _head_of(handle: BinaryIO) -> tuple[bool, str | None]:
     """(readable, the manifest's alembic_head). Two different Nones live here and the
     listing needs to tell them apart: a file that cannot be read as our ZIP is LISTED (it
     is on the volume) but NEVER restorable, while a manifest whose alembic_head is null is
     a snapshot of a create_all database — restorable onto a server that also has no
     alembic_version, which is exactly what the test suite is."""
     try:
-        with zipfile.ZipFile(path) as archive:
+        with zipfile.ZipFile(handle) as archive:
             head = json.loads(archive.read("manifest.json")).get("alembic_head")
     except (OSError, zipfile.BadZipFile, KeyError, ValueError):
         return False, None
@@ -69,17 +110,22 @@ def _list_directory(
     entries: list[SnapshotEntryOut] = []
     for path in directory.iterdir():
         stamp = stamp_of(path.name)
-        # is_symlink first: is_file() FOLLOWS the link, so a symlink dropped into the
-        # directory would be read, sized and offered for restore from wherever it points —
-        # off the data volume entirely. Only real files on the volume are listed.
-        if stamp is None or path.is_symlink() or not path.is_file():
+        if stamp is None:
             continue
-        readable, head = _head_of(path)
+        # Only real files on the volume: a symlink dropped into the directory is never read,
+        # sized or offered for restore from wherever it points, and a name rotation deleted
+        # after the directory read is simply left out (2026-09-23 lane B1 review, M2).
+        opened = _open_regular(path)
+        if opened is None:
+            continue
+        handle, size = opened
+        with handle:
+            readable, head = _head_of(handle)
         entries.append(
             SnapshotEntryOut(
                 name=path.name,
                 at=stamp,
-                size_bytes=path.stat().st_size,
+                size_bytes=size,
                 alembic_head=head,
                 restorable=readable and head == server_head,
                 kind=kind,
@@ -100,13 +146,14 @@ def list_restore_points(server_head: str | None) -> list[SnapshotEntryOut]:
     return _list_directory(restore_points_dir(), restore_point_stamp, "restore_point", server_head)
 
 
-def stored_file(name: str) -> Path | None:
-    """The file a stored snapshot's OR a restore point's name points at, or None
-    (2026-09-23 spec §B3). The two anchored name grammars ARE the path-safety check and run
-    before any path is built from the untrusted name — a match carries neither a separator
-    nor a dot segment; the join is then checked to stay inside its directory, and a symlink
-    is never followed. Sync — callers wrap it in asyncio.to_thread. The download route and
-    restore-from-stored share it, so the two doors can never disagree about what is safe."""
+def open_stored_file(name: str) -> StoredFile | None:
+    """A stored snapshot OR a restore point, opened — or None (2026-09-23 spec §B3). The two
+    anchored name grammars ARE the path-safety check and run before any path is built from
+    the untrusted name — a match carries neither a separator nor a dot segment; the join is
+    then checked to stay inside its directory, and the open refuses a symlink and anything
+    but a regular file (see _open_regular). Sync — callers wrap it in asyncio.to_thread; the
+    caller owns the handle. The download route and restore-from-stored share it, so the two
+    doors can never disagree about what is safe."""
     if SNAPSHOT_NAME_RE.fullmatch(name) is not None:
         directory = snapshots_dir()
     elif RESTORE_POINT_NAME_RE.fullmatch(name) is not None:
@@ -114,9 +161,22 @@ def stored_file(name: str) -> Path | None:
     else:
         return None
     path = directory / name
-    if not path.is_relative_to(directory) or path.is_symlink() or not path.is_file():
+    if not path.is_relative_to(directory):
         return None
-    return path
+    opened = _open_regular(path)
+    if opened is None:
+        return None
+    handle, size = opened
+    return StoredFile(name=name, handle=handle, size=size)
+
+
+def read_stored_file(name: str) -> bytes | None:
+    """open_stored_file, read whole, closed — or None. Sync."""
+    stored = open_stored_file(name)
+    if stored is None:
+        return None
+    with stored.handle:
+        return stored.handle.read()
 
 
 async def write_snapshot(db: AsyncSession, *, actor: str | None, trigger: str) -> SnapshotEntryOut:

@@ -2,15 +2,18 @@
 downloadable and restorable like stored snapshots, behind the same guards — both name
 grammars anchored, the join kept inside its directory, symlinks never followed."""
 
+import contextlib
 import io
 import json
 import zipfile
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
 from app.models import Account
+from app.services import snapshot_store
 from app.services.snapshot import (
     RESTORE_POINT_NAME_RE,
     restore_point_stamp,
@@ -19,7 +22,7 @@ from app.services.snapshot import (
     trim_directory,
     write_restore_point,
 )
-from app.services.snapshot_store import list_restore_points, stored_file
+from app.services.snapshot_store import list_restore_points, open_stored_file
 from tests.workbook_builder import build_workbook
 
 POINT = "pre-restore-20260904-091500-123456.zip"
@@ -73,14 +76,29 @@ def test_list_restore_points_without_a_directory_is_empty():
     assert list_restore_points("c3a7e19d5b42") == []
 
 
-def test_stored_file_resolves_either_grammar_and_nothing_else():
+def read_stored(name: str) -> bytes | None:
+    """What the gate hands back for `name`: the file's bytes, or None when it refuses."""
+    stored = open_stored_file(name)
+    if stored is None:
+        return None
+    with stored.handle:
+        return stored.handle.read()
+
+
+def test_open_stored_file_resolves_either_grammar_and_nothing_else():
     snapshots_dir().mkdir(parents=True)
     restore_points_dir().mkdir(parents=True)
     (snapshots_dir() / SNAP).write_bytes(b"s")
-    (restore_points_dir() / POINT).write_bytes(b"p")
+    (restore_points_dir() / POINT).write_bytes(b"point")
     (restore_points_dir() / "notes.txt").write_bytes(b"x")
-    assert stored_file(SNAP) == snapshots_dir() / SNAP
-    assert stored_file(POINT) == restore_points_dir() / POINT
+    assert read_stored(SNAP) == b"s"
+    assert read_stored(POINT) == b"point"
+    stored = open_stored_file(POINT)
+    with stored.handle:
+        assert (stored.name, stored.size) == (POINT, 5)
+    # A DIRECTORY named like a point is not a file to hand out.
+    (restore_points_dir() / "pre-restore-20260906-091500-123456.zip").mkdir()
+    assert open_stored_file("pre-restore-20260906-091500-123456.zip") is None
     for name in (
         "notes.txt",
         f"../snapshots/{SNAP}",
@@ -91,10 +109,10 @@ def test_stored_file_resolves_either_grammar_and_nothing_else():
         "pre-restore-20260905-091500-123456.zip",
         "",
     ):
-        assert stored_file(name) is None, name
+        assert open_stored_file(name) is None, name
 
 
-def test_stored_file_never_follows_a_symlink(tmp_path):
+def test_open_stored_file_never_follows_a_symlink(tmp_path):
     """is_file() FOLLOWS a link, so a link named like a restore point would hand out whatever
     it points at — off the data volume entirely. Prod is Linux; Windows needs Developer Mode
     to create one, hence the skip rather than a silent pass."""
@@ -105,8 +123,74 @@ def test_stored_file_never_follows_a_symlink(tmp_path):
         (restore_points_dir() / POINT).symlink_to(real)
     except OSError as exc:  # pragma: no cover - privilege-dependent
         pytest.skip(f"cannot create symlinks here: {exc}")
-    assert stored_file(POINT) is None
+    assert open_stored_file(POINT) is None
     assert list_restore_points(None) == []
+
+
+def test_without_o_nofollow_the_opener_refuses_what_is_symlink_reports(monkeypatch):
+    """Windows has no O_NOFOLLOW (and this box cannot create symlinks, so the test above
+    skips here): the fallback asks is_symlink before the open. Pin that branch everywhere."""
+    restore_points_dir().mkdir(parents=True)
+    (restore_points_dir() / POINT).write_bytes(zipped(None))
+    monkeypatch.setattr(snapshot_store, "_NOFOLLOW", 0)
+    monkeypatch.setattr(Path, "is_symlink", lambda self: self.name == POINT)
+    assert open_stored_file(POINT) is None
+    assert list_restore_points(None) == []
+
+
+def test_an_opened_stored_file_reads_whole_even_when_rotation_unlinks_it():
+    """The handle is what gets read and streamed, so a point rotated out between the open and
+    the last byte still arrives whole (2026-09-23 lane B1 review, M2)."""
+    restore_points_dir().mkdir(parents=True)
+    (restore_points_dir() / POINT).write_bytes(b"payload" * 1000)
+    stored = open_stored_file(POINT)
+    try:
+        (restore_points_dir() / POINT).unlink()
+    except PermissionError:  # pragma: no cover - Windows cannot unlink an open file
+        stored.handle.close()
+        pytest.skip("this platform cannot unlink an open file")
+    with stored.handle:
+        assert stored.handle.read() == b"payload" * 1000
+
+
+def test_a_listing_skips_a_name_that_is_gone_by_the_time_it_is_read(monkeypatch):
+    """Rotation can delete a point after the directory read returned its name; the listing
+    leaves it out instead of answering 500 (2026-09-23 lane B1 review, M2). The ghost comes
+    from the directory read itself, so the test holds whichever call first finds it gone."""
+    restore_points_dir().mkdir(parents=True)
+    (restore_points_dir() / POINT).write_bytes(zipped(None))
+    ghost = restore_points_dir() / "pre-restore-20260903-080000-000001.zip"
+    real_iterdir = Path.iterdir
+
+    def iterdir_with_a_ghost(self):
+        yield from real_iterdir(self)
+        if self == restore_points_dir():
+            yield ghost
+
+    monkeypatch.setattr(Path, "iterdir", iterdir_with_a_ghost)
+    assert [entry.name for entry in list_restore_points(None)] == [POINT]
+
+
+async def test_a_point_rotated_out_after_the_gate_still_downloads_whole(auth_client, monkeypatch):
+    """The download streams from the handle the gate opened, so rotation deleting the file
+    between the gate and the send cannot turn the 200 into a 500 — the old path-based
+    FileResponse re-opened by name at send time (2026-09-23 lane B1 review, M2). Windows
+    cannot unlink an open file at all: the same guarantee, from the other side."""
+    restore_points_dir().mkdir(parents=True)
+    payload = zipped(None)
+    (restore_points_dir() / POINT).write_bytes(payload)
+    real_gate = snapshot_store.open_stored_file
+
+    def gate_then_rotate(name):
+        stored = real_gate(name)
+        with contextlib.suppress(PermissionError):
+            (restore_points_dir() / name).unlink()
+        return stored
+
+    monkeypatch.setattr("app.api.system.open_stored_file", gate_then_rotate)
+    resp = await auth_client.get(f"/api/v1/system/snapshots/{POINT}/download")
+    assert resp.status_code == 200
+    assert resp.content == payload
 
 
 async def test_restore_point_routes_require_auth(client):
@@ -138,6 +222,15 @@ async def test_download_serves_either_kind_byte_for_byte(auth_client, db):
         assert resp.headers["content-type"] == "application/zip"
         assert name in resp.headers["content-disposition"]
         assert resp.content == (directory / name).read_bytes()
+        assert resp.headers["content-length"] == str(len(resp.content))
+        # A whole-database ZIP must not sit in a browser cache (review M3).
+        assert resp.headers["cache-control"] == "no-store"
+
+
+async def test_the_live_export_is_never_cached_either(auth_client):
+    resp = await auth_client.get("/api/v1/export/snapshot")
+    assert resp.status_code == 200
+    assert resp.headers["cache-control"] == "no-store"
 
 
 async def test_download_refuses_foreign_and_traversal_names(auth_client, db):
@@ -289,5 +382,5 @@ def test_the_name_grammars_are_ascii_only():
     snapshots_dir().mkdir(parents=True)
     (restore_points_dir() / point).write_bytes(zipped(None))
     (snapshots_dir() / snap).write_bytes(zipped(None))
-    assert stored_file(point) is None and stored_file(snap) is None
+    assert open_stored_file(point) is None and open_stored_file(snap) is None
     assert list_restore_points(None) == []
