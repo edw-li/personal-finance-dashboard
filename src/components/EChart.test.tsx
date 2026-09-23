@@ -337,6 +337,71 @@ describe('zoomWindow fast path', () => {
     expect(chart.dispatchAction).not.toHaveBeenCalled()
   })
 
+  // 2026-09-23 spec §C4, review round 1: the portfolio's weekly axis picks its label stride from
+  // the window it shows, so a chip changes the axis's label SET along with the window. The set is
+  // left out of the fingerprint and merged after the zoom action — the chip still morphs.
+  describe('axis label sets that follow the window', () => {
+    const axis = (customValues: number[]) => ({
+      type: 'category',
+      data: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'],
+      axisLabel: { customValues, hideOverlap: true },
+    })
+
+    it('ride the fast path: the zoom action, then the new set merged onto the live chart', () => {
+      const { rerender } = render(
+        <EChart
+          ariaLabel="test chart"
+          option={{ series, xAxis: axis([0, 3, 6, 9]), dataZoom: [{ type: 'inside', startValue: 0 }] } as EChartsOption}
+          zoomWindow={{ startValue: 0, endValue: 9 }}
+        />,
+      )
+      const chart = instances[0]
+      expect(chart.setOption).toHaveBeenCalledTimes(1)
+      rerender(
+        <EChart
+          ariaLabel="test chart"
+          option={{ series, xAxis: axis([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]), dataZoom: [{ type: 'inside', startValue: 5 }] } as EChartsOption}
+          zoomWindow={{ startValue: 5, endValue: 9 }}
+        />,
+      )
+      expect(chart.dispatchAction).toHaveBeenCalledWith({ type: 'dataZoom', startValue: 5, endValue: 9 })
+      // Merged, never a notMerge rebuild: the morph the action started keeps running.
+      expect(chart.setOption).toHaveBeenCalledTimes(2)
+      expect(chart.setOption.mock.calls[1]).toEqual([
+        { xAxis: [{ axisLabel: { customValues: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] } }] },
+      ])
+    })
+
+    it('merge nothing when the set is unchanged, and still rebuild for any other axis change', () => {
+      const { rerender } = render(
+        <EChart
+          ariaLabel="test chart"
+          option={{ series, xAxis: axis([0, 3, 6, 9]), dataZoom: [{ type: 'inside', startValue: 0 }] } as EChartsOption}
+          zoomWindow={{ startValue: 0, endValue: 9 }}
+        />,
+      )
+      const chart = instances[0]
+      rerender(
+        <EChart
+          ariaLabel="test chart"
+          option={{ series, xAxis: axis([0, 3, 6, 9]), dataZoom: [{ type: 'inside', startValue: 5 }] } as EChartsOption}
+          zoomWindow={{ startValue: 5, endValue: 9 }}
+        />,
+      )
+      expect(chart.dispatchAction).toHaveBeenCalledTimes(1)
+      expect(chart.setOption).toHaveBeenCalledTimes(1)
+      rerender(
+        <EChart
+          ariaLabel="test chart"
+          option={{ series, xAxis: { ...axis([0, 3, 6, 9]), data: ['z', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'] }, dataZoom: [{ type: 'inside', startValue: 5 }] } as EChartsOption}
+          zoomWindow={{ startValue: 5, endValue: 9 }}
+        />,
+      )
+      expect(chart.setOption).toHaveBeenCalledTimes(2)
+      expect(chart.setOption.mock.calls[1][1]).toEqual({ notMerge: true })
+    })
+  })
+
   it('without zoomWindow, a zoom-only change still rebuilds (opt-in contract)', () => {
     const { rerender } = render(
       <EChart

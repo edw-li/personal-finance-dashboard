@@ -21,6 +21,30 @@ export interface EChartEventParams {
   value?: unknown
 }
 
+// An x-axis's label SET that follows the window it shows — the portfolio's weekly axis picks its
+// month stride from the range on screen (2026-09-23 spec §C4, review round 1) and carries the
+// labelled categories as `axisLabel.customValues`. It rides the zoom fast path below: left out of
+// the fingerprint, and merged onto the live instance when it changes, so a range chip still
+// morphs instead of snapping just because its window labels months where All labelled quarters.
+type LabelledAxis = { axisLabel?: { customValues?: unknown } & Record<string, unknown> } & Record<string, unknown>
+
+function xAxesOf(option: EChartsOption): LabelledAxis[] {
+  const axis = (option as { xAxis?: LabelledAxis | LabelledAxis[] }).xAxis
+  return axis === undefined ? [] : Array.isArray(axis) ? axis : [axis]
+}
+
+function withoutLabelSets(option: EChartsOption): EChartsOption {
+  const axes = xAxesOf(option)
+  if (!axes.some((axis) => axis.axisLabel?.customValues !== undefined)) return option
+  const stripped = axes.map((axis) =>
+    axis.axisLabel?.customValues === undefined
+      ? axis
+      : { ...axis, axisLabel: { ...axis.axisLabel, customValues: undefined } },
+  )
+  const xAxis = (option as { xAxis?: unknown }).xAxis
+  return { ...option, xAxis: Array.isArray(xAxis) ? stripped : stripped[0] } as EChartsOption
+}
+
 export default function EChart({
   option,
   height = 320,
@@ -92,6 +116,8 @@ export default function EChart({
   // "nothing else changed" proof). Reset whenever the chart itself is rebuilt — a fresh
   // instance has no applied option to be equal to.
   const lastStrippedRef = useRef<string | null>(null)
+  // The x-axis label sets last put on the chart (JSON), so the fast path merges only a change.
+  const lastLabelSetsRef = useRef<string | null>(null)
   // Has this MOUNT ever painted? Unlike lastStrippedRef this survives the init effect, so a
   // palette re-init repaints already-drawn instead of replaying the entrance (spec §6).
   const paintedOnceRef = useRef(false)
@@ -236,8 +262,9 @@ export default function EChart({
     // to lift it. Without it the flip would find an unchanged fingerprint, take the fast
     // path (which the same flip has just re-enabled) and settle as a no-op — leaving the
     // chart animation-less until some unrelated data change repainted it.
+    const labelSets = JSON.stringify(xAxesOf(option).map((axis) => axis.axisLabel?.customValues ?? null))
     const stripped = JSON.stringify({
-      ...option,
+      ...withoutLabelSets(option),
       dataZoom: undefined,
       __theme: resolved,
       __decals: decals,
@@ -269,6 +296,15 @@ export default function EChart({
           startValue: zoomWindow.startValue,
           endValue: zoomWindow.endValue,
         })
+      }
+      // The new window's label set, merged — never a notMerge rebuild, which would cut the morph.
+      if (labelSets !== lastLabelSetsRef.current) {
+        chart.setOption({
+          xAxis: xAxesOf(option).map((axis) => ({
+            axisLabel: { customValues: axis.axisLabel?.customValues ?? null },
+          })),
+        })
+        lastLabelSetsRef.current = labelSets
       }
       return
     }
@@ -327,6 +363,7 @@ export default function EChart({
       )
       paintedOnceRef.current = true
       lastStrippedRef.current = stripped
+      lastLabelSetsRef.current = labelSets
     }
     // Only an animated first paint waits: a cached or reduced-motion paint has no entrance to
     // protect, and the zoom fast path cannot fire meanwhile (lastStrippedRef stays null).
