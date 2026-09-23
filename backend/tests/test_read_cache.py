@@ -2,6 +2,7 @@
 every write to every table it reads, never handed to a write path, never session-bound."""
 
 import asyncio
+import copy
 import gc
 import re
 from contextlib import contextmanager
@@ -749,10 +750,29 @@ async def test_every_read_path_builds_the_book_and_the_savings_once(auth_client,
 
     monkeypatch.setattr(month_review, "assemble_review_book", counting_assemble)
     monkeypatch.setattr(savings, "compose_months", counting_compose)
-    for path in READS:
+    for index, path in enumerate(READS):
         response = await auth_client.get(path)
         assert response.status_code == 200, (path, response.text)
+        if index == 0:  # the first GET filed the one book every later read is served
+            (shared,) = [REVIEW_BOOKS.get(key) for key in REVIEW_BOOKS.keys()]
+            image = deep_image(shared)
     assert built == {"book": 1, "savings": 1}
+    # The book is shared, and only its top-level mappings are read-only: the inner inputs
+    # dicts/lists and the MonthReviewOut models could be mutated. No read path did.
+    assert [REVIEW_BOOKS.get(key) for key in REVIEW_BOOKS.keys()] == [shared]
+    assert deep_image(shared) == image
+
+
+def deep_image(book) -> dict:
+    """Everything a book holds, copied into plain values (deepcopy cannot copy a
+    MappingProxyType, so the parts are copied one by one)."""
+    return {
+        "today": book.today,
+        "adopted_on": book.adopted_on,
+        "months": {month: state.model_dump() for month, state in book.months.items()},
+        "inputs": copy.deepcopy(dict(book.inputs)),
+        "reviews": {month: review_fields(review) for month, review in book.reviews.items()},
+    }
 
 
 def poison_every_cached_book() -> None:
