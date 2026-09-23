@@ -88,6 +88,7 @@ import { fetchHousehold } from '../api/household'
 import { fetchAccounts, fetchMonthBalances, fetchSummary } from '../api/netWorth'
 import { fetchCategories, fetchMatrix } from '../api/spending'
 import ToastProvider from '../components/ToastProvider'
+import CardsPanel from '../components/creditcards/CardsPanel'
 import CategoriesPanel from '../components/creditcards/CategoriesPanel'
 
 // --- fixtures: the valuation-flip scenario straight from the spec -----------------------
@@ -267,6 +268,19 @@ function renderCategoriesPanel(onChanged: () => void): (next: () => void) => voi
         enteredMonths={new Map()}
         onChanged={callback}
       />
+    </ToastProvider>
+  )
+  const view = render(panel(onChanged))
+  return (next) => view.rerender(panel(next))
+}
+
+/** CardsPanel on its own, for the same reason as renderCategoriesPanel. One `cards` array for
+ *  every render, as the page hands down until its next fetch. Returns the rerender. */
+function renderCardsPanel(onChanged: () => void): (next: () => void) => void {
+  const cards = [vx(), SAVOR, RH]
+  const panel = (callback: () => void) => (
+    <ToastProvider>
+      <CardsPanel cards={cards} accounts={[]} people={PEOPLE} onChanged={callback} />
     </ToastProvider>
   )
   const view = render(panel(onChanged))
@@ -1841,5 +1855,119 @@ describe('CreditCardsPage — the card roster: the rows and the form around a dr
       1,
       expect.objectContaining({ sort_order: 1 }),
     ])
+  })
+})
+
+// Lane R3's code-quality review, applied to the roster as to Categories & weights above.
+describe('CreditCardsPage — the card roster: late answers and overlapping requests (lane R3 review)', () => {
+  /** The cards in `ids` order, renumbered as lane R1's route answers them. */
+  const cardsIn = (ids: number[]): CreditCardOut[] =>
+    ids.flatMap((id, index) =>
+      [vx(), SAVOR, RH]
+        .filter((card) => card.id === id)
+        .map((card) => ({ ...card, sort_order: index })),
+    )
+
+  beforeEach(() => {
+    vi.mocked(reorderCreditCards).mockReset()
+  })
+
+  it("reloads through the latest render's onChanged — a save, its Undo and a delete's Undo that answer late", async () => {
+    const onChanged = [vi.fn(), vi.fn(), vi.fn(), vi.fn()]
+    let answer: (cards: CreditCardOut[]) => void = () => {}
+    vi.mocked(reorderCreditCards)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve
+          }),
+      )
+      .mockImplementationOnce(async (ids) => cardsIn(ids))
+    vi.mocked(deleteCreditCard).mockResolvedValue(undefined)
+    vi.mocked(createCreditCard).mockResolvedValue(RH)
+    const rerenderWith = renderCardsPanel(onChanged[0])
+    keyboardMove('Venture X', 'ArrowDown')
+    // The page renders again while the PUT is out, handing down a new onChanged.
+    rerenderWith(onChanged[1])
+    await act(async () => answer(cardsIn([2, 1, 3])))
+    // The toast's Undo is clicked after yet another render.
+    rerenderWith(onChanged[2])
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await screen.findByText('Order restored')
+    // A delete (reloading through the render it was clicked in), then its Undo after another.
+    fireEvent.click(screen.getByRole('button', { name: 'Delete RH Gold' }))
+    const deleted = (await screen.findByText('Deleted RH Gold')).closest('.toast') as HTMLElement
+    rerenderWith(onChanged[3])
+    fireEvent.click(within(deleted).getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Restored RH Gold — matrix multipliers were not restored')
+    expect(onChanged.map((callback) => callback.mock.calls.length)).toEqual([0, 1, 2, 1])
+  })
+
+  it("keeps the grips parked until every request is back — a drop's Undo clicked while a later drop's save is out", async () => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown') // drop A, answered at once
+    await screen.findByText('Moved Venture X')
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    let answerDrop: (cards: CreditCardOut[]) => void = () => {}
+    let answerUndo: (cards: CreditCardOut[]) => void = () => {}
+    vi.mocked(reorderCreditCards)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerDrop = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerUndo = resolve
+          }),
+      )
+    keyboardMove('RH Gold', 'ArrowUp') // drop B, left out
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' })) // A's Undo, left out too
+    expect(vi.mocked(reorderCreditCards).mock.calls.slice(1)).toEqual([[[2, 3, 1]], [[1, 2, 3]]])
+    await act(async () => answerDrop(cardsIn([2, 3, 1])))
+    // B is back and A's Undo is not: the grips stay parked.
+    expect(grip('RH Gold').getAttribute('aria-disabled')).toBe('true')
+    await act(async () => answerUndo(cardsIn([1, 2, 3])))
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+  })
+
+  it("a throw in the save's success path is a bug on the console, never 'The list is back to how it was.'", async () => {
+    const rejections = collectRejections()
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    // The page's reload throws before it returns a promise: a synchronous throw inside the
+    // success handler, with the saved order already on screen.
+    vi.mocked(fetchCreditCards).mockImplementationOnce(() => {
+      throw new Error('the reload threw')
+    })
+    keyboardMove('Venture X', 'ArrowDown')
+    await waitFor(() => expect(rejections).toHaveLength(1))
+    expect(rejections[0]).toEqual(new Error('the reload threw'))
+    expect(rowIds('.roster-table')).toEqual(['2', '1', '3'])
+    expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
+    // The request is back whatever its success path did: the grips wake.
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+  })
+
+  it("a throw in the Undo's success path is a bug on the console, never \"Couldn't restore the order\"", async () => {
+    const rejections = collectRejections()
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    vi.mocked(fetchCreditCards).mockImplementationOnce(() => {
+      throw new Error('the reload threw')
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(rejections).toHaveLength(1))
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+    expect(screen.queryByText(/Couldn't restore the order/)).toBeNull()
   })
 })

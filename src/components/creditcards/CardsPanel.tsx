@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { ApiError, errorDetail } from '../../api/client'
 import {
@@ -83,8 +83,22 @@ export default function CardsPanel({
   const [form, setForm] = useState<CardFormState>(EMPTY_CARD)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Single-flight across the panel (SecuritiesPanel's busy flag).
-  const [busy, setBusy] = useState(false)
+  // Requests in flight across the panel — counted, never flagged (lane R3 review): a toast's
+  // Undo clicked while a later drop's PUT is out settles on its own, and whichever answers
+  // first must not wake the grips while the other is still out. Every request calls begin()
+  // and settles in its `.finally`.
+  const [inFlight, setInFlight] = useState(0)
+  const busy = inFlight > 0
+  const begin = () => setInFlight((count) => count + 1)
+  const settle = () => setInFlight((count) => count - 1)
+  // The page's onChanged as of the LATEST render (useReorder's `latest` idiom): a save or an
+  // Undo answers long after the render that sent it — a toast stands for 6 s — and must reload
+  // through the page as it is now, never as it was at the drop.
+  const onChangedRef = useRef(onChanged)
+  useLayoutEffect(() => {
+    onChangedRef.current = onChanged
+  })
+  const reload = () => onChangedRef.current()
   const toast = useToast()
 
   // Drag to reorder (2026-09-23 drag-to-reorder spec §7). Two layers sit over the page's
@@ -208,7 +222,7 @@ export default function CardsPanel({
     const stored = ordered.find((card) => card.id === editingId)
     const body = buildBody(stored)
     if (body === null) return
-    setBusy(true)
+    begin()
     setError(null)
     // The FULL row on both verbs: the router validates the MERGED card, so a delta PATCH
     // would 422 on a stored field this form never touched. The nullable columns travel as
@@ -226,14 +240,14 @@ export default function CardsPanel({
         document.getElementById('card-name')?.focus()
         setForm(EMPTY_CARD)
         setEditingId(null)
-        onChanged()
+        reload()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))
-      .finally(() => setBusy(false))
+      .finally(settle)
   }
 
   const toggleArchive = (card: CreditCardOut) => {
-    setBusy(true)
+    begin()
     setError(null)
     // The stored row with ONE bit flipped — not the form's, which may be mid-edit on some
     // other card. Archiving keeps every credit and limit event; it only takes the card out
@@ -255,13 +269,13 @@ export default function CardsPanel({
       notes: card.notes,
       sort_order: card.sort_order,
     })
-      .then(() => onChanged())
+      .then(() => reload())
       .catch((err: unknown) => setError(message(err, 'Archive failed')))
-      .finally(() => setBusy(false))
+      .finally(settle)
   }
 
   const remove = (card: CreditCardOut) => {
-    setBusy(true)
+    begin()
     // Cleared on entry like submit's: a delete that succeeds must not leave the previous
     // save's 409 sitting over the panel as if it still described the table.
     setError(null)
@@ -274,13 +288,17 @@ export default function CardsPanel({
           setEditingId(null)
           setForm(EMPTY_CARD)
         }
-        onChanged()
+        reload()
         toast.success(`Deleted ${card.name}`, {
           action: {
             label: 'Undo',
             onAction: () => {
               // Re-create the card, then its cascaded children. Matrix cells are NOT
-              // restored (they reference the old card id) — the toast says so.
+              // restored (they reference the old card id) — the toast says so. Counted like
+              // any request of the roster, so no drop races the card coming back. (One
+              // catch stays: a credit or limit event that fails to come back is a failed
+              // restore, and says so.)
+              begin()
               createCreditCard({
                 name: card.name,
                 annual_fee: card.annual_fee,
@@ -313,16 +331,17 @@ export default function CardsPanel({
                       limit_amount: event.limit_amount,
                       note: event.note,
                     })
-                  onChanged()
+                  reload()
                   toast.info(`Restored ${card.name} — matrix multipliers were not restored`)
                 })
                 .catch(() => toast.error(`Could not restore ${card.name}`))
+                .finally(settle)
             },
           },
         })
       })
       .catch((err: unknown) => setError(message(err, 'Delete failed')))
-      .finally(() => setBusy(false))
+      .finally(settle)
   }
 
   // A failed save puts the rows back (spec §7, as §4.1). Moving them can blur the grip a
@@ -346,30 +365,35 @@ export default function CardsPanel({
   // as the saved order — it replaces the drop's, so the rows on screen are the restored ones
   // even when the page's reload hands down nothing new (lane R3's browser find: an Undo's
   // reload can match what the page already holds). A roster that changed since answers 409,
-  // and the page's reload shows what is there now.
+  // and the page's reload shows what is there now. Two-argument `then` (lane R3 review): only
+  // the request's own failure takes the failure branch — a throw in the success branch is a
+  // bug for the console, never "Couldn't restore the order".
   const restoreOrder = (ids: number[]) => {
-    setBusy(true)
+    begin()
     reorderCreditCards(ids)
-      .then((restored) => {
-        setSavedOrder(restored)
-        onChanged()
-        toast.info('Order restored')
-      })
-      .catch((err: unknown) => {
-        if (err instanceof ApiError && err.status === 409) {
-          toast.error(errorDetail(err))
-          onChanged()
-          return
-        }
-        toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
-      })
-      .finally(() => setBusy(false))
+      .then(
+        (restored) => {
+          setSavedOrder(restored)
+          reload()
+          toast.info('Order restored')
+        },
+        (err: unknown) => {
+          if (err instanceof ApiError && err.status === 409) {
+            toast.error(errorDetail(err))
+            reload()
+            return
+          }
+          toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
+        },
+      )
+      .finally(settle)
   }
 
   // One drop, one PUT (spec §7): every card, active and archived, in its new order. The
   // matrix columns, the tiles and the credit-line legend read the page's list, so they follow
   // once the page reloads. `reorder` is read only when the PUT answers, long after the render
-  // that declares it below has returned.
+  // that declares it below has returned. Two-argument `then`, as restoreOrder's: a throw in
+  // the success branch must never print "The list is back to how it was." over the saved order.
   const saveOrder = (next: number[], moved: number) => {
     const card = cardById.get(moved)
     if (card === undefined) return // the hook commits only ids it was handed
@@ -382,31 +406,33 @@ export default function CardsPanel({
         return row === undefined ? [] : [row]
       }),
     )
-    setBusy(true)
+    begin()
     reorderCreditCards(next)
-      .then((saved) => {
-        setPendingOrder(null)
-        setSavedOrder(saved)
-        onChanged()
-        reorder.markSaved(moved)
-        toast.success(`Moved ${card.name}`, {
-          action: { label: 'Undo', onAction: () => restoreOrder(previous) },
-        })
-      })
-      .catch((err: unknown) => {
-        dropPendingOrder()
-        if (err instanceof ApiError && err.status === 409) {
-          // The server's sentence says what happened; the reload shows the rows it means.
-          toast.error(errorDetail(err))
-          onChanged()
-          return
-        }
-        // The toast layer, never the form's banner: the table is not the form (spec §4.1).
-        toast.error(
-          `Couldn't save the new order — ${clause(errorDetail(err))}. The list is back to how it was.`,
-        )
-      })
-      .finally(() => setBusy(false))
+      .then(
+        (saved) => {
+          setPendingOrder(null)
+          setSavedOrder(saved)
+          reload()
+          reorder.markSaved(moved)
+          toast.success(`Moved ${card.name}`, {
+            action: { label: 'Undo', onAction: () => restoreOrder(previous) },
+          })
+        },
+        (err: unknown) => {
+          dropPendingOrder()
+          if (err instanceof ApiError && err.status === 409) {
+            // The server's sentence says what happened; the reload shows the rows it means.
+            toast.error(errorDetail(err))
+            reload()
+            return
+          }
+          // The toast layer, never the form's banner: the table is not the form (spec §4.1).
+          toast.error(
+            `Couldn't save the new order — ${clause(errorDetail(err))}. The list is back to how it was.`,
+          )
+        },
+      )
+      .finally(settle)
   }
 
   const reorder = useReorder({
