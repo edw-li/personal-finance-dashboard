@@ -19,6 +19,7 @@ LOGGED: dict[str, set[str]] = {
         "create_account",
         "update_account",
         "delete_account",
+        "reorder_accounts",
         "put_month",
         "delete_month",
     },

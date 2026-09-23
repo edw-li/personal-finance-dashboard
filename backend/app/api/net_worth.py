@@ -24,6 +24,7 @@ from app.schemas.net_worth import (
     SummaryOut,
     TimeseriesOut,
 )
+from app.schemas.ordering import OrderIn
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import mom_pct, require_first_of_month
 from app.services.month_writes import write_balances
@@ -34,6 +35,12 @@ from app.services.net_worth_calc import (
     net_worth_for,
     owner_clause,
     owner_totals_for,
+)
+from app.services.ordering import (
+    STALE_ACCOUNTS,
+    check_permutation,
+    moved_ids,
+    renumber,
 )
 
 router = APIRouter(
@@ -94,6 +101,60 @@ def _check_component_link(is_component: bool | None, parent_account_id: int | No
 async def list_accounts(db: AsyncSession = Depends(get_db)) -> list[Account]:
     result = await db.execute(select(Account).order_by(Account.sort_order, Account.id))
     return list(result.scalars().all())
+
+
+def _reorder_label(accounts: list[Account], moved: list[int]) -> str:
+    """The Activity label (2026-09-23 reorder spec §8.4). One account moved — alone, or a
+    parent with exactly the components it carries — names it; anything else counts the
+    minimal moved set. "Carries" is the Settings table's nesting: the components whose
+    parent it is AND that sit in its group (nestComponents runs per group there)."""
+    by_id = {account.id: account for account in accounts}
+    if len(moved) == 1:
+        return f"Moved account {by_id[moved[0]].name}"
+    moved_set = set(moved)
+    for account_id in moved:
+        parent = by_id[account_id]
+        carried = {
+            other.id
+            for other in accounts
+            if other.parent_account_id == parent.id and other.group == parent.group
+        }
+        if moved_set == {parent.id} | carried:
+            return f"Moved account {parent.name}"
+    return f"Reordered {len(moved)} accounts"
+
+
+@router.put("/accounts/order", response_model=list[AccountOut])
+async def reorder_accounts(
+    body: OrderIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> list[Account]:
+    """Drag-to-reorder (2026-09-23 spec §3.2): `ids` is EVERY account, retired included, in
+    its new order. sort_order becomes 0…n−1 — the first reorder normalizes the workbook's
+    column indexes — and only rows whose value moves are written, as ONE change batch the
+    Activity card can undo. An unchanged order writes and logs nothing.
+
+    Declared before the /accounts/{account_id} routes so a later PUT on that path can never
+    shadow it."""
+    accounts = list(
+        (await db.execute(select(Account).order_by(Account.sort_order, Account.id))).scalars()
+    )
+    current = [account.id for account in accounts]
+    check_permutation(current, body.ids, stale_detail=STALE_ACCOUNTS)
+    if body.ids == current:
+        return accounts
+    by_id = {account.id: account for account in accounts}
+    ordered = [by_id[account_id] for account_id in body.ids]
+    before = {account.id: row_image(account) for account in accounts}
+    for account, _old, _new in renumber(ordered, "sort_order", start=0, step=1):
+        batch.record_update(account, before[account.id])
+    batch.label = _reorder_label(accounts, moved_ids(current, body.ids))
+    # The header only when rows were logged — the allocation routes' rule; batch_header
+    # spells it the way the month DELETEs already do.
+    response.headers.update(batch_header(await batch.commit()))
+    return ordered
 
 
 @router.post("/accounts", response_model=AccountOut, status_code=201)
