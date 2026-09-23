@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ApiError } from '../../api/client'
@@ -27,11 +27,11 @@ import type {
   HoldingsResponse,
   LimitsOut,
   TaxBracketsOut,
+  TaxInputUnit,
   TaxInputsOut,
   TaxSummaryOut,
   WhatIfOut,
 } from '../../types/api'
-import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../../utils/format'
 import { toneOf } from '../../utils/tone'
 import type { Tone } from '../../utils/tone'
@@ -40,6 +40,8 @@ import ChartCard from '../ChartCard'
 import InfoHint from '../InfoHint'
 import { FeedBanner } from '../shell/Feed'
 import StatTile from '../StatTile'
+import { UNIT_KINDS, figureText, isEntry, toBox, toWire } from './inputUnits'
+import { canAddRow, unfinishedCount, useOverrideRows } from './overrideRows'
 import { whatIfDeltaBarOption } from './taxChartOptions'
 import {
   COMPARE_ROWS,
@@ -48,6 +50,7 @@ import {
   encodeTax,
   isEmptyTax,
   labelForTax,
+  storedHouseholdValue,
   summaryValue,
   taxPresets,
   toWhatIfBody,
@@ -88,6 +91,13 @@ function saleLegFor(holding: HoldingOut): SaleEntry {
 // only knob is the price — prefilled from the quote the lots table itself was priced at.
 function esppLegFor(lot: EsppLotOut, quote: string | null): EsppEntry {
   return { lot_id: lot.id, ...(quote === null ? {} : { sale_price: quote }) }
+}
+
+/** A value box's refusal, in the input's own unit (percents are percents, counts whole). */
+const INVALID_WORDS: Record<TaxInputUnit, string> = {
+  money: 'enter a number like 210000',
+  percent: 'enter a percent like 97.53',
+  count: 'enter a whole number like 26',
 }
 
 /**
@@ -211,6 +221,27 @@ export default function WhatIfPanel({
     sandbox.set(change, { immediate })
   }
 
+  // ── Input-override rows (spec §B7; the model and its transitions are overrideRows.ts): the
+  // URL's complete overrides plus the rows the reader has not finished.
+  const labelOf = (key: string) => definitions.find((d) => d.key === key)?.label ?? key
+  const storedOf = (key: string) => storedHouseholdValue(inputs, key)
+  // The input's own unit, off the year's items: the box and the note speak it (a percent as a
+  // percent, a count as a whole number — the house rule), while the wire keeps the engine's
+  // form, so a percent travels as the fraction it multiplies by. Money when nothing says.
+  const unitOf = (key: string): TaxInputUnit => {
+    for (const section of inputs?.sections ?? [])
+      for (const item of section.items) if (item.key === key) return item.unit
+    return 'money'
+  }
+  const overrideRows = useOverrideRows(
+    scenario.overrides,
+    { storedOf, labelOf },
+    (change) => patch(change, true),
+    setFormError,
+  )
+  const rows = overrideRows.state.rows
+  const overrideKeys = Object.keys(scenario.overrides)
+
   // A plain function over stable setters (TaxesPage's `loadYears`), called from both doors
   // into the card. Promise callbacks only — no setState in an effect's synchronous body
   // (react-hooks 7).
@@ -293,7 +324,7 @@ export default function WhatIfPanel({
   // would sell the same shares twice without ever tripping the oversell fence.
   const nextHolding = () => held.find((h) => !scenario.sales.some((s) => s.security_id === h.security_id))
   const nextLot = () => unsoldLots.find((lot) => !scenario.espp.some((e) => e.lot_id === lot.id))
-  const nextDefinition = () => definitions.find((d) => !(d.key in scenario.overrides))
+  const canAddOverride = canAddRow(overrideRows.state, definitions.map((d) => d.key))
 
   const addSale = () => {
     const holding = nextHolding()
@@ -302,10 +333,6 @@ export default function WhatIfPanel({
   const addEsppSale = () => {
     const lot = nextLot()
     if (lot !== undefined) patch((s) => ({ ...s, espp: [...s.espp, esppLegFor(lot, lots?.current_price ?? null)] }), true)
-  }
-  const addOverride = () => {
-    const definition = nextDefinition()
-    if (definition !== undefined) patch((s) => ({ ...s, overrides: { ...s.overrides, [definition.key]: null } }), true)
   }
 
   const setSale = (index: number, change: Partial<SaleEntry>, immediate: boolean) =>
@@ -325,28 +352,15 @@ export default function WhatIfPanel({
     patch((s) => ({ ...s, espp: s.espp.map((leg, i) => (i === index ? { ...leg, ...change } : leg)) }), immediate)
   const removeEspp = (index: number) => patch((s) => ({ ...s, espp: s.espp.filter((_, i) => i !== index) }), true)
 
-  const overrideKeys = Object.keys(scenario.overrides)
-  const setOverrideKey = (from: string, to: string) => {
-    if (to in scenario.overrides) {
-      // Last-write-wins on a dict would silently drop the earlier row — refuse instead.
-      const label = definitions.find((d) => d.key === to)?.label ?? to
-      setFormError(`${label} is overridden twice — one row per key`)
-      return
-    }
-    patch((s) => {
-      const overrides: Record<string, string | null> = {}
-      for (const [key, value] of Object.entries(s.overrides)) overrides[key === from ? to : key] = value
-      return { ...s, overrides }
-    }, true)
+  // Reset to actual empties the scenario AND the unfinished rows: the card goes back to what the
+  // stored year says, not to a form still holding half-made overrides.
+  const panelSandbox = {
+    ...sandbox,
+    reset: () => {
+      overrideRows.clear()
+      sandbox.reset()
+    },
   }
-  const setOverrideValue = (key: string, value: string | null, immediate: boolean) =>
-    patch((s) => ({ ...s, overrides: { ...s.overrides, [key]: value } }), immediate)
-  const removeOverride = (key: string) =>
-    patch((s) => {
-      const overrides = { ...s.overrides }
-      delete overrides[key]
-      return { ...s, overrides }
-    }, true)
 
   const applyPreset = (change: TaxPresetPatch) => {
     if ('overrides' in change) patch((s) => ({ ...s, overrides: { ...s.overrides, ...change.overrides } }), true)
@@ -389,6 +403,15 @@ export default function WhatIfPanel({
     return (r as Partial<WhatIfOut>).scenario ?? { error: 'Preview unavailable' }
   }
   const overrideCount = overrideKeys.length
+  const applyHintId = useId()
+  // Apply is enabled only for COMPLETE rows (spec §B7): a row still outside the scenario would
+  // read as part of "Apply N overrides" while writing nothing — so it holds the button, and the
+  // sentence under it says which row is in the way.
+  const unfinished = unfinishedCount(overrideRows.state)
+  const unfinishedSentence =
+    unfinished === 1
+      ? 'Finish or remove the override row that is not in the scenario yet — Apply writes complete rows only.'
+      : `Finish or remove the ${unfinished} override rows that are not in the scenario yet — Apply writes complete rows only.`
   // "The result on screen IS this URL's answer": nothing in flight, nothing withheld, no
   // refusal standing. Apply reads both halves, so both have to describe one scenario.
   const settled =
@@ -409,7 +432,9 @@ export default function WhatIfPanel({
       onToggle={toggle}
       defaultOpen={defaultOpen}
       toggleLabels={{ open: 'Open what-if', close: 'Close what-if' }}
-      sandbox={sandbox}
+      sandbox={panelSandbox}
+      // An unfinished override row sits outside the scenario, but Reset still has it to clear.
+      canReset={!sandbox.empty || rows.length > 0}
       closedHint={
         <p className="drill-hint">
           Model prospective share sales against {year}&apos;s stored inputs — nothing is saved, and the
@@ -588,14 +613,25 @@ export default function WhatIfPanel({
             <button
               type="button"
               className="button button-primary"
-              disabled={!settled}
-              title={settled ? undefined : 'Waiting for this scenario to finish running'}
+              // Disabled says THAT it cannot run; the sentence beside it says why, so the button
+              // names it — a disabled control is otherwise mute to a screen reader (BudgetPanel).
+              aria-describedby={applyHintId}
+              disabled={!settled || unfinished > 0}
+              title={
+                unfinished > 0
+                  ? unfinishedSentence
+                  : settled
+                    ? undefined
+                    : 'Waiting for this scenario to finish running'
+              }
               onClick={() => onApplyOverrides({ ...scenario.overrides }, changedInputs)}
             >
               Apply {overrideCount} override{overrideCount === 1 ? '' : 's'} to {year}
             </button>
-            <span className="drill-hint">
-              Overrides only — sale and ESPP legs are hypothetical and are never applied.
+            <span id={applyHintId} className="drill-hint">
+              {unfinished > 0
+                ? unfinishedSentence
+                : 'Overrides only — sale and ESPP legs are hypothetical and are never applied.'}
             </span>
           </>
         ) : undefined
@@ -781,53 +817,96 @@ export default function WhatIfPanel({
             })}
           </div>
 
-          {overrideKeys.length > 0 && (
+          {rows.length > 0 && (
             <div className="tax-section whatif-overrides">
               <h3 className="eyebrow">
                 Input overrides
                 <InfoHint text="Absolute replacements applied AFTER the sale legs. An override addresses the household key map — on a married year a per-person line is replaced as one combined figure, the same aggregation the engine applies." />
               </h3>
               <p className="drill-hint">
-                Overrides set a key&apos;s household value for this scenario only. A blank value clears the
-                input (the scenario computes it as 0).
+                Overrides set a key&apos;s household value for this scenario only. A row starts at the stored
+                value and joins the scenario once you change it; tick Clear this input to model the input as
+                cleared (the scenario computes it as 0).
               </p>
               <div className="whatif-legs">
-                {overrideKeys.map((key, index) => {
-                  const label = definitions.find((d) => d.key === key)?.label ?? key
+                {rows.map((row, index) => {
+                  const key = row.key
+                  const label = key === null ? 'This override' : labelOf(key)
+                  const cleared = row.committed && row.cleared
+                  const stored = key === null ? null : storedOf(key)
+                  const unit = key === null ? 'money' : unitOf(key)
+                  const pickerId = `whatif-override-key-${row.id}`
                   return (
-                    <div key={key} className="whatif-form">
-                      <label htmlFor={`whatif-override-key-${index}`}>Override</label>
+                    // The row's own id, never its key or position: a row keeps its DOM — and the
+                    // reader's focus — while it joins or leaves the scenario.
+                    <div key={row.id} className="whatif-form">
+                      <label htmlFor={pickerId}>Override</label>
                       <select
-                        id={`whatif-override-key-${index}`}
+                        id={pickerId}
                         className="field-input whatif-select"
-                        value={key}
-                        onChange={(e) => setOverrideKey(key, e.target.value)}
+                        value={key ?? ''}
+                        // The picker Add override just made is where the next keystroke belongs.
+                        autoFocus={row.id === overrideRows.state.focusId}
+                        onChange={(e) => overrideRows.choose(row.id, e.target.value)}
                       >
-                        {!definitions.some((d) => d.key === key) && <option value={key}>{key}</option>}
+                        {key === null && (
+                          <option value="" disabled>
+                            Choose an input…
+                          </option>
+                        )}
+                        {key !== null && !definitions.some((d) => d.key === key) && <option value={key}>{key}</option>}
                         {definitions.map((d) => (
-                          <option key={d.key} value={d.key}>
+                          <option
+                            key={d.key}
+                            value={d.key}
+                            // One row per key: another row's key is shown but cannot be picked.
+                            disabled={rows.some((other) => other.id !== row.id && other.key === d.key)}
+                          >
                             {d.label} ({d.key})
                           </option>
                         ))}
                       </select>
                       <DraftAmount
                         ariaLabel={`Override ${index + 1} value`}
-                        value={scenario.overrides[key] ?? ''}
-                        onCommit={(canonical, immediate) => setOverrideValue(key, canonical, immediate)}
+                        unit={unit}
+                        value={cleared ? '' : row.draft}
+                        disabled={key === null || cleared}
+                        // Short enough for the 110px box: "choose an input" truncated to "choose an i…".
+                        placeholder={key === null ? 'pick input' : cleared ? 'cleared' : 'amount'}
+                        onCommit={(canonical) => overrideRows.commit(row.id, canonical)}
                         onInvalid={() =>
-                          setFormError(
-                            `${label}: enter a number, or leave the value blank to clear it — like 210000`,
-                          )
+                          setFormError(`${label}: ${INVALID_WORDS[unit]} — or tick “Clear this input”`)
                         }
                       />
+                      <label className="whatif-clear">
+                        <input
+                          type="checkbox"
+                          // Numbered like the row's value box and Remove button, the visible words
+                          // first: two rows must not read as two identical checkboxes.
+                          aria-label={`Clear this input (override ${index + 1})`}
+                          checked={cleared}
+                          disabled={key === null}
+                          onChange={(e) => overrideRows.toggleClear(row.id, e.target.checked)}
+                        />
+                        Clear this input
+                      </label>
                       <button
                         type="button"
                         className="button"
                         aria-label={`Remove override ${index + 1}`}
-                        onClick={() => removeOverride(key)}
+                        onClick={() => overrideRows.remove(row.id)}
                       >
                         Remove
                       </button>
+                      {key !== null && !row.committed && (
+                        <span className="drill-hint whatif-override-note">
+                          Not in the scenario yet —{' '}
+                          {stored === null
+                            ? 'nothing is stored for it; enter a value'
+                            : `change it from the stored ${figureText(unit, stored)}`}{' '}
+                          or tick Clear this input.
+                        </span>
+                      )}
                     </div>
                   )
                 })}
@@ -835,7 +914,7 @@ export default function WhatIfPanel({
             </div>
           )}
 
-          {sandbox.empty && (
+          {sandbox.empty && rows.length === 0 && (
             <p className="empty-note">
               No legs yet — add a sale or an input override to model it against {year}&apos;s stored inputs.
             </p>
@@ -858,7 +937,7 @@ export default function WhatIfPanel({
             >
               Add ESPP sale
             </button>
-            <button type="button" className="button" disabled={nextDefinition() === undefined} onClick={addOverride}>
+            <button type="button" className="button" disabled={!canAddOverride} onClick={overrideRows.add}>
               Add override
             </button>
             <span className="drill-hint">
@@ -931,15 +1010,24 @@ function DraftInput({
 }
 
 /** The override value box: AmountInput's tolerant grammar ("$1,600") canonicalized at commit
- *  (InputsForm's boundary); a blank is the explicit null — the endpoint's "clear this input". */
+ *  (InputsForm's boundary). A blank commits null, which the ROW reads as "no change" — clearing
+ *  an input is the row's explicit checkbox since 2026-09-23 (spec §B7), never an empty box.
+ *  `value` and the commit are WIRE values; the box shows and takes the input's own unit
+ *  (inputUnits.ts, the Inputs form's rule), so "97.53%" in the box is "0.9753" on the wire. */
 function DraftAmount({
   ariaLabel,
+  unit = 'money',
   value,
+  disabled = false,
+  placeholder,
   onCommit,
   onInvalid,
 }: {
   ariaLabel: string
+  unit?: TaxInputUnit
   value: string
+  disabled?: boolean
+  placeholder?: string
   onCommit: (canonical: string | null, immediate: boolean) => void
   onInvalid: () => void
 }) {
@@ -957,15 +1045,16 @@ function DraftAmount({
       onCommit(null, true)
       return
     }
-    // isAmount is the TOLERANT grammar ("$1,600"); canonicalAmount strips the dressing but
-    // passes ".5", "+5" and "5." through unchanged — and formatOverride would then write an
-    // entry parseOverride refuses. Gate on the codec's own accept, like the leg boxes above.
-    const canonical = isAmount(trimmed) ? canonicalAmount(trimmed) : ''
-    if (!isWireDecimal(canonical)) {
+    // isEntry is the TOLERANT grammar ("$1,600", "97.53%") plus the count's whole-number rule;
+    // toWire strips the dressing (and shifts a percent to its fraction) but passes ".5", "+5"
+    // and "5." through unchanged — and formatOverride would then write an entry parseOverride
+    // refuses. Gate on the codec's own accept, like the leg boxes above.
+    const wire = isEntry(unit, trimmed) ? toWire(unit, trimmed) : ''
+    if (!isWireDecimal(wire)) {
       onInvalid()
       return
     }
-    onCommit(canonical, true)
+    onCommit(wire, true)
   }
   return (
     <span
@@ -979,8 +1068,10 @@ function DraftAmount({
     >
       <AmountInput
         aria-label={ariaLabel}
-        value={draft ?? value}
-        placeholder="blank clears"
+        kind={UNIT_KINDS[unit]}
+        value={draft ?? toBox(unit, value)}
+        disabled={disabled}
+        placeholder={placeholder}
         onValueChange={(next) => {
           draftRef.current = next
           setDraft(next)

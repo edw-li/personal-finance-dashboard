@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
@@ -171,6 +171,11 @@ function renderPage(entry = '/credit-cards') {
   )
 }
 
+/** The drill-in's verdict: a labelled region (the tile, the reason and the closing line). */
+const verdictRegion = () => screen.getByRole('region', { name: 'Verdict' })
+/** Its "what closing would change" sentence. */
+const closingLine = () => within(verdictRegion()).getByText(/^Closing it/)
+
 /** The Categories & weights row for one category name (not the matrix's own table). */
 function categoriesRow(name: string): HTMLElement {
   const row = Array.from(document.querySelectorAll('.categories-table tbody tr')).find((tr) =>
@@ -283,12 +288,50 @@ describe('CreditCardsPage', () => {
     expect(screen.getByText('Is each card worth keeping? (est.)')).toBeTruthy()
   })
 
-  it('names the unweighted rows the droppable verdict leaves out', async () => {
+  // 2026-09-23 spec §B6: "droppable" named every card with a net of $0 or less — no-fee cards
+  // that only TIE another card's rate included. Three verdicts replace it.
+  it('sorts the lineup into three verdicts, naming ties and the unweighted rows left out', async () => {
     renderPage()
-    // RH Gold only ties Dining → $0 marginal → droppable; Rent has no weight.
-    const note = await screen.findByText(/Droppable on these numbers/)
-    expect(note.textContent).toContain('RH Gold')
-    expect(note.textContent).toContain('Excludes 1 unweighted category')
+    const summary = await screen.findByRole('list', { name: 'Card verdicts' })
+    const group = (label: string) =>
+      within(summary)
+        .getAllByRole('listitem')
+        .find((item) => item.textContent?.startsWith(label)) as HTMLElement
+    // VX: $31.20 marginal + $300 credits − $395 fee = −$63.80 → its fee outweighs what it adds.
+    expect(group('Costs you money').textContent).toContain('Venture X (−$63.80/yr)')
+    // SavorOne and RH Gold each only tie the other on Dining: $0 marginal, no fee.
+    const free = group('Free to keep — no extra rewards').textContent
+    expect(free).toContain('SavorOne (ties RH Gold on Dining)')
+    expect(free).toContain('RH Gold (ties SavorOne on Dining)')
+    expect(within(summary).queryByText(/^Earns its keep/)).toBeNull()
+    expect(summary.parentElement?.textContent).toContain('Excludes 1 unweighted category')
+    expect(screen.queryByText(/Droppable|droppable/)).toBeNull()
+  })
+
+  // Review of spec §B6: ties are the reason for a FEE card's $0 marginal too.
+  it('names the tie for fee cards as well — two fee cards that tie each other each name the other', async () => {
+    const feeCard = (id: number, name: string, slug: string): CreditCardOut => ({
+      ...SAVOR, id, name, slug, annual_fee: '95.00',
+    })
+    vi.mocked(fetchCreditCards).mockResolvedValue([feeCard(8, 'Card A', 'card-a'), feeCard(9, 'Card B', 'card-b')])
+    vi.mocked(fetchRewardCategories).mockResolvedValue([CATEGORIES[0]])
+    vi.mocked(fetchRewardRates).mockResolvedValue([
+      { id: 41, card_id: 8, category_id: 10, multiplier: '3.00', note: null, monthly_cap: null },
+      { id: 42, card_id: 9, category_id: 10, multiplier: '3.00', note: null, monthly_cap: null },
+    ])
+    renderPage()
+    const summary = await screen.findByRole('list', { name: 'Card verdicts' })
+    const costs = within(summary)
+      .getAllByRole('listitem')
+      .find((item) => item.textContent?.startsWith('Costs you money')) as HTMLElement
+    expect(costs.textContent).toContain('Card A (−$95.00/yr; ties Card B on Groceries)')
+    expect(costs.textContent).toContain('Card B (−$95.00/yr; ties Card A on Groceries)')
+    cleanup()
+    renderPage('/credit-cards?card=card-a')
+    await screen.findByText('Worth keeping? (est.)')
+    expect(verdictRegion().textContent).toContain(
+      'its $95.00 fee buys no extra rewards — it ties Card B on Groceries',
+    )
   })
 
   it('with no weighted categories the page explains setup instead of declaring cards droppable', async () => {
@@ -300,7 +343,8 @@ describe('CreditCardsPage', () => {
     renderPage()
     await screen.findByText('Est. $/yr won')
 
-    expect(screen.queryByText(/Droppable on these numbers/)).toBeNull()
+    expect(screen.queryByRole('list', { name: 'Card verdicts' })).toBeNull()
+    expect(screen.queryByText(/Costs you money|Free to keep/)).toBeNull()
     const setup = screen.getByText(/No spend weights yet/)
     expect(setup.textContent).toContain('Categories & weights')
     // The two $ tiles have nothing honest to say: a dash, not "$0.00/yr".
@@ -340,13 +384,66 @@ describe('CreditCardsPage', () => {
     await screen.findByText('Rewards matrix — best card per category')
   })
 
-  it('the drill-in spells the marginal breakdown', async () => {
+  it('the drill-in spells the marginal breakdown and the verdict it adds up to', async () => {
     renderPage('/credit-cards?card=venture-x')
     await screen.findByText('Worth keeping? (est.)')
     // VX marginal: Groceries falls back to Savor 3% → 265.20−234 = 31.20; Dining
-    // unchanged. Net = 31.20 + 300 − 395 = −63.80 → droppable phrasing shows.
+    // unchanged. Net = 31.20 + 300 − 395 = −63.80 → it costs money.
     expect(screen.getByText(/\$31\.20 marginal/)).toBeTruthy()
-    expect(screen.getByText(/droppable/)).toBeTruthy()
+    const verdict = verdictRegion()
+    expect(verdict.textContent).toContain('Costs you money')
+    expect(verdict.textContent).toContain(
+      'its $395.00 fee is more than the $31.20 of rewards and $300.00 of credits it brings',
+    )
+    expect(screen.queryByText(/droppable/)).toBeNull()
+    // What closing would change: the whole lineup's line, VX's $30,000 out of $40,000. The
+    // summary has no snapshot month, so no utilization is claimed.
+    const closing = closingLine()
+    expect(closing.textContent).toContain('total credit line $40,000.00 → $10,000.00')
+    expect(closing.textContent).not.toContain('utilization')
+  })
+
+  it('a free card says it costs nothing, names the card it ties, and what closing gives up', async () => {
+    renderPage('/credit-cards?card=savorone')
+    await screen.findByText('Worth keeping? (est.)')
+    const verdict = verdictRegion()
+    expect(verdict.textContent).toContain('Free to keep — no extra rewards')
+    expect(verdict.textContent).toContain('ties RH Gold on Dining')
+    expect(verdict.textContent).toContain('no annual fee')
+    expect(closingLine().textContent).toContain(
+      'total credit line $40,000.00 → $30,000.00',
+    )
+    // The tile's second line IS the verdict, in its tone: neutral, not the red of a card to drop.
+    const tile = screen.getByText('Net value per year').closest('.stat-tile') as HTMLElement
+    const delta = tile.querySelector('.stat-delta') as HTMLElement
+    expect(delta.textContent).toBe('Free to keep — no extra rewards')
+    expect(delta.className).toContain('stat-delta-neutral')
+  })
+
+  it('prices household utilization before and after when every card’s balance is known', async () => {
+    vi.mocked(fetchCreditCards).mockResolvedValue([
+      vx({ account_id: 7 }),
+      { ...SAVOR, account_id: 8 },
+      RH,
+    ])
+    vi.mocked(fetchSummary).mockResolvedValue({
+      month: '2026-08-01', net_worth: null, mom_delta: null, mom_pct: null, groups: [], owner_totals: [],
+    })
+    vi.mocked(fetchMonthBalances).mockResolvedValue({
+      month: '2026-08-01', exists: true, recorded_on: null, notes: null,
+      balances: [
+        { account_id: 7, balance: '-1200.00' },
+        { account_id: 8, balance: '-400.00' },
+      ],
+    })
+    renderPage('/credit-cards?card=venture-x')
+    await screen.findByText('Worth keeping? (est.)')
+    // $1,600 owed over $40,000 = 4.0%; the same $1,600 over the $10,000 left = 16.0%.
+    await waitFor(() =>
+      expect(closingLine().textContent).toContain(
+        'household utilization 4.0% → 16.0% with the same balances (as of Aug 2026)',
+      ),
+    )
   })
 
   it('saving edited multipliers PUTs only changed cells and re-renders from the echo', async () => {

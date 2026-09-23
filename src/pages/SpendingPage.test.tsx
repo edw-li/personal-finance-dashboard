@@ -888,3 +888,49 @@ describe('SpendingPage — one failed feed never blanks the page', () => {
     expect(screen.queryByText('boom')).toBeNull()
   })
 })
+
+// 2026-09-23 spec §B5: the Budgets view read the page's focus month (the latest reviewed one)
+// and called a book whose budgets start the month after "No budgets yet".
+describe('SpendingPage — the Budgets view opens where the budgets are', () => {
+  function budgetedFromJuly(): SpendingMatrix {
+    return matrixFixture({
+      // The page's own focus month is June; the budgets start in July.
+      default_month: '2026-06-01',
+      series: [
+        { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, '2100.00'] },
+        { category_id: 2, values: ['600.00', '580.00'], budgets: [null, '550.00'] },
+        { category_id: 3, values: ['150.00', '0.00'], budgets: [null, null] },
+      ],
+      total_budget: [null, '2650.00'],
+    })
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-07-20T12:00:00'))
+    vi.mocked(fetchMatrix).mockResolvedValue(budgetedFromJuly())
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('opens on the month the budgets are in force when the URL names none', async () => {
+    renderPage('/spending?section=budgets')
+    expect(await screen.findByRole('heading', { name: /Budgets — Jul 2026/ })).toBeTruthy()
+    expect(screen.getByRole('meter', { name: 'Rent spend vs budget' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start from my averages' })).toBeNull()
+    // Nothing was written into the URL: the Overview view keeps its own focus month.
+    expect(screen.getByTestId('location').textContent).not.toContain('month=')
+  })
+
+  it('a month named in the URL wins, says where the budgets are, and View moves the URL there', async () => {
+    renderPage('/spending?section=budgets&month=2026-06')
+    expect(
+      await screen.findByText('No budgets in force for Jun 2026 — your 2 budgets start Jul 2026.'),
+    ).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start from my averages' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'View Jul 2026' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toContain('month=2026-07'),
+    )
+    expect(await screen.findByRole('heading', { name: /Budgets — Jul 2026/ })).toBeTruthy()
+  })
+})

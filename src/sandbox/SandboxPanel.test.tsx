@@ -90,6 +90,20 @@ describe('SandboxPanel', () => {
     expect(screen.queryByRole('button', { name: 'Apply 1 override' })).toBeNull()
   })
 
+  // 2026-09-23 spec §B7 review: the taxes what-if holds unfinished override rows OUTSIDE the
+  // scenario, so an empty scenario can still have something for Reset to clear.
+  it('a page can keep Reset live over an empty scenario, and nothing else wakes with it', () => {
+    const sb = sandbox({ empty: true, entries: [], scenario: {} })
+    mount(sb, { canReset: true })
+    const reset = screen.getByRole('button', { name: 'Reset to actual' }) as HTMLButtonElement
+    expect(reset.disabled).toBe(false)
+    fireEvent.click(reset)
+    expect(sb.reset).toHaveBeenCalledTimes(1)
+    expect((screen.getByRole('button', { name: 'Pin this scenario' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Copy link' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Apply 1 override' })).toBeNull()
+  })
+
   it('pins: label box feeds pin(), chips unpin, Copy link writes the origin + link and toasts', async () => {
     const sb = sandbox({ pins: [{ id: 'p1', label: 'Sell 40 VTI', createdAt: 't', entries: ['a:1'] }] })
     const writeText = vi.fn().mockResolvedValue(undefined)
