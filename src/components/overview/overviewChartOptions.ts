@@ -21,7 +21,7 @@ import {
 } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { referenceLine } from '../../charts/reference'
-import { OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
+import { MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
 import type { CoverageOut, NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
@@ -63,9 +63,14 @@ type SpendingDisplay = Pick<SpendingMatrix, 'months' | 'totals'> & Partial<Pick<
 /** Nothing to exclude — one shared empty set, so the default costs no allocation. */
 const NO_MONTHS: ReadonlySet<string> = new Set<string>()
 
+// Total spending is an aggregate, not an entity (2026-09-23 spec §C2): it wears the structural
+// neutral that no category and no income entity uses. PALETTE[1], which it wore before, is Food
+// & Dining's and RSU's colour on this same page.
+const TOTAL_SPEND = MUTED
+
 // Border only, no fill: the ESPP anatomy's "hollow means this is not what it looks like"
 // idiom (esppChartOptions.ts), here for a month nobody has entered.
-const HOLLOW_BAR = { color: 'transparent', borderColor: PALETTE[1], borderWidth: 1.5 } as const
+const HOLLOW_BAR = { color: 'transparent', borderColor: TOTAL_SPEND, borderWidth: 1.5 } as const
 
 /** The months whose total is an ABSENCE rather than a figure (audit item 14).
  *
@@ -157,10 +162,31 @@ export function recentSpendOption(
   // A single-month book has nothing before the latest to average: no line, no legend entry
   // for a comparison that does not exist yet (the tile suppresses its delta for the same
   // reason).
-  const average = mean === null ? [] : [referenceLine(AVERAGE_SERIES, totals.map(() => mean))]
+  const averageData = totals.map(() => mean)
+  const average =
+    mean === null
+      ? []
+      : [
+          referenceLine(AVERAGE_SERIES, averageData),
+          // The reference's grey is the bars' grey, so where it crosses a bar it would vanish.
+          // The dataviz ring for overlapping marks: a surface casing under the dashes, 2px a
+          // side. It has no name (no legend entry), no tooltip row and no hover of its own.
+          {
+            type: 'line' as const,
+            symbol: 'none' as const,
+            silent: true,
+            z: 8,
+            color: SURFACE,
+            lineStyle: { width: 6 },
+            tooltip: { show: false },
+            emphasis: { disabled: true },
+            data: averageData,
+          },
+        ]
   return {
     grid: grid(),
-    legend: legendFor(1 + average.length),
+    // The key lists the bars and the average; the casing is not an entry.
+    legend: legendFor(1 + Math.min(average.length, 1)),
     xAxis: { ...axis, data: labels },
     yAxis: moneyAxis(),
     tooltip: axisTooltip({
@@ -181,12 +207,12 @@ export function recentSpendOption(
         type: 'bar',
         name: SPEND_SERIES,
         ...BAR_MARKS,
-        color: PALETTE[1],
+        color: TOTAL_SPEND,
         data: totals.map((value, i) =>
           blank.has(i)
             ? { value, itemStyle: HOLLOW_BAR }
             : partial.has(i)
-              ? { value, itemStyle: partialItemStyle(PALETTE[1], patterns) }
+              ? { value, itemStyle: partialItemStyle(TOTAL_SPEND, patterns) }
               : value,
         ),
       },

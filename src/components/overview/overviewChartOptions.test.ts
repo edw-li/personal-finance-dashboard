@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
+import { CATEGORY_HUES, ENTITY } from '../../charts/entities'
 import { GRID_VARIANTS, partialItemStyle } from '../../charts/grammar'
 import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
@@ -180,11 +181,20 @@ describe('netWorthTrendOption', () => {
 })
 
 describe('recentSpendOption', () => {
-  it('bars the months in palette slot 2, hairlined against the card', () => {
+  // Review (spec §C2): the bars wore PALETTE[1], which is Food & Dining's and RSU's colour on
+  // this same page. Total spending is an aggregate, not an entity: it wears the structural
+  // neutral no category and no income entity uses.
+  it('bars the months in the neutral total-spending grey, no entity’s colour, hairlined against the card', () => {
     const option = recentSpendOption({ months: monthsFrom('2026-01-01', 3), totals: totalsFrom(3) })
     const [bars] = seriesOf(option)
     expect(bars.type).toBe('bar')
-    expect(bars.color).toBe(PALETTE[1])
+    expect(bars.color).toBe(MUTED)
+    const entityHues = [
+      ...CATEGORY_HUES,
+      ENTITY.salary, ENTITY.rsu, ENTITY.espp, ENTITY.investmentIncome, ENTITY.otherIncome,
+      ENTITY.tax, ENTITY.preTaxSavings, ENTITY.saved, ENTITY.deficit, ENTITY.other, ENTITY.card, ENTITY.ritual,
+    ]
+    expect(entityHues).not.toContain(bars.color)
     // Single-series chart — there are no stacked neighbours here to separate. The
     // surface-colored 1px border is an inset that keeps this chart reading as one family
     // with SpendingPage's stacked bars (there the same border divides segments).
@@ -195,6 +205,22 @@ describe('recentSpendOption', () => {
     expect(bars.data).toEqual([100, 200, 300])
     expect(categoriesOf(option)).toEqual(['Jan 2026', 'Feb 2026', 'Mar 2026'])
     expect(bars.emphasis).toEqual({ focus: 'series', itemStyle: { borderColor: INK } })
+  })
+
+  // The average's grey is the bars' grey now, so where it crosses a bar it would vanish; the
+  // dataviz ring for overlapping marks: a surface casing under the dashes, 2px a side. No name
+  // (no legend entry), no tooltip row, no hover.
+  it('cases the average line in the surface colour so it reads across the grey bars', () => {
+    const option = recentSpendOption({ months: monthsFrom('2026-01-01', 3), totals: totalsFrom(3) })
+    const series = seriesOf(option) as (ReturnType<typeof seriesOf>[number] & { silent?: boolean; tooltip?: { show?: boolean } })[]
+    const casing = series[2]
+    expect(casing).toMatchObject({ type: 'line', color: SURFACE, z: 8, silent: true, lineStyle: { width: 6 }, tooltip: { show: false } })
+    expect(casing.name).toBeUndefined()
+    expect(casing.data).toEqual(series[1].data)
+    // Still ONE comparison in the key: the bars and the average.
+    expect((option as unknown as { legend: { type: string } }).legend.type).toBe('plain')
+    // No average (a one-month book): no casing either.
+    expect(seriesOf(recentSpendOption({ months: monthsFrom('2026-01-01', 1), totals: totalsFrom(1) }))).toHaveLength(1)
   })
 
   it('F14: a dashed reference at the SPEND TILE’s own 12-mo average, listed after the bars', () => {
@@ -259,20 +285,20 @@ describe('recentSpendOption', () => {
     // entered months stay plain numbers, so the series still carries the palette fill.
     expect(bars.data).toEqual([
       100,
-      { value: 0, itemStyle: { color: 'transparent', borderColor: PALETTE[1], borderWidth: 1.5 } },
+      { value: 0, itemStyle: { color: 'transparent', borderColor: MUTED, borderWidth: 1.5 } },
       300,
     ])
     // The row keeps its figure and gains the word that makes the figure honest.
     const suffixed = tooltipRows(
       tooltipOf(option).formatter([
-        { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: 'Feb 2026', dataIndex: 1, value: 0, color: PALETTE[1] },
+        { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: 'Feb 2026', dataIndex: 1, value: 0, color: MUTED },
       ]),
     )
     expect(suffixed.rows).toEqual([{ kind: 'row', label: 'Spend (not entered)', value: '$0.00' }])
     // ...and an entered month is untouched.
     const plain = tooltipRows(
       tooltipOf(option).formatter([
-        { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: 'Jan 2026', dataIndex: 0, value: 100, color: PALETTE[1] },
+        { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: 'Jan 2026', dataIndex: 0, value: 100, color: MUTED },
       ]),
     )
     expect(plain.rows).toEqual([{ kind: 'row', label: 'Spend', value: '$100.00' }])
@@ -308,7 +334,7 @@ describe('recentSpendOption', () => {
     expect(yAxisOf(option).axisLabel?.formatter?.(1500)).toBe('$1.5K')
     expect(tooltipOf(option).axisPointer).toEqual({ type: 'shadow' }) // F7: bars take the shadow rule
     const rows = tooltipRows(tooltipOf(option).formatter([
-      { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: 'Jan 2026', value: 100, color: PALETTE[1] },
+      { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: 'Jan 2026', value: 100, color: MUTED },
       { seriesName: '12-mo average', seriesType: 'line', value: 150, color: MUTED },
     ]))
     expect(rows.rows.map((r) => [r.kind, r.label, r.value])).toEqual([['row', 'Spend', '$100.00'], ['ref', '12-mo average', '$150.00']])
@@ -481,7 +507,7 @@ describe('recentSpendOption: the month in progress (2026-09-23 spec §C5)', () =
   const headOf = (option: EChartsOption | null, label: string, dataIndex: number, value: number) =>
     tooltipRows(
       tooltipOf(option).formatter([
-        { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: label, dataIndex, value, color: PALETTE[1] },
+        { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: label, dataIndex, value, color: MUTED },
       ]),
     ).head
 
@@ -489,11 +515,11 @@ describe('recentSpendOption: the month in progress (2026-09-23 spec §C5)', () =
     expect(seriesOf(recentSpendOption(feed, 12, undefined, { todayIso: today }))[0].data).toEqual([
       4000,
       4200,
-      { value: 2072.23, itemStyle: { borderColor: PALETTE[1], borderWidth: 1, borderType: 'dashed', opacity: 0.45 } },
+      { value: 2072.23, itemStyle: { borderColor: MUTED, borderWidth: 1, borderType: 'dashed', opacity: 0.45 } },
     ])
     expect(seriesOf(recentSpendOption(feed, 12, undefined, { todayIso: today, patterns: true }))[0].data?.[2]).toEqual({
       value: 2072.23,
-      itemStyle: partialItemStyle(PALETTE[1], true),
+      itemStyle: partialItemStyle(MUTED, true),
     })
   })
 
@@ -526,7 +552,7 @@ describe('recentSpendOption: the month in progress (2026-09-23 spec §C5)', () =
     const option = recentSpendOption(empty, 12, new Set(['2026-09-01']), { todayIso: today })
     expect(seriesOf(option)[0].data?.[2]).toEqual({
       value: 0,
-      itemStyle: { color: 'transparent', borderColor: PALETTE[1], borderWidth: 1.5 },
+      itemStyle: { color: 'transparent', borderColor: MUTED, borderWidth: 1.5 },
     })
     expect(axisDataOf(option)[2]).toEqual({ value: 'Sep 2026', textStyle: { color: OTHER_SERIES_COLOR } })
     expect(labelOf(option)('Sep 2026', 2)).toBe('Sep 2026*')
