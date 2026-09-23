@@ -284,8 +284,8 @@ export default function SettingsPage() {
           tiles: 0,
           cards: [
             { span: 4, height: 362 },
-            { span: 8, height: 842 },
-            { span: 12, height: 987 },
+            { span: 8, height: 637 },
+            { span: 12, height: 1056 },
           ],
         }}
       >

@@ -537,7 +537,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
         <InfoHint text="The net-worth roster. Owner blank = joint. Retire keeps an account out of the wizard and the charts without losing its history; delete only works while an account has no balances. The slug never changes — it is the workbook importer's key. Drag a row by its grip to reorder accounts within their group; a parent brings its components with it." />
       </h2>
       <FeedBanner error={loadError} retry={() => load()} retryLabel="Retry loading the accounts" />
-      {!settled && <SettingsGhost height={1045} />}
+      {!settled && <SettingsGhost height={1114} />}
       {settled && loaded && (
         <>
           <form

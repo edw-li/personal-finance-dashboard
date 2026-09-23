@@ -569,3 +569,9 @@ it('says what the order is for and how to change it (spec §8.1)', async () => {
     'Drag a row by its grip to change the order the app lists categories in.',
   )
 })
+
+it('reserves its loaded height while the list is on the wire (2026-09-13 spec §9)', () => {
+  vi.mocked(fetchCategories).mockReturnValue(new Promise<CategoryOut[]>(() => {}))
+  render(<CategoriesCard />)
+  expect((document.querySelector('.settings-ghost') as HTMLElement).dataset.ghostHeight).toBe('695')
+})

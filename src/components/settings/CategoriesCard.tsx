@@ -255,7 +255,7 @@ export default function CategoriesCard() {
         <InfoHint text="The spending matrix's rows. Retire keeps a category out of the wizard without losing its history; delete only works while a category has no monthly rows. The slug never changes — it is the workbook importer's key. Drag a row by its grip to change the order the app lists categories in." />
       </h2>
       <FeedBanner error={loadError} retry={() => load()} retryLabel="Retry loading the categories" />
-      {!loaded && loadError === null && <SettingsGhost height={900} />}
+      {!loaded && loadError === null && <SettingsGhost height={695} />}
       {loaded && (
         <>
           <form

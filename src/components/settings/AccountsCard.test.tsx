@@ -626,7 +626,7 @@ it('renders once, after BOTH feeds settle — no roster table before the portfol
   vi.mocked(fetchAccounts).mockReturnValue(accounts.promise)
   vi.mocked(fetchPortfolioAccounts).mockReturnValue(labels.promise)
   render(<AccountsCard people={[ME]} />)
-  expect((document.querySelector('.settings-ghost') as HTMLElement).dataset.ghostHeight).toBe('1045')
+  expect((document.querySelector('.settings-ghost') as HTMLElement).dataset.ghostHeight).toBe('1114')
   expect(screen.queryByText('Portfolio accounts')).toBeNull()
   await act(async () => {
     accounts.resolve([CHECKING])
