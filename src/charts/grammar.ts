@@ -292,7 +292,8 @@ const MONTH_LABEL = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$
 export const MONTH_LABEL_FULL_PX = 57
 /** "Oct" — the first visible label and each January as "Oct '25" / "Jan '26". */
 export const MONTH_LABEL_SHORT_PX = 35
-/** "Oct" — the first visible label and each January replaced by the year itself, "2026". */
+/** "Oct" — each January replaced by the year itself, "2026"; the first visible label still
+ *  "Oct '25", and the overlap guard gives it its neighbour's room. */
 export const MONTH_LABEL_COMPACT_PX = 28
 /** The partial-period marker a month label carries (spec §C5); the tooltip says the words. */
 export const PARTIAL_MARK = '*'
@@ -310,18 +311,19 @@ export function monthLabelMode(spacing: number): MonthLabelMode {
 
 /** The text one month category prints. `index` is its position inside the VISIBLE window —
  *  echarts hands category formatters `tick - windowStart` — so "the first label" is the first
- *  one on screen. Tooltips keep the full month: they read the category, not this text. A label
- *  that is not "Mmm YYYY" passes through untouched. */
+ *  one on screen, and it always carries the month AND the year (spec §C4: a bare "2025" under
+ *  October reads as January). Tooltips keep the full month: they read the category, not this
+ *  text. A label that is not "Mmm YYYY" passes through untouched. */
 export function monthTick(label: string, index: number, mode: MonthLabelMode, marked = false): string {
   const match = MONTH_LABEL.exec(label)
   if (match === null) return label
   const mark = marked ? PARTIAL_MARK : ''
   if (mode === 'full') return `${label}${mark}`
   const [, month, year] = match
-  const anchor = index === 0 || month === 'Jan'
-  if (mode === 'compact') return `${anchor ? year : month}${mark}`
-  const withYear = mode === 'sparse' || anchor
-  return `${withYear ? `${month} '${year.slice(2)}` : month}${mark}`
+  const monthYear = `${month} '${year.slice(2)}`
+  if (index === 0 || mode === 'sparse') return `${monthYear}${mark}`
+  if (month === 'Jan') return `${mode === 'compact' ? year : monthYear}${mark}`
+  return `${month}${mark}`
 }
 
 interface MonthAxisMeta {
@@ -344,7 +346,9 @@ function monthFormatter(mode: MonthLabelMode, meta: MonthAxisMeta) {
  *  omitted so a bar option's axis stays as it was. Twelve categories or fewer label every one
  *  (a year of months must not skip alternate labels) until EChart fits the axis to its width.
  *  Month labels ("Mmm YYYY") get the grammar's formatter — full until fitted — and the
- *  overlap guard; `marked` months (in progress, spec §C5) carry PARTIAL_MARK. Any other
+ *  overlap guard; `marked` months (in progress, spec §C5) carry PARTIAL_MARK, and an axis with
+ *  one always shows its LAST label: the month in progress is the latest, and when echarts thins
+ *  the labels (All ranges, the heatmap) its mark must not be the one thinned away. Any other
  *  labels (years, steps, dates) keep exactly the axis they always had. */
 export function monthAxis(
   labels: string[],
@@ -357,6 +361,7 @@ export function monthAxis(
           formatter: monthFormatter('full', { marked: marked ?? NO_MARKS, rotated: rotate !== undefined }),
           hideOverlap: true,
           textMargin: [...MONTH_TEXT_MARGIN],
+          ...(marked !== undefined && marked.size > 0 ? { showMaxLabel: true } : {}),
         }
       : {}),
     ...(labels.length <= 12 ? { interval: 0 } : {}),

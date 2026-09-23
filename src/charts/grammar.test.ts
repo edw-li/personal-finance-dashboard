@@ -253,7 +253,10 @@ describe('month labels', () => {
     expect(monthTick('Oct 2025', 0, 'short')).toBe("Oct '25")
     expect(monthTick('Nov 2025', 1, 'short')).toBe('Nov')
     expect(monthTick('Jan 2026', 3, 'short')).toBe("Jan '26")
-    expect(monthTick('Oct 2025', 0, 'compact')).toBe('2025')
+    // Review nit (spec §C4): the FIRST label carries the month AND the year in every form — a
+    // bare "2025" under October reads as January. Later Januaries keep the year alone.
+    expect(monthTick('Oct 2025', 0, 'compact')).toBe("Oct '25")
+    expect(monthTick('Jan 2026', 0, 'compact')).toBe("Jan '26")
     expect(monthTick('Nov 2025', 1, 'compact')).toBe('Nov')
     expect(monthTick('Jan 2026', 3, 'compact')).toBe('2026')
     expect(monthTick('Nov 2025', 1, 'sparse')).toBe("Nov '25")
@@ -275,6 +278,17 @@ describe('month labels', () => {
     expect(labelsOf(axis)).toEqual(YEAR)
     const marked = monthAxis(YEAR, { gap: true, marked: new Set(['Sep 2026']) }) as unknown as Axis
     expect(labelsOf(marked).at(-1)).toBe('Sep 2026*')
+    // Review nit (spec §C5): the in-progress month is the latest one, and when echarts thins the
+    // labels (All ranges, the heatmap) its marked label must not be the one thinned away.
+    expect((marked.axisLabel as unknown as { showMaxLabel?: boolean }).showMaxLabel).toBe(true)
+    expect((axis.axisLabel as unknown as { showMaxLabel?: boolean }).showMaxLabel).toBeUndefined()
+    const heat = monthAxis(YEAR, { gap: true, rotate: 45, marked: new Set(['Sep 2026']) }) as unknown as Axis
+    expect((heat.axisLabel as unknown as { showMaxLabel?: boolean }).showMaxLabel).toBe(true)
+    // …and the fit keeps it: 38 months at 1280 are sparse, thinned by echarts.
+    const long = Array.from({ length: 38 }, (_, i) => `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][(i + 7) % 12]} ${2023 + Math.floor((i + 7) / 12)}`)
+    const sparse = (fitMonthAxes({ grid: grid(), xAxis: monthAxis(long, { gap: true, marked: new Set([long[37]]) }) }, 949).option as unknown as { xAxis: Axis }).xAxis
+    expect(sparse.axisLabel.interval).toBe('auto')
+    expect((sparse.axisLabel as unknown as { showMaxLabel?: boolean }).showMaxLabel).toBe(true)
     // Years, tax steps, dates: byte-identical to the axis every other chart has today.
     expect(monthAxis(['2024', '2025'], { gap: true })).toEqual({ type: 'category', data: ['2024', '2025'], axisLabel: { interval: 0 } })
     expect(monthAxis([])).toEqual({ type: 'category', data: [], boundaryGap: false, axisLabel: { interval: 0 } })
@@ -286,7 +300,8 @@ describe('month labels', () => {
   it('fits the Overview twelve months at 1280, 1600 and 1920', () => {
     const option = { grid: grid(), xAxis: monthAxis(YEAR, { gap: true }) }
     const at = (width: number) => (fitMonthAxes(option, width).option as unknown as { xAxis: Axis }).xAxis
-    expect(labelsOf(at(446))).toEqual(['2025', 'Nov', 'Dec', '2026', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'])
+    // At 29 px "Oct '25" needs the room of its neighbour: the overlap guard hides "Nov" when drawn.
+    expect(labelsOf(at(446))).toEqual(["Oct '25", 'Nov', 'Dec', '2026', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'])
     expect(labelsOf(at(606))).toEqual(["Oct '25", 'Nov', 'Dec', "Jan '26", 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'])
     expect(labelsOf(at(766))).toEqual(["Oct '25", 'Nov', 'Dec', "Jan '26", 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'])
     // A wider card (the Expand dialog, a full-width card) earns the full month.

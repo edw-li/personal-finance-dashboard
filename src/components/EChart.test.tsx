@@ -708,7 +708,7 @@ describe('EChart fits month labels to its width', () => {
     width = 446
     render(<EChart ariaLabel="Recent spending" option={monthOption()} />)
     const applied = lastChart().setOption.mock.calls[0][0] as Fitted
-    expect(applied.xAxis.axisLabel.formatter('Oct 2025', 0)).toBe('2025')
+    expect(applied.xAxis.axisLabel.formatter('Oct 2025', 0)).toBe("Oct '25")
     expect(applied.xAxis.axisLabel.formatter('Nov 2025', 1)).toBe('Nov')
     expect(applied.xAxis.axisLabel.interval).toBe(0)
   })
