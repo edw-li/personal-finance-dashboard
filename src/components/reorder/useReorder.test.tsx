@@ -1254,6 +1254,25 @@ describe('useReorder — reduced motion (spec §2.5)', () => {
     expect(linePlacement()).toEqual(['179px', '0px', '300px'])
   })
 
+  it('reads no computed style after the lift — not per pointer move, not per auto-scroll frame', () => {
+    vi.useFakeTimers()
+    reduceMotion()
+    const ids = Array.from({ length: 20 }, (_, index) => `r${index}`)
+    render(<TableList items={flat(...ids)} />)
+    scrollBox({ top: 100, height: 420, header: 60, scrollTop: 440 }) // r19 at 480..520
+    const handle = grip('r19') // a role query reads computed styles itself: found before the spy
+    fireEvent.pointerDown(handle, { pointerId: 1, button: 0, clientY: 500 })
+    fireEvent.pointerMove(handle, { pointerId: 1, clientY: 440 }) // lifted; before r18: the line is made
+    expect(linePlacement()).toEqual(['439px', '0px', '300px'])
+    const styles = vi.spyOn(window, 'getComputedStyle')
+    for (const y of [430, 420, 410, 400, 390]) fireEvent.pointerMove(handle, { pointerId: 1, clientY: y })
+    fireEvent.pointerMove(handle, { pointerId: 1, clientY: 130 }) // over the header: frames scroll the box
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(styles).not.toHaveBeenCalled()
+  })
+
   it('a scroll listener that outlives its drag draws nothing — after a drop that commits at once, and after a cancel', () => {
     reduceMotion()
     // As if a drag's detach never ran: the window keeps every scroll listener it is given (put back

@@ -42,41 +42,61 @@ export function unitExtent(elements: readonly HTMLElement[], scroller: Scroller)
   return top === Number.POSITIVE_INFINITY ? { top: 0, height: 0 } : { top, height: bottom - top }
 }
 
-/** Where the scroller's sticky header ends (client y): a `thead` that sticks, or whose cells do —
- *  settings.css's and categories.css's `thead th { position: sticky; top: 0 }` — or null when it has
- *  none (the page never does). Measured on what sticks: when only the CELLS stick, the row group's
- *  own box never moves, so the thead's rect would still say where the header began, scrolled away
- *  above the box (lane R7, from lane V's finding 2). */
-export function stickyHeaderBottom(scroller: Scroller): number | null {
+/** What a drag knows of where its list stands — useReorder's Drag carries all three: the scroller,
+ *  and, resolved ONCE at lift so no frame or pointer move reads a computed style or walks the
+ *  ancestors again (lane R7 review 7), what sticks of its header and what clips it sideways. Only
+ *  their rects are read after. */
+export interface ListFrame {
+  scroller: Scroller
+  /** stickyHeaderOf: empty without one. */
+  header: readonly Element[]
+  /** sideClipsOf: empty when nothing clips. */
+  clips: readonly HTMLElement[]
+}
+
+/** What sticks of the scroller's table header — the thead itself, or its cells (settings.css's and
+ *  categories.css's `thead th { position: sticky; top: 0 }`) — or nothing: the page never has one. */
+export function stickyHeaderOf(scroller: Scroller): Element[] {
   const head = scroller?.querySelector('thead') ?? null
-  if (head === null) return null
+  if (head === null) return []
+  return [head, ...head.querySelectorAll('th, td')].filter(
+    (element) => getComputedStyle(element).position === 'sticky',
+  )
+}
+
+/** Where a sticky header (stickyHeaderOf) ends NOW, client y, measured on what sticks: when only the
+ *  CELLS stick, the row group's own box never moves, so the thead's rect would still say where the
+ *  header began, scrolled away above the box (lane R7, from lane V's finding 2). Null without one. */
+export function headerBottom(header: readonly Element[]): number | null {
   let bottom: number | null = null
-  for (const element of [head, ...head.querySelectorAll('th, td')]) {
-    if (getComputedStyle(element).position !== 'sticky') continue
+  for (const element of header) {
     const edge = element.getBoundingClientRect().bottom
     bottom = bottom === null ? edge : Math.max(bottom, edge)
   }
   return bottom
 }
 
-/** How far the scroller's sticky header reaches into its box, px: the top of its own view that the
- *  header hides. 0 for the page and for a box without one. */
-export function stickyInset(scroller: Scroller): number {
-  const header = stickyHeaderBottom(scroller)
-  if (scroller === null || header === null) return 0
-  return Math.max(0, header - scroller.getBoundingClientRect().top)
+/** How far a sticky header reaches into its scroller's box, px: the top of the scroller's own view
+ *  that the header hides. 0 for the page and without one. */
+export function stickyInset(scroller: Scroller, header: readonly Element[]): number {
+  const bottom = headerBottom(header)
+  if (scroller === null || bottom === null) return 0
+  return Math.max(0, bottom - scroller.getBoundingClientRect().top)
 }
 
 /** The client-y band the reader can currently see of the scroller (the viewport for the page): an
- *  element's box below its sticky header, clipped to the viewport. So the auto-scroll zone starts
- *  where the rows show — a 46px two-line header no longer hides the range's first row at the stop
- *  (lane V's finding 2) — and a 420px Settings scroller hanging past the bottom of the window keeps
- *  its zone where the pointer can reach it. */
-export function visibleBounds(scroller: Scroller): { top: number; bottom: number } {
+ *  element's box below its sticky `header` (stickyHeaderOf), clipped to the viewport. So the
+ *  auto-scroll zone starts where the rows show — a 46px two-line header no longer hides the range's
+ *  first row at the stop (lane V's finding 2) — and a 420px Settings scroller hanging past the bottom
+ *  of the window keeps its zone where the pointer can reach it. */
+export function visibleBounds(
+  scroller: Scroller,
+  header: readonly Element[] = [],
+): { top: number; bottom: number } {
   if (scroller === null) return { top: 0, bottom: window.innerHeight }
   const box = scroller.getBoundingClientRect()
-  const header = stickyHeaderBottom(scroller) ?? box.top
-  return { top: Math.max(box.top, header, 0), bottom: Math.min(box.bottom, window.innerHeight) }
+  const top = headerBottom(header) ?? box.top
+  return { top: Math.max(box.top, top, 0), bottom: Math.min(box.bottom, window.innerHeight) }
 }
 
 /** What the scroller shows, in list coordinates: its scroll offset and its visible height (the
@@ -94,15 +114,16 @@ export function scrollByY(scroller: Scroller, dy: number): void {
 
 /** Scroll the least amount that shows [top, top + height) (list coordinates) clear of the
  *  auto-scroll zone at either edge — the keyboard path's "keep the lifted row in view". The top zone
- *  starts below the scroller's sticky header, as the pointer's does (visibleBounds). */
+ *  starts below the scroller's sticky `header` (stickyHeaderOf), as the pointer's does. */
 export function ensureVisible(
   scroller: Scroller,
   top: number,
   height: number,
+  header: readonly Element[] = [],
   margin = AUTO_SCROLL_EDGE,
 ): void {
   const view = scrollView(scroller)
-  const first = view.top + stickyInset(scroller) + margin
+  const first = view.top + stickyInset(scroller, header) + margin
   if (top < first) scrollByY(scroller, top - first)
   else if (top + height > view.top + view.height - margin) {
     scrollByY(scroller, top + height - (view.top + view.height - margin))
@@ -180,22 +201,33 @@ export function createDropLine(row: Element): HTMLElement {
   return line
 }
 
-/** The x-extent the reader can see of `box` (the client rect of `element`): clipped by every
- *  ancestor that actually scrolls sideways — a ledger wider than its .holdings-scroll — and by the
- *  window. A box with nothing to scroll clips nothing: the row fits inside it. */
-export function visibleSpan(element: Element, box: DOMRect): { left: number; right: number } {
-  let left = Math.max(box.left, 0)
-  let right = Math.min(box.right, window.innerWidth)
-  let node = element.parentElement
+/** The ancestors of `element` that clip it sideways AND actually overflow — a ledger wider than its
+ *  .holdings-scroll. A box with nothing to scroll clips nothing: the row fits inside it. */
+export function sideClipsOf(element: Element | null): HTMLElement[] {
+  const clips: HTMLElement[] = []
+  let node = element?.parentElement ?? null
   while (node !== null && node !== document.body && node !== document.documentElement) {
     const overflowX = getComputedStyle(node).overflowX
-    const clips = overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'hidden' || overflowX === 'clip'
-    if (clips && node.scrollWidth - node.clientWidth > 1) {
-      const inner = node.getBoundingClientRect().left + node.clientLeft
-      left = Math.max(left, inner)
-      right = Math.min(right, inner + node.clientWidth)
-    }
+    const clipping =
+      overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'hidden' || overflowX === 'clip'
+    if (clipping && node.scrollWidth - node.clientWidth > 1) clips.push(node)
     node = node.parentElement
+  }
+  return clips
+}
+
+/** The x-extent the reader can see of a row's client rect `box`: clipped by the inner box of each
+ *  of its `clips` (sideClipsOf) where they stand now, and by the window. */
+export function visibleSpan(
+  box: DOMRect,
+  clips: readonly HTMLElement[],
+): { left: number; right: number } {
+  let left = Math.max(box.left, 0)
+  let right = Math.min(box.right, window.innerWidth)
+  for (const clip of clips) {
+    const inner = clip.getBoundingClientRect().left + clip.clientLeft
+    left = Math.max(left, inner)
+    right = Math.min(right, inner + clip.clientWidth)
   }
   return { left, right }
 }
@@ -204,17 +236,17 @@ export function visibleSpan(element: Element, box: DOMRect): { left: number; rig
  *  on that edge, as wide as the row shows — or hide it while that edge is outside the band the reader
  *  can see of the scroller (below its sticky header, inside the window). An edge within half the
  *  line of the band still draws: half of it shows. Positions are measured, so every paint and every
- *  scroll places it again. */
+ *  scroll places it again — from the drag's `frame`, resolved at lift, reading rects alone. */
 export function placeDropLine(
   line: HTMLElement,
   edge: Element,
   side: 'before' | 'after',
-  scroller: Scroller,
+  frame: ListFrame,
 ): void {
   const box = edge.getBoundingClientRect()
   const y = side === 'before' ? box.top : box.bottom
-  const band = visibleBounds(scroller)
-  const span = visibleSpan(edge, box)
+  const band = visibleBounds(frame.scroller, frame.header)
+  const span = visibleSpan(box, frame.clips)
   const half = DROP_LINE_PX / 2
   line.hidden = y < band.top - half || y > band.bottom + half || span.right <= span.left
   if (line.hidden) return

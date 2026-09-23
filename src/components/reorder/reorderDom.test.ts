@@ -4,18 +4,24 @@ import {
   DROP_LINE_PX,
   dropLineLayer,
   ensureVisible,
+  headerBottom,
   keepOnScreen,
   listY,
   placeDropLine,
   scrollParentOf,
   scrollView,
-  stickyHeaderBottom,
+  sideClipsOf,
+  stickyHeaderOf,
   stickyInset,
   unitExtent,
   viewportDelta,
   visibleBounds,
   visibleSpan,
 } from './reorderDom'
+import type { ListFrame } from './reorderDom'
+
+/** A page-scrolled list's frame: no scroller, no sticky header, nothing clipping it sideways. */
+const PAGE: ListFrame = { scroller: null, header: [], clips: [] }
 
 function rect(top: number, height: number, left = 0, width = 100): DOMRect {
   return {
@@ -133,40 +139,56 @@ describe('listY / unitExtent / visibleBounds', () => {
   })
 
   it("an element's band starts below its sticky header: rows under the header are not seen", () => {
-    expect(visibleBounds(scrolledTable(120, 'cells'))).toEqual({ top: 166, bottom: 540 })
-    expect(visibleBounds(scrolledTable(120, 'thead'))).toEqual({ top: 166, bottom: 540 })
+    const band = (box: HTMLElement) => visibleBounds(box, stickyHeaderOf(box))
+    expect(band(scrolledTable(120, 'cells'))).toEqual({ top: 166, bottom: 540 })
+    expect(band(scrolledTable(120, 'thead'))).toEqual({ top: 166, bottom: 540 })
     // A header that does not stick scrolled away with its rows: the band is the whole box.
-    expect(visibleBounds(scrolledTable(120, 'nothing'))).toEqual({ top: 120, bottom: 540 })
+    expect(band(scrolledTable(120, 'nothing'))).toEqual({ top: 120, bottom: 540 })
   })
 
   it('the header counts only where the window shows it', () => {
-    expect(visibleBounds(scrolledTable(-20, 'cells'))).toEqual({ top: 26, bottom: 400 })
-    expect(visibleBounds(scrolledTable(-100, 'cells'))).toEqual({ top: 0, bottom: 320 })
+    const band = (box: HTMLElement) => visibleBounds(box, stickyHeaderOf(box))
+    expect(band(scrolledTable(-20, 'cells'))).toEqual({ top: 26, bottom: 400 })
+    expect(band(scrolledTable(-100, 'cells'))).toEqual({ top: 0, bottom: 320 })
   })
 })
 
-describe('stickyHeaderBottom / stickyInset', () => {
-  it('reads the sticky header CELLS: a thead whose cells stick keeps its own box where the header began', () => {
+describe('stickyHeaderOf / headerBottom / stickyInset', () => {
+  it('finds what sticks — the cells, the house rule — and measures THEM: the thead keeps its box where the header began', () => {
     // The thead's rect is still 200px above the box (scrolled away); the cells stand at its top.
     const box = scrolledTable(120, 'cells')
-    expect(stickyHeaderBottom(box)).toBe(166)
-    expect(stickyInset(box)).toBe(46)
+    const header = stickyHeaderOf(box)
+    expect(header).toEqual([...box.querySelectorAll('th')])
+    expect(headerBottom(header)).toBe(166)
+    expect(stickyInset(box, header)).toBe(46)
   })
 
-  it('reads a thead that sticks itself', () => {
+  it('finds a thead that sticks itself', () => {
     const box = scrolledTable(120, 'thead')
-    expect(stickyHeaderBottom(box)).toBe(166)
-    expect(stickyInset(box)).toBe(46)
+    const header = stickyHeaderOf(box)
+    expect(header).toEqual([box.querySelector('thead')])
+    expect(headerBottom(header)).toBe(166)
+    expect(stickyInset(box, header)).toBe(46)
   })
 
-  it('is null — an inset of 0 — without a sticky header, and for the page', () => {
-    expect(stickyHeaderBottom(scrolledTable(120, 'nothing'))).toBeNull()
-    expect(stickyInset(scrolledTable(120, 'nothing'))).toBe(0)
-    const plain = document.createElement('div')
-    plain.getBoundingClientRect = () => rect(120, 420)
-    expect(stickyHeaderBottom(plain)).toBeNull()
-    expect(stickyHeaderBottom(null)).toBeNull()
-    expect(stickyInset(null)).toBe(0)
+  it('reads where the header stands NOW — found once, measured every time', () => {
+    const box = scrolledTable(120, 'cells')
+    const header = stickyHeaderOf(box)
+    box.getBoundingClientRect = () => rect(90, 420) // the page scrolled 30px: the box and its header rose
+    box.querySelectorAll('th').forEach((th) => {
+      th.getBoundingClientRect = () => rect(90, 46)
+    })
+    expect(headerBottom(header)).toBe(136)
+    expect(visibleBounds(box, header)).toEqual({ top: 136, bottom: 510 })
+  })
+
+  it('is empty — no bottom, an inset of 0 — without a sticky header, and for the page', () => {
+    expect(stickyHeaderOf(scrolledTable(120, 'nothing'))).toEqual([])
+    expect(headerBottom([])).toBeNull()
+    expect(stickyInset(scrolledTable(120, 'nothing'), [])).toBe(0)
+    expect(stickyHeaderOf(document.createElement('div'))).toEqual([])
+    expect(stickyHeaderOf(null)).toEqual([])
+    expect(stickyInset(null, [])).toBe(0)
   })
 })
 
@@ -194,12 +216,13 @@ describe('ensureVisible', () => {
 
   it('keeps the unit clear of the edge zone BELOW a sticky header — never parked under it', () => {
     const scroller = scrolledTable(120, 'cells') // a 46px header over a 400px view
+    const header = stickyHeaderOf(scroller)
     setBox(scroller, { clientHeight: 400, scrollTop: 300 })
-    ensureVisible(scroller, 320, 40) // top 320 above 300 + 46 + 40 → up by 66
+    ensureVisible(scroller, 320, 40, header) // top 320 above 300 + 46 + 40 → up by 66
     expect(scroller.scrollTop).toBe(234)
-    ensureVisible(scroller, 330, 40) // clear of the header's zone now: stays
+    ensureVisible(scroller, 330, 40, header) // clear of the header's zone now: stays
     expect(scroller.scrollTop).toBe(234)
-    ensureVisible(scroller, 700, 40) // the bottom zone is unchanged: 740 past 234 + 400 − 40 → down 146
+    ensureVisible(scroller, 700, 40, header) // the bottom zone is unchanged: 740 past 234 + 400 − 40 → down 146
     expect(scroller.scrollTop).toBe(380)
   })
 })
@@ -247,15 +270,16 @@ describe('keepOnScreen', () => {
   })
 })
 
-describe('visibleSpan', () => {
+describe('sideClipsOf / visibleSpan', () => {
   it("is the box clipped to the window when nothing clips it sideways", () => {
     const row = document.createElement('tr')
     document.body.append(row)
-    expect(visibleSpan(row, rect(200, 40, -10, 1200))).toEqual({ left: 0, right: window.innerWidth })
-    expect(visibleSpan(row, rect(200, 40, 40, 600))).toEqual({ left: 40, right: 640 })
+    expect(sideClipsOf(row)).toEqual([])
+    expect(visibleSpan(rect(200, 40, -10, 1200), [])).toEqual({ left: 0, right: window.innerWidth })
+    expect(visibleSpan(rect(200, 40, 40, 600), [])).toEqual({ left: 40, right: 640 })
   })
 
-  it('stops at an ancestor that actually scrolls sideways (a wide ledger in .holdings-scroll)', () => {
+  it('stops at an ancestor that actually scrolls sideways (a wide ledger in .holdings-scroll) — where it stands now', () => {
     document.body.innerHTML =
       '<div id="wrap" style="overflow-x: auto"><table><tbody><tr id="row"><td>x</td></tr></tbody></table></div>'
     const wrap = document.getElementById('wrap') as HTMLElement
@@ -263,10 +287,14 @@ describe('visibleSpan', () => {
     Object.defineProperty(wrap, 'clientWidth', { value: 600, configurable: true })
     Object.defineProperty(wrap, 'scrollWidth', { value: 1400, configurable: true })
     const row = document.getElementById('row') as HTMLElement
-    expect(visibleSpan(row, rect(200, 40, 100, 1400))).toEqual({ left: 100, right: 700 })
+    const clips = sideClipsOf(row)
+    expect(clips).toEqual([wrap])
+    expect(visibleSpan(rect(200, 40, 100, 1400), clips)).toEqual({ left: 100, right: 700 })
+    wrap.getBoundingClientRect = () => rect(180, 400, 60, 600) // moved: its rect is read each time
+    expect(visibleSpan(rect(200, 40, 60, 1400), clips)).toEqual({ left: 60, right: 660 })
     // The same box with nothing to scroll clips nothing: the row fits inside it.
     Object.defineProperty(wrap, 'scrollWidth', { value: 600, configurable: true })
-    expect(visibleSpan(row, rect(200, 40, 100, 590))).toEqual({ left: 100, right: 690 })
+    expect(sideClipsOf(row)).toEqual([])
   })
 })
 
@@ -298,33 +326,47 @@ describe('the drop line', () => {
     document.body.append(row)
     const line = createDropLine(row)
     row.getBoundingClientRect = () => rect(300, 40, 24, 900)
-    placeDropLine(line, row, 'before', null)
+    placeDropLine(line, row, 'before', PAGE)
     expect(line.hidden).toBe(false)
     expect([line.style.top, line.style.left, line.style.width]).toEqual([
       `${300 - DROP_LINE_PX / 2}px`,
       '24px',
       '900px',
     ])
-    placeDropLine(line, row, 'after', null)
+    placeDropLine(line, row, 'after', PAGE)
     expect(line.style.top).toBe(`${340 - DROP_LINE_PX / 2}px`)
   })
 
   it("hides while the edge is outside the band the reader sees of the scroller — under its sticky header, or past the window", () => {
     const box = scrolledTable(120, 'cells') // the band: 166..540
     const row = box.querySelector('tbody tr') as HTMLElement
+    const frame: ListFrame = { scroller: box, header: stickyHeaderOf(box), clips: [] }
     const line = createDropLine(row)
     row.getBoundingClientRect = () => rect(140, 40) // its top under the header, its bottom below it
-    placeDropLine(line, row, 'before', box)
+    placeDropLine(line, row, 'before', frame)
     expect(line.hidden).toBe(true)
-    placeDropLine(line, row, 'after', box)
+    placeDropLine(line, row, 'after', frame)
     expect(line.hidden).toBe(false)
     expect(line.style.top).toBe(`${180 - DROP_LINE_PX / 2}px`)
     // An edge within half the line of the band still draws: half of it shows.
     row.getBoundingClientRect = () => rect(165, 40)
-    placeDropLine(line, row, 'before', box)
+    placeDropLine(line, row, 'before', frame)
     expect(line.hidden).toBe(false)
     row.getBoundingClientRect = () => rect(900, 40) // on a page-scrolled list, past the window's 768px
-    placeDropLine(line, row, 'before', null)
+    placeDropLine(line, row, 'before', PAGE)
     expect(line.hidden).toBe(true)
+  })
+
+  it("is as wide as the row SHOWS: clipped by the frame's sideways clips", () => {
+    const row = document.createElement('tr')
+    const wrap = document.createElement('div')
+    wrap.append(row)
+    document.body.append(wrap)
+    wrap.getBoundingClientRect = () => rect(180, 400, 100, 600)
+    Object.defineProperty(wrap, 'clientWidth', { value: 600, configurable: true })
+    row.getBoundingClientRect = () => rect(300, 40, 100, 1400)
+    const line = createDropLine(row)
+    placeDropLine(line, row, 'after', { scroller: null, header: [], clips: [wrap] })
+    expect([line.style.left, line.style.width]).toEqual(['100px', '600px'])
   })
 })

@@ -53,10 +53,12 @@ import {
   placeDropLine,
   scrollByY,
   scrollParentOf,
+  sideClipsOf,
+  stickyHeaderOf,
   unitExtent,
   visibleBounds,
 } from './reorderDom'
-import type { Scroller } from './reorderDom'
+import type { ListFrame } from './reorderDom'
 import type { ReorderHandleProps, ReorderItemProps } from './reorderTypes'
 
 export type { ReorderHandleProps, ReorderItemProps } from './reorderTypes'
@@ -89,7 +91,9 @@ export interface UseReorder<K extends ReorderKey> {
   active: boolean
 }
 
-interface Drag<K extends ReorderKey> {
+// A drag is its own ListFrame: its scroller, and — resolved once at lift — what sticks of its
+// list's header and what clips the list sideways (reorderDom.ts).
+interface Drag<K extends ReorderKey> extends ListFrame {
   id: K
   mode: 'pointer' | 'keyboard'
   phase: 'pressing' | 'lifted' | 'settling'
@@ -97,7 +101,6 @@ interface Drag<K extends ReorderKey> {
   startClientY: number
   startListY: number
   lastClientY: number
-  scroller: Scroller
   peers: K[]
   units: K[][]
   extents: Extent[]
@@ -306,7 +309,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
       return
     }
     drag.line ??= createDropLine(edge.element)
-    placeDropLine(drag.line, edge.element, edge.side, drag.scroller)
+    placeDropLine(drag.line, edge.element, edge.side, drag)
   }
 
   // Draw the drag at slot `to`: the lifted unit under the pointer (or, from the keyboard, at its
@@ -472,7 +475,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
       // One band for both questions: the part of the scroller the reader can SEE, clipped to the
       // window. A 420px Settings box can hang past the window's bottom; judged in the whole box, the
       // stop would come while the range's end still sat below the window, out of the pointer's reach.
-      const bounds = visibleBounds(drag.scroller)
+      const bounds = visibleBounds(drag.scroller, drag.header)
       const seen = { top: listY(drag.scroller, bounds.top), height: bounds.bottom - bounds.top }
       const speed = autoScrollWithin(
         autoScrollSpeed(drag.lastClientY, bounds.top, bounds.bottom),
@@ -487,6 +490,9 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
 
   const lift = (drag: Drag<K>) => {
     measure(drag)
+    // Once, here: every frame and move after reads only these elements' rects (R7 review 7).
+    drag.header = stickyHeaderOf(drag.scroller)
+    drag.clips = sideClipsOf(rows.current.get(drag.id) ?? null)
     drag.phase = 'lifted'
     markRows(drag)
     if (drag.mode === 'pointer') {
@@ -527,6 +533,8 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
       detach: null,
       pendingNext: null,
       line: null,
+      header: [],
+      clips: [],
     }
     machine.current.drag = drag
     return drag
@@ -606,7 +614,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     // coordinates, while the drop line is measured, so it must see the rows where they now stand.
     const self = drag.extents[drag.from]
     const landing = self.top + shiftsFor(drag.extents, drag.from, to)[drag.from]
-    ensureVisible(drag.scroller, landing, self.height)
+    ensureVisible(drag.scroller, landing, self.height, drag.header)
     keepOnScreen(drag.scroller, landing, self.height)
     paint(drag, to)
     const message = announce.move(context(drag, to))
