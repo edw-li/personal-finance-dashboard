@@ -174,14 +174,22 @@ export const LIFTED_LAYER = 2
  *  stacking context (its container query applies no layout containment in Edge — measured at lane R7,
  *  whatever panels.css says), so the page's layers all stack in the root, and a list inside the
  *  Customize popover (z-index 20) needs 21. One fixed number that high would lift every other list's
- *  line over the sticky scope row (8), the assistant drawer (15) and the dock (16). */
+ *  line over the sticky scope row (8), the assistant drawer (15) and the dock (16).
+ *
+ *  A heuristic, with limits — it reads z-indexes on POSITIONED ancestors only, so it cannot see:
+ *  - a flex or grid item's z-index, which makes a layer without any positioning;
+ *  - a stacking context made WITHOUT a z-index — opacity below 1, a transform, a filter,
+ *    `isolation: isolate`, containment, a mask. Such a context paints its whole subtree as ONE layer
+ *    at its own level, which this reads as if each z-index inside it stacked in the root.
+ *  None of those stands between a reorderable list and the root today (R7 review 3). */
 export function dropLineLayer(element: Element): number {
   let layer = LIFTED_LAYER
   let node = element.parentElement
   while (node !== null && node !== document.body && node !== document.documentElement) {
     const style = getComputedStyle(node)
     const z = Number.parseInt(style.zIndex, 10)
-    // Unpositioned (jsdom leaves an unset position ''), a z-index makes no layer.
+    // Positioned boxes only — jsdom leaves an unset position '' where a browser says 'static'. A flex
+    // or grid item's z-index makes a layer too; it is one of this heuristic's limits (above).
     const positioned = style.position !== '' && style.position !== 'static'
     if (positioned && Number.isFinite(z)) layer = Math.max(layer, z)
     node = node.parentElement
