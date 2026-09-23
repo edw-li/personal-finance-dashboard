@@ -117,6 +117,24 @@ describe('reorder.css', () => {
     expect(plain).toContain('inset 0 -2px 0 var(--accent)')
   })
 
+  it("lifts a list of boxes on the theme's shadow token, never a raw colour", () => {
+    // --shadow is bare `r g b / a` components (index.css): read as rgb(var(--shadow)).
+    expect(declarationsFor(css, ":not(tr)[data-reorder='lifted']")).toContain(
+      'box-shadow: 0 4px 14px rgb(var(--shadow));',
+    )
+    expect(stripComments(css)).not.toMatch(/rgb\(\s*\d/)
+  })
+
+  it('a pressed grip keeps its accent under the pointer — hover never outranks it', () => {
+    expect(
+      declarationsFor(
+        css,
+        ".reorder-grip:hover:not(:disabled):not([aria-disabled='true']):not([aria-pressed='true'])",
+      ),
+    ).toContain('color: var(--text);')
+    expect(declarationsFor(css, ".reorder-grip[aria-pressed='true']")).toContain('color: var(--accent);')
+  })
+
   it('never styles .is-dragging — the detail-panel resizer owns that name', () => {
     expect(stripComments(css)).not.toContain('.is-dragging')
   })
