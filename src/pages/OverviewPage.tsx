@@ -612,7 +612,7 @@ export default function OverviewPage() {
                       )}
                     </>
                   ) : investments.busy ? (
-                    ' '
+                    '\u00a0'
                   ) : undefined
                 }
                 footer={
