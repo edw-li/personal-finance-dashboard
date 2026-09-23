@@ -5,6 +5,7 @@ import type {
   RewardRateOut,
   SpendingMatrix,
 } from '../../types/api'
+import type { Tone } from '../../utils/tone'
 
 export const TIE_EPSILON = 1e-6
 
@@ -254,6 +255,71 @@ export function optimize(
     optimalTotal,
     lineupNet: netOf(actives, optimalTotal),
   }
+}
+
+// --- verdicts (2026-09-23 spec §B6) -------------------------------------------------------
+//
+// "Droppable" read a $0 marginal as a reason to close a card: four of the five cards it named
+// cost nothing to keep (two only TIED Robinhood Gold's 3x, which a one-at-a-time marginal test
+// prices at $0 each), and one was the household's oldest card. Closing a free card saves
+// nothing and shrinks the credit line; only a fee the card does not earn back costs money.
+
+export type CardVerdictKind = 'costs' | 'free' | 'earns'
+
+export const VERDICT_LABEL: Record<CardVerdictKind, string> = {
+  costs: 'Costs you money',
+  free: 'Free to keep — no extra rewards',
+  earns: 'Earns its keep',
+}
+
+export const VERDICT_TONE: Record<CardVerdictKind, Tone> = {
+  costs: 'negative',
+  free: 'neutral',
+  earns: 'positive',
+}
+
+/** Half a cent: a figure that rounds to $0.00 on screen must not carry a verdict the screen
+ *  cannot show (float dust from three independent sums lands on either side of zero). */
+const HALF_CENT = 0.005
+
+/**
+ * The three keep/close answers, from a card's own figures (net = marginal + counted credits
+ * − fee): it EARNS its keep when the net is above zero; it COSTS money only when it charges a
+ * fee and the net is below zero; everything else is FREE to keep — no fee (or a fee its credits
+ * cover exactly) and nothing extra on these weights. A no-fee card never "costs money": even a
+ * negative marginal there comes from a pin sending spend to it, and unpinning is the fix.
+ */
+export function verdictKind(value: { annualFee: number; net: number }): CardVerdictKind {
+  if (value.net >= HALF_CENT) return 'earns'
+  if (value.annualFee >= HALF_CENT && value.net <= -HALF_CENT) return 'costs'
+  return 'free'
+}
+
+export interface TieGroup {
+  /** The other co-best cards, ascending by id. */
+  withCardIds: number[]
+  /** The weighted categories they share, in the optimizer's category order. */
+  categoryIds: number[]
+}
+
+/**
+ * Why a one-at-a-time marginal prices a card at $0: the weighted categories where it is
+ * CO-best with other active cards — without it, a partner catches the same spend at the same
+ * rate. Grouped by partner set. Empty when the card ties nowhere (never the best, or the
+ * unique best). Categories without a weight move no dollars, so they are left out.
+ */
+export function cardTies(cardId: number, result: OptimizerResult): TieGroup[] {
+  const groups = new Map<string, TieGroup>()
+  for (const verdict of result.verdicts.values()) {
+    if (!verdict.tie || verdict.allocations.length === 0) continue
+    if (!verdict.bestCardIds.includes(cardId)) continue
+    const partners = verdict.bestCardIds.filter((id) => id !== cardId).sort((a, b) => a - b)
+    const key = partners.join(',')
+    const group = groups.get(key) ?? { withCardIds: partners, categoryIds: [] }
+    group.categoryIds.push(verdict.categoryId)
+    groups.set(key, group)
+  }
+  return [...groups.values()]
 }
 
 /** Owner-scope membership, the net-worth grammar verbatim: absent (null) is the whole

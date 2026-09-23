@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { RewardCategoryOut, SpendingMatrix } from '../../types/api'
 import {
+  VERDICT_LABEL,
+  VERDICT_TONE,
   autoWeightSharers,
+  cardTies,
   effectiveRate,
   enteredMonthCounts,
   householdAdvantage,
@@ -10,6 +13,7 @@ import {
   resolveWeight,
   resolveWeights,
   suggestedAnnualSpend,
+  verdictKind,
   type MathCard,
   type MathCategory,
   type MathRate,
@@ -199,6 +203,93 @@ describe('marginal value and lineup', () => {
     )
     const value = result.cardValues.find((v) => v.cardId === 1)!
     expect(value.marginal).toBeCloseTo(1200 * 0.034 - 1200 * 0.03)
+  })
+})
+
+// 2026-09-23 spec §B6: "droppable" priced a $0 marginal on a no-fee card as a reason to close
+// it — four of the five cards it named cost nothing to keep, and one was the oldest card.
+describe('verdictKind — three honest answers', () => {
+  it('a no-fee card with a $0 marginal is free to keep, never a card to drop', () => {
+    expect(verdictKind({ annualFee: 0, net: 0 })).toBe('free')
+  })
+
+  it('a no-fee card that adds rewards earns its keep', () => {
+    expect(verdictKind({ annualFee: 0, net: 144.76 })).toBe('earns')
+  })
+
+  it('a fee card whose net is below zero costs money', () => {
+    expect(verdictKind({ annualFee: 130, net: -94.13 })).toBe('costs')
+  })
+
+  it('a fee card that more than pays for itself earns its keep', () => {
+    expect(verdictKind({ annualFee: 395, net: 116.87 })).toBe('earns')
+  })
+
+  it('a fee its credits cover exactly is free to keep — it costs nothing either way', () => {
+    expect(verdictKind({ annualFee: 95, net: 0 })).toBe('free')
+  })
+
+  it('a no-fee card never costs money, even when a pin gives it a negative marginal', () => {
+    expect(verdictKind({ annualFee: 0, net: -4.8 })).toBe('free')
+  })
+
+  it('reads float dust below half a cent as zero — the verdict matches the $0.00 on screen', () => {
+    expect(verdictKind({ annualFee: 0, net: 0.004 })).toBe('free')
+    expect(verdictKind({ annualFee: 395, net: -0.004 })).toBe('free')
+    expect(verdictKind({ annualFee: 0, net: 0.005 })).toBe('earns')
+  })
+
+  it('names and tones the three verdicts once, for every surface', () => {
+    expect(VERDICT_LABEL).toEqual({
+      costs: 'Costs you money',
+      free: 'Free to keep — no extra rewards',
+      earns: 'Earns its keep',
+    })
+    expect(VERDICT_TONE).toEqual({ costs: 'negative', free: 'neutral', earns: 'positive' })
+  })
+})
+
+describe('cardTies — why a one-at-a-time marginal prices a card at $0', () => {
+  const savor = card(2, 'SavorOne')
+  const rh = card(3, 'RH Gold')
+  const auto = card(5, 'Autograph')
+
+  it('finds the weighted categories where the card is co-best, with the partners', () => {
+    const result = optimize(
+      [savor, rh, auto],
+      [category(40, 'Dining'), category(41, 'Groceries'), category(42, 'Travel')],
+      [rate(2, 40, 3), rate(3, 40, 3), rate(2, 41, 3), rate(3, 41, 3), rate(5, 42, 3), rate(3, 42, 3)],
+    )
+    expect(cardTies(2, result)).toEqual([{ withCardIds: [3], categoryIds: [40, 41] }])
+    // RH Gold ties two different partners: one group per partner set.
+    expect(cardTies(3, result)).toEqual([
+      { withCardIds: [2], categoryIds: [40, 41] },
+      { withCardIds: [5], categoryIds: [42] },
+    ])
+  })
+
+  it('ignores a tie in a category without a weight — it moves no dollars', () => {
+    const result = optimize(
+      [savor, rh],
+      [category(43, 'Dining', { weight: null })],
+      [rate(2, 43, 3), rate(3, 43, 3)],
+    )
+    expect(cardTies(2, result)).toEqual([])
+  })
+
+  it('a unique best is no tie, and a card that is never best ties nothing', () => {
+    const result = optimize([savor, rh], [category(44, 'Gas')], [rate(2, 44, 4), rate(3, 44, 3)])
+    expect(cardTies(2, result)).toEqual([])
+    expect(cardTies(3, result)).toEqual([])
+  })
+
+  it('lists three-way partners together', () => {
+    const result = optimize(
+      [savor, rh, auto],
+      [category(45, 'Streaming')],
+      [rate(2, 45, 3), rate(3, 45, 3), rate(5, 45, 3)],
+    )
+    expect(cardTies(3, result)).toEqual([{ withCardIds: [2, 5], categoryIds: [45] }])
   })
 })
 
