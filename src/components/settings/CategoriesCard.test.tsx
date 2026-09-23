@@ -67,17 +67,24 @@ it('lists the categories with their retirement state', async () => {
   expect(table.getByText('Retired')).toBeTruthy()
 })
 
-it('creates a category', async () => {
+it('creates a category from its name alone — it lands at the end of the list (reorder spec §3.3)', async () => {
   render(<CategoriesCard />)
   await screen.findByRole('table')
 
   fireEvent.change(screen.getByLabelText('Category name'), { target: { value: '  Wedding  ' } })
-  fireEvent.change(screen.getByLabelText('Sort order'), { target: { value: '9' } })
   fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
 
   await waitFor(() => expect(vi.mocked(createCategory)).toHaveBeenCalledTimes(1))
-  expect(vi.mocked(createCategory).mock.calls[0][0]).toEqual({ name: 'Wedding', sort_order: 9 })
+  // No sort_order key at all: the server appends a create that names no position.
+  expect(vi.mocked(createCategory).mock.calls[0][0]).toStrictEqual({ name: 'Wedding' })
   await waitFor(() => expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2))
+})
+
+it('offers no Sort order box: the order is the table’s (reorder spec §4.1)', async () => {
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+
+  expect(screen.queryByLabelText('Sort order')).toBeNull()
 })
 
 it('renames through the inline editor', async () => {
@@ -89,9 +96,9 @@ it('renames through the inline editor', async () => {
   fireEvent.change(screen.getByLabelText('Category name'), { target: { value: 'Food' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save category' }))
 
-  await waitFor(() =>
-    expect(vi.mocked(updateCategory)).toHaveBeenCalledWith(5, { name: 'Food', sort_order: 1 }),
-  )
+  await waitFor(() => expect(vi.mocked(updateCategory)).toHaveBeenCalledTimes(1))
+  // The name alone: sending the stored position back would undo a drag made since this render.
+  expect(vi.mocked(updateCategory).mock.calls[0]).toStrictEqual([5, { name: 'Food' }])
 })
 
 it('retires and restores without touching the other columns', async () => {

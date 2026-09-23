@@ -19,10 +19,9 @@ import { WARM, warmSource } from './settingsPrefetch'
 
 interface CategoryFormState {
   name: string
-  sort_order: string
 }
 
-const EMPTY_CATEGORY: CategoryFormState = { name: '', sort_order: '0' }
+const EMPTY_CATEGORY: CategoryFormState = { name: '' }
 
 // Living · Tax · Transfer (2026-09-04 honest-numbers spec §1) on the house's ONE pick-one
 // control, so a category's kind reads like every other three-way choice in the app.
@@ -90,7 +89,9 @@ export default function CategoriesCard() {
       setFormError('Category name is required.')
       return
     }
-    const body = { name, sort_order: Number(form.sort_order) || 0 }
+    // The name alone: the position is the table's now — a new category lands at the end and
+    // is dragged into place (2026-09-23 reorder spec §3.3, §4.1).
+    const body = { name }
     setBusy(true)
     setFormError(null)
     const request = editingId !== null ? updateCategory(editingId, body) : createCategory(body)
@@ -165,15 +166,6 @@ export default function CategoriesCard() {
                 onChange={(e) => setText('name')(e.target.value)}
               />
             </label>
-            <label>
-              Sort order
-              <input
-                className="field-input"
-                inputMode="numeric"
-                value={form.sort_order}
-                onChange={(e) => setText('sort_order')(e.target.value)}
-              />
-            </label>
             <div className="settings-card-actions">
               <button type="submit" className="button button-primary" disabled={busy}>
                 {editingId !== null ? 'Save category' : 'Add category'}
@@ -197,7 +189,7 @@ export default function CategoriesCard() {
                 onEdit={(category) => {
                   setEditingId(category.id)
                   setFormError(null)
-                  setForm({ name: category.name, sort_order: String(category.sort_order) })
+                  setForm({ name: category.name })
                 }}
                 onToggleActive={toggleActive}
                 onKind={setKind}
