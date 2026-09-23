@@ -47,7 +47,8 @@ class ImportReport(BaseModel):
     sheets: dict[str, SheetReport]
     # The restore point an APPLY saved before its first write (2026-09-23 spec §B3): the
     # Settings toast names it and its Undo pre-selects it in the Restore card. None on a dry
-    # run and on a workbook whose errors blocked the apply.
+    # run and when parse errors stopped the apply before it wrote anything; an apply that
+    # failed LATER still names the point it saved (the file is on the volume either way).
     restore_point: str | None = None
 
     @classmethod
