@@ -18,13 +18,17 @@ the pointer at `z-index: 2` and covered it for 44–53% of each slot's travel (l
 - It is `position: fixed`, 2px, and centred on the target edge: the first row's top for a move up,
   the last row's bottom for a move down (`reorderDom.ts`: `createDropLine`, `placeDropLine`).
 - Its left and width come from the target row's rect, clipped by any ancestor that actually scrolls
-  sideways and by the window (`visibleSpan`).
+  sideways and by the window (`visibleSpan`). Those ancestors are resolved once, at lift
+  (`sideClipsOf`, review 7).
 - It is hidden while the edge is outside the scroller's visible band (`visibleBounds`, which now
   starts below a sticky header), and when the drag is back home.
 - It is re-placed on every paint. The keyboard path now paints after its keep-in-view scroll, so the
   line is measured where the rows then stand.
-- Any other scroll re-places it too. One window capture listener replaces the scroller's own; a
-  pointer drag still re-tracks only on its own scroller.
+- Every scroll re-places it through one window capture listener (replacing the scroller's own), and
+  the listener acts only for the live drag (review 2). A pointer drag re-tracks on every scroll —
+  since review 6 that includes the page scrolling under a Settings box — and a keyboard lift
+  re-places its line.
+- Under forced colors (Windows High Contrast) it takes `Highlight` (review 8).
 - `releaseDrag` removes it, and every way out passes through there: drop, cancel, hard reset, unmount.
 - `data-reorder-drop` stays on the target's edge row; it is the tested contract and the probe reads
   it. Nothing styles it any more: the box-shadow rules, pinned-cell variants included, are deleted.
@@ -41,8 +45,9 @@ the pointer at `z-index: 2` and covered it for 44–53% of each slot's travel (l
 row, or the Accounts group heading, under the header. At 1280, Categories & weights stopped 5px short.
 
 **Now.**
-- `stickyHeaderBottom` reads the bottom of the scroller's sticky header on whatever sticks: the
-  thead, or its cells.
+- `stickyHeaderOf(row, scroller)` resolves, once at lift, what sticks of the lifted row's own table
+  header inside the scroller: the thead, or its cells (reviews 4 and 7). `headerBottom` measures it
+  where it stands now.
 - `visibleBounds`' top is `max(box top, header bottom)`, clipped to the window. So the zone, the
   range-end stop and the drop line's band all count from where the rows show.
 - `ensureVisible` keeps the keyboard's landing slot the edge margin clear below the header too
@@ -140,7 +145,18 @@ row, or the Accounts group heading, under the header. At 1280, Categories & weig
 - `01565ae2` test(probes): reorder-v — the drop line swept and hit-tested in every held sample; the
   stop judged below the sticky header
 - `093d57da` docs(spec): §2.3.5 and §2.5 amended
-- and this note.
+- `a88467d2` this note
+- the review round, in order:
+  - `bcd8e858` (2)
+  - `28eb55f8` (6)
+  - `5b9f7fe3` (7)
+  - `c0bb3586` (4)
+  - `95f54a5c` (3)
+  - `4c1fca9f` (1)
+  - `d60061ac` (8)
+  - `23213da4` (5)
+  - `8437e8e0` (9)
+  - and this update.
 
 ## For the controller
 
@@ -164,4 +180,37 @@ row, or the Accounts group heading, under the header. At 1280, Categories & weig
    is covered there as the row is, and never drawn over the chrome. `--sticky-inset` (PageFrame's
    published scope-row height) is the hook for a later fix.
 3. **Not covered:** a list inside a modal `<dialog>` (the top layer) would need the line appended to
-   that dialog. There is none today.
+   that dialog. There is none today; spec §2.5 records it as a limit (review 5).
+
+## Review round (R7 review: approve after fixes)
+
+One commit per item, tests first where behaviour changed. Each red-first test was run failing before
+its fix.
+
+| # | Item | Commit | What changed |
+|---|---|---|---|
+| 1 | Plan note: `isolation: isolate` | `4c1fca9f` | The note now warns against making `.page` a stacking context unless the line moves inside it. The assumption is stated in `dropLineLayer`'s comment and in `reorder.css`. |
+| 2 | Scroll-listener guard | `bcd8e858` | `onScroll` acts only when `machine.current.drag === drag`. Test: with the window keeping every scroll listener (as if detach never ran), a scroll after a reduced-motion drop, and after a cancel, leaves no line and no transform. Red before: the kept listener re-made the line. |
+| 3 | `dropLineLayer` comment | `95f54a5c` | Corrects the flex/grid statement and names the heuristic's limits: a flex or grid item's z-index, and contexts made by opacity, transform, filter, isolation, containment or a mask. |
+| 4 | Header from the row's own table | `c0bb3586` | `stickyHeaderOf(row, scroller)` uses `row.closest('table').tHead`, only when it is inside the scroller. Tests: two tables in a box (red before); a scrolling tbody under its header. |
+| 5 | Spec | `23213da4` | §2.3.5: the group heading clears the header only because the 40px margin exceeds its ~37px. §2.5: forced colors, a modal `<dialog>`, and the `.page` reliance. |
+| 6 | Pointer re-tracks on every scroll | `28eb55f8` | Fixes the older drift when the page scrolls under a Settings box. Test: the box rises 30px under a still pointer and the row follows, 50 → 80px. Red before: it stayed at 50. |
+| 7 | Resolve once at lift | `5b9f7fe3` | `stickyHeaderOf` and `sideClipsOf` run in `lift`; the drag carries `header` and `clips` (a `ListFrame`). Frames and moves read rects alone. Test: after lift, five moves and half a second of auto-scroll read 0 computed styles (98 before). |
+| 8 | Forced colors | `d60061ac` | `@media (forced-colors: active) { .reorder-drop-line { background: Highlight } }`, pinned. Measured first in Edge's emulation: the accent line painted as the canvas colour (white on white), while `Highlight` is kept (rgb(55, 0, 110) computed and painted). `forced-color-adjust: none` is not needed. |
+| 9 | Test gaps (optional) | `8437e8e0` | A two-row sticky header ends at its lower row. Reduced motion under StrictMode draws one line per drag, keyboard and pointer. |
+
+**No browser re-run of the probe.** None of the fixes moves the line in any probed layout:
+- 4 and 7 compute the same inputs for every real list (one table per box, the same sticky cells, the
+  same clips), are unit-tested, and read rects live as before;
+- 6 changes only a pointer drag under a page scroll with an element scroller, which the probe never
+  does;
+- 2 and 3 do not touch placement;
+- 8 applies only under forced colors, and was checked directly in Edge.
+
+**Gates after the review** (the tip; the targeted suites first, then one full run, nothing else running):
+- Targeted suites: 14 files / 406 tests. That is the reorder folder, the Settings, ledger and
+  Customize consumers, the credit-card page and the CSS pins.
+- `npx vitest run --maxWorkers=2`: **267 files / 3899 tests passed**, exit 0, in 283s. The first
+  round had 3889; the review adds 10.
+- `npx tsc -b` exit 0.
+- `npx eslint .`: 0 errors, the base's 26 `react-refresh/only-export-components` warnings, none new.
