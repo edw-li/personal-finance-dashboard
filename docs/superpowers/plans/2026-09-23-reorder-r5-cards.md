@@ -3884,9 +3884,8 @@ git commit -m "docs(plan): lane R5 — results, gates and the browser check"
     the pinned header cell's hairline now showing under `.reorder-table`.
   - The flex `.row-actions` cells' offset hairline is pre-existing (panel CSS, all tables with
     that class).
-  - `CardDetail`'s one-card sparkline still draws PALETTE[0]: it has no ids and is outside the
-    fence. Under A1's "one colour per money entity", handing it `{ id }` and `rankIds` would make
-    the drill-in line match the page chart.
+  - ~~`CardDetail`'s one-card sparkline still draws PALETTE[0]~~ — fixed in the code-quality
+    round (item 1, below).
   - Lane vites share `node_modules/.vite` with the main checkout through the junction. This one
     re-optimized dependencies at start ("vite config has changed"), which can disturb 5173's dep
     cache.
@@ -3897,6 +3896,39 @@ git commit -m "docs(plan): lane R5 — results, gates and the browser check"
     race the same way as deviation 3.
   - `finance_reorder_r5`: both orders were put back. The card `sort_order`s are now renumbered
     0–6 (the same order); no rows were created.
+
+### Code-quality review round (2026-09-23; approve after fixes)
+
+One commit per item, TDD each. Every new test was seen failing first, except the `.catch`
+guard's and item 4's, whose behaviour already existed: those were mutation-checked instead.
+
+| Item | SHA | What changed |
+|---|---|---|
+| 2 (amended decision) | 3a510e85 | Colours rank among the household's **active** cards, every person's included (`colorRankIds`, one list on the page). The A1 page test was rewritten: an archived Venture X holds no slot (SavorOne slot 0, RH Gold slot 1), and Sam's lone RH Gold keeps slot 1. The old rule gave 1/2; drawn-only ranking would give Sam's line slot 0 — the test fails under both. Builder docs and option-test comments were re-worded. |
+| 1 (important) | f1cb6c0f | `CardDetail` (approved fence extension) takes `rankIds`, draws `{ id, name, events }` with `{ includeTotal: false, rankIds }`, and adds `card.id` and `rankIds` to the memo deps; the page passes the same `colorRankIds`. Test: SavorOne's drill-in line is PALETTE[1], as on the page chart (it was PALETTE[0]). |
+| 3 (minor) | c7a9337c | `.finally(() => { if (seq === loadSeq.current) setLoading(false) })`. Two tests: an older load that fails after a newer one landed shows no "Showing earlier data" line (fails with the catch guard removed); an older load settling first keeps `.loading-dim.is-loading` up until the newest lands (failed before the fix). |
+| 4 (minor) | 1d6c7446 | The roster's one-PUT test runs with an archived RH Gold, and the categories' rewritten test with a hidden Rent — same full-id PUTs. New: dragging the archived RH Gold itself is one PUT `[1, 3, 2]`, and it stays Archived. Mutation-checked: leaving archived cards out of the hook's items fails both roster tests. |
+| 5 (minor) | 5dbbc872 | `colourSlots` → `colorSlots`, **no longer exported** (my call). Nothing imports it, and the eight colour tests pin it through `creditLineChartOption`. The stale `LimitHistoryCard.id` doc was corrected too. |
+| 6 (nit) | 5114355a | CategoriesPanel's empty note and table now decide on `ordered`, as CardsPanel does. |
+
+- **Gates:**
+  - Targeted `vitest run src/pages/CreditCardsPage.test.tsx src/components/creditcards src/charts`:
+    25 files / 372 tests, exit 0 (CreditCardsPage 93, creditLineChartOptions 15, conformance 57).
+  - `tsc -b`: 0. eslint on the six touched files: 0 (only the pre-existing `SEED_CATEGORIES`
+    warning).
+  - The one full `vitest run --maxWorkers=2`: 245/246 files, 3452/3453 tests. The one failure is
+    `src/components/settings/ActivityCard.test.tsx › caps the feed with a scroll region that
+    carries Load more inside it`:
+    - it passes alone (6/6) and passed in this branch's previous full run (3449/3449);
+    - no R5 commit touches it, and `feat/reorder-base` does not change it;
+    - diagnosis: `findByRole('region')` resolves on the card's first paint — the region and its
+      `.settings-scroll` box render around a ghost — before the entries land, so under
+      full-suite load `.activity-list` can still be missing. A new load flake for the list (the
+      test should await the list).
+- **Browser:** not re-run (not asked). In the census all seven cards are active, so item 2 leaves
+  the check's recorded colours as they were. Item 1 now draws the drill-in in the page colour.
+- **Left alone, as instructed:** the Undo-failure wording (spec §8.1's new sentence) and the
+  shared save/Undo helpers, for the consolidation step.
 
 ---
 
