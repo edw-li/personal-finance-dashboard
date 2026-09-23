@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { calendarEvent } from '../../testing/calendarFixtures'
+import type { CalendarLiving } from '../../types/api'
 import {
   cashLine,
+  daysInWindow,
   formatCompactCents,
+  formatWholeDollars,
   fromCents,
+  livingFor,
   monthSummary,
+  proratedLivingCents,
   signedCompact,
   summarize,
   toCents,
@@ -71,5 +76,49 @@ describe('summaries', () => {
     expect(cashLine(summarize([vest, payday, q3]))).toBe('+$6.8k in · ~−$395 out · ~$41.2k vesting')
     expect(cashLine(summarize([payday]))).toBe('+$6.8k in')
     expect(cashLine(summarize([unknown]))).toBe('amounts unknown')
+  })
+})
+
+const LIVING: CalendarLiving[] = ['2026-09-01', '2026-10-01', '2026-11-01'].map((month) => ({
+  month,
+  amount: '5478.00',
+  basis: 'budget',
+  months_in_average: null,
+}))
+
+describe('living-cost helpers (2026-09-23 spec §B2)', () => {
+  it('livingFor finds the month by its prefix, and absent stays absent', () => {
+    expect(livingFor(LIVING, '2026-10-01')?.month).toBe('2026-10-01')
+    expect(livingFor(LIVING, '2026-12-01')).toBeNull()
+    expect(livingFor(undefined, '2026-10-01')).toBeNull()
+  })
+
+  it('formatWholeDollars rounds half up to whole dollars', () => {
+    expect(formatWholeDollars(547800)).toBe('$5,478')
+    expect(formatWholeDollars(541748)).toBe('$5,417')
+    expect(formatWholeDollars(541750)).toBe('$5,418')
+    expect(formatWholeDollars(-541750)).toBe('−$5,418')
+    expect(formatWholeDollars(0)).toBe('$0')
+  })
+
+  it('daysInWindow counts the inclusive days of the window inside a month', () => {
+    expect(daysInWindow('2026-09-01', '2026-09-23', '2026-11-07')).toBe(8)
+    expect(daysInWindow('2026-10-01', '2026-09-23', '2026-11-07')).toBe(31)
+    expect(daysInWindow('2026-11-01', '2026-09-23', '2026-11-07')).toBe(7)
+    expect(daysInWindow('2026-12-01', '2026-09-23', '2026-11-07')).toBe(0)
+    expect(daysInWindow('2026-09-01', '2026-09-10', '2026-09-20')).toBe(11)
+    // February of a leap year, whole.
+    expect(daysInWindow('2028-02-01', '2028-01-15', '2028-03-15')).toBe(29)
+  })
+
+  it('proratedLivingCents spreads each month by its days, in integer cents', () => {
+    // 547,800 x 8/30 + 547,800 + 547,800 x 7/30 = 146,080 + 547,800 + 127,820.
+    expect(proratedLivingCents(LIVING, '2026-09-23', '2026-11-07')).toBe(821700)
+    // 10,001 x 15/30 = 5,000.5 → HALF_UP.
+    const odd: CalendarLiving[] = [{ ...LIVING[0], amount: '100.01' }]
+    expect(proratedLivingCents(odd, '2026-09-01', '2026-09-15')).toBe(5001)
+    // A month the window touches without an estimate: no partial sum.
+    expect(proratedLivingCents(LIVING.slice(0, 2), '2026-09-23', '2026-11-07')).toBeNull()
+    expect(proratedLivingCents([], '2026-09-23', '2026-11-07')).toBeNull()
   })
 })

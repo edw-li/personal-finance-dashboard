@@ -1,7 +1,10 @@
 // Cash-flow arithmetic over fetched events (2026-09-03 calendar spec §10): INTEGER CENTS
-// from the server's 2dp strings, never floats. Feeds the four tiles, the week gutters, the
-// drawer's cash line and Overview's 45-day line — one module so they cannot disagree.
-import type { CalendarDirection, CalendarEvent } from '../../types/api'
+// from the server's 2dp strings, never floats. Feeds the strip's tiles, the week gutters, the
+// drawer's cash line and Overview's 45-day line — one module so they cannot disagree. The
+// living-cost helpers at the end (2026-09-23 spec §B2) only place the SERVER's monthly
+// estimates on the page: find a month's, round it for a tile, spread it over a window's days.
+import type { CalendarDirection, CalendarEvent, CalendarLiving } from '../../types/api'
+import { addMonths } from '../../utils/months'
 
 const CENTS_RE = /^(-?)(\d+)(?:\.(\d{1,2}))?$/
 
@@ -117,4 +120,63 @@ export function cashLine(s: CashSummary): string {
   }
   if (parts.length === 0) return s.unknown > 0 ? 'amounts unknown' : 'nothing due'
   return parts.join(' · ')
+}
+
+/** The estimate for `monthIso`'s month, or null — absent is not zero. */
+export function livingFor(
+  living: readonly CalendarLiving[] | undefined,
+  monthIso: string,
+): CalendarLiving | null {
+  const prefix = monthIso.slice(0, 7)
+  return living?.find((item) => item.month.slice(0, 7) === prefix) ?? null
+}
+
+/** '$5,478': whole dollars, HALF_UP, for a figure the caller already marks as approximate. */
+export function formatWholeDollars(cents: number): string {
+  const dollars = Math.floor((Math.abs(cents) + 50) / 100)
+  return `${cents < 0 ? '−' : ''}$${dollars.toLocaleString('en-US')}`
+}
+
+/** An ISO date as a whole-day count — UTC, so no daylight-saving hour can split a day. */
+function dayNumber(iso: string): number {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number)
+  return Date.UTC(y, m - 1, d) / 86_400_000
+}
+
+/** Days of [startIso, endIso] (inclusive) that fall in `monthIso`'s month. */
+export function daysInWindow(monthIso: string, startIso: string, endIso: string): number {
+  const [y, m] = monthIso.split('-').map(Number)
+  const first = Date.UTC(y, m - 1, 1) / 86_400_000
+  const last = Date.UTC(y, m, 0) / 86_400_000
+  const from = Math.max(first, dayNumber(startIso))
+  const to = Math.min(last, dayNumber(endIso))
+  return to < from ? 0 : to - from + 1
+}
+
+/** a ÷ b rounded HALF_UP (away from zero) in integers: a float quotient can land an exact
+ *  half a hair on the wrong side, this cannot. `denominator` is a positive day count. */
+function roundDiv(numerator: number, denominator: number): number {
+  const sign = numerator < 0 ? -1 : 1
+  return sign * Math.floor((2 * Math.abs(numerator) + denominator) / (2 * denominator))
+}
+
+/** Living costs spread over [startIso, endIso] by the days of each month inside it, in integer
+ *  cents (HALF_UP per month, then summed) — today's month counts only its remaining days. Null
+ *  when a month the window touches has no estimate: a partial sum would understate the very
+ *  spending the figure is there to show (2026-09-23 spec §B2). */
+export function proratedLivingCents(
+  living: readonly CalendarLiving[],
+  startIso: string,
+  endIso: string,
+): number | null {
+  const lastMonth = `${endIso.slice(0, 7)}-01`
+  let total = 0
+  for (let month = `${startIso.slice(0, 7)}-01`; month <= lastMonth; month = addMonths(month, 1)) {
+    const estimate = livingFor(living, month)
+    if (estimate === null) return null
+    const [y, m] = month.split('-').map(Number)
+    const monthDays = new Date(Date.UTC(y, m, 0)).getUTCDate()
+    total += roundDiv(toCents(estimate.amount) * daysInWindow(month, startIso, endIso), monthDays)
+  }
+  return total
 }

@@ -1837,11 +1837,25 @@ export interface SourceHealth {
   note: string | null
 }
 
+/** One month's living-cost estimate (2026-09-23 spec §B2): the day-to-day spending dated events
+ *  never include. `budget` = the living budgets in force that month; `average` = the Spending
+ *  page's "Previous 12 months" living average over `months_in_average` eligible months. A month
+ *  with neither is ABSENT from the list, never a zero. */
+export interface CalendarLiving {
+  month: string
+  amount: string
+  basis: 'budget' | 'average'
+  months_in_average: number | null
+}
+
 export interface CalendarResponse {
   events: CalendarEvent[]
   sources: SourceHealth[]
   /** The employer quote every vest estimate rides (ISO datetime), or null. */
   quote_as_of: string | null
+  /** Every month the window touches that has a living-cost estimate (2026-09-23 spec §B2).
+   *  Absent on a payload from before that batch, which reads as "no estimate". */
+  living?: CalendarLiving[]
 }
 
 // POST/PATCH body — full replace (the form always submits every field).
