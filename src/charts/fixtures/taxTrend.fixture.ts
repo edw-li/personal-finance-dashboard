@@ -8,7 +8,8 @@ const fixture: ChartFixture = {
   ariaLabel:
     'Stacked bar chart of tax by jurisdiction per year, with the effective rate on each cap',
   // "Today" inside 2025, so the second year takes the estimate treatment (2026-09-23 spec §C7):
-  // the per-segment fade and dashed ink outline must pass the colour rule like every other hex.
+  // the grammar's partial look — each segment's own colour at an alpha ('#rrggbbaa') for the
+  // fill, a dashed outline in that colour — must pass the colour rule like every other hex.
   build: () =>
     trendOption([taxSummary2024(), { ...taxSummary2024(), year: 2025 }], { today: '2025-06-01' }),
 }

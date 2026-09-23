@@ -1582,14 +1582,14 @@ describe('?comp= composition drill (2026-08-25 spec §2d)', () => {
       fireEvent.click(within(card()).getByRole('button', { name: /table/i }))
       const table = within(card()).getByRole('table')
       expect(within(table).getByRole('columnheader', { name: 'Status' })).toBeTruthy()
-      expect(within(table).getByText('Estimate — year in progress')).toBeTruthy()
+      expect(within(table).getByText('Estimate (in progress)')).toBeTruthy()
       cleanup()
       vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [summaryFor(2022), summaryFor(2023)] })
       renderPage()
       await waitFor(() => expect(trendCategories()).toBe('2022,2023'))
       expect(hint()).not.toContain('in progress')
       fireEvent.click(within(card()).getByRole('button', { name: /table/i }))
-      expect(within(card()).queryByText('Estimate — year in progress')).toBeNull()
+      expect(within(card()).queryByText('Estimate (in progress)')).toBeNull()
     } finally {
       vi.useRealTimers()
     }
