@@ -876,11 +876,14 @@ export interface ReorderItemProps {
 - [ ] **Step 2: Write the failing test `reorderStatus.test.tsx`**
 
 ```tsx
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import DragHandle from './DragHandle'
 import { ReorderInstructions, ReorderLiveRegion } from './ReorderStatus'
 import type { ReorderHandleProps } from './reorderTypes'
+
+// vitest globals are off (vite.config.ts), so RTL cannot register its own cleanup: the house idiom.
+afterEach(cleanup)
 
 function handle(overrides: Partial<ReorderHandleProps> = {}): ReorderHandleProps {
   return {
@@ -1045,7 +1048,7 @@ cover the keyboard path, and Task 6 adds the pointer tests.
 `src/components/reorder/useReorder.test.tsx`:
 
 ```tsx
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installPointerEvents } from '../../testing/pointer'
@@ -1179,6 +1182,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // vitest globals are off, so RTL's auto-cleanup never registers (the house idiom is explicit).
+  // First, while fake timers are still installed, so unmount effects clear their own timers.
+  cleanup()
   vi.useRealTimers()
   vi.unstubAllGlobals()
   document.documentElement.className = ''
