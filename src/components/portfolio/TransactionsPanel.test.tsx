@@ -1,6 +1,7 @@
 import type { ComponentProps } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../../api/client'
 import type {
   PositionChange,
   SecurityOut,
@@ -911,5 +912,48 @@ describe('TransactionsPanel reorder — what the toast says (spec §8.1)', () =>
     renderLedger()
     keyboardMove(move, key)
     expect(await screen.findByText(text)).toBeTruthy()
+  })
+})
+
+// Spec §8.3 — the transactions route's stale sentence (lane R1's contract).
+const STALE = 'The transactions changed since this list was loaded — nothing was moved.'
+
+describe('TransactionsPanel reorder — Undo (spec §5)', () => {
+  reorderHooks()
+
+  it('re-sends the order that stood before the drop, in its scope, and the reload shows it', async () => {
+    answerWith()
+    const { onChanged, rerender } = renderLedger({ owner: 'joint' })
+    keyboardMove(NVDA_BUY, 'ArrowDown')
+    await screen.findByText(QUIET_NVDA)
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByText('Order restored')).toBeTruthy()
+    expect(vi.mocked(reorderTransactions).mock.calls).toEqual([
+      [[22, 21, 23], 'joint'],
+      [[21, 22, 23], 'joint'],
+    ])
+    expect(onChanged).toHaveBeenCalledTimes(2)
+    // The page's reload is what puts the rows back on screen.
+    rerender({ transactions: [nvdaBuy, vooBuy, nvdaSell] })
+    expect(order()).toEqual(['21', '22', '23'])
+  })
+
+  it.each([
+    {
+      status: 500,
+      detail: 'Internal Server Error',
+      text: "Couldn't restore the order — the server had a problem (HTTP 500).",
+      reloads: 1,
+    },
+    { status: 409, detail: STALE, text: STALE, reloads: 2 },
+  ])('says why an Undo was refused ($status), reloading a stale list', async ({ status, detail, text, reloads }) => {
+    answerWith()
+    const { onChanged } = renderLedger()
+    keyboardMove(NVDA_BUY, 'ArrowDown')
+    await screen.findByText(QUIET_NVDA)
+    vi.mocked(reorderTransactions).mockRejectedValueOnce(new ApiError(detail, status))
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByText(text)).toBeTruthy()
+    expect(onChanged).toHaveBeenCalledTimes(reloads)
   })
 })

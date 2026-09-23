@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ApiError } from '../../api/client'
+import { ApiError, errorDetail } from '../../api/client'
 import {
   createTransaction,
   deleteTransaction,
@@ -248,6 +248,28 @@ export default function TransactionsPanel({
   const rows = pendingOrder ?? savedOrder ?? transactions
   const rowById = new Map(rows.map((txn) => [txn.id, txn]))
 
+  // Undo re-sends the order that stood before the drop (spec §5): the endpoint is not
+  // change-logged, so the client holds the previous order — and the scope it was made in. The
+  // page's reload shows the result; a list that changed since answers 409 and the reload shows
+  // what is there now.
+  const restoreOrder = (ids: number[], scope: OwnerScope) => {
+    setBusy(true)
+    reorderTransactions(ids, scope)
+      .then(() => {
+        onChanged()
+        toast.info('Order restored')
+      })
+      .catch((err: unknown) => {
+        if (err instanceof ApiError && err.status === 409) {
+          toast.error(errorDetail(err))
+          onChanged()
+          return
+        }
+        toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
+      })
+      .finally(() => setBusy(false))
+  }
+
   // One drop, one PUT (spec §5): the visible ids in their new order, in the page's scope. The
   // server re-times the whole ledger, folds it before and after, and answers with the rows and
   // every holding whose figures moved. `reorder` is read only when the PUT answers, long after
@@ -255,6 +277,8 @@ export default function TransactionsPanel({
   const saveOrder = (next: number[], moved: number) => {
     const txn = rowById.get(moved)
     if (txn === undefined) return // the hook commits only ids it was handed
+    const previous = rows.map((row) => row.id)
+    const scope = owner
     // Synchronously: the hook calls onCommit inside flushSync, so the new DOM order and the
     // cleared drag transforms land in one frame (lane R0 consumer rule 3).
     setPendingOrder(
@@ -264,14 +288,16 @@ export default function TransactionsPanel({
       }),
     )
     setBusy(true)
-    reorderTransactions(next, owner)
+    reorderTransactions(next, scope)
       .then((result) => {
         setPendingOrder(null)
         setSavedOrder(result.transactions)
         // Holdings, realized gains and the tiles stand on this order: the page reloads them.
         onChanged()
         reorder.markSaved(moved)
-        toast.success(movedMessage(txn, tickerOf(txn), result.changed_positions))
+        toast.success(movedMessage(txn, tickerOf(txn), result.changed_positions), {
+          action: { label: 'Undo', onAction: () => restoreOrder(previous, scope) },
+        })
       })
       .catch(() => setPendingOrder(null))
       .finally(() => setBusy(false))
