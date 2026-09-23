@@ -5,6 +5,7 @@ import { installPointerEvents } from '../../testing/pointer'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
 import DragHandle from './DragHandle'
 import { ReorderInstructions, ReorderLiveRegion } from './ReorderStatus'
+import { AUTO_SCROLL_MAX } from './reorderMath'
 import type { ReorderItem } from './reorderMath'
 import { useReorder } from './useReorder'
 
@@ -585,6 +586,31 @@ describe('useReorder — pointer', () => {
     })
     expect(order()).toEqual(['B', 'C', 'A', 'D'])
     expect(document.activeElement).toBe(elsewhere)
+  })
+
+  it('auto-scroll stops once the end of the range is in view — the held row never scrolls away', () => {
+    let scrollY = 0
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => scrollY)
+    const scrollBy = vi.fn((_x: number, dy: number) => {
+      scrollY += dy
+    })
+    window.scrollBy = scrollBy as unknown as typeof window.scrollBy
+    render(<Stateful initial={flat('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J')} />)
+    layoutRows(40, 500) // the range: 500..900 in list coordinates, past jsdom's 768px window
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 520 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 750 }) // held in the bottom zone
+    act(() => {
+      vi.advanceTimersByTime(2000)
+    })
+    // The page scrolled until the range's end (900) showed clear of the bottom zone,
+    // 900 − (768 − 40) = 172, and by at most one more step.
+    expect(scrollY).toBeGreaterThanOrEqual(172)
+    expect(scrollY).toBeLessThan(172 + AUTO_SCROLL_MAX)
+    const scrolls = scrollBy.mock.calls.length
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(scrollBy.mock.calls.length).toBe(scrolls) // still held in the zone: the page stays put
   })
 
   it('a throwing onCommit still leaves every row clean, and its error is rethrown after', () => {

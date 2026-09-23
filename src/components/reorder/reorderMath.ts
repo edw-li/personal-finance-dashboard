@@ -215,6 +215,20 @@ export function autoScrollSpeed(pointerY: number, top: number, bottom: number): 
   return 0
 }
 
+/** The auto-scroll speed a range allows: none further down once the range's bottom already shows
+ *  clear of the bottom edge zone, none further up once its top shows clear of the top zone. The held
+ *  unit is clamped to its range, so scrolling on would only carry it out of view. List coordinates:
+ *  `view` is what the scroller shows — its scroll offset and visible height. */
+export function autoScrollWithin(
+  speed: number,
+  range: { top: number; bottom: number },
+  view: { top: number; height: number },
+): number {
+  if (speed > 0 && range.bottom <= view.top + view.height - AUTO_SCROLL_EDGE) return 0
+  if (speed < 0 && range.top >= view.top + AUTO_SCROLL_EDGE) return 0
+  return speed
+}
+
 /** The live region's sentences (spec §8.2). */
 export const announce = {
   lift: ({ name, position, count, range }: AnnounceContext) =>

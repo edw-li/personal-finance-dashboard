@@ -29,6 +29,7 @@ import { useReducedMotion } from '../useReducedMotion'
 import {
   announce,
   autoScrollSpeed,
+  autoScrollWithin,
   clampOffset,
   contractProblems,
   keyboardTarget,
@@ -49,6 +50,7 @@ import {
   nextFrame,
   scrollByY,
   scrollParentOf,
+  scrollView,
   unitExtent,
   visibleBounds,
 } from './reorderDom'
@@ -418,10 +420,19 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
   }
 
   const autoScroll = (drag: Drag<K>) => {
+    const first = drag.extents[0]
+    const last = drag.extents[drag.extents.length - 1]
+    // The range the unit is clamped to: once its far end shows, scrolling on would only carry the
+    // held unit out of view.
+    const range = { top: first.top, bottom: last.top + last.height }
     const step = () => {
       if (machine.current.drag !== drag || drag.phase !== 'lifted') return
       const bounds = visibleBounds(drag.scroller)
-      const speed = autoScrollSpeed(drag.lastClientY, bounds.top, bounds.bottom)
+      const speed = autoScrollWithin(
+        autoScrollSpeed(drag.lastClientY, bounds.top, bounds.bottom),
+        range,
+        scrollView(drag.scroller),
+      )
       if (speed !== 0) scrollByY(drag.scroller, speed)
       drag.frame = nextFrame(step)
     }

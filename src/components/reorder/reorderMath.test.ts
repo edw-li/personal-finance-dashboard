@@ -4,6 +4,7 @@ import {
   REORDER_INSTRUCTIONS,
   announce,
   autoScrollSpeed,
+  autoScrollWithin,
   clampOffset,
   contractProblems,
   keyboardTarget,
@@ -215,6 +216,28 @@ describe('autoScrollSpeed', () => {
     expect(autoScrollSpeed(600, 0, 600)).toBe(AUTO_SCROLL_MAX)
     expect(autoScrollSpeed(20, 0, 600)).toBeCloseTo(-AUTO_SCROLL_MAX / 4)
     expect(autoScrollSpeed(580, 0, 600)).toBeCloseTo(AUTO_SCROLL_MAX / 4)
+  })
+})
+
+describe('autoScrollWithin', () => {
+  // A range in list coordinates, and what the scroller shows of the list.
+  const range = { top: 1000, bottom: 1400 }
+
+  it('keeps scrolling while the far end of the range is still out of view', () => {
+    expect(autoScrollWithin(18, range, { top: 600, height: 400 })).toBe(18)
+    expect(autoScrollWithin(-18, range, { top: 1200, height: 400 })).toBe(-18)
+  })
+
+  it("stops once the range's far edge shows clear of the edge zone", () => {
+    expect(autoScrollWithin(18, range, { top: 1040, height: 400 })).toBe(0) // 1400 ≤ 1040 + 400 − 40
+    expect(autoScrollWithin(18, range, { top: 1039, height: 400 })).toBe(18) // a pixel short of it
+    expect(autoScrollWithin(-18, range, { top: 960, height: 400 })).toBe(0) // 1000 ≥ 960 + 40
+    expect(autoScrollWithin(-18, range, { top: 961, height: 400 })).toBe(-18)
+  })
+
+  it('stops only the direction that has run out', () => {
+    expect(autoScrollWithin(-18, range, { top: 1040, height: 400 })).toBe(-18) // the bottom shows; up is open
+    expect(autoScrollWithin(0, range, { top: 1040, height: 400 })).toBe(0)
   })
 })
 
