@@ -1,20 +1,34 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
+import { CATEGORY_HUES, ENTITY, SALARY_TINTS } from '../../charts/entities'
+import type { CategoryFold } from '../../charts/entities'
+import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE, SEQUENTIAL_BLUE } from '../../charts/theme'
+import type { MoneyFlowCategoryTotal, MoneyFlowOut } from '../../types/api'
 import {
-  MUTED,
-  NEGATIVE,
-  OTHER_SERIES_COLOR,
-  PALETTE,
-  POSITIVE,
-  SEQUENTIAL_BLUE,
-} from '../../charts/theme'
-import type { MoneyFlowOut } from '../../types/api'
-import { moneyFlowCsv, moneyFlowOption } from './moneyFlowOptions'
+  estimateNodeName,
+  estimateSentence,
+  monthRuns,
+  moneyFlowCsv,
+  moneyFlowOption,
+  runWords,
+} from './moneyFlowOptions'
 
-// A conservation-consistent wire payload (sources sum to gross; the mid column sums back
-// to gross; saved = take-home − total_spend), strings exactly as the server quantizes.
-// These are FIXTURE figures shaped like the server's, not engine assertions — the engine
-// truth is pinned backend-side.
+// Nine categories over a fully matched year. FIXTURE figures shaped like the server's (the
+// engine truth is pinned backend-side): sources sum to gross, the mid column sums back to
+// gross, and take_home_matched + refunds − total_spend == saved.
+const TOTALS: MoneyFlowCategoryTotal[] = [
+  { category_id: 1, name: 'Rent', kind: 'living', amount: '24000.00' },
+  { category_id: 2, name: 'Food', kind: 'living', amount: '6000.00' },
+  { category_id: 3, name: 'Travel', kind: 'living', amount: '4200.00' },
+  { category_id: 4, name: 'Utilities', kind: 'living', amount: '3000.00' },
+  { category_id: 5, name: 'Insurance', kind: 'living', amount: '2400.00' },
+  { category_id: 6, name: 'Fun', kind: 'living', amount: '1800.00' },
+  { category_id: 7, name: 'Fitness', kind: 'living', amount: '1200.00' },
+  { category_id: 8, name: 'Gifts', kind: 'living', amount: '900.00' },
+  { category_id: 9, name: 'Misc', kind: 'living', amount: '500.00' },
+]
+const YEAR = Array.from({ length: 12 }, (_, i) => `2026-${String(i + 1).padStart(2, '0')}-01`)
+
 function flowOut(over: Partial<MoneyFlowOut> = {}): MoneyFlowOut {
   return {
     year: 2026,
@@ -46,20 +60,28 @@ function flowOut(over: Partial<MoneyFlowOut> = {}): MoneyFlowOut {
     take_home_pending: '0.00',
     take_home_months_entered: 12,
     retained_equity: '93183.95',
-    categories: [
-      { name: 'Rent', amount: '24000.00' },
-      { name: 'Food', amount: '6000.00' },
-      { name: 'Travel', amount: '4200.00' },
-      { name: 'Utilities', amount: '3000.00' },
-      { name: 'Insurance', amount: '2400.00' },
-      { name: 'Fun', amount: '1800.00' },
-      { name: 'Fitness', amount: '1200.00' },
-    ],
-    other_spend: '1400.00',
+    categories: [],
+    other_spend: null,
     total_spend: '44000.00',
     saved: '76000.00',
+    take_home_matched: '120000.00',
+    refunds: '0.00',
+    matched_months: YEAR,
+    take_home_pending_months: [],
+    take_home_unmatched: '0.00',
+    take_home_unmatched_months: [],
+    spending_unmatched_months: [],
+    spending_unmatched_total: '0.00',
+    category_totals: TOTALS,
+    tracking_start: '2023-08-01',
     ...over,
   }
+}
+
+/** The Spending page's fold (charts/entities.ts): the all-time top five on the chain. */
+const FOLD: CategoryFold = {
+  ids: [1, 2, 3, 4, 5],
+  colors: new Map([1, 2, 3, 4, 5].map((id, i) => [id, CATEGORY_HUES[i]])),
 }
 
 // Option readers (spendingSankeyOptions.test.ts posture).
@@ -88,65 +110,125 @@ function tooltipOf(option: EChartsOption): (params: unknown) => string {
   return (option as unknown as { tooltip: { formatter: (params: unknown) => string } })
     .tooltip.formatter
 }
+const draw = (flow: MoneyFlowOut, fold: CategoryFold | null = FOLD, todayIso = '2026-09-23') =>
+  sankeyOf(moneyFlowOption(flow, { fold, todayIso })!)
+const colorOf = (series: SankeyLike, name: string) =>
+  series.data?.find((n) => n.name === name)?.itemStyle?.color
+const sumLinks = (series: SankeyLike, pick: (link: LinkLike) => boolean) =>
+  Math.round((series.links ?? []).filter(pick).reduce((acc, l) => acc + (l.value ?? 0), 0) * 100) / 100
 
 describe('moneyFlowOption — the four pinned columns', () => {
-  it('emits sources, gross, the mid four and the spend fan in data order with pinned depths', () => {
-    const option = moneyFlowOption(flowOut())
+  it('emits sources, gross, the middle column and the spend fan in data order with pinned depths', () => {
+    const option = moneyFlowOption(flowOut(), { fold: FOLD })
     expect(option).not.toBeNull()
     const series = sankeyOf(option!)
     // The shared mark spec rides every option (charts/sankey.ts owns the numbers).
     expect(series.type).toBe('sankey')
     expect(series.nodeWidth).toBe(12)
     expect(series.layoutIterations).toBe(0)
-    expect(series.data?.map((n) => n.name)).toEqual([
-      'Salary & bonus',
-      'RSU vests',
-      'ESPP',
-      'Investment income',
-      'Other income',
-      'Gross income',
-      'Taxes',
-      'Pre-tax savings',
-      'Retained equity & other',
-      'Take-home cash',
-      'Rent',
-      'Food',
-      'Travel',
-      'Utilities',
-      'Insurance',
-      'Fun',
-      'Fitness',
-      'Other',
-      'Saved',
-    ])
-    expect(series.data?.map((n) => n.depth)).toEqual([
-      0, 0, 0, 0, 0, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-    ])
-    expect(series.data?.map((n) => n.itemStyle?.color)).toEqual([
-      PALETTE[0],
-      PALETTE[1],
-      PALETTE[2],
-      PALETTE[3],
-      PALETTE[4], // fixed source slots
-      MUTED, // Gross restates money in transit (paycheck's intermediate vocabulary)
-      PALETTE[7],
-      PALETTE[5],
-      PALETTE[6], // Taxes / Pre-tax / Retained fixed slots
-      MUTED, // Take-home: the second intermediate
-      PALETTE[0],
-      PALETTE[1],
-      PALETTE[2],
-      PALETTE[3],
-      PALETTE[4],
-      PALETTE[5],
-      PALETTE[6],
-      OTHER_SERIES_COLOR, // the folded remainder wears the gray Other color
-      POSITIVE, // Saved: the kept-money-is-green cross-chart convention
+    expect(series.data?.map((n) => [n.name, n.depth])).toEqual([
+      ['Salary & bonus', 0],
+      ['RSU vests', 0],
+      ['ESPP', 0],
+      ['Investment income', 0],
+      ['Other income', 0],
+      ['Gross income', 1],
+      ['Taxes', 2],
+      ['Pre-tax savings', 2],
+      ['Retained equity & other', 2],
+      ['Take-home cash', 2],
+      // The Spending page's fold, in ITS order and colours — not this year's own ranking.
+      ['Rent', 3],
+      ['Food', 3],
+      ['Travel', 3],
+      ['Utilities', 3],
+      ['Insurance', 3],
+      ['Other', 3],
+      ['Saved', 3],
     ])
   })
 
+  it('wears the entity registry: income hues, the tax hue, kept greens, structural grey (spec §C2)', () => {
+    const series = draw(flowOut())
+    expect(series.data?.map((n) => n.itemStyle?.color)).toEqual([
+      ENTITY.salary,
+      ENTITY.rsu,
+      ENTITY.espp,
+      ENTITY.investmentIncome,
+      ENTITY.otherIncome, // the balancing remainder of income: the Other grey
+      ENTITY.structural, // Gross restates money in transit
+      ENTITY.tax,
+      ENTITY.preTaxSavings,
+      ENTITY.structural, // Retained equity is the RESIDUAL, not an entity — grey (was PALETTE[6])
+      ENTITY.structural, // Take-home: money still in transit toward the fan
+      ...CATEGORY_HUES,
+      OTHER_SERIES_COLOR,
+      POSITIVE, // Saved: kept money is green
+    ])
+    // The two collisions the audit found inside this one chart are gone: no category shares
+    // the pre-tax green or the residual's hue.
+    expect(colorOf(series, 'Pre-tax savings')).toBe(PALETTE[5])
+    expect(CATEGORY_HUES).not.toContain(PALETTE[5])
+  })
+
+  it('never lets two entities share a colour within a column or across linked columns', () => {
+    const series = draw(
+      flowOut({
+        sources: {
+          salary_and_bonus: '220000.00',
+          rsu_vests: '80000.00',
+          espp: '4000.00',
+          investment_income: '2500.00',
+          other_income: '1000.00',
+          salary_people: [
+            { name: 'Me', amount: '132000.00' },
+            { name: 'Sam', amount: '88000.00' },
+          ],
+        },
+        category_totals: [...TOTALS, { category_id: 10, name: 'Taxes', kind: 'tax', amount: '500.00' }],
+        total_spend: '44500.00',
+        saved: '75500.00',
+      }),
+      { ids: [10, 1, 2, 3, 4, 5], colors: new Map([[10, ENTITY.tax], ...[1, 2, 3, 4, 5].map((id, i) => [id, CATEGORY_HUES[i]] as [number, string])]) },
+    )
+    const column = (depth: number) =>
+      (series.data ?? []).filter((n) => n.depth === depth).map((n) => n.itemStyle?.color ?? '')
+    // The greys are sanctioned repeats: the structural grey (gross, take-home, residual,
+    // estimates) and the Other grey (folds and the balancing income remainder).
+    const hues = (colors: string[]) => colors.filter((c) => c !== MUTED && c !== OTHER_SERIES_COLOR)
+    for (const depth of [0, 1, 2, 3]) {
+      const own = hues(column(depth))
+      expect(new Set(own).size, `column ${depth}`).toBe(own.length)
+    }
+    // Linked neighbours: the only shared hue between the middle column and the fan is the
+    // ONE tax hue (spec §C2.3 — the liability node and the tax-kind category are one entity
+    // family); everything else is disjoint.
+    const middle = new Set(hues(column(2)))
+    const shared = hues(column(3)).filter((c) => middle.has(c))
+    expect(shared).toEqual([ENTITY.tax])
+    expect(colorOf(series, 'Taxes (spending)')).toBe(ENTITY.tax)
+    // The documented exemption (charts/entities.ts): the income column and the fan are never
+    // adjacent and never linked, and eleven identities do not fit eight validated hues.
+    expect(column(0)).toContain(CATEGORY_HUES[0])
+  })
+
+  it('keeps each category on its fold colour whatever this year ranks it (stability)', () => {
+    // Food is the all-time leader in this fold; Rent leads THIS year. Food still wears the
+    // first hue and leads the fan — the year's own ranking never recolours anything.
+    const fold: CategoryFold = { ids: [2, 1], colors: new Map([[2, CATEGORY_HUES[0]], [1, CATEGORY_HUES[1]]]) }
+    const series = draw(flowOut(), fold)
+    const fan = (series.data ?? []).filter((n) => n.depth === 3).map((n) => [n.name, n.itemStyle?.color])
+    expect(fan.slice(0, 3)).toEqual([
+      ['Food', CATEGORY_HUES[0]],
+      ['Rent', CATEGORY_HUES[1]],
+      ['Other', OTHER_SERIES_COLOR],
+    ])
+    // Everything outside the fold lands in Other, at its server figures.
+    expect(series.data?.find((n) => n.name === 'Other')?.value).toBe(14000)
+  })
+
   it('carries every link at its server figure and conserves the take-home fan', () => {
-    const series = sankeyOf(moneyFlowOption(flowOut())!)
+    const series = draw(flowOut())
     expect(series.links).toEqual([
       { source: 'Salary & bonus', target: 'Gross income', value: 220000 },
       { source: 'RSU vests', target: 'Gross income', value: 80000 },
@@ -162,72 +244,52 @@ describe('moneyFlowOption — the four pinned columns', () => {
       { source: 'Take-home cash', target: 'Travel', value: 4200 },
       { source: 'Take-home cash', target: 'Utilities', value: 3000 },
       { source: 'Take-home cash', target: 'Insurance', value: 2400 },
-      { source: 'Take-home cash', target: 'Fun', value: 1800 },
-      { source: 'Take-home cash', target: 'Fitness', value: 1200 },
-      { source: 'Take-home cash', target: 'Other', value: 1400 },
+      { source: 'Take-home cash', target: 'Other', value: 4400 },
       { source: 'Take-home cash', target: 'Saved', value: 76000 },
     ])
   })
 
   it('omits a zero source without reshuffling its neighbours', () => {
     // espp zeroed, the freed 4000 moved into other_income — conservation intact.
-    const series = sankeyOf(
-      moneyFlowOption(
-        flowOut({
-          sources: {
-            salary_and_bonus: '220000.00',
-            rsu_vests: '80000.00',
-            espp: '0.00',
-            investment_income: '2500.00',
-            other_income: '5000.00',
-            salary_people: [],
-          },
-        }),
-      )!,
+    const series = draw(
+      flowOut({
+        sources: {
+          salary_and_bonus: '220000.00',
+          rsu_vests: '80000.00',
+          espp: '0.00',
+          investment_income: '2500.00',
+          other_income: '5000.00',
+          salary_people: [],
+        },
+      }),
     )
-    const names = series.data?.map((n) => n.name)
-    expect(names).not.toContain('ESPP')
-    const byName = new Map(series.data?.map((n) => [n.name, n.itemStyle?.color]))
-    expect(byName.get('RSU vests')).toBe(PALETTE[1]) // fixed per ENTITY, not per index
-    expect(byName.get('Investment income')).toBe(PALETTE[3])
+    expect(series.data?.map((n) => n.name)).not.toContain('ESPP')
+    expect(colorOf(series, 'RSU vests')).toBe(ENTITY.rsu) // fixed per ENTITY, not per index
+    expect(colorOf(series, 'Investment income')).toBe(ENTITY.investmentIncome)
   })
 
   it('draws a deficit as a red Drawdown source splitting each category pro-rata', () => {
-    const option = moneyFlowOption(
-      flowOut({
-        take_home_cash: '22000.00',
-        retained_equity: '191183.95',
-        saved: '-22000.00',
-      }),
+    const series = draw(
+      flowOut({ take_home_cash: '22000.00', take_home_matched: '22000.00', retained_equity: '191183.95', saved: '-22000.00' }),
     )
-    const series = sankeyOf(option!)
     const drawdown = series.data?.find((n) => n.name === 'Drawdown')
-    expect(drawdown).toEqual({
-      name: 'Drawdown',
-      value: 22000,
-      depth: 2,
-      itemStyle: { color: NEGATIVE },
-    })
+    expect(drawdown).toEqual({ name: 'Drawdown', value: 22000, depth: 2, itemStyle: { color: NEGATIVE } })
     expect(series.data?.map((n) => n.name)).not.toContain('Saved')
     // 22000 take-home over 44000 spend: exactly half of every category from each source.
-    expect(series.links).toContainEqual({
-      source: 'Take-home cash',
-      target: 'Rent',
-      value: 12000,
-    })
+    expect(series.links).toContainEqual({ source: 'Take-home cash', target: 'Rent', value: 12000 })
     expect(series.links).toContainEqual({ source: 'Drawdown', target: 'Rent', value: 12000 })
-    expect(series.links).toContainEqual({
-      source: 'Take-home cash',
-      target: 'Other',
-      value: 700,
-    })
-    expect(series.links).toContainEqual({ source: 'Drawdown', target: 'Other', value: 700 })
+    expect(series.links).toContainEqual({ source: 'Take-home cash', target: 'Other', value: 2200 })
+    expect(series.links).toContainEqual({ source: 'Drawdown', target: 'Other', value: 2200 })
   })
 
   it('refuses a non-renderable payload and backstops a negative figure', () => {
     expect(moneyFlowOption(flowOut({ renderable: false, reason: 'nope' }))).toBeNull()
     // The server refuses negatives itself; a payload that slipped through must not draw.
     expect(moneyFlowOption(flowOut({ retained_equity: '-0.01' }))).toBeNull()
+    expect(moneyFlowOption(flowOut({ take_home_unmatched: '-1.00' }))).toBeNull()
+    expect(moneyFlowOption(flowOut({ refunds: '-1.00' }))).toBeNull()
+    // Matched take-home that cannot fund what it says was saved is a torn payload.
+    expect(moneyFlowOption(flowOut({ take_home_matched: '1000.00', saved: '76000.00' }))).toBeNull()
   })
 
   it('renames colliding categories — a duplicate node name is a CRASH, not a merge', () => {
@@ -239,17 +301,14 @@ describe('moneyFlowOption — the four pinned columns', () => {
     // user's real 'Taxes' spending category. Upstream names ('Gross income', a source
     // label) would additionally close a cycle. Both die at the source: colliding
     // categories wear a visible ' (spending)' suffix and everything still draws.
+    const totals: MoneyFlowCategoryTotal[] = [
+      { category_id: 1, name: 'Taxes', kind: 'tax', amount: '24000.00' },
+      { category_id: 2, name: 'Gross income', kind: 'living', amount: '6000.00' },
+      { category_id: 3, name: 'RSU vests', kind: 'living', amount: '4200.00' },
+    ]
     const option = moneyFlowOption(
-      flowOut({
-        categories: [
-          { name: 'Taxes', amount: '24000.00' },
-          { name: 'Gross income', amount: '6000.00' },
-          { name: 'RSU vests', amount: '4200.00' },
-        ],
-        other_spend: null,
-        total_spend: '34200.00',
-        saved: '85800.00',
-      }),
+      flowOut({ category_totals: totals, total_spend: '34200.00', saved: '85800.00' }),
+      { fold: null },
     )
     expect(option).not.toBeNull()
     const series = sankeyOf(option!)
@@ -259,11 +318,7 @@ describe('moneyFlowOption — the four pinned columns', () => {
     expect(names).toContain('Taxes (spending)')
     expect(names).toContain('Gross income (spending)')
     expect(names).toContain('RSU vests (spending)')
-    expect(series.links).toContainEqual({
-      source: 'Take-home cash',
-      target: 'Taxes (spending)',
-      value: 24000,
-    })
+    expect(series.links).toContainEqual({ source: 'Take-home cash', target: 'Taxes (spending)', value: 24000 })
     // The jurisdiction tooltip stays pinned to the STRUCTURAL Taxes node alone.
     const format = tooltipOf(option!)
     expect(format({ dataType: 'node', name: 'Taxes' })).toContain('Federal')
@@ -271,15 +326,12 @@ describe('moneyFlowOption — the four pinned columns', () => {
   })
 
   it('keeps a real category named Other distinct from the fold node', () => {
-    const option = moneyFlowOption(
-      flowOut({
-        categories: [{ name: 'Other', amount: '24000.00' }],
-        other_spend: '1000.00',
-        total_spend: '25000.00',
-        saved: '95000.00',
-      }),
-    )
-    expect(option).not.toBeNull()
+    const totals: MoneyFlowCategoryTotal[] = [
+      { category_id: 1, name: 'Other', kind: 'living', amount: '24000.00' },
+      { category_id: 2, name: 'Tiny', kind: 'living', amount: '1000.00' },
+    ]
+    const fold: CategoryFold = { ids: [1], colors: new Map([[1, CATEGORY_HUES[0]]]) }
+    const option = moneyFlowOption(flowOut({ category_totals: totals, total_spend: '25000.00', saved: '95000.00' }), { fold })
     const names = (sankeyOf(option!).data ?? []).map((n) => n.name)
     expect(new Set(names).size).toBe(names.length)
     // Emission order claims first: the REAL category keeps its name, the fold renames.
@@ -288,7 +340,7 @@ describe('moneyFlowOption — the four pinned columns', () => {
   })
 
   it('lists the seven jurisdictions on the Taxes node and delegates everything else', () => {
-    const format = tooltipOf(moneyFlowOption(flowOut())!)
+    const format = tooltipOf(moneyFlowOption(flowOut(), { fold: FOLD })!)
     const taxes = format({ dataType: 'node', name: 'Taxes' })
     expect(taxes).toContain('<strong>$67,016.05</strong>')
     expect(taxes).toContain('Federal $26,520.00')
@@ -302,9 +354,7 @@ describe('moneyFlowOption — the four pinned columns', () => {
     expect(taxes).toContain('NIIT $123.45')
     // Every other node/edge reads the shared factory's server-figure echo.
     expect(format({ dataType: 'node', name: 'Rent' })).toContain('$24,000.00')
-    expect(
-      format({ dataType: 'edge', data: { source: 'Take-home cash', target: 'Saved' } }),
-    ).toContain('$76,000.00')
+    expect(format({ dataType: 'edge', data: { source: 'Take-home cash', target: 'Saved' } })).toContain('$76,000.00')
   })
 
   it('stays silent about NIIT on a payload that predates the field', () => {
@@ -323,49 +373,40 @@ describe('moneyFlowOption — the four pinned columns', () => {
             capital_gains: '0.00',
           },
         }),
+        { fold: FOLD },
       )!,
     )
     const taxes = format({ dataType: 'node', name: 'Taxes' })
     expect(taxes).toContain('Capital gains $0.00')
     expect(taxes).not.toContain('NIIT')
   })
+
   it('splits the salary node per earner, sharing the salary hue family', () => {
-    const series = sankeyOf(
-      moneyFlowOption(
-        flowOut({
-          sources: {
-            salary_and_bonus: '220000.00',
-            rsu_vests: '80000.00',
-            espp: '4000.00',
-            investment_income: '2500.00',
-            other_income: '1000.00',
-            salary_people: [
-              { name: 'Me', amount: '132000.00' },
-              { name: 'Sam', amount: '88000.00' },
-            ],
-          },
-        }),
-      )!,
+    const series = draw(
+      flowOut({
+        sources: {
+          salary_and_bonus: '220000.00',
+          rsu_vests: '80000.00',
+          espp: '4000.00',
+          investment_income: '2500.00',
+          other_income: '1000.00',
+          salary_people: [
+            { name: 'Me', amount: '132000.00' },
+            { name: 'Sam', amount: '88000.00' },
+          ],
+        },
+      }),
     )
     const names = series.data?.map((n) => n.name)
-    expect(names?.slice(0, 6)).toEqual([
-      'Salary — Me',
-      'Salary — Sam',
-      'RSU vests',
-      'ESPP',
-      'Investment income',
-      'Other income',
-    ])
+    expect(names?.slice(0, 6)).toEqual(['Salary — Me', 'Salary — Sam', 'RSU vests', 'ESPP', 'Investment income', 'Other income'])
     expect(names).not.toContain('Salary & bonus')
-    const byName = new Map(series.data?.map((n) => [n.name, n.itemStyle?.color]))
-    // The primary keeps the card's own salary color; the partner takes a lightness step
-    // of the theme's validated blue ramp (index 6 of which IS PALETTE[0]).
-    expect(byName.get('Salary — Me')).toBe(PALETTE[0])
-    expect(byName.get('Salary — Sam')).toBe(SEQUENTIAL_BLUE[9])
-    // The neighbours keep their fixed ENTITY slots — a split never reshuffles hues.
-    expect(byName.get('RSU vests')).toBe(PALETTE[1])
-    expect(byName.get('Other income')).toBe(PALETTE[4])
-    // Both nodes feed Gross at their own figure; the column still sums to 307500.
+    // The primary keeps the salary hue; the partner takes a lightness step of the theme's
+    // validated blue ramp (index 6 of which IS PALETTE[0]).
+    expect(colorOf(series, 'Salary — Me')).toBe(SALARY_TINTS[0])
+    expect(colorOf(series, 'Salary — Sam')).toBe(SEQUENTIAL_BLUE[9])
+    // The neighbours keep their fixed ENTITY colours — a split never reshuffles hues.
+    expect(colorOf(series, 'RSU vests')).toBe(ENTITY.rsu)
+    expect(colorOf(series, 'Other income')).toBe(ENTITY.otherIncome)
     expect(series.links?.slice(0, 2)).toEqual([
       { source: 'Salary — Me', target: 'Gross income', value: 132000 },
       { source: 'Salary — Sam', target: 'Gross income', value: 88000 },
@@ -376,29 +417,26 @@ describe('moneyFlowOption — the four pinned columns', () => {
     // The 2026-08-25 Overview crash, one door further in: echarts keys nodes on NAME, and
     // a spending category spelled exactly like a salary node would drop it and then throw
     // inside setOption.
-    const series = sankeyOf(
-      moneyFlowOption(
-        flowOut({
-          sources: {
-            salary_and_bonus: '220000.00',
-            rsu_vests: '80000.00',
-            espp: '4000.00',
-            investment_income: '2500.00',
-            other_income: '1000.00',
-            salary_people: [
-              { name: 'Me', amount: '132000.00' },
-              { name: 'Sam', amount: '88000.00' },
-            ],
-          },
-          categories: [
-            { name: 'Salary — Sam', amount: '24000.00' },
-            { name: 'Food', amount: '6000.00' },
+    const series = draw(
+      flowOut({
+        sources: {
+          salary_and_bonus: '220000.00',
+          rsu_vests: '80000.00',
+          espp: '4000.00',
+          investment_income: '2500.00',
+          other_income: '1000.00',
+          salary_people: [
+            { name: 'Me', amount: '132000.00' },
+            { name: 'Sam', amount: '88000.00' },
           ],
-          other_spend: null,
-          total_spend: '30000.00',
-          saved: '90000.00',
-        }),
-      )!,
+        },
+        category_totals: [
+          { category_id: 1, name: 'Salary — Sam', kind: 'living', amount: '24000.00' },
+          { category_id: 2, name: 'Food', kind: 'living', amount: '6000.00' },
+        ],
+        total_spend: '30000.00',
+        saved: '90000.00',
+      }),
     )
     const names = series.data?.map((n) => n.name) ?? []
     expect(names).toContain('Salary — Sam')
@@ -407,94 +445,220 @@ describe('moneyFlowOption — the four pinned columns', () => {
   })
 
   it('draws ONE salary node when the split is empty', () => {
-    // The byte-identity pin — the default fixture already asserts the full node list, and
-    // this restates the contract at the seam that could break it.
-    const series = sankeyOf(moneyFlowOption(flowOut())!)
-    expect(series.data?.[0]).toMatchObject({
-      name: 'Salary & bonus',
-      value: 220000,
-      depth: 0,
-      itemStyle: { color: PALETTE[0] },
+    const series = draw(flowOut())
+    expect(series.data?.[0]).toMatchObject({ name: 'Salary & bonus', value: 220000, depth: 0, itemStyle: { color: PALETTE[0] } })
+  })
+})
+
+// 2026-09-23 spec §C1: the fan and Saved cover the MATCHED months only.
+describe('moneyFlowOption — one window on the right', () => {
+  // Production's 2026 shape: take-home and spending entered Jan–Aug, September's rent-only
+  // spending waiting for its take-home, the Sep–Dec take-home estimated.
+  const partial = () =>
+    flowOut({
+      take_home_cash: '52000.00',
+      take_home_matched: '52000.00',
+      take_home_pending: '26000.00',
+      take_home_months_entered: 8,
+      retained_equity: '135183.95',
+      matched_months: YEAR.slice(0, 8),
+      take_home_pending_months: YEAR.slice(8),
+      spending_unmatched_months: ['2026-09-01'],
+      spending_unmatched_total: '2072.23',
+      category_totals: [
+        { category_id: 1, name: 'Rent', kind: 'living', amount: '16000.00' },
+        { category_id: 10, name: 'Taxes', kind: 'tax', amount: '800.00' },
+      ],
+      total_spend: '16800.00',
+      saved: '35200.00',
     })
+
+  it('saves exactly the payload figure — the YTD card’s — and conserves take-home to the cent', () => {
+    const series = draw(partial())
+    expect(series.data?.find((n) => n.name === 'Saved')?.value).toBe(35200)
+    const out = sumLinks(series, (l) => l.source === 'Take-home cash')
+    expect(out).toBe(52000)
+  })
+
+  it('names the estimate by its months: not yet earned, and before tracking', () => {
+    const series = draw(partial())
+    const estimate = series.data?.find((n) => n.name?.startsWith('Est. take-home'))
+    expect(estimate?.name).toBe('Est. take-home, Sep–Dec')
+    expect(estimate?.value).toBe(26000)
+    expect(estimate?.itemStyle).toEqual({ color: MUTED, borderColor: MUTED, borderWidth: 1, borderType: 'dashed' })
+    // Straight off gross, and nothing flows OUT of it: an estimate is never "spent".
+    expect(series.links?.filter((l) => l.target === estimate?.name)).toEqual([
+      { source: 'Gross income', target: 'Est. take-home, Sep–Dec', value: 26000 },
+    ])
+    expect(series.links?.filter((l) => l.source === estimate?.name)).toEqual([])
+    const first = draw(
+      flowOut({
+        year: 2023,
+        take_home_cash: '30886.02',
+        take_home_matched: '30886.02',
+        take_home_pending: '43240.43',
+        take_home_months_entered: 5,
+        retained_equity: '139057.50',
+        take_home_pending_months: ['2023-01-01', '2023-02-01', '2023-03-01', '2023-04-01', '2023-05-01', '2023-06-01', '2023-07-01'],
+        matched_months: ['2023-08-01', '2023-09-01', '2023-10-01', '2023-11-01', '2023-12-01'],
+        saved: '-13113.98',
+      }),
+    )
+    expect(first.data?.some((n) => n.name === 'Est. take-home, Jan–Jul (before tracking)')).toBe(true)
+  })
+
+  it('explains the estimate in its tooltip: how it was computed and why the months are missing', () => {
+    const option = moneyFlowOption(partial(), { fold: FOLD, todayIso: '2026-09-23' })!
+    const text = tooltipOf(option)({ dataType: 'node', name: 'Est. take-home, Sep–Dec' })
+    expect(text).toContain('$26,000.00')
+    expect(text).toContain('the average take-home of the 8 entered months × 4')
+    expect(text).toContain('Sep is still in progress')
+    expect(text).toContain('Oct–Dec are not earned yet')
+  })
+
+  it('sends pay-without-spending to a named terminal instead of Saved', () => {
+    const series = draw(
+      flowOut({
+        take_home_cash: '15100.00',
+        take_home_matched: '5000.00',
+        take_home_unmatched: '10100.00',
+        take_home_unmatched_months: ['2026-02-01', '2026-03-01'],
+        matched_months: ['2026-01-01'],
+        category_totals: [{ category_id: 1, name: 'Rent', kind: 'living', amount: '2000.00' }],
+        total_spend: '2000.00',
+        saved: '3000.00',
+      }),
+    )
+    const terminal = series.data?.find((n) => n.name === 'Take-home, spending not entered (Feb–Mar)')
+    expect(terminal).toEqual({
+      name: 'Take-home, spending not entered (Feb–Mar)',
+      value: 10100,
+      depth: 3,
+      itemStyle: { color: MUTED },
+    })
+    expect(series.data?.find((n) => n.name === 'Saved')?.value).toBe(3000)
+    expect(sumLinks(series, (l) => l.source === 'Take-home cash')).toBe(15100)
+  })
+
+  it('draws refunds as an explicit inflow so the fan conserves with Saved netted', () => {
+    const series = draw(
+      flowOut({
+        take_home_cash: '52000.00',
+        take_home_matched: '52000.00',
+        refunds: '300.00',
+        category_totals: [
+          { category_id: 1, name: 'Rent', kind: 'living', amount: '16000.00' },
+          { category_id: 9, name: 'Returns', kind: 'living', amount: '-300.00' },
+        ],
+        total_spend: '16000.00',
+        saved: '36300.00',
+      }),
+    )
+    expect(colorOf(series, 'Refunds & credits')).toBe(MUTED)
+    expect(series.links).toContainEqual({ source: 'Refunds & credits', target: 'Rent', value: 300 })
+    expect(series.links).toContainEqual({ source: 'Take-home cash', target: 'Rent', value: 15700 })
+    // A net-refund category draws no node — its money is the inflow.
+    expect(series.data?.some((n) => n.name === 'Returns')).toBe(false)
+    expect(sumLinks(series, (l) => l.source === 'Take-home cash')).toBe(52000)
+  })
+
+  it('splits a deficit with refunds across all three sources, each category to the cent', () => {
+    const series = draw(
+      flowOut({
+        take_home_cash: '10000.00',
+        take_home_matched: '10000.00',
+        retained_equity: '203183.95',
+        refunds: '300.00',
+        category_totals: [
+          { category_id: 1, name: 'Rent', kind: 'living', amount: '16000.00' },
+          { category_id: 9, name: 'Returns', kind: 'living', amount: '-300.00' },
+        ],
+        total_spend: '16000.00',
+        saved: '-5700.00',
+      }),
+    )
+    expect(series.links?.filter((l) => l.target === 'Rent')).toEqual([
+      { source: 'Take-home cash', target: 'Rent', value: 10000 },
+      { source: 'Refunds & credits', target: 'Rent', value: 300 },
+      { source: 'Drawdown', target: 'Rent', value: 5700 },
+    ])
+  })
+
+  it('folds by the payload’s own ranking when no Spending fold is at hand', () => {
+    // A tax-kind category still takes the tax hue and leads; the others take the chain.
+    const series = draw(partial(), null)
+    expect((series.data ?? []).filter((n) => n.depth === 3).map((n) => [n.name, n.itemStyle?.color])).toEqual([
+      ['Taxes (spending)', ENTITY.tax],
+      ['Rent', CATEGORY_HUES[0]],
+      ['Saved', POSITIVE],
+    ])
+  })
+
+  it('still draws a payload from before the window (no category totals)', () => {
+    const legacy = flowOut({
+      category_totals: undefined,
+      take_home_matched: undefined,
+      refunds: undefined,
+      categories: [
+        { name: 'Rent', amount: '24000.00' },
+        { name: 'Food', amount: '6000.00' },
+      ],
+      other_spend: '14000.00',
+    })
+    const series = draw(legacy, null)
+    expect((series.data ?? []).filter((n) => n.depth === 3).map((n) => [n.name, n.value])).toEqual([
+      ['Rent', 24000],
+      ['Food', 6000],
+      ['Other', 14000],
+      ['Saved', 76000],
+    ])
+    expect(sumLinks(series, (l) => l.source === 'Take-home cash')).toBe(120000)
+  })
+})
+
+describe('the window’s words', () => {
+  it('groups months into runs and says them inside one year', () => {
+    expect(monthRuns(['2026-03-01', '2026-01-01', '2026-02-01', '2026-06-01'])).toEqual([
+      ['2026-01-01', '2026-02-01', '2026-03-01'],
+      ['2026-06-01'],
+    ])
+    expect(monthRuns([])).toEqual([])
+    expect(runWords(['2026-09-01', '2026-10-01', '2026-11-01', '2026-12-01'])).toBe('Sep–Dec')
+    expect(runWords(['2026-09-01'])).toBe('Sep')
+  })
+
+  it('names the estimate node by its runs, flagging the ones before tracking', () => {
+    expect(estimateNodeName(YEAR.slice(8), '2023-08-01')).toBe('Est. take-home, Sep–Dec')
+    expect(estimateNodeName(['2023-01-01', '2023-02-01', '2023-03-01'], '2023-08-01')).toBe(
+      'Est. take-home, Jan–Mar (before tracking)',
+    )
+    expect(estimateNodeName(['2025-01-01', '2025-02-01', '2025-11-01', '2025-12-01'], '2025-03-01')).toBe(
+      'Est. take-home, Jan–Feb (before tracking), Nov–Dec',
+    )
+    expect(estimateNodeName(['2026-06-01'], null)).toBe('Est. take-home, Jun')
+  })
+
+  it('says why each run is missing: before tracking, in progress, not earned, or not entered', () => {
+    expect(estimateSentence(YEAR.slice(8), '2023-08-01', '2026-09-23')).toBe(
+      'Sep is still in progress; Oct–Dec are not earned yet',
+    )
+    expect(estimateSentence(['2023-01-01', '2023-02-01'], '2023-08-01', '2026-09-23')).toBe(
+      'Jan–Feb predate tracking (it began Aug 2023)',
+    )
+    expect(estimateSentence(['2026-03-01', '2026-06-01', '2026-07-01'], '2023-08-01', '2026-09-23')).toBe(
+      'Mar has no take-home entered; Jun–Jul have no take-home entered',
+    )
+    // Without a clock nothing is called unearned — past or future, it is simply not entered.
+    expect(estimateSentence(['2026-11-01'], '2023-08-01', null)).toBe('Nov has no take-home entered')
   })
 })
 
 describe('moneyFlowCsv (F12)', () => {
   it('exports nodes then links at the server figures', () => {
-    const csv = moneyFlowCsv(flowOut())
+    const csv = moneyFlowCsv(flowOut(), { fold: FOLD })
     expect(csv.headers).toEqual(['Kind', 'Source', 'Target', 'Value'])
     expect(csv.rows).toContainEqual(['node', 'Gross income', '', '307500.00'])
     expect(csv.rows).toContainEqual(['link', 'Take-home cash', 'Saved', '76000.00'])
     expect(moneyFlowCsv(flowOut({ renderable: false, reason: 'nope' })).rows).toEqual([])
-  })
-})
-
-describe('moneyFlowOption — the take-home nobody has entered yet (spec §3)', () => {
-  // Production's own 2026 figures: seven months entered at a $6,373.09 mean, five missing.
-  const pendingFlow = () =>
-    flowOut({
-      take_home_pending: '31865.43',
-      take_home_months_entered: 7,
-      // The server has already taken the estimate out of the residual, so the mid column
-      // still sums back to gross with the new node in it.
-      retained_equity: '61318.52',
-    })
-
-  it('draws it beside take-home, muted and dashed, fed from gross', () => {
-    const series = sankeyOf(moneyFlowOption(pendingFlow())!)
-    const name = 'Take-home not yet entered (5 months)'
-    const node = series.data?.find((n) => n.name === name)
-    expect(node?.depth).toBe(2) // the take-home column, not a fifth one
-    expect(node?.value).toBe(31865.43)
-    expect(node?.itemStyle).toEqual({
-      color: MUTED,
-      borderColor: MUTED,
-      borderWidth: 1,
-      borderType: 'dashed',
-    })
-    // Straight off gross, like every other mid-column terminal — and nothing flows OUT of
-    // it: an estimate must not fan into categories as though it had been spent.
-    expect(series.links?.filter((l) => l.target === name)).toEqual([
-      { source: 'Gross income', target: name, value: 31865.43 },
-    ])
-    expect(series.links?.filter((l) => l.source === name)).toEqual([])
-  })
-
-  it('states the estimate rule in its tooltip', () => {
-    const option = moneyFlowOption(pendingFlow())!
-    const text = tooltipOf(option)({ name: 'Take-home not yet entered (5 months)' })
-    expect(text).toContain('$31,865.43')
-    expect(text).toContain('the average take-home of the 7 entered months × 5')
-  })
-
-  it('is absent from a fully entered year, and from a backend that cannot name it', () => {
-    const full = sankeyOf(moneyFlowOption(flowOut())!)
-    expect(full.data?.some((n) => n.name?.startsWith('Take-home not yet entered'))).toBe(false)
-    const older = sankeyOf(
-      moneyFlowOption(
-        flowOut({ take_home_pending: undefined, take_home_months_entered: undefined }),
-      )!,
-    )
-    expect(older.data?.some((n) => n.name?.startsWith('Take-home not yet entered'))).toBe(false)
-  })
-
-  it('says "1 month" for a single missing one, and carries the node into the export', () => {
-    const one = flowOut({
-      take_home_pending: '6373.09',
-      take_home_months_entered: 11,
-      retained_equity: '86810.86',
-    })
-    const series = sankeyOf(moneyFlowOption(one)!)
-    expect(series.data?.some((n) => n.name === 'Take-home not yet entered (1 month)')).toBe(true)
-    expect(moneyFlowCsv(one).rows).toContainEqual([
-      'node',
-      'Take-home not yet entered (1 month)',
-      '',
-      '6373.09',
-    ])
-  })
-
-  it('refuses a negative estimate rather than drawing a backwards ribbon', () => {
-    expect(moneyFlowOption(flowOut({ take_home_pending: '-1.00', take_home_months_entered: 7 }))).toBeNull()
   })
 })

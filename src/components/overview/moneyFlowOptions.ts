@@ -3,21 +3,25 @@
 // own 2dp figure parsed once for display, and the tooltip echoes those figures verbatim
 // through the shared factory — never a layout-derived link sum (the ±$0.01
 // reconciliation drift the paycheck sankey documents is invisible at link-width scale).
+//
+// ONE WINDOW ON THE RIGHT (2026-09-23 spec §C1): income, taxes and the middle column are the
+// full year; the spending fan and Saved cover only the MATCHED months (take-home and spending
+// both entered), so Saved is the Overview YTD card's cash saved. Take-home of months with no
+// spending ends on a named terminal; take-home of months nobody entered is the named estimate.
+//
+// COLOURS (spec §C2) come from charts/entities.ts: income entities on their registry hues,
+// the tax hue, the kept greens, the structural grey for everything that is money in transit
+// or a residual, and every spending category on the SPENDING PAGE'S fold — the same colour
+// it wears on the bars — whatever this year's own ranking says.
 import type { EChartsOption } from '../../charts/echarts'
+import { ENTITY, SALARY_TINTS, foldCategories, foldColor } from '../../charts/entities'
+import type { CategoryFold } from '../../charts/entities'
 import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter, sankeyCsv } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
-import {
-  MUTED,
-  NEGATIVE,
-  OTHER_SERIES_COLOR,
-  PALETTE,
-  POSITIVE,
-  SEQUENTIAL_BLUE,
-} from '../../charts/theme'
 import { brandTooltip } from '../../charts/tooltip'
-import type { MoneyFlowOut } from '../../types/api'
+import type { MoneyFlowCategoryTotal, MoneyFlowOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { formatCurrency } from '../../utils/format'
+import { escapeHtml, formatCurrency, formatMonth } from '../../utils/format'
 
 // Fixed node names. Sankey nodes key on NAME, so a user category spelling one of these
 // exactly would either duplicate a node (echarts 6 drops it, then CRASHES wiring its
@@ -30,6 +34,7 @@ const TAXES = 'Taxes'
 const PRE_TAX = 'Pre-tax savings'
 const RETAINED = 'Retained equity & other'
 const TAKE_HOME = 'Take-home cash'
+const REFUNDS = 'Refunds & credits'
 const SAVED = 'Saved'
 const DRAWDOWN = 'Drawdown'
 const OTHER_SPEND = 'Other'
@@ -40,45 +45,34 @@ const OTHER_SPEND = 'Other'
 const SALARY = 'Salary & bonus'
 const SALARY_PREFIX = 'Salary — '
 
-// The salary hue FAMILY, in split order. Slot 0 is PALETTE[0] verbatim — the single-node
-// path and the primary earner draw the exact color they always have — and the rest are
-// lightness steps of the theme's own validated ramp (SEQUENTIAL_BLUE, whose index 6 IS
-// PALETTE[0]); no hue is invented here, which is charts/theme.ts's standing rule.
-// #86b6ef measures L* 72.7 against PALETTE[0]'s 55.9: dE 28.5 normal, 25.1 protanope,
-// 28.9 deuteranope, 15.1 tritanope — every one past the palette's own 8.4 adjacency floor
-// — at 8.25:1 on the #171a21 surface. The third step covers a three-person household;
-// beyond that the last tint repeats and the LABELS carry the distinction.
-const SALARY_TINTS = [PALETTE[0], SEQUENTIAL_BLUE[9], SEQUENTIAL_BLUE[3]] as const
-
-// The four FIXED sources, on FIXED PALETTE slots per ENTITY (the paycheck sankey's
-// grammar): an omitted zero source never reshuffles its neighbours' hues. Salary is not
-// here because it is one node or many; it is always emitted FIRST, on slot 0's family.
-// Categories reuse slots 0..6 on the far right — a deliberate repetition: left is income
-// identity, right is the /spending pages' own category slots (same entity, same hue as the
-// stacked bars), and the MUTED intermediates keep the columns apart.
+// The four FIXED sources on their registry ENTITY colours: an omitted zero source never
+// reshuffles its neighbours' hues. Salary is not here because it is one node or many; it is
+// always emitted FIRST, on the salary hue family (SALARY_TINTS).
 const SOURCES: {
   key: keyof Omit<MoneyFlowOut['sources'], 'salary_and_bonus' | 'salary_people'>
   label: string
   color: string
 }[] = [
-  { key: 'rsu_vests', label: 'RSU vests', color: PALETTE[1] },
-  { key: 'espp', label: 'ESPP', color: PALETTE[2] },
-  { key: 'investment_income', label: 'Investment income', color: PALETTE[3] },
-  { key: 'other_income', label: 'Other income', color: PALETTE[4] },
+  { key: 'rsu_vests', label: 'RSU vests', color: ENTITY.rsu },
+  { key: 'espp', label: 'ESPP', color: ENTITY.espp },
+  { key: 'investment_income', label: 'Investment income', color: ENTITY.investmentIncome },
+  // The BALANCING remainder of income (gross minus the named four): the Other gray.
+  { key: 'other_income', label: 'Other income', color: ENTITY.otherIncome },
 ]
 
 // The claim seed: every structural node this builder can emit, seeded UNCONDITIONALLY
 // (a zero-omitted source or a surplus year's absent Drawdown must not change how a
 // colliding category renders from one year to the next). OTHER_SPEND is deliberately NOT
 // seeded — the fold entry claims through the same set in emission order, so a real
-// category named 'Other' keeps its name and the fold wears the suffix. The SPLIT labels
-// are dynamic (they carry user text) and are added to the set per payload below.
+// category named 'Other' keeps its name and the fold wears the suffix. The SPLIT labels and
+// the month-named estimate/terminal labels are dynamic and join the set per payload below.
 const STRUCTURAL_NAMES = [
   GROSS,
   TAXES,
   PRE_TAX,
   RETAINED,
   TAKE_HOME,
+  REFUNDS,
   SAVED,
   DRAWDOWN,
   SALARY,
@@ -89,7 +83,7 @@ const STRUCTURAL_NAMES = [
 function salaryNodes(flow: MoneyFlowOut): { label: string; value: number; color: string }[] {
   const people = flow.sources.salary_people
   if (people.length < 2) {
-    return [{ label: SALARY, value: Number(flow.sources.salary_and_bonus), color: PALETTE[0] }]
+    return [{ label: SALARY, value: Number(flow.sources.salary_and_bonus), color: ENTITY.salary }]
   }
   return people.map((person, index) => ({
     label: `${SALARY_PREFIX}${person.name}`,
@@ -115,22 +109,182 @@ const JURISDICTION_LINES: { key: keyof MoneyFlowOut['taxes']; label: string }[] 
 // zero-width link is tooltip noise (the vesting-tooltip lesson).
 const A_CENT = 0.005
 const cents = (value: number) => Math.round(value * 100) / 100
+const toCents = (amount: string) => Math.round(Number(amount) * 100)
+
+// --- the window's words (pure; exported for the card's lede/footer and for tests) ---------
+
+const SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const ordinal = (iso: string) => Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7)) - 1
+const shortMonth = (iso: string) => SHORT[Number(iso.slice(5, 7)) - 1]
+const firstOfMonth = (iso: string) => `${iso.slice(0, 7)}-01`
+
+/** Contiguous runs of ISO months (the wire's 'YYYY-MM-DD'), ascending. */
+export function monthRuns(months: readonly string[]): string[][] {
+  const runs: string[][] = []
+  for (const month of [...months].sort()) {
+    const run = runs[runs.length - 1]
+    if (run !== undefined && ordinal(month) === ordinal(run[run.length - 1]) + 1) run.push(month)
+    else runs.push([month])
+  }
+  return runs
+}
+
+/** One run in words inside one calendar year: "Sep–Dec", "Sep". */
+export function runWords(run: readonly string[]): string {
+  return run.length === 1 ? shortMonth(run[0]) : `${shortMonth(run[0])}–${shortMonth(run[run.length - 1])}`
+}
+
+/** Runs in words, comma-separated: "Jan–May, Jul–Aug". */
+export function monthWords(months: readonly string[]): string {
+  return monthRuns(months).map(runWords).join(', ')
+}
+
+/** The estimate node's name (spec §C1): "Est. take-home, Sep–Dec" · "Est. take-home, Jan–Jul
+ *  (before tracking)" — a run that ends before the book's first take-home month predates the
+ *  book, so it is not "not entered" (nobody could have entered it). */
+export function estimateNodeName(pending: readonly string[], trackingStart: string | null): string {
+  const parts = monthRuns(pending).map(
+    (run) =>
+      `${runWords(run)}${trackingStart !== null && run[run.length - 1] < trackingStart ? ' (before tracking)' : ''}`,
+  )
+  return `Est. take-home, ${parts.join(', ')}`
+}
+
+type Nature = 'before' | 'current' | 'future' | 'missing'
+
+/** Why each pending month has no take-home, grouped by run and nature. `todayIso` null = no
+ *  clock: nothing is called unearned. */
+export function estimateSentence(
+  pending: readonly string[],
+  trackingStart: string | null,
+  todayIso: string | null,
+): string {
+  const current = todayIso === null ? null : firstOfMonth(todayIso)
+  const natureOf = (month: string): Nature =>
+    trackingStart !== null && month < trackingStart
+      ? 'before'
+      : current !== null && month === current
+        ? 'current'
+        : current !== null && month > current
+          ? 'future'
+          : 'missing'
+  const groups: { nature: Nature; months: string[] }[] = []
+  for (const run of monthRuns(pending)) {
+    for (const month of run) {
+      const nature = natureOf(month)
+      const last = groups[groups.length - 1]
+      const lastMonth = last?.months[last.months.length - 1]
+      if (last !== undefined && last.nature === nature && lastMonth !== undefined && ordinal(month) === ordinal(lastMonth) + 1) {
+        last.months.push(month)
+      } else {
+        groups.push({ nature, months: [month] })
+      }
+    }
+  }
+  return groups
+    .map(({ nature, months }) => {
+      const words = runWords(months)
+      const plural = months.length > 1
+      if (nature === 'before') {
+        return `${words} predate tracking (it began ${trackingStart === null ? '' : formatMonth(trackingStart)})`
+      }
+      if (nature === 'current') return `${words} is still in progress`
+      if (nature === 'future') return `${words} ${plural ? 'are' : 'is'} not earned yet`
+      return `${words} ${plural ? 'have' : 'has'} no take-home entered`
+    })
+    .join('; ')
+}
+
+/** The pay-without-spending terminal: "Take-home, spending not entered (Feb–Mar)". */
+export function unmatchedNodeName(months: readonly string[]): string {
+  return `Take-home, spending not entered (${monthWords(months)})`
+}
+
+// --- the right-hand side -----------------------------------------------------------------
+
+interface Slice {
+  name: string
+  value: number
+  color: string
+}
+
+/** The fan's category slices: the fold's categories in fold order (positive totals only — a
+ *  link cannot be negative; net refunds come back through the Refunds node), then the Other
+ *  bucket of everything outside the fold. A payload from before the window carries no
+ *  per-category totals: its own top-7 fold stands in, with `other_spend` added to Other. */
+function fanSlices(flow: MoneyFlowOut, fold: CategoryFold | null, taken: Set<string>): Slice[] {
+  const totals: MoneyFlowCategoryTotal[] =
+    flow.category_totals ??
+    flow.categories.map((category, index) => ({
+      category_id: -(index + 1),
+      name: category.name,
+      kind: 'living',
+      amount: category.amount,
+    }))
+  const byId = new Map(totals.map((total, index) => [total.category_id ?? -(index + 1), total]))
+  // Without the Spending page's fold (it loads beside this card), fold by the payload's own
+  // ranking through the SAME function — biggest cents first, ties by name.
+  const effective =
+    fold ??
+    foldCategories(
+      [...byId.entries()]
+        .map(([id, total]) => ({ id, kind: total.kind, totalCents: toCents(total.amount), name: total.name }))
+        .sort((a, b) => b.totalCents - a.totalCents || a.name.localeCompare(b.name)),
+    )
+  const slices: Slice[] = []
+  const inFold = new Set<number>()
+  for (const id of effective.ids) {
+    const total = byId.get(id)
+    if (total === undefined) continue
+    inFold.add(id)
+    const value = Number(total.amount)
+    if (!(value >= A_CENT)) continue
+    slices.push({ name: claimNodeName(total.name, taken), value, color: foldColor(effective, id) })
+  }
+  let other = flow.category_totals === undefined && flow.other_spend !== null ? Number(flow.other_spend) : 0
+  for (const [id, total] of byId) {
+    if (inFold.has(id)) continue
+    const value = Number(total.amount)
+    if (value > 0) other += value
+  }
+  other = cents(other)
+  if (other >= A_CENT) slices.push({ name: claimNodeName(OTHER_SPEND, taken), value: other, color: ENTITY.other })
+  return slices
+}
+
+export interface MoneyFlowOptions {
+  /** The Spending page's category fold (charts/entities.ts categoryFold over the matrix);
+   *  null = fold by the payload's own ranking. */
+  fold?: CategoryFold | null
+  /** The page's today, for the estimate's tooltip (in progress vs not yet earned). */
+  todayIso?: string | null
+}
 
 /**
  * "Where the year's money went", 4 pinned columns (spec §5): sources → Gross income →
- * {Taxes, Pre-tax savings, Retained equity & other, Take-home cash} → categories +
- * Saved/Drawdown. layoutIterations 0 makes data order the vertical order, so nodes are
- * emitted column by column, biggest-first where the server sorted them. Null = the card
- * renders the payload's reason (or its generic note) instead of a chart.
+ * {Taxes, Pre-tax savings, Retained equity & other, Take-home cash, the estimate} → the
+ * matched months' categories + Saved/Drawdown (+ the pay-without-spending terminal).
+ * layoutIterations 0 makes data order the vertical order, so nodes are emitted column by
+ * column. Null = the card renders the payload's reason (or its generic note) instead.
  */
-export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
+export function moneyFlowOption(
+  flow: MoneyFlowOut,
+  { fold = null, todayIso = null }: MoneyFlowOptions = {},
+): EChartsOption | null {
   if (!flow.renderable) return null
   const salary = salaryNodes(flow)
+  const takeHome = Number(flow.take_home_cash)
+  const saved = Number(flow.saved)
+  // The fan's funding (spec §C1): the matched months' take-home. A payload from before the
+  // window matched every entered month.
+  const matched = Number(flow.take_home_matched ?? flow.take_home_cash)
+  const refunds = Number(flow.refunds ?? '0')
+  const unmatched = Number(flow.take_home_unmatched ?? '0')
   // Negative backstop (the paycheck sankey's refusal): the server refuses these itself,
   // but a negative ribbon must never be drawable from a payload that slipped through.
-  // `saved` is exempt — it is signed by design and drawn as Drawdown below. The salary
-  // TOTAL is checked alongside the per-earner slices: the split can only reconcile to a
-  // number that is itself drawable.
+  // `saved` is exempt — it is signed by design and drawn as Drawdown below; so are the
+  // category totals, whose negatives are the refunds. The salary TOTAL is checked alongside
+  // the per-earner slices: the split can only reconcile to a number that is itself drawable.
   const structural = [
     flow.gross_income,
     flow.taxes.total,
@@ -140,17 +294,24 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
     flow.sources.salary_and_bonus,
     ...SOURCES.map((source) => flow.sources[source.key]),
     ...(flow.take_home_pending === undefined ? [] : [flow.take_home_pending]),
-    ...flow.categories.map((category) => category.amount),
+    ...(flow.take_home_matched === undefined ? [] : [flow.take_home_matched]),
+    ...(flow.take_home_unmatched === undefined ? [] : [flow.take_home_unmatched]),
+    ...(flow.refunds === undefined ? [] : [flow.refunds]),
+    ...(flow.category_totals === undefined ? flow.categories.map((category) => category.amount) : []),
     ...(flow.other_spend === null ? [] : [flow.other_spend]),
   ].map(Number)
   if (structural.some((value) => !Number.isFinite(value) || value < 0)) return null
   if (salary.some((node) => !Number.isFinite(node.value) || node.value < 0)) return null
+  // The fan's take-home share: what went to spending once Saved is set aside (all of it in a
+  // deficit). Below zero the payload is torn — Saved claims money the window never had.
+  const fromTakeHome = matched - Math.max(saved, 0)
+  if (!Number.isFinite(saved) || fromTakeHome < -A_CENT) return null
 
   // The name-claim set (see STRUCTURAL_NAMES): category names pass through claimNodeName
   // so no node name can ever duplicate or cycle — echarts crashes on both, from inside
   // setOption, where the route boundary would blank the WHOLE Overview. The split labels
-  // join the set because they carry USER TEXT on the left column for the first time: a
-  // spending category spelled 'Salary — Sam' must wear the suffix, not take the node.
+  // join the set because they carry USER TEXT on the left column: a spending category
+  // spelled 'Salary — Sam' must wear the suffix, not take the node.
   const taken = new Set([...STRUCTURAL_NAMES, ...salary.map((node) => node.label)])
 
   const nodes: SankeyNode[] = []
@@ -158,33 +319,24 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
 
   const sourceNodes = [
     ...salary,
-    ...SOURCES.map((source) => ({
-      label: source.label,
-      value: Number(flow.sources[source.key]),
-      color: source.color,
-    })),
+    ...SOURCES.map((source) => ({ label: source.label, value: Number(flow.sources[source.key]), color: source.color })),
   ]
   for (const source of sourceNodes) {
     if (source.value < A_CENT) continue
-    nodes.push({
-      name: source.label,
-      value: source.value,
-      depth: 0,
-      itemStyle: { color: source.color },
-    })
+    nodes.push({ name: source.label, value: source.value, depth: 0, itemStyle: { color: source.color } })
     links.push({ source: source.label, target: GROSS, value: source.value })
   }
   const gross = Number(flow.gross_income)
   if (links.length === 0 || gross < A_CENT) return null
-  nodes.push({ name: GROSS, value: gross, depth: 1, itemStyle: { color: MUTED } })
+  nodes.push({ name: GROSS, value: gross, depth: 1, itemStyle: { color: ENTITY.structural } })
 
-  // The middle column: three terminals on fixed slots, Take-home MUTED because it is
-  // the second intermediate (money still in transit toward the spend fan).
+  // The middle column: tax on the one tax hue, pre-tax savings on the kept green, the
+  // residual and take-home on the structural grey (neither is an entity of its own).
   const mid: [string, number, string][] = [
-    [TAXES, Number(flow.taxes.total), PALETTE[7]],
-    [PRE_TAX, Number(flow.pre_tax_savings), PALETTE[5]],
-    [RETAINED, Number(flow.retained_equity), PALETTE[6]],
-    [TAKE_HOME, Number(flow.take_home_cash), MUTED],
+    [TAXES, Number(flow.taxes.total), ENTITY.tax],
+    [PRE_TAX, Number(flow.pre_tax_savings), ENTITY.preTaxSavings],
+    [RETAINED, Number(flow.retained_equity), ENTITY.structural],
+    [TAKE_HOME, takeHome, ENTITY.structural],
   ]
   for (const [name, value, color] of mid) {
     if (value < A_CENT) continue
@@ -192,19 +344,20 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
     links.push({ source: GROSS, target: name, value })
   }
 
-  // The take-home nobody has entered yet (spec §3). Without it, five unentered months of
-  // paychecks sit inside `retained_equity` — the residual absorbs whatever the year cannot
-  // explain, which is exactly how a data gap turns into a claim about money kept. The server
-  // subtracts the estimate from the residual and hands it over NAMED, so the chart can draw
-  // it beside take-home as what it is: muted like its neighbour (it IS take-home, just not on
-  // record), dashed because it was computed rather than entered, and saying so on hover.
+  // The take-home nobody has entered (honest-numbers spec §3, named by its months since
+  // spec §C1): drawn beside take-home, muted like its neighbour (it IS take-home, just not
+  // on record), dashed because it was computed rather than entered, and saying so on hover.
   const pending = Number(flow.take_home_pending ?? '0')
+  const pendingMonths = flow.take_home_pending_months
   const entered = flow.take_home_months_entered ?? 12
-  const missingMonths = Math.max(0, 12 - entered)
-  const pendingName = `Take-home not yet entered (${missingMonths} ${missingMonths === 1 ? 'month' : 'months'})`
-  const drawsPending = missingMonths > 0 && pending >= A_CENT
+  const missingCount = pendingMonths?.length ?? Math.max(0, 12 - entered)
+  const pendingName =
+    pendingMonths !== undefined && pendingMonths.length > 0
+      ? estimateNodeName(pendingMonths, flow.tracking_start ?? null)
+      : `Est. take-home (${missingCount} ${missingCount === 1 ? 'month' : 'months'})`
+  const drawsPending = missingCount > 0 && pending >= A_CENT
   if (drawsPending) {
-    // Claimed like any other name, but only when DRAWN: this label carries a count, so it
+    // Claimed like any other name, but only when DRAWN: this label carries months, so it
     // changes from year to year — seeding it unconditionally would make a colliding
     // category's rendering depend on how much of the year is entered.
     taken.add(pendingName)
@@ -212,100 +365,86 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
       name: pendingName,
       value: cents(pending),
       depth: 2,
-      itemStyle: { color: MUTED, borderColor: MUTED, borderWidth: 1, borderType: 'dashed' },
+      itemStyle: { color: ENTITY.structural, borderColor: ENTITY.structural, borderWidth: 1, borderType: 'dashed' },
     })
     links.push({ source: GROSS, target: pendingName, value: cents(pending) })
   }
 
-  // Take-home fans into the year's categories with the spending sankey's exact
-  // Saved/Drawdown semantics: surplus → green Saved; deficit → a red Drawdown source
-  // beside Take-home, every category split pro-rata between the two — money is
-  // fungible, and naming WHICH categories the drawdown funded would fabricate
-  // causality.
-  const takeHome = Number(flow.take_home_cash)
-  const spent = Number(flow.total_spend)
-  const saved = Number(flow.saved)
+  // The fan's sources beside take-home: money that came back (a net-refund category), and
+  // the Drawdown a deficit window needs. Each category is split pro-rata across all three —
+  // money is fungible, and naming WHICH categories a refund or a drawdown funded would
+  // fabricate causality.
   const deficit = saved <= -A_CENT
-  if (deficit) {
-    nodes.push({
-      name: DRAWDOWN,
-      value: cents(-saved),
-      depth: 2,
-      itemStyle: { color: NEGATIVE },
-    })
-  }
-  const slices = [
-    ...flow.categories.map((category, slot) => ({
-      // Slot i = PALETTE[i], the /spending fold's exact assignment (biggest-first). The
-      // server pins the fold at 7 (TOP_N_CATEGORIES, tested backend-side), so slots 0..6
-      // always land inside the 8-slot palette; the folded remainder wears gray Other.
-      name: claimNodeName(category.name, taken),
-      value: Number(category.amount),
-      color: PALETTE[slot],
-    })),
-    ...(flow.other_spend === null
-      ? []
-      : [
-          {
-            name: claimNodeName(OTHER_SPEND, taken),
-            value: Number(flow.other_spend),
-            color: OTHER_SERIES_COLOR,
-          },
-        ]),
-  ]
+  const drawsRefunds = refunds >= A_CENT
+  if (drawsRefunds) nodes.push({ name: REFUNDS, value: cents(refunds), depth: 2, itemStyle: { color: ENTITY.structural } })
+  if (deficit) nodes.push({ name: DRAWDOWN, value: cents(-saved), depth: 2, itemStyle: { color: ENTITY.deficit } })
+
+  const slices = fanSlices(flow, fold, taken)
+  const t = Math.max(fromTakeHome, 0)
+  const r = drawsRefunds ? refunds : 0
+  const d = deficit ? -saved : 0
+  const funding = t + r + d
   for (const slice of slices) {
-    if (slice.value < A_CENT) continue
-    nodes.push({
-      name: slice.name,
-      value: slice.value,
-      depth: 3,
-      itemStyle: { color: slice.color },
-    })
-    if (deficit) {
-      const fromTakeHome = spent > 0 ? cents((slice.value * takeHome) / spent) : 0
-      const fromDrawdown = cents(slice.value - fromTakeHome)
-      if (fromTakeHome >= A_CENT) {
-        links.push({ source: TAKE_HOME, target: slice.name, value: fromTakeHome })
-      }
-      if (fromDrawdown >= A_CENT) {
-        links.push({ source: DRAWDOWN, target: slice.name, value: fromDrawdown })
-      }
-    } else {
-      links.push({ source: TAKE_HOME, target: slice.name, value: slice.value })
-    }
+    nodes.push({ name: slice.name, value: slice.value, depth: 3, itemStyle: { color: slice.color } })
+    const viaRefunds = funding > 0 ? cents((slice.value * r) / funding) : 0
+    const viaDrawdown = funding > 0 ? cents((slice.value * d) / funding) : 0
+    const viaTakeHome = cents(slice.value - viaRefunds - viaDrawdown)
+    if (viaTakeHome >= A_CENT) links.push({ source: TAKE_HOME, target: slice.name, value: viaTakeHome })
+    if (viaRefunds >= A_CENT) links.push({ source: REFUNDS, target: slice.name, value: viaRefunds })
+    if (viaDrawdown >= A_CENT) links.push({ source: DRAWDOWN, target: slice.name, value: viaDrawdown })
   }
   if (!deficit && saved >= A_CENT) {
-    nodes.push({ name: SAVED, value: saved, depth: 3, itemStyle: { color: POSITIVE } })
+    nodes.push({ name: SAVED, value: saved, depth: 3, itemStyle: { color: ENTITY.saved } })
     links.push({ source: TAKE_HOME, target: SAVED, value: saved })
+  }
+  // Pay without spending (spec §C1): its take-home ends here, named — never inside Saved.
+  const unmatchedMonths = flow.take_home_unmatched_months ?? []
+  const unmatchedName = unmatchedNodeName(unmatchedMonths)
+  const drawsUnmatched = unmatched >= A_CENT && unmatchedMonths.length > 0
+  if (drawsUnmatched) {
+    taken.add(unmatchedName)
+    nodes.push({ name: unmatchedName, value: cents(unmatched), depth: 3, itemStyle: { color: ENTITY.structural } })
+    links.push({ source: TAKE_HOME, target: unmatchedName, value: cents(unmatched) })
   }
 
   // The Taxes node alone gets an extended tooltip (spec §5: the jurisdictions, server
-  // figures verbatim); everything else delegates to the shared factory so node values can
-  // never drift from the page's figures. Labels here are fixed constants — no user text,
-  // nothing to escape. `niit` is optional on the wire, so an older payload simply drops
-  // its row rather than printing an empty (or NaN) one.
+  // figures verbatim); the estimate, the refunds and the terminal say what they are; every
+  // other node delegates to the shared factory so values can never drift from the page's
+  // figures. Labels are constants, digits and escaped month words — no raw user text.
   const base = makeSankeyTooltipFormatter(nodes, links)
   const taxLines = JURISDICTION_LINES.filter((line) => flow.taxes[line.key] !== undefined)
     .map((line) => `${line.label} ${formatCurrency(flow.taxes[line.key])}`)
     .join('<br/>')
+  const reasons = pendingMonths === undefined ? '' : estimateSentence(pendingMonths, flow.tracking_start ?? null, todayIso)
   // Branded like the factory it wraps: this composition IS the grammar's sankey tooltip
-  // with one node's extended body, and conformance keys on the brand (chart spec §17).
+  // with a few nodes' extended bodies, and conformance keys on the brand (chart spec §17).
   const formatter = brandTooltip((params: unknown): string => {
-    const p = (Array.isArray(params) ? params[0] : params) as {
-      dataType?: string
-      name?: string
-    } | null
-    if (p && p.dataType !== 'edge' && p.name === TAXES) {
+    const p = (Array.isArray(params) ? params[0] : params) as { dataType?: string; name?: string } | null
+    const node = p !== null && p.dataType !== 'edge' ? p.name : undefined
+    if (node === TAXES) {
       return `<strong>${formatCurrency(flow.taxes.total)}</strong><br/>${TAXES}<br/>${taxLines}`
     }
-    // The estimate says out loud how it was computed; the alternative is a reader who
-    // believes a number nobody typed. Labels here are constants and digits — no user text.
-    if (drawsPending && p && p.dataType !== 'edge' && p.name === pendingName) {
+    if (drawsPending && node === pendingName) {
       return (
-        `<strong>${formatCurrency(cents(pending))}</strong><br/>${pendingName}<br/>` +
+        `<strong>${formatCurrency(cents(pending))}</strong><br/>${escapeHtml(pendingName)}<br/>` +
         `Estimated: the average take-home of the ${entered} entered ` +
-        `${entered === 1 ? 'month' : 'months'} × ${missingMonths}. Enter those months and this ` +
-        `becomes a real figure.`
+        `${entered === 1 ? 'month' : 'months'} × ${missingCount}.` +
+        (reasons === '' ? '' : ` ${escapeHtml(reasons)}.`) +
+        ' Entering them replaces the estimate.'
+      )
+    }
+    if (drawsUnmatched && node === unmatchedName) {
+      return (
+        `<strong>${formatCurrency(cents(unmatched))}</strong><br/>${escapeHtml(unmatchedName)}<br/>` +
+        'Take-home entered for months with no spending entered — it joins the spending fan once ' +
+        'their spending is entered.'
+      )
+    }
+    if (drawsRefunds && node === REFUNDS) {
+      return (
+        `<strong>${formatCurrency(cents(refunds))}</strong><br/>${REFUNDS}<br/>` +
+        'Categories whose refunds outweighed their spending over these months — money that came ' +
+        'back, so it helps fund the rest.'
       )
     }
     return base(params)
@@ -319,8 +458,8 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
 
 /** The flow as a table (F12) — the same nodes and links the chart draws; a refused payload
  *  (or one the builder's own backstop refused) yields headers and no rows. */
-export function moneyFlowCsv(flow: MoneyFlowOut): ExportTable {
-  const option = moneyFlowOption(flow) as { series?: { data: SankeyNode[]; links: SankeyLink[] }[] } | null
+export function moneyFlowCsv(flow: MoneyFlowOut, options: MoneyFlowOptions = {}): ExportTable {
+  const option = moneyFlowOption(flow, options) as { series?: { data: SankeyNode[]; links: SankeyLink[] }[] } | null
   const series = option?.series?.[0]
   return series === undefined ? { headers: ['Kind', 'Source', 'Target', 'Value'], rows: [] } : sankeyCsv(series.data, series.links)
 }

@@ -34,6 +34,9 @@ const ROSTER = [
   // …and the same builder on a year whose take-home is only part entered: the muted dashed
   // estimate node, a branch the fully-entered fixture never reaches.
   'moneyFlowPending',
+  // …and the one-window branches (2026-09-23 spec §C1): a month-named estimate, the
+  // pay-without-spending terminal, a refund inflow and the tax-kind category on the tax hue.
+  'moneyFlowWindows',
   // C3 — Spending (spendingSmallMultiples was the one droppable of the night — the plan
   // let C3 ship without the Compare/All mode. It landed, so it is pinned like the rest.)
   'spendingBars',
