@@ -20,6 +20,7 @@ import {
   escapeHtml,
   formatCurrency,
   formatDate,
+  formatMonth,
   formatShares,
 } from '../../utils/format'
 
@@ -339,6 +340,39 @@ export function eventLines(param: AxisTooltipParam): string[] {
   ]
 }
 
+/**
+ * The weekly axis (2026-09-23 spec §C4, §C8; charts F6, shell F5): a label only where a month
+ * begins — "Oct 2023", never an arbitrary Monday like "Oct 23, 2023 · Jan 22, 2024" — while the
+ * category itself stays the exact date, so the tooltip header keeps the checkpoint's day. Every
+ * month for a year of history or less, every quarter start (Jan/Apr/Jul/Oct) up to five years,
+ * Januaries beyond. The stride rides the WHOLE series, never the zoom window: a range chip takes
+ * EChart's animated zoom path, which keeps the last option's functions, so a window-sized rule
+ * would go stale on it. hideOverlap is the last guard on a narrow card (the Overview's half
+ * width): a label that would still touch its neighbour is dropped, never smeared.
+ */
+function weeklyAxis(categories: string[], isoDates: string[]) {
+  const months = new Set(isoDates.map((iso) => iso.slice(0, 7))).size
+  const stride = months <= 12 ? 1 : months <= 60 ? 3 : 12
+  const labels = new Map<string, string>()
+  let previous = ''
+  isoDates.forEach((iso, i) => {
+    const month = iso.slice(0, 7)
+    if (month === previous) return
+    previous = month
+    if ((Number(iso.slice(5, 7)) - 1) % stride === 0) {
+      labels.set(categories[i], formatMonth(`${month}-01`))
+    }
+  })
+  return {
+    ...dateAxis(categories),
+    axisLabel: {
+      interval: (_index: number, value: string) => labels.has(value),
+      formatter: (value: string) => labels.get(value) ?? '',
+      hideOverlap: true,
+    },
+  }
+}
+
 /** The performance chart's event layers (2026-09-23 spec §C8). Buys and sells: plain scatter in
  *  MUTED riding the value line — an annotation layer, not a data hue, and the ripple stays the
  *  live ping's (the net-worth notes-diamond rule). The rug: 2px × 10px ticks at y 0 that straddle
@@ -484,7 +518,7 @@ export function portfolioHistoryOption(
       ),
       inactiveColor: OTHER_SERIES_COLOR,
     },
-    xAxis: dateAxis(categories),
+    xAxis: weeklyAxis(categories, extendAxis && livePt ? [...history.dates, livePt.date] : history.dates),
     // No scale:true — a washed area over a visible axis needs the honest zero baseline.
     yAxis: moneyAxis(),
     // F7: every event kind expands into its clustered lines instead of printing a y that is

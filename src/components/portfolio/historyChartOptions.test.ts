@@ -10,6 +10,7 @@ import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
 import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { tooltipRows } from '../../testing/tooltipRows'
+import { addDays } from '../../utils/months'
 import {
   BUYS_SERIES,
   buildEventMarkers,
@@ -240,13 +241,12 @@ describe('portfolioHistoryOption — grammar', () => {
       series: { emphasis?: unknown }[]
     }
 
-  it('wears the money grid, compact ticks, every-date labels and a plain legend with the page picks', () => {
+  it('wears the money grid, compact ticks, month-start labels and a plain legend with the page picks', () => {
     const option = read(
       portfolioHistoryOption(history(), null, null, { selected: { 'Cost basis': false } }),
     )
     expect(option.grid).toEqual(GRID_VARIANTS.default)
     expect(option.xAxis.boundaryGap).toBe(false)
-    expect(option.xAxis.axisLabel).toEqual({ interval: 0 }) // three points
     expect(option.yAxis.axisLabel.formatter).toBe(compactMoney)
     expect(option.legend.type).toBe('plain')
     // The page's picks ride on top of the starting-balance line's legend-off default.
@@ -289,6 +289,54 @@ describe('portfolioHistoryOption — grammar', () => {
       'Buy &lt;X&gt; — 10 sh · Aug 4, 2026',
       'Dividend VOO — $12.00 · Aug 5, 2026',
     ])
+  })
+})
+
+describe('the weekly axis (2026-09-23 spec §C4, §C8)', () => {
+  type Axis = {
+    data: string[]
+    boundaryGap?: boolean
+    axisLabel: {
+      interval: (index: number, value: string) => boolean
+      formatter: (value: string) => string
+      hideOverlap: boolean
+    }
+  }
+  const shown = (axis: Axis) =>
+    axis.data.filter((value, i) => axis.axisLabel.interval(i, value)).map((value) => axis.axisLabel.formatter(value))
+
+  it('labels only where a month begins, as "Mmm YYYY"; the category keeps the exact day', () => {
+    const axis = portfolioHistoryOption(history(), null)!.xAxis as unknown as Axis
+    // The tooltip header reads the category, so the checkpoint's day stays there.
+    expect(axis.data).toEqual(['Jul 27, 2026', 'Aug 3, 2026', 'Aug 10, 2026'])
+    expect(axis.boundaryGap).toBe(false)
+    // Never an arbitrary Monday ("Oct 23, 2023 · Jan 22, 2024 …" at a 3-year zoom — charts F6).
+    expect(shown(axis)).toEqual(['Jul 2026', 'Aug 2026'])
+    expect(axis.axisLabel.formatter('Aug 10, 2026')).toBe('')
+    // The last guard on a narrow card: labels that would still touch are dropped, not smeared.
+    expect(axis.axisLabel.hideOverlap).toBe(true)
+  })
+
+  it('steps to quarter starts past a year of history', () => {
+    // 70 Mondays from Jan 6, 2025: seventeen months.
+    const dates = Array.from({ length: 70 }, (_, i) => addDays('2025-01-06', 7 * i))
+    const long = history({
+      dates,
+      market_value: dates.map(() => '1.00'),
+      cost_basis: dates.map(() => '1.00'),
+      sp500: dates.map(() => '1.00'),
+      benchmark: dates.map(() => '1.00'),
+    })
+    expect(shown(portfolioHistoryOption(long, null)!.xAxis as unknown as Axis)).toEqual([
+      'Jan 2025', 'Apr 2025', 'Jul 2025', 'Oct 2025', 'Jan 2026', 'Apr 2026',
+    ])
+  })
+
+  it('labels the live category when the quote opens a new month', () => {
+    const axis = portfolioHistoryOption(history(), { date: '2026-09-01', value: 720000 })!
+      .xAxis as unknown as Axis
+    expect(axis.data.at(-1)).toBe('Sep 1, 2026')
+    expect(shown(axis)).toEqual(['Jul 2026', 'Aug 2026', 'Sep 2026'])
   })
 })
 
