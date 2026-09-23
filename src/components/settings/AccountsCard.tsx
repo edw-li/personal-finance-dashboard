@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError, describeError, errorDetail } from '../../api/client'
 import { undoBatch } from '../../api/lifecycle'
 import {
@@ -666,21 +666,23 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                       <th />
                     </tr>
                   </thead>
-                  <tbody>
-                    {groups.map(({ group, units }) => (
-                      <Fragment key={group}>
-                        <tr className="accounts-group-row">
-                          <th scope="colgroup" colSpan={ROSTER_COLUMNS}>
-                            {GROUP_LABELS[group]}
-                          </th>
-                        </tr>
-                        {units.flatMap(({ account, components }) => [
-                          rosterRow(account, false),
-                          ...components.map((component) => rosterRow(component, true)),
-                        ])}
-                      </Fragment>
-                    ))}
-                  </tbody>
+                  {/* One row group per account group, its heading the first row: a row-group
+                      header, since the table has no <colgroup> for a colgroup scope to name. Rows
+                      move only within their group (reorder spec §4.2), so a drag never crosses
+                      a <tbody>. */}
+                  {groups.map(({ group, units }) => (
+                    <tbody key={group}>
+                      <tr className="accounts-group-row">
+                        <th scope="rowgroup" colSpan={ROSTER_COLUMNS}>
+                          {GROUP_LABELS[group]}
+                        </th>
+                      </tr>
+                      {units.flatMap(({ account, components }) => [
+                        rosterRow(account, false),
+                        ...components.map((component) => rosterRow(component, true)),
+                      ])}
+                    </tbody>
+                  ))}
                 </table>
               </div>
               {/* Once per card and OUTSIDE the table (a <span> is not a table child): the

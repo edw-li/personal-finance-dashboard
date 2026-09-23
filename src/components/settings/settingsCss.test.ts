@@ -49,9 +49,11 @@ describe('settings.css', () => {
   })
 
   it('draws an Accounts group heading as a heading, not as a sticky row-actions cell', () => {
+    // Keyed on the row's class; `tbody >` lifts it to (0,3,3), past panels.css's sticky
+    // `th:last-child` (0,3,2) whichever sheet loads last.
     const heading = declarationsFor(
       settings,
-      ".data-table.accounts-table tr.accounts-group-row > th[scope='colgroup']",
+      '.data-table.accounts-table tbody > tr.accounts-group-row > th',
     )
     expect(heading).toContain('position: static;')
     expect(heading).toContain('box-shadow: none;')

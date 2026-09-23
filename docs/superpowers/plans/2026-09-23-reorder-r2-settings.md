@@ -308,10 +308,15 @@ export async function reorderCategories(ids: number[]): Promise<{ data: Category
     - Without this they would vanish from the one place their link can be fixed, and every PUT
       would 409 for want of their ids.
     - The real book has none: all 5 components' parents are top-level.
-11. **The group heading is `<th scope="colgroup" colSpan={6}>`** (§4.2 verbatim).
+11. **The group heading is `<th scope="rowgroup" colSpan={6}>`, the first row of its group's own
+    `<tbody>`.** (Amended at the code-quality review, M1.)
+    - §4.2's `scope="colgroup"` without a `<colgroup>` is invalid HTML, and screen readers expose
+      it as a column header over every column. The coordinator corrects the spec on base.
+    - The hook moves rows only within a group, so a drag never crosses a `<tbody>`.
     - It is drawn in the Monthly update's `.entry-group-row` register.
-    - It is taken out of panels.css's sticky `th:last-child` rule, which a row-actions table
-      applies to every last header cell of every row.
+    - It is taken out of panels.css's sticky `th:last-child` rule (0,3,2), which a row-actions
+      table applies to every last header cell of every row. The override is keyed on the row's
+      class, `tbody > tr.accounts-group-row > th` (0,3,3), not on the scope attribute.
 12. **The instructions and the live region** render once per card, right after the table's
     scroller, and only when the table renders.
 13. **The order note sits directly under the table.** For categories it is above the kind

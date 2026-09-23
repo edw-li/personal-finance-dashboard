@@ -645,16 +645,23 @@ it('renders once, after BOTH feeds settle — no roster table before the portfol
 
 // --- the grouped, reorderable roster (2026-09-23 reorder spec §4.2) ---
 
-it('groups the roster under one heading per non-empty group, in GROUP_ORDER — not API order', async () => {
+it('groups the roster: one row group per non-empty group, in GROUP_ORDER — not API order — each headed by its label', async () => {
   vi.mocked(fetchAccounts).mockResolvedValue([HSA, CHECKING])
   render(<AccountsCard people={[ME]} />)
-  await screen.findByRole('table', { name: 'Net-worth accounts' })
+  const table = await screen.findByRole('table', { name: 'Net-worth accounts' })
 
   // Post-tax, Taxable, Equity, Other and Liabilities hold nothing here: no heading for them.
   expect(headings()).toEqual(['Cash', 'Pre-tax'])
-  const heading = document.querySelector('.accounts-table tr.accounts-group-row > th') as HTMLTableCellElement
-  expect(heading.getAttribute('scope')).toBe('colgroup')
-  expect(heading.colSpan).toBe(6)
+  // One <tbody> per group with its heading as the first row: a ROW-group header. A colgroup scope
+  // would claim every column below it, and the table has no <colgroup> to scope.
+  const bodies = [...table.querySelectorAll('tbody')]
+  expect(bodies).toHaveLength(2)
+  for (const body of bodies) {
+    const heading = body.querySelector('tr.accounts-group-row > th') as HTMLTableCellElement
+    expect(body.firstElementChild).toBe(heading.parentElement)
+    expect(heading.getAttribute('scope')).toBe('rowgroup')
+    expect(heading.colSpan).toBe(6)
+  }
   expect(rowIds()).toEqual(['10', '11'])
 })
 
