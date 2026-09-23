@@ -630,9 +630,12 @@ quick-fixes batch's lane B2. R5 branches only after B2 has merged to local main.
   - Edit keeps sending the stored `sort_order` (full replace).
   - The rewards-matrix columns follow the new order by construction.
 - **Stable colours (`creditLineChartOptions.ts` + the one call site in `CreditCardsPage.tsx`):**
-  - The colour slot is the card's rank **by id** among all the cards the page knows (not its array
-    position, and not only the cards drawn), so neither a reorder nor a person scope repaints a card.
-    (Amended 2026-09-23 while planning lane R5.)
+  - The colour slot is the card's rank **by id** among the household's **active** cards, every person
+    included. It is not the card's array position, and not only the cards drawn, so neither a reorder
+    nor a person scope repaints a card. The card's drill-in chart uses the same rank.
+  - Archiving or unarchiving a card repaints the others once. The alternative, ranking among every
+    card ever known, would let archived cards hold slots forever and turn new cards grey. (Amended
+    2026-09-23 while planning lane R5, and again at its code review.)
   - Series, legend and tooltip order follow the user's order.
   - The 8-slot cap and `OTHER_SERIES_COLOR` rule is unchanged, applied to the id rank.
 - **Categories & weights (`CategoriesPanel.tsx`):**
@@ -669,6 +672,7 @@ quick-fixes batch's lane B2. R5 branches only after B2 has merged to local main.
 | Toast — transactions, figures changed | Moved the {TICKER} {type}. {TICKER} at {account}: {figure} {before} → {after}.{ and N more holdings changed.} · [Undo] — `{figure}` is the first of *realized gain*, *cost basis*, *shares* that changed; if the position gained a warning and nothing else changed: "{TICKER} at {account} now warns: {warning}." |
 | Toast — Undo done | Order restored |
 | Toast — save failed (non-409) | Couldn't save the new order — {reason}. The list is back to how it was. |
+| Toast — Undo failed | Couldn't undo the move — {reason}. (Any server sentence — the stale-list 409, the change-log's overlap refusal — is shown verbatim in its place.) Added 2026-09-23: the lanes had drifted into two wordings; the consolidation step applies this one everywhere. |
 | Overview Customize divider | Hidden |
 
 ### 8.2 Announcements (live region) and instructions
