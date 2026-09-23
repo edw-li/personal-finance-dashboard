@@ -214,6 +214,10 @@ reorder.liftedId         // K | null
      window.
    - Displaced rows need no animation; they already stand where they end up.
    - Keyboard and reduced-motion drops commit immediately.
+   - If the list unmounts during the 120 ms settle (e.g. a popover closes right after a mouse
+     drop), the pending drop is committed from the unmount cleanup rather than lost. It calls
+     `onCommit` directly, without `flushSync`, which a lifecycle cleanup cannot use. A consumer whose
+     parent owns the order therefore keeps the drop. (Amended 2026-09-23 at lane R4's review.)
 7. **Cancel.** Any of these cancels, returning every unit to its place over `--t-fast`:
    - Escape;
    - `pointercancel` or `lostpointercapture` without an up;
@@ -387,6 +391,26 @@ shadow it.
   - Updates never touch `sort_index`.
   - Sync-delete compares `import_key`s.
   - Report samples keep printing `position_transactions[<sheet key>]`.
+- **Row identity survives rows shifting in the sheet.** (Amended 2026-09-23 at lane R1's review.) A
+  Positions row inserted or deleted mid-sheet shifts every key below it. Matching by key alone would
+  pour one trade's fields into another trade's row, and that row keeps its user-owned position. So
+  the matching is:
+  1. **Content first.** An existing import row with an identical trade (security, account, type,
+     date, shares, price, fees, split factor) is the same row. It keeps its id, fields and position;
+     only its key is updated.
+  2. **Same-key edits.** A remaining row with the same key AND the same security, account and type is
+     a sheet edit of that trade: its fields are updated in place and its position is kept.
+  3. **Everything else.** Every other parsed row is created (appended). Every other existing import
+     row is deleted.
+
+  Keys are cleared before reassignment, so the partial unique index never sees a transient
+  collision.
+- **Serialized writes.** (Amended 2026-09-23 at lane R1's review.) Every reorder route, every append
+  path of the same list (the creates, an account's group-change append, the UI transaction create,
+  the importer's creates) takes a per-list transaction-scoped advisory lock first. Concurrent
+  reorders therefore serialize: the later request wins whole, and its change batch records fresh
+  before-images. Without the lock, two overlapping reorders merged row by row into an order neither
+  asked for.
 - **Tests:** existing importer tests that pinned `sort_order == column index` or keying by `sort_index`
   are updated to the new rules. New tests:
   - a moved sheet row survives a re-import with no duplicate and no delete;
