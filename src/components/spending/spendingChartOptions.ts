@@ -6,7 +6,8 @@
 // axisTooltip/itemTooltip), so charts/conformance.ts can check it structurally:
 //   spendingBarsOption   + spendingCsv       — the stacked months under the net-pay line
 //   monthPieOption       + monthPieCsv       — the drill-in month, morphing from the bars
-//   heatmapRows / heatmapOption + heatmapCsv — month x category in three readings (F1)
+//   heatmapRows / heatmapOption + heatmapCsv — month x category in three readings (F1), in
+//                                              spendingHeatmapOptions.ts (re-exported here)
 //   savingsRateOption    + savingsRateCsv    — the total savings rate over the cash one
 //   categoryTrendOption  + categoryTrendCsv  — up to three picks with their budget steps
 //   categorySmallMultiplesOption             — every category as its own tiny line
@@ -20,11 +21,9 @@ import { ENTITY, foldColor, pickStyles } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
 import {
   BAR_MARKS,
-  ESTIMATE_DECAL,
   LINE,
   compactMoney,
   grid,
-  isPartialMonth,
   moneyAxis,
   monthAxis,
   offScaleGap,
@@ -38,17 +37,16 @@ import {
   stagger,
 } from '../../charts/grammar'
 import type { OffScalePoint } from '../../charts/grammar'
+import { markedLabels, partialMonths } from '../../charts/partial'
 import { legendFor } from '../../charts/legend'
 import { zeroLine } from '../../charts/markLine'
 import { budgetReference, referenceLine } from '../../charts/reference'
-import { divergingVisualMap, rowNormalize, sequentialVisualMap, vsAverage } from '../../charts/scales'
 import { INK, MUTED, PALETTE, SURFACE } from '../../charts/theme'
 import { rangeZoom, resolvedWindow } from '../../charts/timeZoom'
 import type { RangeState } from '../../charts/timeZoom'
 import { axisTooltip, itemTooltip } from '../../charts/tooltip'
 import type { SpendingMatrix } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { formatPct } from '../../utils/format'
 import { buildMonthSlices } from '../../utils/spending'
 
 /**
@@ -93,6 +91,10 @@ export function spendingCsv(
  *  at the safe withdrawal rate (Settings), and "4%" was a number the setting can change. */
 export const SUSTAINABLE_SPEND = 'Sustainable spend'
 
+// The heatmap lives in its own module (a clean seam, the 2026-09-23 code-quality review).
+export { HEATMAP_MODES, heatmapCsv, heatmapOption, heatmapRows } from './spendingHeatmapOptions'
+export type { HeatmapInput, HeatmapMode } from './spendingHeatmapOptions'
+
 /** A server string → a display number; absent stays absent (format.ts's rule). */
 const toNumber = (value: string | null | undefined): number | null =>
   value === null || value === undefined ? null : Number(value)
@@ -100,15 +102,6 @@ const toNumber = (value: string | null | undefined): number | null =>
 /** How far a second off-scale label at the same month is lifted off the first (≈ one 11px
  *  label line and a hair), so two clipped series never print over each other. */
 const OFF_SCALE_LIFT = 13
-
-/** The months in progress (2026-09-23 spec §C5, the grammar's objective rule), one flag per
- *  matrix month; all false without a today. */
-const partialMonths = (months: readonly string[], todayIso: string | null | undefined): boolean[] =>
-  months.map((month) => typeof todayIso === 'string' && isPartialMonth(month, todayIso))
-
-/** The labels a month axis marks as in progress. */
-const markedLabels = (labels: readonly string[], partial: readonly boolean[]): Set<string> =>
-  new Set(labels.filter((_, i) => partial[i]))
 
 export interface SpendingBarsInput {
   matrix: SpendingMatrix
@@ -351,186 +344,6 @@ export function monthPieLegend(
   const slices = buildMonthSlices(matrix, fold, monthIndex)
   const total = slices.reduce((acc, slice) => acc + slice.value, 0)
   return slices.map((slice) => ({ name: slice.name, value: slice.value, share: total === 0 ? 0 : slice.value / total, color: slice.color }))
-}
-
-export type HeatmapMode = 'absolute' | 'row' | 'vsAverage'
-export const HEATMAP_MODES: { value: HeatmapMode; label: string }[] = [
-  { value: 'absolute', label: 'Absolute' },
-  { value: 'row', label: 'Row' },
-  { value: 'vsAverage', label: 'vs average' },
-]
-
-const isDormant = (values: (string | null)[]) => values.every((v) => v === null || Number(v) === 0)
-
-/** The rows to draw, in the page's order: dormant categories (never a cent in any month) sit
- *  behind the card's "Show N dormant" toggle so the matrix is as tall as the spending is. */
-export function heatmapRows(
-  matrix: Pick<SpendingMatrix, 'series'>,
-  order: number[],
-  showDormant: boolean,
-): { visible: number[]; dormant: number[] } {
-  const byId = new Map(matrix.series.map((s) => [s.category_id, s.values]))
-  const dormant = order.filter((id) => isDormant(byId.get(id) ?? []))
-  const dormantSet = new Set(dormant)
-  return { visible: showDormant ? order : order.filter((id) => !dormantSet.has(id)), dormant }
-}
-
-/** rows[r][c] for the given row order — Number() once, nulls kept (absent ≠ zero). */
-function heatmapMatrix(
-  matrix: Pick<SpendingMatrix, 'months' | 'series'>,
-  order: number[],
-): (number | null)[][] {
-  const byId = new Map(matrix.series.map((s) => [s.category_id, s.values]))
-  return order.map((id) =>
-    matrix.months.map((_, c) => {
-      const v = byId.get(id)?.[c]
-      return v === null || v === undefined ? null : Number(v)
-    }),
-  )
-}
-
-export interface HeatmapInput {
-  matrix: SpendingMatrix
-  /** The VISIBLE rows (heatmapRows().visible) — row index r maps back to order[r]. */
-  order: number[]
-  nameById: Map<number, string>
-  monthLabels: string[]
-  mode: HeatmapMode
-  /** The product's today: the month in progress's column is drawn partial (2026-09-23 spec
-   *  §C5). Absent, no column is. */
-  todayIso?: string | null
-  /** Appearance › Chart patterns: that column hatched, not faded. */
-  patterns?: boolean
-}
-
-/**
- * Month × category, one of three readings of the same cells (F1). Absolute: one shared dollar
- * scale. Row (default): each category against its own busiest month. vs average: each cell
- * against its trailing 12-month mean, orange above / blue below, blank until six prior months
- * exist. Hover keeps the RAW dollars in the lead; the mode's reading is the sub-line.
- */
-export function heatmapOption({
-  matrix, order, nameById, monthLabels, mode, todayIso = null, patterns = false,
-}: HeatmapInput): EChartsOption | null {
-  if (matrix.months.length === 0 || order.length === 0) return null
-  const raw = heatmapMatrix(matrix, order)
-  // 2026-09-23 spec §C5: the month in progress's column wears the partial look (the cell's
-  // colour is the scale's, so the dashed outline is the neutral one). In the vs-average reading
-  // it stays blank: a month to date against a whole month's average would read as a false
-  // "below average" — the same reason the averages leave it out.
-  const partial = partialMonths(matrix.months, todayIso)
-  const legacyAverage = mode === 'vsAverage' ? vsAverage(raw) : []
-  const comparison = mode === 'vsAverage' ? order.map((categoryId, row) => {
-    const source = matrix.series.find(series => series.category_id === categoryId)
-    if (source?.comparison_average === undefined) return legacyAverage[row]
-    return raw[row].map((value, column) => {
-      const base = source.comparison_average?.[column]
-      if (value === null || base == null || Number(base) <= 0 || (source.comparison_count?.[column] ?? 0) < 6) return null
-      return (value - Number(base)) / Number(base)
-    })
-  }) : []
-  const values = mode === 'absolute' ? raw : mode === 'row' ? rowNormalize(raw) : comparison
-  const triples: [number, number, number][] = []
-  values.forEach((row, r) =>
-    row.forEach((v, c) => {
-      if (v !== null && !(partial[c] && mode === 'vsAverage')) triples.push([c, r, v])
-    }),
-  )
-  const cells = triples.map((cell) =>
-    partial[cell[0]] ? { value: cell, itemStyle: partialItemStyle(MUTED, patterns) } : cell,
-  )
-  // vs average: the month in progress is not compared, but it IS there (audit F1: a blank
-  // column read as "nothing entered"). Its cells ride a second series that the diverging scale
-  // does not colour: neutral, hatched, and saying why on hover.
-  const inProgress =
-    mode === 'vsAverage'
-      ? raw.flatMap((row, r) =>
-          row.flatMap((dollars, c) =>
-            partial[c] && dollars !== null
-              ? [{ value: [c, r, dollars] as [number, number, number], itemStyle: { color: MUTED, decal: ESTIMATE_DECAL } }]
-              : [],
-          ),
-        )
-      : []
-  const rawMax = raw.reduce((m, row) => row.reduce<number>((mm, v) => (v === null ? mm : Math.max(mm, v)), m), 0)
-  const maxAbs = triples.reduce((m, [, , v]) => Math.max(m, Math.abs(v)), 0)
-  const visualMap =
-    mode === 'absolute'
-      ? sequentialVisualMap({ min: 0, max: Math.max(rawMax, 1), formatter: compactMoney })
-      : mode === 'row'
-        ? sequentialVisualMap({ min: 0, max: 1, formatter: (v) => `${Math.round(v * 100)}%`, labels: ['row max', '0'] })
-        : divergingVisualMap({
-            // Clamped between ±10% and ±100%: a quiet history must not paint noise as extremes.
-            span: Math.min(1, Math.max(0.1, maxAbs)),
-            formatter: (v) => formatPct(v, { decimals: 0 }),
-            labels: ['above average', 'below average'],
-            highArm: 'orange',
-          })
-  const name = (r: number) => nameById.get(order[r]) ?? String(order[r])
-  return {
-    grid: grid('heatmap'),
-    tooltip: itemTooltip<{ value?: unknown }>({
-      body: (p) => {
-        // Defensive on the SHAPE, not just on null: a heatmap item param carries the
-        // [col, row, value] triple, and destructuring anything else would throw inside a
-        // formatter — where echarts has no boundary and the whole card would blank.
-        const [c, r, v] = (Array.isArray(p.value) ? p.value : []) as [number, number, number]
-        const dollars = raw[r]?.[c]
-        if (dollars === null || dollars === undefined) return null
-        const cell = `${name(r)} · ${monthLabels[c] ?? ''}`
-        // The in-progress column in the vs-average reading: the dollars, and why there is no
-        // comparison (audit F1).
-        if (mode === 'vsAverage' && partial[c]) return { value: dollars, label: cell, sub: 'month to date — not compared' }
-        // The in-progress words ride the month, as on the bars' tooltip head (spec §C5).
-        const note = typeof todayIso === 'string' && partial[c] ? partialNote(matrix.months[c], todayIso) : null
-        const label = `${cell}${note === null ? '' : ` — ${note}`}`
-        if (mode === 'absolute') return { value: dollars, label }
-        if (mode === 'row') return { value: dollars, label, sub: `${Math.round(v * 100)}% of this category’s busiest month` }
-        return { value: dollars, label, sub: `${formatPct(v, { decimals: 0 })} vs its trailing 12-month average` }
-      },
-    }),
-    xAxis: monthAxis(monthLabels, { gap: true, rotate: 45, marked: markedLabels(monthLabels, partial) }),
-    yAxis: { type: 'category', data: order.map((_, r) => name(r)), inverse: true, axisLabel: { width: 118, overflow: 'truncate' as const } },
-    // The scale colours the compared cells only. echarts draws a heatmap series only under a
-    // visualMap of its own (a real canvas throws "Heatmap must use with visualMap" without one),
-    // so the in-progress series gets a hidden map that paints every cell the one neutral:
-    // continuous, because a piecewise map with open-ended pieces throws too (esppChartOptions).
-    visualMap:
-      inProgress.length > 0
-        ? [
-            { ...visualMap, seriesIndex: 0 },
-            {
-              type: 'continuous' as const,
-              show: false,
-              seriesIndex: 1,
-              dimension: 2,
-              min: 0,
-              max: 1,
-              inRange: { color: [MUTED, MUTED] },
-              outOfRange: { color: [MUTED] },
-            },
-          ]
-        : visualMap,
-    series: [
-      { type: 'heatmap' as const, data: cells, itemStyle: { borderColor: SURFACE, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: INK, borderWidth: 1 } } },
-      ...(inProgress.length > 0
-        ? [{ id: 'in-progress', type: 'heatmap' as const, data: inProgress, itemStyle: { borderColor: SURFACE, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: INK, borderWidth: 1 } } }]
-        : []),
-    ],
-  }
-}
-
-/** The whole matrix (F12, addendum S7): every category in order × every month, verbatim. */
-export function heatmapCsv(
-  matrix: Pick<SpendingMatrix, 'months' | 'series'>,
-  order: number[],
-  nameById: Map<number, string>,
-): ExportTable {
-  const byId = new Map(matrix.series.map((s) => [s.category_id, s.values]))
-  return {
-    headers: ['Category', ...matrix.months],
-    rows: order.map((id) => [nameById.get(id) ?? String(id), ...matrix.months.map((_, c) => byId.get(id)?.[c] ?? '')]),
-  }
 }
 
 /** The two savings words (2026-09-04 honest-numbers spec §2). Payroll deductions are money

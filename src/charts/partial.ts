@@ -53,3 +53,12 @@ export function partialNote(month: string, todayIso: string): string | null {
   if (!isPartialMonth(month, todayIso)) return null
   return month.slice(0, 7) === todayIso.slice(0, 7) ? 'month to date (in progress)' : 'future month (in progress)'
 }
+
+/** The months in progress (2026-09-23 spec §C5, the grammar's objective rule), one flag per
+ *  month; all false without a today. */
+export const partialMonths = (months: readonly string[], todayIso: string | null | undefined): boolean[] =>
+  months.map((month) => typeof todayIso === 'string' && isPartialMonth(month, todayIso))
+
+/** The labels a month axis marks as in progress. */
+export const markedLabels = (labels: readonly string[], partial: readonly boolean[]): Set<string> =>
+  new Set(labels.filter((_, i) => partial[i]))
