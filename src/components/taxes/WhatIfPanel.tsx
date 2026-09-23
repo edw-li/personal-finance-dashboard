@@ -571,6 +571,8 @@ export default function WhatIfPanel({
       defaultOpen={defaultOpen}
       toggleLabels={{ open: 'Open what-if', close: 'Close what-if' }}
       sandbox={panelSandbox}
+      // An unfinished override row sits outside the scenario, but Reset still has it to clear.
+      canReset={!sandbox.empty || overrideRows.rows.length > 0}
       closedHint={
         <p className="drill-hint">
           Model prospective share sales against {year}&apos;s stored inputs — nothing is saved, and the
@@ -1004,7 +1006,8 @@ export default function WhatIfPanel({
                         unit={unit}
                         value={cleared ? '' : row.draft}
                         disabled={key === null || cleared}
-                        placeholder={key === null ? 'choose an input' : cleared ? 'cleared' : 'amount'}
+                        // Short enough for the 110px box: "choose an input" truncated to "choose an i…".
+                        placeholder={key === null ? 'pick input' : cleared ? 'cleared' : 'amount'}
                         onCommit={(canonical) => commitValue(row, canonical)}
                         onInvalid={() =>
                           setFormError(`${label}: ${INVALID_WORDS[unit]} — or tick “Clear this input”`)

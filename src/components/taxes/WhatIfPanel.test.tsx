@@ -783,6 +783,26 @@ describe('WhatIfPanel', () => {
     expect(url()).toBe('/taxes?whatif=pay_periods%3A48&whatif=unq_div_state_exempt_pct%3A0.95')
   })
 
+  it('Reset to actual clears an unfinished row even while the scenario itself is empty', async () => {
+    mount('/taxes', { definitions: DEFS, inputs: INPUTS })
+    await openPanel()
+    const reset = () => screen.getByRole('button', { name: 'Reset to actual' }) as HTMLButtonElement
+    expect(reset().disabled).toBe(true)
+    fireEvent.click(addOverride())
+    expect(reset().disabled).toBe(false)
+    fireEvent.click(reset())
+    expect(screen.queryByLabelText('Override')).toBeNull()
+    expect(reset().disabled).toBe(true)
+    expect(url()).toBe('/taxes')
+  })
+
+  it('a row without a key says so in a placeholder that fits its box', async () => {
+    mount('/taxes', { definitions: DEFS, inputs: INPUTS })
+    await openPanel()
+    fireEvent.click(addOverride())
+    expect(field('Override 1 value').placeholder).toBe('pick input')
+  })
+
   it('a row follows the URL when a link changes its value — to a clear, and back to a figure', async () => {
     render(
       <MemoryRouter initialEntries={['/taxes?whatif=annual_salary%3A250000']}>
