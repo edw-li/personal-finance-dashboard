@@ -198,10 +198,16 @@ async def load_suggestions(db: AsyncSession, today: date) -> tuple[list[date], l
     return window, [suggest(c.id, c.kind, by_category[c.id]) for c in categories]
 
 
-async def living_budget_total(db: AsyncSession, month: date) -> Decimal | None:
-    """The ACTIVE living categories' budgets resolved for `month`, summed (spec §4) — an
-    archived category's stale budget and a tax or transfer target are not modeled spend.
-    None when no such category has a budget that month."""
+async def living_budget_totals(
+    db: AsyncSession, months: Sequence[date]
+) -> dict[date, Decimal | None]:
+    """`living_budget_total` for several months in one read (2026-09-23 spec §B2: the
+    calendar's living estimate asks about every month its window touches). Same rule, same
+    two queries: the ACTIVE living categories' budgets resolved per month, summed; None for
+    a month where no such category has a budget in force."""
+    ordered = sorted(set(months))
+    if not ordered:
+        return {}
     living_ids = set(
         (
             await db.execute(
@@ -214,15 +220,25 @@ async def living_budget_total(db: AsyncSession, month: date) -> Decimal | None:
         .all()
     )
     if not living_ids:
-        return None
-    # The projection calls this once PER REQUEST, so the kind filter belongs in SQL: no
-    # reason to drag every archived category's budget history across the wire to drop it here.
+        return {month: None for month in ordered}
+    # The projection and the calendar call this once PER REQUEST, so the kind filter belongs
+    # in SQL: no reason to drag every archived category's budget history across the wire to
+    # drop it here.
     rows = list(
         (await db.execute(select(CategoryBudget).where(CategoryBudget.category_id.in_(living_ids))))
         .scalars()
         .all()
     )
-    amounts = [
-        values[0] for values in resolve_budgets(rows, [month]).values() if values[0] is not None
-    ]
-    return sum(amounts, Decimal("0.00")) if amounts else None
+    resolved = resolve_budgets(rows, ordered)
+    totals: dict[date, Decimal | None] = {}
+    for index, month in enumerate(ordered):
+        amounts = [values[index] for values in resolved.values() if values[index] is not None]
+        totals[month] = sum(amounts, Decimal("0.00")) if amounts else None
+    return totals
+
+
+async def living_budget_total(db: AsyncSession, month: date) -> Decimal | None:
+    """The ACTIVE living categories' budgets resolved for `month`, summed (spec §4) — an
+    archived category's stale budget and a tax or transfer target are not modeled spend.
+    None when no such category has a budget that month."""
+    return (await living_budget_totals(db, [month]))[month]
