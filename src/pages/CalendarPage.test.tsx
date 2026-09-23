@@ -280,8 +280,8 @@ describe('CalendarPage — month, views, grid', () => {
   it('the strip totals the visible month', async () => {
     renderPage()
     await screen.findByRole('grid')
-    expect(screen.getByRole('group', { name: 'Cash in' }).textContent).toContain('$6,812.44')
-    expect(screen.getByRole('group', { name: 'Cash out' }).textContent).toContain('~$2,400.00')
+    expect(screen.getByRole('group', { name: 'Scheduled in' }).textContent).toContain('$6,812.44')
+    expect(screen.getByRole('group', { name: 'Scheduled out' }).textContent).toContain('~$2,400.00')
     expect(screen.getByRole('group', { name: 'Vesting' }).textContent).toContain('~$41,200.00')
   })
 
