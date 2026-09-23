@@ -418,3 +418,68 @@ async def test_the_fingerprints_cover_exactly_the_tables_the_loaders_read(db, en
         await load_month_savings(db)
     assert book_tables == snapshot_tables == set(read_cache.REVIEW_BOOK_TABLES)
     assert savings_tables == set(read_cache.MONTH_SAVINGS_TABLES)
+
+
+# --- the cached month savings ---
+
+SAVINGS_MUTATIONS = sorted(key for key in MUTATIONS if key[0] in read_cache.MONTH_SAVINGS_TABLES)
+
+
+async def test_cached_savings_equal_the_uncached_rows_and_are_reused(db):
+    await seed(db)
+    first = await read_cache.cached_month_savings(db)
+    assert first == await load_month_savings(db)
+    assert len(read_cache.MONTH_SAVINGS) == 1
+    second = await read_cache.cached_month_savings(db)
+    assert second == first and second is not first  # each caller gets its own list
+    second.append(None)  # so a caller mutating its answer cannot reach the cache
+    assert await read_cache.cached_month_savings(db) == first
+    assert len(read_cache.MONTH_SAVINGS) == 1
+
+
+def test_the_savings_mutations_cover_every_savings_table():
+    assert {table for table, _ in SAVINGS_MUTATIONS} == set(read_cache.MONTH_SAVINGS_TABLES)
+
+
+@pytest.mark.parametrize(("table", "operation"), SAVINGS_MUTATIONS)
+async def test_every_write_to_every_savings_table_invalidates(db, table, operation):
+    await seed(db)
+    ids = await seeded_ids(db)
+    await read_cache.cached_month_savings(db)
+    assert len(read_cache.MONTH_SAVINGS) == 1
+    await MUTATIONS[(table, operation)](db, ids)
+    assert await read_cache.cached_month_savings(db) == await load_month_savings(db)
+    assert len(read_cache.MONTH_SAVINGS) == 2  # a new fingerprint, a new entry
+
+
+async def test_a_write_outside_the_savings_tables_keeps_the_savings_entry(db):
+    await seed(db)
+    await read_cache.cached_month_savings(db)
+    await _run(db, update(AccountBalance).values(balance=D("1")))
+    await read_cache.cached_month_savings(db)
+    assert len(read_cache.MONTH_SAVINGS) == 1  # balances are not a savings input
+
+
+async def test_savings_built_across_a_concurrent_write_are_not_filed(db, engine, monkeypatch):
+    await seed(db)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    real = read_cache.load_month_savings
+
+    async def build_after_a_concurrent_insert(session):
+        async with sessions() as writer:
+            writer.add(MonthlyCashflow(month=date(2026, 11, 1), net_pay=D("77.00")))
+            await writer.commit()
+        return await real(session)
+
+    monkeypatch.setattr(read_cache, "load_month_savings", build_after_a_concurrent_insert)
+    await read_cache.cached_month_savings(db)
+    assert len(read_cache.MONTH_SAVINGS) == 0
+
+
+async def test_savings_with_pending_changes_bypass_the_cache(db):
+    await seed(db)
+    db.add(MonthlyCashflow(month=date(2026, 12, 1), net_pay=D("1.00")))  # pending, unflushed
+    rows = await read_cache.cached_month_savings(db)
+    assert date(2026, 12, 1) in {row.month for row in rows}  # the uncached read autoflushed
+    assert len(read_cache.MONTH_SAVINGS) == 0
+    await db.rollback()

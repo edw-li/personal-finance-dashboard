@@ -45,6 +45,7 @@ from app.models import (
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.services import clock
 from app.services.month_review import ReviewBook, load_review_book, load_review_book_snapshot
+from app.services.savings import MonthSavings, load_month_savings
 
 CACHE_SIZE = 8
 
@@ -101,10 +102,12 @@ class LRU:
 
 
 REVIEW_BOOKS = LRU(CACHE_SIZE)
+MONTH_SAVINGS = LRU(CACHE_SIZE)
 
 
 def clear_read_caches() -> None:
     REVIEW_BOOKS.clear()
+    MONTH_SAVINGS.clear()
 
 
 def _fingerprint_statement(tables: Iterable[str]) -> TextClause:
@@ -121,6 +124,7 @@ def _fingerprint_statement(tables: Iterable[str]) -> TextClause:
 
 
 _REVIEW_BOOK_FINGERPRINT = _fingerprint_statement(REVIEW_BOOK_TABLES)
+_MONTH_SAVINGS_FINGERPRINT = _fingerprint_statement(MONTH_SAVINGS_TABLES)
 
 
 async def _fingerprint(db: AsyncSession, statement: TextClause) -> tuple[str, ...]:
@@ -159,3 +163,19 @@ async def cached_review_book(
     if await _fingerprint(db, _REVIEW_BOOK_FINGERPRINT) == before:
         REVIEW_BOOKS.put(key, book)
     return book
+
+
+async def cached_month_savings(db: AsyncSession) -> list[MonthSavings]:
+    """`load_month_savings` for READ paths, once per data version of its four tables. The rows
+    are frozen dataclasses and the cache keeps a tuple; every caller gets its own list, so
+    appending to or sorting an answer can never reach the next request."""
+    if _has_pending_changes(db):
+        return await load_month_savings(db)
+    before = await _fingerprint(db, _MONTH_SAVINGS_FINGERPRINT)
+    hit = MONTH_SAVINGS.get(before)
+    if hit is not None:
+        return list(hit)
+    rows = await load_month_savings(db)
+    if await _fingerprint(db, _MONTH_SAVINGS_FINGERPRINT) == before:
+        MONTH_SAVINGS.put(before, tuple(rows))
+    return rows
