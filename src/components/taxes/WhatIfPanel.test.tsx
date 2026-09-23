@@ -606,7 +606,7 @@ describe('WhatIfPanel', () => {
   const addOverride = () => screen.getByRole('button', { name: 'Add override' }) as HTMLButtonElement
   const keyPicker = (index = 0) => screen.getAllByLabelText('Override')[index] as HTMLSelectElement
   const clearBox = (index = 0) =>
-    screen.getAllByRole('checkbox', { name: 'Clear this input' })[index] as HTMLInputElement
+    screen.getAllByRole('checkbox', { name: /Clear this input/ })[index] as HTMLInputElement
   // A debounce and then some: long enough for a request the panel should NOT have made.
   const settleRuns = () => act(async () => new Promise((resolve) => setTimeout(resolve, 500)))
   const typeOverride = (label: string, text: string) => {
@@ -671,6 +671,9 @@ describe('WhatIfPanel', () => {
     typeOverride('Override 1 value', '')
     expect(url()).toBe('/taxes')
     expect(screen.getByText(/Not in the scenario yet/)).toBeTruthy()
+    // Code review M5: "no change" shows the stored figure, whether reached by a blank box or by
+    // unticking Clear — never an empty box beside "change it from the stored $212,930.00".
+    expect(field('Override 1 value').value).toBe('$212,930.00')
   })
 
   it('clearing an input is the explicit checkbox; unticking it returns the row to the stored value', async () => {
@@ -707,6 +710,11 @@ describe('WhatIfPanel', () => {
     fireEvent.click(addOverride())
     expect(apply().disabled).toBe(true)
     expect(screen.getByText(/Finish or remove the override row that is not in the scenario yet/)).toBeTruthy()
+    // Code review M4: the visible reason is the disabled button's description, not only a title.
+    const describedBy = apply().getAttribute('aria-describedby') ?? ''
+    expect(document.getElementById(describedBy)?.textContent).toMatch(
+      /^Finish or remove the override row that is not in the scenario yet/,
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Remove override 2' }))
     expect(apply().disabled).toBe(false)
   })
@@ -794,6 +802,15 @@ describe('WhatIfPanel', () => {
     expect(screen.queryByLabelText('Override')).toBeNull()
     expect(reset().disabled).toBe(true)
     expect(url()).toBe('/taxes')
+  })
+
+  // Code review M3: every row's Clear box had the same accessible name.
+  it('names each Clear box by its row, keeping the visible words in the name', async () => {
+    mount('/taxes?whatif=annual_salary%3A250000&whatif=itemized_deduction%3A30000', { definitions: DEFS, inputs: INPUTS })
+    await screen.findByText('Δ total tax')
+    await formReady()
+    expect(screen.getByRole('checkbox', { name: 'Clear this input (override 1)' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Clear this input (override 2)' })).toBeTruthy()
   })
 
   it('a row without a key says so in a placeholder that fits its box', async () => {

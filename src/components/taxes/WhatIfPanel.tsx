@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ApiError } from '../../api/client'
@@ -7,7 +7,6 @@ import { fetchLimits } from '../../api/limits'
 import { fetchHoldings } from '../../api/portfolio'
 import { runWhatIf } from '../../api/whatif'
 import CompareTable from '../../sandbox/CompareTable'
-import { compareDecimals } from '../../sandbox/decimal'
 import { inverted } from '../../sandbox/DeltaChip'
 import PresetRow from '../../sandbox/PresetRow'
 import SandboxPanel from '../../sandbox/SandboxPanel'
@@ -42,6 +41,7 @@ import InfoHint from '../InfoHint'
 import { FeedBanner } from '../shell/Feed'
 import StatTile from '../StatTile'
 import { UNIT_KINDS, figureText, isEntry, toBox, toWire } from './inputUnits'
+import { canAddRow, unfinishedCount, useOverrideRows } from './overrideRows'
 import { whatIfDeltaBarOption } from './taxChartOptions'
 import {
   COMPARE_ROWS,
@@ -93,65 +93,11 @@ function esppLegFor(lot: EsppLotOut, quote: string | null): EsppEntry {
   return { lot_id: lot.id, ...(quote === null ? {} : { sale_price: quote }) }
 }
 
-/**
- * One input-override row (2026-09-23 spec §B7). The URL carries only COMPLETE overrides — a key
- * whose value differs from the stored one, or an explicit clear — so a row can stand on screen
- * before it means anything: `committed` says whether its key is in the URL's scenario. Rows used
- * to BE the URL's entries, which is how one click on "Add override" wrote `annual_salary:null`
- * and modelled a $0 salary with an Apply button under it. Each row keeps its own id, so it keeps
- * its DOM — and the reader's focus — as it joins or leaves the scenario.
- */
-interface OverrideRow {
-  id: number
-  key: string | null
-  /** The value box's text (canonical). The row's own copy, so a commit shows at once rather
-   *  than a beat later, when react-router commits the URL it wrote. */
-  draft: string
-  /** "Clear this input" is ticked (the row is in the scenario as `key:null`). */
-  cleared: boolean
-  committed: boolean
-}
-
-interface OverrideRows {
-  rows: OverrideRow[]
-  nextId: number
-  /** The URL's overrides (keys AND values) these rows were last reconciled with. */
-  seen: string
-  /** The row whose key picker takes focus when it mounts — the one Add override just made. */
-  focusId: number | null
-}
-
-type Overrides = Record<string, string | null>
-
-const overridesSignature = (overrides: Overrides) =>
-  Object.keys(overrides)
-    .map((key) => `${key}:${overrides[key] ?? 'null'}`)
-    .join(SEP)
-
-function rowsFromUrl(overrides: Overrides): OverrideRows {
-  return reconcileRows({ rows: [], nextId: 1, seen: '', focusId: null }, overrides)
-}
-
-/** The rows follow the URL (a preset, a link, Back, Reset): a committed row whose key left the
- *  URL goes with it, a row whose key is in the URL takes the URL's value (an uncommitted one
- *  joins), and a key no row holds gets a row of its own. Uncommitted rows are the reader's
- *  unfinished work, and stay. */
-function reconcileRows(state: OverrideRows, overrides: Overrides): OverrideRows {
-  let nextId = state.nextId
-  const rows = state.rows
-    .filter((row) => !row.committed || (row.key !== null && row.key in overrides))
-    .map((row) => {
-      if (row.key === null || !(row.key in overrides)) return row
-      const value = overrides[row.key]
-      return { ...row, committed: true, cleared: value === null, draft: value ?? '' }
-    })
-  const held = new Set(rows.map((row) => row.key))
-  for (const [key, value] of Object.entries(overrides)) {
-    if (held.has(key)) continue
-    rows.push({ id: nextId, key, draft: value ?? '', cleared: value === null, committed: true })
-    nextId += 1
-  }
-  return { ...state, rows, nextId, seen: overridesSignature(overrides) }
+/** A value box's refusal, in the input's own unit (percents are percents, counts whole). */
+const INVALID_WORDS: Record<TaxInputUnit, string> = {
+  money: 'enter a number like 210000',
+  percent: 'enter a percent like 97.53',
+  count: 'enter a whole number like 26',
 }
 
 /**
@@ -270,19 +216,31 @@ export default function WhatIfPanel({
   const sandbox = useSandbox(spec)
   const { scenario, result } = sandbox
 
-  // The override rows on screen (see OverrideRow): the URL's complete overrides plus the rows
-  // the reader has not finished. Re-synced with the URL whenever its overrides change —
-  // adjusted during render, the house idiom, never a setState in an effect.
-  const overrideKeys = Object.keys(scenario.overrides)
-  const [overrideRows, setOverrideRows] = useState<OverrideRows>(() => rowsFromUrl(scenario.overrides))
-  if (overrideRows.seen !== overridesSignature(scenario.overrides)) {
-    setOverrideRows(reconcileRows(overrideRows, scenario.overrides))
-  }
-
   const patch = (change: (current: TaxScenario) => TaxScenario, immediate: boolean) => {
     setFormError(null) // the sentence described the legs as they WERE
     sandbox.set(change, { immediate })
   }
+
+  // ── Input-override rows (spec §B7; the model and its transitions are overrideRows.ts): the
+  // URL's complete overrides plus the rows the reader has not finished.
+  const labelOf = (key: string) => definitions.find((d) => d.key === key)?.label ?? key
+  const storedOf = (key: string) => storedHouseholdValue(inputs, key)
+  // The input's own unit, off the year's items: the box and the note speak it (a percent as a
+  // percent, a count as a whole number — the house rule), while the wire keeps the engine's
+  // form, so a percent travels as the fraction it multiplies by. Money when nothing says.
+  const unitOf = (key: string): TaxInputUnit => {
+    for (const section of inputs?.sections ?? [])
+      for (const item of section.items) if (item.key === key) return item.unit
+    return 'money'
+  }
+  const overrideRows = useOverrideRows(
+    scenario.overrides,
+    { storedOf, labelOf },
+    (change) => patch(change, true),
+    setFormError,
+  )
+  const rows = overrideRows.state.rows
+  const overrideKeys = Object.keys(scenario.overrides)
 
   // A plain function over stable setters (TaxesPage's `loadYears`), called from both doors
   // into the card. Promise callbacks only — no setState in an effect's synchronous body
@@ -366,12 +324,7 @@ export default function WhatIfPanel({
   // would sell the same shares twice without ever tripping the oversell fence.
   const nextHolding = () => held.find((h) => !scenario.sales.some((s) => s.security_id === h.security_id))
   const nextLot = () => unsoldLots.find((lot) => !scenario.espp.some((e) => e.lot_id === lot.id))
-  // One row per key, and one row at a time without a key: a second empty row adds nothing
-  // but a second "Choose an input…" to finish.
-  const canAddOverride =
-    definitions.length > 0 &&
-    !overrideRows.rows.some((row) => row.key === null) &&
-    !definitions.every((d) => overrideRows.rows.some((row) => row.key === d.key))
+  const canAddOverride = canAddRow(overrideRows.state, definitions.map((d) => d.key))
 
   const addSale = () => {
     const holding = nextHolding()
@@ -381,14 +334,6 @@ export default function WhatIfPanel({
     const lot = nextLot()
     if (lot !== undefined) patch((s) => ({ ...s, espp: [...s.espp, esppLegFor(lot, lots?.current_price ?? null)] }), true)
   }
-  // A new row starts with NO key and changes nothing — not the URL, not the request (spec §B7).
-  const addOverride = () =>
-    setOverrideRows((state) => ({
-      ...state,
-      rows: [...state.rows, { id: state.nextId, key: null, draft: '', cleared: false, committed: false }],
-      nextId: state.nextId + 1,
-      focusId: state.nextId,
-    }))
 
   const setSale = (index: number, change: Partial<SaleEntry>, immediate: boolean) =>
     patch((s) => ({ ...s, sales: s.sales.map((leg, i) => (i === index ? { ...leg, ...change } : leg)) }), immediate)
@@ -407,96 +352,12 @@ export default function WhatIfPanel({
     patch((s) => ({ ...s, espp: s.espp.map((leg, i) => (i === index ? { ...leg, ...change } : leg)) }), immediate)
   const removeEspp = (index: number) => patch((s) => ({ ...s, espp: s.espp.filter((_, i) => i !== index) }), true)
 
-  // ── Override rows (spec §B7): a row joins the scenario only with a key AND a value that
-  // differs from the stored one, or with "Clear this input" ticked; anything else leaves it on
-  // screen and out of the URL.
-  const labelOf = (key: string) => definitions.find((d) => d.key === key)?.label ?? key
-  const storedOf = (key: string) => storedHouseholdValue(inputs, key)
-  // The input's own unit, off the year's items: the box and the note speak it (a percent as a
-  // percent, a count as a whole number — the house rule), while the wire keeps the engine's
-  // form, so a percent travels as the fraction it multiplies by. Money when nothing says.
-  const unitOf = (key: string): TaxInputUnit => {
-    for (const section of inputs?.sections ?? [])
-      for (const item of section.items) if (item.key === key) return item.unit
-    return 'money'
-  }
-  const INVALID_WORDS: Record<TaxInputUnit, string> = {
-    money: 'enter a number like 210000',
-    percent: 'enter a percent like 97.53',
-    count: 'enter a whole number like 26',
-  }
-  const updateRow = (id: number, change: Partial<OverrideRow>) =>
-    setOverrideRows((state) => ({
-      ...state,
-      rows: state.rows.map((row) => (row.id === id ? { ...row, ...change } : row)),
-    }))
-  const withoutKey =
-    (key: string) =>
-    (s: TaxScenario): TaxScenario => {
-      const overrides = { ...s.overrides }
-      delete overrides[key]
-      return { ...s, overrides }
-    }
-
-  const chooseKey = (row: OverrideRow, to: string) => {
-    if (row.key === to) return
-    if (overrideRows.rows.some((other) => other.id !== row.id && other.key === to)) {
-      // Last-write-wins on a dict would silently drop the earlier row — refuse instead.
-      setFormError(`${labelOf(to)} is overridden twice — one row per key`)
-      return
-    }
-    // Every choice is a fresh one: the new input starts at "no change" — its stored figure,
-    // outside the scenario until edited. A figure (or a Clear) typed for the OLD input is not
-    // re-aimed at the new one: `annual_salary:250000` must never become `itemized_deduction:
-    // 250000` with Apply enabled, one select change after the reader meant something else.
-    setFormError(null)
-    updateRow(row.id, { key: to, draft: storedOf(to) ?? '', cleared: false, committed: false })
-    if (row.committed && row.key !== null) patch(withoutKey(row.key), true)
-  }
-
-  // `canonical` is the box's committed text; null is a BLANK box — never "clear" (that is the
-  // checkbox's job), so a blank takes the row out of the scenario like "no change" does.
-  const commitValue = (row: OverrideRow, canonical: string | null) => {
-    if (row.key === null) return
-    const key = row.key
-    const stored = storedOf(key)
-    const changes = canonical !== null && (stored === null || compareDecimals(canonical, stored) !== 0)
-    if (changes) {
-      updateRow(row.id, { committed: true, cleared: false, draft: canonical })
-      patch((s) => ({ ...s, overrides: { ...s.overrides, [key]: canonical } }), true)
-      return
-    }
-    setFormError(null)
-    updateRow(row.id, { committed: false, cleared: false, draft: canonical ?? '' })
-    if (row.committed) patch(withoutKey(key), true)
-  }
-
-  const toggleClear = (row: OverrideRow, clear: boolean) => {
-    if (row.key === null) return
-    const key = row.key
-    if (clear) {
-      updateRow(row.id, { committed: true, cleared: true, draft: '' })
-      patch((s) => ({ ...s, overrides: { ...s.overrides, [key]: null } }), true)
-      return
-    }
-    // Unticked: back to the stored figure, outside the scenario until it is edited.
-    setFormError(null)
-    updateRow(row.id, { committed: false, cleared: false, draft: storedOf(key) ?? '' })
-    patch(withoutKey(key), true)
-  }
-
-  const removeRow = (row: OverrideRow) => {
-    setOverrideRows((state) => ({ ...state, rows: state.rows.filter((other) => other.id !== row.id) }))
-    if (row.committed && row.key !== null) patch(withoutKey(row.key), true)
-    else setFormError(null)
-  }
-
   // Reset to actual empties the scenario AND the unfinished rows: the card goes back to what the
   // stored year says, not to a form still holding half-made overrides.
   const panelSandbox = {
     ...sandbox,
     reset: () => {
-      setOverrideRows((state) => ({ ...state, rows: [], focusId: null }))
+      overrideRows.clear()
       sandbox.reset()
     },
   }
@@ -542,10 +403,11 @@ export default function WhatIfPanel({
     return (r as Partial<WhatIfOut>).scenario ?? { error: 'Preview unavailable' }
   }
   const overrideCount = overrideKeys.length
+  const applyHintId = useId()
   // Apply is enabled only for COMPLETE rows (spec §B7): a row still outside the scenario would
   // read as part of "Apply N overrides" while writing nothing — so it holds the button, and the
   // sentence under it says which row is in the way.
-  const unfinished = overrideRows.rows.filter((row) => !row.committed).length
+  const unfinished = unfinishedCount(overrideRows.state)
   const unfinishedSentence =
     unfinished === 1
       ? 'Finish or remove the override row that is not in the scenario yet — Apply writes complete rows only.'
@@ -572,7 +434,7 @@ export default function WhatIfPanel({
       toggleLabels={{ open: 'Open what-if', close: 'Close what-if' }}
       sandbox={panelSandbox}
       // An unfinished override row sits outside the scenario, but Reset still has it to clear.
-      canReset={!sandbox.empty || overrideRows.rows.length > 0}
+      canReset={!sandbox.empty || rows.length > 0}
       closedHint={
         <p className="drill-hint">
           Model prospective share sales against {year}&apos;s stored inputs — nothing is saved, and the
@@ -751,6 +613,9 @@ export default function WhatIfPanel({
             <button
               type="button"
               className="button button-primary"
+              // Disabled says THAT it cannot run; the sentence beside it says why, so the button
+              // names it — a disabled control is otherwise mute to a screen reader (BudgetPanel).
+              aria-describedby={applyHintId}
               disabled={!settled || unfinished > 0}
               title={
                 unfinished > 0
@@ -763,7 +628,7 @@ export default function WhatIfPanel({
             >
               Apply {overrideCount} override{overrideCount === 1 ? '' : 's'} to {year}
             </button>
-            <span className="drill-hint">
+            <span id={applyHintId} className="drill-hint">
               {unfinished > 0
                 ? unfinishedSentence
                 : 'Overrides only — sale and ESPP legs are hypothetical and are never applied.'}
@@ -952,7 +817,7 @@ export default function WhatIfPanel({
             })}
           </div>
 
-          {overrideRows.rows.length > 0 && (
+          {rows.length > 0 && (
             <div className="tax-section whatif-overrides">
               <h3 className="eyebrow">
                 Input overrides
@@ -964,7 +829,7 @@ export default function WhatIfPanel({
                 cleared (the scenario computes it as 0).
               </p>
               <div className="whatif-legs">
-                {overrideRows.rows.map((row, index) => {
+                {rows.map((row, index) => {
                   const key = row.key
                   const label = key === null ? 'This override' : labelOf(key)
                   const cleared = row.committed && row.cleared
@@ -981,8 +846,8 @@ export default function WhatIfPanel({
                         className="field-input whatif-select"
                         value={key ?? ''}
                         // The picker Add override just made is where the next keystroke belongs.
-                        autoFocus={row.id === overrideRows.focusId}
-                        onChange={(e) => chooseKey(row, e.target.value)}
+                        autoFocus={row.id === overrideRows.state.focusId}
+                        onChange={(e) => overrideRows.choose(row.id, e.target.value)}
                       >
                         {key === null && (
                           <option value="" disabled>
@@ -995,7 +860,7 @@ export default function WhatIfPanel({
                             key={d.key}
                             value={d.key}
                             // One row per key: another row's key is shown but cannot be picked.
-                            disabled={overrideRows.rows.some((other) => other.id !== row.id && other.key === d.key)}
+                            disabled={rows.some((other) => other.id !== row.id && other.key === d.key)}
                           >
                             {d.label} ({d.key})
                           </option>
@@ -1008,7 +873,7 @@ export default function WhatIfPanel({
                         disabled={key === null || cleared}
                         // Short enough for the 110px box: "choose an input" truncated to "choose an i…".
                         placeholder={key === null ? 'pick input' : cleared ? 'cleared' : 'amount'}
-                        onCommit={(canonical) => commitValue(row, canonical)}
+                        onCommit={(canonical) => overrideRows.commit(row.id, canonical)}
                         onInvalid={() =>
                           setFormError(`${label}: ${INVALID_WORDS[unit]} — or tick “Clear this input”`)
                         }
@@ -1016,9 +881,12 @@ export default function WhatIfPanel({
                       <label className="whatif-clear">
                         <input
                           type="checkbox"
+                          // Numbered like the row's value box and Remove button, the visible words
+                          // first: two rows must not read as two identical checkboxes.
+                          aria-label={`Clear this input (override ${index + 1})`}
                           checked={cleared}
                           disabled={key === null}
-                          onChange={(e) => toggleClear(row, e.target.checked)}
+                          onChange={(e) => overrideRows.toggleClear(row.id, e.target.checked)}
                         />
                         Clear this input
                       </label>
@@ -1026,7 +894,7 @@ export default function WhatIfPanel({
                         type="button"
                         className="button"
                         aria-label={`Remove override ${index + 1}`}
-                        onClick={() => removeRow(row)}
+                        onClick={() => overrideRows.remove(row.id)}
                       >
                         Remove
                       </button>
@@ -1046,7 +914,7 @@ export default function WhatIfPanel({
             </div>
           )}
 
-          {sandbox.empty && overrideRows.rows.length === 0 && (
+          {sandbox.empty && rows.length === 0 && (
             <p className="empty-note">
               No legs yet — add a sale or an input override to model it against {year}&apos;s stored inputs.
             </p>
@@ -1069,7 +937,7 @@ export default function WhatIfPanel({
             >
               Add ESPP sale
             </button>
-            <button type="button" className="button" disabled={!canAddOverride} onClick={addOverride}>
+            <button type="button" className="button" disabled={!canAddOverride} onClick={overrideRows.add}>
               Add override
             </button>
             <span className="drill-hint">
