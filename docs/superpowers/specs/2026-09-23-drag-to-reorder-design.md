@@ -710,8 +710,14 @@ normalizes every stored value, so the batch can hold more rows than moved.
   - An empty list shows no grips.
 - **Retired and inactive rows** keep their positions and are draggable. The PUT always sends every row
   the endpoint requires.
-- **Two tabs:** a list changed elsewhere gets a 409 → toast → reload. Nothing is half-applied, because
-  each save is one transaction.
+- **Two tabs:** a list whose rows were **added or removed** elsewhere gets a 409 → toast → reload.
+  A **pure reorder** made in another tab is not detected: the saves are serialized per list, and
+  the later one wins whole (single-user app; no version token). Nothing is half-applied, because
+  each save is one transaction. (Clarified 2026-09-23 after lane R3's browser check.)
+- **An Undo must never leave a stale optimistic layer.** A reload that returns rows identical to
+  the screen may not re-render (the snapshot cache skips equal data). So an Undo's own server
+  answer becomes the displayed order, and a layer is tagged with what it belongs to (e.g. the
+  owner scope). Otherwise the next drag could save an order the reader no longer sees.
 - **A second drop before the first save returns** can't happen: grips are disabled while the list's save
   is in flight. The optimistic rows carry the new order, so the next drag diffs against it (the
   `CategoriesPanel` lesson, `:213-216`).
