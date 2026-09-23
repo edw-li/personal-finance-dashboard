@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
 import {
+  INK,
   NEGATIVE,
   OTHER_SERIES_COLOR,
   PALETTE,
@@ -9,6 +10,7 @@ import {
   SEQUENTIAL_BLUE,
   SURFACE,
 } from '../../charts/theme'
+import { ESTIMATE_HATCH } from '../comp/vestingChartOptions'
 import { lightFromDark } from '../../charts/recolor'
 import { WARM_TINT } from '../../charts/scales'
 import { isGrammarTooltip } from '../../charts/tooltip'
@@ -19,6 +21,7 @@ import {
   TAX_COLORS,
   TAX_LABELS,
   TAX_SERIES_IDS,
+  isEstimateYear,
   ladderCsv,
   marginalLadderOption,
   taxTrendCsv,
@@ -584,6 +587,92 @@ describe('trendOption', () => {
     expect(
       trendOption([summaryFixture(2024)], { selected: { State: false } })!.legend,
     ).toMatchObject({ selected: { State: false } })
+  })
+})
+
+describe('trendOption — the year still in progress (2026-09-23 spec §C5, §C7)', () => {
+  const feed = () => [2024, 2025, 2026].map(summaryFixture)
+  const FADED = { opacity: 0.45, borderType: 'dashed', borderColor: INK, borderWidth: 1 }
+
+  it("is the year whose last day is after today — §0's one objective rule", () => {
+    expect(isEstimateYear(2026, '2026-09-23')).toBe(true)
+    expect(isEstimateYear(2026, '2026-12-30')).toBe(true)
+    // Dec 31 is the year's own last day: not AFTER today, so the year is done.
+    expect(isEstimateYear(2026, '2026-12-31')).toBe(false)
+    expect(isEstimateYear(2025, '2026-09-23')).toBe(false)
+    expect(isEstimateYear(2027, '2026-12-31')).toBe(true)
+  })
+
+  it('labels only that year "(est.)", keeping the bare year as the category', () => {
+    const axis = trendOption(feed(), { today: '2026-09-23' })!.xAxis as {
+      data: string[]
+      axisLabel: { interval: number; formatter: (value: string) => string }
+    }
+    // The drill-in adapter, the table twin and the page's tests all read the bare year.
+    expect(axis.data).toEqual(['2024', '2025', '2026'])
+    expect(axis.axisLabel.interval).toBe(0)
+    expect(axis.data.map((value) => axis.axisLabel.formatter(value))).toEqual([
+      '2024',
+      '2025',
+      '2026 (est.)',
+    ])
+  })
+
+  it('fades and dash-outlines its segments; with chart patterns on, hatches them as well', () => {
+    const plain = seriesOf(trendOption(feed(), { today: '2026-09-23' }))
+    expect(plain[0].data).toEqual([40782.88, 51355.09, { value: 57160.35, itemStyle: FADED }])
+    // Every jurisdiction's segment for the year, and only that year's.
+    for (const s of plain.slice(0, 7)) {
+      expect(typeof s.data?.[0], s.name).toBe('number')
+      expect(typeof s.data?.[1], s.name).toBe('number')
+      expect(s.data?.[2], s.name).toMatchObject({ itemStyle: FADED })
+    }
+    // The rate's carrier is not a segment: nothing to fade.
+    expect(plain[7].data).toEqual([0, 0, 0])
+    // Patterns on: every series already wears an aria texture — Federal's own is a diagonal
+    // too — so the hatch alone would not set the year apart. It keeps the fade and the dashed
+    // outline, and the estimate hatch replaces the series' texture.
+    const hatched = seriesOf(trendOption(feed(), { today: '2026-09-23', patterns: true }))
+    expect(hatched[0].data?.[2]).toEqual({
+      value: 57160.35,
+      itemStyle: { ...FADED, decal: ESTIMATE_HATCH },
+    })
+  })
+
+  it("says so under that year's tooltip, and only there", () => {
+    const format = (
+      trendOption(feed(), { today: '2026-09-23' }) as unknown as {
+        tooltip: { formatter: (p: unknown) => string }
+      }
+    ).tooltip.formatter
+    const foot = (dataIndex: number, year: string) =>
+      tooltipRows(
+        format([
+          {
+            seriesName: 'Federal',
+            seriesType: 'bar',
+            axisValueLabel: year,
+            dataIndex,
+            value: 1,
+            color: TAX_COLORS[0],
+          },
+        ]),
+      ).foot
+    expect(foot(2, '2026')).toEqual([
+      'Effective rate 32.1%',
+      'Estimate: the 2026 tax year is still in progress',
+    ])
+    expect(foot(1, '2025')).toEqual(['Effective rate 31.5%'])
+  })
+
+  it('draws nothing as an estimate without a today, or once every year has ended', () => {
+    expect(seriesOf(trendOption(feed()))[0].data).toEqual([40782.88, 51355.09, 57160.35])
+    expect(seriesOf(trendOption(feed(), { today: '2027-01-02' }))[0].data).toEqual([
+      40782.88, 51355.09, 57160.35,
+    ])
+    expect(
+      (trendOption(feed())!.xAxis as { axisLabel: Record<string, unknown> }).axisLabel.formatter,
+    ).toBeUndefined()
   })
 })
 

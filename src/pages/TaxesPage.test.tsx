@@ -1542,6 +1542,26 @@ describe('?comp= composition drill (2026-08-25 spec §2d)', () => {
     expect(screen.getByRole('button', { name: '2024' }).getAttribute('aria-pressed')).toBe('true')
   })
 
+  it('names a drilled year still in progress as an estimate (2026-09-23 spec §C7)', async () => {
+    // Only the clock is faked: the feeds' promises and the findBy polling keep real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2024, 5, 15)) // mid-June 2024: 2024 has not ended, 2023 has
+    try {
+      const taxed2023 = summaryFor(2023)
+      taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
+      const taxed2024 = summaryFor(2024)
+      taxed2024.federal = { ...taxed2024.federal, tax: '2000.00' }
+      vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, taxed2024] })
+      renderPage('/taxes?comp=2024')
+      expect(await screen.findByText('Tax breakdown — 2024 (est.)')).toBeTruthy()
+      cleanup()
+      renderPage('/taxes?comp=2023')
+      expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('ignores a garbled or unknown year — the trend renders as usual', async () => {
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
       years: [summaryFor(2023), summaryFor(2024)],

@@ -36,6 +36,7 @@ import {
 } from '../../charts/waterfall'
 import type { TaxSummaryOut, WhatIfDelta } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
+import { ESTIMATE_HATCH } from '../comp/vestingChartOptions'
 import { formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
 import type { LadderSegment } from './marginal'
 
@@ -147,21 +148,69 @@ export function waterfallCsv(summary: TaxSummaryOut): ExportTable {
   return steps === null ? { headers: ['Step', 'Amount', 'Remaining'], rows: [] } : stepsCsv(steps)
 }
 
+/** A tax year still running on `today` (an ISO date): its figures are the engine's estimate
+ *  from the inputs entered so far. The batch's one objective rule (2026-09-23 spec §0): a
+ *  period whose last day is after today is in progress. */
+export function isEstimateYear(year: number, today: string): boolean {
+  return `${year}-12-31` > today
+}
+
+/** The estimate treatment for one stack segment (2026-09-23 spec §C5, reused by §C7): a faded
+ *  fill with a dashed ink outline, and — with Appearance › Chart patterns ON — the house
+ *  ESTIMATE_HATCH in place of the series' own aria texture. The hatch alone would not do there:
+ *  every series is already textured (Federal's own is a diagonal too), so the year would read as
+ *  one more pattern rather than as provisional. INK and the hatch's SURFACE are tokens, so the
+ *  light recolor and the conformance colour rule both hold. One object per chart: every estimate
+ *  segment shares it. */
+function estimateItemStyle(patterns: boolean) {
+  const faded = { opacity: 0.45, borderType: 'dashed' as const, borderColor: INK, borderWidth: 1 }
+  return patterns ? { ...faded, decal: ESTIMATE_HATCH } : faded
+}
+
+/** The years axis with every in-progress year LABELLED "2026 (est.)". The category itself stays
+ *  the bare year: the drill-in adapter, the table twin and the page's tests all read it. */
+function yearAxis(years: string[], estimates: ReadonlySet<string>) {
+  const axis = monthAxis(years, { gap: true })
+  if (estimates.size === 0) return axis
+  const labels = (axis as { axisLabel?: Record<string, unknown> }).axisLabel ?? {}
+  return {
+    ...axis,
+    axisLabel: {
+      ...labels,
+      formatter: (value: string) => (estimates.has(value) ? `${value} (est.)` : value),
+    },
+  }
+}
+
 /**
  * Multi-year composition: one stacked bar per year of the tax figures with the year's
  * effective rate as a direct label on the stack's cap (F15 — one axis; a ratio does not
- * share a money axis and does not deserve a second one). Returns null when the feed carries
- * no years at all — the card renders its empty sentence.
+ * share a money axis and does not deserve a second one). A year still in progress on `today`
+ * is the engine's estimate, not a settled figure: its segments take the estimate treatment,
+ * its axis label reads "2026 (est.)" and its tooltip says why (2026-09-23 spec §C5, §C7).
+ * Without a `today` nothing is marked — the builder stays pure; the panel passes the date.
+ * Returns null when the feed carries no years at all — the card renders its empty sentence.
  */
 export function trendOption(
   years: TaxSummaryOut[],
-  { selected }: { selected?: Record<string, boolean> } = {},
+  {
+    selected,
+    today,
+    patterns = false,
+  }: { selected?: Record<string, boolean>; today?: string; patterns?: boolean } = {},
 ): EChartsOption | null {
   if (years.length === 0) return null
   // The feed is already ordered, but the chart owns its own x-axis order rather than
   // trusting it (TaxesPage's `latestOf` reasoning).
   const ordered = [...years].sort((a, b) => a.year - b.year)
   const amounts = ordered.map(taxAmounts)
+  const estimates = new Set(
+    today === undefined
+      ? []
+      : ordered.filter((y) => isEstimateYear(y.year, today)).map((y) => String(y.year)),
+  )
+  const isEstimate = (index: number) => estimates.has(String(ordered[index]?.year))
+  const estimateStyle = estimateItemStyle(patterns)
   // Percent units at 4dp (0.306020 × 100 is 30.602000000000004 unrounded).
   const rates = ordered.map((y) =>
     y.totals.effective_rate === null ? null : roundTo(Number(y.totals.effective_rate) * 100, 4),
@@ -199,12 +248,18 @@ export function trendOption(
           ? Number(total)
           : null
       },
-      // The rate is a ratio, not another addend: it stays out of the sum and under it.
-      footer: (index) => (rateText(index) === '' ? [] : [`Effective rate ${rateText(index)}`]),
+      // The rate is a ratio, not another addend: it stays out of the sum and under it. The
+      // estimate line says why the year's bar looks provisional.
+      footer: (index) => [
+        ...(rateText(index) === '' ? [] : [`Effective rate ${rateText(index)}`]),
+        ...(isEstimate(index)
+          ? [`Estimate: the ${ordered[index].year} tax year is still in progress`]
+          : []),
+      ],
     }),
-    xAxis: monthAxis(
+    xAxis: yearAxis(
       ordered.map((y) => String(y.year)),
-      { gap: true },
+      estimates,
     ),
     yAxis: moneyAxis(),
     series: [
@@ -218,7 +273,9 @@ export function trendOption(
         ...stagger(i),
         color: TAX_COLORS[i],
         universalTransition: true,
-        data: amounts.map((a) => a[i]),
+        data: amounts.map((a, index) =>
+          isEstimate(index) ? { value: a[i], itemStyle: estimateStyle } : a[i],
+        ),
       })),
       // The rate's carrier: a zero-height, transparent, silent member of the SAME stack, so
       // its cap label sits on the year's total without belonging to any jurisdiction.
