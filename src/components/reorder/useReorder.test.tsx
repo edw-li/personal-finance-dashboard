@@ -392,6 +392,27 @@ describe('useReorder — keyboard', () => {
     expect(onCommit).toHaveBeenLastCalledWith(['Q', 'P', 'C2', 'C1'], 'C2')
   })
 
+  it('works under StrictMode: a keyboard lift, move and drop commit exactly once', () => {
+    const onCommit = vi.fn()
+    render(
+      <StrictMode>
+        <Stateful initial={flat('A', 'B', 'C')} onCommit={onCommit} />
+      </StrictMode>,
+    )
+    layoutRows()
+    grip('Alpha').focus()
+    fireEvent.keyDown(grip('Alpha'), { key: ' ' })
+    expect(live()).toBe('Picked up Alpha. Position 1 of 3.')
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    expect(row('A').style.transform).toBe('translateY(40px)')
+    fireEvent.keyDown(grip('Alpha'), { key: ' ' })
+    expect(onCommit).toHaveBeenCalledTimes(1)
+    expect(onCommit).toHaveBeenCalledWith(['B', 'A', 'C'], 'A')
+    expect(order()).toEqual(['B', 'A', 'C'])
+    expect(row('A').hasAttribute('data-reorder')).toBe(false)
+    expect(document.activeElement).toBe(grip('Alpha'))
+  })
+
   it('markSaved flashes the unit for MOTION_MS.flash', () => {
     vi.useFakeTimers()
     render(<Stateful initial={flat('A', 'B', 'C')} />)
