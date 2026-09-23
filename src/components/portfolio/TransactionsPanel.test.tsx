@@ -1092,7 +1092,7 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
       await waitFor(() => expect(escaped).toHaveBeenCalled())
       expect(escaped.mock.calls[0][0]).toBeInstanceOf(TypeError)
-      expect(screen.queryByText(/Couldn't restore the order/)).toBeNull()
+      expect(screen.queryByText(/Couldn't undo the move/)).toBeNull()
     } finally {
       process.off('unhandledRejection', escaped)
     }
@@ -1102,10 +1102,12 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
     {
       status: 500,
       detail: 'Internal Server Error',
-      text: "Couldn't restore the order — the server had a problem (HTTP 500).",
+      text: "Couldn't undo the move — the server had a problem (HTTP 500).",
       reloads: 1,
     },
     { status: 409, detail: STALE, text: STALE, reloads: 2 },
+    // Any refusal of the server's is its own sentence, verbatim (spec §8.1).
+    { status: 422, detail: 'ids lists 21 more than once.', text: 'ids lists 21 more than once.', reloads: 1 },
   ])('says why an Undo was refused ($status), reloading a stale list', async ({ status, detail, text, reloads }) => {
     answerWith()
     const { onChanged } = renderLedger()

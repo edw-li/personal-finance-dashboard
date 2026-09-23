@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { ApiError, errorDetail } from '../../api/client'
 import {
   createTransaction,
@@ -10,8 +10,11 @@ import type { OwnerScope } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
+import { ORDER_RESTORED, clause, orderSaveFailed, undoFailureText } from '../reorder/orderCopy'
 import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
+import { useLatest } from '../reorder/useLatest'
 import { useReorder } from '../reorder/useReorder'
+import { useRequestCount } from '../reorder/useRequestCount'
 import { useToast } from '../ToastProvider'
 import type { PositionChange, SecurityOut, TransactionOut, TransactionType } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
@@ -139,11 +142,6 @@ interface OrderLayer {
   rows: TransactionOut[]
 }
 
-/** A server sentence used inside one of ours: its closing stop goes, ours closes it. */
-function clause(text: string): string {
-  return text.replace(/[.\s]+$/, '')
-}
-
 /** One changed holding, in words (2026-09-23 drag-to-reorder spec §8.1): the FIRST of realized
  *  gain, cost basis and shares that moved — the server's figures, formatted the house way — or,
  *  when only a warning was added, that warning. The server quantizes both sides and never sends
@@ -234,24 +232,17 @@ export default function TransactionsPanel({
   // one piece of state the carry-forward cue and the submit label read.
   const [kept, setKept] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Requests in flight — a count, not a flag: they overlap (a later drop's save and an earlier
+  // Requests in flight — counted, not flagged: they overlap (a later drop's save and an earlier
   // toast's Undo), and the first to settle must not reopen the grips and the row buttons while
   // another is still running. `busy` is what every control reads.
-  const [inFlight, setInFlight] = useState(0)
-  const busy = inFlight > 0
-  const requestStarted = () => setInFlight((count) => count + 1)
-  const requestSettled = () => setInFlight((count) => count - 1)
+  const { busy, track } = useRequestCount()
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
   const toast = useToast()
   // The page's reload AS IT STANDS NOW, for every request's answer: `onChanged` closes over the
   // page's scope, so a save, delete or Undo that answers after a scope switch must not call the
   // one from the render that sent it — that refetches the OLD scope, supersedes the new scope's
-  // load and paints the whole page with the old scope under the new chips (useReorder's
-  // `latest` idiom).
-  const onChangedRef = useRef(onChanged)
-  useLayoutEffect(() => {
-    onChangedRef.current = onChanged
-  })
+  // load and paints the whole page with the old scope under the new chips.
+  const onChangedRef = useLatest(onChanged)
   const accountNote = newAccountNote(form.account, accounts, primaryName)
   const tickerOf = (txn: TransactionOut) => tickers.get(txn.security_id) ?? '?'
 
@@ -288,27 +279,22 @@ export default function TransactionsPanel({
   // change-logged, so the client holds the previous order — and the scope it was made in. Not
   // optimistic: the restored order shows once the server confirms it, as the saved layer, and
   // the page's reload follows. A list that changed since answers 409 and the reload shows what
-  // is there now.
+  // is there now. A refusal is the server's own sentence (§8.1).
   const restoreOrder = (ids: number[], scope: OwnerScope) => {
-    requestStarted()
     // Two-argument then, as in saveOrder: only the request's own failure is a failed restore.
-    reorderTransactions(ids, scope)
-      .then(
+    void track(() =>
+      reorderTransactions(ids, scope).then(
         (result) => {
           setSavedOrder({ scope, rows: result.transactions })
           onChangedRef.current()
-          toast.info('Order restored')
+          toast.info(ORDER_RESTORED)
         },
         (err: unknown) => {
-          if (err instanceof ApiError && err.status === 409) {
-            toast.error(errorDetail(err))
-            onChangedRef.current()
-            return
-          }
-          toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
+          toast.error(undoFailureText(err))
+          if (err instanceof ApiError && err.status === 409) onChangedRef.current()
         },
-      )
-      .finally(requestSettled)
+      ),
+    )
   }
 
   // One drop, one PUT (spec §5): the visible ids in their new order, in the page's scope. The
@@ -329,12 +315,11 @@ export default function TransactionsPanel({
         return row === undefined ? [] : [row]
       }),
     })
-    requestStarted()
     // Two-argument then: only the request's own failure reaches the failure branch. A throw
     // while wording the success (a malformed answer) escapes as an error instead of printing
     // "back to how it was" over the order the server just saved.
-    reorderTransactions(next, scope)
-      .then(
+    void track(() =>
+      reorderTransactions(next, scope).then(
         (result) => {
           setPendingOrder(null)
           setSavedOrder({ scope, rows: result.transactions })
@@ -357,12 +342,10 @@ export default function TransactionsPanel({
             onChangedRef.current()
             return
           }
-          toast.error(
-            `Couldn't save the new order — ${clause(errorDetail(err))}. The list is back to how it was.`,
-          )
+          toast.error(orderSaveFailed(errorDetail(err)))
         },
-      )
-      .finally(requestSettled)
+      ),
+    )
   }
 
   const reorder = useReorder({
@@ -418,48 +401,48 @@ export default function TransactionsPanel({
       setError(form.type === 'split' ? 'Split factor is required' : 'Shares and price are required')
       return
     }
-    requestStarted()
     setError(null)
     const payload = toPayload(form)
     const request =
       editingId !== null
         ? updateTransaction(editingId, payload)
         : createTransaction({ ...payload, security_id: Number(form.security_id) })
-    request
-      .then(() => {
-        if (editingId === null) {
-          // The next lot starts here — BEFORE the reset, and that order is load-bearing
-          // (998f05c's invariant, proven on the paycheck/comp/ESPP panels). This form
-          // carries no data-entry-scope, so Enter is the browser's implicit submit and the
-          // caret is still sitting in an AmountInput when this lands. Moving it BLURS that
-          // box synchronously, and the blur's commit closes over the box's PRE-reset text —
-          // canonicalizing a "$1,205.50" into an enqueued write. Focusing first aims that
-          // write at the state the clearing update below then replaces; the other order
-          // lets it land on the cleared form, where a resurrected price reads exactly like
-          // carry-forward and is indistinguishable from it.
-          // Direct, no queue: the type is kept, so the cell being focused is already in the
-          // DOM and React re-renders it (cleared) around the focus without remounting it.
-          focusFirstAmount(form.type)
-          // Carry-forward (spec §5.1): a lot is rarely entered alone — the security, the
-          // account, the type and the day are the SESSION; only the numbers describing
-          // THIS lot are cleared. Functional, so it composes over the blur's write above
-          // rather than racing it. `kept` then says so out loud, because a form that keeps
-          // its values after a save otherwise reads as a save that never happened.
-          setForm((f) => ({ ...f, shares: '', price: '', fees: '', split_factor: '', notes: '' }))
-          setKept(true)
-        } else {
-          // An edit is a one-off correction rather than a session: full reset, create mode
-          // back, cue down.
-          setForm(EMPTY)
-          setEditingId(null)
-          setKept(false)
-        }
-        onChangedRef.current()
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Save failed')
-      })
-      .finally(requestSettled)
+    void track(() =>
+      request
+        .then(() => {
+          if (editingId === null) {
+            // The next lot starts here — BEFORE the reset, and that order is load-bearing
+            // (998f05c's invariant, proven on the paycheck/comp/ESPP panels). This form
+            // carries no data-entry-scope, so Enter is the browser's implicit submit and the
+            // caret is still sitting in an AmountInput when this lands. Moving it BLURS that
+            // box synchronously, and the blur's commit closes over the box's PRE-reset text —
+            // canonicalizing a "$1,205.50" into an enqueued write. Focusing first aims that
+            // write at the state the clearing update below then replaces; the other order
+            // lets it land on the cleared form, where a resurrected price reads exactly like
+            // carry-forward and is indistinguishable from it.
+            // Direct, no queue: the type is kept, so the cell being focused is already in the
+            // DOM and React re-renders it (cleared) around the focus without remounting it.
+            focusFirstAmount(form.type)
+            // Carry-forward (spec §5.1): a lot is rarely entered alone — the security, the
+            // account, the type and the day are the SESSION; only the numbers describing
+            // THIS lot are cleared. Functional, so it composes over the blur's write above
+            // rather than racing it. `kept` then says so out loud, because a form that keeps
+            // its values after a save otherwise reads as a save that never happened.
+            setForm((f) => ({ ...f, shares: '', price: '', fees: '', split_factor: '', notes: '' }))
+            setKept(true)
+          } else {
+            // An edit is a one-off correction rather than a session: full reset, create mode
+            // back, cue down.
+            setForm(EMPTY)
+            setEditingId(null)
+            setKept(false)
+          }
+          onChangedRef.current()
+        })
+        .catch((err: unknown) => {
+          setError(err instanceof ApiError ? err.message : 'Save failed')
+        }),
+    )
   }
 
   const remove = (txn: TransactionOut) => {
@@ -470,45 +453,45 @@ export default function TransactionsPanel({
     // busy for the duration (RsuGrantsPanel's posture): without the confirm dialog to
     // absorb it, a double-click would fire a second DELETE on the same id and drop a 404
     // into the error banner beside the success toast.
-    requestStarted()
-    deleteTransaction(txn.id)
-      .then(() => {
-        // The edited row is gone — a stale editingId would PATCH a 404 on the next save
-        // (Task 14 review I3). Reset on SUCCESS only: a failed delete leaves the row.
-        if (txn.id === editingId) {
-          setEditingId(null)
-          setForm(EMPTY)
-        }
-        // The ledger just changed under the cue — whatever entry session it narrated is over.
-        setKept(false)
-        onChangedRef.current()
-        toast.success(`Deleted the ${ticker} ${txn.type}`, {
-          action: {
-            label: 'Undo',
-            onAction: () => {
-              // TransactionOut carries every TransactionCreate field verbatim, split
-              // dummies included (toPayload's convention) — POST accepts them as-is.
-              createTransaction({
-                security_id: txn.security_id,
-                account: txn.account,
-                type: txn.type,
-                txn_date: txn.txn_date,
-                shares: txn.shares,
-                price: txn.price,
-                fees: txn.fees,
-                split_factor: txn.split_factor,
-                notes: txn.notes,
-              })
-                .then(() => onChangedRef.current())
-                .catch(() => toast.error(`Could not restore the ${ticker} ${txn.type}`))
+    void track(() =>
+      deleteTransaction(txn.id)
+        .then(() => {
+          // The edited row is gone — a stale editingId would PATCH a 404 on the next save
+          // (Task 14 review I3). Reset on SUCCESS only: a failed delete leaves the row.
+          if (txn.id === editingId) {
+            setEditingId(null)
+            setForm(EMPTY)
+          }
+          // The ledger just changed under the cue — whatever entry session it narrated is over.
+          setKept(false)
+          onChangedRef.current()
+          toast.success(`Deleted the ${ticker} ${txn.type}`, {
+            action: {
+              label: 'Undo',
+              onAction: () => {
+                // TransactionOut carries every TransactionCreate field verbatim, split
+                // dummies included (toPayload's convention) — POST accepts them as-is.
+                createTransaction({
+                  security_id: txn.security_id,
+                  account: txn.account,
+                  type: txn.type,
+                  txn_date: txn.txn_date,
+                  shares: txn.shares,
+                  price: txn.price,
+                  fees: txn.fees,
+                  split_factor: txn.split_factor,
+                  notes: txn.notes,
+                })
+                  .then(() => onChangedRef.current())
+                  .catch(() => toast.error(`Could not restore the ${ticker} ${txn.type}`))
+              },
             },
-          },
+          })
         })
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Delete failed')
-      })
-      .finally(requestSettled)
+        .catch((err: unknown) => {
+          setError(err instanceof ApiError ? err.message : 'Delete failed')
+        }),
+    )
   }
 
   return (
