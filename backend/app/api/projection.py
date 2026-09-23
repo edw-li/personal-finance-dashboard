@@ -63,12 +63,12 @@ from app.services.limit_check import employer_match
 from app.services.metrics import planning_window
 from app.services.money import quantize_money, quantize_pct
 from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
-from app.services.month_review import load_review_book
 from app.services.net_worth_calc import get_swr_pct, investable_base
 from app.services.paycheck_calc import MONTHS_PER_YEAR, breakdown, half_up2
 from app.services.people import load_people
 from app.services.projection import CENT, first_reaching, project
-from app.services.savings import load_month_savings, payroll_monthly
+from app.services.read_cache import cached_month_savings, cached_review_book
+from app.services.savings import payroll_monthly
 
 router = APIRouter(
     prefix="/projection", tags=["projection"], dependencies=[Depends(get_current_user)]
@@ -317,8 +317,8 @@ async def projection(
     # ONE window for both derivations (spec §3): the last twelve months with spending rows
     # AND take-home. Before this, the spend mean and the savings mean averaged DIFFERENT
     # months — and the spend mean counted a zero-filled month as a month of no spending.
-    savings_rows = await load_month_savings(db)
-    review_book = await load_review_book(db)
+    savings_rows = await cached_month_savings(db)
+    review_book = await cached_review_book(db)
     window, planning_receipt = planning_window(savings_rows, review_book)
     has_cashflow = any(row.net_pay is not None for row in savings_rows)
     has_spending = any(row.has_spending_rows for row in savings_rows)

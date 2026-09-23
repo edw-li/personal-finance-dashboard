@@ -2210,8 +2210,8 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
     # Brokerage legs: average-cost fold, summed per security across accounts.
     sale_details: list[SaleDetail] = []
     if body.sales:
-        securities, txns, latest, _history, _dividends = await load_portfolio(
-            db, with_history=False, with_dividends=False
+        securities, txns, latest, _bars, _dividends = await load_portfolio(
+            db, with_last_two_bars=False, with_dividends=False
         )
         folded = fold_transactions(txns)
         per_sec: dict[int, dict] = {}

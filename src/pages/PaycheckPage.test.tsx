@@ -419,6 +419,10 @@ describe('PaycheckPage — the waterfall', () => {
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)
     expect(await screen.findByText('Employer match +$479.17 per check, not part of your pay.')).toBeTruthy()
     cleanup()
+    // The second render must start cold: the first render's snapshot still carries the $479.17
+    // match and the same net pay, so awaiting '$3,384.16' could resolve on that cached paint
+    // before the fresh answer lands (a load-sensitive flake, 2026-09-23 integration).
+    clearSnapshots()
     // No policy, no line — "+$0.00" would be a deduction-shaped nothing.
     vi.mocked(fetchBreakdown).mockResolvedValue(breakdownOf(profile2026, { employer_match: '0.00' }))
     render(<MemoryRouter initialEntries={['/paycheck?section=summary']}><PaycheckPage /></MemoryRouter>)

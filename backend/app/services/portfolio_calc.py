@@ -5,11 +5,12 @@ the entire strategy, mirroring net_worth_calc. Folding law: (sort_index, id) ord
 txn_date is mostly NULL (Plan 1 forward note) and must never drive order.
 """
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import ColumnElement, select
+from sqlalchemy import ColumnElement, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -33,6 +34,17 @@ PositionKey = tuple[int, str]  # (security_id, portfolio account LABEL)
 # (2026-08-28 spec §4.1), so folding by label IS folding by account identity — and the
 # label is what allocation-by-account and Holding.accounts render. If labels ever become
 # editable, this key must move to portfolio_account_id first.
+
+
+@dataclass(frozen=True, slots=True)
+class PriceBar:
+    """One daily close — all the day change needs (2026-09-23 spec §P1). A plain value, not
+    an ORM row: holdings used to hydrate the whole price_history table to read two of these
+    per security. build_holdings reads only `.close`, so hand-built PriceHistory rows (the
+    unit tests' fixtures) still work there."""
+
+    price_date: date
+    close: Decimal
 
 
 @dataclass
@@ -127,11 +139,14 @@ def build_holdings(
     positions: dict[PositionKey, Position],
     securities_by_id: dict[int, Security],
     latest_by_sec: dict[int, LatestPrice],
-    history_by_sec: dict[int, list[PriceHistory]],
+    last_two_bars_by_sec: Mapping[int, Sequence[PriceBar]],
     dividends: list[DividendPayment],
     today: date,
 ) -> list[Holding]:
-    """One row per security with non-zero folded shares, market-value-desc order."""
+    """One row per security with non-zero folded shares, market-value-desc order.
+
+    `last_two_bars_by_sec` is load_last_two_bars' answer — ascending, so `bars[-2]` is the
+    close before the latest bar, the day change's baseline."""
     div_total: dict[int, Decimal] = {}
     div_flows: dict[int, list[tuple[date, Decimal]]] = {}
     for payment in dividends:
@@ -164,7 +179,7 @@ def build_holdings(
 
         latest = latest_by_sec.get(sec_id)
         price = latest.price if latest is not None else None
-        bars = history_by_sec.get(sec_id, [])
+        bars = last_two_bars_by_sec.get(sec_id, [])
         prev_close = bars[-2].close if len(bars) >= 2 else None
 
         market_value = (
@@ -277,20 +292,49 @@ def allocation(
     )
 
 
+async def load_last_two_bars(db: AsyncSession) -> dict[int, list[PriceBar]]:
+    """The two most recent bars per security, ASCENDING by date, so `bars[-2]` keeps its
+    exact meaning: the close before the latest bar (2026-09-23 spec §P1).
+
+    One LATERAL probe per security walks `uq_price_history_security_id` backwards and stops
+    after two rows — 2 ms on prod's data against 14 ms for a row_number() window, which
+    sorts every bar, and it stays flat as ~21k bars a year accumulate. A security with no
+    bars is absent, exactly as it was absent from the old full-history dict."""
+    last_two = (
+        select(PriceHistory.price_date, PriceHistory.close)
+        .where(PriceHistory.security_id == Security.id)
+        .order_by(PriceHistory.price_date.desc())
+        .limit(2)
+        .lateral("last_two")
+    )
+    rows = await db.execute(
+        select(Security.id, last_two.c.price_date, last_two.c.close)
+        .join(last_two, true())
+        .order_by(Security.id, last_two.c.price_date)
+    )
+    by_security: dict[int, list[PriceBar]] = {}
+    for security_id, price_date, close in rows:
+        by_security.setdefault(security_id, []).append(PriceBar(price_date, close))
+    return by_security
+
+
 async def load_portfolio(
     db: AsyncSession,
     *,
-    with_history: bool = True,
+    with_last_two_bars: bool = True,
     with_dividends: bool = True,
     owner_filter: ColumnElement[bool] | None = None,
 ) -> tuple[
     dict[int, Security],
     list[PositionTransaction],
     dict[int, LatestPrice],
-    dict[int, list[PriceHistory]],
+    dict[int, list[PriceBar]],
     list[DividendPayment],
 ]:
-    """/allocation and /realized skip history+dividends they never read (Task 10 review I1).
+    """/allocation and /realized skip bars+dividends they never read (Task 10 review I1).
+
+    The fourth element is the last TWO bars per security (the day change's inputs), never
+    the full price history — see load_last_two_bars (2026-09-23 spec §P1).
 
     `owner_filter` (portfolio_owner_clause's output) scopes the TRANSACTION and DIVIDEND
     loads by portfolio-account membership, and that is the whole filtering seam: holdings,
@@ -313,15 +357,7 @@ async def load_portfolio(
         ).where(owner_filter)
     txns = list((await db.execute(txn_q)).scalars())
     latest = {p.security_id: p for p in (await db.execute(select(LatestPrice))).scalars()}
-    history: dict[int, list[PriceHistory]] = {}
-    if with_history:
-        rows = (
-            await db.execute(
-                select(PriceHistory).order_by(PriceHistory.security_id, PriceHistory.price_date)
-            )
-        ).scalars()
-        for row in rows:
-            history.setdefault(row.security_id, []).append(row)
+    last_two = await load_last_two_bars(db) if with_last_two_bars else {}
     dividends: list[DividendPayment] = []
     if with_dividends:
         div_q = select(DividendPayment)
@@ -330,4 +366,4 @@ async def load_portfolio(
                 PortfolioAccount, PortfolioAccount.id == DividendPayment.portfolio_account_id
             ).where(owner_filter)
         dividends = list((await db.execute(div_q)).scalars())
-    return securities, txns, latest, history, dividends
+    return securities, txns, latest, last_two, dividends

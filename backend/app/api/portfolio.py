@@ -649,12 +649,12 @@ async def list_dividend_events(db: AsyncSession = Depends(get_db)) -> list[Secur
 
 @router.get("/holdings", response_model=HoldingsOut)
 async def holdings(owner: OwnerQuery = None, db: AsyncSession = Depends(get_db)) -> HoldingsOut:
-    securities, txns, latest, history, dividends = await load_portfolio(
+    securities, txns, latest, last_two, dividends = await load_portfolio(
         db, owner_filter=_owner_filter(owner)
     )
     positions = fold_transactions(txns)
     rows = build_holdings(
-        positions, securities, latest, history, dividends, today=clock.product_today()
+        positions, securities, latest, last_two, dividends, today=clock.product_today()
     )
 
     total_mv = sum((h.market_value for h in rows if h.market_value is not None), Decimal("0"))
@@ -747,8 +747,8 @@ async def allocation_view(
     owner: OwnerQuery = None,
     db: AsyncSession = Depends(get_db),
 ) -> AllocationOut:
-    securities, txns, latest, _history, _dividends = await load_portfolio(
-        db, with_history=False, with_dividends=False, owner_filter=_owner_filter(owner)
+    securities, txns, latest, _bars, _dividends = await load_portfolio(
+        db, with_last_two_bars=False, with_dividends=False, owner_filter=_owner_filter(owner)
     )
     return build_allocation(
         fold_transactions(txns), securities, latest, by, owner, await load_targets(db, by, owner)
@@ -857,7 +857,7 @@ async def employer_exposure(
 
     today = clock.product_today()
     securities, txns, latest, _, _ = await load_portfolio(
-        db, with_history=False, with_dividends=False, owner_filter=_owner_filter(owner)
+        db, with_last_two_bars=False, with_dividends=False, owner_filter=_owner_filter(owner)
     )
     positions = fold_transactions(txns)
     priced = build_allocation(positions, securities, latest, "type", owner)
@@ -926,8 +926,8 @@ async def value_history(db: AsyncSession = Depends(get_db)) -> PortfolioHistoryO
 
 @router.get("/realized", response_model=RealizedOut)
 async def realized(owner: OwnerQuery = None, db: AsyncSession = Depends(get_db)) -> RealizedOut:
-    securities, txns, _latest, _history, _dividends = await load_portfolio(
-        db, with_history=False, with_dividends=False, owner_filter=_owner_filter(owner)
+    securities, txns, _latest, _bars, _dividends = await load_portfolio(
+        db, with_last_two_bars=False, with_dividends=False, owner_filter=_owner_filter(owner)
     )
     positions = fold_transactions(txns)
     per_security: dict[int, Decimal] = {}

@@ -4,10 +4,12 @@ Read-time fingerprints catch ordinary editors, imports, undo and restores alike.
 exclude current quotes and use only the payroll profile effective in the reviewed month.
 """
 
-from dataclasses import dataclass
-from datetime import date
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, fields, replace
+from datetime import date, datetime
+from types import MappingProxyType
 
-from sqlalchemy import select, text
+from sqlalchemy import RowMapping, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -41,13 +43,38 @@ def month_shift(month: date, offset: int) -> date:
     return date(index // 12, index % 12 + 1, 1)
 
 
-@dataclass
+@dataclass(frozen=True)
+class ReviewSnapshot:
+    """A month_reviews row as an immutable value (2026-09-23 spec §P4). A CACHED book is shared
+    between requests, so it must not carry ORM objects bound to the session that loaded them.
+    The attribute names are MonthReview's — every column classify_month and the read paths
+    read — so both read the same either way. The write paths' idempotency columns
+    (last_request_*, last_response) stay out: nothing that reads a cached book uses them."""
+
+    month: date
+    legacy_revision: str | None
+    reviewed_revision: str | None
+    confirmation_revision: str | None
+    balances_reviewed: bool
+    spending_reviewed: bool
+    take_home_reviewed: bool
+    zero_spending_confirmed: bool
+    closed_at: datetime | None
+    closed_by: str | None
+
+
+REVIEW_SNAPSHOT_FIELDS = tuple(field.name for field in fields(ReviewSnapshot))
+
+
+@dataclass(frozen=True)
 class ReviewBook:
     today: date
     adopted_on: date | None
-    months: dict[date, MonthReviewOut]
-    inputs: dict[date, dict]
-    reviews: dict[date, MonthReview]
+    months: Mapping[date, MonthReviewOut]
+    inputs: Mapping[date, dict]
+    # The write paths' uncached book carries the ORM rows they update in place; a cached book
+    # (load_review_book_snapshot) carries frozen snapshots with the same attribute names.
+    reviews: Mapping[date, "MonthReview | ReviewSnapshot"]
 
     @property
     def default_month(self) -> date | None:
@@ -61,7 +88,7 @@ class ReviewBook:
 def classify_month(
     month: date,
     data: dict,
-    review: MonthReview | None,
+    review: "MonthReview | ReviewSnapshot | None",
     *,
     today: date,
     adopted_on: date | None,
@@ -161,33 +188,92 @@ def classify_month(
     )
 
 
+INPUT_MODELS = (
+    NetWorthSnapshot,
+    AccountBalance,
+    MonthlySpending,
+    MonthlyCashflow,
+    Account,
+    SpendingCategory,
+    PaycheckProfile,
+)
+
+
+async def _read_input_tables(db: AsyncSession) -> list[list[RowMapping]]:
+    # Core mappings avoid stale ORM identities after a Core-based undo/restore.
+    return [
+        list((await db.execute(select(model.__table__))).mappings().all()) for model in INPUT_MODELS
+    ]
+
+
 async def load_review_book(
     db: AsyncSession,
     *,
     extra_months: list[date] | None = None,
     today: date | None = None,
 ) -> ReviewBook:
+    """The book for WRITE paths: `reviews` holds the session's MonthReview rows, which the
+    close/review flows update in place. Read paths use read_cache.cached_review_book."""
     today = today or clock.product_today()
-    models = (
-        NetWorthSnapshot,
-        AccountBalance,
-        MonthlySpending,
-        MonthlyCashflow,
-        Account,
-        SpendingCategory,
-        PaycheckProfile,
-    )
-    # Core mappings avoid stale ORM identities after a Core-based undo/restore.
-    snapshots, balances, spending, cashflow, accounts, categories, profiles = [
-        list((await db.execute(select(model.__table__))).mappings().all()) for model in models
-    ]
+    tables = await _read_input_tables(db)
     adoption = (
         await db.execute(select(MonthReviewAdoption).execution_options(populate_existing=True))
     ).scalar_one_or_none()
     review_rows = list(
         (await db.execute(select(MonthReview).execution_options(populate_existing=True))).scalars()
     )
-    reviews = {row.month: row for row in review_rows}
+    return assemble_review_book(
+        today=today,
+        extra_months=extra_months,
+        tables=tables,
+        adopted_on=adoption.adopted_on if adoption else None,
+        reviews={row.month: row for row in review_rows},
+    )
+
+
+async def load_review_book_snapshot(
+    db: AsyncSession,
+    *,
+    extra_months: list[date] | None = None,
+    today: date | None = None,
+) -> ReviewBook:
+    """The same book with nothing bound to `db`'s session (2026-09-23 spec §P4): the review
+    rows arrive as Core rows turned into ReviewSnapshot values and the three mappings are
+    read-only, so the read cache can share one book between requests."""
+    today = today or clock.product_today()
+    tables = await _read_input_tables(db)
+    adopted_on = (
+        await db.execute(select(MonthReviewAdoption.__table__.c.adopted_on))
+    ).scalar_one_or_none()
+    review_columns = [MonthReview.__table__.c[name] for name in REVIEW_SNAPSHOT_FIELDS]
+    rows = (await db.execute(select(*review_columns))).mappings()
+    book = assemble_review_book(
+        today=today,
+        extra_months=extra_months,
+        tables=tables,
+        adopted_on=adopted_on,
+        reviews={row["month"]: ReviewSnapshot(**row) for row in rows},
+    )
+    return replace(
+        book,
+        months=MappingProxyType(dict(book.months)),
+        inputs=MappingProxyType(dict(book.inputs)),
+        reviews=MappingProxyType(dict(book.reviews)),
+    )
+
+
+def assemble_review_book(
+    *,
+    today: date,
+    extra_months: Iterable[date] | None,
+    tables: list[list[RowMapping]],
+    adopted_on: date | None,
+    reviews: Mapping[date, "MonthReview | ReviewSnapshot"],
+) -> ReviewBook:
+    """The pure half of the book: canonical inputs and a review state per month, from rows
+    already read (INPUT_MODELS order). Every first-of-month between the earliest and the
+    latest month of the rows, reviews and extra months is included."""
+    snapshots, balances, spending, cashflow, accounts, categories, profiles = tables
     dates = {row["month"] for table in (snapshots, spending, cashflow) for row in table} | set(
         reviews
     )
@@ -213,11 +299,11 @@ async def load_review_book(
             data,
             reviews.get(month),
             today=today,
-            adopted_on=adoption.adopted_on if adoption else None,
+            adopted_on=adopted_on,
             active_accounts=active_accounts,
             active_categories=active_categories,
         )
-    return ReviewBook(today, adoption.adopted_on if adoption else None, statuses, inputs, reviews)
+    return ReviewBook(today, adopted_on, statuses, inputs, reviews)
 
 
 async def lock_review_inputs(db: AsyncSession) -> None:

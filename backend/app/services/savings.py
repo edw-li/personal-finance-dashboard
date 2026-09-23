@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import Row, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import MonthlyCashflow, MonthlySpending, PaycheckProfile, SpendingCategory
@@ -110,10 +110,11 @@ def payroll_monthly(profile) -> Decimal:
 
 
 def payroll_by_month(
-    profiles: Sequence[PaycheckProfile], months: Sequence[date]
+    profiles: Sequence["PaycheckProfile | Row"], months: Sequence[date]
 ) -> dict[date, Decimal]:
     """Σ over people of the profile in force on the 1st of each month, in cents.
 
+    `profiles` are paycheck_profiles rows — ORM objects or plain rows carrying the columns.
     `months` must be ascending; one sorted walk per person, no queries (the table is
     tiny). NO future-profile fallback — that is `_default_profile`'s rule for TODAY's
     paycheck, and applying it to history would credit a January that predates the job.
@@ -121,7 +122,7 @@ def payroll_by_month(
     rounded to cents BEFORE summing, so a caller echoing per-person rows sums exactly,
     and the month's total is emitted in cents too (the rounding contract above).
     """
-    by_person: dict[int, list[PaycheckProfile]] = {}
+    by_person: dict[int, list[PaycheckProfile | Row]] = {}
     for profile in profiles:
         if profile.pay_periods_per_year < MIN_PAY_PERIODS:
             continue
@@ -130,7 +131,7 @@ def payroll_by_month(
     for history in by_person.values():
         history.sort(key=lambda p: p.effective_date)
         pointer = 0
-        current: PaycheckProfile | None = None
+        current: PaycheckProfile | Row | None = None
         for month in months:
             while pointer < len(history) and history[pointer].effective_date <= month:
                 current = history[pointer]
@@ -245,12 +246,22 @@ def matched_months(rows: Sequence[MonthSavings], limit: int) -> list[MonthSaving
 
 
 async def load_payroll_by_month(db: AsyncSession, months: Sequence[date]) -> dict[date, Decimal]:
-    profiles = list((await db.execute(select(PaycheckProfile))).scalars().all())
+    # Plain rows, never PaycheckProfile objects (2026-09-23 spec §P4, review): an entity
+    # select hands back the session's EXISTING object for a row it already holds — with the
+    # values it was loaded with, even after another writer committed new ones — and the read
+    # cache would then file those stale figures under the fresh fingerprint for every later
+    # request. Selecting the mapped COLUMNS keeps the ORM path (the session still autoflushes
+    # first, as the entity select did) without the identity map; the rows carry the attribute
+    # names payroll_by_month and breakdown read.
+    columns = [getattr(PaycheckProfile, column.key) for column in PaycheckProfile.__table__.columns]
+    profiles = list((await db.execute(select(*columns))).all())
     return payroll_by_month(profiles, months)
 
 
 async def load_month_savings(db: AsyncSession) -> list[MonthSavings]:
-    """Every month with a spending or cashflow row, ascending. Three queries."""
+    """Every month with a spending or cashflow row, ascending. Three queries, all of them
+    column selects: plain rows, never a session's possibly stale identities (see
+    load_payroll_by_month)."""
     kind_rows = (
         await db.execute(
             select(MonthlySpending.month, SpendingCategory.kind, func.sum(MonthlySpending.amount))
@@ -262,7 +273,10 @@ async def load_month_savings(db: AsyncSession) -> list[MonthSavings]:
     for month, kind, total in kind_rows:
         by_kind.setdefault(month, {})[kind] = Decimal(total)
     net_pay = {
-        row.month: row.net_pay for row in (await db.execute(select(MonthlyCashflow))).scalars()
+        month: pay
+        for month, pay in (
+            await db.execute(select(MonthlyCashflow.month, MonthlyCashflow.net_pay))
+        ).all()
     }
     months = sorted(set(by_kind) | set(net_pay))
     return compose_months(months, by_kind, net_pay, await load_payroll_by_month(db, months))

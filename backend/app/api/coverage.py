@@ -20,7 +20,7 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.schemas.coverage import CoverageLatestOut, CoverageOut
 from app.services.coverage import load_coverage
-from app.services.month_review import load_review_book
+from app.services.read_cache import cached_review_book
 
 router = APIRouter(prefix="/coverage", tags=["coverage"], dependencies=[Depends(get_current_user)])
 
@@ -31,7 +31,7 @@ def _latest(months: list[date]) -> date | None:
 
 @router.get("", response_model=CoverageOut)
 async def coverage(db: AsyncSession = Depends(get_db)) -> CoverageOut:
-    reviews = await load_review_book(db)
+    reviews = await cached_review_book(db)
     found = await load_coverage(db, reviews)
     return CoverageOut(
         balances=found.balances,

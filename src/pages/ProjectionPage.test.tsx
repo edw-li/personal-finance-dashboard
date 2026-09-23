@@ -953,12 +953,14 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
     )
     renderPage()
 
-    const charts = await screen.findAllByTestId('echart')
-    // [1] is the investable chart (DOM order is card order).
-    expect(charts[0].getAttribute('data-marks')).toBe('Sep 2026=Alex')
+    // [0] is the investable chart (DOM order is card order). Waited, not read at first mount:
+    // on a loaded machine the chart can mount before its marks (a flake, 2026-09-23 integration).
+    await waitFor(() =>
+      expect(screen.getAllByTestId('echart')[0]?.getAttribute('data-marks')).toBe('Sep 2026=Alex'),
+    )
     // Historical exploration is separate and does not acquire retirement annotations.
     await openTrend()
-    expect(screen.getAllByTestId('echart')[1].getAttribute('data-marks')).toBe('')
+    await waitFor(() => expect(screen.getAllByTestId('echart')[1]?.getAttribute('data-marks')).toBe(''))
   })
 
   it('renders the server refusal verbatim — nothing invented, nothing translated', async () => {

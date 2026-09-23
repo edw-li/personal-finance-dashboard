@@ -1,6 +1,24 @@
 # Quick fixes, speed and chart cleanup (2026-09-23) — design record
 
-**Status:** approved for implementation 2026-09-23. Source: the 2026-09-22 fresh-eyes audit
+**Status:** implemented 2026-09-23 and merged to LOCAL main — not pushed, not deployed (the user's
+steps are under "Process, verification and rollout" §5). Lanes landed ready-first rather than in the
+planned P → B1 → B2 → CS → CT order: B2 @72c789a · B1 @1c6b9153 · CS @60c6235b · CT @32a910f3 ·
+P @dab267a4, with the gates re-run after each merge. Integration commits: 24405c09 (the living-cost
+estimate reads P's cached review book and savings), 6531e8a9 and 3a39ce9e (test hardening). Every
+lane passed a spec review and a code-quality review, with fixes re-reviewed; the execution records are
+`docs/superpowers/plans/2026-09-23-{perf,b1,b2,cs,ct}.md`. Gates on merged main (3a39ce9e): backend
+2177 passed · 4 skipped · 1 failed, the one failure a 30 ms timing test in the untouched assistant
+stream (`test_silent_gap_after_partial_output_stops_without_concatenated_fallback`, passes 7/8 alone);
+ruff clean; `tsc -b` clean; eslint 0 errors (26 warnings, as at baseline); vite build clean; vitest
+3573/3574, the one failure the untouched `CategoriesCard` retire/restore test (5/5 alone). Real data
+(`finance_realdata`): 13 views plus the What-if presets, in both themes at 1600 px (four also at
+1280), with 0 console or page errors; every timed endpoint returns the baseline's bytes except the two changed by design (money
+flow, calendar); warm medians holdings 780 → 25 ms and sparklines 326 → 29 ms (targets ≤ 200 / ≤ 100),
+spending metrics 101 → 13 ms; lane P's same-hour A/B put the Overview's request sequence at −63 %.
+The nginx stage (P2) was verified with a locally built bundle, because `npm ci` inside `docker build`
+fails on this box's network.
+
+Approved for implementation 2026-09-23. Source: the 2026-09-22 fresh-eyes audit
 (`scratchpad/audit-2026-09-22/`, gitignored; `00-SUMMARY.md` + eleven area reports). The user chose,
 verbatim: *"The quick bug fixes (#12), the first four speed fixes (#2) and the chart cleanup (#10).
 We'll keep things on the same prod instance for now. Be thorough … correct both in the typical case as
@@ -269,15 +287,17 @@ import confirm says "This cannot be undone" (`SettingsPage.tsx:256-260`).
 - Frontend: Restore card's stored-snapshot select gets an optgroup **"Restore points (saved before a
   restore or import)"** with local-time labels; Backups & snapshots lists restore points (download +
   Restore…) under their own heading. After an import or restore completes, the success toast names the
-  restore point with an action **"Undo"** that pre-selects it in the Restore card (the user still
-  confirms the dry-run/restore — no silent writes). Copy fixes: the import confirm says "A restore
+  restore point with an action **"Roll back…"** that pre-selects it in the Restore card (the user still
+  confirms the dry-run/restore — no silent writes). *(Amended at implementation, review M8: this
+  record first called the action "Undo", but the app's other Undo toasts reverse at once, and this
+  one only opens the Restore card pre-selected, so the label says what it does.)* Copy fixes: the import confirm says "A restore
   point of your current data is saved first — you can roll back from Settings › Data › Restore"; the
   two cards' promises now point at a real control. Snapshot rows show the local date/time as the label
   and keep the UTC filename as secondary text.
 
 **Acceptance.** API tests: listing (grammar filtering, symlink ignored, foreign names ignored,
 restorable flag), download (both kinds, traversal names 404), restore-from-restore-point dry-run and
-apply (restores bytes read before rotation). UI tests for the optgroup, the Undo action preselecting,
+apply (restores bytes read before rotation). UI tests for the optgroup, the Roll back… action preselecting,
 and the corrected copy. Verified end-to-end on a **scratch copy** of `finance_realdata` (never the
 shared real-data DB): import → restore point listed → restore it → data back to the pre-import state.
 

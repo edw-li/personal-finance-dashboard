@@ -391,6 +391,8 @@ the backend container's IP within ~10 s of a backend-only redeploy (the `resolve
 variable `proxy_pass` in `nginx.conf`) — if API calls ever 502 after a redeploy anyway,
 `docker compose -f docker-compose.prod.yml restart frontend` clears it.
 
+Compression (gzip, with the static assets precompressed at image build) and HTTP/2 live in the frontend image (`nginx.conf`, `Dockerfile`), so they arrive with the next frontend rebuild — the `--build` above — and need nothing on the box.
+
 ### 4.2 Scheduler & settings
 
 All three settings in **/settings** take effect without a restart. `price_refresh_cron`

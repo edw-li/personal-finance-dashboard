@@ -35,13 +35,12 @@ from app.schemas.spending import (
 from app.services import clock
 from app.services.budgets import MIN_SEED_MONTHS, load_suggestions, resolve_budgets
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
-from app.services.metrics import average_evidence, category_comparison
+from app.services.metrics import average_evidence, category_amounts, category_comparison
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     quantize_money,
     require_first_of_month,
 )
-from app.services.month_review import load_review_book
 from app.services.month_writes import write_spending
 from app.services.net_worth_calc import get_swr_pct, investable_bases
 from app.services.ordering import (
@@ -52,11 +51,11 @@ from app.services.ordering import (
     next_sort_order,
     order_lock,
 )
+from app.services.read_cache import cached_month_savings, cached_review_book
 from app.services.savings import (
     LIVING,
     MonthSavings,
     compose_months,
-    load_month_savings,
     load_payroll_by_month,
     rollup,
 )
@@ -482,11 +481,12 @@ async def matrix(
             values[i] for values in budgets_by_category.values() if values[i] is not None
         ]
         total_budget.append(sum(month_budgets, Decimal("0.00")) if month_budgets else None)
-    review_book = await load_review_book(db)
-    full_history = await load_month_savings(db)
+    review_book = await cached_review_book(db)
+    full_history = await cached_month_savings(db)
     comparisons = [average_evidence(full_history, review_book, month) for month in months]
+    amounts = category_amounts(review_book)  # indexed once, read ~19 × 39 × 12 times (§P4)
     category_averages = {
-        c.id: [category_comparison(review_book, c.id, month) for month in months]
+        c.id: [category_comparison(review_book, c.id, month, amounts) for month in months]
         for c in categories
     }
     return MatrixOut(
