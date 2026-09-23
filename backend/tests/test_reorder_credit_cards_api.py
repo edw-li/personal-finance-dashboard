@@ -102,6 +102,8 @@ async def test_an_unchanged_card_order_writes_nothing(auth_client, db):
     with flushed_updates(db, CreditCard) as written:
         resp = await auth_client.put(CARD_ORDER, json={"ids": current})
     assert resp.status_code == 200, resp.text
+    # Nothing was even SET: a set attribute is dirty until a flush, and no flush may come.
+    assert not db.dirty
     assert [c["sort_order"] for c in resp.json()] == [0, 0, 0]  # not normalized
     assert written == set()
 
@@ -185,12 +187,25 @@ async def test_reward_category_reorder_renumbers_and_matches_the_get(auth_client
 
 
 async def test_an_unchanged_reward_category_order_writes_nothing(auth_client, db):
-    ids = await seed_reward_categories(db)
-    current = [ids["Dining"], ids["Groceries"], ids["Travel"]]
+    # A gap and a tie, as the old per-row PATCH chain could leave them: normalized values
+    # would make a renumbered answer indistinguishable from an echo.
+    rows = [
+        RewardCategory(name="Dining", slug="dining", sort_order=2),
+        RewardCategory(name="Groceries", slug="groceries", sort_order=7),
+        RewardCategory(name="Travel", slug="travel", sort_order=7, is_active=False),
+    ]
+    db.add_all(rows)
+    await db.commit()
+    current = [row.id for row in rows]  # (sort_order, id) order: 2, then the tie by id
     with flushed_updates(db, RewardCategory) as written:
         resp = await auth_client.put(CATEGORY_ORDER, json={"ids": current})
     assert resp.status_code == 200, resp.text
-    assert [c["id"] for c in resp.json()] == current
+    # Nothing was even SET: a set attribute is dirty until a flush, and no flush may come.
+    assert not db.dirty
+    # The stored numbers come back as they were (decision 10), not renumbered 0, 1, 2.
+    assert [(c["id"], c["sort_order"]) for c in resp.json()] == list(
+        zip(current, [2, 7, 7], strict=True)
+    )
     assert written == set()
 
 

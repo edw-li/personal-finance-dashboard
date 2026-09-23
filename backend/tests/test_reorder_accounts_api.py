@@ -72,6 +72,8 @@ async def test_an_unchanged_order_writes_and_logs_nothing(auth_client, db):
     with flushed_updates(db, Account) as written:
         resp = await auth_client.put(ORDER, json={"ids": current})
     assert resp.status_code == 200, resp.text
+    # Nothing was even SET: a set attribute is dirty until a flush, and no flush may come.
+    assert not db.dirty
     # Not even normalized: the tie and the gaps stay until something actually moves.
     assert [(a["id"], a["sort_order"]) for a in resp.json()] == [
         (ids["Checking"], 3),

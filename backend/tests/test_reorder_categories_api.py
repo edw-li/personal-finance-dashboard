@@ -61,6 +61,8 @@ async def test_an_unchanged_order_writes_and_logs_nothing(auth_client, db):
     with flushed_updates(db, SpendingCategory) as written:
         resp = await auth_client.put(ORDER, json={"ids": current})
     assert resp.status_code == 200, resp.text
+    # Nothing was even SET: a set attribute is dirty until a flush, and no flush may come.
+    assert not db.dirty
     assert [c["sort_order"] for c in resp.json()] == [2, 3, 7, 20]
     assert "x-change-batch" not in resp.headers
     assert written == set()

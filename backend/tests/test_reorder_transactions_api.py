@@ -185,6 +185,8 @@ async def test_an_unchanged_order_writes_nothing(auth_client, db):
     with flushed_updates(db, PositionTransaction) as written:
         resp = await auth_client.put(ORDER, json={"ids": ids})
     assert resp.status_code == 200, resp.text
+    # Nothing was even SET: a set attribute is dirty until a flush, and no flush may come.
+    assert not db.dirty
     assert resp.json()["changed_positions"] == []
     assert [t["sort_index"] for t in resp.json()["transactions"]] == [3, 9]  # not respaced
     assert written == set()
