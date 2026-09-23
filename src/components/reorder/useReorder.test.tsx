@@ -117,6 +117,13 @@ const order = () =>
   [...document.querySelectorAll('[data-reorder-id]')].map((element) => element.getAttribute('data-reorder-id'))
 const live = () => document.querySelector('[aria-live="assertive"]')?.textContent ?? ''
 
+function reduceMotion() {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  )
+}
+
 beforeAll(() => installPointerEvents())
 
 beforeEach(() => {
@@ -313,5 +320,199 @@ describe('useReorder — keyboard', () => {
       vi.advanceTimersByTime(MOTION_MS.flash)
     })
     expect(row('B').hasAttribute('data-reorder-saved')).toBe(false)
+  })
+})
+
+describe('useReorder — pointer', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  it('a press that travels under 4px is a click: no lift, no commit', () => {
+    const onCommit = vi.fn()
+    render(<Stateful initial={flat('A', 'B', 'C', 'D')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 223 })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 223 })
+    expect(live()).toBe('')
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(row('A').hasAttribute('data-reorder')).toBe(false)
+  })
+
+  it('drags: the unit follows the pointer, peers make room, the drop eases in and commits once', () => {
+    const onCommit = vi.fn()
+    render(<Stateful initial={flat('A', 'B', 'C', 'D')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 230 })
+    expect(live()).toBe('Picked up Alpha. Position 1 of 4.')
+    expect(document.documentElement.classList.contains('reorder-active')).toBe(true)
+    expect(row('A').getAttribute('data-reorder')).toBe('lifted')
+    expect(row('A').hasAttribute('data-reorder-mode')).toBe(false)
+    expect(row('B').getAttribute('data-reorder')).toBe('shifting')
+    expect(screen.getByTestId('active').textContent).toBe('true')
+
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    expect(row('A').style.transform).toBe('translateY(85px)')
+    expect(row('B').style.transform).toBe('translateY(-40px)')
+    expect(row('C').style.transform).toBe('translateY(-40px)')
+    expect(row('D').style.transform).toBe('')
+    expect(live()).toBe('Alpha, position 3 of 4.')
+
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    expect(row('A').style.transform).toBe('translateY(80px)') // easing into its gap
+    expect(onCommit).not.toHaveBeenCalled()
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(onCommit).toHaveBeenCalledTimes(1)
+    expect(onCommit).toHaveBeenCalledWith(['B', 'C', 'A', 'D'], 'A')
+    expect(order()).toEqual(['B', 'C', 'A', 'D'])
+    expect(row('A').style.transform).toBe('')
+    expect(row('B').hasAttribute('data-reorder')).toBe(false)
+    expect(document.documentElement.classList.contains('reorder-active')).toBe(false)
+    expect(live()).toBe('Dropped Alpha at position 3 of 4.')
+  })
+
+  it('clamps the unit to the list', () => {
+    render(<Stateful initial={flat('A', 'B', 'C', 'D')} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Bravo'), { pointerId: 1, button: 0, clientY: 260 })
+    fireEvent.pointerMove(grip('Bravo'), { pointerId: 1, clientY: 900 })
+    expect(row('B').style.transform).toBe('translateY(80px)')
+    expect(live()).toBe('Bravo, position 4 of 4.')
+    fireEvent.pointerMove(grip('Bravo'), { pointerId: 1, clientY: -400 })
+    expect(row('B').style.transform).toBe('translateY(-40px)')
+    expect(live()).toBe('Bravo, position 1 of 4.')
+  })
+
+  it('a drop where it started eases home and commits nothing', () => {
+    const onCommit = vi.fn()
+    render(<Stateful initial={flat('A', 'B', 'C')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Bravo'), { pointerId: 1, button: 0, clientY: 260 })
+    fireEvent.pointerMove(grip('Bravo'), { pointerId: 1, clientY: 270 })
+    fireEvent.pointerMove(grip('Bravo'), { pointerId: 1, clientY: 262 })
+    fireEvent.pointerUp(grip('Bravo'), { pointerId: 1, clientY: 262 })
+    expect(live()).toBe('Dropped Bravo where it was.')
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(row('B').hasAttribute('data-reorder')).toBe(false)
+  })
+
+  it('pointercancel and Escape abandon the drag; a second pointer is ignored', () => {
+    const onCommit = vi.fn()
+    render(<Stateful initial={flat('A', 'B', 'C')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 290 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 2, clientY: 220 })
+    expect(row('A').style.transform).toBe('translateY(70px)')
+    fireEvent.pointerCancel(grip('Alpha'), { pointerId: 1 })
+    expect(live()).toBe('Cancelled. Alpha is back at position 1 of 3.')
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 290 })
+    fireEvent.keyDown(grip('Alpha'), { key: 'Escape' })
+    expect(live()).toBe('Cancelled. Alpha is back at position 1 of 3.')
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 290 })
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(order()).toEqual(['A', 'B', 'C'])
+  })
+
+  // Spec §2.6 names window blur among the cancels to pin; a resize and a capture lost with no up
+  // (the OS took the pointer) share its path.
+  it('a window blur, a resize or a lost capture abandons the drag', () => {
+    const onCommit = vi.fn()
+    render(<Stateful initial={flat('A', 'B', 'C')} onCommit={onCommit} />)
+    layoutRows()
+    const abandons: (() => void)[] = [
+      () => act(() => {
+        window.dispatchEvent(new FocusEvent('blur'))
+      }),
+      () => act(() => {
+        window.dispatchEvent(new Event('resize'))
+      }),
+      () => fireEvent.lostPointerCapture(grip('Alpha'), { pointerId: 1 }),
+    ]
+    for (const abandon of abandons) {
+      fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+      fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 290 })
+      expect(live()).toBe('Alpha, position 2 of 3.')
+      abandon()
+      expect(live()).toBe('Cancelled. Alpha is back at position 1 of 3.')
+      act(() => {
+        vi.advanceTimersByTime(MOTION_MS.fast)
+      })
+      expect(row('A').hasAttribute('data-reorder')).toBe(false)
+      expect(document.documentElement.classList.contains('reorder-active')).toBe(false)
+    }
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(order()).toEqual(['A', 'B', 'C'])
+  })
+
+  it('a secondary button never starts a drag', () => {
+    render(<Stateful initial={flat('A', 'B')} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 2, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 300 })
+    expect(live()).toBe('')
+  })
+
+  it('unmounting mid-drag leaves no cursor class behind', () => {
+    const { unmount } = render(<Stateful initial={flat('A', 'B')} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 250 })
+    expect(document.documentElement.classList.contains('reorder-active')).toBe(true)
+    unmount()
+    expect(document.documentElement.classList.contains('reorder-active')).toBe(false)
+  })
+})
+
+describe('useReorder — reduced motion (spec §2.5)', () => {
+  it('keyboard: peers never move, a drop line marks the landing edge, the drop commits at once', () => {
+    reduceMotion()
+    const onCommit = vi.fn()
+    render(<Stateful initial={flat('A', 'B', 'C', 'D')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.keyDown(grip('Alpha'), { key: ' ' })
+    expect(row('B').hasAttribute('data-reorder')).toBe(false)
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    expect(row('A').style.transform).toBe('')
+    expect(row('B').style.transform).toBe('')
+    expect(row('C').getAttribute('data-reorder-drop')).toBe('after')
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowUp' })
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowUp' })
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowUp' })
+    expect(row('C').hasAttribute('data-reorder-drop')).toBe(false)
+    fireEvent.keyDown(grip('Alpha'), { key: 'End' })
+    fireEvent.keyDown(grip('Alpha'), { key: ' ' })
+    expect(onCommit).toHaveBeenCalledWith(['B', 'C', 'D', 'A'], 'A')
+    expect(row('D').hasAttribute('data-reorder-drop')).toBe(false)
+  })
+
+  it('pointer: the unit still follows the pointer; the line marks a move upward on the top edge', () => {
+    reduceMotion()
+    const onCommit = vi.fn()
+    render(<Stateful initial={flat('A', 'B', 'C', 'D')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Delta'), { pointerId: 1, button: 0, clientY: 340 })
+    fireEvent.pointerMove(grip('Delta'), { pointerId: 1, clientY: 255 })
+    expect(row('D').style.transform).toBe('translateY(-85px)')
+    expect(row('B').style.transform).toBe('')
+    expect(row('B').getAttribute('data-reorder-drop')).toBe('before')
+    fireEvent.pointerUp(grip('Delta'), { pointerId: 1, clientY: 255 })
+    expect(onCommit).toHaveBeenCalledWith(['A', 'D', 'B', 'C'], 'D')
   })
 })
