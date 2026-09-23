@@ -796,6 +796,7 @@ export default function PortfolioPage() {
                       transactions={transactions}
                       accounts={accountLabels}
                       primaryName={primaryName}
+                      owner={owner}
                       onChanged={reload}
                     />
                   </div>
