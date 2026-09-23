@@ -488,6 +488,73 @@ async def test_savings_with_pending_changes_bypass_the_cache(db):
     await db.rollback()
 
 
+# --- a session's stale ORM identities never reach a shared value (review of §P4) ---
+
+
+async def test_a_held_cashflow_identity_never_poisons_the_shared_savings(db, engine):
+    """The matrix's own order: it ORM-loads monthly_cashflow, awaits other reads, then asks
+    for the cached savings. If another writer commits in between, an ENTITY select inside
+    the savings loader hands back the session's existing object with its OLD net pay — and
+    the cache would file that under the NEW fingerprint for every later request."""
+    await seed(db)
+    held = list((await db.execute(select(MonthlyCashflow))).scalars())  # identities stay mapped
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as writer:
+        await writer.execute(
+            update(MonthlyCashflow).where(MonthlyCashflow.month == LATEST).values(net_pay=D("2000"))
+        )
+        await writer.commit()
+    await read_cache.cached_month_savings(db)  # a miss under the new fingerprint
+    assert held
+    async with sessions() as next_request:
+        served = await read_cache.cached_month_savings(next_request)
+        truth = await load_month_savings(next_request)
+    assert {row.month: row.net_pay for row in served}[LATEST] == D("2000.00")
+    assert served == truth
+
+
+async def test_a_held_profile_identity_never_poisons_the_shared_savings(db, engine):
+    """The same through the payroll read (load_payroll_by_month)."""
+    await seed(db)
+    held = list((await db.execute(select(PaycheckProfile))).scalars())
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as writer:
+        await writer.execute(update(PaycheckProfile).values(trad_401k_pct=D("0.2")))
+        await writer.commit()
+    await read_cache.cached_month_savings(db)
+    assert held
+    async with sessions() as next_request:
+        served = await read_cache.cached_month_savings(next_request)
+        truth = await load_month_savings(next_request)
+    assert served == truth
+
+
+async def test_held_identities_never_poison_the_shared_book(db, engine):
+    """The book's snapshot loader reads Core rows only, so it is immune by construction; this
+    pins it (an entity select there would reintroduce the savings bug above)."""
+    await seed(db)
+    held = [
+        *(await db.execute(select(MonthlyCashflow))).scalars(),
+        *(await db.execute(select(MonthReview))).scalars(),
+        *(await db.execute(select(MonthReviewAdoption))).scalars(),
+    ]
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as writer:
+        await writer.execute(
+            update(MonthlyCashflow).where(MonthlyCashflow.month == LATEST).values(net_pay=D("2000"))
+        )
+        await writer.execute(update(MonthReview).values(closed_by="another writer"))
+        await writer.execute(update(MonthReviewAdoption).values(adopted_on=date(2026, 8, 20)))
+        await writer.commit()
+    await read_cache.cached_review_book(db)
+    assert held
+    async with sessions() as next_request:
+        served = await read_cache.cached_review_book(next_request)
+        assert_same_book(served, await load_review_book(next_request))
+    assert served.adopted_on == date(2026, 8, 20)
+    assert {r.closed_by for r in served.reviews.values()} == {"another writer"}
+
+
 # --- read paths read through the cache; write paths never do ---
 
 API = "/api/v1"
