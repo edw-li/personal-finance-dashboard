@@ -43,8 +43,13 @@ function message(err: unknown, fallback: string): string {
  * toasts and the applied report names the restore point. Restore points — the pre-restore and
  * pre-import copies the server keeps — are offered in their own group (2026-09-23 spec §B3),
  * and a success toast's Undo pre-selects the one just saved; it never restores by itself.
+ * `onApplied` tells the page an apply wrote a restore point; `revision` is the page telling this
+ * card the volume changed (its own apply, or an import), which reads both lists again.
  */
-export default function RestoreCard() {
+export default function RestoreCard({
+  revision = 0,
+  onApplied,
+}: { revision?: number; onApplied?: () => void } = {}) {
   const [stored, setStored] = useState<StoredLists | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [source, setSource] = useState<Source | null>(null)
@@ -85,6 +90,15 @@ export default function RestoreCard() {
     load()
     // once: `load` is stable (house idiom, memoized above)
   }, [load])
+
+  // A restore point written since the mount load (spec §B3): read the volume again. The
+  // revision the card mounted with was that first reading, so it is not fetched twice.
+  const readRevision = useRef(revision)
+  useEffect(() => {
+    if (revision === readRevision.current) return
+    readRevision.current = revision
+    load()
+  }, [revision, load])
 
   // A report describes exactly ONE source. Any change of selection drops it and the arm.
   const pick = (next: Source | null) => {
@@ -146,6 +160,8 @@ export default function RestoreCard() {
         if (seq !== runSeqRef.current) return
         setReported({ source: target, report: result })
         if (result.applied) {
+          // The apply saved a restore point first: every list of the volume on the page is stale.
+          onApplied?.()
           setArmText('')
           // Focus is moved in the effect below, once the applied report is on the page.
           focusReportRef.current = true

@@ -722,13 +722,7 @@ describe('SettingsPage — xlsx import', () => {
     pick(xlsx())
     fireEvent.click(dryButton())
     await waitFor(() => expect(applyButton().disabled).toBe(false))
-    fireEvent.click(applyButton())
-    expect(
-      await screen.findByText(/^Workbook imported\. The data it replaced is saved as a restore point \(/),
-    ).toBeTruthy()
-    // The applied report names the file too, in the Restore report's own words.
-    expect(screen.getByText(`Restore point written: ${point}`)).toBeTruthy()
-    // The new point is only on the server until the Restore card looks again.
+    // From the moment the apply returns, the point is on the volume: every later read lists it.
     vi.mocked(fetchRestorePoints).mockResolvedValue([
       {
         name: point,
@@ -739,6 +733,16 @@ describe('SettingsPage — xlsx import', () => {
         kind: 'restore_point',
       },
     ])
+    fireEvent.click(applyButton())
+    expect(
+      await screen.findByText(/^Workbook imported\. The data it replaced is saved as a restore point \(/),
+    ).toBeTruthy()
+    // The applied report names the file too, in the Restore report's own words.
+    expect(screen.getByText(`Restore point written: ${point}`)).toBeTruthy()
+    // The Backups card lists the new point without a reload: the page told both cards the
+    // volume changed when the apply settled.
+    const backups = document.getElementById('backups') as HTMLElement
+    expect(await within(backups).findByText(point)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
     await waitFor(() =>
       expect((screen.getByLabelText('Stored snapshot') as HTMLSelectElement).value).toBe(point),

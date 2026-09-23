@@ -69,8 +69,10 @@ function EntryRow({
  * 2026-09-23 (spec §B3) the restore points every restore and import saves first are listed
  * too, under their own heading, and every stored file can be downloaded. The host's encrypted
  * dump stays described on the System card; this card is about what the app itself can read back.
+ * `revision` is the page's word that a restore or an import has just written a restore point:
+ * each change reads the volume again, so the new point is listed without a reload.
  */
-export default function BackupsCard() {
+export default function BackupsCard({ revision = 0 }: { revision?: number } = {}) {
   const [snapshots, setSnapshots] = useState<SnapshotEntry[] | null>(null)
   const [points, setPoints] = useState<SnapshotEntry[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -108,6 +110,16 @@ export default function BackupsCard() {
     load(true)
     // mount-only (house idiom)
   }, [])
+
+  // The mount load above is the first reading, so the revision it mounted with is not fetched
+  // twice; every later one is a restore point written elsewhere on the page (spec §B3).
+  const readRevision = useRef(revision)
+  useEffect(() => {
+    if (revision === readRevision.current) return
+    readRevision.current = revision
+    load()
+    // `load` is a plain function over stable setters (house idiom): the revision is the trigger.
+  }, [revision])
 
   const snapshotNow = () => {
     setBusy('snapshot')

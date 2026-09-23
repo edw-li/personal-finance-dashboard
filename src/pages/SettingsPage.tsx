@@ -63,6 +63,11 @@ export default function SettingsPage() {
   const seqRef = useRef(0)
   const toast = useToast()
   const navigate = useNavigate()
+  // Bumped whenever an apply may have written a restore point (2026-09-23 spec §B3): the Backups
+  // and Restore cards each hold their own reading of the volume, and both are stale the moment an
+  // import or a restore writes one. The cards re-read on every change.
+  const [storedRevision, setStoredRevision] = useState(0)
+  const storedChanged = () => setStoredRevision((revision) => revision + 1)
 
   // Warm a task's data on tab hover or focus (2026-09-13 spec §9), so the click lands on filled
   // cards. Delegated NATIVE listeners on the page root, not props on the tabs: the strip is the
@@ -261,7 +266,11 @@ export default function SettingsPage() {
         // A failed dry run wrote nothing, so the report before it is still true and stays.
         if (!dryRun) setReport(null)
       })
-      .finally(() => setImportBusy(null))
+      .finally(() => {
+        setImportBusy(null)
+        // An apply saves a restore point before its first write — even one that then fails.
+        if (!dryRun) storedChanged()
+      })
   }
 
   const applyImport = () => {
@@ -457,8 +466,8 @@ export default function SettingsPage() {
                   </p>
                 )}
               </section>
-<BackupsCard />
-<RestoreCard />
+<BackupsCard revision={storedRevision} />
+<RestoreCard revision={storedRevision} onApplied={storedChanged} />
 <HealthCard />
 <SystemCard />
 <ActivityCard /></>}

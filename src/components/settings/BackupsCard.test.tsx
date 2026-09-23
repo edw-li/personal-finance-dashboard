@@ -124,6 +124,25 @@ describe('BackupsCard', () => {
     await waitFor(() => expect(downloadStoredSnapshot).toHaveBeenCalledWith(POINT.name))
   })
 
+  it('reads the volume again when the page says a restore point was written', async () => {
+    const view = mount()
+    await screen.findByText(
+      'No restore points yet — one is saved automatically before every restore or import.',
+    )
+    // An import or a restore elsewhere on the page just wrote one.
+    vi.mocked(fetchRestorePoints).mockResolvedValue([POINT])
+    view.rerender(
+      <MemoryRouter>
+        <ToastProvider>
+          <BackupsCard revision={1} />
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText(POINT.name)).toBeTruthy()
+    expect(fetchRestorePoints).toHaveBeenCalledTimes(2)
+    expect(fetchSnapshots).toHaveBeenCalledTimes(2)
+  })
+
   it('says when no restore point exists yet, and what makes one', async () => {
     mount()
     expect(
