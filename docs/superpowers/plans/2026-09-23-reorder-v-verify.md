@@ -3581,6 +3581,23 @@ round, which was merged in (base @adabce05 → 1af542a3) before Task 6's passes.
      shots, at most 1px apart (a ghost-free median-contrast detector that finds the ledger's faint
      `--surface-2` lines too); and no cell with a top border. Validated offline on all 20 saved
      pairs (equal line counts, 0 mismatches) before the light re-run.
+- **The lanes' later changes, and where each is proven:**
+  - R0 leading-edge slot rule, range-end auto-scroll stop, one hairline inside a lifted unit —
+    browser-proven here (every drag lands its computed slot; both boxes stop at the range end;
+    the carry frame's single hairlines). "Cancelled — the list changed." and the drop committed on
+    unmount during the 120ms settle need data landing mid-drag or a popover closing mid-settle —
+    left to R0's and R4's hook tests.
+  - R2 one `<tbody>` per group with `scope="rowgroup"` headings — checked in accounts-rest; grips
+    parked until reloads land — every step waits them out (`waitIdle`, `ready`).
+  - R3 `reloading` — what made `ready()` necessary (fix 3); the owner-scope-tagged layers — the
+    person-scope PUT carries `?owner=2` and the hidden rows keep their slots; a scope SWITCH under a
+    save is R3's unit tests.
+  - R5 colours among ACTIVE cards and the drill-in — the drill-in check (fix 4); all seven cards on
+    this book are active, so "active" vs "all" cannot be told apart here (R5's unit tests); the page
+    load-sequence guard is a race, likewise unit-tested.
+  - R6 one Undo-failure sentence, 4xx verbatim — the overlap refusal shows the change log's own
+    sentence verbatim (activity-overlap); the non-4xx "Couldn't undo the move — {reason}." wording
+    needs a forced 5xx — R6's 503 tests.
 - **Findings for the controller** (none blocks the landing — every hard check is green):
   1. **R0 — moderate (reduced motion only): the drop line hides under the row in hand.** Under
      reduced motion peers never move, so the lifted row (opaque `--surface-2`, `z-index: 2`)
@@ -3664,7 +3681,7 @@ round, which was merged in (base @adabce05 → 1af542a3) before Task 6's passes.
   /paycheck/preview` and `POST /taxes/what-if`, answered from memory by the probe's fence (by
   design; nothing persisted).
 
-### Phase B — on the integration tip (`feat/reorder-base` @ …, main @ …)
+### Phase B — on the landing tip (`feat/reorder-verify` @3d44ae65, which contains `feat/reorder-base` @adabce05 and main @923a633e)
 
 - Preflight (Task 9): no fast-forward — per the controller, main's completed quick-fixes batch was
   already merged into the base (5a701d9d) before the lane was cut, and `git merge feat/reorder-base`
@@ -3672,27 +3689,85 @@ round, which was merged in (base @adabce05 → 1af542a3) before Task 6's passes.
   `main` = 923a633e (unchanged), an ancestor of the tip ("main is inside the tip"), the base
   (adabce05) inside the tip too; none of the five quick-fixes worktrees listed; `alembic heads` =
   `f12026092301 (head)` alone.
-- Backend (Task 10): ruff …; pytest `… passed, … skipped in …` — exit …; flakes re-run alone: …
-- Migration drill (Task 11): upgrade …; backfill `…`; index …; duplicate refused …; downgrade …; upgrade …; `alembic check` …
-- Frontend (Task 12): vitest … files / … tests — exit …; flakes re-run alone: …; `tsc -b` …; no-cache tsc …/…; `eslint .` … (… warnings, none in a file this batch touched); build …
-- Probes (Task 13): reorder dark …; reorder light …; guide …; pace …; charts (credit-cards) …
-- Deviations from this plan, each with its reason: none / …
+- Backend (Task 10), servers stopped for the run: ruff `All checks passed!` and `287 files already
+  formatted` (exit 0); pytest on `finance_test_reorder_v`: `2327 passed, 4 skipped, 1 warning in
+  1334.77s (0:22:14)` — exit 0; no failure, so no flake to re-run (the known
+  `test_assistant_evidence.py` timing tests passed). The 4 skips are Windows platform limits, named
+  by a `-rs` re-run of their files (56 passed, 4 skipped): `test_restore_points.py:128` and
+  `test_snapshot_store.py:160` (no symlink privilege), `test_restore_points.py:144` (FIFOs are
+  POSIX-only), `test_restore_points.py:188` (cannot unlink an open file). The warning is a
+  pre-existing `SyntaxWarning` (an unescaped `\d` in a docstring, `test_restore_points.py:531`).
+  For scale: R1 saw 2118 passed, 1 skipped; the tip adds R2–R6 and the quick-fixes batch.
+- Migration drill (Task 11) on `finance_test_reorder_v_mig` (a `pg_dump | psql` copy of
+  `finance_realdata`, head `f12026091203`): `Running upgrade f12026091203 -> f12026092301`; backfill
+  `26|26|13|13`; `CREATE UNIQUE INDEX ux_position_txn_import_key ON public.position_transactions
+  USING btree (import_key) WHERE ((source)::text = 'import'::text)`; the duplicate refused
+  (`duplicate key value violates unique constraint "ux_position_txn_import_key"`, exit 1, still 39
+  rows); `Running downgrade f12026092301 -> f12026091203` with the column gone (`0`); upgrade again,
+  backfill `26|26|13|13`; `alembic check` — `No new upgrade operations detected.` (exit 0). The
+  database is left for the morning list.
+- Frontend (Task 12), sequential, nothing else running: `npx vitest run --maxWorkers=2` —
+  **267 files / 3869 tests passed**, exit 0 (289s); no failure, so no flake to re-run (neither
+  known flake nor the `TransactionsPanel entry session` test tripped). `tsc -b` exit 0; no-cache
+  `tsc -p tsconfig.app.json` 0 / `tsc -p tsconfig.node.json` 0. `eslint .` exit 0 — 0 errors,
+  26 warnings, all `react-refresh/only-export-components`, exactly the plan's baseline of 26
+  (`CategoriesPanel.tsx`'s `SEED_CATEGORIES` among them); no new one. `npm run build` exit 0; it
+  prints the chunk-size advisory for the lazy echarts chunk (`tooltip-*.js` 763.29 kB against the
+  760 kB `chunkSizeWarningLimit`) — NOT new: main @923a633e prints the same (763.30 kB, measured by
+  building main's frontend from `git archive main` in this lane's gitignored scratchpad). The
+  quick-fixes batch crossed the limit; this batch adds nothing to that chunk.
+- Probes (Task 13), servers restarted from the tip (uvicorn and vite; proxy head `f12026092301`),
+  a fresh copy per theme:
+  - reorder dark: `checks: 604 ok, 0 failed, 70 noted; page writes 72 (blocked 0); logged reorders
+    24, undos 14` — `REORDER SMOKE OK — dark: 604 checks`, exit 0, 6m53s; reorder light: the same
+    shape — `REORDER SMOKE OK — light: 604 checks`, exit 0, 7m24s. Both identical in every figure to
+    the Phase A light run (resting looks, JUDGE geometry, the drill-in colour: dark #008300, light
+    #1f7a1f); 51 page loads each, page CLS ≤ 0.002.
+  - guide: `GUIDE SMOKE OK — 162 link visits, 24 checks, 8 writes blocked`, exit 0; rows 196 / 196
+    (content 196), cards 28 / 28, 162/162 links, 0 console errors.
+  - pace (informational): exit 1 — its `settings`, `rows` and `rail` steps are stale, not this batch:
+    they expect the 2026-09-06 Settings (all five sections on one page, a chip rail in the scope
+    row), which the 2026-09-12 local-sections redesign replaced with one section per tab; the section
+    navigation is identical on main (the tip's only SettingsPage change is R2's skeleton heights).
+    Run step by step: `anchors`, `pace`, `movers` → `PACE SMOKE OK`; `settings` 6 checks red on the
+    missing one-page headings and rail; `rows`/`rail` time out on `.page-frame-scope .segmented`.
+  - charts (credit-cards, informational): `CHARTS SMOKE OK`, exit 0 — but hollow: `/credit-cards`
+    now opens the Rewards view, which drew 0 charts on this copy, and the probe's route list has no
+    `section=lines` entry, so it no longer reaches the credit-line chart. The reorder smoke's
+    colours, roster-follows and drill-in checks cover that chart in both themes.
+- Deviations from this plan, each with its reason:
+  1. No `--ff-only` fast-forward in Task 9: the controller had already merged main into the base
+     and asked for `git merge feat/reorder-base` (before Task 6 and again before the gates) plus an
+     ancestry check instead; both merges and the check are recorded above.
+  2. The probe departs from the plan's text in six recorded places (Phase A, fixes 1–5, and the
+     drill-in check), each against the final lane code or the spec line it answers to; no check was
+     removed; the resting-look check was made more precise, not looser (hairline structure is now
+     judged explicitly, where the plan's threshold could not see dark hairlines at all).
+  3. Two extra read-only instruments, kept in the session scratchpad (not committed): the
+     reduced-motion drop-line sweep and the pinned-edge sample (finding 1 and 4's evidence).
+  4. Phase A's dark pass ran the probe before its last two changes (7f966c97, 59620fc1); the landing
+     runs above ran the final probe in both themes.
+  5. vitest ran with `--maxWorkers=2` (the controller's memory note) instead of the plan's bare
+     `npx vitest run`.
+  6. Main's frontend was built once from `git archive main` in this lane's gitignored scratchpad
+     (`scratchpad/main-build*`) to show the chunk-size advisory predates the batch.
 
 ---
 
-## Morning list (template — the controller fills the brackets and relays it)
+## Morning list (filled by lane V; the controller adds main's hash after the fast-forward and relays it)
 
-**What shipped** — local main @ [hash], **NOT pushed**, [N] commits since the last push. Drag to
-reorder on six lists:
+**What shipped** — local main @ [the controller's fast-forward], **NOT pushed**: the V tip is 191
+commits beyond main/origin main @923a633e (plus the controller's merge). Drag to reorder on six
+lists:
 - **Settings › Spending categories** — a grip column; the Sort order box and column are gone; new
   categories append.
-- **Settings › Accounts** — grouped by type with component accounts nested under their parent, and
-  a parent drags with its components.
+- **Settings › Accounts** — grouped by type (one heading per group) with component accounts nested
+  under their parent, and a parent drags with its components.
 - **Portfolio › Manage › Transactions** — the list IS the cost-basis replay order. A drag re-times
   a trade, and the toast says what the move did to the holding's figures.
 - **Overview › Customize** — drag the tiles and deeper views; hidden items sit under "Hidden".
-- **Credit Cards › Card roster** — each card keeps its credit-line colour whatever the order or the
-  person scope.
+- **Credit Cards › Card roster** — each card keeps its credit-line colour whatever the order, the
+  person scope or its own drill-in.
 - **Credit Cards › Categories & weights** — one save per drop, with Undo.
 
 Every drop saves the whole order at once with a toast and an Undo (Overview: Reset to defaults),
@@ -3701,14 +3776,15 @@ works from the keyboard (Space, arrows, Space), and respects reduced motion. Beh
 - trades are matched to sheet rows by a new key, so a moved trade keeps its identity;
 - new sheet trades land at the end of the ledger.
 
-**Proof:**
-- backend [N] passed, [M] skipped;
-- vitest [files]/[tests];
-- tsc, eslint and build clean;
-- the migration drill green on a copy of the real book (26 imported trades keyed; downgrade and
-  upgrade clean);
-- the reorder smoke dark [598] / light [598] checks, 0 failed;
-- the Guide walk [196] rows per theme.
+**Proof** (all on the landing tip, `feat/reorder-verify` @3d44ae65 plus this results commit, which contains main @923a633e):
+- backend 2327 passed, 4 skipped (Windows-only platform skips), 1 pre-existing warning; ruff clean;
+- vitest 267 files / 3869 tests;
+- tsc (build graph and both no-cache configs), eslint and build clean (eslint: 0 errors and the base's 26 react-refresh warnings; build: the pre-existing echarts chunk advisory, finding 4);
+- the migration drill green on a copy of the real book (26 imported trades keyed; the index refuses
+  a duplicate key; downgrade and upgrade clean; `alembic check` clean);
+- the reorder smoke, a real mouse in Edge on all six lists at 1600 and 1280: dark 604 / light
+  604 checks, 0 failed, 0 blocked writes;
+- the Guide walk: 196 rail rows (= every task) and 28 cards per theme, 162 links.
 
 **Rollout — the user's steps:**
 1. `git push` from the main checkout.
@@ -3731,36 +3807,62 @@ works from the keyboard (Space, arrows, Space), and respects reduced motion. Beh
   parents after their components for the first time. Later moves name one account.
 - **In a person's view each card now wears its household colour.** The joint Apple Card, for
   one, changes colour once in Grace's view. The household view does not change, and colours now
-  hold through any reorder and any person scope.
-- [Judgement 2, if accepted:] **Row lines now continue through the pinned Actions column.** They
-  used to stop at it.
-- [Judgement 1, if accepted:] **While dragging near the top of a capped list, the row in hand
-  rides over the column headers.**
+  hold through any reorder, any person scope and the card's own drill-in.
+- **The pinned Actions column's left edge now shows** on the five reorderable tables — the hairline
+  the 2026-09-13 polish designed; Edge/Chrome had skipped it under the old border model (in full on
+  the ledger, the header cell elsewhere). (Judgement 2, accepted. The plan's "row lines now continue
+  through the pinned column" does not apply: they already did.)
+- **While dragging near the top of a capped list, the row in hand rides over the column headers**
+  until the list stops scrolling; the headers are back on top the moment it stops or drops
+  (Judgement 1, accepted).
+- **Activity shows two rows per Undo** — "Undo" (a run, with View report) above "Undid: …" — as it
+  has since 2026-09-03; it is simply more visible now that reorders are undone there.
 
-**Findings to eyeball:** [any Results finding, with its PNG path]
+**Findings to eyeball** (none blocks the landing; PNGs in `.worktrees/reorder-v/scratchpad/reorder-v/`):
+1. **R0 — moderate, reduced motion only: the drop line hides under the row in hand** for about half
+   of every slot's travel (measured 44% / 53%) — `dropline/zoom-*.png`, `dropline/dropline.json`,
+   any `*-reduced-motion-held.png`. Minimal fix in `reorder.css`: draw the line as a `::after` bar
+   above the lifted unit (`z-index: 3`) instead of an inset box-shadow inside the target's cells.
+2. **R0 — minor, cosmetic: the auto-scroll zone ignores a sticky header.** Categories & weights at
+   1280 (a 46px two-line header) stops 5px short of its top, so the first row rests 5px under the
+   header; the Settings roster's group heading hides under the header at the stop —
+   `{dark,light}/1280-weights-autoscroll-held.png`, `{dark,light}/1600-accounts-autoscroll-held.png`.
+   Minimal fix in `reorderDom.ts`: start `visibleBounds`'s top below the scroller's sticky `thead`.
+3. **Pre-existing, outside this batch — minor:** the pinned Actions column's left hairline is skipped
+   under `border-collapse: collapse` (in full on the HoldingsScroll tables such as Securities, the
+   header cell elsewhere) — decide whether to draw it with a 1px background gradient app-wide.
+4. **Pre-existing, from the quick-fixes batch — note:** `npm run build` prints the chunk-size
+   advisory: the lazy echarts chunk is 763.30 kB on main (763.29 on the tip) against the 760 kB
+   `chunkSizeWarningLimit` in `vite.config.ts`, whose comment asks for the limit to be raised
+   deliberately, with its history, when a chart change pulls in more echarts.
+5. **Pre-existing — two older probes predate the 2026-09-12 local sections:** `pace-v`'s
+   `settings`/`rows`/`rail` steps expect all five Settings sections on one page and a chip rail in
+   the scope row (its `anchors`/`pace`/`movers` steps pass), and `charts-c7`'s `/credit-cards` route
+   now lands on the Rewards view, never the credit-line chart. Worth a refresh when next touched.
 
 **Cleanup — ask before deleting; nothing was deleted by the batch:**
 1. **Worktrees** `.worktrees/reorder-base`, `reorder-r0`, `reorder-r1`, `reorder-r2`,
-   `reorder-r3`, `reorder-r4`, `reorder-r5`, `reorder-v`.
-   - **Junction-safe:** in each, first find out whether `node_modules` is a junction
-     (`cmd //c dir /AL .worktrees\<name>` lists it as `<JUNCTION>`). If it is, remove the link
-     alone with `cmd //c rmdir .worktrees\<name>\node_modules`, which never touches the target.
+   `reorder-r3`, `reorder-r4`, `reorder-r5`, `reorder-r6`, `reorder-v`.
+   - **Junction-safe:** all nine `node_modules` are junctions to the main checkout's (checked
+     2026-09-23 with PowerShell: `(Get-Item .worktrees\<name>\node_modules -Force).LinkType` →
+     `Junction`; the plan's `cmd //c dir /AL` line prints nothing useful from Git Bash). Remove the
+     link alone with `cmd //c rmdir .worktrees\<name>\node_modules`, which never touches the target.
    - Then run `git -C /c/Users/edyli/personal-finance-dashboard worktree remove --force .worktrees/<name>`.
    - Never `rm -rf` through a junction: it empties the main checkout's `node_modules`.
-   - Worktrees whose plan said `ln -s` may hold a real copy instead; that copy is theirs to delete.
 2. **Branches**, once local main contains them (`git branch --merged main`), with `git branch -d`
    (never `-D`): `feat/reorder-base`, `feat/reorder-component`, `feat/reorder-backend`,
    `feat/reorder-settings`, `feat/reorder-transactions`, `feat/reorder-overview`,
-   `feat/reorder-cards`, `feat/reorder-verify`.
+   `feat/reorder-cards`, `feat/reorder-consolidate` (R6), `feat/reorder-verify`.
 3. **Databases.** List them first:
    `docker exec finance-dashboard-db-1 psql -U finance -d postgres -tAc "SELECT datname FROM pg_database WHERE datname LIKE 'finance\_reorder\_%' OR datname LIKE 'finance\_test\_reorder\_%' ORDER BY 1"`.
-   - At planning time that listed `finance_reorder_r2`, `…_r3`, `…_r4`, `…_r5`,
-     `finance_test_reorder_r1`, `…_r1_mig`, `…_r1cq` and `…_r1rev`.
-   - This lane adds `finance_reorder_scratch`, `finance_test_reorder_v` and
-     `finance_test_reorder_v_mig`, and the other lanes' `finance_test_reorder_*` show up too.
+   - On 2026-09-23 that listed `finance_reorder_r2`, `…_r3`, `…_r4`, `…_r5`,
+     `finance_reorder_scratch` (this lane's), `finance_test_reorder_base`, `finance_test_reorder_r1`,
+     `…_r1_mig`, `…_r1cq` and `…_r1rev`; this lane adds `finance_test_reorder_v` and
+     `finance_test_reorder_v_mig`.
    - Drop each by name with `docker exec finance-dashboard-db-1 dropdb -U finance <name>`.
    - Never `finance`, `finance_realdata` or `finance_test`.
-4. `scratchpad/reorder-*` go with their worktrees. The main checkout's `scratchpad/` is untouched.
+4. `scratchpad/reorder-*` go with their worktrees (V's holds the run artifacts, including
+   `dark-run1` and `light-run1`, the red first runs). The main checkout's `scratchpad/` is untouched.
 
 ---
 
