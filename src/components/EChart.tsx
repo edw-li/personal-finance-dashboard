@@ -303,19 +303,24 @@ export default function EChart({
       lastStrippedRef.current !== null &&
       lastStrippedRef.current === stripped
     ) {
-      const current = (
-        chart.getOption() as { dataZoom?: { startValue?: unknown; endValue?: unknown }[] }
-      ).dataZoom?.[0]
-      if (
-        current === undefined ||
-        current.startValue !== zoomWindow.startValue ||
-        current.endValue !== zoomWindow.endValue
-      ) {
-        chart.dispatchAction({
-          type: 'dataZoom',
-          startValue: zoomWindow.startValue,
-          endValue: zoomWindow.endValue,
-        })
+      // The echo needs no engine read: the window the mirror last read IS the target, and
+      // getOption() deep-clones the whole option (every connected chart, every drag step).
+      // Anything the fast path must still do on the echo belongs after this block.
+      if (!echo) {
+        const current = (
+          chart.getOption() as { dataZoom?: { startValue?: unknown; endValue?: unknown }[] }
+        ).dataZoom?.[0]
+        if (
+          current === undefined ||
+          current.startValue !== zoomWindow.startValue ||
+          current.endValue !== zoomWindow.endValue
+        ) {
+          chart.dispatchAction({
+            type: 'dataZoom',
+            startValue: zoomWindow.startValue,
+            endValue: zoomWindow.endValue,
+          })
+        }
       }
       return
     }

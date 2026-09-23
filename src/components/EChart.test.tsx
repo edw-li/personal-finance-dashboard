@@ -370,6 +370,32 @@ describe('zoomWindow fast path', () => {
     expect(chart.dispatchAction).not.toHaveBeenCalled()
   })
 
+  // The code-quality re-review: on the echo, the window the datazoom mirror last read already
+  // proves the engine sits at the target, so the fast path reads nothing back. getOption()
+  // deep-clones the whole option, and every chart in a connected group paid that on every step
+  // of a drag.
+  it.each([
+    ['full motion', false],
+    ['reduced motion', true],
+  ])('settles a drag’s echo without reading the engine again (%s)', (_label, reduce) => {
+    vi.stubGlobal('matchMedia', () => ({ matches: reduce }))
+    const zoomed = (startValue: number, endValue?: number) =>
+      ({ series, dataZoom: [{ type: 'inside', startValue, ...(endValue === undefined ? {} : { endValue }) }] }) as EChartsOption
+    const { rerender } = render(
+      <EChart ariaLabel="test chart" option={zoomed(3)} zoomWindow={{ startValue: 3, endValue: 9 }} onDataZoom={() => {}} />,
+    )
+    const chart = instances[0]
+    chart.getOption.mockReturnValue({ dataZoom: [{ startValue: 2, endValue: 8 }] })
+    act(() => chart.handlers.datazoom()) // the mirror's one read per zoom event
+    const reads = chart.getOption.mock.calls.length
+    rerender(
+      <EChart ariaLabel="test chart" option={zoomed(2, 8)} zoomWindow={{ startValue: 2, endValue: 8 }} onDataZoom={() => {}} />,
+    )
+    expect(chart.getOption).toHaveBeenCalledTimes(reads)
+    expect(chart.setOption).toHaveBeenCalledTimes(1)
+    expect(chart.dispatchAction).not.toHaveBeenCalled()
+  })
+
   it('under reduce, a real window change (a range chip) still snaps by rebuilding', () => {
     vi.stubGlobal('matchMedia', () => ({ matches: true }))
     const { rerender } = render(
