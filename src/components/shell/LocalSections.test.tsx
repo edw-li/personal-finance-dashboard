@@ -305,7 +305,7 @@ describe('holding a deep link where it lands (2026-09-23 spec §C11)', () => {
     const frame = () => act(() => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()) }))
     const landings = () => ({
       scrolled: scrollIntoView.mock.contexts.map((element) => (element as HTMLElement).id),
-      held: vi.mocked(holdPosition).mock.calls.map(([element]) => element.id),
+      held: vi.mocked(holdPosition).mock.calls.map(([element]) => element?.id),
       focused: document.activeElement?.id,
     })
 
