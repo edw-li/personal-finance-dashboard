@@ -274,7 +274,7 @@ export const PLANNING_CARDS: GuideCard[] = [
         where: 'Settings → Household → Accounts',
         steps: [
           'Type the **Account name** and pick the **Group**: Cash, Pre-tax, Post-tax, Taxable, Equity, Other or Liabilities.',
-          'Pick the **Owner**, set the **Sort order**, and press **Add account**.',
+          'Pick the **Owner** and press **Add account** — it lands at the end of its group; drag its grip to move it.',
           'The account appears in the monthly update and in the net-worth charts from the next entry on.',
         ],
         to: '/settings?section=household#accounts',
@@ -311,7 +311,7 @@ export const PLANNING_CARDS: GuideCard[] = [
         title: 'Add a spending category',
         where: 'Settings → Household → Spending categories',
         steps: [
-          'Type the **Category name** and a **Sort order**, then press **Add category**.',
+          'Type the **Category name** and press **Add category** — it lands at the end of the list; drag its grip to move it.',
           'Per row: **Edit**, **Retire** or **Delete**.',
         ],
         to: '/settings?section=household#categories',

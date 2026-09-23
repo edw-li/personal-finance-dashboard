@@ -21,7 +21,6 @@ interface AccountFormState {
   name: string
   group: AccountGroup
   person_id: string
-  sort_order: string
   parent_account_id: string
   is_component: boolean
 }
@@ -30,7 +29,6 @@ const EMPTY_ACCOUNT: AccountFormState = {
   name: '',
   group: 'cash',
   person_id: '',
-  sort_order: '0',
   parent_account_id: '',
   is_component: false,
 }
@@ -134,7 +132,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   }, [])
 
   const setText =
-    (field: 'name' | 'person_id' | 'sort_order' | 'parent_account_id') => (value: string) => {
+    (field: 'name' | 'person_id' | 'parent_account_id') => (value: string) => {
       setForm((f) => ({ ...f, [field]: value }))
       setFormError(null)
     }
@@ -146,7 +144,6 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       name: account.name,
       group: account.group,
       person_id: account.person_id === null ? '' : String(account.person_id),
-      sort_order: String(account.sort_order),
       parent_account_id:
         account.parent_account_id === null ? '' : String(account.parent_account_id),
       is_component: account.is_component,
@@ -172,13 +169,14 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       setFormError(PARENT_NEEDS_COMPONENT)
       return
     }
-    // ALL SIX keys, every time: a blank owner or parent must CLEAR the column, and PATCH
+    // ALL FIVE keys, every time: a blank owner or parent must CLEAR the column, and PATCH
     // treats an omitted key as "leave it alone" — only an explicit null retags an account
-    // to joint or unlinks a component.
+    // to joint or unlinks a component. Never sort_order (2026-09-23 reorder spec §3.3, §4.2):
+    // the order is the table's, a new account lands at the end of its group, and an edit that
+    // moves an account to another group lands it at the end of that one — the server's call.
     const body = {
       name,
       group: form.group,
-      sort_order: Number(form.sort_order) || 0,
       is_component: form.is_component,
       person_id: form.person_id === '' ? null : Number(form.person_id),
       parent_account_id: form.parent_account_id === '' ? null : Number(form.parent_account_id),
@@ -335,15 +333,6 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                   </option>
                 ))}
               </select>
-            </label>
-            <label>
-              Sort order
-              <input
-                className="field-input"
-                inputMode="numeric"
-                value={form.sort_order}
-                onChange={(e) => setText('sort_order')(e.target.value)}
-              />
             </label>
             <label>
               Parent account

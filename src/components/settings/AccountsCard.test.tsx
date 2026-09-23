@@ -165,21 +165,49 @@ it('creates an account with owner, parent and the component flag', async () => {
   fireEvent.change(screen.getByLabelText('Account name'), { target: { value: 'Partner 401(k)' } })
   fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'pre_tax' } })
   fireEvent.change(screen.getByLabelText('Owner'), { target: { value: '2' } })
-  fireEvent.change(screen.getByLabelText('Sort order'), { target: { value: '12' } })
   fireEvent.change(screen.getByLabelText('Parent account'), { target: { value: '11' } })
   fireEvent.click(screen.getByLabelText('Component of the parent'))
   fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
 
   await waitFor(() => expect(vi.mocked(createAccount)).toHaveBeenCalledTimes(1))
-  expect(vi.mocked(createAccount).mock.calls[0][0]).toEqual({
+  // No sort_order key at all: a create that names no position lands at the end of its group
+  // (2026-09-23 reorder spec §3.3).
+  expect(vi.mocked(createAccount).mock.calls[0][0]).toStrictEqual({
     name: 'Partner 401(k)',
     group: 'pre_tax',
-    sort_order: 12,
     is_component: true,
     person_id: 2,
     parent_account_id: 11,
   })
   await waitFor(() => expect(vi.mocked(fetchAccounts)).toHaveBeenCalledTimes(2))
+})
+
+it('offers no Sort order box: the order is the table’s (reorder spec §4.2)', async () => {
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  expect(screen.queryByLabelText('Sort order')).toBeNull()
+})
+
+it('moves an account to another group through Edit without naming a position — the server appends it there (reorder spec §3.3)', async () => {
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Fidelity HSA' }))
+  fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'post_tax' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save account' }))
+
+  await waitFor(() => expect(vi.mocked(updateAccount)).toHaveBeenCalledTimes(1))
+  expect(vi.mocked(updateAccount).mock.calls[0]).toStrictEqual([
+    11,
+    {
+      name: 'Fidelity HSA',
+      group: 'post_tax',
+      is_component: false,
+      person_id: 1,
+      parent_account_id: null,
+    },
+  ])
 })
 
 it('retags an account to joint with an EXPLICIT null', async () => {
@@ -200,6 +228,8 @@ it('retags an account to joint with an EXPLICIT null', async () => {
   // so clearing the select has to send null on purpose.
   expect(Object.keys(body)).toContain('person_id')
   expect(body.person_id).toBeNull()
+  // …and the position must NOT ride along: the stored value may predate a drag.
+  expect(Object.keys(body)).not.toContain('sort_order')
 })
 
 it('retires an account without touching its other columns', async () => {
