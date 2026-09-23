@@ -103,7 +103,9 @@ class CreditCardIn(BaseModel):
     is_active: bool = True
     account_id: int | None = Field(default=None, ge=1, le=2_147_483_647)
     notes: str | None = Field(default=None, max_length=300)
-    sort_order: int = Field(default=0, ge=0, le=1_000_000)
+    # Omitted or null: a POST appends after the last card, a PATCH keeps the stored value
+    # (2026-09-23 reorder spec §3.3). An explicit number is honoured by both.
+    sort_order: int | None = Field(default=None, ge=0, le=1_000_000)
 
     @field_validator("rewards_currency")
     @classmethod
@@ -133,7 +135,8 @@ class RewardCategoryOut(BaseModel):
 
 class RewardCategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
-    sort_order: int = Field(default=0, ge=0, le=1_000_000)
+    # Omitted or null = append after the last row (2026-09-23 reorder spec §3.3).
+    sort_order: int | None = Field(default=None, ge=0, le=1_000_000)
     annual_spend: Decimal | None = None
     spending_category_id: int | None = Field(default=None, ge=1, le=2_147_483_647)
     pinned_card_id: int | None = Field(default=None, ge=1, le=2_147_483_647)
