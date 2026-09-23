@@ -755,6 +755,107 @@ describe('useReorder — pointer', () => {
     expect(seen.at(-1)).toBe(false)
   })
 
+  it('a list unmounting while a drop settles into its gap still commits the drop — once', () => {
+    const onCommit = vi.fn()
+    const { unmount } = render(<Stateful initial={flat('A', 'B', 'C', 'D')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    expect(onCommit).not.toHaveBeenCalled() // still settling
+    unmount() // a popover closed right after the drop
+    expect(onCommit).toHaveBeenCalledTimes(1)
+    expect(onCommit).toHaveBeenCalledWith(['B', 'C', 'A', 'D'], 'A')
+    expect(document.documentElement.classList.contains('reorder-active')).toBe(false)
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(onCommit).toHaveBeenCalledTimes(1)
+  })
+
+  it('a parent that owns the order keeps a drop its list unmounted during', () => {
+    const committed = vi.fn()
+    // R4's shape: the page owns the order; its list mounts only while a popover is open.
+    function Parent() {
+      const [items, setItems] = useState(flat('A', 'B', 'C', 'D'))
+      const [open, setOpen] = useState(true)
+      return (
+        <>
+          <p data-testid="parent-order">{items.map((item) => item.id).join(',')}</p>
+          <button type="button" onClick={() => setOpen(false)}>
+            Done
+          </button>
+          {open && (
+            <List
+              items={items}
+              onCommit={(next, moved) => {
+                setItems(next.map((id) => ({ id })))
+                committed(next, moved)
+              }}
+            />
+          )}
+        </>
+      )
+    }
+    render(<Parent />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    fireEvent.click(screen.getByRole('button', { name: 'Done' })) // closed mid-settle
+    expect(screen.queryByRole('button', { name: 'Reorder Alpha' })).toBeNull()
+    expect(screen.getByTestId('parent-order').textContent).toBe('B,C,A,D')
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(committed).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('parent-order').textContent).toBe('B,C,A,D')
+  })
+
+  it('a list unmounting mid settle-back commits nothing — a cancel or an unmoved drop owes no order', () => {
+    const onCommit = vi.fn()
+    const cancelled = render(<Stateful initial={flat('A', 'B', 'C')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 290 })
+    fireEvent.keyDown(grip('Alpha'), { key: 'Escape' }) // easing home
+    cancelled.unmount()
+
+    const unmoved = render(<Stateful initial={flat('A', 'B', 'C')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Bravo'), { pointerId: 1, button: 0, clientY: 260 })
+    fireEvent.pointerMove(grip('Bravo'), { pointerId: 1, clientY: 270 })
+    fireEvent.pointerUp(grip('Bravo'), { pointerId: 1, clientY: 270 }) // dropped where it was
+    unmoved.unmount()
+
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(onCommit).not.toHaveBeenCalled()
+  })
+
+  it("a consumer's error from that unmount commit cannot break the teardown", () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { unmount } = render(
+      <Stateful
+        initial={flat('A', 'B', 'C', 'D')}
+        onCommit={() => {
+          throw new Error('save exploded')
+        }}
+      />,
+    )
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    expect(() => unmount()).not.toThrow()
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('useReorder'),
+      expect.objectContaining({ message: 'save exploded' }),
+    )
+    expect(document.documentElement.classList.contains('reorder-active')).toBe(false)
+  })
+
   it('unmounting mid-drag leaves no cursor class behind', () => {
     const { unmount } = render(<Stateful initial={flat('A', 'B')} />)
     layoutRows()

@@ -7,7 +7,8 @@
 //   pressing → lifted              the pointer travels 4px (a keyboard lift passes straight through)
 //   pressing → released            up (a click), Escape, a lost pointer, blur, resize
 //   lifted   → commit              a moved drop from the keyboard, or under reduced motion
-//   lifted   → settling → commit   a moved pointer drop: the unit eases into its gap first
+//   lifted   → settling → commit   a moved pointer drop: the unit eases into its gap first (if the
+//                                  list unmounts mid-settle, onCommit runs from the teardown)
 //   lifted   → settling → finish   an unmoved drop, Escape, a lost pointer, blur, resize: rows ease home
 //   any      → released            data changed or the list turned busy: cleared at once, no easing
 // Released = releaseDrag (listeners, frame, timer) and machine.drag = null; rows cleared.
@@ -103,6 +104,8 @@ interface Drag<K extends ReorderKey> {
   frame: number | null
   timer: number | null
   detach: (() => void) | null
+  /** A moved pointer drop easing into its gap: the order it still owes onCommit. Null otherwise. */
+  pendingNext: K[] | null
 }
 
 interface Machine<K extends ReorderKey> {
@@ -198,14 +201,30 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
   }, [signature])
 
   // Unmount: a drag in flight is torn down INSIDE the unmounting commit — its timers, listeners and
-  // the page's grabbing cursor — not a passive tick later.
+  // the page's grabbing cursor — not a passive tick later. A moved pointer drop still easing into its
+  // gap (a popover closed right after the drop) is committed, never lost: straight to onCommit — no
+  // flushSync, which a lifecycle cleanup may not call, and these rows are leaving anyway. A
+  // settle-back (a cancel, an unmoved drop) owes nothing.
   useLayoutEffect(() => {
     const state = machine.current
     const rowMap = rows.current
     const timers = savedTimers.current
     return () => {
-      if (state.drag !== null) releaseDrag(state.drag)
+      const drag = state.drag
       state.drag = null
+      if (drag !== null) {
+        releaseDrag(drag)
+        if (drag.pendingNext !== null) {
+          const next = drag.pendingNext
+          drag.pendingNext = null
+          try {
+            latest.current.options.onCommit(next, drag.id)
+          } catch (error) {
+            // One consumer's error must not break the teardown; it still reaches the console.
+            console.error('useReorder: onCommit threw while its list unmounted', error)
+          }
+        }
+      }
       clearRows(rowMap)
       timers.forEach((timer) => window.clearTimeout(timer))
       timers.clear()
@@ -326,6 +345,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
 
   const commit = (drag: Drag<K>, next: K[]) => {
     releaseDrag(drag)
+    drag.pendingNext = null
     machine.current.drag = null
     const message = announce.drop(context(drag, drag.to))
     // The DOM move blurs whatever the moved rows hold: a grip that had focus — a keyboard reader's,
@@ -365,6 +385,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
       element.style.transition = `transform ${MOTION_MS.fast}ms ${EASE_OUT}`
       element.style.transform = slot === 0 ? '' : `translateY(${slot}px)`
     }
+    drag.pendingNext = next
     drag.timer = window.setTimeout(() => commit(drag, next), MOTION_MS.fast)
   }
 
@@ -446,6 +467,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
       frame: null,
       timer: null,
       detach: null,
+      pendingNext: null,
     }
     machine.current.drag = drag
     return drag
