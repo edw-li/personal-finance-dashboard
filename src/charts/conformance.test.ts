@@ -53,6 +53,8 @@ const ROSTER = [
   'spendingHeatmapVsAverage',
   // …and the heatmap's in-progress column (§C5): partial cells and the marked rotated label.
   'spendingHeatmapPartial',
+  // …and that column in the vs-average reading: a neutral hatched series the scale skips.
+  'spendingHeatmapVsAveragePartial',
   'spendingSavings',
   // …and the same builder without the server's total rate (an older backend): one muted
   // line on the noLegend grid, a shape the two-line fixture never reaches.

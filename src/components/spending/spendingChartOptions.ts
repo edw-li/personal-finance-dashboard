@@ -20,6 +20,7 @@ import { ENTITY, foldColor, pickStyles } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
 import {
   BAR_MARKS,
+  ESTIMATE_DECAL,
   LINE,
   compactMoney,
   grid,
@@ -438,6 +439,19 @@ export function heatmapOption({
   const cells = triples.map((cell) =>
     partial[cell[0]] ? { value: cell, itemStyle: partialItemStyle(MUTED, patterns) } : cell,
   )
+  // vs average: the month in progress is not compared, but it IS there (audit F1: a blank
+  // column read as "nothing entered"). Its cells ride a second series that the diverging scale
+  // does not colour: neutral, hatched, and saying why on hover.
+  const inProgress =
+    mode === 'vsAverage'
+      ? raw.flatMap((row, r) =>
+          row.flatMap((dollars, c) =>
+            partial[c] && dollars !== null
+              ? [{ value: [c, r, dollars] as [number, number, number], itemStyle: { color: MUTED, decal: ESTIMATE_DECAL } }]
+              : [],
+          ),
+        )
+      : []
   const rawMax = raw.reduce((m, row) => row.reduce<number>((mm, v) => (v === null ? mm : Math.max(mm, v)), m), 0)
   const maxAbs = triples.reduce((m, [, , v]) => Math.max(m, Math.abs(v)), 0)
   const visualMap =
@@ -463,9 +477,13 @@ export function heatmapOption({
         const [c, r, v] = (Array.isArray(p.value) ? p.value : []) as [number, number, number]
         const dollars = raw[r]?.[c]
         if (dollars === null || dollars === undefined) return null
+        const cell = `${name(r)} · ${monthLabels[c] ?? ''}`
+        // The in-progress column in the vs-average reading: the dollars, and why there is no
+        // comparison (audit F1).
+        if (mode === 'vsAverage' && partial[c]) return { value: dollars, label: cell, sub: 'month to date — not compared' }
         // The in-progress words ride the month, as on the bars' tooltip head (spec §C5).
         const note = typeof todayIso === 'string' && partial[c] ? partialNote(matrix.months[c], todayIso) : null
-        const label = `${name(r)} · ${monthLabels[c] ?? ''}${note === null ? '' : ` — ${note}`}`
+        const label = `${cell}${note === null ? '' : ` — ${note}`}`
         if (mode === 'absolute') return { value: dollars, label }
         if (mode === 'row') return { value: dollars, label, sub: `${Math.round(v * 100)}% of this category’s busiest month` }
         return { value: dollars, label, sub: `${formatPct(v, { decimals: 0 })} vs its trailing 12-month average` }
@@ -473,8 +491,32 @@ export function heatmapOption({
     }),
     xAxis: monthAxis(monthLabels, { gap: true, rotate: 45, marked: markedLabels(monthLabels, partial) }),
     yAxis: { type: 'category', data: order.map((_, r) => name(r)), inverse: true, axisLabel: { width: 118, overflow: 'truncate' as const } },
-    visualMap,
-    series: [{ type: 'heatmap' as const, data: cells, itemStyle: { borderColor: SURFACE, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: INK, borderWidth: 1 } } }],
+    // The scale colours the compared cells only. echarts draws a heatmap series only under a
+    // visualMap of its own (a real canvas throws "Heatmap must use with visualMap" without one),
+    // so the in-progress series gets a hidden map that paints every cell the one neutral:
+    // continuous, because a piecewise map with open-ended pieces throws too (esppChartOptions).
+    visualMap:
+      inProgress.length > 0
+        ? [
+            { ...visualMap, seriesIndex: 0 },
+            {
+              type: 'continuous' as const,
+              show: false,
+              seriesIndex: 1,
+              dimension: 2,
+              min: 0,
+              max: 1,
+              inRange: { color: [MUTED, MUTED] },
+              outOfRange: { color: [MUTED] },
+            },
+          ]
+        : visualMap,
+    series: [
+      { type: 'heatmap' as const, data: cells, itemStyle: { borderColor: SURFACE, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: INK, borderWidth: 1 } } },
+      ...(inProgress.length > 0
+        ? [{ id: 'in-progress', type: 'heatmap' as const, data: inProgress, itemStyle: { borderColor: SURFACE, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: INK, borderWidth: 1 } } }]
+        : []),
+    ],
   }
 }
 

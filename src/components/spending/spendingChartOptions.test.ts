@@ -3,7 +3,7 @@ import { tooltipRows } from '../../testing/tooltipRows'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { CATEGORY_HUES, ENTITY } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
-import { GRID_VARIANTS, compactMoney, partialItemStyle, percentLabel } from '../../charts/grammar'
+import { ESTIMATE_DECAL, GRID_VARIANTS, compactMoney, partialItemStyle, percentLabel } from '../../charts/grammar'
 import { DIVERGING, INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
 import type { SpendingMatrix } from '../../types/api'
 import {
@@ -700,8 +700,35 @@ describe('heatmapOption: the month in progress (2026-09-23 spec §C5)', () => {
     })
   })
 
-  it('leaves the column blank in the vs-average reading', () => {
-    expect(cellsOf(heatmapOption({ ...input, mode: 'vsAverage' }))).toEqual([[6, 0, 0.5], [6, 1, 0]])
+  // Review (audit F1): a blank column read as "no data"; the month in progress has data, it is
+  // just not comparable yet. Its cells are drawn neutral and hatched, in a series the diverging
+  // scale does not colour, and say why on hover.
+  it('draws the column neutral and hatched in the vs-average reading: there, not compared', () => {
+    const option = heatmapOption({ ...input, mode: 'vsAverage' }) as unknown as {
+      visualMap: { seriesIndex?: number }[]
+      series: { id?: string; type: string; data: unknown[]; itemStyle?: unknown; emphasis?: unknown }[]
+      tooltip: { formatter: (p: unknown) => string }
+    }
+    // The comparison itself still leaves the month out.
+    expect(option.series[0].data).toEqual([[6, 0, 0.5], [6, 1, 0]])
+    // The diverging scale colours the compared cells only; echarts draws a heatmap series only
+    // under a visualMap of its own (a real canvas throws without one), so the in-progress series
+    // gets a hidden one that maps every cell to the neutral.
+    expect(option.visualMap[0].seriesIndex).toBe(0)
+    expect(option.visualMap[1]).toEqual({
+      type: 'continuous', show: false, seriesIndex: 1, dimension: 2, min: 0, max: 1,
+      inRange: { color: [MUTED, MUTED] }, outOfRange: { color: [MUTED] },
+    })
+    expect(option.series[1]).toMatchObject({ id: 'in-progress', type: 'heatmap' })
+    expect(option.series[1].data).toEqual([
+      { value: [7, 1, 50], itemStyle: { color: MUTED, decal: ESTIMATE_DECAL } },
+    ])
+    const hover = tooltipRows(option.tooltip.formatter({ value: [7, 1, 50] }))
+    expect([hover.lead, hover.label, hover.sub]).toEqual(['$50.00', 'Groceries &lt;b&gt;&amp; more&lt;/b&gt; · Aug 2026', 'month to date — not compared'])
+    // The other readings keep one series and an unrestricted scale.
+    const row = heatmapOption({ ...input, mode: 'row' }) as unknown as { visualMap: { seriesIndex?: number }; series: unknown[] }
+    expect(row.series).toHaveLength(1)
+    expect(row.visualMap.seriesIndex).toBeUndefined()
   })
 
   it('marks the label and names the month in the tooltip', () => {
