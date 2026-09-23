@@ -80,11 +80,20 @@ async def import_stored_snapshot(
     # oldest of three out of the directory, and restoring FROM that oldest point is exactly
     # the undo a bad restore needs — its bytes must already be in memory when the file goes.
     data = await asyncio.to_thread(path.read_bytes)
-    return await _restore(data, dry_run=dry_run, user=user, db=db, source_name=name)
+    # A restore point stays protected from its own apply's rotation until that apply commits.
+    return await _restore(
+        data, dry_run=dry_run, user=user, db=db, source_name=name, protect_point=name
+    )
 
 
 async def _restore(
-    data: bytes, *, dry_run: bool, user: User, db: AsyncSession, source_name: str
+    data: bytes,
+    *,
+    dry_run: bool,
+    user: User,
+    db: AsyncSession,
+    source_name: str,
+    protect_point: str | None = None,
 ) -> RestoreReport:
     # Read BEFORE the apply: it expunges every loaded instance, this User included.
     user_id, actor = user.id, user.email
@@ -101,6 +110,7 @@ async def _restore(
             server_head=head,
             source_name=source_name,
             size_bytes=len(data),
+            protect_point=protect_point,
         )
     except SnapshotError as exc:
         await db.rollback()

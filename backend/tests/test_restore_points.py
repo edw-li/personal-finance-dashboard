@@ -12,9 +12,11 @@ from sqlalchemy import select
 
 from app.models import Account
 from app.services.snapshot import (
+    RESTORE_POINT_NAME_RE,
     restore_point_stamp,
     restore_points_dir,
     snapshots_dir,
+    trim_directory,
     write_restore_point,
 )
 from app.services.snapshot_store import list_restore_points, stored_file
@@ -197,6 +199,58 @@ async def test_restoring_the_oldest_of_three_restore_points_still_works(auth_cli
     kept = sorted(path.name for path in restore_points_dir().iterdir())
     assert names[0] not in kept and len(kept) == 3
     assert kept[:2] == names[1:] and kept[2] == resp.json()["restore_point"]
+
+
+async def test_a_failed_restore_from_the_oldest_point_keeps_that_point(
+    auth_client, db, monkeypatch
+):
+    """The apply writes its own point FIRST, and that write used to rotate the oldest of three
+    out of the directory at once — so a restore FROM the oldest point that then failed deleted
+    the very file a retry needed: "Restore failed and nothing was changed", then a 404
+    (2026-09-23 lane B1 review, Important 1). The source is protected until the apply commits."""
+    db.add(Account(name="A", slug="a", group="cash", sort_order=1))
+    await db.commit()
+    names = []
+    for order in (1, 2, 3):
+        await set_sort_order(db, order)
+        names.append((await write_restore_point(db, actor=None)).name)
+    await set_sort_order(db, 4)
+
+    def explode():
+        raise RuntimeError("disk on fire")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("app.lifecycle.restore._exported_in_fk_order", explode)
+        failed = await auth_client.post(f"{STORED}/{names[0]}?dry_run=false")
+    assert failed.status_code == 500
+    assert failed.json()["detail"] == "Restore failed and nothing was changed"
+    assert await sort_order(db) == 4
+    # The source is still on the volume, beside the point the failed apply wrote.
+    assert (restore_points_dir() / names[0]).is_file()
+    assert len(list(restore_points_dir().iterdir())) == 4
+    retry = await auth_client.post(f"{STORED}/{names[0]}")
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["dry_run"] is True
+    applied = await auth_client.post(f"{STORED}/{names[0]}?dry_run=false")
+    assert applied.status_code == 200, applied.text
+    assert await sort_order(db) == 1
+    # Committed: "newest three kept" holds again, and the source has done its job.
+    kept = sorted(p.name for p in restore_points_dir().iterdir())
+    assert len(kept) == 3 and names[0] not in kept
+    assert applied.json()["restore_point"] in kept
+
+
+def test_trim_directory_never_deletes_a_protected_name():
+    directory = restore_points_dir()
+    directory.mkdir(parents=True)
+    names = [f"pre-restore-2026090{day}-080000-000000.zip" for day in range(1, 6)]
+    for name in names:
+        (directory / name).write_bytes(b"x")
+    removed = trim_directory(directory, RESTORE_POINT_NAME_RE, 3, protect=frozenset({names[0]}))
+    # The protected oldest still counts toward the order, but is never the one removed.
+    assert removed == [names[1]]
+    assert sorted(p.name for p in directory.iterdir()) == [names[0], *names[2:]]
+    assert trim_directory(directory, RESTORE_POINT_NAME_RE, 3) == [names[0]]
 
 
 async def test_restore_from_stored_refuses_foreign_names_in_one_sentence(auth_client, db):

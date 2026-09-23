@@ -376,19 +376,33 @@ async def build_snapshot_zip(db: AsyncSession) -> SnapshotZip:
     )
 
 
-def trim_directory(directory: Path, pattern: re.Pattern[str], keep: int) -> list[str]:
+def trim_directory(
+    directory: Path,
+    pattern: re.Pattern[str],
+    keep: int,
+    *,
+    protect: frozenset[str] = frozenset(),
+) -> list[str]:
     """Delete every file matching `pattern` beyond the newest `keep` (names sort
     chronologically by construction). Returns the removed names. Sync — callers in async
-    code wrap it in asyncio.to_thread."""
+    code wrap it in asyncio.to_thread. A name in `protect` still counts toward the order but
+    is never deleted: a restore FROM the oldest restore point must not lose its source to its
+    own new point before the apply has committed (2026-09-23 lane B1 review, Important 1)."""
     names = sorted((p.name for p in directory.iterdir() if pattern.fullmatch(p.name)), reverse=True)
-    removed = names[keep:]
+    removed = [name for name in names[keep:] if name not in protect]
     for name in removed:
         (directory / name).unlink()
     return removed
 
 
 def write_file(
-    directory: Path, name: str, payload: bytes, pattern: re.Pattern[str], keep: int
+    directory: Path,
+    name: str,
+    payload: bytes,
+    pattern: re.Pattern[str],
+    keep: int,
+    *,
+    protect: frozenset[str] = frozenset(),
 ) -> Path:
     """ATOMIC publish of one archive, then trim. The bytes land in `<name>.part` and
     os.replace renames them into place: a crash mid-write leaves a `.part` that matches
@@ -401,7 +415,7 @@ def write_file(
     part = directory / f"{name}.part"
     part.write_bytes(payload)
     os.replace(part, path)
-    trim_directory(directory, pattern, keep)
+    trim_directory(directory, pattern, keep, protect=protect)
     return path
 
 
@@ -413,13 +427,17 @@ class RestorePoint:
     run_id: int
 
 
-async def write_restore_point(db: AsyncSession, *, actor: str | None) -> RestorePoint:
+async def write_restore_point(
+    db: AsyncSession, *, actor: str | None, protect: str | None = None
+) -> RestorePoint:
     """The current database's ZIP to <data_dir>/restore-points, keep three, recorded as a
     `restore_point` run (spec §7 step 1, §9 imports). COMMITS its own run row before
     returning: a restore or import that then fails and rolls back must still leave the
     point listed. File IO rides to_thread — blocking writes on the event loop are the
     ASYNC rules' whole complaint. Call it BEFORE the restore's own writes: the export owns
-    its transaction (see _begin_repeatable_read) and rolls back whatever it finds open."""
+    its transaction (see _begin_repeatable_read) and rolls back whatever it finds open.
+    `protect` names a point this write must not rotate out — the source of a restore from a
+    restore point; the restore trims again once it has committed."""
     snap = await build_snapshot_zip(db)
     name = f"pre-restore-{snap.exported_at:%Y%m%d-%H%M%S-%f}.zip"
     path = await asyncio.to_thread(
@@ -429,6 +447,7 @@ async def write_restore_point(db: AsyncSession, *, actor: str | None) -> Restore
         snap.payload,
         RESTORE_POINT_NAME_RE,
         RESTORE_POINTS_KEEP,
+        protect=frozenset() if protect is None else frozenset({protect}),
     )
     run = LifecycleRun(
         kind="restore_point",
