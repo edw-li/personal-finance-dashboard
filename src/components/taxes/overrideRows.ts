@@ -219,7 +219,9 @@ export function removeRow(state: OverrideRows, id: number): RowStep {
  * render, the house idiom — never a setState in an effect). Each transition's step is applied
  * here: a refusal becomes the panel's sentence; new rows land, and a scenario change goes out
  * through `write` — which clears the sentence, as every URL write does — or the sentence is
- * cleared directly, since it described the rows as they WERE.
+ * cleared directly, since it described the rows as they WERE. Each returned function computes
+ * from THIS render's rows, so two calls in one handler would drop the first: a change that needs
+ * two steps is one transition here in overrideRows.ts, never two calls.
  */
 export function useOverrideRows(
   overrides: Overrides,
