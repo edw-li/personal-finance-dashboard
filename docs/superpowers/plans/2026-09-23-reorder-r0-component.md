@@ -2387,10 +2387,51 @@ git commit -m "docs(plan): lane R0 — results and gates"
 
 ## Results (filled in by the implementer)
 
-- Lane tests: …
-- Full vitest: … files / … tests
-- tsc / eslint / build: …
-- Notes for R2–R5 (anything the contract section should say that it does not): …
+- Lane tests: `npx vitest run src/components/reorder` — 5 files / 57 tests pass (reorderMath 20,
+  reorderDom 8, reorderStatus 3, useReorder 20, reorderCss 6).
+- Full vitest: 238 files / 3183 tests, exit 0 (neither known load-sensitive flake fired).
+- tsc / eslint / build:
+  - `tsc -b` exit 0; also a full check against a fresh buildinfo (tsc -b's cache lives in the shared
+    node_modules junction), exit 0.
+  - `eslint .` exit 0 — 0 errors, 26 pre-existing `react-refresh/only-export-components` warnings in
+    17 files outside the lane, none in `src/components/reorder` or `src/testing/pointer.ts`.
+  - `npm run build` exit 0.
+- Scope: `git diff --stat feat/reorder-base...HEAD` — `src/components/reorder/**` (12 files),
+  `src/testing/pointer.ts` and this section only.
+- Corrections to this plan:
+  1. **RTL cleanup.** vitest runs without globals (vite.config.ts `test:`), so Testing Library never
+     registers its afterEach cleanup. As written, every test after a file's first found the previous
+     test's grips ("Found multiple elements"). `reorderStatus.test.tsx` gains `afterEach(cleanup)`;
+     `useReorder.test.tsx` calls `cleanup()` first in its afterEach, so a list unmounts (clearing its
+     drag's timers) under the clock that armed them.
+  2. **The Escape test's `popover` spy** was a bare document capture listener, which the lift's Enter
+     and the ArrowUp rightly reach (called 2 times). It now acts on Escape only, like
+     usePopoverDismiss. The test also pins spec §2.3's `preventDefault()` (fireEvent returns false).
+  3. **`reduceMotion`** moved from the Task 5 commit to Task 6, where its first caller lands
+     (noUnusedLocals failed tsc at Task 5). The final file is as planned.
+  4. **Added a pointer test:** a window blur, a resize and a lost pointer capture each abandon a live
+     drag. Spec §2.6 names window blur and the plan had no test for it. Mutation-checked: removing
+     each listener fails it.
+  5. **`visibleBounds` clips an element scroller's band to the viewport** (+1 reorderDom test). Spec
+     §2.3.5 says the container's *visible* edge, and the function's own doc says "the band the reader
+     can currently see". Unclipped, a 420 px Settings scroller hanging past the window bottom had an
+     auto-scroll zone the pointer could not reach.
+- Kept as planned where the spec reads differently:
+  - A pointer drop eases the unit into its gap and commits after `MOTION_MS.fast`; spec §2.3.6
+    describes commit-then-FLIP. The result on screen is the same.
+  - Escape is claimed from lift, not from the < 4 px press (§2.3.7 says "pending or live").
+- Notes for R2–R5 (what the contract section does not say):
+  - **Pointer tests** need three things: `installPointerEvents()` in `beforeAll`, `afterEach(cleanup)`,
+    and mocked row boxes (the `layoutRows` helper in `useReorder.test.tsx`). Without layout every
+    midpoint is 0, so any 4 px move lands the unit last. Keyboard drags need no layout.
+  - **Pointer drops commit late.** `onCommit` arrives `MOTION_MS.fast` (120 ms) after pointerup, so
+    advance fake timers before asserting it. Keyboard and reduced-motion drops commit synchronously.
+    `active` stays true through that settle.
+  - **Each range must be one contiguous block** in display order. Headers between ranges are fine; a
+    foreign row between two peers of one range makes the preview disagree with the commit.
+  - **`itemProps(id)` carries a `ref`:** a row that needs its own ref must merge the two.
+  - **Changes under a live drag cancel it silently:** any change to order, membership, range or
+    carries, and `disabled` turning true.
 
 ## Self-review (spec coverage)
 
