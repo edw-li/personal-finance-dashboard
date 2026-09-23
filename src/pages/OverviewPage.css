@@ -188,8 +188,8 @@
    alone: the drag measures each row at lift, and shiftsFor copes with unequal heights. Three
    measures drive a row: --customize-pad is side room for the lifted row's surface and shadow
    (reorder.css), handed back by the negative margin; --customize-grip is the grip's fixed column;
-   --customize-gap spaces grip, box and label. A hidden row is inset by all three, so its box
-   stands under the boxes above it. */
+   --customize-gap is the space between the grip and the box. A hidden row is inset by all three,
+   so its box stands under the boxes above it. */
 .overview-customize-row { --customize-pad: .35rem; --customize-gap: .35rem; --customize-grip: 1.25rem; display: flex; align-items: center; gap: var(--customize-gap); min-height: 1.75rem; margin: .3rem calc(-1 * var(--customize-pad)); padding: 0 var(--customize-pad); font-size: .8rem; }
 .overview-customize-row > .reorder-grip { flex: 0 0 var(--customize-grip); }
 .overview-customize-row.is-off { padding-left: calc(var(--customize-pad) + var(--customize-grip) + var(--customize-gap)); }
