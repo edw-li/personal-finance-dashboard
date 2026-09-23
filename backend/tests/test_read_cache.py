@@ -3,7 +3,7 @@ every write to every table it reads, never handed to a write path, never session
 
 import re
 from contextlib import contextmanager
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import MappingProxyType
@@ -27,6 +27,7 @@ from app.services import clock, read_cache
 from app.services.month_review import (
     REVIEW_SNAPSHOT_FIELDS,
     ReviewSnapshot,
+    adopt_existing_history,
     load_review_book,
     load_review_book_snapshot,
 )
@@ -483,3 +484,127 @@ async def test_savings_with_pending_changes_bypass_the_cache(db):
     assert date(2026, 12, 1) in {row.month for row in rows}  # the uncached read autoflushed
     assert len(read_cache.MONTH_SAVINGS) == 0
     await db.rollback()
+
+
+# --- read paths read through the cache; write paths never do ---
+
+API = "/api/v1"
+BASE = f"{API}/month-review"
+CONFIRMED = {"balances": True, "spending": True, "take_home": True}
+READS = [
+    f"{API}/coverage",
+    f"{API}/metrics/spending",
+    f"{API}/metrics/spending?month={LATEST}",
+    f"{API}/spending/matrix",
+    f"{API}/projection",
+    BASE,
+    f"{BASE}/months/{LATEST}",
+]
+
+
+async def test_every_read_path_builds_the_book_and_the_savings_once(auth_client, db, monkeypatch):
+    """Seven GETs (the Overview's four, projection and month review's two) over unchanged
+    data: one book assembled, one savings composition — by ANY loader, cached or not."""
+    from app.services import month_review, savings
+
+    await seed(db)
+    built = {"book": 0, "savings": 0}
+    assemble, compose = month_review.assemble_review_book, savings.compose_months
+
+    def counting_assemble(**kwargs):
+        built["book"] += 1
+        return assemble(**kwargs)
+
+    def counting_compose(*args):
+        built["savings"] += 1
+        return compose(*args)
+
+    monkeypatch.setattr(month_review, "assemble_review_book", counting_assemble)
+    monkeypatch.setattr(savings, "compose_months", counting_compose)
+    for path in READS:
+        response = await auth_client.get(path)
+        assert response.status_code == 200, (path, response.text)
+    assert built == {"book": 1, "savings": 1}
+
+
+def poison_every_cached_book() -> None:
+    """Same keys, a revision nobody has and a month nobody may close."""
+    for key in REVIEW_BOOKS.keys():
+        book = REVIEW_BOOKS.get(key)
+        poisoned = {
+            month: state.model_copy(
+                update={"input_revision": "0" * 64, "can_close": False, "blockers": ["poison"]}
+            )
+            for month, state in book.months.items()
+        }
+        REVIEW_BOOKS.put(key, replace(book, months=MappingProxyType(poisoned)))
+
+
+async def test_reads_serve_the_cache_and_a_month_save_never_does(auth_client, db):
+    await seed(db)
+    assert (await auth_client.get(BASE)).status_code == 200  # files the no-extras book
+    truth = (await auth_client.get(f"{BASE}/months/{LATEST}")).json()
+    assert len(REVIEW_BOOKS) == 1  # the month lies inside that book, which answers it too
+    poison_every_cached_book()
+    # The reads now answer from the poisoned entry: proof that they read through the cache.
+    assert (await auth_client.get(f"{BASE}/months/{LATEST}")).json()["input_revision"] == "0" * 64
+    listed = (await auth_client.get(BASE)).json()["months"]
+    assert {item["input_revision"] for item in listed} == {"0" * 64}
+    coverage = (await auth_client.get(f"{API}/coverage")).json()
+    assert {item["input_revision"] for item in coverage["review_months"]} == {"0" * 64}
+    evidence = (await auth_client.get(f"{API}/metrics/spending?month={LATEST}")).json()
+    assert evidence["review"]["input_revision"] == "0" * 64
+    # The write path builds its own book: the TRUE revision is accepted, the month closes.
+    saved = await auth_client.put(
+        f"{BASE}/months/{LATEST}",
+        json={"expected_revision": truth["input_revision"], "close": True, "reviewed": CONFIRMED},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["review"]["state"] == "closed"
+    # The save moved the fingerprint: reads rebuild, see it, and the poison is unreachable.
+    after = (await auth_client.get(f"{BASE}/months/{LATEST}")).json()
+    assert after["state"] == "closed" and after["input_revision"] != "0" * 64
+
+
+async def _readopt(db) -> None:
+    await db.execute(delete(MonthReview))
+    await db.execute(delete(MonthReviewAdoption))
+    await db.commit()
+    await adopt_existing_history(db, TODAY)
+    await db.commit()
+
+
+async def test_a_batch_close_never_reads_a_poisoned_book(auth_client, db):
+    await seed(db)
+    await _readopt(db)  # May-Aug become legacy history with their real revisions
+    state = (await auth_client.get(f"{BASE}/months/{MONTHS[0]}")).json()
+    assert state["legacy_eligible"] and state["can_close"]
+    assert len(REVIEW_BOOKS) == 1  # the GET filed the book the poison now replaces
+    poison_every_cached_book()
+    response = await auth_client.post(
+        f"{BASE}/batch-close",
+        json={
+            "months": [{"month": str(MONTHS[0]), "expected_revision": state["input_revision"]}],
+            "reviewed": CONFIRMED,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["months"][0]["state"] == "closed"
+
+
+async def test_adoption_never_reads_a_poisoned_book(db):
+    await seed(db)
+    await db.execute(delete(MonthReview))
+    await db.execute(delete(MonthReviewAdoption))
+    await db.commit()
+    truth = await load_review_book(db, today=TODAY)
+    await read_cache.cached_review_book(db, today=TODAY)
+    assert len(REVIEW_BOOKS) == 1
+    poison_every_cached_book()
+    await adopt_existing_history(db, TODAY)
+    await db.commit()
+    stored = {
+        row.month: row.legacy_revision for row in (await db.execute(select(MonthReview))).scalars()
+    }
+    assert set(stored) == set(MONTHS)
+    assert all(stored[month] == truth.months[month].input_revision for month in stored)

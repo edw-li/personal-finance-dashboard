@@ -40,14 +40,13 @@ from app.services.money import (
     quantize_money,
     require_first_of_month,
 )
-from app.services.month_review import load_review_book
 from app.services.month_writes import write_spending
 from app.services.net_worth_calc import get_swr_pct, investable_bases
+from app.services.read_cache import cached_month_savings, cached_review_book
 from app.services.savings import (
     LIVING,
     MonthSavings,
     compose_months,
-    load_month_savings,
     load_payroll_by_month,
     rollup,
 )
@@ -437,8 +436,8 @@ async def matrix(
             values[i] for values in budgets_by_category.values() if values[i] is not None
         ]
         total_budget.append(sum(month_budgets, Decimal("0.00")) if month_budgets else None)
-    review_book = await load_review_book(db)
-    full_history = await load_month_savings(db)
+    review_book = await cached_review_book(db)
+    full_history = await cached_month_savings(db)
     comparisons = [average_evidence(full_history, review_book, month) for month in months]
     category_averages = {
         c.id: [category_comparison(review_book, c.id, month) for month in months]

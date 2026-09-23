@@ -12,10 +12,11 @@ from app.schemas.metrics import (
     MetricWindow,
     SpendingMetricsOut,
 )
-from app.services.month_review import ReviewBook, load_review_book, month_shift
+from app.services.month_review import ReviewBook, month_shift
 from app.services.paycheck_calc import half_up2
+from app.services.read_cache import cached_month_savings, cached_review_book
 from app.services.review_input_v1 import revision
-from app.services.savings import MonthSavings, load_month_savings, rollup
+from app.services.savings import MonthSavings, rollup
 
 ZERO = Decimal("0.00")
 STATE_LABELS = {
@@ -160,10 +161,10 @@ def average_evidence(
 
 
 async def load_spending_metrics(db: AsyncSession, month: date | None = None) -> SpendingMetricsOut:
-    book = await load_review_book(db, extra_months=[month] if month else None)
+    book = await cached_review_book(db, extra_months=[month] if month else None)
     selected_month = month or book.default_month
     anchor = selected_month or book.today.replace(day=1)
-    rows = await load_month_savings(db)
+    rows = await cached_month_savings(db)
     state = book.months.get(selected_month) if selected_month else None
     row = next((row for row in rows if row.month == selected_month), None)
     completeness = (
