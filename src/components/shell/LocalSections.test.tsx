@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
@@ -124,6 +124,70 @@ describe('LocalSectionNav indicator, trailing slot and history (2026-09-13 polis
     expect(onChange).toHaveBeenLastCalledWith('inputs', undefined)
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Summary' }), { key: 'End' })
     expect(onChange).toHaveBeenLastCalledWith('inputs', { replace: true })
+  })
+})
+
+describe("keeping the reader's place (2026-09-23 spec §C10)", () => {
+  // The scope row is sticky precisely so a chip can be changed while reading lower cards; a
+  // chip, the month ribbon or a chart drill writes only search params, and used to land the
+  // reader at the top (600 → 0 measured on Spending, Net worth and Portfolio).
+  function ScrollHarness() {
+    const state = useLocalSections(SECTIONS, 'summary')
+    const location = useLocation()
+    const navigate = useNavigate()
+    return <>
+      <LocalSectionNav state={state} label="Page views" />
+      <span data-testid="key">{location.key}</span>
+      <button type="button" onClick={() => { const params = new URLSearchParams(location.search); params.set('range', 'ytd'); navigate({ search: params.toString() }) }}>Pick YTD</button>
+      <button type="button" onClick={() => navigate(-1)}>Browser back</button>
+      <button type="button" onClick={() => navigate(1)}>Browser forward</button>
+    </>
+  }
+  // The restore runs in a requestAnimationFrame after the commit.
+  const frame = () => act(() => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()) }))
+  const at = (y: number) => Object.defineProperty(window, 'scrollY', { value: y, configurable: true, writable: true })
+  let scrollTo: ReturnType<typeof vi.fn>
+  beforeEach(() => { scrollTo = vi.fn(); vi.stubGlobal('scrollTo', scrollTo); sessionStorage.clear(); at(0) })
+  afterEach(() => { vi.unstubAllGlobals(); at(0); sessionStorage.clear() })
+
+  it('a search-param write on the same section leaves the scroll alone', async () => {
+    render(<MemoryRouter initialEntries={['/spending']}><ScrollHarness /></MemoryRouter>)
+    at(600)
+    fireEvent.click(screen.getByRole('button', { name: 'Pick YTD' }))
+    await frame()
+    await frame()
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it("a section change restores that section's remembered depth — the top on a first visit", async () => {
+    render(<MemoryRouter initialEntries={['/taxes']}><ScrollHarness /></MemoryRouter>)
+    at(600)
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
+    await frame()
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: 'instant' })
+    at(250)
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
+    await frame()
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 600, behavior: 'instant' })
+  })
+
+  it('Back restores the depth recorded for the entry it returns to; with none recorded, the place holds', async () => {
+    render(<MemoryRouter initialEntries={['/spending']}><ScrollHarness /></MemoryRouter>)
+    // Layout records every entry's depth under scroll:<key> as the reader scrolls.
+    sessionStorage.setItem(`scroll:${screen.getByTestId('key').textContent}`, '600')
+    at(600)
+    fireEvent.click(screen.getByRole('button', { name: 'Pick YTD' }))
+    await frame()
+    at(900)
+    fireEvent.click(screen.getByRole('button', { name: 'Browser back' }))
+    await waitFor(() => expect(scrollTo).toHaveBeenLastCalledWith({ top: 600, behavior: 'instant' }))
+    scrollTo.mockClear()
+    // Forward onto the YTD entry, which was never scrolled in: same section, nothing recorded —
+    // the reader stays where they are rather than being thrown to the top.
+    fireEvent.click(screen.getByRole('button', { name: 'Browser forward' }))
+    await frame()
+    await frame()
+    expect(scrollTo).not.toHaveBeenCalled()
   })
 })
 

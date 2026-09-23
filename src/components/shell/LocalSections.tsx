@@ -27,6 +27,7 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
   const id = useId()
   const positions = useRef(new Map<string, number>())
   const priorLocation = useRef(location.key)
+  const priorSection = useRef<string | null>(null)
   const params = new URLSearchParams(location.search)
   const explicit = params.get('section')
   const legacy = options.resolveLegacy?.({ pathname: location.pathname, searchParams: params, hash: location.hash })
@@ -53,8 +54,11 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
   }, [sections, section, location.pathname, location.search, location.hash, navigate])
 
   useEffect(() => {
-    const changed = priorLocation.current !== location.key
+    const keyChanged = priorLocation.current !== location.key
+    // null on the first run: the page's arrival is Layout's business, not a section change.
+    const sectionChanged = priorSection.current !== null && priorSection.current !== section
     priorLocation.current = location.key
+    priorSection.current = section
     let observer: MutationObserver | undefined
     let timeout: ReturnType<typeof setTimeout> | undefined
     const focusTarget = () => {
@@ -75,11 +79,19 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
           observer.observe(document.body, { childList: true, subtree: true })
           timeout = setTimeout(() => observer?.disconnect(), 5000)
         }
-      } else if (changed) {
+      } else if (sectionChanged || (keyChanged && navigationType === 'POP')) {
+        // Keep the reader's place (2026-09-23 spec §C10, charts F1): only a new SECTION or a
+        // Back/Forward moves the page. A search-param write on the same section — a range or
+        // owner chip, the month ribbon, a chart drill — used to land here too and restore the
+        // section's remembered depth, 0 by default, throwing the reader to the top (600 → 0).
         let saved: string | null = null
-        try { saved = sessionStorage.getItem(`scroll:${location.key}`) } catch { /* Browser memory remains available when storage is blocked. */ }
-        const remembered = navigationType === 'POP' ? Number(saved ?? positions.current.get(section) ?? 0) : positions.current.get(section) ?? 0
-        if (window.scrollY !== remembered) window.scrollTo({ top: Number.isFinite(remembered) ? remembered : 0, behavior: 'instant' })
+        if (navigationType === 'POP') {
+          try { saved = sessionStorage.getItem(`scroll:${location.key}`) } catch { /* Browser memory remains available when storage is blocked. */ }
+        }
+        // A POP onto an entry never scrolled in has no record: the same section keeps its depth
+        // (it IS that page), another section takes that section's own memory.
+        const target = saved !== null ? Number(saved) : sectionChanged ? (positions.current.get(section) ?? 0) : null
+        if (target !== null && window.scrollY !== target) window.scrollTo({ top: Number.isFinite(target) ? target : 0, behavior: 'instant' })
       }
     })
     return () => { cancelAnimationFrame(frame); observer?.disconnect(); if (timeout) clearTimeout(timeout) }
