@@ -467,6 +467,11 @@ run. The encrypted path is exercised here, on the server, the first time you run
 script after setting it — the dev box has no OCI credentials, so this check happens at
 deploy time by design.
 
+Keep `.env` at mode 600 (`chmod 600 .env`) — it holds every secret on the box, the
+passphrase included. The script hands the passphrase to gpg on a file descriptor, never on
+the command line, so it never shows in `ps` while a backup runs, and Settings › Data ›
+System warns whenever the latest backup was uploaded unencrypted.
+
 ```bash
 sudo apt-get install -y python3-boto3
 chmod +x backend/scripts/backup_db.sh
