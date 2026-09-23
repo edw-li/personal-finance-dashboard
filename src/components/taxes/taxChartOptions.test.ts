@@ -10,9 +10,10 @@ import {
   SURFACE,
 } from '../../charts/theme'
 import { lightFromDark } from '../../charts/recolor'
+import { WARM_TINT } from '../../charts/scales'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { tooltipRows } from '../../testing/tooltipRows'
-import { DARK, LIGHT, contrastRatio } from '../../theme/tokens'
+import { DARK, LIGHT, contrastRatio, luminance } from '../../theme/tokens'
 import type { TaxSummaryOut, WhatIfDelta } from '../../types/api'
 import {
   TAX_COLORS,
@@ -265,14 +266,12 @@ describe('waterfallOption', () => {
     expect(remainders[7]).toBe(Number(summary.totals.take_home))
   })
 
-  it('wears theme slots only — grey gross, ramped taxes, positive take-home', () => {
+  it('wears theme slots only — grey gross, the tax hue groups, positive take-home', () => {
     const [, visible] = seriesOf(waterfallOption(summaryFixture(2024)))
     const colors = points(visible).map((p) => p.itemStyle?.color)
     expect(colors[0]).toBe(OTHER_SERIES_COLOR)
     expect(colors[8]).toBe(POSITIVE)
     expect(colors.slice(1, 8)).toEqual([...TAX_COLORS])
-    // One hue family for the seven taxes (the ≤3-hue law's sequential-ramp escape).
-    expect(TAX_COLORS.every((c) => (SEQUENTIAL_BLUE as readonly string[]).includes(c))).toBe(true)
     expect(TAX_COLORS).toHaveLength(TAX_LABELS.length)
   })
 
@@ -348,23 +347,34 @@ describe('waterfallOption', () => {
   })
 })
 
-describe('TAX_COLORS', () => {
-  it('walks UP one ramp from the first slot that clears the contrast floor', () => {
-    const slots = TAX_COLORS.map((c) => (SEQUENTIAL_BLUE as readonly string[]).indexOf(c))
-    // Index 4 is where the ramp starts clearing 3:1 on #171a21 (index 1 is 1.8:1), so the
-    // seven taxes start there and never reach below it. That floor is a DARK-surface fact;
-    // the light side is covered by "tax slot contrast on both surfaces" below.
-    expect(TAX_COLORS[0]).toBe(SEQUENTIAL_BLUE[4])
-    expect(slots.every((slot) => slot >= 4)).toBe(true)
-    // Strictly ascending: the ramp encodes POSITION in TAX_LABELS order, which is what
-    // lets a waterfall step and a stack segment for the same tax wear one color — and it
-    // puts the lightest slots on the smallest taxes, whose slivers need the contrast.
-    expect(slots.slice(1).every((slot, i) => slot > slots[i])).toBe(true)
+describe('TAX_COLORS — four hue groups (2026-09-23 spec §C7)', () => {
+  it('gives each kind of tax one hue, and tints only inside a group', () => {
+    // Seven shades of one blue could not be told apart (audit T11/F16), and on white the two
+    // largest taxes wore the palest slots. One hue per KIND of tax instead.
+    expect(TAX_COLORS).toEqual([
+      PALETTE[6], // Federal income — violet
+      PALETTE[3], // State — amber
+      PALETTE[0], // Payroll: Medicare ┐
+      SEQUENTIAL_BLUE[9], //   Soc. Sec.       ├ three steps of blue
+      SEQUENTIAL_BLUE[11], //  SDI             ┘
+      PALETTE[1], // Investment: Cap. gains ┐ two steps of orange
+      WARM_TINT, //   NIIT                   ┘
+    ])
+    // Seven lines, seven colours: a segment is never mistaken for its neighbour's twin.
+    expect(new Set(TAX_COLORS).size).toBe(TAX_LABELS.length)
   })
 
-  it('never uses the step that doubles as PALETTE[0] (the light recolor would pull it out of the ramp)', () => {
-    expect(TAX_COLORS).not.toContain(PALETTE[0])
-    expect(TAX_COLORS[2]).toBe(SEQUENTIAL_BLUE[7])
+  it("steps each group's tints one way in lightness, under both themes", () => {
+    // What the reader sees under light is the recolored twin, so the order is judged there too.
+    const light = (hex: string) => lightFromDark.get(hex.toLowerCase())!
+    for (const group of [TAX_COLORS.slice(2, 5), TAX_COLORS.slice(5, 7)]) {
+      for (const pick of [(hex: string) => hex, light]) {
+        const lum = group.map((hex) => luminance(pick(hex)))
+        const up = lum.every((l, i) => i === 0 || l > lum[i - 1])
+        const down = lum.every((l, i) => i === 0 || l < lum[i - 1])
+        expect(up || down, group.map(pick).join(' ')).toBe(true)
+      }
+    }
   })
 })
 
@@ -869,12 +879,12 @@ describe('whatIfDeltaBarOption', () => {
   })
 })
 
-// The tax charts borrow SEQUENTIAL_BLUE steps as ordered-CATEGORICAL slots, so unlike a
-// magnitude ramp (whose pale end is pale by design) each slot has to be legible in its own
-// right — under BOTH themes, since the light twins arrive through charts/recolor.ts and no
-// builder branches on theme. tokens.test.ts holds `palette` and `otherSeries` to 3:1 but
-// says nothing about the sequential scale, which is how the light shortfall below survived
-// C6.
+// The tax charts borrow SEQUENTIAL_BLUE steps as CATEGORICAL slots (the payroll tints and the
+// bracket ladder), so unlike a magnitude ramp (whose pale end is pale by design) each slot has
+// to be legible in its own right — under BOTH themes, since the light twins arrive through
+// charts/recolor.ts and no builder branches on theme. tokens.test.ts holds `palette` and
+// `otherSeries` to 3:1 but says nothing about the sequential scale, which is how the light
+// shortfall below survived C6.
 describe('tax slot contrast on both surfaces', () => {
   // The colours the user actually sees: the dark constant, and whatever lightFromDark
   // resolves it to. Reading the map (not LIGHT.sequential by index) means a re-election in
@@ -907,25 +917,21 @@ describe('tax slot contrast on both surfaces', () => {
     return [...tones]
   }
 
-  // RECORDED EXCEPTION (2026-09-04, C7). Slots 0 and 1 — Federal and State — read 2.23:1 and
-  // 2.78:1 against the light surface, and the ladder's alternating base A is the same
-  // 2.78:1 step. Kept, deliberately, because:
-  //   • the ramp cannot be fixed without ruining it. Reaching 3:1 on --bg (the binding
-  //     surface, luminance 0.9102) needs luminance <= 0.2701, and LIGHT.sequential[6]
-  //     already sits at 0.2468 — so steps 4 and 5 would have to squeeze into a 0.023-wide
-  //     band just above step 6, leaving a cliff down from step 3 (0.5243). Steps 4/5/6
-  //     would be indistinguishable and the spending heatmap's Absolute/Row modes, which
-  //     read the same scale through sequentialVisualMap, would band across their low-mid
-  //     range. A sequential ramp's low end is pale BECAUSE it means "small".
-  //   • the slot order already spends contrast where it is needed. Slots run darkest-to-
-  //     lightest on dark, and the fixed TAX_LABELS order puts the two LARGEST taxes on the
-  //     two weakest slots and the slivers (Cap. gains, NIIT) on the strongest — a 2.23:1
-  //     fill spanning a third of the chart is perceivable in a way a 2.23:1 sliver is not.
-  // Every OTHER slot must clear the floor on both surfaces, and this pair may not grow: the
-  // test below is what makes that a fact rather than an intention.
+  // RECORDED EXCEPTION (2026-09-04, C7). The bracket ladder's alternating base A reads 2.78:1
+  // against the light surface. (Until 2026-09-23 the Federal and State tax slots sat on this
+  // ramp's steps 4 and 5 at 2.23:1 and 2.78:1; spec §C7's four hue groups retired both, and
+  // every tax slot now clears the floor outright.) Kept, deliberately, because the ramp cannot
+  // be fixed without ruining it. Reaching 3:1 on --bg (the binding surface, luminance 0.9102)
+  // needs luminance <= 0.2701, and LIGHT.sequential[6] already sits at 0.2468 — so step 5
+  // would have to squeeze into a 0.023-wide band just above step 6, leaving a cliff down from
+  // step 3 (0.5243). Steps 4/5/6 would be indistinguishable and the spending heatmap's
+  // Absolute/Row modes, which read the same scale through sequentialVisualMap, would band
+  // across their low-mid range. A sequential ramp's low end is pale BECAUSE it means "small",
+  // and a ladder segment is always read beside its labelled neighbours.
+  // Every OTHER slot must clear the floor on both surfaces, and this exception may not grow:
+  // the test below is what makes that a fact rather than an intention.
   const LIGHT_EXCEPTIONS = new Map([
-    [SEQUENTIAL_BLUE[4], 2.23], // TAX_COLORS[0] — Federal, the largest bar
-    [SEQUENTIAL_BLUE[5], 2.78], // TAX_COLORS[1] — State; also the ladder's base A
+    [SEQUENTIAL_BLUE[5], 2.78], // the ladder's base A
   ])
 
   it('every tax slot and ladder tone clears 3:1 on the DARK surface and page', () => {
@@ -935,7 +941,7 @@ describe('tax slot contrast on both surfaces', () => {
     }
   })
 
-  it('clears 3:1 on the LIGHT surface too, except the two recorded slots', () => {
+  it('clears 3:1 on the LIGHT surface too, except the one recorded ladder tone', () => {
     for (const hex of [...TAX_COLORS, ...ladderTones()]) {
       const twin = light(hex)
       const ratio = contrastRatio(twin, LIGHT.surface)

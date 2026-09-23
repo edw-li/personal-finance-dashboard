@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { divergingVisualMap, rowNormalize, sequentialVisualMap, vsAverage } from './scales'
+import { WARM_TINT, divergingVisualMap, rowNormalize, sequentialVisualMap, vsAverage } from './scales'
 import { DIVERGING, MUTED, SEQUENTIAL_BLUE } from './theme'
 import { formatCurrencyCompact } from '../utils/format'
 
@@ -24,6 +24,14 @@ describe('divergingVisualMap', () => {
     expect(orangeHigh.inRange.color).toEqual([...DIVERGING].reverse())
     expect(orangeHigh.text).toEqual(['above', 'below'])
     expect(divergingVisualMap({ span: 2, center: 10, formatter: String })).toMatchObject({ min: 8, max: 12 })
+  })
+})
+
+// Lent to the tax composition's Investment pair as a second orange beside PALETTE[1]
+// (2026-09-23 spec §C7): exported here so the diverging tuple keeps one reader file.
+describe('WARM_TINT', () => {
+  it("is the diverging scale's brightest warm step and nothing else", () => {
+    expect(WARM_TINT).toBe(DIVERGING[0])
   })
 })
 
