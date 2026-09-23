@@ -206,10 +206,14 @@ reorder.liftedId         // K | null
    the page), the container scrolls at `18 × (1 − d/40)²` px per frame. It stops at the ends and when
    the pointer leaves the zone.
 6. **Drop.**
-   - `pointerup` commits: `onCommit` fires, then a FLIP settle.
-   - The FLIP settle: the unit's visual top is recorded before the reorder renders. After it renders, the
-     unit starts at the recorded offset and eases to 0 over `--t-fast`.
+   - On `pointerup` the unit eases from under the pointer into its gap over `--t-fast`. Only then
+     does `onCommit` fire, inside `flushSync`, so the DOM reorder lands on rows that already stand
+     where it puts them, and the transforms clear in the same frame. (Amended 2026-09-23 at lane R0's
+     review: the settle comes before the commit, so there is no FLIP measurement after the reorder.)
+   - The save therefore starts about 120 ms after release, and the list's `active` stays true for that
+     window.
    - Displaced rows need no animation; they already stand where they end up.
+   - Keyboard and reduced-motion drops commit immediately.
 7. **Cancel.** Any of these cancels, returning every unit to its place over `--t-fast`:
    - Escape;
    - `pointercancel` or `lostpointercapture` without an up;
