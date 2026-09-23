@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { ENTITY, entityCssVar } from '../../charts/entities'
 import { calendarEvent } from '../../testing/calendarFixtures'
 import {
   CHIP_PRIORITY,
@@ -20,11 +21,19 @@ import {
 } from './calendarView'
 
 describe('SOURCE_COLORS', () => {
-  it('is the FIXED source → slot map over --chart-1…7 with custom on --muted', () => {
+  it('is the registry\'s source → entity map: one colour per money entity, custom on --muted', () => {
+    // 2026-09-23 spec §C2: paydays ARE salary, vests ARE RSU, ex-dividends ARE investment
+    // income — the same hues the money flow, comp and dividend charts give them — and tax
+    // deadlines wear the one tax hue.
     expect(SOURCE_COLORS).toEqual({
-      rsu: 'var(--chart-1)', espp: 'var(--chart-2)', dividend: 'var(--chart-3)', payroll: 'var(--chart-4)',
-      tax: 'var(--chart-5)', card: 'var(--chart-6)', ritual: 'var(--chart-7)', custom: 'var(--muted)',
+      rsu: 'var(--chart-2)', espp: 'var(--chart-3)', dividend: 'var(--chart-4)', payroll: 'var(--chart-1)',
+      tax: 'var(--chart-8)', card: 'var(--chart-5)', ritual: 'var(--chart-7)', custom: 'var(--muted)',
     })
+    expect(SOURCE_COLORS.payroll).toBe(entityCssVar(ENTITY.salary))
+    expect(SOURCE_COLORS.rsu).toBe(entityCssVar(ENTITY.rsu))
+    expect(SOURCE_COLORS.espp).toBe(entityCssVar(ENTITY.espp))
+    expect(SOURCE_COLORS.dividend).toBe(entityCssVar(ENTITY.investmentIncome))
+    expect(SOURCE_COLORS.tax).toBe(entityCssVar(ENTITY.tax))
     expect(new Set(Object.values(SOURCE_COLORS)).size).toBe(8)
     expect(SOURCE_ORDER).toHaveLength(8)
     for (const source of SOURCE_ORDER) expect(SOURCE_LABELS[source].length).toBeGreaterThan(0)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
+import { ENTITY } from '../../charts/entities'
 import { PALETTE, SURFACE } from '../../charts/theme'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { tooltipRows } from '../../testing/tooltipRows'
@@ -66,7 +67,9 @@ describe('monthlyIncomeOption', () => {
     const series = seriesOf(option!)
     expect(series).toHaveLength(1)
     expect(series[0].type).toBe('bar')
-    expect(series[0].color).toBe(PALETTE[0]) // no new hue — slot 1 blue
+    // Investment/dividend income's registry hue (charts/entities.ts) — the same one the money
+    // flow's investment-income node and the calendar's ex-dividend chips wear.
+    expect(series[0].color).toBe(ENTITY.investmentIncome)
   })
 
   it('zero-fills the quiet months between payments', () => {

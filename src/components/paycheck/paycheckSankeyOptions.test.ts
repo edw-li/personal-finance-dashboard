@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
+import { ENTITY } from '../../charts/entities'
 import { MUTED, PALETTE, POSITIVE } from '../../charts/theme'
 import type { PaycheckBreakdownOut, PaycheckProfileOut } from '../../types/api'
 import { paycheckSankeyCsv, paycheckSankeyOption } from './paycheckSankeyOptions'
@@ -119,24 +120,32 @@ describe('paycheckSankeyOption', () => {
     ])
   })
 
-  it('keeps intermediates gray, terminals on their FIXED waterfall slots, net pay green', () => {
+  it('keeps intermediates and take-home gray, terminals on their FIXED registry colours', () => {
     const colorOf = (option: EChartsOption, name: string) =>
       sankeyOf(option).data?.find((n) => n.name === name)?.itemStyle?.color
     const option = paycheckSankeyOption(breakdown())!
     expect(colorOf(option, 'Gross')).toBe(MUTED)
     expect(colorOf(option, 'Taxable')).toBe(MUTED)
     expect(colorOf(option, 'Post-tax')).toBe(MUTED)
-    expect(colorOf(option, 'Traditional 401(k)')).toBe(PALETTE[0])
+    // 2026-09-23 spec §C2: pre-tax savings wears the kept green, withholding the one tax hue,
+    // ESPP its registry hue and take-home the structural grey — no two greens, no two
+    // entities on one colour.
+    expect(colorOf(option, 'Traditional 401(k)')).toBe(ENTITY.preTaxSavings)
     expect(colorOf(option, 'Dental & vision')).toBe(PALETTE[1])
-    expect(colorOf(option, 'HSA')).toBe(PALETTE[2])
-    expect(colorOf(option, 'Withholding')).toBe(PALETTE[3])
+    expect(colorOf(option, 'HSA')).toBe(PALETTE[0])
+    expect(colorOf(option, 'Withholding')).toBe(ENTITY.tax)
     // Roth (slot 4) is omitted this check — After-tax keeps ITS slot 5: slots are fixed
     // per ENTITY, so an omitted zero branch never reshuffles its neighbours' hues.
-    expect(colorOf(option, 'After-tax 401(k)')).toBe(PALETTE[5])
-    expect(colorOf(option, 'ESPP')).toBe(PALETTE[6])
-    expect(colorOf(option, 'Net pay')).toBe(POSITIVE)
+    expect(colorOf(option, 'After-tax 401(k)')).toBe(PALETTE[6])
+    expect(colorOf(option, 'ESPP')).toBe(ENTITY.espp)
+    expect(colorOf(option, 'Net pay')).toBe(ENTITY.structural)
+    // POSITIVE is Saved's (cash kept) — take-home is not kept yet, so it never wears it here.
+    expect(sankeyOf(option).data?.some((n) => n.itemStyle?.color === POSITIVE)).toBe(false)
     const withRoth = paycheckSankeyOption(breakdown({ roth_401k: '150.00' }))!
     expect(colorOf(withRoth, 'Roth 401(k)')).toBe(PALETTE[4])
+    // Within the chart, only the structural grey repeats (Gross, Taxable, Post-tax, Net pay).
+    const hues = (sankeyOf(withRoth).data ?? []).map((n) => n.itemStyle?.color).filter((c) => c !== MUTED)
+    expect(new Set(hues).size).toBe(hues.length)
   })
 
   it('tooltips echo the TABLE figures, never link sums (rounding honesty, spec §4)', () => {
