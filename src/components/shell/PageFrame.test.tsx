@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PageFrame, { usePageFrame } from './PageFrame'
+import { framePartSelector } from './pageFrameParts'
 
 afterEach(() => {
   cleanup()
@@ -116,6 +117,18 @@ describe('PageFrame', () => {
     )
     expect(document.querySelector('.loading-dim.is-loading')).toBeTruthy()
     expect(screen.getByTestId('cache').textContent).toBe('true')
+  })
+
+  // Code review 11: other shell code finds the scope row and the body by a named data attribute —
+  // a contract — never by the class names the stylesheet owns.
+  it('names its scope row and its body for the shell code that has to find them', () => {
+    render(
+      <PageFrame title="Net worth" scopeRow={<span>scope</span>} resource={{ status: 'ready' }}>
+        <p>body</p>
+      </PageFrame>,
+    )
+    expect(document.querySelector(framePartSelector('scope'))).toBe(document.querySelector('.page-frame-scope'))
+    expect(document.querySelector(framePartSelector('body'))).toBe(document.querySelector('.page-frame-body'))
   })
 
   it('the scope row gains is-stuck when its sentinel leaves the viewport', () => {

@@ -7,6 +7,7 @@ import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from './LocalSections'
+import { framePartProps, framePartSelector } from './pageFrameParts'
 // The hold loop is holdPosition's own unit (holdPosition.test.ts); here only WHEN a landing asks.
 const release = vi.hoisted(() => vi.fn())
 vi.mock('./holdPosition', () => ({ holdPosition: vi.fn(() => release) }))
@@ -208,8 +209,8 @@ describe('holding a deep link where it lands (2026-09-23 spec §C11)', () => {
     })
     // PageFrame's shape: the sticky scope row, then the body the target lives in.
     return <div>
-      <div className="page-frame-scope"><LocalSectionNav state={state} label="Page views" /></div>
-      <div className="page-frame-body">
+      <div {...framePartProps('scope')}><LocalSectionNav state={state} label="Page views" /></div>
+      <div {...framePartProps('body')}>
         <LocalSectionPanel state={state} section="summary"><p>Summary content</p></LocalSectionPanel>
         <LocalSectionPanel state={state} section="inputs"><section id="deep">Deep card</section></LocalSectionPanel>
       </div>
@@ -221,7 +222,7 @@ describe('holding a deep link where it lands (2026-09-23 spec §C11)', () => {
   const landing = ({ scrollY, rowTop, targetTop }: { scrollY: number; rowTop: number; targetTop: number }) => {
     Object.defineProperty(window, 'scrollY', { value: scrollY, configurable: true, writable: true })
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-      const top = this.classList.contains('page-frame-scope') ? rowTop : this.id === 'deep' ? targetTop : 0
+      const top = this.matches(framePartSelector('scope')) ? rowTop : this.id === 'deep' ? targetTop : 0
       return { top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect
     })
   }

@@ -5,6 +5,7 @@ import { EASE_OUT, MOTION_MS } from '../../theme/motion'
 import { prefersReducedMotion } from '../useReducedMotion'
 import { holdPosition } from './holdPosition'
 import { LocalSectionVisibility } from './localSectionContext'
+import { framePartSelector } from './pageFrameParts'
 import './localSections.css'
 
 export interface LocalSection<T extends string> { id: T; label: string; badge?: ReactNode }
@@ -133,7 +134,9 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
  */
 function landsUnderOpeningScrim(target: HTMLElement): boolean {
   if (window.scrollY <= 0 || prefersReducedMotion()) return false
-  const row = target.closest('.page-frame-body')?.parentElement?.querySelector(':scope > .page-frame-scope')
+  const row = target
+    .closest(framePartSelector('body'))
+    ?.parentElement?.querySelector(`:scope > ${framePartSelector('scope')}`)
   // A stuck row (top 0) means the landing reached the snap line, below the scrim.
   if (!row || row.getBoundingClientRect().top <= 0) return false
   return target.getBoundingClientRect().top + window.scrollY < window.innerHeight / 2

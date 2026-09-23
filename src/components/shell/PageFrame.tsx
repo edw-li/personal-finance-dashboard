@@ -4,6 +4,7 @@ import PageSkeleton from '../PageSkeleton'
 import { useStagger } from '../useStagger'
 import '../panels.css'
 import './shell.css'
+import { framePartProps } from './pageFrameParts'
 
 // One component owns the top of every page and its lifecycle states (2026-09-03 shell
 // spec §5). Pages keep their own state and hand a `resource` summary here; the frame
@@ -151,7 +152,7 @@ export default function PageFrame({
           {/* The sentinel, the is-stuck hairline and the --sticky-inset measurement all describe
               THIS element, so the strip lives inside it (2026-09-13 polish §3) and every reveal
               timeline, scrim and InfoHint flip keeps measuring the right box. */}
-          <div ref={scopeRef} className={`page-frame-scope${stuck ? ' is-stuck' : ''}`}>
+          <div ref={scopeRef} className={`page-frame-scope${stuck ? ' is-stuck' : ''}`} {...framePartProps('scope')}>
             {sections !== undefined && <div className="page-frame-sections">{sections}</div>}
             {scopeRow !== undefined && <div className="page-frame-scope-row">{scopeRow}</div>}
           </div>
@@ -162,7 +163,7 @@ export default function PageFrame({
           eye is already on them, so they appear at once. ONE wrapper around all three
           lifecycle branches, not one per branch — the entrance then runs once per page mount
           instead of replaying when the skeleton gives way to the payload. */}
-      <div className="page-frame-body" ref={bodyRef}>
+      <div className="page-frame-body" ref={bodyRef} {...framePartProps('body')}>
         {/* The whole spec, spread: PageSkeleton owns the defaults, so a prop added there reaches
             every page without a second forwarding list to keep in step. */}
         {showSkeleton && <PageSkeleton {...skeleton} />}
