@@ -62,6 +62,24 @@ describe('axisTooltip row order', () => {
     expect(tooltipRows(html).head).toBe('&lt;i&gt;Jun&lt;/i&gt;')
   })
 
+  it('prints a reported total when the builder has one, and its own sum otherwise (2026-09-23 §C7)', () => {
+    // The tax trend's case: each addend arrives rounded to the cent on its own, so their sum can
+    // sit a cent off the total the server reports — and the server's figure is the one to print.
+    const { formatter } = axisTooltip({
+      groups: ['A', 'B'],
+      totalOf: (index) => (index === 0 ? 3.01 : null),
+    })
+    const total = (dataIndex: number) =>
+      tooltipRows(
+        formatter([
+          P({ seriesName: 'A', axisValueLabel: 'x', dataIndex, value: 1 }),
+          P({ seriesName: 'B', dataIndex, value: 2 }),
+        ]),
+      ).rows.at(-1)
+    expect(total(0)).toEqual({ kind: 'total', label: 'Total', value: '$3.01' })
+    expect(total(1)).toEqual({ kind: 'total', label: 'Total', value: '$3.00' })
+  })
+
   it('formats by unit and can drop the Total row', () => {
     expect(tooltipRows(axisTooltip({ unit: 'percent' }).formatter([P({ seriesName: 'Savings', value: 0.35 })])).rows[0].value).toBe('35.0%')
     expect(tooltipRows(axisTooltip({ unit: 'shares' }).formatter([P({ seriesName: 'Vest', value: 1822 })])).rows[0].value).toBe('1,822')

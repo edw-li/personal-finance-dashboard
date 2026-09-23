@@ -93,17 +93,27 @@ vi.mock('../api/monthReview', async importOriginal => ({
 // factory keeps the JSX runtime out of the hoisted scope.
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
+  // Which option OBJECT a chart was handed: the real EChart repaints on a new one, already-drawn,
+  // even when it is byte-identical — and a repaint mid-entrance cuts it (code re-review 2).
+  const optionIds = new WeakMap<object, number>()
+  let handed = 0
+  const optionId = (option: object) => {
+    if (!optionIds.has(option)) optionIds.set(option, ++handed)
+    return optionIds.get(option)
+  }
   return {
     default: ({
       option,
       ariaLabel,
       onClick,
       animateEntrance = true,
+      onWidth,
     }: {
-      option: { xAxis?: { data?: unknown[] }; series?: { type?: string; data?: unknown[] }[] } | null
+      option: { xAxis?: { data?: unknown[]; axisLabel?: { customValues?: unknown[] } }; series?: { type?: string; name?: string; data?: unknown[] }[] } | null
       ariaLabel?: string
       onClick?: (params: { dataIndex?: number }) => void
       animateEntrance?: boolean
+      onWidth?: (width: number) => void
     }) =>
       createElement('div', {
         'data-testid': 'echart',
@@ -111,6 +121,8 @@ vi.mock('../components/EChart', async () => {
         'aria-label': ariaLabel,
         'data-categories': (option?.xAxis?.data ?? []).join(','),
         'data-spending-points': JSON.stringify(option?.series?.find(series => series.type === 'bar')?.data ?? []),
+        // The series a chart draws, by name (PortfolioPage.test's marker) — 2026-09-23 spec §C8.
+        'data-series': (option?.series ?? []).map((series) => series.name ?? '').join('|'),
         // The money-flow sankey's nodes as name:colour — which fold coloured the fan.
         'data-sankey': ((option?.series?.find((series) => series.type === 'sankey')?.data ?? []) as { name?: string; depth?: number; itemStyle?: { color?: string } }[])
           .filter((node) => node.depth === 3)
@@ -122,6 +134,10 @@ vi.mock('../components/EChart', async () => {
         // enough to walk the click-through door without a canvas (SpendingPage.test's
         // idiom). Charts given no handler stay inert, like the real thing.
         onClick: () => onClick?.({ dataIndex: 0 }),
+        // The weekly axis's label set, counted; a right-click stands in for a 630px measurement.
+        'data-xlabels': String(option?.xAxis?.axisLabel?.customValues?.length ?? ''),
+        'data-option': option === null ? '' : String(optionId(option)),
+        onContextMenu: () => onWidth?.(630),
       }),
   }
 })
@@ -1917,6 +1933,73 @@ describe('OverviewPage — shell frame and owner scope', () => {
     await screen.findByText('Net worth — Aug 2026')
     // Same holdings payload, same history: only the scope changed, and the ping is gone.
     expect(categoriesOf(perfChart())).not.toContain(livePoint)
+  })
+
+  // 2026-09-23 spec §C8 (shell F5): the starting-balance line invited "we beat the S&P nine-fold";
+  // the home card compares only against the same deposits in VOO.
+  it('states the gap to the same deposits in VOO on the performance card', async () => {
+    // Both legs start level, as the server's always do (the VOO leg is seeded with the first
+    // week's balance): 96,000.00 → 114,421.07 against 96,000.00 → 99,001.13 — $15,419.94 ahead.
+    serve({ history: historyOut({ market_value: ['96000.00', '97500.00', '114421.07'] }) })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    const card = screen
+      .getByLabelText(/Line chart of portfolio value against cost basis/)
+      .closest('section') as HTMLElement
+    expect(card.querySelector('.chart-lede')?.textContent).toBe(
+      'Ahead of the same deposits in VOO by $15.4K',
+    )
+  })
+
+  // Code review 2: the row the sentence will fill is reserved while the investments feed is in
+  // flight, so the card does not grow by a line when it lands. It has to be a NO-BREAK space:
+  // a plain one collapses to 0px (measured) and reserves nothing; U+00A0 keeps the line (19.69px).
+  it('reserves the lede row with a no-break space while the investments load', async () => {
+    serve()
+    vi.mocked(fetchHistory).mockImplementation(() => new Promise<never>(() => {}))
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    // No chart yet — the card is its skeleton, found by its title.
+    const card = screen.getByText('Portfolio performance').closest('section') as HTMLElement
+    expect(card.querySelector('.chart-lede')?.textContent).toBe('\u00a0')
+  })
+
+  // Code review 5: the card's weekly axis takes as many month labels as the card is wide for.
+  it('labels its weekly axis for the width the card measures', async () => {
+    const dates = Array.from({ length: 153 }, (_, i) => addDays('2023-10-23', 7 * i))
+    const flat = dates.map(() => '1.00')
+    serve({ history: historyOut({ dates, market_value: flat, cost_basis: flat, sp500: flat, benchmark: flat }) })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    const perf = () => screen.getByLabelText(/Line chart of portfolio value against cost basis/)
+    await waitFor(() => expect(perf().getAttribute('data-xlabels')).toBe('12')) // quarter starts
+    fireEvent.contextMenu(perf())
+    await waitFor(() => expect(perf().getAttribute('data-xlabels')).toBe('6')) // half-years on a half card
+  })
+
+  // Code re-review 2: the page's data merges four feeds that land independently. The spending
+  // feed landing after the investments used to hand the performance chart a new, byte-identical
+  // option — and the chart repainted it already-drawn, cutting the entrance it had just begun.
+  it("keeps the performance chart's option when another of the page's feeds lands", async () => {
+    const payload = serve()
+    let landSpending: (matrix: typeof payload.matrix) => void = () => {}
+    vi.mocked(fetchMatrix).mockImplementation(() => new Promise((resolve) => { landSpending = resolve }))
+    renderPage()
+    const perf = () => screen.getByLabelText(/Line chart of portfolio value against cost basis/)
+    await waitFor(() => expect(perf().getAttribute('data-series')).toContain('Portfolio value'))
+    const drawn = perf().getAttribute('data-option')
+    expect(screen.queryByLabelText(/Bar chart of living spending/)).toBeNull()
+    await act(async () => landSpending(payload.matrix))
+    await screen.findByLabelText(/Bar chart of living spending/)
+    expect(perf().getAttribute('data-option')).toBe(drawn)
+  })
+
+  it('draws the portfolio against the same deposits in VOO only — no starting-balance line', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    const perf = screen.getByLabelText(/Line chart of portfolio value against cost basis/)
+    expect(perf.getAttribute('data-series')).toBe('Portfolio value|Cost basis|Same deposits in VOO|Live')
   })
 
   it('says so on the two cards an owner scope cannot reach, and nothing when it is All', async () => {

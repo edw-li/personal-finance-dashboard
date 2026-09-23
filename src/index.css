@@ -70,8 +70,8 @@
      (1 = the page's own --bg, 0 = no scrim at all). Not in the reduce block below: reduced
      motion switches the scrims off outright (panels.css §4b), which is a stronger statement
      than flattening their dials. */
-  --scrim-h: 120px;
-  --scrim-alpha: 1;
+  --scrim-h: 32px;
+  --scrim-alpha: 0.5;
   /* Density: comfortable is the pre-2026-09 geometry; compact scales the root font and the
      card/table padding (shell spec §11). */
   --density-card-pad: 1.1rem 1.25rem 1.25rem;

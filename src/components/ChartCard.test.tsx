@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EChartsOption } from '../charts/echarts'
 import { hintLabel } from './InfoHint'
 
@@ -7,17 +7,25 @@ import { hintLabel } from './InfoHint'
 vi.mock('./EChart', async () => {
   const { createElement } = await import('react')
   return {
-    default: ({ ariaLabel, animateEntrance = true, group, height, onClick, onDataZoom }: { ariaLabel?: string; animateEntrance?: boolean; group?: string; height?: number | 'fill'; onClick?: (params: { dataIndex: number; seriesIndex: number }) => void; onDataZoom?: (window: { startValue: number; endValue: number }) => void }) =>
-      createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel, 'data-animate': String(animateEntrance), 'data-group': group ?? '', 'data-height': String(height), style: { height }, onClick: () => onClick?.({ dataIndex: 1, seriesIndex: 0 }), onDoubleClick: () => onDataZoom?.({ startValue: 1, endValue: 2 }) }),
+    default: ({ ariaLabel, animateEntrance = true, group, height, onClick, onDataZoom, onWidth }: { ariaLabel?: string; animateEntrance?: boolean; group?: string; height?: number | 'fill'; onClick?: (params: { dataIndex: number; seriesIndex: number }) => void; onDataZoom?: (window: { startValue: number; endValue: number }) => void; onWidth?: (width: number) => void }) =>
+      createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel, 'data-animate': String(animateEntrance), 'data-group': group ?? '', 'data-height': String(height), style: { height }, onClick: () => onClick?.({ dataIndex: 1, seriesIndex: 0 }), onDoubleClick: () => onDataZoom?.({ startValue: 1, endValue: 2 }), onContextMenu: () => onWidth?.(640) }),
   }
 })
 vi.mock('../utils/download', () => ({ toCsv: vi.fn(() => 'CSV'), downloadDataUrl: vi.fn(), downloadText: vi.fn() }))
+// The anchoring loop is holdPosition's own unit; here only WHAT the card asks it to hold matters.
+// The reader's-input clock stays real: pressing things is how these tests say who changed what.
+vi.mock('./shell/holdPosition', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./shell/holdPosition')>()),
+  holdPosition: vi.fn(() => () => {}),
+}))
 
 import ChartCard from './ChartCard'
 import PageFrame from './shell/PageFrame'
 import { CHART_CARD_ROWS } from './skeletonMetrics'
 import DetailPanelProvider, { useDetailPanel } from './details/DetailPanelProvider'
 import type { ChartSelection } from '../types/metrics'
+import { holdPosition } from './shell/holdPosition'
+import { LocalSectionVisibility } from './shell/localSectionContext'
 
 const OPTION = { series: [] } as EChartsOption
 const base = { title: 'Net worth', hint: 'What it shows.', ariaLabel: 'Line chart of net worth', empty: 'No snapshots yet.', exportName: 'net-worth' }
@@ -176,6 +184,112 @@ describe('ChartCard persistent interactions', () => {
     expect(screen.getByTestId('echart')).toBe(canvas)
     expect(screen.getByText('Pinned: August')).toBeTruthy()
     expect(document.querySelector('.detail-panel')).toBeTruthy()
+  })
+  // 2026-09-23 spec §C10: a drill docks the detail panel and the page narrows around the chart —
+  // the card names ITSELF as the element to hold in place while that happens. Review round 1: only
+  // for a selection that changes UNDER a chart already on screen. On arrival — a new page, Back,
+  // a section coming into view — the page's own scroll restore must win, so nothing is held.
+  describe('holding the drilled chart (2026-09-23 spec §C10)', () => {
+    const card = () => document.querySelector('section.chart-card') as HTMLElement
+    // jsdom lays nothing out; the card sits where each test says.
+    const place = (top: number, bottom: number) =>
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+        return (this.matches('section.chart-card') ? { top, bottom } : { top: 0, bottom: 0 }) as DOMRect
+      })
+    let width = 0
+    beforeEach(() => {
+      width = window.innerWidth
+      Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true }) // wide enough to dock
+      vi.mocked(holdPosition).mockClear()
+    })
+    afterEach(() => {
+      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true })
+      vi.restoreAllMocks()
+    })
+
+    it('holds its own card when the reader drills into the chart', () => {
+      place(120, 560)
+      render(<DetailPanelProvider><ChartCard {...base} option={history} selectionAdapter={() => selection} /></DetailPanelProvider>)
+      fireEvent.click(screen.getByTestId('echart'))
+      expect(holdPosition).toHaveBeenCalledWith(card())
+    })
+
+    it('opens a selection it arrived with without holding the page', () => {
+      place(120, 560)
+      render(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} /></DetailPanelProvider>)
+      expect(document.querySelector('.detail-panel')).toBeTruthy()
+      expect(holdPosition).not.toHaveBeenCalled()
+    })
+
+    it('holds the card when the reader changes its selection after it drew — a month-ribbon pick', () => {
+      place(120, 560)
+      const { rerender } = render(<DetailPanelProvider><ChartCard {...base} option={history} selection={null} /></DetailPanelProvider>)
+      fireEvent.pointerDown(document.body) // the ribbon chip, pressed
+      rerender(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} /></DetailPanelProvider>)
+      expect(holdPosition).toHaveBeenCalledWith(card())
+    })
+
+    it('holds nothing for a selection the page lands on its own after the chart drew — Back, a link', () => {
+      // /spending?month=… : the chart draws, then the month's figures land, with no input between.
+      place(120, 560)
+      const { rerender } = render(<DetailPanelProvider><ChartCard {...base} option={history} selection={null} /></DetailPanelProvider>)
+      rerender(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} /></DetailPanelProvider>)
+      expect(document.querySelector('.detail-panel')).toBeTruthy()
+      expect(holdPosition).not.toHaveBeenCalled()
+    })
+
+    it('holds nothing for a selection that arrives with the chart’s first drawing', () => {
+      place(120, 560)
+      const { rerender } = render(<DetailPanelProvider><ChartCard {...base} option={null} busy selection={null} /></DetailPanelProvider>)
+      rerender(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} /></DetailPanelProvider>)
+      expect(document.querySelector('.detail-panel')).toBeTruthy()
+      expect(holdPosition).not.toHaveBeenCalled()
+    })
+
+    it('holds nothing for a chart scrolled out of view', () => {
+      place(-900, -40)
+      const { rerender } = render(<DetailPanelProvider><ChartCard {...base} option={history} selection={null} /></DetailPanelProvider>)
+      fireEvent.pointerDown(document.body)
+      rerender(<DetailPanelProvider><ChartCard {...base} option={history} selection={selection} /></DetailPanelProvider>)
+      expect(document.querySelector('.detail-panel')).toBeTruthy()
+      expect(holdPosition).not.toHaveBeenCalled()
+    })
+
+    // Code review: Expand moves the card into the modal dialog, which closes the docked panel — and
+    // the page behind the dialog cannot bring a top-layer card back (1200 → 739, 35 corrections).
+    it('holds nothing while the card is expanded — it sits in the modal dialog', () => {
+      place(120, 560)
+      render(<DetailPanelProvider><ChartCard {...base} option={history} selectionAdapter={() => selection} /></DetailPanelProvider>)
+      fireEvent.click(screen.getByTestId('echart'))
+      expect(holdPosition).toHaveBeenCalledTimes(1) // the drill itself
+      vi.mocked(holdPosition).mockClear()
+      fireEvent.click(screen.getByRole('button', { name: 'Expand Net worth' }))
+      expect(document.querySelector('.detail-panel')).toBeNull() // the dock let go…
+      expect(holdPosition).not.toHaveBeenCalled() // …and nothing was held for it
+    })
+
+    it('holds nothing when its section comes into view with a selection', () => {
+      place(120, 560)
+      const view = (visible: boolean) => (
+        <DetailPanelProvider>
+          <LocalSectionVisibility.Provider value={visible}>
+            <ChartCard {...base} option={history} selection={selection} />
+          </LocalSectionVisibility.Provider>
+        </DetailPanelProvider>
+      )
+      const { rerender } = render(view(false))
+      fireEvent.pointerDown(document.body) // the section's tab, pressed
+      rerender(view(true))
+      expect(document.querySelector('.detail-panel')).toBeTruthy()
+      expect(holdPosition).not.toHaveBeenCalled()
+    })
+  })
+  // Code review 5: a card whose option depends on its width hears the chart's measurement.
+  it("passes the chart's measured width through", () => {
+    const onWidth = vi.fn()
+    render(<ChartCard {...base} option={OPTION} onWidth={onWidth} />)
+    fireEvent.contextMenu(screen.getByTestId('echart'))
+    expect(onWidth).toHaveBeenCalledWith(640)
   })
   it('expanded → the chart fills the dialog; collapsed → the card height comes back', () => {
     render(<ChartCard {...base} option={OPTION} height={320} />)

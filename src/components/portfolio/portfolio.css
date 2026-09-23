@@ -34,9 +34,17 @@
 /* Long free text must not stretch the row past the viewport (.port-table td already
    pins white-space: nowrap, so ellipsis needs only a bound + overflow). */
 .notes-cell { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
-.chart-col { width: 120px; } /* the 110px sparkline + cell padding: no reflow per row */
+.chart-col { width: 120px; } /* the 1Y cell + cell padding: no reflow per row */
 .sparkline { display: block; } /* inline SVG baseline gap otherwise inflates row height */
 .sparkline-empty { color: var(--muted); } /* the "no bars yet" dash reads as absence */
+/* The 1Y cell (2026-09-23 spec §C9, PF-11): a 60px line and its printed change side by side
+   inside the old 110px line's budget, so the twelve-column table does not grow. */
+.sparkline-cell { display: inline-flex; align-items: center; gap: 6px; }
+.sparkline-change { min-width: 6.5ch; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.sparkline-change.pos { color: var(--positive); }
+.sparkline-change.neg { color: var(--negative); }
+/* Where the year began: faint and dashed, a reference and not a second line. */
+.sparkline-baseline { stroke: var(--muted); stroke-opacity: 0.45; stroke-width: 1; stroke-dasharray: 2 2; }
 .warn-icon { color: var(--warn); display: inline-flex; }
 .pos { color: var(--positive); }
 .neg { color: var(--negative); }

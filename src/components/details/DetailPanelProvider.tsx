@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { ChevronLeft, Layers, Maximize2, Minimize2, PanelRight, X } from 'lucide-react'
 import { MOTION_MS } from '../../theme/motion'
 import { prefersReducedMotion } from '../useReducedMotion'
+import { holdPosition } from '../shell/holdPosition'
 import Segmented from '../shell/Segmented'
 import type { SegmentedOption } from '../shell/Segmented'
 import './details.css'
@@ -21,6 +22,17 @@ export interface DetailPanelRequest {
   /** Default true. `false` (the assistant — 2026-09-13 spec §4): in overlay or reading mode the
    *  page stays live — no backdrop, no aria-modal, no inert, no Tab trap. Escape still closes it. */
   modal?: boolean
+  /** Held where it is on screen while the dock opens or lets go and the page reflows around it
+   *  — the chart a drill came from (2026-09-23 spec §C10). A getter is asked at that moment, so
+   *  the requester can decline then (ChartCard: never on arrival, never off screen — review
+   *  round 1); null holds nothing. */
+  anchor?: HTMLElement | null | (() => HTMLElement | null)
+}
+
+/** Holds the request's anchor if it names one NOW — measured before the commit that moves it. */
+function holdAnchor(anchor: DetailPanelRequest['anchor']) {
+  const element = typeof anchor === 'function' ? anchor() : anchor
+  if (element) holdPosition(element)
 }
 
 interface DetailPanelApi {
@@ -140,6 +152,9 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
       commit([...current.slice(0, existing), { ...current[existing], ...request, returnTo: current[existing].returnTo }])
       return
     }
+    // A dock opening on an empty stack narrows the page under the reader: hold the element the
+    // request names (the drilled chart) where it is, measured before this commit moves it.
+    if (current.length === 0 && modeRef.current === 'dock') holdAnchor(request.anchor)
     commit([...current, {
       ...request,
       returnTo: request.returnTo ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null),
@@ -176,6 +191,8 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
       if (next.length === 0) {
         returnFocus.current = entry.returnTo ?? null
         beginExit(entry)
+        // The dock lets go and the page widens back: hold the anchor through that reflow too.
+        if (modeRef.current === 'dock') holdAnchor(entry.anchor)
       }
       commit(next)
       entry.onClose?.()
@@ -184,6 +201,7 @@ export default function DetailPanelProvider({ children }: { children: ReactNode 
     if (current.length === 0) return
     returnFocus.current = current[0]?.returnTo ?? null
     beginExit(current[current.length - 1])
+    if (modeRef.current === 'dock') holdAnchor(current.find((entry) => entry.anchor)?.anchor)
     commit([])
     current.forEach((entry) => entry.onClose?.())
   }, [beginExit, commit])

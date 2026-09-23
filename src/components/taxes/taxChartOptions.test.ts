@@ -1,22 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
+import { ESTIMATE_DECAL, GRID_VARIANTS, compactMoney, partialItemStyle } from '../../charts/grammar'
 import {
+  NEGATIVE,
   OTHER_SERIES_COLOR,
   PALETTE,
   POSITIVE,
   SEQUENTIAL_BLUE,
   SURFACE,
 } from '../../charts/theme'
-import { lightFromDark } from '../../charts/recolor'
+import { lightFromDark, recolorOption } from '../../charts/recolor'
+import { WARM_TINT } from '../../charts/scales'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { tooltipRows } from '../../testing/tooltipRows'
-import { DARK, LIGHT, contrastRatio } from '../../theme/tokens'
+import { DARK, LIGHT, contrastRatio, luminance } from '../../theme/tokens'
 import type { TaxSummaryOut, WhatIfDelta } from '../../types/api'
 import {
   TAX_COLORS,
   TAX_LABELS,
   TAX_SERIES_IDS,
+  isEstimateYear,
   ladderCsv,
   marginalLadderOption,
   taxTrendCsv,
@@ -264,14 +267,12 @@ describe('waterfallOption', () => {
     expect(remainders[7]).toBe(Number(summary.totals.take_home))
   })
 
-  it('wears theme slots only — grey gross, ramped taxes, positive take-home', () => {
+  it('wears theme slots only — grey gross, the tax hue groups, positive take-home', () => {
     const [, visible] = seriesOf(waterfallOption(summaryFixture(2024)))
     const colors = points(visible).map((p) => p.itemStyle?.color)
     expect(colors[0]).toBe(OTHER_SERIES_COLOR)
     expect(colors[8]).toBe(POSITIVE)
     expect(colors.slice(1, 8)).toEqual([...TAX_COLORS])
-    // One hue family for the seven taxes (the ≤3-hue law's sequential-ramp escape).
-    expect(TAX_COLORS.every((c) => (SEQUENTIAL_BLUE as readonly string[]).includes(c))).toBe(true)
     expect(TAX_COLORS).toHaveLength(TAX_LABELS.length)
   })
 
@@ -347,23 +348,34 @@ describe('waterfallOption', () => {
   })
 })
 
-describe('TAX_COLORS', () => {
-  it('walks UP one ramp from the first slot that clears the contrast floor', () => {
-    const slots = TAX_COLORS.map((c) => (SEQUENTIAL_BLUE as readonly string[]).indexOf(c))
-    // Index 4 is where the ramp starts clearing 3:1 on #171a21 (index 1 is 1.8:1), so the
-    // seven taxes start there and never reach below it. That floor is a DARK-surface fact;
-    // the light side is covered by "tax slot contrast on both surfaces" below.
-    expect(TAX_COLORS[0]).toBe(SEQUENTIAL_BLUE[4])
-    expect(slots.every((slot) => slot >= 4)).toBe(true)
-    // Strictly ascending: the ramp encodes POSITION in TAX_LABELS order, which is what
-    // lets a waterfall step and a stack segment for the same tax wear one color — and it
-    // puts the lightest slots on the smallest taxes, whose slivers need the contrast.
-    expect(slots.slice(1).every((slot, i) => slot > slots[i])).toBe(true)
+describe('TAX_COLORS — four hue groups (2026-09-23 spec §C7)', () => {
+  it('gives each kind of tax one hue, and tints only inside a group', () => {
+    // Seven shades of one blue could not be told apart (audit T11/F16), and on white the two
+    // largest taxes wore the palest slots. One hue per KIND of tax instead.
+    expect(TAX_COLORS).toEqual([
+      PALETTE[6], // Federal income — violet
+      PALETTE[3], // State — amber
+      PALETTE[0], // Payroll: Medicare ┐
+      SEQUENTIAL_BLUE[9], //   Soc. Sec.       ├ three steps of blue
+      SEQUENTIAL_BLUE[11], //  SDI             ┘
+      PALETTE[1], // Investment: Cap. gains ┐ two steps of orange
+      WARM_TINT, //   NIIT                   ┘
+    ])
+    // Seven lines, seven colours: a segment is never mistaken for its neighbour's twin.
+    expect(new Set(TAX_COLORS).size).toBe(TAX_LABELS.length)
   })
 
-  it('never uses the step that doubles as PALETTE[0] (the light recolor would pull it out of the ramp)', () => {
-    expect(TAX_COLORS).not.toContain(PALETTE[0])
-    expect(TAX_COLORS[2]).toBe(SEQUENTIAL_BLUE[7])
+  it("steps each group's tints one way in lightness, under both themes", () => {
+    // What the reader sees under light is the recolored twin, so the order is judged there too.
+    const light = (hex: string) => lightFromDark.get(hex.toLowerCase())!
+    for (const group of [TAX_COLORS.slice(2, 5), TAX_COLORS.slice(5, 7)]) {
+      for (const pick of [(hex: string) => hex, light]) {
+        const lum = group.map((hex) => luminance(pick(hex)))
+        const up = lum.every((l, i) => i === 0 || l > lum[i - 1])
+        const down = lum.every((l, i) => i === 0 || l < lum[i - 1])
+        expect(up || down, group.map(pick).join(' ')).toBe(true)
+      }
+    }
   })
 })
 
@@ -479,6 +491,34 @@ describe('trendOption', () => {
     expect(parsed.foot).toEqual(['Effective rate 30.6%'])
   })
 
+  it("totals the tooltip with the server's total_tax, not the cent-rounded rows (2026-09-23 §C7)", () => {
+    // finance_realdata's 2026: the seven lines sum to $86,738.46 while the engine's total — the
+    // Summary tile's figure — is $86,738.47. Each line and the total are rounded apart.
+    const year = summaryFixture(2026)
+    year.totals.total_tax = '98584.57' // one cent over the canonical rows' sum
+    const format = (
+      trendOption([year]) as unknown as { tooltip: { formatter: (p: unknown) => string } }
+    ).tooltip.formatter
+    const rows = [57160.35, 22206.8, 5299.21, 10918.2, 3000, 0].map((value, i) => ({
+      seriesName: TAX_LABELS[i],
+      seriesType: 'bar',
+      axisValueLabel: '2026',
+      dataIndex: 0,
+      value,
+      color: TAX_COLORS[i],
+    }))
+    expect(tooltipRows(format(rows)).rows.at(-1)).toEqual({
+      kind: 'total',
+      label: 'Total tax',
+      value: '$98,584.57',
+    })
+    // One jurisdiction hidden from the legend: the rows are a subset, and their own sum is
+    // the honest figure for what is on screen.
+    expect(tooltipRows(format(rows.filter((r) => r.seriesName !== 'SDI'))).rows.at(-1)?.value).toBe(
+      '$95,584.56',
+    )
+  })
+
   it('breaks the rate line where a year has no rate, and still stacks its zeros', () => {
     const sparse = emptySummary(2025)
     const option = trendOption([summaryFixture(2024), sparse])
@@ -545,6 +585,109 @@ describe('trendOption', () => {
     expect(
       trendOption([summaryFixture(2024)], { selected: { State: false } })!.legend,
     ).toMatchObject({ selected: { State: false } })
+  })
+})
+
+describe('trendOption — the year still in progress (2026-09-23 spec §C5, §C7)', () => {
+  const feed = () => [2024, 2025, 2026].map(summaryFixture)
+
+  it("is the year whose last day is after today — §0's one objective rule", () => {
+    expect(isEstimateYear(2026, '2026-09-23')).toBe(true)
+    expect(isEstimateYear(2026, '2026-12-30')).toBe(true)
+    // Dec 31 is the year's own last day: not AFTER today, so the year is done.
+    expect(isEstimateYear(2026, '2026-12-31')).toBe(false)
+    expect(isEstimateYear(2025, '2026-09-23')).toBe(false)
+    expect(isEstimateYear(2027, '2026-12-31')).toBe(true)
+  })
+
+  it('labels only that year "(est.)", keeping the bare year as the category', () => {
+    const axis = trendOption(feed(), { today: '2026-09-23' })!.xAxis as {
+      data: string[]
+      axisLabel: { interval: number; formatter: (value: string) => string }
+    }
+    // The drill-in adapter, the table twin and the page's tests all read the bare year.
+    expect(axis.data).toEqual(['2024', '2025', '2026'])
+    expect(axis.axisLabel.interval).toBe(0)
+    expect(axis.data.map((value) => axis.axisLabel.formatter(value))).toEqual([
+      '2024',
+      '2025',
+      '2026 (est.)',
+    ])
+  })
+
+  // The spec-review round's item 3: "in progress" looks the same on every chart, so the year's
+  // segments wear the house partial look (charts/partial.ts) that Spending and the Overview's
+  // months wear — the FILL faded in the segment's own colour, its dashed outline at full
+  // strength; hatched with the estimate hatch instead under Chart patterns.
+  it("wears the house partial look on that year's segments, each in its own colour", () => {
+    const plain = seriesOf(trendOption(feed(), { today: '2026-09-23' }))
+    expect(plain[0].data).toEqual([
+      40782.88,
+      51355.09,
+      { value: 57160.35, itemStyle: partialItemStyle(TAX_COLORS[0], false) },
+    ])
+    // Only the fill fades: an element opacity would fade the dashed outline with it.
+    expect(plain[0].data?.[2]).toEqual({
+      value: 57160.35,
+      itemStyle: { borderColor: PALETTE[6], borderWidth: 1, borderType: 'dashed', color: `${PALETTE[6]}73` },
+    })
+    // Every jurisdiction's segment for the year, and only that year's.
+    plain.slice(0, 7).forEach((s, i) => {
+      expect(typeof s.data?.[0], s.name).toBe('number')
+      expect(typeof s.data?.[1], s.name).toBe('number')
+      expect(s.data?.[2], s.name).toMatchObject({ itemStyle: partialItemStyle(TAX_COLORS[i], false) })
+    })
+    // The rate's carrier is not a segment: nothing to mark.
+    expect(plain[7].data).toEqual([0, 0, 0])
+    const hatched = seriesOf(trendOption(feed(), { today: '2026-09-23', patterns: true }))
+    expect(hatched[0].data?.[2]).toEqual({
+      value: 57160.35,
+      itemStyle: { borderColor: PALETTE[6], borderWidth: 1, borderType: 'dashed', decal: ESTIMATE_DECAL },
+    })
+  })
+
+  it("keeps the faded fills on the tax colours' light twins, at the same alpha", () => {
+    const option = recolorOption(trendOption(feed(), { today: '2026-09-23' }), lightFromDark) as EChartsOption
+    seriesOf(option).slice(0, 7).forEach((s, i) => {
+      const fill = (s.data?.[2] as { itemStyle: { color: string } }).itemStyle.color
+      expect(fill, s.name).toBe(`${lightFromDark.get(TAX_COLORS[i].toLowerCase())}73`)
+    })
+  })
+
+  it("says so in that year's tooltip head, in the words every in-progress period uses", () => {
+    const format = (
+      trendOption(feed(), { today: '2026-09-23' }) as unknown as {
+        tooltip: { formatter: (p: unknown) => string }
+      }
+    ).tooltip.formatter
+    const hover = (dataIndex: number, year: string) =>
+      tooltipRows(
+        format([
+          {
+            seriesName: 'Federal',
+            seriesType: 'bar',
+            axisValueLabel: year,
+            dataIndex,
+            value: 1,
+            color: TAX_COLORS[0],
+          },
+        ]),
+      )
+    // "Sep 2026 — month to date (in progress)" on Spending; the tax year is an estimate.
+    expect(hover(2, '2026').head).toBe('2026 — estimate (in progress)')
+    expect(hover(2, '2026').foot).toEqual(['Effective rate 32.1%'])
+    expect(hover(1, '2025').head).toBe('2025')
+    expect(hover(1, '2025').foot).toEqual(['Effective rate 31.5%'])
+  })
+
+  it('draws nothing as an estimate without a today, or once every year has ended', () => {
+    expect(seriesOf(trendOption(feed()))[0].data).toEqual([40782.88, 51355.09, 57160.35])
+    expect(seriesOf(trendOption(feed(), { today: '2027-01-02' }))[0].data).toEqual([
+      40782.88, 51355.09, 57160.35,
+    ])
+    expect(
+      (trendOption(feed())!.xAxis as { axisLabel: Record<string, unknown> }).axisLabel.formatter,
+    ).toBeUndefined()
   })
 })
 
@@ -643,6 +786,22 @@ describe('taxTrendCsv', () => {
       legacy.social_security.tax, legacy.disability.tax, legacy.capital_gains.tax, '0.00',
       legacy.totals.total_tax,
     ])
+  })
+
+  // Review round 1: the table view marks the year still in progress, as the chart's axis does. A
+  // trailing column, so every earlier column keeps its position, and the Year cell stays the bare
+  // year — the table's row drill parses it.
+  it('marks the year still in progress in a trailing Status column when it knows the date', () => {
+    const csv = taxTrendCsv([summaryFixture(2025), summaryFixture(2026)], { today: '2026-09-23' })
+    expect(csv.headers.at(-1)).toBe('Status')
+    expect(csv.headers).toHaveLength(10)
+    // The tooltip head's words, as Spending's Period column carries its months' (charts/partial).
+    expect(csv.rows.map((r) => [r[0], r.at(-1)])).toEqual([
+      [2025, ''],
+      [2026, 'Estimate (in progress)'],
+    ])
+    // Without the date nothing is claimed either way.
+    expect(taxTrendCsv([summaryFixture(2026)]).headers).toHaveLength(9)
   })
 })
 
@@ -773,7 +932,7 @@ describe('whatIfDeltaBarOption', () => {
     ...over,
   })
 
-  it('draws one bar per jurisdiction delta, diverging around zero, through the grammar tooltip', () => {
+  it('draws one bar per jurisdiction delta, less tax reading left, through the grammar tooltip', () => {
     const option = whatIfDeltaBarOption(
       delta({
         total_tax: '-5488.69',
@@ -792,10 +951,8 @@ describe('whatIfDeltaBarOption', () => {
       'Disability',
       'Capital gains',
     ])
-    const series = (option.series as { data: number[] }[])[0]
-    expect(series.data).toEqual([-3000, -2413.1, -75.59, 0, 0, 0, 0])
-    // Symmetric around zero on the LARGEST move, so the arms mean the same thing.
-    expect(option.visualMap).toMatchObject({ min: -3000, max: 3000 })
+    const series = (option.series as { data: { value: number }[] }[])[0]
+    expect(series.data.map((d) => d.value)).toEqual([-3000, -2413.1, -75.59, 0, 0, 0, 0])
     // The grammar's, by identity — a hand-rolled formatter is a conformance failure.
     expect((option.xAxis as { axisLabel: { formatter: unknown } }).axisLabel.formatter).toBe(
       compactMoney,
@@ -805,7 +962,70 @@ describe('whatIfDeltaBarOption', () => {
 
   it('treats an absent NIIT as no movement rather than a gap in the ladder', () => {
     const option = whatIfDeltaBarOption(delta({ federal_tax: '-100.00', niit_tax: null }))!
-    expect((option.series as { data: number[] }[])[0].data[2]).toBe(0)
+    expect((option.series as { data: { value: number }[] }[])[0].data[2].value).toBe(0)
+  })
+
+  it('colours each bar by its sign and prints the signed amount at its outer end (2026-09-23 §C6)', () => {
+    // The real "Max 401(k)" + "Sell all NVDA" answer on the 2026 book (finance_realdata).
+    const option = whatIfDeltaBarOption(
+      delta({
+        federal_tax: '-608.20',
+        state_tax: '19186.18',
+        niit_tax: '7935.81',
+        capital_gains_tax: '31325.57',
+      }),
+    )!
+    const [series] = option.series as {
+      data: { value: number; itemStyle: { color: string }; label: { position: string } }[]
+      label: { show: boolean; formatter: (p: { dataIndex: number }) => string }
+    }[]
+    // More tax is the warm/negative tone, less tax the positive one, no movement neutral.
+    expect(series.data.map((d) => d.itemStyle.color)).toEqual([
+      POSITIVE,
+      NEGATIVE,
+      NEGATIVE,
+      OTHER_SERIES_COLOR,
+      OTHER_SERIES_COLOR,
+      OTHER_SERIES_COLOR,
+      NEGATIVE,
+    ])
+    // The label sits beyond each bar's OUTER end: left of less tax, right of more.
+    expect(series.data.map((d) => d.label.position)).toEqual([
+      'left', 'right', 'right', 'right', 'right', 'right', 'right',
+    ])
+    expect(series.label.show).toBe(true)
+    expect([0, 1, 2, 3, 6].map((dataIndex) => series.label.formatter({ dataIndex }))).toEqual([
+      '-$608',
+      '+$19.2K',
+      '+$7.9K',
+      '$0',
+      '+$31.3K',
+    ])
+  })
+
+  it('draws no colour scale and no legend, and leaves room for the labels past each end that has bars', () => {
+    const gap = (over: Partial<WhatIfDelta>) =>
+      (whatIfDeltaBarOption(delta(over))!.xAxis as { boundaryGap: unknown }).boundaryGap
+    const option = whatIfDeltaBarOption(delta({ federal_tax: '-100.00' }))! as Record<string, unknown>
+    // The old visualMap mapped the CATEGORY index (a horizontal bar's last dimension) and so
+    // painted every bar the neutral midpoint; its gradient legend sat on the x-axis ticks.
+    expect(option.visualMap).toBeUndefined()
+    expect(option.legend).toBeUndefined()
+    expect(option.grid).toEqual(GRID_VARIANTS.horizontal)
+    // Review round 1: headroom only where a bar can reach — no empty arm when every delta
+    // shares a sign.
+    expect(gap({ federal_tax: '-100.00', state_tax: '250.00' })).toEqual(['12%', '12%'])
+    expect(gap({ federal_tax: '-100.00', state_tax: '-250.00' })).toEqual(['12%', 0])
+    expect(gap({ state_tax: '250.00', niit_tax: '40.00' })).toEqual([0, '12%'])
+  })
+
+  it('keeps both sign tones at 3:1 or better on the card in both themes', () => {
+    for (const hex of [POSITIVE, NEGATIVE]) {
+      expect(contrastRatio(hex, DARK.surface), `${hex} on dark`).toBeGreaterThanOrEqual(3)
+      const twin = lightFromDark.get(hex.toLowerCase())
+      expect(twin, `${hex} has a light twin`).toBeDefined()
+      expect(contrastRatio(twin!, LIGHT.surface), `${twin} on light`).toBeGreaterThanOrEqual(3)
+    }
   })
 
   it('returns null when every delta is zero', () => {
@@ -813,12 +1033,12 @@ describe('whatIfDeltaBarOption', () => {
   })
 })
 
-// The tax charts borrow SEQUENTIAL_BLUE steps as ordered-CATEGORICAL slots, so unlike a
-// magnitude ramp (whose pale end is pale by design) each slot has to be legible in its own
-// right — under BOTH themes, since the light twins arrive through charts/recolor.ts and no
-// builder branches on theme. tokens.test.ts holds `palette` and `otherSeries` to 3:1 but
-// says nothing about the sequential scale, which is how the light shortfall below survived
-// C6.
+// The tax charts borrow SEQUENTIAL_BLUE steps as CATEGORICAL slots (the payroll tints and the
+// bracket ladder), so unlike a magnitude ramp (whose pale end is pale by design) each slot has
+// to be legible in its own right — under BOTH themes, since the light twins arrive through
+// charts/recolor.ts and no builder branches on theme. tokens.test.ts holds `palette` and
+// `otherSeries` to 3:1 but says nothing about the sequential scale, which is how the light
+// shortfall below survived C6.
 describe('tax slot contrast on both surfaces', () => {
   // The colours the user actually sees: the dark constant, and whatever lightFromDark
   // resolves it to. Reading the map (not LIGHT.sequential by index) means a re-election in
@@ -851,25 +1071,21 @@ describe('tax slot contrast on both surfaces', () => {
     return [...tones]
   }
 
-  // RECORDED EXCEPTION (2026-09-04, C7). Slots 0 and 1 — Federal and State — read 2.23:1 and
-  // 2.78:1 against the light surface, and the ladder's alternating base A is the same
-  // 2.78:1 step. Kept, deliberately, because:
-  //   • the ramp cannot be fixed without ruining it. Reaching 3:1 on --bg (the binding
-  //     surface, luminance 0.9102) needs luminance <= 0.2701, and LIGHT.sequential[6]
-  //     already sits at 0.2468 — so steps 4 and 5 would have to squeeze into a 0.023-wide
-  //     band just above step 6, leaving a cliff down from step 3 (0.5243). Steps 4/5/6
-  //     would be indistinguishable and the spending heatmap's Absolute/Row modes, which
-  //     read the same scale through sequentialVisualMap, would band across their low-mid
-  //     range. A sequential ramp's low end is pale BECAUSE it means "small".
-  //   • the slot order already spends contrast where it is needed. Slots run darkest-to-
-  //     lightest on dark, and the fixed TAX_LABELS order puts the two LARGEST taxes on the
-  //     two weakest slots and the slivers (Cap. gains, NIIT) on the strongest — a 2.23:1
-  //     fill spanning a third of the chart is perceivable in a way a 2.23:1 sliver is not.
-  // Every OTHER slot must clear the floor on both surfaces, and this pair may not grow: the
-  // test below is what makes that a fact rather than an intention.
+  // RECORDED EXCEPTION (2026-09-04, C7). The bracket ladder's alternating base A reads 2.78:1
+  // against the light surface. (Until 2026-09-23 the Federal and State tax slots sat on this
+  // ramp's steps 4 and 5 at 2.23:1 and 2.78:1; spec §C7's four hue groups retired both, and
+  // every tax slot now clears the floor outright.) Kept, deliberately, because the ramp cannot
+  // be fixed without ruining it. Reaching 3:1 on --bg (the binding surface, luminance 0.9102)
+  // needs luminance <= 0.2701, and LIGHT.sequential[6] already sits at 0.2468 — so step 5
+  // would have to squeeze into a 0.023-wide band just above step 6, leaving a cliff down from
+  // step 3 (0.5243). Steps 4/5/6 would be indistinguishable and the spending heatmap's
+  // Absolute/Row modes, which read the same scale through sequentialVisualMap, would band
+  // across their low-mid range. A sequential ramp's low end is pale BECAUSE it means "small",
+  // and a ladder segment is always read beside its labelled neighbours.
+  // Every OTHER slot must clear the floor on both surfaces, and this exception may not grow:
+  // the test below is what makes that a fact rather than an intention.
   const LIGHT_EXCEPTIONS = new Map([
-    [SEQUENTIAL_BLUE[4], 2.23], // TAX_COLORS[0] — Federal, the largest bar
-    [SEQUENTIAL_BLUE[5], 2.78], // TAX_COLORS[1] — State; also the ladder's base A
+    [SEQUENTIAL_BLUE[5], 2.78], // the ladder's base A
   ])
 
   it('every tax slot and ladder tone clears 3:1 on the DARK surface and page', () => {
@@ -879,7 +1095,7 @@ describe('tax slot contrast on both surfaces', () => {
     }
   })
 
-  it('clears 3:1 on the LIGHT surface too, except the two recorded slots', () => {
+  it('clears 3:1 on the LIGHT surface too, except the one recorded ladder tone', () => {
     for (const hex of [...TAX_COLORS, ...ladderTones()]) {
       const twin = light(hex)
       const ratio = contrastRatio(twin, LIGHT.surface)

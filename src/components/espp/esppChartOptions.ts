@@ -30,8 +30,8 @@ import {
   formatShares,
 } from '../../utils/format'
 import { addDays } from '../../utils/months'
-import { eventLines } from '../portfolio/historyChartOptions'
-import type { ChartEventPoint } from '../portfolio/historyChartOptions'
+import { eventLines } from '../portfolio/performanceEvents'
+import type { ChartEventPoint } from '../portfolio/performanceEvents'
 
 export type AnatomyView = 'dollars' | 'per-share'
 

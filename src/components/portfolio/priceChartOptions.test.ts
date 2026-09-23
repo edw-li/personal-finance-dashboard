@@ -5,7 +5,7 @@ import { INK, MUTED, NEGATIVE, PALETTE, POSITIVE } from '../../charts/theme'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { tooltipRows } from '../../testing/tooltipRows'
 import type { PricePoint } from '../../types/api'
-import { EVENTS_SERIES } from './historyChartOptions'
+import { EVENTS_SERIES } from './performanceEvents'
 import {
   PRICE_SPANS,
   extentKnown,

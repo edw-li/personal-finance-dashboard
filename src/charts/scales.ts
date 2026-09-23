@@ -1,9 +1,15 @@
 // Continuous colour scales (chart spec §12) and the two heatmap transforms behind F1.
 // `sequentialVisualMap` is the spending heatmap's current visualMap verbatim; the diverging
-// map is the ONLY reader of the DIVERGING tuple. Both return plain literals — recolor.ts maps
-// the `inRange.color` arrays by position under the light theme (the ramp rule), whichever way
-// round they are. Depends on: charts/theme.ts.
+// map and WARM_TINT below are the ONLY readers of the DIVERGING tuple. Both maps return plain
+// literals — recolor.ts maps the `inRange.color` arrays by position under the light theme (the
+// ramp rule), whichever way round they are. Depends on: charts/theme.ts.
 import { DIVERGING, MUTED, SEQUENTIAL_BLUE } from './theme'
+
+/** The diverging scale's brightest WARM step, lent out as a tint (2026-09-23 spec §C7): the tax
+ *  composition's Investment pair needs a second orange beside PALETTE[1], and this is the only
+ *  other validated orange (7.14:1 on the dark card, 6.29:1 on the light one). Exported from HERE
+ *  so the diverging tuple keeps its one reader file — builders still never index DIVERGING. */
+export const WARM_TINT = DIVERGING[0]
 
 const BAR = {
   calculable: false,

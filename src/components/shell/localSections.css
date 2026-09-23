@@ -15,4 +15,4 @@
 .local-section-trailing { display: flex; align-items: center; flex: none; padding-bottom: .3rem; }
 .local-section-panel { min-width: 0; }
 .local-section-panel[hidden] { display: none !important; }
-.local-section-panel [id] { scroll-margin-top: 7rem; }
+.local-section-panel [id] { scroll-margin-top: calc(var(--sticky-inset, 0px) + 0.75rem); }

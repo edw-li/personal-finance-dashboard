@@ -13,7 +13,7 @@ import {
 } from '../../utils/format'
 import { todayIso } from '../../utils/months'
 import { TYPE_LABELS } from './allocationChartOptions'
-import { buildEventMarkers } from './historyChartOptions'
+import { buildEventMarkers } from './performanceEvents'
 import {
   PRICE_SPANS,
   priceHistoryCsv,

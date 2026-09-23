@@ -43,6 +43,19 @@ describe('HoldingsTable', () => {
     expect(tickerColumn()[0]).toContain('AAA') // now ascending
   })
 
+  // 2026-09-23 spec §C9: the 1Y column was aria-hidden — an empty column to a screen reader.
+  it('names each 1Y sparkline by its ticker and printed change', () => {
+    render(
+      <HoldingsTable
+        holdings={rows}
+        sparklines={{ AAA: [{ d: '2025-09-26', c: '10' }, { d: '2026-09-21', c: '15' }] }}
+      />,
+    )
+    expect(screen.getByRole('img', { name: 'AAA 1-year change +50.0%' })).toBeTruthy()
+    // A holding with no bars says so rather than going silent.
+    expect(screen.getByRole('img', { name: 'BBB 1-year change unavailable' })).toBeTruthy()
+  })
+
   it('renders em-dashes for null money fields and a warning marker', () => {
     render(
       <HoldingsTable

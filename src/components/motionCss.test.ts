@@ -218,3 +218,14 @@ it('gates the indicator transition on the attribute Layout sets after its first 
   // reaches it and the glyph snapped to the accent while the bar was still sliding.
   expect(layout).toContain('.nav-link svg { transition: color var(--t-fast) ease; }')
 })
+
+// 2026-09-23 spec §C11: the card a deep link lands on must never start under the top scrim. The
+// root scroller's padding is added to every scrollIntoView, anchor jump and focus scroll, so a
+// target lands below the fade — but only where the scrims exist (reduced motion has none).
+it('lands deep links below the top scrim — the root scroller pads by its height, only where scrims exist', () => {
+  const scrims = inside(panels, '@supports (animation-timeline: scroll())')
+  expect(inside(scrims, '@media (prefers-reduced-motion: no-preference)')).toContain(
+    'html { scroll-padding-top: var(--scrim-h); }',
+  )
+  expect(inside(scrims, '@media (prefers-reduced-motion: reduce)')).not.toContain('scroll-padding')
+})

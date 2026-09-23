@@ -6,7 +6,15 @@ import ChartCard from '../ChartCard'
 import type { ChartSelection } from '../../types/metrics'
 import SelectionDetail from '../details/SelectionDetail'
 import type { TaxSummaryOut } from '../../types/api'
-import { taxTrendCsv, trendOption, yearPieCsv, yearPieOption } from './taxChartOptions'
+import { todayIso } from '../../utils/months'
+import { useChartDecals } from '../useChartDecals'
+import {
+  isEstimateYear,
+  taxTrendCsv,
+  trendOption,
+  yearPieCsv,
+  yearPieOption,
+} from './taxChartOptions'
 // Only this component's own sheet, like its siblings: the app-wide vocabulary
 // (.card/.eyebrow/.empty-note/.error-banner) is panels.css, which the PAGE imports.
 import './taxes.css'
@@ -101,11 +109,21 @@ export default function CompositionPanel({
       .map((y) => y.year)
     return [...new Set([...incompleteYears, ...slipped])].sort((a, b) => a - b)
   }, [years, incompleteYears])
+  // The year still in progress is drawn as an estimate (2026-09-23 spec §C5, §C7): the builder
+  // needs the date to know which year that is, and Appearance › Chart patterns to know how to
+  // mark it. A string, so the memo below holds for the whole day.
+  const today = todayIso()
+  const patterns = useChartDecals()
+  // Whether any charted year is still in progress — the hint says so only then (review round 1).
+  const hasEstimate = chartable?.some((y) => isEstimateYear(y.year, today)) ?? false
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every
   // render replays the chart on unrelated state flips (AllocationPanel's note).
   const trend = useMemo(
-    () => (chartable === null ? null : trendOption(chartable, { selected: legendSelected })),
-    [chartable, legendSelected],
+    () =>
+      chartable === null
+        ? null
+        : trendOption(chartable, { selected: legendSelected, today, patterns }),
+    [chartable, legendSelected, today, patterns],
   )
 
   // The drilled year's summary comes out of THIS panel's all-years feed, so a save that
@@ -134,12 +152,12 @@ export default function CompositionPanel({
   return (
     <ChartCard
       title="Tax composition by year"
-      hint="Tax composition per year stacked by jurisdiction, with the year's effective rate on each cap. Select a year to inspect its breakdown beside this history."
+      hint={`Tax composition per year stacked by jurisdiction, with the year's effective rate on each cap. Select a year to inspect its breakdown beside this history.${hasEstimate ? ' The current year is still in progress, so its bar is an estimate, marked (est.).' : ''}`}
       ariaLabel="Stacked bar chart of tax by jurisdiction per year, with the effective rate on each cap"
       option={trend}
       empty={flaggedYears.length > 0 ? 'No comparable years yet — every year with stored inputs is missing bracket tables for its filing status.' : 'No years with stored inputs to compare yet.'}
       exportName="tax-trend"
-      csv={chartable === null ? undefined : () => taxTrendCsv(chartable)}
+      csv={chartable === null ? undefined : () => taxTrendCsv(chartable, { today })}
       independentRangeLabel="All recorded years"
       height={320}
       busy={years === null && error === null}
@@ -157,7 +175,7 @@ export default function CompositionPanel({
       renderSelection={(selection) => <>
         <SelectionDetail selection={selection} chartTitle="Tax composition by year" onClear={() => setDetailYear(null)} />
         {detailSummary && <ChartCard
-          title={`Tax breakdown — ${detailSummary.year}`}
+          title={`Tax breakdown — ${detailSummary.year}${isEstimateYear(detailSummary.year, today) ? ' (est.)' : ''}`}
           hint="The positive tax components for the selected year. The receipt above includes any negative components in the total."
           ariaLabel={`Donut chart of ${detailSummary.year}'s tax by jurisdiction`}
           option={detailPie}

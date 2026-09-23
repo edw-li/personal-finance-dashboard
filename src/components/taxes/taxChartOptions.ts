@@ -11,16 +11,20 @@ import {
   BAR_MARKS,
   capLabel,
   grid,
+  isPartialMonth,
   moneyAxis,
   monthAxis,
+  partialItemStyle,
   roundTo,
   stagger,
 } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
-import { divergingVisualMap } from '../../charts/scales'
+import { WARM_TINT } from '../../charts/scales'
 import {
   INK,
+  NEGATIVE,
   OTHER_SERIES_COLOR,
+  PALETTE,
   POSITIVE,
   SEQUENTIAL_BLUE,
   SURFACE,
@@ -34,7 +38,7 @@ import {
 } from '../../charts/waterfall'
 import type { TaxSummaryOut, WhatIfDelta } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { formatCurrency, formatPct } from '../../utils/format'
+import { formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
 import type { LadderSegment } from './marginal'
 
 // The seven tax lines in the order the engine reports them — one order shared by the
@@ -50,30 +54,31 @@ export const TAX_LABELS = [
   'NIIT',
 ] as const
 
-// Seven ordered slots of ONE hue family: seven identity hues would break the ≤3-hue law, so
-// the sequential ramp is the compliant form (AllocationPanel's convention). The ramp
-// encodes POSITION in the fixed order above — not magnitude — which is why the two charts
-// can share it: a waterfall step and a stack segment for the same tax wear one color.
-// Slots start at index 4 — where the ramp clears 3:1 on the DARK surface #171a21 — and SKIP
-// index 6: that step is also PALETTE[0], and charts/recolor.ts elects the categorical blue
-// for a lone hex, so under the light theme the middle tax would have jumped out of the ramp.
-// Slot order spends contrast where it is needed: the ramp brightens with index on dark, and
-// TAX_LABELS puts the two LARGEST taxes on the two weakest slots and the slivers (Cap.
-// gains, NIIT) on the strongest.
-//
-// The 3:1 floor at index 4 is a DARK-surface fact only. The light twins run the other way
-// (pale → deep), so slots 0 and 1 arrive at 2.23:1 and 2.78:1 on the light surface — a
-// recorded, tested exception, not an oversight: see "tax slot contrast on both surfaces" in
-// taxChartOptions.test.ts for the arithmetic showing the ramp cannot be re-cut without
-// collapsing its low-mid range, and for the guard that stops the pair from growing.
+// Four legible hue groups, one per KIND of tax (2026-09-23 spec §C7; audit T11/F16) — seven
+// shades of one blue could not be told apart at a swatch's size, and on white the two
+// largest taxes wore the palest slots:
+//   Federal income  violet  PALETTE[6]
+//   State           amber   PALETTE[3]
+//   Payroll         blue    PALETTE[0] · SEQUENTIAL_BLUE[9] · SEQUENTIAL_BLUE[11]  (Medicare, Soc. Sec., SDI)
+//   Investment      orange  PALETTE[1] · WARM_TINT                              (Cap. gains, NIIT)
+// One order still serves the waterfall's steps, the trend's stack, the donut and both legends,
+// so a tax wears one colour everywhere on the page. dataviz-validated under both themes: every
+// slot clears 4.48:1 on the card and 4.16:1 on the page; every cross-group neighbour — the
+// stack, the waterfall's walk and the donut's wrap from NIIT back to Federal — keeps ΔE ≥ 23
+// under protan/deutan simulation; each group's tints pass the ordinal checks (one hue,
+// monotone, ΔL ≥ 0.06). Inside a group the tints are told apart by the stack's surface
+// hairline, the legend and the tooltip, as members of one group should be. State's amber sits
+// between violet and the blues on purpose: violet beside blue collapses under deuteranopia
+// (ΔE 0.2). PALETTE[0] is taken as a LONE colour here — recolor.ts's lone election sends it to
+// the light palette blue, which still sits above SEQUENTIAL_BLUE[9]'s twin in the tint order.
 export const TAX_COLORS = [
-  SEQUENTIAL_BLUE[4],
-  SEQUENTIAL_BLUE[5],
-  SEQUENTIAL_BLUE[7],
-  SEQUENTIAL_BLUE[8],
+  PALETTE[6],
+  PALETTE[3],
+  PALETTE[0],
   SEQUENTIAL_BLUE[9],
-  SEQUENTIAL_BLUE[10],
   SEQUENTIAL_BLUE[11],
+  PALETTE[1],
+  WARM_TINT,
 ] as const
 
 // Stable ids shared by the trend's seven stacks and the drill-in pie: universalTransition
@@ -144,21 +149,64 @@ export function waterfallCsv(summary: TaxSummaryOut): ExportTable {
   return steps === null ? { headers: ['Step', 'Amount', 'Remaining'], rows: [] } : stepsCsv(steps)
 }
 
+/** A tax year still running on `today` (an ISO date): its figures are the engine's estimate
+ *  from the inputs entered so far. The batch's one objective rule (2026-09-23 spec §0), from
+ *  the grammar's own partial-period helper at a year's grain: a year is in progress while its
+ *  last month is — Dec 31 after today. */
+export function isEstimateYear(year: number, today: string): boolean {
+  return isPartialMonth(`${year}-12-01`, today)
+}
+
+/** What an in-progress year's tooltip head adds — "2026 — estimate (in progress)" — in the
+ *  words every in-progress period uses ("Sep 2026 — month to date (in progress)"): the tax
+ *  year's figure is the engine's estimate, not a total to date. */
+const ESTIMATE_NOTE = 'estimate (in progress)'
+
+/** The years axis with every in-progress year LABELLED "2026 (est.)". The category itself stays
+ *  the bare year: the drill-in adapter, the table twin and the page's tests all read it. */
+function yearAxis(years: string[], estimates: ReadonlySet<string>) {
+  const axis = monthAxis(years, { gap: true })
+  if (estimates.size === 0) return axis
+  const labels = (axis as { axisLabel?: Record<string, unknown> }).axisLabel ?? {}
+  return {
+    ...axis,
+    axisLabel: {
+      ...labels,
+      formatter: (value: string) => (estimates.has(value) ? `${value} (est.)` : value),
+    },
+  }
+}
+
 /**
  * Multi-year composition: one stacked bar per year of the tax figures with the year's
  * effective rate as a direct label on the stack's cap (F15 — one axis; a ratio does not
- * share a money axis and does not deserve a second one). Returns null when the feed carries
- * no years at all — the card renders its empty sentence.
+ * share a money axis and does not deserve a second one). A year still in progress on `today`
+ * is the engine's estimate, not a settled figure: its segments wear the grammar's partial look
+ * (charts/partial.ts — the one "in progress" look Spending's and the Overview's months wear too),
+ * its axis label reads "2026 (est.)" and its tooltip head says "2026 — estimate (in progress)"
+ * (2026-09-23 spec §C5, §C7). Without a `today` nothing is marked — the builder stays pure; the
+ * panel passes the date.
+ * Returns null when the feed carries no years at all — the card renders its empty sentence.
  */
 export function trendOption(
   years: TaxSummaryOut[],
-  { selected }: { selected?: Record<string, boolean> } = {},
+  {
+    selected,
+    today,
+    patterns = false,
+  }: { selected?: Record<string, boolean>; today?: string; patterns?: boolean } = {},
 ): EChartsOption | null {
   if (years.length === 0) return null
   // The feed is already ordered, but the chart owns its own x-axis order rather than
   // trusting it (TaxesPage's `latestOf` reasoning).
   const ordered = [...years].sort((a, b) => a.year - b.year)
   const amounts = ordered.map(taxAmounts)
+  const estimates = new Set(
+    today === undefined
+      ? []
+      : ordered.filter((y) => isEstimateYear(y.year, today)).map((y) => String(y.year)),
+  )
+  const isEstimate = (index: number) => estimates.has(String(ordered[index]?.year))
   // Percent units at 4dp (0.306020 × 100 is 30.602000000000004 unrounded).
   const rates = ordered.map((y) =>
     y.totals.effective_rate === null ? null : roundTo(Number(y.totals.effective_rate) * 100, 4),
@@ -185,27 +233,47 @@ export function trendOption(
       groups: stacked,
       totalLabel: 'Total tax',
       pointer: 'shadow',
+      // The engine's own total_tax, never the rows' sum: each jurisdiction is rounded to the
+      // cent on its own, so their sum can sit a cent off the Summary tile ($86,738.46 against
+      // $86,738.47 for 2026 — 2026-09-23 spec §C7). Only while every jurisdiction is on
+      // screen: with one hidden from the legend the rows are a subset, and their sum is honest.
+      totalOf: (index, params) => {
+        const total = ordered[index]?.totals.total_tax
+        return total !== undefined &&
+          stacked.every((label) => params.some((p) => p.seriesName === label))
+          ? Number(total)
+          : null
+      },
       // The rate is a ratio, not another addend: it stays out of the sum and under it.
       footer: (index) => (rateText(index) === '' ? [] : [`Effective rate ${rateText(index)}`]),
+      // Why the year's bar looks provisional, where every chart says "in progress": the head.
+      headNote: (index) => (isEstimate(index) ? ESTIMATE_NOTE : null),
     }),
-    xAxis: monthAxis(
+    xAxis: yearAxis(
       ordered.map((y) => String(y.year)),
-      { gap: true },
+      estimates,
     ),
     yAxis: moneyAxis(),
     series: [
-      ...stacked.map((label, i) => ({
-        id: TAX_SERIES_IDS[i],
-        name: label,
-        type: 'bar' as const,
-        stack: 'tax',
-        ...BAR_MARKS,
-        barMaxWidth: 24,
-        ...stagger(i),
-        color: TAX_COLORS[i],
-        universalTransition: true,
-        data: amounts.map((a) => a[i]),
-      })),
+      ...stacked.map((label, i) => {
+        // The year's segment faded in its own colour, dashed at full strength; hatched instead
+        // under Chart patterns. One object per series: every estimate year shares it.
+        const estimateStyle = partialItemStyle(TAX_COLORS[i], patterns)
+        return {
+          id: TAX_SERIES_IDS[i],
+          name: label,
+          type: 'bar' as const,
+          stack: 'tax',
+          ...BAR_MARKS,
+          barMaxWidth: 24,
+          ...stagger(i),
+          color: TAX_COLORS[i],
+          universalTransition: true,
+          data: amounts.map((a, index) =>
+            isEstimate(index) ? { value: a[i], itemStyle: estimateStyle } : a[i],
+          ),
+        }
+      }),
       // The rate's carrier: a zero-height, transparent, silent member of the SAME stack, so
       // its cap label sits on the year's total without belonging to any jurisdiction.
       // Riding the top jurisdiction instead would have taken every year's rate off the
@@ -278,10 +346,24 @@ export function yearPieCsv(summary: TaxSummaryOut): ExportTable {
 
 /** The trend chart as a table (2026-08-25 spec §2a): year rows × TAX_LABELS order plus
  * the server's own total_tax, ascending like the chart's axis, verbatim strings. */
-export function taxTrendCsv(years: TaxSummaryOut[]): ExportTable {
+export function taxTrendCsv(
+  years: TaxSummaryOut[],
+  { today }: { today?: string } = {},
+): ExportTable {
   const ordered = [...years].sort((a, b) => a.year - b.year)
+  // Given the date, the table marks the year still in progress, as the chart's axis does
+  // (review round 1) — in a TRAILING column, so every earlier column keeps its position, and
+  // the Year cell stays the bare year the table's row drill parses. In the tooltip head's
+  // words, as Spending's Period column carries its months' ("Month to date (in progress)").
+  const status =
+    today === undefined
+      ? null
+      : (year: number) =>
+          isEstimateYear(year, today)
+            ? `${ESTIMATE_NOTE.charAt(0).toUpperCase()}${ESTIMATE_NOTE.slice(1)}`
+            : ''
   return {
-    headers: ['Year', ...TAX_LABELS, 'Total tax'],
+    headers: ['Year', ...TAX_LABELS, 'Total tax', ...(status === null ? [] : ['Status'])],
     rows: ordered.map((y) => [
       y.year, y.federal.tax, y.state.tax, y.medicare.tax, y.social_security.tax,
       y.disability.tax, y.capital_gains.tax,
@@ -289,6 +371,7 @@ export function taxTrendCsv(years: TaxSummaryOut[]): ExportTable {
       // header row
       y.niit?.tax ?? '0.00',
       y.totals.total_tax,
+      ...(status === null ? [] : [status(y.year)]),
     ]),
   }
 }
@@ -305,8 +388,7 @@ export interface LadderRow {
 // Three slots of the ONE hue family (the ≤3-hue law): adjacent segments alternate the two
 // mid tones so their seam reads at a glance, and the bracket the income sits in takes the
 // bright slot. All three sit at/above SEQUENTIAL_BLUE[4], the ramp's 3:1 floor ON DARK;
-// base A is the same step as the State tax slot and shares its recorded light-surface
-// exception (2.78:1) — see the TAX_COLORS note above and the contrast test.
+// base A carries a recorded light-surface exception (2.78:1) — see the contrast test.
 const LADDER_BASE_A = SEQUENTIAL_BLUE[5]
 const LADDER_BASE_B = SEQUENTIAL_BLUE[7]
 const LADDER_CURRENT = SEQUENTIAL_BLUE[10]
@@ -435,9 +517,19 @@ const DELTA_LINES: readonly [string, (delta: WhatIfDelta) => string | null | und
   ['Capital gains', (d) => d.capital_gains_tax],
 ]
 
+/** "+$19.2K" / "-$608" — on a Δ bar the sign is the whole point (the movers chart's grammar). */
+const signedCompact = (value: number): string =>
+  value > 0 ? `+${formatCurrencyCompact(value)}` : formatCurrencyCompact(value)
+
 /**
  * The what-if's Δ by jurisdiction (2026-09-03 planning-sandboxes spec §10): one horizontal
- * bar per tax line, scenario minus baseline, diverging around zero — less tax reads left.
+ * bar per tax line, scenario minus baseline — less tax reads left. Each bar wears its SIGN
+ * (more tax NEGATIVE, less tax POSITIVE, no movement the neutral grey) and its signed amount
+ * at its outer end (2026-09-23 spec §C6). It used to take its colour from a diverging
+ * visualMap, which on a horizontal bar maps the LAST dimension — the category index, not the
+ * value — so every bar painted the neutral midpoint at ≈1.2:1 against the card, and the
+ * scale's unlabelled legend sat on the x-axis ticks. The axis carries the sign and the labels
+ * carry the amounts, so there is no legend at all.
  * Null when nothing moved at all, which is the card's empty sentence rather than seven bars
  * of zero pretending to be an answer.
  *
@@ -450,8 +542,6 @@ export function whatIfDeltaBarOption(delta: WhatIfDelta): EChartsOption | null {
     return raw === null || raw === undefined ? 0 : Number(raw)
   })
   if (values.every((v) => v === 0)) return null
-  // Symmetric on the LARGEST move, so a bar's length means the same thing on either arm.
-  const span = Math.max(...values.map(Math.abs))
   return {
     grid: grid('horizontal'),
     // Item trigger: an axis tooltip would announce the whole ladder for one hover, and each
@@ -460,11 +550,30 @@ export function whatIfDeltaBarOption(delta: WhatIfDelta): EChartsOption | null {
       body: (p) =>
         typeof p.value === 'number' ? { value: p.value, label: `${String(p.name)} Δ` } : null,
     }),
-    xAxis: moneyAxis(),
+    // The movers chart's 12 % of headroom past each end a bar can reach, so a signed label never
+    // clips at the grid edge — and none past an end with no bars (review round 1), or every
+    // same-signed answer drew an empty arm.
+    xAxis: {
+      ...moneyAxis(),
+      boundaryGap: [values.some((v) => v < 0) ? '12%' : 0, values.some((v) => v > 0) ? '12%' : 0] as [
+        string | number,
+        string | number,
+      ],
+    },
     // inverse, so Federal reads on TOP the way the compare rows below order them.
     yAxis: { type: 'category', data: DELTA_LINES.map(([label]) => label), inverse: true },
-    // The colour IS the sign here, so it comes from the scale rather than a per-bar hex.
-    visualMap: divergingVisualMap({ span, formatter: formatCurrency }),
-    series: [{ type: 'bar' as const, ...BAR_MARKS, data: values }],
+    series: [
+      {
+        type: 'bar' as const,
+        ...BAR_MARKS,
+        label: capLabel((p) => signedCompact(values[p.dataIndex] ?? 0)),
+        data: values.map((value) => ({
+          value,
+          itemStyle: { color: value > 0 ? NEGATIVE : value < 0 ? POSITIVE : OTHER_SERIES_COLOR },
+          // Beyond the bar's OUTER end: right of more tax, left of less.
+          label: { position: value < 0 ? ('left' as const) : ('right' as const) },
+        })),
+      },
+    ],
   }
 }

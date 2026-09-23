@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EChartsOption } from '../charts/echarts'
@@ -338,6 +339,100 @@ describe('zoomWindow fast path', () => {
     expect(chart.dispatchAction).not.toHaveBeenCalled()
   })
 
+  // 2026-09-23 spec §C4, review round 1: the portfolio's weekly axis picks its label stride from
+  // the window it shows, so a chip changes the axis's label SET along with the window. The set is
+  // left out of the fingerprint and merged after the zoom action — the chip still morphs.
+  describe('axis label sets that follow the window', () => {
+    const axis = (customValues: number[]) => ({
+      type: 'category',
+      data: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'],
+      axisLabel: { customValues, hideOverlap: true },
+    })
+
+    it('ride the fast path: the zoom action, then the new set merged onto the live chart', () => {
+      const { rerender } = render(
+        <EChart
+          ariaLabel="test chart"
+          option={{ series, xAxis: axis([0, 3, 6, 9]), dataZoom: [{ type: 'inside', startValue: 0 }] } as EChartsOption}
+          zoomWindow={{ startValue: 0, endValue: 9 }}
+        />,
+      )
+      const chart = instances[0]
+      expect(chart.setOption).toHaveBeenCalledTimes(1)
+      rerender(
+        <EChart
+          ariaLabel="test chart"
+          option={{ series, xAxis: axis([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]), dataZoom: [{ type: 'inside', startValue: 5 }] } as EChartsOption}
+          zoomWindow={{ startValue: 5, endValue: 9 }}
+        />,
+      )
+      expect(chart.dispatchAction).toHaveBeenCalledWith({ type: 'dataZoom', startValue: 5, endValue: 9 })
+      // Merged, never a notMerge rebuild: the morph the action started keeps running.
+      expect(chart.setOption).toHaveBeenCalledTimes(2)
+      expect(chart.setOption.mock.calls[1]).toEqual([
+        { xAxis: [{ axisLabel: { customValues: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] } }] },
+      ])
+    })
+
+    it('merge nothing when the set is unchanged, and still rebuild for any other axis change', () => {
+      const { rerender } = render(
+        <EChart
+          ariaLabel="test chart"
+          option={{ series, xAxis: axis([0, 3, 6, 9]), dataZoom: [{ type: 'inside', startValue: 0 }] } as EChartsOption}
+          zoomWindow={{ startValue: 0, endValue: 9 }}
+        />,
+      )
+      const chart = instances[0]
+      rerender(
+        <EChart
+          ariaLabel="test chart"
+          option={{ series, xAxis: axis([0, 3, 6, 9]), dataZoom: [{ type: 'inside', startValue: 5 }] } as EChartsOption}
+          zoomWindow={{ startValue: 5, endValue: 9 }}
+        />,
+      )
+      expect(chart.dispatchAction).toHaveBeenCalledTimes(1)
+      expect(chart.setOption).toHaveBeenCalledTimes(1)
+      rerender(
+        <EChart
+          ariaLabel="test chart"
+          option={{ series, xAxis: { ...axis([0, 3, 6, 9]), data: ['z', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'] }, dataZoom: [{ type: 'inside', startValue: 5 }] } as EChartsOption}
+          zoomWindow={{ startValue: 5, endValue: 9 }}
+        />,
+      )
+      expect(chart.setOption).toHaveBeenCalledTimes(2)
+      expect(chart.setOption.mock.calls[1][1]).toEqual({ notMerge: true })
+    })
+
+    // After lane CS's merge (both reviewers): under reduce a drag's echo rides the fast path, and
+    // a drag moves the window — so the weekly axis's label set moves with it. The echo must still
+    // merge that set alone: a notMerge rebuild would recreate the inside zoom under the pointer
+    // and end the pan after its first step.
+    it('under reduce, a drag echo that changes the set merges only customValues — no rebuild, the pan keeps going', () => {
+      vi.stubGlobal('matchMedia', () => ({ matches: true }))
+      const dragged = (customValues: number[], startValue: number, endValue?: number) =>
+        ({
+          series,
+          xAxis: axis(customValues),
+          dataZoom: [{ type: 'inside', startValue, ...(endValue === undefined ? {} : { endValue }) }],
+        }) as EChartsOption
+      const { rerender } = render(
+        <EChart ariaLabel="test chart" option={dragged([3, 6, 9], 3)} zoomWindow={{ startValue: 3, endValue: 9 }} onDataZoom={() => {}} />,
+      )
+      const chart = instances[0]
+      expect(chart.setOption).toHaveBeenCalledTimes(1)
+      // The user drags: the engine sits at 2–8 now, and the page mirrors that window back in,
+      // with the label set that window takes.
+      chart.getOption.mockReturnValue({ dataZoom: [{ startValue: 2, endValue: 8 }] })
+      act(() => chart.handlers.datazoom())
+      rerender(
+        <EChart ariaLabel="test chart" option={dragged([2, 4, 6, 8], 2, 8)} zoomWindow={{ startValue: 2, endValue: 8 }} onDataZoom={() => {}} />,
+      )
+      expect(chart.setOption).toHaveBeenCalledTimes(2)
+      expect(chart.setOption.mock.calls[1]).toEqual([{ xAxis: [{ axisLabel: { customValues: [2, 4, 6, 8] } }] }])
+      expect(chart.dispatchAction).not.toHaveBeenCalled() // the engine is already there
+    })
+  })
+
   // The 2026-09-23 code review (2): a manual drag echoes back through the page (datazoom → page
   // state → an option identical apart from its window). Under reduce the fast path stood aside,
   // so that echo rebuilt the chart with notMerge — recreating the inside zoom under the user's
@@ -631,6 +726,26 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
   })
 })
 
+// Code review 5: a chart whose labels depend on its width (the portfolio's weekly axis) reads the
+// container's measured width from the same observer that refits the engine.
+describe('EChart width signal', () => {
+  it("reports the container's width on mount, before any observer delivery, and on every resize", () => {
+    const measured = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(1230)
+    try {
+      const onWidth = vi.fn()
+      const { container } = render(<EChart ariaLabel="test chart" option={OPTION} onWidth={onWidth} />)
+      // Code re-review 2: measured in the mount's commit, not a frame later by the observer.
+      expect(onWidth.mock.calls).toEqual([[1230]])
+      const box = container.querySelector('[aria-label="test chart"]') as HTMLElement
+      Object.defineProperty(box, 'clientWidth', { configurable: true, value: 800 })
+      resizeNotify.forEach((fire) => fire())
+      expect(onWidth).toHaveBeenLastCalledWith(800)
+    } finally {
+      measured.mockRestore()
+    }
+  })
+})
+
 describe('EChart resize guard (spec §6)', () => {
   it('ignores the notification that only echoes the size the engine already holds', () => {
     render(<EChart ariaLabel="test chart" option={OPTION} />)
@@ -707,6 +822,34 @@ describe('EChart first paint waits for visibility (spec §6)', () => {
     render(<EChart ariaLabel="test chart" option={{ series: [] } as EChartsOption} animateEntrance={false} />)
     const [only] = lastChart().setOption.mock.calls[0] as [Record<string, unknown>]
     expect(only.animationDuration).toBe(0)
+  })
+  // Code re-review 2: the Overview's weekly axis reads the card's width. Learned from the
+  // observer's first delivery — a frame after the entrance had started — the rebuilt option
+  // repainted the chart already-drawn and cut the entrance. Measured on mount, before the held
+  // first paint, the page's option is already the right one when the card scrolls in.
+  it('an option that reads the measured width paints once, at that width, as the entrance', () => {
+    const measured = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(1230)
+    try {
+      function Page() {
+        const [width, setWidth] = useState<number | null>(null)
+        const option = useMemo(
+          () => ({ xAxis: { axisLabel: { customValues: width === null ? [] : [width] } }, series: [{ type: 'line', data: [1] }] }) as EChartsOption,
+          [width],
+        )
+        return <EChart ariaLabel="test chart" option={option} onWidth={setWidth} />
+      }
+      render(<Page />)
+      const chart = lastChart()
+      act(() => notify.forEach((fire) => fire([{ isIntersecting: true, intersectionRatio: 1 }])))
+      // The observer's own first delivery follows, carrying the width already reported.
+      act(() => resizeNotify.forEach((fire) => fire()))
+      expect(chart.setOption).toHaveBeenCalledTimes(1)
+      const [only] = chart.setOption.mock.calls[0] as [{ xAxis: { axisLabel: { customValues: number[] } } }]
+      expect(only.xAxis.axisLabel.customValues).toEqual([1230])
+      expect('animationDuration' in only).toBe(false) // the entrance, whole
+    } finally {
+      measured.mockRestore()
+    }
   })
   it('the entrance is the mount’s only one — the next paint is already-drawn', () => {
     const bars = (v: number) => ({ series: [{ type: 'bar', data: [v] }] }) as EChartsOption

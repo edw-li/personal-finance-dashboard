@@ -39,10 +39,13 @@ import {
   recentSpendOption,
   spendStats,
 } from '../components/overview/overviewChartOptions'
+import { performanceLede } from '../components/portfolio/benchmarkLede'
+import PerformanceLede from '../components/portfolio/PerformanceLede'
 import {
   liveFromHoldings,
   portfolioHistoryCsv,
   portfolioHistoryOption,
+  weeklyLabelCapacity,
 } from '../components/portfolio/historyChartOptions'
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
@@ -122,7 +125,7 @@ const loadPlanning = async () => { const [taxes, lots, taxYears, system] = await
 const SPENDING_HINT =
   "Living spending for the latest eligible month, compared with eligible months within the previous 12 calendar months. Tax paid from take-home and transfers are separate."
 const PERFORMANCE_HINT =
-  "Portfolio value vs cost basis, checkpointed weekly after Monday's close; the pinging dot is live. The S&P 500 line invests only the starting balance; VOO (your contributions) invests every inferred contribution instead."
+  "Portfolio value vs cost basis, checkpointed weekly after Monday's close; the pinging dot is live. Same deposits in VOO invests every inferred contribution in VOO as it lands — the fair comparison, and the line above the chart states the gap since the first checkpoint."
 
 // The up-next window slides with the calendar day — key it by today so a date rollover
 // misses cleanly instead of painting yesterday's window.
@@ -292,15 +295,32 @@ export default function OverviewPage() {
   // this guard since 2026-08-31 (A3); this copy is the same rule, one page later — null
   // also suppresses the dashed connector and the "Live" legend entry, both inside the
   // builder's livePt branch.
+  // The home card compares against the same deposits in VOO only (2026-09-23 spec §C8, shell
+  // F5): the starting-balance line invited "we beat the S&P nine-fold". Portfolio keeps it,
+  // legend-off, for the reader who asks for it.
+  // The weekly axis takes as many month labels as the card's plot fits (code review 5).
+  // Keyed on the two feeds it draws, not on `data`: that merges four feeds landing on their own,
+  // and the spending feed landing after the investments handed the chart a new, byte-identical
+  // option — repainted already-drawn, cutting the entrance it had just begun (code re-review 2).
+  const [perfLabels, setPerfLabels] = useState<number | undefined>(undefined)
+  const onPerfWidth = useCallback((width: number) => setPerfLabels(weeklyLabelCapacity(width)), [])
   const perf = useMemo(
     () =>
       data.history && data.holdings
         ? portfolioHistoryOption(
             data.history,
             owner === null ? liveFromHoldings(data.holdings) : null,
+            null,
+            { startingBalance: 'omit', labels: perfLabels },
           )
         : null,
-    [data, owner],
+    [data.history, data.holdings, owner, perfLabels],
+  )
+  // The card states the honest benchmark's answer over the whole history it draws
+  // (2026-09-23 spec §C8; shell F5): "Ahead of the same deposits in VOO by $263.7K".
+  const perfLede = useMemo(
+    () => (data.history ? performanceLede(data.history, { preset: 'all' }) : null),
+    [data],
   )
   // The months whose "0.00" is an absence rather than a figure (audit item 14). Memoized
   // beside the options it feeds, not recomputed per render: it rides INTO the bars' memo,
@@ -634,9 +654,20 @@ export default function OverviewPage() {
                 option={perf}
                 empty="No performance history yet."
                 exportName="portfolio-performance"
-                csv={data.history ? () => portfolioHistoryCsv(data.history!) : undefined}
+                onWidth={onPerfWidth}
+                csv={data.history ? () => portfolioHistoryCsv(data.history!, { startingBalance: 'omit' }) : undefined}
                 height={280}
                 busy={investments.busy} error={investments.error} selectionScopeKey={String(owner)}
+                // The row is reserved while the feed is in flight, so the card does not grow
+                // by a line — and shove the cards below it — the moment the sentence lands. A
+                // NO-BREAK space, spelled as an escape: a plain one collapses to 0px.
+                lede={
+                  perfLede !== null ? (
+                    <PerformanceLede line={perfLede} />
+                  ) : investments.busy ? (
+                    '\u00a0'
+                  ) : undefined
+                }
                 footer={
                   <NavLink className="drill-hint" to="/portfolio">
                     Open portfolio →
