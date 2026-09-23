@@ -312,10 +312,12 @@ async def test_download_serves_either_kind_byte_for_byte(auth_client, db):
 
 
 def test_both_zip_downloads_stream_in_64_kib_blocks():
-    """One ~500 KB write followed at once by the connection's close lost its last ~40 KB on the
-    Windows dev box whenever the client sent `Connection: close` (uvicorn on the Proactor loop:
-    the live export failed 12 of 30 on main too). Both ZIP downloads stream in FileResponse's
-    64 KiB block size instead (2026-09-23 lane B1 review, M2)."""
+    """A Windows dev-box mitigation, pinned: there one ~500 KB write followed at once by the
+    connection's close stalled at 456,960 bytes whenever the client sent `Connection: close`
+    (plain asyncio on Windows reproduces it, Proactor and Selector loops alike; the live export
+    failed 12 of 30 on main), while Linux with prod's exact stack delivered it whole 300 of 300.
+    Both ZIP downloads stream in FileResponse's 64 KiB block size, which reduces the risk on
+    Windows without strictly guaranteeing it (2026-09-23 lane B1 review, M2, and re-review)."""
     from app.api.export import _slices
     from app.api.system import _chunks
 

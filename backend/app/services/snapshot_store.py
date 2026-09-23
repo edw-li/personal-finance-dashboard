@@ -43,10 +43,14 @@ logger = logging.getLogger(__name__)
 SNAPSHOTS_KEEP = 14
 CHANGE_LOG_RETENTION_DAYS = 400
 ERROR_SNIPPET_LEN = 500
-# Every ZIP download streams in blocks of this size — FileResponse's own. One ~500 KB write
-# followed at once by the connection's close lost its last ~40 KB on the Windows dev box
-# whenever the client sent `Connection: close` (uvicorn on the Proactor loop; the live export
-# failed 12 of 30 on main), and 64 KiB blocks did not (2026-09-23 lane B1 review, M2).
+# Every ZIP download streams in blocks of this size — FileResponse's own. A WINDOWS DEV-BOX
+# mitigation, not a production fix: there, one ~500 KB write followed at once by the
+# connection's close stalled at 456,960 bytes whenever the client sent `Connection: close` —
+# plain asyncio on Windows reproduces it, on the Proactor and the Selector loop alike, and the
+# live export failed 12 of 30 that way on main — while Linux with prod's exact stack (uvicorn
+# 0.52.1, uvloop, httptools) delivered the single write whole 300 of 300. 64 KiB blocks took
+# the dev box to 40 of 40; that reduces the risk on Windows but does not strictly guarantee it
+# (2026-09-23 lane B1 review, M2, and re-review).
 DOWNLOAD_CHUNK_BYTES = 64 * 1024
 
 # O_NOFOLLOW makes the open itself refuse a symlink (Linux, where prod runs). Windows has no

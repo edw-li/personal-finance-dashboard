@@ -18,8 +18,9 @@ router = APIRouter(prefix="/export", tags=["export"], dependencies=[Depends(get_
 
 
 def _slices(payload: bytes) -> Iterator[bytes]:
-    """The built ZIP in DOWNLOAD_CHUNK_BYTES blocks — one whole-payload write lost its tail on
-    the Windows dev box when the client asked to close the connection (see the constant)."""
+    """The built ZIP in DOWNLOAD_CHUNK_BYTES blocks — a Windows dev-box mitigation: there one
+    whole-payload write lost its tail when the client asked to close the connection, which
+    prod's Linux stack does not do (see the constant)."""
     for start in range(0, len(payload), DOWNLOAD_CHUNK_BYTES):
         yield payload[start : start + DOWNLOAD_CHUNK_BYTES]
 
