@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { DROP_LINE_PX } from './reorderDom'
+import { DROP_LINE_PX, LIFTED_LAYER } from './reorderDom'
 
 /** Comments first, over the WHOLE file (settingsCss.test.ts's rule). */
 function stripComments(css: string): string {
@@ -25,8 +25,6 @@ function declarationsFor(css: string, selector: string): string {
 }
 
 const css = readFileSync(path.resolve(__dirname, 'reorder.css'), 'utf8')
-const sheet = (file: string) => readFileSync(path.resolve(__dirname, file), 'utf8')
-const zIndexOf = (declarations: string) => Number(/z-index: (\d+);/.exec(declarations)?.[1] ?? NaN)
 
 describe('reorder.css', () => {
   it('gives each cell of a reorderable table its own hairline (a collapsed border stays behind)', () => {
@@ -53,10 +51,10 @@ describe('reorder.css', () => {
     )
   })
 
-  it('lifts the unit above its neighbours', () => {
+  it('lifts the unit above its neighbours — on the layer the drop line is drawn one above', () => {
     const lifted = declarationsFor(css, "[data-reorder='lifted']")
     expect(lifted).toContain('position: relative;')
-    expect(lifted).toContain('z-index: 2;')
+    expect(lifted).toContain(`z-index: ${LIFTED_LAYER};`)
   })
 
   it('scopes the table row states to .reorder-table; a list of boxes keeps its own rules', () => {
@@ -77,29 +75,17 @@ describe('reorder.css', () => {
   it('draws the reduced-motion drop line as ONE fixed overlay — never inside a cell, where the row in hand covered it', () => {
     const line = declarationsFor(css, '.reorder-drop-line')
     expect(line).toContain('position: fixed;')
-    expect(line).toContain('z-index: 14;')
     expect(line).toContain(`height: ${DROP_LINE_PX}px;`) // the thickness the hook centres on the edge
     expect(line).toContain('background: var(--accent);')
     expect(line).toContain('pointer-events: none;')
-    // The hook hides it with the `hidden` attribute, which any `display` here would override.
+    // The hook hides it with the `hidden` attribute, which any `display` here would override; and
+    // it sets the z-index from the list's own layer (dropLineLayer), so none is fixed here.
     expect(line).not.toContain('display')
+    expect(line).not.toContain('z-index')
     // The row keeps `data-reorder-drop` (the tested contract), but nothing styles it any more: the
     // inset box-shadow line — in the target's cells, pinned ones too — is gone.
     expect(stripComments(css)).not.toContain('data-reorder-drop')
     expect(stripComments(css)).not.toMatch(/inset 0 -?2px 0 var\(--accent\)/)
-  })
-
-  it("sits the line above every page layer and under the chrome: .page is the one stacking context the page paints in", () => {
-    // panels.css: `.page`'s container query applies layout containment, which makes .page a stacking
-    // context — so the sticky headers (1), the lifted row (2), the scope row (8) and the Customize
-    // popover (20) order only inside it, and the line on <body> clears them all with any z-index.
-    expect(declarationsFor(sheet('../panels.css'), '.page')).toContain('container: page / inline-size;')
-    const line = zIndexOf(declarationsFor(css, '.reorder-drop-line'))
-    // The chrome that may cover the page still covers the line.
-    expect(zIndexOf(declarationsFor(sheet('../assistant/assistant.css'), '.assistant-drawer'))).toBeGreaterThan(line)
-    expect(zIndexOf(declarationsFor(sheet('../details/details.css'), '.detail-panel-layer'))).toBeGreaterThan(line)
-    expect(zIndexOf(declarationsFor(sheet('../CommandPalette.css'), '.palette-overlay'))).toBeGreaterThan(line)
-    expect(zIndexOf(declarationsFor(sheet('../toast.css'), '.toast-region'))).toBeGreaterThan(line)
   })
 
   it('draws a lifted multi-row unit as one block: its rows meet on one hairline, never two', () => {

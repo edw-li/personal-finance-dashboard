@@ -298,14 +298,14 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     return element === undefined ? null : { element, side }
   }
 
-  // The drop line on that edge, as the row stands NOW (lane V's finding 1): an overlay above every
-  // page layer, so the row in hand never covers it. Made at the first edge; hidden with none.
+  // The drop line on that edge, as the row stands NOW (lane V's finding 1): an overlay one layer
+  // above its list, so the row in hand never covers it. Made at the first edge; hidden with none.
   const drawLine = (drag: Drag<K>, edge: DropEdge | null) => {
     if (edge === null) {
       if (drag.line !== null) drag.line.hidden = true
       return
     }
-    drag.line ??= createDropLine()
+    drag.line ??= createDropLine(edge.element)
     placeDropLine(drag.line, edge.element, edge.side, drag.scroller)
   }
 

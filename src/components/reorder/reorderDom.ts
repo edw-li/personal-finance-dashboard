@@ -142,14 +142,40 @@ export function keepOnScreen(scroller: Scroller, top: number, height: number): v
 /** The reduced-motion drop line's thickness, px (reorder.css draws it; placeDropLine centres it). */
 export const DROP_LINE_PX = 2
 
+/** The lifted row's z-index — reorder.css's `[data-reorder='lifted']`, pinned there. */
+export const LIFTED_LAYER = 2
+
+/** The drop line's z-index: one above its list's own layer, so nothing in that layer covers it — not
+ *  the row in hand (LIFTED_LAYER), not a sticky header (1) — while whatever covers the list covers the
+ *  line too. That layer is the highest z-index among the list's positioned ancestors: `.page` is NOT a
+ *  stacking context (its container query applies no layout containment in Edge — measured at lane R7,
+ *  whatever panels.css says), so the page's layers all stack in the root, and a list inside the
+ *  Customize popover (z-index 20) needs 21. One fixed number that high would lift every other list's
+ *  line over the sticky scope row (8), the assistant drawer (15) and the dock (16). */
+export function dropLineLayer(element: Element): number {
+  let layer = LIFTED_LAYER
+  let node = element.parentElement
+  while (node !== null && node !== document.body && node !== document.documentElement) {
+    const style = getComputedStyle(node)
+    const z = Number.parseInt(style.zIndex, 10)
+    // Unpositioned (jsdom leaves an unset position ''), a z-index makes no layer.
+    const positioned = style.position !== '' && style.position !== 'static'
+    if (positioned && Number.isFinite(z)) layer = Math.max(layer, z)
+    node = node.parentElement
+  }
+  return layer + 1
+}
+
 /** Reduced motion's landing cue (spec §2.5 as amended by lane R7): ONE overlay per drag, appended to
- *  <body> and fixed above the page's layers (reorder.css), so the row in hand — which follows the
- *  pointer across its target — can never cover it (lane V's finding 1). Hidden until placed. */
-export function createDropLine(): HTMLElement {
+ *  <body>, fixed, one layer above the list whose `row` it marks (dropLineLayer), so the row in hand —
+ *  which follows the pointer across its target — can never cover it (lane V's finding 1). Hidden
+ *  until placed. */
+export function createDropLine(row: Element): HTMLElement {
   const line = document.createElement('div')
   line.className = 'reorder-drop-line'
   line.setAttribute('aria-hidden', 'true')
   line.hidden = true
+  line.style.zIndex = String(dropLineLayer(row))
   document.body.append(line)
   return line
 }

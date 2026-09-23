@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createDropLine,
   DROP_LINE_PX,
+  dropLineLayer,
   ensureVisible,
   keepOnScreen,
   listY,
@@ -271,17 +272,31 @@ describe('visibleSpan', () => {
 
 describe('the drop line', () => {
   it('is one hidden, aria-hidden overlay on <body> until it is placed', () => {
-    const line = createDropLine()
+    document.body.innerHTML = '<ul><li id="row">x</li></ul>'
+    const line = createDropLine(document.getElementById('row') as HTMLElement)
     expect(line.parentElement).toBe(document.body)
     expect(line.className).toBe('reorder-drop-line')
     expect(line.getAttribute('aria-hidden')).toBe('true')
     expect(line.hidden).toBe(true)
+    expect(line.style.zIndex).toBe('3')
+  })
+
+  it("stands one layer above its list: over the row in hand (2) in the page, over the popover a list sits in (20)", () => {
+    document.body.innerHTML =
+      '<div class="page"><ul><li id="page-row">x</li></ul>' +
+      '<div style="position: absolute; z-index: 20"><fieldset><div id="popover-row">y</div></fieldset></div>' +
+      // A z-index on a box that is not positioned makes no layer: it is not counted.
+      '<div style="z-index: 40"><div id="static-row">z</div></div></div>'
+    expect(dropLineLayer(document.getElementById('page-row') as HTMLElement)).toBe(3)
+    expect(dropLineLayer(document.getElementById('popover-row') as HTMLElement)).toBe(21)
+    expect(dropLineLayer(document.getElementById('static-row') as HTMLElement)).toBe(3)
+    expect(createDropLine(document.getElementById('popover-row') as HTMLElement).style.zIndex).toBe('21')
   })
 
   it('sits centred on the edge it marks — a row top for "before", a row bottom for "after" — as wide as the row', () => {
-    const line = createDropLine()
     const row = document.createElement('tr')
     document.body.append(row)
+    const line = createDropLine(row)
     row.getBoundingClientRect = () => rect(300, 40, 24, 900)
     placeDropLine(line, row, 'before', null)
     expect(line.hidden).toBe(false)
@@ -296,8 +311,8 @@ describe('the drop line', () => {
 
   it("hides while the edge is outside the band the reader sees of the scroller — under its sticky header, or past the window", () => {
     const box = scrolledTable(120, 'cells') // the band: 166..540
-    const line = createDropLine()
     const row = box.querySelector('tbody tr') as HTMLElement
+    const line = createDropLine(row)
     row.getBoundingClientRect = () => rect(140, 40) // its top under the header, its bottom below it
     placeDropLine(line, row, 'before', box)
     expect(line.hidden).toBe(true)

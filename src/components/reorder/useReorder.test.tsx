@@ -1166,6 +1166,29 @@ describe('useReorder — reduced motion (spec §2.5)', () => {
     expect(lines()).toEqual([])
   })
 
+  it("the line stands one layer above its list: over the row in hand in the page, over the popover a list sits in", () => {
+    reduceMotion()
+    render(
+      <>
+        <Stateful initial={flat('A', 'B', 'C', 'D')} />
+        {/* Overview › Customize's shape: .popover-surface is position: absolute; z-index: 20. */}
+        <div style={{ position: 'absolute', zIndex: 20 }}>
+          <TableList items={flat('r0', 'r1', 'r2')} />
+        </div>
+      </>,
+    )
+    layoutRows()
+    fireEvent.keyDown(grip('Alpha'), { key: ' ' })
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    expect(lines().map((line) => line.style.zIndex)).toEqual(['3'])
+    fireEvent.keyDown(grip('Alpha'), { key: 'Escape' })
+    fireEvent.keyDown(grip('r0'), { key: ' ' })
+    fireEvent.keyDown(grip('r0'), { key: 'ArrowDown' })
+    expect(lines().map((line) => line.style.zIndex)).toEqual(['21'])
+    fireEvent.keyDown(grip('r0'), { key: 'Escape' })
+    expect(lines()).toEqual([])
+  })
+
   it('keyboard: the line is measured after the keep-in-view scroll, and follows any later scroll', () => {
     reduceMotion()
     render(

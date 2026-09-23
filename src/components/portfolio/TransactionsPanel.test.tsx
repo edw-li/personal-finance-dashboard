@@ -1297,7 +1297,7 @@ describe('portfolio.css and reorder.css — the reorderable ledger', () => {
 
   it('lifts the pinned actions cell with its row; the drop line is drawn over it, never inside it', () => {
     // panels.css pins `.port-table td.row-actions` (0,2,1) with its own surface and a left
-    // hairline; each row state outranks it and keeps that hairline. The lifted cell draws its own
+    // hairline; the lifted state outranks it and keeps that hairline. The lifted cell draws its own
     // edge first, then the row's top and bottom edges — which a ledger row, a unit of one, has
     // both of (R0 round 4 composes them through --reorder-edge-*).
     expect(reorderCss).toMatch(

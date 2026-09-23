@@ -125,13 +125,13 @@ table.reorder-table {
    1). The hook draws it as an overlay on <body> instead — positioned from the target row's rect,
    hidden with the `hidden` attribute (so no `display` here), and gone when the drag lets go. The row
    keeps `data-reorder-drop`, which nothing here styles.
-   z-index 14, deliberately: above `.page`, the ONE stacking context every page layer paints in
-   (panels.css: the sticky table headers at 1, the lifted row at 2, the scope row at 8 and the
-   Customize popover at 20 all order only inside it), and under the chrome that may cover the page —
-   the assistant drawer and launcher (15), the detail dock (16), the palette (20), toasts (30). */
+   No z-index here, deliberately: the hook sets it inline to one above the list's own layer
+   (reorderDom.ts's dropLineLayer) — 3 for a list in the page, over the row in hand's 2 and the
+   sticky headers' 1; 21 inside the Customize popover (20). `.page` is not a stacking context, so
+   the page's layers stack in the root, and one fixed number above the popover would also lift the
+   line over the sticky scope row (8), the assistant drawer (15) and the dock (16). */
 .reorder-drop-line {
   position: fixed;
-  z-index: 14;
   height: 2px;
   background: var(--accent);
   pointer-events: none;
