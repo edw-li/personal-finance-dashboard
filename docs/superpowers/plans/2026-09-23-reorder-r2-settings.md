@@ -4579,12 +4579,15 @@ git commit -m "docs(plan): lane R2 — results, gates and the browser check"
        its top when moving up) with peer midpoints, or clamp the centre instead of the extent.
        Pin it with `slotFor` on `stacked([160, 40, 40])` from slot 0.
      - Not patched here (spec §11; plan Task 9 step 8).
+     - **Resolved** by R0 round 4 (`d5efe2d9`, the leading-edge slot rule), verified in browser
+       round 2 below.
   2. Auto-scroll does not stop at the unit's range. Holding at the top edge scrolled the 420px
      roster about 660px, well past Liabilities, so the clamped lifted row left the view. The drop
-     was still right. A minor UX note for R0/V.
+     was still right. A minor UX note for R0/V. **Resolved** by R0 round 4 (the range-end stop),
+     verified below.
   3. In a multi-row lifted unit (a parent with components), each row draws its own inset top and
      bottom hairline, so the internal separators read doubled (`09-*-keyboard-lifted`). Cosmetic
-     (reorder.css).
+     (reorder.css). **Resolved** by R0 round 4 (one hairline inside a lifted unit), verified below.
   4. `src/pages/SettingsPage.test.tsx:883` still has a comment saying both tables carry a "Sort
      order" box. It is only a comment, outside the fence, and was left alone.
   5. The cleanup restored the ORDER exactly. The stored `sort_order` values are now normalized
@@ -4595,6 +4598,70 @@ git commit -m "docs(plan): lane R2 — results, gates and the browser check"
      - Task 7 follows A1: the two tests pin reorder.css and the grip override keeps
        `padding-right: 0`. Its commit message was reworded to say so.
      - The smoke additions above.
+
+### Code-quality review round (2026-09-23): approved after fixes
+
+- One commit per item, each test-first (the red runs are in brackets):
+  - `81101883` **I1** — a write holds the grips until its reload lands. `load` returns its
+    promise and every write returns it; any failed save reloads, not only a 409; and
+    `disabled: busy || loadError !== null`. The early-release tests are rewritten; there is an
+    Undo-window test and a failed-reload test. [4 failures per card: the reload never called,
+    grips not parked ×2, no reload banner.]
+  - `f8c2e65f` **I2** — `busy` is a request count, with `track()` around every write, the toast's
+    Undo included. The save's answer takes a turn in load's sequence. [1 failure per card: an
+    older toast's Undo overlapping a later save handed the grips back when the Undo settled.]
+  - `d0603579` **M1** — one `<tbody>` per group, headed by `<th scope="rowgroup">`. The CSS
+    override is keyed on the row's class (`tbody > tr.accounts-group-row > th`, 0,3,3).
+    [2 failures: the tbody count, and the CSS block.]
+  - `52dd8a1f` **M3** — `rosterGroups` / `rosterItems` are pure functions in
+    `src/utils/accounts.ts`, with 8 unit tests, including R0's `contractProblems` on the derived
+    items. [8 failures: the missing exports.] The roster table was NOT extracted into its own
+    component (optional, and not quick).
+  - `1dd7deb8` **M4** — `vi.resetAllMocks()` in both card test files, and the `reorder.css` pins
+    match normalized CSS, with a test that runs them against a reformatted copy of the sheet.
+    [1 failure: the reformatted sheet.]
+  - M2 (duplication between the two cards) is deferred to the consolidation step after R3 and R5,
+    as the coordinator decided.
+- One addition beyond the letter of I2: an OVERTAKEN save reads the list again instead of
+  simply dropping its answer. The later request (the reload after an older toast's Undo) may have
+  read the list before this save committed, so dropping alone could strand the table one move
+  behind the server. The overlap test pins it: the save's answer is not drawn, a third GET follows,
+  and the grips wait for it.
+- `e453a8c1` merges `feat/reorder-base` @ `d5efe2d9` (R0 round 4, plus the §4.2 spec correction).
+  The merge was clean: base touched only R0's files and docs, and my reorder.css pins still hold.
+- Tests on the final HEAD:
+  - CategoriesCard 31, AccountsCard 45, settingsCss 7, utils/accounts 11.
+  - The targeted set (settings, SettingsPage, guide, reorder, utils/accounts): 32 files / 400.
+  - No expectation moved with the leading-edge rule. The card tests drive the keyboard; R0's own
+    suite passes at 40 / 26 / 16 / 14.
+  - The ONE full `npx vitest run --maxWorkers=2`: **246 files / 3454 tests, exit 0.** No known
+    flake fired.
+  - `tsc -b` exit 0; eslint on every touched file exit 0.
+- Browser check, round 2 (after the merge; `scratchpad/reorder-r2/report.json`, rounds 1 and 2
+  kept beside it as `report-run1.json` / `report-run2.json`): **149 ok, 0 failed —
+  `R2 SETTINGS SMOKE OK`.** 0 blocked writes, console clean, both orders restored.
+  - The 4 formerly failing drags (Fidelity Traditional 401(k) below the IRA): 16/16. The
+    clamped unit's bottom now reaches 257.8px against the IRA midpoint's 193.4.
+  - The smoke's carry drags now aim by the leading edge (bottom edge 4px past the sibling's
+    midpoint). The plan's `sibling.mid − parent.mid + 4` was the centre rule's travel; under the
+    new rule it also passes the HSA, and the 4-row unit then lands last — correct for that pointer
+    position, but not "below the IRA". The categories three-row drag lands three places down under
+    both rules, so it is unchanged.
+  - Auto-scroll, two cases:
+    - (a) The plan's case, Liabilities, now scrolls 0px. It ends the list, so at full depth its
+      first row already shows 118.7px below the visible top, clear of the zone. The held row stays
+      in view, lands first, and Undo restores it.
+    - (b) Taxable, whose first row can be hidden: the list scrolls 123–127px, stops with that row
+      43.3–47.3px below the visible top, and is still stopped 500ms later. The held row stays in
+      view at its group's top, lands first, and Undo restores it.
+  - The lifted 4-row block draws its top hairline on the first row and its bottom one on the last,
+    with none between (computed shadows, all 4 passes). The screenshot shows a single hairline
+    between its rows.
+  - Heights at 1440 are unchanged by this round: 695 / 1114.
+- For R0 / V: when auto-scroll stops at a group's end, the group's heading row sits mostly under
+  the Settings table's sticky column header (about 38px). The 40px zone is measured from the
+  scroller's top, not from the header's bottom. The held row is fully visible, so this is cosmetic
+  (`06b-accounts-autoscroll-stop-held`).
 
 ---
 
