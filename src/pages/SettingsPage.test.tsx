@@ -103,6 +103,7 @@ vi.mock('../api/limits', async (importOriginal) => ({
 vi.mock('../api/lifecycle', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/lifecycle')>()),
   fetchSnapshots: vi.fn(),
+  fetchRestorePoints: vi.fn(),
   createSnapshot: vi.fn(),
   restoreUpload: vi.fn(),
   restoreStored: vi.fn(),
@@ -111,7 +112,7 @@ vi.mock('../api/lifecycle', async (importOriginal) => ({
   undoBatch: vi.fn(),
   fetchHealth: vi.fn(),
 }))
-import { createSnapshot, fetchSnapshots } from '../api/lifecycle'
+import { createSnapshot, fetchRestorePoints, fetchSnapshots } from '../api/lifecycle'
 // CalendarFeedCard owns a mount fetch of its own, for the same reason as the cards above:
 // unmocked it would make a real network call from every test here and banner the failure as
 // a second role="alert". Its own behaviour is pinned in CalendarFeedCard.test.tsx.
@@ -310,6 +311,8 @@ beforeEach(() => {
   // Empty volume: the Backups card settles into its own empty note without adding a row,
   // a link or a banner to any of this file's queries.
   vi.mocked(fetchSnapshots).mockResolvedValue([])
+  // No restore points either (2026-09-23 spec §B3): the Backups and Restore cards read both lists.
+  vi.mocked(fetchRestorePoints).mockResolvedValue([])
   vi.mocked(fetchHousehold).mockResolvedValue({ people: [ME], marriage_date: null })
   // No profile: the Plan assumptions card settles into "no paycheck profile yet" without
   // adding a row, a link or a banner to any of this file's queries.

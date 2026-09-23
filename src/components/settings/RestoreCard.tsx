@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { ApiError } from '../../api/client'
-import { fetchSnapshots, restoreStored, restoreUpload } from '../../api/lifecycle'
+import {
+  fetchRestorePoints,
+  fetchSnapshots,
+  restoreStored,
+  restoreUpload,
+} from '../../api/lifecycle'
 import type { RestoreReport, SnapshotEntry } from '../../types/api'
 import { formatBytes, formatDateTime, formatInstantDate, localDateKey } from '../../utils/format'
 import InfoHint from '../InfoHint'
@@ -8,11 +14,16 @@ import { FeedBanner } from '../shell/Feed'
 import { useToast } from '../ToastProvider'
 import { useArrivalValue } from '../useArrivalParam'
 import RestoreReportView from './RestoreReportView'
+import { restoreHref, restorePointLabel } from './restorePoints'
 import '../panels.css'
 import './settings.css'
 
 // What is being restored: a file the user picked, or a stored nightly by name. Exactly one.
 type Source = { kind: 'file'; file: File } | { kind: 'stored'; name: string }
+
+// Both stored kinds, read together (2026-09-23 spec §B3): the select offers them side by side
+// and an arrival may name either, so the card holds ONE reading of the volume.
+type StoredLists = { snapshots: SnapshotEntry[]; points: SnapshotEntry[] }
 
 // A report describes exactly ONE source, so it is held WITH the source it was run for. The
 // arm reads a date off the report and the apply sends the SELECTION: if those two could
@@ -29,10 +40,12 @@ function message(err: unknown, fallback: string): string {
  * the shared report view, then Restore — armed ONLY by a clean dry run of the current
  * selection (compatible schema, no errors) plus the snapshot's date typed out (the month-
  * delete arm pattern). The server's sentences (400/409/413/422/500) render verbatim; success
- * toasts and the applied report names the restore point.
+ * toasts and the applied report names the restore point. Restore points — the pre-restore and
+ * pre-import copies the server keeps — are offered in their own group (2026-09-23 spec §B3),
+ * and a success toast's Undo pre-selects the one just saved; it never restores by itself.
  */
 export default function RestoreCard() {
-  const [stored, setStored] = useState<SnapshotEntry[] | null>(null)
+  const [stored, setStored] = useState<StoredLists | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [source, setSource] = useState<Source | null>(null)
   const [reported, setReported] = useState<Reported | null>(null)
@@ -48,6 +61,7 @@ export default function RestoreCard() {
   const reportRef = useRef<HTMLDivElement>(null)
   const focusReportRef = useRef(false)
   const toast = useToast()
+  const navigate = useNavigate()
 
   // The house's load recipe (inline chain, seqRef), but memoized: the arrival callback
   // below calls it too, and a fresh identity every render would make that callback fresh
@@ -55,10 +69,10 @@ export default function RestoreCard() {
   // and setters is captured, so the empty dependency list is the honest one.
   const load = useCallback(() => {
     const seq = ++seqRef.current
-    fetchSnapshots()
-      .then((list) => {
+    Promise.all([fetchSnapshots(), fetchRestorePoints()])
+      .then(([snapshots, points]) => {
         if (seq !== seqRef.current) return
-        setStored(list)
+        setStored({ snapshots, points })
         setLoadError(null)
       })
       .catch((err: unknown) => {
@@ -96,7 +110,8 @@ export default function RestoreCard() {
         // when the reader is reading the report it would silently discard.
         if (busy !== null) return true
         if (stored === null) return false
-        if (!stored.some((entry) => entry.name === name && entry.restorable)) {
+        const offered = [...stored.snapshots, ...stored.points]
+        if (!offered.some((entry) => entry.name === name && entry.restorable)) {
           // The Backups card fetches its own copy of this list and "Snapshot now" only
           // updates THAT one, so the newest file is unknown here until we look again.
           // One re-look per name, then the answer stands: unknown against a FRESH list is
@@ -139,7 +154,19 @@ export default function RestoreCard() {
               ? 'snapshot'
               : `snapshot from ${formatInstantDate(result.exported_at)}`
           // The /import mutation path already invalidated every page snapshot (client.ts).
-          toast.success(`Restored ${when} — other pages reload on their next visit`)
+          const point = result.restore_point
+          toast.success(
+            `Restored ${when}.` +
+              (point === null
+                ? ''
+                : ` The data it replaced is saved as a restore point (${restorePointLabel(point)}).`) +
+              ' Other pages reload on their next visit.',
+            point === null
+              ? undefined
+              : // Undo SELECTS the point here; the reader still dry-runs it and types its date
+                // (2026-09-23 spec §B3 — no silent writes).
+                { action: { label: 'Undo', onAction: () => navigate(restoreHref(point)) } },
+          )
         }
       })
       .catch((err: unknown) => {
@@ -197,13 +224,19 @@ export default function RestoreCard() {
     run(false)
   }
 
-  const restorable = (stored ?? []).filter((entry) => entry.restorable)
+  const snapshots = (stored?.snapshots ?? []).filter((entry) => entry.restorable)
+  const points = (stored?.points ?? []).filter((entry) => entry.restorable)
+  const option = (entry: SnapshotEntry) => (
+    <option key={entry.name} value={entry.name}>
+      {formatDateTime(entry.at)} · {formatBytes(entry.size_bytes)} · {entry.name}
+    </option>
+  )
 
   return (
     <section className="card span-6" id="restore" role="region" aria-label="Restore">
       <h2 className="eyebrow">
         Restore
-        <InfoHint text="Replaces every exported table from a snapshot ZIP — one this app wrote, at this server's schema. Dry run shows what would change and writes nothing. Restore first writes a pre-restore point, so the step back is one more restore. Your login, the operational trails and this server's backup markers are never touched." />
+        <InfoHint text="Replaces every exported table from a snapshot ZIP — one this app wrote, at this server's schema. Dry run shows what would change and writes nothing. Restore first saves a restore point of the current data — it is listed under Restore points below the snapshots, so the step back is one more restore. Your login, the operational trails and this server's backup markers are never touched." />
       </h2>
       <div className="restore-source">
         <label>
@@ -236,11 +269,12 @@ export default function RestoreCard() {
             onChange={(e) => pick(e.target.value === '' ? null : { kind: 'stored', name: e.target.value })}
           >
             <option value="">Choose a stored snapshot…</option>
-            {restorable.map((entry) => (
-              <option key={entry.name} value={entry.name}>
-                {formatDateTime(entry.at)} · {formatBytes(entry.size_bytes)} · {entry.name}
-              </option>
-            ))}
+            {snapshots.length > 0 && <optgroup label="Snapshots">{snapshots.map(option)}</optgroup>}
+            {points.length > 0 && (
+              <optgroup label="Restore points (saved before a restore or import)">
+                {points.map(option)}
+              </optgroup>
+            )}
           </select>
         </label>
       </div>
