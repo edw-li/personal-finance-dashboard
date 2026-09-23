@@ -1,13 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import { ApiError, describeError } from '../../api/client'
+import { ApiError, describeError, errorDetail } from '../../api/client'
+import { undoBatch } from '../../api/lifecycle'
 import {
   createCategory,
   deleteCategory,
   fetchCategories,
+  reorderCategories,
   updateCategory,
 } from '../../api/spending'
 import type { CategoryKind, CategoryOut } from '../../types/api'
 import InfoHint from '../InfoHint'
+import DragHandle from '../reorder/DragHandle'
+import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
+import { useReorder } from '../reorder/useReorder'
+import type { UseReorder } from '../reorder/useReorder'
 import { useToast } from '../ToastProvider'
 import { FeedBanner } from '../shell/Feed'
 import Segmented from '../shell/Segmented'
@@ -35,10 +41,34 @@ function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
 
+// errorDetail's reason with any closing stop folded away: the two sentences below end on their
+// own (describeLoadFailures' rule in client.ts).
+function reason(err: unknown): string {
+  return errorDetail(err).replace(/[.\s]+$/, '')
+}
+
+/** A drop the server did not take (2026-09-23 reorder spec §8.1), said once the rows have
+ *  already snapped back. A 409 never reaches this: its own sentence is shown verbatim. */
+function orderSaveFailed(err: unknown): string {
+  return `Couldn't save the new order — ${reason(err)}. The list is back to how it was.`
+}
+
+/** A refused Undo is the server's own sentence ("Later changes touched these rows — undo those
+ *  first", spec §9); a request that got no answer at all says what failed and why. */
+function undoFailed(err: unknown): string {
+  return err instanceof ApiError && err.status >= 400 && err.status < 500
+    ? err.message
+    : `Couldn't undo the move — ${reason(err)}.`
+}
+
 /**
  * The Settings Spending-categories card (2026-08-26 spec §6). The CRUD endpoints have
  * existed since Plan 3 with no caller at all (audit §3.1), so the category axis was fixed
  * by the workbook exactly like the account roster was.
+ *
+ * The order is the table's (2026-09-23 reorder spec §4.1): a row is dragged by its grip — or
+ * lifted with Space and moved with the arrows — and the drop saves the WHOLE order in one PUT,
+ * with the change log's Undo behind it.
  */
 export default function CategoriesCard() {
   const [categories, setCategories] = useState<CategoryOut[]>([])
@@ -50,8 +80,20 @@ export default function CategoriesCard() {
   const [busy, setBusy] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState<CategoryFormState>(EMPTY_CATEGORY)
+  // A drop renders its order AT ONCE; the order is retired the moment the server's rows land —
+  // CategoriesPanel's adjust-during-render recipe, not an effect (spec §4.1).
+  const [pendingOrder, setPendingOrder] = useState<CategoryOut[] | null>(null)
+  const [lastCategories, setLastCategories] = useState(categories)
   const seqRef = useRef(0)
   const toast = useToast()
+
+  if (lastCategories !== categories) {
+    setLastCategories(categories)
+    setPendingOrder(null)
+  }
+  // What the table draws: the dropped order while its save is in flight, else the server's.
+  const shown = pendingOrder ?? categories
+  const nameOf = new Map(shown.map((category) => [category.id, category.name]))
 
   const load = (initial = false) => {
     const seq = ++seqRef.current
@@ -141,6 +183,71 @@ export default function CategoriesCard() {
       .finally(() => setBusy(false))
   }
 
+  // The reorder route logs its batch (spec §3.2), so Undo is the change log's: the server
+  // writes every renumbered row back, then the list is read again.
+  const undoOrder = (batchId: string) => {
+    setBusy(true)
+    undoBatch(batchId)
+      .then(() => {
+        load()
+        toast.info('Order restored')
+      })
+      .catch((err: unknown) => toast.error(undoFailed(err)))
+      .finally(() => setBusy(false))
+  }
+
+  // One PUT with every category — active and retired — in the dropped order (spec §4.1). Its
+  // outcome is about a row far down the table, so it rides the toast layer, never the form
+  // banner (the delete guard's rule above).
+  const saveOrder = (ids: number[], moved: number) => {
+    const name = nameOf.get(moved) ?? 'the category'
+    // A reload already on the wire describes the order BEFORE this drop; its answer must not
+    // land on top of the one this save brings back (load's seq guard drops it).
+    seqRef.current += 1
+    setBusy(true)
+    reorderCategories(ids)
+      .then(({ data, batchId }) => {
+        setCategories(data)
+        reorder.markSaved(moved)
+        toast.success(
+          `Moved ${name}`,
+          // No batch = nothing was logged, so there is nothing to undo (the wizard's contract).
+          batchId === null
+            ? undefined
+            : { action: { label: 'Undo', onAction: () => undoOrder(batchId) } },
+        )
+      })
+      .catch((err: unknown) => {
+        setPendingOrder(null) // back to the last order the server confirmed
+        if (err instanceof ApiError && err.status === 409) {
+          // The list changed under this one (another tab): the server's sentence, then the
+          // current rows (spec §8.3).
+          toast.error(err.message)
+          load()
+          return
+        }
+        toast.error(orderSaveFailed(err))
+      })
+      .finally(() => setBusy(false))
+  }
+
+  const reorder = useReorder({
+    items: shown.map((category) => ({ id: category.id })),
+    labelOf: (id) => nameOf.get(id) ?? String(id),
+    // Every request of the card parks the grips: a drop cannot race a save (spec §9).
+    disabled: busy,
+    onCommit: (next, moved) => {
+      const byId = new Map(shown.map((category) => [category.id, category]))
+      setPendingOrder(
+        next.flatMap((id) => {
+          const category = byId.get(id)
+          return category === undefined ? [] : [category]
+        }),
+      )
+      saveOrder(next, moved)
+    },
+  })
+
   return (
     <section className="card span-8" id="categories">
       <h2 className="eyebrow">
@@ -183,9 +290,10 @@ export default function CategoriesCard() {
           ) : (
             <>
               <CategoriesTable
-                categories={categories}
+                categories={shown}
                 busy={busy}
                 editingId={editingId}
+                reorder={reorder}
                 onEdit={(category) => {
                   setEditingId(category.id)
                   setFormError(null)
@@ -195,6 +303,10 @@ export default function CategoriesCard() {
                 onKind={setKind}
                 onRemove={remove}
               />
+              {/* Once per card and OUTSIDE the table (a <span> is not a table child): the grips'
+                  aria-describedby target and the lift/move/drop announcements (spec §2.4). */}
+              <ReorderInstructions id={reorder.instructionsId} />
+              <ReorderLiveRegion text={reorder.announcement} />
               {/* ONE line per kind (spec §1): the three definitions are read while deciding
                   a single row's picker, so they have to be scannable side by side, not
                   buried in a paragraph the reader has to parse to find their case. */}
@@ -228,11 +340,16 @@ export default function CategoriesCard() {
  *  first commit: the card mounts before its rows land, and a hook bound to a ref that is still null
  *  then would never observe the element. The scroller flags `data-scroll-more` (panels.css masks
  *  the clipped edge) and the last column is sticky, so Delete is never hidden behind a scrollbar
- *  that only appears on hover (2026-09-13 spec §7, audit S-3). */
+ *  that only appears on hover (2026-09-13 spec §7, audit S-3).
+ *
+ *  The first column is the grip (2026-09-23 reorder spec §4.1): every category, retired ones
+ *  included, is a row of ONE list that moves among the others. `.reorder-table` gives each cell
+ *  its own hairline so a moving row takes its border with it (reorder.css). */
 function CategoriesTable({
   categories,
   busy,
   editingId,
+  reorder,
   onEdit,
   onToggleActive,
   onKind,
@@ -241,6 +358,7 @@ function CategoriesTable({
   categories: CategoryOut[]
   busy: boolean
   editingId: number | null
+  reorder: UseReorder<number>
   onEdit: (category: CategoryOut) => void
   onToggleActive: (category: CategoryOut) => void
   onKind: (category: CategoryOut, next: CategoryKind) => void
@@ -250,19 +368,26 @@ function CategoriesTable({
   useScrollEdges(scrollRef)
   return (
     <div className="settings-scroll" ref={scrollRef}>
-      <table className="data-table category-table">
+      <table className="data-table category-table reorder-table">
         <thead>
           <tr>
+            <th className="reorder-grip-cell" aria-hidden="true" />
             <th>Category</th>
             <th>Kind</th>
-            <th className="num">Sort</th>
             <th>Status</th>
             <th />
           </tr>
         </thead>
         <tbody>
           {categories.map((category) => (
-            <tr key={category.id} className={category.id === editingId ? 'is-editing' : undefined}>
+            <tr
+              key={category.id}
+              className={category.id === editingId ? 'is-editing' : undefined}
+              {...reorder.itemProps(category.id)}
+            >
+              <td className="reorder-grip-cell">
+                <DragHandle name={category.name} {...reorder.handleProps(category.id)} />
+              </td>
               <td>{category.name}</td>
               <td>
                 <Segmented
@@ -276,7 +401,6 @@ function CategoriesTable({
                   onChange={(next) => onKind(category, next)}
                 />
               </td>
-              <td className="num">{category.sort_order}</td>
               <td>
                 <span className="badge">{category.is_active ? 'Active' : 'Retired'}</span>
               </td>
