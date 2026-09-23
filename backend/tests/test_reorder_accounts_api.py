@@ -171,6 +171,56 @@ async def test_the_label_names_a_parent_moved_with_the_components_it_carries(aut
     assert labels == {"Moved account P"}
 
 
+async def seed_block(db, *names: str) -> dict[str, int]:
+    """Top-level accounts in `names` order, where "P" is a parent and every name starting
+    with "K" is one of its components in the same group — the rows the Settings table nests
+    under P and carries with it."""
+    parent = Account(name="P", slug="p", group="cash", sort_order=names.index("P"))
+    db.add(parent)
+    await db.flush()
+    rows = {"P": parent}
+    for index, name in enumerate(names):
+        if name == "P":
+            continue
+        component = name.startswith("K")
+        rows[name] = Account(
+            name=name,
+            slug=name.lower(),
+            group="cash",
+            sort_order=index,
+            is_component=component,
+            parent_account_id=parent.id if component else None,
+        )
+        db.add(rows[name])
+    await db.commit()
+    return {name: row.id for name, row in rows.items()}
+
+
+@pytest.mark.parametrize("moved", ["ABCPKD", "ABPKCD", "PKABCD"], ids=["up 1", "up 2", "up 4"])
+async def test_a_parent_moved_with_its_component_is_named_however_far_it_went(
+    auth_client, db, moved
+):
+    """The natural explanation comes first (spec §8.4, amended at the R1 review): the minimal
+    moved set would name "D" for up 1 and count "2 accounts" for up 2, but the user dragged
+    P — and every other row kept its order."""
+    ids = await seed_block(db, "A", "B", "C", "D", "P", "K")
+    resp = await auth_client.put(ORDER, json={"ids": [ids[name] for name in moved]})
+    assert resp.status_code == 200, resp.text
+    labels = set((await db.execute(select(ChangeLog.label))).scalars())
+    assert labels == {"Moved account P"}
+
+
+async def test_a_component_moved_inside_its_parents_block_is_named_itself(auth_client, db):
+    """P did not move among the other rows — only its two components swapped — so the
+    parent rule does not apply, and the single-row rule names the component."""
+    ids = await seed_block(db, "A", "P", "K1", "K2", "B")
+    new = [ids[name] for name in ("A", "P", "K2", "K1", "B")]
+    resp = await auth_client.put(ORDER, json={"ids": new})
+    assert resp.status_code == 200, resp.text
+    labels = set((await db.execute(select(ChangeLog.label))).scalars())
+    assert labels == {"Moved account K1"}  # the adjacent swap's tie rule (spec §3.1)
+
+
 async def test_the_label_counts_the_minimal_moved_set_otherwise(auth_client, db):
     a, b, c, d, e = await seed_numbered(db, "A", "B", "C", "D", "E")
     # Two unrelated swaps: the kept run is B, D, E, so A and C are "the ones that moved".

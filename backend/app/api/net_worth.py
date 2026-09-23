@@ -40,6 +40,7 @@ from app.services.ordering import (
     STALE_ACCOUNTS,
     apply_order,
     in_list_order,
+    moved_alone,
     moved_ids,
     next_sort_order,
     order_lock,
@@ -104,24 +105,35 @@ async def list_accounts(db: AsyncSession = Depends(get_db)) -> list[Account]:
     return list((await db.execute(in_list_order(Account))).scalars())
 
 
-def _reorder_label(accounts: list[Account], moved: list[int]) -> str:
-    """The Activity label (2026-09-23 reorder spec §8.4). One account moved — alone, or a
-    parent with exactly the components it carries — names it; anything else counts the
-    minimal moved set. "Carries" is the Settings table's nesting: the components whose
-    parent it is AND that sit in its group (nestComponents runs per group there)."""
+def _reorder_label(accounts: list[Account], new_order: list[int]) -> str:
+    """The Activity label (2026-09-23 reorder spec §8.4, amended at the R1 review): the
+    natural explanation before the minimal one.
+
+    1. A parent that moved with the components it carries while every other row kept its
+       order names the parent, however far it went — up one row it is not "Moved account
+       <the row it passed>". "Carries" is the Settings table's nesting: the components whose
+       parent it is AND that sit in its group (nestComponents runs per group there). Of two
+       such blocks that swapped, the later one in the new order is named (moved_ids' tie).
+    2. Else one row whose move explains everything names it — an adjacent swap names one of
+       the two by moved_ids' tie rule.
+    3. Else "Reordered {n} accounts", n the minimal moved set.
+
+    O(n) per parent with components, plus moved_ids' O(n log n)."""
+    old_order = [account.id for account in accounts]
     by_id = {account.id: account for account in accounts}
+    carried: dict[int, set[int]] = {}
+    for account in accounts:
+        parent = by_id.get(account.parent_account_id)
+        if parent is not None and parent.id != account.id and parent.group == account.group:
+            carried.setdefault(parent.id, set()).add(account.id)
+    for account_id in reversed(new_order):
+        if account_id in carried and moved_alone(
+            old_order, new_order, account_id, carried[account_id]
+        ):
+            return f"Moved account {by_id[account_id].name}"
+    moved = moved_ids(old_order, new_order)
     if len(moved) == 1:
         return f"Moved account {by_id[moved[0]].name}"
-    moved_set = set(moved)
-    for account_id in moved:
-        parent = by_id[account_id]
-        carried = {
-            other.id
-            for other in accounts
-            if other.parent_account_id == parent.id and other.group == parent.group
-        }
-        if moved_set == {parent.id} | carried:
-            return f"Moved account {parent.name}"
     return f"Reordered {len(moved)} accounts"
 
 
@@ -151,8 +163,7 @@ async def reorder_accounts(
         return ordered
     for account, _old, _new in changed:
         batch.record_update(account, before[account.id])
-    current = [account.id for account in accounts]
-    batch.label = _reorder_label(accounts, moved_ids(current, body.ids))
+    batch.label = _reorder_label(accounts, body.ids)
     # The header only when rows were logged — the allocation routes' rule; batch_header
     # spells it the way the month DELETEs already do.
     response.headers.update(batch_header(await batch.commit()))

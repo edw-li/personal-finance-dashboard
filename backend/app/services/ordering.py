@@ -6,7 +6,7 @@ that needs the database is BUILT here and awaited by the router.
 """
 
 from bisect import bisect_left
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
@@ -117,6 +117,36 @@ def apply_order[R: ListRow](
     by_id = {row.id: row for row in rows}
     ordered = [by_id[row_id] for row_id in ids]
     return ordered, renumber(ordered, "sort_order", start=0, step=1)
+
+
+def moved_alone(
+    old_order: Sequence[int],
+    new_order: Sequence[int],
+    head: int,
+    carried: Collection[int] = (),
+) -> bool:
+    """True when `head` — with the rows it carries, if any — explains the whole change:
+    take them out of both orders and the rest is the same sequence, and `head` itself now
+    sits somewhere else among the rest. A change among the carried rows alone does not
+    count, so a component shuffled under its parent never names the parent. The natural
+    explanation the Activity label reaches for before the minimal moved set (§8.4, amended
+    at the R1 review). O(n)."""
+    unit = {head, *carried}
+    rest_old = [row_id for row_id in old_order if row_id not in unit]
+    rest_new = [row_id for row_id in new_order if row_id not in unit]
+    if rest_old != rest_new:
+        return False
+
+    def rest_before_head(order: Sequence[int]) -> int:
+        count = 0
+        for row_id in order:
+            if row_id == head:
+                return count
+            if row_id not in unit:
+                count += 1
+        raise ValueError("head must be a row of both orders")
+
+    return rest_before_head(old_order) != rest_before_head(new_order)
 
 
 def moved_ids(old_order: Sequence[int], new_order: Sequence[int]) -> list[int]:

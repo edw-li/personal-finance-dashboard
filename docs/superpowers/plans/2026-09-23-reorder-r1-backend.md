@@ -96,10 +96,18 @@ find out why before changing anything.
    sequence §3.1 reads old positions in. Of all longest increasing subsequences, the kept one is the
    lexicographically smallest by new-order index. An adjacent swap `[a, b] → [b, a]` therefore names
    `a` (the kept row is `b`, the earlier row of the new order). O(n log n).
-2. **"A parent with exactly its components"** (§8.4) means: the moved set is one account plus exactly
-   the accounts whose `parent_account_id` is that account AND whose `group` equals its group — the
-   rows the Settings table nests under it and carries in a drag (R2 applies `nestComponents` per
-   group, spec §4.2). A same-parent component sitting in another group is not carried.
+2. **"A parent with exactly its components"** (§8.4). A parent carries the accounts whose
+   `parent_account_id` is that account AND whose `group` equals its group — the rows the Settings
+   table nests under it and carries in a drag (R2 applies `nestComponents` per group, spec §4.2). A
+   same-parent component sitting in another group is not carried. (Amended 2026-09-23 at the R1
+   code review.) The label tries the natural explanation BEFORE the minimal moved set:
+   `services.ordering.moved_alone(old, new, parent, carried)`. This holds when removing the parent's
+   block from both orders leaves the same sequence, and the parent itself now sits elsewhere among
+   the rest. So a block moved up one row is "Moved account P", not "Moved account D" (the row it
+   passed, which is what the minimal set names), and up two is not "Reordered 2 accounts".
+   Components shuffled under an unmoved parent never name the parent. Of two blocks that swapped,
+   the later one in the new order is named (moved_ids' tie rule). Then the single-row rule, then the
+   count.
 3. **`check_permutation` raises `HTTPException` itself** — the `services/money.py` precedent: the
    module's sentences are the API's vocabulary. Duplicates are checked before set equality, so
    `[1, 1, 99]` is a 422, not a 409.
@@ -196,8 +204,8 @@ written — the first reorder normalizes every stored value, so a batch can hold
 
 | Case | Label |
 |---|---|
-| exactly one account moved | `Moved account {name}` |
-| the moved set is one account plus exactly the components it carries (same `parent_account_id` AND same `group`) | `Moved account {parent name}` |
+| a parent moved with the components it carries (same `parent_account_id` AND same `group`), every other row keeping its order — however far it went (checked first) | `Moved account {parent name}` |
+| else exactly one account moved (an adjacent swap names one of the two) | `Moved account {name}` |
 | any other account move | `Reordered {n} accounts` |
 | exactly one category moved | `Moved category {name}` |
 | any other category move | `Reordered {n} categories` |

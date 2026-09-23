@@ -18,6 +18,7 @@ from app.services.ordering import (
     apply_order,
     check_permutation,
     in_list_order,
+    moved_alone,
     moved_ids,
     next_sort_index,
     next_sort_order,
@@ -163,6 +164,35 @@ def test_moved_ids_prefers_the_smaller_side_of_a_block_move():
 
 def test_moved_ids_on_a_reversal_keeps_the_first_row_of_the_new_order():
     assert moved_ids([1, 2, 3], [3, 2, 1]) == [2, 1]
+
+
+# ── moved_alone ──────────────────────────────────────────────────────────────────────
+
+BLOCK = [1, 2, 3, 4, 9, 10]  # 9 is a parent carrying 10
+
+
+@pytest.mark.parametrize(
+    "new",
+    [[1, 2, 3, 9, 10, 4], [1, 2, 9, 10, 3, 4], [9, 10, 1, 2, 3, 4], [9, 1, 2, 3, 4, 10]],
+    ids=["up 1", "up 2", "up 4", "the carried row left behind"],
+)
+def test_moved_alone_names_a_head_that_moved_while_everything_else_kept_its_order(new):
+    assert moved_alone(BLOCK, new, 9, {10})
+
+
+@pytest.mark.parametrize(
+    "new",
+    [BLOCK, [1, 2, 10, 3, 4, 9], [1, 2, 3, 4, 10, 9], [1, 2, 4, 3, 9, 10]],
+    ids=["unchanged", "only the carried row moved", "inside the unit", "another row moved"],
+)
+def test_moved_alone_is_false_unless_the_head_itself_moved_among_an_unchanged_rest(new):
+    assert not moved_alone(BLOCK, new, 9, {10})
+
+
+def test_moved_alone_without_carried_rows_is_the_single_row_rule():
+    assert moved_alone([1, 2, 3, 4], [1, 4, 2, 3], 4)
+    assert not moved_alone([1, 2, 3, 4], [1, 4, 2, 3], 2)  # 2 did not move among the rest
+    assert not moved_alone([1, 2, 3, 4], [4, 3, 2, 1], 4)  # the rest changed too
 
 
 # ── next_sort_order ──────────────────────────────────────────────────────────────────
