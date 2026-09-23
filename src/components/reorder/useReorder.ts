@@ -304,12 +304,16 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     stopDrag(drag)
     machine.current.drag = null
     const message = announce.drop(context(drag, drag.to))
-    // One frame: the list's optimistic order renders AND the transforms clear before paint.
-    flushSync(() => {
-      setSnap({ liftedId: null, announcement: message, signature: null })
-      latest.current.options.onCommit(next, drag.id)
-    })
-    clearRows(rows.current)
+    try {
+      // One frame: the list's optimistic order renders AND the transforms clear before paint.
+      flushSync(() => {
+        setSnap({ liftedId: null, announcement: message, signature: null })
+        latest.current.options.onCommit(next, drag.id)
+      })
+    } finally {
+      // Even when onCommit throws (its error rethrows from here): no row is left stranded mid-drag.
+      clearRows(rows.current)
+    }
     // A DOM move can blur the grip; a keyboard reader keeps their place.
     if (drag.mode === 'keyboard') grips.current.get(drag.id)?.focus()
   }

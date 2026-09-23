@@ -503,6 +503,32 @@ describe('useReorder — pointer', () => {
     expect(row('A').style.transform).toBe('translateY(360px)') // J's bottom, 900, less A's, 540
   })
 
+  it('a throwing onCommit still leaves every row clean, and its error is rethrown after', () => {
+    render(
+      <Stateful
+        initial={flat('A', 'B', 'C', 'D')}
+        onCommit={() => {
+          throw new Error('save exploded')
+        }}
+      />,
+    )
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    expect(() =>
+      act(() => {
+        vi.advanceTimersByTime(MOTION_MS.fast)
+      }),
+    ).toThrow('save exploded')
+    for (const id of ['A', 'B', 'C', 'D']) {
+      expect(row(id).style.transform).toBe('')
+      expect(row(id).style.transition).toBe('')
+      expect(row(id).hasAttribute('data-reorder')).toBe(false)
+    }
+    expect(document.documentElement.classList.contains('reorder-active')).toBe(false)
+  })
+
   it('clamps the unit to the list', () => {
     render(<Stateful initial={flat('A', 'B', 'C', 'D')} />)
     layoutRows()
