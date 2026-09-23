@@ -38,6 +38,33 @@ check.
 
 ---
 
+## Controller amendments (2026-09-23, after lane R0's review — these override the tasks below)
+
+**A1. Task 6 adds no CSS.** Lane R0's `src/components/reorder/reorder.css` (merged before this lane
+starts) now owns everything Task 6 restated for `.port-table`:
+- `table.reorder-table { border-collapse: separate; border-spacing: 0; }` — (0,1,1), beating
+  `.port-table`'s `border-collapse: collapse` on specificity, whatever the chunk order;
+- `.reorder-table .reorder-grip-cell` (width 2rem, `padding-right: 0`), which beats `.port-table td`;
+- the lifted and drop-line states scoped under `.reorder-table`, including the sticky
+  `td.row-actions` / `td.col-identity` variants that keep each pinned cell's own hairline.
+
+So Task 6 appends nothing to `portfolio.css`. Keep its three tests (the counts later in this plan
+stay the same), but make them read `path.join(__dirname, '../reorder/reorder.css')` into a
+`reorderCss` string and pin that those rules exist there:
+- `table.reorder-table` has `border-collapse: separate;` and `border-spacing: 0;`;
+- `.reorder-table .reorder-grip-cell` has `padding-right: 0;`;
+- `.reorder-table tr[data-reorder='lifted'] > td.row-actions` sets `background: var(--surface-2)` with
+  the `-1px 0 0 var(--border)` hairline kept, and both `data-reorder-drop` variants exist for
+  `td.row-actions`.
+
+These pins pass at once. That is expected: they are a guard on a dependency, not TDD. Keep the
+existing `css` (portfolio.css) reader in the same `describe`, because Task 9 Step 5's contingency
+appends to it. The commit becomes `test(portfolio): pin the reorder.css rules the ledger relies on`.
+
+**A2.** Notes for the controller items 1 and 2 are resolved by A1.
+
+---
+
 ## Mechanics (read once)
 
 - **Worktree:** `C:/Users/edyli/personal-finance-dashboard/.worktrees/reorder-r3`, branch

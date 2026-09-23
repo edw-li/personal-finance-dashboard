@@ -36,6 +36,38 @@ component in `src/components/reorder/`, the lane-R1 client functions in `src/api
 
 ---
 
+## Controller amendments (2026-09-23, after lane R0's review — these override the tasks below)
+
+**A1. Task 7 keeps only the Settings-specific rules.** Lane R0's `src/components/reorder/reorder.css`
+(merged before this lane starts) now owns:
+- the table border model, as `table.reorder-table { border-collapse: separate; border-spacing: 0; }`
+  (0,1,1), which beats `.data-table` on specificity;
+- `.reorder-table .reorder-grip-cell` (width 2rem, `padding-right: 0`);
+- the lifted and drop-line row states scoped under `.reorder-table`, including sticky
+  `td.row-actions` / `td.col-identity` variants that keep each pinned cell's own hairline.
+
+In Task 7, therefore:
+- **Do not add** `.settings-scroll .reorder-table { … }` or the three
+  `.settings-scroll .reorder-table tr[…] > td.row-actions` rules (or their comment paragraphs).
+- **Replace their two tests** (the "separate border model" and the "sticky Actions cell" tests) with
+  two pins that read `path.resolve(__dirname, '../reorder/reorder.css')`:
+  - `table.reorder-table` has `border-collapse: separate;` and `border-spacing: 0;`;
+  - `.reorder-table tr[data-reorder='lifted'] > td.row-actions` has `background: var(--surface-2);`
+    with `-1px 0 0 var(--border)`, and both `.reorder-table tr[data-reorder-drop='before'|'after'] >
+    td.row-actions` blocks exist.
+
+  The test count stays at 6. Step 2's expected failures drop to the two Settings rules, and the two
+  reorder.css pins pass at once as a dependency guard.
+- **Keep** the group-heading rule and the component-indent rules. In the grip-cell override for
+  component rows, keep R0's narrow right edge: `padding: var(--density-cell-pad); padding-right: 0;`,
+  and pin both declarations.
+- The Notes for the controller items 1–3 are resolved by A1.
+- R0 notes that `settingsCss.test.ts`'s `declarationsFor` misses a second block that immediately
+  follows a first one for the same selector. Every Settings rule here is a single block, so this is
+  harmless — just don't split one.
+
+---
+
 ## Mechanics (read once)
 
 - **Worktree:** `C:/Users/edyli/personal-finance-dashboard/.worktrees/reorder-r2`, branch
