@@ -972,14 +972,20 @@ describe('whatIfDeltaBarOption', () => {
     ])
   })
 
-  it('draws no colour scale and no legend, and leaves room past both ends for the labels', () => {
+  it('draws no colour scale and no legend, and leaves room for the labels past each end that has bars', () => {
+    const gap = (over: Partial<WhatIfDelta>) =>
+      (whatIfDeltaBarOption(delta(over))!.xAxis as { boundaryGap: unknown }).boundaryGap
     const option = whatIfDeltaBarOption(delta({ federal_tax: '-100.00' }))! as Record<string, unknown>
     // The old visualMap mapped the CATEGORY index (a horizontal bar's last dimension) and so
     // painted every bar the neutral midpoint; its gradient legend sat on the x-axis ticks.
     expect(option.visualMap).toBeUndefined()
     expect(option.legend).toBeUndefined()
     expect(option.grid).toEqual(GRID_VARIANTS.horizontal)
-    expect((option.xAxis as { boundaryGap: unknown }).boundaryGap).toEqual(['12%', '12%'])
+    // Review round 1: headroom only where a bar can reach — no empty arm when every delta
+    // shares a sign.
+    expect(gap({ federal_tax: '-100.00', state_tax: '250.00' })).toEqual(['12%', '12%'])
+    expect(gap({ federal_tax: '-100.00', state_tax: '-250.00' })).toEqual(['12%', 0])
+    expect(gap({ state_tax: '250.00', niit_tax: '40.00' })).toEqual([0, '12%'])
   })
 
   it('keeps both sign tones at 3:1 or better on the card in both themes', () => {

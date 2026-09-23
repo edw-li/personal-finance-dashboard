@@ -538,9 +538,16 @@ export function whatIfDeltaBarOption(delta: WhatIfDelta): EChartsOption | null {
       body: (p) =>
         typeof p.value === 'number' ? { value: p.value, label: `${String(p.name)} Δ` } : null,
     }),
-    // The movers chart's 12 % of headroom, on BOTH ends: the longest bar can sit on either
-    // arm, and its signed label must not clip at the grid edge.
-    xAxis: { ...moneyAxis(), boundaryGap: ['12%', '12%'] as [string, string] },
+    // The movers chart's 12 % of headroom past each end a bar can reach, so a signed label never
+    // clips at the grid edge — and none past an end with no bars (review round 1), or every
+    // same-signed answer drew an empty arm.
+    xAxis: {
+      ...moneyAxis(),
+      boundaryGap: [values.some((v) => v < 0) ? '12%' : 0, values.some((v) => v > 0) ? '12%' : 0] as [
+        string | number,
+        string | number,
+      ],
+    },
     // inverse, so Federal reads on TOP the way the compare rows below order them.
     yAxis: { type: 'category', data: DELTA_LINES.map(([label]) => label), inverse: true },
     series: [
