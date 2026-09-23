@@ -9,6 +9,7 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
 from app.models import CategoryBudget, MonthlyCashflow, MonthlySpending, SpendingCategory
+from app.schemas.ordering import OrderIn
 from app.schemas.projection import DerivedWindowOut
 from app.schemas.spending import (
     AmountEntry,
@@ -43,6 +44,12 @@ from app.services.money import (
 from app.services.month_review import load_review_book
 from app.services.month_writes import write_spending
 from app.services.net_worth_calc import get_swr_pct, investable_bases
+from app.services.ordering import (
+    STALE_CATEGORIES,
+    check_permutation,
+    moved_ids,
+    renumber,
+)
 from app.services.savings import (
     LIVING,
     MonthSavings,
@@ -61,6 +68,47 @@ async def list_categories(db: AsyncSession = Depends(get_db)) -> list[SpendingCa
         select(SpendingCategory).order_by(SpendingCategory.sort_order, SpendingCategory.id)
     )
     return list(result.scalars().all())
+
+
+@router.put("/categories/order", response_model=list[CategoryOut])
+async def reorder_categories(
+    body: OrderIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> list[SpendingCategory]:
+    """Drag-to-reorder (2026-09-23 spec §3.2): `ids` is EVERY category, retired included, in
+    its new order. sort_order becomes 0…n−1 and only rows whose value moves are written, as
+    ONE change batch (§8.4 labels). An unchanged order writes and logs nothing.
+
+    Declared before the /categories/{category_id} routes so a later PUT on that path can
+    never shadow it."""
+    categories = list(
+        (
+            await db.execute(
+                select(SpendingCategory).order_by(SpendingCategory.sort_order, SpendingCategory.id)
+            )
+        ).scalars()
+    )
+    current = [category.id for category in categories]
+    check_permutation(current, body.ids, stale_detail=STALE_CATEGORIES)
+    if body.ids == current:
+        return categories
+    by_id = {category.id: category for category in categories}
+    ordered = [by_id[category_id] for category_id in body.ids]
+    before = {category.id: row_image(category) for category in categories}
+    for category, _old, _new in renumber(ordered, "sort_order", start=0, step=1):
+        batch.record_update(category, before[category.id])
+    moved = moved_ids(current, body.ids)
+    batch.label = (
+        f"Moved category {by_id[moved[0]].name}"
+        if len(moved) == 1
+        else f"Reordered {len(moved)} categories"
+    )
+    # The header only when rows were logged — the allocation routes' rule; batch_header
+    # spells it the way the month DELETEs already do.
+    response.headers.update(batch_header(await batch.commit()))
+    return ordered
 
 
 @router.post("/categories", response_model=CategoryOut, status_code=201)

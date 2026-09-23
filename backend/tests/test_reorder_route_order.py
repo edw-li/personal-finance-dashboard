@@ -6,9 +6,12 @@ router: the app mounts routers lazily, so `app.routes` is not a flat list."""
 import pytest
 from fastapi.routing import APIRoute
 
-from app.api import net_worth
+from app.api import net_worth, spending
 
-ORDER_ROUTES = ((net_worth.router, "/net-worth/accounts/order"),)
+ORDER_ROUTES = (
+    (net_worth.router, "/net-worth/accounts/order"),
+    (spending.router, "/spending/categories/order"),
+)
 
 
 @pytest.mark.parametrize(("router", "path"), ORDER_ROUTES, ids=[path for _, path in ORDER_ROUTES])

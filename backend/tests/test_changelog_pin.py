@@ -27,6 +27,7 @@ LOGGED: dict[str, set[str]] = {
         "create_category",
         "update_category",
         "delete_category",
+        "reorder_categories",
         "put_category_budget",
         "seed_budgets",
         "delete_category_budget",
