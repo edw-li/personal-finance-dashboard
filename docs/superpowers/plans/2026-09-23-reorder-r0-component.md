@@ -2387,10 +2387,10 @@ git commit -m "docs(plan): lane R0 — results and gates"
 
 ## Results (filled in by the implementer)
 
-- Lane tests: `npx vitest run src/components/reorder` — 5 files / 58 tests pass (reorderMath 20,
-  reorderDom 8, reorderStatus 3, useReorder 21, reorderCss 6).
+- Lane tests: `npx vitest run src/components/reorder` — 5 files / 71 tests pass (reorderMath 20,
+  reorderDom 14, reorderStatus 3, useReorder 24, reorderCss 10).
 - Full vitest: 238 files / 3183 tests, exit 0 (neither known load-sensitive flake fired). Run before
-  correction 6, which adds one lane test.
+  correction 6 and review round 1, which changed lane files only.
 - tsc / eslint / build:
   - `tsc -b` exit 0; also a full check against a fresh buildinfo (tsc -b's cache lives in the shared
     node_modules junction), exit 0.
@@ -2426,6 +2426,32 @@ git commit -m "docs(plan): lane R0 — results and gates"
        listeners (mutation-checked).
 - Kept as planned: a pointer drop eases the unit into its gap, then commits after `MOTION_MS.fast`.
   Spec §2.3 has since been amended to match (feat/reorder-base 4fe2c74).
+- Review round 1 (one commit each):
+  1. **CSS outranks panels.css.**
+     - `table.reorder-table` (0,1,1) beats the tables' own `border-collapse: collapse`.
+     - `.reorder-table .reorder-grip-cell` beats the house cell padding.
+     - Every table row state is scoped to `.reorder-table`. That includes the saved flash, for
+       consistency, although nothing in panels.css contests `animation`.
+     - The pinned `td.row-actions` / `td.col-identity` keep their edge hairline under lifted and both
+       drop lines.
+     - The css test's `declarationsFor` now finds a selector anywhere in a selector list, and finds
+       two adjacent blocks for one selector. settingsCss.test.ts's original consumes each block's
+       closing brace, so it misses the second of two adjacent blocks.
+  2. **A data change, or `disabled` turning true, under a lifted unit says "Cancelled — the list
+     changed."** (`announce.cancelChanged`). This includes a pointer drop still settling into its gap.
+     The DOM resets at once. Once nothing is lifted (a settle-back under way) the standing sentence
+     stays.
+  3. **Tighter pins.** The saved flash is still present at `MOTION_MS.flash − 1` and gone at
+     `MOTION_MS.flash`. Every settle-back path holds the inline settle transition and `data-reorder`
+     until `MOTION_MS.fast`, then both clear. Mutation-checked: dropping the transition, clearing at
+     once, or ending the flash 1 ms early each fails.
+  4. **Keyboard keep-in-view keeps the landing slot on screen** when an element scroller hangs past
+     the window. It uses a pure `viewportDelta` plus `keepOnScreen`, and has a hook wiring test.
+     - The landing slot's client position is *computed* from the lift's list coordinates (the inverse
+       of `listY`), not measured with `getBoundingClientRect`.
+     - The keyboard-lifted unit animates its transform over `--t-fast`, so a rect read right after
+       the move reports where it came from. That would leave the page one step behind, and after
+       Home/End it would not scroll at all.
 - Notes for R2–R5 (what the contract section does not say):
   - **Pointer tests** need three things: `installPointerEvents()` in `beforeAll`, `afterEach(cleanup)`,
     and mocked row boxes (the `layoutRows` helper in `useReorder.test.tsx`). Without layout every
@@ -2436,8 +2462,10 @@ git commit -m "docs(plan): lane R0 — results and gates"
   - **Each range must be one contiguous block** in display order. Headers between ranges are fine; a
     foreign row between two peers of one range makes the preview disagree with the commit.
   - **`itemProps(id)` carries a `ref`:** a row that needs its own ref must merge the two.
-  - **Changes under a live drag cancel it silently:** any change to order, membership, range or
-    carries, and `disabled` turning true.
+  - **Changes under a live drag cancel it at once:** any change to order, membership, range or
+    carries, and `disabled` turning true. A lifted unit announces "Cancelled — the list changed."
+  - **Every row state in a table needs `.reorder-table` on the `<table>`.** Only the `:not(tr)` box
+    forms apply without it.
 
 ## Self-review (spec coverage)
 
