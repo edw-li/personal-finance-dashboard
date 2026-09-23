@@ -1011,6 +1011,40 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
     expect(before).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps the grips inert until every request has settled — an Undo outlives a later save', async () => {
+    answerWith()
+    renderLedger()
+    keyboardMove(NVDA_BUY, 'ArrowDown') // drop A, answered: 22, 21, 23
+    await screen.findByText(QUIET_NVDA)
+    await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
+    let answerB: (value: TransactionOrderOut) => void = () => {}
+    let answerUndo: (value: TransactionOrderOut) => void = () => {}
+    vi.mocked(reorderTransactions)
+      .mockReturnValueOnce(
+        new Promise<TransactionOrderOut>((resolve) => {
+          answerB = resolve
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<TransactionOrderOut>((resolve) => {
+          answerUndo = resolve
+        }),
+      )
+    keyboardMove(NVDA_SELL, 'ArrowUp') // drop B, in flight: 22, 23, 21
+    // A's toast is still up, and its Undo starts a second request while B is in flight.
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await act(async () => {
+      answerB({ transactions: [vooBuy, nvdaSell, nvdaBuy], changed_positions: [] })
+    })
+    await screen.findByText("Moved the NVDA sell. No holding's figures changed.")
+    // B has settled; the restore has not — no drop may start yet.
+    expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBe('true')
+    await act(async () => {
+      answerUndo({ transactions: [nvdaBuy, vooBuy, nvdaSell], changed_positions: [] })
+    })
+    await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
+  })
+
   it.each([
     {
       status: 500,

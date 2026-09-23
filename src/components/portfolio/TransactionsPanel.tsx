@@ -229,7 +229,13 @@ export default function TransactionsPanel({
   // one piece of state the carry-forward cue and the submit label read.
   const [kept, setKept] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  // Requests in flight — a count, not a flag: they overlap (a later drop's save and an earlier
+  // toast's Undo), and the first to settle must not reopen the grips and the row buttons while
+  // another is still running. `busy` is what every control reads.
+  const [inFlight, setInFlight] = useState(0)
+  const busy = inFlight > 0
+  const requestStarted = () => setInFlight((count) => count + 1)
+  const requestSettled = () => setInFlight((count) => count - 1)
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
   const toast = useToast()
   // The page's reload AS IT STANDS NOW, for every request's answer: `onChanged` closes over the
@@ -279,7 +285,7 @@ export default function TransactionsPanel({
   // the page's reload follows. A list that changed since answers 409 and the reload shows what
   // is there now.
   const restoreOrder = (ids: number[], scope: OwnerScope) => {
-    setBusy(true)
+    requestStarted()
     reorderTransactions(ids, scope)
       .then((result) => {
         setSavedOrder({ scope, rows: result.transactions })
@@ -294,7 +300,7 @@ export default function TransactionsPanel({
         }
         toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
       })
-      .finally(() => setBusy(false))
+      .finally(requestSettled)
   }
 
   // One drop, one PUT (spec §5): the visible ids in their new order, in the page's scope. The
@@ -315,7 +321,7 @@ export default function TransactionsPanel({
         return row === undefined ? [] : [row]
       }),
     })
-    setBusy(true)
+    requestStarted()
     reorderTransactions(next, scope)
       .then((result) => {
         setPendingOrder(null)
@@ -343,7 +349,7 @@ export default function TransactionsPanel({
           `Couldn't save the new order — ${clause(errorDetail(err))}. The list is back to how it was.`,
         )
       })
-      .finally(() => setBusy(false))
+      .finally(requestSettled)
   }
 
   const reorder = useReorder({
@@ -398,7 +404,7 @@ export default function TransactionsPanel({
       setError(form.type === 'split' ? 'Split factor is required' : 'Shares and price are required')
       return
     }
-    setBusy(true)
+    requestStarted()
     setError(null)
     const payload = toPayload(form)
     const request =
@@ -439,7 +445,7 @@ export default function TransactionsPanel({
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Save failed')
       })
-      .finally(() => setBusy(false))
+      .finally(requestSettled)
   }
 
   const remove = (txn: TransactionOut) => {
@@ -450,7 +456,7 @@ export default function TransactionsPanel({
     // busy for the duration (RsuGrantsPanel's posture): without the confirm dialog to
     // absorb it, a double-click would fire a second DELETE on the same id and drop a 404
     // into the error banner beside the success toast.
-    setBusy(true)
+    requestStarted()
     deleteTransaction(txn.id)
       .then(() => {
         // The edited row is gone — a stale editingId would PATCH a 404 on the next save
@@ -488,7 +494,7 @@ export default function TransactionsPanel({
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Delete failed')
       })
-      .finally(() => setBusy(false))
+      .finally(requestSettled)
   }
 
   return (
