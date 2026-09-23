@@ -22,7 +22,7 @@ export function restorePointLabel(name: string): string {
 }
 
 /** The Restore card's arrival link for a stored file: the Backups rows' Restore… and the
- *  toasts' Undo both pre-select through it (RestoreCard's `?restore=` arrival). */
+ *  toasts' Roll back… both pre-select through it (RestoreCard's `?restore=` arrival). */
 export function restoreHref(name: string): string {
   return `/settings?restore=${encodeURIComponent(name)}#restore`
 }

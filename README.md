@@ -544,8 +544,10 @@ for the host path); the same ZIP restores from the UI — Restore card → Dry r
 Restore — with a pre-restore point written first. Those restore points (one saved before every
 restore and every import; the newest three kept) are listed in Settings › Data under Backups &
 snapshots and in the Restore card's picker, downloadable and restorable the same way, and the
-success toast's Undo pre-selects the one just saved. Restoring even the oldest of the three works:
-its bytes are read before the apply's own new point rotates it out.
+success toast's **Roll back…** pre-selects the one just saved (it only selects: the dry run and
+the typed date still stand between you and the write). Restoring even the oldest of the three
+works, and a failed attempt keeps it: the file being restored is protected from rotation until
+the apply commits, so a retry finds it where it was.
 
 **The nightly dump (disaster recovery — schema-agnostic, survives any app state).**
 

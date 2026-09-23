@@ -227,7 +227,7 @@ describe('RestoreCard', () => {
     await waitFor(() => expect(onStoredChanged).toHaveBeenCalledTimes(1))
   })
 
-  it('names the restore point an apply saved, and Undo pre-selects it without writing', async () => {
+  it('names the restore point an apply saved, and Roll back… pre-selects it without writing', async () => {
     vi.mocked(restoreStored)
       .mockResolvedValueOnce(report())
       .mockResolvedValueOnce(
@@ -245,7 +245,10 @@ describe('RestoreCard', () => {
     ).toBeTruthy()
     // The new point is only on the server until the card looks again.
     vi.mocked(fetchRestorePoints).mockResolvedValue([POINT])
-    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    // "Roll back…", not "Undo": the app's other Undo toasts reverse at once, and this one only
+    // opens the way back — a dry run and the typed date still stand between (review M8).
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back…' }))
     await waitFor(() => expect(select().value).toBe(POINT.name))
     await waitFor(() => expect(url()).toBe('/settings#restore'))
     // Pre-selected, never applied: the reader still dry-runs it and types its date.

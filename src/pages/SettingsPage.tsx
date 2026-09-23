@@ -243,13 +243,14 @@ export default function SettingsPage() {
         setReport(r)
         setImportError(null)
         // The way back, said at the moment it exists (2026-09-23 spec §B3): the apply saved a
-        // restore point first, and Undo SELECTS it in the Restore card — the reader still
-        // dry-runs and confirms it there, so nothing is written by the click.
+        // restore point first, and Roll back… SELECTS it in the Restore card — the reader still
+        // dry-runs and confirms it there, so nothing is written by the click. Not "Undo": the
+        // app's other Undo toasts reverse at once (lane B1 review, M8).
         const point = r.restore_point ?? null
         if (r.applied && point !== null) {
           toast.success(
             `Workbook imported. The data it replaced is saved as a restore point (${restorePointLabel(point)}).`,
-            { action: { label: 'Undo', onAction: () => navigate(restoreHref(point)) } },
+            { action: { label: 'Roll back…', onAction: () => navigate(restoreHref(point)) } },
           )
         }
       })

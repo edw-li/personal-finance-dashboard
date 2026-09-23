@@ -42,7 +42,7 @@ function message(err: unknown, fallback: string): string {
  * delete arm pattern). The server's sentences (400/409/413/422/500) render verbatim; success
  * toasts and the applied report names the restore point. Restore points — the pre-restore and
  * pre-import copies the server keeps — are offered in their own group (2026-09-23 spec §B3),
- * and a success toast's Undo pre-selects the one just saved; it never restores by itself.
+ * and a success toast's Roll back… pre-selects the one just saved; it never restores by itself.
  * `onStoredChanged` tells the page an apply ran — succeeded OR failed: the server saves (and
  * rotates) a restore point before its first write, so every list of the volume on the page may
  * be stale either way. `revision` is the page telling this card the volume changed (its own
@@ -179,9 +179,10 @@ export default function RestoreCard({
               ' Other pages reload on their next visit.',
             point === null
               ? undefined
-              : // Undo SELECTS the point here; the reader still dry-runs it and types its date
-                // (2026-09-23 spec §B3 — no silent writes).
-                { action: { label: 'Undo', onAction: () => navigate(restoreHref(point)) } },
+              : // Roll back… SELECTS the point here; the reader still dry-runs it and types its
+                // date (2026-09-23 spec §B3 — no silent writes). Not "Undo": the app's other Undo
+                // toasts reverse at once (lane B1 review, M8).
+                { action: { label: 'Roll back…', onAction: () => navigate(restoreHref(point)) } },
           )
         }
       })

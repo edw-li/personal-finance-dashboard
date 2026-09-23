@@ -706,7 +706,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(applyButton().disabled).toBe(true)
   })
 
-  it('toasts the restore point an applied import saved, and Undo pre-selects it in Restore', async () => {
+  it('toasts the restore point an applied import saved, and Roll back… pre-selects it in Restore', async () => {
     const point = 'pre-restore-20260904-161500-123456.zip'
     vi.mocked(importXlsx)
       .mockResolvedValueOnce(makeReport(SPENDING_DIFF))
@@ -743,7 +743,8 @@ describe('SettingsPage — xlsx import', () => {
     // volume changed when the apply settled.
     const backups = document.getElementById('backups') as HTMLElement
     expect(await within(backups).findByText(point)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back…' }))
     await waitFor(() =>
       expect((screen.getByLabelText('Stored snapshot') as HTMLSelectElement).value).toBe(point),
     )
