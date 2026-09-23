@@ -179,7 +179,7 @@ export default function HoldingsTable({
               <td className="num">{formatPct(h.xirr_pct)}</td>
               <td className="num">{formatCurrency(h.dividends_collected)}</td>
               <td className="chart-col">
-                <Sparkline points={sparklines[h.ticker] ?? []} />
+                <Sparkline points={sparklines[h.ticker] ?? []} label={h.ticker} />
               </td>
             </tr>
           ))}
