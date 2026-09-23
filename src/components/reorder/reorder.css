@@ -43,8 +43,9 @@
   cursor: grabbing;
 }
 
-/* The grip's column (its <td> and the empty header <th>): as narrow as the icon. */
-.reorder-grip-cell {
+/* The grip's column (its <td> and the empty header <th>): as narrow as the icon. Scoped to the
+   table so it outranks the house cell padding (.data-table td / .port-table td, specificity 0,1,1). */
+.reorder-table .reorder-grip-cell {
   width: 2rem;
   padding-right: 0;
 }
@@ -58,8 +59,10 @@ html.reorder-active * {
 
 /* A collapsed border is painted by the TABLE, so a translated row would leave its hairline behind
    (spec §0.11). Separate borders with zero spacing give every cell its own border-bottom — the
-   resting look is the same, and the hairline travels with its row. */
-.reorder-table {
+   resting look is the same, and the hairline travels with its row. `table.` (0,1,1) outranks the
+   house tables' own `border-collapse: collapse` (.data-table, .port-table: 0,1,0) whichever
+   stylesheet loads last. */
+table.reorder-table {
   border-collapse: separate;
   border-spacing: 0;
 }
@@ -79,7 +82,9 @@ html.reorder-active * {
   z-index: 2;
 }
 
-tr[data-reorder='lifted'] > td,
+/* Table row states are scoped to .reorder-table: an unscoped `tr[…] > td` (0,1,2) would lose to the
+   house tables' pinned cells (0,2,1, below). A list of boxes takes the unscoped :not(tr) forms. */
+.reorder-table tr[data-reorder='lifted'] > td,
 :not(tr)[data-reorder='lifted'] {
   background: var(--surface-2);
   box-shadow:
@@ -94,14 +99,57 @@ tr[data-reorder='lifted'] > td,
 }
 
 /* Reduced motion: peers stay put and an accent line marks the landing edge instead. */
-tr[data-reorder-drop='before'] > td,
+.reorder-table tr[data-reorder-drop='before'] > td,
 :not(tr)[data-reorder-drop='before'] {
   box-shadow: inset 0 2px 0 var(--accent);
 }
 
-tr[data-reorder-drop='after'] > td,
+.reorder-table tr[data-reorder-drop='after'] > td,
 :not(tr)[data-reorder-drop='after'] {
   box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* The pinned cells (panels.css: the right-sticky td.row-actions, the left-sticky td.col-identity)
+   draw their edge hairline as a box-shadow, so every row state that sets a box-shadow restates the
+   hairline beside its own: a pinned cell keeps its edge while its row is lifted or marked. */
+.reorder-table tr[data-reorder='lifted'] > td.row-actions {
+  background: var(--surface-2);
+  box-shadow:
+    -1px 0 0 var(--border),
+    inset 0 1px 0 var(--border),
+    inset 0 -1px 0 var(--border);
+}
+
+.reorder-table tr[data-reorder-drop='before'] > td.row-actions {
+  box-shadow:
+    -1px 0 0 var(--border),
+    inset 0 2px 0 var(--accent);
+}
+
+.reorder-table tr[data-reorder-drop='after'] > td.row-actions {
+  box-shadow:
+    -1px 0 0 var(--border),
+    inset 0 -2px 0 var(--accent);
+}
+
+.reorder-table tr[data-reorder='lifted'] > td.col-identity {
+  background: var(--surface-2);
+  box-shadow:
+    1px 0 0 var(--border),
+    inset 0 1px 0 var(--border),
+    inset 0 -1px 0 var(--border);
+}
+
+.reorder-table tr[data-reorder-drop='before'] > td.col-identity {
+  box-shadow:
+    1px 0 0 var(--border),
+    inset 0 2px 0 var(--accent);
+}
+
+.reorder-table tr[data-reorder-drop='after'] > td.col-identity {
+  box-shadow:
+    1px 0 0 var(--border),
+    inset 0 -2px 0 var(--accent);
 }
 
 /* Saved: one accent wash fading out (the pasted-cell flash's language, MonthlyUpdatePage.css). */
@@ -115,7 +163,7 @@ tr[data-reorder-drop='after'] > td,
   }
 }
 
-tr[data-reorder-saved] > td,
+.reorder-table tr[data-reorder-saved] > td,
 :not(tr)[data-reorder-saved] {
   animation: reorder-saved var(--t-flash) var(--ease-out);
 }
