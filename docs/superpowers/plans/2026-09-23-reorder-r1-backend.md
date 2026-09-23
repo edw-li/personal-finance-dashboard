@@ -4638,13 +4638,72 @@ git commit -m "docs(plan): lane R1 results — gates, drill, counts"
 
 ## Results (filled in by the implementer in Task 11)
 
-- Commits on `feat/reorder-backend`: _(list)_
-- Backend: `FINANCE_TEST_DB=finance_test_reorder_r1 $PY -m pytest -q` → _(N passed, M skipped,
-  duration, exit code)_; ruff clean: _(yes/no)_
-- Migration drill on `finance_test_reorder_r1_mig`: _(upgrade/backfill/duplicate refused/
-  downgrade/upgrade/check outcome)_
-- Frontend: vitest _(files/tests)_, `tsc -b` _(exit)_, `eslint .` _(exit)_, `vite build` _(exit)_
-- Deviations from this plan, each with its reason: _(none / list)_
+Implemented 2026-09-23 on `feat/reorder-backend`, cut from `feat/reorder-base` @d5b2ba5 (its
+`backend/` and `src/` are byte-identical to the @b3a55d2 this plan was replayed on — checked with
+`git diff --stat` before Task 1).
+
+- Commits on `feat/reorder-backend` (Tasks 1–10 — Task 8 commits twice — with the plan's messages
+  verbatim):
+  - `b526f36` feat(ordering): pure reorder helpers — permutation check, slot-preserving subset,
+    renumber, minimal moved set
+  - `b8c1887` feat(ordering): OrderIn, the one body every reorder route takes
+  - `48125ff` feat(ordering): PUT /net-worth/accounts/order — one change batch, §8.4 labels, Undo
+    on the Activity card
+  - `fa79ea6` feat(ordering): PUT /spending/categories/order — logged like the accounts, §8.4 labels
+  - `5135c9a` feat(ordering): new accounts and categories append instead of taking 0; a group change
+    appends
+  - `44116e8` feat(portfolio): position_transactions.import_key + partial unique index (migration
+    f12026092301)
+  - `11ec28f` feat(importer): order belongs to the user — create-only sort_order, sheet rows matched
+    by import_key and appended
+  - `03d39cc` feat(ordering): position_changes — what a replay-order move did to each holding
+  - `f6c5e3b` feat(portfolio): PUT /portfolio/transactions/order — scoped slots, whole-ledger
+    renumber, figure report
+  - `5e8ac95` feat(credit-cards): PUT /credit-cards/order and /categories/order; a create appends,
+    a PATCH keeps sort_order
+  - `6c8cfe4` feat(api): the reorder client contract — five PUT functions and the
+    TransactionOrderOut wire types
+  - plus this results commit.
+- TDD trail: every "watch it fail" step printed the plan's expected failure (Task 0 baseline
+  `57 passed`; T1 `ModuleNotFoundError`; T2 `ModuleNotFoundError`; T3 `16 failed, 1 passed`; T4
+  `14 failed, 2 passed`; T5 `ImportError` then `3 failed, 27 passed`; T6 `1 failed, 7 passed`
+  (`TypeError`); T7 `9 failed, 44 passed`; T8 `ImportError` then `14 failed, 2 passed`; T9
+  `19 failed, 3 passed`; T10 `6 failed | 17 passed (23)`), and every pass step printed the plan's
+  count (20; 4; 17 + neighbours 73; 16 + spending 44; 51 + neighbours 117; 55 = 8 + 47; importer
+  suites 109 with `test_importer_apply.py` at 53; 25; 77 = 3 + 13 + 47 + 14; 48; 23).
+- Extra check (scratch, not committed): `moved_ids` brute-forced against its definition — the
+  complement of the lexicographically smallest (by new-order index) longest increasing subsequence
+  of old positions — on all 5 914 permutations of n = 0…7: identical.
+- Backend: `FINANCE_TEST_DB=finance_test_reorder_r1 $PY -m pytest -q` → `2118 passed, 1 skipped
+  in 2995.78s (0:49:55)`, exit 0 — every one of the 2 119 tests `--collect-only` finds, in one run,
+  with no flake to re-run (`test_assistant_evidence.py::test_total_budget_includes_context_loading`,
+  listed as failing on this box before the lane began, passed too). The run shared the machine with
+  another session's full suite and, for four minutes, this lane's full vitest. `ruff check` and
+  `ruff format --check` over `app`, `tests` and the migration: clean.
+- Contract check: the app's generated OpenAPI shows the five `PUT …/order` paths (PUT only), body
+  `OrderIn` (`ids`: 1…10 000 integers), 200 models `list[AccountOut]`, `list[CategoryOut]`,
+  `TransactionOrderOut`, `list[CreditCardOut]`, `list[RewardCategoryOut]`, the optional `owner`
+  query on the transactions route only, `sort_order` nullable with 0…1 000 000 bounds on the four
+  create bodies, and no `import_key` on `TransactionOut` — the "Contracts" section, unchanged.
+- Migration drill on `finance_test_reorder_r1_mig`: the `finance_realdata` census printed
+  `duplicate import sort_index: [] | import rows: 26`; `alembic heads` → `f12026092301 (head)`; the
+  offline SQL matched Step 6 line for line; upgrade to `f12026091203`, seed, `upgrade head` →
+  `[('import', 30, 30), ('import', 40, 40), ('ui', 50, None)]` and `duplicate import_key refused
+  by ux_position_txn_import_key`; `downgrade -1` → `import_key after downgrade: []` (index gone
+  too); `upgrade head` → the same two lines again; `alembic check` → `No new upgrade operations
+  detected.` (in Task 6 and again in Task 11).
+- Frontend: `npx vitest run` → 232 of 234 files, 3 130 of 3 132 tests, while two backend suites
+  loaded the machine; the two failures pass alone — `PaycheckPage … names the employer match under
+  the waterfall` (the known load flake; the file 84/84 alone) and `CategoriesCard … retires and
+  restores without touching the other columns` (1 247 ms against `waitFor`'s 1 000 ms default; the
+  file 13/13 alone; it imports nothing this lane changed beyond a doc comment on `CategoryCreate`).
+  The four `src/api` files: 23/23. `tsc -b` exit 0; `eslint .` exit 0; `vite build` exit 0.
+- Deviations from this plan, each with its reason — none in code or tests. Two process notes:
+  (1) the full backend suite was started right after Task 9's commit (the last backend change) and
+  ran while Task 10 (`src/` only) was done, so it tested the final backend tree; (2) `eslint .`
+  printed 26 warnings where Task 10 expected no output — all pre-existing
+  `react-refresh/only-export-components` notes in files this lane does not touch (exit 0 either
+  way; the lane's nine `src/` files lint with no output).
 - Left for the morning list: the drill database `finance_test_reorder_r1_mig` and the test database
   `finance_test_reorder_r1` (never dropped by the lane).
 
