@@ -1,6 +1,6 @@
 import type { ChartFixture } from './_types'
 import { categoryTrendOption } from '../../components/spending/spendingChartOptions'
-import { LABELS, MATRIX, NAMES } from './spendingBars.fixture'
+import { FOLD, LABELS, MATRIX, NAMES } from './spendingBars.fixture'
 
 const fixture: ChartFixture = {
   name: 'spendingTrends',
@@ -9,7 +9,7 @@ const fixture: ChartFixture = {
   dashed: ['Groceries budget'],
   build: () =>
     categoryTrendOption({
-      matrix: MATRIX, trend: [{ categoryId: 1, slot: 0 }, { categoryId: 2, slot: 1 }], nameById: NAMES,
+      matrix: MATRIX, trend: [{ categoryId: 1 }, { categoryId: 2 }], fold: FOLD, nameById: NAMES,
       monthLabels: LABELS, range: { preset: 'all' }, selected: {},
     }),
 }

@@ -1317,6 +1317,15 @@ describe('PaycheckPage — the flow card', () => {
     expect(marker.getAttribute('data-nodes')).toBe(
       'Gross,Taxable,Post-tax,Traditional 401(k),Dental & vision,HSA,Withholding,After-tax 401(k),ESPP,Net pay',
     )
+    // The caption says what the colours mean NOW (2026-09-23 spec §C2): net pay is the grey
+    // take-home, and the kept lines (Roth, after-tax 401(k), HSA) are not all green, so "green is
+    // what you keep" would be wrong. Withholding, Traditional 401(k) and ESPP wear the registry
+    // colours they wear across the app.
+    const caption = screen.getByText(/Gray is the check itself/).textContent ?? ''
+    expect(caption).toContain('the net pay that reaches your account')
+    expect(caption).toContain('withholding wears the tax color')
+    expect(caption).toContain('Traditional 401(k) and ESPP their savings colors')
+    expect(caption).not.toMatch(/green is what you keep/)
   })
 
   it('shows the guard sentence instead of a chart when a figure is negative', async () => {
@@ -1329,10 +1338,10 @@ describe('PaycheckPage — the flow card', () => {
     // The table (which handles negatives fine) stays; the sankey steps aside (spec §4).
     expect(screen.getByText(/deductions exceed pay — see the table/)).toBeTruthy()
     expect(screen.queryByTestId('echart')).toBeNull()
-    // …and the card's node legend goes with it: "Gray nodes restate money in transit …
+    // …and the card's node legend goes with it: "Gray is the check itself …
     // Hover a node to trace its flows" under the guard sentence describes a chart that
     // is not on the page.
-    expect(screen.queryByText(/Gray nodes restate money in transit/)).toBeNull()
+    expect(screen.queryByText(/Gray is the check itself/)).toBeNull()
     expect(screen.queryByText(/Hover a node to trace its flows/)).toBeNull()
   })
 

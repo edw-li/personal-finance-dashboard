@@ -108,12 +108,24 @@ function recolorRamp(items: unknown[], map: Map<string, string>): string[] | nul
   return out
 }
 
+// A token at an alpha (charts/partial.ts withAlpha, '#rrggbbaa' — the partial month's faded
+// fill): the token part follows the theme like the token itself, and the alpha stays.
+const TOKEN_AT_ALPHA = /^(#[0-9a-f]{6})([0-9a-f]{2})$/i
+
+function recolorString(value: string, map: Map<string, string>): string {
+  const exact = map.get(value.toLowerCase())
+  if (exact !== undefined) return exact
+  const faded = TOKEN_AT_ALPHA.exec(value)
+  const base = faded === null ? undefined : map.get(faded[1].toLowerCase())
+  return base === undefined || faded === null ? value : `${base}${faded[2]}`
+}
+
 /** Deep-copies `value`, replacing string leaves found in `map` (case-insensitive).
  *  Only arrays and PLAIN objects are walked — functions (tooltip/axisLabel formatters)
  *  and non-plain objects fall through the final return and stay referentially identical,
  *  which is what keeps a recolored option behaviourally the same option. */
 export function recolorOption(value: unknown, map: Map<string, string>): unknown {
-  if (typeof value === 'string') return map.get(value.toLowerCase()) ?? value
+  if (typeof value === 'string') return recolorString(value, map)
   if (Array.isArray(value)) {
     return recolorRamp(value, map) ?? value.map((item) => recolorOption(item, map))
   }

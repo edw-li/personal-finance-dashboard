@@ -109,7 +109,8 @@ describe('CalendarGrid', () => {
     // Split spans, one accessible name — the sentence the chip read before the split.
     expect(screen.getByRole('button', { name: 'RSU vest · 4 grants ~+$41.2k' })).toBe(vest)
     expect(vest.getAttribute('title')).toBe('RSU vest — 4 grants · $41,200.00 · estimated')
-    expect(vest.getAttribute('style')).toContain('border-left-color: var(--chart-1)')
+    // RSU's registry hue (charts/entities.ts) — the same one the money flow and comp use.
+    expect(vest.getAttribute('style')).toContain('border-left-color: var(--chart-2)')
     expect(cell('2026-09-02').querySelector('button.cal-chip')?.classList.contains('is-done')).toBe(
       true,
     )

@@ -186,3 +186,14 @@ describe('shared dark hexes', () => {
     expect(lightFromDark.has(DARK.shadow.toLowerCase())).toBe(false)
   })
 })
+
+// The partial fill (charts/partial.ts withAlpha): a dark token at an alpha follows the theme like
+// the token itself, and keeps its alpha.
+describe('a token at an alpha', () => {
+  it('maps the token part to its light twin and keeps the alpha', () => {
+    const out = recolorOption({ itemStyle: { color: `${DARK.palette[1]}73`, borderColor: DARK.palette[1] } }, lightFromDark)
+    expect(out).toEqual({ itemStyle: { color: `${LIGHT.palette[1]}73`, borderColor: LIGHT.palette[1] } })
+    // Not a token underneath: passes through untouched, like any foreign colour.
+    expect(recolorOption({ color: '#12345673' }, lightFromDark)).toEqual({ color: '#12345673' })
+  })
+})

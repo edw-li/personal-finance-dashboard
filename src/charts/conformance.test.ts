@@ -30,20 +30,37 @@ const ROSTER = [
   'netWorthMoversAccounts',
   'overviewNetWorthTrend',
   'overviewRecentSpend',
+  // …and with the month in progress (2026-09-23 spec §C5): the partial bar and marked label.
+  'overviewRecentSpendPartial',
   'moneyFlow',
   // …and the same builder on a year whose take-home is only part entered: the muted dashed
   // estimate node, a branch the fully-entered fixture never reaches.
   'moneyFlowPending',
+  // …and the one-window branches (2026-09-23 spec §C1): a month-named estimate, the
+  // pay-without-spending terminal, a refund inflow and the tax-kind category on the tax hue.
+  'moneyFlowWindows',
   // C3 — Spending (spendingSmallMultiples was the one droppable of the night — the plan
   // let C3 ship without the Compare/All mode. It landed, so it is pinned like the rest.)
   'spendingBars',
+  // …and over a window holding one import-artefact month (2026-09-23 spec §C3): the capped
+  // axis and its edge marker.
+  'spendingBarsOffScale',
+  // …and with the month in progress under Chart patterns (2026-09-23 spec §C5): hatched
+  // segments and the detached net-pay marker series.
+  'spendingBarsPartial',
   'spendingMonthPie',
   'spendingHeatmapRow',
   'spendingHeatmapVsAverage',
+  // …and the heatmap's in-progress column (§C5): partial cells and the marked rotated label.
+  'spendingHeatmapPartial',
+  // …and that column in the vs-average reading: a neutral hatched series the scale skips.
+  'spendingHeatmapVsAveragePartial',
   'spendingSavings',
   // …and the same builder without the server's total rate (an older backend): one muted
   // line on the noLegend grid, a shape the two-line fixture never reaches.
   'spendingSavingsCash',
+  // …and a month below −100% on both lines: the fixed floor and the off-scale markers (§C3).
+  'spendingSavingsClamped',
   'spendingTrends',
   'spendingSankey',
   'spendingSmallMultiples',
@@ -151,6 +168,14 @@ describe('conformance rules reject', () => {
     const nested = base()
     ;(nested.series as { data: unknown[] }[])[0].data = [{ value: 1, itemStyle: { color: 'rgba(0,0,0,0.5)' } }]
     expect(only(nested)[0]).toMatch(/color rgba/)
+  })
+  it('a token at an alpha is a token; a foreign colour at an alpha is not', () => {
+    const faded = base()
+    ;(faded.series as { data: unknown[] }[])[0].data = [{ value: 1, itemStyle: { color: `${PALETTE[0]}73` } }]
+    expect(only(faded)).toEqual([])
+    const foreign = base()
+    ;(foreign.series as { data: unknown[] }[])[0].data = [{ value: 1, itemStyle: { color: '#12345673' } }]
+    expect(only(foreign)[0]).toMatch(/color #12345673/)
   })
   it('an inline axis formatter', () => {
     const o = base()

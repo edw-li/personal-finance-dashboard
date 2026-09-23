@@ -11,6 +11,8 @@ import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
+import { categoryFold } from '../charts/entities'
+import { hasPartialMonth, PARTIAL_FOOTNOTE } from '../charts/partial'
 import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import { chipAmount, eventKey } from '../components/calendar/calendarView'
@@ -45,6 +47,7 @@ import {
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
+import { useChartDecals } from '../components/useChartDecals'
 import StatTile from '../components/StatTile'
 import useOverviewResource from '../components/overview/useOverviewResource'
 import useSpendingEvidence from '../components/metrics/useSpendingEvidence'
@@ -306,10 +309,23 @@ export default function OverviewPage() {
     () => (data.matrix && data.coverage ? notEnteredMonths(data.matrix, data.coverage) : new Set<string>()),
     [data],
   )
+  // The month in progress is drawn as such (2026-09-23 spec §C5): judged against the product's
+  // today, hatched or faded by Appearance › Chart patterns.
+  const spendToday = todayIso()
+  const patterns = useChartDecals()
   const bars = useMemo(
-    () => (data.matrix ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered) : null),
-    [data, notEntered],
+    () =>
+      data.matrix
+        ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered, { todayIso: spendToday, patterns })
+        : null,
+    [data, notEntered, spendToday, patterns],
   )
+  // The bars' '*' on the month in progress, said in words under the card (code review 13).
+  const spendPartial = data.matrix ? hasPartialMonth(data.matrix.months.slice(-RECENT_SPEND_MONTHS), spendToday) : false
+  // The money flow's category colours are the Spending page's own (2026-09-23 spec §C2): the
+  // fold comes from the same all-time ranking over the matrix this page already loads.
+  const matrix = data.matrix
+  const flowFold = useMemo(() => (matrix ? categoryFold(matrix) : null), [matrix])
 
   // Audit item 11: the server answers an owner with no accounts with zero TOTALS, and a
   // page of $0.00 tiles over a flat line reads as "you have nothing" rather than "there is
@@ -641,7 +657,7 @@ export default function OverviewPage() {
                 option={bars}
                 empty="No spending months yet."
                 exportName="recent-spending"
-                csv={data.matrix ? () => recentSpendCsv(data.matrix!) : undefined}
+                csv={data.matrix ? () => recentSpendCsv(data.matrix!, RECENT_SPEND_MONTHS, { todayIso: spendToday }) : undefined}
                 height={240}
                 busy={spending.busy} error={spending.error}
                 selectionAdapter={params => {
@@ -651,9 +667,20 @@ export default function OverviewPage() {
                   return month ? { kind: 'period', id: `living:${month}`, period: month, label: formatMonth(month), scope: 'Household', values: [{ label: 'Living spending', value: data.matrix.living_total?.[index] ?? null, unit: 'USD' }], source: { href: `/spending?month=${month}`, label: 'Open spending' } } : null
                 }}
                 footer={
-                  <NavLink className="drill-hint" to="/spending">
-                    Open spending →
-                  </NavLink>
+                  spendPartial ? (
+                    // The '*' in words (code review 13, spec §C5): one line with the drill link,
+                    // so the caption row keeps the one line it reserves in every state.
+                    <p className="drill-hint chart-footnote-line">
+                      <span>{PARTIAL_FOOTNOTE}</span> ·{' '}
+                      <NavLink className="drill-hint" to="/spending">
+                        Open spending →
+                      </NavLink>
+                    </p>
+                  ) : (
+                    <NavLink className="drill-hint" to="/spending">
+                      Open spending →
+                    </NavLink>
+                  )
                 }
               />
     ),
@@ -663,6 +690,10 @@ export default function OverviewPage() {
                 failed={flowFailed}
                 onRetry={() => loadFlow(flowYear)}
                 onYearChange={showFlowYear}
+                fold={flowFold}
+                // Wait for the fold rather than draw once in the payload's own ranking and
+                // recolour a moment later; a failed spending feed falls back to that ranking.
+                foldPending={matrix === undefined && spending.busy}
               />
     ),
   }

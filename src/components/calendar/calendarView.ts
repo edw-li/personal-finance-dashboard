@@ -1,21 +1,24 @@
 // Pure calendar-page vocabulary — no React, no fetching (the attention.ts posture).
+import { ENTITY, entityCssVar } from '../../charts/entities'
 import type { CalendarEvent, CalendarEventType, CalendarSource } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
 import { signedCompact, toCents } from './cashflow'
 
-// FIXED source → palette-slot map (2026-09-03 calendar spec §7; charts/theme's slot
-// discipline: fixed order IS the CVD mechanism — never reorder, never cycle). Spelled as CSS
-// custom properties because every consumer is a DOM inline style (chip border, legend dot,
-// drawer bar), never an ECharts option. Color is never the only channel: every chip carries
-// its short label, and the health footer names the sources.
+// FIXED source → ENTITY colour (2026-09-23 spec §C2; charts/entities.ts is the one registry):
+// paydays ARE salary, vests ARE the RSU entity, ex-dividends ARE investment income, and tax
+// deadlines wear the one tax hue — so a chip matches its entity on the money flow, comp and
+// dividend charts. Spelled as CSS custom properties (entityCssVar) because every consumer is
+// a DOM inline style (chip border, legend dot, drawer bar), never an ECharts option. Color is
+// never the only channel: every chip carries its short label, and the health footer names
+// the sources.
 export const SOURCE_COLORS: Record<CalendarSource, string> = {
-  rsu: 'var(--chart-1)',
-  espp: 'var(--chart-2)',
-  dividend: 'var(--chart-3)',
-  payroll: 'var(--chart-4)',
-  tax: 'var(--chart-5)',
-  card: 'var(--chart-6)',
-  ritual: 'var(--chart-7)',
+  rsu: entityCssVar(ENTITY.rsu),
+  espp: entityCssVar(ENTITY.espp),
+  dividend: entityCssVar(ENTITY.investmentIncome),
+  payroll: entityCssVar(ENTITY.salary),
+  tax: entityCssVar(ENTITY.tax),
+  card: entityCssVar(ENTITY.card),
+  ritual: entityCssVar(ENTITY.ritual),
   custom: 'var(--muted)', // entered, not derived
 }
 

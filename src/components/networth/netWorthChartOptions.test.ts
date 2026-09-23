@@ -132,7 +132,11 @@ describe('netWorthStackOption — By group', () => {
     expect(option.series[7].data).toEqual([550, 590, 630])
     expect(option.series[8]).toMatchObject({ type: 'scatter', color: MUTED, z: 11 })
     expect(option.grid).toEqual(GRID_VARIANTS.endLabel)
-    expect(option.xAxis).toEqual({ type: 'category', data: ['Jun 2026', 'Jul 2026', 'Aug 2026'], boundaryGap: false, axisLabel: { interval: 0 } })
+    // One grammar for every monthly axis (2026-09-23 spec §C4): the month formatter EChart fits
+    // to the card's width, and the overlap guard; unfitted it prints the full month.
+    expect(option.xAxis).toMatchObject({ type: 'category', data: ['Jun 2026', 'Jul 2026', 'Aug 2026'], boundaryGap: false, axisLabel: { interval: 0, hideOverlap: true } })
+    const monthFormatter = (option.xAxis as unknown as { axisLabel: { formatter: (value: string, index: number) => string } }).axisLabel.formatter
+    expect(monthFormatter('Jun 2026', 0)).toBe('Jun 2026')
     expect(option.yAxis.axisLabel.formatter).toBe(compactMoney)
     // Nine named series (six groups + liabilities + net worth + notes) is past the §9
     // eight-entry ceiling, so the one legend rule pages rather than wraps.

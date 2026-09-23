@@ -45,6 +45,9 @@ export interface AxisTooltipOptions {
   footer?: (dataIndex: number, params: AxisTooltipParam[]) => string[]
   /** Printed once when `groups` is set and no group row is finite (an absent month). */
   absentText?: string
+  /** A note on the hovered index's head — "Sep 2026 — month to date (in progress)"
+   *  (2026-09-23 spec §C5); null for an ordinary month. Escaped here. */
+  headNote?: (dataIndex: number) => string | null
   /** Bars pass 'shadow'; lines keep echarts' default rule (the key is omitted). */
   pointer?: 'line' | 'shadow'
 }
@@ -88,7 +91,9 @@ export function swatch(
   color: unknown,
   { shape = 'square', wash = false }: { shape?: 'square' | 'line'; wash?: boolean } = {},
 ): string {
-  const hex = typeof color === 'string' ? color : ''
+  // A token at an alpha (a partial month's faded fill, charts/partial.ts) swatches as its token.
+  const raw = typeof color === 'string' ? color : ''
+  const hex = /^#[0-9a-f]{8}$/i.test(raw) ? raw.slice(0, 7) : raw
   const paint = CSS_VARS.get(hex.toLowerCase()) ?? (HEX6.test(hex) ? hex : 'var(--muted)')
   const classes = ['chart-tip-swatch', shape === 'line' ? 'is-line' : '', wash ? 'is-wash' : '']
     .filter(Boolean)
@@ -138,6 +143,7 @@ export function axisTooltip(options: AxisTooltipOptions = {}) {
     rowSuffix,
     footer,
     absentText,
+    headNote,
     pointer = 'line',
   } = options
   const groupSet = new Set(groups)
@@ -180,7 +186,10 @@ export function axisTooltip(options: AxisTooltipOptions = {}) {
     const sw = (p: AxisTooltipParam) =>
       swatch(p.color, { shape: p.seriesType === 'line' && !groupSet.has(nameOf(p)) ? 'line' : 'square' })
 
-    const parts = [`<div class="chart-tip-head">${escapeHtml(head)}</div>`]
+    const note = headNote !== undefined && typeof index === 'number' ? headNote(index) : null
+    const parts = [
+      `<div class="chart-tip-head">${escapeHtml(note ? `${head} — ${note}` : head)}</div>`,
+    ]
     for (const { p, v } of groupRows) parts.push(row(label(p), cell(v, true), sw(p)))
     if (groupRows.length > 0 && totalLabel !== false) {
       parts.push(row(escapeHtml(totalLabel), formatUnit(unit, total), BLANK_SWATCH, ' chart-tip-total'))

@@ -157,11 +157,13 @@ function BreakdownPanel({ data, still }: { data: PaycheckBreakdownOut; still: bo
 // ── Flow ────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The waterfall drawn as a flow, from the SAME payload the table renders: gray nodes
- * restate money in transit (gross, taxable, post-tax), colored nodes are destinations,
- * green is the kept money. A null option is the builder's negative guard (or an all-zero
- * check) — the table is the always-correct surface, so this card steps aside with a
- * sentence instead of drawing a lie.
+ * The waterfall drawn as a flow, from the SAME payload the table renders: gray nodes are the
+ * check itself (gross, taxable, post-tax) and the net pay that reaches the account; colored
+ * nodes are deductions, each on one fixed color — withholding on the tax hue, Traditional
+ * 401(k) on the pre-tax-savings green and ESPP on its own hue, the registry colors they wear
+ * across the app (charts/entities.ts, 2026-09-23 spec §C2). A null option is the builder's
+ * negative guard (or an all-zero check) — the table is the always-correct surface, so this
+ * card steps aside with a sentence instead of drawing a lie.
  */
 function FlowPanel({ data }: { data: PaycheckBreakdownOut }) {
   const option = useMemo(() => paycheckSankeyOption(data), [data])
@@ -183,8 +185,10 @@ function FlowPanel({ data }: { data: PaycheckBreakdownOut }) {
       footer={
         option === null ? undefined : (
           <p className="drill-hint">
-            Gray nodes restate money in transit; colored nodes are where it lands; green is
-            what you keep. Hover a node to trace its flows.
+            Gray is the check itself — gross, taxable, post-tax — and the net pay that reaches
+            your account. Each colored node is a deduction on its own fixed color: withholding
+            wears the tax color, Traditional 401(k) and ESPP their savings colors, as they do
+            across the app. Hover a node to trace its flows.
           </p>
         )
       }

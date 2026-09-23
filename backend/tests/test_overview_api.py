@@ -163,7 +163,38 @@ async def test_money_flow_composes_the_year_and_cross_checks_the_engine(
     assert body["categories"][0]["amount"] == "24000.00"
     assert body["other_spend"] == "900.00"
     assert body["total_spend"] == "43500.00"
-    assert body["saved"] == "26500.00"
+    # ONE window on the right (2026-09-23 spec §C1). This assertion used to read
+    # saved == "26500.00": SEVEN months of take-home minus TWO months of spending — the very
+    # mixed-window figure §C1 fixes. Only Jan and Feb carry both feeds, so the fan and Saved
+    # cover them alone (20000 of take-home against 43500 drawn less the 25 refunded).
+    assert body["matched_months"] == ["2026-01-01", "2026-02-01"]
+    assert body["take_home_matched"] == "20000.00"
+    assert body["refunds"] == "25.00"
+    assert body["saved"] == "-23475.00"
+    # Mar-Jul carry take-home and no spending: a named terminal, not part of Saved.
+    assert body["take_home_unmatched"] == "50000.00"
+    assert body["take_home_unmatched_months"] == [f"2026-0{m}-01" for m in range(3, 8)]
+    assert body["spending_unmatched_months"] == []
+    assert body["take_home_pending_months"] == [
+        "2026-08-01",
+        "2026-09-01",
+        "2026-10-01",
+        "2026-11-01",
+        "2026-12-01",
+    ]
+    # The book's first take-home month is the prior December's row.
+    assert body["tracking_start"] == "2025-12-01"
+    right = {c["name"]: c for c in body["category_totals"]}
+    assert right["Rent"] == {
+        "category_id": right["Rent"]["category_id"],
+        "name": "Rent",
+        "kind": "living",
+        "amount": "24000.00",
+    }
+    assert right["Refunds"]["amount"] == "-25.00"
+    assert Decimal(body["take_home_matched"]) + Decimal(body["refunds"]) - Decimal(
+        body["total_spend"]
+    ) == Decimal(body["saved"])
     # Conservation at the WIRE: with flat brackets every term is exact cents, so both
     # identities survive quantization verbatim (in general the wire tolerates the
     # paycheck sankey's documented ±$0.01 reconciliation drift).
@@ -475,3 +506,127 @@ async def test_money_flow_on_a_separate_return_does_not_split(auth_client, db, d
 
     body = (await auth_client.get(MONEY_FLOW)).json()
     assert body["sources"]["salary_people"] == []
+
+
+# --- one window on the right (2026-09-23 spec §C1) ---
+
+
+async def _seed_partial_year(db) -> None:
+    """Production's 2026 shape: take-home Jan-Aug, spending Jan-Sep (Sep rent-only), a
+    tax-kind category paid in April and a transfer category every month."""
+    housing = SpendingCategory(name="Housing", slug="housing", sort_order=1)
+    taxes = SpendingCategory(name="Taxes", slug="taxes", sort_order=2, kind="tax")
+    brokerage = SpendingCategory(name="Brokerage", slug="brokerage", sort_order=3, kind="transfer")
+    db.add_all([housing, taxes, brokerage])
+    await db.flush()
+    for month in range(1, 9):
+        db.add(MonthlyCashflow(month=date(2026, month, 1), net_pay=Decimal("6595.30")))
+        db.add(
+            MonthlySpending(
+                month=date(2026, month, 1), category_id=housing.id, amount=Decimal("2000.00")
+            )
+        )
+        db.add(
+            MonthlySpending(
+                month=date(2026, month, 1), category_id=brokerage.id, amount=Decimal("500.00")
+            )
+        )
+    db.add(MonthlySpending(month=date(2026, 4, 1), category_id=taxes.id, amount=Decimal("5044.00")))
+    db.add(
+        MonthlySpending(month=date(2026, 9, 1), category_id=housing.id, amount=Decimal("2072.23"))
+    )
+    await db.commit()
+
+
+async def test_money_flow_saved_equals_the_ytd_cards_cash_saved(auth_client, db, definitions):
+    """The acceptance line of spec §C1: the sankey's Saved IS /spending/yearly's
+    cash_savings — the figure the Overview YTD card prints — over the same months, with a
+    spending-only month in progress, a transfer category and a tax-kind category."""
+    await seed_tax_year(auth_client, 2026)
+    await _seed_partial_year(db)
+    flow = (await auth_client.get(f"{MONEY_FLOW}?year=2026")).json()
+    yearly = (await auth_client.get("/api/v1/spending/yearly")).json()
+    row = next(entry for entry in yearly["years"] if entry["year"] == 2026)
+    assert flow["saved"] == row["cash_savings"]
+    assert len(flow["matched_months"]) == row["months_matched"] == 8
+    # Take-home cash still means every entered month; only the right side is windowed.
+    assert flow["take_home_cash"] == flow["take_home_matched"] == "52762.40"
+    assert flow["spending_unmatched_months"] == ["2026-09-01"]
+    assert flow["spending_unmatched_total"] == "2072.23"
+    names = [entry["name"] for entry in flow["category_totals"]]
+    assert "Brokerage" not in names  # a transfer stayed yours — not spending, not in Saved
+    assert {entry["name"]: entry["kind"] for entry in flow["category_totals"]} == {
+        "Housing": "living",
+        "Taxes": "tax",
+    }
+    housing = next(entry for entry in flow["category_totals"] if entry["name"] == "Housing")
+    assert housing["amount"] == "16000.00"  # Jan-Aug only: September's rent is not matched
+    assert flow["total_spend"] == "21044.00"
+    assert flow["tracking_start"] == "2026-01-01"
+    assert flow["take_home_pending_months"] == [
+        "2026-09-01",
+        "2026-10-01",
+        "2026-11-01",
+        "2026-12-01",
+    ]
+
+
+async def test_money_flow_complete_year_keeps_every_existing_figure(auth_client, db, definitions):
+    """Spec §C1: a complete year is unchanged. Twelve matched months, no transfers: the
+    fold, its total and Saved are exactly the pre-window figures (take-home minus every
+    category), and nothing is pending, unmatched or estimated."""
+    await seed_tax_year(auth_client, 2025)
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    food = SpendingCategory(name="Food", slug="food", sort_order=2)
+    db.add_all([rent, food])
+    await db.flush()
+    for month in range(1, 13):
+        db.add(MonthlyCashflow(month=date(2025, month, 1), net_pay=Decimal("5000.00")))
+        db.add(
+            MonthlySpending(
+                month=date(2025, month, 1), category_id=rent.id, amount=Decimal("2000.00")
+            )
+        )
+        db.add(
+            MonthlySpending(
+                month=date(2025, month, 1), category_id=food.id, amount=Decimal("512.34")
+            )
+        )
+    await db.commit()
+    body = (await auth_client.get(f"{MONEY_FLOW}?year=2025")).json()
+    assert [(c["name"], c["amount"]) for c in body["categories"]] == [
+        ("Rent", "24000.00"),
+        ("Food", "6148.08"),
+    ]
+    assert body["other_spend"] is None
+    assert body["total_spend"] == "30148.08"
+    assert body["saved"] == "29851.92"  # 60000.00 - 30148.08, as before the window
+    assert body["take_home_pending"] == "0.00"
+    assert body["take_home_matched"] == body["take_home_cash"] == "60000.00"
+    assert len(body["matched_months"]) == 12
+    assert body["take_home_pending_months"] == []
+    assert body["take_home_unmatched"] == "0.00"
+    assert body["spending_unmatched_months"] == []
+    assert body["refunds"] == "0.00"
+
+
+async def test_money_flow_names_the_months_before_tracking_began(auth_client, db, definitions):
+    """A first, partial year: tracking began in August, so January-July are estimated and
+    the payload says where tracking began for the card to label them 'before tracking'."""
+    await seed_tax_year(auth_client, 2025)
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    db.add(rent)
+    await db.flush()
+    for month in range(8, 13):
+        db.add(MonthlyCashflow(month=date(2025, month, 1), net_pay=Decimal("6000.00")))
+        db.add(
+            MonthlySpending(
+                month=date(2025, month, 1), category_id=rent.id, amount=Decimal("2000.00")
+            )
+        )
+    await db.commit()
+    body = (await auth_client.get(f"{MONEY_FLOW}?year=2025")).json()
+    assert body["tracking_start"] == "2025-08-01"
+    assert body["take_home_pending_months"] == [f"2025-0{m}-01" for m in range(1, 8)]
+    assert body["take_home_pending"] == "42000.00"  # the 6000.00 mean x 7
+    assert body["saved"] == "20000.00"
