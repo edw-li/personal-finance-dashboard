@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { DEFAULT_OVERVIEW_LAYOUT, OVERVIEW_CARDS, OVERVIEW_TILES } from '../../prefs/overviewLayout'
 import type { OverviewCard, OverviewLayout, OverviewTile } from '../../prefs/overviewLayout'
@@ -50,6 +50,7 @@ function CustomizeGroup<K extends View>({
   onChange: (next: K[]) => void
 }) {
   const fieldsetRef = useRef<HTMLFieldSetElement>(null)
+  const dividerId = useId()
   const reorder = useReorder<K>({
     items: visible.map((id) => ({ id })),
     labelOf,
@@ -83,15 +84,22 @@ function CustomizeGroup<K extends View>({
           </label>
         </div>
       ))}
-      {hidden.length > 0 && <div className="overview-customize-divider">Hidden</div>}
-      {hidden.map((id) => (
-        <div key={id} className="overview-customize-row is-off">
-          <label>
-            <input type="checkbox" data-view={id} checked={false} disabled={locked} onChange={() => toggle(id, true)} />
-            {LABELS[id]}
-          </label>
-        </div>
-      ))}
+      {hidden.length > 0 && (
+        <>
+          <div id={dividerId} className="overview-customize-divider">Hidden</div>
+          {/* The divider names the hidden rows' group: tabbing into one of them says "Hidden". */}
+          <div role="group" aria-labelledby={dividerId}>
+            {hidden.map((id) => (
+              <div key={id} className="overview-customize-row is-off">
+                <label>
+                  <input type="checkbox" data-view={id} checked={false} disabled={locked} onChange={() => toggle(id, true)} />
+                  {LABELS[id]}
+                </label>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </fieldset>
   )
 }

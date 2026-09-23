@@ -100,6 +100,19 @@ describe('OverviewCustomize — the lists (2026-09-23 spec §6)', () => {
     expect(within(list('Deeper views')).queryByText('Hidden')).toBeNull()
   })
 
+  it('gathers the hidden views in a group the divider names, so tabbing into one says "Hidden"', () => {
+    render(<Harness initial={{ tiles: ['tax', 'net_worth'], cards: [...DEFAULT_OVERVIEW_LAYOUT.cards] }} />)
+    openPopover()
+    const hidden = within(list('Summary tiles')).getByRole('group', { name: 'Hidden' })
+    expect(within(hidden).getAllByRole('checkbox').map((box) => box.closest('label')?.textContent)).toEqual([
+      'Portfolio',
+      'Living spending',
+    ])
+    // The views that show stay outside it, and a list that hides nothing has no such group.
+    expect(hidden.contains(box('Net worth'))).toBe(false)
+    expect(within(list('Deeper views')).queryByRole('group', { name: 'Hidden' })).toBeNull()
+  })
+
   it('gives each list its own hidden instructions and its own live region', () => {
     render(<Harness />)
     openPopover()
