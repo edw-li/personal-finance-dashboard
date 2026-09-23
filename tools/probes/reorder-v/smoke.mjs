@@ -809,6 +809,19 @@ async function orderRestored() {
     .last()
     .waitFor({ timeout: 10000 })
 }
+/** A drag starts only on a list whose grips are live. A busy list parks every grip (lane R0
+ *  consumer rule 4: aria-disabled, still focusable) — through a save, an Undo, and, on the ledger,
+ *  the page's revalidation after either (lane R3's `reloading` prop) — and a press or a Space on a
+ *  parked grip lifts nothing, by design. So every drag instrument waits here first, the way a reader
+ *  waits for the grips to come back; a fixed settle cannot know how long the page's reload runs. */
+const ready = (rows) =>
+  page.waitForFunction(
+    (sel) =>
+      document.querySelector(sel) !== null &&
+      document.querySelector(`${sel} .reorder-grip[aria-disabled="true"]`) === null,
+    rows,
+    { timeout: 20000 },
+  )
 /** The list's save is back: no grip in `scope` is parked any more (R0: aria-disabled while busy). */
 const waitIdle = (scope) =>
   page.waitForFunction(
@@ -889,6 +902,7 @@ async function press(rows, id, dy, sign) {
  *  the rows on screen, clear of the auto-scroll zones. */
 async function mouseDrag({ rows, id, k, shot = null }) {
   await clearToasts()
+  await ready(rows)
   const before = await order(rows)
   const from = before.indexOf(String(id))
   const to = from + k
@@ -929,6 +943,7 @@ async function mouseDrag({ rows, id, k, shot = null }) {
 /** Focus the grip, Space, the keys, Space — no judgement. */
 async function keyboardPress(rows, id, keys) {
   await clearToasts()
+  await ready(rows)
   const grip = page.locator(gripSel(rows, id))
   const name = await grip.getAttribute('aria-label')
   await grip.focus()
@@ -968,6 +983,7 @@ async function keyboardMove({ rows, id, keys }) {
  *  accent drop line marks the landing edge; Escape then cancels with no request. */
 async function reducedMotion({ rows, id, k, popover = false }) {
   await clearToasts()
+  await ready(rows)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.waitForTimeout(250)
   try {
@@ -1022,6 +1038,7 @@ async function reducedMotion({ rows, id, k, popover = false }) {
  *  scrolls the page under the lifted row (spec §2.3.5, §10). Lane R3's long drag. */
 async function longDrag(rows, id) {
   await clearToasts()
+  await ready(rows)
   const before = await order(rows)
   const from = before.indexOf(String(id))
   await standAt(rowSel(rows, id), 0.35)
@@ -1060,6 +1077,7 @@ async function longDrag(rows, id) {
  *  plan Task 7); and once the drag ends. Then Undo. */
 async function autoScrollInBox({ box, rows, ids, scope, label, shot }) {
   await clearToasts()
+  await ready(rows)
   const first = ids[0]
   const last = ids[ids.length - 1]
   // The last row 60px above the visible band's foot, as the plan placed it — and when that still
@@ -1125,16 +1143,18 @@ async function autoScrollInBox({ box, rows, ids, scope, label, shot }) {
     s1,
     firstRowHiddenBy: hiddenBy,
   })
-  // Lane R0 round 4: the scroll stops once the range's first slot shows — still 400ms later, the row
-  // in hand clamped at that slot, clear below the sticky header; above the box's own top unless the
-  // range starts the box (Categories & weights is one range: there the two tops are one).
+  // Spec §2.3.5 as amended (lane R0 round 4): the scroll stops once the range's end is inside the
+  // band the reader can see — the scroller's box clipped to the window — less the 40px edge margin,
+  // or at the scroller's own end. So: still 400ms later, and either the box reached its top (only
+  // where the range starts the box — Categories & weights is one range) or it stopped short with the
+  // row in hand, clamped at the range's first slot, at least 40px into the band. Whether that slot
+  // clears the box's sticky header is not the rule's concern — a two-line header is taller than the
+  // margin — so it is measured in the JUDGE record below (held.overlapPx), not asserted.
+  const slotInBand = held.liftedBox === null ? null : held.liftedBox[0] - Math.round(band.top)
   check(
-    "the scroll stops at the range's first slot — the row in hand clamped there, below the header",
-    s2 === s1 &&
-      held.liftedBox !== null &&
-      held.liftedBox[0] >= held.headerBox[1] - 1 &&
-      (s1 > 0 || rangeStartsBox),
-    { s1, s2, liftedBox: held.liftedBox, headerBox: held.headerBox, rangeStartsBox },
+    "the scroll stops at the range's end — the box's own top, or the row in hand clamped at the range's first slot ≥ 40px into the visible band",
+    s2 === s1 && slotInBand !== null && (s1 === 0 ? rangeStartsBox : slotInBand >= 39),
+    { s1, s2, slotInBand, liftedBox: held.liftedBox, headerBox: held.headerBox, rangeStartsBox },
   )
   note('JUDGE (plan Task 7): the row in hand over the sticky header — mid-scroll, then held at the stop', {
     scrolling,
@@ -1441,6 +1461,7 @@ async function settingsWalk() {
     step('categories-resize-cancels')
     await boxTop(CAT_BOX)
     await clearToasts()
+    await ready(CAT_ROWS)
     const writes = writesNow()
     await press(CAT_ROWS, C0[0], aim(await boxes(CAT_ROWS), 0, 2), 1)
     const lifted = await liftState(CAT_ROWS)
@@ -1609,6 +1630,7 @@ async function settingsWalk() {
     const unit = [carrier.parent, ...carrier.kids]
     await boxTo(ACC_BOX, rowSel(ACC_ROWS, carrier.parent), 80)
     await clearToasts()
+    await ready(ACC_ROWS)
     const before = await order(ACC_ROWS)
     const bottomOf = (list) =>
       page.evaluate(
@@ -1659,6 +1681,7 @@ async function settingsWalk() {
     const kidName = accName.get(kid)
     await boxTo(ACC_BOX, rowSel(ACC_ROWS, carrier.parent), 80)
     await clearToasts()
+    await ready(ACC_ROWS)
     const before = await order(ACC_ROWS)
     const writes = writesNow()
     await page.locator(gripSel(ACC_ROWS, kid)).focus()
@@ -2242,7 +2265,17 @@ async function activityWalk() {
     [`Undid: ${label}`, false],
     [label, true],
   ]
-  const rows = await waitFor(async () => (await activityRows()).slice(0, 2).map((row) => [row.label, row.undone]), wantRows)
+  // The change log's Undo also records a run (kind "undo", its report behind "View report" — the
+  // house's Activity since 2026-09-03), drawn as its own row just above the "Undid:" batch. The
+  // question here is about the batches, so the runs are set aside — the activity-feed step's rule.
+  const rows = await waitFor(
+    async () =>
+      (await activityRows())
+        .filter((row) => row.source !== 'run')
+        .slice(0, 2)
+        .map((row) => [row.label, row.undone]),
+    wantRows,
+  )
   check('the feed puts the undo on top and marks the entry undone', same(rows, wantRows), rows)
 
   step('activity-overlap')
