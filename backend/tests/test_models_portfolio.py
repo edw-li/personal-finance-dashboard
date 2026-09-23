@@ -84,6 +84,44 @@ async def test_position_transaction_source_defaults_to_ui(db):
     assert TRANSACTION_SOURCES == ("import", "ui")
 
 
+async def test_import_key_is_unique_among_import_rows_only(db):
+    """The importer's identity (2026-09-23 reorder spec §3.5): two IMPORT rows may not share
+    a sheet key, while UI rows and NULL keys sit outside the partial unique index. Declared
+    in the model as well as migration f12026092301 because this schema is create_all-built."""
+    sec = Security(ticker="IKEY", name="Import Key", holding_type="stock")
+    db.add(sec)
+    await db.commit()
+    # Held as a plain int: the rollback below expires every instance, and a later sec.id
+    # would then emit lazy IO (MissingGreenlet under asyncio).
+    sec_id = sec.id
+
+    def row(source: str, import_key: int | None) -> PositionTransaction:
+        return PositionTransaction(
+            security_id=sec_id,
+            portfolio_account=acct("RH Taxable"),
+            type="buy",
+            shares=Decimal("1"),
+            price=Decimal("1"),
+            source=source,
+            import_key=import_key,
+        )
+
+    db.add_all(
+        [
+            row("import", 20),
+            row("ui", 20),
+            row("import", None),
+            row("import", None),
+            row("ui", None),
+        ]
+    )
+    await db.commit()  # a UI row may carry any key, and NULL keys never collide
+    db.add(row("import", 20))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()  # shared-session contract (conftest): unpoison after IntegrityError
+
+
 async def test_one_close_per_day(db):
     sec = Security(ticker="SCHD", name="Schwab US Dividend", holding_type="etf")
     db.add(sec)

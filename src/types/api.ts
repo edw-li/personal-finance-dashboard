@@ -32,6 +32,7 @@ export interface AccountOut {
 export interface AccountCreate {
   name: string
   group: AccountGroup
+  /** Omitted = appended after the last account (2026-09-23 reorder spec §3.3). */
   sort_order?: number
   is_component?: boolean
   /** Omitted or null = joint; the API never guesses the primary person. */
@@ -193,6 +194,7 @@ export interface CategoryOut {
 
 export interface CategoryCreate {
   name: string
+  /** Omitted = appended after the last category (2026-09-23 reorder spec §3.3). */
   sort_order?: number
   /** Omitted = `living`, the column's server default. */
   kind?: CategoryKind
@@ -409,6 +411,31 @@ export interface TransactionCreate {
 }
 
 export type TransactionUpdate = Partial<Omit<TransactionCreate, 'security_id'>>
+
+/** One position whose figures a replay-order change moved (2026-09-23 reorder spec §3.2).
+ *  The server quantizes before it answers — shares are 6-dp strings, money 2-dp strings —
+ *  so the browser shows them as sent and never recomputes one. `warnings_added` holds only
+ *  the lines the new order introduced. */
+export interface PositionChange {
+  security_id: number
+  ticker: string
+  account: string
+  shares_before: string
+  shares_after: string
+  cost_basis_before: string
+  cost_basis_after: string
+  realized_gl_before: string
+  realized_gl_after: string
+  warnings_added: string[]
+}
+
+/** PUT /portfolio/transactions/order's answer: the rows the scope shows, in their new order,
+ *  and every position whose figures changed, ordered by (ticker, account) — empty when a
+ *  move re-folded nothing. */
+export interface TransactionOrderOut {
+  transactions: TransactionOut[]
+  changed_positions: PositionChange[]
+}
 
 export interface DividendOut {
   id: number
@@ -2176,7 +2203,9 @@ export interface CreditCardIn {
   is_active: boolean
   account_id: number | null
   notes: string | null
-  sort_order: number
+  /** Omitted or null: a create appends after the last card; an edit keeps the stored
+   *  value — the list's drag owns it (2026-09-23 reorder spec §3.3). */
+  sort_order?: number | null
 }
 
 export interface RewardCategoryOut {
@@ -2193,6 +2222,7 @@ export interface RewardCategoryOut {
 
 export interface RewardCategoryCreate {
   name: string
+  /** Omitted = appended after the last row (2026-09-23 reorder spec §3.3). */
   sort_order?: number
   annual_spend?: string | null
   spending_category_id?: number | null

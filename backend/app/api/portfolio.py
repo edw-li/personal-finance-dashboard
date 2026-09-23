@@ -4,7 +4,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import ColumnElement, func, select, text
+from sqlalchemy import ColumnElement, Select, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -19,6 +19,7 @@ from app.models import (
     SecurityDividendEvent,
 )
 from app.models.portfolio import AllocationTargetSet
+from app.schemas.ordering import OrderIn
 from app.schemas.portfolio import (
     AllocationDimension,
     AllocationOut,
@@ -43,6 +44,7 @@ from app.schemas.portfolio import (
     SecurityOut,
     SecurityUpdate,
     TransactionCreate,
+    TransactionOrderOut,
     TransactionOut,
     TransactionUpdate,
 )
@@ -57,6 +59,16 @@ from app.services.money import (
     quantize_price,
     quantize_shares,
     require_reasonable_date,
+)
+from app.services.ordering import (
+    SORT_INDEX_STEP,
+    STALE_TRANSACTIONS,
+    check_permutation,
+    next_sort_index,
+    order_lock,
+    position_changes,
+    renumber,
+    subset_in_slots,
 )
 from app.services.portfolio_accounts import portfolio_owner_clause, resolve_portfolio_account
 from app.services.portfolio_allocation import (
@@ -324,23 +336,92 @@ def _validated_txn_fields(
     }
 
 
+def _ledger_query(owner_filter: ColumnElement[bool] | None) -> Select[tuple[PositionTransaction]]:
+    """The ledger in replay order, (sort_index, id), scoped by `owner_filter` — ONE builder
+    for the list GET and the reorder PUT, so "the rows the page shows" and "the rows the
+    reorder must be sent" can never be two different filters."""
+    query = select(PositionTransaction).order_by(
+        PositionTransaction.sort_index, PositionTransaction.id
+    )
+    if owner_filter is not None:
+        query = query.join(
+            PortfolioAccount, PortfolioAccount.id == PositionTransaction.portfolio_account_id
+        ).where(owner_filter)
+    return query
+
+
 @router.get("/transactions", response_model=list[TransactionOut])
 async def list_transactions(
     security_id: int | None = None,
     owner: OwnerQuery = None,
     db: AsyncSession = Depends(get_db),
 ) -> list[PositionTransaction]:
-    query = select(PositionTransaction).order_by(
-        PositionTransaction.sort_index, PositionTransaction.id
-    )
+    query = _ledger_query(_owner_filter(owner))
     if security_id is not None:
         query = query.where(PositionTransaction.security_id == security_id)
-    owner_filter = _owner_filter(owner)
-    if owner_filter is not None:
-        query = query.join(
-            PortfolioAccount, PortfolioAccount.id == PositionTransaction.portfolio_account_id
-        ).where(owner_filter)
     return list((await db.execute(query)).scalars())
+
+
+@router.put("/transactions/order", response_model=TransactionOrderOut)
+async def reorder_transactions(
+    body: OrderIn,
+    owner: OwnerQuery = None,
+    db: AsyncSession = Depends(get_db),
+) -> TransactionOrderOut:
+    """Change the REPLAY order (2026-09-23 drag-to-reorder spec §3.2). `ids` is every row
+    `GET /transactions?owner=` returns, in its new order. The visible rows take the slots
+    the visible rows already hold, hidden rows keep theirs, and the whole ledger is
+    renumbered 10, 20, … (only rows whose number moves are written). Both orders are
+    folded, and every position whose figures changed is reported, so the page can say what
+    the move did to cost basis and gains.
+
+    A scope never splits a holding: a position is keyed by an account label, and a label
+    belongs to one owner (or joint), so each position is wholly visible or wholly hidden.
+
+    NOT change-logged, on purpose (spec §0.10): undo replays whole-row images, and this
+    table's other writers (the CRUD routes here, the importer) are unlogged, so undoing a
+    logged reorder after an unlogged edit of a moved row would silently revert that edit.
+    The client's Undo re-sends the previous order through this same route instead.
+
+    Serialized per ledger (decision 16): the order lock is the first statement, so two tabs'
+    replay orders never blend into one neither sent — the later request wins whole.
+
+    Declared before the /transactions/{txn_id} routes so a later PUT on that path can never
+    shadow it."""
+    owner_filter = _owner_filter(owner)  # 422 on a garbage owner before anything is read
+    await db.execute(order_lock(PositionTransaction))
+    ledger = list((await db.execute(_ledger_query(None))).scalars())
+    visible = (
+        ledger
+        if owner_filter is None
+        else list((await db.execute(_ledger_query(owner_filter))).scalars())
+    )
+    visible_ids = [txn.id for txn in visible]
+    check_permutation(visible_ids, body.ids, stale_detail=STALE_TRANSACTIONS)
+    if body.ids == visible_ids:
+        return TransactionOrderOut(
+            transactions=[TransactionOut.model_validate(txn) for txn in visible],
+            changed_positions=[],
+        )
+    tickers = {
+        security_id: ticker
+        for security_id, ticker in await db.execute(select(Security.id, Security.ticker))
+    }
+    by_id = {txn.id: txn for txn in ledger}
+    before = fold_transactions(ledger)  # folded BEFORE renumber touches a row
+    new_order = subset_in_slots([txn.id for txn in ledger], body.ids)
+    renumber(
+        [by_id[txn_id] for txn_id in new_order],
+        "sort_index",
+        start=SORT_INDEX_STEP,
+        step=SORT_INDEX_STEP,
+    )
+    changed = position_changes(before, fold_transactions(ledger), tickers)
+    await db.commit()
+    return TransactionOrderOut(
+        transactions=[TransactionOut.model_validate(by_id[txn_id]) for txn_id in body.ids],
+        changed_positions=changed,
+    )
 
 
 @router.post("/transactions", response_model=TransactionOut, status_code=201)
@@ -352,21 +433,24 @@ async def create_transaction(
     fields = _validated_txn_fields(body.type, body.shares, body.price, body.fees, body.split_factor)
     if body.txn_date is not None:
         require_reasonable_date(body.txn_date, "txn_date")
-    max_index = (
-        await db.execute(select(func.coalesce(func.max(PositionTransaction.sort_index), 0)))
-    ).scalar_one()
+    label = _validated_account(body.account)
+    # The append position, under the ledger's lock (decision 16): a reorder in flight
+    # commits before the max is read, so this row never lands on a number it is writing.
+    await db.execute(order_lock(PositionTransaction))
+    sort_index = (await db.execute(next_sort_index())).scalar_one()
     # Resolve only after every 422 above: get-or-create flushes, and a label minted for a
     # request that then fails validation would be a row nobody asked for.
-    account = await resolve_portfolio_account(db, _validated_account(body.account))
-    # UI rows fold chronologically LAST (locked decision). A later sheet import may mint
-    # the same sort_index for a new row — folding tie-breaks on id; accepted.
+    account = await resolve_portfolio_account(db, label)
+    # UI rows fold chronologically LAST (locked decision) until the user drags them
+    # elsewhere (PUT /transactions/order). A later import appends its new sheet rows after
+    # the ledger's max the same way — import_key, not sort_index, is the importer's identity.
     txn = PositionTransaction(
         security_id=body.security_id,
         # The ROW, not the id: the response serializes `account` off this relationship.
         portfolio_account=account,
         type=body.type,
         txn_date=body.txn_date,
-        sort_index=max_index + 10,
+        sort_index=sort_index,
         source="ui",
         notes=body.notes,
         **fields,
@@ -423,8 +507,9 @@ async def update_transaction(
     txn.price = merged["price"]
     txn.fees = merged["fees"]
     txn.split_factor = merged["split_factor"]
-    # source/sort_index are ownership metadata — never PATCHable. Edits to
-    # source='import' rows are legal but the next re-import reverts them (sheet wins).
+    # source/sort_index/import_key are ownership metadata — never PATCHable (the replay
+    # order moves only through PUT /transactions/order). Edits to source='import' rows are
+    # legal but the next re-import reverts them (sheet wins).
     await db.commit()
     return txn
 
@@ -432,7 +517,9 @@ async def update_transaction(
 @router.delete("/transactions/{txn_id}", status_code=204)
 async def delete_transaction(txn_id: int, db: AsyncSession = Depends(get_db)) -> Response:
     txn = await _get_transaction(db, txn_id)
-    await db.delete(txn)  # import-owned rows resurrect on the next re-import — documented
+    # Import-owned rows resurrect on the next re-import — appended at the ledger's end,
+    # matched by import_key — documented.
+    await db.delete(txn)
     await db.commit()
     return Response(status_code=204)
 

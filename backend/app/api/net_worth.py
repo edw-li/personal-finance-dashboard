@@ -24,6 +24,7 @@ from app.schemas.net_worth import (
     SummaryOut,
     TimeseriesOut,
 )
+from app.schemas.ordering import OrderIn
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import mom_pct, require_first_of_month
 from app.services.month_writes import write_balances
@@ -34,6 +35,15 @@ from app.services.net_worth_calc import (
     net_worth_for,
     owner_clause,
     owner_totals_for,
+)
+from app.services.ordering import (
+    STALE_ACCOUNTS,
+    apply_order,
+    in_list_order,
+    moved_alone,
+    moved_ids,
+    next_sort_order,
+    order_lock,
 )
 
 router = APIRouter(
@@ -92,8 +102,72 @@ def _check_component_link(is_component: bool | None, parent_account_id: int | No
 
 @router.get("/accounts", response_model=list[AccountOut])
 async def list_accounts(db: AsyncSession = Depends(get_db)) -> list[Account]:
-    result = await db.execute(select(Account).order_by(Account.sort_order, Account.id))
-    return list(result.scalars().all())
+    return list((await db.execute(in_list_order(Account))).scalars())
+
+
+def _reorder_label(accounts: list[Account], new_order: list[int]) -> str:
+    """The Activity label (2026-09-23 reorder spec §8.4, amended at the R1 review): the
+    natural explanation before the minimal one.
+
+    1. A parent that moved with the components it carries while every other row kept its
+       order names the parent, however far it went — up one row it is not "Moved account
+       <the row it passed>". "Carries" is the Settings table's nesting: the components whose
+       parent it is AND that sit in its group (nestComponents runs per group there). Of two
+       such blocks that swapped, the later one in the new order is named (moved_ids' tie).
+    2. Else one row whose move explains everything names it — an adjacent swap names one of
+       the two by moved_ids' tie rule.
+    3. Else "Reordered {n} accounts", n the minimal moved set.
+
+    O(n) per parent with components, plus moved_ids' O(n log n)."""
+    old_order = [account.id for account in accounts]
+    by_id = {account.id: account for account in accounts}
+    carried: dict[int, set[int]] = {}
+    for account in accounts:
+        parent = by_id.get(account.parent_account_id)
+        if parent is not None and parent.id != account.id and parent.group == account.group:
+            carried.setdefault(parent.id, set()).add(account.id)
+    for account_id in reversed(new_order):
+        if account_id in carried and moved_alone(
+            old_order, new_order, account_id, carried[account_id]
+        ):
+            return f"Moved account {by_id[account_id].name}"
+    moved = moved_ids(old_order, new_order)
+    if len(moved) == 1:
+        return f"Moved account {by_id[moved[0]].name}"
+    return f"Reordered {len(moved)} accounts"
+
+
+@router.put("/accounts/order", response_model=list[AccountOut])
+async def reorder_accounts(
+    body: OrderIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> list[Account]:
+    """Drag-to-reorder (2026-09-23 spec §3.2): `ids` is EVERY account, retired included, in
+    its new order. sort_order becomes 0…n−1 — the first reorder normalizes the workbook's
+    column indexes — and only rows whose value moves are written, as ONE change batch the
+    Activity card can undo. An unchanged order writes and logs nothing.
+
+    Serialized per list (decision 16): the order lock is the first statement, so a reorder
+    in flight commits before this one reads — the later request wins whole, and its batch
+    records fresh before-images.
+
+    Declared before the /accounts/{account_id} routes so a later PUT on that path can never
+    shadow it."""
+    await db.execute(order_lock(Account))
+    accounts = list((await db.execute(in_list_order(Account))).scalars())
+    before = {account.id: row_image(account) for account in accounts}
+    ordered, changed = apply_order(accounts, body.ids, stale_detail=STALE_ACCOUNTS)
+    if not changed:  # the order as stored: nothing written, nothing logged
+        return ordered
+    for account, _old, _new in changed:
+        batch.record_update(account, before[account.id])
+    batch.label = _reorder_label(accounts, body.ids)
+    # The header only when rows were logged — the allocation routes' rule; batch_header
+    # spells it the way the month DELETEs already do.
+    response.headers.update(batch_header(await batch.commit()))
+    return ordered
 
 
 @router.post("/accounts", response_model=AccountOut, status_code=201)
@@ -124,11 +198,18 @@ async def create_account(
         raise HTTPException(status_code=409, detail=f"account {slug!r} already exists")
     await _validate_links(db, body.person_id, body.parent_account_id, None)
     _check_component_link(body.is_component, body.parent_account_id)
+    sort_order = body.sort_order
+    if sort_order is None:
+        # No position given: append after the last account (2026-09-23 reorder spec §3.3),
+        # never 0 — 0 put every new account at the top of its group. Under the list's lock
+        # (decision 16): a reorder in flight commits before the max is read.
+        await db.execute(order_lock(Account))
+        sort_order = (await db.execute(next_sort_order(Account.sort_order))).scalar_one()
     account = Account(
         name=body.name,
         slug=slug,
         group=body.group,
-        sort_order=body.sort_order,
+        sort_order=sort_order,
         is_component=body.is_component,
         person_id=body.person_id,
         parent_account_id=body.parent_account_id,
@@ -155,7 +236,6 @@ async def update_account(
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> Account:
-    account = await _get_account(db, account_id)
     # Every patchable account column is NOT NULL *except* the two in
     # NULLABLE_ACCOUNT_FIELDS, so an explicit null is a no-op request for the rest
     # ("name": null must never reach the ORM) and a real write for those two.
@@ -164,6 +244,12 @@ async def update_account(
         for field, value in body.model_dump(exclude_unset=True).items()
         if value is not None or field in NULLABLE_ACCOUNT_FIELDS
     }
+    if "group" in updates and "sort_order" not in updates:
+        # A group change appends (below), so take the list's lock BEFORE the row is read
+        # (decision 16): the max and the before-image are then both read after any reorder
+        # in flight commits. A same-group PATCH holds it for nothing — harmless.
+        await db.execute(order_lock(Account))
+    account = await _get_account(db, account_id)
     new_name = updates.get("name")
     if new_name is not None and not slugify(new_name):
         # Same rule as create: PATCH must not produce a blank/whitespace display name.
@@ -194,6 +280,11 @@ async def update_account(
             updates.get("is_component", account.is_component),
             updates.get("parent_account_id", account.parent_account_id),
         )
+    if "group" in updates and updates["group"] != account.group and "sort_order" not in updates:
+        # A group change lands the account at the END of its new group (2026-09-23 reorder
+        # spec §3.3): its old number ranked it among the old group's rows. It rides the
+        # same batch as the group change, so one Undo reverts both.
+        updates["sort_order"] = (await db.execute(next_sort_order(Account.sort_order))).scalar_one()
     # slug is the importer's natural key — never rewritten here. A sheet-side rename is
     # the importer's job (per-run alias semantics, Plan 2 forward note).
     before = row_image(account)

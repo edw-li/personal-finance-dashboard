@@ -16,6 +16,7 @@ import type {
   SecurityOut,
   SecurityUpdate,
   TransactionCreate,
+  TransactionOrderOut,
   TransactionOut,
   TransactionUpdate,
 } from '../types/api'
@@ -72,6 +73,21 @@ export function updateTransaction(id: number, body: TransactionUpdate): Promise<
 
 export function deleteTransaction(id: number): Promise<void> {
   return api<void>(`/portfolio/transactions/${id}`, { method: 'DELETE' })
+}
+
+/** Change the REPLAY order (2026-09-23 spec §3.2): `ids` is every row fetchTransactions(owner)
+ *  returned, in its new order, and `owner` is that same scope — the server judges the ids
+ *  against exactly those rows, so the scope is required rather than defaulted (a forgotten
+ *  one would earn a 409, not a reorder). Unlogged server-side: the caller's Undo re-sends
+ *  the previous order through this same function. */
+export function reorderTransactions(
+  ids: number[],
+  owner: OwnerScope,
+): Promise<TransactionOrderOut> {
+  return api<TransactionOrderOut>(`/portfolio/transactions/order${ownerQuery(owner, '?')}`, {
+    method: 'PUT',
+    body: JSON.stringify({ ids }),
+  })
 }
 
 export function fetchDividends(owner: OwnerScope = null): Promise<DividendOut[]> {

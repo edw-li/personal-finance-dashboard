@@ -30,6 +30,7 @@ from app.schemas.credit_cards import (
     RewardRateOut,
     RewardRatePut,
 )
+from app.schemas.ordering import OrderIn
 from app.services.money import (
     MONEY_MAX_ABS_8_2,
     MONEY_MAX_ABS_10_2,
@@ -37,6 +38,14 @@ from app.services.money import (
     quantize_money,
     quantize_price,
     require_reasonable_date,
+)
+from app.services.ordering import (
+    STALE_CARDS,
+    STALE_REWARD_CATEGORIES,
+    apply_order,
+    in_list_order,
+    next_sort_order,
+    order_lock,
 )
 
 router = APIRouter(
@@ -84,10 +93,7 @@ def _validated_annual_spend(value: Decimal | None) -> Decimal | None:
 
 @router.get("/categories", response_model=list[RewardCategoryOut])
 async def list_reward_categories(db: AsyncSession = Depends(get_db)) -> list[RewardCategory]:
-    result = await db.execute(
-        select(RewardCategory).order_by(RewardCategory.sort_order, RewardCategory.id)
-    )
-    return list(result.scalars().all())
+    return list((await db.execute(in_list_order(RewardCategory))).scalars())
 
 
 @router.post("/categories", response_model=RewardCategoryOut, status_code=201)
@@ -115,10 +121,16 @@ async def create_reward_category(
     if existing is not None:
         raise HTTPException(status_code=409, detail=f"reward category {slug!r} already exists")
     await _validated_category_refs(db, body.spending_category_id, body.pinned_card_id)
+    sort_order = body.sort_order
+    if sort_order is None:
+        # No position given: append after the last row (2026-09-23 reorder spec §3.3), under
+        # the list's lock (decision 16).
+        await db.execute(order_lock(RewardCategory))
+        sort_order = (await db.execute(next_sort_order(RewardCategory.sort_order))).scalar_one()
     category = RewardCategory(
         name=body.name,
         slug=slug,
-        sort_order=body.sort_order,
+        sort_order=sort_order,
         annual_spend=_validated_annual_spend(body.annual_spend),
         spending_category_id=body.spending_category_id,
         pinned_card_id=body.pinned_card_id,
@@ -126,6 +138,23 @@ async def create_reward_category(
     db.add(category)
     await db.commit()
     return category
+
+
+@router.put("/categories/order", response_model=list[RewardCategoryOut])
+async def reorder_reward_categories(
+    body: OrderIn, db: AsyncSession = Depends(get_db)
+) -> list[RewardCategory]:
+    """Drag-to-reorder the Categories & weights rows (2026-09-23 spec §3.2): `ids` is every
+    reward category in its new order; sort_order becomes 0…n−1 in ONE transaction, and only
+    rows whose value moves are written. Unlogged like the rest of this router — the client's
+    Undo re-sends the previous order. Serialized per list (decision 16): the order lock
+    comes first. Declared before /categories/{category_id}."""
+    await db.execute(order_lock(RewardCategory))
+    categories = list((await db.execute(in_list_order(RewardCategory))).scalars())
+    ordered, changed = apply_order(categories, body.ids, stale_detail=STALE_REWARD_CATEGORIES)
+    if changed:  # the order as stored writes nothing
+        await db.commit()
+    return ordered
 
 
 @router.patch("/categories/{category_id}", response_model=RewardCategoryOut)
@@ -348,6 +377,13 @@ async def _one_card_out(db: AsyncSession, card: CreditCard) -> CreditCardOut:
     return _card_out(card, credits[card.id], events[card.id])
 
 
+async def _cards_out(db: AsyncSession, cards: list[CreditCard]) -> list[CreditCardOut]:
+    """The list GET's wire for these cards, in this order. The reorder PUT answers through
+    it too, so its rows are built exactly as `GET /credit-cards` builds them."""
+    credits, events = await _card_children(db, [card.id for card in cards])
+    return [_card_out(card, credits[card.id], events[card.id]) for card in cards]
+
+
 async def _validated_card_values(db: AsyncSession, body: CreditCardIn, card_id: int | None) -> dict:
     """Shared POST/PATCH validation → column dict. Raises the router's own 422/404/409s."""
     slug = slugify(body.name)
@@ -407,13 +443,7 @@ async def _validated_card_values(db: AsyncSession, body: CreditCardIn, card_id: 
 
 @router.get("", response_model=list[CreditCardOut])
 async def list_credit_cards(db: AsyncSession = Depends(get_db)) -> list[CreditCardOut]:
-    cards = list(
-        (await db.execute(select(CreditCard).order_by(CreditCard.sort_order, CreditCard.id)))
-        .scalars()
-        .all()
-    )
-    credits, events = await _card_children(db, [card.id for card in cards])
-    return [_card_out(card, credits[card.id], events[card.id]) for card in cards]
+    return await _cards_out(db, list((await db.execute(in_list_order(CreditCard))).scalars()))
 
 
 @router.post("", response_model=CreditCardOut, status_code=201)
@@ -421,19 +451,47 @@ async def create_credit_card(
     body: CreditCardIn, db: AsyncSession = Depends(get_db)
 ) -> CreditCardOut:
     values = await _validated_card_values(db, body, card_id=None)
+    if values["sort_order"] is None:
+        # No position given: append after the last card (2026-09-23 reorder spec §3.3), under
+        # the list's lock (decision 16).
+        await db.execute(order_lock(CreditCard))
+        values["sort_order"] = (
+            await db.execute(next_sort_order(CreditCard.sort_order))
+        ).scalar_one()
     card = CreditCard(**values)
     db.add(card)
     await db.commit()
     return await _one_card_out(db, card)
 
 
+@router.put("/order", response_model=list[CreditCardOut])
+async def reorder_credit_cards(
+    body: OrderIn, db: AsyncSession = Depends(get_db)
+) -> list[CreditCardOut]:
+    """Drag-to-reorder the card list (2026-09-23 spec §3.2): `ids` is every card, active
+    and inactive, in its new order; sort_order becomes 0…n−1 in ONE transaction, and only
+    rows whose value moves are written. Answers exactly as the list GET does. Unlogged like
+    the rest of this router — the client's Undo re-sends the previous order. Serialized per
+    list (decision 16): the order lock comes first. Declared before the /{card_id} routes."""
+    await db.execute(order_lock(CreditCard))
+    cards = list((await db.execute(in_list_order(CreditCard))).scalars())
+    ordered, changed = apply_order(cards, body.ids, stale_detail=STALE_CARDS)
+    if changed:  # the order as stored writes nothing
+        await db.commit()
+    return await _cards_out(db, ordered)
+
+
 @router.patch("/{card_id}", response_model=CreditCardOut)
 async def update_credit_card(
     card_id: int, body: CreditCardIn, db: AsyncSession = Depends(get_db)
 ) -> CreditCardOut:
-    """Full replace (house style) — the client sends the whole card back."""
+    """Full replace (house style) — the client sends the whole card back, except that an
+    absent or null sort_order keeps the stored one (2026-09-23 reorder spec §3.3): the
+    list's drag owns that column, and an edit form holding a stale copy must not undo it."""
     card = await _get_card(db, card_id)
     values = await _validated_card_values(db, body, card_id=card_id)
+    if values["sort_order"] is None:
+        del values["sort_order"]
     for field, value in values.items():
         setattr(card, field, value)
     await db.commit()

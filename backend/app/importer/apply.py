@@ -6,6 +6,8 @@ caller (service.py) owns the transaction: nothing here commits.
 """
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
+from typing import NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +23,7 @@ from app.importer.parsers import (
     ParsedReferenceData,
     ParsedSpending,
     ParsedTaxes,
+    ParsedTransaction,
 )
 from app.importer.report import SheetReport
 from app.models import (
@@ -44,6 +47,7 @@ from app.models import (
     TaxYear,
 )
 from app.seed import seed_tax_definitions
+from app.services.ordering import ORDERED_LISTS, SORT_INDEX_STEP, next_sort_index, order_lock
 from app.services.people import load_people, primary_person
 from app.services.portfolio_accounts import resolve_portfolio_account
 from app.services.spending_guard import records_something
@@ -63,6 +67,16 @@ def _diff_update(obj, fields: dict, counts, report: SheetReport, sample_key: str
         report.add_sample(f"{sample_key}: " + "; ".join(changed))
     else:
         counts.skips += 1
+
+
+async def lock_ordered_lists(db: AsyncSession) -> None:
+    """Take the three lists' order locks (services.ordering.order_lock), once, before any
+    applier reads them, in services.ordering.ORDERED_LISTS' fixed order: the importer's
+    creates append after each list's max, so they serialize with the reorder routes like
+    every other append (plan decision 16). Held until the import's commit or rollback — dry
+    runs included, whose reads then match."""
+    for model in ORDERED_LISTS:
+        await db.execute(order_lock(model))
 
 
 async def apply_reference_data(
@@ -127,6 +141,39 @@ async def apply_reference_data(
     return by_name
 
 
+class _Trade(NamedTuple):
+    """What makes two import rows the same trade (2026-09-23 reorder spec §3.4, amended):
+    every column a sheet row writes, the account by id. Not the sheet key — that is only
+    where the row sits in the sheet, and rows shift."""
+
+    security_id: int
+    portfolio_account_id: int
+    type: str
+    txn_date: date | None
+    shares: Decimal
+    price: Decimal
+    fees: Decimal | None
+    split_factor: Decimal | None
+
+    @classmethod
+    def of(cls, row: PositionTransaction) -> "_Trade":
+        return cls(
+            row.security_id,
+            row.portfolio_account_id,
+            row.type,
+            row.txn_date,
+            row.shares,
+            row.price,
+            row.fees,
+            row.split_factor,
+        )
+
+    @property
+    def identity(self) -> tuple[int, int, str]:
+        """Security, account and type: a sheet EDIT of a trade keeps them."""
+        return self.security_id, self.portfolio_account_id, self.type
+
+
 async def apply_positions(
     db: AsyncSession,
     parsed: ParsedPositions,
@@ -162,14 +209,20 @@ async def apply_positions(
             )
     await db.flush()
 
-    existing = {
-        t.sort_index: t
-        for t in (
+    # Existing importer-owned rows in REPLAY order: of two identical trades, the one the
+    # user put earlier is matched first. UI rows are invisible here throughout (Plan 4).
+    imported = list(
+        (
             await db.execute(
-                select(PositionTransaction).where(PositionTransaction.source == "import")
+                select(PositionTransaction)
+                .where(PositionTransaction.source == "import")
+                .order_by(PositionTransaction.sort_index, PositionTransaction.id)
             )
         ).scalars()
-    }
+    )
+    # New sheet rows land at the END of the ledger in sheet order, exactly where a UI row
+    # lands; the user drags them into place. Existing rows never move.
+    next_index = (await db.execute(next_sort_index())).scalar_one()
     # One get-or-create per DISTINCT sheet label, not per row: a re-import of ~200 position
     # rows touches a handful of platforms. New labels land owned by the primary person;
     # a label the user re-tagged in Settings keeps its owner (resolve_portfolio_account).
@@ -177,15 +230,15 @@ async def apply_positions(
         label: await resolve_portfolio_account(db, label)
         for label in sorted({txn.account for txn in parsed.transactions})
     }
-    incoming_indexes: set[int] = set()
+    incoming: list[tuple[ParsedTransaction, dict, _Trade]] = []
     for txn in parsed.transactions:
-        incoming_indexes.add(txn.sort_index)
+        account = accounts[txn.account]
         fields = {
             "security_id": lookup[txn.name].id,
             # The relationship, not the id: _diff_update's sample prints the row's
             # __repr__ (the label), and assigning it keeps the loaded attribute in step
             # with the FK it writes.
-            "portfolio_account": accounts[txn.account],
+            "portfolio_account": account,
             "type": txn.type,
             "txn_date": txn.txn_date,
             "shares": txn.shares,
@@ -193,31 +246,110 @@ async def apply_positions(
             "fees": txn.fees,
             "split_factor": txn.split_factor,
         }
-        row = existing.get(txn.sort_index)
+        trade = _Trade(
+            fields["security_id"],
+            account.id,
+            txn.type,
+            txn.txn_date,
+            txn.shares,
+            txn.price,
+            txn.fees,
+            txn.split_factor,
+        )
+        incoming.append((txn, fields, trade))
+
+    # Which existing row IS each sheet row (2026-09-23 reorder spec §3.4, amended)? Not
+    # simply the one holding its key: the key is the sheet row x 10 (the parser still calls
+    # it `sort_index`), and a row inserted or deleted mid-sheet shifts every key below it.
+    # Matched by key alone, one trade's fields would be poured into another trade's row — a
+    # row that keeps the replay position the user gave the OLD trade.
+    # 1. Content: an identical trade is the same row, wherever the sheet now has it.
+    by_trade: dict[_Trade, list[PositionTransaction]] = {}
+    for row in imported:  # replay order, so each list's first row is the earliest replayed
+        by_trade.setdefault(_Trade.of(row), []).append(row)
+    matched: dict[int, PositionTransaction] = {}  # sheet key -> the row it is
+    #    1a. Over EVERY sheet row first: the identical trade still holding its own key. Were
+    #        the rows taken in sheet order instead, an earlier row made identical to a later
+    #        one (a typo fixed) would claim the later row while it sits unchanged at its own
+    #        key — the fixed row deleted, its position lost, a copy appended at the end.
+    for txn, _fields, trade in incoming:
+        candidates = by_trade.get(trade, [])
+        row = next((c for c in candidates if c.import_key == txn.sort_index), None)
+        if row is not None:
+            candidates.remove(row)
+            matched[txn.sort_index] = row
+    #    1b. Then, for the rows still unmatched, an identical trade at another key — the
+    #        sheet moved it — the earliest in replay order first.
+    for txn, _fields, trade in incoming:
+        candidates = by_trade.get(trade)
+        if candidates and txn.sort_index not in matched:
+            matched[txn.sort_index] = candidates.pop(0)
+    # 2. The same key AND the same security, account and type: a sheet edit of that trade,
+    #    made in place — the row keeps its id and its replay position.
+    taken = {row.id for row in matched.values()}
+    by_key = {
+        row.import_key: row
+        for row in imported
+        if row.id not in taken and row.import_key is not None
+    }
+    edited: set[int] = set()
+    for txn, _fields, trade in incoming:
+        row = by_key.get(txn.sort_index)
+        if row is not None and txn.sort_index not in matched:
+            if _Trade.of(row).identity == trade.identity:
+                matched[txn.sort_index] = row
+                edited.add(txn.sort_index)
+    # 3. Every other existing import row has left the sheet. Delete those, and clear the key
+    #    of every kept row whose key moves, BEFORE any key is written: a key can pass from a
+    #    deleted row to a created one, or between two kept rows, and the partial unique index
+    #    must never see two rows holding one key mid-flush.
+    old_keys = {row.id: row.import_key for row in imported}
+    kept_ids = {row.id for row in matched.values()}
+    gone = [row for row in imported if row.id not in kept_ids]
+    for row in gone:
+        await db.delete(row)
+    for key, row in matched.items():
+        if row.import_key != key:
+            row.import_key = None
+    await db.flush()
+    # 4. In sheet order: keep (re-keyed where the sheet moved it), edit in place, or create.
+    for txn, fields, _trade in incoming:
+        key = txn.sort_index
+        row = matched.get(key)
         if row is None:
-            db.add(PositionTransaction(sort_index=txn.sort_index, source="import", **fields))
+            db.add(
+                PositionTransaction(
+                    import_key=key, sort_index=next_index, source="import", **fields
+                )
+            )
+            next_index += SORT_INDEX_STEP
             txn_counts.creates += 1
             report.add_sample(
-                f"position_transactions[{txn.sort_index}]: {txn.type} "
-                f"{txn.shares} {txn.name} @ {txn.price}"
+                f"position_transactions[{key}]: {txn.type} {txn.shares} {txn.name} @ {txn.price}"
             )
+        elif key in edited:
+            _diff_update(row, fields, txn_counts, report, f"position_transactions[{key}]")
+        elif old_keys[row.id] == key:
+            txn_counts.skips += 1
         else:
-            _diff_update(
-                row,
-                fields,
-                txn_counts,
-                report,
-                f"position_transactions[{txn.sort_index}]",
+            # The same trade in another sheet row: a write (its key), so an update.
+            row.import_key = key
+            txn_counts.updates += 1
+            was = old_keys[row.id]
+            report.add_sample(
+                f"position_transactions[{key}]: kept (was {was})"
+                if was is not None
+                else f"position_transactions[{key}]: kept (had no sheet key)"
             )
-    # Sync: importer-owned rows (source='import') whose sheet row disappeared are deleted.
-    # UI-created rows (source='ui') are invisible to the sync at ANY sort_index (Plan 4
-    # contract, superseding Plan 2's sort_index-0 rule) — so a sheet row may land on a UI
-    # row's sort_index; both survive and cost-basis folding tie-breaks the pair on id.
-    for sort_index, row in existing.items():
-        if sort_index not in incoming_indexes:
-            await db.delete(row)
-            txn_counts.deletes += 1
-            report.add_sample(f"position_transactions[{sort_index}]: deleted (row left sheet)")
+    for row in gone:
+        txn_counts.deletes += 1
+        key = old_keys[row.id]
+        # A key-less row is named by its id: it has no sheet key to print.
+        report.add_sample(
+            f"position_transactions[id {row.id}]: deleted (no sheet key)"
+            if key is None
+            else f"position_transactions[{key}]: deleted (row left sheet)"
+        )
 
 
 # The five Net Worth source-bucket columns whose sums ALSO appear as their own sheet
@@ -245,6 +377,10 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
     balance_counts = report.counts("account_balances")
 
     existing_accounts = {a.slug: a for a in (await db.execute(select(Account))).scalars()}
+    # The importer no longer owns order (2026-09-23 drag-to-reorder spec §3.4): sort_order
+    # is set at CREATE only, appended after the current last account in sheet order, and a
+    # re-import never moves an existing row. An empty database gets the sheet's order.
+    next_order = max((a.sort_order for a in existing_accounts.values()), default=-1) + 1
     accounts_by_name: dict[str, Account] = {}
     seen_slugs: set[str] = set()
     created_component_slugs: list[str] = []
@@ -264,11 +400,12 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
             continue
         seen_slugs.add(slug)
         account = existing_accounts.get(slug)
-        fields = {"name": column.name, "group": column.group, "sort_order": column.sort_order}
+        fields = {"name": column.name, "group": column.group}
         if account is None:
             is_component = slug in COMPONENT_SLUGS_AT_CREATE
             # is_active default True; both flags are user-owned after creation
-            account = Account(slug=slug, is_component=is_component, **fields)
+            account = Account(slug=slug, is_component=is_component, sort_order=next_order, **fields)
+            next_order += 1
             db.add(account)
             account_counts.creates += 1
             if is_component:
@@ -403,6 +540,8 @@ async def apply_spending(db: AsyncSession, parsed: ParsedSpending, report: Sheet
     existing_categories = {
         c.slug: c for c in (await db.execute(select(SpendingCategory))).scalars()
     }
+    # Same order rule as the accounts (spec §3.4): set at create only, appended in sheet order.
+    next_order = max((c.sort_order for c in existing_categories.values()), default=-1) + 1
     categories_by_name: dict[str, SpendingCategory] = {}
     seen_slugs: set[str] = set()
     for column in parsed.categories:
@@ -421,9 +560,10 @@ async def apply_spending(db: AsyncSession, parsed: ParsedSpending, report: Sheet
             continue
         seen_slugs.add(slug)
         category = existing_categories.get(slug)
-        fields = {"name": column.name, "sort_order": column.sort_order}
+        fields = {"name": column.name}
         if category is None:
-            category = SpendingCategory(slug=slug, **fields)
+            category = SpendingCategory(slug=slug, sort_order=next_order, **fields)
+            next_order += 1
             db.add(category)
             category_counts.creates += 1
             report.add_sample(f"spending_categories[{slug}]: created")

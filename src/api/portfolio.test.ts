@@ -7,6 +7,7 @@ import {
   fetchRealized,
   fetchTransactions,
   patchPortfolioAccount,
+  reorderTransactions,
 } from './portfolio'
 
 // Only the transport is stubbed — the query string this module builds IS the test
@@ -97,4 +98,41 @@ it('patches ONLY person_id, and sends an explicit null for joint', async () => {
   vi.clearAllMocks()
   await patchPortfolioAccount(4, { person_id: 2 })
   expect(init()?.body).toBe('{"person_id":2}')
+})
+
+// The replay-order PUT (2026-09-23 spec §3.2, §3.6) is judged against exactly the rows
+// fetchTransactions(owner) returned, so it carries the SAME owner query — built by the same
+// helper, household sending none at all.
+it('reorderTransactions PUTs the visible ids under the scope they were fetched in', async () => {
+  await reorderTransactions([3, 1, 2], null)
+  expect(path()).toBe('/portfolio/transactions/order')
+  expect(init()).toEqual({ method: 'PUT', body: '{"ids":[3,1,2]}' })
+  vi.clearAllMocks()
+  await reorderTransactions([5, 4], 7)
+  expect(path()).toBe('/portfolio/transactions/order?owner=7')
+  vi.clearAllMocks()
+  await reorderTransactions([9], 'joint')
+  expect(path()).toBe('/portfolio/transactions/order?owner=joint')
+})
+
+it('reorderTransactions hands back the server answer untouched', async () => {
+  const answer = {
+    transactions: [],
+    changed_positions: [
+      {
+        security_id: 1,
+        ticker: 'VOO',
+        account: 'Mine',
+        shares_before: '6.000000',
+        shares_after: '6.000000',
+        cost_basis_before: '300.00',
+        cost_basis_after: '500.00',
+        realized_gl_before: '120.00',
+        realized_gl_after: '320.00',
+        warnings_added: ['txn 7: sell with no held shares'],
+      },
+    ],
+  }
+  vi.mocked(api).mockResolvedValue(answer)
+  expect(await reorderTransactions([7, 6], null)).toEqual(answer)
 })

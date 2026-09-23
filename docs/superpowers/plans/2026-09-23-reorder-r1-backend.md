@@ -96,10 +96,18 @@ find out why before changing anything.
    sequence §3.1 reads old positions in. Of all longest increasing subsequences, the kept one is the
    lexicographically smallest by new-order index. An adjacent swap `[a, b] → [b, a]` therefore names
    `a` (the kept row is `b`, the earlier row of the new order). O(n log n).
-2. **"A parent with exactly its components"** (§8.4) means: the moved set is one account plus exactly
-   the accounts whose `parent_account_id` is that account AND whose `group` equals its group — the
-   rows the Settings table nests under it and carries in a drag (R2 applies `nestComponents` per
-   group, spec §4.2). A same-parent component sitting in another group is not carried.
+2. **"A parent with exactly its components"** (§8.4). A parent carries the accounts whose
+   `parent_account_id` is that account AND whose `group` equals its group — the rows the Settings
+   table nests under it and carries in a drag (R2 applies `nestComponents` per group, spec §4.2). A
+   same-parent component sitting in another group is not carried. (Amended 2026-09-23 at the R1
+   code review.) The label tries the natural explanation BEFORE the minimal moved set:
+   `services.ordering.moved_alone(old, new, parent, carried)`. This holds when removing the parent's
+   block from both orders leaves the same sequence, and the parent itself now sits elsewhere among
+   the rest. So a block moved up one row is "Moved account P", not "Moved account D" (the row it
+   passed, which is what the minimal set names), and up two is not "Reordered 2 accounts".
+   Components shuffled under an unmoved parent never name the parent. Of two blocks that swapped,
+   the later one in the new order is named (moved_ids' tie rule). Then the single-row rule, then the
+   count.
 3. **`check_permutation` raises `HTTPException` itself** — the `services/money.py` precedent: the
    module's sentences are the API's vocabulary. Duplicates are checked before set equality, so
    `[1, 1, 99]` is a 422, not a 409.
@@ -124,10 +132,24 @@ find out why before changing anything.
 10. **No-op answers echo the stored values** (no normalization happens on a no-op, §3.2). The
     transactions no-op answers the visible rows with `changed_positions: []`.
 11. **Importer transaction appends** start from `coalesce(max(sort_index), 0)` over the WHOLE ledger
-    (UI rows included — the UI create's own base) and step 10 per created row, in sheet order. **An
-    import row with a NULL `import_key`** (only reachable by hand-built rows) cannot match a sheet
-    row, so the sync deletes it like any row whose key left the sheet. The column is declared last
-    on the model, where the migration's `add_column` puts it too.
+    (UI rows included — the UI create's own base) and step 10 per created row, in sheet order
+    (`services.ordering.next_sort_index`, `SORT_INDEX_STEP`). **Matching** (amended 2026-09-23 at
+    the R1 code review, spec §3.4). Content comes first: an existing import row with an identical
+    trade is that sheet row, re-keyed if the sheet moved it. Candidates are compared on security,
+    account, type, date, shares, price, fees and split. The content match runs in two passes, both
+    over every sheet row (split at the R1 re-review):
+    - 1a: the identical trade still holding its own key;
+    - 1b: for the rows still unmatched, an identical trade at another key, earliest in replay order.
+
+    A single sheet-order pass let an earlier row, made identical to a later one by a typo fix,
+    claim the later row while it sat unchanged at its own key. Next, the same key with the same
+    security, account and type is an in-place edit. Every other sheet row is created and every
+    other import row is deleted. Moving keys are cleared (and gone rows deleted) in one flush before
+    any key is written. A re-key counts as an update, sampled
+    `position_transactions[<new>]: kept (was <old>)`. **An import row with a NULL `import_key`**
+    (only reachable by hand-built rows) can match by content, sampled `kept (had no sheet key)`.
+    Otherwise the sync deletes it, sampled `position_transactions[id <id>]: deleted (no sheet key)`.
+    The column is declared last on the model, where the migration's `add_column` puts it too.
 12. **Account and category importer appends** start from `max(existing sort_order) + 1` (0 on an
     empty table), in sheet order. The applier no longer reads the parser's column index; the parser
     is untouched (§3.4).
@@ -141,14 +163,31 @@ find out why before changing anything.
 15. **`reorderTransactions(ids, owner)` takes `owner` as REQUIRED** (no `= null` default, unlike
     `fetchTransactions`): the server judges the ids against the scope's rows, so a forgotten scope
     should be a type error, not a 409.
-16. **No row locking.** Two concurrent reorders of one list both pass the permutation check and the
-    later commit wins — the single-user posture `put_category_budget` documents. A change committed
-    elsewhere before the read is the 409 path.
+16. **Serialized per list; the later request wins whole.** (Amended 2026-09-23 at the R1 code
+    review, which reproduced the original "no row locking" rule merging two overlapping account
+    reorders row by row into `B0 D0 A1 C3`, with a change batch whose Undo produced an order that
+    never existed.) Every reorder route takes its list's transaction-scoped advisory lock —
+    `services.ordering.order_lock(model)`, key `reorder:<table>` — as its FIRST statement. Every
+    path that appends to the same list takes it before reading the max: the four creates without a
+    `sort_order`, an account PATCH that changes `group` (it locks before reading the row, so the
+    before-image is fresh too), the UI transaction create, and the importer (all three lists, once,
+    at the start of its apply phase). Also the Activity card's Undo (`undo_batch`, added at the R1
+    re-review): a batch touching `accounts` or `spending_categories` rows rewrites that list's
+    numbers, so it takes those lists' locks. It takes them in `ORDERED_LISTS`' fixed order (ledger,
+    accounts, spending categories — the importer's), and before the review-input table locks, so it
+    can never deadlock against an import. A reorder that arrives while another is in flight waits,
+    then reads what the first committed, so its batch logs fresh before-images. A change committed
+    elsewhere before the read is still the 409 path. Renames and other edits and deletes do not take
+    the lock: a write of theirs landing inside a reorder's few milliseconds stays the single-user
+    posture `put_category_budget` documents.
 17. **Test files.** One new test file per router (`test_reorder_accounts_api.py`,
     `…_categories_…`, `…_transactions_…`, `…_credit_cards_…`), plus `tests/ordering_helpers.py` (a
     flush listener that proves "only changed rows are written") and `tests/test_reorder_route_order.py`
     (pins "declared before the `/{id}` routes"). The route-order pin reads each module's own
     `router.routes`: FastAPI 0.141 mounts routers lazily, so `app.routes` is not a flat list.
+    Added at the code review: `tests/test_reorder_serialization.py`, which holds decision 16's
+    two-session races (`ordering_helpers.race`, `GatedSession`) and its lock-first pins
+    (`ordering_helpers.recorded_sql`).
 18. **No browser check in this lane.** R1 has no UI; §10's browser checks belong to the UI lanes and
     V. R1's live-data proof is the read-only `finance_realdata` census in Task 6, which shows the
     backfill's unique index will build on prod-shaped data.
@@ -186,8 +225,8 @@ written — the first reorder normalizes every stored value, so a batch can hold
 
 | Case | Label |
 |---|---|
-| exactly one account moved | `Moved account {name}` |
-| the moved set is one account plus exactly the components it carries (same `parent_account_id` AND same `group`) | `Moved account {parent name}` |
+| a parent moved with the components it carries (same `parent_account_id` AND same `group`), every other row keeping its order — however far it went (checked first) | `Moved account {parent name}` |
+| else exactly one account moved (an adjacent swap names one of the two) | `Moved account {name}` |
 | any other account move | `Reordered {n} accounts` |
 | exactly one category moved | `Moved category {name}` |
 | any other category move | `Reordered {n} categories` |
@@ -4638,15 +4677,193 @@ git commit -m "docs(plan): lane R1 results — gates, drill, counts"
 
 ## Results (filled in by the implementer in Task 11)
 
-- Commits on `feat/reorder-backend`: _(list)_
-- Backend: `FINANCE_TEST_DB=finance_test_reorder_r1 $PY -m pytest -q` → _(N passed, M skipped,
-  duration, exit code)_; ruff clean: _(yes/no)_
-- Migration drill on `finance_test_reorder_r1_mig`: _(upgrade/backfill/duplicate refused/
-  downgrade/upgrade/check outcome)_
-- Frontend: vitest _(files/tests)_, `tsc -b` _(exit)_, `eslint .` _(exit)_, `vite build` _(exit)_
-- Deviations from this plan, each with its reason: _(none / list)_
+Implemented 2026-09-23 on `feat/reorder-backend`, cut from `feat/reorder-base` @d5b2ba5 (its
+`backend/` and `src/` are byte-identical to the @b3a55d2 this plan was replayed on — checked with
+`git diff --stat` before Task 1).
+
+- Commits on `feat/reorder-backend` (Tasks 1–10 — Task 8 commits twice — with the plan's messages
+  verbatim):
+  - `b526f36` feat(ordering): pure reorder helpers — permutation check, slot-preserving subset,
+    renumber, minimal moved set
+  - `b8c1887` feat(ordering): OrderIn, the one body every reorder route takes
+  - `48125ff` feat(ordering): PUT /net-worth/accounts/order — one change batch, §8.4 labels, Undo
+    on the Activity card
+  - `fa79ea6` feat(ordering): PUT /spending/categories/order — logged like the accounts, §8.4 labels
+  - `5135c9a` feat(ordering): new accounts and categories append instead of taking 0; a group change
+    appends
+  - `44116e8` feat(portfolio): position_transactions.import_key + partial unique index (migration
+    f12026092301)
+  - `11ec28f` feat(importer): order belongs to the user — create-only sort_order, sheet rows matched
+    by import_key and appended
+  - `03d39cc` feat(ordering): position_changes — what a replay-order move did to each holding
+  - `f6c5e3b` feat(portfolio): PUT /portfolio/transactions/order — scoped slots, whole-ledger
+    renumber, figure report
+  - `5e8ac95` feat(credit-cards): PUT /credit-cards/order and /categories/order; a create appends,
+    a PATCH keeps sort_order
+  - `6c8cfe4` feat(api): the reorder client contract — five PUT functions and the
+    TransactionOrderOut wire types
+  - plus this results commit.
+- TDD trail: every "watch it fail" step printed the plan's expected failure (Task 0 baseline
+  `57 passed`; T1 `ModuleNotFoundError`; T2 `ModuleNotFoundError`; T3 `16 failed, 1 passed`; T4
+  `14 failed, 2 passed`; T5 `ImportError` then `3 failed, 27 passed`; T6 `1 failed, 7 passed`
+  (`TypeError`); T7 `9 failed, 44 passed`; T8 `ImportError` then `14 failed, 2 passed`; T9
+  `19 failed, 3 passed`; T10 `6 failed | 17 passed (23)`), and every pass step printed the plan's
+  count (20; 4; 17 + neighbours 73; 16 + spending 44; 51 + neighbours 117; 55 = 8 + 47; importer
+  suites 109 with `test_importer_apply.py` at 53; 25; 77 = 3 + 13 + 47 + 14; 48; 23).
+- Extra check (scratch, not committed): `moved_ids` brute-forced against its definition — the
+  complement of the lexicographically smallest (by new-order index) longest increasing subsequence
+  of old positions — on all 5 914 permutations of n = 0…7: identical.
+- Backend: `FINANCE_TEST_DB=finance_test_reorder_r1 $PY -m pytest -q` → `2118 passed, 1 skipped
+  in 2995.78s (0:49:55)`, exit 0 — every one of the 2 119 tests `--collect-only` finds, in one run,
+  with no flake to re-run (`test_assistant_evidence.py::test_total_budget_includes_context_loading`,
+  listed as failing on this box before the lane began, passed too). The run shared the machine with
+  another session's full suite and, for four minutes, this lane's full vitest. `ruff check` and
+  `ruff format --check` over `app`, `tests` and the migration: clean.
+- Contract check: the app's generated OpenAPI shows the five `PUT …/order` paths (PUT only), body
+  `OrderIn` (`ids`: 1…10 000 integers), 200 models `list[AccountOut]`, `list[CategoryOut]`,
+  `TransactionOrderOut`, `list[CreditCardOut]`, `list[RewardCategoryOut]`, the optional `owner`
+  query on the transactions route only, `sort_order` nullable with 0…1 000 000 bounds on the four
+  create bodies, and no `import_key` on `TransactionOut` — the "Contracts" section, unchanged.
+- Migration drill on `finance_test_reorder_r1_mig`: the `finance_realdata` census printed
+  `duplicate import sort_index: [] | import rows: 26`; `alembic heads` → `f12026092301 (head)`; the
+  offline SQL matched Step 6 line for line; upgrade to `f12026091203`, seed, `upgrade head` →
+  `[('import', 30, 30), ('import', 40, 40), ('ui', 50, None)]` and `duplicate import_key refused
+  by ux_position_txn_import_key`; `downgrade -1` → `import_key after downgrade: []` (index gone
+  too); `upgrade head` → the same two lines again; `alembic check` → `No new upgrade operations
+  detected.` (in Task 6 and again in Task 11).
+- Frontend: `npx vitest run` → 232 of 234 files, 3 130 of 3 132 tests, while two backend suites
+  loaded the machine; the two failures pass alone — `PaycheckPage … names the employer match under
+  the waterfall` (the known load flake; the file 84/84 alone) and `CategoriesCard … retires and
+  restores without touching the other columns` (1 247 ms against `waitFor`'s 1 000 ms default; the
+  file 13/13 alone; it imports nothing this lane changed beyond a doc comment on `CategoryCreate`).
+  The four `src/api` files: 23/23. `tsc -b` exit 0; `eslint .` exit 0; `vite build` exit 0.
+- Deviations from this plan, each with its reason — none in code or tests. Two process notes:
+  (1) the full backend suite was started right after Task 9's commit (the last backend change) and
+  ran while Task 10 (`src/` only) was done, so it tested the final backend tree; (2) `eslint .`
+  printed 26 warnings where Task 10 expected no output — all pre-existing
+  `react-refresh/only-export-components` notes in files this lane does not touch (exit 0 either
+  way; the lane's nine `src/` files lint with no output).
 - Left for the morning list: the drill database `finance_test_reorder_r1_mig` and the test database
   `finance_test_reorder_r1` (never dropped by the lane).
+
+### Code-quality review round (2026-09-23): approve after fixes
+
+Six findings. Each was fixed test-first in its own commit. The contracts are unchanged: the same
+routes, bodies, answers and label strings; only which label case applies changed (decision 2).
+
+- **Item 6 — no-op tests could pass with rows dirtied but never flushed** (`fe1d71a`).
+  - `assert not db.dirty` now follows the PUT in all five no-op tests.
+  - A scratch mutation (the accounts no-op setting each `sort_order` to itself) passed the old
+    test and fails the new one.
+  - The reward-category no-op seeds its own gap and tie, since the shared seed was already 0, 1, 2
+    and could not tell an echo from a renumber.
+- **Item 4 — a key-less import row's delete sample printed `[None]`** (`2ab0ae9`). It now reads
+  `position_transactions[id <id>]: deleted (no sheet key)`, pinned.
+- **Item 5 — duplicated reorder logic** (`afe82fd`).
+  - `apply_order(rows, ids, *, stale_detail)` does the check, the no-op and the renumber for the
+    four sort_order PUTs; the cards route loses its inverted branch.
+  - `in_list_order(model)` is shared by each of those lists' GET and PUT.
+  - `next_sort_index()` and `SORT_INDEX_STEP` replace both `coalesce(max(sort_index), 0)` copies
+    and the reorder's 10/10 spacing.
+  - All three are unit-tested; every route suite passes unchanged (311 tests).
+- **Item 1 — concurrent reorders merged row by row** (`6ed1a0b`).
+  - `services.ordering.order_lock(model)`, i.e. `pg_advisory_xact_lock(hashtext('reorder:<table>'))`,
+    is the first statement of all five reorder routes.
+  - It is also taken before every append reads its max: the four creates without a `sort_order`,
+    the group-change PATCH (which locks before it reads the row, so its before-image is fresh), and
+    the UI transaction create.
+  - The importer takes all three of its lists' locks once, at the start of its apply phase
+    (`apply.lock_ordered_lists`, called from `service.run_import`).
+  - Since the re-review, `undo_batch` also takes the order locks of the lists its batch touches
+    (see the next section).
+  - Two-session races (`tests.ordering_helpers.race`) park the first request at COMMIT and open the
+    gate once the second has finished or is seen waiting on an advisory lock in `pg_locks`. They are
+    deterministic both ways.
+  - Red before the fix:
+    - accounts `B0 D0 A1 C3`, the reviewer's case;
+    - ledger `t2 10, t4 10`;
+    - a new card on 1 beside Y.
+  - Green after:
+    - the later request wins whole;
+    - its batch's before-images are fresh, and its Undo lands exactly on the first request's order;
+    - a create racing a reorder appends after it.
+  - Recorded-SQL pins prove the lock comes first in every route, every append path and the importer.
+  - Decision 16 amended.
+- **Item 3 — labels named the minimal set before the natural explanation** (`ecc3563`).
+  - `moved_alone(old, new, head, carried)` holds when removing the block leaves the rest identical
+    AND the head itself moved among the rest.
+  - A parent and its component moved up 1, 2 and 4 rows is "Moved account P". Before the fix, up 1
+    read "Moved account D" and up 2 read "Reordered 2 accounts".
+  - A component shuffled under its unmoved parent names itself, not the parent.
+  - Decision 2 and the label table amended.
+- **Item 2 — importer identity when sheet rows shift** (`4add1de`).
+  - Matching now runs content first, then same-key edits of the same security, account and type,
+    then creates and deletes.
+  - Moving keys are cleared (and gone rows deleted) in one flush before any key is written.
+  - A re-key counts as an update, sampled `kept (was <old>)`.
+  - New tests:
+    - mid-sheet insertion: every original row keeps its id, trade and position (red before:
+      `(2, 1, 1, 1)`, with the Fido sell poured into the Mystery Fund row);
+    - a same-trade edit is made in place;
+    - an identity change (security, account or type) is a delete plus an append (red before: edited
+      in place);
+    - identical trades stay stable, both still and when shifted (red before: row 1's trade
+      rewritten);
+    - a first import is unchanged;
+    - a key-less row whose trade is on the sheet is kept and keyed.
+  - Decision 11 amended.
+
+Gates after the round:
+- **The full backend suite**, the single run at `4add1de`:
+  - Claude Code's memory-pressure reaper stopped it at about 99%; the machine was critically low
+    on memory, which the notice says is not a failure of the run. It printed no summary line.
+  - Up to that point its progress held one F:
+    `test_assistant_evidence.py::test_total_budget_includes_context_loading`, the pre-existing
+    failure. It fails alone on this box too (its `is_set()` timing assertion); the first full run
+    happened to pass it.
+  - Every other test it reached passed.
+  - Per the coordinator it was not restarted: lane V runs the full suite on the merged branch.
+- `ruff check` and `ruff format --check` clean over `app`, `tests` and the migration.
+- The four `src/api` files 23/23 (no `src/` file changed this round); `tsc -b` exit 0; `eslint .`
+  exit 0 (the same 26 pre-existing warnings).
+
+### Re-review round (2026-09-23): approve once one importer bug is fixed
+
+- **The content pass could steal an identical trade** (`d15938a`).
+  - Content matching now runs in two passes, both over every sheet row: 1a the identical trade
+    still holding its own key, then 1b an identical trade at another key, earliest in replay
+    order. Steps 2–4 are unchanged.
+  - Before the fix, the reviewer's typo scenario gave 1 create, 1 update and 1 delete:
+    - the edited row was deleted, losing its replay position;
+    - the key-40 row was re-keyed into its place;
+    - a copy was appended after the sell, which then read "sell exceeds held shares".
+  - Now it is exactly one in-place edit (0, 1, 0, 3), with every id, key and position kept and a
+    clean fold.
+  - A sheet-row swap test (keys pass between two kept rows) joins the insertion and copy tests.
+- **Undo takes the order locks** (`5f60dfd`).
+  - `undo_batch` takes the order locks of the lists its batch touches (`accounts`,
+    `spending_categories`) first: in `services.ordering.ORDERED_LISTS`' fixed order (now the
+    importer's source of truth too), and before `lock_review_inputs`.
+  - Proven per list: while another session holds the order lock, the Undo times out on a 200 ms
+    `lock_timeout` having changed nothing, and succeeds once the lock is released.
+  - An Undo of a batch outside those lists (a budget row) never waits on them.
+- Gates after the re-review (no second full suite, per the coordinator; lane V runs it on the
+  merged branch): the affected files, 308 passed.
+  - Importer — 119: `test_importer_apply` (63), `test_importer_service`, `test_import_api`,
+    `test_import_trail` and `test_importer_parsers`.
+  - Changelog and Undo — 56: `test_changelog_service`, `test_changelog_routes`,
+    `test_changelog_pin`, `test_activity_api`, `test_month_review_api` and
+    `test_allocation_experience`.
+  - The four reorder route files — 64.
+  - Ordering — 69: `test_reorder_serialization` (18), `test_ordering_service` (42),
+    `test_schemas_ordering` (4) and `test_reorder_route_order` (5).
+  - `ruff check` and `ruff format --check` clean over `app`, `tests` and the migration.
+  - The reviewer's scenario script (A–F), replayed through the real `apply_positions` on
+    `finance_test_reorder_r1`:
+    - the typo fix is (0, 1, 0, 3) with a clean fold;
+    - insertion, copies and swap re-key without deletes;
+    - the same-trade edit is made in place;
+    - the identity change is a delete plus an append.
 
 ---
 

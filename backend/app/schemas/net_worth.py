@@ -33,8 +33,9 @@ class AccountOut(BaseModel):
 class AccountCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     group: str
-    # int32-safe and generous; sheet column indexes top out at 51.
-    sort_order: int = Field(default=0, ge=0, le=1_000_000)
+    # Omitted or null = append after the last account (2026-09-23 reorder spec §3.3); an
+    # explicit number is still honoured (scripts, tests). int32-safe and generous.
+    sort_order: int | None = Field(default=None, ge=0, le=1_000_000)
     is_component: bool = False
     # Both int32-bounded so a garbage id 422s instead of surfacing asyncpg's DataError
     # (BalanceEntry's rule). Omitted or null = joint / no parent; the API never guesses

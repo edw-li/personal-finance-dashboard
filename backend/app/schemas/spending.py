@@ -25,8 +25,9 @@ class CategoryOut(BaseModel):
 
 class CategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
-    # int32-safe and generous; sheet column indexes top out at 20.
-    sort_order: int = Field(default=0, ge=0, le=1_000_000)
+    # Omitted or null = append after the last category (2026-09-23 reorder spec §3.3); an
+    # explicit number is still honoured (scripts, tests). int32-safe and generous.
+    sort_order: int | None = Field(default=None, ge=0, le=1_000_000)
     kind: CategoryKind = "living"
 
 

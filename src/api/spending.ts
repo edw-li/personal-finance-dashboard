@@ -36,6 +36,19 @@ export function deleteCategory(categoryId: number): Promise<void> {
   return api<void>(`/spending/categories/${categoryId}`, { method: 'DELETE' })
 }
 
+/** Drag-to-reorder (2026-09-23 spec §3.2): `ids` is EVERY category, retired included, in its
+ *  new order. `batchId` is the change batch the Undo toast reverts — null when the order was
+ *  unchanged and nothing was logged. */
+export async function reorderCategories(
+  ids: number[],
+): Promise<{ data: CategoryOut[]; batchId: string | null }> {
+  const { data, headers } = await apiWithHeaders<CategoryOut[]>('/spending/categories/order', {
+    method: 'PUT',
+    body: JSON.stringify({ ids }),
+  })
+  return { data, batchId: headers.get('x-change-batch') }
+}
+
 export function fetchMatrix(): Promise<SpendingMatrix> {
   return api<SpendingMatrix>('/spending/matrix')
 }

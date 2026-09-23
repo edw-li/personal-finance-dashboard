@@ -37,6 +37,20 @@ export function deleteAccount(accountId: number): Promise<void> {
   return api<void>(`/net-worth/accounts/${accountId}`, { method: 'DELETE' })
 }
 
+/** Drag-to-reorder (2026-09-23 spec §3.2): `ids` is EVERY account, retired included, in its
+ *  new order. The answer is the whole list in that order; `batchId` is the change batch the
+ *  Undo toast reverts, null when the order was unchanged and nothing was logged. A 409
+ *  carries the server's "changed since this list was loaded" sentence. */
+export async function reorderAccounts(
+  ids: number[],
+): Promise<{ data: AccountOut[]; batchId: string | null }> {
+  const { data, headers } = await apiWithHeaders<AccountOut[]>('/net-worth/accounts/order', {
+    method: 'PUT',
+    body: JSON.stringify({ ids }),
+  })
+  return { data, batchId: headers.get('x-change-batch') }
+}
+
 /** The page-level ownership scope. `null` is the household view and sends NO param at all,
  *  so an unfiltered request stays byte-identical to the pre-ownership one. A person id is
  *  INCLUSIVE of joint (their accounts plus person_id-NULL accounts — matches how a couple

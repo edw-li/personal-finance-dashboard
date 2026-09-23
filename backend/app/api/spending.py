@@ -9,6 +9,7 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
 from app.models import CategoryBudget, MonthlyCashflow, MonthlySpending, SpendingCategory
+from app.schemas.ordering import OrderIn
 from app.schemas.projection import DerivedWindowOut
 from app.schemas.spending import (
     AmountEntry,
@@ -43,6 +44,14 @@ from app.services.money import (
 from app.services.month_review import load_review_book
 from app.services.month_writes import write_spending
 from app.services.net_worth_calc import get_swr_pct, investable_bases
+from app.services.ordering import (
+    STALE_CATEGORIES,
+    apply_order,
+    in_list_order,
+    moved_ids,
+    next_sort_order,
+    order_lock,
+)
 from app.services.savings import (
     LIVING,
     MonthSavings,
@@ -57,10 +66,42 @@ router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(
 
 @router.get("/categories", response_model=list[CategoryOut])
 async def list_categories(db: AsyncSession = Depends(get_db)) -> list[SpendingCategory]:
-    result = await db.execute(
-        select(SpendingCategory).order_by(SpendingCategory.sort_order, SpendingCategory.id)
+    return list((await db.execute(in_list_order(SpendingCategory))).scalars())
+
+
+@router.put("/categories/order", response_model=list[CategoryOut])
+async def reorder_categories(
+    body: OrderIn,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> list[SpendingCategory]:
+    """Drag-to-reorder (2026-09-23 spec §3.2): `ids` is EVERY category, retired included, in
+    its new order. sort_order becomes 0…n−1 and only rows whose value moves are written, as
+    ONE change batch (§8.4 labels). An unchanged order writes and logs nothing.
+
+    Serialized per list like the accounts (decision 16): the order lock comes first.
+
+    Declared before the /categories/{category_id} routes so a later PUT on that path can
+    never shadow it."""
+    await db.execute(order_lock(SpendingCategory))
+    categories = list((await db.execute(in_list_order(SpendingCategory))).scalars())
+    before = {category.id: row_image(category) for category in categories}
+    ordered, changed = apply_order(categories, body.ids, stale_detail=STALE_CATEGORIES)
+    if not changed:  # the order as stored: nothing written, nothing logged
+        return ordered
+    for category, _old, _new in changed:
+        batch.record_update(category, before[category.id])
+    moved = moved_ids([category.id for category in categories], body.ids)
+    batch.label = (
+        f"Moved category {next(c.name for c in categories if c.id == moved[0])}"
+        if len(moved) == 1
+        else f"Reordered {len(moved)} categories"
     )
-    return list(result.scalars().all())
+    # The header only when rows were logged — the allocation routes' rule; batch_header
+    # spells it the way the month DELETEs already do.
+    response.headers.update(batch_header(await batch.commit()))
+    return ordered
 
 
 @router.post("/categories", response_model=CategoryOut, status_code=201)
@@ -91,9 +132,13 @@ async def create_category(
     )
     if existing is not None:
         raise HTTPException(status_code=409, detail=f"category {slug!r} already exists")
-    category = SpendingCategory(
-        name=body.name, slug=slug, sort_order=body.sort_order, kind=body.kind
-    )
+    sort_order = body.sort_order
+    if sort_order is None:
+        # No position given: append after the last category (2026-09-23 reorder spec §3.3),
+        # under the list's lock (decision 16).
+        await db.execute(order_lock(SpendingCategory))
+        sort_order = (await db.execute(next_sort_order(SpendingCategory.sort_order))).scalar_one()
+    category = SpendingCategory(name=body.name, slug=slug, sort_order=sort_order, kind=body.kind)
     db.add(category)
     await db.flush()
     batch.record_insert(category)
