@@ -88,11 +88,11 @@ function totalLine(perCard: (number | null)[][], months: string[]): (number | nu
 
 /** Each card's PALETTE slot: its rank BY ID (2026-09-23 drag-to-reorder spec §7). The list
  *  order is the user's — it sets the series, legend and tooltip order — and a reorder must never
- *  repaint a card. `rankIds` is every card the page knows, archived ones and those outside the
- *  person scope included, so a scope that draws fewer cards repaints none either (spec §7 as
+ *  repaint a card. `rankIds` is the household's active cards, every person's included, so a scope
+ *  that draws fewer cards repaints none, and a card's drill-in wears its page colour (spec §7 as
  *  amended); without it the cards drawn rank among themselves. A drawn id the source leaves out
- *  still ranks, among the rest. When any card comes without an id (one card's own history, a
- *  fixture), every card keeps its array position. */
+ *  (an archived card's own drill-in) still ranks, among the rest. When any card comes without an
+ *  id (a fixture), every card keeps its array position. */
 export function colourSlots(
   cards: readonly LimitHistoryCard[],
   rankIds?: readonly number[],
@@ -119,7 +119,7 @@ export function creditLineChartOption(
   }: {
     includeTotal: boolean
     selected?: Record<string, boolean>
-    /** The ids to rank colours against — the page passes every card it loaded. */
+    /** The ids to rank colours against — the page passes the household's active cards. */
     rankIds?: readonly number[]
   },
 ): EChartsOption {

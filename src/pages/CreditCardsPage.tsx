@@ -192,6 +192,12 @@ export default function CreditCardsPage() {
   )
 
   const householdCards = useMemo(() => (cards ?? []).filter((c) => c.is_active), [cards])
+  // A card's credit-line colour is its rank by id among these — the household's ACTIVE cards,
+  // every person's included (2026-09-23 drag-to-reorder spec §7, as amended at lane R5's
+  // review): no reorder and no person scope repaints a card, the page chart and a card's
+  // drill-in agree, and an archived card holds no slot (ids only grow, so archived cards
+  // holding slots for ever would turn a new card grey). Archiving repaints the others once.
+  const colorRankIds = useMemo(() => householdCards.map((card) => card.id), [householdCards])
   const scopedCards = useMemo(
     () => householdCards.filter((c) => ownerMatches(c.person_id, owner)),
     [householdCards, owner],
@@ -334,12 +340,10 @@ export default function CreditCardsPage() {
         ? creditLineChartOption(lineCards, lineMonths, {
             includeTotal: lineCards.length > 1,
             selected: lineLegend,
-            // Ranked among EVERY card the page loaded — archived ones and those outside the
-            // person scope too — so a card wears one colour in every scope (spec §7, amended).
-            rankIds: (cards ?? []).map((card) => card.id),
+            rankIds: colorRankIds,
           })
         : null,
-    [lineCards, lineMonths, lineLegend, cards],
+    [lineCards, lineMonths, lineLegend, colorRankIds],
   )
 
   return (

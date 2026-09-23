@@ -1144,15 +1144,17 @@ describe('CreditCardsPage — the credit-line colours follow the card, not its p
     expect(line?.getAttribute('data-series-colors')).toBe(`${PALETTE[1]}|${PALETTE[0]}|${INK}`)
   })
 
-  // Amendment A1 (spec §7 as amended 2026-09-23): the rank counts every card the page loaded,
-  // so a person scope that draws fewer cards repaints none of them.
-  it('keeps a card in one colour across person scopes — archived cards hold their rank too', async () => {
+  // Spec §7 as amended at the lane's code review: the rank counts the household's ACTIVE cards,
+  // every person's included — so a person scope that draws fewer cards repaints none of them,
+  // and an archived card holds no slot (ids only grow: archived cards holding slots for ever
+  // would turn a new card grey with seven lines drawn).
+  it('keeps a card in one colour across person scopes, and an archived card holds no slot', async () => {
     const rhWithLine: CreditCardOut = {
       ...RH,
       current_limit: '5000.00',
       limit_events: [{ id: 24, effective_date: '2025-03-01', limit_amount: '5000.00', note: null }],
     }
-    // Venture X (id 1) is archived: it draws no line, and still takes the first rank.
+    // Venture X (id 1) is archived: it draws no line and takes no rank — SavorOne is first.
     vi.mocked(fetchCreditCards).mockResolvedValue([vx({ is_active: false }), SAVOR, rhWithLine])
     renderPage('/credit-cards?section=lines')
     await screen.findByText('Credit line history')
@@ -1160,11 +1162,11 @@ describe('CreditCardsPage — the credit-line colours follow the card, not its p
     await waitFor(() =>
       expect(line().getAttribute('data-series-names')).toBe('SavorOne|RH Gold|Total line'),
     )
-    expect(line().getAttribute('data-series-colors')).toBe(`${PALETTE[1]}|${PALETTE[2]}|${INK}`)
+    expect(line().getAttribute('data-series-colors')).toBe(`${PALETTE[0]}|${PALETTE[1]}|${INK}`)
     // Sam's scope draws RH Gold alone — in the colour the household view gave it.
     fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
     await waitFor(() => expect(line().getAttribute('data-series-names')).toBe('RH Gold'))
-    expect(line().getAttribute('data-series-colors')).toBe(PALETTE[2])
+    expect(line().getAttribute('data-series-colors')).toBe(PALETTE[1])
   })
 })
 

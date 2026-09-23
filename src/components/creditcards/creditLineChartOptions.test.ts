@@ -117,7 +117,7 @@ describe('creditLineChartOption', () => {
 
 // Drag to reorder (2026-09-23 spec §7): the card list's order is the user's, so it sets the
 // series order — and with it the legend's and the tooltip's — but never a card's colour. The
-// colour is the card's rank BY ID among every card the page knows (`rankIds`), or among the
+// colour is the card's rank BY ID among the household's active cards (`rankIds`), or among the
 // cards drawn when no rank source is handed in.
 describe('creditLineChartOption — a card keeps its colour wherever it stands', () => {
   const months = ['2024-01-01', '2024-02-01', '2024-09-01']
@@ -173,12 +173,12 @@ describe('creditLineChartOption — a card keeps its colour wherever it stands',
     ])
   })
 
-  // Amendment A1 (spec §7 as amended 2026-09-23): a person scope draws fewer cards, and ranked
-  // among those alone the joint card would change colour between Grace's view and the
-  // household's. Ranked among every card the page knows — archived ones included — it wears
-  // one colour in every scope ("one colour per money entity").
+  // Amendment A1 (spec §7 as amended 2026-09-23, and again at the lane's review): a person scope
+  // draws fewer cards, and ranked among those alone the joint card would change colour between
+  // Grace's view and the household's. Ranked among the household's active cards — every
+  // person's — it wears one colour in every scope ("one colour per money entity").
   it('ranks among rankIds: the same card wears the same colour in a one-card scope and in the household draw', () => {
-    // Seven cards known, as in the census; the joint Apple Card is id 6.
+    // Seven active cards, as in the census; the joint Apple Card is id 6.
     const known = [1, 2, 3, 4, 5, 6, 7]
     const APPLE = {
       id: 6,
