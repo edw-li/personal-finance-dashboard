@@ -6,6 +6,12 @@ import type { RangeState } from '../../charts/timeZoom'
 import type { PortfolioHistory } from '../../types/api'
 import { formatCurrencyCompact, formatDate } from '../../utils/format'
 
+/** A lede as words and a figure, so a page can set the figure in bold (PerformanceLede). */
+export interface LedeText {
+  text: string
+  amount: string | null
+}
+
 export interface BenchmarkLede {
   direction: 'ahead' | 'behind' | 'level'
   /** Dollars, ≥ 0 — the size of the gap; `direction` carries its sign. */
@@ -82,7 +88,7 @@ export function benchmarkLede(
 export function benchmarkLedeText(
   lede: BenchmarkLede,
   prefix: string | null = null,
-): { text: string; amount: string | null } {
+): LedeText {
   const against = prefix === null ? 'the same deposits in VOO' : 'the same money in VOO'
   const phrase =
     lede.direction === 'ahead'
@@ -107,7 +113,7 @@ export function benchmarkLedeText(
 export function performanceLede(
   history: PortfolioHistory,
   range: RangeState,
-): { text: string; amount: string | null } | null {
+): LedeText | null {
   const last = history.dates.length - 1
   const window = resolvedWindow(history.dates, range)
   const end = Math.min(window.endValue, last)

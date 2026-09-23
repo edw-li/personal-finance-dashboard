@@ -32,6 +32,7 @@ import {
   spendStats,
 } from '../components/overview/overviewChartOptions'
 import { performanceLede } from '../components/portfolio/benchmarkLede'
+import PerformanceLede from '../components/portfolio/PerformanceLede'
 import {
   liveFromHoldings,
   portfolioHistoryCsv,
@@ -607,15 +608,7 @@ export default function OverviewPage() {
                 // NO-BREAK space, spelled as an escape: a plain one collapses to 0px.
                 lede={
                   perfLede !== null ? (
-                    <>
-                      {perfLede.text}
-                      {perfLede.amount !== null && (
-                        <>
-                          {' '}
-                          <b>{perfLede.amount}</b>
-                        </>
-                      )}
-                    </>
+                    <PerformanceLede line={perfLede} />
                   ) : investments.busy ? (
                     '\u00a0'
                   ) : undefined

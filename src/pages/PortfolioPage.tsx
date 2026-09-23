@@ -25,6 +25,7 @@ import InfoHint from '../components/InfoHint'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
 import DividendsPanel from '../components/portfolio/DividendsPanel'
 import { performanceLede } from '../components/portfolio/benchmarkLede'
+import PerformanceLede from '../components/portfolio/PerformanceLede'
 import {
   liveFromHoldings,
   portfolioHistoryCsv,
@@ -771,19 +772,7 @@ export default function PortfolioPage() {
                 hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. Same deposits in VOO invests every inferred contribution in VOO as it lands — the fair comparison. The line above the chart compares like with like: on All, the portfolio against the same deposits in VOO; over a shorter range, against the same money in VOO — the portfolio's value when the range opens, grown at VOO's rate, plus every deposit since. S&P 500 — starting balance only invests just the first week's balance; it stays off until you pick it in the legend. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Dated buys and sells ride the line; the ticks along the bottom mark weeks with logged dividends and older ex-dividend dates of securities held then or now (per-share only — dollar amounts that old are unknowable from undated imports)."
                 ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
                 option={performanceOption}
-                lede={
-                  performanceLedeLine === null ? undefined : (
-                    <>
-                      {performanceLedeLine.text}
-                      {performanceLedeLine.amount !== null && (
-                        <>
-                          {' '}
-                          <b>{performanceLedeLine.amount}</b>
-                        </>
-                      )}
-                    </>
-                  )
-                }
+                lede={performanceLedeLine === null ? undefined : <PerformanceLede line={performanceLedeLine} />}
                 empty="No performance history yet — import your workbook in Settings to load it."
                 exportName="portfolio-performance"
                 csv={history === null ? undefined : () => portfolioHistoryCsv(history)}
