@@ -866,16 +866,19 @@ describe('portfolioHistoryOption with events (2026-09-23 spec §C8)', () => {
 })
 
 describe('portfolioHistoryCsv', () => {
-  it('lays out date rows × the four series in the legend order, verbatim strings', () => {
+  // Review round 1: a reader's spreadsheet reads these columns by position, so each series keeps
+  // the column it has always had — the starting balance fourth, the VOO leg fifth — under its
+  // honest name (2026-09-23 spec §C8 renamed them; it did not move them).
+  it('lays out date rows × the four series in their long-standing columns, verbatim strings', () => {
     expect(portfolioHistoryCsv(history())).toEqual({
       headers: [
-        'Date', 'Portfolio value', 'Cost basis', 'Same deposits in VOO',
-        'S&P 500 — starting balance only',
+        'Date', 'Portfolio value', 'Cost basis', 'S&P 500 — starting balance only',
+        'Same deposits in VOO',
       ],
       rows: [
         ['2026-07-27', '700000.00', '395000.00', '96000.00', '96000.00'],
-        ['2026-08-03', '710000.50', '399542.36', '97250.00', '97000.00'],
-        ['2026-08-10', '718422.07', '400243.74', '99001.13', '98636.70'],
+        ['2026-08-03', '710000.50', '399542.36', '97000.00', '97250.00'],
+        ['2026-08-10', '718422.07', '400243.74', '98636.70', '99001.13'],
       ],
     })
   })
@@ -888,6 +891,6 @@ describe('portfolioHistoryCsv', () => {
 
   it('empties the VOO cells on a degraded or stale-payload benchmark', () => {
     const rows = portfolioHistoryCsv(history({ benchmark: [null, null, null] })).rows
-    expect(rows.map((r) => r[3])).toEqual(['', '', ''])
+    expect(rows.map((r) => r[4])).toEqual(['', '', ''])
   })
 })

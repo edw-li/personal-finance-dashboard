@@ -657,10 +657,12 @@ export function performanceLede(
   return benchmarkLedeText(lede, prefix)
 }
 
-/** The performance chart as a table (2026-08-25 spec §2a): date rows × the series in the
- * legend's order, verbatim server strings; degraded/stale benchmark cells go empty. The live
- * ping stays out — it is a quote, not a history row. Where the chart omits the starting
- * balance (the Overview card), so does its table (2026-09-23 spec §C8). */
+/** The performance chart as a table (2026-08-25 spec §2a): date rows × the series, verbatim
+ * server strings; degraded/stale benchmark cells go empty. The live ping stays out — it is a
+ * quote, not a history row. Each series keeps the column it has always had — a reader's
+ * spreadsheet reads them by position — under its honest name (2026-09-23 spec §C8 renamed them,
+ * review round 1 kept them in place). Where the chart omits the starting balance (the Overview
+ * card), so does its table. */
 export function portfolioHistoryCsv(
   history: PortfolioHistory,
   { startingBalance = 'legend-off' }: Pick<HistoryOptionSettings, 'startingBalance'> = {},
@@ -672,15 +674,15 @@ export function portfolioHistoryCsv(
       'Date',
       VALUE_SERIES,
       COST_SERIES,
-      VOO_LEG_SERIES,
       ...(withStart ? [STARTING_BALANCE_SERIES] : []),
+      VOO_LEG_SERIES,
     ],
     rows: history.dates.map((date, i) => [
       date,
       history.market_value[i],
       history.cost_basis[i],
-      benchmark[i] ?? '',
       ...(withStart ? [history.sp500[i]] : []),
+      benchmark[i] ?? '',
     ]),
   }
 }
