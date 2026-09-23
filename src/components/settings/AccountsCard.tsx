@@ -1,6 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
-import { ApiError, describeError } from '../../api/client'
-import { createAccount, deleteAccount, fetchAccounts, updateAccount } from '../../api/netWorth'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { ApiError, describeError, errorDetail } from '../../api/client'
+import { undoBatch } from '../../api/lifecycle'
+import {
+  createAccount,
+  deleteAccount,
+  fetchAccounts,
+  reorderAccounts,
+  updateAccount,
+} from '../../api/netWorth'
 import { fetchPortfolioAccounts, patchPortfolioAccount } from '../../api/portfolio'
 import { GROUP_LABELS, GROUP_ORDER } from '../../charts/theme'
 import type {
@@ -9,7 +16,12 @@ import type {
   PersonOut,
   PortfolioAccountOut,
 } from '../../types/api'
+import { nestComponents } from '../../utils/accounts'
 import InfoHint from '../InfoHint'
+import DragHandle from '../reorder/DragHandle'
+import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
+import type { ReorderItem } from '../reorder/reorderMath'
+import { useReorder } from '../reorder/useReorder'
 import { useToast } from '../ToastProvider'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
@@ -42,8 +54,78 @@ const COMPONENT_NEEDS_PARENT =
 const PARENT_NEEDS_COMPONENT =
   'parent_account_id needs is_component — a linked account must be a component'
 
+// grip · Account · Owner · Roll-up · Status · actions — a group heading spans all six.
+const ROSTER_COLUMNS = 6
+
 function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
+}
+
+// errorDetail's reason with any closing stop folded away: the two sentences below end on their
+// own (describeLoadFailures' rule in client.ts).
+function reason(err: unknown): string {
+  return errorDetail(err).replace(/[.\s]+$/, '')
+}
+
+/** A drop the server did not take (2026-09-23 reorder spec §8.1), said once the rows have
+ *  already snapped back. A 409 never reaches this: its own sentence is shown verbatim. */
+function orderSaveFailed(err: unknown): string {
+  return `Couldn't save the new order — ${reason(err)}. The list is back to how it was.`
+}
+
+/** A refused Undo is the server's own sentence ("Later changes touched these rows — undo those
+ *  first", spec §9); a request that got no answer at all says what failed and why. */
+function undoFailed(err: unknown): string {
+  return err instanceof ApiError && err.status >= 400 && err.status < 500
+    ? err.message
+    : `Couldn't undo the move — ${reason(err)}.`
+}
+
+/** One drag unit of the roster (2026-09-23 reorder spec §4.2): a top-level account and the
+ *  components nested under it, which travel with it and move only among themselves. */
+interface RosterUnit {
+  account: AccountOut
+  components: AccountOut[]
+  /** nestComponents could not place it — its parent is itself nested (a chain) or the link
+   *  loops back (a cycle). Kept at the END of its group with a grip that has nowhere to go:
+   *  the roster is where that link gets fixed, and the order PUT must name every account. */
+  unplaced: boolean
+}
+
+interface RosterGroup {
+  group: AccountGroup
+  units: RosterUnit[]
+}
+
+/**
+ * The roster the way the Monthly update walks it (spec §4.2): one block per non-empty group in
+ * GROUP_ORDER, API order inside it, components nested under their parent by nestComponents run
+ * PER GROUP — so a component whose parent sits in another group stays top-level in its own
+ * (nestComponents' contract for an absent parent), and one whose parent is retired stays
+ * nested, because a retired parent is still listed here.
+ */
+function rosterGroups(accounts: AccountOut[]): RosterGroup[] {
+  return GROUP_ORDER.flatMap((group) => {
+    const members = accounts.filter((account) => account.group === group)
+    if (members.length === 0) return []
+    const present = new Set(members.map((account) => account.id))
+    const units: RosterUnit[] = []
+    for (const account of nestComponents(members)) {
+      // nestComponents emits each parent followed by its nested components, so a nested row
+      // always belongs to the unit opened just before it.
+      const nested = account.parent_account_id !== null && present.has(account.parent_account_id)
+      const carrier = units.at(-1)
+      if (nested && carrier !== undefined) carrier.components.push(account)
+      else units.push({ account, components: [], unplaced: false })
+    }
+    const placed = new Set(
+      units.flatMap((unit) => [unit.account.id, ...unit.components.map((c) => c.id)]),
+    )
+    for (const account of members) {
+      if (!placed.has(account.id)) units.push({ account, components: [], unplaced: true })
+    }
+    return [{ group, units }]
+  })
 }
 
 /**
@@ -54,6 +136,10 @@ function message(err: unknown, fallback: string): string {
  *
  * `people` arrives as a prop from the page rather than from a second /household fetch, so
  * a partner added in the Household card is selectable here without a reload.
+ *
+ * The roster is grouped and its order is the table's (2026-09-23 reorder spec §4.2): a row is
+ * dragged by its grip within its group, a parent brings its components, and the drop saves the
+ * WHOLE order in one PUT with the change log's Undo behind it.
  */
 export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [accounts, setAccounts] = useState<AccountOut[]>([])
@@ -66,6 +152,10 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [busy, setBusy] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState<AccountFormState>(EMPTY_ACCOUNT)
+  // A drop renders its order AT ONCE; the order is retired the moment the server's rows land —
+  // CategoriesPanel's adjust-during-render recipe, not an effect (spec §4.2).
+  const [pendingOrder, setPendingOrder] = useState<AccountOut[] | null>(null)
+  const [lastAccounts, setLastAccounts] = useState(accounts)
   const seqRef = useRef(0)
   // The portfolio labels get their OWN fetch, error slot, busy flag and seq guard —
   // deliberately not folded into the roster's above. Two tables from two routers, and one
@@ -79,6 +169,11 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [portfolioBusy, setPortfolioBusy] = useState(false)
   const portfolioSeqRef = useRef(0)
   const toast = useToast()
+
+  if (lastAccounts !== accounts) {
+    setLastAccounts(accounts)
+    setPendingOrder(null)
+  }
 
   const load = (initial = false) => {
     const seq = ++seqRef.current
@@ -278,6 +373,159 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   // primary person, and this table is the only place that can be undone.
   const primaryName = people.find((p) => p.is_primary)?.name ?? 'the primary person'
 
+  // What the table draws: the dropped order while its save is in flight, else the server's.
+  const shown = pendingOrder ?? accounts
+  const groups = rosterGroups(shown)
+  // The hook's items, in DISPLAY order (reorder spec §2.2): a top-level account ranges over its
+  // group and carries its components; a component ranges over its siblings only.
+  const items: ReorderItem<number>[] = groups.flatMap(({ group, units }) =>
+    units.flatMap(({ account, components, unplaced }) => [
+      {
+        id: account.id,
+        range: unplaced ? `unplaced:${account.id}` : group,
+        carries: components.map((component) => component.id),
+      },
+      ...components.map((component) => ({ id: component.id, range: `parent:${account.id}` })),
+    ]),
+  )
+
+  // The reorder route logs its batch (spec §3.2), so Undo is the change log's: the server
+  // writes every renumbered row back, then the roster is read again.
+  const undoOrder = (batchId: string) => {
+    setBusy(true)
+    undoBatch(batchId)
+      .then(() => {
+        load()
+        toast.info('Order restored')
+      })
+      .catch((err: unknown) => toast.error(undoFailed(err)))
+      .finally(() => setBusy(false))
+  }
+
+  // One PUT with EVERY account — active and retired, every group — in the new display order
+  // (spec §4.2). Its outcome is about a row far down the table, so it rides the toast layer,
+  // never the form banner (remove's rule above).
+  const saveOrder = (ids: number[], moved: number) => {
+    const name = byId.get(moved)?.name ?? 'the account'
+    // A reload already on the wire describes the order BEFORE this drop; its answer must not
+    // land on top of the one this save brings back (load's seq guard drops it).
+    seqRef.current += 1
+    setBusy(true)
+    reorderAccounts(ids)
+      .then(({ data, batchId }) => {
+        setAccounts(data)
+        reorder.markSaved(moved)
+        toast.success(
+          `Moved ${name}`,
+          // No batch = nothing was logged, so there is nothing to undo (the wizard's contract).
+          batchId === null
+            ? undefined
+            : { action: { label: 'Undo', onAction: () => undoOrder(batchId) } },
+        )
+      })
+      .catch((err: unknown) => {
+        setPendingOrder(null) // back to the last order the server confirmed
+        if (err instanceof ApiError && err.status === 409) {
+          // The roster changed under this one (another tab): the server's sentence, then the
+          // current rows (spec §8.3).
+          toast.error(err.message)
+          load()
+          return
+        }
+        toast.error(orderSaveFailed(err))
+      })
+      .finally(() => setBusy(false))
+  }
+
+  const reorder = useReorder({
+    items,
+    labelOf: (id) => byId.get(id)?.name ?? String(id),
+    // "…Position 2 of 3 in Pre-tax." / "…in Fidelity Traditional 401(k)'s components." (§8.2)
+    rangeLabelOf: (range) => {
+      if (range.startsWith('parent:')) {
+        const parent = byId.get(Number(range.slice('parent:'.length)))
+        return parent === undefined ? undefined : `${parent.name}'s components`
+      }
+      const group = GROUP_ORDER.find((candidate) => candidate === range)
+      return group === undefined ? undefined : GROUP_LABELS[group]
+    },
+    // Every request of the roster parks the grips: a drop cannot race a save (spec §9).
+    disabled: busy,
+    onCommit: (next, moved) => {
+      // `next` is the whole roster flattened group by group, each parent followed by its
+      // components — exactly the order the PUT sends.
+      const rowsById = new Map(shown.map((account) => [account.id, account]))
+      setPendingOrder(
+        next.flatMap((id) => {
+          const account = rowsById.get(id)
+          return account === undefined ? [] : [account]
+        }),
+      )
+      saveOrder(next, moved)
+    },
+  })
+
+  /** One roster row. `nested` rows are components drawn under their parent: panels.css's
+   *  `.component-row` register, with the indent moved to the Account cell (settings.css). */
+  const rosterRow = (account: AccountOut, nested: boolean) => {
+    const classes = [nested ? 'component-row' : null, account.id === editingId ? 'is-editing' : null]
+      .filter((name) => name !== null)
+      .join(' ')
+    return (
+      <tr
+        key={account.id}
+        className={classes === '' ? undefined : classes}
+        {...reorder.itemProps(account.id)}
+      >
+        <td className="reorder-grip-cell">
+          <DragHandle name={account.name} {...reorder.handleProps(account.id)} />
+        </td>
+        <td className="accounts-name-cell">
+          {account.name}
+          {account.is_component && <span className="badge">Component</span>}
+        </td>
+        {/* NULL is JOINT, never "unknown": the migration backfilled every pre-existing
+            account to the primary person. */}
+        <td>
+          {account.person_id === null ? 'Joint' : (ownerName.get(account.person_id) ?? '—')}
+        </td>
+        <td>{rollUpNote(account)}</td>
+        <td>
+          <span className="badge">{account.is_active ? 'Active' : 'Retired'}</span>
+        </td>
+        <td className="row-actions">
+          <button
+            type="button"
+            className="button"
+            aria-label={`Edit ${account.name}`}
+            disabled={busy}
+            onClick={() => startEdit(account)}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className="button"
+            aria-label={account.is_active ? `Retire ${account.name}` : `Restore ${account.name}`}
+            disabled={busy}
+            onClick={() => toggleActive(account)}
+          >
+            {account.is_active ? 'Retire' : 'Restore'}
+          </button>
+          <button
+            type="button"
+            className="button"
+            aria-label={`Delete ${account.name}`}
+            disabled={busy}
+            onClick={() => remove(account)}
+          >
+            Delete
+          </button>
+        </td>
+      </tr>
+    )
+  }
+
   return (
     <section className="card span-12" id="accounts">
       <h2 className="eyebrow">
@@ -375,82 +623,49 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
           {accounts.length === 0 ? (
             <p className="empty-note">No accounts yet — add the first one above.</p>
           ) : (
-            <div className="settings-scroll">
-              {/* Named because the card now carries TWO tables (screen readers and the
-                  role queries both need to tell them apart). */}
-              <table className="data-table accounts-table" aria-label="Net-worth accounts">
-                <thead>
-                  <tr>
-                    <th>Account</th>
-                    <th>Group</th>
-                    <th>Owner</th>
-                    <th className="num">Sort</th>
-                    <th>Roll-up</th>
-                    <th>Status</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {accounts.map((account) => (
-                    <tr
-                      key={account.id}
-                      className={account.id === editingId ? 'is-editing' : undefined}
-                    >
-                      <td>
-                        {account.name}
-                        {account.is_component && <span className="badge">Component</span>}
-                      </td>
-                      <td>{GROUP_LABELS[account.group]}</td>
-                      {/* NULL is JOINT, never "unknown": the migration backfilled every
-                          pre-existing account to the primary person. */}
-                      <td>
-                        {account.person_id === null
-                          ? 'Joint'
-                          : (ownerName.get(account.person_id) ?? '—')}
-                      </td>
-                      <td className="num">{account.sort_order}</td>
-                      <td>{rollUpNote(account)}</td>
-                      <td>
-                        <span className="badge">{account.is_active ? 'Active' : 'Retired'}</span>
-                      </td>
-                      <td className="row-actions">
-                        <button
-                          type="button"
-                          className="button"
-                          aria-label={`Edit ${account.name}`}
-                          disabled={busy}
-                          onClick={() => startEdit(account)}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="button"
-                          aria-label={
-                            account.is_active
-                              ? `Retire ${account.name}`
-                              : `Restore ${account.name}`
-                          }
-                          disabled={busy}
-                          onClick={() => toggleActive(account)}
-                        >
-                          {account.is_active ? 'Retire' : 'Restore'}
-                        </button>
-                        <button
-                          type="button"
-                          className="button"
-                          aria-label={`Delete ${account.name}`}
-                          disabled={busy}
-                          onClick={() => remove(account)}
-                        >
-                          Delete
-                        </button>
-                      </td>
+            <>
+              <div className="settings-scroll">
+                {/* Named because the card now carries TWO tables (screen readers and the
+                    role queries both need to tell them apart). Grouped (reorder spec §4.2):
+                    the heading row carries what the Group column used to say, and
+                    `.reorder-table` gives each cell its own hairline so a moving row takes
+                    its border with it (reorder.css). */}
+                <table
+                  className="data-table accounts-table reorder-table"
+                  aria-label="Net-worth accounts"
+                >
+                  <thead>
+                    <tr>
+                      <th className="reorder-grip-cell" aria-hidden="true" />
+                      <th>Account</th>
+                      <th>Owner</th>
+                      <th>Roll-up</th>
+                      <th>Status</th>
+                      <th />
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {groups.map(({ group, units }) => (
+                      <Fragment key={group}>
+                        <tr className="accounts-group-row">
+                          <th scope="colgroup" colSpan={ROSTER_COLUMNS}>
+                            {GROUP_LABELS[group]}
+                          </th>
+                        </tr>
+                        {units.flatMap(({ account, components }) => [
+                          rosterRow(account, false),
+                          ...components.map((component) => rosterRow(component, true)),
+                        ])}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* Once per card and OUTSIDE the table (a <span> is not a table child): the
+                  grips' aria-describedby target and the lift/move/drop announcements. */}
+              <ReorderInstructions id={reorder.instructionsId} />
+              <ReorderLiveRegion text={reorder.announcement} />
+            </>
           )}
         </>
       )}
