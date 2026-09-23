@@ -199,17 +199,20 @@ export function offScaleMarkPoint(
 // ── Month labels that never collide (2026-09-23 spec §C4) ──────────────────────────────────
 // A builder cannot know pixels, so a MONTH axis carries a branded formatter and EChart fits it
 // to the measured card (fitMonthAxes) before every paint, on resize and on every zoom. The
-// thresholds are the chart font's own measurements (12px Segoe UI, the widest of each form):
-// "Sep 2026*" 53.9px · "May '26" 41.7px beside a 17.9px "Jun" · "2026" 25.9px · "May" 22.7px,
-// each plus a ~4px gap between neighbouring labels.
+// thresholds are the chart font's own measurements (12px Segoe UI): the widest neighbouring
+// pair of each form — "Aug 2026" 50.7px beside "Sep 2026*" 53.9px; "Nov '25" 40.8px beside
+// "Dec" 20.2px; "2025" 25.9px beside "Nov" 21.8px — half their sum, plus the 2px a side of
+// textMargin month axes carry. (echarts 6 pads every axis label 3px a side before hideOverlap
+// tests it — with that default, twelve short months drop a label on the Overview at 1280.)
+const MONTH_TEXT_MARGIN = [0, 2]
 const MONTH_LABEL = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$/
 
 /** "Oct 2025" on every month. */
-export const MONTH_LABEL_FULL_PX = 56
+export const MONTH_LABEL_FULL_PX = 57
 /** "Oct" — the first visible label and each January as "Oct '25" / "Jan '26". */
-export const MONTH_LABEL_SHORT_PX = 34
+export const MONTH_LABEL_SHORT_PX = 35
 /** "Oct" — the first visible label and each January replaced by the year itself, "2026". */
-export const MONTH_LABEL_COMPACT_PX = 27
+export const MONTH_LABEL_COMPACT_PX = 28
 /** The partial-period marker a month label carries (spec §C5); the tooltip says the words. */
 export const PARTIAL_MARK = '*'
 
@@ -272,6 +275,7 @@ export function monthAxis(
       ? {
           formatter: monthFormatter('full', { marked: marked ?? NO_MARKS, rotated: rotate !== undefined }),
           hideOverlap: true,
+          textMargin: [...MONTH_TEXT_MARGIN],
         }
       : {}),
     ...(labels.length <= 12 ? { interval: 0 } : {}),

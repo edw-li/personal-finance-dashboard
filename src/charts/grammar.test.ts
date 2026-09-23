@@ -184,19 +184,20 @@ describe('robust axes', () => {
 })
 
 // 2026-09-23 spec §C4: month labels never collide. Thresholds come from the chart font's own
-// measurements (12px Segoe UI): "Sep 2026*" 53.9px, "May '26" 41.7px, "2026" 25.9px, "May" 22.7px.
+// measurements (12px Segoe UI): "Sep 2026*" 53.9px, "May '26" 41.7px, "2026" 25.9px, "May" 22.7px —
+// plus the 2px a side of textMargin every month axis carries (echarts' own default is 3).
 describe('month labels', () => {
   const YEAR = ['Oct 2025', 'Nov 2025', 'Dec 2025', 'Jan 2026', 'Feb 2026', 'Mar 2026', 'Apr 2026', 'May 2026', 'Jun 2026', 'Jul 2026', 'Aug 2026', 'Sep 2026']
   type Axis = { data: string[]; axisLabel: { formatter: (value: string, index: number) => string; interval?: number | 'auto'; hideOverlap?: boolean; rotate?: number } }
   const labelsOf = (axis: Axis) => axis.data.map((label, i) => axis.axisLabel.formatter(label, i))
 
   it('picks the form from the width each month gets', () => {
-    expect(monthLabelMode(56)).toBe('full')
-    expect(monthLabelMode(55.9)).toBe('short')
-    expect(monthLabelMode(34)).toBe('short')
-    expect(monthLabelMode(33.9)).toBe('compact')
-    expect(monthLabelMode(27)).toBe('compact')
-    expect(monthLabelMode(26.9)).toBe('sparse')
+    expect(monthLabelMode(57)).toBe('full')
+    expect(monthLabelMode(56.9)).toBe('short')
+    expect(monthLabelMode(35)).toBe('short')
+    expect(monthLabelMode(34.9)).toBe('compact')
+    expect(monthLabelMode(28)).toBe('compact')
+    expect(monthLabelMode(27.9)).toBe('sparse')
   })
 
   it('monthTick: full keeps the month; short years the first label and January; compact shows the year there instead; sparse years every label', () => {
@@ -218,6 +219,9 @@ describe('month labels', () => {
   it('monthAxis gives month labels the grammar formatter and the overlap guard; other labels keep the old axis', () => {
     const axis = monthAxis(YEAR, { gap: true }) as unknown as Axis
     expect(axis.axisLabel.hideOverlap).toBe(true)
+    // echarts pads each label 3px a side before its overlap test; 2px keeps neighbours apart
+    // and lets twelve short months fit the Overview card at 1280.
+    expect((axis.axisLabel as unknown as { textMargin: number[] }).textMargin).toEqual([0, 2])
     expect(axis.axisLabel.interval).toBe(0)
     // Unfitted (no width known — tests, SSR): the full month, as before.
     expect(labelsOf(axis)).toEqual(YEAR)
@@ -229,13 +233,16 @@ describe('month labels', () => {
   })
 
   // The Overview's Recent spending card, measured in the browser: 446 / 606 / 766 px wide at
-  // 1280 / 1600 / 1920 (the default grid takes 94 px) — 29, 43 and 56 px per month.
+  // 1280 / 1600 / 1920 (the default grid takes 94 px) — 29, 43 and 56 px per month. At 56 px two
+  // full months ("Nov 2025" 50.9px beside "Dec 2025" 49.3px) are a quarter pixel short of fitting.
   it('fits the Overview twelve months at 1280, 1600 and 1920', () => {
     const option = { grid: grid(), xAxis: monthAxis(YEAR, { gap: true }) }
     const at = (width: number) => (fitMonthAxes(option, width).option as unknown as { xAxis: Axis }).xAxis
     expect(labelsOf(at(446))).toEqual(['2025', 'Nov', 'Dec', '2026', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'])
     expect(labelsOf(at(606))).toEqual(["Oct '25", 'Nov', 'Dec', "Jan '26", 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'])
-    expect(labelsOf(at(766))).toEqual(YEAR)
+    expect(labelsOf(at(766))).toEqual(["Oct '25", 'Nov', 'Dec', "Jan '26", 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'])
+    // A wider card (the Expand dialog, a full-width card) earns the full month.
+    expect(labelsOf(at(800))).toEqual(YEAR)
     for (const width of [446, 606, 766]) expect(at(width).axisLabel.interval).toBe(0)
     expect(fitMonthAxes(option, 446).key).toBe('compact')
     // The original option is never mutated — EChart refits the same one on every resize.
@@ -264,7 +271,7 @@ describe('month labels', () => {
   it('lines space labels one gap fewer; percent grids are measured against the container', () => {
     // A line (boundaryGap false) puts its first and last labels on the plot's edges.
     const line = { grid: grid(), xAxis: monthAxis(YEAR) }
-    expect(fitMonthAxes(line, 94 + 11 * 34).key).toBe('short')
+    expect(fitMonthAxes(line, 94 + 11 * 36).key).toBe('short')
     // Small multiples: three cells of 29.33% each on a 1600 px card — 469 px, 43 px a month (a
     // misread '29.333%' as 29 px would call it sparse).
     const cells = { grid: [{ left: '2%', width: '29.333%', top: 24, height: 66 }], xAxis: [{ ...monthAxis(YEAR), gridIndex: 0 }] }

@@ -718,7 +718,7 @@ describe('EChart fits month labels to its width', () => {
     render(<EChart ariaLabel="Recent spending" option={monthOption()} />)
     const chart = lastChart()
     const painted = chart.setOption.mock.calls.length
-    width = 766
+    width = 900
     chart.getWidth.mockReturnValue(446) // the engine still holds the old size
     resizeNotify.forEach((fire) => fire())
     expect(chart.resize).toHaveBeenCalledTimes(1)
