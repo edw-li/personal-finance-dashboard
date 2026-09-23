@@ -368,6 +368,38 @@ async def test_an_applied_import_names_the_restore_point_it_saved(auth_client, d
     assert (restore_points_dir() / applied["restore_point"]).is_file()
 
 
+async def test_an_apply_stopped_by_parse_errors_saves_and_names_no_point(auth_client, db):
+    """The two cases ImportReport.restore_point documents (2026-09-23 lane B1 review, M11):
+    parse errors stop the import before anything is saved..."""
+    from openpyxl import load_workbook
+
+    book = load_workbook(io.BytesIO(build_workbook()))
+    del book["ESPP"]
+    out = io.BytesIO()
+    book.save(out)
+    files = {"file": ("workbook.xlsx", out.getvalue(), "application/octet-stream")}
+    report = (await auth_client.post("/api/v1/import/xlsx?dry_run=false", files=files)).json()
+    assert report["sheets"]["espp"]["errors"] and report["applied"] is False
+    assert report["restore_point"] is None
+    assert not restore_points_dir().exists() or list(restore_points_dir().iterdir()) == []
+
+
+async def test_an_apply_whose_appliers_report_errors_still_names_its_point(
+    auth_client, db, monkeypatch
+):
+    """...while an apply that got past the parse saved its point FIRST, so the report names
+    it even when an applier then reports errors and the apply rolls back (M11)."""
+
+    async def failing_espp(_db, _parsed, sheet_report):
+        sheet_report.errors.append("ESPP: a definition the book does not have")
+
+    monkeypatch.setattr("app.importer.apply.apply_espp", failing_espp)
+    files = {"file": ("workbook.xlsx", build_workbook(), "application/octet-stream")}
+    report = (await auth_client.post("/api/v1/import/xlsx?dry_run=false", files=files)).json()
+    assert report["applied"] is False
+    assert (restore_points_dir() / report["restore_point"]).is_file()
+
+
 def test_the_name_grammars_are_ascii_only():
     """`\d` matches every Unicode digit; a fullwidth "２０２６…" name must be as foreign as any
     other (2026-09-23 lane B1 review, M1)."""

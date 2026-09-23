@@ -2028,8 +2028,11 @@ export interface ImportReport {
   dry_run: boolean
   applied: boolean
   sheets: Record<string, ImportSheetReport>
-  /** The restore point an APPLY saved before its first write (2026-09-23 spec §B3); null on a
-   *  dry run or a blocked apply. Absent on a report from before that batch. */
+  /** The restore point an apply saved before its first write (2026-09-23 spec §B3). Set
+   *  whenever the apply got past the parse — `applied` false included, when an applier then
+   *  reported errors and rolled back (the point was saved first and stays either way). null on
+   *  a dry run, and when parse errors stopped the import before anything was saved. Absent on
+   *  a report from before that batch. */
   restore_point?: string | null
 }
 
