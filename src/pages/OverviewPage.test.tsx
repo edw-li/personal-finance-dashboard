@@ -2033,6 +2033,26 @@ describe('OverviewPage independent groups and preferences', () => {
     expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
     expect(document.activeElement).toBe(trigger)
   })
+
+  // 2026-09-23 drag spec §6/§9: an Escape while a tile is lifted cancels the lift, never the popover.
+  it('Escape while a tile is lifted cancels only the drag — the popover stays open and the tiles keep their order', async () => {
+    const scroll = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    const trigger = screen.getByRole('button', { name: 'Customize' })
+    fireEvent.click(trigger)
+    const grip = screen.getByRole('button', { name: 'Reorder Portfolio' })
+    grip.focus()
+    for (const key of [' ', 'ArrowUp', 'Escape']) fireEvent.keyDown(grip, { key })
+    expect(screen.getByRole('dialog', { name: 'Customize overview' })).toBeTruthy()
+    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Net worth — Aug 2026')
+    expect(getLocal('overview_layout')).toBeUndefined()
+    fireEvent.keyDown(grip, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+    scroll.mockRestore()
+  })
 })
 
 describe('OverviewPage chart cards (charts C2)', () => {

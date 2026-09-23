@@ -56,6 +56,9 @@ function CustomizeGroup<K extends View>({
     onCommit: (next) => onChange(next),
   })
   const hidden = all.filter((id) => !visible.includes(id))
+  // While a row is up, every box of this list is inert (R0's consumer rule 5): a tick mid-lift
+  // would change the items under the drag, and the hook would silently cancel it.
+  const inert = reorder.active
   // A tick moves its row across the divider, and React mounts a new box for it there: commit the
   // change now and hand the caret to the new box, or a keyboard reader lands on <body>.
   const toggle = (id: K, show: boolean) => {
@@ -73,7 +76,7 @@ function CustomizeGroup<K extends View>({
         <div key={id} className="overview-customize-row" {...reorder.itemProps(id)}>
           <DragHandle name={LABELS[id]} {...reorder.handleProps(id)} />
           <label>
-            <input type="checkbox" value={id} checked disabled={keepOne && visible.length === 1} onChange={() => toggle(id, false)} />
+            <input type="checkbox" value={id} checked disabled={inert || (keepOne && visible.length === 1)} onChange={() => toggle(id, false)} />
             {LABELS[id]}
           </label>
         </div>
@@ -82,7 +85,7 @@ function CustomizeGroup<K extends View>({
       {hidden.map((id) => (
         <div key={id} className="overview-customize-row is-off">
           <label>
-            <input type="checkbox" value={id} checked={false} onChange={() => toggle(id, true)} />
+            <input type="checkbox" value={id} checked={false} disabled={inert} onChange={() => toggle(id, true)} />
             {LABELS[id]}
           </label>
         </div>

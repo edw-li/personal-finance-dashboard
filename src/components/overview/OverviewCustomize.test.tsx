@@ -1,8 +1,10 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { useState } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_OVERVIEW_LAYOUT } from '../../prefs/overviewLayout'
 import type { OverviewLayout } from '../../prefs/overviewLayout'
+import { installPointerEvents } from '../../testing/pointer'
+import { MOTION_MS } from '../../theme/motion'
 import OverviewCustomize from './OverviewCustomize'
 
 // Overview › Customize (2026-09-23 drag-to-reorder spec §6). This file pins the popover's own
@@ -191,5 +193,153 @@ describe('OverviewCustomize — the lists (2026-09-23 spec §6)', () => {
       '⋮ [x] Recent spending',
       '⋮ [x] Money flow',
     ])
+  })
+})
+
+/** jsdom has no layout: every drag row gets a box `height` tall, stacked from y=200 in DOM order
+ *  (the tiles' rows first, then the cards'), clear of the viewport's 40px auto-scroll zones.
+ *  useReorder measures these once at lift (R0's useReorder.test.tsx helper). */
+function layoutRows(height = 40, start = 200) {
+  document.querySelectorAll<HTMLElement>('[data-reorder-id]').forEach((row, index) => {
+    const top = start + index * height
+    row.getBoundingClientRect = () =>
+      ({ top, bottom: top + height, height, left: 0, right: 360, width: 360, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
+  })
+}
+
+const live = (legend: Legend) => list(legend).querySelector('[aria-live="assertive"]')?.textContent ?? ''
+
+describe('OverviewCustomize — dragging (2026-09-23 spec §6, §2.3–§2.4)', () => {
+  beforeAll(() => installPointerEvents())
+
+  beforeEach(() => {
+    // jsdom only logs window.scrollBy as not implemented; the hook scrolls when a row nears an edge.
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+  })
+
+  it('Space lifts a tile, ↓ moves it, Space drops: one layout change, the rows follow, the grip keeps its focus', () => {
+    const onChange = vi.fn()
+    render(<Harness onChange={onChange} />)
+    openPopover()
+    layoutRows()
+    grip('Net worth').focus()
+    fireEvent.keyDown(grip('Net worth'), { key: ' ' })
+    expect(live('Summary tiles')).toBe('Picked up Net worth. Position 1 of 4.')
+    expect(grip('Net worth').getAttribute('aria-pressed')).toBe('true')
+    fireEvent.keyDown(grip('Net worth'), { key: 'ArrowDown' })
+    expect(live('Summary tiles')).toBe('Net worth, position 2 of 4.')
+    expect(onChange).not.toHaveBeenCalled()
+    fireEvent.keyDown(grip('Net worth'), { key: ' ' })
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange).toHaveBeenCalledWith({
+      tiles: ['portfolio', 'net_worth', 'living_spending', 'tax'],
+      cards: DEFAULT_CARDS,
+    })
+    expect(lines('Summary tiles')).toEqual([
+      '⋮ [x] Portfolio',
+      '⋮ [x] Net worth',
+      '⋮ [x] Living spending',
+      '⋮ [x] Estimated tax',
+    ])
+    expect(live('Summary tiles')).toBe('Dropped Net worth at position 2 of 4.')
+    expect(document.activeElement).toBe(grip('Net worth'))
+  })
+
+  it('the deeper views reorder on their own: End sends one to the bottom and the tiles stay put', () => {
+    const onChange = vi.fn()
+    render(<Harness onChange={onChange} />)
+    openPopover()
+    layoutRows()
+    fireEvent.keyDown(grip('Year to date'), { key: 'Enter' })
+    expect(live('Deeper views')).toBe('Picked up Year to date. Position 1 of 4.')
+    expect(live('Summary tiles')).toBe('')
+    fireEvent.keyDown(grip('Year to date'), { key: 'End' })
+    fireEvent.keyDown(grip('Year to date'), { key: 'Enter' })
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange).toHaveBeenCalledWith({
+      tiles: ['net_worth', 'portfolio', 'living_spending', 'tax'],
+      cards: ['performance', 'spending', 'money_flow', 'ytd'],
+    })
+  })
+
+  it('Escape while a row is lifted cancels only the drag; the next Escape closes the popover and hands focus back', () => {
+    const onChange = vi.fn()
+    render(<Harness onChange={onChange} />)
+    openPopover()
+    layoutRows()
+    grip('Portfolio').focus()
+    fireEvent.keyDown(grip('Portfolio'), { key: ' ' })
+    fireEvent.keyDown(grip('Portfolio'), { key: 'ArrowUp' })
+    fireEvent.keyDown(grip('Portfolio'), { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: 'Customize overview' })).toBeTruthy()
+    expect(live('Summary tiles')).toBe('Cancelled. Portfolio is back at position 2 of 4.')
+    expect(lines('Summary tiles')[1]).toBe('⋮ [x] Portfolio')
+    fireEvent.keyDown(grip('Portfolio'), { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Customize' }))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('lifting a row makes every box of its own list inert until it lands', () => {
+    render(<Harness initial={{ tiles: ['net_worth', 'portfolio'], cards: ['ytd'] }} />)
+    openPopover()
+    layoutRows()
+    fireEvent.keyDown(grip('Net worth'), { key: ' ' })
+    expect(box('Net worth').disabled).toBe(true)
+    expect(box('Living spending').disabled).toBe(true)
+    expect(box('Year to date').disabled).toBe(false)
+    fireEvent.keyDown(grip('Net worth'), { key: 'Escape' })
+    expect(box('Net worth').disabled).toBe(false)
+    expect(box('Living spending').disabled).toBe(false)
+  })
+
+  it('a mouse drag lands where the gap opened and commits once; released far below the popover, it leaves it open', () => {
+    vi.useFakeTimers()
+    const onChange = vi.fn()
+    render(<Harness onChange={onChange} />)
+    openPopover()
+    layoutRows()
+    // Pressing the grip is a pointerdown INSIDE the surface: usePopoverDismiss lets it be.
+    fireEvent.pointerDown(grip('Net worth'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Net worth'), { pointerId: 1, clientY: 230 })
+    expect(live('Summary tiles')).toBe('Picked up Net worth. Position 1 of 4.')
+    fireEvent.pointerMove(grip('Net worth'), { pointerId: 1, clientY: 305 })
+    expect(live('Summary tiles')).toBe('Net worth, position 3 of 4.')
+    // Far below the popover the row clamps to the end of its list. Capture keeps the up on the
+    // grip, and the popover's dismissal listens to pointerdown only, so nothing here closes it.
+    fireEvent.pointerMove(grip('Net worth'), { pointerId: 1, clientY: 900 })
+    expect(live('Summary tiles')).toBe('Net worth, position 4 of 4.')
+    fireEvent.pointerUp(grip('Net worth'), { pointerId: 1, clientY: 900 })
+    expect(onChange).not.toHaveBeenCalled() // still easing into its gap
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange).toHaveBeenCalledWith({
+      tiles: ['portfolio', 'living_spending', 'tax', 'net_worth'],
+      cards: DEFAULT_CARDS,
+    })
+    expect(lines('Summary tiles')).toEqual([
+      '⋮ [x] Portfolio',
+      '⋮ [x] Living spending',
+      '⋮ [x] Estimated tax',
+      '⋮ [x] Net worth',
+    ])
+    expect(screen.getByRole('dialog', { name: 'Customize overview' })).toBeTruthy()
+  })
+
+  // R0's development contract check (useReorder's console.error) guards lists whose ranges are
+  // split or whose carried rows wander. Each list here is one range with nothing carried, so it must
+  // stay silent through every change of its rows — and React has nothing to warn about either.
+  it('keeps the console quiet through a tick and a drag: each list is one well-formed range', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(<Harness initial={{ tiles: ['tax', 'net_worth'], cards: ['money_flow', 'ytd'] }} />)
+    openPopover()
+    fireEvent.click(box('Portfolio'))
+    layoutRows()
+    grip('Portfolio').focus()
+    for (const key of [' ', 'Home', ' ']) fireEvent.keyDown(grip('Portfolio'), { key })
+    expect(lines('Summary tiles').slice(0, 3)).toEqual(['⋮ [x] Portfolio', '⋮ [x] Estimated tax', '⋮ [x] Net worth'])
+    expect(error.mock.calls).toEqual([])
   })
 })
