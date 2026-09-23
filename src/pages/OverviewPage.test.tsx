@@ -5,7 +5,7 @@ import { ApiError } from '../api/client'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { fetchSpendingEvidence, REVIEW_LABELS } from '../api/monthReview'
 import type { MonthReview } from '../api/monthReview'
-import { getLocal, resetPrefsStoreForTests, STORAGE_KEYS } from '../prefs/prefsStore'
+import { getLocal, resetPrefsStoreForTests, STORAGE_KEYS, syncFromServer } from '../prefs/prefsStore'
 import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
 import type {
   CalendarEvent,
@@ -82,6 +82,9 @@ vi.mock('../api/coverage', () => ({ fetchCoverage: vi.fn() }))
 vi.mock('../api/monthReview', async importOriginal => ({
   ...await importOriginal<typeof import('../api/monthReview')>(), fetchSpendingEvidence: vi.fn(),
 }))
+// The account's preferences, as prefsStore's session sync reads them: one Customize test lands
+// an adopted layout through syncFromServer (a PATCH never leaves here — there is no token).
+vi.mock('../api/prefs', () => ({ fetchPrefs: vi.fn(), patchPrefs: vi.fn(), deletePref: vi.fn() }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law). What the three
 // charts DRAW is pinned elsewhere — the net-worth trend and the bars in
 // src/components/overview/overviewChartOptions.test.ts, the performance lines in
@@ -124,6 +127,7 @@ import { fetchHousehold } from '../api/household'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import { fetchMoneyFlow } from '../api/overview'
 import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
+import { fetchPrefs, patchPrefs } from '../api/prefs'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
@@ -2052,6 +2056,49 @@ describe('OverviewPage independent groups and preferences', () => {
     fireEvent.keyDown(grip, { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
     expect(document.activeElement).toBe(trigger)
+  })
+
+  // 2026-09-23 drag spec §2.3.7: the account's layout landing under a live lift — the session's
+  // server sync adopting overview_layout (prefsStore's syncFromServer → subscribe) — re-renders the
+  // rows, so the lift is dropped at once, and the page shows the layout the account holds.
+  it('a layout adopted from the account while a tile is lifted cancels the lift and shows the adopted layout', async () => {
+    const scroll = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    onTestFinished(() => scroll.mockRestore())
+    const adopted = { tiles: ['tax', 'net_worth', 'portfolio'], cards: ['ytd', 'performance', 'spending'] }
+    vi.mocked(fetchPrefs).mockResolvedValue({
+      prefs: { overview_layout: { value: adopted, updated_at: '2026-09-23T07:00:00+00:00' } },
+    })
+    vi.mocked(patchPrefs).mockResolvedValue({ prefs: {} })
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+    const tiles = screen.getByRole('group', { name: 'Summary tiles' })
+    const live = () => tiles.querySelector('[aria-live="assertive"]')?.textContent
+    const grip = within(tiles).getByRole('button', { name: 'Reorder Net worth' })
+    grip.focus()
+    for (const key of [' ', 'ArrowDown']) fireEvent.keyDown(grip, { key })
+    expect(live()).toBe('Net worth, position 2 of 4.')
+    // The session's one sync (SessionPrefs runs it after /auth/me) answers now.
+    await act(async () => {
+      await syncFromServer()
+    })
+    expect(live()).toBe('Cancelled — the list changed.')
+    expect(within(tiles).getByRole('button', { name: 'Reorder Net worth' }).getAttribute('aria-pressed')).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'Customize overview' })).toBeTruthy()
+    expect([...document.querySelectorAll('.kpi-row .stat-label')].map((label) => label.textContent)).toEqual([
+      `Estimated tax — ${CURRENT_YEAR} (est.)`,
+      'Net worth — Aug 2026',
+      'Portfolio',
+    ])
+    expect(screen.queryByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeNull()
+    expect(
+      within(tiles)
+        .getAllByRole('checkbox')
+        .map((box) => `${(box as HTMLInputElement).checked ? '[x]' : '[ ]'} ${box.closest('label')?.textContent}`),
+    ).toEqual(['[x] Estimated tax', '[x] Net worth', '[x] Portfolio', '[ ] Living spending'])
+    // The dropped lift wrote nothing: the browser now holds the account's layout, as adopted.
+    expect(getLocal('overview_layout')).toEqual(adopted)
   })
 })
 
