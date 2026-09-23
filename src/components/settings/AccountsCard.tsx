@@ -465,6 +465,10 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     },
   })
 
+  // A lifted row holds the roster: the row buttons wait for the drop, as they wait for a request
+  // (spec §2.3) — an Edit or a Delete must not land on a row that is in the air.
+  const locked = busy || reorder.active
+
   /** One roster row. `nested` rows are components drawn under their parent: panels.css's
    *  `.component-row` register, with the indent moved to the Account cell (settings.css). */
   const rosterRow = (account: AccountOut, nested: boolean) => {
@@ -498,7 +502,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
             type="button"
             className="button"
             aria-label={`Edit ${account.name}`}
-            disabled={busy}
+            disabled={locked}
             onClick={() => startEdit(account)}
           >
             Edit
@@ -507,7 +511,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
             type="button"
             className="button"
             aria-label={account.is_active ? `Retire ${account.name}` : `Restore ${account.name}`}
-            disabled={busy}
+            disabled={locked}
             onClick={() => toggleActive(account)}
           >
             {account.is_active ? 'Retire' : 'Restore'}
@@ -516,7 +520,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
             type="button"
             className="button"
             aria-label={`Delete ${account.name}`}
-            disabled={busy}
+            disabled={locked}
             onClick={() => remove(account)}
           >
             Delete
@@ -530,7 +534,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     <section className="card span-12" id="accounts">
       <h2 className="eyebrow">
         Accounts
-        <InfoHint text="The net-worth roster. Owner blank = joint. Retire keeps an account out of the wizard and the charts without losing its history; delete only works while an account has no balances. The slug never changes — it is the workbook importer's key." />
+        <InfoHint text="The net-worth roster. Owner blank = joint. Retire keeps an account out of the wizard and the charts without losing its history; delete only works while an account has no balances. The slug never changes — it is the workbook importer's key. Drag a row by its grip to reorder accounts within their group; a parent brings its components with it." />
       </h2>
       <FeedBanner error={loadError} retry={() => load()} retryLabel="Retry loading the accounts" />
       {!settled && <SettingsGhost height={1045} />}
@@ -665,6 +669,13 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                   grips' aria-describedby target and the lift/move/drop announcements. */}
               <ReorderInstructions id={reorder.instructionsId} />
               <ReorderLiveRegion text={reorder.announcement} />
+              {/* What the order is FOR (2026-09-23 reorder spec §8.1): the wizard walks it inside
+                  each person's section, and a positional paste fills it — so moving a row here
+                  moves where a pasted value lands. */}
+              <p className="settings-note">
+                The Monthly update lists accounts in this order within each person and group — a
+                spreadsheet column pasted there fills them in this order too.
+              </p>
             </>
           )}
         </>

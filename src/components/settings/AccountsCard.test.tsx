@@ -940,3 +940,37 @@ it('parks every grip while another request of the roster is in flight (spec §4.
   })
   await waitFor(() => expect(grip('Fidelity HSA').getAttribute('aria-disabled')).toBeNull())
 })
+
+it('holds every roster button while a row is lifted — the portfolio labels stay live', async () => {
+  vi.mocked(fetchAccounts).mockResolvedValue(ROSTER)
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+  const edit = () => screen.getByRole('button', { name: 'Edit Traditional pre-tax' }) as HTMLButtonElement
+
+  press('Fidelity HSA', ' ')
+  expect(edit().disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Delete Fidelity HSA' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Retire Joint Checking' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((screen.getByLabelText('Owner for Fidelity Brokerage') as HTMLSelectElement).disabled).toBe(false)
+
+  press('Fidelity HSA', 'Escape')
+  expect(live()).toBe('Cancelled. Fidelity HSA is back at position 1 of 2.')
+  expect(edit().disabled).toBe(false)
+})
+
+it('says what the order is for and how to change it (spec §8.1)', async () => {
+  render(<AccountsCard people={[ME]} />)
+  const table = await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  const note = screen.getByText(
+    'The Monthly update lists accounts in this order within each person and group — a spreadsheet column pasted there fills them in this order too.',
+  )
+  // Under the roster, above the Portfolio accounts heading.
+  expect(table.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  const labelsHeading = document.querySelector('.portfolio-accounts-heading') as HTMLElement
+  expect(note.compareDocumentPosition(labelsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: /^About The net-worth roster/ }))
+  expect(screen.getByRole('tooltip').textContent).toContain(
+    'Drag a row by its grip to reorder accounts within their group; a parent brings its components with it.',
+  )
+})
