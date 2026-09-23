@@ -17,8 +17,8 @@ import type { SpendingMatrix, SpendingYearly, YearRollup } from '../../types/api
 import { toCents } from '../../utils/cents'
 import type { ExportTable } from '../../utils/download'
 import { formatMonth } from '../../utils/format'
-import { buildMonthSlices } from '../../utils/spending'
-import type { MonthSlice } from '../../utils/spending'
+import { buildMonthSlices } from './monthSlices'
+import type { MonthSlice } from './monthSlices'
 
 /** The year's window (2026-09-23 spec §0 flows F10, §C1): its MATCHED months, those with spending
  *  rows AND a take-home row (the savings module's rule), so the year's Saved is the Overview's

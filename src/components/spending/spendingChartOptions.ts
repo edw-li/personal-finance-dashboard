@@ -47,7 +47,7 @@ import type { RangeState } from '../../charts/timeZoom'
 import { axisTooltip, itemTooltip } from '../../charts/tooltip'
 import type { SpendingMatrix } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { buildMonthSlices } from '../../utils/spending'
+import { buildMonthSlices } from './monthSlices'
 
 /**
  * The stacked chart as a table (2026-08-25 spec §2a): month rows × the SAME top-N fold
