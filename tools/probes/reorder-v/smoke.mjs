@@ -21,12 +21,15 @@
 //     reload;
 //   - the toast and its Undo (Overview has no toast: Reset to defaults is its way back);
 //   - the keyboard path — Space, ↓ ×2, Space — with focus kept on the grip;
-//   - reduced-motion emulation: one accent drop line, no transform on a peer, Escape cancelling
-//     with no request.
+//   - reduced-motion emulation: one accent drop line — lane R7's overlay, swept 2px at a time and
+//     visible in every held sample with a landing slot: on the marked edge, topmost along its
+//     length, over the row in hand too, painted in the accent — no transform on a peer, Escape
+//     cancelling with no request and no line left.
 // Plus auto-scroll inside the 420px Settings box (a group whose first row the box can hide: the
 // roster's last group never scrolls under lane R0's range-end stop) and the 440px Categories &
-// weights box — the scroll stopping at the range's first slot, the sticky header recorded while
-// the row in hand crosses it mid-scroll and at the stop — and on the page (the ledger at 1280×800);
+// weights box — the scroll stopping at the range's first slot clear below the sticky header (lane
+// R7), its group heading too, the header recorded while the row in hand crosses it mid-scroll and
+// at the stop — and on the page (the ledger at 1280×800);
 // the Accounts roster's groups, nesting and carried components, and a component held to its
 // siblings; the ledger in a person scope and a sell dragged above its buy; the credit-line colours
 // through a reorder and in every person scope, and the rewards matrix's columns; Escape inside the
@@ -742,38 +745,62 @@ const boxTo = (box, selector, offset) =>
     [box, selector, offset],
   )
 const scrollTopOf = (box) => page.evaluate((sel) => document.querySelector(sel).scrollTop, box)
+/** The band of a capped box the reader sees — lane R0's visibleBounds as amended by lane R7: the box
+ *  clipped to the window, starting below its sticky header, which is where the auto-scroll zone and
+ *  the range-end stop count from. The header's bottom is read on what sticks (the th cells): the
+ *  thead's own box never moves when only its cells stick (`theadBottom`, kept as the evidence).
+ *  `clip` is the whole visible box, header included, for the shots. */
 const visibleBand = (box) =>
   page.evaluate((sel) => {
-    const r = document.querySelector(sel).getBoundingClientRect()
-    const top = Math.max(r.top, 0)
+    const el = document.querySelector(sel)
+    const r = el.getBoundingClientRect()
+    const head = el.querySelector('thead')
+    const sticky =
+      head === null
+        ? []
+        : [head, ...head.querySelectorAll('th, td')].filter((n) => getComputedStyle(n).position === 'sticky')
+    const headerBottom = sticky.length === 0 ? null : Math.max(...sticky.map((n) => n.getBoundingClientRect().bottom))
+    const boxTop = Math.max(r.top, 0)
+    const top = Math.max(boxTop, headerBottom ?? boxTop)
     const bottom = Math.min(r.bottom, window.innerHeight)
     const left = Math.max(0, r.left)
     return {
       top,
+      boxTop,
       bottom,
+      headerBottom,
+      theadBottom: head === null ? null : head.getBoundingClientRect().bottom,
       clip: {
         x: Math.floor(left),
-        y: Math.floor(top),
+        y: Math.floor(boxTop),
         width: Math.floor(Math.min(r.right, window.innerWidth) - left),
-        height: Math.floor(bottom - top),
+        height: Math.floor(bottom - boxTop),
       },
     }
   }, box)
-/** Who wins the sticky header's first labelled cell: the header, or a lifted row over it. */
+/** Who wins the sticky header's first labelled cell: the header, or a lifted row over it. Plus the
+ *  lifted row's group heading, when its <tbody> has one (lane R2's roster), and the thead's own box
+ *  beside the sticky cell's (lane R7: they differ once the box scrolls). */
 const headerCover = (box) =>
   page.evaluate((sel) => {
     const el = document.querySelector(sel)
     const th = [...el.querySelectorAll('thead th')].find((cell) => cell.textContent.trim() !== '')
     const r = th.getBoundingClientRect()
+    const t = el.querySelector('thead').getBoundingClientRect()
     const hit = document.elementFromPoint(r.left + Math.min(24, r.width / 2), r.top + r.height / 2)
     const lifted = el.querySelector('[data-reorder="lifted"]')
     const l = lifted === null ? null : lifted.getBoundingClientRect()
+    const heading = lifted?.closest('tbody')?.querySelector('tr.accounts-group-row') ?? null
+    const h = heading === null ? null : heading.getBoundingClientRect()
     return {
       header: th.textContent.trim(),
       headerOnTop: hit !== null && th.contains(hit),
       liftedOver: lifted !== null && hit !== null && lifted.contains(hit),
       headerBox: [Math.round(r.top), Math.round(r.bottom)],
+      theadBox: [Math.round(t.top), Math.round(t.bottom)],
       liftedBox: l === null ? null : [Math.round(l.top), Math.round(l.bottom)],
+      heading: heading === null ? null : heading.textContent.trim(),
+      headingBox: h === null ? null : [Math.round(h.top), Math.round(h.bottom)],
       overlapPx:
         l === null ? 0 : Math.max(0, Math.round(Math.min(r.bottom, l.bottom) - Math.max(r.top, l.top))),
       zIndex: {
@@ -981,8 +1008,142 @@ async function keyboardMove({ rows, id, keys }) {
   check('focus stays on the moved grip', focused === name, { focused, name })
   return expected
 }
-/** Reduced motion (spec §2.5): the lifted row still follows the pointer, peers stay put, one
- *  accent drop line marks the landing edge; Escape then cancels with no request. */
+/** The page's accent as a computed colour, `rgb(r, g, b)` — what the drop line must paint. */
+const accentColour = () =>
+  page.evaluate(() => {
+    const probe = document.createElement('div')
+    probe.style.background = 'var(--accent)'
+    document.body.append(probe)
+    const colour = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return colour
+  })
+/** One held sample of reduced motion's drop line (spec §2.5 as amended by lane R7): the rows' drop
+ *  mark, and the overlay — where it stands, whether it sits on the marked edge inside the row's span,
+ *  and whether it is the TOPMOST thing along its length. The overlay is `pointer-events: none`, so it
+ *  is made hit-testable for the instant of five elementFromPoint calls (synchronous: no event, no
+ *  frame in between). `underHand`: the row in hand spans the line's y — where lane V found the old
+ *  in-cell line hidden beneath it. */
+const lineSample = (rows, accent) =>
+  page.evaluate(
+    ([sel, colour]) => {
+      const els = [...document.querySelectorAll(sel)]
+      const marked = els.filter((el) => el.hasAttribute('data-reorder-drop'))
+      const all = [...document.querySelectorAll('.reorder-drop-line')]
+      const line = all[0] ?? null
+      const sample = {
+        lines: all.length,
+        marks: marked.map((el) => [el.getAttribute('data-reorder-id'), el.getAttribute('data-reorder-drop')]),
+        shown: line !== null && !line.hidden && getComputedStyle(line).display !== 'none',
+      }
+      if (!sample.shown) return sample
+      const r = line.getBoundingClientRect()
+      const y = r.top + r.height / 2
+      const style = getComputedStyle(line)
+      let edge = null
+      let withinRow = null
+      if (marked.length === 1) {
+        const b = marked[0].getBoundingClientRect()
+        edge = marked[0].getAttribute('data-reorder-drop') === 'before' ? b.top : b.bottom
+        withinRow = r.left >= Math.max(b.left, 0) - 0.75 && r.right <= Math.min(b.right, window.innerWidth) + 0.75 && r.width > 0
+      }
+      const xs = [0.02, 0.25, 0.5, 0.75, 0.98].map((f) => r.left + f * r.width)
+      line.style.pointerEvents = 'auto'
+      const hits = xs.map((x) => document.elementFromPoint(x, y))
+      line.style.pointerEvents = ''
+      const lifted = els.filter((el) => el.getAttribute('data-reorder') === 'lifted')
+      return {
+        ...sample,
+        rect: [r.left, r.top, r.width, r.height].map((v) => Math.round(v * 10) / 10),
+        edge: edge === null ? null : Math.round(edge * 10) / 10,
+        onEdge: edge !== null && Math.abs(y - edge) <= 0.75,
+        withinRow,
+        onTop: hits.every((hit) => hit === line),
+        coveredBy: hits
+          .filter((hit) => hit !== line)
+          .map((hit) => (hit === null ? null : `${hit.tagName.toLowerCase()}.${hit.className}`)),
+        underHand: lifted.some((el) => {
+          const b = el.getBoundingClientRect()
+          return b.top <= y && y <= b.bottom
+        }),
+        onBody: line.parentElement === document.body,
+        fixed: style.position === 'fixed',
+        accent: style.backgroundColor === colour,
+        height: r.height,
+      }
+    },
+    [rows, accent],
+  )
+const lineVisible = (s) =>
+  s.shown && s.onBody && s.fixed && s.accent && s.height === 2 && s.onEdge && s.withinRow && s.onTop
+/** Press a grip, pass the lift threshold, then travel to `dy` 2px at a time with the button held,
+ *  sampling the drop line at every step and once more after the hold at `dy`. */
+async function pressSweep(rows, id, dy, accent) {
+  const g = await page.locator(gripSel(rows, id)).boundingBox()
+  if (g === null) throw new Error(`no grip on screen for row ${id}`)
+  const x = g.x + g.width / 2
+  const y0 = g.y + g.height / 2
+  const sign = Math.sign(dy)
+  await page.mouse.move(x, y0)
+  await page.mouse.down()
+  await page.mouse.move(x, y0 + sign * 6, { steps: 2 })
+  const samples = []
+  for (let d = 8; d < Math.abs(dy); d += 2) {
+    await page.mouse.move(x, y0 + sign * d)
+    samples.push(await lineSample(rows, accent))
+  }
+  await page.mouse.move(x, y0 + dy)
+  await page.waitForTimeout(250)
+  samples.push(await lineSample(rows, accent))
+  const marked = samples.filter((s) => s.marks.length === 1)
+  const missed = marked.filter((s) => !lineVisible(s))
+  return {
+    samples: samples.length,
+    marked: marked.length,
+    visible: marked.length - missed.length,
+    underHand: marked.filter((s) => s.underHand).length,
+    shownUnmarked: samples.filter((s) => s.marks.length === 0 && s.shown).length,
+    extra: samples.filter((s) => s.lines > 1 || s.marks.length > 1).length,
+    firstMissed: missed[0] ?? null,
+    held: samples[samples.length - 1],
+  }
+}
+/** The held shot's pixels along the line: in a 6px strip around it, the share of each pixel row
+ *  that is the accent (every channel within 24). A painted 2px line has a row at ~100%. */
+async function linePixels(rect, accent) {
+  const clip = { x: Math.floor(rect[0]) + 2, y: Math.floor(rect[1]) - 2, width: Math.floor(rect[2]) - 4, height: 6 }
+  const png = await page.screenshot({ clip })
+  return page.evaluate(
+    async ([b64, colour]) => {
+      const want = colour.match(/\d+/g).slice(0, 3).map(Number)
+      const bin = atob(b64)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i)
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }))
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
+      ctx.drawImage(bitmap, 0, 0)
+      const px = ctx.getImageData(0, 0, bitmap.width, bitmap.height).data
+      const shares = []
+      for (let y = 0; y < bitmap.height; y += 1) {
+        let hits = 0
+        for (let x = 0; x < bitmap.width; x += 1) {
+          const i = (y * bitmap.width + x) * 4
+          if (want.every((c, k) => Math.abs(px[i + k] - c) <= 24)) hits += 1
+        }
+        shares.push(Math.round((hits / bitmap.width) * 1000) / 1000)
+      }
+      return { shares, best: Math.max(...shares) }
+    },
+    [png.toString('base64'), accent],
+  )
+}
+/** Reduced motion (spec §2.5 as amended by lane R7): the lifted row still follows the pointer, peers
+ *  stay put, and ONE accent drop line — an overlay fixed on <body> — marks the landing edge ABOVE the
+ *  row in hand. The press sweeps to its target 2px at a time; at every held sample with a drop mark
+ *  the line must be visible: on the marked edge, inside the row's span, painted in the accent, and
+ *  the topmost thing along its length (lane V measured the old in-cell line covered in 44–53% of
+ *  such samples). Escape then cancels with no request, and no line is left behind. */
 async function reducedMotion({ rows, id, k, popover = false }) {
   await clearToasts()
   await ready(rows)
@@ -994,9 +1155,11 @@ async function reducedMotion({ rows, id, k, popover = false }) {
     const from = before.indexOf(String(id))
     const to = from + k
     const dy = aim(await boxes(rows), from, k)
-    await press(rows, id, dy, Math.sign(k))
+    const accent = await accentColour()
+    const sweep = await pressSweep(rows, id, dy, accent)
     const mid = await liftState(rows)
     await snap(`${where.step}-held`)
+    const pixels = sweep.held.shown ? await linePixels(sweep.held.rect, accent) : null
     await page.keyboard.press('Escape')
     await page.waitForTimeout(250)
     const after = await liftState(rows)
@@ -1010,6 +1173,7 @@ async function reducedMotion({ rows, id, k, popover = false }) {
             el.style.transform !== '',
         ).length,
     )
+    const leftLines = await page.evaluate(() => document.querySelectorAll('.reorder-drop-line').length)
     const cursor = await grabbing()
     const open = popover ? await dialog().isVisible() : null
     await page.mouse.up()
@@ -1022,9 +1186,27 @@ async function reducedMotion({ rows, id, k, popover = false }) {
       check('reduced motion: no peer shifts — no shifting row, no transform on a peer', mid.shifting === 0 && mid.peerTransforms === 0, mid)
       check('reduced motion: one accent drop line marks the landing edge', same(mid.drop, [[before[to], k > 0 ? 'after' : 'before']]), mid.drop)
     }
-    check('Escape cancels at once: nothing lifted, no line, no transform, no grabbing cursor', after === null && residue === 0 && !cursor, {
+    const { held, ...counts } = sweep
+    check(
+      'reduced motion: the drop line is visible in 100% of the held samples with a landing slot — on the marked edge, in the accent, topmost along its length, over the row in hand too',
+      sweep.marked > 0 && sweep.visible === sweep.marked && sweep.shownUnmarked === 0 && sweep.extra === 0,
+      counts,
+    )
+    check(
+      'reduced motion: the held shot paints the line — a pixel row in the accent across its width',
+      pixels !== null && pixels.best >= 0.95,
+      { pixels, rect: held.rect, accent },
+    )
+    note('drop-line sweep (lane R7): held samples, those with a landing slot, the line visible, the row in hand over its y', {
+      samples: sweep.samples,
+      marked: sweep.marked,
+      visible: sweep.visible,
+      underHand: sweep.underHand,
+    })
+    check('Escape cancels at once: nothing lifted, no line, no transform, no grabbing cursor', after === null && residue === 0 && leftLines === 0 && !cursor, {
       after,
       residue,
+      leftLines,
       cursor,
     })
     check('…with no request, and the order unchanged', writesNow() === writes && same(await order(rows), before), {
@@ -1072,11 +1254,12 @@ async function longDrag(rows, id) {
 /** Inside a capped box: the LAST of `ids` (a range of single-row units, in order) dragged to the
  *  box's top edge — the box scrolls up under the held pointer and the row lands first (spec §10).
  *  Lane R0 round 4 stops the scroll once the range's first slot shows clear of the 40px zone and
- *  clamps the held unit to its range, so the walk starts with that first row hidden above the zone,
- *  and proves the stop. The sticky header is read at rest; with the row in hand over it while the
- *  box still scrolls (pointer 28px in: ~1.6px a frame, slow enough to catch — at the stop the row
- *  sits clamped below the header, lane R5's observation), and held at the stop (both a judgement —
- *  plan Task 7); and once the drag ends. Then Undo. */
+ *  clamps the held unit to its range; lane R7 starts that zone below the box's sticky header. So the
+ *  walk starts with that first row hidden above the zone, and proves the stop: the row in hand held
+ *  at the range's first slot, clear below the header — the group's heading too, where it has one.
+ *  The sticky header is read at rest; with the row in hand crossing it while the box still scrolls
+ *  (pointer 28px into the zone: ~1.6px a frame, slow enough to catch), and held at the stop (both a
+ *  judgement — plan Task 7); and once the drag ends. Then Undo. */
 async function autoScrollInBox({ box, rows, ids, scope, label, shot }) {
   await clearToasts()
   await ready(rows)
@@ -1084,15 +1267,16 @@ async function autoScrollInBox({ box, rows, ids, scope, label, shot }) {
   const last = ids[ids.length - 1]
   // The last row 60px above the visible band's foot, as the plan placed it — and when that still
   // shows the range's first row clear of the top zone (a short range), the last row's grip raised to
-  // 60px under the band's top: under the ~38px sticky header and out of the zone, the first row
-  // hidden above.
+  // 60px under the band's top — below the sticky header, out of the zone — the first row hidden above.
   await page.evaluate(
     ([b, firstSel, lastSel]) => {
       const el = document.querySelector(b)
       el.scrollIntoView({ block: 'center' })
       const band = () => {
         const r = el.getBoundingClientRect()
-        return { top: Math.max(r.top, 0), bottom: Math.min(r.bottom, window.innerHeight) }
+        const cells = [...el.querySelectorAll('thead th')].filter((th) => getComputedStyle(th).position === 'sticky')
+        const header = cells.length === 0 ? r.top : Math.max(...cells.map((th) => th.getBoundingClientRect().bottom))
+        return { top: Math.max(r.top, header, 0), bottom: Math.min(r.bottom, window.innerHeight) }
       }
       const lastRow = document.querySelector(lastSel)
       el.scrollTop += lastRow.getBoundingClientRect().bottom - (band().bottom - 60)
@@ -1117,8 +1301,8 @@ async function autoScrollInBox({ box, rows, ids, scope, label, shot }) {
   await page.mouse.move(x, y0)
   await page.mouse.down()
   await page.mouse.move(x, y0 - 8, { steps: 2 })
-  // Mid-scroll: the pointer 28px into the box — inside the 40px zone, where the box scrolls slowly
-  // and the row, still short of its range's first row, follows the pointer across the header.
+  // Mid-scroll: the pointer 28px into the zone below the header — where the box scrolls slowly and
+  // the row, still short of its range's first row, follows the pointer to the header's edge.
   await page.mouse.move(x, band.top + 28, { steps: 6 })
   await page.waitForTimeout(250)
   const scrolling = await headerCover(box)
@@ -1145,19 +1329,38 @@ async function autoScrollInBox({ box, rows, ids, scope, label, shot }) {
     s1,
     firstRowHiddenBy: hiddenBy,
   })
-  // Spec §2.3.5 as amended (lane R0 round 4): the scroll stops once the range's end is inside the
-  // band the reader can see — the scroller's box clipped to the window — less the 40px edge margin,
-  // or at the scroller's own end. So: still 400ms later, and either the box reached its top (only
-  // where the range starts the box — Categories & weights is one range) or it stopped short with the
-  // row in hand, clamped at the range's first slot, at least 40px into the band. Whether that slot
-  // clears the box's sticky header is not the rule's concern — a two-line header is taller than the
-  // margin — so it is measured in the JUDGE record below (held.overlapPx), not asserted.
+  // Spec §2.3.5 as amended (lane R0 round 4, lane R7): the scroll stops once the range's end is
+  // inside the band the reader can see — the scroller's box below its sticky header, clipped to the
+  // window — less the 40px edge margin, or at the scroller's own end. So: still 400ms later, and
+  // either the box reached its top (only where the range starts the box — Categories & weights is
+  // one range) or it stopped short with the row in hand, clamped at the range's first slot, at least
+  // 40px below the header. Either way nothing of it rests under the header (lane V's finding 2: at
+  // 1280 the weights stop left it 5px under a 46px header), nor does its group's heading.
   const slotInBand = held.liftedBox === null ? null : held.liftedBox[0] - Math.round(band.top)
   check(
-    "the scroll stops at the range's end — the box's own top, or the row in hand clamped at the range's first slot ≥ 40px into the visible band",
+    "the scroll stops at the range's end — the box's own top, or the row in hand clamped at the range's first slot ≥ 40px below the sticky header",
     s2 === s1 && slotInBand !== null && (s1 === 0 ? rangeStartsBox : slotInBand >= 39),
     { s1, s2, slotInBand, liftedBox: held.liftedBox, headerBox: held.headerBox, rangeStartsBox },
   )
+  check(
+    'at the stop the header is on top and the row in hand rests clear below it — its group heading too, where it has one',
+    held.headerOnTop &&
+      held.overlapPx === 0 &&
+      held.liftedBox !== null &&
+      held.liftedBox[0] >= held.headerBox[1] - 1 &&
+      (held.headingBox === null || held.headingBox[0] >= held.headerBox[1] - 1),
+    { headerBox: held.headerBox, liftedBox: held.liftedBox, heading: held.heading, headingBox: held.headingBox, overlapPx: held.overlapPx },
+  )
+  note("the stop (lane R7): the box's scrollTop, the header's bottom as the sticky cells and as the thead's own box report it, the row in hand's top below it", {
+    s0,
+    s1,
+    headerBottom: band.headerBottom === null ? null : Math.round(band.headerBottom),
+    theadBottomAtRest: Math.round(band.theadBottom),
+    theadBoxHeld: held.theadBox,
+    slotBelowHeader: held.liftedBox === null ? null : held.liftedBox[0] - held.headerBox[1],
+    heading: held.heading,
+    headingBox: held.headingBox,
+  })
   note('JUDGE (plan Task 7): the row in hand over the sticky header — mid-scroll, then held at the stop', {
     scrolling,
     held,
