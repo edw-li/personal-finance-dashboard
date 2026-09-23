@@ -207,20 +207,16 @@ describe('recentSpendOption', () => {
     expect(bars.emphasis).toEqual({ focus: 'series', itemStyle: { borderColor: INK } })
   })
 
-  // The average's grey is the bars' grey now, so where it crosses a bar it would vanish; the
-  // dataviz ring for overlapping marks: a surface casing under the dashes, 2px a side. No name
-  // (no legend entry), no tooltip row, no hover.
-  it('cases the average line in the surface colour so it reads across the grey bars', () => {
+  // Coordinator decision (2026-09-23 review): the bars are the neutral grey, so the average is
+  // drawn in INK, dashed. Its key differs from the bars' and its dashes read across every bar,
+  // so the surface casing is gone (it only cut the bars in two).
+  it('draws the average in ink, dashed, so its key and its line stand apart from the grey bars', () => {
     const option = recentSpendOption({ months: monthsFrom('2026-01-01', 3), totals: totalsFrom(3) })
-    const series = seriesOf(option) as (ReturnType<typeof seriesOf>[number] & { silent?: boolean; tooltip?: { show?: boolean } })[]
-    const casing = series[2]
-    expect(casing).toMatchObject({ type: 'line', color: SURFACE, z: 8, silent: true, lineStyle: { width: 6 }, tooltip: { show: false } })
-    expect(casing.name).toBeUndefined()
-    expect(casing.data).toEqual(series[1].data)
-    // Still ONE comparison in the key: the bars and the average.
-    expect((option as unknown as { legend: { type: string } }).legend.type).toBe('plain')
-    // No average (a one-month book): no casing either.
-    expect(seriesOf(recentSpendOption({ months: monthsFrom('2026-01-01', 1), totals: totalsFrom(1) }))).toHaveLength(1)
+    const [bars, average, ...rest] = seriesOf(option)
+    expect(bars.color).toBe(MUTED)
+    expect(average).toMatchObject({ name: '12-mo average', color: INK, lineStyle: { width: 2, type: 'dashed' } })
+    expect(average.color).not.toBe(bars.color)
+    expect(rest).toEqual([])
   })
 
   it('F14: a dashed reference at the SPEND TILE’s own 12-mo average, listed after the bars', () => {
@@ -228,7 +224,7 @@ describe('recentSpendOption', () => {
     const option = recentSpendOption(feed)
     const [bars, average] = seriesOf(option)
     expect(bars.name).toBe('Spend')
-    expect(average).toMatchObject({ name: '12-mo average', type: 'line', color: MUTED, z: 9, lineStyle: { width: 2, type: 'dashed' } })
+    expect(average).toMatchObject({ name: '12-mo average', type: 'line', color: INK, z: 9, lineStyle: { width: 2, type: 'dashed' } })
     // One label, ONE number: the line is spendStats.avg12 — the mean of the months
     // STRICTLY BEFORE the latest (100, 200 → 150), which is exactly what the tile
     // prints as “over/under $150.00 12-mo avg”. The mean of the SHOWN window

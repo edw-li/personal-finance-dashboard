@@ -21,7 +21,7 @@ import {
 } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { referenceLine } from '../../charts/reference'
-import { MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
+import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
 import type { CoverageOut, NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
@@ -162,31 +162,13 @@ export function recentSpendOption(
   // A single-month book has nothing before the latest to average: no line, no legend entry
   // for a comparison that does not exist yet (the tile suppresses its delta for the same
   // reason).
-  const averageData = totals.map(() => mean)
-  const average =
-    mean === null
-      ? []
-      : [
-          referenceLine(AVERAGE_SERIES, averageData),
-          // The reference's grey is the bars' grey, so where it crosses a bar it would vanish.
-          // The dataviz ring for overlapping marks: a surface casing under the dashes, 2px a
-          // side. It has no name (no legend entry), no tooltip row and no hover of its own.
-          {
-            type: 'line' as const,
-            symbol: 'none' as const,
-            silent: true,
-            z: 8,
-            color: SURFACE,
-            lineStyle: { width: 6 },
-            tooltip: { show: false },
-            emphasis: { disabled: true },
-            data: averageData,
-          },
-        ]
+  // The reference grammar's dashes, drawn in INK rather than its muted grey: the bars wear the
+  // neutral grey (TOTAL_SPEND), and a grey line would share their legend key and vanish where
+  // it crosses a bar (the 2026-09-23 review's decision). The fixtures declare the dash.
+  const average = mean === null ? [] : [{ ...referenceLine(AVERAGE_SERIES, totals.map(() => mean)), color: INK }]
   return {
     grid: grid(),
-    // The key lists the bars and the average; the casing is not an entry.
-    legend: legendFor(1 + Math.min(average.length, 1)),
+    legend: legendFor(1 + average.length),
     xAxis: { ...axis, data: labels },
     yAxis: moneyAxis(),
     tooltip: axisTooltip({
