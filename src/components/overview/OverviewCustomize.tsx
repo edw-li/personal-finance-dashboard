@@ -56,14 +56,16 @@ function CustomizeGroup<K extends View>({
     onCommit: (next) => onChange(next),
   })
   const hidden = all.filter((id) => !visible.includes(id))
-  // While a row is up, every box of this list is inert (R0's consumer rule 5): a tick mid-lift
-  // would change the items under the drag, and the hook would silently cancel it.
-  const inert = reorder.active
+  // While a row is up its list's boxes are disabled (useReorder's consumer rules): a tick would
+  // change the items under the drag, and the hook would drop the lift ('Cancelled — the list
+  // changed.').
+  const locked = reorder.active
   // A tick moves its row across the divider, and React mounts a new box for it there: commit the
-  // change now and hand the caret to the new box, or a keyboard reader lands on <body>.
+  // change now and hand the caret to the new box, or a keyboard reader lands on <body>. The boxes
+  // are never submitted, so they carry their view in data-view — a lookup key, not a form value.
   const toggle = (id: K, show: boolean) => {
     flushSync(() => onChange(show ? [...visible, id] : visible.filter((item) => item !== id)))
-    fieldsetRef.current?.querySelector<HTMLInputElement>(`input[value="${id}"]`)?.focus()
+    fieldsetRef.current?.querySelector<HTMLInputElement>(`input[data-view="${id}"]`)?.focus()
   }
   return (
     <fieldset ref={fieldsetRef}>
@@ -76,7 +78,7 @@ function CustomizeGroup<K extends View>({
         <div key={id} className="overview-customize-row" {...reorder.itemProps(id)}>
           <DragHandle name={LABELS[id]} {...reorder.handleProps(id)} />
           <label>
-            <input type="checkbox" value={id} checked disabled={inert || (keepOne && visible.length === 1)} onChange={() => toggle(id, false)} />
+            <input type="checkbox" data-view={id} checked disabled={locked || (keepOne && visible.length === 1)} onChange={() => toggle(id, false)} />
             {LABELS[id]}
           </label>
         </div>
@@ -85,7 +87,7 @@ function CustomizeGroup<K extends View>({
       {hidden.map((id) => (
         <div key={id} className="overview-customize-row is-off">
           <label>
-            <input type="checkbox" value={id} checked={false} disabled={inert} onChange={() => toggle(id, true)} />
+            <input type="checkbox" data-view={id} checked={false} disabled={locked} onChange={() => toggle(id, true)} />
             {LABELS[id]}
           </label>
         </div>
