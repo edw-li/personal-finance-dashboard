@@ -225,6 +225,11 @@ reorder.liftedId         // K | null
    `preventDefault()`. So it cancels only the drag: `usePopoverDismiss` and the detail panel both yield
    to a `defaultPrevented` Escape.
 
+   The one exception to easing home is a **data change** (or `disabled` turning true) under a live
+   lift. The rows have already re-rendered, so there is nothing to ease: the drag clears at once and
+   the live region says "Cancelled — the list changed." (§8.2). "Back at position …" would describe a
+   list that no longer exists. (Amended 2026-09-23 at lane R0's review.)
+
 ### 2.4 Keyboard and screen readers
 
 - **The grip.**
@@ -639,6 +644,7 @@ quick-fixes batch's lane B2. R5 branches only after B2 has merged to local main.
 | Drop, moved | Dropped {name} at position {i} of {n}. |
 | Drop, unmoved | Dropped {name} where it was. |
 | Cancel | Cancelled. {name} is back at position {i} of {n}. |
+| Cancel, the list changed under a live lift | Cancelled — the list changed. |
 
 `{range}` is the group label ("Cash") for accounts, "{parent}'s components" for components, and absent
 elsewhere. Positions count within the range.
