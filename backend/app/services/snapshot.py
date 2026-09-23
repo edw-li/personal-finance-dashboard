@@ -135,7 +135,7 @@ REDACTED_ROWS: dict[str, frozenset[str]] = {"app_settings": frozenset({KEY_SETTI
 # overwrite it; restore points add microseconds for the same reason. Both anchored, so a
 # name from a URL can never carry a path separator.
 SNAPSHOT_NAME_RE = re.compile(r"^finance-export-(\d{8})-(\d{6})\.zip$")
-RESTORE_POINT_NAME_RE = re.compile(r"^pre-restore-\d{8}-\d{6}-\d{6}\.zip$")
+RESTORE_POINT_NAME_RE = re.compile(r"^pre-restore-(\d{8})-(\d{6})-(\d{6})\.zip$")
 RESTORE_POINTS_KEEP = 3
 
 
@@ -164,6 +164,19 @@ def snapshot_stamp(name: str) -> datetime | None:
         return datetime.strptime(f"{match.group(1)}{match.group(2)}", "%Y%m%d%H%M%S").replace(
             tzinfo=UTC
         )
+    except ValueError:
+        return None
+
+
+def restore_point_stamp(name: str) -> datetime | None:
+    """The UTC instant a restore point's name encodes, to the microsecond, or None for a
+    foreign name — snapshot_stamp's twin (2026-09-23 spec §B3): the listing and the download
+    read restore points by the same grammar the writer names them with."""
+    match = RESTORE_POINT_NAME_RE.fullmatch(name)
+    if match is None:
+        return None
+    try:
+        return datetime.strptime("".join(match.groups()), "%Y%m%d%H%M%S%f").replace(tzinfo=UTC)
     except ValueError:
         return None
 

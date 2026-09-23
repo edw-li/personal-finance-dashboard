@@ -56,6 +56,9 @@ class SnapshotEntryOut(BaseModel):
     alembic_head: str | None
     # head equals the server's — the only snapshots the Restore card offers to apply.
     restorable: bool
+    # Which directory the file lives in (2026-09-23 spec §B3): a stored snapshot (nightly or
+    # Snapshot now) or a restore point saved before a restore or an import.
+    kind: Literal["snapshot", "restore_point"] = "snapshot"
 
 
 # ── Activity (§9) ─────────────────────────────────────────────────────────────────────

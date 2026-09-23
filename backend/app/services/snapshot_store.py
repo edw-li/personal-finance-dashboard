@@ -13,8 +13,10 @@ import contextlib
 import json
 import logging
 import zipfile
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,8 +24,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import ChangeLog, LifecycleRun
 from app.schemas.lifecycle import SnapshotEntryOut
 from app.services.snapshot import (
+    RESTORE_POINT_NAME_RE,
     SNAPSHOT_NAME_RE,
     build_snapshot_zip,
+    restore_point_stamp,
+    restore_points_dir,
     snapshot_name,
     snapshot_stamp,
     snapshots_dir,
@@ -51,18 +56,22 @@ def _head_of(path: Path) -> tuple[bool, str | None]:
     return True, head if isinstance(head, str) else None
 
 
-def list_snapshots(server_head: str | None) -> list[SnapshotEntryOut]:
+def _list_directory(
+    directory: Path,
+    stamp_of: Callable[[str], datetime | None],
+    kind: Literal["snapshot", "restore_point"],
+    server_head: str | None,
+) -> list[SnapshotEntryOut]:
     """Sync (filesystem) — callers wrap it in asyncio.to_thread. Newest first; names outside
     the grammar are ignored; restorable = the file's head equals this server's."""
-    directory = snapshots_dir()
     if not directory.is_dir():
         return []
     entries: list[SnapshotEntryOut] = []
     for path in directory.iterdir():
-        stamp = snapshot_stamp(path.name)
+        stamp = stamp_of(path.name)
         # is_symlink first: is_file() FOLLOWS the link, so a symlink dropped into the
-        # snapshots directory would be read, sized and offered for restore from wherever it
-        # points — off the data volume entirely. Only real files on the volume are snapshots.
+        # directory would be read, sized and offered for restore from wherever it points —
+        # off the data volume entirely. Only real files on the volume are listed.
         if stamp is None or path.is_symlink() or not path.is_file():
             continue
         readable, head = _head_of(path)
@@ -73,9 +82,41 @@ def list_snapshots(server_head: str | None) -> list[SnapshotEntryOut]:
                 size_bytes=path.stat().st_size,
                 alembic_head=head,
                 restorable=readable and head == server_head,
+                kind=kind,
             )
         )
     return sorted(entries, key=lambda entry: entry.name, reverse=True)
+
+
+def list_snapshots(server_head: str | None) -> list[SnapshotEntryOut]:
+    """The stored snapshots (nightly and Snapshot now), newest first."""
+    return _list_directory(snapshots_dir(), snapshot_stamp, "snapshot", server_head)
+
+
+def list_restore_points(server_head: str | None) -> list[SnapshotEntryOut]:
+    """The points saved before every restore and import (2026-09-23 spec §B3), newest first
+    — the three the writer keeps. Until this, the only way back after a bad restore or import
+    was shell access to the volume."""
+    return _list_directory(restore_points_dir(), restore_point_stamp, "restore_point", server_head)
+
+
+def stored_file(name: str) -> Path | None:
+    """The file a stored snapshot's OR a restore point's name points at, or None
+    (2026-09-23 spec §B3). The two anchored name grammars ARE the path-safety check and run
+    before any path is built from the untrusted name — a match carries neither a separator
+    nor a dot segment; the join is then checked to stay inside its directory, and a symlink
+    is never followed. Sync — callers wrap it in asyncio.to_thread. The download route and
+    restore-from-stored share it, so the two doors can never disagree about what is safe."""
+    if SNAPSHOT_NAME_RE.fullmatch(name) is not None:
+        directory = snapshots_dir()
+    elif RESTORE_POINT_NAME_RE.fullmatch(name) is not None:
+        directory = restore_points_dir()
+    else:
+        return None
+    path = directory / name
+    if not path.is_relative_to(directory) or path.is_symlink() or not path.is_file():
+        return None
+    return path
 
 
 async def write_snapshot(db: AsyncSession, *, actor: str | None, trigger: str) -> SnapshotEntryOut:
