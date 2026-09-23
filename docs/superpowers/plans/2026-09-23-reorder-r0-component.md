@@ -2387,10 +2387,11 @@ git commit -m "docs(plan): lane R0 — results and gates"
 
 ## Results (filled in by the implementer)
 
-- Lane tests: `npx vitest run src/components/reorder` — 5 files / 71 tests pass (reorderMath 20,
-  reorderDom 14, reorderStatus 3, useReorder 24, reorderCss 10).
-- Full vitest: 238 files / 3183 tests, exit 0 (neither known load-sensitive flake fired). Run before
-  correction 6 and review round 1, which changed lane files only.
+- Lane tests: `npx vitest run src/components/reorder` — 5 files / 87 tests pass (reorderMath 23,
+  reorderDom 15, reorderStatus 3, useReorder 33, reorderCss 13).
+- Full vitest, after the code-quality round: 238 files / 3213 tests, exit 0. The last commit after it
+  (the harness fix in code-quality item 13) touched only `useReorder.test.tsx`, which the lane gate
+  re-ran green. The first full run, before correction 6, was 238 / 3183 green.
 - tsc / eslint / build:
   - `tsc -b` exit 0; also a full check against a fresh buildinfo (tsc -b's cache lives in the shared
     node_modules junction), exit 0.
@@ -2452,6 +2453,35 @@ git commit -m "docs(plan): lane R0 — results and gates"
      - The keyboard-lifted unit animates its transform over `--t-fast`, so a rect read right after
        the move reports where it came from. That would leave the page one step behind, and after
        Home/End it would not scroll at all.
+- Code-quality review round (one commit per item; 3 and 5 share one):
+  1. `scrollParentOf` needs more than 1 px of overhang. An `overflow-x`-only box computes
+     `overflow-y: auto`, and a rounding pixel must not steal the page's auto-scroll.
+  2. A pinned cell's saved flash runs `reorder-saved-pinned`: mixed over, and ending on, its own
+     `--surface`. Nothing scrolled beneath it shows through.
+  3. The lifted box's shadow is `rgb(var(--shadow))`, the theme token.
+  4. Pinned two browser behaviours:
+     - fake-rAF auto-scroll, with the unit riding a page scroll, clamped;
+     - pointerup's implicit `lostpointercapture` in the drop, unmoved-drop and reduced-motion tests.
+  5. The hover rule skips a pressed grip, so its accent shows mid-drag.
+  6. The settle holds at `MOTION_MS.fast − 1` and ends at `MOTION_MS.fast`, both for easing home and
+     for the pointer drop (no `onCommit` before).
+  7. The unmount teardown is a layout effect. A sibling's layout effect in the unmounting commit
+     already sees `html.reorder-active` gone.
+  8. `commit` clears the rows in a `finally`. A throwing `onCommit` leaves nothing stranded, and its
+     error propagates.
+  9. Focus goes back to the moved grip whenever it held focus, pointer drops included, and is never
+     taken from elsewhere.
+  10. A held Space/Enter (`event.repeat`) neither lifts nor drops.
+  11. Test hygiene: `onTestFinished` removes the popover listeners, `vi.restoreAllMocks()` runs, and
+      only `reorder-active` is cleared.
+  12. `stopDrag` is now `releaseDrag`, and the header has a phase/transition table.
+  13. Development-only `contractProblems`: a split range, or carried rows that don't follow their
+      carrier in order, go to `console.error` once per change of the rows (a ref guard makes that
+      hold under StrictMode too). Its first catch was this lane's own harness: after a component
+      move, `Stateful` kept the carrier's stale `carries`, so the parent's next drag would have put
+      the components back. The harness now re-derives `carries`, and the carried-rows test pins the
+      parent move.
+  14. A StrictMode smoke test: lift, move, drop, exactly one `onCommit`.
 - Notes for R2–R5 (what the contract section does not say):
   - **Pointer tests** need three things: `installPointerEvents()` in `beforeAll`, `afterEach(cleanup)`,
     and mocked row boxes (the `layoutRows` helper in `useReorder.test.tsx`). Without layout every
@@ -2466,6 +2496,13 @@ git commit -m "docs(plan): lane R0 — results and gates"
     carries, and `disabled` turning true. A lifted unit announces "Cancelled — the list changed."
   - **Every row state in a table needs `.reorder-table` on the `<table>`.** Only the `:not(tr)` box
     forms apply without it.
+  - **Re-derive `carries` from the order you render.** After a component move, the carrier's
+    `carries` lists its components in their new order. Stale `carries` would make the parent's next
+    drag put them back. In development the hook reports it (`useReorder: … carries …` on
+    `console.error`), as it does a split range.
+  - **`onCommit` may throw.** The rows are still cleared, and the error propagates to whoever
+    dispatched the drop (a React event handler, or the pointer settle's timer). Catch your own save
+    errors.
 
 ## Self-review (spec coverage)
 
