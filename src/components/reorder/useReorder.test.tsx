@@ -503,6 +503,40 @@ describe('useReorder — pointer', () => {
     expect(row('A').style.transform).toBe('translateY(360px)') // J's bottom, 900, less A's, 540
   })
 
+  it('a pointer drop gives focus back to the moved grip when it held focus', () => {
+    // A browser blurs an element whose ROW is moved; jsdom blurs only a moved node itself. So the
+    // commit does what the reorder's DOM move does in a browser.
+    const blurLikeTheMove = () => {
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+    }
+    render(<Stateful initial={flat('A', 'B', 'C', 'D')} onCommit={blurLikeTheMove} />)
+    layoutRows()
+    grip('Alpha').focus()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(order()).toEqual(['B', 'C', 'A', 'D'])
+    expect(document.activeElement).toBe(grip('Alpha'))
+  })
+
+  it('a drop never takes focus from elsewhere', () => {
+    render(<Stateful initial={flat('A', 'B', 'C', 'D')} />)
+    layoutRows()
+    const elsewhere = screen.getByRole('button', { name: 'mark Bravo saved' })
+    elsewhere.focus()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(order()).toEqual(['B', 'C', 'A', 'D'])
+    expect(document.activeElement).toBe(elsewhere)
+  })
+
   it('a throwing onCommit still leaves every row clean, and its error is rethrown after', () => {
     render(
       <Stateful
