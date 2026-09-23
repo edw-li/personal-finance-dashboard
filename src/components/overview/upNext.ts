@@ -1,10 +1,15 @@
 // Pure Up-next math for the overview strip (2026-09-03 calendar spec §14; attention.ts's
 // charter: no React, no fetching, todayIso injectable). Fed from the same GET /calendar the
-// page uses (today → +45 days).
-import type { CalendarEvent } from '../../types/api'
+// page uses (today → +45 days) — its events AND its living-cost estimates.
+import type { CalendarEvent, CalendarLiving } from '../../types/api'
 import { addDays } from '../../utils/months'
 import { DEADLINE_TYPES } from '../calendar/calendarView'
-import { cashLine, windowSummary } from '../calendar/cashflow'
+import {
+  formatCompactCents,
+  proratedLivingCents,
+  signedCompact,
+  windowSummary,
+} from '../calendar/cashflow'
 
 export const UP_NEXT_LIMIT = 5
 export const UP_NEXT_WINDOW_DAYS = 45
@@ -32,14 +37,35 @@ export function rankUpNext(events: CalendarEvent[], todayIso: string): CalendarE
   return picked
 }
 
-/** "Next 45 days: +$X in · −$Y out" from the same cents arithmetic as the calendar strip.
- *  It sums the whole WINDOW, not the five listed rows: the list is about attention, the line
- *  is about money, and a second payday the list dropped still lands in the account. */
-export function upNextLine(events: CalendarEvent[], todayIso: string): string {
-  const summary = windowSummary(events, todayIso, addDays(todayIso, UP_NEXT_WINDOW_DAYS))
-  // Vesting is not cash; the calendar's own strip is where that leg is reported.
-  const line = cashLine({ ...summary, vesting: 0 })
-  return `Next ${UP_NEXT_WINDOW_DAYS} days: ${line}`
+/** "Next 45 days: +$12.4k scheduled in · −$50 scheduled out · ≈ −$8.2k living costs"
+ *  (2026-09-23 spec §B2). The dated legs are the calendar strip's own cents arithmetic, named
+ *  "scheduled" because that is all they are; the living leg spreads each month's server estimate
+ *  over its days inside the window (today's month counts only what is left of it) and appears
+ *  only when every month the window touches has an estimate — a partial sum would understate the
+ *  very spending it is there to show. It sums the whole WINDOW, not the five listed rows: the
+ *  list is about attention, the line is about money, and a second payday the list dropped still
+ *  lands in the account. Vesting is not cash; the calendar's own strip reports that leg. */
+export function upNextLine(
+  events: CalendarEvent[],
+  living: readonly CalendarLiving[],
+  todayIso: string,
+): string {
+  const end = addDays(todayIso, UP_NEXT_WINDOW_DAYS)
+  const s = windowSummary(events, todayIso, end)
+  const parts: string[] = []
+  if (s.cashIn !== 0) parts.push(`${signedCompact(s.cashIn, 'in', s.estimated.cashIn)} scheduled in`)
+  if (s.cashOut !== 0) {
+    parts.push(`${signedCompact(s.cashOut, 'out', s.estimated.cashOut)} scheduled out`)
+  }
+  const livingCents = proratedLivingCents(living, todayIso, end)
+  if (livingCents !== null && livingCents !== 0) {
+    // Spending leaves the account: a minus, like the scheduled-out leg's.
+    parts.push(`≈ ${livingCents > 0 ? '−' : '+'}${formatCompactCents(livingCents)} living costs`)
+  }
+  if (parts.length === 0) {
+    return `Next ${UP_NEXT_WINDOW_DAYS} days: ${s.unknown > 0 ? 'amounts unknown' : 'nothing due'}`
+  }
+  return `Next ${UP_NEXT_WINDOW_DAYS} days: ${parts.join(' · ')}`
 }
 
 /** Kept for callers that only trim (the assistant's context builder mirrors it server-side). */

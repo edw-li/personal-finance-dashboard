@@ -52,6 +52,7 @@ import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
 import { getLocal, setLocal, subscribe } from '../prefs/prefsStore'
 import type {
   CalendarEvent,
+  CalendarLiving,
   CoverageOut,
   DividendOut,
   EsppLotsResponse,
@@ -120,6 +121,13 @@ function upNextKey(): string {
   return `overview:upnext:${todayIso()}`
 }
 
+// The up-next card's one read (2026-09-23 spec §B2): the window's events and its living-cost
+// estimates are ONE response, cached together under the day key so they are never two instants.
+interface UpNextData {
+  events: CalendarEvent[]
+  living: CalendarLiving[]
+}
+
 function flowKey(year: number | null): string {
   return `overview:flow:${year ?? 'auto'}`
 }
@@ -161,8 +169,8 @@ export default function OverviewPage() {
   // The agenda has its own day-keyed cache and failure state, independent of the four
   // groups above. A failed refresh keeps the last loaded schedule with a notice;
   // without a previous answer, the card reports that upcoming events are unavailable.
-  const [upNext, setUpNext] = useState<CalendarEvent[] | null>(
-    () => getSnapshot<CalendarEvent[]>(upNextKey()) ?? null,
+  const [upNext, setUpNext] = useState<UpNextData | null>(
+    () => getSnapshot<UpNextData>(upNextKey()) ?? null,
   )
   const [upNextFailed, setUpNextFailed] = useState(false)
   const upNextSeq = useRef(0)
@@ -174,12 +182,12 @@ export default function OverviewPage() {
       .then((data) => {
         if (seq !== upNextSeq.current) return
         const key = upNextKey()
-        const previous = getSnapshot<CalendarEvent[]>(key)
-        setSnapshot(key, data.events)
+        const next: UpNextData = { events: data.events, living: data.living ?? [] }
+        const previous = getSnapshot<UpNextData>(key)
+        setSnapshot(key, next)
         setUpNextFailed(false)
-        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data.events))
-          return
-        setUpNext(data.events)
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(next)) return
+        setUpNext(next)
       })
       .catch(() => {
         if (seq !== upNextSeq.current) return
@@ -723,7 +731,7 @@ export default function OverviewPage() {
                   <button type="button" className="button" onClick={loadUpNext}>Retry upcoming events</button>
                 </p>
               )}
-              {upNext === null ? !upNextFailed && <p className="drill-hint">Loading upcoming events...</p> : rankUpNext(upNext, todayIso()).length === 0 ? (
+              {upNext === null ? !upNextFailed && <p className="drill-hint">Loading upcoming events...</p> : rankUpNext(upNext.events, todayIso()).length === 0 ? (
                 <p className="drill-hint">
                   {upNextFailed
                     ? `The last loaded schedule had no events in the next ${UP_NEXT_WINDOW_DAYS} days.`
@@ -732,7 +740,7 @@ export default function OverviewPage() {
               ) : (
                 <>
                   <ul className="up-next-list">
-                    {rankUpNext(upNext, todayIso()).map((event) => {
+                    {rankUpNext(upNext.events, todayIso()).map((event) => {
                       const amount = chipAmount(event)
                       const row = (
                         <>
@@ -756,7 +764,9 @@ export default function OverviewPage() {
                     })}
                   </ul>
                   {/* The money the window actually moves — the list is capped, this is not. */}
-                  <p className="drill-hint up-next-line">{upNextLine(upNext, todayIso())}</p>
+                  <p className="drill-hint up-next-line">
+                    {upNextLine(upNext.events, upNext.living, todayIso())}
+                  </p>
                 </>
               )}
               <NavLink className="drill-hint" to="/calendar">

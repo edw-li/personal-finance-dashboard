@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { calendarEvent } from '../../testing/calendarFixtures'
+import type { CalendarLiving } from '../../types/api'
 import { UP_NEXT_LIMIT, UP_NEXT_WINDOW_DAYS, rankUpNext, upNextLine } from './upNext'
 
 const TODAY = '2026-08-24'
@@ -52,11 +53,33 @@ describe('rankUpNext', () => {
         calendarEvent({ date: '2026-09-15', type: 'tax_deadline', label: 'Q3', amount: '1200.00', direction: 'out', basis: 'estimated' }),
         payday('2026-10-15'), // day 52: outside the window
       ],
+      [],
       TODAY,
     )
-    expect(line).toBe('Next 45 days: +$13.6k in · ~−$1.2k out')
-    expect(upNextLine([], TODAY)).toBe('Next 45 days: nothing due')
+    // "Scheduled" on both dated legs (2026-09-23 spec §B2): neither is a forecast of spending.
+    expect(line).toBe('Next 45 days: +$13.6k scheduled in · ~−$1.2k scheduled out')
+    expect(upNextLine([], [], TODAY)).toBe('Next 45 days: nothing due')
     expect(UP_NEXT_WINDOW_DAYS).toBe(45)
+  })
+
+  it('adds the living costs the window spends, pro-rated by day in integer cents', () => {
+    const living: CalendarLiving[] = ['2026-09-01', '2026-10-01', '2026-11-01'].map((month) => ({
+      month,
+      amount: '5478.00',
+      basis: 'budget',
+      months_in_average: null,
+    }))
+    const today = '2026-09-23'
+    // Sep 23–30 is 8 of 30 days, October all 31, Nov 1–7 is 7 of 30:
+    // 1,460.80 + 5,478.00 + 1,278.20 = 8,217.00.
+    expect(upNextLine([payday('2026-09-30')], living, today)).toBe(
+      'Next 45 days: +$6.8k scheduled in · ≈ −$8.2k living costs',
+    )
+    // A month the window touches without an estimate: the leg is left out, not understated.
+    expect(upNextLine([payday('2026-09-30')], living.slice(0, 2), today)).toBe(
+      'Next 45 days: +$6.8k scheduled in',
+    )
+    expect(upNextLine([], living, today)).toBe('Next 45 days: ≈ −$8.2k living costs')
   })
 
   it('leaves vesting out of the cash line — a vest is not money in the bank', () => {
@@ -65,8 +88,9 @@ describe('rankUpNext', () => {
         calendarEvent({ date: '2026-08-30', type: 'rsu_vest', label: 'RSU vest', amount: '41200.00', direction: 'in', basis: 'estimated' }),
         payday('2026-08-31'),
       ],
+      [],
       TODAY,
     )
-    expect(line).toBe('Next 45 days: +$6.8k in')
+    expect(line).toBe('Next 45 days: +$6.8k scheduled in')
   })
 })
