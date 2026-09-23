@@ -188,24 +188,27 @@ describe('spendingBarsOption', () => {
   })
 
   // F5 (2026-09-13 audit): one budgeted month in 38 drove a permanent legend chip.
-  it('omits the budget step unless the DISPLAYED window shows at least two budgeted months', () => {
+  // Judged over the PRESET's window, never a manual drag's (the 2026-09-23 code-quality review):
+  // a series that appears mid-drag is a notMerge rebuild, and a rebuild stops the pan dead.
+  it('omits the budget step unless the preset window shows at least two budgeted months', () => {
     expect(read(spendingBarsOption(barsInput(matrixFixture({ total_budget: ['500.00', null] })))).series.map((s) => s.id)).not.toContain('budget-Total budget')
-    const three = matrixFixture({
-      months: ['2026-05-01', '2026-06-01', '2026-07-01'],
-      series: [
-        { category_id: 1, values: ['2000.00', '2000.00', '2000.00'], budgets: ['500.00', '500.00', null] },
-        { category_id: 2, values: ['600.00', '600.00', null], budgets: [null, null, null] },
-        { category_id: 3, values: ['150.00', '150.00', null], budgets: [null, null, null] },
-      ],
-      totals: ['2750.00', '2750.00', '2000.00'], net_pay: ['6000.00', '6000.00', '6000.00'],
-      savings_rate: ['0.54', '0.54', null], four_pct_rule: ['4100.50', '4100.50', '4100.50'],
-      total_budget: ['500.00', '500.00', null],
+    // Fourteen months, budgeted only in the first two: All shows the step, 1Y (the last twelve) does not.
+    const months = Array.from({ length: 14 }, (_, i) => `${2025 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}-01`)
+    const fourteen = matrixFixture({
+      months,
+      series: [1, 2, 3].map((id) => ({ category_id: id, values: months.map(() => '100.00'), budgets: months.map(() => null) })),
+      totals: months.map(() => '300.00'), net_pay: months.map(() => '6000.00'),
+      savings_rate: months.map(() => null), four_pct_rule: months.map(() => null),
+      total_budget: months.map((_, i) => (i < 2 ? '500.00' : null)),
     })
-    const labels = ['May 2026', 'Jun 2026', 'Jul 2026']
-    const inView = read(spendingBarsOption({ ...barsInput(three), monthLabels: labels, range: { preset: 'all' as const, window: { startValue: 0, endValue: 1 } } }))
-    expect(inView.series.map((s) => s.id)).toContain('budget-Total budget')
-    const outOfView = read(spendingBarsOption({ ...barsInput(three), monthLabels: labels, range: { preset: 'all' as const, window: { startValue: 2, endValue: 2 } } }))
-    expect(outOfView.series.map((s) => s.id)).not.toContain('budget-Total budget')
+    const labels = months.map((m) => `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`)
+    const ids = (range: { preset: 'all' | '1y'; window?: { startValue: number; endValue: number } }) =>
+      read(spendingBarsOption({ ...barsInput(fourteen), monthLabels: labels, range })).series.map((s) => s.id)
+    expect(ids({ preset: 'all' })).toContain('budget-Total budget')
+    expect(ids({ preset: '1y' })).not.toContain('budget-Total budget')
+    // A drag inside either preset changes nothing.
+    expect(ids({ preset: 'all', window: { startValue: 10, endValue: 13 } })).toContain('budget-Total budget')
+    expect(ids({ preset: '1y', window: { startValue: 0, endValue: 3 } })).not.toContain('budget-Total budget')
   })
 
   it('grid, axes, legend: money grid, every month labelled, compact money ticks, Total budget deselected under the page picks', () => {
@@ -282,9 +285,36 @@ describe('spendingBarsOption', () => {
     expect(netPay.markPoint?.data).toEqual([
       { name: 'Apr 2024', coord: ['Apr 2024', 7000], value: 25937.48, label: { formatter: '$25.9K ↑' } },
     ])
-    // A window that does not hold the outlier is never capped: echarts' own extent applies.
+    // The scale is the series', not the window's: a zoom that leaves the outlier out keeps the
+    // same axis, and echarts hides the markers of months outside the window itself.
     const recent = read(spendingBarsOption({ ...barsInput(matrix), monthLabels: labels, range: { preset: 'all', window: { startValue: 12, endValue: 23 } } })) as unknown as { yAxis: { max?: number } }
-    expect(recent.yAxis.max).toBeUndefined()
+    expect(recent.yAxis.max).toBe(7000)
+  })
+
+  // 2026-09-23 code-quality review: the robust axis followed the MANUALLY zoomed window, so the
+  // option changed exactly when an outlier entered or left the dragged window. EChart then drops
+  // to a notMerge rebuild mid-drag, echarts disposes its drag controller, and the pan stops dead.
+  it('a manual drag never changes the option apart from its dataZoom, so the pan keeps going', () => {
+    const months = Array.from({ length: 24 }, (_, i) => `${2024 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}-01`)
+    const labels = months.map((m) => `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`)
+    const matrix = matrixFixture({
+      months,
+      series: [1, 2, 3].map((id) => ({ category_id: id, values: months.map(() => '900.00'), budgets: months.map(() => null) })),
+      totals: months.map(() => '2700.00'),
+      net_pay: months.map((_, i) => (i === 3 ? '25937.48' : '6000.00')),
+      savings_rate: months.map((_, i) => (i === 3 ? '-10.73' : '0.5')),
+      total_savings_rate: months.map((_, i) => (i === 3 ? '-9.5' : '0.6')),
+      four_pct_rule: months.map(() => '2000.00'),
+      total_budget: months.map((_, i) => (i < 13 ? '500.00' : null)),
+    })
+    const withoutZoom = (option: unknown) => JSON.stringify({ ...(option as object), dataZoom: undefined })
+    const inside = { preset: 'all' as const, window: { startValue: 0, endValue: 5 } } // holds the outlier
+    const outside = { preset: 'all' as const, window: { startValue: 14, endValue: 23 } } // does not
+    const bars = (range: typeof inside) => spendingBarsOption({ ...barsInput(matrix), monthLabels: labels, range })
+    expect(withoutZoom(bars(inside))).toBe(withoutZoom(bars(outside)))
+    expect(withoutZoom(bars(inside))).toBe(withoutZoom(bars({ preset: 'all', window: undefined as never })))
+    const savings = (range: typeof inside) => savingsRateOption({ matrix, monthLabels: labels, range })
+    expect(withoutZoom(savings(inside))).toBe(withoutZoom(savings(outside)))
   })
 })
 
@@ -501,12 +531,13 @@ describe('savingsRateOption', () => {
       { name: 'Nov 2023', coord: ['Nov 2023', -1], value: -1.76, label: { show: false } },
       { name: 'Dec 2023', coord: ['Dec 2023', -1], value: -1.55, label: { show: false } },
     ])
-    // Zoomed in to five months, each month has room for its own label.
+    // A manual zoom keeps the markers the whole series decided: the option must not change
+    // mid-drag (the pan would stop), and the tooltip still carries every true value.
     const zoomed = read(savingsRateOption({ matrix, monthLabels: labels, range: { preset: 'all', window: { startValue: 0, endValue: 4 } } })) as unknown as {
       series: { markPoint?: { data: { label: unknown }[] } }[]
     }
     expect(zoomed.series[0].markPoint?.data.map((item) => item.label)).toEqual([
-      { formatter: '-1073% ↓' }, { formatter: '-198% ↓' }, { formatter: '-176% ↓' }, { formatter: '-155% ↓' },
+      { formatter: '-1073% ↓' }, { show: false }, { show: false }, { show: false },
     ])
   })
 

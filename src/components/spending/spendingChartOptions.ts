@@ -148,27 +148,30 @@ export function spendingBarsOption({
   )
   const name = (id: number) => nameById.get(id) ?? String(id)
   const categoryNames = [...topIds.map(name), 'Other']
+  // Nothing below may follow a MANUAL drag (the 2026-09-23 code-quality review): the page mirrors
+  // every drag into `range.window`, and an option that changes mid-drag is a notMerge rebuild,
+  // which disposes echarts' drag controller and stops the pan dead.
   // F5 (2026-09-13 audit): a single budgeted month in 38 drove a permanent legend entry. The step
-  // and its chip exist only when the DISPLAYED window shows at least two budgeted months — one
+  // and its chip exist only when the PRESET's window shows at least two budgeted months — one
   // point draws no step, and a book with no budgets in view has nothing to summon.
-  const { startValue, endValue } = resolvedWindow(matrix.months, range)
+  const { startValue, endValue } = resolvedWindow(matrix.months, { preset: range.preset })
   const budgetedInView = matrix.total_budget.slice(startValue, endValue + 1).filter((v) => v !== null).length
   const hasBudget = budgetedInView >= 2
-  // Robust axis (2026-09-23 spec §C3), judged over the DISPLAYED window: one import-artefact
-  // month (Aug 2023's $25,937.48 of net pay) must not set the scale for three years of $2–10K
-  // bars. The drawn stack top is what a bar reaches; the lines and references ride along.
+  // Robust axis (2026-09-23 spec §C3), judged over the WHOLE series: one import-artefact month
+  // (Aug 2023's $25,937.48 of net pay) must not set the scale for three years of $2–10K bars,
+  // in any window, dragged or not. echarts hides the markers of months outside the window.
+  // The drawn stack top is what a bar reaches; the lines and references ride along.
   const netPay = matrix.net_pay.map(toNumber)
   const stackTop = matrix.months.map(
     (_, i) =>
       topIds.reduce((acc, id) => acc + Math.max(toNumber(valuesById.get(id)?.[i]) ?? 0, 0), 0) +
       Math.max(otherPerMonth[i] ?? 0, 0),
   )
-  const inView = <T,>(values: readonly T[]) => values.slice(startValue, endValue + 1)
   const robust = robustMax([
-    ...inView(stackTop),
-    ...inView(netPay),
-    ...inView(matrix.four_pct_rule.map(toNumber)),
-    ...(hasBudget ? inView(matrix.total_budget.map(toNumber)) : []),
+    ...stackTop,
+    ...netPay,
+    ...matrix.four_pct_rule.map(toNumber),
+    ...(hasBudget ? matrix.total_budget.map(toNumber) : []),
   ])
   // Clipped values keep their TRUE figure in the series (the tooltip and the table read it)
   // and gain an edge marker. Labels are selective across the stack and the net-pay line
@@ -177,15 +180,15 @@ export function spendingBarsOption({
   const clippedBars: OffScalePoint[] = []
   const clippedPay: OffScalePoint[] = []
   if (robust !== null) {
-    for (let i = startValue; i <= endValue && i < matrix.months.length; i += 1) {
+    matrix.months.forEach((_, i) => {
       if (stackTop[i] > robust.max) clippedBars.push({ index: i, x: monthLabels[i], value: stackTop[i] })
       const pay = netPay[i]
       if (pay !== null && pay > robust.max) clippedPay.push({ index: i, x: monthLabels[i], value: pay })
-    }
+    })
   }
   const [barEdge, payEdge] = offScaleMarks([clippedBars, clippedPay], {
     direction: 'up',
-    minGap: offScaleGap(endValue - startValue + 1),
+    minGap: offScaleGap(matrix.months.length),
     lift: OFF_SCALE_LIFT,
     text: compactMoney,
   })
@@ -368,23 +371,18 @@ export function savingsRateOption({ matrix, monthLabels, range }: SavingsRateInp
   const numbers = (values: (string | null)[]) => values.map(toNumber)
   const totalRates = total === undefined ? null : numbers(total)
   const cashRates = numbers(matrix.savings_rate)
-  const { startValue, endValue } = resolvedWindow(matrix.months, range)
-  const inView = (values: (number | null)[]) => values.slice(startValue, endValue + 1)
-  const yAxis = pctAxis({ floor: -1, ceiling: 1, values: [...inView(totalRates ?? []), ...inView(cashRates)] })
+  // The extents and the markers are the WHOLE series', never a manual drag's window: an option
+  // that changes mid-drag is a notMerge rebuild, and the pan stops dead (the 2026-09-23
+  // code-quality review). The floor is fixed anyway; echarts hides out-of-window markers.
+  const yAxis = pctAxis({ floor: -1, ceiling: 1, values: [...(totalRates ?? []), ...cashRates] })
   // Each line's clipped months, at the floor (↓) or the ceiling (↑), labelled selectively over
   // BOTH lines (offScaleMarks): one label per run of neighbouring clipped months — its extreme
   // (production's Sep–Dec 2023 are four in a row) — and the cash label lifted where the total
   // line already labels the same run. The same text at the same month reads as one label.
   const lines = totalRates === null ? [cashRates] : [totalRates, cashRates]
-  const clippedWhere = (rates: (number | null)[], beyond: (value: number) => boolean) => {
-    const points: OffScalePoint[] = []
-    for (let i = startValue; i <= endValue && i < rates.length; i += 1) {
-      const value = rates[i]
-      if (value !== null && beyond(value)) points.push({ index: i, x: monthLabels[i], value })
-    }
-    return points
-  }
-  const edges = { minGap: offScaleGap(endValue - startValue + 1), lift: OFF_SCALE_LIFT, text: percentLabel }
+  const clippedWhere = (rates: (number | null)[], beyond: (value: number) => boolean) =>
+    rates.flatMap((value, i): OffScalePoint[] => (value !== null && beyond(value) ? [{ index: i, x: monthLabels[i], value }] : []))
+  const edges = { minGap: offScaleGap(matrix.months.length), lift: OFF_SCALE_LIFT, text: percentLabel }
   const lows = offScaleMarks(lines.map((rates) => clippedWhere(rates, (v) => v < yAxis.min)), { direction: 'down', ...edges })
   const highs = offScaleMarks(lines.map((rates) => clippedWhere(rates, (v) => v > yAxis.max)), { direction: 'up', ...edges })
   const marksFor = (line: number, color: string) => {
