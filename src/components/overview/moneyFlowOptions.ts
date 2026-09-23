@@ -17,6 +17,7 @@ import type { EChartsOption } from '../../charts/echarts'
 import { ENTITY, SALARY_TINTS, foldCategories, foldColor } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
 import { DEFICIT_DECAL, fanCents } from '../../charts/grammar'
+import { monthOrdinal as ordinal, monthRuns, monthWords, runWords } from '../../charts/windowWords'
 import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter, sankeyCsv } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
 import { brandTooltip } from '../../charts/tooltip'
@@ -112,33 +113,11 @@ const A_CENT = 0.005
 const cents = (value: number) => Math.round(value * 100) / 100
 const toCents = (amount: string) => Math.round(Number(amount) * 100)
 
-// --- the window's words (pure; exported for the card's lede/footer and for tests) ---------
+// --- the window's words (charts/windowWords.ts, shared with the Spending "Where … went" year;
+// re-exported for the card's lede/footer and for tests) ------------------------------------
 
-const SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const ordinal = (iso: string) => Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7)) - 1
-const shortMonth = (iso: string) => SHORT[Number(iso.slice(5, 7)) - 1]
+export { monthRuns, monthWords, runWords }
 const firstOfMonth = (iso: string) => `${iso.slice(0, 7)}-01`
-
-/** Contiguous runs of ISO months (the wire's 'YYYY-MM-DD'), ascending. */
-export function monthRuns(months: readonly string[]): string[][] {
-  const runs: string[][] = []
-  for (const month of [...months].sort()) {
-    const run = runs[runs.length - 1]
-    if (run !== undefined && ordinal(month) === ordinal(run[run.length - 1]) + 1) run.push(month)
-    else runs.push([month])
-  }
-  return runs
-}
-
-/** One run in words inside one calendar year: "Sep–Dec", "Sep". */
-export function runWords(run: readonly string[]): string {
-  return run.length === 1 ? shortMonth(run[0]) : `${shortMonth(run[0])}–${shortMonth(run[run.length - 1])}`
-}
-
-/** Runs in words, comma-separated: "Jan–May, Jul–Aug". */
-export function monthWords(months: readonly string[]): string {
-  return monthRuns(months).map(runWords).join(', ')
-}
 
 /** The estimate node's name (spec §C1): "Est. take-home, Sep–Dec" · "Est. take-home, Jan–Jul
  *  (before tracking)" — a run that ends before the book's first take-home month predates the

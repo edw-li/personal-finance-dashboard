@@ -147,7 +147,7 @@ const YEARLY: SpendingYearly = {
       living_total: '4000.00',
       tax_total: '1180.00',
       transfer_total: '150.00',
-      cash_savings: '6820.00',
+      cash_savings: '6670.00',
       payroll_savings: '2000.00',
       total_savings: '8820.00',
       total_savings_rate: '0.630000',
@@ -235,19 +235,57 @@ describe('SpendingPage — the flow card', () => {
     )
   })
 
-  it('re-slices to the yearly rollup client-side on the Year toggle', async () => {
+  it('re-slices to the year client-side on the Year toggle, over its matched months', async () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
 
     fireEvent.click(screen.getByRole('button', { name: 'Year' }))
 
-    expect(await screen.findByText('Where 2026 went')).toBeTruthy()
+    // 2026-09-23 review (spec §C1): the year is its window, the months with take-home AND
+    // spending, and the card says so.
+    expect(await screen.findByText('Where Jun–Jul 2026 went')).toBeTruthy()
+    expect(screen.getByText('Months with take-home and spending entered')).toBeTruthy()
     expect(flowMarker()?.getAttribute('data-links')).toBe(
       'Net pay>Rent=4000|Net pay>Groceries=1180|Net pay>Fun=150|Net pay>Saved=6670',
     )
     // Both datasources were already on the page — the toggle never refetches.
     expect(vi.mocked(fetchMatrix)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(fetchYearly)).toHaveBeenCalledTimes(1)
+  })
+
+  // 2026-09-23 review: on prod the Year view paired Jan–Aug net pay with Jan–Sep spending and
+  // said Saved $148.74 beside the Overview's $2,220.97. August here has spending and no take-home.
+  it('leaves a spend-only month out of the year and names it, like the Overview money flow', async () => {
+    const three = (a: string, b: string, c: string) => [a, b, c]
+    vi.mocked(fetchMatrix).mockResolvedValue(
+      matrixFixture({
+        months: ['2026-06-01', '2026-07-01', '2026-08-01'],
+        series: [
+          { category_id: 1, values: three('2000.00', '2000.00', '2000.00'), budgets: [null, null, null] },
+          { category_id: 2, values: three('600.00', '580.00', '580.00'), budgets: [null, null, null] },
+          { category_id: 3, values: three('150.00', '0.00', '0.00'), budgets: [null, null, null] },
+        ],
+        totals: three('2750.00', '2580.00', '2580.00'),
+        living_total: three('2750.00', '2580.00', '2580.00'),
+        tax_total: three('0.00', '0.00', '0.00'), transfer_total: three('0.00', '0.00', '0.00'),
+        cash_outflow: three('2750.00', '2580.00', '2580.00'),
+        comparison_average: [null, '2750.00', '2665.00'], comparison_count: [0, 1, 2],
+        net_pay: ['6000.00', '6000.00', null],
+        savings_rate: ['0.541666667', '0.57', null],
+        four_pct_rule: [null, null, null],
+        total_budget: [null, null, null],
+      }),
+    )
+    renderPage()
+    // The flow opens on the latest month, which has no take-home to fan out yet.
+    await screen.findByText('Where Aug 2026 went')
+    fireEvent.click(screen.getByRole('button', { name: 'Year' }))
+    expect(await screen.findByText('Where Jun–Jul 2026 went')).toBeTruthy()
+    expect(screen.getByText('Aug 2026 spending ($2,580.00) is shown once its take-home is entered.')).toBeTruthy()
+    // Saved is the rollup's cash saved over Jun–Jul, which the matrix confirms to the cent.
+    expect(flowMarker()?.getAttribute('data-links')).toBe(
+      'Net pay>Rent=4000|Net pay>Groceries=1180|Net pay>Fun=150|Net pay>Saved=6670',
+    )
   })
 
   it('follows the drilled month (the pie month is the flow month)', async () => {

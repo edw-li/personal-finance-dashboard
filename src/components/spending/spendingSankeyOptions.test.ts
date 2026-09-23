@@ -7,7 +7,6 @@ import { distinguishable } from '../../testing/perceptual'
 import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, POSITIVE } from '../../charts/theme'
 import type { SpendingMatrix, SpendingYearly } from '../../types/api'
 import {
-  buildYearSlices,
   spendingFlowPeriod,
   spendingSankeyCsv,
   spendingSankeyOption,
@@ -66,18 +65,46 @@ const YEARLY: SpendingYearly = {
 // category hues, everything else Other.
 const TOP: CategoryFold = { ids: [1, 2], colors: new Map([[1, CATEGORY_HUES[0]], [2, CATEGORY_HUES[1]]]) }
 
-describe('buildYearSlices', () => {
-  it('folds the rollup exactly like the stacked chart: fold colours, positive-only, gray Other', () => {
-    const slices = buildYearSlices(matrix().categories, YEARLY.years[0], TOP)
-    expect(slices).toEqual([
-      { name: 'Rent', value: 4000, color: CATEGORY_HUES[0] },
-      { name: 'Groceries <b>& more</b>', value: 1180, color: CATEGORY_HUES[1] },
-      // Fun (150) folds into Other; the -25 refund cell is EXCLUDED (positive-only,
-      // buildMonthSlices' documented rule mirrored).
-      { name: 'Other', value: 150, color: OTHER_SERIES_COLOR },
-    ])
+// 2026-09-23 review (spec §0 flows F10, §C1): the Year view paired the rollup's Jan–Aug net pay
+// with its Jan–Sep spending, so on prod it said Saved $148.74 while the Overview said $2,220.97.
+// A year is drawn over its MATCHED months (spending rows AND take-home, the savings module's
+// rule): Jan–Feb here. March has spending and no take-home; April take-home and no spending.
+// Returns is a net refund; Brokerage is a transfer, which is not spending.
+function windowMatrix(netPay: (string | null)[] = ['6000.00', '6000.00', null, '6100.00']): SpendingMatrix {
+  const four = [null, null, null, null]
+  return matrix({
+    months: ['2026-01-01', '2026-02-01', '2026-03-01', '2026-04-01'],
+    categories: [
+      ...matrix().categories,
+      { id: 4, name: 'Returns', slug: 'returns', sort_order: 3, is_active: true, kind: 'living' },
+      { id: 5, name: 'Brokerage', slug: 'brokerage', sort_order: 4, is_active: true, kind: 'transfer' },
+    ],
+    series: [
+      { category_id: 1, values: ['2000.00', '2000.00', '2000.00', null], budgets: four },
+      { category_id: 2, values: ['600.00', '580.00', '300.00', null], budgets: four },
+      { category_id: 3, values: ['150.00', '0.00', null, null], budgets: four },
+      { category_id: 4, values: ['-25.00', null, null, null], budgets: four },
+      { category_id: 5, values: ['1000.00', '1000.00', null, null], budgets: four },
+    ],
+    totals: ['3725.00', '3580.00', '2300.00', '0.00'],
+    net_pay: netPay,
   })
-})
+}
+// The server's YTD figure over the same months: 12,000 + 25 of refunds − 5,330 = 6,695.
+function windowYearly(cashSavings: string | null = '6695.00'): SpendingYearly {
+  return {
+    years: [{ year: 2026, by_category: [], total: '0.00', net_pay_total: '18100.00', savings_rate: null, cash_savings: cashSavings, months_matched: 2 }],
+  }
+}
+/** Whole cents out of / into a node, and its own value — a flow that leaks reads as a bug. */
+function ledger(series: SankeyLike) {
+  const c = (v: number | undefined) => Math.round((v ?? 0) * 100)
+  return {
+    node: (name: string) => c(series.data?.find((n) => n.name === name)?.value),
+    out: (name: string) => (series.links ?? []).filter((l) => l.source === name).reduce((a, l) => a + c(l.value), 0),
+    into: (name: string) => (series.links ?? []).filter((l) => l.target === name).reduce((a, l) => a + c(l.value), 0),
+  }
+}
 
 describe('spendingFlowPeriod', () => {
   it('month mode slices the matrix column and carries its net pay', () => {
@@ -100,11 +127,37 @@ describe('spendingFlowPeriod', () => {
     expect(period?.netPay).toBeNull()
   })
 
-  it('year mode follows the looked-at month into its rollup', () => {
-    const period = spendingFlowPeriod(matrix(), YEARLY, TOP, 0, 'year')
-    expect(period?.label).toBe('2026')
-    expect(period?.netPay).toBe('12000.00')
-    expect(period?.slices.map((s) => s.name)).toEqual(['Rent', 'Groceries <b>& more</b>', 'Other'])
+  it('year mode covers the matched months only: their net pay, their categories, the server’s Saved', () => {
+    expect(spendingFlowPeriod(windowMatrix(), windowYearly(), TOP, 3, 'year')).toEqual({
+      label: 'Jan–Feb 2026',
+      netPay: '12000.00',
+      slices: [
+        { name: 'Rent', value: 4000, color: CATEGORY_HUES[0] },
+        { name: 'Groceries <b>& more</b>', value: 1180, color: CATEGORY_HUES[1] },
+        { name: 'Other', value: 150, color: OTHER_SERIES_COLOR },
+      ],
+      window: {
+        months: ['2026-01-01', '2026-02-01'],
+        fullYear: false,
+        saved: '6695.00',
+        refunds: 25,
+        spendingLeftOut: 'Mar 2026 spending ($2,300.00) is shown once its take-home is entered.',
+        takeHomeLeftOut: 'Apr 2026 take-home ($6,100.00) is shown once its spending is entered.',
+      },
+    })
+  })
+
+  it('keeps the flow whole when the rollup and the matrix disagree (two fetches a moment apart)', () => {
+    // Same definition, same data: a figure that does not reconcile to the cent means the book
+    // changed between the two requests. The matrix's own figure keeps the flow conserved.
+    expect(spendingFlowPeriod(windowMatrix(), windowYearly('6820.00'), TOP, 0, 'year')?.window?.saved).toBe('6695.00')
+    // An older rollup without the field: the matrix's figure, too.
+    expect(spendingFlowPeriod(windowMatrix(), windowYearly(null), TOP, 0, 'year')?.window?.saved).toBe('6695.00')
+  })
+
+  it('a year with no matched month has nothing to draw, and says why', () => {
+    const period = spendingFlowPeriod(matrix({ net_pay: [null, null] }), YEARLY, TOP, 0, 'year')
+    expect(period).toMatchObject({ label: '2026', netPay: null, empty: 'No month of 2026 has both take-home and spending entered yet.' })
   })
 
   it('is null with no matrix, an out-of-range month, or a year the rollup lacks', () => {
@@ -179,11 +232,74 @@ describe('spendingSankeyOption — surplus periods', () => {
     const other = series.data?.find((n) => n.name === 'Other')
     expect(other?.itemStyle?.color).toBe(OTHER_SERIES_COLOR)
     expect(series.links).toContainEqual({ source: 'Net pay', target: 'Other', value: 150 })
-    // Saved = net pay − the DRAWN sum (4000+1180+150 = 5330), NOT net_pay − the
-    // refund-netted rollup total (5305): links cannot be negative, so the fold restates
-    // spending GROSS and balance (inflow = outflow) wins over restating the server total
-    // — the same documented divergence the drill-in pie carries (buildMonthSlices).
+    // Jun–Jul, both matched: 12,000 of net pay less 5,330 spent (this rollup predates the
+    // cash-saved field, so the matrix's own figure stands in).
     expect(series.links).toContainEqual({ source: 'Net pay', target: 'Saved', value: 6670 })
+  })
+
+  it('year-mode flow: Saved is the server’s figure, refunds flow in, transfers stay out, every node equals its links', () => {
+    const series = sankeyOf(spendingSankeyOption(spendingFlowPeriod(windowMatrix(), windowYearly(), TOP, 0, 'year')!)!)
+    expect(series.data?.map((n) => [n.name, n.value])).toEqual([
+      ['Net pay', 12000],
+      ['Refunds & credits', 25],
+      ['Rent', 4000],
+      ['Groceries <b>& more</b>', 1180],
+      ['Other', 150],
+      ['Saved', 6695],
+    ])
+    expect(series.data?.find((n) => n.name === 'Refunds & credits')?.itemStyle?.color).toBe(MUTED)
+    expect(series.links).toContainEqual({ source: 'Net pay', target: 'Saved', value: 6695 })
+    const books = ledger(series)
+    for (const name of ['Net pay', 'Refunds & credits']) expect(books.out(name), name).toBe(books.node(name))
+    for (const name of ['Rent', 'Groceries <b>& more</b>', 'Other', 'Saved']) expect(books.into(name), name).toBe(books.node(name))
+    // No transfer anywhere: Brokerage stayed yours.
+    expect(series.data?.some((n) => n.name === 'Brokerage')).toBe(false)
+  })
+
+  it('a deficit year draws the hatched Drawdown, and still balances to the cent', () => {
+    // 4,000 of matched net pay + 25 of refunds against 5,330 spent: 1,305 drawn down.
+    const period = spendingFlowPeriod(windowMatrix(['2000.00', '2000.00', null, '6100.00']), windowYearly('-1305.00'), TOP, 0, 'year')!
+    const series = sankeyOf(spendingSankeyOption(period)!)
+    expect(series.data?.map((n) => n.name)).toEqual(['Net pay', 'Refunds & credits', 'Drawdown', 'Rent', 'Groceries <b>& more</b>', 'Other'])
+    const books = ledger(series)
+    for (const name of ['Net pay', 'Refunds & credits', 'Drawdown']) expect(books.out(name), name).toBe(books.node(name))
+    for (const name of ['Rent', 'Groceries <b>& more</b>', 'Other']) expect(books.into(name), name).toBe(books.node(name))
+  })
+
+  it('a complete year draws exactly what it always did: the whole year, net pay less spending', () => {
+    const months = Array.from({ length: 12 }, (_, i) => `2025-${String(i + 1).padStart(2, '0')}-01`)
+    const twelve = (value: string) => months.map(() => value)
+    const full = matrix({
+      months,
+      series: [
+        { category_id: 1, values: twelve('2000.00'), budgets: months.map(() => null) },
+        { category_id: 2, values: twelve('500.00'), budgets: months.map(() => null) },
+        { category_id: 3, values: twelve('100.00'), budgets: months.map(() => null) },
+      ],
+      totals: twelve('2600.00'),
+      net_pay: twelve('6000.00'),
+    })
+    const yearly: SpendingYearly = {
+      years: [{
+        year: 2025,
+        by_category: [{ category_id: 1, total: '24000.00' }, { category_id: 2, total: '6000.00' }, { category_id: 3, total: '1200.00' }],
+        total: '31200.00', net_pay_total: '72000.00', savings_rate: null, cash_savings: '40800.00', months_matched: 12,
+      }],
+    }
+    const period = spendingFlowPeriod(full, yearly, TOP, 11, 'year')!
+    expect(period.label).toBe('2025')
+    expect(period.window?.fullYear).toBe(true)
+    // The pre-window Year view over this year: 72,000 fanned into 24,000 / 6,000 / 1,200 and Saved.
+    const series = sankeyOf(spendingSankeyOption(period)!)
+    expect(series.data?.map((n) => [n.name, n.value])).toEqual([
+      ['Net pay', 72000], ['Rent', 24000], ['Groceries <b>& more</b>', 6000], ['Other', 1200], ['Saved', 40800],
+    ])
+    expect(series.links).toEqual([
+      { source: 'Net pay', target: 'Rent', value: 24000 },
+      { source: 'Net pay', target: 'Groceries <b>& more</b>', value: 6000 },
+      { source: 'Net pay', target: 'Other', value: 1200 },
+      { source: 'Net pay', target: 'Saved', value: 40800 },
+    ])
   })
 
   it('omits an exactly-zero Saved node (zero-width links are tooltip noise)', () => {

@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import type { CategoryFold } from '../../charts/entities'
+import { spendingLeftOut } from '../../charts/windowWords'
 import type { MoneyFlowOut } from '../../types/api'
-import { formatCurrency } from '../../utils/format'
 import { todayIso } from '../../utils/months'
 import ChartCard from '../ChartCard'
 import Segmented from '../shell/Segmented'
@@ -20,13 +20,9 @@ function windowSentence(flow: MoneyFlowOut): string | null {
 }
 
 /** Spending with no take-home beside it (the month in progress) is left out of the fan — and
- *  said out loud, so a rent-only September is never silently missing from the picture. */
+ *  said out loud, in the words the Spending "Where … went" year uses too (charts/windowWords). */
 function unmatchedSpendingSentence(flow: MoneyFlowOut): string | null {
-  const months = flow.spending_unmatched_months ?? []
-  if (months.length === 0) return null
-  const amount = formatCurrency(flow.spending_unmatched_total ?? null)
-  const whose = months.length === 1 ? 'its' : 'their'
-  return `${monthWords(months)} ${flow.year} spending (${amount}) is shown once ${whose} take-home is entered.`
+  return spendingLeftOut(flow.spending_unmatched_months ?? [], flow.year, flow.spending_unmatched_total ?? '0.00')
 }
 
 /**

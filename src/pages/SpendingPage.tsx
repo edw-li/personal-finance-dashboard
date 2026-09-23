@@ -644,15 +644,19 @@ export default function SpendingPage() {
           {flowPeriod && (
             <ChartCard
               title={`Where ${flowPeriod.label} went`}
-              hint="Net pay fanned out across the period's categories, wearing the stacked chart's colors; green Saved is what was left. A deficit period adds a hatched red Drawdown source covering the overspend."
+              hint="Net pay fanned out across the period's categories, wearing the stacked chart's colors; green Saved is what was left. A deficit period adds a hatched red Drawdown source covering the overspend. Year covers only the months with both take-home and spending entered, so its Saved matches the Overview's cash saved: transfers stay out, and a category whose refunds outweighed its spending flows in as Refunds & credits."
               ariaLabel={`Sankey flow of where ${flowPeriod.label} went, from net pay into categories and savings`}
+              // A year short of twelve matched months says which months it is (2026-09-23 spec
+              // §C1): its Saved is the Overview's cash saved over those same months.
+              lede={flowPeriod.window && !flowPeriod.window.fullYear ? 'Months with take-home and spending entered' : undefined}
               option={flowOption}
               empty={
-                flowPeriod.netPay === null
+                flowPeriod.empty ??
+                (flowPeriod.netPay === null
                   ? `Enter net pay for ${flowPeriod.label} to see the flow.`
-                  : `No flow to draw for ${flowPeriod.label}.`
+                  : `No flow to draw for ${flowPeriod.label}.`)
               }
-              exportName={`spending-flow-${flowPeriod.label.replace(/\s+/g, '-').toLowerCase()}`}
+              exportName={`spending-flow-${flowPeriod.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
               csv={() => spendingSankeyCsv(flowPeriod)}
               height={320}
               controls={
@@ -669,10 +673,15 @@ export default function SpendingPage() {
                 />
               }
               footer={
-                <p className="drill-hint">
-                  Hover a node to trace its flows; drill a month on the top chart and this
-                  card follows it.
-                </p>
+                <>
+                  {/* What the year's window leaves out, named like the Overview money flow's. */}
+                  {flowPeriod.window?.spendingLeftOut && <p className="drill-hint">{flowPeriod.window.spendingLeftOut}</p>}
+                  {flowPeriod.window?.takeHomeLeftOut && <p className="drill-hint">{flowPeriod.window.takeHomeLeftOut}</p>}
+                  <p className="drill-hint">
+                    Hover a node to trace its flows; drill a month on the top chart and this
+                    card follows it.
+                  </p>
+                </>
               }
             />
           )}
