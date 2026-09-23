@@ -2105,7 +2105,7 @@ export interface MoneyFlowOut {
   /** SIGNED: the YTD card's cash saved over the matched months (take-home and spending both
    *  entered) — `take_home_matched + refunds − total_spend`. Negative draws a red Drawdown. */
   saved: string
-  /** The rest are the §C1 window fields — optional for the `niit` reason (an older payload). */
+  // The rest are the §C1 window fields — optional, as `niit` is: an older payload lacks them.
   /** Take-home of the matched months: the spending fan's funding. */
   take_home_matched?: string
   /** Minus the net-negative category totals — money back, an explicit inflow beside take-home. */
@@ -2119,7 +2119,8 @@ export interface MoneyFlowOut {
   /** Spending months with no take-home (the month in progress): left out, named in the footer. */
   spending_unmatched_months?: string[]
   spending_unmatched_total?: string
-  /** Every category's matched-month total, signed, exact zeros omitted. */
+  /** Every living and tax category's matched-month total — transfers excluded (they stay yours,
+   *  as the YTD card's cash saved has it) — signed, exact zeros omitted, biggest first. */
   category_totals?: MoneyFlowCategoryTotal[]
   /** The book's first take-home month; pending months before it predate tracking. */
   tracking_start?: string | null
@@ -2127,9 +2128,10 @@ export interface MoneyFlowOut {
 
 /** One category over the money flow's matched months (2026-09-23 spec §C1). */
 export interface MoneyFlowCategoryTotal {
-  category_id: number | null
+  category_id: number
   name: string
-  kind: string
+  /** The kinds cash saved subtracts; a transfer is never listed. */
+  kind: 'living' | 'tax'
   amount: string
 }
 

@@ -772,3 +772,18 @@ describe('moneyFlowCsv (F12)', () => {
     expect(moneyFlowCsv(flowOut({ renderable: false, reason: 'nope' })).rows).toEqual([])
   })
 })
+
+// The 2026-09-23 code review (3, 6): a category total always names its category (the service's
+// id-less shorthand is gone), and only the kinds cash saved subtracts are listed (transfers stay
+// yours). The wire type says both — pinned for tsc by the expect-error lines — so the builder
+// needs no fallback id and no reader has to guess a kind.
+describe('the category totals type', () => {
+  it('names the category and lists living and tax only', () => {
+    const rent: MoneyFlowCategoryTotal = { category_id: 1, name: 'Rent', kind: 'living', amount: '1.00' }
+    // @ts-expect-error: no id-less total on the wire
+    const idless: MoneyFlowCategoryTotal = { category_id: null, name: 'Rent', kind: 'living', amount: '1.00' }
+    // @ts-expect-error: transfers are never listed
+    const transfer: MoneyFlowCategoryTotal = { category_id: 2, name: 'Brokerage', kind: 'transfer', amount: '1.00' }
+    expect([rent, idless, transfer].map((total) => total.category_id)).toEqual([1, null, 2])
+  })
+})

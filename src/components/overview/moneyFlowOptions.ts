@@ -204,7 +204,7 @@ function fanSlices(flow: MoneyFlowOut, fold: CategoryFold | null, taken: Set<str
       kind: 'living',
       amount: category.amount,
     }))
-  const byId = new Map(totals.map((total, index) => [total.category_id ?? -(index + 1), total]))
+  const byId = new Map(totals.map((total) => [total.category_id, total]))
   // Without the Spending page's fold (it loads beside this card), or with a payload whose
   // categories carry no ids, fold by the payload's own ranking through the SAME function —
   // biggest cents first, ties by name.
