@@ -3487,21 +3487,191 @@ step 3). No push, no deploy.
 
 ## Results (filled in by the implementer)
 
-### Phase A — on the R0–R5 merge (`feat/reorder-verify` @ …)
+### Phase A — on the R0–R6 merge (`feat/reorder-verify`, cut @58f048c4, base merged again @1af542a3)
 
-- Preflight (Task 0): base merges …; greps …; `finance_realdata` census `…`; ports …
-- Probe commits (Tasks 3–5): …; `node --check` reorder-v …, guide-v …; source counts `tasks … cards …`
-- Reorder smoke, dark (Task 6): `checks: … ok, … failed, … noted; page writes … (blocked …); logged reorders …, undos …` — exit …, … min
-- Reorder smoke, light: … — exit …, … min
-- Fixes to the probe during the runs (commit, what, the spec line it answers to): none / …
-- Findings for the controller (lane defects — the report line, the PNG, the owning lane): none / …
-- Judgement 1, the row in hand over a sticky header (2 boxes × 2 widths × 2 themes): ACCEPT / REJECT — …
-- Judgement 2, pixels inside pinned cells (`inside` per table per width per theme): … — ACCEPT / REJECT — …
-- Guide walk (Task 8): `GUIDE SMOKE OK — … link visits, … checks, … writes blocked`; rows dark … / light … (content …); cards …; destinations …
+The lane was cut after R6 (not only R0–R5) and after main's completed quick-fixes batch
+(5a701d9d, main @923a633e) — so Phase A already ran on the landing content, less R6's cleanup
+round, which was merged in (base @adabce05 → 1af542a3) before Task 6's passes.
+
+- **Preflight (Task 0)** — all as expected:
+  - merges on the branch: R0 0d805010 (+ 11a4cda0, round 4 d5efe2d9 → e453a8c1), R4 cca4d9cf,
+    R1 dd62aa6c, main with B2 d7a16e6a, R3 c877cd7d, R2 e4064947 (+ 9b458bd6), main with B1/CS/CT
+    54f535be, R5 665a8d7c, main complete 5a701d9d, R6 58f048c4;
+  - greps: the five `reorder-table` paths; `useReorder` ×4; `cards-reorder` (line 717); `rankIds`
+    (lines 91, 98); `no draggable left`; the `f12026092301` migration;
+  - the interpreter imports this worktree's backend; `alembic heads` = `f12026092301 (head)` alone;
+  - vite, playwright-core and Edge present, node `v18.12.0`; 8096 and 5196 free;
+  - `finance_realdata` census `29|19|39|7|19|f12026091203` and `0` stored layouts (= planning);
+    every rebuilt copy read `29|19|39|7|19|f12026092301` and backfill `26|13`.
+- **Probe commits (Tasks 3–5)**: 5af157eb (the probe), d48594ec (README row + recipe), 1987caf0
+  (guide-v derived counts + README clause); `node --check` clean for both; source counts
+  `tasks 196 cards 28`.
+- **Reorder smoke, dark (Task 6)**, final run on a fresh copy (tip dd7c65ab):
+  `checks: 602 ok, 0 failed, 69 noted; page writes 72 (blocked 0); logged reorders 24, undos 14`
+  — `REORDER SMOKE OK — dark: 602 checks`, exit 0, 7m18s. 602 = the plan's 598 + the four
+  range-end stop checks (2 boxes × 2 widths). 50 page loads, page CLS ≤ 0.002 (total ≤ 0.097);
+  0 warnings; the only benign entries are the two expected 409s (two-tab, overlap); the fence
+  passed exactly 6 `PATCH /prefs` (overview_layout alone, nothing stubbed).
+  - The first full dark run (kept as `scratchpad/reorder-v/dark-run1/`) was red — 553 ok,
+    10 failed — on three probe-driving faults, fixed in dd7c65ab (below); a narrowed re-check
+    (portfolio + activity, `trial-2`) went 140/0 before the full re-run.
+  - This green run used the probe as of dd7c65ab — before the drill-in check (7f966c97) and the
+    corrected resting-look rule (59620fc1). Both themes run the final probe in Phase B (Task 13).
+- **Reorder smoke, light** (Task 6 Steps 3–4), fresh copy, final probe @59620fc1:
+  `checks: 604 ok, 0 failed, 70 noted; page writes 72 (blocked 0); logged reorders 24, undos 14`
+  — `REORDER SMOKE OK — light: 604 checks`, exit 0, 7m24s (= 602 + the drill-in check and its
+  page's CLS). 51 page loads, page CLS ≤ 0.002; 0 warnings; benign = the two expected 409s; the
+  fence passed 6 `PATCH /prefs`, overview_layout only. Resting look, all 10 green: 0 judged px
+  outside the pinned cells (weights 1600: 165 of 435); every checked boundary one hairline in both
+  models (7–18 per table; 1px apart on 7/8 categories, 5/9 accounts, 4/9 weights-1600 rows); no
+  cell with a top border; judged `inside` = the gained pinned edge only (28–44px header segment;
+  the ledger 728/577px, its whole edge).
+  - The first light run (`scratchpad/reorder-v/light-run1/`, probe @7f966c97) was 599 ok /
+    5 failed — the resting-look rule of fix 2, corrected in fix 5.
+  - Task 6 Step 3's refusal, shown on the light copy afterwards: `REORDER SMOKE REFUSED` (exit 2)
+    naming the reorders already in Activity and the `V scratch` ledger account.
+- **Fixes to the probe during the runs** (each commit cites what it answers to):
+  1. *5af157eb, written against the final lane code rather than the plan's text:*
+     - `aim()` lands the lifted row's LEADING edge on the k-th peer's far edge — R0 round 4's
+       leading-edge slot rule (spec §2.3.4 as amended); the plan's centre-rule aim sat 0.1 row
+       from the next slot;
+     - accounts-carry travels the sibling unit's height — under the leading-edge rule the plan's
+       centre-rule travel is clamped and also passes the HSA (R2's round-2 finding);
+     - accounts-rest expects one `<tbody>` per group with `scope="rowgroup"` headings (spec §4.2's
+       correction, R2's final DOM), not `colgroup`;
+     - accounts-autoscroll drags in the longest flat group with rows below it (Taxable), not
+       Liabilities: R0's range-end stop (§2.3.5 as amended) means the roster's last group can
+       never scroll (its first row already shows ~119px down at full depth — R2's round-2 case a);
+     - `autoScrollInBox` starts with the range's first row hidden, captures the row in hand over
+       the sticky header MID-scroll (pointer 28px in; at the stop it sits clamped below the header
+       — R5's observation) and adds a range-end stop check.
+  2. *26f38264 — the resting look*: the first real trial failed 3 of 5 tables (6,895–11,593 px vs
+     budgets of 212–435) while every differing pixel vanished under a 1px vertical shift and no
+     hairline pixel differed. Measured in the live DOM: under `border-collapse: collapse` each
+     cell's text sits exactly 0.5 CSS px lower (0.25 on the first row) and every row bottom is
+     identical — CSS 2.1 §17.6.2 puts half of each shared border inside the cell, so the collapsed
+     model offsets CONTENT, not lines, and no separate-border table can match it pixel for pixel.
+     The check now judges each row's hairline band (bottom edge ±1px) exactly and elsewhere counts
+     a pixel only when no pixel one row above or below matches it (spec §10: "within a pixel-diff
+     tolerance"); the plan's as-drawn statistic stays in the record; the diff marks judged pixels
+     magenta and offset-explained ones yellow. A doubled, missing or moved hairline, a changed
+     background or a horizontal shift still fails.
+  3. *dd7c65ab — three driving fixes from the first full run:*
+     - every drag instrument (and the three ad-hoc drags) waits for live grips (`ready()`): R3's
+       `reloading` prop keeps the ledger's grips inert through the Portfolio page's reload after a
+       save or an Undo (R3 amendment 4), longer than the plan's fixed 1.5s settle on the real book —
+       so Space lifted nothing at `ledger-keyboard`, by design, at both widths;
+     - the stop check follows §2.3.5's letter (stops at the box's own top, or with the clamped slot
+       ≥ 40px into the visible band); whether that slot clears a sticky header is measured in the
+       JUDGE record instead (finding 2 below);
+     - `activity-undo` reads the top BATCH rows: every change-log Undo also records a run of kind
+       `undo` (house behaviour since 65ea44f6, 2026-09-03), drawn as its own "Undo" row above
+       "Undid: …" — the plan's activity-feed step already set runs aside.
+  4. *7f966c97 — one added check*: a card's drill-in draws its line in its household colour (spec
+     §7 as amended at R5's review: rank among the household's ACTIVE cards). Apple Card (rank 5)
+     discriminates — a lone series used to take slot 0. Added after the dark run; in the light run
+     and both Phase B runs.
+  5. *59620fc1 — the resting look, corrected*: the first light run failed five resting-look checks
+     that dark had passed. Fix 2's "hairlines exact" band was wrong: at a low threshold dark shows
+     the same thing — the collapsed model draws each row's LINE half a pixel lower too (a shared
+     border is centred on the grid line), so about half the lines land one device pixel apart; dark's
+     hairline contrast (~21) sat under the plan's 24 threshold, light's (~30) did not. Since a plain
+     1px tolerance would also accept a doubled or a missing hairline, the rule is now three-part —
+     pixels within a one-row vertical offset; at every DOM row boundary as many hairline rows in both
+     shots, at most 1px apart (a ghost-free median-contrast detector that finds the ledger's faint
+     `--surface-2` lines too); and no cell with a top border. Validated offline on all 20 saved
+     pairs (equal line counts, 0 mismatches) before the light re-run.
+- **Findings for the controller** (none blocks the landing — every hard check is green):
+  1. **R0 — moderate (reduced motion only): the drop line hides under the row in hand.** Under
+     reduced motion peers never move, so the lifted row (opaque `--surface-2`, `z-index: 2`)
+     overlaps its target peer, and the accent line — an inset box-shadow inside the TARGET's cells
+     — is painted beneath it. Measured with a read-only sweep (2px pointer steps, hit test inside
+     the line): covered in 24 of 54 samples on Settings › Spending categories (44%) and 10 of 19
+     in Overview › Customize (53%); every `*-reduced-motion-held.png` shows no line (zooms:
+     `scratchpad/reorder-v/dropline/zoom-*.png`, numbers in `dropline.json`). For about half of
+     each slot's travel a reduced-motion reader loses the one landing cue that replaces the
+     shifting peers (spec §2.5). The probe's check reads `data-reorder-drop` and stays green.
+     *Minimal fix (reorder.css):* draw the line above the lifted unit — a `::after` bar on the
+     target's edge cells (`position: absolute; left: 0; right: 0; height: 2px; background:
+     var(--accent); z-index: 3; pointer-events: none`, `top: 0` for `before`, `bottom: 0` for
+     `after`; the cells `position: relative` except the already-positioned pinned ones) in place
+     of the inset box-shadows, pinned in `reorderCss.test.ts`. (A pinned sticky cell is its own
+     stacking context, so the bar stays under the lifted row in the Actions column only.)
+  2. **R0 / spec §2.3.5 — minor, cosmetic: the auto-scroll zone ignores a sticky header.** The top
+     zone and the range-end stop are measured from the scroller's top edge. Categories & weights at
+     1280 has a two-line 46px header, so an upward auto-scroll stops at scrollTop 5: the row in
+     hand overlaps the header's bottom by 5px, and after the drop the first row rests 5px under the
+     header (`1280-weights-autoscroll-held.png`, both themes). In the Settings roster (~30px header)
+     the group's heading row sits under the header at the stop (R2's round-2 note; "TAXABLE" is
+     half-hidden in `1600-accounts-autoscroll-held.png`). *Minimal fix (reorderDom.ts):* start
+     `visibleBounds(scroller).top` below the scroller's sticky `thead` (its height when its cells
+     compute `position: sticky`), so the zone and the stop both count from the header's bottom.
+  3. **Not a lane defect — for the record:** the resting tables are not pixel-identical to the
+     collapsed model: each row's content AND hairline sit half a CSS pixel higher (fixes 2 and 5) —
+     0 or 1 device pixel per row. Row boxes, backgrounds and the one-line-per-boundary structure are
+     identical. Imperceptible; a separate-border table cannot reproduce a centred shared border.
+  4. **Pre-existing — minor (not this batch):** under `border-collapse: collapse`, Edge/Chrome skip
+     the pinned Actions column's left hairline (`box-shadow: -1px 0 0 var(--border)`, panels.css,
+     2026-09-13 polish §7) on the pinned HEADER cell of every table, and on the BODY cells of the
+     tables inside HoldingsScroll. Measured: the reorderable ledger's edge paints in full under
+     `separate` and not at all under `collapse` (header and every row); Portfolio › Manage ›
+     Securities — a house table that stays `collapse` — computes the same shadow and paints nothing
+     (read-only sample: dark 38,43,54 vs 23,26,33; light 225,231,239 vs white); on the Settings
+     tables, the roster and Categories & weights only the header cell's segment differs. So the five
+     reorderable tables now draw that edge in full, as designed (Judgement 2), while the other
+     pinned-column tables keep the gaps (in full on Securities, measured — likely on the other
+     HoldingsScroll tables too; the header cell on the rest, by the pattern above). *Fix, outside this batch:* draw that edge in a way both models paint (a 1px
+     `background-image` gradient on the pinned cell), or accept the difference.
+  5. **House behaviour, noted:** every change-log Undo shows two Activity rows — the run
+     ("Undo", with View report) and the batch ("Undid: …") (since 2026-09-03; not this batch).
+- **Judgement 1, the row in hand over a sticky header** (2 boxes × 2 widths × 2 themes): **ACCEPT.**
+  - Mid-scroll (`*-autoscroll-scrolling.png`, the range's first row still hidden): the row in hand
+    covers the header — hit test `liftedOver: true`, overlap 21px (38px under the 46px weights
+    header at 1280) — fully legible, raised on `--surface-2` with its hairlines, under the pointer;
+    no header label shows through it; nothing is clipped by the header.
+  - At the stop (`*-autoscroll-held.png`): the header is on top again (`headerOnTop: true`), the row
+    clamped at its range's first slot below it (accounts 10px below, weights 1600 flush) — except
+    weights at 1280, 5px over the header's bottom (finding 2).
+  - After every drop the header is on top (a hard check, green in every box, width and theme).
+  - It reads as the row in hand riding above everything while the pointer holds the top zone of a
+    live drag, and only then. The `z-index` fix from Task 7 is not needed.
+- **Judgement 2, pixels inside pinned cells**: **ACCEPT.**
+  - What differs inside the pinned cells, both themes: (a) the Actions buttons' labels, the row
+    lines and the header cells, moved by the half-pixel row offset (yellow — explained); (b) ONE
+    vertical line, the pinned column's left hairline, which the separate model paints where the
+    collapsed model skipped it (finding 4): the header cell's segment on every table, the whole edge
+    on the ledger. Dark: judged `inside` 0 — that line's contrast (21) is under the probe's 24
+    threshold; light: the line's pixels ARE the judged `inside` count (the light line above).
+  - No button moved, no label shifted, the `-1px` edge is not lost — it is gained: the hairline
+    panels.css was written to draw ("border-collapse loses a sticky cell's own border, so the
+    hairline is redrawn as a box-shadow") and spec §2.5 names ("the sticky last column's box-shadow
+    hairline stays"). It separates the pinned column the way it was designed to.
+  - The plan's anticipated "row lines now continue through the pinned Actions column" does not
+    happen — the row lines already ran through it under `collapse` — so the morning list gets the
+    real change instead: the pinned column's left edge now shows on the five reorderable tables.
+- **Task 7 Step 1 (the drags, eyeballed in both themes)**: the lifted row raised on `--surface-2`
+  with its hairlines and its pinned Actions cell on the same surface; exactly the passed rows moved
+  (categories, accounts, ledger, roster, weights, Customize with its shadow); the carry frame moves
+  the 401(k) and its three components as one block with one hairline between rows, only the IRA
+  making room; the 1280 ledger frame shows the lifted trade at the window's foot after the page
+  scrolled; `1600-credit-lines-after-reorder.png` shows the legend in the new order (Savor, Robinhood
+  Gold, Active Cash, Venture X, Autograph, Apple Card, Total) and every line in its recorded colour.
+  The reduced-motion frames show the vacated slot and the row in hand, but no drop line (finding 1).
+- **Guide walk (Task 8)**, on the light pass's copy (read-only): `GUIDE SMOKE OK — 162 link visits,
+  24 checks, 8 writes blocked` — exit 0; rows dark 196 / light 196 (content 196); cards 28 / 28
+  (content 28); chips 21; 81 destinations per theme; 162/162 links landed; 0 console errors. Both
+  new derived checks green. The 8 blocked writes are the pages' compute-only `POST
+  /paycheck/preview` and `POST /taxes/what-if`, answered from memory by the probe's fence (by
+  design; nothing persisted).
 
 ### Phase B — on the integration tip (`feat/reorder-base` @ …, main @ …)
 
-- Preflight (Task 9): fast-forward to …; main inside …; quick-fixes worktrees gone …; `alembic heads` …
+- Preflight (Task 9): no fast-forward — per the controller, main's completed quick-fixes batch was
+  already merged into the base (5a701d9d) before the lane was cut, and `git merge feat/reorder-base`
+  brought R6's cleanup round (adabce05 → 1af542a3) before Task 6; checked again before the gates:
+  `main` = 923a633e (unchanged), an ancestor of the tip ("main is inside the tip"), the base
+  (adabce05) inside the tip too; none of the five quick-fixes worktrees listed; `alembic heads` =
+  `f12026092301 (head)` alone.
 - Backend (Task 10): ruff …; pytest `… passed, … skipped in …` — exit …; flakes re-run alone: …
 - Migration drill (Task 11): upgrade …; backfill `…`; index …; duplicate refused …; downgrade …; upgrade …; `alembic check` …
 - Frontend (Task 12): vitest … files / … tests — exit …; flakes re-run alone: …; `tsc -b` …; no-cache tsc …/…; `eslint .` … (… warnings, none in a file this batch touched); build …
