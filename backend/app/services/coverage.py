@@ -21,7 +21,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import MonthlyCashflow, MonthlySpending, NetWorthSnapshot
-from app.services.month_review import ReviewBook, load_review_book
+from app.services.month_review import ReviewBook
+from app.services.read_cache import cached_review_book
 
 
 @dataclass(frozen=True)
@@ -96,7 +97,7 @@ async def load_coverage(db: AsyncSession, reviews: ReviewBook | None = None) -> 
         )
     ).all()
     net_pay = list((await db.execute(select(MonthlyCashflow.month))).scalars().all())
-    reviews = reviews or await load_review_book(db)
+    reviews = reviews or await cached_review_book(db)
     confirmed = [
         month
         for month, review in reviews.reviews.items()

@@ -102,8 +102,8 @@ async def _current_book(
     numbers — plus the latest quotes. Positions are mostly undated by design
     (PositionTransaction.sort_index), so the CURRENT share count is the only one
     there is; every snapshot, live or backfilled, prices this book."""
-    _securities, txns, latest, _history, _dividends = await load_portfolio(
-        db, with_history=False, with_dividends=False
+    _securities, txns, latest, _bars, _dividends = await load_portfolio(
+        db, with_last_two_bars=False, with_dividends=False
     )
     positions = fold_transactions(txns)
     shares_by_sec: dict[int, Decimal] = {}

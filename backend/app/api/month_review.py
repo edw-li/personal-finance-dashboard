@@ -18,6 +18,7 @@ from app.services.changelog import ChangeBatch, change_batch, row_image
 from app.services.money import require_first_of_month
 from app.services.month_review import load_review_book, lock_review_inputs
 from app.services.month_writes import write_balances, write_spending
+from app.services.read_cache import cached_review_book
 from app.services.review_input_v1 import revision
 
 router = APIRouter(
@@ -27,7 +28,7 @@ router = APIRouter(
 
 @router.get("", response_model=MonthReviewListOut)
 async def list_month_reviews(db: AsyncSession = Depends(get_db)) -> MonthReviewListOut:
-    book = await load_review_book(db)
+    book = await cached_review_book(db)
     return MonthReviewListOut(
         adopted_on=book.adopted_on,
         default_month=book.default_month,
@@ -38,7 +39,7 @@ async def list_month_reviews(db: AsyncSession = Depends(get_db)) -> MonthReviewL
 @router.get("/months/{month}", response_model=MonthReviewOut)
 async def get_month_review(month: date, db: AsyncSession = Depends(get_db)) -> MonthReviewOut:
     require_first_of_month(month)
-    return (await load_review_book(db, extra_months=[month])).months[month]
+    return (await cached_review_book(db, extra_months=[month])).months[month]
 
 
 def _conflict(current: MonthReviewOut) -> HTTPException:

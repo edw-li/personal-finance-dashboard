@@ -25,6 +25,14 @@ RUN npm run build:image
 FROM nginx:1.25-alpine
 
 COPY --from=build /app/dist /usr/share/nginx/html
+# Precompress once, here (2026-09-23 spec §P2): gzip_static serves foo.js.gz for foo.js, so the
+# 2 vCPU box never compresses a static file per request. Text assets of at least 1 KiB (nginx's
+# gzip_min_length: below it gzip is not worth the bytes); the originals stay for clients that
+# do not accept gzip. busybox gzip has no -k, hence -c into a new file.
+RUN find /usr/share/nginx/html -type f \
+      \( -name '*.js' -o -name '*.css' -o -name '*.svg' -o -name '*.html' -o -name '*.json' \
+         -o -name '*.txt' -o -name '*.webmanifest' \) \
+      -size +1023c -exec sh -c 'gzip -9 -c "$1" > "$1.gz"' _ {} \;
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80

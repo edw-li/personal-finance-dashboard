@@ -121,6 +121,20 @@ def _reset_assistant_module_state():
     assistant_models.TRANSPORT_OVERRIDE = None
 
 
+@pytest.fixture(autouse=True)
+def _clear_read_caches():
+    # The review book and the month savings are memoised per data fingerprint (2026-09-23
+    # spec §P4). The db fixture TRUNCATEs with RESTART IDENTITY, so two tests can seed
+    # byte-identical tables — and a test that pins the clock or patches a loader must never
+    # be answered by an entry another test left behind. Imported here, like the assistant
+    # module above, so conftest stays import-light.
+    from app.services import read_cache
+
+    read_cache.clear_read_caches()
+    yield
+    read_cache.clear_read_caches()
+
+
 @pytest.fixture
 async def seeded_user(db):
     user = User(email="me@example.com", password_hash=hash_password("correct-horse"))

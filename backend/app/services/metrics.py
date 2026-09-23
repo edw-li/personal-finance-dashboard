@@ -1,5 +1,6 @@
 """Deterministic, dated metric receipts consumed by pages, exports and assistant tools."""
 
+from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal
 
@@ -12,10 +13,11 @@ from app.schemas.metrics import (
     MetricWindow,
     SpendingMetricsOut,
 )
-from app.services.month_review import ReviewBook, load_review_book, month_shift
+from app.services.month_review import ReviewBook, month_shift
 from app.services.paycheck_calc import half_up2
+from app.services.read_cache import cached_month_savings, cached_review_book
 from app.services.review_input_v1 import revision
-from app.services.savings import MonthSavings, load_month_savings, rollup
+from app.services.savings import MonthSavings, rollup
 
 ZERO = Decimal("0.00")
 STATE_LABELS = {
@@ -81,22 +83,39 @@ def planning_window(
     return window_rows(rows, book, book.default_month, inclusive=True, matched=True)
 
 
+def category_amounts(book: ReviewBook) -> dict[date, dict[int, Decimal]]:
+    """Each month's entered spending by category, indexed ONCE per request (2026-09-23 spec
+    §P4). The matrix compares every category in every month with its twelve prior months; a
+    scan of the month's list per lookup made that ~19 × 39 × 12 linear searches. The FIRST
+    entry per category wins, as `next(...)` did — a month holds one row per category anyway
+    ((month, category_id) is unique)."""
+    index: dict[date, dict[int, Decimal]] = {}
+    for month, data in book.inputs.items():
+        amounts: dict[int, Decimal] = {}
+        for item in data["spending"]:
+            amounts.setdefault(item["category_id"], item["amount"])
+        index[month] = amounts
+    return index
+
+
 def category_comparison(
-    book: ReviewBook, category_id: int, focus: date
+    book: ReviewBook,
+    category_id: int,
+    focus: date,
+    amounts: Mapping[date, Mapping[int, Decimal]],
 ) -> tuple[Decimal | None, int]:
-    """The same prior-calendar eligibility policy, retaining missing category cells."""
+    """The same prior-calendar eligibility policy, retaining missing category cells.
+    `amounts` is `category_amounts(book)`, built once by the caller: required, because
+    indexing all months for a single comparison would bring the per-call cost back."""
     values = []
     for offset in range(-12, 0):
         month = month_shift(focus, offset)
         state = book.months.get(month)
         if not state or not state.eligible_spending:
             continue
-        entry = next(
-            (item for item in book.inputs[month]["spending"] if item["category_id"] == category_id),
-            None,
-        )
-        if entry is not None:
-            values.append(entry["amount"])
+        month_amounts = amounts[month]
+        if category_id in month_amounts:
+            values.append(month_amounts[category_id])
     count = len(values)
     return (half_up2(sum(values, ZERO) / count) if count else None), count
 
@@ -160,10 +179,10 @@ def average_evidence(
 
 
 async def load_spending_metrics(db: AsyncSession, month: date | None = None) -> SpendingMetricsOut:
-    book = await load_review_book(db, extra_months=[month] if month else None)
+    book = await cached_review_book(db, extra_months=[month] if month else None)
     selected_month = month or book.default_month
     anchor = selected_month or book.today.replace(day=1)
-    rows = await load_month_savings(db)
+    rows = await cached_month_savings(db)
     state = book.months.get(selected_month) if selected_month else None
     row = next((row for row in rows if row.month == selected_month), None)
     completeness = (
