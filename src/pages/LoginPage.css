@@ -38,6 +38,14 @@
   color: var(--text);
 }
 
+/* 2026-09-23 spec §B9: the autofocused email field showed no ring at all in dark. The field
+   idiom (panels.css .field-input): the accent ring hugging an accent border. */
+.login-card input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
 /* Layout-only: the primary treatment (dark-on-accent — AA-safe, unlike the old local
    white-on-accent at ~3.2:1, 2026-08-25 polish §4) comes from panels.css's
    .button-primary. This selector outranks the class rules per-property, so it must not

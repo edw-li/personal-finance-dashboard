@@ -156,6 +156,17 @@ button {
   font: inherit;
 }
 
+/* Keyboard focus you can see (2026-09-23 spec §B9): links, fields, summaries and anything made
+   focusable fell back to the browser's `outline: auto` — a #101010 ring on the dark card, 1.09:1.
+   :where() keeps this at zero specificity, so every component that states its own focus
+   treatment still wins; :focus-visible keeps it off mouse clicks (a text field shows it on a
+   click too — the browser's rule for a control that takes typing). `button` rides along for
+   the few buttons with no focus style of their own. The ring's 3:1 is pinned in tokens.test.ts. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* One switch for the whole grammar. Rules gated by `no-preference` never see these values;
    rules that read a token unconditionally — the nav indicator, the paste flash,
    .loading-dim, the delayed fallbacks — become instant here instead of each carrying a
