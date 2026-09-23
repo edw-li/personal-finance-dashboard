@@ -3,15 +3,17 @@ import { ApiError } from '../../api/client'
 import {
   createTransaction,
   deleteTransaction,
+  reorderTransactions,
   updateTransaction,
 } from '../../api/portfolio'
+import type { OwnerScope } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
 import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
 import { useReorder } from '../reorder/useReorder'
 import { useToast } from '../ToastProvider'
-import type { SecurityOut, TransactionOut, TransactionType } from '../../types/api'
+import type { PositionChange, SecurityOut, TransactionOut, TransactionType } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
 import { FeedBanner } from '../shell/Feed'
@@ -130,11 +132,22 @@ function rowName(txn: TransactionOut, ticker: string): string {
   return `${ticker} ${txn.type}, ${txn.account}`
 }
 
+/** The success toast (2026-09-23 drag-to-reorder spec §8.1). */
+function movedMessage(
+  txn: TransactionOut,
+  ticker: string,
+  changes: readonly PositionChange[],
+): string {
+  const head = `Moved the ${ticker} ${txn.type}.`
+  return changes.length === 0 ? `${head} No holding's figures changed.` : head
+}
+
 export default function TransactionsPanel({
   securities,
   transactions,
   accounts = null,
   primaryName = null,
+  owner = null,
   onChanged,
 }: {
   securities: SecurityOut[]
@@ -147,6 +160,11 @@ export default function TransactionsPanel({
   /** Who a NEW account would be assigned to, for that note; null falls back to a
    *  description rather than inventing a name. */
   primaryName?: string | null
+  /** The page's owner scope — the value `fetchTransactions` was given for `transactions`
+   *  (2026-09-23 drag-to-reorder spec §5). A reorder is saved in it: the server checks the ids
+   *  against exactly the rows this scope lists and moves them among their own slots. Null is
+   *  the whole household. */
+  owner?: OwnerScope
   onChanged: () => void
 }) {
   const [form, setForm] = useState<FormState>(EMPTY)
@@ -163,27 +181,51 @@ export default function TransactionsPanel({
 
   // Drag to reorder (2026-09-23 drag-to-reorder spec §5). The LIST ORDER is the cost-basis
   // replay order — the rows carry no dates, so their order is the ledger's timeline and a drag
-  // re-times a trade. pendingOrder is the dropped order, shown the moment the grip lets go and
-  // retired when fresh rows arrive from the page (CategoriesPanel's adjust-during-render
-  // pattern — no effect, so react-hooks/set-state-in-effect stays clean).
+  // re-times a trade. Two layers sit over the page's rows, and only a reorder sets either:
+  //   pendingOrder — the dropped order, from the moment the grip lets go until the PUT answers
+  //                  (optimistic), cleared either way when it does;
+  //   savedOrder   — the server's answer, until the page's next fetch replaces `transactions`
+  //                  (retired during render — CategoriesPanel's adjust-during-render pattern,
+  //                  no effect, so react-hooks/set-state-in-effect stays clean).
+  // So a fetch that lands mid-save never flashes the row back to where it came from, and a
+  // failed save falls back to the newest order the server confirmed.
   const [pendingOrder, setPendingOrder] = useState<TransactionOut[] | null>(null)
+  const [savedOrder, setSavedOrder] = useState<TransactionOut[] | null>(null)
   const [lastTransactions, setLastTransactions] = useState(transactions)
   if (lastTransactions !== transactions) {
     setLastTransactions(transactions)
-    setPendingOrder(null)
+    setSavedOrder(null)
   }
-  const rows = pendingOrder ?? transactions
+  const rows = pendingOrder ?? savedOrder ?? transactions
   const rowById = new Map(rows.map((txn) => [txn.id, txn]))
 
-  // Synchronously: the hook calls onCommit inside flushSync, so the new DOM order and the
-  // cleared drag transforms land in one frame (lane R0 consumer rule 3).
-  const showOrder = (next: number[]) => {
+  // One drop, one PUT (spec §5): the visible ids in their new order, in the page's scope. The
+  // server re-times the whole ledger, folds it before and after, and answers with the rows and
+  // every holding whose figures moved. `reorder` is read only when the PUT answers, long after
+  // the render that declares it below has returned.
+  const saveOrder = (next: number[], moved: number) => {
+    const txn = rowById.get(moved)
+    if (txn === undefined) return // the hook commits only ids it was handed
+    // Synchronously: the hook calls onCommit inside flushSync, so the new DOM order and the
+    // cleared drag transforms land in one frame (lane R0 consumer rule 3).
     setPendingOrder(
       next.flatMap((id) => {
-        const txn = rowById.get(id)
-        return txn === undefined ? [] : [txn]
+        const row = rowById.get(id)
+        return row === undefined ? [] : [row]
       }),
     )
+    setBusy(true)
+    reorderTransactions(next, owner)
+      .then((result) => {
+        setPendingOrder(null)
+        setSavedOrder(result.transactions)
+        // Holdings, realized gains and the tiles stand on this order: the page reloads them.
+        onChanged()
+        reorder.markSaved(moved)
+        toast.success(movedMessage(txn, tickerOf(txn), result.changed_positions))
+      })
+      .catch(() => setPendingOrder(null))
+      .finally(() => setBusy(false))
   }
 
   const reorder = useReorder({
@@ -192,10 +234,10 @@ export default function TransactionsPanel({
       const txn = rowById.get(id)
       return txn === undefined ? 'this transaction' : rowName(txn, tickerOf(txn))
     },
-    // Any request of the panel in flight leaves the grips focusable but inert (lane R0 consumer
-    // rule 4), so a drop can never race a save.
+    // Any request of the panel in flight — a save, a delete, a reorder — leaves the grips
+    // focusable but inert (lane R0 consumer rule 4), so a second drop cannot race the first.
     disabled: busy,
-    onCommit: showOrder,
+    onCommit: saveOrder,
   })
 
   // 'type' is excluded: it is a union field with its own dedicated handler below.

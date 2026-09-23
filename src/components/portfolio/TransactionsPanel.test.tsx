@@ -1,7 +1,12 @@
 import type { ComponentProps } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { SecurityOut, TransactionOut } from '../../types/api'
+import type {
+  PositionChange,
+  SecurityOut,
+  TransactionOrderOut,
+  TransactionOut,
+} from '../../types/api'
 import TransactionsPanel from './TransactionsPanel'
 import ToastProvider from '../ToastProvider'
 
@@ -677,5 +682,94 @@ describe('TransactionsPanel reorder — the grip column (spec §5)', () => {
     fireEvent.keyDown(handle, { key: ' ' })
     expect(live()).toBe('')
     expect(handle.getAttribute('aria-pressed')).toBeNull()
+  })
+})
+
+/** The keyboard path (spec §2.4): focus the grip, Space lifts, `key` moves one place, Space
+ *  drops. */
+function keyboardMove(name: string, key: 'ArrowUp' | 'ArrowDown'): void {
+  grip(name).focus()
+  fireEvent.keyDown(grip(name), { key: ' ' })
+  fireEvent.keyDown(grip(name), { key })
+  fireEvent.keyDown(grip(name), { key: ' ' })
+}
+
+const tableRow = (id: number) =>
+  document.querySelector(`tbody tr[data-reorder-id="${id}"]`) as HTMLElement
+
+/** The server's answer to a reorder: the rows it was sent, in that order, and `changes`. */
+function answerWith(changes: PositionChange[] = []): void {
+  const byId = new Map(LEDGER.map((txn) => [txn.id, txn]))
+  vi.mocked(reorderTransactions).mockImplementation(async (ids) => ({
+    transactions: ids.flatMap((id) => {
+      const txn = byId.get(id)
+      return txn === undefined ? [] : [txn]
+    }),
+    changed_positions: changes,
+  }))
+}
+
+// Spec §8.1: "Moved the {TICKER} {type}. No holding's figures changed."
+const QUIET_VOO = "Moved the VOO buy. No holding's figures changed."
+const QUIET_NVDA = "Moved the NVDA buy. No holding's figures changed."
+
+describe('TransactionsPanel reorder — saving the replay order (spec §5)', () => {
+  reorderHooks()
+
+  it('saves one drop as one PUT of the visible ids, in the page scope', () => {
+    renderLedger({ owner: 2 })
+    keyboardMove(NVDA_BUY, 'ArrowDown')
+    expect(reorderTransactions).toHaveBeenCalledTimes(1)
+    expect(reorderTransactions).toHaveBeenCalledWith([22, 21, 23], 2)
+    // Unanswered: the dropped order is on screen already, and every grip stays inert until the
+    // server answers — so a second drop cannot race the first (spec §9).
+    expect(order()).toEqual(['22', '21', '23'])
+    expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBe('true')
+    expect(document.activeElement).toBe(grip(NVDA_BUY))
+  })
+
+  it('reports a move that changed no figures, flashes the moved row and has the page reload', async () => {
+    answerWith()
+    const { onChanged } = renderLedger()
+    keyboardMove(VOO_BUY, 'ArrowUp')
+    expect(await screen.findByText(QUIET_VOO)).toBeTruthy()
+    // The household view sends null: the client turns it into no owner param at all.
+    expect(reorderTransactions).toHaveBeenCalledWith([22, 21, 23], null)
+    expect(onChanged).toHaveBeenCalledTimes(1)
+    expect(tableRow(22).hasAttribute('data-reorder-saved')).toBe(true)
+    await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
+  })
+
+  it("keeps the server's order up until the page's next fetch, then shows the page's rows", async () => {
+    answerWith()
+    const { rerender } = renderLedger()
+    keyboardMove(NVDA_BUY, 'ArrowDown')
+    await screen.findByText(QUIET_NVDA)
+    await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
+    expect(order()).toEqual(['22', '21', '23'])
+    // The page's reload lands — here carrying an order saved elsewhere meanwhile.
+    rerender({ transactions: [nvdaSell, vooBuy, nvdaBuy] })
+    expect(order()).toEqual(['23', '22', '21'])
+  })
+
+  it('never lets a fetch that lands mid-save show over the dropped order', async () => {
+    let answer: (value: TransactionOrderOut) => void = () => {}
+    vi.mocked(reorderTransactions).mockReturnValueOnce(
+      new Promise<TransactionOrderOut>((resolve) => {
+        answer = resolve
+      }),
+    )
+    const { rerender } = renderLedger()
+    keyboardMove(NVDA_BUY, 'ArrowDown')
+    // A reload that started before the save lands first: the old order, in a fresh array.
+    rerender({ transactions: [nvdaBuy, vooBuy, nvdaSell] })
+    expect(order()).toEqual(['22', '21', '23'])
+    await act(async () => {
+      answer({ transactions: [vooBuy, nvdaBuy, nvdaSell], changed_positions: [] })
+    })
+    expect(order()).toEqual(['22', '21', '23'])
+    // The reload the save asked for.
+    rerender({ transactions: [vooBuy, nvdaBuy, nvdaSell] })
+    expect(order()).toEqual(['22', '21', '23'])
   })
 })
