@@ -303,6 +303,32 @@ describe('CreditCardsPage', () => {
     expect(screen.queryByText(/Droppable|droppable/)).toBeNull()
   })
 
+  // Review of spec §B6: ties are the reason for a FEE card's $0 marginal too.
+  it('names the tie for fee cards as well — two fee cards that tie each other each name the other', async () => {
+    const feeCard = (id: number, name: string, slug: string): CreditCardOut => ({
+      ...SAVOR, id, name, slug, annual_fee: '95.00',
+    })
+    vi.mocked(fetchCreditCards).mockResolvedValue([feeCard(8, 'Card A', 'card-a'), feeCard(9, 'Card B', 'card-b')])
+    vi.mocked(fetchRewardCategories).mockResolvedValue([CATEGORIES[0]])
+    vi.mocked(fetchRewardRates).mockResolvedValue([
+      { id: 41, card_id: 8, category_id: 10, multiplier: '3.00', note: null, monthly_cap: null },
+      { id: 42, card_id: 9, category_id: 10, multiplier: '3.00', note: null, monthly_cap: null },
+    ])
+    renderPage()
+    const summary = await screen.findByRole('list', { name: 'Card verdicts' })
+    const costs = within(summary)
+      .getAllByRole('listitem')
+      .find((item) => item.textContent?.startsWith('Costs you money')) as HTMLElement
+    expect(costs.textContent).toContain('Card A (−$95.00/yr; ties Card B on Groceries)')
+    expect(costs.textContent).toContain('Card B (−$95.00/yr; ties Card A on Groceries)')
+    cleanup()
+    renderPage('/credit-cards?card=card-a')
+    await screen.findByText('Worth keeping? (est.)')
+    expect(screen.getByTestId('card-verdict').textContent).toContain(
+      'its $95.00 fee buys no extra rewards — it ties Card B on Groceries',
+    )
+  })
+
   it('with no weighted categories the page explains setup instead of declaring cards droppable', async () => {
     // Production on 2026-09-03: every reward category unmapped and unweighted, so the
     // optimizer valued every card at $0 and called five of six "droppable".

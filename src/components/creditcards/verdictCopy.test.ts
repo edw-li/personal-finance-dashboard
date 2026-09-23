@@ -95,6 +95,21 @@ describe('verdictReason', () => {
     )
   })
 
+  // Review of 2026-09-23 §B6: a FEE card whose $0 marginal comes from a tie has to say so as
+  // well — two fee cards that tie each other both "cost money", but closing both loses the spend.
+  it('costs, when the $0 marginal is a tie: names the partner', () => {
+    expect(
+      verdictReason(value({ annualFee: 95, net: -95 }), 'ties Robinhood Gold on Gas'),
+    ).toBe(
+      'On these numbers its $95.00 fee buys no extra rewards — it ties Robinhood Gold on Gas, so that spend earns the same without it: −$95.00 a year.',
+    )
+    expect(
+      verdictReason(value({ annualFee: 95, countedCredits: 50, net: -45 }), 'ties Robinhood Gold on Gas'),
+    ).toBe(
+      'On these numbers its $95.00 fee is more than the $50.00 of credits it brings, and it ties Robinhood Gold on Gas, so its rewards are not extra: −$45.00 a year.',
+    )
+  })
+
   it('costs, with a pin dragging the marginal below zero', () => {
     expect(verdictReason(value({ marginal: -4.8, annualFee: 95, net: -99.8 }), null)).toBe(
       'On these numbers its $95.00 fee buys nothing back, and a pin sends spend to it at a lower rate than the best card: −$99.80 a year.',
@@ -170,7 +185,27 @@ describe('closingSentence', () => {
         { opened_on: null, oldest: false },
       ),
     ).toBe(
-      'Closing it saves $94.13 a year on these numbers: no credit limit is recorded for it, so the total line shown would not change.',
+      'Closing it saves $94.13 a year on these numbers: no credit limit is recorded for it, so the total line shown would not change. Its age counts toward your credit history.',
+    )
+  })
+
+  // Review: "Free to keep" names credit history AND available credit, even with no opened date.
+  it('names the credit history even when no opened date is recorded', () => {
+    expect(closingSentence('free', value({}), effect(), { opened_on: null, oldest: false })).toBe(
+      'Closing it saves nothing: total credit line $115,350.00 → $107,750.00. Its age counts toward your credit history.',
+    )
+  })
+
+  // Review nit: a no-fee card whose pin costs rewards said "unpin it" and then "closing saves
+  // nothing" — closing WOULD win the pin's cost back; so would unpinning, keeping the card.
+  it('free with a costly pin: closing wins the pin’s cost back, and so does unpinning', () => {
+    expect(
+      closingSentence('free', value({ marginal: -4.8, net: -4.8 }), effect(), {
+        opened_on: '2024-02-01',
+        oldest: false,
+      }),
+    ).toBe(
+      'Closing it would win back the $4.80 a year its pin costs — unpinning does that too and keeps the card: total credit line $115,350.00 → $107,750.00. Open since Feb 1, 2024 — its age counts toward your credit history.',
     )
   })
 

@@ -96,9 +96,19 @@ export function verdictReason(value: CardValue, ties: string | null): string {
       : `On these numbers it adds ${formatCurrency(value.net)} a year that the rest of the lineup would not earn.`
   }
   if (hasFee && value.net <= -HALF_CENT) {
-    return value.marginal < -HALF_CENT
-      ? `On these numbers its ${formatCurrency(value.annualFee)} fee buys nothing back, and a pin sends spend to it at a lower rate than the best card: ${signedMoney(value.net)} a year.`
-      : `On these numbers its ${formatCurrency(value.annualFee)} fee is more than the ${brings(value)} it brings: ${signedMoney(value.net)} a year.`
+    const fee = formatCurrency(value.annualFee)
+    if (value.marginal < -HALF_CENT) {
+      return `On these numbers its ${fee} fee buys nothing back, and a pin sends spend to it at a lower rate than the best card: ${signedMoney(value.net)} a year.`
+    }
+    // A fee card's $0 marginal can be a tie too (review of spec §B6): two fee cards that tie
+    // each other BOTH read as costing money, and closing both would lose the spend — the
+    // partner is the reason, and the reader needs its name to close only one.
+    if (ties !== null) {
+      return value.countedCredits >= HALF_CENT
+        ? `On these numbers its ${fee} fee is more than the ${formatCurrency(value.countedCredits)} of credits it brings, and it ${ties}, so its rewards are not extra: ${signedMoney(value.net)} a year.`
+        : `On these numbers its ${fee} fee buys no extra rewards — it ${ties}, so that spend earns the same without it: ${signedMoney(value.net)} a year.`
+    }
+    return `On these numbers its ${fee} fee is more than the ${brings(value)} it brings: ${signedMoney(value.net)} a year.`
   }
   // Free to keep.
   if (hasFee) {
@@ -122,10 +132,14 @@ export function closingSentence(
   effect: ClosingEffect,
   card: { opened_on: string | null; oldest: boolean },
 ): string {
+  // A free card whose pin costs rewards is the one free card closing does save on — the pin's
+  // cost — and unpinning saves the same while keeping the card (its reason says unpin it).
   const saves =
     kind === 'costs'
       ? `Closing it saves ${formatCurrency(-value.net)} a year on these numbers`
-      : 'Closing it saves nothing'
+      : value.marginal < -HALF_CENT
+        ? `Closing it would win back the ${formatCurrency(-value.marginal)} a year its pin costs — unpinning does that too and keeps the card`
+        : 'Closing it saves nothing'
   const line =
     effect.cardLimit === null
       ? 'no credit limit is recorded for it, so the total line shown would not change'
@@ -140,9 +154,11 @@ export function closingSentence(
       : utilization.after === null
         ? `; household utilization ${pct(utilization.before)} now, with no line left after`
         : `; household utilization ${pct(utilization.before)} → ${pct(utilization.after)} with the same balances (as of ${formatMonth(utilization.month)})`
+  // The spec's "credit history AND available credit": the line clause above is the available
+  // credit; the history is said whether or not the card's opened date is on record.
   const history =
     card.opened_on === null
-      ? ''
+      ? ' Its age counts toward your credit history.'
       : ` Open since ${formatDate(card.opened_on)}${card.oldest ? ' — the oldest card here' : ''} — its age counts toward your credit history.`
   return `${saves}: ${line}${usage}.${history}`
 }

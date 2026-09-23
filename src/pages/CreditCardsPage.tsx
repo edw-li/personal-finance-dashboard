@@ -472,7 +472,7 @@ export default function CreditCardsPage() {
               )}
 <ChartCard
                 title="Is each card worth keeping? (est.)"
-                hint="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. Green earns its keep. Red costs you money: a fee bigger than what the card brings back. Grey is free to keep: no fee (or one its credits cover) and nothing extra on these weights — often because it ties another card's rate, and closing it would only shrink your available credit. Needs at least one weighted category to say anything."
+                hint="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. Green earns its keep. Red costs you money: a fee bigger than what the card brings back. Grey is free to keep: no fee (or one its credits cover) and nothing extra on these weights — often because it ties another card's rate, and closing it would only give up available credit and credit history. Needs at least one weighted category to say anything."
                 ariaLabel="Horizontal bars of each card's estimated net annual value"
                 option={hasWeights ? valueOption : null}
                 empty={
