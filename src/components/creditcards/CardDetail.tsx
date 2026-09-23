@@ -22,10 +22,19 @@ import type {
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatMonth, formatPct } from '../../utils/format'
 import { currentMonthIso } from '../../utils/months'
+import { closingEffect, type BalanceSnapshot } from './closingEffect'
 import { creditLineChartOption, creditLineCsv, limitMonths } from './creditLineChartOptions'
-import type { OptimizerResult } from './rewardsMath'
+import {
+  VERDICT_LABEL,
+  VERDICT_TONE,
+  cardTies,
+  verdictKind,
+  type OptimizerResult,
+} from './rewardsMath'
+import { closingSentence, tieWords, verdictReason } from './verdictCopy'
 import { FeedBanner } from '../shell/Feed'
 import './carddetail.css'
+import './verdicts.css'
 
 function message(err: unknown, fallback: string): string {
   // 404/409/422 details are the server's own sentences — rendered verbatim (house note).
@@ -43,6 +52,7 @@ export default function CardDetail({
   rates,
   categories,
   accounts,
+  lineup,
   busy,
   weighted = true,
   onClose,
@@ -53,6 +63,9 @@ export default function CardDetail({
   rates: RewardRateOut[]
   categories: RewardCategoryOut[]
   accounts: AccountOut[]
+  /** The active cards the optimizer valued this card against (the whole household — the drill
+   *  ignores the Whose chips): whose line and balances closing this card would change. */
+  lineup: CreditCardOut[]
   busy: boolean
   /** False when NO active category carries a spend weight: every marginal is then $0 by
    *  construction, and the tile must read as "unweighted", never as a verdict. */
@@ -64,8 +77,10 @@ export default function CardDetail({
   const [localBusy, setLocalBusy] = useState(false)
   const [creditForm, setCreditForm] = useState({ label: '', annual_value: '' })
   const [limitForm, setLimitForm] = useState({ effective_date: '', limit_amount: '', note: '' })
-  // Latest-snapshot balance for the linked account; null = not linked / not loaded.
-  const [utilization, setUtilization] = useState<{ month: string; balance: number } | null>(null)
+  // The latest net-worth snapshot's balances, every account — this card's own utilization line
+  // and the household utilization closing it would change (2026-09-23 spec §B6) both read it.
+  // null = nothing linked, not loaded, or the fetch failed.
+  const [balances, setBalances] = useState<BalanceSnapshot | null>(null)
   const toast = useToast()
   const headingRef = useRef<HTMLHeadingElement>(null)
   const anyBusy = busy || localBusy
@@ -76,18 +91,22 @@ export default function CardDetail({
     headingRef.current?.focus()
   }, [card.id])
 
+  // Only when some card is linked to a liability account: otherwise no balance could answer.
+  const needsBalances = card.account_id !== null || lineup.some((c) => c.account_id !== null)
   useEffect(() => {
-    if (card.account_id === null) return
+    if (!needsBalances) return
     let cancelled = false
     fetchSummary()
       .then((summary) => {
         if (summary.month === null) return null
         return fetchMonthBalances(summary.month)
       })
-      .then((balances) => {
-        if (cancelled || !balances) return
-        const entry = balances.balances.find((b) => b.account_id === card.account_id)
-        if (entry) setUtilization({ month: balances.month, balance: Number(entry.balance) })
+      .then((snapshot) => {
+        if (cancelled || !snapshot) return
+        setBalances({
+          month: snapshot.month,
+          byAccount: new Map(snapshot.balances.map((b) => [b.account_id, Number(b.balance)])),
+        })
       })
       .catch(() => {
         // Utilization is a nicety — degrade silently, never an error banner.
@@ -95,7 +114,7 @@ export default function CardDetail({
     return () => {
       cancelled = true
     }
-  }, [card.account_id])
+  }, [needsBalances])
 
   const accountName =
     card.account_id === null
@@ -248,10 +267,31 @@ export default function CardDetail({
     })
   }, [card.name, card.limit_events])
 
+  // This card's own balance from the snapshot; null = not linked / not loaded.
+  const ownBalance =
+    card.account_id === null || balances === null ? undefined : balances.byAccount.get(card.account_id)
+  const utilization =
+    balances === null || ownBalance === undefined ? null : { month: balances.month, balance: ownBalance }
   const utilizationPct =
     utilization !== null && card.current_limit !== null && Number(card.current_limit) > 0
       ? Math.abs(utilization.balance) / Number(card.current_limit)
       : null
+
+  // The verdict (2026-09-23 spec §B6), its reason and — for a card someone might close — what
+  // closing would change. The tie is only the reason for a $0 marginal.
+  const kind = value === undefined ? null : verdictKind(value)
+  const cardName = (id: number) => lineup.find((c) => c.id === id)?.name ?? `#${id}`
+  const categoryName = (id: number) => nameByCategory.get(id) ?? `#${id}`
+  const ties =
+    value !== undefined && Math.abs(value.marginal) < 0.005
+      ? tieWords(cardTies(card.id, result), cardName, categoryName)
+      : null
+  const openedDates = lineup.flatMap((c) => (c.opened_on === null ? [] : [c.opened_on]))
+  const oldest =
+    card.opened_on !== null &&
+    openedDates.length > 1 &&
+    openedDates.every((opened) => opened >= (card.opened_on as string))
+  const effect = closingEffect(card, lineup, balances)
 
   return (
     <div className="card-detail">
@@ -289,21 +329,33 @@ export default function CardDetail({
             <InfoHint text="Marginal rewards (optimal lineup with this card minus without it) plus counted credits, minus the annual fee. Estimates from your category weights." />
           </h2>
           {value ? (
-            <>
+            <div className="card-verdict" data-testid="card-verdict">
+              {/* The tile's second line IS the verdict, in its tone — the old sign rule painted a
+                  $0 no-fee card red and called it droppable. */}
               <StatTile
                 label="Net value per year"
                 value={formatCurrency(value.net)}
-                tone={!weighted ? 'neutral' : value.net > 0 ? 'positive' : 'negative'}
+                delta={weighted && kind !== null ? VERDICT_LABEL[kind] : undefined}
+                tone={!weighted || kind === null ? 'neutral' : VERDICT_TONE[kind]}
                 hint="marginal + counted credits − annual fee"
               />
               <p className="drill-hint">
                 {formatCurrency(value.marginal)} marginal + {formatCurrency(value.countedCredits)}{' '}
                 credits − {formatCurrency(value.annualFee)} fee
-                {!weighted
-                  ? ' — no spend weights yet, so the marginal reads $0 by construction; set weights in Categories & weights to judge this card.'
-                  : value.net <= 0 && ' — droppable: the rest of the lineup catches this spend.'}
+                {!weighted &&
+                  ' — no spend weights yet, so the marginal reads $0 by construction; set weights in Categories & weights to judge this card.'}
               </p>
-            </>
+              {weighted && kind !== null && (
+                <>
+                  <p className="card-verdict-reason">{verdictReason(value, ties)}</p>
+                  {kind !== 'earns' && (
+                    <p className="drill-hint" data-testid="card-closing">
+                      {closingSentence(kind, value, effect, { opened_on: card.opened_on, oldest })}
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
           ) : (
             <p className="empty-note">Archived cards sit outside the optimizer.</p>
           )}

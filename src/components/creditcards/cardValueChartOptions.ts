@@ -2,16 +2,20 @@
 // of its own. Reduced motion and the dark theme are the EChart wrapper's job (it forces
 // `animation: false` after the spread), so everything here is data.
 //
-// One horizontal bar per card, colored by the SIGN of its net annual value: keeping is a
-// POSITIVE bar, and anything that does not clear its fee reads NEGATIVE (droppable). The
+// One horizontal bar per card, coloured by its VERDICT (2026-09-23 spec §B6): earns its keep
+// is POSITIVE, costs you money (a fee the card does not earn back) is NEGATIVE, and free to
+// keep — no fee, nothing extra on these weights — is the neutral grey. The old sign rule painted
+// every $0 no-fee card red ("droppable"), and a $0 bar drew nothing at all, so the chart's
+// loudest colour and its empty rows both said "close it" about cards that cost nothing. The
 // zero line is drawn explicitly so a bar's side of it is readable without hunting the axis.
 import type { EChartsOption } from '../../charts/echarts'
 import { BAR_MARKS, grid, moneyAxis } from '../../charts/grammar'
 import { zeroLine } from '../../charts/markLine'
-import { NEGATIVE, POSITIVE } from '../../charts/theme'
+import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, POSITIVE } from '../../charts/theme'
 import { itemTooltip } from '../../charts/tooltip'
 import type { ExportTable } from '../../utils/download'
 import { formatCurrency } from '../../utils/format'
+import { VERDICT_LABEL, verdictKind, type CardVerdictKind } from './rewardsMath'
 
 export interface CardValueDatum {
   name: string
@@ -19,10 +23,26 @@ export interface CardValueDatum {
   credits: number
   fee: number
   net: number
+  /** Why the verdict reads as it does, for the tooltip — e.g. "ties Robinhood Gold on Dining". */
+  note?: string
 }
 
-/** Horizontal net-value bars, one per card, POSITIVE/NEGATIVE per datum. Callers
- *  pass rows sorted net-descending; height = max(140, rows×34 + 70). */
+const VERDICT_COLOR: Record<CardVerdictKind, string> = {
+  earns: POSITIVE,
+  costs: NEGATIVE,
+  free: OTHER_SERIES_COLOR,
+}
+
+// The stub's length: long enough to see and to hover, short enough to read as "nothing".
+const STUB_PX = 3
+
+const kindOf = (row: CardValueDatum) => verdictKind({ annualFee: row.fee, net: row.net })
+
+// The same half-cent rule the verdict uses: a row that prints "$0.00" is a $0 row.
+const isZero = (row: CardValueDatum) => Math.abs(row.net) < 0.005
+
+/** Horizontal net-value bars, one per card, coloured by verdict. Callers pass rows sorted
+ *  net-descending; height = max(140, rows×34 + 70). */
 export function cardValueChartOption(rows: CardValueDatum[]): EChartsOption {
   return {
     grid: grid('horizontal'),
@@ -36,7 +56,8 @@ export function cardValueChartOption(rows: CardValueDatum[]): EChartsOption {
           label: row.name,
           sub:
             `${formatCurrency(row.marginal)} marginal + ${formatCurrency(row.credits)} credits` +
-            ` − ${formatCurrency(row.fee)} fee, per year`,
+            ` − ${formatCurrency(row.fee)} fee, per year · ${VERDICT_LABEL[kindOf(row)]}` +
+            (row.note === undefined ? '' : ` (${row.note})`),
         }
       },
     }),
@@ -52,28 +73,36 @@ export function cardValueChartOption(rows: CardValueDatum[]): EChartsOption {
       {
         type: 'bar' as const,
         ...BAR_MARKS,
-        // Sign colours per item: keeping is POSITIVE, anything that does not clear its fee
-        // reads NEGATIVE (droppable) — the reserved status use spec §12 allows.
-        data: rows.map((r) => ({
-          value: r.net,
-          itemStyle: { color: r.net > 0 ? POSITIVE : NEGATIVE },
-        })),
+        // A $0 net is a real answer ("free to keep"), not an absent one: every bar is at least a
+        // stub, so the row can be seen and hovered like the others.
+        barMinHeight: STUB_PX,
+        data: rows.map((r) => {
+          const color = VERDICT_COLOR[kindOf(r)]
+          if (!isZero(r)) return { value: r.net, itemStyle: { color } }
+          return {
+            value: r.net,
+            // No SURFACE hairline on the stub: a 1px border each side would leave 1px of bar.
+            itemStyle: { color, borderWidth: 0 },
+            label: { show: true, position: 'right', color: MUTED, formatter: '$0 · free to keep' },
+          }
+        }),
         markLine: zeroLine('x'),
       },
     ],
   }
 }
 
-/** The lineup as a table (F12): the three inputs and the net each bar draws. */
+/** The lineup as a table (F12): the three inputs, the net each bar draws, and its verdict. */
 export function cardValueCsv(rows: CardValueDatum[]): ExportTable {
   return {
-    headers: ['Card', 'Marginal', 'Credits', 'Fee', 'Net'],
+    headers: ['Card', 'Marginal', 'Credits', 'Fee', 'Net', 'Verdict'],
     rows: rows.map((r) => [
       r.name,
       r.marginal.toFixed(2),
       r.credits.toFixed(2),
       r.fee.toFixed(2),
       r.net.toFixed(2),
+      VERDICT_LABEL[kindOf(r)],
     ]),
   }
 }

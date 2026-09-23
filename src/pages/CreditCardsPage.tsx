@@ -28,6 +28,7 @@ import {
   limitMonths,
 } from '../components/creditcards/creditLineChartOptions'
 import {
+  cardTies,
   enteredMonthCounts,
   householdAdvantage,
   optimize,
@@ -37,7 +38,10 @@ import {
   toMathCards,
   toMathCategories,
   toMathRates,
+  verdictKind,
 } from '../components/creditcards/rewardsMath'
+import { tieWords } from '../components/creditcards/verdictCopy'
+import VerdictSummary from '../components/creditcards/VerdictSummary'
 import type {
   AccountOut,
   CategoryOut,
@@ -277,27 +281,38 @@ export default function CreditCardsPage() {
     }
   }, [cards, activeCards, result])
 
-  const valueRows = useMemo(
-    () =>
-      [...result.cardValues]
-        .sort((a, b) => b.net - a.net)
-        .map((v) => {
-          const card = (cards ?? []).find((c) => c.id === v.cardId)
-          return {
-            name: card?.name ?? String(v.cardId),
-            marginal: v.marginal,
-            credits: v.countedCredits,
-            fee: v.annualFee,
-            net: v.net,
-          }
-        }),
-    [result, cards],
-  )
+  // One verdict per card (2026-09-23 spec §B6) — the bars, the table twin and the footer all
+  // read these rows, so they cannot disagree about a card.
+  const valueRows = useMemo(() => {
+    const cardName = (id: number) => (cards ?? []).find((c) => c.id === id)?.name ?? `#${id}`
+    const categoryName = (id: number) =>
+      (categories ?? []).find((c) => c.id === id)?.name ?? `#${id}`
+    return [...result.cardValues]
+      .sort((a, b) => b.net - a.net)
+      .map((v) => {
+        // A $0 marginal that comes from a tie says so: the one-at-a-time test prices BOTH tied
+        // cards at $0, so "free to keep" has to name the card that catches the same spend.
+        const ties =
+          Math.abs(v.marginal) < 0.005
+            ? tieWords(cardTies(v.cardId, result), cardName, categoryName, 2)
+            : null
+        return {
+          cardId: v.cardId,
+          name: cardName(v.cardId),
+          marginal: v.marginal,
+          credits: v.countedCredits,
+          fee: v.annualFee,
+          net: v.net,
+          kind: verdictKind(v),
+          ties,
+          ...(ties === null ? {} : { note: ties }),
+        }
+      })
+  }, [result, cards, categories])
   const valueOption = useMemo(
     () => (valueRows.length ? cardValueChartOption(valueRows) : null),
     [valueRows],
   )
-  const droppable = valueRows.filter((r) => r.net <= 0).map((r) => r.name)
 
   // The user's legend picks, mirrored back into the option (F9): a revalidation rebuilds it,
   // and without this every hidden card's line would come back.
@@ -366,6 +381,7 @@ export default function CreditCardsPage() {
             rates={rates ?? []}
             categories={categories ?? []}
             accounts={accounts}
+            lineup={activeCards}
             busy={busy}
             weighted={hasWeights}
             onClose={() => closeDetail(activeCard.id)}
@@ -456,7 +472,7 @@ export default function CreditCardsPage() {
               )}
 <ChartCard
                 title="Is each card worth keeping? (est.)"
-                hint="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. A $0 bar means the rest of the lineup already catches that spend. Needs at least one weighted category to say anything."
+                hint="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. Green earns its keep. Red costs you money: a fee bigger than what the card brings back. Grey is free to keep: no fee (or one its credits cover) and nothing extra on these weights — often because it ties another card's rate, and closing it would only shrink your available credit. Needs at least one weighted category to say anything."
                 ariaLabel="Horizontal bars of each card's estimated net annual value"
                 option={hasWeights ? valueOption : null}
                 empty={
@@ -468,15 +484,8 @@ export default function CreditCardsPage() {
                 csv={() => cardValueCsv(valueRows)}
                 height={Math.max(140, valueRows.length * 34 + 70)}
                 footer={
-                  hasWeights && droppable.length > 0 ? (
-                    <p className="drill-hint">
-                      Droppable on these numbers: {droppable.join(', ')} — zero or negative net
-                      value after fees.
-                      {unweightedCount > 0 &&
-                        ` Excludes ${unweightedCount} unweighted ${
-                          unweightedCount === 1 ? 'category' : 'categories'
-                        }.`}
-                    </p>
+                  hasWeights && valueRows.length > 0 ? (
+                    <VerdictSummary entries={valueRows} unweightedCount={unweightedCount} />
                   ) : undefined
                 }
               />
