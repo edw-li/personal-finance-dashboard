@@ -227,6 +227,22 @@ async def test_download_serves_either_kind_byte_for_byte(auth_client, db):
         assert resp.headers["cache-control"] == "no-store"
 
 
+def test_both_zip_downloads_stream_in_64_kib_blocks():
+    """One ~500 KB write followed at once by the connection's close lost its last ~40 KB on the
+    Windows dev box whenever the client sent `Connection: close` (uvicorn on the Proactor loop:
+    the live export failed 12 of 30 on main too). Both ZIP downloads stream in FileResponse's
+    64 KiB block size instead (2026-09-23 lane B1 review, M2)."""
+    from app.api.export import _slices
+    from app.api.system import _chunks
+
+    payload = bytes(range(256)) * 800  # 204,800 bytes: three full blocks and a tail
+    blocks = list(_chunks(io.BytesIO(payload)))
+    assert b"".join(blocks) == payload
+    assert [len(block) for block in blocks] == [65536, 65536, 65536, 8192]
+    slices = list(_slices(payload))
+    assert slices == blocks
+
+
 async def test_the_live_export_is_never_cached_either(auth_client):
     resp = await auth_client.get("/api/v1/export/snapshot")
     assert resp.status_code == 200

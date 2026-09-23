@@ -43,6 +43,11 @@ logger = logging.getLogger(__name__)
 SNAPSHOTS_KEEP = 14
 CHANGE_LOG_RETENTION_DAYS = 400
 ERROR_SNIPPET_LEN = 500
+# Every ZIP download streams in blocks of this size — FileResponse's own. One ~500 KB write
+# followed at once by the connection's close lost its last ~40 KB on the Windows dev box
+# whenever the client sent `Connection: close` (uvicorn on the Proactor loop; the live export
+# failed 12 of 30 on main), and 64 KiB blocks did not (2026-09-23 lane B1 review, M2).
+DOWNLOAD_CHUNK_BYTES = 64 * 1024
 
 # O_NOFOLLOW makes the open itself refuse a symlink (Linux, where prod runs). Windows has no
 # such flag: there the opener checks is_symlink first — creating a symlink on Windows takes a

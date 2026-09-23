@@ -32,6 +32,7 @@ from app.services.price_service import REFRESH_RUNS_KEY
 from app.services.scheduler import is_scheduler_running
 from app.services.snapshot import alembic_head
 from app.services.snapshot_store import (
+    DOWNLOAD_CHUNK_BYTES,
     list_restore_points,
     list_snapshots,
     open_stored_file,
@@ -45,7 +46,6 @@ BACKUP_RUNS_KEY = "backup_runs"
 # Keep-10 agrees in THREE places: this reader, price_service.REFRESH_RUNS_KEEP, and the
 # jsonpath literal '$[0 to 9]' inside backup_db.sh's upsert — bump all three together.
 RUNS_LIMIT = 10
-DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 # A whole-database ZIP must never sit in a browser or proxy cache (2026-09-23 lane B1 review,
 # M3). export.py's live export sends the same header.
 NO_STORE = "no-store"
@@ -131,8 +131,8 @@ async def restore_points(db: AsyncSession = Depends(get_db)) -> list[SnapshotEnt
 
 
 def _chunks(handle: BinaryIO) -> Iterator[bytes]:
-    """The opened file, in blocks, closed when the stream ends. A sync generator: Starlette
-    iterates it in its threadpool, so no read blocks the event loop."""
+    """The opened file, in DOWNLOAD_CHUNK_BYTES blocks, closed when the stream ends. A sync
+    generator: Starlette iterates it in its threadpool, so no read blocks the event loop."""
     with handle:
         while block := handle.read(DOWNLOAD_CHUNK_BYTES):
             yield block
