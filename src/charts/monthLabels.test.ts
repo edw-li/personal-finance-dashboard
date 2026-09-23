@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { grid } from './grammar'
-import { fitMonthAxes, monthAxis, monthLabelMode, monthTick } from './monthLabels'
+import { fitMonthAxes, hasMonthAxes, monthAxesKey, monthAxesPatch, monthAxis, monthLabelMode, monthTick } from './monthLabels'
 
 // 2026-09-23 spec §C4: month labels never collide. Thresholds come from the chart font's own
 // measurements (12px Segoe UI): "Sep 2026*" 53.9px, "May '26" 41.7px, "2026" 25.9px, "May" 22.7px —
@@ -126,5 +126,47 @@ describe('month labels', () => {
     const twice = fitMonthAxes(once.option, 606)
     expect(twice.key).toBe(once.key)
     expect(labelsOf((twice.option as unknown as { xAxis: Axis }).xAxis)).toEqual(labelsOf((once.option as unknown as { xAxis: Axis }).xAxis))
+  })
+})
+
+// Code-quality review (2026-09-23 spec §C4): EChart refits on every resize frame and every zoom.
+// The key is computed first and allocates nothing; the patch carries only the two keys a fit
+// changes, and a fit reuses one formatter per axis and form instead of minting a closure (and a
+// WeakMap entry) on every call.
+describe('fitting without churn', () => {
+  const YEAR = ['Oct 2025', 'Nov 2025', 'Dec 2025', 'Jan 2026', 'Feb 2026', 'Mar 2026', 'Apr 2026', 'May 2026', 'Jun 2026', 'Jul 2026', 'Aug 2026', 'Sep 2026']
+  const option = { grid: grid(), xAxis: monthAxis(YEAR, { gap: true }) }
+  type Fitted = { xAxis: { axisLabel: { formatter: unknown } } }
+
+  it('reuses one formatter per axis and form across fits', () => {
+    const a = (fitMonthAxes(option, 446).option as unknown as Fitted).xAxis.axisLabel.formatter
+    const b = (fitMonthAxes(option, 450).option as unknown as Fitted).xAxis.axisLabel.formatter
+    expect(b).toBe(a) // same form (compact), same closure
+    const c = (fitMonthAxes(option, 900).option as unknown as Fitted).xAxis.axisLabel.formatter
+    expect(c).not.toBe(a) // a new form is a new formatter…
+    expect((fitMonthAxes(option, 901).option as unknown as Fitted).xAxis.axisLabel.formatter).toBe(c) // …once
+  })
+
+  it('computes the same key the fit does, without building anything', () => {
+    for (const width of [0, 446, 606, 900]) expect(monthAxesKey(option, width)).toBe(fitMonthAxes(option, width).key)
+    expect(monthAxesKey(option, 446, { startValue: 3, endValue: 9 })).toBe(fitMonthAxes(option, 446, { startValue: 3, endValue: 9 }).key)
+    expect(monthAxesKey({ xAxis: monthAxis(['2024', '2025'], { gap: true }) }, 446)).toBe('')
+  })
+
+  it('patches only the formatter and the interval, one entry per x axis', () => {
+    const patch = monthAxesPatch({ grid: grid(), xAxis: [monthAxis(YEAR, { gap: true }), monthAxis(['2024', '2025'])] }, 446)
+    expect(patch).toHaveLength(2)
+    expect(Object.keys(patch[0])).toEqual(['axisLabel'])
+    expect(Object.keys(patch[0].axisLabel ?? {})).toEqual(['formatter', 'interval'])
+    expect(patch[0].axisLabel?.interval).toBe(0)
+    expect((patch[0].axisLabel?.formatter as (v: string, i: number) => string)('Oct 2025', 0)).toBe("Oct '25")
+    expect(patch[1]).toEqual({}) // not a month axis: left exactly as painted
+  })
+
+  it('knows which options carry a month axis worth refitting', () => {
+    expect(hasMonthAxes(option)).toBe(true)
+    expect(hasMonthAxes({ xAxis: monthAxis(['2024', '2025']) })).toBe(false)
+    expect(hasMonthAxes({ xAxis: monthAxis(YEAR, { gap: true, rotate: 45 }) })).toBe(false) // the heatmap keeps its labels
+    expect(hasMonthAxes({ series: [] })).toBe(false)
   })
 })

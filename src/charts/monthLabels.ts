@@ -59,9 +59,20 @@ interface MonthAxisMeta {
 const MONTH_AXES = new WeakMap<object, MonthAxisMeta>()
 const NO_MARKS: ReadonlySet<string> = new Set<string>()
 
-function monthFormatter(mode: MonthLabelMode, meta: MonthAxisMeta) {
-  const formatter = (value: string, index: number) => monthTick(value, index, mode, meta.marked.has(value))
+type MonthFormatter = (value: string, index: number) => string
+// One formatter per axis and form, minted once: EChart refits on every resize frame and every
+// zoom, and a fresh closure (plus its brand entry) per call was pure churn (the 2026-09-23
+// code-quality review). Keyed by the axis's own facts, so the cache dies with its option.
+const FORMATTERS = new WeakMap<MonthAxisMeta, Map<MonthLabelMode, MonthFormatter>>()
+
+function monthFormatter(mode: MonthLabelMode, meta: MonthAxisMeta): MonthFormatter {
+  const byMode = FORMATTERS.get(meta) ?? new Map<MonthLabelMode, MonthFormatter>()
+  FORMATTERS.set(meta, byMode)
+  const cached = byMode.get(mode)
+  if (cached !== undefined) return cached
+  const formatter: MonthFormatter = (value, index) => monthTick(value, index, mode, meta.marked.has(value))
   MONTH_AXES.set(formatter, meta)
+  byMode.set(mode, formatter)
   return formatter
 }
 
@@ -120,30 +131,39 @@ function gridPx(value: unknown, width: number): number {
  *  window EChart reads back; the option's own dataZoom otherwise. Rotated axes (the heatmap)
  *  and non-month axes are left alone; so is everything when the width is unknown (0). The
  *  input is never mutated. `key` names the fitted forms, so a caller refits only on change. */
-export function fitMonthAxes(
-  option: object,
-  width: number,
-  zoom?: { startValue: number; endValue: number } | null,
-): { option: typeof option; key: string } {
-  if (!(width > 0)) return { option, key: '' }
+type Zoom = { startValue: number; endValue: number } | null | undefined
+type AxisRecord = Record<string, unknown>
+
+/** The x axes of an option, as a list (a single axis is the common case). */
+function xAxesOf(option: object): { axes: AxisRecord[]; single: boolean } {
   const o = option as Record<string, unknown>
   const single = !Array.isArray(o.xAxis)
-  const axes = (single ? (o.xAxis === undefined ? [] : [o.xAxis]) : o.xAxis) as Record<string, unknown>[]
-  const grids = (Array.isArray(o.grid) ? o.grid : [o.grid ?? {}]) as Record<string, unknown>[]
+  return { axes: (single ? (o.xAxis === undefined ? [] : [o.xAxis]) : o.xAxis) as AxisRecord[], single }
+}
+
+/** A month axis this fit may refit: a branded month formatter, not rotated, with categories. */
+function fittableMeta(axis: AxisRecord): MonthAxisMeta | undefined {
+  const label = (axis.axisLabel ?? {}) as Record<string, unknown>
+  const meta = typeof label.formatter === 'function' ? MONTH_AXES.get(label.formatter) : undefined
+  const count = Array.isArray(axis.data) ? axis.data.length : 0
+  return meta === undefined || meta.rotated || count === 0 ? undefined : meta
+}
+
+/** Every x axis's fit, or null where the fit leaves the axis alone. Allocates no formatter. */
+function planMonthAxes(option: object, width: number, zoom: Zoom): { mode: MonthLabelMode; meta: MonthAxisMeta }[] | null {
+  if (!(width > 0)) return null
+  const o = option as Record<string, unknown>
+  const { axes } = xAxesOf(option)
+  const grids = (Array.isArray(o.grid) ? o.grid : [o.grid ?? {}]) as AxisRecord[]
   const zooms = (Array.isArray(o.dataZoom) ? o.dataZoom : o.dataZoom === undefined ? [] : [o.dataZoom]) as {
     startValue?: unknown
     endValue?: unknown
   }[]
-  const keys: string[] = []
   let fitted = false
-  const next = axes.map((axis, index) => {
-    const label = (axis.axisLabel ?? {}) as Record<string, unknown>
-    const meta = typeof label.formatter === 'function' ? MONTH_AXES.get(label.formatter) : undefined
-    const count = Array.isArray(axis.data) ? axis.data.length : 0
-    if (meta === undefined || meta.rotated || count === 0) {
-      keys.push('-')
-      return axis
-    }
+  const plan = axes.map((axis, index) => {
+    const meta = fittableMeta(axis)
+    if (meta === undefined) return null
+    const count = (axis.data as unknown[]).length
     const grid = grids[typeof axis.gridIndex === 'number' ? axis.gridIndex : 0] ?? {}
     const plot = grid.width !== undefined ? gridPx(grid.width, width) : width - gridPx(grid.left, width) - gridPx(grid.right, width)
     // The zoom a single-axis chart carries applies to its first axis (rangeZoom's contract).
@@ -152,11 +172,49 @@ export function fitMonthAxes(
     const end = index === 0 ? (zoom?.endValue ?? (typeof preset?.endValue === 'number' ? preset.endValue : count - 1)) : count - 1
     const visible = Math.max(1, Math.min(end, count - 1) - Math.max(start, 0) + 1)
     const spacing = plot / (axis.boundaryGap === false ? Math.max(visible - 1, 1) : visible)
-    const mode = monthLabelMode(spacing)
-    keys.push(mode)
     fitted = true
-    return { ...axis, axisLabel: { ...label, formatter: monthFormatter(mode, meta), interval: mode === 'sparse' ? 'auto' : 0 } }
+    return { mode: monthLabelMode(spacing), meta }
   })
-  if (!fitted) return { option, key: '' }
-  return { option: { ...o, xAxis: single ? next[0] : next }, key: keys.join('|') }
+  return fitted ? (plan as { mode: MonthLabelMode; meta: MonthAxisMeta }[]) : null
+}
+
+/** Does the option carry a month axis a fit would touch? EChart skips all refit work without. */
+export function hasMonthAxes(option: object): boolean {
+  return xAxesOf(option).axes.some((axis) => fittableMeta(axis) !== undefined)
+}
+
+type AxisPlan = ReturnType<typeof planMonthAxes>
+type AxisPatch = { axisLabel?: { formatter: MonthFormatter; interval: number | 'auto' } }
+const keyOf = (plan: AxisPlan) => (plan === null ? '' : plan.map((fit) => fit?.mode ?? '-').join('|'))
+const patchOf = (plan: AxisPlan): AxisPatch[] =>
+  plan === null
+    ? []
+    : plan.map((fit) =>
+        fit === null ? {} : { axisLabel: { formatter: monthFormatter(fit.mode, fit.meta), interval: fit.mode === 'sparse' ? 'auto' : 0 } },
+      )
+
+/** The fit's key: each x axis's form ('-' for one it leaves alone), '' when nothing fits. Builds
+ *  nothing, so a caller can compare it on every resize frame and refit only on a change. */
+export function monthAxesKey(option: object, width: number, zoom?: Zoom): string {
+  return keyOf(planMonthAxes(option, width, zoom))
+}
+
+/** What a refit merges, per x axis: ONLY the label formatter and interval of a month axis, and
+ *  an empty object for any other, so the engine keeps every other key it holds (another lane's
+ *  merge-updated `axisLabel.customValues` included). Empty when nothing fits. */
+export function monthAxesPatch(option: object, width: number, zoom?: Zoom): AxisPatch[] {
+  return patchOf(planMonthAxes(option, width, zoom))
+}
+
+/** The whole option fitted (the first paint's), and its key: one plan, one formatter per form. */
+export function fitMonthAxes(option: object, width: number, zoom?: Zoom): { option: typeof option; key: string } {
+  const plan = planMonthAxes(option, width, zoom)
+  if (plan === null) return { option, key: '' }
+  const patch = patchOf(plan)
+  const { axes, single } = xAxesOf(option)
+  const next = axes.map((axis, index) => {
+    const fit = patch[index].axisLabel
+    return fit === undefined ? axis : { ...axis, axisLabel: { ...(axis.axisLabel as object), ...fit } }
+  })
+  return { option: { ...(option as object), xAxis: single ? next[0] : next }, key: keyOf(plan) }
 }
