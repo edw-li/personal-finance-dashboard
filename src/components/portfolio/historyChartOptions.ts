@@ -5,7 +5,7 @@
 import type { EChartsOption } from '../../charts/echarts'
 import { LINE, WASH, dateAxis, grid, moneyAxis } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
-import { INK, MUTED, PALETTE } from '../../charts/theme'
+import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
 import type { AxisTooltipParam } from '../../charts/tooltip'
 import type {
@@ -115,19 +115,52 @@ export function buildEventMarkers(
   dividendEvents: DividendEventOut[] = [],
 ): ChartEventPoint[] {
   if (history.dates.length === 0) return []
-  const days = history.dates.map(dayNumber)
+  const byIndex = snapToBars(
+    history.dates,
+    collectEvents(transactions, dividends, tickers, dividendEvents),
+  )
+  const SYMBOLS = { buy: 'triangle', sell: 'triangle', dividend: 'circle', exdiv: 'circle' } as const
+  return [...byIndex.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([index, events]) => {
+      events.sort(byDate)
+      const kinds = new Set(events.map((e) => e.kind))
+      const kind = kinds.size === 1 ? events[0].kind : null
+      return {
+        value: [formatDate(history.dates[index]), Number(history.market_value[index])],
+        symbol: kind === null ? 'diamond' : SYMBOLS[kind],
+        symbolRotate: kind === 'sell' ? 180 : 0,
+        events: events.map(({ text }) => ({ text })),
+      }
+    })
+}
+
+type EventKind = 'buy' | 'sell' | 'dividend' | 'exdiv'
+interface RawEvent {
+  kind: EventKind
+  date: string
+  text: string
+  securityId: number
+}
+const byDate = (a: RawEvent, b: RawEvent) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)
+
+/** Every dated buy and sell, every ledger dividend and every provider ex-dividend notice the
+ *  ledger does not already carry, as display lines — buildEventMarkers' rules, shared with the
+ *  performance chart's events below. */
+function collectEvents(
+  transactions: TransactionOut[],
+  dividends: DividendOut[],
+  tickers: Map<number, string>,
+  dividendEvents: DividendEventOut[],
+): RawEvent[] {
   const ticker = (id: number) => tickers.get(id) ?? `#${id}`
-  interface RawEvent {
-    kind: 'buy' | 'sell' | 'dividend' | 'exdiv'
-    date: string
-    text: string
-  }
   const raw: RawEvent[] = []
   for (const t of transactions) {
     if (t.txn_date === null || (t.type !== 'buy' && t.type !== 'sell')) continue
     raw.push({
       kind: t.type,
       date: t.txn_date,
+      securityId: t.security_id,
       text: `${t.type === 'buy' ? 'Buy' : 'Sell'} ${ticker(t.security_id)} — ${formatShares(
         t.shares,
       )} sh · ${formatDate(t.txn_date)}`,
@@ -151,6 +184,7 @@ export function buildEventMarkers(
     raw.push({
       kind: 'dividend',
       date: d.pay_date,
+      securityId: d.security_id,
       text: `Dividend ${ticker(d.security_id)} — ${formatCurrency(d.amount)} · ${formatDate(
         d.pay_date,
       )}`,
@@ -166,13 +200,22 @@ export function buildEventMarkers(
     raw.push({
       kind: 'exdiv',
       date: e.ex_date,
+      securityId: e.security_id,
       text: `Ex-dividend ${ticker(e.security_id)} — $${trimPerShare(e.per_share)}/sh · ${formatDate(
         e.ex_date,
       )}`,
     })
   }
+  return raw
+}
+
+/** Each event snapped to the NEAREST bar (the axis is categorical — a true-date x would lie
+ *  between bars); an event off either end of the axis has no bar to stand on and is dropped. */
+function snapToBars(dates: string[], events: RawEvent[]): Map<number, RawEvent[]> {
   const byIndex = new Map<number, RawEvent[]>()
-  for (const event of raw) {
+  if (dates.length === 0) return byIndex
+  const days = dates.map(dayNumber)
+  for (const event of events) {
     const day = dayNumber(event.date)
     if (day < days[0] || day > days[days.length - 1]) continue
     let index = 0
@@ -184,20 +227,103 @@ export function buildEventMarkers(
     if (bucket) bucket.push(event)
     else byIndex.set(index, [event])
   }
-  const SYMBOLS = { buy: 'triangle', sell: 'triangle', dividend: 'circle', exdiv: 'circle' } as const
-  return [...byIndex.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([index, events]) => {
-      events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-      const kinds = new Set(events.map((e) => e.kind))
-      const kind = kinds.size === 1 ? events[0].kind : null
-      return {
-        value: [formatDate(history.dates[index]), Number(history.market_value[index])],
-        symbol: kind === null ? 'diamond' : SYMBOLS[kind],
-        symbolRotate: kind === 'sell' ? 180 : 0,
-        events: events.map(({ text }) => ({ text })),
-      }
-    })
+  return byIndex
+}
+
+// One series per KIND of event on the performance chart (2026-09-23 spec §C8): the legend
+// names each, and each toggles on its own.
+export const BUYS_SERIES = 'Buys'
+export const SELLS_SERIES = 'Sells'
+export const DIVIDENDS_SERIES = 'Dividends'
+export const EXDIV_SERIES = 'Ex-dividend dates'
+
+/** One rug tick: a weekly bar with events of its kind, at y 0 — the plot's floor. */
+export interface RugPoint {
+  value: [string, number]
+  /** Display-ready lines, TRUE dates included; escaped at HTML time (eventLines). */
+  events: { text: string }[]
+}
+
+export interface PerformanceEvents {
+  buys: ChartEventPoint[]
+  sells: ChartEventPoint[]
+  dividends: RugPoint[]
+  exDividends: RugPoint[]
+}
+
+/** Whether a security was held on a date, from the ledger alone: undated (imported) rows are
+ *  the opening book, held before any dated row; dated buys, sells and splits apply on their own
+ *  dates. Display-only share arithmetic — nothing here reaches a money figure. */
+function heldOn(transactions: TransactionOut[]): (securityId: number, iso: string) => boolean {
+  const bySecurity = new Map<number, TransactionOut[]>()
+  for (const t of transactions) {
+    const rows = bySecurity.get(t.security_id)
+    if (rows) rows.push(t)
+    else bySecurity.set(t.security_id, [t])
+  }
+  // The opening book first (undated imports, in their sort order), then dated rows by date.
+  for (const rows of bySecurity.values()) {
+    rows.sort(
+      (a, b) => (a.txn_date ?? '').localeCompare(b.txn_date ?? '') || a.sort_index - b.sort_index,
+    )
+  }
+  return (securityId, iso) => {
+    let shares = 0
+    for (const t of bySecurity.get(securityId) ?? []) {
+      if (t.txn_date !== null && t.txn_date > iso) break
+      if (t.type === 'buy') shares += Number(t.shares)
+      else if (t.type === 'sell') shares -= Number(t.shares)
+      else if (t.split_factor !== null) shares *= Number(t.split_factor)
+    }
+    return shares > 1e-9
+  }
+}
+
+/**
+ * The performance chart's annotations (2026-09-23 spec §C8; wealth PF-5, charts F11). Dated buys
+ * and sells ride the value line as before; ledger dividends and provider ex-dividend notices move
+ * OFF it, to a rug on the plot's floor — one tick per weekly bar per kind, listing its events in
+ * the tooltip. They used to sit on ≈132 of 155 weekly points and turn the value line into a bead
+ * chain. The provider lists every security the book has ever named — targets and watch-list
+ * tickers included (IVV, IJH… never owned) — so a notice survives only for a security held on its
+ * ex-date (heldOn) or held today (`heldNow`, the page's holdings). Ledger rows are the household's
+ * own dividends and always stay; the ledger still wins a collision (collectEvents).
+ */
+export function buildPerformanceEvents(
+  history: Pick<PortfolioHistory, 'dates' | 'market_value'>,
+  transactions: TransactionOut[],
+  dividends: DividendOut[],
+  tickers: Map<number, string>,
+  dividendEvents: DividendEventOut[],
+  heldNow: ReadonlySet<number>,
+): PerformanceEvents {
+  const held = heldOn(transactions)
+  const raw = collectEvents(transactions, dividends, tickers, dividendEvents).filter(
+    (e) => e.kind !== 'exdiv' || heldNow.has(e.securityId) || held(e.securityId, e.date),
+  )
+  const bars = (kind: EventKind) =>
+    [...snapToBars(history.dates, raw.filter((e) => e.kind === kind)).entries()].sort(
+      ([a], [b]) => a - b,
+    )
+  const lines = (events: RawEvent[]) => [...events].sort(byDate).map(({ text }) => ({ text }))
+  const onLine = (kind: 'buy' | 'sell'): ChartEventPoint[] =>
+    bars(kind).map(([index, events]) => ({
+      value: [formatDate(history.dates[index]), Number(history.market_value[index])],
+      symbol: 'triangle',
+      symbolRotate: kind === 'sell' ? 180 : 0,
+      events: lines(events),
+    }))
+  const rug = (kind: 'dividend' | 'exdiv'): RugPoint[] =>
+    bars(kind).map(([index, events]) => ({
+      value: [formatDate(history.dates[index]), 0],
+      events: lines(events),
+    }))
+  return {
+    buys: onLine('buy'),
+    sells: onLine('sell'),
+    dividends: rug('dividend'),
+    exDividends: rug('exdiv'),
+  }
 }
 
 // The axis-tooltip param subset eventLines reads is the grammar's own
@@ -213,10 +339,44 @@ export function eventLines(param: AxisTooltipParam): string[] {
   ]
 }
 
+/** The performance chart's event layers (2026-09-23 spec §C8). Buys and sells: plain scatter in
+ *  MUTED riding the value line — an annotation layer, not a data hue, and the ripple stays the
+ *  live ping's (the net-worth notes-diamond rule). The rug: 2px × 10px ticks at y 0 that straddle
+ *  the x-axis line, so they cross the plot only where the lines themselves are lowest; neutral
+ *  tones by kind (INK for the household's own ledger, MUTED for provider notices), because no
+ *  money-entity colour can then collide with them inside this chart, and the ledger draws on
+ *  top where a week has both. An empty kind draws no series and lists no legend entry. */
+function eventSeries(events: PerformanceEvents) {
+  const marker = (name: string, data: ChartEventPoint[]) => ({
+    type: 'scatter' as const,
+    name,
+    color: MUTED,
+    symbolSize: 9,
+    itemStyle: { borderColor: INK, borderWidth: 1 },
+    z: 11,
+    data,
+  })
+  const rug = (name: string, data: RugPoint[], color: string, z: number) => ({
+    type: 'scatter' as const,
+    name,
+    color,
+    symbol: 'rect' as const,
+    symbolSize: [2, 10] as [number, number],
+    z,
+    data,
+  })
+  return [
+    ...(events.buys.length > 0 ? [marker(BUYS_SERIES, events.buys)] : []),
+    ...(events.sells.length > 0 ? [marker(SELLS_SERIES, events.sells)] : []),
+    ...(events.dividends.length > 0 ? [rug(DIVIDENDS_SERIES, events.dividends, INK, 13)] : []),
+    ...(events.exDividends.length > 0 ? [rug(EXDIV_SERIES, events.exDividends, MUTED, 12)] : []),
+  ]
+}
+
 export function portfolioHistoryOption(
   history: PortfolioHistory,
   live: LivePoint | null,
-  events: ChartEventPoint[] | null = null,
+  events: PerformanceEvents | null = null,
   { selected, startingBalance = 'legend-off' }: HistoryOptionSettings = {},
 ): EChartsOption | null {
   if (history.dates.length < 2) return null
@@ -270,23 +430,9 @@ export function portfolioHistoryOption(
     ...(startingBalance === 'omit'
       ? []
       : [lineSeries(STARTING_BALANCE_SERIES, history.sp500, PALETTE[2], false)]),
-    ...(events !== null && events.length > 0
-      ? [
-          {
-            // Plain scatter in MUTED riding the value line — an annotation layer, not
-            // a data hue, and the ripple stays reserved for the live ping (the
-            // net-worth notes-diamond rule). Legend-toggleable, ON by default: no
-            // legend.selected entry ships for it.
-            type: 'scatter' as const,
-            name: EVENTS_SERIES,
-            color: MUTED,
-            symbolSize: 9,
-            itemStyle: { borderColor: INK, borderWidth: 1 },
-            z: 11,
-            data: events,
-          },
-        ]
-      : []),
+    // One series per kind of event (2026-09-23 spec §C8): each has its own legend entry and
+    // toggles on its own; all are ON by default — no legend.selected entry ships for them.
+    ...(events === null ? [] : eventSeries(events)),
     ...(livePt
       ? [
           {
@@ -327,19 +473,25 @@ export function portfolioHistoryOption(
   return {
     grid: grid(),
     // Listed but hidden until picked; the page's own picks (F9) ride on top, so a reader who
-    // switched it on keeps it on across refetches and theme swaps.
-    legend: legendFor(
-      series.length,
-      startingBalance === 'omit' ? selected : { [STARTING_BALANCE_SERIES]: false, ...selected },
-    ),
+    // switched it on keeps it on across refetches and theme swaps. An entry that is off must
+    // LOOK off: echarts' default inactive #ccc is brighter than an active label on the dark
+    // card, and this line now starts hidden on every visit — the fold grey reads as "off" in
+    // both themes (a token, so the light recolor carries it).
+    legend: {
+      ...legendFor(
+        series.length,
+        startingBalance === 'omit' ? selected : { [STARTING_BALANCE_SERIES]: false, ...selected },
+      ),
+      inactiveColor: OTHER_SERIES_COLOR,
+    },
     xAxis: dateAxis(categories),
     // No scale:true — a washed area over a visible axis needs the honest zero baseline.
     yAxis: moneyAxis(),
-    // F7: the Events row expands into its clustered lines instead of printing a y that is
+    // F7: every event kind expands into its clustered lines instead of printing a y that is
     // chart geometry, not a figure — axisTooltip does it through the annotations hook.
     tooltip: axisTooltip({
       unit: 'money',
-      annotationSeries: [EVENTS_SERIES],
+      annotationSeries: [BUYS_SERIES, SELLS_SERIES, DIVIDENDS_SERIES, EXDIV_SERIES],
       annotations: eventLines,
     }),
     series,

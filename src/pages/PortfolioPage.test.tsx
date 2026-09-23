@@ -810,6 +810,26 @@ it('renders the panels real empty notes for an owner who holds nothing', async (
 // from the OWNER-FILTERED holdings — plotting a person's total at the end of the household
 // series drew a fake cliff. The ping (and its dashed connector, which rides the Live
 // series' markLine) renders only on the All view.
+// ── Performance events on a rug (2026-09-23 spec §C8) ─────────────────────────────────────
+// The provider's ex-dividend notices cover every security the book ever named; the chart
+// keeps only those for a security held then or now — "now" is this page's own holdings.
+it('draws ex-dividend notices on the rug only for securities the page holds', async () => {
+  vi.mocked(fetchDividendEvents).mockResolvedValue([
+    { security_id: 1, ex_date: '2026-08-18', per_share: '1.000000' }, // VOO — held
+    { security_id: 99, ex_date: '2026-08-19', per_share: '2.000000' }, // never held
+  ])
+  renderPage()
+  const performance = () => screen.getAllByTestId('echart')[0]
+  await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+  cleanup()
+  vi.mocked(fetchDividendEvents).mockResolvedValue([
+    { security_id: 99, ex_date: '2026-08-19', per_share: '2.000000' },
+  ])
+  renderPage()
+  await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Live'))
+  expect(performance().getAttribute('data-series')).not.toContain('Ex-dividend dates')
+})
+
 it('renders the live ping only on the All view', async () => {
   renderPage()
   await screen.findByRole('group', { name: 'Whose' })

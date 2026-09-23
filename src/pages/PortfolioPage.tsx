@@ -25,7 +25,7 @@ import InfoHint from '../components/InfoHint'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
 import DividendsPanel from '../components/portfolio/DividendsPanel'
 import {
-  buildEventMarkers,
+  buildPerformanceEvents,
   liveFromHoldings,
   portfolioHistoryCsv,
   portfolioHistoryOption,
@@ -441,9 +441,19 @@ export default function PortfolioPage() {
   const performanceOption = useMemo(() => {
     if (!history || !holdings) return null
     // Markers come from the ledgers this page ALREADY fetches in the same Promise.all —
-    // Overview keeps the two-arg call and never starts fetching them (spec Decision log).
+    // Overview keeps the short call and never starts fetching them (spec Decision log).
+    // Dividends and ex-dividend notices go to the rug; a notice survives only for a security
+    // held then or now, and "now" is this page's own holdings (2026-09-23 spec §C8).
     const tickerById = new Map(securities.map((s) => [s.id, s.ticker]))
-    const events = buildEventMarkers(history, transactions, dividends, tickerById, dividendEvents)
+    const heldNow = new Set(holdings.holdings.map((h) => h.security_id))
+    const events = buildPerformanceEvents(
+      history,
+      transactions,
+      dividends,
+      tickerById,
+      dividendEvents,
+      heldNow,
+    )
     // A3 (2026-08-31 tier-1): the ping is derived from the OWNER-FILTERED holdings, but
     // /portfolio/history is household-wide by design — plotting a person's total at the
     // end of the household series drew a fake cliff. Only the All view bridges to "now";
@@ -668,7 +678,7 @@ export default function PortfolioPage() {
             <LocalSectionPanel state={views} section="overview">
               <ChartCard
                 title="Performance"
-                hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. Same deposits in VOO invests every inferred contribution in VOO as it lands — the fair comparison. S&P 500 — starting balance only invests just the first week's balance; it stays off until you pick it in the legend. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Event markers annotate dated buys and sells, logged dividends, and older ex-dividend dates (per-share only — dollar amounts that old are unknowable from undated imports)."
+                hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. Same deposits in VOO invests every inferred contribution in VOO as it lands — the fair comparison. S&P 500 — starting balance only invests just the first week's balance; it stays off until you pick it in the legend. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Dated buys and sells ride the line; the ticks along the bottom mark weeks with logged dividends and older ex-dividend dates of securities held then or now (per-share only — dollar amounts that old are unknowable from undated imports)."
                 ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
                 option={performanceOption}
                 empty="No performance history yet — import your workbook in Settings to load it."

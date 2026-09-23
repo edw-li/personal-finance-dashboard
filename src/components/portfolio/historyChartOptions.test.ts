@@ -7,17 +7,21 @@ import type {
   TransactionOut,
 } from '../../types/api'
 import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
-import { MUTED, PALETTE } from '../../charts/theme'
+import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { tooltipRows } from '../../testing/tooltipRows'
 import {
+  BUYS_SERIES,
   buildEventMarkers,
-  EVENTS_SERIES,
+  buildPerformanceEvents,
+  DIVIDENDS_SERIES,
+  EXDIV_SERIES,
   liveFromHoldings,
   portfolioHistoryCsv,
   portfolioHistoryOption,
   STARTING_BALANCE_SERIES,
 } from './historyChartOptions'
+import type { PerformanceEvents } from './historyChartOptions'
 
 // Wire shape of GET /portfolio/history — Decimal strings, parallel arrays.
 function history(over: Partial<PortfolioHistory> = {}): PortfolioHistory {
@@ -49,6 +53,19 @@ const EVENT_POINTS = [
     events: [{ text: 'Buy NVDA — 10 sh · Aug 4, 2026' }],
   },
 ]
+// The performance chart's events, one kind per series (2026-09-23 spec §C8): a buy on the
+// line, and one rug tick of each dividend kind on the plot's floor.
+const EVENTS: PerformanceEvents = {
+  buys: EVENT_POINTS,
+  sells: [],
+  dividends: [
+    { value: ['Aug 10, 2026', 0], events: [{ text: 'Dividend VOO — $12.00 · Aug 9, 2026' }] },
+  ],
+  exDividends: [
+    { value: ['Jul 27, 2026', 0], events: [{ text: 'Ex-dividend VOO — $1.71/sh · Jul 28, 2026' }] },
+  ],
+}
+const NO_EVENTS: PerformanceEvents = { buys: [], sells: [], dividends: [], exDividends: [] }
 
 // --- option readers (allocationChartOptions.test.ts posture) ---------------------------
 interface SeriesLike {
@@ -124,6 +141,12 @@ describe('portfolioHistoryOption', () => {
         }),
       ).selected,
     ).toEqual({ [STARTING_BALANCE_SERIES]: true })
+    // Off must LOOK off in both themes: echarts' default inactive #ccc reads brighter than an
+    // active label on the dark card, and the line now starts hidden on every visit.
+    expect(
+      (portfolioHistoryOption(history(), null) as unknown as { legend: { inactiveColor?: string } })
+        .legend.inactiveColor,
+    ).toBe(OTHER_SERIES_COLOR)
     // The Overview card does not draw it at all (shell F5).
     const overview = portfolioHistoryOption(history(), null, null, { startingBalance: 'omit' })!
     expect(seriesOf(overview).map((s) => s.name)).toEqual([
@@ -234,8 +257,8 @@ describe('portfolioHistoryOption — grammar', () => {
     expect(option.series[0].emphasis).toEqual({ focus: 'series' })
   })
 
-  it('F7: value rows in series order, null rows dropped, Events expand into escaped lines with a count', () => {
-    const option = read(portfolioHistoryOption(history(), null, EVENT_POINTS))
+  it('F7: value rows in series order, null rows dropped, events expand into escaped lines with a count', () => {
+    const option = read(portfolioHistoryOption(history(), null, EVENTS))
     expect(isGrammarTooltip(option.tooltip.formatter)).toBe(true)
     expect(option.tooltip.axisPointer).toBeUndefined()
     const parsed = tooltipRows(
@@ -246,7 +269,7 @@ describe('portfolioHistoryOption — grammar', () => {
         },
         { seriesName: 'Cost basis', seriesType: 'line', value: null, color: PALETTE[1] },
         {
-          seriesName: EVENTS_SERIES, seriesType: 'scatter', value: ['Aug 3, 2026', 710000.5],
+          seriesName: BUYS_SERIES, seriesType: 'scatter', value: ['Aug 3, 2026', 710000.5],
           color: MUTED,
           data: {
             events: [
@@ -450,26 +473,192 @@ describe('buildEventMarkers', () => {
   })
 })
 
-describe('portfolioHistoryOption with events', () => {
-  it('appends a MUTED plain-scatter Events series, legend-toggleable and on by default', () => {
-    const option = portfolioHistoryOption(history(), null, EVENT_POINTS)
-    const series = seriesOf(option!)
-    expect(series.map((s) => s.name)).toEqual([
-      'Portfolio value', 'Cost basis', 'Same deposits in VOO', 'S&P 500 — starting balance only',
-      EVENTS_SERIES,
+// --- performance events: the line and the rug (2026-09-23 spec §C8) ------------------
+
+describe('buildPerformanceEvents (2026-09-23 spec §C8)', () => {
+  const HELD = new Set([2]) // VOO is held today; NVDA (1) is not
+
+  it('keeps dated buys and sells on the value line, one list per kind', () => {
+    const events = buildPerformanceEvents(
+      history(),
+      [
+        txn({ id: 1, type: 'buy', txn_date: '2026-08-04' }),
+        txn({ id: 2, type: 'sell', txn_date: '2026-07-28', shares: '3' }),
+      ],
+      [],
+      TICKERS,
+      [],
+      HELD,
+    )
+    expect(events.buys).toEqual([
+      {
+        value: ['Aug 3, 2026', 710000.5],
+        symbol: 'triangle',
+        symbolRotate: 0,
+        events: [{ text: 'Buy NVDA — 10 sh · Aug 4, 2026' }],
+      },
     ])
-    const events = series[4] as SeriesLike & { z?: number }
-    expect(events.type).toBe('scatter') // ripple stays reserved for the live ping
-    expect(events.color).toBe(MUTED)
-    expect(events.z).toBe(11)
-    expect(events.data).toBe(EVENT_POINTS)
-    // No legend.selected entry of its own: on by default, toggleable like any series.
-    expect((option as unknown as { legend: { selected?: unknown } }).legend.selected)
-      .toEqual({ [STARTING_BALANCE_SERIES]: false })
+    expect(events.sells).toEqual([
+      {
+        value: ['Jul 27, 2026', 700000],
+        symbol: 'triangle',
+        symbolRotate: 180,
+        events: [{ text: 'Sell NVDA — 3 sh · Jul 28, 2026' }],
+      },
+    ])
+    expect(events.dividends).toEqual([])
+    expect(events.exDividends).toEqual([])
   })
 
-  it('draws no Events series for an empty or omitted list (Overview keeps the two-arg call)', () => {
-    expect(seriesOf(portfolioHistoryOption(history(), null, [])!)).toHaveLength(4)
+  it('moves ledger dividends and ex-dividend notices to the floor, one tick per bar per kind', () => {
+    const events = buildPerformanceEvents(
+      history(),
+      [],
+      [div({ id: 9, pay_date: '2026-08-09', ex_date: '2026-08-09', source: 'auto' })],
+      TICKERS,
+      [exdiv({ ex_date: '2026-07-28' }), exdiv({ ex_date: '2026-07-29', per_share: '0.500000' })],
+      HELD,
+    )
+    expect(events.dividends).toEqual([
+      { value: ['Aug 10, 2026', 0], events: [{ text: 'Dividend VOO — $12.00 · Aug 9, 2026' }] },
+    ])
+    // Two notices in one week are ONE tick that lists both, by date.
+    expect(events.exDividends).toEqual([
+      {
+        value: ['Jul 27, 2026', 0],
+        events: [
+          { text: 'Ex-dividend VOO — $1.71/sh · Jul 28, 2026' },
+          { text: 'Ex-dividend VOO — $0.5/sh · Jul 29, 2026' },
+        ],
+      },
+    ])
+    expect(events.buys).toEqual([])
+  })
+
+  it('keeps an ex-dividend notice only for a security held on its ex-date or held today', () => {
+    // The provider lists every security the book ever named — watch-list tickers included.
+    const notices = [
+      exdiv({ security_id: 1, ex_date: '2026-07-28' }),
+      exdiv({ security_id: 1, ex_date: '2026-08-09' }),
+    ]
+    const texts = (events: ReturnType<typeof buildPerformanceEvents>) =>
+      events.exDividends.flatMap((point) => point.events.map((e) => e.text))
+    // NVDA never held: both notices go.
+    expect(texts(buildPerformanceEvents(history(), [], [], TICKERS, notices, HELD))).toEqual([])
+    // Held today: both stay, whatever the ledger says.
+    expect(texts(buildPerformanceEvents(history(), [], [], TICKERS, notices, new Set([1])))).toHaveLength(2)
+    // Bought Aug 1 (and sold since, so not held today): only the notice AFTER the buy.
+    expect(
+      texts(buildPerformanceEvents(history(), [txn({ id: 1, type: 'buy', txn_date: '2026-08-01' })], [], TICKERS, notices, HELD)),
+    ).toEqual(['Ex-dividend NVDA — $1.71/sh · Aug 9, 2026'])
+    // An imported (undated) opening lot sold out on Aug 5: held before, not after.
+    expect(
+      texts(
+        buildPerformanceEvents(
+          history(),
+          [txn({ id: 1, type: 'buy' }), txn({ id: 2, type: 'sell', txn_date: '2026-08-05' })],
+          [],
+          TICKERS,
+          notices,
+          HELD,
+        ),
+      ),
+    ).toEqual(['Ex-dividend NVDA — $1.71/sh · Jul 28, 2026'])
+    // A 2-for-1 split doubles what is held; a sell of the old count leaves half still held.
+    expect(
+      texts(
+        buildPerformanceEvents(
+          history(),
+          [
+            txn({ id: 1, type: 'buy' }),
+            txn({ id: 2, type: 'split', txn_date: '2026-07-20', split_factor: '2' }),
+            txn({ id: 3, type: 'sell', txn_date: '2026-08-05' }),
+          ],
+          [],
+          TICKERS,
+          notices,
+          HELD,
+        ),
+      ),
+    ).toHaveLength(2)
+  })
+
+  it('leaves the ledger winning a collision, exactly as the markers always did', () => {
+    // Same security and ex-date as a ledger row: the notice is the ledger's, drawn once.
+    const events = buildPerformanceEvents(
+      history(),
+      [],
+      [div({ id: 9, pay_date: '2026-08-09', ex_date: '2026-08-09', source: 'auto' })],
+      TICKERS,
+      [exdiv({ ex_date: '2026-08-09' })],
+      HELD,
+    )
+    expect(events.exDividends).toEqual([])
+    expect(events.dividends).toHaveLength(1)
+  })
+
+  it('returns no events on an empty history', () => {
+    expect(
+      buildPerformanceEvents({ ...history(), dates: [], market_value: [] }, [], [div({ id: 9, pay_date: '2026-08-09' })], TICKERS, [], HELD),
+    ).toEqual(NO_EVENTS)
+  })
+})
+
+describe('portfolioHistoryOption with events (2026-09-23 spec §C8)', () => {
+  type EventSeries = SeriesLike & { symbol?: string; symbolSize?: unknown; z?: number }
+
+  it('names one legend entry per kind; the rug is thin rects on the floor, the ledger on top', () => {
+    const option = portfolioHistoryOption(history(), null, EVENTS)
+    const series = seriesOf(option!) as EventSeries[]
+    expect(series.map((s) => s.name)).toEqual([
+      'Portfolio value', 'Cost basis', 'Same deposits in VOO', 'S&P 500 — starting balance only',
+      BUYS_SERIES, DIVIDENDS_SERIES, EXDIV_SERIES,
+    ])
+    const byName = new Map(series.map((s) => [s.name, s]))
+    // Buys ride the line as before — an annotation, not a data hue; the ripple stays the
+    // live ping's.
+    expect(byName.get(BUYS_SERIES)).toMatchObject({ type: 'scatter', color: MUTED, z: 11 })
+    expect(byName.get(BUYS_SERIES)!.data).toBe(EVENTS.buys)
+    // The rug: 2px × 10px ticks at y 0, in neutral tones by kind — no money-entity colour
+    // can collide with them inside this chart. The ledger's ticks draw over the notices'.
+    expect(byName.get(DIVIDENDS_SERIES)).toMatchObject({
+      type: 'scatter', color: INK, symbol: 'rect', symbolSize: [2, 10], z: 13,
+    })
+    expect(byName.get(DIVIDENDS_SERIES)!.data).toBe(EVENTS.dividends)
+    expect(byName.get(EXDIV_SERIES)).toMatchObject({
+      type: 'scatter', color: MUTED, symbol: 'rect', symbolSize: [2, 10], z: 12,
+    })
+    expect(byName.get(EXDIV_SERIES)!.data).toBe(EVENTS.exDividends)
+    // Every kind is on by default and toggles from its own legend entry.
+    expect((option as unknown as { legend: { selected?: unknown } }).legend.selected).toEqual({
+      [STARTING_BALANCE_SERIES]: false,
+    })
+  })
+
+  it('lists a rug tick\'s events in the tooltip, never a y value', () => {
+    const format = (
+      portfolioHistoryOption(history(), null, EVENTS) as unknown as {
+        tooltip: { formatter: (p: unknown) => string }
+      }
+    ).tooltip.formatter
+    const parsed = tooltipRows(
+      format([
+        {
+          seriesName: 'Portfolio value', seriesType: 'line', axisValueLabel: 'Aug 10, 2026',
+          value: 718422.07, color: PALETTE[0],
+        },
+        {
+          seriesName: DIVIDENDS_SERIES, seriesType: 'scatter', value: ['Aug 10, 2026', 0],
+          color: INK, data: EVENTS.dividends[0],
+        },
+      ]),
+    )
+    expect(parsed.rows.map((r) => r.label)).toEqual(['Portfolio value'])
+    expect(parsed.notes).toEqual(['Dividend VOO — $12.00 · Aug 9, 2026'])
+  })
+
+  it('draws no event series for an empty set or none at all (Overview keeps the short call)', () => {
+    expect(seriesOf(portfolioHistoryOption(history(), null, NO_EVENTS)!)).toHaveLength(4)
     expect(seriesOf(portfolioHistoryOption(history(), null)!)).toHaveLength(4)
   })
 })
