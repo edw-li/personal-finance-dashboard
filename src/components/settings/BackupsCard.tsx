@@ -78,8 +78,9 @@ export default function BackupsCard({ revision = 0 }: { revision?: number } = {}
   const [error, setError] = useState<string | null>(null)
   // One busy flag for the two card-level writes: neither should start while the other is in flight.
   const [busy, setBusy] = useState<'snapshot' | 'download' | null>(null)
-  // Which stored file's download is in flight — its own row goes busy, nothing else does.
-  const [downloading, setDownloading] = useState<string | null>(null)
+  // Which stored files' downloads are in flight — each row goes busy on its own, and a second
+  // download neither frees nor is freed by the first (2026-09-23 lane B1 review, M7).
+  const [downloading, setDownloading] = useState<ReadonlySet<string>>(() => new Set())
   // Its OWN slot, never `error`: a failed action must not hide a list that loaded fine.
   const [actionError, setActionError] = useState<string | null>(null)
   const seqRef = useRef(0)
@@ -143,11 +144,17 @@ export default function BackupsCard({ revision = 0 }: { revision?: number } = {}
   }
 
   const downloadFile = (name: string) => {
-    setDownloading(name)
+    setDownloading((current) => new Set(current).add(name))
     setActionError(null)
     downloadStoredSnapshot(name)
       .catch((err: unknown) => setActionError(message(err, 'Download failed.')))
-      .finally(() => setDownloading(null))
+      .finally(() =>
+        setDownloading((current) => {
+          const next = new Set(current)
+          next.delete(name)
+          return next
+        }),
+      )
   }
 
   const row = (entry: SnapshotEntry, noun: string) => (
@@ -155,7 +162,7 @@ export default function BackupsCard({ revision = 0 }: { revision?: number } = {}
       key={entry.name}
       entry={entry}
       noun={noun}
-      busy={downloading === entry.name}
+      busy={downloading.has(entry.name)}
       onDownload={() => downloadFile(entry.name)}
     />
   )

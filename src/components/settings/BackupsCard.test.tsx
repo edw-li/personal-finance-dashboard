@@ -182,6 +182,43 @@ describe('BackupsCard', () => {
     expect((await banner()).textContent).toContain('No stored snapshot named')
   })
 
+  it('tracks each row’s download on its own — a second one neither frees nor is freed by the first', async () => {
+    // 2026-09-23 lane B1 review, M7: one shared slot let the second click re-enable the first
+    // row mid-download, and the first to finish cleared the second one's busy state.
+    vi.mocked(fetchRestorePoints).mockResolvedValue([POINT])
+    const releases = new Map<string, () => void>()
+    vi.mocked(downloadStoredSnapshot).mockImplementation(
+      (name: string) =>
+        new Promise<void>((resolve) => {
+          releases.set(name, resolve)
+        }),
+    )
+    mount()
+    const snapshotButton = async () =>
+      (await screen.findByRole('button', {
+        name: `Download the snapshot from ${formatDateTime(NEWEST.at)}`,
+      })) as HTMLButtonElement
+    const pointButton = async () =>
+      (await screen.findByRole('button', {
+        name: `Download the restore point from ${formatDateTime(POINT.at)}`,
+      })) as HTMLButtonElement
+    fireEvent.click(await snapshotButton())
+    fireEvent.click(await pointButton())
+    expect((await snapshotButton()).disabled).toBe(true)
+    expect((await pointButton()).disabled).toBe(true)
+    await act(async () => {
+      releases.get(POINT.name)?.()
+    })
+    // The restore point finished; the snapshot is still downloading and still says so.
+    expect((await pointButton()).disabled).toBe(false)
+    expect((await snapshotButton()).disabled).toBe(true)
+    expect((await snapshotButton()).textContent).toBe('Preparing…')
+    await act(async () => {
+      releases.get(NEWEST.name)?.()
+    })
+    expect((await snapshotButton()).disabled).toBe(false)
+  })
+
   it('Snapshot now prepends the new entry and toasts its name', async () => {
     mount()
     await screen.findByRole('link', { name: 'Restore…' })
