@@ -381,22 +381,23 @@ async def test_an_import_row_without_a_key_is_swept_as_left_the_sheet(db):
     by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
     await db.commit()
     acme_id = (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one().id
-    db.add(
-        PositionTransaction(
-            security_id=acme_id,
-            portfolio_account=acct("Keyless"),
-            type="buy",
-            shares=Decimal("1"),
-            price=Decimal("1"),
-            sort_index=5,
-            source="import",
-        )
+    keyless = PositionTransaction(
+        security_id=acme_id,
+        portfolio_account=acct("Keyless"),
+        type="buy",
+        shares=Decimal("1"),
+        price=Decimal("1"),
+        sort_index=5,
+        source="import",
     )
+    db.add(keyless)
     await db.commit()
+    keyless_id = keyless.id
     await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
     await db.commit()
     assert report.entities["position_transactions"].deletes == 1
-    assert "position_transactions[None]: deleted (row left sheet)" in report.samples
+    # Named by its id — "[None]" names nothing a reader could find.
+    assert f"position_transactions[id {keyless_id}]: deleted (no sheet key)" in report.samples
     keys = (await db.execute(select(PositionTransaction.import_key))).scalars().all()
     assert sorted(keys) == [20, 40, 50]
 

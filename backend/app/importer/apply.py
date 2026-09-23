@@ -228,7 +228,12 @@ async def apply_positions(
     # deleted. A row with no key cannot be matched to any sheet row, so it reads as having
     # left too. UI-created rows (source='ui') are never loaded here (Plan 4 contract).
     for row in imported:
-        if row.import_key is None or row.import_key not in incoming_keys:
+        if row.import_key is None:
+            await db.delete(row)
+            txn_counts.deletes += 1
+            # Named by its id: a key-less row has no sheet key to print.
+            report.add_sample(f"position_transactions[id {row.id}]: deleted (no sheet key)")
+        elif row.import_key not in incoming_keys:
             await db.delete(row)
             txn_counts.deletes += 1
             report.add_sample(f"position_transactions[{row.import_key}]: deleted (row left sheet)")
