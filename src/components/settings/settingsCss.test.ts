@@ -18,6 +18,9 @@ function declarationsFor(css: string, selector: string): string {
 }
 
 const settings = readFileSync(path.resolve(__dirname, 'settings.css'), 'utf8')
+// Lane R0's stylesheet owns the reorderable tables' border model and the sticky Actions cell's
+// row states; the two Settings tables lean on both, so they are pinned here as a dependency guard.
+const reorderCss = readFileSync(path.resolve(__dirname, '../reorder/reorder.css'), 'utf8')
 
 describe('settings.css', () => {
   // The rail rides PageFrame's sticky scope row, which paints over the top of the scrollport.
@@ -35,5 +38,60 @@ describe('settings.css', () => {
   // piece; the form sheet's 320px field cap would clip it to a third of its length.
   it('exempts the once-shown feed URL from the field cap', () => {
     expect(declarationsFor(settings, '.feed-fresh label')).toContain('max-width: none;')
+  })
+
+  // Drag to reorder (2026-09-23 reorder spec §4). jsdom computes no cascade, so the rules that
+  // must OUTRANK panels.css are pinned here, selector and all.
+  it('the reorderable tables get the separate border model from reorder.css — `table.` outranks .data-table', () => {
+    const table = declarationsFor(reorderCss, 'table.reorder-table')
+    expect(table).toContain('border-collapse: separate;')
+    expect(table).toContain('border-spacing: 0;')
+  })
+
+  it('draws an Accounts group heading as a heading, not as a sticky row-actions cell', () => {
+    const heading = declarationsFor(
+      settings,
+      ".data-table.accounts-table tr.accounts-group-row > th[scope='colgroup']",
+    )
+    expect(heading).toContain('position: static;')
+    expect(heading).toContain('box-shadow: none;')
+    expect(heading).toContain('padding-top: 0.9rem;')
+  })
+
+  it('moves the component indent off the grip cell and onto the Account cell', () => {
+    // The grip cell gets the plain cell padding back, with reorder.css's narrow right edge kept.
+    const grip = declarationsFor(
+      settings,
+      '.data-table.accounts-table tr.component-row > td.reorder-grip-cell',
+    )
+    expect(grip).toContain('padding: var(--density-cell-pad);')
+    expect(grip).toContain('padding-right: 0;')
+    const name = declarationsFor(
+      settings,
+      '.data-table.accounts-table tr.component-row > td.accounts-name-cell',
+    )
+    expect(name).toContain('padding-left: 1.6rem;')
+    expect(name).toContain('color: var(--muted);')
+  })
+
+  it("reorder.css lifts the sticky Actions cell with its row and runs the drop line through it, keeping the cell's own hairline", () => {
+    const lifted = declarationsFor(
+      reorderCss,
+      ".reorder-table tr[data-reorder='lifted'] > td.row-actions",
+    )
+    expect(lifted).toContain('background: var(--surface-2);')
+    expect(lifted).toContain('-1px 0 0 var(--border),')
+    const before = declarationsFor(
+      reorderCss,
+      ".reorder-table tr[data-reorder-drop='before'] > td.row-actions",
+    )
+    expect(before).toContain('-1px 0 0 var(--border),')
+    expect(before).toContain('inset 0 2px 0 var(--accent);')
+    const after = declarationsFor(
+      reorderCss,
+      ".reorder-table tr[data-reorder-drop='after'] > td.row-actions",
+    )
+    expect(after).toContain('-1px 0 0 var(--border),')
+    expect(after).toContain('inset 0 -2px 0 var(--accent);')
   })
 })
