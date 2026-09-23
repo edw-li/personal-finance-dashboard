@@ -69,6 +69,7 @@ vi.mock('../charts/motion', async (importOriginal) => ({
   quiesceRipples: (option: unknown) => option,
 }))
 
+import { grid, monthAxis } from '../charts/grammar'
 import EChart from './EChart'
 import * as chartsModule from '../charts/echarts'
 import ThemeProvider, { useTheme } from './shell/ThemeProvider'
@@ -683,5 +684,76 @@ describe('EChart height', () => {
   it("'fill' hands the host to its flex parent — height: 100%", () => {
     const { container } = render(<EChart option={OPTION} ariaLabel="Filled chart" height="fill" />)
     expect((container.firstElementChild as HTMLElement).style.height).toBe('100%')
+  })
+})
+
+// 2026-09-23 spec §C4: a builder cannot know pixels, so EChart fits month labels to its own
+// measured width — before the paint, after a resize that changes the form, and after a zoom.
+describe('EChart fits month labels to its width', () => {
+  const YEAR = ['Oct 2025', 'Nov 2025', 'Dec 2025', 'Jan 2026', 'Feb 2026', 'Mar 2026', 'Apr 2026', 'May 2026', 'Jun 2026', 'Jul 2026', 'Aug 2026', 'Sep 2026']
+  const monthOption = () =>
+    ({ grid: grid(), xAxis: monthAxis(YEAR, { gap: true }), series: [{ type: 'bar', data: YEAR.map(() => 1) }] }) as unknown as EChartsOption
+  type Fitted = { xAxis: { axisLabel: { formatter: (value: string, index: number) => string; interval?: unknown } } }
+  let width = 0
+  beforeEach(() => {
+    width = 0
+    // jsdom lays nothing out; the wrapper reads its host's clientWidth like a browser would.
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width })
+  })
+  afterEach(() => {
+    delete (HTMLElement.prototype as unknown as { clientWidth?: number }).clientWidth
+  })
+
+  it('paints the form its measured width allows — the Overview card at 1280 gets the compact months', () => {
+    width = 446
+    render(<EChart ariaLabel="Recent spending" option={monthOption()} />)
+    const applied = lastChart().setOption.mock.calls[0][0] as Fitted
+    expect(applied.xAxis.axisLabel.formatter('Oct 2025', 0)).toBe('2025')
+    expect(applied.xAxis.axisLabel.formatter('Nov 2025', 1)).toBe('Nov')
+    expect(applied.xAxis.axisLabel.interval).toBe(0)
+  })
+
+  it('refits when a resize changes the form, merging only the axis', () => {
+    width = 446
+    render(<EChart ariaLabel="Recent spending" option={monthOption()} />)
+    const chart = lastChart()
+    const painted = chart.setOption.mock.calls.length
+    width = 766
+    chart.getWidth.mockReturnValue(446) // the engine still holds the old size
+    resizeNotify.forEach((fire) => fire())
+    expect(chart.resize).toHaveBeenCalledTimes(1)
+    expect(chart.setOption.mock.calls.length).toBe(painted + 1)
+    const merged = chart.setOption.mock.calls.at(-1) as [Fitted, unknown?]
+    expect(merged[1]).toBeUndefined() // a merge, never a notMerge rebuild of the whole chart
+    expect(merged[0].xAxis.axisLabel.formatter('Oct 2025', 0)).toBe('Oct 2025')
+  })
+
+  it('does not touch the option when a resize keeps the same form', () => {
+    width = 446
+    render(<EChart ariaLabel="Recent spending" option={monthOption()} />)
+    const chart = lastChart()
+    const painted = chart.setOption.mock.calls.length
+    width = 450
+    chart.getWidth.mockReturnValue(446)
+    resizeNotify.forEach((fire) => fire())
+    expect(chart.resize).toHaveBeenCalledTimes(1)
+    expect(chart.setOption.mock.calls.length).toBe(painted)
+  })
+
+  it('refits after a zoom: fewer months on screen get the longer form', () => {
+    width = 446
+    // A chart that zooms (the Spending bars): the live window is what the labels fit.
+    render(<EChart ariaLabel="Recent spending" option={{ ...monthOption(), dataZoom: [{ type: 'inside', startValue: 0 }] } as EChartsOption} />)
+    const chart = lastChart()
+    // The fake answers getOption with the window 3…9: seven months, 50 px each.
+    act(() => chart.handlers.datazoom())
+    const merged = chart.setOption.mock.calls.at(-1) as [Fitted]
+    expect(merged[0].xAxis.axisLabel.formatter('Jan 2026', 0)).toBe("Jan '26")
+  })
+
+  it('leaves a chart it cannot measure exactly as the page built it', () => {
+    render(<EChart ariaLabel="Recent spending" option={monthOption()} />)
+    const applied = lastChart().setOption.mock.calls[0][0] as Fitted
+    expect(applied.xAxis.axisLabel.formatter('Oct 2025', 0)).toBe('Oct 2025')
   })
 })
