@@ -88,6 +88,13 @@ describe('cardValueChartOption', () => {
     )
   })
 
+  // Real-data pass of the code review: the tie note makes the sub-line ~850px long, and echarts
+  // flips a box that will not fit right of the cursor to its LEFT — off the viewport's edge for a
+  // $0 stub near the middle of the chart ("…ograph Visa"). Confined, it stays in the chart.
+  it('keeps the tooltip inside the chart, so a long tie note is never cut by the window', () => {
+    expect(option.tooltip).toMatchObject({ trigger: 'item', confine: true })
+  })
+
   it('grammar: horizontal grid, compact money X axis, bar marks, the zero baseline', () => {
     expect((option as { grid: unknown }).grid).toEqual(GRID_VARIANTS.horizontal)
     // F13: was full currency on every tick — the axis is a scale, the tooltip the figure.

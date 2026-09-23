@@ -47,23 +47,29 @@ const isZero = (row: CardValueDatum) => roundsToZero(row.net)
 export function cardValueChartOption(rows: CardValueDatum[]): EChartsOption {
   return {
     grid: grid('horizontal'),
-    tooltip: itemTooltip<{ dataIndex?: number }>({
-      // Card names are user text — itemTooltip escapes every label and sub-line it renders.
-      body: (p) => {
-        const row = rows[p.dataIndex ?? -1]
-        if (row === undefined) return null
-        // The footer's own why (verdictNote): a costly pin, else the tie behind a $0 marginal.
-        const note = verdictNote(row, row.ties ?? null)
-        return {
-          value: row.net,
-          label: row.name,
-          sub:
-            `${formatCurrency(row.marginal)} marginal + ${formatCurrency(row.credits)} credits` +
-            ` − ${formatCurrency(row.fee)} fee, per year · ${VERDICT_LABEL[kindOf(row)]}` +
-            (note === null ? '' : ` (${note})`),
-        }
-      },
-    }),
+    tooltip: {
+      ...itemTooltip<{ dataIndex?: number }>({
+        // Card names are user text — itemTooltip escapes every label and sub-line it renders.
+        body: (p) => {
+          const row = rows[p.dataIndex ?? -1]
+          if (row === undefined) return null
+          // The footer's own why (verdictNote): a costly pin, else the tie behind a $0 marginal.
+          const note = verdictNote(row, row.ties ?? null)
+          return {
+            value: row.net,
+            label: row.name,
+            sub:
+              `${formatCurrency(row.marginal)} marginal + ${formatCurrency(row.credits)} credits` +
+              ` − ${formatCurrency(row.fee)} fee, per year · ${VERDICT_LABEL[kindOf(row)]}` +
+              (note === null ? '' : ` (${note})`),
+          }
+        },
+      }),
+      // A tie note runs the sub-line to ~850px, and echarts flips a box that will not fit right
+      // of the cursor to its LEFT — past the window's edge for a $0 stub mid-chart (real data,
+      // 1600px: "…ograph Visa"). Confined, the box stays inside the chart, which is wide enough.
+      confine: true,
+    },
     // Compact ticks (F13): the axis is a scale, the tooltip carries the exact figure.
     xAxis: moneyAxis(),
     yAxis: {
