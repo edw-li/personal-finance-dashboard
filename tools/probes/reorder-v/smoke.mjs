@@ -1155,10 +1155,17 @@ async function autoScrollInBox({ box, rows, ids, scope, label, shot }) {
 }
 /** Two PNGs of one clip compared pixel by pixel inside the page (no PNG library in the repo).
  *  `zones` are the pinned (position: sticky) cells, judged apart. A channel delta over 24 counts
- *  as a difference; a diff image marks every such pixel in magenta. */
-function comparePngs(a, b, zones) {
+ *  as a difference. `lines` are the pixel rows of the table's row hairlines (each row's bottom
+ *  edge, ±1px): compared exactly. Everywhere else a pixel still counts only when no pixel ONE ROW
+ *  above or below it in the other shot matches it — the collapsed model draws every cell's content
+ *  half a CSS pixel lower than the separate one (CSS 2.1 §17.6.2: half of each shared border lies
+ *  inside the cell), which rasterizes as a 0-or-1px offset of text and controls while the lines stay
+ *  put (measured at lane V: row bottoms identical, text +0.5px). The as-drawn counts (no offset
+ *  allowed — the plan's statistic) ride along. The diff image marks the judged differences magenta
+ *  and those a 1px content offset explains yellow. */
+function comparePngs(a, b, zones, lines) {
   return page.evaluate(
-    async ([a64, b64, rects]) => {
+    async ([a64, b64, rects, lineRows]) => {
       const decode = async (data) => {
         const bin = atob(data)
         const bytes = new Uint8Array(bin.length)
@@ -1178,11 +1185,23 @@ function comparePngs(a, b, zones) {
           for (let x = Math.max(0, r.x); x < Math.min(w, r.x + r.w); x += 1) mask[y * w + x] = 1
         }
       }
+      const strict = new Uint8Array(h)
+      for (const line of lineRows) {
+        for (let y = Math.max(0, line - 1); y <= Math.min(h - 1, line + 1); y += 1) strict[y] = 1
+      }
+      const delta = (i, j) =>
+        Math.max(
+          Math.abs(A.px[i] - B.px[j]),
+          Math.abs(A.px[i + 1] - B.px[j + 1]),
+          Math.abs(A.px[i + 2] - B.px[j + 2]),
+        )
       const out = new OffscreenCanvas(w, h)
       const octx = out.getContext('2d')
       const img = octx.createImageData(w, h)
       let outside = 0
       let inside = 0
+      let outsideAsDrawn = 0
+      let insideAsDrawn = 0
       let outsidePixels = 0
       let insidePixels = 0
       let maxDelta = 0
@@ -1191,35 +1210,57 @@ function comparePngs(a, b, zones) {
           const i = (y * A.w + x) * 4
           const j = (y * B.w + x) * 4
           const k = (y * w + x) * 4
-          const d = Math.max(
-            Math.abs(A.px[i] - B.px[j]),
-            Math.abs(A.px[i + 1] - B.px[j + 1]),
-            Math.abs(A.px[i + 2] - B.px[j + 2]),
-          )
+          const d = delta(i, j)
           const pinned = mask[y * w + x] === 1
           if (pinned) insidePixels += 1
           else outsidePixels += 1
           if (d > maxDelta) maxDelta = d
-          const differs = d > 24
+          const asDrawn = d > 24
+          let differs = asDrawn
+          // Off the hairlines, a half-pixel content offset (0 or 1px once rasterized) is the border
+          // model's, not a change of look: the same pixel one row up or down in the other shot.
+          if (differs && strict[y] === 0) {
+            for (const dy of [-1, 1]) {
+              const yb = y + dy
+              if (yb >= 0 && yb < h && delta(i, (yb * B.w + x) * 4) <= 24) {
+                differs = false
+                break
+              }
+            }
+          }
+          if (asDrawn && pinned) insideAsDrawn += 1
+          if (asDrawn && !pinned) outsideAsDrawn += 1
           if (differs && pinned) inside += 1
           if (differs && !pinned) outside += 1
-          img.data[k] = differs ? 255 : A.px[i]
-          img.data[k + 1] = differs ? 0 : A.px[i + 1]
-          img.data[k + 2] = differs ? 255 : A.px[i + 2]
-          img.data[k + 3] = differs ? 255 : 72
+          const shifted = asDrawn && !differs
+          img.data[k] = differs || shifted ? 255 : A.px[i]
+          img.data[k + 1] = differs ? 0 : shifted ? 200 : A.px[i + 1]
+          img.data[k + 2] = differs ? 255 : shifted ? 0 : A.px[i + 2]
+          img.data[k + 3] = differs || shifted ? 255 : 72
         }
       }
       let png = null
-      if (outside + inside > 0) {
+      if (outsideAsDrawn + insideAsDrawn > 0) {
         octx.putImageData(img, 0, 0)
         const bytes = new Uint8Array(await (await out.convertToBlob({ type: 'image/png' })).arrayBuffer())
         let s = ''
         for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
         png = btoa(s)
       }
-      return { sizes: [A.w, A.h, B.w, B.h], outside, outsidePixels, inside, insidePixels, maxDelta, png }
+      return {
+        sizes: [A.w, A.h, B.w, B.h],
+        outside,
+        outsideAsDrawn,
+        outsidePixels,
+        inside,
+        insideAsDrawn,
+        insidePixels,
+        lineRows: lineRows.length,
+        maxDelta,
+        png,
+      }
     },
-    [a.toString('base64'), b.toString('base64'), zones],
+    [a.toString('base64'), b.toString('base64'), zones, lines],
   )
 }
 /** The resting look (spec §2.5, §10): the table as drawn — `.reorder-table`'s separate borders —
@@ -1249,7 +1290,12 @@ async function restingLook(table, clipOf, name) {
           const b = cell.getBoundingClientRect()
           return { x: Math.floor(b.left) - x - 1, y: Math.floor(b.top) - y - 1, w: Math.ceil(b.width) + 3, h: Math.ceil(b.height) + 3 }
         })
-      return { clip: { x, y, width: right - x, height: bottom - y }, pinned, model: getComputedStyle(el).borderCollapse }
+      // Every row's hairline: the pixel row just above its rounded bottom edge (both models put the
+      // shared line there — the row boxes do not move), compared exactly in the clip.
+      const lines = [...el.querySelectorAll('tr')]
+        .map((tr) => Math.round(tr.getBoundingClientRect().bottom) - y - 1)
+        .filter((line) => line >= 0 && line < bottom - y)
+      return { clip: { x, y, width: right - x, height: bottom - y }, pinned, lines, model: getComputedStyle(el).borderCollapse }
     },
     [table, clipOf],
   )
@@ -1262,19 +1308,20 @@ async function restingLook(table, clipOf, name) {
   await page.$eval(table, (el) => {
     el.style.borderCollapse = ''
   })
-  const diff = await comparePngs(drawn, collapsed, geo.pinned)
+  const diff = await comparePngs(drawn, collapsed, geo.pinned, geo.lines)
   writeFileSync(file(`${name}-separate`), drawn)
   writeFileSync(file(`${name}-collapse`), collapsed)
   if (diff.png !== null) writeFileSync(file(`${name}-diff`), Buffer.from(diff.png, 'base64'))
   const budget = Math.max(40, Math.round(diff.outsidePixels * 0.001))
   const { png, ...stats } = diff
   check(
-    `the resting table matches the collapsed border model outside its pinned cells (≤ ${budget} px differ)`,
-    geo.model === 'separate' && diff.outside <= budget,
+    `the resting table matches the collapsed border model outside its pinned cells — hairlines exact, cell content within the model's half-pixel offset (≤ ${budget} px differ)`,
+    geo.model === 'separate' && diff.lineRows > 0 && diff.outside <= budget,
     { model: geo.model, clip: geo.clip, budget, ...stats },
   )
   note('JUDGE (plan Task 7): pixels that differ INSIDE the pinned (sticky) cells', {
     inside: diff.inside,
+    insideAsDrawn: diff.insideAsDrawn,
     insidePixels: diff.insidePixels,
     diff: png === null ? null : `${size.width}-${name}-diff.png`,
   })
