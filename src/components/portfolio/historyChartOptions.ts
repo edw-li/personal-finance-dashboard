@@ -7,7 +7,7 @@ import { LINE, WASH, dateAxis, grid, moneyAxis } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { rangeCutoff, rangeStartIndex, resolvedWindow } from '../../charts/timeZoom'
-import type { RangeState } from '../../charts/timeZoom'
+import type { RangeState, ZoomWindow } from '../../charts/timeZoom'
 import { axisTooltip } from '../../charts/tooltip'
 import type { AxisTooltipParam } from '../../charts/tooltip'
 import type {
@@ -67,6 +67,10 @@ export interface HistoryOptionSettings {
   /** 'legend-off' — Portfolio: the starting-balance line is listed but hidden until picked.
    *  'omit' — the Overview card: not drawn, not listed, not in the table. */
   startingBalance?: 'legend-off' | 'omit'
+  /** The window the chart shows — Portfolio's range chip, or one dragged out with ctrl+wheel —
+   *  which the weekly axis picks its label stride from (review round 1). The page still spreads
+   *  the matching dataZoom on itself. Absent (the Overview card): the whole series. */
+  range?: RangeState
 }
 
 export interface ChartEventPoint {
@@ -343,34 +347,56 @@ export function eventLines(param: AxisTooltipParam): string[] {
   ]
 }
 
+/** Month strides the weekly axis steps through, finest first — each lands on Januaries. */
+const MONTH_STRIDES = [1, 3, 6, 12, 24, 60, 120] as const
+/** The most month labels a stride may put in the window; hideOverlap still guards a narrow card. */
+const MOST_LABELS = 12
+/** Under this many month starts in the window, its weekly checkpoints carry the axis instead. */
+const FEWEST_LABELS = 3
+
 /**
- * The weekly axis (2026-09-23 spec §C4, §C8; charts F6, shell F5): a label only where a month
- * begins — "Oct 2023", never an arbitrary Monday like "Oct 23, 2023 · Jan 22, 2024" — while the
- * category itself stays the exact date, so the tooltip header keeps the checkpoint's day. Every
- * month for a year of history or less, every quarter start (Jan/Apr/Jul/Oct) up to five years,
- * Januaries beyond. The stride rides the WHOLE series, never the zoom window: a range chip takes
- * EChart's animated zoom path, which keeps the last option's functions, so a window-sized rule
- * would go stale on it. hideOverlap is the last guard on a narrow card (the Overview's half
- * width): a label that would still touch its neighbour is dropped, never smeared.
+ * The weekly axis (2026-09-23 spec §C4, §C8; charts F6, shell F5; review round 1): labels where a
+ * month begins — "Oct 2023", never an arbitrary Monday like "Oct 23, 2023 · Jan 22, 2024" — while
+ * the category itself stays the exact date, so the tooltip header keeps the checkpoint's day. The
+ * stride is chosen from the WINDOW the chart shows (the range chip's, or one dragged out with
+ * ctrl+wheel; the whole series on the Overview): every month, else quarter starts, half-years,
+ * Januaries… — the finest that puts at most twelve in the window. A whole-series stride left 1Y
+ * with four labels on this book, a single "Jan" on a longer one, and a zoom between two quarter
+ * starts with none. A window holding fewer than three month starts (year to date in February)
+ * labels its weekly checkpoints instead ("Jan 12"; a month start keeps "Jan 2026"). The set rides
+ * in `customValues` (category indices; echarts draws the ones inside the window) — data, so a chip
+ * that changes it reaches the chart: EChart's zoom fast path merges a changed set after its zoom
+ * action. The formatter depends on nothing but the category. hideOverlap is the last guard on a
+ * narrow card: a label that would still touch its neighbour is dropped, never smeared.
  */
-function weeklyAxis(categories: string[], isoDates: string[]) {
-  const months = new Set(isoDates.map((iso) => iso.slice(0, 7))).size
-  const stride = months <= 12 ? 1 : months <= 60 ? 3 : 12
-  const labels = new Map<string, string>()
-  let previous = ''
-  isoDates.forEach((iso, i) => {
-    const month = iso.slice(0, 7)
-    if (month === previous) return
-    previous = month
-    if ((Number(iso.slice(5, 7)) - 1) % stride === 0) {
-      labels.set(categories[i], formatMonth(`${month}-01`))
-    }
-  })
+function weeklyAxis(categories: string[], isoDates: string[], window: ZoomWindow) {
+  // The first checkpoint of each calendar month: where a month label may stand.
+  const monthStarts = isoDates.flatMap((iso, i) =>
+    i === 0 || iso.slice(0, 7) !== isoDates[i - 1].slice(0, 7) ? [i] : [],
+  )
+  const inWindow = (i: number) => i >= window.startValue && i <= window.endValue
+  // Months since year 0, so a 24- or 60-month stride lands on the same Januaries every time.
+  const monthNumber = (i: number) => Number(isoDates[i].slice(0, 4)) * 12 + Number(isoDates[i].slice(5, 7)) - 1
+  const onStride = (stride: number) => monthStarts.filter((i) => monthNumber(i) % stride === 0)
+  const labelled =
+    monthStarts.filter(inWindow).length < FEWEST_LABELS
+      ? isoDates.flatMap((_, i) => (inWindow(i) ? [i] : []))
+      : onStride(
+          MONTH_STRIDES.find((stride) => onStride(stride).filter(inWindow).length <= MOST_LABELS) ??
+            MONTH_STRIDES[MONTH_STRIDES.length - 1],
+        )
+  const starts = new Set(monthStarts)
+  const text = new Map(
+    categories.map((category, i) => [
+      category,
+      starts.has(i) ? formatMonth(`${isoDates[i].slice(0, 7)}-01`) : formatDate(isoDates[i]).replace(/, \d{4}$/, ''),
+    ]),
+  )
   return {
     ...dateAxis(categories),
     axisLabel: {
-      interval: (_index: number, value: string) => labels.has(value),
-      formatter: (value: string) => labels.get(value) ?? '',
+      customValues: labelled,
+      formatter: (value: string) => text.get(value) ?? value,
       hideOverlap: true,
     },
   }
@@ -414,7 +440,7 @@ export function portfolioHistoryOption(
   history: PortfolioHistory,
   live: LivePoint | null,
   events: PerformanceEvents | null = null,
-  { selected, startingBalance = 'legend-off' }: HistoryOptionSettings = {},
+  { selected, startingBalance = 'legend-off', range }: HistoryOptionSettings = {},
 ): EChartsOption | null {
   if (history.dates.length < 2) return null
   const lastDate = history.dates[history.dates.length - 1]
@@ -521,7 +547,14 @@ export function portfolioHistoryOption(
       ),
       inactiveColor: OTHER_SERIES_COLOR,
     },
-    xAxis: weeklyAxis(categories, extendAxis && livePt ? [...history.dates, livePt.date] : history.dates),
+    xAxis: weeklyAxis(
+      categories,
+      extendAxis && livePt ? [...history.dates, livePt.date] : history.dates,
+      // Resolved exactly as the page's zoom is — out to the live category when one is appended.
+      range === undefined
+        ? { startValue: 0, endValue: categories.length - 1 }
+        : resolvedWindow(history.dates, range, categories.length),
+    ),
     // No scale:true — a washed area over a visible axis needs the honest zero baseline.
     yAxis: moneyAxis(),
     // F7: every event kind expands into its clustered lines instead of printing a y that is

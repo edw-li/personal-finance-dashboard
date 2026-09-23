@@ -488,12 +488,13 @@ export default function PortfolioPage() {
     // null also suppresses the dashed connector and the "Live" legend entry (both live
     // inside the builder's livePt branch).
     // The picks ride INTO the builder (F9): legendFor() owns the legend's shape, so a page
-    // that spread its own `legend` over the result would drop the scroll/pager rules.
+    // that spread its own `legend` over the result would drop the scroll/pager rules. So does the
+    // range: the weekly axis picks its label stride from the window on screen (review round 1).
     const base = portfolioHistoryOption(
       history,
       owner === null ? liveFromHoldings(holdings) : null,
       events,
-      { selected: legendSelected },
+      { selected: legendSelected, range },
     )
     return base === null
       ? null

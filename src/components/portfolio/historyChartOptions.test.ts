@@ -295,51 +295,88 @@ describe('portfolioHistoryOption — grammar', () => {
   })
 })
 
-describe('the weekly axis (2026-09-23 spec §C4, §C8)', () => {
+describe('the weekly axis (2026-09-23 spec §C4, §C8, review round 1)', () => {
   type Axis = {
     data: string[]
     boundaryGap?: boolean
-    axisLabel: {
-      interval: (index: number, value: string) => boolean
-      formatter: (value: string) => string
-      hideOverlap: boolean
-    }
+    axisLabel: { customValues: number[]; formatter: (value: string) => string; hideOverlap: boolean }
   }
-  const shown = (axis: Axis) =>
-    axis.data.filter((value, i) => axis.axisLabel.interval(i, value)).map((value) => axis.axisLabel.formatter(value))
+  const axisOf = (option: EChartsOption | null) => option!.xAxis as unknown as Axis
+  // What echarts draws: the custom values inside the window it shows, through the formatter.
+  const shown = (axis: Axis, from = 0, to = axis.data.length - 1) =>
+    axis.axisLabel.customValues
+      .filter((i) => i >= from && i <= to)
+      .map((i) => axis.axisLabel.formatter(axis.data[i]))
+  // `weeks` Mondays from `first`, every leg level.
+  const mondays = (first: string, weeks: number) => {
+    const dates = Array.from({ length: weeks }, (_, i) => addDays(first, 7 * i))
+    const flat = dates.map(() => '1.00')
+    return history({ dates, market_value: flat, cost_basis: flat, sp500: flat, benchmark: flat })
+  }
 
-  it('labels only where a month begins, as "Mmm YYYY"; the category keeps the exact day', () => {
-    const axis = portfolioHistoryOption(history(), null)!.xAxis as unknown as Axis
+  it('labels where a month begins, as "Mmm YYYY"; the category keeps the exact day', () => {
+    // Fifteen weeks from Jul 6, 2026 — four month starts on the whole series.
+    const axis = axisOf(portfolioHistoryOption(mondays('2026-07-06', 15), null))
     // The tooltip header reads the category, so the checkpoint's day stays there.
-    expect(axis.data).toEqual(['Jul 27, 2026', 'Aug 3, 2026', 'Aug 10, 2026'])
+    expect(axis.data.slice(0, 2)).toEqual(['Jul 6, 2026', 'Jul 13, 2026'])
     expect(axis.boundaryGap).toBe(false)
     // Never an arbitrary Monday ("Oct 23, 2023 · Jan 22, 2024 …" at a 3-year zoom — charts F6).
-    expect(shown(axis)).toEqual(['Jul 2026', 'Aug 2026'])
-    expect(axis.axisLabel.formatter('Aug 10, 2026')).toBe('')
+    expect(shown(axis)).toEqual(['Jul 2026', 'Aug 2026', 'Sep 2026', 'Oct 2026'])
     // The last guard on a narrow card: labels that would still touch are dropped, not smeared.
     expect(axis.axisLabel.hideOverlap).toBe(true)
   })
 
-  it('steps to quarter starts past a year of history', () => {
-    // 70 Mondays from Jan 6, 2025: seventeen months.
-    const dates = Array.from({ length: 70 }, (_, i) => addDays('2025-01-06', 7 * i))
-    const long = history({
-      dates,
-      market_value: dates.map(() => '1.00'),
-      cost_basis: dates.map(() => '1.00'),
-      sp500: dates.map(() => '1.00'),
-      benchmark: dates.map(() => '1.00'),
-    })
-    expect(shown(portfolioHistoryOption(long, null)!.xAxis as unknown as Axis)).toEqual([
-      'Jan 2025', 'Apr 2025', 'Jul 2025', 'Oct 2025', 'Jan 2026', 'Apr 2026',
+  it('picks its stride from the window it shows — never a lone "Jan" in a year', () => {
+    // finance_realdata's shape: 153 Mondays from Oct 23, 2023 to Sep 21, 2026.
+    const real = mondays('2023-10-23', 153)
+    const all = axisOf(portfolioHistoryOption(real, null, null, { range: { preset: 'all' } }))
+    expect(shown(all)).toEqual([
+      'Oct 2023', 'Jan 2024', 'Apr 2024', 'Jul 2024', 'Oct 2024', 'Jan 2025', 'Apr 2025',
+      'Jul 2025', 'Oct 2025', 'Jan 2026', 'Apr 2026', 'Jul 2026',
+    ])
+    // 1Y opens on Sep 22, 2025: every month start in it.
+    const year = axisOf(portfolioHistoryOption(real, null, null, { range: { preset: '1y' } }))
+    const yearStart = real.dates.indexOf('2025-09-22')
+    expect(shown(year, yearStart)).toEqual([
+      'Oct 2025', 'Nov 2025', 'Dec 2025', 'Jan 2026', 'Feb 2026', 'Mar 2026', 'Apr 2026',
+      'May 2026', 'Jun 2026', 'Jul 2026', 'Aug 2026', 'Sep 2026',
+    ])
+    const ytd = axisOf(portfolioHistoryOption(real, null, null, { range: { preset: 'ytd' } }))
+    expect(shown(ytd, real.dates.indexOf('2026-01-05'))).toHaveLength(9)
+    // The Overview card passes no range: the whole series.
+    expect(shown(axisOf(portfolioHistoryOption(real, null)))).toEqual(shown(all))
+    // A decade: Januaries.
+    const decade = axisOf(portfolioHistoryOption(mondays('2016-01-04', 530), null))
+    expect(shown(decade)).toEqual([
+      'Jan 2016', 'Jan 2017', 'Jan 2018', 'Jan 2019', 'Jan 2020', 'Jan 2021', 'Jan 2022',
+      'Jan 2023', 'Jan 2024', 'Jan 2025', 'Jan 2026',
     ])
   })
 
+  it('labels every checkpoint in a window holding fewer than three month starts', () => {
+    // Year to date on Feb 16: two month starts, so the weeks carry the axis — at least three.
+    const early = mondays('2025-10-06', 20)
+    const ytd = axisOf(portfolioHistoryOption(early, null, null, { range: { preset: 'ytd' } }))
+    const start = early.dates.indexOf('2026-01-05')
+    expect(shown(ytd, start)).toEqual([
+      'Jan 2026', 'Jan 12', 'Jan 19', 'Jan 26', 'Feb 2026', 'Feb 9', 'Feb 16',
+    ])
+    // A ctrl+wheel window between two quarter starts still reads.
+    const real = mondays('2023-10-23', 153)
+    const from = real.dates.indexOf('2025-02-03')
+    const to = real.dates.indexOf('2025-03-17')
+    const zoomed = axisOf(
+      portfolioHistoryOption(real, null, null, {
+        range: { preset: 'all', window: { startValue: from, endValue: to } },
+      }),
+    )
+    expect(shown(zoomed, from, to).length).toBeGreaterThanOrEqual(3)
+  })
+
   it('labels the live category when the quote opens a new month', () => {
-    const axis = portfolioHistoryOption(history(), { date: '2026-09-01', value: 720000 })!
-      .xAxis as unknown as Axis
+    const axis = axisOf(portfolioHistoryOption(mondays('2026-06-01', 13), { date: '2026-09-01', value: 720000 }))
     expect(axis.data.at(-1)).toBe('Sep 1, 2026')
-    expect(shown(axis)).toEqual(['Jul 2026', 'Aug 2026', 'Sep 2026'])
+    expect(shown(axis)).toEqual(['Jun 2026', 'Jul 2026', 'Aug 2026', 'Sep 2026'])
   })
 })
 
