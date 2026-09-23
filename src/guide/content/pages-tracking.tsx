@@ -30,8 +30,9 @@ export const TRACKING_CARDS: GuideCard[] = [
         where: 'Overview → Customize',
         steps: [
           'Press **Customize** in the title row.',
-          'Tick or untick items under **Summary tiles** and **Deeper views**.',
-          'Reorder an item with its ↑ or ↓ button; **Reset to defaults** restores the shipped order.',
+          'Tick or untick items under **Summary tiles** and **Deeper views**; an unticked item waits under **Hidden**, and ticking it again adds it at the end.',
+          'Drag an item by its grip to reorder it, or focus the grip and press Space, move it with the arrow keys and press Space again.',
+          '**Reset to defaults** restores the shipped order and shows everything.',
           'Press **Done** — the layout saves to your account, not to this browser alone.',
         ],
         to: '/',

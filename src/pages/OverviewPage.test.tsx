@@ -1,11 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { fetchSpendingEvidence, REVIEW_LABELS } from '../api/monthReview'
 import type { MonthReview } from '../api/monthReview'
-import { getLocal, resetPrefsStoreForTests, STORAGE_KEYS } from '../prefs/prefsStore'
+import { getLocal, resetPrefsStoreForTests, STORAGE_KEYS, syncFromServer } from '../prefs/prefsStore'
 import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
 import type {
   CalendarEvent,
@@ -82,6 +82,9 @@ vi.mock('../api/coverage', () => ({ fetchCoverage: vi.fn() }))
 vi.mock('../api/monthReview', async importOriginal => ({
   ...await importOriginal<typeof import('../api/monthReview')>(), fetchSpendingEvidence: vi.fn(),
 }))
+// The account's preferences, as prefsStore's session sync reads them: one Customize test lands
+// an adopted layout through syncFromServer (a PATCH never leaves here — there is no token).
+vi.mock('../api/prefs', () => ({ fetchPrefs: vi.fn(), patchPrefs: vi.fn(), deletePref: vi.fn() }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law). What the three
 // charts DRAW is pinned elsewhere — the net-worth trend and the bars in
 // src/components/overview/overviewChartOptions.test.ts, the performance lines in
@@ -124,6 +127,7 @@ import { fetchHousehold } from '../api/household'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import { fetchMoneyFlow } from '../api/overview'
 import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
+import { fetchPrefs, patchPrefs } from '../api/prefs'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
@@ -1949,11 +1953,18 @@ describe('OverviewPage independent groups and preferences', () => {
   })
 
   it('persists hidden and reordered views across remounts and resets to the supported defaults', async () => {
+    // A keyboard move keeps the lifted row in view with window.scrollBy, which jsdom only logs as
+    // not implemented (the drag itself is pinned in OverviewCustomize.test.tsx).
+    const scroll = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    onTestFinished(() => scroll.mockRestore())
     serve()
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
     fireEvent.click(screen.getByText('Customize'))
-    fireEvent.click(screen.getByRole('button', { name: 'Move Portfolio earlier' }))
+    // Space · ↓ · Space on Net worth's grip (2026-09-23 drag spec §6): Portfolio now leads.
+    const grip = screen.getByRole('button', { name: 'Reorder Net worth' })
+    grip.focus()
+    for (const key of [' ', 'ArrowDown', ' ']) fireEvent.keyDown(grip, { key })
     fireEvent.click(screen.getByRole('checkbox', { name: 'Living spending' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Money flow' }))
     expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Portfolio')
@@ -1967,6 +1978,18 @@ describe('OverviewPage independent groups and preferences', () => {
     expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Portfolio')
     expect(screen.queryByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeNull()
     fireEvent.click(screen.getByText('Customize'))
+    // The popover lists the STORED order, and the hidden tile waits under its divider.
+    const tiles = screen.getByRole('group', { name: 'Summary tiles' })
+    expect(
+      within(tiles)
+        .getAllByRole('checkbox')
+        .map((box) => `${(box as HTMLInputElement).checked ? '[x]' : '[ ]'} ${box.closest('label')?.textContent}`),
+    ).toEqual(['[x] Portfolio', '[x] Net worth', '[x] Estimated tax', '[ ] Living spending'])
+    expect(within(tiles).getByText('Hidden')).toBeTruthy()
+    // Showing it again appends it: it becomes the last tile on the page.
+    fireEvent.click(within(tiles).getByRole('checkbox', { name: 'Living spending' }))
+    expect(getLocal('overview_layout')?.tiles).toEqual(['portfolio', 'net_worth', 'tax', 'living_spending'])
+    expect(document.querySelector('.kpi-row > :last-child')?.textContent).toContain('Living spending')
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }))
     expect(getLocal('overview_layout')).toEqual(DEFAULT_OVERVIEW_LAYOUT)
     expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Net worth — Aug 2026')
@@ -1982,6 +2005,8 @@ describe('OverviewPage independent groups and preferences', () => {
     fireEvent.click(screen.getByText('Customize'))
     for (const name of ['Portfolio', 'Living spending', 'Estimated tax']) fireEvent.click(screen.getByRole('checkbox', { name }))
     expect((screen.getByRole('checkbox', { name: 'Net worth' }) as HTMLInputElement).disabled).toBe(true)
+    // …and its grip too: a list of one has nowhere to move (2026-09-23 drag spec §9).
+    expect((screen.getByRole('button', { name: 'Reorder Net worth' }) as HTMLButtonElement).disabled).toBe(true)
     expect(getLocal('overview_layout')?.tiles).toEqual(['net_worth'])
   })
 
@@ -2011,6 +2036,69 @@ describe('OverviewPage independent groups and preferences', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
     expect(document.activeElement).toBe(trigger)
+  })
+
+  // 2026-09-23 drag spec §6/§9: an Escape while a tile is lifted cancels the lift, never the popover.
+  it('Escape while a tile is lifted cancels only the drag — the popover stays open and the tiles keep their order', async () => {
+    const scroll = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    onTestFinished(() => scroll.mockRestore())
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    const trigger = screen.getByRole('button', { name: 'Customize' })
+    fireEvent.click(trigger)
+    const grip = screen.getByRole('button', { name: 'Reorder Portfolio' })
+    grip.focus()
+    for (const key of [' ', 'ArrowUp', 'Escape']) fireEvent.keyDown(grip, { key })
+    expect(screen.getByRole('dialog', { name: 'Customize overview' })).toBeTruthy()
+    expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Net worth — Aug 2026')
+    expect(getLocal('overview_layout')).toBeUndefined()
+    fireEvent.keyDown(grip, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  // 2026-09-23 drag spec §2.3.7: the account's layout landing under a live lift — the session's
+  // server sync adopting overview_layout (prefsStore's syncFromServer → subscribe) — re-renders the
+  // rows, so the lift is dropped at once, and the page shows the layout the account holds.
+  it('a layout adopted from the account while a tile is lifted cancels the lift and shows the adopted layout', async () => {
+    const scroll = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    onTestFinished(() => scroll.mockRestore())
+    const adopted = { tiles: ['tax', 'net_worth', 'portfolio'], cards: ['ytd', 'performance', 'spending'] }
+    vi.mocked(fetchPrefs).mockResolvedValue({
+      prefs: { overview_layout: { value: adopted, updated_at: '2026-09-23T07:00:00+00:00' } },
+    })
+    vi.mocked(patchPrefs).mockResolvedValue({ prefs: {} })
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+    const tiles = screen.getByRole('group', { name: 'Summary tiles' })
+    const live = () => tiles.querySelector('[aria-live="assertive"]')?.textContent
+    const grip = within(tiles).getByRole('button', { name: 'Reorder Net worth' })
+    grip.focus()
+    for (const key of [' ', 'ArrowDown']) fireEvent.keyDown(grip, { key })
+    expect(live()).toBe('Net worth, position 2 of 4.')
+    // The session's one sync (SessionPrefs runs it after /auth/me) answers now.
+    await act(async () => {
+      await syncFromServer()
+    })
+    expect(live()).toBe('Cancelled — the list changed.')
+    expect(within(tiles).getByRole('button', { name: 'Reorder Net worth' }).getAttribute('aria-pressed')).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'Customize overview' })).toBeTruthy()
+    expect([...document.querySelectorAll('.kpi-row .stat-label')].map((label) => label.textContent)).toEqual([
+      `Estimated tax — ${CURRENT_YEAR} (est.)`,
+      'Net worth — Aug 2026',
+      'Portfolio',
+    ])
+    expect(screen.queryByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeNull()
+    expect(
+      within(tiles)
+        .getAllByRole('checkbox')
+        .map((box) => `${(box as HTMLInputElement).checked ? '[x]' : '[ ]'} ${box.closest('label')?.textContent}`),
+    ).toEqual(['[x] Estimated tax', '[x] Net worth', '[x] Portfolio', '[ ] Living spending'])
+    // The dropped lift wrote nothing: the browser now holds the account's layout, as adopted.
+    expect(getLocal('overview_layout')).toEqual(adopted)
   })
 })
 

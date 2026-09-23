@@ -132,6 +132,9 @@ The pieces R0 provides that this plan leans on:
 - The divider: `.overview-customize-divider` with the text `Hidden`, present only when the group
   hides something.
 - A hidden view: `.overview-customize-row.is-off`, with an unchecked box and no grip.
+  - Since the code-quality review round, the hidden rows sit inside a `div[role=group]` that the
+    divider names through `aria-labelledby`, so its accessible name is **Hidden**.
+  - Each box carries `data-view="<id>"`.
 
 ## Decisions this plan takes where the spec is silent (recorded for review)
 
@@ -1800,15 +1803,137 @@ git commit -m "docs(plan): lane R4 — results, gates and browser check"
 
 ## Results (filled in by the implementer)
 
-- Preflight (Task 1): R0 commit(s) on the base …; baseline …
-- Component tests (`OverviewCustomize.test.tsx`): … / 15
-- Page tests (`OverviewPage.test.tsx`): …
-- Guide line (Task 5): applied / not approved
-- Full vitest: … files / … tests
-- tsc / eslint . / build: …
-- Scope check: …
-- Browser check: `R4 CUSTOMIZE CHECK OK — … checks, … screenshots`; screenshot notes: …
-- Notes for the controller / lane V: …
+- Preflight (Task 1): the branch was cut at `0d805010` (the lane R0 merge into `feat/reorder-base`,
+  which also holds main through lane B2). All seven R0 modules, their tests and
+  `src/testing/pointer.ts` were present, and the grep printed exactly the five exports. Baseline
+  `src/components/reorder` + `OverviewPage.test.tsx`: 6 files / 167 tests pass.
+- R0's final API matched this plan's imports and calls verbatim, so no code deviated from it. The
+  pointer test already advances `MOTION_MS.fast` before asserting the commit.
+- Red before green, as planned:
+  - Task 2: all 7 list tests failed, plus "persists…" and "falls back…" (no "Reorder Net worth"
+    button).
+  - Task 3: exactly one failure (the inert boxes, `expected false to be true`).
+  - Task 4: the three CSS pins failed for the three predicted reasons.
+- Component tests (`OverviewCustomize.test.tsx`): **17 / 17** — the plan's 15, one pin (see
+  Corrections 1) and the review round's Hidden-group test.
+- Page tests (`OverviewPage.test.tsx`): **82 / 82** — the 80 existing tests (two of them rewritten
+  per Task 2), the new "Escape while a tile is lifted…" test and the review round's adoption test.
+- Guide line (Task 5): applied (approved). `src/guide` + `GuidePage.test.tsx` +
+  `paletteRegistry.guide.test.ts`: 8 files / 55 tests pass. The longest step is 148 characters.
+- Lane set (Task 6 step 1): 13 files / 221 tests pass.
+- Full vitest, after the code-quality review round: **245 files / 3382 tests, exit 0.** The first
+  round's run was 245 / 3380, also exit 0.
+  - Neither known load flake fired, in either run.
+  - The only stderr was jsdom "Not implemented" noise from two unrelated existing suites
+    (`exportImage.test.ts` canvas, `LotAnatomyCard.test.tsx` navigation).
+- tsc / eslint . / build:
+  - `tsc -b` exit 0. Because `tsc -b`'s buildinfo lives in the shared `node_modules` junction, both
+    projects were also checked with no cache: `tsc -p tsconfig.app.json --noEmit --incremental false`
+    and the same for `tsconfig.node.json`, both exit 0.
+  - `eslint .` exit 0: 0 errors, and the 26 pre-existing `react-refresh/only-export-components`
+    warnings, none in a file this lane touched.
+  - `npm run build` exit 0.
+- Scope check: `git diff --stat feat/reorder-base...HEAD` lists exactly `OverviewCustomize.tsx`,
+  `OverviewCustomize.test.tsx`, `OverviewPage.css`, `OverviewPage.test.tsx` and
+  `src/guide/content/pages-tracking.tsx`. The CSS diff is the Customize row block alone (the old
+  four lines became the commented row, grip, hidden-row, label and divider rules).
+- Browser check: **`R4 CUSTOMIZE CHECK OK — 112 checks, 20 screenshots`**.
+  - Run on the lane's own 8094/5194 against `finance_reorder_r4` (29 accounts, at head
+    `f12026091203`).
+  - Measured in all four passes (dark/light × 1280/1600):
+    - every Customize row is 28 px, with or without a grip;
+    - every box stands at one x (805 px at 1280, 1125 px at 1600);
+    - the lifted row travelled exactly the pointer's 98.4 px (clamped at the list's end);
+    - three peers shifted, and `html.reorder-active` was on mid-drag.
+  - No write was blocked. The 12 `PATCH /prefs` (3 per pass: the drop, the hide, the re-show) all
+    carried `overview_layout` alone.
+  - The console was clean in all 8 browser contexts.
+  - The driver put the private copy's layout back to the defaults (verified with a read-only query).
+  - Both servers were stopped. Vite's node child outlived its shell and was stopped with
+    `taskkill //F //T` (the plan's fallback).
+- Screenshot notes (both themes, both widths):
+  - the grips stand in one column beside the boxes;
+  - `dragging`: the lifted row wears the raised surface with its accent grip, and its shadow is not
+    clipped by the popover. Its own list's boxes are greyed (inert) while Deeper views stays live;
+  - `hidden`: "Hidden" is a small muted word with a hairline, quieter than the bold legends, and
+    level with them on the left. The hidden row's box sits under the boxes above;
+  - `dropped` and `fresh-browser`: the tiles are in the new order (Portfolio · Living spending ·
+    Estimated tax · Net worth), in a fresh browser too.
+  - Not this lane's: the Net worth tile keeps its hero styling wherever it is placed. Tiles are keyed
+    by identity, so this is pre-existing behaviour.
+- Corrections to this plan:
+  1. **One added pin, welcomed by the controller:** "keeps the console quiet through a tick and a
+     drag". It spies on `console.error` through open → tick → Space/Home/Space and asserts no call at
+     all. That covers R0's development contract check (each list is one range with no carries) and
+     any React warning, such as `flushSync` inside `toggle`. With it, Task 3 ends at 13 tests (plan:
+     12) and Task 4 at 16 (plan: 15).
+  2. **The browser driver's server check was key-order sensitive.**
+     - The first run failed only "the server holds the new layout", in all four passes.
+     - The observed value was exactly `EXPECTED`, but JSONB hands its keys back as
+       `{cards, tiles}`, and `same()` compares JSON strings.
+     - The driver (gitignored scratch) now compares a stored layout list by list (`sameLayout`).
+       The re-run passed all 112 checks. The reload and fresh-browser checks had passed in both runs.
+  3. **Decision 5's wording.** With R0's final code, a change to the items under a *live* lift is not
+     silent: the hook cancels at once and the live region says "Cancelled — the list changed."
+     (spec §2.3.7, amended at R0's review).
+     - Reset cannot reach a live lift in practice: a click on it first blurs the lifted grip, and
+       blur cancels.
+     - The path that can is a server pref adoption landing mid-lift (`subscribe('overview_layout', …)`
+       in `OverviewPage.tsx`).
+- Code-quality review round (coordinator, 2026-09-23: approved with eight items, all folded in):
+  1. + 2. `7d029a84`: the comment above the lock now says the boxes are disabled and the hook would
+     drop the lift ("Cancelled — the list changed."), and `inert` became `locked` (it sets
+     `disabled`, not the HTML `inert` attribute).
+  3. Also `7d029a84`, the implementer's call: **`data-view`**.
+     - The boxes are never submitted, so `value` carried no meaning of its own; `data-view` says it
+       is a lookup key.
+     - Mutation-checked: the old `input[value=…]` selector against the new markup fails the caret
+       test (focus lands on `<body>`).
+  4. `b2c849c5` + `3f70bbcd` (wording):
+     - `--customize-pad` and `--customize-gap` join `--customize-grip`;
+     - the row's padding, its negative margin, its gap and the hidden-row inset all derive from them,
+       and a pin asserts the inset holds no literal length;
+     - the comment now says one row height is for the eye, and that `shiftsFor` copes with unequal
+       heights.
+     - The two updated pins failed first, then passed.
+  5. `ca16f5b5`: both page tests restore their `scrollBy` spy with `onTestFinished`.
+  6. `8a890490`: the lock test reads "…until the lift ends". The pointer test asserts that
+     Portfolio's box stays disabled through the 120 ms settle and is free again after the commit.
+  7. `b65cfe5e`: the hidden rows sit in `<div role="group" aria-labelledby={dividerId}>`, and the
+     divider takes its id from `useId`.
+     - Test first: "gathers the hidden views in a group the divider names…" failed ("Unable to find …
+       group … Hidden"), then passed.
+     - The divider stays readable text (Decision 9). A browse-mode reader therefore meets "Hidden" as
+       text and then as the group's name; tabbing announces the group name once.
+  8. `3c869a0c`: a page test drives `syncFromServer()`, the store's session sync, while Net worth is
+     lifted.
+     - `OverviewPage.test.tsx` now mocks `../api/prefs` the house way (the `useScope` and
+       `AppearanceCard` idiom), beside its other API mocks. That header hunk (around lines 85 and 128)
+       is outside the customize-test lines: a merge note.
+     - Result: the live region says "Cancelled — the list changed.", the grip is no longer pressed,
+       the popover stays open, the page shows the adopted tiles (Estimated tax · Net worth ·
+       Portfolio) and drops Money flow, and the stored layout is the adopted one.
+  - Gates after the round:
+    - component + page + guide + CSS set: 12 files / 160 tests;
+    - `tsc -b` exit 0;
+    - `eslint` on the four touched source files exit 0;
+    - one full `npx vitest run`: 245 files / 3382 tests, exit 0, with stderr only from the two
+      unrelated suites above;
+    - after the comment-only `3f70bbcd`, the three suites that read stylesheet text passed again
+      (23 / 23).
+  - Browser re-check (not requested; run because the DOM and the CSS changed):
+    **`R4 CUSTOMIZE CHECK OK — 116 checks, 20 screenshots`**.
+    - The driver gained one check per pass: the hidden boxes sit in a group Edge names "Hidden".
+    - Rows are still 28 px everywhere, and the boxes still stand at 805 px (1280) and 1125 px
+      (1600). The screenshots look as before.
+    - The only writes were `overview_layout` PATCHes, and the console was clean in all 8 contexts.
+    - The layout was reset to the defaults, and both servers were stopped (vite's child via
+      `taskkill` again).
+- Notes for the controller / lane V:
+  - `src/pages/OverviewPage.tsx` is untouched.
+  - The DOM this lane publishes is as listed under "DOM this lane publishes".
+  - The browser driver stays in `scratchpad/reorder-r4/` (gitignored), with `report.json` and the 20
+    PNGs next to it.
 
 ## Notes for the controller (outside this lane — found while planning it)
 
