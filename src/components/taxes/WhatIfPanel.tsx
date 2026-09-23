@@ -431,21 +431,13 @@ export default function WhatIfPanel({
       setFormError(`${labelOf(to)} is overridden twice — one row per key`)
       return
     }
-    if (row.committed && row.key !== null) {
-      // A row already in the scenario keeps its figure under the new key: the reader's own
-      // number, re-aimed — renamed in place, so the URL keeps its order.
-      const from = row.key
-      updateRow(row.id, { key: to })
-      patch((s) => {
-        const overrides: Record<string, string | null> = {}
-        for (const [key, value] of Object.entries(s.overrides)) overrides[key === from ? to : key] = value
-        return { ...s, overrides }
-      }, true)
-      return
-    }
-    // A new choice starts at "no change": the stored figure, outside the scenario until edited.
+    // Every choice is a fresh one: the new input starts at "no change" — its stored figure,
+    // outside the scenario until edited. A figure (or a Clear) typed for the OLD input is not
+    // re-aimed at the new one: `annual_salary:250000` must never become `itemized_deduction:
+    // 250000` with Apply enabled, one select change after the reader meant something else.
     setFormError(null)
-    updateRow(row.id, { key: to, draft: storedOf(to) ?? '', cleared: false })
+    updateRow(row.id, { key: to, draft: storedOf(to) ?? '', cleared: false, committed: false })
+    if (row.committed && row.key !== null) patch(withoutKey(row.key), true)
   }
 
   // `canonical` is the box's committed text; null is a BLANK box — never "clear" (that is the

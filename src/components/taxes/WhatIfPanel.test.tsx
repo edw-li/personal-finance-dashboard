@@ -711,6 +711,32 @@ describe('WhatIfPanel', () => {
     expect(apply().disabled).toBe(false)
   })
 
+  // Review of 2026-09-23 §B7: re-keying a row already in the scenario used to carry its figure
+  // (or its Clear) to the new input — `annual_salary:250000` became `itemized_deduction:250000`
+  // at once, Apply enabled. Every key choice is a fresh one.
+  it('choosing another key is a fresh choice: the old override leaves, the new input starts at its stored value', async () => {
+    mount('/taxes?whatif=itemized_deduction%3A30000', { definitions: DEFS, inputs: INPUTS })
+    await screen.findByText('Δ total tax')
+    await formReady()
+    fireEvent.change(keyPicker(), { target: { value: 'annual_salary' } })
+    expect(url()).toBe('/taxes')
+    expect(keyPicker().value).toBe('annual_salary')
+    expect(field('Override 1 value').value).toBe('$212,930.00')
+    expect(screen.getByText(/Not in the scenario yet — change it from the stored \$212,930\.00/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Apply \d+ override/ })).toBeNull()
+  })
+
+  it('a ticked Clear does not travel to the next key either', async () => {
+    mount('/taxes?whatif=itemized_deduction%3Anull', { definitions: DEFS, inputs: INPUTS })
+    await waitFor(() => expect(lastBody()?.overrides).toEqual({ itemized_deduction: null }))
+    await formReady()
+    expect(clearBox().checked).toBe(true)
+    fireEvent.change(keyPicker(), { target: { value: 'annual_salary' } })
+    expect(url()).toBe('/taxes')
+    expect(clearBox().checked).toBe(false)
+    expect(field('Override 1 value').value).toBe('$212,930.00')
+  })
+
   it('a row follows the URL when a link changes its value — to a clear, and back to a figure', async () => {
     render(
       <MemoryRouter initialEntries={['/taxes?whatif=annual_salary%3A250000']}>
