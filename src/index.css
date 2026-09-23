@@ -167,6 +167,19 @@ button {
   outline-offset: 2px;
 }
 
+/* ...except inside a scroll container, where a ring drawn OUTSIDE the control is cut wherever the
+   control sits flush with the container's edge: a keyboard walk of every page and local view on
+   real data, both themes, found the attention strip's rows cut at both sides and the Settings
+   and card-category tables' buttons cut at the bottom edge a Tab scrolls them to (1–4px). There
+   the ring is drawn inset, as the Guide rail's rows already draw theirs. `.button` in the list is
+   for weight: :is() counts its most specific argument, so this is (0,3,0) and moves the
+   components' own rings too — `.button:focus-visible` (0,2,0), and portfolio.css's bare
+   `.row-actions button:focus-visible` (0,2,1), which loads after this sheet and reaches the
+   Settings tables' Edit buttons. */
+:is(.attention-strip, .settings-scroll, .categories-scroll) :is(a, button, .button):focus-visible {
+  outline-offset: -2px;
+}
+
 /* One switch for the whole grammar. Rules gated by `no-preference` never see these values;
    rules that read a token unconditionally — the nav indicator, the paste flash,
    .loading-dim, the delayed fallbacks — become instant here instead of each carrying a

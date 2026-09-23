@@ -49,6 +49,67 @@ describe('the global focus ring (index.css)', () => {
   })
 })
 
+describe('the ring inside a clipping scroll container (index.css)', () => {
+  // Measured by a keyboard walk on finance_realdata, both themes (code review of §B9,
+  // recommendation 2): a ring drawn OUTSIDE a control is cut wherever the control sits flush with
+  // a scroll container's edge — the attention strip's rows at both sides, the Settings and card
+  // category tables' buttons at the bottom edge a Tab scrolls them to. Inside those containers the
+  // ring is drawn inset, as the Guide rail's rows already draw theirs.
+  const inset = rules(index, /^:is\([^)]*\) :is\([^)]*\):focus-visible$/)
+
+  it('names every container the walk found cutting the ring', () => {
+    expect(inset).toHaveLength(1)
+    for (const container of ['.attention-strip', '.settings-scroll', '.categories-scroll']) {
+      expect(inset[0].selector, container).toContain(container)
+    }
+  })
+
+  it('draws it 2px inside the control, where no container edge reaches it', () => {
+    expect(inset[0].body).toMatch(/outline-offset:\s*-2px;/)
+  })
+
+  // The rings it has to move are the components' own, and some load AFTER index.css — the first
+  // walk after the fix still found the Settings tables' Edit buttons cut, under portfolio.css's
+  // bare `.row-actions button:focus-visible`. Only weight wins against a later sheet.
+  it('outranks the component rings inside those containers, whatever order the sheets load in', () => {
+    const ours = specificity(inset[0].selector)
+    for (const theirs of [
+      '.button:focus-visible',
+      '.row-actions button:focus-visible',
+      '.attention-item:focus-visible',
+      '.drag-handle:focus-visible',
+    ]) {
+      expect(compareSpecificity(ours, specificity(theirs)), theirs).toBeGreaterThan(0)
+    }
+  })
+})
+
+type Specificity = [ids: number, classes: number, types: number]
+
+function compareSpecificity(a: Specificity, b: Specificity): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2]
+}
+
+/** Selectors Level 4 specificity for the plain selectors these rules use: `:is()`/`:not()`
+ *  count their most specific argument, `:where()` counts nothing. */
+function specificity(selector: string): Specificity {
+  const total: Specificity = [0, 0, 0]
+  const rest = selector.replace(/:(is|where|not)\(([^()]*)\)/g, (_, fn: string, args: string) => {
+    if (fn !== 'where') {
+      const best = args
+        .split(',')
+        .map((arg) => specificity(arg.trim()))
+        .reduce((a, b) => (compareSpecificity(a, b) >= 0 ? a : b))
+      total.forEach((_value, i) => (total[i] += best[i]))
+    }
+    return ' '
+  })
+  total[0] += (rest.match(/#[\w-]+/g) ?? []).length
+  total[1] += (rest.match(/\.[\w-]+|\[[^\]]*\]|:(?!:)[\w-]+/g) ?? []).length
+  total[2] += (rest.match(/(?:^|[\s>+~])[a-z][\w-]*/gi) ?? []).length
+  return total
+}
+
 describe('the login fields (LoginPage.css)', () => {
   it('have their own focus-visible treatment: the accent ring and an accent border', () => {
     const field = rules(login, /^\.login-card input:focus-visible$/)
