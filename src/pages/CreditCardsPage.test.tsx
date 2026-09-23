@@ -1971,3 +1971,47 @@ describe('CreditCardsPage — the card roster: late answers and overlapping requ
     expect(screen.queryByText(/Couldn't restore the order/)).toBeNull()
   })
 })
+
+// Found by the lane's Edge check (Task 11, step f): the drop's reload was still out when the
+// Undo's reload landed — its /net-worth/accounts answered last — and CreditCardsPage.load let
+// that older answer overwrite the newer one. The roster showed the dropped order over a server
+// that held the restored one, and the next drag saved it. One load feeds both lists, so the
+// roster pins it for Categories & weights too.
+describe('CreditCardsPage — an older reload never overwrites a newer one (the lane R5 browser check)', () => {
+  beforeEach(() => {
+    vi.mocked(reorderCreditCards).mockReset()
+  })
+
+  it("drop → Undo while the drop's reload is still out: when it answers last, the restored order stays and the next drag saves it", async () => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    const firstLoad = getSnapshot('credit-cards')
+    // The drop's reload reads the list the drop saved, and answers only after the Undo's.
+    let answerDropReload: (cards: CreditCardOut[]) => void = () => {}
+    vi.mocked(fetchCreditCards).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answerDropReload = resolve
+        }),
+    )
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Order restored')
+    // The Undo's reload has landed …
+    await waitFor(() => expect(getSnapshot('credit-cards')).not.toBe(firstLoad))
+    // … and now the drop's answers, with the order the drop saved.
+    await act(async () => {
+      answerDropReload([
+        { ...SAVOR, sort_order: 0 },
+        { ...vx(), sort_order: 1 },
+        { ...RH, sort_order: 2 },
+      ])
+    })
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    keyboardMove('RH Gold', 'ArrowUp')
+    expect(reorderCreditCards).toHaveBeenLastCalledWith([1, 3, 2])
+  })
+})

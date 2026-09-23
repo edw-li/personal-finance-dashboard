@@ -1,5 +1,5 @@
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { describeError } from '../api/client'
 import {
@@ -126,7 +126,14 @@ export default function CreditCardsPage() {
     )
   }
 
+  // Many things trigger a load (mount, retry, both Manage panels, the drill-in) and the six
+  // requests are not ordered, so a slow earlier load must never overwrite a later one
+  // (PortfolioPage's seqRef). A reorder's Undo made that race everyday: the drop's reload,
+  // still out when the Undo's landed, put the dropped order back over the restored one
+  // (2026-09-23 drag-to-reorder, lane R5's Edge check).
+  const loadSeq = useRef(0)
   const load = useCallback(() => {
+    const seq = ++loadSeq.current
     Promise.all([
       fetchCreditCards(),
       fetchRewardCategories(),
@@ -136,6 +143,7 @@ export default function CreditCardsPage() {
       fetchAccounts(),
     ])
       .then(([cardsData, categoriesData, ratesData, spendingData, matrixData, accountsData]) => {
+        if (seq !== loadSeq.current) return
         const snapshot: CreditCardsSnapshot = {
           cards: cardsData,
           categories: categoriesData,
@@ -158,6 +166,7 @@ export default function CreditCardsPage() {
         setAccounts(accountsData)
       })
       .catch((err: unknown) => {
+        if (seq !== loadSeq.current) return
         setError(describeError(err, 'credit cards'))
       })
       .finally(() => setLoading(false))
