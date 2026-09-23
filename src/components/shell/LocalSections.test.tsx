@@ -7,6 +7,10 @@ import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from './LocalSections'
+// The hold loop is holdPosition's own unit (holdPosition.test.ts); here only WHEN a landing asks.
+const release = vi.hoisted(() => vi.fn())
+vi.mock('./holdPosition', () => ({ holdPosition: vi.fn(() => release) }))
+import { holdPosition } from './holdPosition'
 
 const SECTIONS = [{ id: 'summary', label: 'Summary' }, { id: 'inputs', label: 'Inputs' }] as const
 const mounted = vi.fn()
@@ -189,6 +193,104 @@ describe("keeping the reader's place (2026-09-23 spec §C10)", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Browser forward' }))
     await frame()
     await frame()
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+})
+
+// 2026-09-23 spec §C11: a deep link lands while the page is still making its entrance, and
+// scrollIntoView measures the target's TRANSFORMED box — so on /guide#routine-monthly the card
+// landed 87px down (clear of the top scrim), then rose 22px with the entrance and came to rest
+// under the scrim. Held from the landing, it stays where the landing put it.
+describe('holding a deep link where it lands (2026-09-23 spec §C11)', () => {
+  function TargetHarness() {
+    const state = useLocalSections(SECTIONS, 'summary', {
+      resolveLegacy: ({ hash }) => (hash === '#deep' ? { section: 'inputs', targetId: 'deep' } : null),
+    })
+    // PageFrame's shape: the sticky scope row, then the body the target lives in.
+    return <div>
+      <div className="page-frame-scope"><LocalSectionNav state={state} label="Page views" /></div>
+      <div className="page-frame-body">
+        <LocalSectionPanel state={state} section="summary"><p>Summary content</p></LocalSectionPanel>
+        <LocalSectionPanel state={state} section="inputs"><section id="deep">Deep card</section></LocalSectionPanel>
+      </div>
+    </div>
+  }
+  let scrollIntoView: ReturnType<typeof vi.fn>
+  let scrollTo: ReturnType<typeof vi.fn>
+  // Where the landing left things: the row's top (0 = stuck) and the target's top, on screen.
+  const landing = ({ scrollY, rowTop, targetTop }: { scrollY: number; rowTop: number; targetTop: number }) => {
+    Object.defineProperty(window, 'scrollY', { value: scrollY, configurable: true, writable: true })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const top = this.classList.contains('page-frame-scope') ? rowTop : this.id === 'deep' ? targetTop : 0
+      return { top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+    })
+  }
+  beforeEach(() => {
+    vi.mocked(holdPosition).mockClear()
+    release.mockClear()
+    // jsdom implements no scrollIntoView (SettingsPage.test carries the same note).
+    scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true })
+    scrollTo = vi.fn()
+    vi.stubGlobal('scrollTo', scrollTo)
+  })
+  afterEach(() => {
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    Object.defineProperty(window, 'scrollY', { value: 0, configurable: true, writable: true })
+  })
+
+  it('holds the target from the moment it lands, and lets go when the page goes away', async () => {
+    const { unmount } = render(<MemoryRouter initialEntries={['/guide#deep']}><TargetHarness /></MemoryRouter>)
+    await waitFor(() => expect(holdPosition).toHaveBeenCalledWith(screen.getByText('Deep card')))
+    // Measured AFTER the landing: a hold taken before it would pin the card to its old place.
+    expect(scrollIntoView.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(holdPosition).mock.invocationCallOrder[0])
+    expect(release).not.toHaveBeenCalled()
+    unmount()
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('a page without a deep link holds nothing', async () => {
+    render(<MemoryRouter initialEntries={['/guide']}><TargetHarness /></MemoryRouter>)
+    await act(() => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()) }))
+    expect(holdPosition).not.toHaveBeenCalled()
+  })
+
+  // The first card of a page cannot reach the snap line: the landing stops before the scope row
+  // sticks (/guide#routine-monthly: 44px down, the row still 28px from the top), and there the
+  // arrived scrim lies on the body's first 32px — across the very card the link named.
+  it('a target in the opening screen lands at the top of the page, where no scrim has arrived', async () => {
+    landing({ scrollY: 44, rowTop: 28, targetTop: 87 })
+    render(<MemoryRouter initialEntries={['/guide#deep']}><TargetHarness /></MemoryRouter>)
+    await waitFor(() => expect(holdPosition).toHaveBeenCalled())
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' })
+    // The hold measures the FINAL landing, so it comes after the move to the top.
+    expect(scrollTo.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(holdPosition).mock.invocationCallOrder[0])
+  })
+
+  it('a target the landing brought under a stuck row stays where it landed', async () => {
+    // Only just deep enough for the row to stick: still in the opening screen's upper half, so
+    // the stuck row is the one thing that says the landing reached the snap line.
+    landing({ scrollY: 88, rowTop: 0, targetTop: 87 })
+    render(<MemoryRouter initialEntries={['/guide#deep']}><TargetHarness /></MemoryRouter>)
+    await waitFor(() => expect(holdPosition).toHaveBeenCalled())
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('a target far down a short page stays where it landed — the top would hide it', async () => {
+    // Max scroll reached before the row could stick; from the top the card would be off screen.
+    landing({ scrollY: 60, rowTop: 12, targetTop: 700 })
+    render(<MemoryRouter initialEntries={['/guide#deep']}><TargetHarness /></MemoryRouter>)
+    await waitFor(() => expect(holdPosition).toHaveBeenCalled())
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('under reduced motion there are no scrims, so the landing stands', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    landing({ scrollY: 44, rowTop: 28, targetTop: 87 })
+    render(<MemoryRouter initialEntries={['/guide#deep']}><TargetHarness /></MemoryRouter>)
+    await waitFor(() => expect(holdPosition).toHaveBeenCalled())
     expect(scrollTo).not.toHaveBeenCalled()
   })
 })

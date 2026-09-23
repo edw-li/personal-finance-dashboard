@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { useLocation, useNavigate, useNavigationType } from 'react-router-dom'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
 import { prefersReducedMotion } from '../useReducedMotion'
+import { holdPosition } from './holdPosition'
 import { LocalSectionVisibility } from './localSectionContext'
 import './localSections.css'
 
@@ -61,11 +62,17 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
     priorSection.current = section
     let observer: MutationObserver | undefined
     let timeout: ReturnType<typeof setTimeout> | undefined
+    let release: (() => void) | undefined
     const focusTarget = () => {
       if (!targetId) return false
       const target = document.getElementById(targetId)
       if (!target || target.closest('[hidden]')) return false
       target.scrollIntoView?.({ block: 'start', behavior: 'instant' })
+      if (landsUnderOpeningScrim(target)) window.scrollTo({ top: 0, behavior: 'instant' })
+      // A deep link lands mid-entrance, and scrollIntoView measures the TRANSFORMED box: a card
+      // landed clear of the top scrim, then rose 22px with the page's entrance and came to rest
+      // under it (2026-09-23 spec §C11). Held from here, it stays where it landed.
+      release = holdPosition(target)
       if (!target.hasAttribute('tabindex') && !target.matches('input,button,select,textarea,a[href]')) target.setAttribute('tabindex', '-1')
       target.focus({ preventScroll: true })
       observer?.disconnect()
@@ -94,10 +101,27 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
         if (target !== null && window.scrollY !== target) window.scrollTo({ top: Number.isFinite(target) ? target : 0, behavior: 'instant' })
       }
     })
-    return () => { cancelAnimationFrame(frame); observer?.disconnect(); if (timeout) clearTimeout(timeout) }
+    return () => { cancelAnimationFrame(frame); observer?.disconnect(); if (timeout) clearTimeout(timeout); release?.() }
   }, [location.key, section, targetId, navigationType])
 
   return { section, sections, setSection, panelId: (value) => `${id}-section-${value}`, tabId: (value) => `${id}-tab-${value}` }
+}
+
+/**
+ * Whether a deep link's landing left its target under the top scrim in the page's opening screen
+ * (2026-09-23 spec §C11). A card near the top of the body cannot reach the snap line: the landing
+ * stops before PageFrame's scope row sticks, and there the scrim — arrived over the first
+ * --scrim-h of scroll, sitting on the body's top until the row sticks — lies across the very card
+ * the link named (/guide#routine-monthly: 44px down, the fade over its top 32px). The page's top
+ * shows the same card with no scrim at all, so that is where it lands — unless the card sits so
+ * low (a short page scrolled to its end) that the top would hide it. Reduced motion has no scrims.
+ */
+function landsUnderOpeningScrim(target: HTMLElement): boolean {
+  if (window.scrollY <= 0 || prefersReducedMotion()) return false
+  const row = target.closest('.page-frame-body')?.parentElement?.querySelector(':scope > .page-frame-scope')
+  // A stuck row (top 0) means the landing reached the snap line, below the scrim.
+  if (!row || row.getBoundingClientRect().top <= 0) return false
+  return target.getBoundingClientRect().top + window.scrollY < window.innerHeight / 2
 }
 
 function safeHash(hash: string): string | undefined {
