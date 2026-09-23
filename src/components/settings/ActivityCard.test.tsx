@@ -53,7 +53,8 @@ describe('ActivityCard', () => {
     mount()
     expect(await screen.findByRole('region', { name: 'Activity' })).toBeTruthy()
     expect(document.getElementById('activity')).toBeTruthy()
-    const rows = screen.getAllByRole('listitem')
+    // The rows themselves: the region stands from the first paint, around a ghost.
+    const rows = await screen.findAllByRole('listitem')
     expect(rows).toHaveLength(4)
     expect(rows[0].textContent).toContain('Saved Sep 2026 balances — 19 updated')
     expect(rows[0].querySelector('.activity-source')?.textContent).toBe('ui')
