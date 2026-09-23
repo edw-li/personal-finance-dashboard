@@ -142,3 +142,10 @@ describe('axisTooltip head note', () => {
     expect(plain.head).toBe('Aug 2026')
   })
 })
+
+// A partial bar's params colour is its faded fill: the swatch still wears the token's variable.
+describe('swatch of a token at an alpha', () => {
+  it('reads the token part', () => {
+    expect(swatch(`${PALETTE[3]}73`)).toContain('var(--chart-4)')
+  })
+})

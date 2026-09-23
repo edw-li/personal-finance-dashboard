@@ -169,6 +169,14 @@ describe('conformance rules reject', () => {
     ;(nested.series as { data: unknown[] }[])[0].data = [{ value: 1, itemStyle: { color: 'rgba(0,0,0,0.5)' } }]
     expect(only(nested)[0]).toMatch(/color rgba/)
   })
+  it('a token at an alpha is a token; a foreign colour at an alpha is not', () => {
+    const faded = base()
+    ;(faded.series as { data: unknown[] }[])[0].data = [{ value: 1, itemStyle: { color: `${PALETTE[0]}73` } }]
+    expect(only(faded)).toEqual([])
+    const foreign = base()
+    ;(foreign.series as { data: unknown[] }[])[0].data = [{ value: 1, itemStyle: { color: '#12345673' } }]
+    expect(only(foreign)[0]).toMatch(/color #12345673/)
+  })
   it('an inline axis formatter', () => {
     const o = base()
     o.yAxis = { type: 'value', axisLabel: { formatter: (v: number) => compactMoney(v) } }

@@ -723,17 +723,37 @@ describe('spendingBarsOption: the month in progress (2026-09-23 spec §C5)', () 
 describe('heatmapOption: the month in progress (2026-09-23 spec §C5)', () => {
   const MONTH_LABELS = ['Jan 2026', 'Feb 2026', 'Mar 2026', 'Apr 2026', 'May 2026', 'Jun 2026', 'Jul 2026', 'Aug 2026']
   const input = { matrix: longMatrix(), order: [1, 2], nameById: NAMES, monthLabels: MONTH_LABELS, todayIso: '2026-08-12' }
-  const cellsOf = (option: unknown) => (option as { series: { data: unknown[] }[] }).series[0].data
 
+  // A cell's fill is its scale's colour, so the in-progress column rides its own series under a
+  // hidden copy of the scale: faded by the scale's colorAlpha (only the FILL fades, the dashed
+  // outline stays at full strength) or, under Chart patterns, hatched.
   it('draws the column under way partial in the absolute and row readings', () => {
-    const absolute = cellsOf(heatmapOption({ ...input, mode: 'absolute' }))
-    expect(absolute).toContainEqual({ value: [7, 1, 50], itemStyle: partialItemStyle(MUTED, false) })
-    // Finished months stay plain triples.
-    expect(absolute).toContainEqual([6, 0, 150])
-    expect(cellsOf(heatmapOption({ ...input, mode: 'row', patterns: true }))).toContainEqual({
-      value: [7, 1, 1],
-      itemStyle: partialItemStyle(MUTED, true),
+    type Heat = {
+      visualMap: Record<string, unknown>[]
+      series: { id?: string; data: unknown[] }[]
+    }
+    const absolute = heatmapOption({ ...input, mode: 'absolute' }) as unknown as Heat
+    // Finished months stay plain triples in the scale's own series; the column is not there.
+    expect(absolute.series[0].data).toContainEqual([6, 0, 150])
+    expect(absolute.series[0].data.some((cell) => Array.isArray(cell) && cell[0] === 7)).toBe(false)
+    expect(absolute.series[1]).toMatchObject({ id: 'in-progress' })
+    expect(absolute.series[1].data).toEqual([
+      { value: [7, 1, 50], itemStyle: { borderColor: MUTED, borderWidth: 1, borderType: 'dashed' } },
+    ])
+    expect(absolute.visualMap[0].seriesIndex).toBe(0)
+    expect(absolute.visualMap[1]).toMatchObject({
+      show: false,
+      seriesIndex: 1,
+      min: absolute.visualMap[0].min,
+      max: absolute.visualMap[0].max,
+      inRange: { color: [...SEQUENTIAL_BLUE], colorAlpha: [0.45, 0.45] },
     })
+    const row = heatmapOption({ ...input, mode: 'row', patterns: true }) as unknown as Heat
+    expect(row.series[1].data).toEqual([
+      { value: [7, 1, 1], itemStyle: { borderColor: MUTED, borderWidth: 1, borderType: 'dashed', decal: ESTIMATE_DECAL } },
+    ])
+    // Hatched, not faded: the scale copy keeps its colours at full strength.
+    expect((row.visualMap[1].inRange as Record<string, unknown>).colorAlpha).toBeUndefined()
   })
 
   // Review (audit F1): a blank column read as "no data"; the month in progress has data, it is
@@ -761,10 +781,12 @@ describe('heatmapOption: the month in progress (2026-09-23 spec §C5)', () => {
     ])
     const hover = tooltipRows(option.tooltip.formatter({ value: [7, 1, 50] }))
     expect([hover.lead, hover.label, hover.sub]).toEqual(['$50.00', 'Groceries &lt;b&gt;&amp; more&lt;/b&gt; · Aug 2026', 'month to date — not compared'])
-    // The other readings keep one series and an unrestricted scale.
-    const row = heatmapOption({ ...input, mode: 'row' }) as unknown as { visualMap: { seriesIndex?: number }; series: unknown[] }
-    expect(row.series).toHaveLength(1)
-    expect(row.visualMap.seriesIndex).toBeUndefined()
+    // With no month in progress, every reading keeps one series and an unrestricted scale.
+    for (const mode of ['absolute', 'row', 'vsAverage'] as const) {
+      const done = heatmapOption({ ...input, mode, todayIso: '2026-08-31' }) as unknown as { visualMap: { seriesIndex?: number }; series: unknown[] }
+      expect(done.series).toHaveLength(1)
+      expect(done.visualMap.seriesIndex).toBeUndefined()
+    }
   })
 
   it('marks the label and names the month in the tooltip', () => {

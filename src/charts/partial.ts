@@ -27,10 +27,23 @@ export const ESTIMATE_DECAL = {
  *  read as one. */
 export const DEFICIT_DECAL = { ...ESTIMATE_DECAL, rotation: Math.PI / 4 }
 
-/** The partial look on one bar, cell or point in `color` (its outline's). */
+/** How much of its fill a partial bar or point keeps (spec §C5's "reduced-opacity fill"). */
+export const PARTIAL_FILL_ALPHA = 0.45
+
+/** A token colour at an alpha, spelled '#rrggbbaa'. recolor.ts maps the token part to the light
+ *  theme and keeps the alpha, conformance.ts accepts it as the token it is, and the tooltip
+ *  swatch reads the token. echarts has no fill-only opacity, so this is how a fill fades
+ *  without its outline. */
+export const withAlpha = (hex: string, alpha: number) =>
+  `${hex}${Math.round(alpha * 255).toString(16).padStart(2, '0')}`
+
+/** The partial look on one bar or point in `color`: hatched under Chart patterns, otherwise its
+ *  FILL faded (the element's opacity would fade the dashed outline too, the 2026-09-23 review);
+ *  a dashed outline at full strength both ways. A heatmap cell's fill is its scale's colour, so
+ *  its in-progress column fades through the scale instead (spendingHeatmapOptions.ts). */
 export function partialItemStyle(color: string, patterns: boolean) {
   const outline = { borderColor: color, borderWidth: 1, borderType: 'dashed' as const }
-  return patterns ? { ...outline, decal: ESTIMATE_DECAL } : { ...outline, opacity: 0.45 }
+  return patterns ? { ...outline, decal: ESTIMATE_DECAL } : { ...outline, color: withAlpha(color, PARTIAL_FILL_ALPHA) }
 }
 
 /** The last day of an ISO month ('2026-09-01' → '2026-09-30'), by string math — never a

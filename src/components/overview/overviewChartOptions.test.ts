@@ -511,7 +511,7 @@ describe('recentSpendOption: the month in progress (2026-09-23 spec §C5)', () =
     expect(seriesOf(recentSpendOption(feed, 12, undefined, { todayIso: today }))[0].data).toEqual([
       4000,
       4200,
-      { value: 2072.23, itemStyle: { borderColor: MUTED, borderWidth: 1, borderType: 'dashed', opacity: 0.45 } },
+      { value: 2072.23, itemStyle: { borderColor: MUTED, borderWidth: 1, borderType: 'dashed', color: `${MUTED}73` } },
     ])
     expect(seriesOf(recentSpendOption(feed, 12, undefined, { todayIso: today, patterns: true }))[0].data?.[2]).toEqual({
       value: 2072.23,

@@ -91,7 +91,9 @@ export function swatch(
   color: unknown,
   { shape = 'square', wash = false }: { shape?: 'square' | 'line'; wash?: boolean } = {},
 ): string {
-  const hex = typeof color === 'string' ? color : ''
+  // A token at an alpha (a partial month's faded fill, charts/partial.ts) swatches as its token.
+  const raw = typeof color === 'string' ? color : ''
+  const hex = /^#[0-9a-f]{8}$/i.test(raw) ? raw.slice(0, 7) : raw
   const paint = CSS_VARS.get(hex.toLowerCase()) ?? (HEX6.test(hex) ? hex : 'var(--muted)')
   const classes = ['chart-tip-swatch', shape === 'line' ? 'is-line' : '', wash ? 'is-wash' : '']
     .filter(Boolean)

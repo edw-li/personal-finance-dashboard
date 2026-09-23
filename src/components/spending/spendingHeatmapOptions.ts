@@ -4,7 +4,7 @@
 // React, no fetching, only the grammar in src/charts.
 import type { EChartsOption } from '../../charts/echarts'
 import { compactMoney, grid, monthAxis } from '../../charts/grammar'
-import { ESTIMATE_DECAL, markedLabels, partialItemStyle, partialMonths, partialNote } from '../../charts/partial'
+import { ESTIMATE_DECAL, markedLabels, PARTIAL_FILL_ALPHA, partialMonths, partialNote } from '../../charts/partial'
 import { divergingVisualMap, rowNormalize, sequentialVisualMap, vsAverage } from '../../charts/scales'
 import { INK, MUTED, SURFACE } from '../../charts/theme'
 import { itemTooltip } from '../../charts/tooltip'
@@ -48,6 +48,18 @@ function heatmapMatrix(
   )
 }
 
+/** One cell of the month in progress (its own series, heatmapOption). */
+interface InProgressCell {
+  value: [number, number, number]
+  itemStyle: {
+    color?: string
+    decal?: typeof ESTIMATE_DECAL
+    borderColor?: string
+    borderWidth?: number
+    borderType?: 'dashed'
+  }
+}
+
 export interface HeatmapInput {
   matrix: SpendingMatrix
   /** The VISIBLE rows (heatmapRows().visible) — row index r maps back to order[r]. */
@@ -75,7 +87,7 @@ export function heatmapOption({
   const raw = heatmapMatrix(matrix, order)
   // 2026-09-23 spec §C5: the month in progress's column wears the partial look (the cell's
   // colour is the scale's, so the dashed outline is the neutral one). In the vs-average reading
-  // it stays blank: a month to date against a whole month's average would read as a false
+  // it is not compared: a month to date against a whole month's average would read as a false
   // "below average" — the same reason the averages leave it out.
   const partial = partialMonths(matrix.months, todayIso)
   const legacyAverage = mode === 'vsAverage' ? vsAverage(raw) : []
@@ -89,28 +101,31 @@ export function heatmapOption({
     })
   }) : []
   const values = mode === 'absolute' ? raw : mode === 'row' ? rowNormalize(raw) : comparison
+  // The scale's own series holds the finished months; the month in progress rides a second one.
   const triples: [number, number, number][] = []
   values.forEach((row, r) =>
     row.forEach((v, c) => {
-      if (v !== null && !(partial[c] && mode === 'vsAverage')) triples.push([c, r, v])
+      if (v !== null && !partial[c]) triples.push([c, r, v])
     }),
   )
-  const cells = triples.map((cell) =>
-    partial[cell[0]] ? { value: cell, itemStyle: partialItemStyle(MUTED, patterns) } : cell,
+  // The column under way, in every reading. Absolute and row: a cell's fill is its scale's
+  // colour and echarts has no fill-only opacity (an element's opacity fades the dashed outline
+  // too — the 2026-09-23 review), so the cells sit under a hidden copy of the scale whose
+  // colorAlpha fades the fill (charts/partial.ts PARTIAL_FILL_ALPHA); under Chart patterns the
+  // copy keeps full strength and the cells are hatched. vs average: not compared, but there
+  // (audit F1: a blank column read as "nothing entered") — neutral, hatched, saying why on hover.
+  const outline = { borderColor: MUTED, borderWidth: 1, borderType: 'dashed' as const }
+  const inProgress = raw.flatMap((row, r) =>
+    row.flatMap<InProgressCell>((dollars, c) => {
+      if (!partial[c] || dollars === null) return []
+      if (mode === 'vsAverage') {
+        return [{ value: [c, r, dollars] as [number, number, number], itemStyle: { color: MUTED, decal: ESTIMATE_DECAL } }]
+      }
+      const v = values[r][c]
+      if (v === null) return []
+      return [{ value: [c, r, v] as [number, number, number], itemStyle: patterns ? { ...outline, decal: ESTIMATE_DECAL } : outline }]
+    }),
   )
-  // vs average: the month in progress is not compared, but it IS there (audit F1: a blank
-  // column read as "nothing entered"). Its cells ride a second series that the diverging scale
-  // does not colour: neutral, hatched, and saying why on hover.
-  const inProgress =
-    mode === 'vsAverage'
-      ? raw.flatMap((row, r) =>
-          row.flatMap((dollars, c) =>
-            partial[c] && dollars !== null
-              ? [{ value: [c, r, dollars] as [number, number, number], itemStyle: { color: MUTED, decal: ESTIMATE_DECAL } }]
-              : [],
-          ),
-        )
-      : []
   const rawMax = raw.reduce((m, row) => row.reduce<number>((mm, v) => (v === null ? mm : Math.max(mm, v)), m), 0)
   const maxAbs = triples.reduce((m, [, , v]) => Math.max(m, Math.abs(v)), 0)
   const visualMap =
@@ -150,28 +165,40 @@ export function heatmapOption({
     }),
     xAxis: monthAxis(monthLabels, { gap: true, rotate: 45, marked: markedLabels(monthLabels, partial) }),
     yAxis: { type: 'category', data: order.map((_, r) => name(r)), inverse: true, axisLabel: { width: 118, overflow: 'truncate' as const } },
-    // The scale colours the compared cells only. echarts draws a heatmap series only under a
-    // visualMap of its own (a real canvas throws "Heatmap must use with visualMap" without one),
-    // so the in-progress series gets a hidden map that paints every cell the one neutral:
-    // continuous, because a piecewise map with open-ended pieces throws too (esppChartOptions).
+    // The visible scale colours the finished months only. echarts draws a heatmap series only
+    // under a visualMap of its own (a real canvas throws "Heatmap must use with visualMap"
+    // without one), so the in-progress series gets a hidden one: the scale's copy (same range,
+    // same ramp, the fill faded unless hatched) or, vs average, a map that paints every cell
+    // the one neutral — continuous, because a piecewise map with open-ended pieces throws too
+    // (esppChartOptions).
     visualMap:
       inProgress.length > 0
         ? [
             { ...visualMap, seriesIndex: 0 },
-            {
-              type: 'continuous' as const,
-              show: false,
-              seriesIndex: 1,
-              dimension: 2,
-              min: 0,
-              max: 1,
-              inRange: { color: [MUTED, MUTED] },
-              outOfRange: { color: [MUTED] },
-            },
+            mode === 'vsAverage'
+              ? {
+                  type: 'continuous' as const,
+                  show: false,
+                  seriesIndex: 1,
+                  dimension: 2,
+                  min: 0,
+                  max: 1,
+                  inRange: { color: [MUTED, MUTED] },
+                  outOfRange: { color: [MUTED] },
+                }
+              : {
+                  ...visualMap,
+                  show: false,
+                  seriesIndex: 1,
+                  inRange: {
+                    ...visualMap.inRange,
+                    ...(patterns ? {} : { colorAlpha: [PARTIAL_FILL_ALPHA, PARTIAL_FILL_ALPHA] }),
+                  },
+                },
           ]
         : visualMap,
     series: [
-      { type: 'heatmap' as const, data: cells, itemStyle: { borderColor: SURFACE, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: INK, borderWidth: 1 } } },
+      { type: 'heatmap' as const, data: triples, itemStyle: { borderColor: SURFACE, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: INK, borderWidth: 1 } } },
       ...(inProgress.length > 0
         ? [{ id: 'in-progress', type: 'heatmap' as const, data: inProgress, itemStyle: { borderColor: SURFACE, borderWidth: 1 }, emphasis: { itemStyle: { borderColor: INK, borderWidth: 1 } } }]
         : []),
