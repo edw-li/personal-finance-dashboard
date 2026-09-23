@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { ActivityBatch, ActivityPage, ActivityRun } from '../../types/api'
@@ -88,8 +88,9 @@ describe('ActivityCard', () => {
     expect(scroll).not.toBeNull()
     expect(scroll?.querySelector('.activity-list')).not.toBeNull()
     // Inside, not under: a Load more that sits below a 420px scroll box is a button the reader
-    // has to leave the list to reach.
-    expect(scroll?.querySelector('button')).not.toBeNull()
+    // has to leave the list to reach. By name — the rows' own Undo and View report buttons are
+    // inside the box too.
+    expect(within(scroll as HTMLElement).getByRole('button', { name: 'Load more' })).toBeTruthy()
   })
 
   it('Undo arms on the first click and fires on the second, then toasts and refetches', async () => {
