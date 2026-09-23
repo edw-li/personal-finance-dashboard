@@ -9,6 +9,8 @@ from bisect import bisect_left
 from collections.abc import Sequence
 
 from fastapi import HTTPException
+from sqlalchemy import Select, func, select
+from sqlalchemy.orm import InstrumentedAttribute
 
 # §8.3 — the 409 a stale list earns. The client shows it in toast.error and reloads, so the
 # reader is already looking at the current rows when they read it.
@@ -97,3 +99,10 @@ def moved_ids(old_order: Sequence[int], new_order: Sequence[int]) -> list[int]:
             floor = value
             need -= 1
     return [row_id for index, row_id in enumerate(new_order) if index not in kept]
+
+
+def next_sort_order(column: InstrumentedAttribute[int]) -> Select[tuple[int]]:
+    """`SELECT coalesce(max(column), -1) + 1` — the append position a create without a
+    sort_order takes (spec §3.3). The statement, not the value, so this module stays free
+    of I/O: the router awaits it inside its own transaction."""
+    return select(func.coalesce(func.max(column), -1) + 1)

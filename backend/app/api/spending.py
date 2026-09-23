@@ -48,6 +48,7 @@ from app.services.ordering import (
     STALE_CATEGORIES,
     check_permutation,
     moved_ids,
+    next_sort_order,
     renumber,
 )
 from app.services.savings import (
@@ -139,9 +140,11 @@ async def create_category(
     )
     if existing is not None:
         raise HTTPException(status_code=409, detail=f"category {slug!r} already exists")
-    category = SpendingCategory(
-        name=body.name, slug=slug, sort_order=body.sort_order, kind=body.kind
-    )
+    sort_order = body.sort_order
+    if sort_order is None:
+        # No position given: append after the last category (2026-09-23 reorder spec §3.3).
+        sort_order = (await db.execute(next_sort_order(SpendingCategory.sort_order))).scalar_one()
+    category = SpendingCategory(name=body.name, slug=slug, sort_order=sort_order, kind=body.kind)
     db.add(category)
     await db.flush()
     batch.record_insert(category)

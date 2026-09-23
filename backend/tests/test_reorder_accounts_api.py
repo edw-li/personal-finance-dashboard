@@ -210,3 +210,50 @@ async def test_a_later_edit_of_a_moved_row_makes_the_undo_refuse(auth_client, db
     assert refused.json()["detail"] == OVERLAP_REFUSAL
     listed = (await auth_client.get(f"{NW}/accounts")).json()
     assert [a["id"] for a in listed] == new  # nothing half-undone
+
+
+# ── the append defaults (spec §3.3) ──────────────────────────────────────────────────
+
+
+async def test_create_without_a_sort_order_appends_after_the_last_account(auth_client, db):
+    first = await auth_client.post(f"{NW}/accounts", json={"name": "Checking", "group": "cash"})
+    assert first.status_code == 201, first.text
+    assert first.json()["sort_order"] == 0  # an empty table starts at 0
+    db.add(Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=55))
+    await db.commit()
+    second = await auth_client.post(f"{NW}/accounts", json={"name": "Savings", "group": "cash"})
+    assert second.json()["sort_order"] == 56
+    nulled = await auth_client.post(
+        f"{NW}/accounts", json={"name": "HSA", "group": "pre_tax", "sort_order": None}
+    )
+    assert nulled.json()["sort_order"] == 57
+    explicit = await auth_client.post(
+        f"{NW}/accounts", json={"name": "IRA", "group": "pre_tax", "sort_order": 4}
+    )
+    assert explicit.json()["sort_order"] == 4  # an explicit number is still honoured
+
+
+async def test_a_group_change_appends_the_account_inside_the_same_batch(auth_client, db):
+    checking = Account(name="Checking", slug="checking", group="cash", sort_order=1)
+    db.add_all([checking, Account(name="Z", slug="z", group="taxable", sort_order=55)])
+    await db.commit()
+    resp = await auth_client.patch(f"{NW}/accounts/{checking.id}", json={"group": "other"})
+    assert resp.status_code == 200, resp.text
+    assert (resp.json()["group"], resp.json()["sort_order"]) == ("other", 56)
+    [logged] = (await db.execute(select(ChangeLog))).scalars().all()
+    assert (logged.before["group"], logged.before["sort_order"]) == ("cash", 1)
+    assert (logged.after["group"], logged.after["sort_order"]) == ("other", 56)
+    assert logged.label == "Updated account Checking"
+
+
+async def test_an_explicit_sort_order_wins_and_other_edits_never_move_a_row(auth_client, db):
+    checking = Account(name="Checking", slug="checking", group="cash", sort_order=1)
+    db.add_all([checking, Account(name="Z", slug="z", group="taxable", sort_order=55)])
+    await db.commit()
+    url = f"{NW}/accounts/{checking.id}"
+    explicit = await auth_client.patch(url, json={"group": "other", "sort_order": 7})
+    assert explicit.json()["sort_order"] == 7
+    renamed = await auth_client.patch(url, json={"name": "Everyday Checking"})
+    assert renamed.json()["sort_order"] == 7
+    same_group = await auth_client.patch(url, json={"group": "other"})
+    assert same_group.json()["sort_order"] == 7  # not a group CHANGE, so no append

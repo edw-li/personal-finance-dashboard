@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from app.models import Account
 from app.services.ordering import (
     STALE_ACCOUNTS,
     STALE_CARDS,
@@ -14,6 +15,7 @@ from app.services.ordering import (
     STALE_TRANSACTIONS,
     check_permutation,
     moved_ids,
+    next_sort_order,
     renumber,
     subset_in_slots,
 )
@@ -150,3 +152,18 @@ def test_moved_ids_prefers_the_smaller_side_of_a_block_move():
 
 def test_moved_ids_on_a_reversal_keeps_the_first_row_of_the_new_order():
     assert moved_ids([1, 2, 3], [3, 2, 1]) == [2, 1]
+
+
+# ── next_sort_order ──────────────────────────────────────────────────────────────────
+
+
+async def test_next_sort_order_appends_after_the_max_and_starts_at_zero(db):
+    assert (await db.execute(next_sort_order(Account.sort_order))).scalar_one() == 0
+    db.add_all(
+        [
+            Account(name="A", slug="a", group="cash", sort_order=3),
+            Account(name="B", slug="b", group="cash", sort_order=29),
+        ]
+    )
+    await db.commit()
+    assert (await db.execute(next_sort_order(Account.sort_order))).scalar_one() == 30

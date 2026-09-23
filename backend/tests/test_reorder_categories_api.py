@@ -180,3 +180,20 @@ async def test_undo_after_a_later_reorder_refuses_until_the_later_one_is_undone(
         (ids["Rent"], 2),
         (ids["Old"], 3),
     ]
+
+
+# ── the append default (spec §3.3) ───────────────────────────────────────────────────
+
+
+async def test_create_without_a_sort_order_appends_after_the_last_category(auth_client, db):
+    first = await auth_client.post(f"{SP}/categories", json={"name": "Food"})
+    assert first.status_code == 201, first.text
+    assert first.json()["sort_order"] == 0  # an empty table starts at 0
+    db.add(SpendingCategory(name="Travel", slug="travel", sort_order=20))
+    await db.commit()
+    second = await auth_client.post(f"{SP}/categories", json={"name": "Pets"})
+    assert second.json()["sort_order"] == 21
+    nulled = await auth_client.post(f"{SP}/categories", json={"name": "Kids", "sort_order": None})
+    assert nulled.json()["sort_order"] == 22
+    explicit = await auth_client.post(f"{SP}/categories", json={"name": "Gym", "sort_order": 5})
+    assert explicit.json()["sort_order"] == 5

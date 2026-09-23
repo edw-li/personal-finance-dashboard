@@ -40,6 +40,7 @@ from app.services.ordering import (
     STALE_ACCOUNTS,
     check_permutation,
     moved_ids,
+    next_sort_order,
     renumber,
 )
 
@@ -185,11 +186,16 @@ async def create_account(
         raise HTTPException(status_code=409, detail=f"account {slug!r} already exists")
     await _validate_links(db, body.person_id, body.parent_account_id, None)
     _check_component_link(body.is_component, body.parent_account_id)
+    sort_order = body.sort_order
+    if sort_order is None:
+        # No position given: append after the last account (2026-09-23 reorder spec §3.3),
+        # never 0 — 0 put every new account at the top of its group.
+        sort_order = (await db.execute(next_sort_order(Account.sort_order))).scalar_one()
     account = Account(
         name=body.name,
         slug=slug,
         group=body.group,
-        sort_order=body.sort_order,
+        sort_order=sort_order,
         is_component=body.is_component,
         person_id=body.person_id,
         parent_account_id=body.parent_account_id,
@@ -255,6 +261,11 @@ async def update_account(
             updates.get("is_component", account.is_component),
             updates.get("parent_account_id", account.parent_account_id),
         )
+    if "group" in updates and updates["group"] != account.group and "sort_order" not in updates:
+        # A group change lands the account at the END of its new group (2026-09-23 reorder
+        # spec §3.3): its old number ranked it among the old group's rows. It rides the
+        # same batch as the group change, so one Undo reverts both.
+        updates["sort_order"] = (await db.execute(next_sort_order(Account.sort_order))).scalar_one()
     # slug is the importer's natural key — never rewritten here. A sheet-side rename is
     # the importer's job (per-run alias semantics, Plan 2 forward note).
     before = row_image(account)
