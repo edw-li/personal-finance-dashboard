@@ -251,20 +251,43 @@ describe('useReorder — keyboard', () => {
     expect(onCommit).not.toHaveBeenCalled()
   })
 
-  it('data landing under a live lift cancels it silently; the next Space lifts afresh', () => {
+  it('data landing under a live lift cancels it at once and says the list changed; the next Space lifts afresh', () => {
     const onCommit = vi.fn()
     const { rerender } = render(<List items={flat('A', 'B', 'C')} onCommit={onCommit} />)
     layoutRows()
     fireEvent.keyDown(grip('Bravo'), { key: ' ' })
     fireEvent.keyDown(grip('Bravo'), { key: 'ArrowDown' })
     rerender(<List items={flat('A', 'B', 'C', 'D')} onCommit={onCommit} />)
+    expect(live()).toBe('Cancelled — the list changed.')
     expect(grip('Bravo').getAttribute('aria-pressed')).toBeNull()
+    // At once, no easing home: the rows have already re-rendered.
     expect(row('B').style.transform).toBe('')
+    expect(row('B').style.transition).toBe('')
+    expect(row('B').hasAttribute('data-reorder')).toBe(false)
     expect(row('C').hasAttribute('data-reorder')).toBe(false)
     layoutRows()
     fireEvent.keyDown(grip('Bravo'), { key: ' ' })
     expect(live()).toBe('Picked up Bravo. Position 2 of 4.')
+    // The list turning busy under a live lift is the same cancel.
+    rerender(<List items={flat('A', 'B', 'C', 'D')} onCommit={onCommit} disabled />)
+    expect(live()).toBe('Cancelled — the list changed.')
+    expect(grip('Bravo').getAttribute('aria-pressed')).toBeNull()
+    expect(row('B').hasAttribute('data-reorder')).toBe(false)
     expect(onCommit).not.toHaveBeenCalled()
+  })
+
+  it('data landing after the unit let go keeps the sentence that stands', () => {
+    vi.useFakeTimers()
+    const onCommit = vi.fn()
+    const { rerender } = render(<List items={flat('A', 'B', 'C')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.keyDown(grip('Bravo'), { key: ' ' })
+    fireEvent.keyDown(grip('Bravo'), { key: 'Escape' })
+    expect(live()).toBe('Cancelled. Bravo is back at position 2 of 3.')
+    rerender(<List items={flat('A', 'B', 'C', 'D')} onCommit={onCommit} />) // mid settle-back
+    expect(live()).toBe('Cancelled. Bravo is back at position 2 of 3.')
+    expect(row('B').style.transition).toBe('')
+    expect(row('B').hasAttribute('data-reorder')).toBe(false)
   })
 
   it('a busy list keeps its grips focusable but inert', () => {
@@ -373,6 +396,26 @@ describe('useReorder — pointer', () => {
     expect(row('B').hasAttribute('data-reorder')).toBe(false)
     expect(document.documentElement.classList.contains('reorder-active')).toBe(false)
     expect(live()).toBe('Dropped Alpha at position 3 of 4.')
+  })
+
+  it("a data change during the drop's settle cancels the commit and says the list changed", () => {
+    const onCommit = vi.fn()
+    const { rerender } = render(<List items={flat('A', 'B', 'C', 'D')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    expect(row('A').style.transform).toBe('translateY(80px)') // settling: still lifted
+    rerender(<List items={flat('A', 'B', 'C', 'D', 'E')} onCommit={onCommit} />)
+    expect(live()).toBe('Cancelled — the list changed.')
+    expect(row('A').style.transform).toBe('')
+    expect(row('A').hasAttribute('data-reorder')).toBe(false)
+    expect(document.documentElement.classList.contains('reorder-active')).toBe(false)
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(order()).toEqual(['A', 'B', 'C', 'D', 'E'])
   })
 
   it('clamps the unit to the list', () => {

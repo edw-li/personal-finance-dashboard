@@ -197,6 +197,7 @@ describe('announce / signatureOf / instructions', () => {
     expect(announce.cancel({ name: 'Housing', position: 11, count: 19 })).toBe(
       'Cancelled. Housing is back at position 11 of 19.',
     )
+    expect(announce.cancelChanged()).toBe('Cancelled — the list changed.')
     expect(REORDER_INSTRUCTIONS).toBe(
       'Press Space or Enter to pick up. Use the arrow keys to move, Home or End to jump, Space or Enter to drop, Escape to cancel.',
     )

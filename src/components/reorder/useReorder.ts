@@ -139,11 +139,18 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
   const sizes = rangeSizes(options.items)
   const [snap, setSnap] = useState<Snapshot<K>>({ liftedId: null, announcement: '', signature: null })
 
-  // Data landed under a live drag (spec §2.3): the lift is void. React state resets here, during
-  // render — the house's adjust-during-render pattern (CategoriesPanel's pendingOrder), so
-  // set-state-in-effect stays clean. The DOM half resets in the layout effect below.
+  // Data landed (or the list turned busy) under a live drag (spec §2.3.7): the lift is void. React
+  // state resets here, during render — the house's adjust-during-render pattern (CategoriesPanel's
+  // pendingOrder), so set-state-in-effect stays clean. The DOM half resets AT ONCE in the layout
+  // effect below: the rows have re-rendered, so there is nothing to ease home. A unit still lifted —
+  // a pointer drop settling into its gap included — says why it let go; once nothing is lifted (a
+  // settle-back under way) the sentence that stands stays.
   if (snap.signature !== null && snap.signature !== signature) {
-    setSnap({ liftedId: null, announcement: '', signature: null })
+    setSnap({
+      liftedId: null,
+      announcement: snap.liftedId !== null ? announce.cancelChanged() : snap.announcement,
+      signature: null,
+    })
   }
 
   const rows = useRef(new Map<K, HTMLElement>())

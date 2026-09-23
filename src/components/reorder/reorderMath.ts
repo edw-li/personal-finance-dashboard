@@ -185,6 +185,9 @@ export const announce = {
   dropUnmoved: ({ name }: AnnounceContext) => `Dropped ${name} where it was.`,
   cancel: ({ name, position, count }: AnnounceContext) =>
     `Cancelled. ${name} is back at position ${position} of ${count}.`,
+  /** Data landed (or the list turned busy) under a live lift: the rows have already re-rendered, so
+   *  "back at position …" would describe a list that no longer exists (spec §2.3.7). */
+  cancelChanged: () => 'Cancelled — the list changed.',
 }
 
 /** The grips' `aria-describedby` target (spec §8.2). */
