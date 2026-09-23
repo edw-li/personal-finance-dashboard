@@ -20,11 +20,28 @@ const categoryName = (id: number) => CATEGORIES.get(id) ?? `#${id}`
 describe('tieWords', () => {
   it('names the partner and the shared categories', () => {
     expect(tieWords([{ withCardIds: [3], categoryIds: [40, 41] }], cardName, categoryName)).toBe(
-      'ties Robinhood Gold on Dining, Groceries',
+      'ties Robinhood Gold on Dining and Groceries',
     )
   })
 
-  it('joins partner sets and several partners readably', () => {
+  // Production, 2026-09-23: Savor ties Robinhood Gold on four categories, three of them with
+  // other cards too. Listing every partner SET read as a paragraph; one partner card that ties
+  // it everywhere is the whole reason, and it is enough.
+  it('explains by the fewest partner cards, the one tying the most categories first', () => {
+    expect(
+      tieWords(
+        [
+          { withCardIds: [3], categoryIds: [40, 41] },
+          { withCardIds: [3, 5, 9], categoryIds: [42] },
+          { withCardIds: [3, 5], categoryIds: [44] },
+        ],
+        cardName,
+        categoryName,
+      ),
+    ).toBe('ties Robinhood Gold on Dining, Groceries, Travel and Streaming')
+  })
+
+  it('names a second partner only for the categories the first does not tie', () => {
     expect(
       tieWords(
         [
@@ -34,7 +51,7 @@ describe('tieWords', () => {
         cardName,
         categoryName,
       ),
-    ).toBe('ties Robinhood Gold on Dining; Autograph and Venture X on Travel')
+    ).toBe('ties Robinhood Gold on Dining; Autograph on Travel')
   })
 
   it('shortens a long category list to a count when asked', () => {
@@ -140,12 +157,18 @@ describe('closingSentence', () => {
     )
   })
 
-  it('costs: saves the net, and says when no limit is recorded', () => {
+  it('costs: saves the net, and says when no limit is recorded — with no utilization that cannot move', () => {
     expect(
-      closingSentence('costs', value({ annualFee: 130, net: -94.13 }), effect({ cardLimit: null, lineAfter: 115350 }), {
-        opened_on: null,
-        oldest: false,
-      }),
+      closingSentence(
+        'costs',
+        value({ annualFee: 130, net: -94.13 }),
+        effect({
+          cardLimit: null,
+          lineAfter: 115350,
+          utilization: { before: 0.042, after: 0.042, month: '2026-10-01' },
+        }),
+        { opened_on: null, oldest: false },
+      ),
     ).toBe(
       'Closing it saves $94.13 a year on these numbers: no credit limit is recorded for it, so the total line shown would not change.',
     )

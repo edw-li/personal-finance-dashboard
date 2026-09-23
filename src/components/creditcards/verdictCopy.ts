@@ -15,23 +15,59 @@ function andList(words: string[]): string {
   return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`
 }
 
-/** "ties Robinhood Gold on Dining, Groceries; Autograph on Travel" — null with nothing tied.
- *  `maxCategories` shortens each group's list to a count ("… and 3 more"). */
+/**
+ * "ties Robinhood Gold on Dining, Groceries and Streaming" — null with nothing tied.
+ *
+ * Explained by the FEWEST partner cards: the card tying the most of these categories is named
+ * first, and another partner only for categories the first does not tie. Every tie needs just
+ * one partner to be the reason ("without it, that spend earns the same on the other card"), and
+ * listing each partner SET read as a paragraph on production data (Savor ties Robinhood Gold on
+ * four categories, three of them with other cards as well). `maxCategories` shortens each
+ * partner's list to a count ("Dining, Groceries and 3 more").
+ */
 export function tieWords(
   groups: TieGroup[],
   cardName: (id: number) => string,
   categoryName: (id: number) => string,
   maxCategories = Infinity,
 ): string | null {
-  if (groups.length === 0) return null
-  const parts = groups.map((group) => {
-    const names = group.categoryIds.map(categoryName)
+  // Every tied category once, in the optimizer's order, and which partners tie each.
+  const order: number[] = []
+  const partnersOf = new Map<number, Set<number>>()
+  for (const group of groups)
+    for (const categoryId of group.categoryIds) {
+      if (!partnersOf.has(categoryId)) {
+        order.push(categoryId)
+        partnersOf.set(categoryId, new Set())
+      }
+      for (const partner of group.withCardIds) partnersOf.get(categoryId)?.add(partner)
+    }
+  if (order.length === 0) return null
+  const uncovered = new Set(order)
+  const parts: { partner: number; categories: number[] }[] = []
+  while (uncovered.size > 0) {
+    const coverage = new Map<number, number[]>()
+    for (const categoryId of order) {
+      if (!uncovered.has(categoryId)) continue
+      for (const partner of partnersOf.get(categoryId) ?? [])
+        coverage.set(partner, [...(coverage.get(partner) ?? []), categoryId])
+    }
+    const [partner, categories] = [...coverage.entries()].sort(
+      ([a, ca], [b, cb]) => cb.length - ca.length || cardName(a).localeCompare(cardName(b)),
+    )[0]
+    parts.push({ partner, categories })
+    for (const categoryId of categories) uncovered.delete(categoryId)
+  }
+  // Read in the categories' own order, whichever partner claimed them first.
+  parts.sort((a, b) => order.indexOf(a.categories[0]) - order.indexOf(b.categories[0]))
+  const phrase = ({ partner, categories }: { partner: number; categories: number[] }) => {
+    const names = categories.map(categoryName)
     const shown = names.slice(0, maxCategories)
     const rest = names.length - shown.length
-    const categories = rest > 0 ? `${shown.join(', ')} and ${rest} more` : shown.join(', ')
-    return `${andList(group.withCardIds.map(cardName))} on ${categories}`
-  })
-  return `ties ${parts.join('; ')}`
+    const list = rest > 0 ? `${shown.join(', ')} and ${rest} more` : andList(shown)
+    return `${cardName(partner)} on ${list}`
+  }
+  return `ties ${parts.map(phrase).join('; ')}`
 }
 
 /** A card's yearly net with a real minus sign: "−$94.13/yr", "+$116.87/yr", "$0.00/yr". */
@@ -95,7 +131,9 @@ export function closingSentence(
       ? 'no credit limit is recorded for it, so the total line shown would not change'
       : `total credit line ${formatCurrency(effect.lineBefore)} → ${formatCurrency(effect.lineAfter)}`
   const pct = (fraction: number) => formatPct(fraction, { signed: false })
-  const utilization = effect.utilization
+  // A card with no recorded limit moves no line, so it cannot move utilization either — a
+  // "4.2% → 4.2%" would only be noise.
+  const utilization = effect.cardLimit === null ? null : effect.utilization
   const usage =
     utilization === null
       ? ''
