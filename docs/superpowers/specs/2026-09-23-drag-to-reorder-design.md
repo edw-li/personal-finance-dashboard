@@ -618,8 +618,9 @@ quick-fixes batch's lane B2. R5 branches only after B2 has merged to local main.
   - Edit keeps sending the stored `sort_order` (full replace).
   - The rewards-matrix columns follow the new order by construction.
 - **Stable colours (`creditLineChartOptions.ts` + the one call site in `CreditCardsPage.tsx`):**
-  - The colour slot is the card's rank **by id** among the cards drawn, not its array position, so a
-    reorder never repaints a card.
+  - The colour slot is the card's rank **by id** among all the cards the page knows (not its array
+    position, and not only the cards drawn), so neither a reorder nor a person scope repaints a card.
+    (Amended 2026-09-23 while planning lane R5.)
   - Series, legend and tooltip order follow the user's order.
   - The 8-slot cap and `OTHER_SERIES_COLOR` rule is unchanged, applied to the id rank.
 - **Categories & weights (`CategoriesPanel.tsx`):**
