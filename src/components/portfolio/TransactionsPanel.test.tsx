@@ -686,6 +686,20 @@ describe('TransactionsPanel reorder — the grip column (spec §5)', () => {
     expect(live()).toBe('')
     expect(handle.getAttribute('aria-pressed')).toBeNull()
   })
+
+  it('keeps the grips inert while the page revalidates the rows it shows', () => {
+    // A scope painted from cache, or a reload after a change: a drop now could save an order the
+    // landing data replaces.
+    const { rerender } = renderLedger({ reloading: true })
+    const handle = grip(VOO_BUY)
+    expect(handle.getAttribute('aria-disabled')).toBe('true')
+    handle.focus()
+    fireEvent.keyDown(handle, { key: ' ' })
+    expect(handle.getAttribute('aria-pressed')).toBeNull()
+    expect(live()).toBe('')
+    rerender({ reloading: false })
+    expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull()
+  })
 })
 
 /** The keyboard path (spec §2.4): focus the grip, Space lifts, `key` moves one place, Space

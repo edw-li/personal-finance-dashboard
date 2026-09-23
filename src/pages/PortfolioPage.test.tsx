@@ -1017,6 +1017,44 @@ describe('PortfolioPage — shell scope', () => {
       scrollBy.mockRestore()
     }
   })
+
+  // A scope painted from cache is still revalidating: a drag there could save an order the
+  // landing data replaces, so the ledger's grips wait for the page's own dim to lift.
+  it('keeps the ledger grips inert while the page revalidates a cached paint', async () => {
+    const second: TransactionOut = {
+      ...TRANSACTIONS[0],
+      id: 12,
+      account: 'Joint Taxable',
+      sort_index: 10,
+    }
+    setSnapshot('portfolio:all', {
+      holdings: holdingsOut(),
+      securities: SECURITIES,
+      accounts: ACCOUNTS,
+      primaryName: 'Me',
+      transactions: [TRANSACTIONS[0], second],
+      dividends: DIVIDENDS,
+      dividendEvents: [],
+      byType: allocationOut('type'),
+      byAccount: allocationOut('account'),
+      sparklines: {},
+      history: HISTORY,
+      realized: REALIZED,
+      refreshStatus: STATUS,
+    })
+    vi.mocked(fetchTransactions).mockResolvedValue([TRANSACTIONS[0], second])
+    let land: (value: HoldingsResponse) => void = () => {}
+    vi.mocked(fetchHoldings).mockReturnValue(
+      new Promise<HoldingsResponse>((resolve) => {
+        land = resolve
+      }),
+    )
+    renderPage('/portfolio?section=manage')
+    const handle = screen.getByRole('button', { name: 'Reorder VOO buy, Fidelity Brokerage' })
+    expect(handle.getAttribute('aria-disabled')).toBe('true')
+    land(holdingsOut())
+    await waitFor(() => expect(handle.getAttribute('aria-disabled')).toBeNull())
+  })
 })
 
 // ── Shared card grammar (2026-09-13 polish §12, M3) ───────────────────────────────────────

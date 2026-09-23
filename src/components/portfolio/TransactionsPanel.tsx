@@ -204,6 +204,7 @@ export default function TransactionsPanel({
   accounts = null,
   primaryName = null,
   owner = null,
+  reloading = false,
   onChanged,
 }: {
   securities: SecurityOut[]
@@ -221,6 +222,10 @@ export default function TransactionsPanel({
    *  against exactly the rows this scope lists and moves them among their own slots. Null is
    *  the whole household. */
   owner?: OwnerScope
+  /** True while the page revalidates what it shows — a scope painted from cache, the reload
+   *  after a change (PortfolioPage's `reloading`, the frame's dim). The grips go inert: a drop
+   *  in that window could save an order the landing rows replace. */
+  reloading?: boolean
   onChanged: () => void
 }) {
   const [form, setForm] = useState<FormState>(EMPTY)
@@ -367,8 +372,9 @@ export default function TransactionsPanel({
       return txn === undefined ? 'this transaction' : rowName(txn, tickerOf(txn))
     },
     // Any request of the panel in flight — a save, a delete, a reorder — leaves the grips
-    // focusable but inert (lane R0 consumer rule 4), so a second drop cannot race the first.
-    disabled: busy,
+    // focusable but inert (lane R0 consumer rule 4), so a second drop cannot race the first; so
+    // does the page revalidating the rows, so a drop never saves an order about to be replaced.
+    disabled: busy || reloading,
     onCommit: saveOrder,
   })
 
