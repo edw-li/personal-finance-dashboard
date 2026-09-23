@@ -113,6 +113,35 @@ describe('holdPosition', () => {
     expect(window.scrollBy).not.toHaveBeenCalled()
   })
 
+  // Code review 7: a background tab pauses animation frames. The hold must neither keep the page's
+  // scroll anchoring off while it waits, nor apply one stale correction when the tab comes back.
+  describe('a tab that goes to the background', () => {
+    afterEach(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    })
+
+    it('corrects nothing once its time is up, however late the frame arrives', () => {
+      holdPosition(el, 500)
+      top = 300
+      now = 5000 // the first frame after the tab came back
+      flush()
+      expect(window.scrollBy).not.toHaveBeenCalled()
+      expect(frames).toHaveLength(0)
+      expect(document.documentElement.style.overflowAnchor).toBe('')
+    })
+
+    it('lets go the moment the tab is hidden, handing anchoring back', () => {
+      holdPosition(el, 500)
+      expect(document.documentElement.style.overflowAnchor).toBe('none')
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(document.documentElement.style.overflowAnchor).toBe('')
+      top = 300
+      flush()
+      expect(window.scrollBy).not.toHaveBeenCalled()
+    })
+  })
+
   // Code review: an element that does not move with the page — sticky while pinned (Projection's
   // chart column under its band), fixed, in the top layer (the Expand dialog) — keeps its drift
   // whatever the window does, so the hold re-applied it every frame for 600 ms and ran the page

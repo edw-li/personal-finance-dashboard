@@ -65,16 +65,28 @@ export function holdPosition(
   const resumeAnchoring = suspendScrollAnchoring()
   let frame = 0
   let done = false
+  // A background tab pauses frames: let go at once rather than keep the page's anchoring off
+  // until the reader comes back (code review 7).
+  const onVisibility = () => {
+    if (document.visibilityState === 'hidden') stop()
+  }
   const stop = () => {
     if (done) return
     done = true
     cancelAnimationFrame(frame)
     resumeAnchoring()
     for (const type of INPUT_EVENTS) window.removeEventListener(type, stop, true)
+    document.removeEventListener('visibilitychange', onVisibility)
   }
   const tick = () => {
     if (done) return
-    if (!element.isConnected || Math.abs(window.scrollY - expectedY) >= 1) {
+    // Time is checked BEFORE correcting: a frame that arrives late — the tab came back — is
+    // past the hold, and one stale correction then would move a page the reader has moved on from.
+    if (
+      performance.now() >= until ||
+      !element.isConnected ||
+      Math.abs(window.scrollY - expectedY) >= 1
+    ) {
       stop()
       return
     }
@@ -97,15 +109,12 @@ export function holdPosition(
         return
       }
     }
-    if (performance.now() >= until) {
-      stop()
-      return
-    }
     frame = requestAnimationFrame(tick)
   }
   for (const type of INPUT_EVENTS) {
     window.addEventListener(type, stop, { capture: true, passive: true })
   }
+  document.addEventListener('visibilitychange', onVisibility)
   frame = requestAnimationFrame(tick)
   return stop
 }
