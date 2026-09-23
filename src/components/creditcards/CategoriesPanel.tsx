@@ -390,7 +390,9 @@ export default function CategoriesPanel({
         <InfoHint text="Matrix rows. Weight = estimated annual spend: blank uses the mapped spending category's trailing-12-month figure; a typed amount overrides it. Pin forces the 'use which card' answer for a row." />
       </h2>
       <FeedBanner error={error} />
-      {categories.length === 0 && (
+      {/* The rows on screen decide, as in CardsPanel: the empty note and the table read
+          `ordered` — the list a reorder layer may be showing — never the props beneath it. */}
+      {ordered.length === 0 && (
         <p className="empty-note">
           No categories yet.{' '}
           <button type="button" className="button" disabled={busy} onClick={seed}>
@@ -472,7 +474,7 @@ export default function CategoriesPanel({
           )}
         </div>
       </form>
-      {categories.length > 0 && (
+      {ordered.length > 0 && (
         <>
           {/* Once per list and outside the table — a <span> is not a valid child of one (lane
               R0 consumer rule 6). Every grip points its aria-describedby at the instructions. */}
