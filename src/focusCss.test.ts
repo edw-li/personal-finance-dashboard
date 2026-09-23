@@ -77,7 +77,7 @@ describe('the ring inside a clipping scroll container (index.css)', () => {
       '.button:focus-visible',
       '.row-actions button:focus-visible',
       '.attention-item:focus-visible',
-      '.drag-handle:focus-visible',
+      '.reorder-grip:focus-visible',
     ]) {
       expect(compareSpecificity(ours, specificity(theirs)), theirs).toBeGreaterThan(0)
     }

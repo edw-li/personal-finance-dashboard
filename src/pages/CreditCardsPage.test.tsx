@@ -1,6 +1,8 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type {
   CreditCardOut,
   RewardCategoryOut,
@@ -28,6 +30,9 @@ vi.mock('../api/creditCards', () => ({
   createRewardCategory: vi.fn(),
   updateRewardCategory: vi.fn(),
   deleteRewardCategory: vi.fn(),
+  // The two reorder PUTs (lane R1). Every reorder test answers them or leaves them pending.
+  reorderCreditCards: vi.fn(),
+  reorderRewardCategories: vi.fn(),
 }))
 vi.mock('../api/spending', () => ({ fetchCategories: vi.fn(), fetchMatrix: vi.fn() }))
 vi.mock('../api/netWorth', () => ({
@@ -70,6 +75,7 @@ import {
   fetchRewardCategories,
   fetchRewardRates,
   putRewardRates,
+  reorderRewardCategories,
   updateCardCredit,
   updateCreditCard,
   updateRewardCategory,
@@ -197,6 +203,50 @@ function matrixRow(name: string): HTMLElement {
   return cell.closest('tr') as HTMLElement
 }
 
+// ── Drag-to-reorder helpers (2026-09-23 drag-to-reorder spec §7) ─────────────────────────────
+
+/** The page inside a ToastProvider, on Manage — the reorder toasts and their Undo live there. */
+function renderManage() {
+  return render(
+    <MemoryRouter initialEntries={['/credit-cards?section=manage']}>
+      <ToastProvider>
+        <CreditCardsPage />
+      </ToastProvider>
+    </MemoryRouter>,
+  )
+}
+
+/** A row's grip, by the name it is announced with ("Reorder Venture X"). */
+const grip = (name: string) => screen.getByRole('button', { name: `Reorder ${name}` })
+
+/** The keyboard path (spec §2.4): focus the grip, Space lifts, `key` moves one place, Space
+ *  drops. */
+function keyboardMove(name: string, key: 'ArrowUp' | 'ArrowDown'): void {
+  grip(name).focus()
+  fireEvent.keyDown(grip(name), { key: ' ' })
+  fireEvent.keyDown(grip(name), { key })
+  fireEvent.keyDown(grip(name), { key: ' ' })
+}
+
+/** A table's row ids, top to bottom, as rendered. */
+const rowIds = (table: '.roster-table' | '.categories-table') =>
+  [...document.querySelectorAll(`${table} tbody tr`)].map((row) => row.getAttribute('data-reorder-id'))
+
+/** A tiny server for the reward categories: the GET answers the stored order; the reorder PUT
+ *  stores the order it is sent — renumbered 0…n−1, as lane R1's route does — and answers with it. */
+function serveCategories(initial: RewardCategoryOut[] = CATEGORIES): void {
+  let stored = initial
+  vi.mocked(fetchRewardCategories).mockImplementation(async () => stored)
+  vi.mocked(reorderRewardCategories).mockImplementation(async (ids) => {
+    const byId = new Map(stored.map((category) => [category.id, category]))
+    stored = ids.flatMap((id, index) => {
+      const category = byId.get(id)
+      return category === undefined ? [] : [{ ...category, sort_order: index }]
+    })
+    return stored
+  })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   clearSnapshots()
@@ -205,6 +255,9 @@ beforeEach(() => {
   // next test's page before it has rendered a single chip.
   localStorage.clear()
   seedHappyPath()
+  // jsdom has no layout: a keyboard lift measures every row at y=0, so lane R0's hook asks the
+  // page to scroll the landing slot clear of the top edge — and jsdom implements no scrollBy.
+  window.scrollBy = vi.fn()
 })
 
 /** The six-fetch payload the page stores under its snapshot key. */
@@ -622,40 +675,31 @@ describe('CreditCardsPage', () => {
     expect(categoriesRow('Groceries').textContent).toContain('auto · from 2 entered months')
   })
 
-  it('reordering a category is optimistic and PATCHes only the rows that moved', async () => {
-    vi.mocked(updateRewardCategory).mockResolvedValue(CATEGORIES[0])
+  it('reordering a category is one PUT of the whole new order, and a second move before the refetch diffs against the optimistic order', async () => {
+    serveCategories()
     renderPage('/credit-cards?section=manage')
     await screen.findByText('Categories & weights')
-    // Groceries (index 0) moves down one via the keyboard path of the drag handle.
-    fireEvent.keyDown(
-      screen.getByRole('button', { name: 'Reorder Groceries — drag, or arrow keys' }),
-      { key: 'ArrowDown' },
-    )
+    // The page's reload never lands in this test: every move below has only the rows on screen
+    // to go by, never the props the page loaded with.
+    vi.mocked(fetchRewardCategories).mockReturnValue(new Promise<never>(() => {}))
+    // Lift-and-drop from the keyboard (2026-09-23 drag-to-reorder spec §2.4): Space lifts
+    // Groceries, ↓ moves it one place, Space drops it.
+    keyboardMove('Groceries', 'ArrowDown')
+    // ONE PUT, carrying every reward category in the new order (spec §7).
+    expect(reorderRewardCategories).toHaveBeenCalledTimes(1)
+    expect(reorderRewardCategories).toHaveBeenLastCalledWith([11, 10, 12])
     // Optimistic: the list re-renders in the new order before any refetch lands.
-    const handles = screen
-      .getAllByRole('button', { name: /^Reorder / })
-      .map((b) => b.getAttribute('aria-label'))
-    expect(handles[0]).toBe('Reorder Dining — drag, or arrow keys')
-    expect(handles[1]).toBe('Reorder Groceries — drag, or arrow keys')
-    // Persistence: sort_order = index, and ONLY the two moved rows go on the wire
-    // (Rent keeps sort_order 2 and is skipped).
-    await waitFor(() => expect(updateRewardCategory).toHaveBeenCalledTimes(2))
-    expect(vi.mocked(updateRewardCategory).mock.calls).toEqual([
-      [11, { sort_order: 0 }],
-      [10, { sort_order: 1 }],
-    ])
-    // Regression (live-check find): a SECOND move before any refetch must diff against
-    // the just-persisted sort_orders, not the stale wire values — moving back writes
-    // both rows again rather than silently no-oping.
-    fireEvent.keyDown(
-      screen.getByRole('button', { name: 'Reorder Groceries — drag, or arrow keys' }),
-      { key: 'ArrowUp' },
-    )
-    await waitFor(() => expect(updateRewardCategory).toHaveBeenCalledTimes(4))
-    expect(vi.mocked(updateRewardCategory).mock.calls.slice(2)).toEqual([
-      [10, { sort_order: 0 }],
-      [11, { sort_order: 1 }],
-    ])
+    expect(rowIds('.categories-table')).toEqual(['11', '10', '12'])
+    // The grips wake when the PUT answers.
+    await waitFor(() => expect(grip('Groceries').getAttribute('aria-disabled')).toBeNull())
+    // Regression (the live-check find this test was first written for): a SECOND move before
+    // the refetch lands must diff against the optimistic order, not the loaded one — moving
+    // Groceries back up is a real move, never a silent no-op.
+    keyboardMove('Groceries', 'ArrowUp')
+    expect(reorderRewardCategories).toHaveBeenCalledTimes(2)
+    expect(reorderRewardCategories).toHaveBeenLastCalledWith([10, 11, 12])
+    // The per-row PATCH chain is gone: a reorder never PATCHes a row.
+    expect(updateRewardCategory).not.toHaveBeenCalled()
   })
 
   it('empty state: no categories → the seed button renders', async () => {
@@ -1039,5 +1083,102 @@ describe('CreditCardsPage — the credit-line colours follow the card, not its p
     fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
     await waitFor(() => expect(line().getAttribute('data-series-names')).toBe('RH Gold'))
     expect(line().getAttribute('data-series-colors')).toBe(PALETTE[2])
+  })
+})
+
+describe('CreditCardsPage — reorder Categories & weights (2026-09-23 drag-to-reorder spec §7)', () => {
+  beforeEach(() => {
+    vi.mocked(reorderRewardCategories).mockReset()
+  })
+
+  it('puts a grip first on every row — hidden ones too — on a reorderable table', async () => {
+    // One range, no carried rows: lane R0's development-only contract check stays silent.
+    const errors = vi.spyOn(console, 'error')
+    onTestFinished(() => errors.mockRestore())
+    serveCategories([CATEGORIES[0], CATEGORIES[1], { ...CATEGORIES[2], is_active: false }])
+    renderManage()
+    await screen.findByText('Categories & weights')
+    const table = document.querySelector('.categories-table') as HTMLTableElement
+    expect(table.className).toBe('data-table categories-table reorder-table')
+    const head = table.querySelector('thead tr')?.firstElementChild
+    expect(head?.className).toBe('reorder-grip-cell')
+    expect(head?.getAttribute('aria-hidden')).toBe('true')
+    for (const row of table.querySelectorAll('tbody tr')) {
+      expect(row.firstElementChild?.className).toBe('reorder-grip-cell')
+    }
+    expect(
+      [...table.querySelectorAll('tbody .reorder-grip')].map((button) =>
+        button.getAttribute('aria-label'),
+      ),
+    ).toEqual(['Reorder Groceries', 'Reorder Dining', 'Reorder Rent'])
+    // A hidden row keeps its place and moves like any other (spec §9).
+    expect((grip('Rent') as HTMLButtonElement).disabled).toBe(false)
+    // The native drag is gone: no row can be picked up by the browser itself.
+    expect(table.querySelectorAll('[draggable]')).toHaveLength(0)
+    // One description for the list's grips, outside the capped scroller's table.
+    const instructions = document.getElementById(
+      grip('Groceries').getAttribute('aria-describedby') ?? '',
+    )
+    expect(instructions?.textContent).toBe(
+      'Press Space or Enter to pick up. Use the arrow keys to move, Home or End to jump, Space or Enter to drop, Escape to cancel.',
+    )
+    expect(table.contains(instructions)).toBe(false)
+    expect(errors.mock.calls.filter(([first]) => String(first).startsWith('useReorder:'))).toEqual([])
+  })
+
+  it('keeps the grips focusable but inert while any request of the panel is in flight', async () => {
+    serveCategories()
+    // A hide that never settles: the panel stays busy for the rest of the test.
+    vi.mocked(updateRewardCategory).mockReturnValueOnce(new Promise<never>(() => {}))
+    renderManage()
+    await screen.findByText('Categories & weights')
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Rent' }))
+    const handle = grip('Dining') as HTMLButtonElement
+    expect(handle.getAttribute('aria-disabled')).toBe('true')
+    expect(handle.disabled).toBe(false)
+    handle.focus()
+    fireEvent.keyDown(handle, { key: ' ' })
+    expect(handle.getAttribute('aria-pressed')).toBeNull()
+    expect(reorderRewardCategories).not.toHaveBeenCalled()
+  })
+
+  it('flashes the moved row, says "Moved Dining", and the page reloads the list', async () => {
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Dining', 'ArrowUp')
+    expect(await screen.findByText('Moved Dining')).toBeTruthy()
+    expect(reorderRewardCategories).toHaveBeenCalledWith([11, 10, 12])
+    expect(
+      document
+        .querySelector('.categories-table tr[data-reorder-id="11"]')
+        ?.hasAttribute('data-reorder-saved'),
+    ).toBe(true)
+    // The mount's fetch, then the reload the save asked for.
+    expect(fetchRewardCategories).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
+    expect(rowIds('.categories-table')).toEqual(['11', '10', '12'])
+    // Focus stays on the moved grip through the save (lane R0 restores it after the drop).
+    expect(document.activeElement).toBe(grip('Dining'))
+  })
+})
+
+describe('Credit cards — the native drag is gone (2026-09-23 drag-to-reorder spec §7 acceptance)', () => {
+  const folder = path.resolve(__dirname, '../components/creditcards')
+
+  it('no source under src/components/creditcards sets draggable or handles an HTML5 drag event', () => {
+    const offenders = readdirSync(folder)
+      .filter((name) => /\.tsx?$/.test(name))
+      .filter((name) =>
+        /\bdraggable\b|\bonDrag\w*|\bonDrop\b|dataTransfer/.test(
+          readFileSync(path.join(folder, name), 'utf8'),
+        ),
+      )
+    expect(offenders).toEqual([])
+  })
+
+  it('categories.css keeps no rule of the retired drag', () => {
+    const css = readFileSync(path.join(folder, 'categories.css'), 'utf8')
+    expect(css).not.toMatch(/\.drag-handle|\.drag-over|\.drag-cell|\.is-dragging/)
   })
 })

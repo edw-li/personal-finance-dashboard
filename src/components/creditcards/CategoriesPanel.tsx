@@ -1,13 +1,16 @@
-import { useRef, useState } from 'react'
-import { GripVertical } from 'lucide-react'
+import { useState } from 'react'
 import { ApiError } from '../../api/client'
 import {
   createRewardCategory,
   deleteRewardCategory,
+  reorderRewardCategories,
   updateRewardCategory,
 } from '../../api/creditCards'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
+import DragHandle from '../reorder/DragHandle'
+import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
+import { useReorder } from '../reorder/useReorder'
 import { useToast } from '../ToastProvider'
 import type { CategoryOut, CreditCardOut, RewardCategoryOut } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
@@ -78,23 +81,27 @@ export default function CategoriesPanel({
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  // Drag-reorder state. pendingOrder renders IMMEDIATELY on drop (optimistic) and is
-  // retired the moment fresh props arrive from the refetch — the adjust-during-render
-  // pattern below, not an effect (react-hooks/set-state-in-effect stays clean).
+  // Drag to reorder (2026-09-23 drag-to-reorder spec §7). Two layers sit over the page's
+  // `categories`, and only a reorder sets either:
+  //   pendingOrder — the dropped order, from the moment the grip lets go until the PUT
+  //                  answers (optimistic), cleared either way when it does;
+  //   savedOrder   — the server's answer, until the page's next fetch replaces `categories`
+  //                  (retired during render — the adjust-during-render pattern below, not an
+  //                  effect, so react-hooks/set-state-in-effect stays clean).
+  // A reload that lands mid-save never flashes a row back to where it came from, and a
+  // second move before the reload diffs against the rows on screen, never the stale props
+  // (the live-check find the page test pins).
   const [pendingOrder, setPendingOrder] = useState<RewardCategoryOut[] | null>(null)
+  const [savedOrder, setSavedOrder] = useState<RewardCategoryOut[] | null>(null)
   const [lastCategories, setLastCategories] = useState(categories)
-  const [dragIndex, setDragIndex] = useState<number | null>(null)
-  const [overIndex, setOverIndex] = useState<number | null>(null)
-  // Only the grip arms a row drag — a click-drag on Edit or a text selection must not
-  // pick the row up (the standard drag-handle recipe).
-  const dragArmed = useRef(false)
   const toast = useToast()
 
   if (lastCategories !== categories) {
     setLastCategories(categories)
-    setPendingOrder(null)
+    setSavedOrder(null)
   }
-  const ordered = pendingOrder ?? categories
+  const ordered = pendingOrder ?? savedOrder ?? categories
+  const categoryById = new Map(ordered.map((category) => [category.id, category]))
 
   const activeCards = cards.filter((c) => c.is_active)
   const spendingName = new Map(spendingCategories.map((c) => [c.id, c.name]))
@@ -206,41 +213,44 @@ export default function CategoriesPanel({
       .finally(() => setBusy(false))
   }
 
-  /** Persist a new order: sort_order = list index, PATCHing only rows whose stored
-   *  value differs (an adjacent swap writes exactly two rows). Sequential chain — the
-   *  seed's idiom. The refetch re-orders the matrix too (GET orders by sort_order). */
-  const persistOrder = (next: RewardCategoryOut[]) => {
-    // The optimistic rows must CARRY the sort_orders being persisted: a second move
-    // before the refetch lands diffs against these fields, and stale values would make
-    // it a silent no-op (found by the live browser check, pinned in the page test).
-    setPendingOrder(next.map((category, index) => ({ ...category, sort_order: index })))
+  // One drop, one PUT (spec §7): every reward category, hidden ones included, in its new
+  // order. The server renumbers them in ONE transaction, so a failure can no longer leave a
+  // half-saved order (the per-row PATCH chain this replaces could). The matrix rows follow
+  // once the page reloads. `reorder` is read only when the PUT answers, long after the render
+  // that declares it below has returned.
+  const saveOrder = (next: number[], moved: number) => {
+    const category = categoryById.get(moved)
+    if (category === undefined) return // the hook commits only ids it was handed
+    // Synchronously: the hook calls onCommit inside flushSync, so the new DOM order and the
+    // cleared drag transforms land in one frame (lane R0 consumer rule 3).
+    setPendingOrder(
+      next.flatMap((id) => {
+        const row = categoryById.get(id)
+        return row === undefined ? [] : [row]
+      }),
+    )
     setBusy(true)
-    setError(null)
-    next
-      .reduce(
-        (chain, category, index) =>
-          category.sort_order === index
-            ? chain
-            : chain.then(() =>
-                updateRewardCategory(category.id, { sort_order: index }).then(() => undefined),
-              ),
-        Promise.resolve<undefined>(undefined),
-      )
-      .then(() => onChanged())
-      .catch((err: unknown) => {
-        setPendingOrder(null) // snap back to the server's truth
-        setError(message(err, 'Reorder failed'))
+    reorderRewardCategories(next)
+      .then((saved) => {
+        setPendingOrder(null)
+        setSavedOrder(saved)
+        onChanged()
+        reorder.markSaved(moved)
+        toast.success(`Moved ${category.name}`)
       })
+      .catch(() => setPendingOrder(null))
       .finally(() => setBusy(false))
   }
 
-  const moveRow = (from: number, to: number) => {
-    if (busy || to < 0 || to >= ordered.length || from === to) return
-    const next = [...ordered]
-    const [row] = next.splice(from, 1)
-    next.splice(to, 0, row)
-    persistOrder(next)
-  }
+  const reorder = useReorder({
+    items: ordered.map((category) => ({ id: category.id })),
+    labelOf: (id) => categoryById.get(id)?.name ?? 'this category',
+    // Any request of the panel in flight — a save, a hide, a delete, the seed, a reorder —
+    // leaves the grips focusable but inert (lane R0 consumer rule 4), so a drop never races
+    // a save.
+    disabled: busy,
+    onCommit: saveOrder,
+  })
 
   const seed = () => {
     setBusy(true)
@@ -377,140 +387,91 @@ export default function CategoriesPanel({
         </div>
       </form>
       {categories.length > 0 && (
-        // Capped + scrollable past ~10 rows (sticky header): the row list grows with
-        // every niche MCC category, and the rest of the page must stay reachable
-        // (wherever this panel sits — the 2026-08-31 reorder moved it below the matrix).
-        <div className="categories-scroll">
-          <table className="data-table categories-table">
-            <thead>
-              <tr>
-                <th className="drag-cell" aria-hidden="true" />
-                <th>Category</th>
-                <th className="num">Weight ($/yr est.)</th>
-                <th>Mapped spending category</th>
-                <th>Pinned card</th>
-                <th>Status</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {ordered.map((category, index) => (
-                <tr
-                  key={category.id}
-                  draggable={!busy}
-                  onDragStart={(e) => {
-                    if (!dragArmed.current) {
-                      e.preventDefault() // only the grip picks a row up
-                      return
-                    }
-                    dragArmed.current = false
-                    setDragIndex(index)
-                    e.dataTransfer.effectAllowed = 'move'
-                    e.dataTransfer.setData('text/plain', String(index)) // Firefox needs data
-                  }}
-                  onDragOver={(e) => {
-                    if (dragIndex === null) return
-                    e.preventDefault()
-                    e.dataTransfer.dropEffect = 'move'
-                    setOverIndex(index)
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault()
-                    if (dragIndex !== null) moveRow(dragIndex, index)
-                    setDragIndex(null)
-                    setOverIndex(null)
-                  }}
-                  onDragEnd={() => {
-                    dragArmed.current = false
-                    setDragIndex(null)
-                    setOverIndex(null)
-                  }}
-                  className={
-                    [
-                      category.id === editingId ? 'is-editing' : '',
-                      dragIndex === index ? 'is-dragging' : '',
-                      overIndex === index && dragIndex !== null && dragIndex !== index
-                        ? 'drag-over'
-                        : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' ') || undefined
-                  }
-                >
-                  <td className="drag-cell">
-                    <button
-                      type="button"
-                      className="drag-handle"
-                      aria-label={`Reorder ${category.name} — drag, or arrow keys`}
-                      disabled={busy}
-                      onMouseDown={() => {
-                        dragArmed.current = true
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'ArrowUp') {
-                          e.preventDefault()
-                          moveRow(index, index - 1)
-                        }
-                        if (e.key === 'ArrowDown') {
-                          e.preventDefault()
-                          moveRow(index, index + 1)
-                        }
-                      }}
-                    >
-                      <GripVertical size={14} aria-hidden="true" />
-                    </button>
-                  </td>
-                  <td>{category.name}</td>
-                  <td className="num">{weightCell(category)}</td>
-                  <td>
-                    {category.spending_category_id === null
-                      ? '—'
-                      : (spendingName.get(category.spending_category_id) ?? '—')}
-                  </td>
-                  <td>
-                    {category.pinned_card_id === null
-                      ? '—'
-                      : (cardName.get(category.pinned_card_id) ?? '—')}
-                  </td>
-                  <td>
-                    <span className="badge">{category.is_active ? 'Active' : 'Hidden'}</span>
-                  </td>
-                  <td className="row-actions">
-                    <button
-                      type="button"
-                      className="button"
-                      aria-label={`Edit ${category.name}`}
-                      disabled={busy}
-                      onClick={() => startEdit(category)}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="button"
-                      aria-label={
-                        category.is_active ? `Hide ${category.name}` : `Show ${category.name}`
-                      }
-                      disabled={busy}
-                      onClick={() => toggleActive(category)}
-                    >
-                      {category.is_active ? 'Hide' : 'Show'}
-                    </button>
-                    <button
-                      type="button"
-                      className="button"
-                      aria-label={`Delete ${category.name}`}
-                      disabled={busy}
-                      onClick={() => remove(category)}
-                    >
-                      Delete
-                    </button>
-                  </td>
+        <>
+          {/* Once per list and outside the table — a <span> is not a valid child of one (lane
+              R0 consumer rule 6). Every grip points its aria-describedby at the instructions. */}
+          <ReorderInstructions id={reorder.instructionsId} />
+          <ReorderLiveRegion text={reorder.announcement} />
+          {/* Capped + scrollable past ~10 rows (sticky header): the row list grows with every
+              niche MCC category, and the rest of the page must stay reachable (wherever this
+              panel sits — the 2026-08-31 reorder moved it below the matrix). A drag near its
+              edge scrolls the box; a keyboard move keeps the landing row in view (lane R0). */}
+          <div className="categories-scroll">
+            <table className="data-table categories-table reorder-table">
+              <thead>
+                <tr>
+                  <th className="reorder-grip-cell" aria-hidden="true" />
+                  <th>Category</th>
+                  <th className="num">Weight ($/yr est.)</th>
+                  <th>Mapped spending category</th>
+                  <th>Pinned card</th>
+                  <th>Status</th>
+                  <th />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {ordered.map((category) => (
+                  <tr
+                    key={category.id}
+                    {...reorder.itemProps(category.id)}
+                    className={category.id === editingId ? 'is-editing' : undefined}
+                  >
+                    {/* Every row, hidden ones included, keeps its place and moves (spec §9). */}
+                    <td className="reorder-grip-cell">
+                      <DragHandle name={category.name} {...reorder.handleProps(category.id)} />
+                    </td>
+                    <td>{category.name}</td>
+                    <td className="num">{weightCell(category)}</td>
+                    <td>
+                      {category.spending_category_id === null
+                        ? '—'
+                        : (spendingName.get(category.spending_category_id) ?? '—')}
+                    </td>
+                    <td>
+                      {category.pinned_card_id === null
+                        ? '—'
+                        : (cardName.get(category.pinned_card_id) ?? '—')}
+                    </td>
+                    <td>
+                      <span className="badge">{category.is_active ? 'Active' : 'Hidden'}</span>
+                    </td>
+                    <td className="row-actions">
+                      <button
+                        type="button"
+                        className="button"
+                        aria-label={`Edit ${category.name}`}
+                        disabled={busy}
+                        onClick={() => startEdit(category)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="button"
+                        aria-label={
+                          category.is_active ? `Hide ${category.name}` : `Show ${category.name}`
+                        }
+                        disabled={busy}
+                        onClick={() => toggleActive(category)}
+                      >
+                        {category.is_active ? 'Hide' : 'Show'}
+                      </button>
+                      <button
+                        type="button"
+                        className="button"
+                        aria-label={`Delete ${category.name}`}
+                        disabled={busy}
+                        onClick={() => remove(category)}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </section>
   )
