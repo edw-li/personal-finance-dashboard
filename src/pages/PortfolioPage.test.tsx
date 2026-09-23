@@ -810,27 +810,53 @@ it('renders the panels real empty notes for an owner who holds nothing', async (
 // from the OWNER-FILTERED holdings — plotting a person's total at the end of the household
 // series drew a fake cliff. The ping (and its dashed connector, which rides the Live
 // series' markLine) renders only on the All view.
-// ── The performance lede (2026-09-23 spec §C8) ───────────────────────────────────────────
+// ── The performance lede (2026-09-23 spec §C8, review round 1) ────────────────────────────
 // The chart had the honest benchmark and hid its answer; the card now states it, over the
-// window the chart is showing. HISTORY: 4,400 → 4,500 against the same deposits in VOO
-// 4,350 → 4,480 — thirty dollars behind.
-it('states the gap to the same deposits in VOO above the chart, following the range chip', async () => {
+// window the chart is showing. Fifteen months whose legs start level at 4,000.00. From Sep 1,
+// 2025 the starting-balance leg grows ×1.08 (4,100 → 4,428), so the portfolio's $100 lead
+// that day would have become $108 in VOO; it ends $50 BEHIND the same deposits instead:
+// −50 − 108 = $158 behind the same money over 1Y, $50 behind the same deposits over All.
+const LONG_HISTORY: PortfolioHistory = {
+  dates: ['2025-06-02', '2025-09-01', '2026-08-24'],
+  market_value: ['4000.00', '4300.00', '4500.00'],
+  cost_basis: ['4000.00', '4100.00', '4114.00'],
+  sp500: ['4000.00', '4100.00', '4428.00'],
+  benchmark: ['4000.00', '4200.00', '4550.00'],
+}
+it('states the gap to the same money in VOO above the chart, following the range chip', async () => {
+  vi.mocked(fetchHistory).mockResolvedValue(LONG_HISTORY)
   renderPage()
   const card = () => screen.getByText('Performance').closest('section') as HTMLElement
   // The scope row opens on 1Y, so the sentence says which window it measured.
   await waitFor(() =>
     expect(card().querySelector('.chart-lede')?.textContent).toBe(
-      'Over 1Y: behind the same deposits in VOO by $30',
+      'Over 1Y: behind the same money in VOO by $158',
     ),
   )
   // The figure wears the strip's bold ink; the words stay muted.
-  expect(card().querySelector('.chart-lede b')?.textContent).toBe('$30')
+  expect(card().querySelector('.chart-lede b')?.textContent).toBe('$158')
   fireEvent.click(
     within(screen.getByRole('group', { name: 'Time range' })).getByRole('button', { name: 'All' }),
   )
   await waitFor(() =>
     expect(card().querySelector('.chart-lede')?.textContent).toBe(
-      'Behind the same deposits in VOO by $30',
+      'Behind the same deposits in VOO by $50',
+    ),
+  )
+})
+
+it('says since when the history is shorter than the range chip', async () => {
+  // HISTORY is two weeks from Aug 17, 2026, legs level at the start: the 1Y chip cannot claim a year.
+  vi.mocked(fetchHistory).mockResolvedValue({
+    ...HISTORY,
+    sp500: ['4400.00', '4550.00'],
+    benchmark: ['4400.00', '4530.00'],
+  })
+  renderPage()
+  const card = () => screen.getByText('Performance').closest('section') as HTMLElement
+  await waitFor(() =>
+    expect(card().querySelector('.chart-lede')?.textContent).toBe(
+      'Since Aug 17, 2026: behind the same money in VOO by $30',
     ),
   )
 })

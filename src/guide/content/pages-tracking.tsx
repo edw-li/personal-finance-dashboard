@@ -378,7 +378,8 @@ export const TRACKING_CARDS: GuideCard[] = [
         steps: [
           'Lines: **Portfolio value**, **Cost basis** and **Same deposits in VOO** — every contribution bought into VOO as it landed, the fair comparison.',
           '**S&P 500 — starting balance only** stays off until you pick it in the legend; it invests just the first week’s balance.',
-          'The line under the title says how far ahead of — or behind — the same deposits in VOO the portfolio is over the range you picked.',
+          'The line under the title says how far ahead of — or behind — VOO the portfolio is.',
+          'On **All** it compares the same deposits in VOO; on **1Y** or **YTD**, the same money: the portfolio’s value when the range opened, plus every deposit since.',
           'Ticks along the bottom mark weeks with **Dividends** and **Ex-dividend dates** of securities held then or now; hover one to list them.',
           'Click a legend name to drop a line; the axis refits to what is left.',
           'The **Live** dot appears on the All scope only, because the history is household-wide.',
