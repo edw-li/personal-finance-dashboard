@@ -110,6 +110,18 @@ class PortfolioAccount(Base):
 
 class PositionTransaction(Base):
     __tablename__ = "position_transactions"
+    __table_args__ = (
+        # The importer's identity for sheet rows (2026-09-23 drag-to-reorder spec §3.5):
+        # unique among source='import' rows only — UI rows carry NULL. Declared HERE as well
+        # as in migration f12026092301 because the test database is built by create_all (the
+        # ux_dividend_auto_event precedent below).
+        Index(
+            "ux_position_txn_import_key",
+            "import_key",
+            unique=True,
+            postgresql_where=text("source = 'import'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     security_id: Mapped[int] = mapped_column(ForeignKey("securities.id", ondelete="CASCADE"))
@@ -143,13 +155,20 @@ class PositionTransaction(Base):
     price: Mapped[Decimal] = mapped_column(Numeric(14, 4))
     fees: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     split_factor: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
-    # Preserves spreadsheet row order — cost-basis folding must process transactions in
-    # this order because most rows have no date. Order by (sort_index, id) for stability.
+    # The REPLAY order: cost-basis folding processes transactions in (sort_index, id)
+    # order because most rows have no date. The user owns it — PUT
+    # /portfolio/transactions/order renumbers the ledger 10, 20, … — and the importer only
+    # ever appends new sheet rows after the max (2026-09-23 drag-to-reorder spec §3.4).
     sort_index: Mapped[int] = mapped_column(default=0)
     # Ownership contract (supersedes Plan 2's sort_index-0 rule): the importer keys and
     # sync-deletes ONLY source='import' rows; UI rows are invisible to re-imports.
     source: Mapped[str] = mapped_column(String(10), default="ui", server_default="ui")
     notes: Mapped[str | None] = mapped_column(Text)
+    # The importer's identity for a sheet row: the sheet key (sheet row x 10) on
+    # source='import' rows, NULL on UI rows. It used to BE sort_index; once the user could
+    # drag the replay order it had to live apart (migration f12026092301 backfilled it from
+    # sort_index). Importer identity, not a UI field — TransactionOut does not carry it.
+    import_key: Mapped[int | None] = mapped_column(default=None)
 
 
 class DividendPayment(Base):
