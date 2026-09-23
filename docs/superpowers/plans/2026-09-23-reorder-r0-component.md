@@ -2393,8 +2393,8 @@ git commit -m "docs(plan): lane R0 — results and gates"
 
 ## Results (filled in by the implementer)
 
-- Lane tests: `npx vitest run src/components/reorder` — 5 files / 98 tests pass (reorderMath 26,
-  reorderDom 16, reorderStatus 3, useReorder 39, reorderCss 14).
+- Lane tests: `npx vitest run src/components/reorder` — 5 files / 99 tests pass (reorderMath 26,
+  reorderDom 16, reorderStatus 3, useReorder 40, reorderCss 14).
 - Full vitest, after the R2 browser-check round, on the branch brought up to feat/reorder-base (R1,
   R4 and main's B2 in): `npx vitest run --maxWorkers=2` (the box is short of memory) — 246 files /
   3399 tests, exit 0, no stderr from the lane. Earlier full runs: 238 / 3213 after the code-quality
@@ -2535,6 +2535,18 @@ git commit -m "docs(plan): lane R0 — results and gates"
      - Every lifted cell draws `var(--reorder-edge-top), var(--reorder-edge-bottom)`. The pinned
        cells put their own edge hairline in front of the two.
      - One pair of variables replaces nine position × cell-kind rules. Pinned in reorderCss.test.ts.
+- Round review fix: **auto-scroll's range-end stop is judged in the band the reader can see.**
+  - The stop had read `scrollView`, the scroller's whole view. The speed reads the band clipped to
+    the window. With a 420 px box hanging past the window, the stop came once the range's end
+    cleared the BOX's bottom zone, while that end could still sit below the window, beyond the
+    pointer's reach.
+  - Both now use one band: `visibleBounds` converted to list coordinates
+    (`{ top: listY(scroller, bounds.top), height: bounds.bottom − bounds.top }`). `scrollView`
+    stays for `ensureVisible`.
+  - A hook test with the box at 600..1020 (window 768) and the range 0..400: the box scrolls on to
+    272 (at most one step more), then holds. Judged in the box, it stopped at about 22.
+  - Also pinned: the mirror slot case `slotFor(stacked([43, 172]), 1, 0, 172) === 0`.
+  - Lane tests: 99. R4's OverviewCustomize: 17, unchanged.
 - Notes for R2–R5 (what the contract section does not say):
   - **Pointer tests** need three things: `installPointerEvents()` in `beforeAll`, `afterEach(cleanup)`,
     and mocked row boxes (the `layoutRows` helper in `useReorder.test.tsx`). Without layout every

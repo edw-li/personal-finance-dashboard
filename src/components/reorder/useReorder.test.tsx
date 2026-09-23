@@ -613,6 +613,37 @@ describe('useReorder — pointer', () => {
     expect(scrollBy.mock.calls.length).toBe(scrolls) // still held in the zone: the page stays put
   })
 
+  it("judges the range's end in the band the reader sees: a scroller hanging past the window scrolls on until that end clears the window's bottom zone", () => {
+    render(
+      <div data-testid="scroller" style={{ overflowY: 'auto' }}>
+        <Stateful initial={flat('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J')} />
+      </div>,
+    )
+    const scroller = screen.getByTestId('scroller')
+    Object.defineProperty(scroller, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(scroller, 'clientHeight', { value: 420, configurable: true })
+    Object.defineProperty(scroller, 'scrollTop', { value: 0, writable: true, configurable: true })
+    // The box runs 600..1020, past jsdom's 768px window: the reader sees only its 600..768.
+    scroller.getBoundingClientRect = () =>
+      ({ top: 600, bottom: 1020, height: 420, left: 0, right: 300, width: 300, x: 0, y: 600, toJSON: () => ({}) }) as DOMRect
+    layoutRows(40, 600) // the range: 0..400 of the scroller's content
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 620 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 750 }) // held in the window's bottom zone
+    act(() => {
+      vi.advanceTimersByTime(3000)
+    })
+    // The end (400) must clear the WINDOW's bottom zone: 400 − (768 − 600 − 40) = 272. Judged in the
+    // box, it cleared at 20 — while still 212px below the window, out of the pointer's reach.
+    expect(scroller.scrollTop).toBeGreaterThanOrEqual(272)
+    expect(scroller.scrollTop).toBeLessThan(272 + AUTO_SCROLL_MAX)
+    const held = scroller.scrollTop
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(scroller.scrollTop).toBe(held)
+    expect(window.scrollBy).not.toHaveBeenCalled()
+  })
+
   it('a throwing onCommit still leaves every row clean, and its error is rethrown after', () => {
     render(
       <Stateful

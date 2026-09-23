@@ -50,7 +50,6 @@ import {
   nextFrame,
   scrollByY,
   scrollParentOf,
-  scrollView,
   unitExtent,
   visibleBounds,
 } from './reorderDom'
@@ -427,11 +426,15 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     const range = { top: first.top, bottom: last.top + last.height }
     const step = () => {
       if (machine.current.drag !== drag || drag.phase !== 'lifted') return
+      // One band for both questions: the part of the scroller the reader can SEE, clipped to the
+      // window. A 420px Settings box can hang past the window's bottom; judged in the whole box, the
+      // stop would come while the range's end still sat below the window, out of the pointer's reach.
       const bounds = visibleBounds(drag.scroller)
+      const seen = { top: listY(drag.scroller, bounds.top), height: bounds.bottom - bounds.top }
       const speed = autoScrollWithin(
         autoScrollSpeed(drag.lastClientY, bounds.top, bounds.bottom),
         range,
-        scrollView(drag.scroller),
+        seen,
       )
       if (speed !== 0) scrollByY(drag.scroller, speed)
       drag.frame = nextFrame(step)

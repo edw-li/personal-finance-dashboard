@@ -152,6 +152,8 @@ describe('slotFor', () => {
     const tallFirst = stacked([172, 43])
     expect(slotFor(tallFirst, 0, 43, 215)).toBe(1) // clamped at +43
     expect(slotFor(tallFirst, 0, 21, 193)).toBe(0) // its bottom just short of the midpoint
+    // The mirror: that tall unit below a short first peer, held at the top, passes it too.
+    expect(slotFor(stacked([43, 172]), 1, 0, 172)).toBe(0)
     // A plain account (40px) lifted from below a parent carrying two components (120px).
     const tall = stacked([120, 40])
     expect(slotFor(tall, 1, 65, 105)).toBe(1) // its top still below the parent's midpoint (60)
