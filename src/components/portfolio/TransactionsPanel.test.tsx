@@ -308,6 +308,16 @@ describe('TransactionsPanel entry session', () => {
     fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
   }
 
+  /** The panel counts a save until its whole chain has run, and the cue it sets can reach the
+   *  screen first (the focus the save hands to the next lot flushes a render of its own), so the
+   *  buttons a save shuts open a beat after `onChanged` is seen. A click on a disabled button is
+   *  dropped — wait for this one to be live. */
+  async function enabledButton(name: string | RegExp): Promise<HTMLButtonElement> {
+    const button = () => screen.getByRole('button', { name }) as HTMLButtonElement
+    await waitFor(() => expect(button().disabled).toBe(false))
+    return button()
+  }
+
   it('keeps security/account/type/date after an add, clears the numbers, focuses shares', async () => {
     const onChanged = vi.fn()
     render(<TransactionsPanel securities={securities} transactions={[]} onChanged={onChanged} />)
@@ -437,7 +447,7 @@ describe('TransactionsPanel entry session', () => {
     vi.mocked(createTransaction).mockRejectedValueOnce(new Error('network'))
     change(screen.getByLabelText(/shares/i), '3')
     change(screen.getByLabelText(/price/i), '151')
-    fireEvent.click(screen.getByRole('button', { name: /add another/i }))
+    fireEvent.click(await enabledButton(/add another/i))
     await waitFor(() => expect(screen.getByText('Save failed')).toBeTruthy())
     // Nothing reached the ledger, so nothing is cleared and nothing is re-narrated: the cue
     // still describes the form truthfully (the kept context is the FIRST add's and is still
@@ -488,7 +498,7 @@ describe('TransactionsPanel entry session', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(screen.getByRole('button', { name: /add another/i })).toBeTruthy()
     // Entering edit mode ends the create session: the form now describes ONE stored row.
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.click(await enabledButton('Edit'))
     expect(screen.queryByText(/kept/i)).toBeNull()
     change(screen.getByLabelText(/shares/i), '11')
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
