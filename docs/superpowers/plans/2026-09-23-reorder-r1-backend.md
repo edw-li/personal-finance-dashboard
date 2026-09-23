@@ -132,10 +132,19 @@ find out why before changing anything.
 10. **No-op answers echo the stored values** (no normalization happens on a no-op, §3.2). The
     transactions no-op answers the visible rows with `changed_positions: []`.
 11. **Importer transaction appends** start from `coalesce(max(sort_index), 0)` over the WHOLE ledger
-    (UI rows included — the UI create's own base) and step 10 per created row, in sheet order. **An
-    import row with a NULL `import_key`** (only reachable by hand-built rows) cannot match a sheet
-    row, so the sync deletes it like any row whose key left the sheet. The column is declared last
-    on the model, where the migration's `add_column` puts it too.
+    (UI rows included — the UI create's own base) and step 10 per created row, in sheet order
+    (`services.ordering.next_sort_index`, `SORT_INDEX_STEP`). **Matching** (amended 2026-09-23 at
+    the R1 code review, spec §3.4). Content comes first: an existing import row with an identical
+    trade is that sheet row, re-keyed if the sheet moved it. Candidates are compared on security,
+    account, type, date, shares, price, fees and split. Of identical candidates, the one already
+    holding the key wins, else the earliest in replay order. Next, the same key with the same
+    security, account and type is an in-place edit. Every other sheet row is created and every
+    other import row is deleted. Moving keys are cleared (and gone rows deleted) in one flush before
+    any key is written. A re-key counts as an update, sampled
+    `position_transactions[<new>]: kept (was <old>)`. **An import row with a NULL `import_key`**
+    (only reachable by hand-built rows) can match by content, sampled `kept (had no sheet key)`.
+    Otherwise the sync deletes it, sampled `position_transactions[id <id>]: deleted (no sheet key)`.
+    The column is declared last on the model, where the migration's `add_column` puts it too.
 12. **Account and category importer appends** start from `max(existing sort_order) + 1` (0 on an
     empty table), in sheet order. The applier no longer reads the parser's column index; the parser
     is untouched (§3.4).

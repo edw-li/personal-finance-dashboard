@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
 from app.importer.apply import (
@@ -374,8 +375,8 @@ async def test_a_new_sheet_row_appends_after_the_whole_ledger(db):
 
 
 async def test_an_import_row_without_a_key_is_swept_as_left_the_sheet(db):
-    """No sheet row can match a keyless import row, so the sync treats it as gone — the
-    same answer a missing sheet key gets."""
+    """A keyless import row whose trade no sheet row carries cannot be matched, so the sync
+    treats it as gone — the same answer a missing sheet key gets."""
     wb = sheets()
     report = SheetReport()
     by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
@@ -400,6 +401,186 @@ async def test_an_import_row_without_a_key_is_swept_as_left_the_sheet(db):
     assert f"position_transactions[id {keyless_id}]: deleted (no sheet key)" in report.samples
     keys = (await db.execute(select(PositionTransaction.import_key))).scalars().all()
     assert sorted(keys) == [20, 40, 50]
+
+
+# ── sheet rows shift; trades keep their rows (2026-09-23 reorder spec §3.4, amended) ────────
+
+
+async def import_positions(db, rows: list[list] | None = None) -> SheetReport:
+    """One committed Positions import of `rows` (the default sheet when None)."""
+    wb = sheets() if rows is None else sheets(positions=rows)
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    return report
+
+
+async def import_rows(db) -> list[tuple[int, int | None, int]]:
+    """(id, import_key, sort_index) of every import row, by id — read from the table."""
+    rows = await db.execute(
+        select(
+            PositionTransaction.id, PositionTransaction.import_key, PositionTransaction.sort_index
+        )
+        .where(PositionTransaction.source == "import")
+        .order_by(PositionTransaction.id)
+    )
+    return [tuple(row) for row in rows]
+
+
+async def trades(db) -> dict[int, tuple]:
+    """Each import row's trade — every column a sheet row writes — by row id."""
+    rows = await db.execute(
+        select(
+            PositionTransaction.id,
+            PositionTransaction.security_id,
+            PositionTransaction.portfolio_account_id,
+            PositionTransaction.type,
+            PositionTransaction.shares,
+            PositionTransaction.price,
+            PositionTransaction.fees,
+            PositionTransaction.split_factor,
+        ).where(PositionTransaction.source == "import")
+    )
+    return {row[0]: tuple(row[1:]) for row in rows}
+
+
+def txn_counts(report: SheetReport) -> tuple[int, int, int, int]:
+    counts = report.entities["position_transactions"]
+    return counts.creates, counts.updates, counts.deletes, counts.skips
+
+
+DIV_CORP_BUY = ["Fido", "Buy", "Div Corp", 3.0, 40.0, None, None, 0, 0, 0, 0, 0]
+
+
+async def test_a_row_inserted_mid_sheet_moves_no_trade_into_another_rows_place(db):
+    """Inserting a Positions row shifts every sheet key below it. Matched by key alone, the
+    Fido sell would be poured into the Mystery Fund row — which keeps the replay position
+    the user gave the Mystery Fund buy. Matched by content, every unedited row stays whole:
+    same id, same fields, same position; only its key moves."""
+    await import_positions(db)  # keys 20 Acme buy, 40 Fido sell, 50 Mystery buy
+    rows = {t.import_key: t for t in (await db.execute(select(PositionTransaction))).scalars()}
+    # The user's drag, as PUT /portfolio/transactions/order writes it: Mystery to the top.
+    rows[50].sort_index, rows[20].sort_index, rows[40].sort_index = 10, 20, 30
+    await db.commit()
+    before = {key: (id_, index) for id_, key, index in await import_rows(db)}
+    trades_before = await trades(db)
+
+    sheet = default_positions_rows()
+    sheet.insert(2, DIV_CORP_BUY)  # a new sheet row 3: everything from row 3 down moves one
+    report = await import_positions(db, sheet)
+    trades_after = await trades(db)
+    assert {id_: trades_after[id_] for id_ in trades_before} == trades_before  # none rewritten
+
+    assert txn_counts(report) == (1, 2, 0, 1)
+    assert "position_transactions[50]: kept (was 40)" in report.samples
+    assert "position_transactions[60]: kept (was 50)" in report.samples
+    after = {key: (id_, index) for id_, key, index in await import_rows(db)}
+    assert (after[20], after[50], after[60]) == (before[20], before[40], before[50])
+    new_id, new_index = after[30]
+    assert new_id not in {id_ for id_, _ in before.values()}
+    assert new_index == 40  # appended after the ledger's max, never in anyone's place
+
+
+async def test_a_sheet_edit_of_the_same_trade_is_made_in_place_and_keeps_its_place(db):
+    await import_positions(db)
+    acme = (
+        await db.execute(select(PositionTransaction).where(PositionTransaction.import_key == 20))
+    ).scalar_one()
+    acme.sort_index = 99  # the user dragged it to the end
+    await db.commit()
+    acme_id = acme.id
+    sheet = default_positions_rows()
+    sheet[1][3] = 12.0  # sheet row 2: the same Acme buy, now 12 shares
+    report = await import_positions(db, sheet)
+    assert txn_counts(report) == (0, 1, 0, 2)
+    assert any(s.startswith("position_transactions[20]: shares ") for s in report.samples)
+    assert [row for row in await import_rows(db) if row[1] == 20] == [(acme_id, 20, 99)]
+    edited = await db.get(PositionTransaction, acme_id)
+    assert edited.shares == Decimal("12")
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [(2, "Div Corp"), (0, "Fido"), (1, "Sell")],
+    ids=["another security", "another account", "another type"],
+)
+async def test_a_key_whose_trade_changed_identity_is_a_delete_and_an_append(db, column, value):
+    """Same sheet key, but a different security, account or type: not an edit of that trade
+    but another trade in its row. The old row goes, and its replay position with it; the new
+    one is appended, where the user can drag it."""
+    await import_positions(db)
+    old_id = next(id_ for id_, key, _ in await import_rows(db) if key == 20)
+    sheet = default_positions_rows()
+    sheet[1][column] = value
+    report = await import_positions(db, sheet)
+    assert txn_counts(report) == (1, 0, 1, 2)
+    assert "position_transactions[20]: deleted (row left sheet)" in report.samples
+    [(new_id, _, new_index)] = [row for row in await import_rows(db) if row[1] == 20]
+    assert new_id != old_id
+    assert new_index == 40  # after the ledger's max (30)
+
+
+async def test_identical_trades_match_stably_while_still_and_when_shifted(db):
+    sheet = default_positions_rows()
+    sheet[2] = list(sheet[1])  # sheet row 3 is now an exact copy of row 2: keys 20 and 30
+    await import_positions(db, sheet)
+    first = await import_rows(db)
+
+    report = await import_positions(db, sheet)  # nothing moved: each copy keeps its own key
+    assert txn_counts(report) == (0, 0, 0, 4)
+    assert await import_rows(db) == first
+
+    shifted = [sheet[0], DIV_CORP_BUY, *sheet[1:]]  # every key moves down one row
+    trades_before = await trades(db)
+    report = await import_positions(db, shifted)
+    assert txn_counts(report) == (1, 3, 0, 1)
+    trades_after = await trades(db)
+    assert {id_: trades_after[id_] for id_ in trades_before} == trades_before  # none rewritten
+    after = await import_rows(db)
+    # Every original row survives with its replay position; no copy is deleted or doubled.
+    assert {(id_, index) for id_, _, index in first} <= {(id_, index) for id_, _, index in after}
+    assert sorted(key for _, key, _ in after) == [20, 30, 40, 50, 60]
+
+    report = await import_positions(db, shifted)  # and once shifted, it stands still
+    assert txn_counts(report) == (0, 0, 0, 5)
+    assert await import_rows(db) == after
+
+
+async def test_a_first_import_creates_every_row_in_sheet_order(db):
+    report = await import_positions(db)
+    assert txn_counts(report) == (3, 0, 0, 0)
+    assert [(key, index) for _, key, index in await import_rows(db)] == [
+        (20, 10),
+        (40, 20),
+        (50, 30),
+    ]
+    assert not any(": kept (" in sample for sample in report.samples)
+
+
+async def test_a_keyless_import_row_whose_trade_the_sheet_carries_is_kept_and_keyed(db):
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await db.commit()
+    acme_id = (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one().id
+    keyless = PositionTransaction(  # sheet row 2's trade exactly, without its key
+        security_id=acme_id,
+        portfolio_account=acct("RH Taxable"),
+        type="buy",
+        shares=Decimal("10.123457"),
+        price=Decimal("100.1235"),
+        sort_index=5,
+        source="import",
+    )
+    db.add(keyless)
+    await db.commit()
+    keyless_id = keyless.id
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    assert txn_counts(report) == (2, 1, 0, 0)
+    assert "position_transactions[20]: kept (had no sheet key)" in report.samples
+    assert [row for row in await import_rows(db) if row[0] == keyless_id] == [(keyless_id, 20, 5)]
 
 
 async def test_apply_positions_creates_primary_owned_portfolio_accounts(db):

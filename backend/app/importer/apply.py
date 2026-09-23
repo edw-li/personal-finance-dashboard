@@ -6,6 +6,8 @@ caller (service.py) owns the transaction: nothing here commits.
 """
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
+from typing import NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +23,7 @@ from app.importer.parsers import (
     ParsedReferenceData,
     ParsedSpending,
     ParsedTaxes,
+    ParsedTransaction,
 )
 from app.importer.report import SheetReport
 from app.models import (
@@ -142,6 +145,39 @@ async def apply_reference_data(
     return by_name
 
 
+class _Trade(NamedTuple):
+    """What makes two import rows the same trade (2026-09-23 reorder spec §3.4, amended):
+    every column a sheet row writes, the account by id. Not the sheet key — that is only
+    where the row sits in the sheet, and rows shift."""
+
+    security_id: int
+    portfolio_account_id: int
+    type: str
+    txn_date: date | None
+    shares: Decimal
+    price: Decimal
+    fees: Decimal | None
+    split_factor: Decimal | None
+
+    @classmethod
+    def of(cls, row: PositionTransaction) -> "_Trade":
+        return cls(
+            row.security_id,
+            row.portfolio_account_id,
+            row.type,
+            row.txn_date,
+            row.shares,
+            row.price,
+            row.fees,
+            row.split_factor,
+        )
+
+    @property
+    def identity(self) -> tuple[int, int, str]:
+        """Security, account and type: a sheet EDIT of a trade keeps them."""
+        return self.security_id, self.portfolio_account_id, self.type
+
+
 async def apply_positions(
     db: AsyncSession,
     parsed: ParsedPositions,
@@ -177,19 +213,17 @@ async def apply_positions(
             )
     await db.flush()
 
-    # Sheet rows are matched by import_key — the sheet key the parser still calls
-    # `sort_index` (row x 10) — never by the stored sort_index, which since 2026-09-23 is the
-    # user's replay order (drag-to-reorder spec §3.4). UI rows are invisible here throughout.
+    # Existing importer-owned rows in REPLAY order: of two identical trades, the one the
+    # user put earlier is matched first. UI rows are invisible here throughout (Plan 4).
     imported = list(
         (
             await db.execute(
                 select(PositionTransaction)
                 .where(PositionTransaction.source == "import")
-                .order_by(PositionTransaction.id)
+                .order_by(PositionTransaction.sort_index, PositionTransaction.id)
             )
         ).scalars()
     )
-    existing = {t.import_key: t for t in imported if t.import_key is not None}
     # New sheet rows land at the END of the ledger in sheet order, exactly where a UI row
     # lands; the user drags them into place. Existing rows never move.
     next_index = (await db.execute(next_sort_index())).scalar_one()
@@ -200,15 +234,15 @@ async def apply_positions(
         label: await resolve_portfolio_account(db, label)
         for label in sorted({txn.account for txn in parsed.transactions})
     }
-    incoming_keys: set[int] = set()
+    incoming: list[tuple[ParsedTransaction, dict, _Trade]] = []
     for txn in parsed.transactions:
-        incoming_keys.add(txn.sort_index)
+        account = accounts[txn.account]
         fields = {
             "security_id": lookup[txn.name].id,
             # The relationship, not the id: _diff_update's sample prints the row's
             # __repr__ (the label), and assigning it keeps the loaded attribute in step
             # with the FK it writes.
-            "portfolio_account": accounts[txn.account],
+            "portfolio_account": account,
             "type": txn.type,
             "txn_date": txn.txn_date,
             "shares": txn.shares,
@@ -216,40 +250,101 @@ async def apply_positions(
             "fees": txn.fees,
             "split_factor": txn.split_factor,
         }
-        row = existing.get(txn.sort_index)
+        trade = _Trade(
+            fields["security_id"],
+            account.id,
+            txn.type,
+            txn.txn_date,
+            txn.shares,
+            txn.price,
+            txn.fees,
+            txn.split_factor,
+        )
+        incoming.append((txn, fields, trade))
+
+    # Which existing row IS each sheet row (2026-09-23 reorder spec §3.4, amended)? Not
+    # simply the one holding its key: the key is the sheet row x 10 (the parser still calls
+    # it `sort_index`), and a row inserted or deleted mid-sheet shifts every key below it.
+    # Matched by key alone, one trade's fields would be poured into another trade's row — a
+    # row that keeps the replay position the user gave the OLD trade.
+    # 1. Content: an identical trade is the same row, wherever the sheet now has it. Of
+    #    identical candidates, the one already holding this key, else the earliest replayed.
+    by_trade: dict[_Trade, list[PositionTransaction]] = {}
+    for row in imported:
+        by_trade.setdefault(_Trade.of(row), []).append(row)
+    matched: dict[int, PositionTransaction] = {}  # sheet key -> the row it is
+    for txn, _fields, trade in incoming:
+        candidates = by_trade.get(trade)
+        if candidates:
+            row = next((c for c in candidates if c.import_key == txn.sort_index), candidates[0])
+            candidates.remove(row)
+            matched[txn.sort_index] = row
+    # 2. The same key AND the same security, account and type: a sheet edit of that trade,
+    #    made in place — the row keeps its id and its replay position.
+    taken = {row.id for row in matched.values()}
+    by_key = {
+        row.import_key: row
+        for row in imported
+        if row.id not in taken and row.import_key is not None
+    }
+    edited: set[int] = set()
+    for txn, _fields, trade in incoming:
+        row = by_key.get(txn.sort_index)
+        if row is not None and txn.sort_index not in matched:
+            if _Trade.of(row).identity == trade.identity:
+                matched[txn.sort_index] = row
+                edited.add(txn.sort_index)
+    # 3. Every other existing import row has left the sheet. Delete those, and clear the key
+    #    of every kept row whose key moves, BEFORE any key is written: a key can pass from a
+    #    deleted row to a created one, or between two kept rows, and the partial unique index
+    #    must never see two rows holding one key mid-flush.
+    old_keys = {row.id: row.import_key for row in imported}
+    kept_ids = {row.id for row in matched.values()}
+    gone = [row for row in imported if row.id not in kept_ids]
+    for row in gone:
+        await db.delete(row)
+    for key, row in matched.items():
+        if row.import_key != key:
+            row.import_key = None
+    await db.flush()
+    # 4. In sheet order: keep (re-keyed where the sheet moved it), edit in place, or create.
+    for txn, fields, _trade in incoming:
+        key = txn.sort_index
+        row = matched.get(key)
         if row is None:
             db.add(
                 PositionTransaction(
-                    import_key=txn.sort_index, sort_index=next_index, source="import", **fields
+                    import_key=key, sort_index=next_index, source="import", **fields
                 )
             )
             next_index += SORT_INDEX_STEP
             txn_counts.creates += 1
             report.add_sample(
-                f"position_transactions[{txn.sort_index}]: {txn.type} "
-                f"{txn.shares} {txn.name} @ {txn.price}"
+                f"position_transactions[{key}]: {txn.type} {txn.shares} {txn.name} @ {txn.price}"
             )
+        elif key in edited:
+            _diff_update(row, fields, txn_counts, report, f"position_transactions[{key}]")
+        elif old_keys[row.id] == key:
+            txn_counts.skips += 1
         else:
-            _diff_update(
-                row,
-                fields,
-                txn_counts,
-                report,
-                f"position_transactions[{txn.sort_index}]",
+            # The same trade in another sheet row: a write (its key), so an update.
+            row.import_key = key
+            txn_counts.updates += 1
+            was = old_keys[row.id]
+            report.add_sample(
+                f"position_transactions[{key}]: kept (was {was})"
+                if was is not None
+                else f"position_transactions[{key}]: kept (had no sheet key)"
             )
-    # Sync: an importer-owned row (source='import') whose sheet key left the sheet is
-    # deleted. A row with no key cannot be matched to any sheet row, so it reads as having
-    # left too. UI-created rows (source='ui') are never loaded here (Plan 4 contract).
-    for row in imported:
-        if row.import_key is None:
-            await db.delete(row)
-            txn_counts.deletes += 1
-            # Named by its id: a key-less row has no sheet key to print.
-            report.add_sample(f"position_transactions[id {row.id}]: deleted (no sheet key)")
-        elif row.import_key not in incoming_keys:
-            await db.delete(row)
-            txn_counts.deletes += 1
-            report.add_sample(f"position_transactions[{row.import_key}]: deleted (row left sheet)")
+    for row in gone:
+        txn_counts.deletes += 1
+        key = old_keys[row.id]
+        # A key-less row is named by its id: it has no sheet key to print.
+        report.add_sample(
+            f"position_transactions[id {row.id}]: deleted (no sheet key)"
+            if key is None
+            else f"position_transactions[{key}]: deleted (row left sheet)"
+        )
 
 
 # The five Net Worth source-bucket columns whose sums ALSO appear as their own sheet
