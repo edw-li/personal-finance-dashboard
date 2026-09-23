@@ -47,7 +47,12 @@
   color: var(--muted);
 }
 
-/* Drill-in: the reason and the closing line sit directly under the net-value tile. */
+/* Drill-in: the reason and the closing line sit directly under the net-value tile, and the
+   block keeps the next section's heading at the hint's usual distance. */
+.card-verdict {
+  margin-bottom: 1rem;
+}
+
 .card-verdict p {
   margin: 0.35rem 0 0;
 }

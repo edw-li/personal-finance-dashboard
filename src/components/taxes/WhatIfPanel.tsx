@@ -103,47 +103,54 @@ function esppLegFor(lot: EsppLotOut, quote: string | null): EsppEntry {
 interface OverrideRow {
   id: number
   key: string | null
-  /** An uncommitted row's value (canonical text); a committed row shows the URL's value. */
+  /** The value box's text (canonical). The row's own copy, so a commit shows at once rather
+   *  than a beat later, when react-router commits the URL it wrote. */
   draft: string
+  /** "Clear this input" is ticked (the row is in the scenario as `key:null`). */
+  cleared: boolean
   committed: boolean
 }
 
 interface OverrideRows {
   rows: OverrideRow[]
   nextId: number
-  /** The URL's override keys these rows were last reconciled with (SEP-joined). */
+  /** The URL's overrides (keys AND values) these rows were last reconciled with. */
   seen: string
   /** The row whose key picker takes focus when it mounts — the one Add override just made. */
   focusId: number | null
 }
 
-function rowsFromUrl(keys: string[]): OverrideRows {
-  return {
-    rows: keys.map((key, i) => ({ id: i + 1, key, draft: '', committed: true })),
-    nextId: keys.length + 1,
-    seen: keys.join(SEP),
-    focusId: null,
-  }
+type Overrides = Record<string, string | null>
+
+const overridesSignature = (overrides: Overrides) =>
+  Object.keys(overrides)
+    .map((key) => `${key}:${overrides[key] ?? 'null'}`)
+    .join(SEP)
+
+function rowsFromUrl(overrides: Overrides): OverrideRows {
+  return reconcileRows({ rows: [], nextId: 1, seen: '', focusId: null }, overrides)
 }
 
 /** The rows follow the URL (a preset, a link, Back, Reset): a committed row whose key left the
- *  URL goes with it, an uncommitted row whose key arrived joins it, and a key no row holds gets
- *  a row of its own. Uncommitted rows are the reader's unfinished work, and stay. */
-function reconcileRows(state: OverrideRows, keys: string[]): OverrideRows {
-  const inUrl = new Set(keys)
+ *  URL goes with it, a row whose key is in the URL takes the URL's value (an uncommitted one
+ *  joins), and a key no row holds gets a row of its own. Uncommitted rows are the reader's
+ *  unfinished work, and stay. */
+function reconcileRows(state: OverrideRows, overrides: Overrides): OverrideRows {
   let nextId = state.nextId
   const rows = state.rows
-    .filter((row) => !row.committed || (row.key !== null && inUrl.has(row.key)))
-    .map((row) =>
-      !row.committed && row.key !== null && inUrl.has(row.key) ? { ...row, committed: true } : row,
-    )
+    .filter((row) => !row.committed || (row.key !== null && row.key in overrides))
+    .map((row) => {
+      if (row.key === null || !(row.key in overrides)) return row
+      const value = overrides[row.key]
+      return { ...row, committed: true, cleared: value === null, draft: value ?? '' }
+    })
   const held = new Set(rows.map((row) => row.key))
-  for (const key of keys) {
+  for (const [key, value] of Object.entries(overrides)) {
     if (held.has(key)) continue
-    rows.push({ id: nextId, key, draft: '', committed: true })
+    rows.push({ id: nextId, key, draft: value ?? '', cleared: value === null, committed: true })
     nextId += 1
   }
-  return { ...state, rows, nextId, seen: keys.join(SEP) }
+  return { ...state, rows, nextId, seen: overridesSignature(overrides) }
 }
 
 /**
@@ -263,12 +270,12 @@ export default function WhatIfPanel({
   const { scenario, result } = sandbox
 
   // The override rows on screen (see OverrideRow): the URL's complete overrides plus the rows
-  // the reader has not finished. Re-synced with the URL whenever its override keys change —
+  // the reader has not finished. Re-synced with the URL whenever its overrides change —
   // adjusted during render, the house idiom, never a setState in an effect.
   const overrideKeys = Object.keys(scenario.overrides)
-  const [overrideRows, setOverrideRows] = useState<OverrideRows>(() => rowsFromUrl(overrideKeys))
-  if (overrideRows.seen !== overrideKeys.join(SEP)) {
-    setOverrideRows(reconcileRows(overrideRows, overrideKeys))
+  const [overrideRows, setOverrideRows] = useState<OverrideRows>(() => rowsFromUrl(scenario.overrides))
+  if (overrideRows.seen !== overridesSignature(scenario.overrides)) {
+    setOverrideRows(reconcileRows(overrideRows, scenario.overrides))
   }
 
   const patch = (change: (current: TaxScenario) => TaxScenario, immediate: boolean) => {
@@ -377,7 +384,7 @@ export default function WhatIfPanel({
   const addOverride = () =>
     setOverrideRows((state) => ({
       ...state,
-      rows: [...state.rows, { id: state.nextId, key: null, draft: '', committed: false }],
+      rows: [...state.rows, { id: state.nextId, key: null, draft: '', cleared: false, committed: false }],
       nextId: state.nextId + 1,
       focusId: state.nextId,
     }))
@@ -438,7 +445,7 @@ export default function WhatIfPanel({
     }
     // A new choice starts at "no change": the stored figure, outside the scenario until edited.
     setFormError(null)
-    updateRow(row.id, { key: to, draft: storedOf(to) ?? '' })
+    updateRow(row.id, { key: to, draft: storedOf(to) ?? '', cleared: false })
   }
 
   // `canonical` is the box's committed text; null is a BLANK box — never "clear" (that is the
@@ -449,12 +456,12 @@ export default function WhatIfPanel({
     const stored = storedOf(key)
     const changes = canonical !== null && (stored === null || compareDecimals(canonical, stored) !== 0)
     if (changes) {
-      updateRow(row.id, { committed: true, draft: canonical })
+      updateRow(row.id, { committed: true, cleared: false, draft: canonical })
       patch((s) => ({ ...s, overrides: { ...s.overrides, [key]: canonical } }), true)
       return
     }
     setFormError(null)
-    updateRow(row.id, { committed: false, draft: canonical ?? '' })
+    updateRow(row.id, { committed: false, cleared: false, draft: canonical ?? '' })
     if (row.committed) patch(withoutKey(key), true)
   }
 
@@ -462,13 +469,13 @@ export default function WhatIfPanel({
     if (row.key === null) return
     const key = row.key
     if (clear) {
-      updateRow(row.id, { committed: true, draft: '' })
+      updateRow(row.id, { committed: true, cleared: true, draft: '' })
       patch((s) => ({ ...s, overrides: { ...s.overrides, [key]: null } }), true)
       return
     }
     // Unticked: back to the stored figure, outside the scenario until it is edited.
     setFormError(null)
-    updateRow(row.id, { committed: false, draft: storedOf(key) ?? '' })
+    updateRow(row.id, { committed: false, cleared: false, draft: storedOf(key) ?? '' })
     patch(withoutKey(key), true)
   }
 
@@ -952,8 +959,7 @@ export default function WhatIfPanel({
                 {overrideRows.rows.map((row, index) => {
                   const key = row.key
                   const label = key === null ? 'This override' : labelOf(key)
-                  const cleared = row.committed && key !== null && scenario.overrides[key] === null
-                  const shown = row.committed && key !== null ? (scenario.overrides[key] ?? '') : row.draft
+                  const cleared = row.committed && row.cleared
                   const stored = key === null ? null : storedOf(key)
                   const pickerId = `whatif-override-key-${row.id}`
                   return (
@@ -988,7 +994,7 @@ export default function WhatIfPanel({
                       </select>
                       <DraftAmount
                         ariaLabel={`Override ${index + 1} value`}
-                        value={cleared ? '' : shown}
+                        value={cleared ? '' : row.draft}
                         disabled={key === null || cleared}
                         placeholder={key === null ? 'choose an input' : cleared ? 'cleared' : 'amount'}
                         onCommit={(canonical) => commitValue(row, canonical)}

@@ -701,6 +701,26 @@ describe('WhatIfPanel', () => {
     expect(apply().disabled).toBe(false)
   })
 
+  it('a row follows the URL when a link changes its value — to a clear, and back to a figure', async () => {
+    render(
+      <MemoryRouter initialEntries={['/taxes?whatif=annual_salary%3A250000']}>
+        <WhatIfPanel year={2024} definitions={DEFS} inputs={INPUTS} defaultOpen />
+        <Url />
+        <Link to="/taxes?whatif=annual_salary%3Anull">clear it</Link>
+        <Link to="/taxes?whatif=annual_salary%3A260000">raise it</Link>
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(field('Override 1 value').value).toBe('$250,000.00'))
+    fireEvent.click(screen.getByRole('link', { name: 'clear it' }))
+    await waitFor(() => expect(clearBox().checked).toBe(true))
+    expect(field('Override 1 value').disabled).toBe(true)
+    fireEvent.click(screen.getByRole('link', { name: 'raise it' }))
+    await waitFor(() => expect(clearBox().checked).toBe(false))
+    expect(field('Override 1 value').value).toBe('$260,000.00')
+    // Still one row: the link moved its value, it did not add a second one.
+    expect(screen.getAllByLabelText('Override')).toHaveLength(1)
+  })
+
   it('Reset to actual clears every override row, the unfinished ones too', async () => {
     mount('/taxes?whatif=annual_salary%3A250000', { definitions: DEFS, inputs: INPUTS })
     await screen.findByText('Δ total tax')
