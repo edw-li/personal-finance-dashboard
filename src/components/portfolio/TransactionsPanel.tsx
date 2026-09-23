@@ -475,19 +475,23 @@ export default function TransactionsPanel({
               onAction: () => {
                 // TransactionOut carries every TransactionCreate field verbatim, split
                 // dummies included (toPayload's convention) — POST accepts them as-is.
-                createTransaction({
-                  security_id: txn.security_id,
-                  account: txn.account,
-                  type: txn.type,
-                  txn_date: txn.txn_date,
-                  shares: txn.shares,
-                  price: txn.price,
-                  fees: txn.fees,
-                  split_factor: txn.split_factor,
-                  notes: txn.notes,
-                })
-                  .then(() => onChangedRef.current())
-                  .catch(() => toast.error(`Could not restore the ${ticker} ${txn.type}`))
+                // Counted like any request of the ledger, so no drop races the row coming back
+                // (CardsPanel's and CategoriesPanel's delete Undo).
+                void track(() =>
+                  createTransaction({
+                    security_id: txn.security_id,
+                    account: txn.account,
+                    type: txn.type,
+                    txn_date: txn.txn_date,
+                    shares: txn.shares,
+                    price: txn.price,
+                    fees: txn.fees,
+                    split_factor: txn.split_factor,
+                    notes: txn.notes,
+                  })
+                    .then(() => onChangedRef.current())
+                    .catch(() => toast.error(`Could not restore the ${ticker} ${txn.type}`)),
+                )
               },
             },
           })

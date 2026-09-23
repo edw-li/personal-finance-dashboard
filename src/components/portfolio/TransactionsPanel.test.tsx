@@ -21,7 +21,12 @@ vi.mock('../../api/portfolio', () => ({
   // The replay-order PUT (lane R1). Every reorder test answers it or leaves it pending.
   reorderTransactions: vi.fn(),
 }))
-import { createTransaction, reorderTransactions, updateTransaction } from '../../api/portfolio'
+import {
+  createTransaction,
+  deleteTransaction,
+  reorderTransactions,
+  updateTransaction,
+} from '../../api/portfolio'
 
 afterEach(cleanup)
 // Call counts are per-test: the "not called" assertion below would otherwise see the
@@ -1075,6 +1080,29 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
       answerUndo({ transactions: [nvdaBuy, vooBuy, nvdaSell], changed_positions: [] })
     })
     await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
+  })
+
+  // CardsPanel's and CategoriesPanel's rule: the delete toast's Undo is a request of the list like
+  // any other, so no drop races the row coming back.
+  it("counts the delete toast's Undo — the grips wait while the row is re-created", async () => {
+    // Set here: reorderHooks' restoreAllMocks takes back the module factory's answer.
+    vi.mocked(deleteTransaction).mockResolvedValue(undefined)
+    let answer: (value: TransactionOut) => void = () => {}
+    vi.mocked(createTransaction).mockReturnValueOnce(
+      new Promise<TransactionOut>((resolve) => {
+        answer = resolve
+      }),
+    )
+    const { onChanged } = renderLedger()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this sell' }))
+    await screen.findByText('Deleted the NVDA sell')
+    await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    // The row is on its way back: no drop may start until it has landed.
+    expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBe('true')
+    await act(async () => answer(nvdaSell))
+    await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
+    expect(onChanged).toHaveBeenCalledTimes(2)
   })
 
   it('never calls a restore that succeeded a failure — a throw after it escapes the failure path', async () => {
