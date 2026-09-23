@@ -1168,6 +1168,24 @@ describe('CreditCardsPage — the credit-line colours follow the card, not its p
     await waitFor(() => expect(line().getAttribute('data-series-names')).toBe('RH Gold'))
     expect(line().getAttribute('data-series-colors')).toBe(PALETTE[1])
   })
+
+  // One rank, one hue (spec §7 as amended at lane R5's review): the drill-in ranked its one card
+  // alone and drew every card in the first slot, so a card that is orange on the page chart
+  // turned blue the moment it was opened.
+  it("draws a card's drill-in line in the colour its page-chart line wears", async () => {
+    renderPage('/credit-cards?section=lines')
+    await screen.findByText('Credit line history')
+    const pageChart = screen.getByLabelText(/Step chart of credit limits/)
+    const names = (pageChart.getAttribute('data-series-names') ?? '').split('|')
+    const colors = (pageChart.getAttribute('data-series-colors') ?? '').split('|')
+    const savor = colors[names.indexOf('SavorOne')]
+    expect(savor).toBe(PALETTE[1])
+    cleanup()
+    renderPage('/credit-cards?card=savorone')
+    await screen.findByText('Worth keeping? (est.)')
+    const drill = screen.getByLabelText("Step chart of SavorOne's credit limit over time")
+    expect(drill.getAttribute('data-series-colors')).toBe(savor)
+  })
 })
 
 describe('CreditCardsPage — reorder Categories & weights (2026-09-23 drag-to-reorder spec §7)', () => {

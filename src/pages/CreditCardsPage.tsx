@@ -392,6 +392,7 @@ export default function CreditCardsPage() {
             categories={categories ?? []}
             accounts={accounts}
             lineup={activeCards}
+            rankIds={colorRankIds}
             busy={busy}
             weighted={hasWeights}
             onClose={() => closeDetail(activeCard.id)}
