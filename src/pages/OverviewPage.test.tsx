@@ -2188,9 +2188,13 @@ describe('OverviewPage chart cards (charts C2)', () => {
     serve()
     renderPage()
     await screen.findByText('Net worth trend')
-    expect(screen.getByLabelText('Line chart of net worth at every monthly snapshot')).toBeTruthy()
-    expect(screen.getByLabelText(/Line chart of portfolio value against cost basis/)).toBeTruthy()
-    expect(screen.getByLabelText(/Bar chart of living spending with the previous 12-month eligible average/)).toBeTruthy()
+    // The card titles paint before their charts mount (each feed lands on its own), so the charts
+    // are waited for rather than read at the title — a load-sensitive flake (2026-09-23 integration).
+    await waitFor(() => {
+      expect(screen.getByLabelText('Line chart of net worth at every monthly snapshot')).toBeTruthy()
+      expect(screen.getByLabelText(/Line chart of portfolio value against cost basis/)).toBeTruthy()
+      expect(screen.getByLabelText(/Bar chart of living spending with the previous 12-month eligible average/)).toBeTruthy()
+    })
     expect(screen.getAllByRole('group', { name: /Export/ }).length).toBeGreaterThanOrEqual(3)
     expect(screen.getByRole('link', { name: 'Open net worth →' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open spending →' })).toBeTruthy()
