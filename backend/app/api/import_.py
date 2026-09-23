@@ -17,7 +17,8 @@ from app.importer import ImportReport, InvalidWorkbookError, run_import
 from app.lifecycle.restore import SnapshotError, apply_restore, load_snapshot, plan_restore
 from app.models import User
 from app.schemas.lifecycle import RestoreReport
-from app.services.snapshot import SNAPSHOT_NAME_RE, alembic_head, snapshots_dir
+from app.services.snapshot import alembic_head
+from app.services.snapshot_store import stored_file
 
 logger = logging.getLogger(__name__)
 
@@ -68,17 +69,16 @@ async def import_stored_snapshot(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RestoreReport:
-    # The name grammar IS the path-safety check, and it runs BEFORE any path is built from
-    # the untrusted name: a match can carry neither a separator nor a dot segment, so
-    # nothing but a stored snapshot is ever opened.
-    missing = f"No stored snapshot named {name!r}"
-    if SNAPSHOT_NAME_RE.fullmatch(name) is None:
-        raise HTTPException(status_code=404, detail=missing)
-    directory = snapshots_dir()
-    path = directory / name
-    # Belt-and-braces on the join itself: only reachable if the grammar above ever loosens.
-    if not path.is_relative_to(directory) or not await asyncio.to_thread(path.is_file):
-        raise HTTPException(status_code=404, detail=missing)
+    # The name grammars (a stored snapshot's, or a restore point's — 2026-09-23 spec §B3) ARE
+    # the path-safety check: `stored_file` matches them BEFORE any path is built from the
+    # untrusted name, keeps the join inside its directory and never follows a symlink, so
+    # nothing but a stored file of ours is ever opened.
+    path = await asyncio.to_thread(stored_file, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"No stored snapshot named {name!r}")
+    # Read in FULL before the restore starts: the apply's own restore point rotates the
+    # oldest of three out of the directory, and restoring FROM that oldest point is exactly
+    # the undo a bad restore needs — its bytes must already be in memory when the file goes.
     data = await asyncio.to_thread(path.read_bytes)
     return await _restore(data, dry_run=dry_run, user=user, db=db, source_name=name)
 

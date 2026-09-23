@@ -124,8 +124,9 @@ async def run_import(
 
     if not dry_run:
         # "This cannot be undone" leaves the import card (2026-09-03 data-lifecycle spec §9):
-        # the current database is kept first, as its own committed run.
-        await write_restore_point(db, actor=actor)
+        # the current database is kept first, as its own committed run — and the report
+        # names it, so the page can offer the way back (2026-09-23 spec §B3).
+        report.restore_point = (await write_restore_point(db, actor=actor)).name
     batch_id: UUID | None = None
     try:
         by_name = await appliers.apply_reference_data(

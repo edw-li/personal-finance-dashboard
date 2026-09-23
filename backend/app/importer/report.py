@@ -45,6 +45,10 @@ class ImportReport(BaseModel):
     dry_run: bool
     applied: bool = False
     sheets: dict[str, SheetReport]
+    # The restore point an APPLY saved before its first write (2026-09-23 spec §B3): the
+    # Settings toast names it and its Undo pre-selects it in the Restore card. None on a dry
+    # run and on a workbook whose errors blocked the apply.
+    restore_point: str | None = None
 
     @classmethod
     def new(cls, dry_run: bool) -> "ImportReport":

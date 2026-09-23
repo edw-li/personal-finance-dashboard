@@ -8,7 +8,9 @@ import zipfile
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import select
 
+from app.models import Account
 from app.services.snapshot import (
     restore_point_stamp,
     restore_points_dir,
@@ -16,11 +18,13 @@ from app.services.snapshot import (
     write_restore_point,
 )
 from app.services.snapshot_store import list_restore_points, stored_file
+from tests.workbook_builder import build_workbook
 
 POINT = "pre-restore-20260904-091500-123456.zip"
 SNAP = "finance-export-20260904-233000.zip"
 RESTORE_POINTS = "/api/v1/system/restore-points"
 DOWNLOAD = "/api/v1/system/snapshots/{}/download"
+STORED = "/api/v1/import/snapshot/stored"
 
 
 def zipped(head: str | None) -> bytes:
@@ -148,3 +152,70 @@ async def test_download_refuses_foreign_and_traversal_names(auth_client, db):
         resp = await auth_client.get(DOWNLOAD.format(name))
         assert resp.status_code == 404, name
         assert resp.json()["detail"].startswith("No stored snapshot named"), name
+
+
+async def sort_order(db) -> int:
+    db.expire_all()
+    return (await db.execute(select(Account.sort_order))).scalar_one()
+
+
+async def set_sort_order(db, value: int) -> None:
+    await db.execute(Account.__table__.update().values(sort_order=value))
+    await db.commit()
+
+
+async def test_a_restore_point_restores_by_name(auth_client, db):
+    db.add(Account(name="A", slug="a", group="cash", sort_order=1))
+    await db.commit()
+    point = await write_restore_point(db, actor=None)
+    await set_sort_order(db, 9)
+    dry = await auth_client.post(f"{STORED}/{point.name}")
+    assert dry.status_code == 200, dry.text
+    assert dry.json()["dry_run"] is True
+    assert dry.json()["tables"]["accounts"]["identical"] is False
+    assert await sort_order(db) == 9  # a dry run writes nothing
+    applied = await auth_client.post(f"{STORED}/{point.name}?dry_run=false")
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["applied"] is True
+    assert await sort_order(db) == 1
+
+
+async def test_restoring_the_oldest_of_three_restore_points_still_works(auth_client, db):
+    """The apply writes a NEW point first, which rotates the oldest of three out of the
+    directory — the very file being restored. Its bytes are read before the restore starts,
+    so the undo a bad day needs most still works (spec §B3)."""
+    db.add(Account(name="A", slug="a", group="cash", sort_order=1))
+    await db.commit()
+    names = []
+    for order in (1, 2, 3):
+        await set_sort_order(db, order)
+        names.append((await write_restore_point(db, actor=None)).name)
+    await set_sort_order(db, 4)
+    resp = await auth_client.post(f"{STORED}/{names[0]}?dry_run=false")
+    assert resp.status_code == 200, resp.text
+    assert await sort_order(db) == 1
+    kept = sorted(path.name for path in restore_points_dir().iterdir())
+    assert names[0] not in kept and len(kept) == 3
+    assert kept[:2] == names[1:] and kept[2] == resp.json()["restore_point"]
+
+
+async def test_restore_from_stored_refuses_foreign_names_in_one_sentence(auth_client, db):
+    await write_restore_point(db, actor=None)
+    for name in (
+        "notes.txt",
+        "..%2F" + POINT,
+        "..%2Frestore-points%2F" + POINT,
+        "pre-restore-20260904-091500-999999.zip",
+    ):
+        missing = await auth_client.post(f"{STORED}/{name}")
+        assert missing.status_code == 404, name
+        assert missing.json()["detail"].startswith("No stored snapshot named"), name
+
+
+async def test_an_applied_import_names_the_restore_point_it_saved(auth_client, db):
+    files = {"file": ("workbook.xlsx", build_workbook(), "application/octet-stream")}
+    dry = (await auth_client.post("/api/v1/import/xlsx", files=files)).json()
+    assert dry["restore_point"] is None
+    applied = (await auth_client.post("/api/v1/import/xlsx?dry_run=false", files=files)).json()
+    assert applied["applied"] is True
+    assert (restore_points_dir() / applied["restore_point"]).is_file()
