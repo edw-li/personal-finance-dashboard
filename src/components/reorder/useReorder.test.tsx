@@ -219,6 +219,22 @@ describe('useReorder — keyboard', () => {
     expect(onCommit).toHaveBeenCalledWith(['A', 'B', 'D', 'C'], 'C')
   })
 
+  it('a held Space or Enter never lifts, drops and lifts again — key repeats are ignored', () => {
+    const onCommit = vi.fn()
+    render(<Stateful initial={flat('A', 'B', 'C')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.keyDown(grip('Alpha'), { key: ' ' })
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    fireEvent.keyDown(grip('Alpha'), { key: ' ', repeat: true }) // the lift's Space, still held
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(grip('Alpha').getAttribute('aria-pressed')).toBe('true')
+    fireEvent.keyDown(grip('Alpha'), { key: ' ' }) // a fresh press drops
+    expect(onCommit).toHaveBeenCalledTimes(1)
+    fireEvent.keyDown(grip('Alpha'), { key: 'Enter', repeat: true }) // held past the drop
+    expect(grip('Alpha').getAttribute('aria-pressed')).toBeNull()
+    expect(live()).toBe('Dropped Alpha at position 2 of 3.')
+  })
+
   it('a drop where it started commits nothing', () => {
     const onCommit = vi.fn()
     render(<Stateful initial={flat('A', 'B', 'C')} onCommit={onCommit} />)
