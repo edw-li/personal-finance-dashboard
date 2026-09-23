@@ -490,6 +490,34 @@ describe('trendOption', () => {
     expect(parsed.foot).toEqual(['Effective rate 30.6%'])
   })
 
+  it("totals the tooltip with the server's total_tax, not the cent-rounded rows (2026-09-23 §C7)", () => {
+    // finance_realdata's 2026: the seven lines sum to $86,738.46 while the engine's total — the
+    // Summary tile's figure — is $86,738.47. Each line and the total are rounded apart.
+    const year = summaryFixture(2026)
+    year.totals.total_tax = '98584.57' // one cent over the canonical rows' sum
+    const format = (
+      trendOption([year]) as unknown as { tooltip: { formatter: (p: unknown) => string } }
+    ).tooltip.formatter
+    const rows = [57160.35, 22206.8, 5299.21, 10918.2, 3000, 0].map((value, i) => ({
+      seriesName: TAX_LABELS[i],
+      seriesType: 'bar',
+      axisValueLabel: '2026',
+      dataIndex: 0,
+      value,
+      color: TAX_COLORS[i],
+    }))
+    expect(tooltipRows(format(rows)).rows.at(-1)).toEqual({
+      kind: 'total',
+      label: 'Total tax',
+      value: '$98,584.57',
+    })
+    // One jurisdiction hidden from the legend: the rows are a subset, and their own sum is
+    // the honest figure for what is on screen.
+    expect(tooltipRows(format(rows.filter((r) => r.seriesName !== 'SDI'))).rows.at(-1)?.value).toBe(
+      '$95,584.56',
+    )
+  })
+
   it('breaks the rate line where a year has no rate, and still stacks its zeros', () => {
     const sparse = emptySummary(2025)
     const option = trendOption([summaryFixture(2024), sparse])

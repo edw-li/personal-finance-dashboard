@@ -188,6 +188,17 @@ export function trendOption(
       groups: stacked,
       totalLabel: 'Total tax',
       pointer: 'shadow',
+      // The engine's own total_tax, never the rows' sum: each jurisdiction is rounded to the
+      // cent on its own, so their sum can sit a cent off the Summary tile ($86,738.46 against
+      // $86,738.47 for 2026 — 2026-09-23 spec §C7). Only while every jurisdiction is on
+      // screen: with one hidden from the legend the rows are a subset, and their sum is honest.
+      totalOf: (index, params) => {
+        const total = ordered[index]?.totals.total_tax
+        return total !== undefined &&
+          stacked.every((label) => params.some((p) => p.seriesName === label))
+          ? Number(total)
+          : null
+      },
       // The rate is a ratio, not another addend: it stays out of the sum and under it.
       footer: (index) => (rateText(index) === '' ? [] : [`Effective rate ${rateText(index)}`]),
     }),
