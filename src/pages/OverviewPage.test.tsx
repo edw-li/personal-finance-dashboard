@@ -1949,11 +1949,17 @@ describe('OverviewPage independent groups and preferences', () => {
   })
 
   it('persists hidden and reordered views across remounts and resets to the supported defaults', async () => {
+    // A keyboard move keeps the lifted row in view with window.scrollBy, which jsdom only logs as
+    // not implemented (the drag itself is pinned in OverviewCustomize.test.tsx).
+    const scroll = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
     serve()
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
     fireEvent.click(screen.getByText('Customize'))
-    fireEvent.click(screen.getByRole('button', { name: 'Move Portfolio earlier' }))
+    // Space · ↓ · Space on Net worth's grip (2026-09-23 drag spec §6): Portfolio now leads.
+    const grip = screen.getByRole('button', { name: 'Reorder Net worth' })
+    grip.focus()
+    for (const key of [' ', 'ArrowDown', ' ']) fireEvent.keyDown(grip, { key })
     fireEvent.click(screen.getByRole('checkbox', { name: 'Living spending' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Money flow' }))
     expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Portfolio')
@@ -1967,10 +1973,23 @@ describe('OverviewPage independent groups and preferences', () => {
     expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Portfolio')
     expect(screen.queryByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeNull()
     fireEvent.click(screen.getByText('Customize'))
+    // The popover lists the STORED order, and the hidden tile waits under its divider.
+    const tiles = screen.getByRole('group', { name: 'Summary tiles' })
+    expect(
+      within(tiles)
+        .getAllByRole('checkbox')
+        .map((box) => `${(box as HTMLInputElement).checked ? '[x]' : '[ ]'} ${box.closest('label')?.textContent}`),
+    ).toEqual(['[x] Portfolio', '[x] Net worth', '[x] Estimated tax', '[ ] Living spending'])
+    expect(within(tiles).getByText('Hidden')).toBeTruthy()
+    // Showing it again appends it: it becomes the last tile on the page.
+    fireEvent.click(within(tiles).getByRole('checkbox', { name: 'Living spending' }))
+    expect(getLocal('overview_layout')?.tiles).toEqual(['portfolio', 'net_worth', 'tax', 'living_spending'])
+    expect(document.querySelector('.kpi-row > :last-child')?.textContent).toContain('Living spending')
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }))
     expect(getLocal('overview_layout')).toEqual(DEFAULT_OVERVIEW_LAYOUT)
     expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Net worth — Aug 2026')
     expect(await screen.findByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeTruthy()
+    scroll.mockRestore()
   })
 
   it('falls back from an invalid saved layout and keeps at least one headline tile visible', async () => {
@@ -1982,6 +2001,8 @@ describe('OverviewPage independent groups and preferences', () => {
     fireEvent.click(screen.getByText('Customize'))
     for (const name of ['Portfolio', 'Living spending', 'Estimated tax']) fireEvent.click(screen.getByRole('checkbox', { name }))
     expect((screen.getByRole('checkbox', { name: 'Net worth' }) as HTMLInputElement).disabled).toBe(true)
+    // …and its grip too: a list of one has nowhere to move (2026-09-23 drag spec §9).
+    expect((screen.getByRole('button', { name: 'Reorder Net worth' }) as HTMLButtonElement).disabled).toBe(true)
     expect(getLocal('overview_layout')?.tiles).toEqual(['net_worth'])
   })
 
