@@ -186,6 +186,25 @@ export interface PresetContext {
   /** How many checks those targets are spread over — null on a payload the server did not
    *  walk, which is how a disabled chip tells "the year is spent" from "still loading". */
   remainingChecks: number | null
+  /** Whether this person takes part in the household's ESPP plan — the server's rule
+   *  (2026-09-23 spec §B1). A non-participant's Max/Stop ESPP chips would model somebody
+   *  else's plan (Max ESPP enrolled a $24K earner at 15 %), so both are disabled with
+   *  `esppPlanReason`'s sentence. */
+  esppParticipant: boolean
+  /** The participants' names, primary first, for that sentence. */
+  esppParticipants: readonly string[]
+}
+
+/** "ESPP presets model the household's ESPP plan (Edward's)." — why a non-participant's two
+ *  ESPP chips are off (2026-09-23 spec §B1). The names are the payload's, never re-derived. */
+export function esppPlanReason(participants: readonly string[]): string {
+  if (participants.length === 0) return "ESPP presets model the household's ESPP plan."
+  const owners = participants.map((name) => `${name}'s`)
+  const list =
+    owners.length === 1
+      ? owners[0]
+      : `${owners.slice(0, -1).join(', ')} and ${owners[owners.length - 1]}`
+  return `ESPP presets model the household's ESPP plan (${list}).`
 }
 
 const LIMITS_HINT = 'in Settings › Limits'
@@ -265,6 +284,11 @@ export function paycheckPresets(
   // track it moves.
   const clamp = (value: string, max: string) => (compareDecimals(value, max) > 0 ? max : value)
   const fraction = (limit: string) => clamp(divideDecimals(limit, ctx.salary, 9) ?? '0', '1')
+  // Both ESPP chips model the household's ONE plan (2026-09-23 spec §B1): for someone outside
+  // it, Max ESPP would size an enrolment from another person's purchases and cap, and Stop
+  // ESPP would stop a plan they are not in. The first refusal on either chip.
+  const planRefusal = ctx.esppParticipant ? undefined : esppPlanReason(ctx.esppParticipants)
+  const esppZero = compareDecimals(ctx.esppPct, '0') === 0
   return [
     {
       id: 'max401k',
@@ -289,13 +313,14 @@ export function paycheckPresets(
     {
       id: 'maxespp',
       label: 'Max ESPP',
-      disabled: espp === null,
+      disabled: planRefusal !== undefined || espp === null,
       title:
-        espp === null
+        planRefusal ??
+        (espp === null
           ? `Enter this year's ESPP §423 limit ${LIMITS_HINT} (the ESPP pace row appears once ESPP is above 0%)`
-          : undefined,
+          : undefined),
       apply: () => {
-        if (espp === null) return
+        if (planRefusal !== undefined || espp === null) return
         // The PRACTICAL cap where the row has one: the §423 limit buys fewer contribution
         // dollars than itself at a plan discount, so sizing from 25,000 would build the very
         // scenario the pace strip beside this chip grades "over". The statutory figure is the
@@ -309,9 +334,11 @@ export function paycheckPresets(
     {
       id: 'stopespp',
       label: 'Stop ESPP',
-      disabled: compareDecimals(ctx.esppPct, '0') === 0,
-      title: compareDecimals(ctx.esppPct, '0') === 0 ? 'ESPP is already 0%' : undefined,
-      apply: () => apply({ espp_pct: '0' }),
+      disabled: planRefusal !== undefined || esppZero,
+      title: planRefusal ?? (esppZero ? 'ESPP is already 0%' : undefined),
+      apply: () => {
+        if (planRefusal === undefined) apply({ espp_pct: '0' })
+      },
     },
   ]
 }

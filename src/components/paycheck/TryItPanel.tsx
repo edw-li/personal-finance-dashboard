@@ -33,6 +33,7 @@ import {
   applySeedFor,
   decodePaycheck,
   encodePaycheck,
+  esppPlanReason,
   isEmptyPaycheck,
   labelForPaycheck,
   paycheckPresets,
@@ -222,6 +223,10 @@ export default function TryItPanel({
   }
   const coverage = (scenario.hsa_coverage as HsaCoverage | undefined) ?? profile.hsa_coverage
   const hsaKey = coverage === 'none' ? null : HSA_LIMIT_KEY[coverage]
+  // 2026-09-23 spec §B1: the server says whether this person's strip grades the household's
+  // stored ESPP purchases. Absent (a pre-batch payload) is today's behaviour: a participant.
+  const esppParticipant = breakdown.espp_participant ?? true
+  const esppParticipants = breakdown.espp_participants ?? []
   const presets = paycheckPresets(
     {
       salary: scenario.annual_salary ?? profile.annual_salary,
@@ -235,6 +240,8 @@ export default function TryItPanel({
       toCapRate: paceRow(LIMIT_401K_ELECTIVE)?.to_cap_rate ?? null,
       toCapPerCheck: hsaKey === null ? null : (paceRow(hsaKey)?.to_cap_per_check ?? null),
       remainingChecks: walkedRow()?.remaining_checks ?? null,
+      esppParticipant,
+      esppParticipants,
     },
     (patch) => sandbox.set(patch, { immediate: true }),
   )
@@ -265,7 +272,14 @@ export default function TryItPanel({
           profile — nothing is saved until you choose to save it as one.
         </p>
       }
-      presets={<PresetRow presets={presets} />}
+      presets={
+        <>
+          <PresetRow presets={presets} />
+          {/* Said on the card, not only in the chips' titles (2026-09-23 spec §B1): a disabled
+              chip whose reason is hover-only reads as broken. */}
+          {!esppParticipant && <p className="drill-hint">{esppPlanReason(esppParticipants)}</p>}
+        </>
+      }
       staleNoun="this scenario"
       skeletonHeight={220}
       compare={

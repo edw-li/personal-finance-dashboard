@@ -129,6 +129,37 @@ afterEach(() => {
 })
 
 describe('TryItPanel', () => {
+  it('turns the ESPP chips off for a non-participant and says why, out loud', async () => {
+    render(
+      <MemoryRouter initialEntries={['/paycheck']}>
+        <TryItPanel
+          profileId={null}
+          personId={2}
+          breakdown={{ ...breakdown, espp_participant: false, espp_participants: ['Edward'] }}
+          onApply={vi.fn()}
+          defaultOpen
+        />
+      </MemoryRouter>,
+    )
+    const reason = "ESPP presets model the household's ESPP plan (Edward's)."
+    // A visible line, not only the chips' title (2026-09-23 spec §B1): a hover-only reason is
+    // invisible to anyone not hovering, and a disabled chip without one reads as broken.
+    expect(await screen.findByText(reason)).toBeTruthy()
+    for (const name of ['Max ESPP', 'Stop ESPP']) {
+      const chip = screen.getByRole('button', { name }) as HTMLButtonElement
+      expect(chip.disabled).toBe(true)
+      expect(chip.title).toBe(reason)
+    }
+  })
+
+  it('says nothing about the plan to a participant or a pre-batch payload', async () => {
+    mount()
+    fireEvent.click(toggle())
+    await screen.findByRole('button', { name: 'Max ESPP' })
+    expect(screen.queryByText(/ESPP presets model/)).toBeNull()
+    expect((screen.getByRole('button', { name: 'Max ESPP' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('mounts closed and spends no request; opening runs the empty scenario against the shown profile', async () => {
     mount()
     expect(screen.getByRole('heading', { name: /Try changes — effective Jan 1, 2026/ })).toBeTruthy()

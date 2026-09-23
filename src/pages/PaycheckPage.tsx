@@ -70,7 +70,10 @@ function message(err: unknown, fallback: string): string {
  * side of the wire (global rule 9).
  */
 const WATERFALL: {
-  key: Exclude<keyof PaycheckBreakdownOut, 'profile' | 'warnings' | 'monthly_net' | 'pace'>
+  key: Exclude<
+    keyof PaycheckBreakdownOut,
+    'profile' | 'warnings' | 'monthly_net' | 'pace' | 'espp_participant' | 'espp_participants'
+  >
   label: string
 }[] = [
     { key: 'gross', label: 'Gross' },

@@ -1504,6 +1504,11 @@ export interface PaycheckBreakdownOut {
   employer_match: string
   warnings: string[]
   pace: PaceItem[]
+  /** Does THIS person's pace strip grade the household's stored ESPP purchases (2026-09-23
+   *  spec §B1)? Absent on a payload from before that batch — read as true, today's behaviour. */
+  espp_participant?: boolean
+  /** The household's ESPP participants, primary first — whose plan the ESPP presets model. */
+  espp_participants?: string[]
 }
 
 // --- paycheck: the "Try it" sandbox (POST /paycheck/preview, 2026-09-03 planning-sandboxes
@@ -1580,6 +1585,9 @@ export interface PaycheckPreviewOut {
   changed: PaycheckChangedField[]
   /** Scenario-side advisories only — the breakdown's own two sentences. */
   warnings: string[]
+  /** PaycheckBreakdownOut's pair for the same person (2026-09-23 spec §B1). */
+  espp_participant?: boolean
+  espp_participants?: string[]
 }
 
 // --- comp ---
