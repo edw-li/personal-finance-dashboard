@@ -2095,13 +2095,42 @@ export interface MoneyFlowOut {
   take_home_months_entered?: number
   /** Residual: gross − taxes − pre-tax − take-home (≈ vest shares kept + ESPP + timing). */
   retained_equity: string
-  /** Top-7 by year sum, biggest first, positive-only (the /spending fold). */
+  /** Top-7 by the MATCHED months' sum, biggest first, positive-only (2026-09-23 spec §C1). The
+   *  card folds `category_totals` by the Spending page's own set instead (§C2). */
   categories: MoneyFlowCategory[]
   /** The folded positive remainder; null when nothing folded. */
   other_spend: string | null
+  /** What the fold draws: the matched months' positive category totals. */
   total_spend: string
-  /** SIGNED: take_home_cash − total_spend; negative draws a red Drawdown source. */
+  /** SIGNED: the YTD card's cash saved over the matched months (take-home and spending both
+   *  entered) — `take_home_matched + refunds − total_spend`. Negative draws a red Drawdown. */
   saved: string
+  /** The rest are the §C1 window fields — optional for the `niit` reason (an older payload). */
+  /** Take-home of the matched months: the spending fan's funding. */
+  take_home_matched?: string
+  /** Minus the net-negative category totals — money back, an explicit inflow beside take-home. */
+  refunds?: string
+  matched_months?: string[]
+  /** The months `take_home_pending` estimates (no take-home entered). */
+  take_home_pending_months?: string[]
+  /** Take-home of months with no spending: a named terminal node, not part of Saved. */
+  take_home_unmatched?: string
+  take_home_unmatched_months?: string[]
+  /** Spending months with no take-home (the month in progress): left out, named in the footer. */
+  spending_unmatched_months?: string[]
+  spending_unmatched_total?: string
+  /** Every category's matched-month total, signed, exact zeros omitted. */
+  category_totals?: MoneyFlowCategoryTotal[]
+  /** The book's first take-home month; pending months before it predate tracking. */
+  tracking_start?: string | null
+}
+
+/** One category over the money flow's matched months (2026-09-23 spec §C1). */
+export interface MoneyFlowCategoryTotal {
+  category_id: number | null
+  name: string
+  kind: string
+  amount: string
 }
 
 // --- credit cards (2026-08-25 spec §2/§3) -----------------------------------------------
