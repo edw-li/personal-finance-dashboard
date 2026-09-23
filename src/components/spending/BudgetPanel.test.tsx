@@ -506,6 +506,19 @@ describe('the month the card reads (spec §B5)', () => {
     ).toBeDefined()
   })
 
+  // Code review M11: one budget is "your budget", never "your 1 budget".
+  it('names a single budget without counting it', () => {
+    const single: SpendingMatrix = {
+      ...SEP_BOOK,
+      series: [SEP_BOOK.series[0], { ...SEP_BOOK.series[1], budgets: [null, null, null] }, SEP_BOOK.series[2]],
+      total_budget: [null, null, '501.00'],
+    }
+    renderBook(single, 1)
+    expect(
+      screen.getByText('No budgets in force for Aug 2026 — your budget starts Sep 2026.'),
+    ).toBeDefined()
+  })
+
   it('each budgeted row says since when its budget has been in force', () => {
     const changed: SpendingMatrix = {
       ...SEP_BOOK,
@@ -524,6 +537,9 @@ describe('the month the card reads (spec §B5)', () => {
   it('marks the month in progress as month to date, and a finished month not at all', () => {
     renderBook(SEP_BOOK, null)
     expect(within(heading()).getByText('Month to date')).toBeDefined()
+    // Code review M2: the badge is a word of its own in the heading's accessible text, not
+    // "Sep 2026Month to date" run together behind a margin.
+    expect(screen.getByRole('heading', { level: 2, name: /^Budgets — Sep 2026 Month to date/ })).toBeDefined()
     expect(screen.getByText('0 of 2 budgeted categories over so far in Sep 2026')).toBeDefined()
     cleanup()
     pinToday('2026-10-05')

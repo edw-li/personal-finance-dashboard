@@ -50,7 +50,9 @@ function elsewhereSentence(viewed: string, elsewhere: BudgetsElsewhere, target: 
   const where =
     elsewhere.relation === 'start'
       ? elsewhere.everyBudget
-        ? `your ${elsewhere.count} ${elsewhere.count === 1 ? 'budget starts' : 'budgets start'} ${target}`
+        ? elsewhere.count === 1
+          ? `your budget starts ${target}` // one budget is not counted: never "your 1 budget"
+          : `your ${elsewhere.count} budgets start ${target}`
         : `your budgets start ${target}`
       : elsewhere.relation === 'resume'
         ? `your budgets resume ${target}`
@@ -422,7 +424,14 @@ export default function BudgetPanel({
       {/* tabIndex -1: the focus target after "View <month>", never a tab stop of its own. */}
       <h2 className="eyebrow" ref={headingRef} tabIndex={-1}>
         Budgets — {formatMonth(month)}
-        {inProgress && <span className="badge">Month to date</span>}
+        {/* JSX drops the line break: without the space the heading's text reads "Sep 2026Month
+            to date" to a screen reader, whatever the badge's margin shows (SourceHealth's note). */}
+        {inProgress && (
+          <>
+            {' '}
+            <span className="badge">Month to date</span>
+          </>
+        )}
         <InfoHint text="Each budgeted category's spend against its budget for the month shown: the month picked in the ribbon, or else this month when a budget is in force, else the latest month that has one. Budgets are effective-dated: a change applies from its month forward and never rewrites history — each row says since when. With no transaction feed there is no mid-month pacing: a month still in progress reads month to date. Start from my averages writes every living category's typical spend as an editable budget; the editor's chips offer the same figures one at a time." />
       </h2>
       <FeedBanner error={error} />
