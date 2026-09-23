@@ -2,6 +2,7 @@
 downloadable and restorable like stored snapshots, behind the same guards — both name
 grammars anchored, the join kept inside its directory, symlinks never followed."""
 
+import asyncio
 import contextlib
 import io
 import json
@@ -191,6 +192,53 @@ async def test_a_point_rotated_out_after_the_gate_still_downloads_whole(auth_cli
     resp = await auth_client.get(f"/api/v1/system/snapshots/{POINT}/download")
     assert resp.status_code == 200
     assert resp.content == payload
+
+
+@pytest.mark.parametrize("spec_version", ["2.3", "2.4"])
+async def test_a_download_the_client_abandons_closes_its_file(monkeypatch, spec_version):
+    """uvicorn 0.52 speaks ASGI 2.3, where Starlette CANCELS the stream when the client goes
+    away and never closes the generator reading the file: the handle stayed open until cyclic
+    GC (still open 30 s later). On Windows that failed the next rotation of that point — the
+    restore or import 500s with the new point on disk and no run row; on Linux it pins a
+    rotated-out file's disk space. Under 2.4 the send raises instead; the file closes either
+    way (2026-09-23 lane B1 re-review)."""
+    from starlette.requests import ClientDisconnect
+
+    from app.api.system import download_stored
+
+    restore_points_dir().mkdir(parents=True)
+    (restore_points_dir() / POINT).write_bytes(b"x" * (3 * 65536))
+    opened = []
+    real_gate = snapshot_store.open_stored_file
+
+    def recording_gate(name):
+        stored = real_gate(name)
+        opened.append(stored)
+        return stored
+
+    monkeypatch.setattr("app.api.system.open_stored_file", recording_gate)
+    response = await download_stored(POINT)
+    first_block_sent = asyncio.Event()
+
+    async def receive():
+        await first_block_sent.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        if message["type"] != "http.response.body":
+            return
+        if spec_version == "2.4":
+            raise OSError("the client went away")  # 2.4: the send itself reports it
+        first_block_sent.set()
+        await asyncio.sleep(3600)  # the client stopped reading: only a cancel ends this
+
+    scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": spec_version}}
+    if spec_version == "2.4":
+        with pytest.raises(ClientDisconnect):
+            await response(scope, receive, send)
+    else:
+        await asyncio.wait_for(response(scope, receive, send), timeout=30)
+    assert opened[0].handle.closed
 
 
 async def test_restore_point_routes_require_auth(client):
