@@ -344,8 +344,10 @@ async def test_extras_asked_before_the_base_book_exists_are_cached_under_their_o
     inside = await read_cache.cached_review_book(db, extra_months=[MONTHS[2]])
     assert await read_cache.cached_review_book(db, extra_months=[MONTHS[2]]) is inside
     base = await read_cache.cached_review_book(db)
+    assert base is not inside  # the no-extras key was cold: built and filed on its own
     assert_same_book(base, inside)
-    assert await read_cache.cached_review_book(db, extra_months=[MONTHS[2]]) in (base, inside)
+    # Once it exists, the no-extras book answers the in-range month first.
+    assert await read_cache.cached_review_book(db, extra_months=[MONTHS[2]]) is base
 
 
 async def test_a_write_committed_mid_build_is_never_filed_under_the_old_key(
