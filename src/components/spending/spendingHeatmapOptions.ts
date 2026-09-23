@@ -4,7 +4,7 @@
 // React, no fetching, only the grammar in src/charts.
 import type { EChartsOption } from '../../charts/echarts'
 import { compactMoney, grid, monthAxis } from '../../charts/grammar'
-import { ESTIMATE_DECAL, markedLabels, PARTIAL_FILL_ALPHA, partialMonths, partialNote } from '../../charts/partial'
+import { ESTIMATE_DECAL, markedLabels, PARTIAL_FILL_ALPHA, partialMonths, partialNote, periodHeader } from '../../charts/partial'
 import { divergingVisualMap, rowNormalize, sequentialVisualMap, vsAverage } from '../../charts/scales'
 import { INK, MUTED, SURFACE } from '../../charts/theme'
 import { itemTooltip } from '../../charts/tooltip'
@@ -206,15 +206,18 @@ export function heatmapOption({
   }
 }
 
-/** The whole matrix (F12, addendum S7): every category in order × every month, verbatim. */
+/** The whole matrix (F12, addendum S7): every category in order × every month, verbatim. With
+ *  a today, the header of a month in progress says so (the 2026-09-23 code review, 13: the
+ *  axis's '*' in words, for the table twin and the CSV). */
 export function heatmapCsv(
   matrix: Pick<SpendingMatrix, 'months' | 'series'>,
   order: number[],
   nameById: Map<number, string>,
+  { todayIso = null }: { todayIso?: string | null } = {},
 ): ExportTable {
   const byId = new Map(matrix.series.map((s) => [s.category_id, s.values]))
   return {
-    headers: ['Category', ...matrix.months],
+    headers: ['Category', ...matrix.months.map((month) => periodHeader(month, todayIso))],
     rows: order.map((id) => [nameById.get(id) ?? String(id), ...matrix.months.map((_, c) => byId.get(id)?.[c] ?? '')]),
   }
 }

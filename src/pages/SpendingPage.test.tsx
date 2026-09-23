@@ -6,6 +6,7 @@ import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
+import { addMonths, currentMonthIso } from '../utils/months'
 import { fetchSpendingEvidence, REVIEW_LABELS } from '../api/monthReview'
 vi.mock('../api/monthReview', async importOriginal => ({ ...await importOriginal<typeof import('../api/monthReview')>(), fetchSpendingEvidence: vi.fn() }))
 
@@ -651,6 +652,49 @@ describe('SpendingPage — absent ≠ zero and axis honesty (2026-08-31 tier-1 A
       .find((el) => (el.getAttribute('data-y-floor') ?? '') !== '')
     expect(savings?.getAttribute('data-y-floor')).toBe('-1')
     expect(savings?.getAttribute('data-y-ceiling')).toBe('1')
+  })
+})
+
+// Code review 13 (2026-09-23 spec §C5): the '*' a month axis puts on a month in progress is
+// said in words under each card that draws it, and each card's table twin names the month. A
+// month AFTER this one is in progress whatever today is, so the fixture holds on any date.
+describe('SpendingPage — the month in progress in words', () => {
+  const ahead = addMonths(currentMonthIso(), 1)
+  const withAhead = () =>
+    matrixFixture({
+      months: ['2026-07-01', ahead],
+      default_month: '2026-07-01',
+    })
+
+  it('footnotes Monthly entries and names the month in its data table', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(withAhead())
+    renderPage()
+    const bars = await screen.findByLabelText(/Stacked bar chart of all monthly category entries/)
+    const card = bars.closest('.chart-card') as HTMLElement
+    expect(within(card).getByText('* Month in progress')).toBeTruthy()
+    fireEvent.click(within(card).getByRole('button', { name: 'Table' }))
+    const table = within(card).getByRole('table')
+    expect(within(table).getByRole('columnheader', { name: 'Period' })).toBeTruthy()
+    expect(within(table).getByText('Future month (in progress)')).toBeTruthy()
+    expect(within(table).getByText('Whole month')).toBeTruthy()
+  })
+
+  it('footnotes the heatmap and flags its column in the data table', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(withAhead())
+    renderPage()
+    await screen.findByLabelText(/Stacked bar chart of all monthly category entries/)
+    await openView('History')
+    const heat = await screen.findByLabelText(/Heatmap of spend per category per month/)
+    const card = heat.closest('.chart-card') as HTMLElement
+    expect(within(card).getByText('* Month in progress')).toBeTruthy()
+    fireEvent.click(within(card).getByRole('button', { name: 'Table' }))
+    expect(within(within(card).getByRole('table')).getByRole('columnheader', { name: `${ahead} (in progress)` })).toBeTruthy()
+  })
+
+  it('has no footnote when no month is in progress', async () => {
+    renderPage()
+    const bars = await screen.findByLabelText(/Stacked bar chart of all monthly category entries/)
+    expect(within(bars.closest('.chart-card') as HTMLElement).queryByText('* Month in progress')).toBeNull()
   })
 })
 

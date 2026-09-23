@@ -344,6 +344,22 @@ describe('the overview CSVs (F12)', () => {
     expect(recentSpendCsv({ months: monthsFrom('2025-01-01', 14), totals: totalsFrom(14) }).rows).toHaveLength(12)
     expect(recentSpendCsv({ months: monthsFrom('2026-01-01', 2), totals: totalsFrom(2) })).toEqual({ headers: ['Month', 'Spend'], rows: [['2026-01-01', '100.00'], ['2026-02-01', '200.00']] })
   })
+
+  // Code review 13 (2026-09-23 spec §C5): the bars mark the month in progress; the table twin
+  // names it, and keeps its shape when no shown month is in progress.
+  it('names the month in progress in a Period column', () => {
+    const matrix = { months: ['2026-07-01', '2026-08-01'], totals: ['100.00', '50.00'] }
+    expect(recentSpendCsv(matrix, 12, { todayIso: '2026-08-12' })).toEqual({
+      headers: ['Month', 'Spend', 'Period'],
+      rows: [['2026-07-01', '100.00', 'Whole month'], ['2026-08-01', '50.00', 'Month to date (in progress)']],
+    })
+    expect(recentSpendCsv(matrix, 12, { todayIso: '2026-08-31' }).headers).toEqual(['Month', 'Spend'])
+    // Judged over the SHOWN months: an older partial month outside the window adds nothing.
+    expect(recentSpendCsv(matrix, 1, { todayIso: '2026-07-12' }).headers).toEqual(['Month', 'Spend', 'Period'])
+    expect(recentSpendCsv({ months: ['2026-07-01', '2026-08-01'], totals: ['100.00', '50.00'] }, 1, { todayIso: '2026-06-12' }).rows).toEqual([
+      ['2026-08-01', '50.00', 'Future month (in progress)'],
+    ])
+  })
 })
 
 describe('spendStats', () => {

@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { DEFICIT_DECAL, ESTIMATE_DECAL, isPartialMonth, partialItemStyle, partialNote, withAlpha } from './partial'
+import {
+  DEFICIT_DECAL,
+  ESTIMATE_DECAL,
+  hasPartialMonth,
+  isPartialMonth,
+  PARTIAL_FOOTNOTE,
+  partialItemStyle,
+  partialNote,
+  periodColumn,
+  periodHeader,
+  withAlpha,
+} from './partial'
 import { SURFACE } from './theme'
 
 // 2026-09-23 spec §C5 (and §0's objective rule): a month whose last day is after today is in
@@ -53,5 +64,36 @@ describe('a token at an alpha', () => {
     expect(withAlpha('#3987e5', 0.45)).toBe('#3987e573')
     expect(withAlpha('#3987e5', 1)).toBe('#3987e5ff')
     expect(withAlpha('#3987e5', 0)).toBe('#3987e500')
+  })
+})
+
+// The 2026-09-23 code review (13): the '*' a month axis puts on a month in progress is said in
+// words under the chart, and the chart's table twin (its ExportTable) names the month too.
+describe('the month in progress in words', () => {
+  it('footnotes the axis mark', () => {
+    expect(PARTIAL_FOOTNOTE).toBe('* Month in progress')
+  })
+
+  it('knows whether any shown month is in progress', () => {
+    expect(hasPartialMonth(['2026-07-01', '2026-08-01'], '2026-08-12')).toBe(true)
+    expect(hasPartialMonth(['2026-07-01', '2026-08-01'], '2026-08-31')).toBe(false)
+    expect(hasPartialMonth(['2026-08-01'], null)).toBe(false)
+  })
+
+  it("gives a month-per-row table a Period column, only when a month is in progress", () => {
+    expect(periodColumn(['2026-07-01', '2026-08-01'], '2026-08-12')).toEqual(['Whole month', 'Month to date (in progress)'])
+    expect(periodColumn(['2026-08-01', '2026-09-01'], '2026-08-12')).toEqual([
+      'Month to date (in progress)',
+      'Future month (in progress)',
+    ])
+    // Nothing in progress, or no today: the table keeps its shape.
+    expect(periodColumn(['2026-07-01', '2026-08-01'], '2026-08-31')).toBeNull()
+    expect(periodColumn(['2026-08-01'], undefined)).toBeNull()
+  })
+
+  it('flags a month-per-column header', () => {
+    expect(periodHeader('2026-08-01', '2026-08-12')).toBe('2026-08-01 (in progress)')
+    expect(periodHeader('2026-07-01', '2026-08-12')).toBe('2026-07-01')
+    expect(periodHeader('2026-08-01', null)).toBe('2026-08-01')
   })
 })

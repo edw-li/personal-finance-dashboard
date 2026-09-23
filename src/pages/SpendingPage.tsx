@@ -46,6 +46,7 @@ import {
   spendingSankeyOption,
 } from '../components/spending/spendingSankeyOptions'
 import { EMPTY_FOLD, entityCssVar, foldCategories, pickColors, rankCategories } from '../charts/entities'
+import { hasPartialMonth, PARTIAL_FOOTNOTE } from '../charts/partial'
 import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
@@ -262,6 +263,8 @@ export default function SpendingPage() {
   // judged against the product's today, hatched or faded by Appearance › Chart patterns.
   const today = todayIso()
   const patterns = useChartDecals()
+  // Their '*' on that month, said in words under each card (the 2026-09-23 code review, 13).
+  const partialShown = matrix !== null && hasPartialMonth(matrix.months, today)
 
   // The all-time ranking decides the fold — every category colour on this page — AND the
   // heatmap row order (biggest at top). ONE ranking, shared with the Overview money flow
@@ -556,7 +559,7 @@ export default function SpendingPage() {
             option={barsOption}
             empty="No spending recorded yet — enter a month to begin."
             exportName="spending"
-            csv={matrix === null ? undefined : () => spendingCsv(matrix, topIds, nameById)}
+            csv={matrix === null ? undefined : () => spendingCsv(matrix, topIds, nameById, { todayIso: today })}
             height={340}
             zoomable
             group="spending"
@@ -589,18 +592,21 @@ export default function SpendingPage() {
               ) : undefined
             }
             footer={
-              activeDetail && matrix ? (
-                <p className="drill-hint">
-                  Total {formatCurrency(matrix.totals[detailIndex])} · Net pay{' '}
-                  {formatCurrency(matrix.net_pay[detailIndex])} · Cash savings{' '}
-                  {matrix.savings_rate[detailIndex] === null
-                    ? '—'
-                    : formatPct(matrix.savings_rate[detailIndex], { signed: false })}{' '}
-                  · Selected month. Choose another bar to compare.
-                </p>
-              ) : (
-                <p className="drill-hint">Select a month to pin its totals and breakdown beside the chart.</p>
-              )
+              <>
+                {partialShown && <p className="drill-hint">{PARTIAL_FOOTNOTE}</p>}
+                {activeDetail && matrix ? (
+                  <p className="drill-hint">
+                    Total {formatCurrency(matrix.totals[detailIndex])} · Net pay{' '}
+                    {formatCurrency(matrix.net_pay[detailIndex])} · Cash savings{' '}
+                    {matrix.savings_rate[detailIndex] === null
+                      ? '—'
+                      : formatPct(matrix.savings_rate[detailIndex], { signed: false })}{' '}
+                    · Selected month. Choose another bar to compare.
+                  </p>
+                ) : (
+                  <p className="drill-hint">Select a month to pin its totals and breakdown beside the chart.</p>
+                )}
+              </>
             }
           />
 
@@ -814,7 +820,7 @@ export default function SpendingPage() {
             option={heatmapOpt}
             empty="No months entered yet."
             exportName="spending-heatmap"
-            csv={matrix === null ? undefined : () => heatmapCsv(matrix, heatmapOrder, nameById)}
+            csv={matrix === null ? undefined : () => heatmapCsv(matrix, heatmapOrder, nameById, { todayIso: today })}
             height={Math.max(332, heatRows.visible.length * 24 + 142)}
             selectionAdapter={params => {
               if (!matrix || !Array.isArray(params.value)) return null
@@ -851,13 +857,18 @@ export default function SpendingPage() {
               ) : undefined
             }
             footer={
-              nonLiving.length === 0 ? undefined : (
-                <p className="drill-hint">
-                  Not living spend:{' '}
-                  {nonLiving.map((category) => `${category.name} (${category.kind})`).join(' · ')} —
-                  these rows are drawn here, but the savings figures and the year's living
-                  total leave them out.
-                </p>
+              nonLiving.length === 0 && !partialShown ? undefined : (
+                <>
+                  {partialShown && <p className="drill-hint">{PARTIAL_FOOTNOTE}</p>}
+                  {nonLiving.length > 0 && (
+                    <p className="drill-hint">
+                      Not living spend:{' '}
+                      {nonLiving.map((category) => `${category.name} (${category.kind})`).join(' · ')} —
+                      these rows are drawn here, but the savings figures and the year's living
+                      total leave them out.
+                    </p>
+                  )}
+                </>
               )
             }
           />

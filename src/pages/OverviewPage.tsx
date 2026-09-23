@@ -12,6 +12,7 @@ import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { categoryFold } from '../charts/entities'
+import { hasPartialMonth, PARTIAL_FOOTNOTE } from '../charts/partial'
 import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import { chipAmount, eventKey } from '../components/calendar/calendarView'
@@ -287,6 +288,8 @@ export default function OverviewPage() {
         : null,
     [data, notEntered, spendToday, patterns],
   )
+  // The bars' '*' on the month in progress, said in words under the card (code review 13).
+  const spendPartial = data.matrix ? hasPartialMonth(data.matrix.months.slice(-RECENT_SPEND_MONTHS), spendToday) : false
   // The money flow's category colours are the Spending page's own (2026-09-23 spec §C2): the
   // fold comes from the same all-time ranking over the matrix this page already loads.
   const matrix = data.matrix
@@ -618,7 +621,7 @@ export default function OverviewPage() {
                 option={bars}
                 empty="No spending months yet."
                 exportName="recent-spending"
-                csv={data.matrix ? () => recentSpendCsv(data.matrix!) : undefined}
+                csv={data.matrix ? () => recentSpendCsv(data.matrix!, RECENT_SPEND_MONTHS, { todayIso: spendToday }) : undefined}
                 height={240}
                 busy={spending.busy} error={spending.error}
                 selectionAdapter={params => {
@@ -628,9 +631,18 @@ export default function OverviewPage() {
                   return month ? { kind: 'period', id: `living:${month}`, period: month, label: formatMonth(month), scope: 'Household', values: [{ label: 'Living spending', value: data.matrix.living_total?.[index] ?? null, unit: 'USD' }], source: { href: `/spending?month=${month}`, label: 'Open spending' } } : null
                 }}
                 footer={
-                  <NavLink className="drill-hint" to="/spending">
-                    Open spending →
-                  </NavLink>
+                  <>
+                    {/* The '*' in words (code review 13, spec §C5) — inline before the link, so
+                        the caption row keeps the one line it reserves in every state. */}
+                    {spendPartial && (
+                      <span className="drill-hint">
+                        <span>{PARTIAL_FOOTNOTE}</span> ·{' '}
+                      </span>
+                    )}
+                    <NavLink className="drill-hint" to="/spending">
+                      Open spending →
+                    </NavLink>
+                  </>
                 }
               />
     ),

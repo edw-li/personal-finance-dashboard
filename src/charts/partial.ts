@@ -75,3 +75,30 @@ export const partialMonths = (months: readonly string[], todayIso: string | null
 /** The labels a month axis marks as in progress. */
 export const markedLabels = (labels: readonly string[], partial: readonly boolean[]): Set<string> =>
   new Set(labels.filter((_, i) => partial[i]))
+
+// ── The month in progress in words (the 2026-09-23 code review, 13) ────────────────────────
+// The axis mark ('*') is a glyph on a canvas: the card says it in words under the chart, and
+// the chart's table twin (its ExportTable, the CSV too) names the month, so no reader has to
+// hover to learn which month is still growing.
+
+/** The footnote under a card whose month axis marks a month in progress. */
+export const PARTIAL_FOOTNOTE = '* Month in progress'
+
+/** Whether any of `months` is in progress (the footnote's condition). */
+export const hasPartialMonth = (months: readonly string[], todayIso: string | null | undefined): boolean =>
+  partialMonths(months, todayIso).some(Boolean)
+
+/** A month-per-row table's flag: one 'Period' cell per month — "Whole month", "Month to date
+ *  (in progress)" or "Future month (in progress)" (the tooltip head's words) — or null when no
+ *  month is in progress, so an ordinary table keeps its shape. */
+export function periodColumn(months: readonly string[], todayIso: string | null | undefined): string[] | null {
+  if (typeof todayIso !== 'string' || !hasPartialMonth(months, todayIso)) return null
+  return months.map((month) => {
+    const note = partialNote(month, todayIso)
+    return note === null ? 'Whole month' : note.charAt(0).toUpperCase() + note.slice(1)
+  })
+}
+
+/** A month-per-column table's flag: the header of a month in progress says so. */
+export const periodHeader = (month: string, todayIso: string | null | undefined): string =>
+  typeof todayIso === 'string' && isPartialMonth(month, todayIso) ? `${month} (in progress)` : month

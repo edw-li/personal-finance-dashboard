@@ -20,6 +20,7 @@ import {
   partialNote,
 } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
+import { periodColumn } from '../../charts/partial'
 import { referenceLine } from '../../charts/reference'
 import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
@@ -203,13 +204,21 @@ export function recentSpendOption(
   }
 }
 
-/** The shown months as a table (F12) — the same trailing window the bars draw. */
+/** The shown months as a table (F12) — the same trailing window the bars draw. With a today,
+ *  a month in progress among them adds a trailing Period column that names it (the 2026-09-23
+ *  code review, 13: the bars' '*' in words, for the table twin and the CSV). */
 export function recentSpendCsv(
   matrix: SpendingDisplay,
   months = RECENT_SPEND_MONTHS,
+  { todayIso = null }: Pick<RecentSpendOptions, 'todayIso'> = {},
 ): ExportTable {
   const start = Math.max(0, matrix.months.length - months)
-  return { headers: ['Month', matrix.living_total ? 'Living spending (USD)' : 'Spend', ...(matrix.review_state ? ['Review status'] : [])], rows: matrix.months.slice(start).map((m, i) => [m, (matrix.living_total ?? matrix.totals)[start + i], ...(matrix.review_state ? [matrix.review_state[start + i]] : [])]) }
+  const shown = matrix.months.slice(start)
+  const period = periodColumn(shown, todayIso)
+  return {
+    headers: ['Month', matrix.living_total ? 'Living spending (USD)' : 'Spend', ...(matrix.review_state ? ['Review status'] : []), ...(period ? ['Period'] : [])],
+    rows: shown.map((m, i) => [m, (matrix.living_total ?? matrix.totals)[start + i], ...(matrix.review_state ? [matrix.review_state[start + i]] : []), ...(period ? [period[i]] : [])]),
+  }
 }
 
 export interface SpendStats {

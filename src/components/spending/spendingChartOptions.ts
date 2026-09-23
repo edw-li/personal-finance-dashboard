@@ -37,7 +37,7 @@ import {
   stagger,
 } from '../../charts/grammar'
 import type { OffScalePoint } from '../../charts/grammar'
-import { markedLabels, partialMonths } from '../../charts/partial'
+import { markedLabels, partialMonths, periodColumn } from '../../charts/partial'
 import { legendFor } from '../../charts/legend'
 import { zeroLine } from '../../charts/markLine'
 import { budgetReference, referenceLine } from '../../charts/reference'
@@ -53,15 +53,18 @@ import { buildMonthSlices } from '../../utils/spending'
  * The stacked chart as a table (2026-08-25 spec §2a): month rows × the SAME top-N fold
  * the bars draw, plus Other, the server's Total and Net pay — the export echoes the
  * displayed chart, verbatim server strings. Null cells go empty, never '0.00': absent
- * is not zero.
+ * is not zero. With a today, a month in progress adds a trailing Period column that names
+ * it (the 2026-09-23 code review, 13: the bars' '*' in words, for the table twin and the CSV).
  */
 export function spendingCsv(
   matrix: Pick<SpendingMatrix, 'months' | 'series' | 'totals' | 'net_pay' | 'cash_outflow' | 'living_total' | 'tax_total' | 'transfer_total' | 'review_state'>,
   topIds: number[],
   nameById: Map<number, string>,
+  { todayIso = null }: { todayIso?: string | null } = {},
 ): ExportTable {
   const topSet = new Set(topIds)
   const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
+  const period = periodColumn(matrix.months, todayIso)
   return {
     headers: [
       'Month',
@@ -70,6 +73,7 @@ export function spendingCsv(
       'All category entries',
       'Net pay',
       ...(matrix.cash_outflow ? ['Living spending', 'Tax paid from take-home', 'Transfers', 'Cash outflow', 'Review status'] : []),
+      ...(period ? ['Period'] : []),
     ],
     rows: matrix.months.map((month, i) => [
       month,
@@ -83,6 +87,7 @@ export function spendingCsv(
       matrix.totals[i],
       matrix.net_pay[i] ?? '',
       ...(matrix.cash_outflow ? [matrix.living_total?.[i] ?? '', matrix.tax_total?.[i] ?? '', matrix.transfer_total?.[i] ?? '', matrix.cash_outflow[i], matrix.review_state?.[i] ?? ''] : []),
+      ...(period ? [period[i]] : []),
     ]),
   }
 }

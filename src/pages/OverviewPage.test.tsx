@@ -2047,6 +2047,30 @@ describe('OverviewPage chart cards (charts C2)', () => {
     expect(screen.getByRole('link', { name: 'Open net worth →' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open spending →' })).toBeTruthy()
   })
+
+  // Code review 13 (2026-09-23 spec §C5): the '*' on a month in progress is said in words under
+  // the card, and the card's table twin names the month. A month AFTER this one is in progress
+  // whatever today is (this month is done on its last day), so the fixture holds on any date.
+  it('footnotes the month in progress under Recent spending and names it in the data table', async () => {
+    const ahead = addMonths(currentMonthIso(), 1)
+    serve({ matrix: matrixOut({ months: [...SPEND_MONTHS.slice(1), ahead] }) })
+    renderPage()
+    const card = (await screen.findByRole('heading', { name: /Recent spending/ })).closest('.card') as HTMLElement
+    await waitFor(() => expect(within(card).getByText('* Month in progress')).toBeTruthy())
+    fireEvent.click(within(card).getByRole('button', { name: 'Table' }))
+    const table = within(card).getByRole('table')
+    expect(within(table).getByRole('columnheader', { name: 'Period' })).toBeTruthy()
+    const last = within(table).getAllByRole('row').at(-1) as HTMLElement
+    expect(within(last).getByText('Future month (in progress)')).toBeTruthy()
+  })
+
+  it('has no footnote when no shown month is in progress', async () => {
+    serve()
+    renderPage()
+    const card = (await screen.findByRole('heading', { name: /Recent spending/ })).closest('.card') as HTMLElement
+    await waitFor(() => expect(within(card).getByLabelText(/Bar chart of living spending/)).toBeTruthy())
+    expect(within(card).queryByText('* Month in progress')).toBeNull()
+  })
 })
 
 // 2026-09-23 spec §C2: the money flow folds by the SPENDING PAGE's category set, in the same

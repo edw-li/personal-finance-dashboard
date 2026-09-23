@@ -47,6 +47,21 @@ describe('spendingCsv', () => {
     })
   })
 
+  // Code review 13 (2026-09-23 spec §C5): the bars mark the month in progress; the table twin
+  // names it, and keeps its shape when no month is in progress.
+  it('names the month in progress in a trailing Period column', () => {
+    const matrix = {
+      months: ['2026-07-01', '2026-08-01'],
+      series: [{ category_id: 1, values: ['2000.00', '900.00'], budgets: [null, null] }],
+      totals: ['2000.00', '900.00'],
+      net_pay: ['6000.00', null],
+    }
+    const table = spendingCsv(matrix, [1], new Map([[1, 'Rent']]), { todayIso: '2026-08-12' })
+    expect(table.headers).toEqual(['Month', 'Rent', 'Other', 'All category entries', 'Net pay', 'Period'])
+    expect(table.rows.map((row) => row.at(-1))).toEqual(['Whole month', 'Month to date (in progress)'])
+    expect(spendingCsv(matrix, [1], new Map([[1, 'Rent']]), { todayIso: '2026-08-31' }).headers).not.toContain('Period')
+  })
+
   it('keeps an absent month byte-identical — CSV output is deliberately unchanged by A6', () => {
     const matrix = {
       months: ['2026-08-01'],
@@ -445,6 +460,14 @@ describe('heatmapCsv', () => {
     expect(csv.headers).toEqual(['Category', ...longMatrix().months])
     expect(csv.rows[0]).toEqual(['Rent', '100.00', '100.00', '100.00', '100.00', '100.00', '100.00', '150.00', ''])
     expect(csv.rows[2][0]).toBe('Fun')
+  })
+
+  // Code review 13 (2026-09-23 spec §C5): months are the columns here, so the flag rides the
+  // header of the month in progress.
+  it('flags the column of the month in progress', () => {
+    const csv = heatmapCsv(longMatrix(), [1, 2, 3], NAMES, { todayIso: '2026-08-12' })
+    expect(csv.headers).toEqual(['Category', ...longMatrix().months.slice(0, 7), '2026-08-01 (in progress)'])
+    expect(heatmapCsv(longMatrix(), [1, 2, 3], NAMES, { todayIso: '2026-08-31' }).headers).toEqual(['Category', ...longMatrix().months])
   })
 })
 
