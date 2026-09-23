@@ -176,3 +176,29 @@ async def test_the_average_is_the_spending_pages_previous_12_months_figure(db):
     metrics = await load_spending_metrics(db, AUG)
     assert estimate.amount == metrics.comparison.value
     assert estimate.months_in_average == len(metrics.comparison.window.included)
+
+
+async def test_get_calendar_answers_living_per_month(auth_client, db):
+    rent, food, _taxes = await book(db, flat_year())
+    db.add_all(
+        [
+            CategoryBudget(category_id=rent.id, effective_month=SEP, amount=D("2100.00")),
+            CategoryBudget(category_id=food.id, effective_month=SEP, amount=D("550.00")),
+        ]
+    )
+    await db.commit()
+    resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-10-31")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["living"] == [
+        {"month": "2026-08-01", "amount": "2500.00", "basis": "average", "months_in_average": 11},
+        {"month": "2026-09-01", "amount": "2650.00", "basis": "budget", "months_in_average": None},
+        {"month": "2026-10-01", "amount": "2650.00", "basis": "budget", "months_in_average": None},
+    ]
+    # A window inside one month asks about that month alone.
+    one = (await auth_client.get(f"{CALENDAR}?start=2026-09-10&end=2026-09-20")).json()
+    assert [row["month"] for row in one["living"]] == ["2026-09-01"]
+
+
+async def test_get_calendar_living_is_empty_on_an_empty_book(auth_client):
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-10-31")).json()
+    assert body["living"] == []
