@@ -657,9 +657,9 @@ const rowsOf = (legend) =>
 /** The credit-line chart's series off echarts' applied option. The echarts handle is imported
  *  only after the card painted (tools/probes/espp-v: an import at page-init makes the dev server
  *  transform the chart graph mid-load and books a layout shift the product does not have). */
-async function lineSeries() {
+async function lineSeries(title = /Credit line history/) {
   await page
-    .locator('section.chart-card', { has: page.locator('h2', { hasText: 'Credit line history' }) })
+    .locator('section.chart-card', { has: page.locator('h2', { hasText: title }) })
     .scrollIntoViewIfNeeded()
   await page.evaluate(async () => {
     try {
@@ -671,9 +671,10 @@ async function lineSeries() {
   })
   const start = Date.now()
   while (Date.now() - start < 10000) {
-    const seen = await page.evaluate(() => {
+    const seen = await page.evaluate(([source, flags]) => {
+      const re = new RegExp(source, flags)
       const card = [...document.querySelectorAll('section.chart-card')].find((c) =>
-        /Credit line history/.test(c.querySelector('h2')?.textContent ?? ''),
+        re.test(c.querySelector('h2')?.textContent ?? ''),
       )
       const host = card?.querySelector('[_echarts_instance_]')
       const inst = host && window.__echarts ? window.__echarts.getInstanceByDom(host) : null
@@ -681,7 +682,7 @@ async function lineSeries() {
       return Array.isArray(series) && series.length > 0
         ? series.map((s) => ({ name: s.name, color: s.color }))
         : null
-    })
+    }, [title.source, title.flags])
     if (seen !== null) return seen
     await page.waitForTimeout(250)
   }
@@ -2106,6 +2107,21 @@ async function cardsWalk() {
         `owner=${scope}: every card drawn wears its household colour`,
         seen.length > 0 && seen.every((s) => colourOf.get(s.name) === s.color),
         seen,
+      )
+    }
+    // Spec §7 as amended at lane R5's review: a card's drill-in draws its lone credit line in the
+    // colour the page gives it — its rank among the household's active cards — never the first
+    // slot a lone series would take. The drawn card with the highest id (rank > 0) discriminates.
+    const drill = cards.filter(drawnCard).sort((a, b) => b.id - a.id)[0]
+    if (drill === undefined || cards.filter(drawnCard).length < 2) {
+      note('fewer than two drawn cards — the drill-in colour check is skipped', null)
+    } else {
+      await visit(`/credit-cards?card=${drill.slug}&owner=all`, 'section.chart-card')
+      const own = await lineSeries(/^\s*Credit line(?! history)/)
+      check(
+        `the ${drill.name} drill-in draws its line in the card's household colour`,
+        own !== null && own.length === 1 && own[0].color === colourOf.get(drill.name),
+        { own, household: colourOf.get(drill.name) },
       )
     }
   }
