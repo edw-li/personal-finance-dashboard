@@ -598,7 +598,8 @@ export default function OverviewPage() {
                 height={280}
                 busy={investments.busy} error={investments.error} selectionScopeKey={String(owner)}
                 // The row is reserved while the feed is in flight, so the card does not grow
-                // by a line — and shove the cards below it — the moment the sentence lands.
+                // by a line — and shove the cards below it — the moment the sentence lands. A
+                // NO-BREAK space, spelled as an escape: a plain one collapses to 0px.
                 lede={
                   perfLede !== null ? (
                     <>

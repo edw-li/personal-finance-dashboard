@@ -1865,6 +1865,19 @@ describe('OverviewPage — shell frame and owner scope', () => {
     )
   })
 
+  // Code review 2: the row the sentence will fill is reserved while the investments feed is in
+  // flight, so the card does not grow by a line when it lands. It has to be a NO-BREAK space:
+  // a plain one collapses to 0px (measured) and reserves nothing; U+00A0 keeps the line (19.69px).
+  it('reserves the lede row with a no-break space while the investments load', async () => {
+    serve()
+    vi.mocked(fetchHistory).mockImplementation(() => new Promise<never>(() => {}))
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    // No chart yet — the card is its skeleton, found by its title.
+    const card = screen.getByText('Portfolio performance').closest('section') as HTMLElement
+    expect(card.querySelector('.chart-lede')?.textContent).toBe(' ')
+  })
+
   it('draws the portfolio against the same deposits in VOO only — no starting-balance line', async () => {
     serve()
     renderPage()
