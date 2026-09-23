@@ -1,5 +1,5 @@
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { describeError } from '../api/client'
 import {
@@ -126,7 +126,14 @@ export default function CreditCardsPage() {
     )
   }
 
+  // Many things trigger a load (mount, retry, both Manage panels, the drill-in) and the six
+  // requests are not ordered, so a slow earlier load must never overwrite a later one
+  // (PortfolioPage's seqRef). A reorder's Undo made that race everyday: the drop's reload,
+  // still out when the Undo's landed, put the dropped order back over the restored one
+  // (2026-09-23 drag-to-reorder, lane R5's Edge check).
+  const loadSeq = useRef(0)
   const load = useCallback(() => {
+    const seq = ++loadSeq.current
     Promise.all([
       fetchCreditCards(),
       fetchRewardCategories(),
@@ -136,6 +143,7 @@ export default function CreditCardsPage() {
       fetchAccounts(),
     ])
       .then(([cardsData, categoriesData, ratesData, spendingData, matrixData, accountsData]) => {
+        if (seq !== loadSeq.current) return
         const snapshot: CreditCardsSnapshot = {
           cards: cardsData,
           categories: categoriesData,
@@ -158,9 +166,14 @@ export default function CreditCardsPage() {
         setAccounts(accountsData)
       })
       .catch((err: unknown) => {
+        if (seq !== loadSeq.current) return
         setError(describeError(err, 'credit cards'))
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        // Only the newest load lifts the revalidation dim: an older one settling first would
+        // lift it while the page is still waiting for the data it will show.
+        if (seq === loadSeq.current) setLoading(false)
+      })
   }, [])
 
   useEffect(() => {
@@ -183,6 +196,12 @@ export default function CreditCardsPage() {
   )
 
   const householdCards = useMemo(() => (cards ?? []).filter((c) => c.is_active), [cards])
+  // A card's credit-line colour is its rank by id among these — the household's ACTIVE cards,
+  // every person's included (2026-09-23 drag-to-reorder spec §7, as amended at lane R5's
+  // review): no reorder and no person scope repaints a card, the page chart and a card's
+  // drill-in agree, and an archived card holds no slot (ids only grow, so archived cards
+  // holding slots for ever would turn a new card grey). Archiving repaints the others once.
+  const colorRankIds = useMemo(() => householdCards.map((card) => card.id), [householdCards])
   const scopedCards = useMemo(
     () => householdCards.filter((c) => ownerMatches(c.person_id, owner)),
     [householdCards, owner],
@@ -313,7 +332,9 @@ export default function CreditCardsPage() {
     () =>
       activeCards
         .filter((card) => card.limit_events.length > 0)
-        .map((card) => ({ name: card.name, events: card.limit_events })),
+        // The id keys each line's colour, so a reorder never repaints a card (2026-09-23
+        // drag-to-reorder spec §7); the list order still sets the series and legend order.
+        .map((card) => ({ id: card.id, name: card.name, events: card.limit_events })),
     [activeCards],
   )
   const lineMonths = useMemo(() => limitMonths(lineCards, currentMonthIso()), [lineCards])
@@ -323,9 +344,10 @@ export default function CreditCardsPage() {
         ? creditLineChartOption(lineCards, lineMonths, {
             includeTotal: lineCards.length > 1,
             selected: lineLegend,
+            rankIds: colorRankIds,
           })
         : null,
-    [lineCards, lineMonths, lineLegend],
+    [lineCards, lineMonths, lineLegend, colorRankIds],
   )
 
   return (
@@ -374,6 +396,7 @@ export default function CreditCardsPage() {
             categories={categories ?? []}
             accounts={accounts}
             lineup={activeCards}
+            rankIds={colorRankIds}
             busy={busy}
             weighted={hasWeights}
             onClose={() => closeDetail(activeCard.id)}

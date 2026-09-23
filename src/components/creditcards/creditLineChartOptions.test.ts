@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { GRID_VARIANTS } from '../../charts/grammar'
-import { INK, PALETTE } from '../../charts/theme'
+import { INK, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
 import {
   creditLineChartOption,
@@ -9,15 +9,21 @@ import {
   monthOf,
   resolvedLimits,
 } from './creditLineChartOptions'
+import type { LimitHistoryCard } from './creditLineChartOptions'
 
 const VX = {
+  id: 1,
   name: 'Venture X',
   events: [
     { effective_date: '2023-05-12', limit_amount: '20000.00' },
     { effective_date: '2024-08-01', limit_amount: '25000.00' },
   ],
 }
-const BILT = { name: 'BILT', events: [{ effective_date: '2024-02-20', limit_amount: '12500.00' }] }
+const BILT = {
+  id: 2,
+  name: 'BILT',
+  events: [{ effective_date: '2024-02-20', limit_amount: '12500.00' }],
+}
 
 describe('limitMonths', () => {
   it('spans earliest event month through the end month', () => {
@@ -106,5 +112,106 @@ describe('creditLineChartOption', () => {
         ['2024-09-01', '25000.00', '12500.00', '37500.00'],
       ],
     })
+  })
+})
+
+// Drag to reorder (2026-09-23 spec §7): the card list's order is the user's, so it sets the
+// series order — and with it the legend's and the tooltip's — but never a card's colour. The
+// colour is the card's rank BY ID among the household's active cards (`rankIds`), or among the
+// cards drawn when no rank source is handed in.
+describe('creditLineChartOption — a card keeps its colour wherever it stands', () => {
+  const months = ['2024-01-01', '2024-02-01', '2024-09-01']
+  const drawn = (cards: LimitHistoryCard[], includeTotal = true, rankIds?: readonly number[]) => {
+    const option = creditLineChartOption(cards, months, { includeTotal, rankIds })
+    return {
+      legend: option.legend,
+      series: (option.series as { name: string; color: string }[]).map((s) => [s.name, s.color]),
+    }
+  }
+
+  it('keeps every colour through a reorder; the series (so the legend and tooltip) follow the list', () => {
+    expect(drawn([VX, BILT]).series).toEqual([
+      ['Venture X', PALETTE[0]],
+      ['BILT', PALETTE[1]],
+      ['Total line', INK],
+    ])
+    // BILT dragged above Venture X: the order moves, no card is repainted.
+    const moved = drawn([BILT, VX])
+    expect(moved.series).toEqual([
+      ['BILT', PALETTE[1]],
+      ['Venture X', PALETTE[0]],
+      ['Total line', INK],
+    ])
+    // No legend `data`: echarts lists the legend in series order, so it follows the list too.
+    expect(moved.legend).not.toHaveProperty('data')
+  })
+
+  it('ranks the ids, not their values — gaps and large ids still take the first slots', () => {
+    expect(drawn([{ ...VX, id: 40 }, { ...BILT, id: 7 }]).series).toEqual([
+      ['Venture X', PALETTE[1]],
+      ['BILT', PALETTE[0]],
+      ['Total line', INK],
+    ])
+  })
+
+  it('folds the ninth id and later into the Other gray, wherever those cards stand', () => {
+    // Listed highest id first: id 9 leads the list and still takes the ninth rank.
+    const cards = Array.from({ length: 9 }, (_, i) => ({
+      id: 9 - i,
+      name: `Card ${9 - i}`,
+      events: [{ effective_date: '2024-01-01', limit_amount: '1000.00' }],
+    }))
+    const { series } = drawn(cards, false)
+    expect(series.map(([name]) => name)).toEqual(cards.map((card) => card.name))
+    expect(series[0][1]).toBe(OTHER_SERIES_COLOR)
+    expect(series.slice(1).map(([, color]) => color)).toEqual([...PALETTE].reverse())
+  })
+
+  it('keeps the array position when a card is drawn without an id (one card on its own)', () => {
+    expect(drawn([{ name: 'Solo', events: VX.events }], false).series).toEqual([
+      ['Solo', PALETTE[0]],
+    ])
+  })
+
+  // Amendment A1 (spec §7 as amended 2026-09-23, and again at the lane's review): a person scope
+  // draws fewer cards, and ranked among those alone the joint card would change colour between
+  // Grace's view and the household's. Ranked among the household's active cards — every
+  // person's — it wears one colour in every scope ("one colour per money entity").
+  it('ranks among rankIds: the same card wears the same colour in a one-card scope and in the household draw', () => {
+    // Seven active cards, as in the census; the joint Apple Card is id 6.
+    const known = [1, 2, 3, 4, 5, 6, 7]
+    const APPLE = {
+      id: 6,
+      name: 'Apple Card',
+      events: [{ effective_date: '2024-01-05', limit_amount: '5000.00' }],
+    }
+    expect(drawn([VX, BILT, APPLE], true, known).series).toEqual([
+      ['Venture X', PALETTE[0]],
+      ['BILT', PALETTE[1]],
+      ['Apple Card', PALETTE[5]],
+      ['Total line', INK],
+    ])
+    expect(drawn([APPLE], false, known).series).toEqual([['Apple Card', PALETTE[5]]])
+    // Without the page's rank source the lone card would take the first slot.
+    expect(drawn([APPLE], false).series).toEqual([['Apple Card', PALETTE[0]]])
+  })
+
+  it('applies the 8-slot cap to the rank among rankIds: a ninth-ranked card is the Other gray even drawn alone', () => {
+    const ninth = {
+      id: 90,
+      name: 'Card 90',
+      events: [{ effective_date: '2024-01-01', limit_amount: '1000.00' }],
+    }
+    expect(drawn([ninth], false, [10, 20, 30, 40, 50, 60, 70, 80, 90]).series).toEqual([
+      ['Card 90', OTHER_SERIES_COLOR],
+    ])
+  })
+
+  it('still ranks a drawn card the rank source leaves out — among the rest, never an empty colour', () => {
+    expect(drawn([BILT, VX], true, [2]).series).toEqual([
+      ['BILT', PALETTE[1]],
+      ['Venture X', PALETTE[0]],
+      ['Total line', INK],
+    ])
   })
 })

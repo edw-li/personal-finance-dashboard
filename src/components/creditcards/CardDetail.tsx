@@ -47,6 +47,7 @@ export default function CardDetail({
   categories,
   accounts,
   lineup,
+  rankIds,
   busy,
   weighted = true,
   onClose,
@@ -60,6 +61,9 @@ export default function CardDetail({
   /** The active cards the optimizer valued this card against (the whole household — the drill
    *  ignores the Whose chips): whose line and balances closing this card would change. */
   lineup: CreditCardOut[]
+  /** The ids the page chart ranks credit-line colours against (the household's active cards),
+   *  so this card's line wears its page colour (2026-09-23 drag-to-reorder spec §7). */
+  rankIds: readonly number[]
   busy: boolean
   /** False when NO active category carries a spend weight: every marginal is then $0 by
    *  construction, and the tile must read as "unweighted", never as a verdict. */
@@ -252,14 +256,17 @@ export default function CardDetail({
 
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every
   // render would replay the chart on every keystroke in the two forms below (CompPage's
-  // note). One series, no Total — a single card's own line is the whole story here.
+  // note). One series, no Total — a single card's own line is the whole story here — in the
+  // colour the page chart gives this card: its rank by id among the page's rankIds, never the
+  // first slot every lone card would take (2026-09-23 drag-to-reorder spec §7, as amended).
   const sparkOption = useMemo(() => {
     if (card.limit_events.length === 0) return null
-    const history = [{ name: card.name, events: card.limit_events }]
+    const history = [{ id: card.id, name: card.name, events: card.limit_events }]
     return creditLineChartOption(history, limitMonths(history, currentMonthIso()), {
       includeTotal: false,
+      rankIds,
     })
-  }, [card.name, card.limit_events])
+  }, [card.id, card.name, card.limit_events, rankIds])
 
   // This card's own balance from the snapshot; null = not linked / not loaded.
   const ownBalance =

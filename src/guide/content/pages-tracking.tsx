@@ -714,6 +714,17 @@ export const TRACKING_CARDS: GuideCard[] = [
         keywords: ['close card', 'archive card', 'delete card'],
       },
       {
+        id: 'cards-reorder',
+        title: 'Reorder your cards',
+        where: 'Credit cards → Manage → Card roster',
+        steps: [
+          'Drag a card by its grip, or focus the grip and press Space, move it with the arrow keys and press Space again.',
+          'The matrix columns and the credit-line legend follow the new order; each line keeps its colour.',
+        ],
+        to: '/credit-cards?section=manage',
+        keywords: ['reorder cards', 'card order'],
+      },
+      {
         id: 'cards-utilization',
         title: 'Read utilization',
         where: 'Credit cards → Rewards → Utilization',
@@ -731,7 +742,8 @@ export const TRACKING_CARDS: GuideCard[] = [
         where: 'Credit cards → Manage → Categories & weights',
         steps: [
           '**Hide** takes a row out of the matrix and keeps its cells; **Show** brings it back.',
-          'Drag the grip, or focus it and press the up and down arrows, to reorder.',
+          'Drag a row by its grip to reorder it, or focus the grip and press Space, move it with the arrow keys and press Space again.',
+          'The new order saves at once and the matrix rows follow it; the toast’s **Undo** puts it back.',
         ],
         to: '/credit-cards?section=manage',
         keywords: ['hide category', 'reorder', 'matrix rows'],

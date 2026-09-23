@@ -1,14 +1,18 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { readdirSync, readFileSync } from 'node:fs'
+import path from 'node:path'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type {
   CreditCardOut,
   RewardCategoryOut,
   RewardRateOut,
   SpendingMatrix,
 } from '../types/api'
-import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
+import { ApiError, invalidateForMutation } from '../api/client'
+import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import CreditCardsPage from './CreditCardsPage'
+import { INK, PALETTE } from '../charts/theme'
 import { expectInDocumentOrder } from '../testing/domOrder'
 
 vi.mock('../api/creditCards', () => ({
@@ -27,6 +31,9 @@ vi.mock('../api/creditCards', () => ({
   createRewardCategory: vi.fn(),
   updateRewardCategory: vi.fn(),
   deleteRewardCategory: vi.fn(),
+  // The two reorder PUTs (lane R1). Every reorder test answers them or leaves them pending.
+  reorderCreditCards: vi.fn(),
+  reorderRewardCategories: vi.fn(),
 }))
 vi.mock('../api/spending', () => ({ fetchCategories: vi.fn(), fetchMatrix: vi.fn() }))
 vi.mock('../api/netWorth', () => ({
@@ -36,7 +43,7 @@ vi.mock('../api/netWorth', () => ({
 }))
 vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
 // ECharts never renders in jsdom (house law): the stub exposes the slices these tests
-// pin — series names for the two chart cards — via data-* attributes.
+// pin — series names and colours for the two chart cards — via data-* attributes.
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
   return {
@@ -45,7 +52,7 @@ vi.mock('../components/EChart', async () => {
       ariaLabel,
       animateEntrance = true,
     }: {
-      option: { series?: { name?: string }[] }
+      option: { series?: { name?: string; color?: string }[] }
       ariaLabel?: string
       animateEntrance?: boolean
     }) =>
@@ -53,6 +60,8 @@ vi.mock('../components/EChart', async () => {
         'data-testid': 'echart',
         'aria-label': ariaLabel,
         'data-series-names': (option.series ?? []).map((s) => s.name ?? '').join('|'),
+        // The credit-line chart keys each colour to its card (2026-09-23 drag-to-reorder §7).
+        'data-series-colors': (option.series ?? []).map((s) => s.color ?? '').join('|'),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
       }),
@@ -62,11 +71,15 @@ vi.mock('../components/EChart', async () => {
 import {
   createCardCredit,
   createCreditCard,
+  createRewardCategory,
   deleteCreditCard,
+  deleteRewardCategory,
   fetchCreditCards,
   fetchRewardCategories,
   fetchRewardRates,
   putRewardRates,
+  reorderCreditCards,
+  reorderRewardCategories,
   updateCardCredit,
   updateCreditCard,
   updateRewardCategory,
@@ -75,6 +88,8 @@ import { fetchHousehold } from '../api/household'
 import { fetchAccounts, fetchMonthBalances, fetchSummary } from '../api/netWorth'
 import { fetchCategories, fetchMatrix } from '../api/spending'
 import ToastProvider from '../components/ToastProvider'
+import CardsPanel from '../components/creditcards/CardsPanel'
+import CategoriesPanel from '../components/creditcards/CategoriesPanel'
 
 // --- fixtures: the valuation-flip scenario straight from the spec -----------------------
 // VX: 2x miles @1.7¢ on Groceries (3.4%) — beats Savor's 3x cash (3.0%).
@@ -194,6 +209,123 @@ function matrixRow(name: string): HTMLElement {
   return cell.closest('tr') as HTMLElement
 }
 
+// ── Drag-to-reorder helpers (2026-09-23 drag-to-reorder spec §7) ─────────────────────────────
+
+// Lane R1's stale-list sentences (spec §8.3).
+const STALE_CATEGORIES =
+  'The reward categories changed since this list was loaded — nothing was moved.'
+const STALE_CARDS = 'The cards changed since this list was loaded — nothing was moved.'
+
+/** The page inside a ToastProvider, on Manage — the reorder toasts and their Undo live there. */
+function renderManage() {
+  return render(
+    <MemoryRouter initialEntries={['/credit-cards?section=manage']}>
+      <ToastProvider>
+        <CreditCardsPage />
+      </ToastProvider>
+    </MemoryRouter>,
+  )
+}
+
+/** A row's grip, by the name it is announced with ("Reorder Venture X"). */
+const grip = (name: string) => screen.getByRole('button', { name: `Reorder ${name}` })
+
+/** The keyboard path (spec §2.4): focus the grip, Space lifts, `key` moves one place, Space
+ *  drops. */
+function keyboardMove(name: string, key: 'ArrowUp' | 'ArrowDown'): void {
+  grip(name).focus()
+  fireEvent.keyDown(grip(name), { key: ' ' })
+  fireEvent.keyDown(grip(name), { key })
+  fireEvent.keyDown(grip(name), { key: ' ' })
+}
+
+/** Unhandled rejections raised during the test, collected rather than failing the run: vitest
+ *  steps aside when another listener exists. A throw in a save's success path must surface as
+ *  one of these — a bug, loud on the console — never as a failed-save toast (lane R3 review). */
+function collectRejections(): unknown[] {
+  const reasons: unknown[] = []
+  const listener = (reason: unknown) => {
+    reasons.push(reason)
+  }
+  process.on('unhandledRejection', listener)
+  onTestFinished(() => {
+    process.off('unhandledRejection', listener)
+  })
+  return reasons
+}
+
+/** CategoriesPanel on its own, so a test can hand it a new onChanged between renders — the
+ *  page's own `load` never changes, so only a direct render shows which one a late answer calls.
+ *  Returns the rerender. */
+function renderCategoriesPanel(onChanged: () => void): (next: () => void) => void {
+  const panel = (callback: () => void) => (
+    <ToastProvider>
+      <CategoriesPanel
+        categories={CATEGORIES}
+        cards={[vx(), SAVOR, RH]}
+        spendingCategories={[]}
+        suggested={new Map()}
+        enteredMonths={new Map()}
+        onChanged={callback}
+      />
+    </ToastProvider>
+  )
+  const view = render(panel(onChanged))
+  return (next) => view.rerender(panel(next))
+}
+
+/** CardsPanel on its own, for the same reason as renderCategoriesPanel. One `cards` array for
+ *  every render, as the page hands down until its next fetch. Returns the rerender. */
+function renderCardsPanel(onChanged: () => void): (next: () => void) => void {
+  const cards = [vx(), SAVOR, RH]
+  const panel = (callback: () => void) => (
+    <ToastProvider>
+      <CardsPanel cards={cards} accounts={[]} people={PEOPLE} onChanged={callback} />
+    </ToastProvider>
+  )
+  const view = render(panel(onChanged))
+  return (next) => view.rerender(panel(next))
+}
+
+/** A table's row ids, top to bottom, as rendered. */
+const rowIds = (table: '.roster-table' | '.categories-table') =>
+  [...document.querySelectorAll(`${table} tbody tr`)].map((row) => row.getAttribute('data-reorder-id'))
+
+/** A tiny server for the reward categories: the GET answers the stored order; the reorder PUT
+ *  stores the order it is sent — renumbered 0…n−1, as lane R1's route does — and answers with it.
+ *  Every GET answers fresh rows, as a parsed response does: the page's state (and a panel's
+ *  saved order, which retires on new props) must never ride on a reused array. */
+function serveCategories(initial: RewardCategoryOut[] = CATEGORIES): void {
+  let stored = initial
+  vi.mocked(fetchRewardCategories).mockImplementation(async () =>
+    stored.map((category) => ({ ...category })),
+  )
+  vi.mocked(reorderRewardCategories).mockImplementation(async (ids) => {
+    const byId = new Map(stored.map((category) => [category.id, category]))
+    stored = ids.flatMap((id, index) => {
+      const category = byId.get(id)
+      return category === undefined ? [] : [{ ...category, sort_order: index }]
+    })
+    return stored
+  })
+}
+
+/** A tiny server for the card list: the GET answers the stored order (fresh rows every time,
+ *  as serveCategories'); the reorder PUT stores the order it is sent — renumbered 0…n−1, as lane
+ *  R1's route does — and answers with it. */
+function serveCards(initial: CreditCardOut[] = [vx(), SAVOR, RH]): void {
+  let stored = initial
+  vi.mocked(fetchCreditCards).mockImplementation(async () => stored.map((card) => ({ ...card })))
+  vi.mocked(reorderCreditCards).mockImplementation(async (ids) => {
+    const byId = new Map(stored.map((card) => [card.id, card]))
+    stored = ids.flatMap((id, index) => {
+      const card = byId.get(id)
+      return card === undefined ? [] : [{ ...card, sort_order: index }]
+    })
+    return stored
+  })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   clearSnapshots()
@@ -202,6 +334,9 @@ beforeEach(() => {
   // next test's page before it has rendered a single chip.
   localStorage.clear()
   seedHappyPath()
+  // jsdom has no layout: a keyboard lift measures every row at y=0, so lane R0's hook asks the
+  // page to scroll the landing slot clear of the top edge — and jsdom implements no scrollBy.
+  window.scrollBy = vi.fn()
 })
 
 /** The six-fetch payload the page stores under its snapshot key. */
@@ -501,8 +636,10 @@ describe('CreditCardsPage', () => {
       rewards_currency: 'cash',
       point_value_cents: '1',
       is_active: true,
-      sort_order: 0,
     })
+    // No position: the server appends a new card after the last one (2026-09-23 reorder spec
+    // §3.3, §7) — a 0 here would put it first.
+    expect(vi.mocked(createCreditCard).mock.calls[0][0]).not.toHaveProperty('sort_order')
   })
 
   it('toggling a credit\'s "counts" PATCHes the full credit body', async () => {
@@ -619,40 +756,32 @@ describe('CreditCardsPage', () => {
     expect(categoriesRow('Groceries').textContent).toContain('auto · from 2 entered months')
   })
 
-  it('reordering a category is optimistic and PATCHes only the rows that moved', async () => {
-    vi.mocked(updateRewardCategory).mockResolvedValue(CATEGORIES[0])
+  it('reordering a category is one PUT of the whole new order, and a second move before the refetch diffs against the optimistic order', async () => {
+    // Rent is hidden: it keeps its place and rides in every PUT (spec §9).
+    serveCategories([CATEGORIES[0], CATEGORIES[1], { ...CATEGORIES[2], is_active: false }])
     renderPage('/credit-cards?section=manage')
     await screen.findByText('Categories & weights')
-    // Groceries (index 0) moves down one via the keyboard path of the drag handle.
-    fireEvent.keyDown(
-      screen.getByRole('button', { name: 'Reorder Groceries — drag, or arrow keys' }),
-      { key: 'ArrowDown' },
-    )
+    // The page's reload never lands in this test: every move below has only the rows on screen
+    // to go by, never the props the page loaded with.
+    vi.mocked(fetchRewardCategories).mockReturnValue(new Promise<never>(() => {}))
+    // Lift-and-drop from the keyboard (2026-09-23 drag-to-reorder spec §2.4): Space lifts
+    // Groceries, ↓ moves it one place, Space drops it.
+    keyboardMove('Groceries', 'ArrowDown')
+    // ONE PUT, carrying every reward category in the new order (spec §7).
+    expect(reorderRewardCategories).toHaveBeenCalledTimes(1)
+    expect(reorderRewardCategories).toHaveBeenLastCalledWith([11, 10, 12])
     // Optimistic: the list re-renders in the new order before any refetch lands.
-    const handles = screen
-      .getAllByRole('button', { name: /^Reorder / })
-      .map((b) => b.getAttribute('aria-label'))
-    expect(handles[0]).toBe('Reorder Dining — drag, or arrow keys')
-    expect(handles[1]).toBe('Reorder Groceries — drag, or arrow keys')
-    // Persistence: sort_order = index, and ONLY the two moved rows go on the wire
-    // (Rent keeps sort_order 2 and is skipped).
-    await waitFor(() => expect(updateRewardCategory).toHaveBeenCalledTimes(2))
-    expect(vi.mocked(updateRewardCategory).mock.calls).toEqual([
-      [11, { sort_order: 0 }],
-      [10, { sort_order: 1 }],
-    ])
-    // Regression (live-check find): a SECOND move before any refetch must diff against
-    // the just-persisted sort_orders, not the stale wire values — moving back writes
-    // both rows again rather than silently no-oping.
-    fireEvent.keyDown(
-      screen.getByRole('button', { name: 'Reorder Groceries — drag, or arrow keys' }),
-      { key: 'ArrowUp' },
-    )
-    await waitFor(() => expect(updateRewardCategory).toHaveBeenCalledTimes(4))
-    expect(vi.mocked(updateRewardCategory).mock.calls.slice(2)).toEqual([
-      [10, { sort_order: 0 }],
-      [11, { sort_order: 1 }],
-    ])
+    expect(rowIds('.categories-table')).toEqual(['11', '10', '12'])
+    // The grips wake when the PUT answers.
+    await waitFor(() => expect(grip('Groceries').getAttribute('aria-disabled')).toBeNull())
+    // Regression (the live-check find this test was first written for): a SECOND move before
+    // the refetch lands must diff against the optimistic order, not the loaded one — moving
+    // Groceries back up is a real move, never a silent no-op.
+    keyboardMove('Groceries', 'ArrowUp')
+    expect(reorderRewardCategories).toHaveBeenCalledTimes(2)
+    expect(reorderRewardCategories).toHaveBeenLastCalledWith([10, 11, 12])
+    // The per-row PATCH chain is gone: a reorder never PATCHes a row.
+    expect(updateRewardCategory).not.toHaveBeenCalled()
   })
 
   it('empty state: no categories → the seed button renders', async () => {
@@ -769,8 +898,9 @@ describe('CreditCardsPage — card ownership', () => {
     renderPage('/credit-cards?section=manage')
     await screen.findByText('Card roster')
     const roster = document.querySelector('.roster-table') as HTMLElement
+    // The grip column comes first (2026-09-23 drag-to-reorder spec §7): Owner is the third cell.
     const owners = Array.from(roster.querySelectorAll('tbody tr')).map(
-      (tr) => tr.querySelectorAll('td')[1].textContent,
+      (tr) => tr.querySelectorAll('td')[2].textContent,
     )
     expect(owners).toEqual(['Ed', 'Ed', 'Sam'])
     // The fresh form follows the roster once /household lands — Joint must be a CHOICE.
@@ -996,5 +1126,986 @@ describe('CreditCardsPage — tiles per view', () => {
     const { container } = renderPage()
     expect(container.querySelectorAll('.page-skeleton .skeleton-tile')).toHaveLength(4)
     expect(container.querySelector('.page-skeleton .skeleton-delta')).toBeNull()
+  })
+})
+
+// ── Drag to reorder (2026-09-23 drag-to-reorder spec §7) ──────────────────────────────────────
+
+describe('CreditCardsPage — the credit-line colours follow the card, not its place', () => {
+  it('keys each line to its card id: a card moved up the list keeps its colour', async () => {
+    // SavorOne stands first — as it would after a drag — and still wears slot 1 (id 2), while
+    // Venture X keeps slot 0 (id 1). The series order is the list's.
+    vi.mocked(fetchCreditCards).mockResolvedValue([SAVOR, vx(), RH])
+    renderPage('/credit-cards?section=lines')
+    await screen.findByText('Credit line history')
+    const line = screen
+      .getAllByTestId('echart')
+      .find((el) => (el.getAttribute('data-series-names') ?? '').includes('Total line'))
+    expect(line?.getAttribute('data-series-names')).toBe('SavorOne|Venture X|Total line')
+    expect(line?.getAttribute('data-series-colors')).toBe(`${PALETTE[1]}|${PALETTE[0]}|${INK}`)
+  })
+
+  // Spec §7 as amended at the lane's code review: the rank counts the household's ACTIVE cards,
+  // every person's included — so a person scope that draws fewer cards repaints none of them,
+  // and an archived card holds no slot (ids only grow: archived cards holding slots for ever
+  // would turn a new card grey with seven lines drawn).
+  it('keeps a card in one colour across person scopes, and an archived card holds no slot', async () => {
+    const rhWithLine: CreditCardOut = {
+      ...RH,
+      current_limit: '5000.00',
+      limit_events: [{ id: 24, effective_date: '2025-03-01', limit_amount: '5000.00', note: null }],
+    }
+    // Venture X (id 1) is archived: it draws no line and takes no rank — SavorOne is first.
+    vi.mocked(fetchCreditCards).mockResolvedValue([vx({ is_active: false }), SAVOR, rhWithLine])
+    renderPage('/credit-cards?section=lines')
+    await screen.findByText('Credit line history')
+    const line = () => screen.getByLabelText(/Step chart of credit limits/)
+    await waitFor(() =>
+      expect(line().getAttribute('data-series-names')).toBe('SavorOne|RH Gold|Total line'),
+    )
+    expect(line().getAttribute('data-series-colors')).toBe(`${PALETTE[0]}|${PALETTE[1]}|${INK}`)
+    // Sam's scope draws RH Gold alone — in the colour the household view gave it.
+    fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
+    await waitFor(() => expect(line().getAttribute('data-series-names')).toBe('RH Gold'))
+    expect(line().getAttribute('data-series-colors')).toBe(PALETTE[1])
+  })
+
+  // One rank, one hue (spec §7 as amended at lane R5's review): the drill-in ranked its one card
+  // alone and drew every card in the first slot, so a card that is orange on the page chart
+  // turned blue the moment it was opened.
+  it("draws a card's drill-in line in the colour its page-chart line wears", async () => {
+    renderPage('/credit-cards?section=lines')
+    await screen.findByText('Credit line history')
+    const pageChart = screen.getByLabelText(/Step chart of credit limits/)
+    const names = (pageChart.getAttribute('data-series-names') ?? '').split('|')
+    const colors = (pageChart.getAttribute('data-series-colors') ?? '').split('|')
+    const savor = colors[names.indexOf('SavorOne')]
+    expect(savor).toBe(PALETTE[1])
+    cleanup()
+    renderPage('/credit-cards?card=savorone')
+    await screen.findByText('Worth keeping? (est.)')
+    const drill = screen.getByLabelText("Step chart of SavorOne's credit limit over time")
+    expect(drill.getAttribute('data-series-colors')).toBe(savor)
+  })
+})
+
+describe('CreditCardsPage — reorder Categories & weights (2026-09-23 drag-to-reorder spec §7)', () => {
+  beforeEach(() => {
+    vi.mocked(reorderRewardCategories).mockReset()
+  })
+
+  it('puts a grip first on every row — hidden ones too — on a reorderable table', async () => {
+    // One range, no carried rows: lane R0's development-only contract check stays silent.
+    const errors = vi.spyOn(console, 'error')
+    onTestFinished(() => errors.mockRestore())
+    serveCategories([CATEGORIES[0], CATEGORIES[1], { ...CATEGORIES[2], is_active: false }])
+    renderManage()
+    await screen.findByText('Categories & weights')
+    const table = document.querySelector('.categories-table') as HTMLTableElement
+    expect(table.className).toBe('data-table categories-table reorder-table')
+    const head = table.querySelector('thead tr')?.firstElementChild
+    expect(head?.className).toBe('reorder-grip-cell')
+    expect(head?.getAttribute('aria-hidden')).toBe('true')
+    for (const row of table.querySelectorAll('tbody tr')) {
+      expect(row.firstElementChild?.className).toBe('reorder-grip-cell')
+    }
+    expect(
+      [...table.querySelectorAll('tbody .reorder-grip')].map((button) =>
+        button.getAttribute('aria-label'),
+      ),
+    ).toEqual(['Reorder Groceries', 'Reorder Dining', 'Reorder Rent'])
+    // A hidden row keeps its place and moves like any other (spec §9).
+    expect((grip('Rent') as HTMLButtonElement).disabled).toBe(false)
+    // The native drag is gone: no row can be picked up by the browser itself.
+    expect(table.querySelectorAll('[draggable]')).toHaveLength(0)
+    // One description for the list's grips, outside the capped scroller's table.
+    const instructions = document.getElementById(
+      grip('Groceries').getAttribute('aria-describedby') ?? '',
+    )
+    expect(instructions?.textContent).toBe(
+      'Press Space or Enter to pick up. Use the arrow keys to move, Home or End to jump, Space or Enter to drop, Escape to cancel.',
+    )
+    expect(table.contains(instructions)).toBe(false)
+    expect(errors.mock.calls.filter(([first]) => String(first).startsWith('useReorder:'))).toEqual([])
+  })
+
+  it('keeps the grips focusable but inert while any request of the panel is in flight', async () => {
+    serveCategories()
+    // A hide that never settles: the panel stays busy for the rest of the test.
+    vi.mocked(updateRewardCategory).mockReturnValueOnce(new Promise<never>(() => {}))
+    renderManage()
+    await screen.findByText('Categories & weights')
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Rent' }))
+    const handle = grip('Dining') as HTMLButtonElement
+    expect(handle.getAttribute('aria-disabled')).toBe('true')
+    expect(handle.disabled).toBe(false)
+    handle.focus()
+    fireEvent.keyDown(handle, { key: ' ' })
+    expect(handle.getAttribute('aria-pressed')).toBeNull()
+    expect(reorderRewardCategories).not.toHaveBeenCalled()
+  })
+
+  it('flashes the moved row, says "Moved Dining", and the page reloads the list', async () => {
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Dining', 'ArrowUp')
+    expect(await screen.findByText('Moved Dining')).toBeTruthy()
+    expect(reorderRewardCategories).toHaveBeenCalledWith([11, 10, 12])
+    expect(
+      document
+        .querySelector('.categories-table tr[data-reorder-id="11"]')
+        ?.hasAttribute('data-reorder-saved'),
+    ).toBe(true)
+    // The mount's fetch, then the reload the save asked for.
+    expect(fetchRewardCategories).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
+    expect(rowIds('.categories-table')).toEqual(['11', '10', '12'])
+    // Focus stays on the moved grip through the save (lane R0 restores it after the drop).
+    expect(document.activeElement).toBe(grip('Dining'))
+  })
+})
+
+describe('Credit cards — the native drag is gone (2026-09-23 drag-to-reorder spec §7 acceptance)', () => {
+  const folder = path.resolve(__dirname, '../components/creditcards')
+
+  it('no source under src/components/creditcards sets draggable or handles an HTML5 drag event', () => {
+    const offenders = readdirSync(folder)
+      .filter((name) => /\.tsx?$/.test(name))
+      .filter((name) =>
+        /\bdraggable\b|\bonDrag\w*|\bonDrop\b|dataTransfer/.test(
+          readFileSync(path.join(folder, name), 'utf8'),
+        ),
+      )
+    expect(offenders).toEqual([])
+  })
+
+  it('categories.css keeps no rule of the retired drag', () => {
+    const css = readFileSync(path.join(folder, 'categories.css'), 'utf8')
+    expect(css).not.toMatch(/\.drag-handle|\.drag-over|\.drag-cell|\.is-dragging/)
+  })
+})
+
+describe('CreditCardsPage — Categories & weights: Undo, and a save that fails (spec §7, §8.1, §8.3)', () => {
+  beforeEach(() => {
+    vi.mocked(reorderRewardCategories).mockReset()
+  })
+
+  it('Undo re-sends the order that stood before the drop, shows it and says so', async () => {
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Dining', 'ArrowUp')
+    await screen.findByText('Moved Dining')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByText('Order restored')).toBeTruthy()
+    expect(vi.mocked(reorderRewardCategories).mock.calls).toEqual([[[11, 10, 12]], [[10, 11, 12]]])
+    // The server's answer shows at once, and the page reloads behind it.
+    expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
+    expect(fetchRewardCategories).toHaveBeenCalledTimes(3)
+  })
+
+  // Lane R3's real-browser find, applied here: after a quick Undo the page can hand the panel
+  // nothing new. Here the drop's reload never lands and the Undo's returns exactly what the page
+  // first loaded, which CreditCardsPage.load skips as already shown. The panel shows the order
+  // the Undo restored — the server's own answer — and the next drag saves the order on screen.
+  it('drop → Undo → drag again saves the order the user sees, even when the page skips an identical reload', async () => {
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    const firstLoad = getSnapshot('credit-cards')
+    // The drop's reload never lands …
+    vi.mocked(fetchRewardCategories).mockReturnValueOnce(new Promise<never>(() => {}))
+    keyboardMove('Dining', 'ArrowUp')
+    await screen.findByText('Moved Dining')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Order restored')
+    // … and the Undo's lands with the rows of the first load, so the page keeps its props.
+    await waitFor(() => expect(getSnapshot('credit-cards')).not.toBe(firstLoad))
+    expect(JSON.stringify(getSnapshot('credit-cards'))).toBe(JSON.stringify(firstLoad))
+    await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
+    expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
+    keyboardMove('Rent', 'ArrowUp')
+    expect(reorderRewardCategories).toHaveBeenLastCalledWith([10, 12, 11])
+  })
+
+  // …and no saved order outlives a reload that returns rows identical to the first load. In
+  // the app every reorder PUT goes through api(), which drops the page's 'credit-cards'
+  // snapshot (client.ts MUTATION_FAMILIES), so the next reload always hands the panel fresh
+  // rows. Here the PUT does the same, and another tab puts the old order back before this
+  // tab's reload reads the list.
+  it("retires the saved order on the next reload even when it returns the first load's rows (another tab put them back)", async () => {
+    let stored = CATEGORIES
+    vi.mocked(fetchRewardCategories).mockImplementation(async () =>
+      stored.map((category) => ({ ...category })),
+    )
+    vi.mocked(reorderRewardCategories).mockImplementation(async (ids) => {
+      const byId = new Map(stored.map((category) => [category.id, category]))
+      const answer = ids.flatMap((id, index) => {
+        const category = byId.get(id)
+        return category === undefined ? [] : [{ ...category, sort_order: index }]
+      })
+      stored = CATEGORIES // the other tab's order, back where it was
+      invalidateForMutation('/credit-cards/categories/order')
+      return answer
+    })
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Dining', 'ArrowUp')
+    await screen.findByText('Moved Dining')
+    await waitFor(() => expect(rowIds('.categories-table')).toEqual(['10', '11', '12']))
+    await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
+    keyboardMove('Rent', 'ArrowUp')
+    expect(reorderRewardCategories).toHaveBeenLastCalledWith([10, 12, 11])
+  })
+
+  it.each([
+    { status: 500, detail: 'Internal Server Error', reason: 'the server had a problem (HTTP 500)' },
+    // A server sentence that brings its own stop: ours closes it, once.
+    { status: 422, detail: 'ids lists 12 more than once.', reason: 'ids lists 12 more than once' },
+  ])('puts the rows back, keeps the grip focused and says why ($status)', async ({ status, detail, reason }) => {
+    serveCategories()
+    vi.mocked(reorderRewardCategories).mockRejectedValueOnce(new ApiError(detail, status))
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Rent', 'ArrowUp')
+    expect(
+      await screen.findByText(
+        `Couldn't save the new order — ${reason}. The list is back to how it was.`,
+      ),
+    ).toBeTruthy()
+    expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
+    expect(document.activeElement).toBe(grip('Rent'))
+    expect(fetchRewardCategories).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+  })
+
+  it("shows a stale list's server sentence, puts the rows back and reloads (409)", async () => {
+    serveCategories()
+    vi.mocked(reorderRewardCategories).mockRejectedValueOnce(new ApiError(STALE_CATEGORIES, 409))
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Groceries', 'ArrowDown')
+    expect(await screen.findByText(STALE_CATEGORIES)).toBeTruthy()
+    expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
+    expect(fetchRewardCategories).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
+  })
+
+  it.each([
+    {
+      status: 500,
+      detail: 'Internal Server Error',
+      text: "Couldn't restore the order — the server had a problem (HTTP 500).",
+      fetches: 2,
+    },
+    { status: 409, detail: STALE_CATEGORIES, text: STALE_CATEGORIES, fetches: 3 },
+  ])('says why an Undo was refused ($status), reloading a stale list', async ({ status, detail, text, fetches }) => {
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Groceries', 'ArrowDown')
+    await screen.findByText('Moved Groceries')
+    vi.mocked(reorderRewardCategories).mockRejectedValueOnce(new ApiError(detail, status))
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByText(text)).toBeTruthy()
+    expect(fetchRewardCategories).toHaveBeenCalledTimes(fetches)
+  })
+})
+
+// Lane R3's code-quality review, applied to the same save/Undo shape (coordinator, 2026-09-23):
+// a late answer reloads through the page as it is now; requests are counted, not flagged; and
+// a throw in a success path is never reported as a failed request.
+describe('CreditCardsPage — Categories & weights: late answers and overlapping requests (lane R3 review)', () => {
+  /** The reward categories in `ids` order, renumbered as lane R1's route answers them. */
+  const categoriesIn = (ids: number[]): RewardCategoryOut[] =>
+    ids.flatMap((id, index) =>
+      CATEGORIES.filter((category) => category.id === id).map((category) => ({
+        ...category,
+        sort_order: index,
+      })),
+    )
+
+  beforeEach(() => {
+    vi.mocked(reorderRewardCategories).mockReset()
+  })
+
+  it("reloads through the latest render's onChanged — a save, its Undo and a delete's Undo that answer late", async () => {
+    const onChanged = [vi.fn(), vi.fn(), vi.fn(), vi.fn()]
+    let answer: (rows: RewardCategoryOut[]) => void = () => {}
+    vi.mocked(reorderRewardCategories)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve
+          }),
+      )
+      .mockImplementationOnce(async (ids) => categoriesIn(ids))
+    vi.mocked(deleteRewardCategory).mockResolvedValue(undefined)
+    vi.mocked(createRewardCategory).mockResolvedValue(CATEGORIES[2])
+    const rerenderWith = renderCategoriesPanel(onChanged[0])
+    keyboardMove('Dining', 'ArrowUp')
+    // The page renders again while the PUT is out, handing down a new onChanged.
+    rerenderWith(onChanged[1])
+    await act(async () => answer(categoriesIn([11, 10, 12])))
+    // The toast's Undo is clicked after yet another render.
+    rerenderWith(onChanged[2])
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await screen.findByText('Order restored')
+    // A delete (reloading through the render it was clicked in), then its Undo after another.
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Rent' }))
+    const deleted = (await screen.findByText('Deleted Rent and its multipliers')).closest(
+      '.toast',
+    ) as HTMLElement
+    rerenderWith(onChanged[3])
+    fireEvent.click(within(deleted).getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Restored Rent — multipliers were not restored')
+    expect(onChanged.map((callback) => callback.mock.calls.length)).toEqual([0, 1, 2, 1])
+  })
+
+  it("keeps the grips parked until every request is back — a drop's Undo clicked while a later drop's save is out", async () => {
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Dining', 'ArrowUp') // drop A, answered at once
+    await screen.findByText('Moved Dining')
+    await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
+    let answerDrop: (rows: RewardCategoryOut[]) => void = () => {}
+    let answerUndo: (rows: RewardCategoryOut[]) => void = () => {}
+    vi.mocked(reorderRewardCategories)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerDrop = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerUndo = resolve
+          }),
+      )
+    keyboardMove('Rent', 'ArrowUp') // drop B, left out
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' })) // A's Undo, left out too
+    expect(vi.mocked(reorderRewardCategories).mock.calls.slice(1)).toEqual([
+      [[11, 12, 10]],
+      [[10, 11, 12]],
+    ])
+    await act(async () => answerDrop(categoriesIn([11, 12, 10])))
+    // B is back and A's Undo is not: the grips stay parked.
+    expect(grip('Rent').getAttribute('aria-disabled')).toBe('true')
+    await act(async () => answerUndo(categoriesIn([10, 11, 12])))
+    await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
+    expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
+  })
+
+  it("a throw in the save's success path is a bug on the console, never 'The list is back to how it was.'", async () => {
+    const rejections = collectRejections()
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    // The page's reload throws before it returns a promise: a synchronous throw inside the
+    // success handler, with the saved order already on screen.
+    vi.mocked(fetchRewardCategories).mockImplementationOnce(() => {
+      throw new Error('the reload threw')
+    })
+    keyboardMove('Dining', 'ArrowUp')
+    await waitFor(() => expect(rejections).toHaveLength(1))
+    expect(rejections[0]).toEqual(new Error('the reload threw'))
+    expect(rowIds('.categories-table')).toEqual(['11', '10', '12'])
+    expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
+    // The request is back whatever its success path did: the grips wake.
+    await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
+  })
+
+  it("a throw in the Undo's success path is a bug on the console, never \"Couldn't restore the order\"", async () => {
+    const rejections = collectRejections()
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Dining', 'ArrowUp')
+    await screen.findByText('Moved Dining')
+    vi.mocked(fetchRewardCategories).mockImplementationOnce(() => {
+      throw new Error('the reload threw')
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(rejections).toHaveLength(1))
+    expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
+    expect(screen.queryByText(/Couldn't restore the order/)).toBeNull()
+  })
+})
+
+describe('CreditCardsPage — Categories & weights: the rows and the form around a drag', () => {
+  beforeEach(() => {
+    vi.mocked(reorderRewardCategories).mockReset()
+  })
+
+  it("shuts the rows' own buttons while a row is lifted; Escape opens them again and saves nothing", async () => {
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    const rowButtons = () =>
+      CATEGORIES.flatMap(({ name }) =>
+        [`Edit ${name}`, `Hide ${name}`, `Delete ${name}`].map(
+          (label) => screen.getByRole('button', { name: label }) as HTMLButtonElement,
+        ),
+      )
+    grip('Dining').focus()
+    fireEvent.keyDown(grip('Dining'), { key: ' ' })
+    expect(rowButtons().every((button) => button.disabled)).toBe(true)
+    fireEvent.keyDown(grip('Dining'), { key: 'Escape' })
+    expect(rowButtons().every((button) => !button.disabled)).toBe(true)
+    expect(reorderRewardCategories).not.toHaveBeenCalled()
+  })
+
+  it('a new category names no position — the server appends it after the last row', async () => {
+    serveCategories()
+    vi.mocked(createRewardCategory).mockResolvedValue({
+      ...CATEGORIES[2],
+      id: 13,
+      name: 'Gas',
+      slug: 'gas',
+      sort_order: 3,
+    })
+    renderManage()
+    await screen.findByText('Categories & weights')
+    fireEvent.change(screen.getByLabelText('Category name'), { target: { value: 'Gas' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    await waitFor(() => expect(createRewardCategory).toHaveBeenCalledTimes(1))
+    // Exactly the four columns the form owns — no sort_order (2026-09-23 reorder spec §3.3).
+    expect(vi.mocked(createRewardCategory).mock.calls[0][0]).toStrictEqual({
+      name: 'Gas',
+      annual_spend: null,
+      spending_category_id: null,
+      pinned_card_id: null,
+    })
+  })
+})
+
+describe('CreditCardsPage — reorder the card roster (2026-09-23 drag-to-reorder spec §7)', () => {
+  beforeEach(() => {
+    vi.mocked(reorderCreditCards).mockReset()
+  })
+
+  it('puts a grip first on every card row — archived ones too — on a reorderable table', async () => {
+    // One range, no carried rows: lane R0's development-only contract check stays silent.
+    const errors = vi.spyOn(console, 'error')
+    onTestFinished(() => errors.mockRestore())
+    serveCards([vx({ is_active: false }), SAVOR, RH])
+    renderManage()
+    await screen.findByText('Card roster')
+    const table = document.querySelector('.roster-table') as HTMLTableElement
+    expect(table.className).toBe('data-table roster-table reorder-table')
+    const head = table.querySelector('thead tr')?.firstElementChild
+    expect(head?.className).toBe('reorder-grip-cell')
+    expect(head?.getAttribute('aria-hidden')).toBe('true')
+    for (const row of table.querySelectorAll('tbody tr')) {
+      expect(row.firstElementChild?.className).toBe('reorder-grip-cell')
+    }
+    expect(
+      [...table.querySelectorAll('tbody .reorder-grip')].map((button) =>
+        button.getAttribute('aria-label'),
+      ),
+    ).toEqual(['Reorder Venture X', 'Reorder SavorOne', 'Reorder RH Gold'])
+    // An archived card keeps its place and moves like any other (spec §9).
+    expect((grip('Venture X') as HTMLButtonElement).disabled).toBe(false)
+    // One description for the list's grips, outside the table (lane R0 consumer rule 6).
+    const instructions = document.getElementById(
+      grip('Venture X').getAttribute('aria-describedby') ?? '',
+    )
+    expect(instructions?.textContent).toBe(
+      'Press Space or Enter to pick up. Use the arrow keys to move, Home or End to jump, Space or Enter to drop, Escape to cancel.',
+    )
+    expect(table.contains(instructions)).toBe(false)
+    expect(errors.mock.calls.filter(([first]) => String(first).startsWith('useReorder:'))).toEqual([])
+  })
+
+  it('gives a lone card a disabled grip, and an empty roster no table at all (spec §9)', async () => {
+    serveCards([vx()])
+    renderManage()
+    await screen.findByText('Card roster')
+    expect((grip('Venture X') as HTMLButtonElement).disabled).toBe(true)
+    cleanup()
+    clearSnapshots()
+    serveCards([])
+    renderManage()
+    await screen.findByText(/No cards yet/)
+    expect(document.querySelector('.roster-table')).toBeNull()
+  })
+
+  it('saves one drop as one PUT of every card id, shows it at once, and parks the grips until it answers', async () => {
+    // RH Gold is archived: it keeps its place and rides in the PUT (spec §9).
+    serveCards([vx(), SAVOR, { ...RH, is_active: false }])
+    vi.mocked(reorderCreditCards).mockReturnValue(new Promise<never>(() => {}))
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    expect(reorderCreditCards).toHaveBeenCalledTimes(1)
+    expect(reorderCreditCards).toHaveBeenCalledWith([2, 1, 3])
+    // Optimistic: the dropped order is on screen before the server answers (spec §7).
+    expect(rowIds('.roster-table')).toEqual(['2', '1', '3'])
+    // Inert until it answers, so a second drop cannot race the first (spec §9) — but still
+    // focusable: the keyboard drop left focus on the moved grip.
+    expect(grip('RH Gold').getAttribute('aria-disabled')).toBe('true')
+    expect(document.activeElement).toBe(grip('Venture X'))
+  })
+
+  it('moves an archived card like any other — its own drop is one PUT of every card id (spec §9)', async () => {
+    serveCards([vx(), SAVOR, { ...RH, is_active: false }])
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('RH Gold', 'ArrowUp')
+    expect(reorderCreditCards).toHaveBeenCalledWith([1, 3, 2])
+    expect(await screen.findByText('Moved RH Gold')).toBeTruthy()
+    expect(rowIds('.roster-table')).toEqual(['1', '3', '2'])
+    // Still archived where it now stands: a reorder moves the row and nothing else.
+    expect(
+      document.querySelector('.roster-table tr[data-reorder-id="3"] .badge')?.textContent,
+    ).toBe('Archived')
+  })
+
+  it('flashes the moved row, says "Moved Venture X", and the page reloads — the matrix follows', async () => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    expect(await screen.findByText('Moved Venture X')).toBeTruthy()
+    expect(
+      document.querySelector('.roster-table tr[data-reorder-id="1"]')?.hasAttribute('data-reorder-saved'),
+    ).toBe(true)
+    // The mount's fetch, then the reload the save asked for.
+    expect(fetchCreditCards).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    expect(rowIds('.roster-table')).toEqual(['2', '1', '3'])
+    // The matrix reads the page's list, so its columns follow the new order by construction.
+    fireEvent.click(screen.getByRole('tab', { name: 'Rewards' }))
+    expect([...document.querySelectorAll('[id^="card-col-"]')].map((button) => button.id)).toEqual(
+      ['card-col-2', 'card-col-1', 'card-col-3'],
+    )
+  })
+
+  it('keeps the grips focusable but inert while any request of the roster is in flight', async () => {
+    serveCards()
+    // An archive that never settles: the roster stays busy for the rest of the test.
+    vi.mocked(updateCreditCard).mockReturnValueOnce(new Promise<never>(() => {}))
+    renderManage()
+    await screen.findByText('Card roster')
+    fireEvent.click(screen.getByRole('button', { name: 'Archive RH Gold' }))
+    const handle = grip('SavorOne') as HTMLButtonElement
+    expect(handle.getAttribute('aria-disabled')).toBe('true')
+    expect(handle.disabled).toBe(false)
+    handle.focus()
+    fireEvent.keyDown(handle, { key: ' ' })
+    expect(handle.getAttribute('aria-pressed')).toBeNull()
+    expect(reorderCreditCards).not.toHaveBeenCalled()
+  })
+
+  it('never lets a reload that lands mid-save show the old order over the dropped one', async () => {
+    serveCards()
+    let answer: (cards: CreditCardOut[]) => void = () => {}
+    vi.mocked(reorderCreditCards).mockReturnValueOnce(
+      new Promise<CreditCardOut[]>((resolve) => {
+        answer = resolve
+      }),
+    )
+    const hidden = { ...CATEGORIES[2], is_active: false }
+    vi.mocked(updateRewardCategory).mockResolvedValue(hidden)
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    // Another panel's save reloads the page mid-flight: a fresh card list, still in the old
+    // order (the server has not moved it yet), beside the change that panel made.
+    vi.mocked(fetchCreditCards).mockResolvedValue([vx(), SAVOR, RH])
+    vi.mocked(fetchRewardCategories).mockResolvedValue([CATEGORIES[0], CATEGORIES[1], hidden])
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Rent' }))
+    await screen.findByRole('button', { name: 'Show Rent' })
+    expect(rowIds('.roster-table')).toEqual(['2', '1', '3'])
+    // The PUT answers: the server's order stands until the page's next fetch.
+    await act(async () => {
+      answer([{ ...SAVOR, sort_order: 0 }, { ...vx(), sort_order: 1 }, { ...RH, sort_order: 2 }])
+    })
+    expect(rowIds('.roster-table')).toEqual(['2', '1', '3'])
+  })
+})
+
+describe('CreditCardsPage — the card roster: Undo, and a save that fails (spec §7, §8.1, §8.3)', () => {
+  beforeEach(() => {
+    vi.mocked(reorderCreditCards).mockReset()
+  })
+
+  it('Undo re-sends the order that stood before the drop, shows it and says so', async () => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByText('Order restored')).toBeTruthy()
+    expect(vi.mocked(reorderCreditCards).mock.calls).toEqual([[[2, 1, 3]], [[1, 2, 3]]])
+    // The server's answer shows at once, and the page reloads behind it.
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+    expect(fetchCreditCards).toHaveBeenCalledTimes(3)
+  })
+
+  // Lane R3's browser find, as for Categories & weights: the drop's reload never lands and the
+  // Undo's returns exactly what the page first loaded, which the page skips as already shown.
+  it('drop → Undo → drag again saves the order the user sees, even when the page skips an identical reload', async () => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    const firstLoad = getSnapshot('credit-cards')
+    // The drop's reload never lands …
+    vi.mocked(fetchCreditCards).mockReturnValueOnce(new Promise<never>(() => {}))
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Order restored')
+    // … and the Undo's lands with the rows of the first load, so the page keeps its props.
+    await waitFor(() => expect(getSnapshot('credit-cards')).not.toBe(firstLoad))
+    expect(JSON.stringify(getSnapshot('credit-cards'))).toBe(JSON.stringify(firstLoad))
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+    keyboardMove('RH Gold', 'ArrowUp')
+    expect(reorderCreditCards).toHaveBeenLastCalledWith([1, 3, 2])
+  })
+
+  // …and no saved order outlives a reload that returns the first load's rows: every reorder
+  // PUT drops the page's snapshot (api() → invalidateForMutation), so the reload always hands
+  // the roster fresh rows. Here another tab puts the old order back before this tab reloads.
+  it("retires the saved order on the next reload even when it returns the first load's rows (another tab put them back)", async () => {
+    let stored = [vx(), SAVOR, RH]
+    vi.mocked(fetchCreditCards).mockImplementation(async () => stored.map((card) => ({ ...card })))
+    vi.mocked(reorderCreditCards).mockImplementation(async (ids) => {
+      const byId = new Map(stored.map((card) => [card.id, card]))
+      const answer = ids.flatMap((id, index) => {
+        const card = byId.get(id)
+        return card === undefined ? [] : [{ ...card, sort_order: index }]
+      })
+      stored = [vx(), SAVOR, RH] // the other tab's order, back where it was
+      invalidateForMutation('/credit-cards/order')
+      return answer
+    })
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    await waitFor(() => expect(rowIds('.roster-table')).toEqual(['1', '2', '3']))
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    keyboardMove('RH Gold', 'ArrowUp')
+    expect(reorderCreditCards).toHaveBeenLastCalledWith([1, 3, 2])
+  })
+
+  it.each([
+    { status: 500, detail: 'Internal Server Error', reason: 'the server had a problem (HTTP 500)' },
+    // A server sentence that brings its own stop: ours closes it, once.
+    { status: 422, detail: 'ids lists 3 more than once.', reason: 'ids lists 3 more than once' },
+  ])('puts the rows back, keeps the grip focused and says why ($status)', async ({ status, detail, reason }) => {
+    serveCards()
+    vi.mocked(reorderCreditCards).mockRejectedValueOnce(new ApiError(detail, status))
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('RH Gold', 'ArrowUp')
+    expect(
+      await screen.findByText(
+        `Couldn't save the new order — ${reason}. The list is back to how it was.`,
+      ),
+    ).toBeTruthy()
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+    expect(document.activeElement).toBe(grip('RH Gold'))
+    expect(fetchCreditCards).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+  })
+
+  it("shows a stale roster's server sentence, puts the rows back and reloads (409)", async () => {
+    serveCards()
+    vi.mocked(reorderCreditCards).mockRejectedValueOnce(new ApiError(STALE_CARDS, 409))
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    expect(await screen.findByText(STALE_CARDS)).toBeTruthy()
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+    expect(fetchCreditCards).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
+  })
+
+  it.each([
+    {
+      status: 500,
+      detail: 'Internal Server Error',
+      text: "Couldn't restore the order — the server had a problem (HTTP 500).",
+      fetches: 2,
+    },
+    { status: 409, detail: STALE_CARDS, text: STALE_CARDS, fetches: 3 },
+  ])('says why an Undo was refused ($status), reloading a stale roster', async ({ status, detail, text, fetches }) => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    vi.mocked(reorderCreditCards).mockRejectedValueOnce(new ApiError(detail, status))
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByText(text)).toBeTruthy()
+    expect(fetchCreditCards).toHaveBeenCalledTimes(fetches)
+  })
+})
+
+describe('CreditCardsPage — the card roster: the rows and the form around a drag', () => {
+  beforeEach(() => {
+    vi.mocked(reorderCreditCards).mockReset()
+  })
+
+  it("shuts the rows' own buttons while a row is lifted; Escape opens them again and saves nothing", async () => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    const rowButtons = () =>
+      ['Venture X', 'SavorOne', 'RH Gold'].flatMap((name) =>
+        [`Edit ${name}`, `Archive ${name}`, `Delete ${name}`].map(
+          (label) => screen.getByRole('button', { name: label }) as HTMLButtonElement,
+        ),
+      )
+    grip('SavorOne').focus()
+    fireEvent.keyDown(grip('SavorOne'), { key: ' ' })
+    expect(rowButtons().every((button) => button.disabled)).toBe(true)
+    fireEvent.keyDown(grip('SavorOne'), { key: 'Escape' })
+    expect(rowButtons().every((button) => !button.disabled)).toBe(true)
+    expect(reorderCreditCards).not.toHaveBeenCalled()
+  })
+
+  it("an edit after a reorder sends the card's renumbered sort_order, never the one it loaded with", async () => {
+    serveCards()
+    vi.mocked(updateCreditCard).mockResolvedValue(vx())
+    renderManage()
+    await screen.findByText('Card roster')
+    // The page's reload never lands: only the PUT's own answer knows the new numbers.
+    vi.mocked(fetchCreditCards).mockReturnValue(new Promise<never>(() => {}))
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Venture X' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save card' }))
+    await waitFor(() => expect(updateCreditCard).toHaveBeenCalledTimes(1))
+    // Venture X loaded as 0 and now stands second, renumbered 1 by the server. The full-replace
+    // PATCH still names a position (spec §7), and a stale 0 would tie SavorOne's new 0.
+    expect(vi.mocked(updateCreditCard).mock.calls[0]).toEqual([
+      1,
+      expect.objectContaining({ sort_order: 1 }),
+    ])
+  })
+})
+
+// Lane R3's code-quality review, applied to the roster as to Categories & weights above.
+describe('CreditCardsPage — the card roster: late answers and overlapping requests (lane R3 review)', () => {
+  /** The cards in `ids` order, renumbered as lane R1's route answers them. */
+  const cardsIn = (ids: number[]): CreditCardOut[] =>
+    ids.flatMap((id, index) =>
+      [vx(), SAVOR, RH]
+        .filter((card) => card.id === id)
+        .map((card) => ({ ...card, sort_order: index })),
+    )
+
+  beforeEach(() => {
+    vi.mocked(reorderCreditCards).mockReset()
+  })
+
+  it("reloads through the latest render's onChanged — a save, its Undo and a delete's Undo that answer late", async () => {
+    const onChanged = [vi.fn(), vi.fn(), vi.fn(), vi.fn()]
+    let answer: (cards: CreditCardOut[]) => void = () => {}
+    vi.mocked(reorderCreditCards)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve
+          }),
+      )
+      .mockImplementationOnce(async (ids) => cardsIn(ids))
+    vi.mocked(deleteCreditCard).mockResolvedValue(undefined)
+    vi.mocked(createCreditCard).mockResolvedValue(RH)
+    const rerenderWith = renderCardsPanel(onChanged[0])
+    keyboardMove('Venture X', 'ArrowDown')
+    // The page renders again while the PUT is out, handing down a new onChanged.
+    rerenderWith(onChanged[1])
+    await act(async () => answer(cardsIn([2, 1, 3])))
+    // The toast's Undo is clicked after yet another render.
+    rerenderWith(onChanged[2])
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await screen.findByText('Order restored')
+    // A delete (reloading through the render it was clicked in), then its Undo after another.
+    fireEvent.click(screen.getByRole('button', { name: 'Delete RH Gold' }))
+    const deleted = (await screen.findByText('Deleted RH Gold')).closest('.toast') as HTMLElement
+    rerenderWith(onChanged[3])
+    fireEvent.click(within(deleted).getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Restored RH Gold — matrix multipliers were not restored')
+    expect(onChanged.map((callback) => callback.mock.calls.length)).toEqual([0, 1, 2, 1])
+  })
+
+  it("keeps the grips parked until every request is back — a drop's Undo clicked while a later drop's save is out", async () => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown') // drop A, answered at once
+    await screen.findByText('Moved Venture X')
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    let answerDrop: (cards: CreditCardOut[]) => void = () => {}
+    let answerUndo: (cards: CreditCardOut[]) => void = () => {}
+    vi.mocked(reorderCreditCards)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerDrop = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerUndo = resolve
+          }),
+      )
+    keyboardMove('RH Gold', 'ArrowUp') // drop B, left out
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' })) // A's Undo, left out too
+    expect(vi.mocked(reorderCreditCards).mock.calls.slice(1)).toEqual([[[2, 3, 1]], [[1, 2, 3]]])
+    await act(async () => answerDrop(cardsIn([2, 3, 1])))
+    // B is back and A's Undo is not: the grips stay parked.
+    expect(grip('RH Gold').getAttribute('aria-disabled')).toBe('true')
+    await act(async () => answerUndo(cardsIn([1, 2, 3])))
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+  })
+
+  it("a throw in the save's success path is a bug on the console, never 'The list is back to how it was.'", async () => {
+    const rejections = collectRejections()
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    // The page's reload throws before it returns a promise: a synchronous throw inside the
+    // success handler, with the saved order already on screen.
+    vi.mocked(fetchCreditCards).mockImplementationOnce(() => {
+      throw new Error('the reload threw')
+    })
+    keyboardMove('Venture X', 'ArrowDown')
+    await waitFor(() => expect(rejections).toHaveLength(1))
+    expect(rejections[0]).toEqual(new Error('the reload threw'))
+    expect(rowIds('.roster-table')).toEqual(['2', '1', '3'])
+    expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
+    // The request is back whatever its success path did: the grips wake.
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+  })
+
+  it("a throw in the Undo's success path is a bug on the console, never \"Couldn't restore the order\"", async () => {
+    const rejections = collectRejections()
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    vi.mocked(fetchCreditCards).mockImplementationOnce(() => {
+      throw new Error('the reload threw')
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(rejections).toHaveLength(1))
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+    expect(screen.queryByText(/Couldn't restore the order/)).toBeNull()
+  })
+})
+
+// Found by the lane's Edge check (Task 11, step f): the drop's reload was still out when the
+// Undo's reload landed — its /net-worth/accounts answered last — and CreditCardsPage.load let
+// that older answer overwrite the newer one. The roster showed the dropped order over a server
+// that held the restored one, and the next drag saved it. One load feeds both lists, so the
+// roster pins it for Categories & weights too.
+describe('CreditCardsPage — an older reload never overwrites a newer one (the lane R5 browser check)', () => {
+  beforeEach(() => {
+    vi.mocked(reorderCreditCards).mockReset()
+  })
+
+  it("drop → Undo while the drop's reload is still out: when it answers last, the restored order stays and the next drag saves it", async () => {
+    serveCards()
+    renderManage()
+    await screen.findByText('Card roster')
+    const firstLoad = getSnapshot('credit-cards')
+    // The drop's reload reads the list the drop saved, and answers only after the Undo's.
+    let answerDropReload: (cards: CreditCardOut[]) => void = () => {}
+    vi.mocked(fetchCreditCards).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answerDropReload = resolve
+        }),
+    )
+    keyboardMove('Venture X', 'ArrowDown')
+    await screen.findByText('Moved Venture X')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Order restored')
+    // The Undo's reload has landed …
+    await waitFor(() => expect(getSnapshot('credit-cards')).not.toBe(firstLoad))
+    // … and now the drop's answers, with the order the drop saved.
+    await act(async () => {
+      answerDropReload([
+        { ...SAVOR, sort_order: 0 },
+        { ...vx(), sort_order: 1 },
+        { ...RH, sort_order: 2 },
+      ])
+    })
+    expect(rowIds('.roster-table')).toEqual(['1', '2', '3'])
+    await waitFor(() => expect(grip('RH Gold').getAttribute('aria-disabled')).toBeNull())
+    keyboardMove('RH Gold', 'ArrowUp')
+    expect(reorderCreditCards).toHaveBeenLastCalledWith([1, 3, 2])
+  })
+})
+
+// Lane R5's review, item 3: a superseded load neither reports its failure nor lifts the page's
+// revalidation dim — only the newest load speaks.
+describe('CreditCardsPage — loads that overtake each other (lane R5 review)', () => {
+  it('an older load that fails after a newer one landed shows no error', async () => {
+    setSnapshot('credit-cards', snapshotFixture())
+    let failMount: (err: Error) => void = () => {}
+    vi.mocked(fetchCreditCards).mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          failMount = reject
+        }),
+    )
+    vi.mocked(updateRewardCategory).mockResolvedValue({ ...CATEGORIES[2], is_active: false })
+    renderPage('/credit-cards?section=manage')
+    await screen.findByText('Categories & weights')
+    const seeded = getSnapshot('credit-cards')
+    // A panel's save reloads the page while the mount's load is still out, and that newer load
+    // lands first …
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Rent' }))
+    await waitFor(() => expect(getSnapshot('credit-cards')).not.toBe(seeded))
+    // … then the mount's load fails.
+    await act(async () => failMount(new Error('the old request timed out')))
+    expect(screen.queryByText(/Showing earlier data/)).toBeNull()
+    expect(screen.queryByText(/the old request timed out/)).toBeNull()
+  })
+
+  it('keeps the revalidation dim up until the newest load lands — an older one settling first does not lift it', async () => {
+    setSnapshot('credit-cards', snapshotFixture())
+    let answerMount: (cards: CreditCardOut[]) => void = () => {}
+    let answerNewer: (cards: CreditCardOut[]) => void = () => {}
+    vi.mocked(fetchCreditCards)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerMount = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerNewer = resolve
+          }),
+      )
+    vi.mocked(updateRewardCategory).mockResolvedValue({ ...CATEGORIES[2], is_active: false })
+    const { container } = renderPage('/credit-cards?section=manage')
+    await screen.findByText('Categories & weights')
+    // The seeded paint revalidates under the house dim.
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Rent' }))
+    await waitFor(() => expect(fetchCreditCards).toHaveBeenCalledTimes(2))
+    // The mount's load answers after the newer one started: it is superseded, and the dim stays.
+    await act(async () => answerMount([vx(), SAVOR, RH]))
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+    await act(async () => answerNewer([vx(), SAVOR, RH]))
+    await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
   })
 })

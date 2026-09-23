@@ -19,6 +19,10 @@ import { formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
 
 export interface LimitHistoryCard {
+  /** The card's id — its colour key, so a card keeps its hue wherever the user drags it
+   *  (2026-09-23 drag-to-reorder spec §7). Optional for a caller with no ids (the charts
+   *  fixture): without ids, a card's slot is its array position. */
+  id?: number
   name: string
   events: { effective_date: string; limit_amount: string }[]
 }
@@ -82,20 +86,51 @@ function totalLine(perCard: (number | null)[][], months: string[]): (number | nu
   })
 }
 
-/** Per-card step lines + optional INK Total. PALETTE slots are fixed by array
- *  position; a 9th+ card wears OTHER_SERIES_COLOR (never cycle past 8 — theme law). */
+/** Each card's PALETTE slot: its rank BY ID (2026-09-23 drag-to-reorder spec §7). The list
+ *  order is the user's — it sets the series, legend and tooltip order — and a reorder must never
+ *  repaint a card. `rankIds` is the household's active cards, every person's included, so a scope
+ *  that draws fewer cards repaints none, and a card's drill-in wears its page colour (spec §7 as
+ *  amended); without it the cards drawn rank among themselves. A drawn id the source leaves out
+ *  (an archived card's own drill-in) still ranks, among the rest. When any card comes without an
+ *  id (a fixture), every card keeps its array position. */
+function colorSlots(
+  cards: readonly LimitHistoryCard[],
+  rankIds?: readonly number[],
+): number[] {
+  const ids: number[] = []
+  for (const card of cards) {
+    if (card.id === undefined) return cards.map((_, index) => index)
+    ids.push(card.id)
+  }
+  const ranked = [...new Set([...(rankIds ?? []), ...ids])].sort((a, b) => a - b)
+  return ids.map((id) => ranked.indexOf(id))
+}
+
+/** Per-card step lines + optional INK Total, in the list's order. A card's colour is its
+ *  colorSlots rank, so it survives a reorder and a person scope; a 9th+ rank wears
+ *  OTHER_SERIES_COLOR (never cycle past 8 — theme law). */
 export function creditLineChartOption(
   cards: LimitHistoryCard[],
   months: string[],
-  { includeTotal, selected }: { includeTotal: boolean; selected?: Record<string, boolean> },
+  {
+    includeTotal,
+    selected,
+    rankIds,
+  }: {
+    includeTotal: boolean
+    selected?: Record<string, boolean>
+    /** The ids to rank colours against — the page passes the household's active cards. */
+    rankIds?: readonly number[]
+  },
 ): EChartsOption {
   const perCard = cards.map((card) => resolvedLimits(card, months))
+  const slots = colorSlots(cards, rankIds)
   const series = [
     ...cards.map((card, i) => ({
       ...LINE,
       name: card.name,
       step: 'end' as const, // limits change discretely — steps, not slopes
-      color: slotColor(i),
+      color: slotColor(slots[i]),
       connectNulls: false,
       data: perCard[i],
     })),

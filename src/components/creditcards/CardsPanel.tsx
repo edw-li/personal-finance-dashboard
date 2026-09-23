@@ -1,14 +1,19 @@
-import { useState } from 'react'
-import { ApiError } from '../../api/client'
+import { useLayoutEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
+import { ApiError, errorDetail } from '../../api/client'
 import {
   createCardCredit,
   createCreditCard,
   createLimitEvent,
   deleteCreditCard,
+  reorderCreditCards,
   updateCreditCard,
 } from '../../api/creditCards'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
+import DragHandle from '../reorder/DragHandle'
+import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
+import { useReorder } from '../reorder/useReorder'
 import { useToast } from '../ToastProvider'
 import type {
   AccountOut,
@@ -52,6 +57,12 @@ function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
 
+/** A server sentence used inside one of ours: its closing stop goes, ours closes it (the
+ *  reorder toasts' rule, lane R3's `clause`). */
+function clause(text: string): string {
+  return text.replace(/[.\s]+$/, '')
+}
+
 /**
  * Card roster: add/edit form + table. Archive = full-object PATCH flipping is_active
  * (history kept, optimizer ignores it). Delete = instant + Undo; Undo re-POSTs the
@@ -72,9 +83,42 @@ export default function CardsPanel({
   const [form, setForm] = useState<CardFormState>(EMPTY_CARD)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Single-flight across the panel (SecuritiesPanel's busy flag).
-  const [busy, setBusy] = useState(false)
+  // Requests in flight across the panel — counted, never flagged (lane R3 review): a toast's
+  // Undo clicked while a later drop's PUT is out settles on its own, and whichever answers
+  // first must not wake the grips while the other is still out. Every request calls begin()
+  // and settles in its `.finally`.
+  const [inFlight, setInFlight] = useState(0)
+  const busy = inFlight > 0
+  const begin = () => setInFlight((count) => count + 1)
+  const settle = () => setInFlight((count) => count - 1)
+  // The page's onChanged as of the LATEST render (useReorder's `latest` idiom): a save or an
+  // Undo answers long after the render that sent it — a toast stands for 6 s — and must reload
+  // through the page as it is now, never as it was at the drop.
+  const onChangedRef = useRef(onChanged)
+  useLayoutEffect(() => {
+    onChangedRef.current = onChanged
+  })
+  const reload = () => onChangedRef.current()
   const toast = useToast()
+
+  // Drag to reorder (2026-09-23 drag-to-reorder spec §7). Two layers sit over the page's
+  // `cards`, and only a reorder sets either:
+  //   pendingOrder — the dropped order, from the moment the grip lets go until the PUT
+  //                  answers (optimistic), cleared either way when it does;
+  //   savedOrder   — the server's answer, until the page's next fetch replaces `cards`
+  //                  (retired during render — CategoriesPanel's adjust-during-render
+  //                  pattern, no effect, so react-hooks/set-state-in-effect stays clean).
+  // So a reload that lands mid-save never flashes a row back to where it came from, and the
+  // rows on screen carry the server's renumbered sort_order the moment it answers.
+  const [pendingOrder, setPendingOrder] = useState<CreditCardOut[] | null>(null)
+  const [savedOrder, setSavedOrder] = useState<CreditCardOut[] | null>(null)
+  const [lastCards, setLastCards] = useState(cards)
+  if (lastCards !== cards) {
+    setLastCards(cards)
+    setSavedOrder(null)
+  }
+  const ordered = pendingOrder ?? savedOrder ?? cards
+  const cardById = new Map(ordered.map((card) => [card.id, card]))
 
   // A card is paid from a LIABILITY account and nothing else — offering the cash and
   // taxable accounts would only be a way to link the wrong row.
@@ -113,8 +157,8 @@ export default function CardsPanel({
     })
   }
 
-  /** The full-replace body, preserving fields the form doesn't show (is_active,
-   *  sort_order) from the stored row when editing. */
+  /** The full-replace body, preserving fields the form doesn't show from the stored row when
+   *  editing: is_active always, sort_order on an edit only (a new card names no position). */
   const buildBody = (stored: CreditCardOut | undefined): CreditCardIn | null => {
     const name = form.name.trim()
     if (!name) {
@@ -141,7 +185,7 @@ export default function CardsPanel({
       setError('point_value_cents must be positive')
       return null
     }
-    return {
+    const body: CreditCardIn = {
       name,
       // The wire belt: blur usually canonicalized already, but a submit reached without one
       // (a mouse user who types and clicks Save) must not ship "$95" to a Decimal column.
@@ -159,23 +203,26 @@ export default function CardsPanel({
       primary_holder: stored?.primary_holder ?? null,
       authorized_users: form.authorized_users.trim() || null,
       opened_on: form.opened_on || null,
-      // The two columns this form has no box for. On a full-replace PATCH an omitted or
-      // guessed value would silently unarchive a card, or shuffle the roster's order, on
-      // every unrelated edit — so they come from the STORED row and only Archive moves
-      // is_active.
+      // One of the two columns this form has no box for. On a full-replace PATCH an omitted
+      // or guessed is_active would silently unarchive a card on every unrelated edit — so it
+      // comes from the STORED row and only Archive moves it.
       is_active: stored?.is_active ?? true,
       account_id: form.account_id === '' ? null : Number(form.account_id),
       notes: form.notes.trim() || null,
-      sort_order: stored?.sort_order ?? 0,
     }
+    // The other is the position, which the roster's drag owns (2026-09-23 drag-to-reorder spec
+    // §7). An edit sends the stored value back, as a full replace names every column; a new
+    // card names none, and the server appends it after the last card (spec §3.3).
+    return stored === undefined ? body : { ...body, sort_order: stored.sort_order }
   }
 
   const submit = () => {
-    // The row as the SERVER has it, looked up in the current feed.
-    const stored = cards.find((c) => c.id === editingId)
+    // The row as the SERVER has it, as rendered: after a reorder the PUT's answer — its
+    // renumbered sort_order included — stands here before the page's reload lands.
+    const stored = ordered.find((card) => card.id === editingId)
     const body = buildBody(stored)
     if (body === null) return
-    setBusy(true)
+    begin()
     setError(null)
     // The FULL row on both verbs: the router validates the MERGED card, so a delta PATCH
     // would 422 on a stored field this form never touched. The nullable columns travel as
@@ -193,14 +240,14 @@ export default function CardsPanel({
         document.getElementById('card-name')?.focus()
         setForm(EMPTY_CARD)
         setEditingId(null)
-        onChanged()
+        reload()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))
-      .finally(() => setBusy(false))
+      .finally(settle)
   }
 
   const toggleArchive = (card: CreditCardOut) => {
-    setBusy(true)
+    begin()
     setError(null)
     // The stored row with ONE bit flipped — not the form's, which may be mid-edit on some
     // other card. Archiving keeps every credit and limit event; it only takes the card out
@@ -222,13 +269,13 @@ export default function CardsPanel({
       notes: card.notes,
       sort_order: card.sort_order,
     })
-      .then(() => onChanged())
+      .then(() => reload())
       .catch((err: unknown) => setError(message(err, 'Archive failed')))
-      .finally(() => setBusy(false))
+      .finally(settle)
   }
 
   const remove = (card: CreditCardOut) => {
-    setBusy(true)
+    begin()
     // Cleared on entry like submit's: a delete that succeeds must not leave the previous
     // save's 409 sitting over the panel as if it still described the table.
     setError(null)
@@ -241,13 +288,17 @@ export default function CardsPanel({
           setEditingId(null)
           setForm(EMPTY_CARD)
         }
-        onChanged()
+        reload()
         toast.success(`Deleted ${card.name}`, {
           action: {
             label: 'Undo',
             onAction: () => {
               // Re-create the card, then its cascaded children. Matrix cells are NOT
-              // restored (they reference the old card id) — the toast says so.
+              // restored (they reference the old card id) — the toast says so. Counted like
+              // any request of the roster, so no drop races the card coming back. (One
+              // catch stays: a credit or limit event that fails to come back is a failed
+              // restore, and says so.)
+              begin()
               createCreditCard({
                 name: card.name,
                 annual_fee: card.annual_fee,
@@ -280,17 +331,118 @@ export default function CardsPanel({
                       limit_amount: event.limit_amount,
                       note: event.note,
                     })
-                  onChanged()
+                  reload()
                   toast.info(`Restored ${card.name} — matrix multipliers were not restored`)
                 })
                 .catch(() => toast.error(`Could not restore ${card.name}`))
+                .finally(settle)
             },
           },
         })
       })
       .catch((err: unknown) => setError(message(err, 'Delete failed')))
-      .finally(() => setBusy(false))
+      .finally(settle)
   }
+
+  // A failed save puts the rows back (spec §7, as §4.1). Moving them can blur the grip a
+  // keyboard drop left focus on — reverting an upward move moves that grip's own row — so
+  // focus is handed back once the DOM has moved (flushSync: the move has happened by the next
+  // line). Lane R3's dropPendingOrder.
+  const dropPendingOrder = () => {
+    const focused = document.activeElement
+    flushSync(() => setPendingOrder(null))
+    if (
+      focused instanceof HTMLElement &&
+      focused.isConnected &&
+      document.activeElement !== focused
+    ) {
+      focused.focus()
+    }
+  }
+
+  // Undo re-sends the order that stood before the drop (spec §7): the route is not
+  // change-logged, so the client holds the previous order. The server's answer shows at once,
+  // as the saved order — it replaces the drop's, so the rows on screen are the restored ones
+  // even when the page's reload hands down nothing new (lane R3's browser find: an Undo's
+  // reload can match what the page already holds). A roster that changed since answers 409,
+  // and the page's reload shows what is there now. Two-argument `then` (lane R3 review): only
+  // the request's own failure takes the failure branch — a throw in the success branch is a
+  // bug for the console, never "Couldn't restore the order".
+  const restoreOrder = (ids: number[]) => {
+    begin()
+    reorderCreditCards(ids)
+      .then(
+        (restored) => {
+          setSavedOrder(restored)
+          reload()
+          toast.info('Order restored')
+        },
+        (err: unknown) => {
+          if (err instanceof ApiError && err.status === 409) {
+            toast.error(errorDetail(err))
+            reload()
+            return
+          }
+          toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
+        },
+      )
+      .finally(settle)
+  }
+
+  // One drop, one PUT (spec §7): every card, active and archived, in its new order. The
+  // matrix columns, the tiles and the credit-line legend read the page's list, so they follow
+  // once the page reloads. `reorder` is read only when the PUT answers, long after the render
+  // that declares it below has returned. Two-argument `then`, as restoreOrder's: a throw in
+  // the success branch must never print "The list is back to how it was." over the saved order.
+  const saveOrder = (next: number[], moved: number) => {
+    const card = cardById.get(moved)
+    if (card === undefined) return // the hook commits only ids it was handed
+    const previous = ordered.map((row) => row.id)
+    // Synchronously: the hook calls onCommit inside flushSync, so the new DOM order and the
+    // cleared drag transforms land in one frame (lane R0 consumer rule 3).
+    setPendingOrder(
+      next.flatMap((id) => {
+        const row = cardById.get(id)
+        return row === undefined ? [] : [row]
+      }),
+    )
+    begin()
+    reorderCreditCards(next)
+      .then(
+        (saved) => {
+          setPendingOrder(null)
+          setSavedOrder(saved)
+          reload()
+          reorder.markSaved(moved)
+          toast.success(`Moved ${card.name}`, {
+            action: { label: 'Undo', onAction: () => restoreOrder(previous) },
+          })
+        },
+        (err: unknown) => {
+          dropPendingOrder()
+          if (err instanceof ApiError && err.status === 409) {
+            // The server's sentence says what happened; the reload shows the rows it means.
+            toast.error(errorDetail(err))
+            reload()
+            return
+          }
+          // The toast layer, never the form's banner: the table is not the form (spec §4.1).
+          toast.error(
+            `Couldn't save the new order — ${clause(errorDetail(err))}. The list is back to how it was.`,
+          )
+        },
+      )
+      .finally(settle)
+  }
+
+  const reorder = useReorder({
+    items: ordered.map((card) => ({ id: card.id })),
+    labelOf: (id) => cardById.get(id)?.name ?? 'this card',
+    // Any request of the roster in flight — a save, an archive, a delete, a reorder — leaves
+    // the grips focusable but inert (lane R0 consumer rule 4), so a drop never races a save.
+    disabled: busy,
+    onCommit: saveOrder,
+  })
 
   // A card with no opened date has no anniversary, so the calendar can date neither its
   // fee nor an anniversary-cadence credit reset (2026-09-03 calendar spec §6) — the one
@@ -433,88 +585,104 @@ export default function CardsPanel({
           )}
         </div>
       </form>
-      {cards.length === 0 ? (
+      {ordered.length === 0 ? (
         <p className="empty-note">No cards yet — add your first card above.</p>
       ) : (
-        <table className="data-table roster-table">
-          <thead>
-            <tr>
-              <th>Card</th>
-              <th>Owner</th>
-              <th>Holder</th>
-              <th>Auth. users</th>
-              <th>Opened</th>
-              <th className="num">Limit</th>
-              <th>Linked account</th>
-              <th>Status</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {cards.map((card) => (
-              <tr key={card.id} className={card.id === editingId ? 'is-editing' : undefined}>
-                <td>
-                  {card.name}
-                  {/* The card's economics ride the name cell rather than owning two more
-                      columns. A 1¢ point value is the cash identity and says nothing. */}
-                  <span className="sub">
-                    {formatCurrency(card.annual_fee)} · {card.rewards_currency}
-                    {Number(card.point_value_cents) !== 1 && ` ${Number(card.point_value_cents)}¢`}
-                  </span>
-                </td>
-                {/* NULL is JOINT, never "unknown": the migration backfilled every
-                    pre-existing card to the primary person. `Holder` beside it is the
-                    embossed name — informational, and no longer editable here. */}
-                <td>
-                  {card.person_id === null ? 'Joint' : (ownerName.get(card.person_id) ?? '—')}
-                </td>
-                <td>{card.primary_holder ?? '—'}</td>
-                <td>{card.authorized_users ?? '—'}</td>
-                <td>{card.opened_on ? formatDate(card.opened_on) : '—'}</td>
-                {/* The SERVER's latest limit event, never re-derived here (global rule 9). */}
-                <td className="num">
-                  {card.current_limit === null ? '—' : formatCurrency(card.current_limit)}
-                </td>
-                <td>{card.account_id === null ? '—' : (accountName.get(card.account_id) ?? '—')}</td>
-                <td>
-                  <span className="badge">{card.is_active ? 'Active' : 'Archived'}</span>
-                </td>
-                <td className="row-actions">
-                  <button
-                    type="button"
-                    className="button"
-                    aria-label={`Edit ${card.name}`}
-                    // Shut mid-flight like every other button here: this fills the form from
-                    // the row, and a save landing a moment later resets it out from under
-                    // the click.
-                    disabled={busy}
-                    onClick={() => startEdit(card)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="button"
-                    aria-label={card.is_active ? `Archive ${card.name}` : `Unarchive ${card.name}`}
-                    disabled={busy}
-                    onClick={() => toggleArchive(card)}
-                  >
-                    {card.is_active ? 'Archive' : 'Unarchive'}
-                  </button>
-                  <button
-                    type="button"
-                    className="button"
-                    aria-label={`Delete ${card.name}`}
-                    disabled={busy}
-                    onClick={() => remove(card)}
-                  >
-                    Delete
-                  </button>
-                </td>
+        <>
+          {/* Once per list and outside the table — a <span> is not a valid child of one (lane
+              R0 consumer rule 6). Every grip points its aria-describedby at the instructions. */}
+          <ReorderInstructions id={reorder.instructionsId} />
+          <ReorderLiveRegion text={reorder.announcement} />
+          <table className="data-table roster-table reorder-table">
+            <thead>
+              <tr>
+                <th className="reorder-grip-cell" aria-hidden="true" />
+                <th>Card</th>
+                <th>Owner</th>
+                <th>Holder</th>
+                <th>Auth. users</th>
+                <th>Opened</th>
+                <th className="num">Limit</th>
+                <th>Linked account</th>
+                <th>Status</th>
+                <th />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {ordered.map((card) => (
+                <tr
+                  key={card.id}
+                  {...reorder.itemProps(card.id)}
+                  className={card.id === editingId ? 'is-editing' : undefined}
+                >
+                  {/* Every card, archived ones included, keeps its place and moves (spec §9). */}
+                  <td className="reorder-grip-cell">
+                    <DragHandle name={card.name} {...reorder.handleProps(card.id)} />
+                  </td>
+                  <td>
+                    {card.name}
+                    {/* The card's economics ride the name cell rather than owning two more
+                        columns. A 1¢ point value is the cash identity and says nothing. */}
+                    <span className="sub">
+                      {formatCurrency(card.annual_fee)} · {card.rewards_currency}
+                      {Number(card.point_value_cents) !== 1 && ` ${Number(card.point_value_cents)}¢`}
+                    </span>
+                  </td>
+                  {/* NULL is JOINT, never "unknown": the migration backfilled every
+                      pre-existing card to the primary person. `Holder` beside it is the
+                      embossed name — informational, and no longer editable here. */}
+                  <td>
+                    {card.person_id === null ? 'Joint' : (ownerName.get(card.person_id) ?? '—')}
+                  </td>
+                  <td>{card.primary_holder ?? '—'}</td>
+                  <td>{card.authorized_users ?? '—'}</td>
+                  <td>{card.opened_on ? formatDate(card.opened_on) : '—'}</td>
+                  {/* The SERVER's latest limit event, never re-derived here (global rule 9). */}
+                  <td className="num">
+                    {card.current_limit === null ? '—' : formatCurrency(card.current_limit)}
+                  </td>
+                  <td>{card.account_id === null ? '—' : (accountName.get(card.account_id) ?? '—')}</td>
+                  <td>
+                    <span className="badge">{card.is_active ? 'Active' : 'Archived'}</span>
+                  </td>
+                  <td className="row-actions">
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={`Edit ${card.name}`}
+                      // Shut mid-flight like every other button here: this fills the form from
+                      // the row, and a save landing a moment later resets it out from under
+                      // the click. Shut while a row is lifted too (lane R0 consumer rule 5): a
+                      // click mid-drag would act on a row that is about to move.
+                      disabled={busy || reorder.active}
+                      onClick={() => startEdit(card)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={card.is_active ? `Archive ${card.name}` : `Unarchive ${card.name}`}
+                      disabled={busy || reorder.active}
+                      onClick={() => toggleArchive(card)}
+                    >
+                      {card.is_active ? 'Archive' : 'Unarchive'}
+                    </button>
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={`Delete ${card.name}`}
+                      disabled={busy || reorder.active}
+                      onClick={() => remove(card)}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
       {/* Sibling of the ternary, not inside it: `undated` derives from `cards`, so it is
           empty exactly when the empty-note above is showing. */}
