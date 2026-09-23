@@ -72,10 +72,15 @@ function Stateful({
       disabled={disabled}
       onCommit={(next, moved) => {
         const byId = new Map(items.map((item) => [item.id, item]))
+        const at = new Map(next.map((id, index) => [id, index]))
+        const position = (id: string) => at.get(id) ?? 0
         setItems(
           next.flatMap((id) => {
             const item = byId.get(id)
-            return item === undefined ? [] : [item]
+            if (item === undefined) return []
+            // Like a real list re-deriving its nesting: carried rows follow the new order.
+            const carries = item.carries && [...item.carries].sort((a, b) => position(a) - position(b))
+            return [carries === undefined ? item : { ...item, carries }]
           }),
         )
         onCommit(next, moved)
@@ -390,6 +395,13 @@ describe('useReorder — keyboard', () => {
     fireEvent.keyDown(grip('Comp two'), { key: 'ArrowUp' })
     fireEvent.keyDown(grip('Comp two'), { key: ' ' })
     expect(onCommit).toHaveBeenLastCalledWith(['Q', 'P', 'C2', 'C1'], 'C2')
+
+    // The parent's unit now carries its components in their new order.
+    layoutRows()
+    fireEvent.keyDown(grip('Parent'), { key: ' ' })
+    fireEvent.keyDown(grip('Parent'), { key: 'ArrowUp' })
+    fireEvent.keyDown(grip('Parent'), { key: ' ' })
+    expect(onCommit).toHaveBeenLastCalledWith(['P', 'C2', 'C1', 'Q'], 'P')
   })
 
   it('works under StrictMode: a keyboard lift, move and drop commit exactly once', () => {
