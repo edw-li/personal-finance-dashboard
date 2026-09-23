@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { fetchSpendingEvidence, REVIEW_LABELS } from '../api/monthReview'
@@ -1952,6 +1952,7 @@ describe('OverviewPage independent groups and preferences', () => {
     // A keyboard move keeps the lifted row in view with window.scrollBy, which jsdom only logs as
     // not implemented (the drag itself is pinned in OverviewCustomize.test.tsx).
     const scroll = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    onTestFinished(() => scroll.mockRestore())
     serve()
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
@@ -1989,7 +1990,6 @@ describe('OverviewPage independent groups and preferences', () => {
     expect(getLocal('overview_layout')).toEqual(DEFAULT_OVERVIEW_LAYOUT)
     expect(document.querySelector('.kpi-row .stat-label')?.textContent).toBe('Net worth — Aug 2026')
     expect(await screen.findByRole('heading', { name: new RegExp(`Money flow.*${CURRENT_YEAR}`) })).toBeTruthy()
-    scroll.mockRestore()
   })
 
   it('falls back from an invalid saved layout and keeps at least one headline tile visible', async () => {
@@ -2037,6 +2037,7 @@ describe('OverviewPage independent groups and preferences', () => {
   // 2026-09-23 drag spec §6/§9: an Escape while a tile is lifted cancels the lift, never the popover.
   it('Escape while a tile is lifted cancels only the drag — the popover stays open and the tiles keep their order', async () => {
     const scroll = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    onTestFinished(() => scroll.mockRestore())
     serve()
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
@@ -2051,7 +2052,6 @@ describe('OverviewPage independent groups and preferences', () => {
     fireEvent.keyDown(grip, { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: 'Customize overview' })).toBeNull()
     expect(document.activeElement).toBe(trigger)
-    scroll.mockRestore()
   })
 })
 
