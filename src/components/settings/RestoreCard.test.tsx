@@ -165,7 +165,7 @@ describe('RestoreCard', () => {
   })
 
   it('tells the page an apply wrote a restore point, and re-reads the volume when told', async () => {
-    const onApplied = vi.fn()
+    const onStoredChanged = vi.fn()
     vi.mocked(restoreStored)
       .mockResolvedValueOnce(report())
       .mockResolvedValueOnce(
@@ -174,7 +174,7 @@ describe('RestoreCard', () => {
     const view = render(
       <MemoryRouter initialEntries={['/settings']}>
         <ToastProvider>
-          <RestoreCard onApplied={onApplied} />
+          <RestoreCard onStoredChanged={onStoredChanged} />
         </ToastProvider>
       </MemoryRouter>,
     )
@@ -183,23 +183,48 @@ describe('RestoreCard', () => {
     fireEvent.click(dryButton())
     await screen.findByText('Dry run — nothing was written.')
     // A dry run writes nothing, so nobody is told anything.
-    expect(onApplied).not.toHaveBeenCalled()
+    expect(onStoredChanged).not.toHaveBeenCalled()
     fireEvent.change(dateBox(), { target: { value: '2026-09-02' } })
     fireEvent.click(restoreButton())
     await screen.findByText('Restored.')
-    expect(onApplied).toHaveBeenCalledTimes(1)
+    expect(onStoredChanged).toHaveBeenCalledTimes(1)
     // The page answers with a new revision; the card reads both lists again.
     vi.mocked(fetchRestorePoints).mockResolvedValue([POINT])
     view.rerender(
       <MemoryRouter initialEntries={['/settings']}>
         <ToastProvider>
-          <RestoreCard onApplied={onApplied} revision={1} />
+          <RestoreCard onStoredChanged={onStoredChanged} revision={1} />
         </ToastProvider>
       </MemoryRouter>,
     )
     await waitFor(() => expect(select().options).toHaveLength(3))
     // The applied report stands: a re-read of the lists is not a new selection.
     expect(screen.getByText('Restored.')).toBeTruthy()
+  })
+
+  it('tells the page after a FAILED apply too — the server saved (and rotated) a point before it failed', async () => {
+    // 2026-09-23 lane B1 review, M4: the lists went stale on failure as well, and a stale
+    // Restore card would go on offering a point the rotation had already deleted.
+    const onStoredChanged = vi.fn()
+    vi.mocked(restoreStored)
+      .mockResolvedValueOnce(report())
+      .mockRejectedValueOnce(new ApiError('Restore failed and nothing was changed', 500))
+    render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <ToastProvider>
+          <RestoreCard onStoredChanged={onStoredChanged} />
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(select().options).toHaveLength(2))
+    fireEvent.change(select(), { target: { value: STORED.name } })
+    fireEvent.click(dryButton())
+    await screen.findByText('Dry run — nothing was written.')
+    expect(onStoredChanged).not.toHaveBeenCalled()
+    fireEvent.change(dateBox(), { target: { value: '2026-09-02' } })
+    fireEvent.click(restoreButton())
+    expect((await banner()).textContent).toContain('Restore failed and nothing was changed')
+    await waitFor(() => expect(onStoredChanged).toHaveBeenCalledTimes(1))
   })
 
   it('names the restore point an apply saved, and Undo pre-selects it without writing', async () => {

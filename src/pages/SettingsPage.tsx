@@ -467,7 +467,7 @@ export default function SettingsPage() {
                 )}
               </section>
 <BackupsCard revision={storedRevision} />
-<RestoreCard revision={storedRevision} onApplied={storedChanged} />
+<RestoreCard revision={storedRevision} onStoredChanged={storedChanged} />
 <HealthCard />
 <SystemCard />
 <ActivityCard /></>}

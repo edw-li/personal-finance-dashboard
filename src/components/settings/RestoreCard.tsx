@@ -43,13 +43,15 @@ function message(err: unknown, fallback: string): string {
  * toasts and the applied report names the restore point. Restore points — the pre-restore and
  * pre-import copies the server keeps — are offered in their own group (2026-09-23 spec §B3),
  * and a success toast's Undo pre-selects the one just saved; it never restores by itself.
- * `onApplied` tells the page an apply wrote a restore point; `revision` is the page telling this
- * card the volume changed (its own apply, or an import), which reads both lists again.
+ * `onStoredChanged` tells the page an apply ran — succeeded OR failed: the server saves (and
+ * rotates) a restore point before its first write, so every list of the volume on the page may
+ * be stale either way. `revision` is the page telling this card the volume changed (its own
+ * apply, or an import), which reads both lists again.
  */
 export default function RestoreCard({
   revision = 0,
-  onApplied,
-}: { revision?: number; onApplied?: () => void } = {}) {
+  onStoredChanged,
+}: { revision?: number; onStoredChanged?: () => void } = {}) {
   const [stored, setStored] = useState<StoredLists | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [source, setSource] = useState<Source | null>(null)
@@ -160,8 +162,6 @@ export default function RestoreCard({
         if (seq !== runSeqRef.current) return
         setReported({ source: target, report: result })
         if (result.applied) {
-          // The apply saved a restore point first: every list of the volume on the page is stale.
-          onApplied?.()
           setArmText('')
           // Focus is moved in the effect below, once the applied report is on the page.
           focusReportRef.current = true
@@ -196,6 +196,10 @@ export default function RestoreCard({
       .finally(() => {
         // The newest run owns the busy flag; a superseded one must not free the card.
         if (seq === runSeqRef.current) setBusy(null)
+        // An apply saves a restore point before its first write — and rotates the oldest out —
+        // even when it then fails (2026-09-23 lane B1 review, M4; SettingsPage's import does
+        // the same). Superseded or not, the volume moved: every list of it is stale.
+        if (!dryRun) onStoredChanged?.()
       })
   }
 
