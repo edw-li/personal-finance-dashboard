@@ -9,11 +9,18 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.services.snapshot import restore_point_stamp, restore_points_dir, snapshots_dir
+from app.services.snapshot import (
+    restore_point_stamp,
+    restore_points_dir,
+    snapshots_dir,
+    write_restore_point,
+)
 from app.services.snapshot_store import list_restore_points, stored_file
 
 POINT = "pre-restore-20260904-091500-123456.zip"
 SNAP = "finance-export-20260904-233000.zip"
+RESTORE_POINTS = "/api/v1/system/restore-points"
+DOWNLOAD = "/api/v1/system/snapshots/{}/download"
 
 
 def zipped(head: str | None) -> bytes:
@@ -94,3 +101,50 @@ def test_stored_file_never_follows_a_symlink(tmp_path):
         pytest.skip(f"cannot create symlinks here: {exc}")
     assert stored_file(POINT) is None
     assert list_restore_points(None) == []
+
+
+async def test_restore_point_routes_require_auth(client):
+    assert (await client.get(RESTORE_POINTS)).status_code == 401
+    assert (await client.get(DOWNLOAD.format(POINT))).status_code == 401
+
+
+async def test_restore_points_lists_what_a_restore_wrote(auth_client, db):
+    assert (await auth_client.get(RESTORE_POINTS)).json() == []
+    point = await write_restore_point(db, actor="me@example.com")
+    listed = (await auth_client.get(RESTORE_POINTS)).json()
+    # A create_all database has no alembic head, and neither does its restore point.
+    assert [(e["name"], e["kind"], e["restorable"]) for e in listed] == [
+        (point.name, "restore_point", True)
+    ]
+    # The snapshot list stays the snapshot list, and says so.
+    created = (await auth_client.post("/api/v1/system/snapshots")).json()
+    assert created["kind"] == "snapshot"
+    snapshots = (await auth_client.get("/api/v1/system/snapshots")).json()
+    assert [(e["name"], e["kind"]) for e in snapshots] == [(created["name"], "snapshot")]
+
+
+async def test_download_serves_either_kind_byte_for_byte(auth_client, db):
+    point = await write_restore_point(db, actor=None)
+    snap = (await auth_client.post("/api/v1/system/snapshots")).json()["name"]
+    for name, directory in ((point.name, restore_points_dir()), (snap, snapshots_dir())):
+        resp = await auth_client.get(DOWNLOAD.format(name))
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"] == "application/zip"
+        assert name in resp.headers["content-disposition"]
+        assert resp.content == (directory / name).read_bytes()
+
+
+async def test_download_refuses_foreign_and_traversal_names(auth_client, db):
+    await write_restore_point(db, actor=None)
+    (restore_points_dir() / "notes.txt").write_bytes(b"x")
+    for name in (
+        "notes.txt",
+        "..%2Fsnapshots%2Ffinance-export-20260904-233000.zip",
+        "..%2F..%2Fetc%2Fpasswd",
+        "%2Fetc%2Fpasswd",
+        "finance-export-20260904-999999.zip",
+        "pre-restore-20260904-091500-999999.zip",
+    ):
+        resp = await auth_client.get(DOWNLOAD.format(name))
+        assert resp.status_code == 404, name
+        assert resp.json()["detail"].startswith("No stored snapshot named"), name

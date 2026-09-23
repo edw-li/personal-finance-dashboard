@@ -6,7 +6,8 @@ upserts. Every stored shape degrades to None rather than a 500."""
 
 import asyncio
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +29,12 @@ from app.schemas.system import (
 from app.services.price_service import REFRESH_RUNS_KEY
 from app.services.scheduler import is_scheduler_running
 from app.services.snapshot import alembic_head
-from app.services.snapshot_store import list_snapshots, write_snapshot
+from app.services.snapshot_store import (
+    list_restore_points,
+    list_snapshots,
+    stored_file,
+    write_snapshot,
+)
 
 router = APIRouter(prefix="/system", tags=["system"], dependencies=[Depends(get_current_user)])
 
@@ -107,6 +113,32 @@ async def stored_snapshots(db: AsyncSession = Depends(get_db)) -> list[SnapshotE
     §8). `restorable` = the file's schema head equals this server's."""
     head = await alembic_head(db)
     return await asyncio.to_thread(list_snapshots, head)
+
+
+@router.get("/restore-points", response_model=list[SnapshotEntryOut])
+async def restore_points(db: AsyncSession = Depends(get_db)) -> list[SnapshotEntryOut]:
+    """The points saved before every restore and import (2026-09-23 spec §B3), newest
+    first: /snapshots' own entry shape with kind="restore_point". `restorable` = the file's
+    schema head equals this server's."""
+    head = await alembic_head(db)
+    return await asyncio.to_thread(list_restore_points, head)
+
+
+# `:path` so a traversal-shaped name ("..%2Fx.zip") reaches THIS handler and 404s in the same
+# words as any other foreign name (import_.py's reason), not as Starlette's bare "Not Found".
+@router.get(
+    "/snapshots/{name:path}/download",
+    response_class=FileResponse,
+    responses={200: {"content": {"application/zip": {}}}},
+)
+async def download_stored(name: str) -> FileResponse:
+    """A stored snapshot OR a restore point, byte for byte (2026-09-23 spec §B3): the
+    shell-free way to take either off the box. `stored_file` is the one gate both this and
+    restore-from-stored pass through."""
+    path = await asyncio.to_thread(stored_file, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"No stored snapshot named {name!r}")
+    return FileResponse(path, media_type="application/zip", filename=name)
 
 
 @router.post("/snapshots", response_model=SnapshotEntryOut, status_code=201)
