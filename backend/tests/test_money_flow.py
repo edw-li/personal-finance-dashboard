@@ -7,6 +7,7 @@ named sources, pre-tax savings) are hand-checkable because they never touch the 
 and the main fixture is deliberately CG-free so even its engine figures are stable.
 """
 
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.services.money_flow import (
@@ -18,7 +19,10 @@ from app.services.money_flow import (
     NO_NET_PAY_WARNING,
     NO_SPENDING_WARNING,
     SPENDING_COVERAGE_WARNING,
+    FlowMonth,
+    FlowSpendingRow,
     compose_money_flow,
+    matched_window,
 )
 from app.services.tax_service import compute_breakdown
 
@@ -535,3 +539,116 @@ def test_a_negative_residual_names_the_pending_estimate_that_helped_cause_it():
     assert flow.take_home_pending == D("200000.00")
     assert "take-home not yet entered" in flow.reason
     assert "200000.00" in flow.reason
+
+
+# --- the matched window (2026-09-23 spec §C1) ---
+#
+# The right-hand side of the flow covers only the months that have BOTH take-home and spending
+# entered — the savings module's own `MonthSavings.matched` rule, which is what the Overview YTD
+# card's cash-saved figure is summed over. These cases hand the pure window builder month rows.
+
+
+def spend(category_id, name, amount, kind="living"):
+    return FlowSpendingRow(category_id=category_id, name=name, kind=kind, amount=D(amount))
+
+
+def flow_month(number, pay, *rows, year=2026, spending=True):
+    return FlowMonth(
+        month=date(year, number, 1),
+        net_pay=None if pay is None else D(pay),
+        spending=tuple(rows) if spending else None,
+    )
+
+
+def test_window_matches_only_months_with_both_feeds_and_saved_is_the_ytd_figure():
+    # Production's 2026 shape: pay Jan-Aug, spending Jan-Sep (Sep rent-only), nothing after.
+    months = [
+        flow_month(n, "6500.00", spend(1, "Housing", "2000.00"), spend(2, "Taxes", "100.00", "tax"))
+        for n in range(1, 9)
+    ]
+    months.append(flow_month(9, None, spend(1, "Housing", "2072.23")))
+    window = matched_window(2026, months, tracking_start=date(2023, 8, 1))
+    assert window.matched_months == [date(2026, n, 1) for n in range(1, 9)]
+    assert window.take_home_matched == D("52000.00")
+    # 8 x (6500 - 2000 - 100): the savings module's own rollup, not a re-derivation.
+    assert window.cash_savings == D("35200.00")
+    assert window.spending_unmatched_months == [date(2026, 9, 1)]
+    assert window.spending_unmatched_total == D("2072.23")
+    assert window.take_home_unmatched == D("0.00")
+    assert window.take_home_unmatched_months == []
+    assert window.take_home_pending_months == [date(2026, n, 1) for n in range(9, 13)]
+    assert window.tracking_start == date(2023, 8, 1)
+    totals = {t.name: (t.category_id, t.kind, t.amount) for t in window.category_totals}
+    assert totals == {
+        "Housing": (1, "living", D("16000.00")),
+        "Taxes": (2, "tax", D("800.00")),
+    }
+
+
+def test_window_excludes_transfers_and_nets_refunds_exactly_like_cash_savings():
+    months = [
+        flow_month(
+            1,
+            "5000.00",
+            spend(1, "Rent", "2000.00"),
+            spend(3, "Brokerage", "1500.00", "transfer"),
+            spend(4, "Refunds", "-40.00"),
+        ),
+        flow_month(2, "5000.00", spend(1, "Rent", "2000.00")),
+    ]
+    window = matched_window(2026, months, tracking_start=date(2026, 1, 1))
+    # 10000 - 4000 - (-40): the transfer stayed yours, the refund came back.
+    assert window.cash_savings == D("6040.00")
+    names = [t.name for t in window.category_totals]
+    assert "Brokerage" not in names
+    assert {t.name: t.amount for t in window.category_totals}["Refunds"] == D("-40.00")
+    assert (
+        window.take_home_matched - sum(t.amount for t in window.category_totals)
+        == window.cash_savings
+    )
+
+
+def test_window_routes_pay_without_spending_to_the_unmatched_terminal():
+    months = [
+        flow_month(1, "5000.00", spend(1, "Rent", "2000.00")),
+        flow_month(2, "5000.00", spending=False),
+        flow_month(3, "5100.00", spending=False),
+    ]
+    window = matched_window(2026, months, tracking_start=date(2026, 1, 1))
+    assert window.matched_months == [date(2026, 1, 1)]
+    assert window.take_home_matched == D("5000.00")
+    assert window.take_home_unmatched == D("10100.00")
+    assert window.take_home_unmatched_months == [date(2026, 2, 1), date(2026, 3, 1)]
+
+
+def test_window_counts_an_all_zero_spending_month_with_pay_as_matched():
+    # savings.MonthSavings.matched: rows present (even all $0.00) beside a pay row is a real
+    # month of spending nothing — the YTD figure counts it, so the window must too.
+    window = matched_window(
+        2026, [flow_month(1, "5000.00", spend(1, "Rent", "0.00"))], tracking_start=None
+    )
+    assert window.matched_months == [date(2026, 1, 1)]
+    assert window.cash_savings == D("5000.00")
+    assert window.category_totals == []  # an exact-zero total draws nothing and is not listed
+
+
+def test_window_with_nothing_matched_has_zero_saved_and_every_month_pending():
+    window = matched_window(
+        2026, [flow_month(3, None, spend(1, "Rent", "10.00"))], tracking_start=None
+    )
+    assert window.matched_months == []
+    assert window.cash_savings == D("0.00")
+    assert str(window.cash_savings) == "0.00"  # the wire's two places, even for an empty sum
+    assert window.take_home_pending_months == [date(2026, n, 1) for n in range(1, 13)]
+    assert window.spending_unmatched_total == D("10.00")
+
+
+def test_window_ignores_rows_outside_the_year():
+    months = [
+        flow_month(12, "9999.00", spend(1, "Rent", "999.00"), year=2025),
+        flow_month(1, "5000.00", spend(1, "Rent", "2000.00")),
+    ]
+    window = matched_window(2026, months, tracking_start=date(2025, 12, 1))
+    assert window.matched_months == [date(2026, 1, 1)]
+    assert window.take_home_matched == D("5000.00")
+    assert window.cash_savings == D("3000.00")

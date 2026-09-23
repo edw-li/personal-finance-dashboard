@@ -19,11 +19,22 @@ A negative balancing/residual node means the stored inputs contradict each other
 sankey ribbon cannot be negative — the payload then says renderable=False with a human
 `reason` sentence (the paycheck sankey's refusal posture) while still carrying every
 figure it could compute, so the card can say what it knows.
+
+ONE WINDOW ON THE RIGHT (2026-09-23 spec §C1). Income and taxes are the full-year engine
+figures and the middle column conserves against them (take-home cash = every entered month,
+plus the named estimate for the rest). The spending fan and Saved, though, cover only the
+MATCHED months — take-home and spending both entered, the savings module's own rule — so
+`saved` IS the Overview YTD card's cash saved for the same months, by construction rather
+than by coincidence. A month with pay but no spending sends its take-home to a named
+terminal; a month with spending but no pay (the month in progress) is left out and named.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
+from app.services.savings import LIVING, TAX, compose_months, rollup
 from app.services.tax_service import (
     MISSING_INPUTS_WARNING,
     Bracket,
@@ -35,6 +46,11 @@ from app.tax_keys import SINGLE
 
 ZERO = Decimal("0")
 CENT = Decimal("0.01")
+# The wire's two places for a sum that may be empty — an empty window still says 0.00.
+ZERO_CENTS = Decimal("0.00")
+# The kinds the YTD card's cash saved subtracts (services/savings.py): living spend and tax
+# paid from take-home. Transfers are money that stayed yours, so they are not spending here.
+CASH_OUTFLOW_KINDS = (LIVING, TAX)
 MONTHS_IN_YEAR = 12
 # The /spending pages' fold width (SpendingPage's TOP_N): top 7 categories by the year's
 # sum, the positive remainder folded into "Other".
@@ -149,6 +165,129 @@ class MoneyFlowTaxes:
 class MoneyFlowCategory:
     name: str
     amount: Decimal
+
+
+@dataclass(frozen=True)
+class FlowSpendingRow:
+    """One stored spending cell, with the category facts the window needs."""
+
+    category_id: int
+    name: str
+    kind: str
+    amount: Decimal
+
+
+@dataclass(frozen=True)
+class FlowMonth:
+    """One calendar month: its take-home row (None = none entered) and its spending rows
+    (None = no rows at all — distinct from rows that are all $0.00, which is a real month
+    of spending nothing and matches like any other)."""
+
+    month: date
+    net_pay: Decimal | None
+    spending: tuple[FlowSpendingRow, ...] | None
+
+
+@dataclass
+class MoneyFlowCategoryTotal:
+    """A category's matched-month total — signed (a refund category can net negative).
+    `category_id` is what the card folds by (the Spending page's all-time category set);
+    None only on the pure tests' name-keyed shorthand."""
+
+    category_id: int | None
+    name: str
+    kind: str
+    amount: Decimal
+
+
+@dataclass
+class MatchedWindow:
+    """The right-hand side's months (spec §C1). `cash_savings` is `savings.rollup` over the
+    matched months — the YTD card's own figure — and `take_home_matched` minus the sum of
+    `category_totals` equals it to the cent (both are sums of the same stored cents)."""
+
+    matched_months: list[date]
+    take_home_matched: Decimal
+    take_home_unmatched: Decimal
+    take_home_unmatched_months: list[date]
+    spending_unmatched_months: list[date]
+    spending_unmatched_total: Decimal
+    take_home_pending_months: list[date]
+    category_totals: list[MoneyFlowCategoryTotal]
+    cash_savings: Decimal
+    tracking_start: date | None
+
+
+def matched_window(
+    year: int, months: Sequence[FlowMonth], tracking_start: date | None
+) -> MatchedWindow:
+    """Split one calendar year's months by which feeds they carry (spec §C1).
+
+    MATCHED = spending rows AND a take-home row — `savings.MonthSavings.matched`, reached by
+    calling the savings module itself so the definition cannot drift from the YTD card's.
+    Pay-only months are UNMATCHED take-home (the card's named terminal); spending-only
+    months are UNMATCHED spending (left out of the fan and named in the card's footer).
+    PENDING months are the year's months with no take-home row — exactly the ones
+    `take_home_pending` estimates. `tracking_start` (the book's first take-home month) rides
+    along so the card can say which of them predate tracking. Rows outside `year` are ignored.
+    """
+    in_year = sorted((m for m in months if m.month.year == year), key=lambda m: m.month)
+    by_kind: dict[date, dict[str, Decimal]] = {}
+    for m in in_year:
+        if m.spending is None:
+            continue
+        kinds = by_kind.setdefault(m.month, {})
+        for cell in m.spending:
+            kinds[cell.kind] = kinds.get(cell.kind, ZERO_CENTS) + cell.amount
+    pay = {m.month: m.net_pay for m in in_year if m.net_pay is not None}
+    rows = compose_months([m.month for m in in_year], by_kind, pay, {})
+    matched = [row.month for row in rows if row.matched]
+    matched_set = set(matched)
+    # Cash saved is the savings module's figure, never re-derived here: `rollup` sums the
+    # months' EMITTED cents exactly as /spending/yearly does for the YTD card.
+    period = rollup(rows)
+
+    totals: dict[int, MoneyFlowCategoryTotal] = {}
+    for m in in_year:
+        if m.month not in matched_set:
+            continue
+        for cell in m.spending or ():
+            if cell.kind not in CASH_OUTFLOW_KINDS:
+                continue
+            entry = totals.setdefault(
+                cell.category_id,
+                MoneyFlowCategoryTotal(cell.category_id, cell.name, cell.kind, ZERO_CENTS),
+            )
+            entry.amount += cell.amount
+    # An exact-zero total draws nothing; biggest first, so the payload reads like the card.
+    category_totals = sorted(
+        (entry for entry in totals.values() if entry.amount != 0),
+        key=lambda entry: (-entry.amount, entry.name, entry.category_id or 0),
+    )
+    pay_only = [m for m in in_year if m.net_pay is not None and m.spending is None]
+    spend_only = [m for m in in_year if m.net_pay is None and m.spending is not None]
+    return MatchedWindow(
+        matched_months=matched,
+        take_home_matched=sum((pay[month] for month in matched), ZERO_CENTS),
+        take_home_unmatched=sum((pay[m.month] for m in pay_only), ZERO_CENTS),
+        take_home_unmatched_months=[m.month for m in pay_only],
+        spending_unmatched_months=[m.month for m in spend_only],
+        spending_unmatched_total=sum(
+            (
+                cell.amount
+                for m in spend_only
+                for cell in m.spending or ()
+                if cell.kind in CASH_OUTFLOW_KINDS
+            ),
+            ZERO_CENTS,
+        ),
+        take_home_pending_months=[
+            date(year, number, 1) for number in range(1, 13) if date(year, number, 1) not in pay
+        ],
+        category_totals=category_totals,
+        cash_savings=ZERO_CENTS if period.cash_savings is None else period.cash_savings,
+        tracking_start=tracking_start,
+    )
 
 
 @dataclass
