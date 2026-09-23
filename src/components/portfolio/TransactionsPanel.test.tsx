@@ -775,6 +775,27 @@ describe('TransactionsPanel reorder — saving the replay order (spec §5)', () 
     rerender({ transactions: [vooBuy, nvdaBuy, nvdaSell] })
     expect(order()).toEqual(['22', '21', '23'])
   })
+
+  it("never shows one scope's order under another — a save that answers after a scope switch", async () => {
+    let answer: (value: TransactionOrderOut) => void = () => {}
+    vi.mocked(reorderTransactions).mockReturnValueOnce(
+      new Promise<TransactionOrderOut>((resolve) => {
+        answer = resolve
+      }),
+    )
+    const { rerender } = renderLedger({ owner: 1 })
+    keyboardMove(NVDA_BUY, 'ArrowDown')
+    expect(order()).toEqual(['22', '21', '23'])
+    // The reader picks another scope while the save is in flight, and the page hands down its rows.
+    rerender({ owner: 'joint', transactions: [vooBuy] })
+    expect(order()).toEqual(['22'])
+    await act(async () => {
+      answer({ transactions: [vooBuy, nvdaBuy, nvdaSell], changed_positions: [] })
+    })
+    // Scope 1's answer never stands over the joint rows — the page's next joint reload may hand
+    // down nothing new to push it off (PortfolioPage skips a payload it is already showing).
+    expect(order()).toEqual(['22'])
+  })
 })
 
 /** A holding the server reports as changed — every figure equal unless a case says otherwise. */
@@ -937,6 +958,18 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
     expect(onChanged).toHaveBeenCalledTimes(2)
     // The page's reload is what puts the rows back on screen.
     rerender({ transactions: [nvdaBuy, vooBuy, nvdaSell] })
+    expect(order()).toEqual(['21', '22', '23'])
+  })
+
+  it('shows the restored order once the server confirms it, though the page hands down nothing new', async () => {
+    answerWith()
+    renderLedger()
+    keyboardMove(NVDA_BUY, 'ArrowDown')
+    await screen.findByText(QUIET_NVDA)
+    // Undo before the drop's reload lands: the Undo's reload supersedes it and brings back the
+    // rows the page already shows from before the drop, so PortfolioPage re-renders nothing.
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Order restored')
     expect(order()).toEqual(['21', '22', '23'])
   })
 

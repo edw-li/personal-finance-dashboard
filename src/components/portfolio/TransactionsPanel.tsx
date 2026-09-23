@@ -132,6 +132,13 @@ function rowName(txn: TransactionOut, ticker: string): string {
   return `${ticker} ${txn.type}, ${txn.account}`
 }
 
+/** A replay order the panel shows ahead of the page's rows, and the owner scope it belongs to —
+ *  it shows only while the page shows that scope. */
+interface OrderLayer {
+  scope: OwnerScope
+  rows: TransactionOut[]
+}
+
 /** A server sentence used inside one of ours: its closing stop goes, ours closes it. */
 function clause(text: string): string {
   return text.replace(/[.\s]+$/, '')
@@ -230,32 +237,43 @@ export default function TransactionsPanel({
 
   // Drag to reorder (2026-09-23 drag-to-reorder spec §5). The LIST ORDER is the cost-basis
   // replay order — the rows carry no dates, so their order is the ledger's timeline and a drag
-  // re-times a trade. Two layers sit over the page's rows, and only a reorder sets either:
+  // re-times a trade. Two layers sit over the page's rows, and only this panel's own reorder
+  // requests set either:
   //   pendingOrder — the dropped order, from the moment the grip lets go until the PUT answers
   //                  (optimistic), cleared either way when it does;
-  //   savedOrder   — the server's answer, until the page's next fetch replaces `transactions`
-  //                  (retired during render — CategoriesPanel's adjust-during-render pattern,
-  //                  no effect, so react-hooks/set-state-in-effect stays clean).
+  //   savedOrder   — the server's answer to the last drop or Undo, until the page's next fetch
+  //                  replaces `transactions` (retired during render — CategoriesPanel's
+  //                  adjust-during-render pattern, no effect, so react-hooks/set-state-in-effect
+  //                  stays clean).
   // So a fetch that lands mid-save never flashes the row back to where it came from, and a
-  // failed save falls back to the newest order the server confirmed.
-  const [pendingOrder, setPendingOrder] = useState<TransactionOut[] | null>(null)
-  const [savedOrder, setSavedOrder] = useState<TransactionOut[] | null>(null)
+  // failed save falls back to the newest order the server confirmed. The server's answer, not
+  // the page's reload, is what the panel trusts after a request: PortfolioPage hands down no new
+  // `transactions` when a reload matches what it already shows, and an Undo's reload that
+  // supersedes the drop's brings back exactly the rows from before the drop. Each layer keeps
+  // the scope it was made in and shows only while the page shows that scope, so an answer that
+  // lands after a scope switch never paints one scope's rows over another's.
+  const [pendingOrder, setPendingOrder] = useState<OrderLayer | null>(null)
+  const [savedOrder, setSavedOrder] = useState<OrderLayer | null>(null)
   const [lastTransactions, setLastTransactions] = useState(transactions)
   if (lastTransactions !== transactions) {
     setLastTransactions(transactions)
     setSavedOrder(null)
   }
-  const rows = pendingOrder ?? savedOrder ?? transactions
+  const inScope = (layer: OrderLayer | null) =>
+    layer !== null && layer.scope === owner ? layer.rows : null
+  const rows = inScope(pendingOrder) ?? inScope(savedOrder) ?? transactions
   const rowById = new Map(rows.map((txn) => [txn.id, txn]))
 
   // Undo re-sends the order that stood before the drop (spec §5): the endpoint is not
-  // change-logged, so the client holds the previous order — and the scope it was made in. The
-  // page's reload shows the result; a list that changed since answers 409 and the reload shows
-  // what is there now.
+  // change-logged, so the client holds the previous order — and the scope it was made in. Not
+  // optimistic: the restored order shows once the server confirms it, as the saved layer, and
+  // the page's reload follows. A list that changed since answers 409 and the reload shows what
+  // is there now.
   const restoreOrder = (ids: number[], scope: OwnerScope) => {
     setBusy(true)
     reorderTransactions(ids, scope)
-      .then(() => {
+      .then((result) => {
+        setSavedOrder({ scope, rows: result.transactions })
         onChanged()
         toast.info('Order restored')
       })
@@ -281,17 +299,18 @@ export default function TransactionsPanel({
     const scope = owner
     // Synchronously: the hook calls onCommit inside flushSync, so the new DOM order and the
     // cleared drag transforms land in one frame (lane R0 consumer rule 3).
-    setPendingOrder(
-      next.flatMap((id) => {
+    setPendingOrder({
+      scope,
+      rows: next.flatMap((id) => {
         const row = rowById.get(id)
         return row === undefined ? [] : [row]
       }),
-    )
+    })
     setBusy(true)
     reorderTransactions(next, scope)
       .then((result) => {
         setPendingOrder(null)
-        setSavedOrder(result.transactions)
+        setSavedOrder({ scope, rows: result.transactions })
         // Holdings, realized gains and the tiles stand on this order: the page reloads them.
         onChanged()
         reorder.markSaved(moved)
