@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { installPointerEvents } from '../../testing/pointer'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
 import DragHandle from './DragHandle'
@@ -153,7 +153,8 @@ afterEach(() => {
   cleanup()
   vi.useRealTimers()
   vi.unstubAllGlobals()
-  document.documentElement.className = ''
+  vi.restoreAllMocks()
+  document.documentElement.classList.remove('reorder-active')
 })
 
 describe('useReorder — keyboard', () => {
@@ -233,6 +234,7 @@ describe('useReorder — keyboard', () => {
       if (event.key === 'Escape') popover()
     }
     document.addEventListener('keydown', popoverKeys, true)
+    onTestFinished(() => document.removeEventListener('keydown', popoverKeys, true))
     render(<Stateful initial={flat('A', 'B', 'C')} onCommit={onCommit} />)
     layoutRows()
     fireEvent.keyDown(grip('Bravo'), { key: 'Enter' })
@@ -247,7 +249,6 @@ describe('useReorder — keyboard', () => {
     expect(row('A').style.transform).toBe('')
     expectEasedHome(['A', 'B'])
     expect(order()).toEqual(['A', 'B', 'C'])
-    document.removeEventListener('keydown', popoverKeys, true)
   })
 
   it('tabbing away (the grip blurs) cancels a keyboard lift', () => {
@@ -512,6 +513,7 @@ describe('useReorder — pointer', () => {
       if (event.key === 'Escape') popover()
     }
     document.addEventListener('keydown', popoverKeys, true)
+    onTestFinished(() => document.removeEventListener('keydown', popoverKeys, true))
     render(<Stateful initial={flat('A', 'B', 'C')} onCommit={onCommit} />)
     layoutRows()
     fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
@@ -533,7 +535,6 @@ describe('useReorder — pointer', () => {
     fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 220 })
     expect(fireEvent.keyDown(grip('Alpha'), { key: 'Escape' })).toBe(true)
     expect(popover).toHaveBeenCalledTimes(1)
-    document.removeEventListener('keydown', popoverKeys, true)
   })
 
   // Spec §2.6 names window blur among the cancels to pin; a resize and a capture lost with no up
