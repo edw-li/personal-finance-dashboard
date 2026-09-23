@@ -42,13 +42,41 @@ export function unitExtent(elements: readonly HTMLElement[], scroller: Scroller)
   return top === Number.POSITIVE_INFINITY ? { top: 0, height: 0 } : { top, height: bottom - top }
 }
 
-/** The client-y band the reader can currently see of the scroller (the viewport for the page). An
- *  element's box is clipped to the viewport: a 420px Settings scroller hanging past the bottom of the
- *  window keeps its auto-scroll zone where the pointer can reach it. */
+/** Where the scroller's sticky header ends (client y): a `thead` that sticks, or whose cells do —
+ *  settings.css's and categories.css's `thead th { position: sticky; top: 0 }` — or null when it has
+ *  none (the page never does). Measured on what sticks: when only the CELLS stick, the row group's
+ *  own box never moves, so the thead's rect would still say where the header began, scrolled away
+ *  above the box (lane R7, from lane V's finding 2). */
+export function stickyHeaderBottom(scroller: Scroller): number | null {
+  const head = scroller?.querySelector('thead') ?? null
+  if (head === null) return null
+  let bottom: number | null = null
+  for (const element of [head, ...head.querySelectorAll('th, td')]) {
+    if (getComputedStyle(element).position !== 'sticky') continue
+    const edge = element.getBoundingClientRect().bottom
+    bottom = bottom === null ? edge : Math.max(bottom, edge)
+  }
+  return bottom
+}
+
+/** How far the scroller's sticky header reaches into its box, px: the top of its own view that the
+ *  header hides. 0 for the page and for a box without one. */
+export function stickyInset(scroller: Scroller): number {
+  const header = stickyHeaderBottom(scroller)
+  if (scroller === null || header === null) return 0
+  return Math.max(0, header - scroller.getBoundingClientRect().top)
+}
+
+/** The client-y band the reader can currently see of the scroller (the viewport for the page): an
+ *  element's box below its sticky header, clipped to the viewport. So the auto-scroll zone starts
+ *  where the rows show — a 46px two-line header no longer hides the range's first row at the stop
+ *  (lane V's finding 2) — and a 420px Settings scroller hanging past the bottom of the window keeps
+ *  its zone where the pointer can reach it. */
 export function visibleBounds(scroller: Scroller): { top: number; bottom: number } {
   if (scroller === null) return { top: 0, bottom: window.innerHeight }
   const box = scroller.getBoundingClientRect()
-  return { top: Math.max(box.top, 0), bottom: Math.min(box.bottom, window.innerHeight) }
+  const header = stickyHeaderBottom(scroller) ?? box.top
+  return { top: Math.max(box.top, header, 0), bottom: Math.min(box.bottom, window.innerHeight) }
 }
 
 /** What the scroller shows, in list coordinates: its scroll offset and its visible height (the
@@ -65,7 +93,8 @@ export function scrollByY(scroller: Scroller, dy: number): void {
 }
 
 /** Scroll the least amount that shows [top, top + height) (list coordinates) clear of the
- *  auto-scroll zone at either edge — the keyboard path's "keep the lifted row in view". */
+ *  auto-scroll zone at either edge — the keyboard path's "keep the lifted row in view". The top zone
+ *  starts below the scroller's sticky header, as the pointer's does (visibleBounds). */
 export function ensureVisible(
   scroller: Scroller,
   top: number,
@@ -73,7 +102,8 @@ export function ensureVisible(
   margin = AUTO_SCROLL_EDGE,
 ): void {
   const view = scrollView(scroller)
-  if (top < view.top + margin) scrollByY(scroller, top - (view.top + margin))
+  const first = view.top + stickyInset(scroller) + margin
+  if (top < first) scrollByY(scroller, top - first)
   else if (top + height > view.top + view.height - margin) {
     scrollByY(scroller, top + height - (view.top + view.height - margin))
   }
@@ -99,7 +129,9 @@ export function viewportDelta(
  *  (list coordinates) in an element scroller's own view, but the scroller itself can hang past the
  *  window edge (a 420px Settings box low on the page), so the page scrolls too. Computed from list
  *  coordinates — the inverse of listY — never measured: a keyboard-lifted unit is mid-transition
- *  when this runs, and a painted rect would still show where it came from. */
+ *  when this runs, and a painted rect would still show where it came from. It needs no header
+ *  inset: the header rides in the box, and a page scroll moves both alike, so the unit stays the
+ *  margin clear of it that ensureVisible left. */
 export function keepOnScreen(scroller: Scroller, top: number, height: number): void {
   if (scroller === null) return
   const clientTop = top - scroller.scrollTop + scroller.getBoundingClientRect().top

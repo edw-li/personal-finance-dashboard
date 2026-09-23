@@ -5,23 +5,47 @@ import {
   listY,
   scrollParentOf,
   scrollView,
+  stickyHeaderBottom,
+  stickyInset,
   unitExtent,
   viewportDelta,
   visibleBounds,
 } from './reorderDom'
 
-function rect(top: number, height: number): DOMRect {
+function rect(top: number, height: number, left = 0, width = 100): DOMRect {
   return {
     top,
     height,
     bottom: top + height,
-    left: 0,
-    right: 100,
-    width: 100,
-    x: 0,
+    left,
+    right: left + width,
+    width,
+    x: left,
     y: top,
     toJSON: () => ({}),
   } as DOMRect
+}
+
+/** A 420px box scrolled 200px into a table whose header is 46px tall, as settings.css draws it
+ *  (`.settings-scroll thead th { position: sticky; top: 0 }`). `sticks` says what sticks: the
+ *  header CELLS (the house rule), the thead itself, or nothing. What sticks sits at the box's top;
+ *  what does not stands where the header began, scrolled 200px above it. */
+function scrolledTable(boxTop: number, sticks: 'cells' | 'thead' | 'nothing'): HTMLElement {
+  const sticky = ' style="position: sticky; top: 0"'
+  document.body.innerHTML =
+    `<div id="box" style="overflow-y: auto"><table><thead${sticks === 'thead' ? sticky : ''}>` +
+    `<tr><th${sticks === 'cells' ? sticky : ''}></th><th${sticks === 'cells' ? sticky : ''}>Name</th></tr>` +
+    '</thead><tbody><tr><td>x</td><td>y</td></tr></tbody></table></div>'
+  const box = document.getElementById('box') as HTMLElement
+  box.getBoundingClientRect = () => rect(boxTop, 420)
+  const stuck = rect(boxTop, 46)
+  const away = rect(boxTop - 200, 46)
+  const head = box.querySelector('thead') as HTMLElement
+  head.getBoundingClientRect = () => (sticks === 'thead' ? stuck : away)
+  box.querySelectorAll('th').forEach((th) => {
+    th.getBoundingClientRect = () => (sticks === 'nothing' ? away : stuck)
+  })
+  return box
 }
 
 function setBox(element: HTMLElement, box: { scrollHeight?: number; clientHeight?: number; scrollTop?: number }) {
@@ -102,6 +126,43 @@ describe('listY / unitExtent / visibleBounds', () => {
     scroller.getBoundingClientRect = () => rect(-100, 420) // its top scrolled off above the viewport
     expect(visibleBounds(scroller)).toEqual({ top: 0, bottom: 320 })
   })
+
+  it("an element's band starts below its sticky header: rows under the header are not seen", () => {
+    expect(visibleBounds(scrolledTable(120, 'cells'))).toEqual({ top: 166, bottom: 540 })
+    expect(visibleBounds(scrolledTable(120, 'thead'))).toEqual({ top: 166, bottom: 540 })
+    // A header that does not stick scrolled away with its rows: the band is the whole box.
+    expect(visibleBounds(scrolledTable(120, 'nothing'))).toEqual({ top: 120, bottom: 540 })
+  })
+
+  it('the header counts only where the window shows it', () => {
+    expect(visibleBounds(scrolledTable(-20, 'cells'))).toEqual({ top: 26, bottom: 400 })
+    expect(visibleBounds(scrolledTable(-100, 'cells'))).toEqual({ top: 0, bottom: 320 })
+  })
+})
+
+describe('stickyHeaderBottom / stickyInset', () => {
+  it('reads the sticky header CELLS: a thead whose cells stick keeps its own box where the header began', () => {
+    // The thead's rect is still 200px above the box (scrolled away); the cells stand at its top.
+    const box = scrolledTable(120, 'cells')
+    expect(stickyHeaderBottom(box)).toBe(166)
+    expect(stickyInset(box)).toBe(46)
+  })
+
+  it('reads a thead that sticks itself', () => {
+    const box = scrolledTable(120, 'thead')
+    expect(stickyHeaderBottom(box)).toBe(166)
+    expect(stickyInset(box)).toBe(46)
+  })
+
+  it('is null — an inset of 0 — without a sticky header, and for the page', () => {
+    expect(stickyHeaderBottom(scrolledTable(120, 'nothing'))).toBeNull()
+    expect(stickyInset(scrolledTable(120, 'nothing'))).toBe(0)
+    const plain = document.createElement('div')
+    plain.getBoundingClientRect = () => rect(120, 420)
+    expect(stickyHeaderBottom(plain)).toBeNull()
+    expect(stickyHeaderBottom(null)).toBeNull()
+    expect(stickyInset(null)).toBe(0)
+  })
 })
 
 describe('scrollView', () => {
@@ -124,6 +185,17 @@ describe('ensureVisible', () => {
     expect(scroller.scrollTop).toBe(60)
     ensureVisible(scroller, 200, 40) // already clear of both edge zones
     expect(scroller.scrollTop).toBe(60)
+  })
+
+  it('keeps the unit clear of the edge zone BELOW a sticky header — never parked under it', () => {
+    const scroller = scrolledTable(120, 'cells') // a 46px header over a 400px view
+    setBox(scroller, { clientHeight: 400, scrollTop: 300 })
+    ensureVisible(scroller, 320, 40) // top 320 above 300 + 46 + 40 → up by 66
+    expect(scroller.scrollTop).toBe(234)
+    ensureVisible(scroller, 330, 40) // clear of the header's zone now: stays
+    expect(scroller.scrollTop).toBe(234)
+    ensureVisible(scroller, 700, 40) // the bottom zone is unchanged: 740 past 234 + 400 − 40 → down 146
+    expect(scroller.scrollTop).toBe(380)
   })
 })
 

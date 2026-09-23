@@ -56,6 +56,32 @@ function List({
   )
 }
 
+/** A capped table like the Settings boxes (settings.css): a box that scrolls, its header cells
+ *  sticky. Rows are named by id ("Reorder r3"). */
+function TableList({ items }: { items: ReorderItem<string>[] }) {
+  const reorder = useReorder({ items, labelOf: (id) => id, onCommit: () => {} })
+  return (
+    <div data-testid="scroller" style={{ overflowY: 'auto' }}>
+      <table>
+        <thead>
+          <tr>
+            <th style={{ position: 'sticky', top: 0 }}>Name</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={item.id} {...reorder.itemProps(item.id)}>
+              <td>
+                <DragHandle name={item.id} {...reorder.handleProps(item.id)} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 /** A list that applies its commits, the way every consumer's optimistic order does. */
 function Stateful({
   initial,
@@ -110,6 +136,50 @@ function layoutRows(height = 40, start = 200) {
         toJSON: () => ({}),
       }) as DOMRect
   })
+}
+
+function box(top: number, height: number, width = 300): DOMRect {
+  return { top, bottom: top + height, height, left: 0, right: width, width, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+}
+
+/** A scroller box at client `top`, `height` tall, holding a `header`-px sticky header (0: none)
+ *  and the rows in CURRENT DOM order, `rowHeight` each, below it. Unlike layoutRows, the rows MOVE
+ *  with scrollTop — clamped to the content, as a browser clamps it — so a re-measure after a scroll
+ *  sees where they went. Returns the scroller. */
+function scrollBox({
+  top,
+  height,
+  header = 0,
+  rowHeight = 40,
+  scrollTop = 0,
+}: {
+  top: number
+  height: number
+  header?: number
+  rowHeight?: number
+  scrollTop?: number
+}): HTMLElement {
+  const scroller = screen.getByTestId('scroller')
+  const rowsInOrder = [...scroller.querySelectorAll<HTMLElement>('[data-reorder-id]')]
+  const content = header + rowsInOrder.length * rowHeight
+  let offset = scrollTop
+  Object.defineProperty(scroller, 'scrollTop', {
+    get: () => offset,
+    set: (value: number) => {
+      offset = Math.min(Math.max(0, value), content - height)
+    },
+    configurable: true,
+  })
+  Object.defineProperty(scroller, 'scrollHeight', { value: content, configurable: true })
+  Object.defineProperty(scroller, 'clientHeight', { value: height, configurable: true })
+  scroller.getBoundingClientRect = () => box(top, height)
+  scroller.querySelectorAll('th').forEach((th) => {
+    th.getBoundingClientRect = () => box(top, header) // stuck at the box's top
+  })
+  rowsInOrder.forEach((element, index) => {
+    element.getBoundingClientRect = () => box(top + header + index * rowHeight - offset, rowHeight)
+  })
+  return scroller
 }
 
 function row(id: string): HTMLElement {
@@ -642,6 +712,32 @@ describe('useReorder — pointer', () => {
     })
     expect(scroller.scrollTop).toBe(held)
     expect(window.scrollBy).not.toHaveBeenCalled()
+  })
+
+  it("auto-scroll stops only once the range's first row clears the box's sticky header — never parked beneath it", () => {
+    const ids = Array.from({ length: 20 }, (_, index) => `r${index}`)
+    // Two ranges of ten, like the Settings roster's groups; the drag stays in the second.
+    render(<TableList items={ids.map((id, index) => ({ id, range: index < 10 ? 'first' : 'second' }))} />)
+    // A 420px box at 100 under a 60px header — taller than the 40px edge zone, as Categories &
+    // weights' two-line 46px header is at 1280. Scrolled to its end (440): the second range starts at
+    // 460 of the content, its first row hidden under the header at 120..160.
+    const scroller = scrollBox({ top: 100, height: 420, header: 60, scrollTop: 440 })
+    fireEvent.pointerDown(grip('r19'), { pointerId: 1, button: 0, clientY: 500 })
+    fireEvent.pointerMove(grip('r19'), { pointerId: 1, clientY: 130 }) // over the header: full speed up
+    act(() => {
+      vi.advanceTimersByTime(3000)
+    })
+    // The zone starts at the header's foot (160), so the scroll stops once the range's first row
+    // (460) shows the 40px edge zone clear below it: 460 − (60 + 40) = 360, by at most one step
+    // more. Judged from the box's own top it stopped at 404, the row still 4px under the header.
+    expect(scroller.scrollTop).toBeLessThanOrEqual(360)
+    expect(scroller.scrollTop).toBeGreaterThan(360 - AUTO_SCROLL_MAX)
+    expect(row('r10').getBoundingClientRect().top).toBeGreaterThanOrEqual(160 + 40)
+    const held = scroller.scrollTop
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(scroller.scrollTop).toBe(held) // still held in the zone: the box stays put
   })
 
   it('a throwing onCommit still leaves every row clean, and its error is rethrown after', () => {
