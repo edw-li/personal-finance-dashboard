@@ -4454,21 +4454,127 @@ git commit -m "docs(plan): lane R2 — results, gates and the browser check"
 ## Results (filled in by the implementer)
 
 - Task 0 preflight:
-  - R1/R0 merges on the base …; `reorderAccounts`/`reorderCategories` signatures …;
-  - baseline CategoriesCard 13 / AccountsCard 22 / settingsCss 2 …
-- Lane tests (Task 8 Step 1): CategoriesCard … / 27, AccountsCard … / 42, settingsCss … / 6;
-  SettingsPage …; guide …
-- Full vitest: … files / … tests (exit …); pre-existing failures, if any: …
-- tsc -b / eslint . / npm run build: …
-- Scope check: …
-- Browser check (`scratchpad/reorder-r2/report.json`):
-  - `checks: … ok, … failed`; problems …;
-  - per pass (dark/light × 1280/1600): …;
-  - auto-scroll distance: …;
-  - screenshot notes: …
-- Heights (Task 10): dark-1440 categories … (ghost 900), accounts … (ghost 1045); constants changed:
-  yes/no → …
-- For the controller / R0 / V: …
+  - The branch was cut at `da1a3e44` on `feat/reorder-base`: R1 merged (`dd62aa6c`), R0 merged
+    (`0d805010`) with its unmount follow-up (`11a4cda0`), R4 (`cca4d9cf`), and main through lane B2
+    (`d7a16e6a`). All seven R0 modules and their tests are present. Each `grep` printed one line,
+    and both signatures are exactly `Promise<{ data: …[]; batchId: string | null }>`.
+  - `finance_reorder_r2` read `29|19|f12026092301`: already at R1's head, so the controller's
+    migration step was skipped.
+  - Baseline (settings + SettingsPage + guide + reorder): 31 files / 335 tests pass —
+    CategoriesCard 13, AccountsCard 22, settingsCss 2.
+- R0's final API matched this plan's code verbatim (`useReorder`, `UseReorder`, `handleProps`,
+  `itemProps`, `markSaved`, the two helpers). No code deviated from it.
+  - `items` (and so every `carries`) is re-derived from the rows being rendered on every render.
+  - R0's dev-only contract check printed nothing in any test run or in the real browser.
+- Red before green, every task, with exactly the failures the plan predicts:
+  - T1: 3 failed / 11 passed;
+  - T2: 4 / 20, then the Guide fence `['accounts-add: Sort order', 'categories-add: Sort order']`;
+  - T3: 11 / 14;
+  - T4: 2 / 25;
+  - T5: 18 / 22;
+  - T6: 2 / 40;
+  - T7 (per A1): 2 / 4 — the group heading and the component indent. The two reorder.css pins passed
+    at once, as the dependency guard;
+  - T10: 2 / 68 on the two ghost pins.
+  - (T3's and T5's last test failed "no table" only as a cascade: the failing reload test leaves its
+    `mockReturnValueOnce` queued, and `vi.clearAllMocks` does not drain it.)
+- Lane tests (Task 8 Step 1): 31 files / 373 tests pass — CategoriesCard 27/27, AccountsCard
+  42/42, settingsCss 6/6, SettingsPage 47/47, guide 6 files / 37. After Task 10, CategoriesCard is
+  28 (the ghost pin).
+  - Task 2's set (`src/guide` + GuidePage + paletteRegistry.guide + both cards): 10 files / 93.
+  - The Guide's two new steps are 106 and 114 characters.
+- Full vitest: ONE run at the end, on the final code (`--maxWorkers=2`, the controller's memory
+  rule). 246 files / 3431 tests: 245 files, 3430 tests pass.
+  - The one failure is the known load flake `PaycheckPage … names the employer match under the
+    waterfall` (`expected <p class="drill-hint"></p> to be null`).
+  - `PaycheckPage.test.tsx` re-run alone: 84/84, exit 0. This lane never touches it.
+- tsc / eslint / build, on the final HEAD:
+  - `tsc -b` exit 0. Its buildinfo lives in the shared `node_modules` junction, so both projects
+    were also checked with no cache (`tsc -p tsconfig.app.json --noEmit --incremental false`, and
+    the same for `tsconfig.node.json`): both exit 0.
+  - `eslint .` exit 0: 0 errors, the 26 pre-existing warnings, none in a file this lane touched.
+  - `npm run build` exit 0, with no chunk warning.
+- Scope check: the seven fenced files, plus `src/pages/SettingsPage.tsx` (the two skeleton
+  numbers, 842 → 637 and 987 → 1056, under the controller-approved Task 10 extension). Nothing under
+  `src/api`, `src/types` or `src/components/reorder` changed.
+- Browser check (`scratchpad/reorder-r2/report.json`; real headless Edge, vite 5192 → uvicorn 8092
+  → `finance_reorder_r2`):
+  - Result: `checks: 101 ok, 0 failed`, plus 4 problems. All four are the same one:
+    `accounts-carry: locator.waitFor: Timeout 10000ms exceeded`, once per pass.
+    - The plan's downward carry drag (Fidelity Traditional 401(k) below Fidelity Traditional IRA)
+      never moves. The drop is "where it was", so no toast arrives.
+    - Cause: R0's slot math, not this lane — see "For the controller / R0 / V" item 1.
+  - 0 blocked writes; 44 allowed writes (12 category PUTs, 12 account PUTs, 20 undos).
+  - The final PUTs put both orders back exactly (the cleanup check passed, and psql reads the
+    census order).
+  - Per pass (dark/light × 1280/1600), all green:
+    - open: theme painted; both tables `border-collapse: separate`;
+    - categories-drag: 5/5 — follows, 3 peers shift, lands, Undo, survives a reload;
+    - categories-keyboard: 4/4 — lifted in keyboard mode, 2 places down, focus kept, Undo;
+    - accounts-autoscroll: 3/3;
+    - console: clean in every pass.
+  - Lane additions (the smoke is gitignored, so they are recorded here), all green in every pass:
+    - 5b carry-up, 4/4: Fidelity Traditional IRA dragged above the 401(k). The 4-row unit is
+      displaced as one block (one transform), its components stay nested, and Undo restores.
+    - 5c carry-keyboard, 5/5: the 401(k) moved down one place by keyboard. The 4 rows lift and move
+      together, land below the IRA still nested, focus stays on its grip, and Undo restores.
+  - Also changed in the smoke: every step has its own try/catch, and each pass has a console check.
+  - Auto-scroll (Costco CC, the last of Liabilities, 7 units): scrollTop 1120 → 454 / 454 / 463 / 382,
+    i.e. 666 / 666 / 657 / 738 px while held. Costco CC then lands first in Liabilities, and Undo
+    restores.
+  - Screenshot notes (both themes, 1280 and 1600):
+    - Resting tables: the grip column is narrow and muted, and the Sort and Group columns are gone.
+      The Accounts headings (CASH, PRE-TAX…) are uppercase, muted, with the 0.9rem lead-in.
+      Component names are indented and muted in the Account cell, not the grip cell. The sticky
+      Actions column keeps its hairline. Each order note sits right under its table.
+    - Categories mid-drag: the lifted row is on `--surface-2` across every cell, Actions included,
+      with an accent grip, and its peers are moved up. One peer is caught mid-transition.
+    - Dropped frames: the saved flash covers the whole unit, Actions cells included. The toasts
+      read "Moved {name} · Undo" and "Order restored".
+    - `07-accounts-carry-mid-drag`: the 4-row unit sits clamped at the bottom of Pre-tax, and the
+      two peers it covers have NOT moved up — the defect below, made visible.
+    - The pale band over two Portfolio rows in the full-card shots is a fixed page overlay, caught
+      while the 1114px element was stitched into the 900px viewport.
+- Heights (Task 10): dark-1440 categories **695** (ghost 900), accounts **1114** (ghost 1045).
+  - Both were off by more than 2 px, so the constants changed: 900 → 695 and 1045 → 1114, the
+    skeleton 842 → 637 and 987 → 1056, and the Accounts pin and a new Categories pin (`4fb1e9ec`).
+  - The ghosts were already stale on the real book before this lane. With the pre-lane layout
+    simulated in the live DOM (the Sort order field put back, the order note removed), the same
+    page measures 723 / 1142 at 1440.
+  - So this lane's own change is −28 px on each card. The rest is data: all three tables fill
+    their 420px scrollers here, and there are 8 portfolio labels.
+  - The other widths: 1280 is 731 / 1132, and 1600 is 677 / 1114.
+- For the controller / R0 / V:
+  1. **R0 defect — a tall unit cannot be dragged down past short peers near the end of its range.**
+     - `clampOffset` stops the unit's bottom at the last peer's bottom, and `slotFor` compares the
+       unit's CENTRE with each peer's original midpoint. A unit of height H therefore passes the
+       next peer below (height h, with R px of peers after it) only if H ≤ 2R + h.
+     - In the real book, the Pre-tax 401(k) (4 rows, 171.9px) has the IRA and the HSA (one row
+       each) below it. Its clamped centre reaches 171.9px; the IRA's midpoint is at 193.4px.
+     - So no pointer drag can move it down at all. The keyboard path works (5c), as does moving the
+       peer up past it (5b).
+     - R0's tests cover only a short unit moving up past a tall one (`slotFor(stacked([120, 40]),
+       1, …)`).
+     - A fix is R0's call. Options: compare the unit's leading edge (its bottom when moving down,
+       its top when moving up) with peer midpoints, or clamp the centre instead of the extent.
+       Pin it with `slotFor` on `stacked([160, 40, 40])` from slot 0.
+     - Not patched here (spec §11; plan Task 9 step 8).
+  2. Auto-scroll does not stop at the unit's range. Holding at the top edge scrolled the 420px
+     roster about 660px, well past Liabilities, so the clamped lifted row left the view. The drop
+     was still right. A minor UX note for R0/V.
+  3. In a multi-row lifted unit (a parent with components), each row draws its own inset top and
+     bottom hairline, so the internal separators read doubled (`09-*-keyboard-lifted`). Cosmetic
+     (reorder.css).
+  4. `src/pages/SettingsPage.test.tsx:883` still has a comment saying both tables carry a "Sort
+     order" box. It is only a comment, outside the fence, and was left alone.
+  5. The cleanup restored the ORDER exactly. The stored `sort_order` values are now normalized
+     0…n−1, instead of the importer's 3…55 with its two ties, as after any reorder.
+  6. Plan-text deviations:
+     - All vitest runs used `--maxWorkers=2`, and the full run came once, at the end, after Task
+       10, rather than in Task 8.
+     - Task 7 follows A1: the two tests pin reorder.css and the grip override keeps
+       `padding-right: 0`. Its commit message was reworded to say so.
+     - The smoke additions above.
 
 ---
 
