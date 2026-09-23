@@ -438,17 +438,15 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     }
     const onAbandon = () => cancel(drag)
     // Every scroll in the document reaches here — scroll events do not bubble, but they cross
-    // window's capture phase. The list's own scroller moves the list under a pointer, so a pointer
-    // drag re-tracks; any other scroll (the page under a Settings box, a keyboard lift's
-    // keep-in-view, a wheel) moves only where the drop line's edge stands, and the line is fixed.
-    const onScroll = (event: Event) => {
+    // window's capture phase. Any of them can move the list under a still pointer: its own
+    // scroller's, and the PAGE's under a Settings box (the row in hand used to drift off the pointer
+    // there). track re-reads the pointer against the scroller's rect, so a pointer drag re-tracks on
+    // every scroll. A keyboard lift stays on its slot: only the drop line, fixed, follows its edge.
+    const onScroll = () => {
       // Only the live drag: a direct commit (a keyboard or reduced-motion drop) leaves its phase
       // 'lifted', so a listener that ever outlived its drag would re-paint rows and re-make a line.
       if (machine.current.drag !== drag || drag.phase !== 'lifted') return
-      // The page's own scroll targets the document (or the window), never an element.
-      const own =
-        drag.scroller === null ? !(event.target instanceof Element) : event.target === drag.scroller
-      if (own && drag.mode === 'pointer') track(drag)
+      if (drag.mode === 'pointer') track(drag)
       else drawLine(drag, dropEdge(drag, drag.to))
     }
     window.addEventListener('keydown', onKey, true)

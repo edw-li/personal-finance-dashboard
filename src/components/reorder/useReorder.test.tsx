@@ -727,6 +727,27 @@ describe('useReorder — pointer', () => {
     expect(window.scrollBy).not.toHaveBeenCalled()
   })
 
+  it('the row in hand keeps following the pointer when the PAGE scrolls under its box — every scroll re-tracks', () => {
+    render(
+      <div data-testid="scroller" style={{ overflowY: 'auto' }}>
+        <Stateful initial={flat('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J')} />
+      </div>,
+    )
+    // A 200px Settings-like box at 100, rows 0..400 of its content: A at 100..140.
+    const scroller = scrollBox({ top: 100, height: 200 })
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 120 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 170 }) // clear of both zones
+    expect(row('A').style.transform).toBe('translateY(50px)')
+    // A wheel scrolls the PAGE 30px: the box, and the list in it, rise under the still pointer.
+    scroller.getBoundingClientRect = () => box(70, 200)
+    act(() => {
+      window.dispatchEvent(new Event('scroll'))
+    })
+    // The pointer now stands 30px further down the list, and the row stays under it.
+    expect(row('A').style.transform).toBe('translateY(80px)')
+    expect(live()).toBe('Alpha, position 3 of 10.') // its leading edge (120) passed B's and C's middles
+  })
+
   it("auto-scroll stops only once the range's first row clears the box's sticky header — never parked beneath it", () => {
     const ids = Array.from({ length: 20 }, (_, index) => `r${index}`)
     // Two ranges of ten, like the Settings roster's groups; the drag stays in the second.
