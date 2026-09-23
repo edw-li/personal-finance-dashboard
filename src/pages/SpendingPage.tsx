@@ -679,11 +679,18 @@ export default function SpendingPage() {
         </LocalSectionPanel>
         <LocalSectionPanel state={views} section="budgets" className="card-grid">
           {/* onBudgetsChanged = the page's refetch: a saved budget re-draws the meters, the
-              chart reference lines and the movers column together, from one matrix. */}
-          {matrix && focusIndex >= 0 && (
-            <BudgetPanel matrix={matrix} monthIndex={focusIndex} onBudgetsChanged={load} />
+              chart reference lines and the movers column together, from one matrix. The card
+              reads the URL's month when there is one and otherwise opens where the budgets are
+              (2026-09-23 spec §B5); the page's focus month is only its last resort. */}
+          {matrix && (
+            <BudgetPanel
+              matrix={matrix}
+              monthIndex={activeDetail ? detailIndex : null}
+              defaultIndex={focusIndex}
+              onViewMonth={setDetailMonth}
+              onBudgetsChanged={load}
+            />
           )}
-          {focusIndex < 0 && <p className="empty-note">Select an entered month in the ribbon to review its budgets.</p>}
         </LocalSectionPanel>
         <LocalSectionPanel state={views} section="trends" className="card-grid">
 

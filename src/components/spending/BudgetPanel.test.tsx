@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import BudgetPanel from './BudgetPanel'
 
 vi.mock('../../api/spending', () => ({
@@ -357,6 +357,196 @@ it('says Nothing to seed when every category is dormant', async () => {
   expect(
     (screen.getByRole('button', { name: 'Start from my averages' }) as HTMLButtonElement).disabled,
   ).toBe(true)
+})
+
+// --- 2026-09-23 spec §B5: the card opens where the budgets are -----------------------------
+
+describe('the month the card reads (spec §B5)', () => {
+  // The production shape that made the bug: budgets set from Sep 2026, the page's own focus
+  // month still Aug 2026, today Sep 23 — the card said "No budgets yet" and offered to seed
+  // a second, Aug-dated set.
+  const SEP_BOOK: SpendingMatrix = {
+    months: ['2026-07-01', '2026-08-01', '2026-09-01'],
+    categories: matrix.categories,
+    series: [
+      { category_id: 1, values: ['300.00', '410.00', '0.00'], budgets: [null, null, '501.00'] },
+      { category_id: 2, values: ['2072.23', '2072.23', '2072.23'], budgets: [null, null, '2164.00'] },
+      { category_id: 3, values: [null, null, null], budgets: [null, null, null] },
+    ],
+    totals: ['2372.23', '2482.23', '2072.23'],
+    net_pay: [null, null, null],
+    savings_rate: [null, null, null],
+    four_pct_rule: [null, null, null],
+    total_budget: [null, null, '2665.00'],
+  }
+  const BLANK_BOOK: SpendingMatrix = {
+    ...SEP_BOOK,
+    series: SEP_BOOK.series.map((s) => ({ ...s, budgets: [null, null, null] })),
+    total_budget: [null, null, null],
+  }
+  const onViewMonth = vi.fn()
+
+  function pinToday(iso: string) {
+    // Date only: Testing Library's waitFor still needs real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(`${iso}T12:00:00`))
+  }
+
+  function renderBook(book: SpendingMatrix, monthIndex: number | null, defaultIndex = 1) {
+    return render(
+      <BudgetPanel
+        matrix={book}
+        monthIndex={monthIndex}
+        defaultIndex={defaultIndex}
+        onViewMonth={onViewMonth}
+        onBudgetsChanged={onBudgetsChanged}
+      />,
+    )
+  }
+
+  const heading = () => screen.getByRole('heading', { level: 2 })
+
+  beforeEach(() => pinToday('2026-09-23'))
+  afterEach(() => vi.useRealTimers())
+
+  it("with no month in the URL, opens on today's month when budgets are in force there", () => {
+    renderBook(SEP_BOOK, null)
+    expect(heading().textContent).toContain('Budgets — Sep 2026')
+    expect(screen.getByRole('meter', { name: 'Food spend vs budget' })).toBeDefined()
+    expect(screen.getByRole('meter', { name: 'Rent spend vs budget' })).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Start from my averages' })).toBeNull()
+  })
+
+  it("falls back to the latest earlier budgeted month when today's month is not entered yet", () => {
+    pinToday('2026-10-05')
+    renderBook(SEP_BOOK, null)
+    expect(heading().textContent).toContain('Budgets — Sep 2026')
+  })
+
+  it("opens on the page's own month, with the seed, when no month has a budget", async () => {
+    renderBook(BLANK_BOOK, null)
+    expect(heading().textContent).toContain('Budgets — Aug 2026')
+    const seed = (await screen.findByRole('button', {
+      name: 'Start from my averages',
+    })) as HTMLButtonElement
+    await waitFor(() => expect(seed.disabled).toBe(false))
+    fireEvent.click(seed)
+    await waitFor(() => expect(seedBudgets).toHaveBeenCalledWith('2026-08-01'))
+  })
+
+  it('an explicit month always wins — and says where the budgets are instead of offering to seed', async () => {
+    renderBook(SEP_BOOK, 1)
+    expect(heading().textContent).toContain('Budgets — Aug 2026')
+    expect(
+      screen.getByText('No budgets in force for Aug 2026 — your 2 budgets start Sep 2026.'),
+    ).toBeDefined()
+    // The suggestions land, and still no seed: the book HAS budget rows, just not this month.
+    await waitFor(() => expect(fetchBudgetSuggestions).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: 'Start from my averages' })).toBeNull()
+    expect(screen.queryByText('No budgets yet.')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'View Sep 2026' }))
+    expect(onViewMonth).toHaveBeenCalledWith('2026-09-01')
+    // The button that was pressed goes away with the month; the reader is handed the heading.
+    await waitFor(() => expect(document.activeElement).toBe(heading()))
+  })
+
+  it('names budgets that ended, and budgets that resume, in their own words', () => {
+    const ended: SpendingMatrix = {
+      ...SEP_BOOK,
+      series: [
+        { ...SEP_BOOK.series[0], budgets: ['400.00', null, null] },
+        { ...SEP_BOOK.series[1], budgets: [null, null, null] },
+        SEP_BOOK.series[2],
+      ],
+    }
+    renderBook(ended, 2)
+    expect(
+      screen.getByText('No budgets in force for Sep 2026 — your budgets were last in force in Jul 2026.'),
+    ).toBeDefined()
+    expect(screen.getByRole('button', { name: 'View Jul 2026' })).toBeDefined()
+    cleanup()
+    const gap: SpendingMatrix = {
+      ...ended,
+      series: [{ ...SEP_BOOK.series[0], budgets: ['400.00', null, '400.00'] }, ...ended.series.slice(1)],
+    }
+    renderBook(gap, 1)
+    expect(
+      screen.getByText('No budgets in force for Aug 2026 — your budgets resume Sep 2026.'),
+    ).toBeDefined()
+  })
+
+  it('does not call a partial set "your N budgets"', () => {
+    const staggered: SpendingMatrix = {
+      ...SEP_BOOK,
+      series: [
+        { ...SEP_BOOK.series[0], budgets: [null, '400.00', '400.00'] },
+        SEP_BOOK.series[1],
+        SEP_BOOK.series[2],
+      ],
+    }
+    renderBook(staggered, 0)
+    expect(
+      screen.getByText('No budgets in force for Jul 2026 — your budgets start Aug 2026.'),
+    ).toBeDefined()
+  })
+
+  it('each budgeted row says since when its budget has been in force', () => {
+    const changed: SpendingMatrix = {
+      ...SEP_BOOK,
+      series: [
+        { ...SEP_BOOK.series[0], budgets: ['450.00', '501.00', '501.00'] },
+        SEP_BOOK.series[1],
+        SEP_BOOK.series[2],
+      ],
+    }
+    renderBook(changed, null)
+    const row = (name: string) => screen.getByText(name).closest('.budget-row') as HTMLElement
+    expect(within(row('Food')).getByText('since Aug 2026')).toBeDefined()
+    expect(within(row('Rent')).getByText('since Sep 2026')).toBeDefined()
+  })
+
+  it('marks the month in progress as month to date, and a finished month not at all', () => {
+    renderBook(SEP_BOOK, null)
+    expect(within(heading()).getByText('Month to date')).toBeDefined()
+    expect(screen.getByText('0 of 2 budgeted categories over so far in Sep 2026')).toBeDefined()
+    cleanup()
+    pinToday('2026-10-05')
+    renderBook(SEP_BOOK, 2)
+    expect(screen.queryByText('Month to date')).toBeNull()
+    expect(screen.getByText('0 of 2 budgeted categories over in Sep 2026')).toBeDefined()
+  })
+
+  it('a seed made from the default view keeps the card on the month it seeded', async () => {
+    const view = renderBook(BLANK_BOOK, null)
+    const seed = (await screen.findByRole('button', {
+      name: 'Start from my averages',
+    })) as HTMLButtonElement
+    await waitFor(() => expect(seed.disabled).toBe(false))
+    fireEvent.click(seed)
+    await waitFor(() => expect(onBudgetsChanged).toHaveBeenCalledTimes(1))
+    // The page refetches: budgets now resolve from Aug on — which also makes Sep (today's
+    // month) budgeted. The card must not jump away from the month the reader just seeded.
+    const seededBook: SpendingMatrix = {
+      ...SEP_BOOK,
+      series: SEP_BOOK.series.map((s, i) =>
+        i < 2 ? { ...s, budgets: [null, i === 0 ? '413.00' : '2000.00', i === 0 ? '413.00' : '2000.00'] } : s,
+      ),
+    }
+    const props = { defaultIndex: 1, onViewMonth, onBudgetsChanged }
+    view.rerender(<BudgetPanel matrix={seededBook} monthIndex={null} {...props} />)
+    expect(heading().textContent).toContain('Budgets — Aug 2026')
+    // A month picked in the ribbon wins, and dropping it lands on the budgets' own month.
+    view.rerender(<BudgetPanel matrix={seededBook} monthIndex={2} {...props} />)
+    expect(heading().textContent).toContain('Budgets — Sep 2026')
+    view.rerender(<BudgetPanel matrix={seededBook} monthIndex={null} {...props} />)
+    expect(heading().textContent).toContain('Budgets — Sep 2026')
+  })
+
+  it('asks for a month when neither the URL, the budgets nor the page name one', () => {
+    renderBook(BLANK_BOOK, null, -1)
+    expect(screen.getByText('Select an entered month in the ribbon to review its budgets.')).toBeDefined()
+    expect(screen.queryByRole('meter')).toBeNull()
+  })
 })
 
 // A1/W6 (2026-09-13 audit): with no budgets the whole job of the card is to get one set, so the
