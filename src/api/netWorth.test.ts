@@ -1,5 +1,11 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-import { deleteMonthBalances, fetchSummary, fetchTimeseries, putMonthBalances } from './netWorth'
+import {
+  deleteMonthBalances,
+  fetchSummary,
+  fetchTimeseries,
+  putMonthBalances,
+  reorderAccounts,
+} from './netWorth'
 
 // Only the transport is stubbed — the query string this module builds IS the test
 // (src/api/projection.test.ts's posture).
@@ -102,4 +108,24 @@ it('putMonthBalances ships the body verbatim and reads the derived echo back', a
     },
   ])
   expect(result.derived).toEqual([{ account_id: 9, balance: '194411.66' }])
+})
+
+// Drag-to-reorder (2026-09-23 spec §3.2, §3.6): one PUT with the whole new order, and the
+// change batch read back so the Undo toast can revert it — null when nothing was logged.
+it('reorderAccounts PUTs every id in its new order and reads the change batch', async () => {
+  const rows = [
+    { id: 7, sort_order: 0 },
+    { id: 3, sort_order: 1 },
+  ]
+  vi.mocked(apiWithHeaders).mockResolvedValue({
+    data: rows,
+    headers: new Headers({ 'X-Change-Batch': 'b-order' }),
+  })
+  expect(await reorderAccounts([7, 3])).toEqual({ data: rows, batchId: 'b-order' })
+  expect(vi.mocked(apiWithHeaders).mock.calls[0]).toEqual([
+    '/net-worth/accounts/order',
+    { method: 'PUT', body: '{"ids":[7,3]}' },
+  ])
+  vi.mocked(apiWithHeaders).mockResolvedValue({ data: rows, headers: new Headers() })
+  expect((await reorderAccounts([7, 3])).batchId).toBeNull()
 })

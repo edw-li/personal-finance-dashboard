@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-import { deleteSpendingMonth, putSpendingMonth } from './spending'
+import { deleteSpendingMonth, putSpendingMonth, reorderCategories } from './spending'
 
 // Only the transport is stubbed — the request this module builds IS the test.
 vi.mock('./client', async (importOriginal) => ({
@@ -55,4 +55,24 @@ it('putSpendingMonth ships the body verbatim, with confirm_zero only when the ca
     method: 'PUT',
     body: '{"amounts":[{"category_id":1,"amount":"0.00"}],"confirm_zero":true}',
   })
+})
+
+// Drag-to-reorder (2026-09-23 spec §3.2, §3.6): one PUT with the whole new order; the change
+// batch rides the X-Change-Batch header, null when the order was unchanged.
+it('reorderCategories PUTs every id in its new order and reads the change batch', async () => {
+  const rows = [
+    { id: 4, sort_order: 0 },
+    { id: 2, sort_order: 1 },
+  ]
+  vi.mocked(apiWithHeaders).mockResolvedValue({
+    data: rows,
+    headers: new Headers({ 'X-Change-Batch': 'b-cat' }),
+  })
+  expect(await reorderCategories([4, 2])).toEqual({ data: rows, batchId: 'b-cat' })
+  expect(vi.mocked(apiWithHeaders).mock.calls[0]).toEqual([
+    '/spending/categories/order',
+    { method: 'PUT', body: '{"ids":[4,2]}' },
+  ])
+  vi.mocked(apiWithHeaders).mockResolvedValue({ data: rows, headers: new Headers() })
+  expect((await reorderCategories([4, 2])).batchId).toBeNull()
 })

@@ -30,6 +30,16 @@ export function deleteCreditCard(id: number): Promise<void> {
   return api<void>(`/credit-cards/${id}`, { method: 'DELETE' })
 }
 
+/** Drag-to-reorder the card list (2026-09-23 spec §3.2): `ids` is every card, active and
+ *  inactive, in its new order; the answer is the list exactly as fetchCreditCards returns it.
+ *  Unlogged server-side — the caller's Undo re-sends the previous order. */
+export function reorderCreditCards(ids: number[]): Promise<CreditCardOut[]> {
+  return api<CreditCardOut[]>('/credit-cards/order', {
+    method: 'PUT',
+    body: JSON.stringify({ ids }),
+  })
+}
+
 export function createCardCredit(cardId: number, body: CardCreditIn): Promise<CardCreditOut> {
   return api<CardCreditOut>(`/credit-cards/${cardId}/credits`, {
     method: 'POST',
@@ -87,6 +97,16 @@ export function updateRewardCategory(
 
 export function deleteRewardCategory(id: number): Promise<void> {
   return api<void>(`/credit-cards/categories/${id}`, { method: 'DELETE' })
+}
+
+/** One PUT for the whole Categories & weights order (2026-09-23 spec §3.2) — it replaces the
+ *  per-row PATCH chain. `ids` is every reward category in its new order. Unlogged server-side;
+ *  the caller's Undo re-sends the previous order. */
+export function reorderRewardCategories(ids: number[]): Promise<RewardCategoryOut[]> {
+  return api<RewardCategoryOut[]>('/credit-cards/categories/order', {
+    method: 'PUT',
+    body: JSON.stringify({ ids }),
+  })
 }
 
 export function fetchRewardRates(): Promise<RewardRateOut[]> {
