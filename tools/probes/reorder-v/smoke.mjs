@@ -1174,16 +1174,22 @@ async function autoScrollInBox({ box, rows, ids, scope, label, shot }) {
   const back = await waitFor(async () => (await order(rows)).filter((rowId) => ids.includes(rowId)), ids)
   check('Undo puts the order back', same(back, ids), back)
 }
-/** Two PNGs of one clip compared pixel by pixel inside the page (no PNG library in the repo).
- *  `zones` are the pinned (position: sticky) cells, judged apart. A channel delta over 24 counts
- *  as a difference. `lines` are the pixel rows of the table's row hairlines (each row's bottom
- *  edge, ±1px): compared exactly. Everywhere else a pixel still counts only when no pixel ONE ROW
- *  above or below it in the other shot matches it — the collapsed model draws every cell's content
- *  half a CSS pixel lower than the separate one (CSS 2.1 §17.6.2: half of each shared border lies
- *  inside the cell), which rasterizes as a 0-or-1px offset of text and controls while the lines stay
- *  put (measured at lane V: row bottoms identical, text +0.5px). The as-drawn counts (no offset
- *  allowed — the plan's statistic) ride along. The diff image marks the judged differences magenta
- *  and those a 1px content offset explains yellow. */
+/** Two PNGs of one clip compared inside the page (no PNG library in the repo). `zones` are the
+ *  pinned (position: sticky) cells, judged apart. A channel delta over 24 counts as a difference.
+ *
+ *  The collapsed model draws every row half a CSS pixel lower than the separate one — content AND
+ *  hairline: CSS 2.1 §17.6.2 centres a shared border on the grid line, half inside each cell, where
+ *  the separate model puts it inside the row's bottom. Measured at lane V: row boxes identical, text
+ *  +0.5px, and each row's line 0 or 1 device pixel apart once rasterized. So:
+ *    - pixels: one counts only when no pixel ONE ROW above or below it in the other shot matches it
+ *      (the as-drawn counts, no offset allowed — the plan's statistic — ride along);
+ *    - hairlines, judged on their own, since a 1px tolerance alone would also accept a doubled or a
+ *      missing line: at every row boundary (`lines`, from the DOM) the pixel rows that ARE a line —
+ *      those whose median contrast with the rows three pixels above and below, across the unpinned
+ *      width, is at least 4 (a background row's median is 0 — text is too sparse to move it; the
+ *      hairlines measure 8 on the ledger's --surface-2 lines, 21 in dark, 30 in light) — must be as
+ *      many in both shots, and at most one pixel apart.
+ *  The diff image marks judged pixels magenta and offset-explained ones yellow. */
 function comparePngs(a, b, zones, lines) {
   return page.evaluate(
     async ([a64, b64, rects, lineRows]) => {
@@ -1205,10 +1211,6 @@ function comparePngs(a, b, zones, lines) {
         for (let y = Math.max(0, r.y); y < Math.min(h, r.y + r.h); y += 1) {
           for (let x = Math.max(0, r.x); x < Math.min(w, r.x + r.w); x += 1) mask[y * w + x] = 1
         }
-      }
-      const strict = new Uint8Array(h)
-      for (const line of lineRows) {
-        for (let y = Math.max(0, line - 1); y <= Math.min(h - 1, line + 1); y += 1) strict[y] = 1
       }
       const delta = (i, j) =>
         Math.max(
@@ -1238,9 +1240,8 @@ function comparePngs(a, b, zones, lines) {
           if (d > maxDelta) maxDelta = d
           const asDrawn = d > 24
           let differs = asDrawn
-          // Off the hairlines, a half-pixel content offset (0 or 1px once rasterized) is the border
-          // model's, not a change of look: the same pixel one row up or down in the other shot.
-          if (differs && strict[y] === 0) {
+          // The model's half-pixel row offset: the same pixel one row up or down in the other shot.
+          if (differs) {
             for (const dy of [-1, 1]) {
               const yb = y + dy
               if (yb >= 0 && yb < h && delta(i, (yb * B.w + x) * 4) <= 24) {
@@ -1260,6 +1261,37 @@ function comparePngs(a, b, zones, lines) {
           img.data[k + 3] = differs || shifted ? 255 : 72
         }
       }
+      // The hairlines: which pixel rows around each boundary are a line, in each shot. A line is
+      // thin, so it differs from the rows three pixels above AND below it (a row just under a line
+      // differs only from above — no ghost line there).
+      const lineStrength = (P, W, y) => {
+        if (y < 3 || y + 3 >= h) return null
+        const deltas = []
+        const d = (i, j) => Math.max(Math.abs(P[i] - P[j]), Math.abs(P[i + 1] - P[j + 1]), Math.abs(P[i + 2] - P[j + 2]))
+        for (let x = 0; x < w; x += 1) {
+          if (mask[y * w + x] === 1) continue
+          const i = (y * W + x) * 4
+          deltas.push(Math.min(d(i, ((y - 3) * W + x) * 4), d(i, ((y + 3) * W + x) * 4)))
+        }
+        if (deltas.length < w * 0.5) return null // mostly pinned (a sticky header row): judged apart
+        deltas.sort((p, q) => p - q)
+        return deltas[Math.floor(deltas.length / 2)]
+      }
+      const boundaries = []
+      for (const line of lineRows) {
+        if (line < 5 || line > h - 6) continue
+        const ys = [line - 2, line - 1, line, line + 1, line + 2]
+        const inA = ys.filter((y) => (lineStrength(A.px, A.w, y) ?? 0) >= 4)
+        const inB = ys.filter((y) => (lineStrength(B.px, B.w, y) ?? 0) >= 4)
+        if (ys.every((y) => lineStrength(A.px, A.w, y) === null)) continue
+        boundaries.push({ line, separate: inA, collapse: inB })
+      }
+      const lineMismatches = boundaries.filter(
+        (bd) =>
+          bd.separate.length === 0 ||
+          bd.separate.length !== bd.collapse.length ||
+          Math.abs(bd.separate[0] - bd.collapse[0]) > 1,
+      )
       let png = null
       if (outsideAsDrawn + insideAsDrawn > 0) {
         octx.putImageData(img, 0, 0)
@@ -1276,7 +1308,10 @@ function comparePngs(a, b, zones, lines) {
         inside,
         insideAsDrawn,
         insidePixels,
-        lineRows: lineRows.length,
+        boundaries: boundaries.length,
+        linesOneApart: boundaries.filter((bd) => bd.separate[0] !== bd.collapse[0]).length,
+        lineMismatches: lineMismatches.slice(0, 6),
+        lineMismatchCount: lineMismatches.length,
         maxDelta,
         png,
       }
@@ -1311,12 +1346,17 @@ async function restingLook(table, clipOf, name) {
           const b = cell.getBoundingClientRect()
           return { x: Math.floor(b.left) - x - 1, y: Math.floor(b.top) - y - 1, w: Math.ceil(b.width) + 3, h: Math.ceil(b.height) + 3 }
         })
-      // Every row's hairline: the pixel row just above its rounded bottom edge (both models put the
-      // shared line there — the row boxes do not move), compared exactly in the clip.
+      // Every row boundary: the pixel row just above the row's rounded bottom edge, where the
+      // separate model draws the row's own hairline (the collapsed one is at most a pixel lower).
       const lines = [...el.querySelectorAll('tr')]
         .map((tr) => Math.round(tr.getBoundingClientRect().bottom) - y - 1)
         .filter((line) => line >= 0 && line < bottom - y)
-      return { clip: { x, y, width: right - x, height: bottom - y }, pinned, lines, model: getComputedStyle(el).borderCollapse }
+      // One hairline per boundary by construction: no cell draws a top border (spec §2.5 — each
+      // cell owns its border-bottom).
+      const topBorders = [...el.querySelectorAll('th, td')].filter(
+        (cell) => parseFloat(getComputedStyle(cell).borderTopWidth) > 0,
+      ).length
+      return { clip: { x, y, width: right - x, height: bottom - y }, pinned, lines, topBorders, model: getComputedStyle(el).borderCollapse }
     },
     [table, clipOf],
   )
@@ -1336,9 +1376,13 @@ async function restingLook(table, clipOf, name) {
   const budget = Math.max(40, Math.round(diff.outsidePixels * 0.001))
   const { png, ...stats } = diff
   check(
-    `the resting table matches the collapsed border model outside its pinned cells — hairlines exact, cell content within the model's half-pixel offset (≤ ${budget} px differ)`,
-    geo.model === 'separate' && diff.lineRows > 0 && diff.outside <= budget,
-    { model: geo.model, clip: geo.clip, budget, ...stats },
+    `the resting table matches the collapsed border model outside its pinned cells — one hairline per row boundary in both, at most 1px apart; no cell with a top border; everything else within the model's half-pixel offset (≤ ${budget} px differ)`,
+    geo.model === 'separate' &&
+      geo.topBorders === 0 &&
+      diff.boundaries > 0 &&
+      diff.lineMismatchCount === 0 &&
+      diff.outside <= budget,
+    { model: geo.model, clip: geo.clip, topBorders: geo.topBorders, budget, ...stats },
   )
   note('JUDGE (plan Task 7): pixels that differ INSIDE the pinned (sticky) cells', {
     inside: diff.inside,
