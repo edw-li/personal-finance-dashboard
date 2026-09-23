@@ -1,4 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { useState } from 'react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_OVERVIEW_LAYOUT } from '../../prefs/overviewLayout'
@@ -341,5 +343,49 @@ describe('OverviewCustomize — dragging (2026-09-23 spec §6, §2.3–§2.4)', 
     for (const key of [' ', 'Home', ' ']) fireEvent.keyDown(grip('Portfolio'), { key })
     expect(lines('Summary tiles').slice(0, 3)).toEqual(['⋮ [x] Portfolio', '⋮ [x] Estimated tax', '⋮ [x] Net worth'])
     expect(error.mock.calls).toEqual([])
+  })
+})
+
+/** Comments first, over the WHOLE file (overviewCss.test.ts's rule): a `}` inside a comment would
+ *  otherwise truncate a block. */
+function stripComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '')
+}
+
+/** Every declaration of `selector`, concatenated across blocks. */
+function declarationsFor(css: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const blocks = [...stripComments(css).matchAll(new RegExp(`(^|[,{}])\\s*${escaped}\\s*\\{([^}]*)\\}`, 'g'))]
+  if (blocks.length === 0) throw new Error(`no ${selector} block`)
+  return blocks.map((match) => match[2]).join(' ')
+}
+
+// The rows' CSS lives with the page (OverviewPage.css). It is pinned here rather than in
+// overviewCss.test.ts because that file is outside this lane's fence and an in-flight lane edits it.
+describe('OverviewPage.css — the Customize rows (2026-09-23 spec §6)', () => {
+  const css = readFileSync(path.resolve(__dirname, '../../pages/OverviewPage.css'), 'utf8')
+
+  it('gives every row one height and one gap, grip or not, and room for the lifted surface', () => {
+    // useReorder measures the rows once at lift and keeps those gaps while it makes room.
+    const row = declarationsFor(css, '.overview-customize-row')
+    expect(row).toContain('min-height: 1.75rem;')
+    expect(row).toContain('margin: .3rem -.35rem;')
+    expect(row).toContain('padding: 0 .35rem;')
+    expect(row).toContain('--customize-grip: 1.25rem;')
+  })
+
+  it("stands a hidden row's box under the boxes above it and draws the divider quietly", () => {
+    expect(declarationsFor(css, '.overview-customize-row > .reorder-grip')).toContain('flex: 0 0 var(--customize-grip);')
+    expect(declarationsFor(css, '.overview-customize-row.is-off')).toContain(
+      'padding-left: calc(.35rem + var(--customize-grip) + .35rem);',
+    )
+    expect(declarationsFor(css, '.overview-customize-divider')).toContain('color: var(--muted);')
+    expect(declarationsFor(css, '.overview-customize-divider::after')).toContain('border-top: 1px solid var(--border);')
+  })
+
+  it('keeps no rule for the retired position number or ↑/↓ buttons', () => {
+    const plain = stripComments(css)
+    expect(plain).not.toContain('.overview-customize-row > span')
+    expect(plain).not.toContain('.overview-customize-row .button')
   })
 })

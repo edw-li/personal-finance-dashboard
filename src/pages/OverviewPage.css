@@ -182,10 +182,20 @@
 .overview-customize-actions { display: flex; justify-content: space-between; gap: .5rem; margin-top: .5rem; }
 .overview-customize-menu fieldset { border: 0; padding: 0; margin: 0 0 .85rem; }
 .overview-customize-menu legend { font-size: .8rem; font-weight: 600; margin-bottom: .4rem; }
-.overview-customize-row { display: flex; align-items: center; gap: .35rem; margin: .45rem 0; font-size: .8rem; }
+/* Customize rows (2026-09-23 drag-to-reorder spec §6): grip · box · label for a view that shows,
+   box · label under the "Hidden" divider for one that does not. One height with or without a
+   grip, and one collapsed margin between rows: useReorder measures the rows once at lift and keeps
+   those gaps while it makes room, so a row that changed height mid-drag would land off by the
+   difference. The side padding, cancelled by the negative margin, is room for the lifted row's
+   surface and shadow (reorder.css); the grip column is a fixed width so a hidden row's box stands
+   under the boxes above it. */
+.overview-customize-row { --customize-grip: 1.25rem; display: flex; align-items: center; gap: .35rem; min-height: 1.75rem; margin: .3rem -.35rem; padding: 0 .35rem; font-size: .8rem; }
+.overview-customize-row > .reorder-grip { flex: 0 0 var(--customize-grip); }
+.overview-customize-row.is-off { padding-left: calc(.35rem + var(--customize-grip) + .35rem); }
 .overview-customize-row label { flex: 1; display: flex; gap: .45rem; align-items: center; }
-.overview-customize-row > span { color: var(--muted); font-size: .7rem; min-width: 2rem; text-align: center; }
-.overview-customize-row .button { padding: .25rem .45rem; }
+/* The quiet line between what shows and what does not: a muted word, then a hairline. */
+.overview-customize-divider { display: flex; align-items: center; gap: .5rem; margin: .5rem 0 .2rem; color: var(--muted); font-size: .7rem; }
+.overview-customize-divider::after { content: ''; flex: 1; border-top: 1px solid var(--border); }
 
 /* Data status card: the four clocks as definition rows (2026-09-13 polish §10). Amber is the
    advisory register (--warn) — a feed behind the ritual, a quote past its day. */
