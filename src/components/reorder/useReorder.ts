@@ -328,8 +328,9 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     drag.timer = window.setTimeout(() => commit(drag, next), MOTION_MS.fast)
   }
 
-  // Window listeners for a live drag. Escape is caught on WINDOW in the CAPTURE phase, before any
-  // document listener: usePopoverDismiss and the detail panel never see it (spec §2.3).
+  // Window listeners for a pending or live drag — a pointer press attaches them at pointerdown, a
+  // keyboard lift at lift. Escape is caught on WINDOW in the CAPTURE phase, before any document
+  // listener: usePopoverDismiss and the detail panel never see it (spec §2.3.7).
   const listen = (drag: Drag<K>) => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
@@ -373,7 +374,8 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
       document.documentElement.classList.add('reorder-active')
       autoScroll(drag)
     }
-    listen(drag)
+    // A pointer press is already listening (since pointerdown); a keyboard lift starts here.
+    if (drag.detach === null) listen(drag)
     const message = announce.lift(context(drag, drag.from))
     setSnap({ liftedId: drag.id, announcement: message, signature: drag.signature })
   }
@@ -416,6 +418,9 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     // No text selection, no focus theft: the press belongs to the drag.
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
+    // Pending already counts (spec §2.3.7): an Escape in the first 4px abandons the press and
+    // never reaches a popover around the list.
+    listen(drag)
   }
 
   const onPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -433,7 +438,9 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     const drag = machine.current.drag
     if (drag === null || drag.mode !== 'pointer' || event.pointerId !== drag.pointerId) return
     if (drag.phase === 'pressing') {
-      machine.current.drag = null // a click: nothing was lifted
+      // A click: nothing was lifted. Detach the press's window listeners too.
+      stopDrag(drag)
+      machine.current.drag = null
       return
     }
     if (drag.phase === 'lifted') drop(drag)

@@ -2387,9 +2387,10 @@ git commit -m "docs(plan): lane R0 — results and gates"
 
 ## Results (filled in by the implementer)
 
-- Lane tests: `npx vitest run src/components/reorder` — 5 files / 57 tests pass (reorderMath 20,
-  reorderDom 8, reorderStatus 3, useReorder 20, reorderCss 6).
-- Full vitest: 238 files / 3183 tests, exit 0 (neither known load-sensitive flake fired).
+- Lane tests: `npx vitest run src/components/reorder` — 5 files / 58 tests pass (reorderMath 20,
+  reorderDom 8, reorderStatus 3, useReorder 21, reorderCss 6).
+- Full vitest: 238 files / 3183 tests, exit 0 (neither known load-sensitive flake fired). Run before
+  correction 6, which adds one lane test.
 - tsc / eslint / build:
   - `tsc -b` exit 0; also a full check against a fresh buildinfo (tsc -b's cache lives in the shared
     node_modules junction), exit 0.
@@ -2416,10 +2417,15 @@ git commit -m "docs(plan): lane R0 — results and gates"
      §2.3.5 says the container's *visible* edge, and the function's own doc says "the band the reader
      can currently see". Unclipped, a 420 px Settings scroller hanging past the window bottom had an
      auto-scroll zone the pointer could not reach.
-- Kept as planned where the spec reads differently:
-  - A pointer drop eases the unit into its gap and commits after `MOTION_MS.fast`; spec §2.3.6
-    describes commit-then-FLIP. The result on screen is the same.
-  - Escape is claimed from lift, not from the < 4 px press (§2.3.7 says "pending or live").
+  6. **Escape during a pending press** (§2.3.7 "pending or live"; lane review follow-up).
+     - A pointer press now attaches its window listeners at pointerdown. `lift()` attaches them only
+       when none are attached, so the keyboard path still attaches once.
+     - An Escape in the first 4 px therefore abandons the press, so a later move lifts nothing. It is
+       also `preventDefault`ed and `stopPropagation`ed, so a popover around the list stays open.
+     - A plain click now calls `stopDrag` too. Otherwise every click on a grip would leak its window
+       listeners (mutation-checked).
+- Kept as planned: a pointer drop eases the unit into its gap, then commits after `MOTION_MS.fast`.
+  Spec §2.3 has since been amended to match (feat/reorder-base 4fe2c74).
 - Notes for R2–R5 (what the contract section does not say):
   - **Pointer tests** need three things: `installPointerEvents()` in `beforeAll`, `afterEach(cleanup)`,
     and mocked row boxes (the `layoutRows` helper in `useReorder.test.tsx`). Without layout every

@@ -429,6 +429,38 @@ describe('useReorder — pointer', () => {
     expect(order()).toEqual(['A', 'B', 'C'])
   })
 
+  it('Escape during a pending press abandons it, never the popover around it', () => {
+    const onCommit = vi.fn()
+    // usePopoverDismiss's shape: a document capture listener that acts on Escape only.
+    const popover = vi.fn()
+    const popoverKeys = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') popover()
+    }
+    document.addEventListener('keydown', popoverKeys, true)
+    render(<Stateful initial={flat('A', 'B', 'C')} onCommit={onCommit} />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 222 }) // still pending: under 4px
+    // fireEvent answers dispatchEvent: false means the Escape was defaultPrevented (spec §2.3.7).
+    expect(fireEvent.keyDown(grip('Alpha'), { key: 'Escape' })).toBe(false)
+    expect(popover).not.toHaveBeenCalled()
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 300 }) // +80px: the press is gone
+    expect(live()).toBe('')
+    expect(row('A').hasAttribute('data-reorder')).toBe(false)
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 300 })
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(onCommit).not.toHaveBeenCalled()
+
+    // A plain click leaves nothing listening: the next Escape is the popover's again.
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 220 })
+    expect(fireEvent.keyDown(grip('Alpha'), { key: 'Escape' })).toBe(true)
+    expect(popover).toHaveBeenCalledTimes(1)
+    document.removeEventListener('keydown', popoverKeys, true)
+  })
+
   // Spec §2.6 names window blur among the cancels to pin; a resize and a capture lost with no up
   // (the OS took the pointer) share its path.
   it('a window blur, a resize or a lost capture abandons the drag', () => {
