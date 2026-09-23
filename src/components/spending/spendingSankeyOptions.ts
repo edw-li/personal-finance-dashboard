@@ -14,6 +14,7 @@ import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter, sankeyCsv } fr
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
 import { monthWords, spendingLeftOut, takeHomeLeftOut } from '../../charts/windowWords'
 import type { SpendingMatrix, SpendingYearly, YearRollup } from '../../types/api'
+import { toCents } from '../../utils/cents'
 import type { ExportTable } from '../../utils/download'
 import { formatMonth } from '../../utils/format'
 import { buildMonthSlices } from '../../utils/spending'
@@ -52,8 +53,6 @@ export interface SpendingFlowPeriod {
 // Transfers stay yours (a brokerage deposit is not money gone), exactly as the YTD card's
 // cash saved and the money flow's fan leave them out.
 const CASH_OUTFLOW_KINDS = new Set(['living', 'tax'])
-const toCents = (value: string | null | undefined) =>
-  value === null || value === undefined ? 0 : Math.round(Number(value) * 100)
 
 /** The year a looked-at month falls in, over its matched months (FlowWindow). Every figure is
  *  summed from the matrix's own cells in whole cents. The year's Saved is the rollup's

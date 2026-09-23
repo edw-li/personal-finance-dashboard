@@ -51,6 +51,7 @@
 // within each column, and between every linked pair of columns, no two entities share a hue.
 // Depends on: charts/theme.ts.
 import type { SpendingMatrix } from '../types/api'
+import { toCents } from '../utils/cents'
 import {
   GROUP_COLORS,
   MUTED,
@@ -125,9 +126,6 @@ export interface CategoryFold {
 }
 
 export const EMPTY_FOLD: CategoryFold = { ids: [], colors: new Map() }
-
-const toCents = (value: string | null | undefined) =>
-  value === null || value === undefined ? 0 : Math.round(Number(value) * 100)
 
 /** The Spending page's all-time ranking: biggest total first; ties keep the server's series
  *  order (sort_order, id) — Array.prototype.sort is stable. */

@@ -22,6 +22,7 @@ import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter, sankeyCsv } fr
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
 import { brandTooltip } from '../../charts/tooltip'
 import type { MoneyFlowCategoryTotal, MoneyFlowOut } from '../../types/api'
+import { toCents } from '../../utils/cents'
 import type { ExportTable } from '../../utils/download'
 import { escapeHtml, formatCurrency, formatMonth } from '../../utils/format'
 
@@ -111,7 +112,6 @@ const JURISDICTION_LINES: { key: keyof MoneyFlowOut['taxes']; label: string }[] 
 // zero-width link is tooltip noise (the vesting-tooltip lesson).
 const A_CENT = 0.005
 const cents = (value: number) => Math.round(value * 100) / 100
-const toCents = (amount: string) => Math.round(Number(amount) * 100)
 
 // --- the window's words (charts/windowWords.ts, shared with the Spending "Where … went" year;
 // re-exported for the card's lede/footer and for tests) ------------------------------------
