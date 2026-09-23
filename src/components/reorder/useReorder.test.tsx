@@ -117,15 +117,22 @@ const order = () =>
   [...document.querySelectorAll('[data-reorder-id]')].map((element) => element.getAttribute('data-reorder-id'))
 const live = () => document.querySelector('[aria-live="assertive"]')?.textContent ?? ''
 
-/** A cancel eases the moved rows home: until MOTION_MS.fast has passed they carry the settle
- *  transition and keep their state; then both are gone. (Fake timers.) */
+/** A cancel eases the moved rows home: they carry the settle transition and keep their state until
+ *  MOTION_MS.fast has passed — still there 1ms before — then both are gone. (Fake timers.) */
 function expectEasedHome(ids: string[]) {
-  for (const id of ids) {
-    expect(row(id).style.transition).toBe(`transform ${MOTION_MS.fast}ms ${EASE_OUT}`)
-    expect(row(id).hasAttribute('data-reorder')).toBe(true)
+  const held = () => {
+    for (const id of ids) {
+      expect(row(id).style.transition).toBe(`transform ${MOTION_MS.fast}ms ${EASE_OUT}`)
+      expect(row(id).hasAttribute('data-reorder')).toBe(true)
+    }
   }
+  held()
   act(() => {
-    vi.advanceTimersByTime(MOTION_MS.fast)
+    vi.advanceTimersByTime(MOTION_MS.fast - 1)
+  })
+  held()
+  act(() => {
+    vi.advanceTimersByTime(1)
   })
   for (const id of ids) {
     expect(row(id).style.transition).toBe('')
@@ -430,7 +437,13 @@ describe('useReorder — pointer', () => {
     expect(live()).toBe('Alpha, position 3 of 4.')
     expect(onCommit).not.toHaveBeenCalled()
     act(() => {
-      vi.advanceTimersByTime(MOTION_MS.fast)
+      vi.advanceTimersByTime(MOTION_MS.fast - 1)
+    })
+    expect(onCommit).not.toHaveBeenCalled() // the settle holds until the last millisecond
+    expect(row('A').style.transform).toBe('translateY(80px)')
+    expect(row('A').getAttribute('data-reorder')).toBe('lifted')
+    act(() => {
+      vi.advanceTimersByTime(1)
     })
     expect(onCommit).toHaveBeenCalledTimes(1)
     expect(onCommit).toHaveBeenCalledWith(['B', 'C', 'A', 'D'], 'A')
