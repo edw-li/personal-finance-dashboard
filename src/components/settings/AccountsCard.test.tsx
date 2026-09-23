@@ -865,6 +865,28 @@ it("a refused Undo shows the server's own sentence (spec §9)", async () => {
   expect(vi.mocked(fetchAccounts)).toHaveBeenCalledTimes(1)
 })
 
+// …and an Undo that fails for any other reason speaks the one §8.1 sentence every reorderable
+// list shares.
+it('an Undo the server could not run says why, in the shared sentence (spec §8.1)', async () => {
+  vi.mocked(fetchAccounts).mockResolvedValue(ROSTER)
+  vi.mocked(undoBatch).mockRejectedValue(new ApiError('Service Unavailable', 503))
+  render(
+    <ToastProvider>
+      <AccountsCard people={[ME]} />
+    </ToastProvider>,
+  )
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+  press('Fidelity Traditional 401(k)', ' ', 'ArrowUp', ' ')
+  await screen.findByText('Moved Fidelity Traditional 401(k)')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+
+  const failure = await screen.findByText(
+    "Couldn't undo the move — the server had a problem (HTTP 503).",
+  )
+  expect(failure.className).toBe('toast-message')
+})
+
 it('a failed save snaps back to the last server order, says why, and reads the roster again (spec §8.1)', async () => {
   vi.mocked(fetchAccounts).mockResolvedValue(ROSTER)
   vi.mocked(reorderAccounts).mockRejectedValue(new ApiError('database unavailable', 503))
