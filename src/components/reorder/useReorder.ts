@@ -3,6 +3,15 @@
 // list registered through `itemProps`: React never renders a transform, so a 60fps drag costs no
 // renders. The only React state is who is lifted and what the live region says.
 //
+// Phases (Drag.phase) and what moves a drag between them:
+//   pressing → lifted              the pointer travels 4px (a keyboard lift passes straight through)
+//   pressing → released            up (a click), Escape, a lost pointer, blur, resize
+//   lifted   → commit              a moved drop from the keyboard, or under reduced motion
+//   lifted   → settling → commit   a moved pointer drop: the unit eases into its gap first
+//   lifted   → settling → finish   an unmoved drop, Escape, a lost pointer, blur, resize: rows ease home
+//   any      → released            data changed or the list turned busy: cleared at once, no easing
+// Released = releaseDrag (listeners, frame, timer) and machine.drag = null; rows cleared.
+//
 // Consumer rules (lanes R2–R5):
 //   1. Render EVERY item once, `{...itemProps(id)}` on its row, in `items` order (carried rows
 //      right after their carrier).
@@ -124,7 +133,8 @@ function clearRows<K extends ReorderKey>(rows: Map<K, HTMLElement>): void {
   document.documentElement.classList.remove('reorder-active')
 }
 
-function stopDrag<K extends ReorderKey>(drag: Drag<K>): void {
+/** Let go of everything a drag holds outside React: its window listeners, its frame, its timer. */
+function releaseDrag<K extends ReorderKey>(drag: Drag<K>): void {
   drag.detach?.()
   drag.detach = null
   if (drag.frame !== null) cancelFrame(drag.frame)
@@ -168,7 +178,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     const state = machine.current
     const drag = state.drag
     if (drag === null || drag.signature === signature) return
-    stopDrag(drag)
+    releaseDrag(drag)
     state.drag = null
     clearRows(rows.current)
   }, [signature])
@@ -180,7 +190,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     const rowMap = rows.current
     const timers = savedTimers.current
     return () => {
-      if (state.drag !== null) stopDrag(state.drag)
+      if (state.drag !== null) releaseDrag(state.drag)
       state.drag = null
       clearRows(rowMap)
       timers.forEach((timer) => window.clearTimeout(timer))
@@ -267,7 +277,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
   }
 
   const finish = (drag: Drag<K>) => {
-    stopDrag(drag)
+    releaseDrag(drag)
     if (machine.current.drag === drag) machine.current.drag = null
     clearRows(rows.current)
     setSnap((current) => ({ ...current, liftedId: null, signature: null }))
@@ -275,7 +285,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
 
   // Back where it started (Escape, an unmoved drop, a lost pointer): every row eases home.
   const settleBack = (drag: Drag<K>, message: string) => {
-    stopDrag(drag)
+    releaseDrag(drag)
     drag.phase = 'settling'
     setSnap({ liftedId: null, announcement: message, signature: drag.signature })
     if (latest.current.reduced) {
@@ -293,7 +303,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
 
   const cancel = (drag: Drag<K>) => {
     if (drag.phase === 'pressing') {
-      stopDrag(drag)
+      releaseDrag(drag)
       machine.current.drag = null
       return
     }
@@ -301,7 +311,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
   }
 
   const commit = (drag: Drag<K>, next: K[]) => {
-    stopDrag(drag)
+    releaseDrag(drag)
     machine.current.drag = null
     const message = announce.drop(context(drag, drag.to))
     // The DOM move blurs whatever the moved rows hold: a grip that had focus — a keyboard reader's,
@@ -332,7 +342,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     }
     // Pointer: the unit eases from under the pointer into its gap, THEN the order commits — the DOM
     // reorder lands on rows that already stand where it puts them.
-    stopDrag(drag)
+    releaseDrag(drag)
     drag.phase = 'settling'
     const slot = shiftsFor(drag.extents, drag.from, drag.to)[drag.from]
     for (const rowId of drag.units[drag.from]) {
@@ -455,7 +465,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     if (drag === null || drag.mode !== 'pointer' || event.pointerId !== drag.pointerId) return
     if (drag.phase === 'pressing') {
       // A click: nothing was lifted. Detach the press's window listeners too.
-      stopDrag(drag)
+      releaseDrag(drag)
       machine.current.drag = null
       return
     }
