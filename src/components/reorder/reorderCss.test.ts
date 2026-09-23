@@ -128,6 +128,13 @@ describe('reorder.css', () => {
     expect(pinned).not.toContain('transparent')
   })
 
+  it('keeps the drop line in Windows High Contrast: forced colors paint the accent as the canvas, so it takes Highlight', () => {
+    // Measured in Edge's forced-colors emulation (lane R7 review 8): the accent line computed and
+    // painted as the canvas colour — gone — while an author `Highlight` is kept.
+    const forced = /@media \(forced-colors: active\) \{([\s\S]*?)\n\}/.exec(stripComments(css))?.[1] ?? ''
+    expect(declarationsFor(forced, '.reorder-drop-line')).toContain('background: Highlight;')
+  })
+
   it('flashes a saved row for --t-flash', () => {
     expect(stripComments(css)).toMatch(/animation:\s*reorder-saved var\(--t-flash\)/)
   })

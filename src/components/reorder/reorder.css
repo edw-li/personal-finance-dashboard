@@ -142,6 +142,14 @@ table.reorder-table {
   pointer-events: none;
 }
 
+/* Windows High Contrast: forced colors paint an author background as the canvas colour, so the
+   accent line vanished (measured in Edge's emulation, R7 review 8); a system colour is kept. */
+@media (forced-colors: active) {
+  .reorder-drop-line {
+    background: Highlight;
+  }
+}
+
 /* The pinned cells (panels.css: the right-sticky td.row-actions, the left-sticky td.col-identity)
    draw their edge hairline as a box-shadow, so the lifted state, which sets a box-shadow, restates
    the hairline beside its own: a pinned cell keeps its edge while its row is lifted. */
