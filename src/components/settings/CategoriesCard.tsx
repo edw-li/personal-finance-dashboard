@@ -252,7 +252,7 @@ export default function CategoriesCard() {
     <section className="card span-8" id="categories">
       <h2 className="eyebrow">
         Spending categories
-        <InfoHint text="The spending matrix's rows. Retire keeps a category out of the wizard without losing its history; delete only works while a category has no monthly rows. The slug never changes — it is the workbook importer's key." />
+        <InfoHint text="The spending matrix's rows. Retire keeps a category out of the wizard without losing its history; delete only works while a category has no monthly rows. The slug never changes — it is the workbook importer's key. Drag a row by its grip to change the order the app lists categories in." />
       </h2>
       <FeedBanner error={loadError} retry={() => load()} retryLabel="Retry loading the categories" />
       {!loaded && loadError === null && <SettingsGhost height={900} />}
@@ -307,6 +307,12 @@ export default function CategoriesCard() {
                   aria-describedby target and the lift/move/drop announcements (spec §2.4). */}
               <ReorderInstructions id={reorder.instructionsId} />
               <ReorderLiveRegion text={reorder.announcement} />
+              {/* What the order is FOR (2026-09-23 reorder spec §8.1): the wizard walks it, and a
+                  positional paste fills it — so moving a row here moves where a pasted value lands. */}
+              <p className="settings-note">
+                The Monthly update lists categories in this order — a spreadsheet column pasted
+                there fills them in this order too.
+              </p>
               {/* ONE line per kind (spec §1): the three definitions are read while deciding
                   a single row's picker, so they have to be scannable side by side, not
                   buried in a paragraph the reader has to parse to find their case. */}
@@ -366,6 +372,9 @@ function CategoriesTable({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   useScrollEdges(scrollRef)
+  // A lifted row holds the list: the row buttons wait for the drop, as they wait for a request
+  // (spec §2.3) — an Edit or a Delete must not land on a row that is in the air.
+  const locked = busy || reorder.active
   return (
     <div className="settings-scroll" ref={scrollRef}>
       <table className="data-table category-table reorder-table">
@@ -396,7 +405,7 @@ function CategoriesTable({
                   ariaLabel={`Kind for ${category.name}`}
                   // disabled while a request is in flight, like the row's other controls: a second
                   // PATCH would race the reload that follows the first and the picker would flicker back.
-                  options={KINDS.map((k) => ({ ...k, disabled: busy }))}
+                  options={KINDS.map((k) => ({ ...k, disabled: locked }))}
                   value={category.kind}
                   onChange={(next) => onKind(category, next)}
                 />
@@ -405,19 +414,19 @@ function CategoriesTable({
                 <span className="badge">{category.is_active ? 'Active' : 'Retired'}</span>
               </td>
               <td className="row-actions">
-                <button type="button" className="button" aria-label={`Edit ${category.name}`} disabled={busy} onClick={() => onEdit(category)}>
+                <button type="button" className="button" aria-label={`Edit ${category.name}`} disabled={locked} onClick={() => onEdit(category)}>
                   Edit
                 </button>
                 <button
                   type="button"
                   className="button"
                   aria-label={category.is_active ? `Retire ${category.name}` : `Restore ${category.name}`}
-                  disabled={busy}
+                  disabled={locked}
                   onClick={() => onToggleActive(category)}
                 >
                   {category.is_active ? 'Retire' : 'Restore'}
                 </button>
-                <button type="button" className="button" aria-label={`Delete ${category.name}`} disabled={busy} onClick={() => onRemove(category)}>
+                <button type="button" className="button" aria-label={`Delete ${category.name}`} disabled={locked} onClick={() => onRemove(category)}>
                   Delete
                 </button>
               </td>

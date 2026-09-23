@@ -534,3 +534,38 @@ it('parks every grip while another request of the card is in flight (spec §4.1 
   })
   await waitFor(() => expect(grip('Taxes').getAttribute('aria-disabled')).toBeNull())
 })
+
+it('holds every row button while a row is lifted, and gives them back when the lift is cancelled', async () => {
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+  const edit = () => screen.getByRole('button', { name: 'Edit Taxes' }) as HTMLButtonElement
+  const kindTax = () =>
+    within(screen.getByRole('group', { name: 'Kind for Pets' })).getByRole('button', {
+      name: 'Tax',
+    }) as HTMLButtonElement
+
+  press('Groceries', ' ')
+  expect(edit().disabled).toBe(true)
+  expect((screen.getByRole('button', { name: 'Delete Pets' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(kindTax().disabled).toBe(true)
+
+  press('Groceries', 'Escape')
+  expect(live()).toBe('Cancelled. Groceries is back at position 1 of 3.')
+  expect(edit().disabled).toBe(false)
+  expect(kindTax().disabled).toBe(false)
+})
+
+it('says what the order is for and how to change it (spec §8.1)', async () => {
+  render(<CategoriesCard />)
+  const table = await screen.findByRole('table')
+
+  const note = screen.getByText(
+    'The Monthly update lists categories in this order — a spreadsheet column pasted there fills them in this order too.',
+  )
+  // Under the table.
+  expect(table.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: /^About The spending matrix's/ }))
+  expect(screen.getByRole('tooltip').textContent).toContain(
+    'Drag a row by its grip to change the order the app lists categories in.',
+  )
+})
