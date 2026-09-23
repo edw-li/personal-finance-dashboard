@@ -174,7 +174,11 @@ it('retires and restores without touching the other columns', async () => {
     expect(vi.mocked(updateCategory)).toHaveBeenCalledWith(5, { is_active: false }),
   )
 
-  fireEvent.click(screen.getByRole('button', { name: 'Restore Pets' }))
+  // The card stays busy until the Retire's reload has landed (a write holds the row buttons with
+  // the grips): the second click waits for it rather than racing it.
+  const restore = () => screen.getByRole('button', { name: 'Restore Pets' }) as HTMLButtonElement
+  await waitFor(() => expect(restore().disabled).toBe(false))
+  fireEvent.click(restore())
   await waitFor(() =>
     expect(vi.mocked(updateCategory)).toHaveBeenCalledWith(6, { is_active: true }),
   )
