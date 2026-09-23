@@ -116,6 +116,10 @@ export default function ImportReportView({ report }: { report: ImportReport }) {
       <p className="settings-note" role="status">
         {report.applied ? 'Applied.' : 'Dry run — nothing was written.'}
       </p>
+      {/* The Restore report's own sentence (2026-09-23 spec §B3): the file to go back to. */}
+      {report.applied && report.restore_point != null && (
+        <p className="settings-note">Restore point written: {report.restore_point}</p>
+      )}
       {SHEET_ORDER.filter((k) => report.sheets[k] && sheetHasContent(report.sheets[k])).map(
         (key) => (
           <SheetSection key={key} label={SHEET_LABELS[key] ?? key} sheet={report.sheets[key]} />

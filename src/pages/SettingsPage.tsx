@@ -1,6 +1,6 @@
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../components/shell/LocalSections'
 import { useEffect, useRef, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { changePassword } from '../api/auth'
 import { ApiError, describeError } from '../api/client'
 import { importXlsx } from '../api/importer'
@@ -20,10 +20,12 @@ import LimitsCard from '../components/settings/LimitsCard'
 import PlanAssumptionsCard from '../components/settings/PlanAssumptionsCard'
 import PriceRefreshCard from '../components/settings/PriceRefreshCard'
 import RestoreCard from '../components/settings/RestoreCard'
+import { restoreHref, restorePointLabel } from '../components/settings/restorePoints'
 import SystemCard from '../components/settings/SystemCard'
 import { prefetchSection, type SettingsSection } from '../components/settings/settingsPrefetch'
 import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
+import { useToast } from '../components/ToastProvider'
 import type { ImportReport, PersonOut } from '../types/api'
 import '../components/panels.css'
 // The settings family sheet, not only the component's: this page renders .settings-note
@@ -59,6 +61,8 @@ export default function SettingsPage() {
   // does no household fetching of its own — this is a relay, not a second source of truth.
   const [people, setPeople] = useState<PersonOut[]>([])
   const seqRef = useRef(0)
+  const toast = useToast()
+  const navigate = useNavigate()
 
   // Warm a task's data on tab hover or focus (2026-09-13 spec §9), so the click lands on filled
   // cards. Delegated NATIVE listeners on the page root, not props on the tabs: the strip is the
@@ -233,6 +237,16 @@ export default function SettingsPage() {
       .then((r) => {
         setReport(r)
         setImportError(null)
+        // The way back, said at the moment it exists (2026-09-23 spec §B3): the apply saved a
+        // restore point first, and Undo SELECTS it in the Restore card — the reader still
+        // dry-runs and confirms it there, so nothing is written by the click.
+        const point = r.restore_point ?? null
+        if (r.applied && point !== null) {
+          toast.success(
+            `Workbook imported. The data it replaced is saved as a restore point (${restorePointLabel(point)}).`,
+            { action: { label: 'Undo', onAction: () => navigate(restoreHref(point)) } },
+          )
+        }
       })
       .catch((err: unknown) => {
         // Verbatim: the router's 413 names the 15 MB limit and its 400 names the file type,
@@ -252,11 +266,14 @@ export default function SettingsPage() {
 
   const applyImport = () => {
     // The one thing a dry run cannot show, said before the write: within a year the SHEET
-    // wins, so taxes work done in the UI for sheet-covered years is about to be replaced.
+    // wins, so taxes work done in the UI for sheet-covered years is about to be replaced. And
+    // the honest way back (2026-09-23 spec §B3): the apply saves a restore point first, which
+    // the Restore card lists — "This cannot be undone" had stopped being true.
     const ok = window.confirm(
       'Apply this workbook to the live database? Sheet values overwrite imported rows — ' +
         'taxes inputs and brackets you edited in the UI for sheet-covered years WILL be ' +
-        'reset to the sheet. This cannot be undone.',
+        'reset to the sheet. A restore point of your current data is saved first — you can ' +
+        'roll back from Settings › Data › Restore.',
     )
     if (!ok) return
     runImport(false)
