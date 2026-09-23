@@ -9,7 +9,8 @@ import type {
   RewardRateOut,
   SpendingMatrix,
 } from '../types/api'
-import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
+import { ApiError, invalidateForMutation } from '../api/client'
+import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import CreditCardsPage from './CreditCardsPage'
 import { INK, PALETTE } from '../charts/theme'
 import { expectInDocumentOrder } from '../testing/domOrder'
@@ -205,6 +206,10 @@ function matrixRow(name: string): HTMLElement {
 
 // ── Drag-to-reorder helpers (2026-09-23 drag-to-reorder spec §7) ─────────────────────────────
 
+// Lane R1's stale-list sentence for the reward categories (spec §8.3).
+const STALE_CATEGORIES =
+  'The reward categories changed since this list was loaded — nothing was moved.'
+
 /** The page inside a ToastProvider, on Manage — the reorder toasts and their Undo live there. */
 function renderManage() {
   return render(
@@ -233,10 +238,14 @@ const rowIds = (table: '.roster-table' | '.categories-table') =>
   [...document.querySelectorAll(`${table} tbody tr`)].map((row) => row.getAttribute('data-reorder-id'))
 
 /** A tiny server for the reward categories: the GET answers the stored order; the reorder PUT
- *  stores the order it is sent — renumbered 0…n−1, as lane R1's route does — and answers with it. */
+ *  stores the order it is sent — renumbered 0…n−1, as lane R1's route does — and answers with it.
+ *  Every GET answers fresh rows, as a parsed response does: the page's state (and a panel's
+ *  saved order, which retires on new props) must never ride on a reused array. */
 function serveCategories(initial: RewardCategoryOut[] = CATEGORIES): void {
   let stored = initial
-  vi.mocked(fetchRewardCategories).mockImplementation(async () => stored)
+  vi.mocked(fetchRewardCategories).mockImplementation(async () =>
+    stored.map((category) => ({ ...category })),
+  )
   vi.mocked(reorderRewardCategories).mockImplementation(async (ids) => {
     const byId = new Map(stored.map((category) => [category.id, category]))
     stored = ids.flatMap((id, index) => {
@@ -1180,5 +1189,132 @@ describe('Credit cards — the native drag is gone (2026-09-23 drag-to-reorder s
   it('categories.css keeps no rule of the retired drag', () => {
     const css = readFileSync(path.join(folder, 'categories.css'), 'utf8')
     expect(css).not.toMatch(/\.drag-handle|\.drag-over|\.drag-cell|\.is-dragging/)
+  })
+})
+
+describe('CreditCardsPage — Categories & weights: Undo, and a save that fails (spec §7, §8.1, §8.3)', () => {
+  beforeEach(() => {
+    vi.mocked(reorderRewardCategories).mockReset()
+  })
+
+  it('Undo re-sends the order that stood before the drop, shows it and says so', async () => {
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Dining', 'ArrowUp')
+    await screen.findByText('Moved Dining')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByText('Order restored')).toBeTruthy()
+    expect(vi.mocked(reorderRewardCategories).mock.calls).toEqual([[[11, 10, 12]], [[10, 11, 12]]])
+    // The server's answer shows at once, and the page reloads behind it.
+    expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
+    expect(fetchRewardCategories).toHaveBeenCalledTimes(3)
+  })
+
+  // Lane R3's real-browser find, applied here: after a quick Undo the page can hand the panel
+  // nothing new. Here the drop's reload never lands and the Undo's returns exactly what the page
+  // first loaded, which CreditCardsPage.load skips as already shown. The panel shows the order
+  // the Undo restored — the server's own answer — and the next drag saves the order on screen.
+  it('drop → Undo → drag again saves the order the user sees, even when the page skips an identical reload', async () => {
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    const firstLoad = getSnapshot('credit-cards')
+    // The drop's reload never lands …
+    vi.mocked(fetchRewardCategories).mockReturnValueOnce(new Promise<never>(() => {}))
+    keyboardMove('Dining', 'ArrowUp')
+    await screen.findByText('Moved Dining')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Order restored')
+    // … and the Undo's lands with the rows of the first load, so the page keeps its props.
+    await waitFor(() => expect(getSnapshot('credit-cards')).not.toBe(firstLoad))
+    expect(JSON.stringify(getSnapshot('credit-cards'))).toBe(JSON.stringify(firstLoad))
+    await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
+    expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
+    keyboardMove('Rent', 'ArrowUp')
+    expect(reorderRewardCategories).toHaveBeenLastCalledWith([10, 12, 11])
+  })
+
+  // …and no saved order outlives a reload that returns rows identical to the first load. In
+  // the app every reorder PUT goes through api(), which drops the page's 'credit-cards'
+  // snapshot (client.ts MUTATION_FAMILIES), so the next reload always hands the panel fresh
+  // rows. Here the PUT does the same, and another tab puts the old order back before this
+  // tab's reload reads the list.
+  it("retires the saved order on the next reload even when it returns the first load's rows (another tab put them back)", async () => {
+    let stored = CATEGORIES
+    vi.mocked(fetchRewardCategories).mockImplementation(async () =>
+      stored.map((category) => ({ ...category })),
+    )
+    vi.mocked(reorderRewardCategories).mockImplementation(async (ids) => {
+      const byId = new Map(stored.map((category) => [category.id, category]))
+      const answer = ids.flatMap((id, index) => {
+        const category = byId.get(id)
+        return category === undefined ? [] : [{ ...category, sort_order: index }]
+      })
+      stored = CATEGORIES // the other tab's order, back where it was
+      invalidateForMutation('/credit-cards/categories/order')
+      return answer
+    })
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Dining', 'ArrowUp')
+    await screen.findByText('Moved Dining')
+    await waitFor(() => expect(rowIds('.categories-table')).toEqual(['10', '11', '12']))
+    await waitFor(() => expect(grip('Rent').getAttribute('aria-disabled')).toBeNull())
+    keyboardMove('Rent', 'ArrowUp')
+    expect(reorderRewardCategories).toHaveBeenLastCalledWith([10, 12, 11])
+  })
+
+  it.each([
+    { status: 500, detail: 'Internal Server Error', reason: 'the server had a problem (HTTP 500)' },
+    // A server sentence that brings its own stop: ours closes it, once.
+    { status: 422, detail: 'ids lists 12 more than once.', reason: 'ids lists 12 more than once' },
+  ])('puts the rows back, keeps the grip focused and says why ($status)', async ({ status, detail, reason }) => {
+    serveCategories()
+    vi.mocked(reorderRewardCategories).mockRejectedValueOnce(new ApiError(detail, status))
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Rent', 'ArrowUp')
+    expect(
+      await screen.findByText(
+        `Couldn't save the new order — ${reason}. The list is back to how it was.`,
+      ),
+    ).toBeTruthy()
+    expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
+    expect(document.activeElement).toBe(grip('Rent'))
+    expect(fetchRewardCategories).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+  })
+
+  it("shows a stale list's server sentence, puts the rows back and reloads (409)", async () => {
+    serveCategories()
+    vi.mocked(reorderRewardCategories).mockRejectedValueOnce(new ApiError(STALE_CATEGORIES, 409))
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Groceries', 'ArrowDown')
+    expect(await screen.findByText(STALE_CATEGORIES)).toBeTruthy()
+    expect(rowIds('.categories-table')).toEqual(['10', '11', '12'])
+    expect(fetchRewardCategories).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
+  })
+
+  it.each([
+    {
+      status: 500,
+      detail: 'Internal Server Error',
+      text: "Couldn't restore the order — the server had a problem (HTTP 500).",
+      fetches: 2,
+    },
+    { status: 409, detail: STALE_CATEGORIES, text: STALE_CATEGORIES, fetches: 3 },
+  ])('says why an Undo was refused ($status), reloading a stale list', async ({ status, detail, text, fetches }) => {
+    serveCategories()
+    renderManage()
+    await screen.findByText('Categories & weights')
+    keyboardMove('Groceries', 'ArrowDown')
+    await screen.findByText('Moved Groceries')
+    vi.mocked(reorderRewardCategories).mockRejectedValueOnce(new ApiError(detail, status))
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByText(text)).toBeTruthy()
+    expect(fetchRewardCategories).toHaveBeenCalledTimes(fetches)
   })
 })
