@@ -639,11 +639,16 @@ export default function CalendarPage() {
           busy,
           retry: () => revalidate(month),
         }}
-        skeleton={{ tiles: 4, cards: [{ span: 12, height: 420 }] }}
+        skeleton={{ tiles: 5, cards: [{ span: 12, height: 420 }] }}
       >
         {shown !== null && (
           <>
-            <CashflowStrip events={visible} month={month} quoteAsOf={shown.quote_as_of} />
+            <CashflowStrip
+              events={visible}
+              month={month}
+              quoteAsOf={shown.quote_as_of}
+              living={shown.living ?? []}
+            />
             <div className="card-grid">
               {form !== null && !hasPanel && (
                 <section className="card span-12">

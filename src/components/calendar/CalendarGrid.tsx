@@ -55,15 +55,18 @@ export function shiftMonth(dayIso: string, delta: number): string {
   return dayInMonth(addMonths(`${dayIso.slice(0, 7)}-01`, delta), dayIso)
 }
 
-/** The week gutter's lines: cash in over cash out — "+$6.8k" then "−$395" — or a lone em dash when
- *  nothing moves. Two lines, never one string with a slash: the 84px track broke the second token
- *  in half (audit C-2). A zero side prints "$0" (cashflow.ts's rule), so the shape is stable. */
+/** The week gutter's lines: cash in over cash out — "+$6.8k" then "−$395" — each side only when
+ *  it moved (2026-09-23 spec §B2: a "$0" under every other week was noise the audit counted), or
+ *  a lone em dash when nothing moves. Two lines, never one string with a slash: the 84px track
+ *  broke the second token in half (audit C-2). Scheduled events only — living costs are a
+ *  month-level estimate on the strip, never spread over weeks. */
 export function gutterLines(summary: CashSummary): string[] {
-  if (summary.cashIn === 0 && summary.cashOut === 0) return ['—']
-  return [
-    signedCompact(summary.cashIn, 'in', summary.estimated.cashIn),
-    signedCompact(summary.cashOut, 'out', summary.estimated.cashOut),
-  ]
+  const lines: string[] = []
+  if (summary.cashIn !== 0) lines.push(signedCompact(summary.cashIn, 'in', summary.estimated.cashIn))
+  if (summary.cashOut !== 0) {
+    lines.push(signedCompact(summary.cashOut, 'out', summary.estimated.cashOut))
+  }
+  return lines.length === 0 ? ['—'] : lines
 }
 
 export default function CalendarGrid({

@@ -92,7 +92,7 @@ const ROUTE_SAMPLES: Record<string, SamplePrompt[]> = {
     {
       label: 'Card lineup check',
       prompt:
-        'Given my rewards matrix and spending weights, which cards earn their keep and which look droppable? Cite the estimated yearly values.',
+        'Given my rewards matrix and spending weights, which of my cards earn their keep, which cost more than they earn, and which are free to keep? Cite the estimated yearly values.',
     },
   ],
   '/espp': [

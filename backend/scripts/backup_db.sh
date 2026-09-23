@@ -131,9 +131,21 @@ sanitize() {  # the first 300 bytes of a file as one JSON/SQL-safe line
   head -c 300 "$1" | tr -d "\"'\\\\" | tr '\n' ' '
 }
 
+# The passphrase reaches gpg on file descriptor 3 (a here-string), never in argv: a command
+# line is readable by every user on the box through ps or /proc/<pid>/cmdline for as long as
+# the dump runs (2026-09-23 spec §B4). --pinentry-mode loopback is still what lets gpg 2.1+
+# take a passphrase non-interactively under --batch. Both directions live in these two
+# functions, which tests/test_ops_scripts.py lifts verbatim and round-trips through gpg.
+encrypt_stream() {  # stdin -> "$1", symmetric AES256
+  gpg --symmetric --batch --yes --cipher-algo AES256 \
+    --pinentry-mode loopback --passphrase-fd 3 \
+    -o "$1" 3<<<"$BACKUP_PASSPHRASE"
+}
+
 decrypt_dump() {  # the SQL text of $DUMP_FILE on stdout, whichever flavor was written
   if [ -n "${BACKUP_PASSPHRASE:-}" ]; then
-    gpg --decrypt --batch --quiet --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" "$DUMP_FILE" | gunzip
+    gpg --decrypt --batch --quiet --pinentry-mode loopback --passphrase-fd 3 \
+      "$DUMP_FILE" 3<<<"$BACKUP_PASSPHRASE" | gunzip
   else
     gunzip -c "$DUMP_FILE"
   fi
@@ -149,9 +161,8 @@ fi
 
 echo "[$(date)] Starting backup of database '${DB_NAME}'..."
 
-# Dump, compress, and (when configured) encrypt. --pinentry-mode loopback is required to
-# take the passphrase non-interactively: without it gpg 2.1+ ignores --passphrase under
-# --batch and tries to open a pinentry a cron job does not have.
+# Dump, compress, and (when configured) encrypt through encrypt_stream above — the passphrase
+# on fd 3, never on gpg's command line.
 if [ -n "${BACKUP_PASSPHRASE:-}" ]; then
   PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump \
     -h "$DB_HOST" \
@@ -161,9 +172,7 @@ if [ -n "${BACKUP_PASSPHRASE:-}" ]; then
     --no-owner \
     --no-acl \
     | gzip \
-    | gpg --symmetric --batch --yes --cipher-algo AES256 \
-        --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" \
-        -o "$DUMP_FILE"
+    | encrypt_stream "$DUMP_FILE"
 else
   PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump \
     -h "$DB_HOST" \
@@ -179,14 +188,20 @@ DUMP_SIZE="$(du -h "$DUMP_FILE" | cut -f1)"
 echo "[$(date)] Dump complete: ${DUMP_FILE} (${DUMP_SIZE})"
 
 # Upload to OCI Object Storage and delete the backups (both flavors) that aged past
-# retention
-python3 - "$S3_ENDPOINT" "$OCI_REGION" "$OCI_ACCESS_KEY" "$OCI_SECRET_KEY" \
+# retention. The two OCI keys ride the ENVIRONMENT, never argv: a command line is readable by
+# every user on the box through ps or /proc/<pid>/cmdline for the whole upload (2026-09-23
+# spec §B4, the passphrase's rule applied to the keys). `export` makes that explicit however
+# the values arrived — the .env above is sourced under `set -a`, a caller's may not be.
+export OCI_ACCESS_KEY OCI_SECRET_KEY
+python3 - "$S3_ENDPOINT" "$OCI_REGION" \
   "$OCI_BUCKET" "$DUMP_FILE" "$OBJECT_KEY" "$EXPIRED_KEY_PLAIN" "$EXPIRED_KEY_GPG" <<'PYEOF'
-import sys, boto3
+import os, sys, boto3
 from botocore.config import Config
 
-endpoint, region, access_key, secret_key, bucket, dump_file, obj_key = sys.argv[1:8]
-expired_keys = sys.argv[8:10]
+endpoint, region, bucket, dump_file, obj_key = sys.argv[1:6]
+expired_keys = sys.argv[6:8]
+access_key = os.environ["OCI_ACCESS_KEY"]
+secret_key = os.environ["OCI_SECRET_KEY"]
 
 # region_name is REQUIRED: without it boto3 signs with us-east-1 in the SigV4
 # credential scope, which OCI only tolerates in the tenancy's home region

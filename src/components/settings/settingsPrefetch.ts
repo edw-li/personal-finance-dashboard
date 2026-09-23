@@ -2,7 +2,12 @@ import { fetchAssistantSettings } from '../../api/assistant'
 import { fetchFeedTokens } from '../../api/calendarFeed'
 import { fetchCoverage } from '../../api/coverage'
 import { fetchHousehold } from '../../api/household'
-import { fetchActivity, fetchHealth, fetchSnapshots } from '../../api/lifecycle'
+import {
+  fetchActivity,
+  fetchHealth,
+  fetchRestorePoints,
+  fetchSnapshots,
+} from '../../api/lifecycle'
 import { fetchLimits } from '../../api/limits'
 import { fetchAccounts } from '../../api/netWorth'
 import { fetchProfiles } from '../../api/paycheck'
@@ -34,6 +39,7 @@ export const WARM = {
   assistant: 'assistant-settings',
   feedTokens: 'feed-tokens',
   snapshots: 'snapshots',
+  restorePoints: 'restore-points',
   health: 'health',
   coverage: 'coverage',
   activity: 'activity',
@@ -104,6 +110,7 @@ export const WRITERS: Record<string, SettingsSection[]> = {
   [WARM.assistant]: ['integrations'],
   [WARM.feedTokens]: ['integrations'],
   [WARM.snapshots]: ['data'],
+  [WARM.restorePoints]: ['data'],
   [WARM.health]: ['data'],
   [WARM.coverage]: ['data'],
   [WARM.activity]: ['data'],
@@ -143,6 +150,7 @@ const LOADERS: Record<SettingsSection, (prime: Prime) => void> = {
   },
   data: (prime) => {
     prime(WARM.snapshots, fetchSnapshots)
+    prime(WARM.restorePoints, fetchRestorePoints)
     prime(WARM.health, fetchHealth)
     prime(WARM.systemStatus, fetchSystemStatus)
     prime(WARM.coverage, fetchCoverage)

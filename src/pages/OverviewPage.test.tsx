@@ -9,6 +9,7 @@ import { getLocal, resetPrefsStoreForTests, STORAGE_KEYS } from '../prefs/prefsS
 import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
 import type {
   CalendarEvent,
+  CalendarLiving,
   CalendarEventType,
   CoverageOut,
   DividendOut,
@@ -27,6 +28,8 @@ import type {
   TaxYearOut,
 } from '../types/api'
 import { calendarEvent } from '../testing/calendarFixtures'
+import { formatCompactCents, proratedLivingCents } from '../components/calendar/cashflow'
+import { upNextWindow } from '../components/overview/upNext'
 import { formatDate, formatMonth } from '../utils/format'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import OverviewPage from './OverviewPage'
@@ -106,7 +109,7 @@ vi.mock('../components/EChart', async () => {
       animateEntrance = true,
       onWidth,
     }: {
-      option: { xAxis?: { data?: unknown[]; axisLabel?: { customValues?: unknown[] } }; series?: { type?: string; name?: string; data?: unknown[] }[] }
+      option: { xAxis?: { data?: unknown[]; axisLabel?: { customValues?: unknown[] } }; series?: { type?: string; name?: string; data?: unknown[] }[] } | null
       ariaLabel?: string
       onClick?: (params: { dataIndex?: number }) => void
       animateEntrance?: boolean
@@ -116,10 +119,15 @@ vi.mock('../components/EChart', async () => {
         'data-testid': 'echart',
         // ChartCard hands every mount its house sentence (F11) — the page test reads it.
         'aria-label': ariaLabel,
-        'data-categories': (option.xAxis?.data ?? []).join(','),
-        'data-spending-points': JSON.stringify(option.series?.find(series => series.type === 'bar')?.data ?? []),
+        'data-categories': (option?.xAxis?.data ?? []).join(','),
+        'data-spending-points': JSON.stringify(option?.series?.find(series => series.type === 'bar')?.data ?? []),
         // The series a chart draws, by name (PortfolioPage.test's marker) — 2026-09-23 spec §C8.
-        'data-series': (option.series ?? []).map((series) => series.name ?? '').join('|'),
+        'data-series': (option?.series ?? []).map((series) => series.name ?? '').join('|'),
+        // The money-flow sankey's nodes as name:colour — which fold coloured the fan.
+        'data-sankey': ((option?.series?.find((series) => series.type === 'sankey')?.data ?? []) as { name?: string; depth?: number; itemStyle?: { color?: string } }[])
+          .filter((node) => node.depth === 3)
+          .map((node) => `${node.name}:${node.itemStyle?.color}`)
+          .join(','),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
         // A click stands in for a click on the chart's FIRST point (dataIndex 0) —
@@ -127,13 +135,15 @@ vi.mock('../components/EChart', async () => {
         // idiom). Charts given no handler stay inert, like the real thing.
         onClick: () => onClick?.({ dataIndex: 0 }),
         // The weekly axis's label set, counted; a right-click stands in for a 630px measurement.
-        'data-xlabels': String(option.xAxis?.axisLabel?.customValues?.length ?? ''),
-        'data-option': String(optionId(option)),
+        'data-xlabels': String(option?.xAxis?.axisLabel?.customValues?.length ?? ''),
+        'data-option': option === null ? '' : String(optionId(option)),
         onContextMenu: () => onWidth?.(630),
       }),
   }
 })
 import { fetchCalendar } from '../api/calendar'
+import { CATEGORY_HUES } from '../charts/entities'
+import { POSITIVE } from '../charts/theme'
 import { fetchCoverage } from '../api/coverage'
 import { fetchLots } from '../api/espp'
 import { fetchHousehold } from '../api/household'
@@ -1409,6 +1419,10 @@ it('renders a custom event as a plain row — no page to open (spec §9.2)', asy
   expect(screen.getByText(/Upcoming event 1/).closest('a')?.getAttribute('href')).toBe('/paycheck')
 })
 
+/** The 45-day line as a reader sees it: its spans' text, whitespace as spaces. */
+const upNextText = () =>
+  document.querySelector('.up-next-line')?.textContent?.replace(/\s+/g, ' ') ?? null
+
 // The ranking and the 45-day line (2026-09-03 calendar spec §14): a deadline that is close
 // leads, a second payday is dropped from the LIST, and the line still sums the whole window.
 it('ranks Up next with one payday and prints the 45-day line with amounts', async () => {
@@ -1430,7 +1444,65 @@ it('ranks Up next with one payday and prints the 45-day line with amounts', asyn
   expect(items[0]).toContain('Tax deadline — Q3') // a deadline within 14 days leads
   expect(items[0]).toContain('~−$1.2k')
   // Both paydays are in the window even though only one is listed.
-  expect(screen.getByText('Next 45 days: +$13.6k in · ~−$1.2k out')).toBeTruthy()
+  expect(upNextText()).toBe('Next 45 days: +$13.6k scheduled in · ~−$1.2k scheduled out')
+  // Each clause is one unbreakable span: a narrow card wraps between clauses, never inside
+  // one ("≈ −" / "$8.2k living costs" was a line break inside a figure).
+  expect(
+    Array.from(document.querySelectorAll('.up-next-line .up-next-clause')).map((el) => el.textContent),
+  ).toEqual(['Next 45 days:', '+$13.6k scheduled in', '~−$1.2k scheduled out'])
+})
+
+// 2026-09-23 spec §B2: the line also says what day-to-day living will cost over the window —
+// each month's server estimate spread over its days inside the window, in integer cents.
+it('adds the living costs of the next 45 days to the line', async () => {
+  serve()
+  const today = todayIso()
+  // Exactly 45 days, today included (lane B1 review, M5): the fetch asks for that window.
+  const end = addDays(today, 44)
+  expect(upNextWindow(today)).toEqual({ start: today, end })
+  // One budget-basis estimate for every month the window touches, whatever day this runs.
+  const living: CalendarLiving[] = []
+  for (let month = `${today.slice(0, 7)}-01`; month <= end; month = addMonths(month, 1)) {
+    living.push({ month, amount: '3000.00', basis: 'budget', months_in_average: null })
+  }
+  vi.mocked(fetchCalendar).mockResolvedValue({
+    sources: [],
+    quote_as_of: null,
+    living,
+    events: [
+      calendarEvent({ date: addDays(today, 3), type: 'payday', label: 'Payday', amount: '6812.44', direction: 'in' }),
+    ],
+  })
+  renderPage()
+  const spread = formatCompactCents(proratedLivingCents(living, today, end) ?? 0)
+  await waitFor(() =>
+    expect(upNextText()).toBe(`Next 45 days: +$6.8k scheduled in · ≈ −${spread} living costs`),
+  )
+  expect(vi.mocked(fetchCalendar)).toHaveBeenCalledWith(today, end)
+})
+
+// Review M5 (a): an empty agenda still costs money — the living clause stands on its own under
+// "Nothing scheduled…", and only when there is an estimate to show.
+it('shows the living clause under an empty agenda, and nothing more when there is no estimate', async () => {
+  serve()
+  const today = todayIso()
+  const end = addDays(today, 44)
+  const living: CalendarLiving[] = []
+  for (let month = `${today.slice(0, 7)}-01`; month <= end; month = addMonths(month, 1)) {
+    living.push({ month, amount: '3000.00', basis: 'budget', months_in_average: null })
+  }
+  vi.mocked(fetchCalendar).mockResolvedValue({ sources: [], quote_as_of: null, living, events: [] })
+  const view = renderPage()
+  await screen.findByText('Nothing scheduled in the next 45 days.')
+  const spread = formatCompactCents(proratedLivingCents(living, today, end) ?? 0)
+  await waitFor(() => expect(upNextText()).toBe(`Next 45 days: ≈ −${spread} living costs`))
+  expect(document.querySelectorAll('.up-next-list li')).toHaveLength(0)
+  view.unmount()
+  clearSnapshots()
+  vi.mocked(fetchCalendar).mockResolvedValue({ sources: [], quote_as_of: null, living: [], events: [] })
+  renderPage()
+  await screen.findByText('Nothing scheduled in the next 45 days.')
+  expect(upNextText()).toBeNull()
 })
 
 it('a calendar failure dents only the strip, never the snapshot', async () => {
@@ -1446,7 +1518,7 @@ it('a calendar failure dents only the strip, never the snapshot', async () => {
 
 it('keeps cached upcoming events after a failed refresh and replaces them only when retry succeeds', async () => {
   serve()
-  setSnapshot(`overview:upnext:${todayIso()}`, upNextEvents(2))
+  setSnapshot(`overview:upnext:${todayIso()}`, { events: upNextEvents(2), living: [] })
   vi.mocked(fetchCalendar).mockRejectedValueOnce(new ApiError('calendar down', 500))
     .mockResolvedValueOnce({ events: [], sources: [], quote_as_of: null })
   renderPage()
@@ -1463,7 +1535,7 @@ it('keeps cached upcoming events after a failed refresh and replaces them only w
 
 it('labels a cached empty agenda as the last loaded schedule when refresh fails', async () => {
   serve()
-  setSnapshot(`overview:upnext:${todayIso()}`, [])
+  setSnapshot(`overview:upnext:${todayIso()}`, { events: [], living: [] })
   vi.mocked(fetchCalendar).mockRejectedValue(new ApiError('calendar down', 500))
   renderPage()
   await screen.findByText(/Couldn't refresh upcoming events/)
@@ -1603,7 +1675,7 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
     seedOverview(snapshotOf(payload))
     pendAllSnapshotFetches()
     // todayIso() is LOCAL-date based (utils/months) — the UTC slice would miss by a day.
-    setSnapshot(`overview:upnext:${todayIso()}`, upNextEvents())
+    setSnapshot(`overview:upnext:${todayIso()}`, { events: upNextEvents(), living: [] })
     vi.mocked(fetchCalendar).mockImplementation(() => new Promise(() => {}))
     renderPage()
     // The strip is up before the calendar answers — its own key, its own fetch.
@@ -2122,5 +2194,66 @@ describe('OverviewPage chart cards (charts C2)', () => {
     expect(screen.getAllByRole('group', { name: /Export/ }).length).toBeGreaterThanOrEqual(3)
     expect(screen.getByRole('link', { name: 'Open net worth →' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open spending →' })).toBeTruthy()
+  })
+
+  // Code review 13 (2026-09-23 spec §C5): the '*' on a month in progress is said in words under
+  // the card, and the card's table twin names the month. A month AFTER this one is in progress
+  // whatever today is (this month is done on its last day), so the fixture holds on any date.
+  it('footnotes the month in progress under Recent spending and names it in the data table', async () => {
+    const ahead = addMonths(currentMonthIso(), 1)
+    serve({ matrix: matrixOut({ months: [...SPEND_MONTHS.slice(1), ahead] }) })
+    renderPage()
+    const card = (await screen.findByRole('heading', { name: /Recent spending/ })).closest('.card') as HTMLElement
+    await waitFor(() => expect(within(card).getByText('* Month in progress')).toBeTruthy())
+    // One caption line: the footnote runs inline before the drill link (the row reserves one).
+    const line = within(card).getByText('* Month in progress').closest('p')
+    expect(line).not.toBeNull()
+    expect(within(line as HTMLElement).getByRole('link', { name: 'Open spending →' })).toBeTruthy()
+    fireEvent.click(within(card).getByRole('button', { name: 'Table' }))
+    const table = within(card).getByRole('table')
+    expect(within(table).getByRole('columnheader', { name: 'Period' })).toBeTruthy()
+    const last = within(table).getAllByRole('row').at(-1) as HTMLElement
+    expect(within(last).getByText('Future month (in progress)')).toBeTruthy()
+  })
+
+  it('has no footnote when no shown month is in progress', async () => {
+    serve()
+    renderPage()
+    const card = (await screen.findByRole('heading', { name: /Recent spending/ })).closest('.card') as HTMLElement
+    await waitFor(() => expect(within(card).getByLabelText(/Bar chart of living spending/)).toBeTruthy())
+    expect(within(card).queryByText('* Month in progress')).toBeNull()
+  })
+})
+
+// 2026-09-23 spec §C2: the money flow folds by the SPENDING PAGE's category set, in the same
+// colours — so a category is one colour on the Overview and on /spending, whatever this year's
+// own ranking says.
+it('folds the money flow by the Spending page\u2019s all-time categories, in their colours', async () => {
+  const categories = [
+    { id: 1, name: 'Rent', slug: 'rent', sort_order: 1, is_active: true, kind: 'living' as const },
+    { id: 2, name: 'Food', slug: 'food', sort_order: 2, is_active: true, kind: 'living' as const },
+  ]
+  serve({
+    // Food is the ALL-TIME leader; Rent leads the flow's own year.
+    matrix: matrixOut({
+      categories,
+      series: [
+        { category_id: 1, values: Array<string>(12).fill('100.00'), budgets: Array<null>(12).fill(null) },
+        { category_id: 2, values: Array<string>(12).fill('900.00'), budgets: Array<null>(12).fill(null) },
+      ],
+    }),
+    flow: moneyFlowOut({
+      category_totals: [
+        { category_id: 1, name: 'Rent', kind: 'living', amount: '24000.00' },
+        { category_id: 2, name: 'Food', kind: 'living', amount: '6000.00' },
+      ],
+    }),
+  })
+  renderPage()
+  await waitFor(() => {
+    const flow = screen.getAllByTestId('echart').find((chart) => (chart.getAttribute('data-sankey') ?? '') !== '')
+    expect(flow?.getAttribute('data-sankey')).toBe(
+      `Food:${CATEGORY_HUES[0]},Rent:${CATEGORY_HUES[1]},Saved:${POSITIVE}`,
+    )
   })
 })

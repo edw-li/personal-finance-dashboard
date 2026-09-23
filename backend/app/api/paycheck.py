@@ -704,11 +704,55 @@ def _text(value) -> str:
     return format(value, "f") if isinstance(value, Decimal) else str(value)
 
 
-async def _pace_inputs(
-    db: AsyncSession, person_id: int
-) -> tuple[list[PaycheckProfile], list[StoredPeriod], Decimal]:
+@dataclass(frozen=True)
+class PaceInputs:
+    """Everything the pace strip reads from the database, read ONCE per request: a preview
+    builds two strips from one request, and both must describe the same person, the same
+    periods and the same plan discount."""
+
+    profiles: list[PaycheckProfile]
+    periods: list[StoredPeriod]
+    discount: Decimal
+    # 2026-09-23 spec §B1: does this person's strip grade the household's STORED ESPP
+    # purchases? The ESPP tables have no owner column (income INC-21), so the stored periods
+    # belong to the household's participants, and `periods` is empty for anyone else.
+    espp_participant: bool
+    # The participants' names, primary first: the Try-changes reason line says whose plan
+    # the ESPP presets model, so the client never re-derives the rule.
+    espp_participants: list[str]
+
+
+async def _espp_participants(db: AsyncSession, today: date) -> list[Person]:
+    """Who the stored ESPP periods belong to (2026-09-23 spec §B1): every person with
+    `espp_pct > 0` in a profile effective on or before `today` — past or current, since a
+    purchase entered for last year was funded by whoever was enrolled then, but never a
+    FUTURE profile: an enrollment that starts next year has funded nothing yet (lane B1
+    review, M9). Primary first. Nobody enrolled by today means the PRIMARY alone, which keeps
+    a single-earner household (and one that typed its purchases but never a rate) exactly
+    as it was. Two enrolled people both keep every stored period: without an owner column
+    there is no honest split (the documented limitation). SELECTs only
+    (tests/test_sandbox_purity.py)."""
+    people = await load_people(db)
+    enrolled = set(
+        (
+            await db.execute(
+                select(PaycheckProfile.person_id)
+                .where(PaycheckProfile.espp_pct > 0, PaycheckProfile.effective_date <= today)
+                .distinct()
+            )
+        ).scalars()
+    )
+    participants = [person for person in people if person.id in enrolled]
+    if participants:
+        return participants
+    primary = primary_person(people)
+    return [] if primary is None else [primary]
+
+
+async def _pace_inputs(db: AsyncSession, person_id: int, today: date) -> PaceInputs:
     """Everything the pace strip reads from the database, ONCE: the person's profile
-    timeline, the stored ESPP periods and the plan discount.
+    timeline, the stored ESPP periods (a participant's only — spec §B1) and the plan
+    discount.
 
     A preview builds two strips from one request, and they read exactly the same rows — so
     the reads live here and `_pace_rows` below is pure. SELECTs only, on both doors
@@ -723,10 +767,19 @@ async def _pace_inputs(
             )
         ).scalars()
     )
-    stored = list(
-        (
-            await db.execute(select(EsppPeriod).order_by(EsppPeriod.period_end, EsppPeriod.id))
-        ).scalars()
+    participants = await _espp_participants(db, today)
+    participant = any(person.id == person_id for person in participants)
+    # A non-participant reads NO stored periods: plan_year_rows then derives two zero-seeded
+    # halves, espp_pace_item prices them from this person's own paydays, and its "window <= 0
+    # and rate <= 0" rule hides the row unless their own scenario sets a rate.
+    stored = (
+        list(
+            (
+                await db.execute(select(EsppPeriod).order_by(EsppPeriod.period_end, EsppPeriod.id))
+            ).scalars()
+        )
+        if participant
+        else []
     )
     periods = [
         StoredPeriod(
@@ -740,7 +793,13 @@ async def _pace_inputs(
         )
         for row in stored
     ]
-    return profiles, periods, await read_espp_discount(db)
+    return PaceInputs(
+        profiles=profiles,
+        periods=periods,
+        discount=await read_espp_discount(db),
+        espp_participant=participant,
+        espp_participants=[person.name for person in participants],
+    )
 
 
 def _pace_rows(
@@ -748,9 +807,7 @@ def _pace_rows(
     scenario,
     limits: dict[str, Decimal],
     today: date,
-    profiles: list[PaycheckProfile],
-    periods: list[StoredPeriod],
-    discount: Decimal,
+    inputs: PaceInputs,
 ) -> list[PaceItem]:
     """The pace strip's rows: every one WALKED payday by payday (§2.6), with the ESPP row
     replaced by the PURCHASE-year one (§1.6).
@@ -765,6 +822,7 @@ def _pace_rows(
     # ESPP row is the one with a window of its own (§1.2). A person with no stored profile
     # cannot be walked at all, and there the pure fallback ("a year at this rate") is the
     # only honest answer.
+    profiles = inputs.profiles
     walked = (
         walk(profiles, scenario, today, date(today.year, 1, 1), date(today.year, 12, 31))
         if profiles
@@ -774,13 +832,13 @@ def _pace_rows(
     # never a sandbox knob and never a profile that only takes effect today (spec §2.5).
     paid_by = in_force(profiles, today - timedelta(days=1)) if profiles else None
     items = paycheck_pace(profile, limits, profile.hsa_coverage, walked, paid_by)
-    rows, _warnings = plan_year_rows(today.year, periods, [], None, None)
+    rows, _warnings = plan_year_rows(today.year, inputs.periods, [], None, None)
     espp = espp_pace_item(
         rows=rows,
         profiles=profiles,
         scenario_from_today=scenario,
         limit=limits.get(LIMIT_ESPP_423),
-        discount=discount,
+        discount=inputs.discount,
         today=today,
     )
     # limit_check already emits ESPP last, so appending keeps the display order intact.
@@ -803,10 +861,10 @@ async def get_breakdown(
     lines = {name: half_up2(value) for name, value in breakdown(profile).items()}
     warnings = _advisories(profile, lines["net_pay"])
     limits = await _limits_for(db, today.year)
-    inputs = await _pace_inputs(db, profile.person_id)
+    inputs = await _pace_inputs(db, profile.person_id, today)
     pace = [
         PaceItemOut.model_validate(item)
-        for item in _pace_rows(profile, profile, limits, today, *inputs)
+        for item in _pace_rows(profile, profile, limits, today, inputs)
     ]
     # Per check from the ANNUAL policy, not the other way round: the bands are annual
     # dollars, so the year is the only place the tiers can be applied honestly.
@@ -821,6 +879,8 @@ async def get_breakdown(
         warnings=warnings,
         pace=pace,
         employer_match=match_per_check,
+        espp_participant=inputs.espp_participant,
+        espp_participants=inputs.espp_participants,
         **lines,
     )
 
@@ -843,15 +903,15 @@ async def preview(body: PreviewIn, db: AsyncSession = Depends(get_db)) -> Previe
     limits = await _limits_for(db, today.year)
     # ONE set of reads for both halves: they describe the same person, the same periods and
     # the same plan discount, and reading twice could only introduce a disagreement.
-    inputs = await _pace_inputs(db, base.person_id)
+    inputs = await _pace_inputs(db, base.person_id, today)
     pace = PreviewPace(
         baseline=[
             PaceItemOut.model_validate(item)
-            for item in _pace_rows(base, base, limits, today, *inputs)
+            for item in _pace_rows(base, base, limits, today, inputs)
         ],
         scenario=[
             PaceItemOut.model_validate(item)
-            for item in _pace_rows(scenario, scenario, limits, today, *inputs)
+            for item in _pace_rows(scenario, scenario, limits, today, inputs)
         ],
     )
     changed = [
@@ -873,4 +933,6 @@ async def preview(body: PreviewIn, db: AsyncSession = Depends(get_db)) -> Previe
         pace=pace,
         changed=changed,
         warnings=_advisories(scenario, per_check.scenario.net_pay),
+        espp_participant=inputs.espp_participant,
+        espp_participants=inputs.espp_participants,
     )

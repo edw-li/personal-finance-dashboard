@@ -15,6 +15,7 @@ import type {
 } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatMonth } from '../../utils/format'
+import { currentMonthIso, todayIso } from '../../utils/months'
 import { budgetProgress } from '../../utils/spending'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
@@ -23,6 +24,13 @@ import { FeedBanner } from '../shell/Feed'
 import { useToast } from '../ToastProvider'
 import Disclosure from '../Disclosure'
 import BudgetSuggestions from './BudgetSuggestions'
+import {
+  budgetSinceIndex,
+  budgetsElsewhere,
+  budgetsOpeningIndex,
+  isMonthInProgress,
+  type BudgetsElsewhere,
+} from './budgetMonth'
 import { MIN_SEED_MONTHS, seedCounts, skipSummary } from './budgetSeed'
 import '../panels.css'
 import './budgets.css'
@@ -36,6 +44,22 @@ function failMessage(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
 
+/** The aware empty state's sentence (spec §B5): the viewed month has no budget in force, and
+ *  the book says where its budgets are instead of offering to write a second set. */
+function elsewhereSentence(viewed: string, elsewhere: BudgetsElsewhere, target: string): string {
+  const where =
+    elsewhere.relation === 'start'
+      ? elsewhere.everyBudget
+        ? elsewhere.count === 1
+          ? `your budget starts ${target}` // one budget is not counted: never "your 1 budget"
+          : `your ${elsewhere.count} budgets start ${target}`
+        : `your budgets start ${target}`
+      : elsewhere.relation === 'resume'
+        ? `your budgets resume ${target}`
+        : `your budgets were last in force in ${target}`
+  return `No budgets in force for ${viewed} — ${where}.`
+}
+
 /**
  * The Budget card (spec §4.2): one 4px meter per BUDGETED category for the page's focused
  * month, unbudgeted actives collapsed below, and the app's first budget-management
@@ -47,14 +71,28 @@ function failMessage(err: unknown, fallback: string): string {
  * month, one change batch, one Undo — a confirm-first re-seed once budgets exist, and a
  * suggestion line in every editor. The figures come from GET /spending/budgets/suggestions,
  * fetched once; if that fails the meters and the editor are untouched and the seed says why.
+ *
+ * 2026-09-23 (spec §B5): the card reads the month the URL names, and otherwise opens where the
+ * budgets ARE — it used to read the page's focus month (Aug) and call a book with 13 budgets
+ * from Sep "No budgets yet", its primary button one click from writing 13 more dated Aug. The
+ * seed is offered only to a book with no budget in force in any month; a month without budgets
+ * in a book that has them says where they are instead.
  */
 export default function BudgetPanel({
   matrix,
   monthIndex,
+  defaultIndex = -1,
+  onViewMonth,
   onBudgetsChanged,
 }: {
   matrix: SpendingMatrix
-  monthIndex: number
+  /** The month the URL names (a ribbon pick or a deep link), as an index — it always wins.
+   *  null when the URL names none: the card then opens where the budgets are (spec §B5). */
+  monthIndex: number | null
+  /** The page's own focus month — used only when no month has a budget in force. */
+  defaultIndex?: number
+  /** Moves the page to a month (the aware empty state's "View Sep 2026"). */
+  onViewMonth?: (month: string) => void
   onBudgetsChanged: () => void
 }) {
   const toast = useToast()
@@ -77,6 +115,20 @@ export default function BudgetPanel({
   // confirm-first control, so it owes the same courtesy — Cancel hands focus back to
   // the button that asked, instead of dropping it on <body>.
   const reseedRef = useRef<HTMLButtonElement>(null)
+  // "View <month>" moves the card, and the button that was pressed leaves with the month it
+  // offered — the heading takes focus so it does not fall to <body>.
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  // A write never moves the card out from under the reader (spec §B5): while the card chooses
+  // its own month, the month a seed, save or delete was made on stays in view — a first seed
+  // from Aug would otherwise re-resolve to Sep the moment Sep became budgeted too. The pin
+  // belongs to the URL month it was made under, so a ribbon pick or "Back to latest" drops it
+  // (adjusted during render, the house idiom — never a setState in an effect).
+  const [pinned, setPinned] = useState<string | null>(null)
+  const [pinnedUnder, setPinnedUnder] = useState(monthIndex)
+  if (pinnedUnder !== monthIndex) {
+    setPinnedUnder(monthIndex)
+    setPinned(null)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -92,33 +144,66 @@ export default function BudgetPanel({
     }
   }, [])
 
-  const month = matrix.months[monthIndex]
+  // The meters show ACTIVE categories only, so the month rules read the same set: an archived
+  // category's budget neither opens a month nor keeps the seed away.
+  const activeIds = new Set(matrix.categories.filter((c) => c.is_active).map((c) => c.id))
+  const activeBook = {
+    months: matrix.months,
+    series: matrix.series.filter((s) => activeIds.has(s.category_id)),
+  }
+  // The URL's month, else the pinned month, else where the budgets are (today's month when one
+  // is in force there, else the latest month with one), else the page's own focus month.
+  const pinnedIndex = pinned === null ? -1 : matrix.months.indexOf(pinned)
+  const monthIndexShown =
+    monthIndex ??
+    (pinnedIndex >= 0
+      ? pinnedIndex
+      : (budgetsOpeningIndex(activeBook, currentMonthIso()) ?? defaultIndex))
+
+  if (monthIndexShown < 0 || monthIndexShown >= matrix.months.length) {
+    return <p className="empty-note">Select an entered month in the ribbon to review its budgets.</p>
+  }
+
+  const month = matrix.months[monthIndexShown]
+  // Rent entered on the 1st and nothing else yet must read as partial, not as under budget.
+  const inProgress = isMonthInProgress(month, todayIso())
   // A5 (2026-08-31 tier-1): default to the FOCUSED month — the month the meters read.
   // The old next-calendar-month default made a first budget save successfully and
   // visibly do nothing (the meters were reading a month the budget hadn't reached).
   // months entries are YYYY-MM-01 (or YYYY-MM in old fixtures); the input wants YYYY-MM.
   const defaultEffectiveFrom = month.slice(0, 7)
   const effectiveMonth = `${defaultEffectiveFrom}-01`
+  const keepMonth = () => {
+    if (monthIndex === null) setPinned(month)
+  }
 
   const seriesById = new Map(matrix.series.map((s) => [s.category_id, s]))
   const rows = matrix.categories
     .filter((c) => c.is_active)
     .map((category) => {
       const series = seriesById.get(category.id)
-      const spent = series?.values[monthIndex] ?? null
-      const budget = series?.budgets[monthIndex] ?? null
-      return { category, budget, progress: budgetProgress(spent, budget) }
+      const spent = series?.values[monthIndexShown] ?? null
+      const budget = series?.budgets[monthIndexShown] ?? null
+      const since = series === undefined ? null : budgetSinceIndex(series.budgets, monthIndexShown)
+      return {
+        category,
+        budget,
+        since: since === null ? null : matrix.months[since],
+        progress: budgetProgress(spent, budget),
+      }
     })
   const budgeted = rows.flatMap((row) =>
     row.progress === null ? [] : [{ ...row, progress: row.progress }],
   )
   const unbudgeted = rows.filter((row) => row.progress === null)
   const overCount = budgeted.filter((row) => row.progress.over).length
+  // Non-null exactly when this month has no budget in force but another month does.
+  const elsewhere = budgeted.length > 0 ? null : budgetsElsewhere(activeBook, monthIndexShown)
 
   const suggestionById = new Map((suggestions?.suggestions ?? []).map((s) => [s.category_id, s]))
   const seedWindow = suggestions?.window ?? null
   const counts =
-    suggestions === null ? null : seedCounts(matrix, monthIndex, suggestions.suggestions)
+    suggestions === null ? null : seedCounts(matrix, monthIndexShown, suggestions.suggestions)
   const canSeed =
     counts !== null &&
     seedWindow !== null &&
@@ -145,6 +230,7 @@ export default function BudgetPanel({
     seedBudgets(effectiveMonth)
       .then((out) => {
         setSeedStatus(skipSummary(out.skipped))
+        keepMonth()
         onBudgetsChanged()
         const n = out.written.length
         const done = `Seeded ${n} ${n === 1 ? 'budget' : 'budgets'} from averages, from ${formatMonth(month)}`
@@ -204,6 +290,7 @@ export default function BudgetPanel({
         // The editor STAYS open: the PUT's response is the effective-dated history rendered
         // inside it, and that list is the save's only receipt (its own tests pin it). One
         // editor at a time is still the rule — it is the row's button that closes this one.
+        keepMonth()
         onBudgetsChanged()
       })
       .catch((err: unknown) => setError(failMessage(err, 'Failed to save the budget')))
@@ -221,6 +308,7 @@ export default function BudgetPanel({
             (h) => h.effective_month !== effectiveMonthIso,
           ),
         }))
+        keepMonth()
         onBudgetsChanged()
       })
       .catch((err: unknown) => setError(failMessage(err, 'Failed to delete the budget row')))
@@ -324,11 +412,27 @@ export default function BudgetPanel({
 
   const newCount = counts === null ? 0 : counts.writes - counts.rewrites
 
+  const viewMonth = (target: string) => {
+    onViewMonth?.(target)
+    // The pressed button leaves with the month it offered: hand focus to the card's heading
+    // (the house hand-off) rather than letting it fall to <body>.
+    requestAnimationFrame(() => headingRef.current?.focus())
+  }
+
   return (
     <section className="card span-12">
-      <h2 className="eyebrow">
+      {/* tabIndex -1: the focus target after "View <month>", never a tab stop of its own. */}
+      <h2 className="eyebrow" ref={headingRef} tabIndex={-1}>
         Budgets — {formatMonth(month)}
-        <InfoHint text="Each budgeted category's spend against its budget for the focused month. Budgets are effective-dated: a change applies from its month forward and never rewrites history. With no transaction feed there is no mid-month pacing — meters describe completed months and the live wizard entry. Start from my averages writes every living category's typical spend as an editable budget; the editor's chips offer the same figures one at a time." />
+        {/* JSX drops the line break: without the space the heading's text reads "Sep 2026Month
+            to date" to a screen reader, whatever the badge's margin shows (SourceHealth's note). */}
+        {inProgress && (
+          <>
+            {' '}
+            <span className="badge">Month to date</span>
+          </>
+        )}
+        <InfoHint text="Each budgeted category's spend against its budget for the month shown: the month picked in the ribbon, or else this month when a budget is in force, else the latest month that has one. Budgets are effective-dated: a change applies from its month forward and never rewrites history — each row says since when. With no transaction feed there is no mid-month pacing: a month still in progress reads month to date. Start from my averages writes every living category's typical spend as an editable budget; the editor's chips offer the same figures one at a time." />
       </h2>
       <FeedBanner error={error} />
       {seedStatus !== null && (
@@ -340,7 +444,7 @@ export default function BudgetPanel({
         <>
           <div className="budget-summary-row">
             <p className="drill-hint" role="status">
-              {`${overCount} of ${budgeted.length} budgeted categories over in ${formatMonth(month)}`}
+              {`${overCount} of ${budgeted.length} budgeted categories over ${inProgress ? 'so far ' : ''}in ${formatMonth(month)}`}
             </p>
             {canSeed && !confirmReseed && (
               <button
@@ -381,10 +485,16 @@ export default function BudgetPanel({
             </p>
           )}
           <div className="budget-rows">
-            {budgeted.map(({ category, budget, progress }) => (
+            {budgeted.map(({ category, budget, since, progress }) => (
               <div className="budget-entry" key={category.id}>
                 <div className="budget-row">
-                  <span className="budget-name">{category.name}</span>
+                  <span className="budget-label">
+                    <span className="budget-name">{category.name}</span>
+                    {/* Its effective month (spec §B5): which budget is being read, and from when. */}
+                    {since !== null && (
+                      <span className="budget-since">since {formatMonth(since)}</span>
+                    )}
+                  </span>
                   <div
                     className="budget-meter"
                     role="meter"
@@ -412,6 +522,27 @@ export default function BudgetPanel({
             ))}
           </div>
         </>
+      ) : elsewhere !== null ? (
+        // Budgets exist, just not this month: say where they are — and offer no seed, which
+        // would write a second, overlapping set dated this month (spec §B5).
+        <div className="budget-elsewhere">
+          <p className="empty-note">
+            {elsewhereSentence(
+              formatMonth(month),
+              elsewhere,
+              formatMonth(matrix.months[elsewhere.targetIndex]),
+            )}
+          </p>
+          {onViewMonth !== undefined && (
+            <button
+              type="button"
+              className="button"
+              onClick={() => viewMonth(matrix.months[elsewhere.targetIndex])}
+            >
+              View {formatMonth(matrix.months[elsewhere.targetIndex])}
+            </button>
+          )}
+        </div>
       ) : (
         <div className="budget-seed">
           {/* W6: a lead sentence beside its button — not a centred placeholder 24px from both. */}
@@ -435,7 +566,12 @@ export default function BudgetPanel({
         </div>
       )}
       {unbudgeted.length > 0 && (() => {
-        const title = `No budget yet (${unbudgeted.length})`
+        // Where budgets exist in other months, "No budget yet" would contradict the sentence
+        // above it ("your 13 budgets start Sep 2026"): name the month instead (spec §B5).
+        const title =
+          elsewhere === null
+            ? `No budget yet (${unbudgeted.length})`
+            : `No budget in force for ${formatMonth(month)} (${unbudgeted.length})`
         const rows = (
           <div className="budget-rows">
             {unbudgeted.map(({ category, budget }) => (

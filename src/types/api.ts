@@ -1504,6 +1504,11 @@ export interface PaycheckBreakdownOut {
   employer_match: string
   warnings: string[]
   pace: PaceItem[]
+  /** Does THIS person's pace strip grade the household's stored ESPP purchases (2026-09-23
+   *  spec §B1)? Absent on a payload from before that batch — read as true, today's behaviour. */
+  espp_participant?: boolean
+  /** The household's ESPP participants, primary first — whose plan the ESPP presets model. */
+  espp_participants?: string[]
 }
 
 // --- paycheck: the "Try it" sandbox (POST /paycheck/preview, 2026-09-03 planning-sandboxes
@@ -1580,6 +1585,9 @@ export interface PaycheckPreviewOut {
   changed: PaycheckChangedField[]
   /** Scenario-side advisories only — the breakdown's own two sentences. */
   warnings: string[]
+  /** PaycheckBreakdownOut's pair for the same person (2026-09-23 spec §B1). */
+  espp_participant?: boolean
+  espp_participants?: string[]
 }
 
 // --- comp ---
@@ -1829,11 +1837,25 @@ export interface SourceHealth {
   note: string | null
 }
 
+/** One month's living-cost estimate (2026-09-23 spec §B2): the day-to-day spending dated events
+ *  never include. `budget` = the living budgets in force that month; `average` = the Spending
+ *  page's "Previous 12 months" living average over `months_in_average` eligible months. A month
+ *  with neither is ABSENT from the list, never a zero. */
+export interface CalendarLiving {
+  month: string
+  amount: string
+  basis: 'budget' | 'average'
+  months_in_average: number | null
+}
+
 export interface CalendarResponse {
   events: CalendarEvent[]
   sources: SourceHealth[]
   /** The employer quote every vest estimate rides (ISO datetime), or null. */
   quote_as_of: string | null
+  /** Every month the window touches that has a living-cost estimate (2026-09-23 spec §B2).
+   *  Absent on a payload from before that batch, which reads as "no estimate". */
+  living?: CalendarLiving[]
 }
 
 // POST/PATCH body — full replace (the form always submits every field).
@@ -2006,6 +2028,12 @@ export interface ImportReport {
   dry_run: boolean
   applied: boolean
   sheets: Record<string, ImportSheetReport>
+  /** The restore point an apply saved before its first write (2026-09-23 spec §B3). Set
+   *  whenever the apply got past the parse — `applied` false included, when an applier then
+   *  reported errors and rolled back (the point was saved first and stays either way). null on
+   *  a dry run, and when parse errors stopped the import before anything was saved. Absent on
+   *  a report from before that batch. */
+  restore_point?: string | null
 }
 
 // --- app settings ---
@@ -2095,13 +2123,44 @@ export interface MoneyFlowOut {
   take_home_months_entered?: number
   /** Residual: gross − taxes − pre-tax − take-home (≈ vest shares kept + ESPP + timing). */
   retained_equity: string
-  /** Top-7 by year sum, biggest first, positive-only (the /spending fold). */
+  /** Top-7 by the MATCHED months' sum, biggest first, positive-only (2026-09-23 spec §C1). The
+   *  card folds `category_totals` by the Spending page's own set instead (§C2). */
   categories: MoneyFlowCategory[]
   /** The folded positive remainder; null when nothing folded. */
   other_spend: string | null
+  /** What the fold draws: the matched months' positive category totals. */
   total_spend: string
-  /** SIGNED: take_home_cash − total_spend; negative draws a red Drawdown source. */
+  /** SIGNED: the YTD card's cash saved over the matched months (take-home and spending both
+   *  entered) — `take_home_matched + refunds − total_spend`. Negative draws a red Drawdown. */
   saved: string
+  // The rest are the §C1 window fields — optional, as `niit` is: an older payload lacks them.
+  /** Take-home of the matched months: the spending fan's funding. */
+  take_home_matched?: string
+  /** Minus the net-negative category totals — money back, an explicit inflow beside take-home. */
+  refunds?: string
+  matched_months?: string[]
+  /** The months `take_home_pending` estimates (no take-home entered). */
+  take_home_pending_months?: string[]
+  /** Take-home of months with no spending: a named terminal node, not part of Saved. */
+  take_home_unmatched?: string
+  take_home_unmatched_months?: string[]
+  /** Spending months with no take-home (the month in progress): left out, named in the footer. */
+  spending_unmatched_months?: string[]
+  spending_unmatched_total?: string
+  /** Every living and tax category's matched-month total — transfers excluded (they stay yours,
+   *  as the YTD card's cash saved has it) — signed, exact zeros omitted, biggest first. */
+  category_totals?: MoneyFlowCategoryTotal[]
+  /** The book's first take-home month; pending months before it predate tracking. */
+  tracking_start?: string | null
+}
+
+/** One category over the money flow's matched months (2026-09-23 spec §C1). */
+export interface MoneyFlowCategoryTotal {
+  category_id: number
+  name: string
+  /** The kinds cash saved subtracts; a transfer is never listed. */
+  kind: 'living' | 'tax'
+  amount: string
 }
 
 // --- credit cards (2026-08-25 spec §2/§3) -----------------------------------------------
@@ -2428,6 +2487,10 @@ export interface SnapshotEntry {
   alembic_head: string | null
   /** Head equals this server's — the only entries the Restore card offers to apply. */
   restorable: boolean
+  /** Which list the file belongs to (2026-09-23 spec §B3): a stored snapshot (nightly or
+   *  Snapshot now) or a restore point saved before a restore or import. Absent on a pre-batch
+   *  payload, which only ever listed snapshots. */
+  kind?: 'snapshot' | 'restore_point'
 }
 
 export type ChangeSource = 'ui' | 'import' | 'restore' | 'scheduler' | 'repair' | 'undo'

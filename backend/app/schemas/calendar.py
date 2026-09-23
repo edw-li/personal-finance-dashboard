@@ -71,10 +71,24 @@ class SourceHealthOut(BaseModel):
     note: str | None
 
 
+class LivingEstimateOut(BaseModel):
+    """One month's living costs (2026-09-23 spec §B2): dated events never include
+    day-to-day spending, so the strip's Net subtracts this. `budget` = the living budgets in
+    force that month; `average` = the Spending page's "Previous 12 months" living average. A
+    month with neither is ABSENT from the list, never a 0."""
+
+    month: date
+    amount: Decimal  # 2dp
+    basis: Literal["budget", "average"]
+    months_in_average: int | None  # eligible months the mean read; null on a budget
+
+
 class CalendarOut(BaseModel):
     events: list[CalendarEventOut]
     sources: list[SourceHealthOut] = Field(default_factory=list)
     quote_as_of: datetime | None = None  # the employer quote every vest estimate rides
+    # Every month the window touches that has a living-cost estimate (spec §B2).
+    living: list[LivingEstimateOut] = Field(default_factory=list)
 
 
 class CustomEventIn(BaseModel):

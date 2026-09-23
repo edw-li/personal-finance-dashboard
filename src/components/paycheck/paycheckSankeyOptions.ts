@@ -5,9 +5,10 @@
 // reconciliation drift between a node's table figure and its links' sum is invisible at
 // link-width scale; the tooltip reads the table figure (charts/sankey.ts factory).
 import type { EChartsOption } from '../../charts/echarts'
+import { ENTITY } from '../../charts/entities'
 import { SANKEY_MARKS, makeSankeyTooltipFormatter, sankeyCsv } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
-import { MUTED, PALETTE, POSITIVE } from '../../charts/theme'
+import { MUTED } from '../../charts/theme'
 import type { PaycheckBreakdownOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 
@@ -21,22 +22,27 @@ type FlowKey = Exclude<keyof PaycheckBreakdownOut, 'profile' | 'warnings' | 'mon
 // layoutIterations:0 each lone intermediate (Taxable, Post-tax) sits flush at y=0, so
 // the spanning Gross→401(k)/Dental/HSA ribbons drew straight across those bars —
 // probe-verified overlap, user-revoked. Adjacent-only links are the money-flow sankey's
-// grammar and can never cross a node. Colors: intermediates MUTED (restatements, not
-// destinations — Gross included); terminals on FIXED PALETTE slots in waterfall order,
-// fixed per ENTITY so an omitted zero branch never reshuffles its neighbours' hues;
-// Net pay POSITIVE green (§3's kept-money-is-green cross-chart convention).
+// grammar and can never cross a node. Colors (2026-09-23 spec §C2 — charts/entities.ts is the
+// one registry): intermediates MUTED (restatements, not destinations — Gross included); Net
+// pay is take-home, the STRUCTURAL grey it wears on the money flow (it is not kept money yet,
+// so POSITIVE — Saved's — stays off it and the old "two greens" beside After-tax 401(k) are
+// gone); Withholding is tax, on the one tax hue; ESPP on its registry hue; Traditional 401(k)
+// on the pre-tax-savings green. The other four lines wear their own registry entries (entities.ts
+// PAYCHECK LINES: reused slots, picked so no two touching lines collapse for a colour-blind
+// reader), fixed per LINE so an omitted zero branch never reshuffles its neighbours' hues, and
+// no two lines share one.
 const FLOW_NODES: { key: FlowKey; label: string; depth: 0 | 1 | 2 | 3; color: string }[] = [
   { key: 'gross', label: 'Gross', depth: 0, color: MUTED },
   { key: 'taxable', label: 'Taxable', depth: 1, color: MUTED },
   { key: 'post_tax', label: 'Post-tax', depth: 2, color: MUTED },
-  { key: 'trad_401k', label: 'Traditional 401(k)', depth: 1, color: PALETTE[0] },
-  { key: 'dental_vision', label: 'Dental & vision', depth: 1, color: PALETTE[1] },
-  { key: 'hsa', label: 'HSA', depth: 1, color: PALETTE[2] },
-  { key: 'withholding', label: 'Withholding', depth: 2, color: PALETTE[3] },
-  { key: 'roth_401k', label: 'Roth 401(k)', depth: 3, color: PALETTE[4] },
-  { key: 'after_tax_401k', label: 'After-tax 401(k)', depth: 3, color: PALETTE[5] },
-  { key: 'espp', label: 'ESPP', depth: 3, color: PALETTE[6] },
-  { key: 'net_pay', label: 'Net pay', depth: 3, color: POSITIVE },
+  { key: 'trad_401k', label: 'Traditional 401(k)', depth: 1, color: ENTITY.preTaxSavings },
+  { key: 'dental_vision', label: 'Dental & vision', depth: 1, color: ENTITY.dentalVision },
+  { key: 'hsa', label: 'HSA', depth: 1, color: ENTITY.hsa },
+  { key: 'withholding', label: 'Withholding', depth: 2, color: ENTITY.tax },
+  { key: 'roth_401k', label: 'Roth 401(k)', depth: 3, color: ENTITY.roth401k },
+  { key: 'after_tax_401k', label: 'After-tax 401(k)', depth: 3, color: ENTITY.afterTax401k },
+  { key: 'espp', label: 'ESPP', depth: 3, color: ENTITY.espp },
+  { key: 'net_pay', label: 'Net pay', depth: 3, color: ENTITY.structural },
 ]
 
 const LABELS = new Map<FlowKey, string>(FLOW_NODES.map((node) => [node.key, node.label]))

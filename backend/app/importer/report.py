@@ -45,6 +45,13 @@ class ImportReport(BaseModel):
     dry_run: bool
     applied: bool = False
     sheets: dict[str, SheetReport]
+    # The restore point an apply saved before its first write (2026-09-23 spec §B3). Set
+    # whenever the apply got past the parse — `applied` false included, when an applier then
+    # reported errors and the apply rolled back: the point was committed first and stays on
+    # the volume either way. None on a dry run, and when parse errors stopped the import
+    # before anything was saved. (An applier that RAISES answers 500 with no report at all;
+    # its point is still listed in Settings › Data › Restore.)
+    restore_point: str | None = None
 
     @classmethod
     def new(cls, dry_run: bool) -> "ImportReport":

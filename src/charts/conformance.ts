@@ -66,8 +66,12 @@ export function checkConformance(option: unknown, fixture: ChartFixture): string
   const series = asList<SeriesLike>(o.series)
 
   // 1. Colours: token hexes, 'transparent', 'source' — nothing invented, nothing rgba().
+  // A token at an alpha ('#rrggbbaa', charts/partial.ts withAlpha) is still that token: recolor
+  // maps it, and the swatch reads it. A foreign colour at an alpha is not.
+  const isToken = (color: string) =>
+    TOKEN_HEXES.has(color.toLowerCase()) || (/^#[0-9a-f]{8}$/i.test(color) && TOKEN_HEXES.has(color.slice(0, 7).toLowerCase()))
   walkColors(o, 'option', (color, path) => {
-    if (!TOKEN_HEXES.has(color.toLowerCase()) && !ALLOWED_WORDS.has(color)) problems.push(`${path}: color ${color} is not a token`)
+    if (!isToken(color) && !ALLOWED_WORDS.has(color)) problems.push(`${path}: color ${color} is not a token`)
   })
 
   // 2. Value/log axes label through the grammar's formatters, by identity.

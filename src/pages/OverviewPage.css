@@ -20,6 +20,13 @@
   color: var(--text);
 }
 
+/* Recent spending's caption while a month is in progress: the "* Month in progress" footnote
+   runs inline before the drill link, so the row keeps the one line it reserves in every state
+   (2026-09-23 code review 13). The link stays a link, just not a block of its own here. */
+.overview-page .chart-footnote-line .drill-hint {
+  display: inline;
+}
+
 /* The "needs attention" strip: one row per actionable condition, each a link to the page
    that fixes it. Amber accent = advisory, not error (the .tax-warnings register) — the
    --warn token (PALETTE[3] amber) the freshness cue below shares. */
@@ -150,6 +157,12 @@
 
 .up-next-line {
   margin-top: 0.35rem;
+}
+
+/* One clause of the 45-day line (2026-09-23 spec §B2): kept whole, so the line wraps between
+   clauses — never inside a figure, where "≈ −" / "$8.2k living costs" split at a prefix sign. */
+.up-next-clause {
+  white-space: nowrap;
 }
 /* The two columns end on the same line (lane V: the agenda column ran 66px past the wealth
    column at 1440 and 1920, over the 24px limit). `stretch` hands both columns the taller one's

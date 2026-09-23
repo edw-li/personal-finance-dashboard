@@ -11,6 +11,8 @@ import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
+import { categoryFold } from '../charts/entities'
+import { hasPartialMonth, PARTIAL_FOOTNOTE } from '../charts/partial'
 import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import { chipAmount, eventKey } from '../components/calendar/calendarView'
@@ -19,7 +21,13 @@ import DataStatusCard from '../components/overview/DataStatusCard'
 import { netWorthComponents } from '../components/overview/netWorthReceipt'
 import { GhostTile, SkeletonCard } from '../components/PageSkeleton'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
-import { UP_NEXT_WINDOW_DAYS, rankUpNext, upNextLine } from '../components/overview/upNext'
+import {
+  UP_NEXT_WINDOW_DAYS,
+  type UpNextMoney,
+  rankUpNext,
+  upNextMoney,
+  upNextWindow,
+} from '../components/overview/upNext'
 import { windowWords, ytdStats } from '../components/overview/ytd'
 import {
   netWorthTrendCsv,
@@ -42,6 +50,7 @@ import {
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
+import { useChartDecals } from '../components/useChartDecals'
 import StatTile from '../components/StatTile'
 import useOverviewResource from '../components/overview/useOverviewResource'
 import useSpendingEvidence from '../components/metrics/useSpendingEvidence'
@@ -55,6 +64,7 @@ import { DEFAULT_OVERVIEW_LAYOUT } from '../prefs/overviewLayout'
 import { getLocal, setLocal, subscribe } from '../prefs/prefsStore'
 import type {
   CalendarEvent,
+  CalendarLiving,
   CoverageOut,
   DividendOut,
   EsppLotsResponse,
@@ -71,7 +81,7 @@ import type {
   TaxYearOut,
 } from '../types/api'
 import { formatCurrency, formatDate, formatMonth, formatPct } from '../utils/format'
-import { addDays, todayIso } from '../utils/months'
+import { todayIso } from '../utils/months'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './OverviewPage.css'
@@ -123,8 +133,32 @@ function upNextKey(): string {
   return `overview:upnext:${todayIso()}`
 }
 
+// The up-next card's one read (2026-09-23 spec §B2): the window's events and its living-cost
+// estimates are ONE response, cached together under the day key so they are never two instants.
+interface UpNextData {
+  events: CalendarEvent[]
+  living: CalendarLiving[]
+}
+
 function flowKey(year: number | null): string {
   return `overview:flow:${year ?? 'auto'}`
+}
+
+/** The money the window actually moves — the list is capped, this is not. Each piece is one
+ *  unbroken span, the "·" glued to the clause before it, so a narrow card wraps between clauses
+ *  and never inside a figure (2026-09-23 spec §B2). */
+function UpNextMoneyLine({ money }: { money: UpNextMoney }) {
+  return (
+    <p className="drill-hint up-next-line">
+      <span className="up-next-clause">{money.lead}</span>
+      {money.clauses.map((clause, index) => (
+        <Fragment key={index}>
+          {index === 0 ? ' ' : <>&nbsp;&middot; </>}
+          <span className="up-next-clause">{clause}</span>
+        </Fragment>
+      ))}
+    </p>
+  )
 }
 
 /** Whose view this is, in words (audit item 11). The scope row fetched the household for
@@ -164,25 +198,26 @@ export default function OverviewPage() {
   // The agenda has its own day-keyed cache and failure state, independent of the four
   // groups above. A failed refresh keeps the last loaded schedule with a notice;
   // without a previous answer, the card reports that upcoming events are unavailable.
-  const [upNext, setUpNext] = useState<CalendarEvent[] | null>(
-    () => getSnapshot<CalendarEvent[]>(upNextKey()) ?? null,
+  const [upNext, setUpNext] = useState<UpNextData | null>(
+    () => getSnapshot<UpNextData>(upNextKey()) ?? null,
   )
   const [upNextFailed, setUpNextFailed] = useState(false)
   const upNextSeq = useRef(0)
 
   const loadUpNext = () => {
     const seq = ++upNextSeq.current
-    const today = todayIso()
-    fetchCalendar(today, addDays(today, UP_NEXT_WINDOW_DAYS))
+    // The line's own window (exactly 45 days, today included), so what is fetched is what is summed.
+    const { start, end } = upNextWindow(todayIso())
+    fetchCalendar(start, end)
       .then((data) => {
         if (seq !== upNextSeq.current) return
         const key = upNextKey()
-        const previous = getSnapshot<CalendarEvent[]>(key)
-        setSnapshot(key, data.events)
+        const next: UpNextData = { events: data.events, living: data.living ?? [] }
+        const previous = getSnapshot<UpNextData>(key)
+        setSnapshot(key, next)
         setUpNextFailed(false)
-        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data.events))
-          return
-        setUpNext(data.events)
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(next)) return
+        setUpNext(next)
       })
       .catch(() => {
         if (seq !== upNextSeq.current) return
@@ -294,10 +329,23 @@ export default function OverviewPage() {
     () => (data.matrix && data.coverage ? notEnteredMonths(data.matrix, data.coverage) : new Set<string>()),
     [data],
   )
+  // The month in progress is drawn as such (2026-09-23 spec §C5): judged against the product's
+  // today, hatched or faded by Appearance › Chart patterns.
+  const spendToday = todayIso()
+  const patterns = useChartDecals()
   const bars = useMemo(
-    () => (data.matrix ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered) : null),
-    [data, notEntered],
+    () =>
+      data.matrix
+        ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered, { todayIso: spendToday, patterns })
+        : null,
+    [data, notEntered, spendToday, patterns],
   )
+  // The bars' '*' on the month in progress, said in words under the card (code review 13).
+  const spendPartial = data.matrix ? hasPartialMonth(data.matrix.months.slice(-RECENT_SPEND_MONTHS), spendToday) : false
+  // The money flow's category colours are the Spending page's own (2026-09-23 spec §C2): the
+  // fold comes from the same all-time ranking over the matrix this page already loads.
+  const matrix = data.matrix
+  const flowFold = useMemo(() => (matrix ? categoryFold(matrix) : null), [matrix])
 
   // Audit item 11: the server answers an owner with no accounts with zero TOTALS, and a
   // page of $0.00 tiles over a flat line reads as "you have nothing" rather than "there is
@@ -312,6 +360,10 @@ export default function OverviewPage() {
   // guide spec §7.1). Household scope only: a person or joint scope with nothing in it is the
   // empty-scope note's case above, and a book with months but no accounts cannot exist.
   const emptyBook = owner === null && data.ts !== undefined && data.ts.months.length === 0
+
+  // The 45-day money line, one reading for both of the agenda's branches (spec §B2).
+  const upNextMoneyNow =
+    upNext === null ? null : upNextMoney(upNext.events, upNext.living, todayIso())
 
   const summary = data?.summary
   // Rendered verbatim, never re-derived: these are the server's own totals fields (the
@@ -636,7 +688,7 @@ export default function OverviewPage() {
                 option={bars}
                 empty="No spending months yet."
                 exportName="recent-spending"
-                csv={data.matrix ? () => recentSpendCsv(data.matrix!) : undefined}
+                csv={data.matrix ? () => recentSpendCsv(data.matrix!, RECENT_SPEND_MONTHS, { todayIso: spendToday }) : undefined}
                 height={240}
                 busy={spending.busy} error={spending.error}
                 selectionAdapter={params => {
@@ -646,9 +698,20 @@ export default function OverviewPage() {
                   return month ? { kind: 'period', id: `living:${month}`, period: month, label: formatMonth(month), scope: 'Household', values: [{ label: 'Living spending', value: data.matrix.living_total?.[index] ?? null, unit: 'USD' }], source: { href: `/spending?month=${month}`, label: 'Open spending' } } : null
                 }}
                 footer={
-                  <NavLink className="drill-hint" to="/spending">
-                    Open spending →
-                  </NavLink>
+                  spendPartial ? (
+                    // The '*' in words (code review 13, spec §C5): one line with the drill link,
+                    // so the caption row keeps the one line it reserves in every state.
+                    <p className="drill-hint chart-footnote-line">
+                      <span>{PARTIAL_FOOTNOTE}</span> ·{' '}
+                      <NavLink className="drill-hint" to="/spending">
+                        Open spending →
+                      </NavLink>
+                    </p>
+                  ) : (
+                    <NavLink className="drill-hint" to="/spending">
+                      Open spending →
+                    </NavLink>
+                  )
                 }
               />
     ),
@@ -658,6 +721,10 @@ export default function OverviewPage() {
                 failed={flowFailed}
                 onRetry={() => loadFlow(flowYear)}
                 onYearChange={showFlowYear}
+                fold={flowFold}
+                // Wait for the fold rather than draw once in the payload's own ranking and
+                // recolour a moment later; a failed spending feed falls back to that ranking.
+                foldPending={matrix === undefined && spending.busy}
               />
     ),
   }
@@ -754,16 +821,23 @@ export default function OverviewPage() {
                   <button type="button" className="button" onClick={loadUpNext}>Retry upcoming events</button>
                 </p>
               )}
-              {upNext === null ? !upNextFailed && <p className="drill-hint">Loading upcoming events...</p> : rankUpNext(upNext, todayIso()).length === 0 ? (
-                <p className="drill-hint">
-                  {upNextFailed
-                    ? `The last loaded schedule had no events in the next ${UP_NEXT_WINDOW_DAYS} days.`
-                    : `Nothing scheduled in the next ${UP_NEXT_WINDOW_DAYS} days.`}
-                </p>
+              {upNext === null ? !upNextFailed && <p className="drill-hint">Loading upcoming events...</p> : rankUpNext(upNext.events, todayIso()).length === 0 ? (
+                <>
+                  <p className="drill-hint">
+                    {upNextFailed
+                      ? `The last loaded schedule had no events in the next ${UP_NEXT_WINDOW_DAYS} days.`
+                      : `Nothing scheduled in the next ${UP_NEXT_WINDOW_DAYS} days.`}
+                  </p>
+                  {/* Nothing dated, but the days still cost money: the line stands on its own
+                      whenever there is a living estimate to show (lane B1 review, M5). */}
+                  {upNextMoneyNow !== null && upNextMoneyNow.living && (
+                    <UpNextMoneyLine money={upNextMoneyNow} />
+                  )}
+                </>
               ) : (
                 <>
                   <ul className="up-next-list">
-                    {rankUpNext(upNext, todayIso()).map((event) => {
+                    {rankUpNext(upNext.events, todayIso()).map((event) => {
                       const amount = chipAmount(event)
                       const row = (
                         <>
@@ -786,8 +860,7 @@ export default function OverviewPage() {
                       )
                     })}
                   </ul>
-                  {/* The money the window actually moves — the list is capped, this is not. */}
-                  <p className="drill-hint up-next-line">{upNextLine(upNext, todayIso())}</p>
+                  {upNextMoneyNow !== null && <UpNextMoneyLine money={upNextMoneyNow} />}
                 </>
               )}
               <NavLink className="drill-hint" to="/calendar">

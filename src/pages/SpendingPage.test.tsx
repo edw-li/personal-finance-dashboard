@@ -6,6 +6,7 @@ import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
+import { addMonths, currentMonthIso } from '../utils/months'
 import { fetchSpendingEvidence, REVIEW_LABELS } from '../api/monthReview'
 vi.mock('../api/monthReview', async importOriginal => ({ ...await importOriginal<typeof import('../api/monthReview')>(), fetchSpendingEvidence: vi.fn() }))
 
@@ -74,15 +75,16 @@ vi.mock('../components/EChart', async () => {
         'data-bar-data': JSON.stringify(
           (option.series ?? []).filter((s) => s.type === 'bar').map((s) => s.data ?? []),
         ),
-        // A7: the y-axis clamps, sampled at a fixed extent so the pin reads numbers.
+        // The y-axis clamps: a fixed number (2026-09-23 spec §C3's robust axes), or a function
+        // sampled at a fixed extent so the pin reads numbers either way.
         'data-y-floor':
           typeof option.yAxis?.min === 'function'
             ? String(option.yAxis.min({ min: -1.8, max: 0.6 }))
-            : '',
+            : typeof option.yAxis?.min === 'number' ? String(option.yAxis.min) : '',
         'data-y-ceiling':
           typeof option.yAxis?.max === 'function'
             ? String(option.yAxis.max({ min: -1.8, max: 0.6 }))
-            : '',
+            : typeof option.yAxis?.max === 'number' ? String(option.yAxis.max) : '',
         onClick: () => onClick?.({ dataIndex: 0 }),
         onMouseEnter: () => onLegendChange?.({ 'Net pay': false, 'Sustainable spend': true }),
         // A SECOND legendselectchanged shape, carrying a map disjoint from mouseEnter's:
@@ -146,7 +148,7 @@ const YEARLY: SpendingYearly = {
       living_total: '4000.00',
       tax_total: '1180.00',
       transfer_total: '150.00',
-      cash_savings: '6820.00',
+      cash_savings: '6670.00',
       payroll_savings: '2000.00',
       total_savings: '8820.00',
       total_savings_rate: '0.630000',
@@ -234,19 +236,57 @@ describe('SpendingPage — the flow card', () => {
     )
   })
 
-  it('re-slices to the yearly rollup client-side on the Year toggle', async () => {
+  it('re-slices to the year client-side on the Year toggle, over its matched months', async () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
 
     fireEvent.click(screen.getByRole('button', { name: 'Year' }))
 
-    expect(await screen.findByText('Where 2026 went')).toBeTruthy()
+    // 2026-09-23 review (spec §C1): the year is its window, the months with take-home AND
+    // spending, and the card says so.
+    expect(await screen.findByText('Where Jun–Jul 2026 went')).toBeTruthy()
+    expect(screen.getByText('Months with take-home and spending entered')).toBeTruthy()
     expect(flowMarker()?.getAttribute('data-links')).toBe(
       'Net pay>Rent=4000|Net pay>Groceries=1180|Net pay>Fun=150|Net pay>Saved=6670',
     )
     // Both datasources were already on the page — the toggle never refetches.
     expect(vi.mocked(fetchMatrix)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(fetchYearly)).toHaveBeenCalledTimes(1)
+  })
+
+  // 2026-09-23 review: on prod the Year view paired Jan–Aug net pay with Jan–Sep spending and
+  // said Saved $148.74 beside the Overview's $2,220.97. August here has spending and no take-home.
+  it('leaves a spend-only month out of the year and names it, like the Overview money flow', async () => {
+    const three = (a: string, b: string, c: string) => [a, b, c]
+    vi.mocked(fetchMatrix).mockResolvedValue(
+      matrixFixture({
+        months: ['2026-06-01', '2026-07-01', '2026-08-01'],
+        series: [
+          { category_id: 1, values: three('2000.00', '2000.00', '2000.00'), budgets: [null, null, null] },
+          { category_id: 2, values: three('600.00', '580.00', '580.00'), budgets: [null, null, null] },
+          { category_id: 3, values: three('150.00', '0.00', '0.00'), budgets: [null, null, null] },
+        ],
+        totals: three('2750.00', '2580.00', '2580.00'),
+        living_total: three('2750.00', '2580.00', '2580.00'),
+        tax_total: three('0.00', '0.00', '0.00'), transfer_total: three('0.00', '0.00', '0.00'),
+        cash_outflow: three('2750.00', '2580.00', '2580.00'),
+        comparison_average: [null, '2750.00', '2665.00'], comparison_count: [0, 1, 2],
+        net_pay: ['6000.00', '6000.00', null],
+        savings_rate: ['0.541666667', '0.57', null],
+        four_pct_rule: [null, null, null],
+        total_budget: [null, null, null],
+      }),
+    )
+    renderPage()
+    // The flow opens on the latest month, which has no take-home to fan out yet.
+    await screen.findByText('Where Aug 2026 went')
+    fireEvent.click(screen.getByRole('button', { name: 'Year' }))
+    expect(await screen.findByText('Where Jun–Jul 2026 went')).toBeTruthy()
+    expect(screen.getByText('Aug 2026 spending ($2,580.00) is shown once its take-home is entered.')).toBeTruthy()
+    // Saved is the rollup's cash saved over Jun–Jul, which the matrix confirms to the cent.
+    expect(flowMarker()?.getAttribute('data-links')).toBe(
+      'Net pay>Rent=4000|Net pay>Groceries=1180|Net pay>Fun=150|Net pay>Saved=6670',
+    )
   })
 
   it('follows the drilled month (the pie month is the flow month)', async () => {
@@ -599,17 +639,62 @@ describe('SpendingPage — absent ≠ zero and axis honesty (2026-08-31 tier-1 A
     expect(screen.getByText('$2,665.00')).toBeTruthy()
   })
 
-  it('lets the savings-rate floor follow the data below −100%, ceiling capped (A7)', async () => {
+  it('clamps the savings-rate floor at −100% and tops it a nice step above the data (§C3)', async () => {
+    // 2026-09-23 spec §C3 replaces A7's expanding floor: one −1,073% month set the axis to
+    // −1100% and flattened three years into a band. The floor is FIXED now (a month below it
+    // draws off the edge with a marker), and the top is the next nice step over the best
+    // month (57% → 100%), never the data max itself.
     renderPage()
     await screen.findByText('Where Jul 2026 went')
     await openView('Trends')
     const savings = screen
       .getAllByTestId('echart')
       .find((el) => (el.getAttribute('data-y-floor') ?? '') !== '')
-    // Sampled at extent {min: −1.8, max: 0.6}: the floor expands to the whole −200% step
-    // (Math.min(−1, Math.floor(−1.8))); the ceiling keeps hugging the data under +100%.
-    expect(savings?.getAttribute('data-y-floor')).toBe('-2')
-    expect(savings?.getAttribute('data-y-ceiling')).toBe('0.6')
+    expect(savings?.getAttribute('data-y-floor')).toBe('-1')
+    expect(savings?.getAttribute('data-y-ceiling')).toBe('1')
+  })
+})
+
+// Code review 13 (2026-09-23 spec §C5): the '*' a month axis puts on a month in progress is
+// said in words under each card that draws it, and each card's table twin names the month. A
+// month AFTER this one is in progress whatever today is, so the fixture holds on any date.
+describe('SpendingPage — the month in progress in words', () => {
+  const ahead = addMonths(currentMonthIso(), 1)
+  const withAhead = () =>
+    matrixFixture({
+      months: ['2026-07-01', ahead],
+      default_month: '2026-07-01',
+    })
+
+  it('footnotes Monthly entries and names the month in its data table', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(withAhead())
+    renderPage()
+    const bars = await screen.findByLabelText(/Stacked bar chart of all monthly category entries/)
+    const card = bars.closest('.chart-card') as HTMLElement
+    expect(within(card).getByText('* Month in progress')).toBeTruthy()
+    fireEvent.click(within(card).getByRole('button', { name: 'Table' }))
+    const table = within(card).getByRole('table')
+    expect(within(table).getByRole('columnheader', { name: 'Period' })).toBeTruthy()
+    expect(within(table).getByText('Future month (in progress)')).toBeTruthy()
+    expect(within(table).getByText('Whole month')).toBeTruthy()
+  })
+
+  it('footnotes the heatmap and flags its column in the data table', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(withAhead())
+    renderPage()
+    await screen.findByLabelText(/Stacked bar chart of all monthly category entries/)
+    await openView('History')
+    const heat = await screen.findByLabelText(/Heatmap of spend per category per month/)
+    const card = heat.closest('.chart-card') as HTMLElement
+    expect(within(card).getByText('* Month in progress')).toBeTruthy()
+    fireEvent.click(within(card).getByRole('button', { name: 'Table' }))
+    expect(within(within(card).getByRole('table')).getByRole('columnheader', { name: `${ahead} (in progress)` })).toBeTruthy()
+  })
+
+  it('has no footnote when no month is in progress', async () => {
+    renderPage()
+    const bars = await screen.findByLabelText(/Stacked bar chart of all monthly category entries/)
+    expect(within(bars.closest('.chart-card') as HTMLElement).queryByText('* Month in progress')).toBeNull()
   })
 })
 
@@ -886,5 +971,51 @@ describe('SpendingPage — one failed feed never blanks the page', () => {
       "Couldn't load spending — the server had a problem (HTTP 500)",
     )
     expect(screen.queryByText('boom')).toBeNull()
+  })
+})
+
+// 2026-09-23 spec §B5: the Budgets view read the page's focus month (the latest reviewed one)
+// and called a book whose budgets start the month after "No budgets yet".
+describe('SpendingPage — the Budgets view opens where the budgets are', () => {
+  function budgetedFromJuly(): SpendingMatrix {
+    return matrixFixture({
+      // The page's own focus month is June; the budgets start in July.
+      default_month: '2026-06-01',
+      series: [
+        { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, '2100.00'] },
+        { category_id: 2, values: ['600.00', '580.00'], budgets: [null, '550.00'] },
+        { category_id: 3, values: ['150.00', '0.00'], budgets: [null, null] },
+      ],
+      total_budget: [null, '2650.00'],
+    })
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-07-20T12:00:00'))
+    vi.mocked(fetchMatrix).mockResolvedValue(budgetedFromJuly())
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('opens on the month the budgets are in force when the URL names none', async () => {
+    renderPage('/spending?section=budgets')
+    expect(await screen.findByRole('heading', { name: /Budgets — Jul 2026/ })).toBeTruthy()
+    expect(screen.getByRole('meter', { name: 'Rent spend vs budget' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start from my averages' })).toBeNull()
+    // Nothing was written into the URL: the Overview view keeps its own focus month.
+    expect(screen.getByTestId('location').textContent).not.toContain('month=')
+  })
+
+  it('a month named in the URL wins, says where the budgets are, and View moves the URL there', async () => {
+    renderPage('/spending?section=budgets&month=2026-06')
+    expect(
+      await screen.findByText('No budgets in force for Jun 2026 — your 2 budgets start Jul 2026.'),
+    ).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start from my averages' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'View Jul 2026' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toContain('month=2026-07'),
+    )
+    expect(await screen.findByRole('heading', { name: /Budgets — Jul 2026/ })).toBeTruthy()
   })
 })

@@ -149,3 +149,21 @@ describe('itemTooltip', () => {
     expect(isGrammarTooltip(pct.formatter)).toBe(true)
   })
 })
+
+// 2026-09-23 spec §C5: an in-progress month says so in the tooltip's own head.
+describe('axisTooltip head note', () => {
+  it('appends the note for the hovered index to the head, escaped', () => {
+    const { formatter } = axisTooltip({ headNote: (index) => (index === 1 ? 'month to date (in progress)' : null) })
+    const noted = tooltipRows(formatter([P({ seriesName: 'Spend', axisValueLabel: 'Sep 2026', dataIndex: 1, value: 2072.23 })]))
+    expect(noted.head).toBe('Sep 2026 — month to date (in progress)')
+    const plain = tooltipRows(formatter([P({ seriesName: 'Spend', axisValueLabel: 'Aug 2026', dataIndex: 0, value: 4000 })]))
+    expect(plain.head).toBe('Aug 2026')
+  })
+})
+
+// A partial bar's params colour is its faded fill: the swatch still wears the token's variable.
+describe('swatch of a token at an alpha', () => {
+  it('reads the token part', () => {
+    expect(swatch(`${PALETTE[3]}73`)).toContain('var(--chart-4)')
+  })
+})

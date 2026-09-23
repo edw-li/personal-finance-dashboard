@@ -133,9 +133,10 @@ REDACTED_ROWS: dict[str, frozenset[str]] = {"app_settings": frozenset({KEY_SETTI
 # File-name grammar for the data volume (spec §8). Stored snapshots carry SECONDS (the
 # download filename keeps HHMM) so a manual "Snapshot now" in the nightly's minute cannot
 # overwrite it; restore points add microseconds for the same reason. Both anchored, so a
-# name from a URL can never carry a path separator.
-SNAPSHOT_NAME_RE = re.compile(r"^finance-export-(\d{8})-(\d{6})\.zip$")
-RESTORE_POINT_NAME_RE = re.compile(r"^pre-restore-\d{8}-\d{6}-\d{6}\.zip$")
+# name from a URL can never carry a path separator — and ASCII-only (re.ASCII), because a bare
+# `\d` also matches every Unicode digit ("２０２６…"), which is nobody's file name here.
+SNAPSHOT_NAME_RE = re.compile(r"^finance-export-(\d{8})-(\d{6})\.zip$", re.ASCII)
+RESTORE_POINT_NAME_RE = re.compile(r"^pre-restore-(\d{8})-(\d{6})-(\d{6})\.zip$", re.ASCII)
 RESTORE_POINTS_KEEP = 3
 
 
@@ -164,6 +165,19 @@ def snapshot_stamp(name: str) -> datetime | None:
         return datetime.strptime(f"{match.group(1)}{match.group(2)}", "%Y%m%d%H%M%S").replace(
             tzinfo=UTC
         )
+    except ValueError:
+        return None
+
+
+def restore_point_stamp(name: str) -> datetime | None:
+    """The UTC instant a restore point's name encodes, to the microsecond, or None for a
+    foreign name — snapshot_stamp's twin (2026-09-23 spec §B3): the listing and the download
+    read restore points by the same grammar the writer names them with."""
+    match = RESTORE_POINT_NAME_RE.fullmatch(name)
+    if match is None:
+        return None
+    try:
+        return datetime.strptime("".join(match.groups()), "%Y%m%d%H%M%S%f").replace(tzinfo=UTC)
     except ValueError:
         return None
 
@@ -363,19 +377,33 @@ async def build_snapshot_zip(db: AsyncSession) -> SnapshotZip:
     )
 
 
-def trim_directory(directory: Path, pattern: re.Pattern[str], keep: int) -> list[str]:
+def trim_directory(
+    directory: Path,
+    pattern: re.Pattern[str],
+    keep: int,
+    *,
+    protect: frozenset[str] = frozenset(),
+) -> list[str]:
     """Delete every file matching `pattern` beyond the newest `keep` (names sort
     chronologically by construction). Returns the removed names. Sync — callers in async
-    code wrap it in asyncio.to_thread."""
+    code wrap it in asyncio.to_thread. A name in `protect` still counts toward the order but
+    is never deleted: a restore FROM the oldest restore point must not lose its source to its
+    own new point before the apply has committed (2026-09-23 lane B1 review, Important 1)."""
     names = sorted((p.name for p in directory.iterdir() if pattern.fullmatch(p.name)), reverse=True)
-    removed = names[keep:]
+    removed = [name for name in names[keep:] if name not in protect]
     for name in removed:
         (directory / name).unlink()
     return removed
 
 
 def write_file(
-    directory: Path, name: str, payload: bytes, pattern: re.Pattern[str], keep: int
+    directory: Path,
+    name: str,
+    payload: bytes,
+    pattern: re.Pattern[str],
+    keep: int,
+    *,
+    protect: frozenset[str] = frozenset(),
 ) -> Path:
     """ATOMIC publish of one archive, then trim. The bytes land in `<name>.part` and
     os.replace renames them into place: a crash mid-write leaves a `.part` that matches
@@ -388,7 +416,7 @@ def write_file(
     part = directory / f"{name}.part"
     part.write_bytes(payload)
     os.replace(part, path)
-    trim_directory(directory, pattern, keep)
+    trim_directory(directory, pattern, keep, protect=protect)
     return path
 
 
@@ -400,13 +428,17 @@ class RestorePoint:
     run_id: int
 
 
-async def write_restore_point(db: AsyncSession, *, actor: str | None) -> RestorePoint:
+async def write_restore_point(
+    db: AsyncSession, *, actor: str | None, protect: str | None = None
+) -> RestorePoint:
     """The current database's ZIP to <data_dir>/restore-points, keep three, recorded as a
     `restore_point` run (spec §7 step 1, §9 imports). COMMITS its own run row before
     returning: a restore or import that then fails and rolls back must still leave the
     point listed. File IO rides to_thread — blocking writes on the event loop are the
     ASYNC rules' whole complaint. Call it BEFORE the restore's own writes: the export owns
-    its transaction (see _begin_repeatable_read) and rolls back whatever it finds open."""
+    its transaction (see _begin_repeatable_read) and rolls back whatever it finds open.
+    `protect` names a point this write must not rotate out — the source of a restore from a
+    restore point; the restore trims again once it has committed."""
     snap = await build_snapshot_zip(db)
     name = f"pre-restore-{snap.exported_at:%Y%m%d-%H%M%S-%f}.zip"
     path = await asyncio.to_thread(
@@ -416,6 +448,7 @@ async def write_restore_point(db: AsyncSession, *, actor: str | None) -> Restore
         snap.payload,
         RESTORE_POINT_NAME_RE,
         RESTORE_POINTS_KEEP,
+        protect=frozenset() if protect is None else frozenset({protect}),
     )
     run = LifecycleRun(
         kind="restore_point",

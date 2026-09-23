@@ -27,6 +27,10 @@ export interface SandboxPanelProps<S extends object, R> {
   closedHint?: ReactNode
   sandbox: Sandbox<S, R>
   resetLabel?: string
+  /** Keeps Reset live over an EMPTY scenario, for a page that holds unfinished work outside
+   *  it (the taxes what-if's override rows, 2026-09-23 spec §B7). Pin, Copy link and Apply
+   *  still follow the scenario. Absent → Reset follows the scenario too. */
+  canReset?: boolean
   presets?: ReactNode
   children: ReactNode
   compare?: ReactNode
@@ -48,6 +52,7 @@ export default function SandboxPanel<S extends object, R extends NonNullable<unk
   closedHint,
   sandbox,
   resetLabel = 'Reset to actual',
+  canReset,
   presets,
   children,
   compare,
@@ -67,7 +72,12 @@ export default function SandboxPanel<S extends object, R extends NonNullable<unk
         </h2>
         <div className="sandbox-header-actions">
           {isOpen && (
-            <button type="button" className="button" disabled={sandbox.empty} onClick={sandbox.reset}>
+            <button
+              type="button"
+              className="button"
+              disabled={!(canReset ?? !sandbox.empty)}
+              onClick={sandbox.reset}
+            >
               {resetLabel}
             </button>
           )}

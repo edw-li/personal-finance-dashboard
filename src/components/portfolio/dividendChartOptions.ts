@@ -1,8 +1,8 @@
 // Pure option builder for the dividend income chart — no React, no fetching, no theme
 // decisions of its own (historyChartOptions.ts posture). Number() is display-only.
 import type { EChartsOption } from '../../charts/echarts'
+import { ENTITY } from '../../charts/entities'
 import { BAR_MARKS, grid, moneyAxis, monthAxis } from '../../charts/grammar'
-import { PALETTE } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
 import type { DividendOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
@@ -62,7 +62,9 @@ export function monthlyIncomeOption(
         type: 'bar',
         name: 'Dividends',
         ...BAR_MARKS,
-        color: PALETTE[0],
+        // Investment/dividend income's registry hue (2026-09-23 spec §C2): the money flow's
+        // investment-income node and the calendar's ex-dividend chips wear the same one.
+        color: ENTITY.investmentIncome,
         data: rows.map((r) => r.amount),
       },
     ],

@@ -19,6 +19,7 @@ import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../compone
 import type { ChartSelection } from '../types/metrics'
 import SelectionDetail from '../components/details/SelectionDetail'
 import { useArrivalValue } from '../components/useArrivalParam'
+import { useChartDecals } from '../components/useChartDecals'
 import Segmented from '../components/shell/Segmented'
 import BudgetPanel from '../components/spending/BudgetPanel'
 import {
@@ -44,15 +45,17 @@ import {
   spendingSankeyCsv,
   spendingSankeyOption,
 } from '../components/spending/spendingSankeyOptions'
+import { EMPTY_FOLD, entityCssVar, foldCategories, pickColors, rankCategories } from '../charts/entities'
+import { hasPartialMonth, PARTIAL_FOOTNOTE } from '../charts/partial'
 import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
+import { todayIso } from '../utils/months'
 import { hasVsBudget, monthMovers } from '../utils/spending'
 import '../components/panels.css'
 import './SpendingPage.css'
 
-const TOP_N = 7
 const MAX_TREND = 3
 const MOVERS_TOP = 5
 const SECTIONS = [{ id: 'overview', label: 'Overview' }, { id: 'trends', label: 'Trends' }, { id: 'budgets', label: 'Budgets' }, { id: 'history', label: 'History' }] as const
@@ -78,16 +81,13 @@ interface SpendingSnapshot {
   yearly: SpendingYearly
 }
 
-// Default trend pick — the single biggest all-time category, slot 1. Extracted from
-// load()'s .then so a cache-seeded mount derives the same default (spec §1).
-function defaultTrend(m: SpendingMatrix): { categoryId: number; slot: number }[] {
+// Default trend pick — the single biggest all-time category (the fold's own ranking,
+// charts/entities.ts). Extracted from load()'s .then so a cache-seeded mount derives the
+// same default (spec §1).
+function defaultTrend(m: SpendingMatrix): { categoryId: number }[] {
   if (m.categories.length === 0) return []
-  const totals = m.series.map((s) => ({
-    id: s.category_id,
-    total: s.values.reduce((acc, v) => acc + (v === null ? 0 : Number(v)), 0),
-  }))
-  totals.sort((a, b) => b.total - a.total)
-  return [{ categoryId: totals[0].id, slot: 0 }]
+  const [biggest] = rankCategories(m)
+  return biggest === undefined ? [] : [{ categoryId: biggest.id }]
 }
 
 export default function SpendingPage() {
@@ -105,7 +105,7 @@ export default function SpendingPage() {
   // this, never the cache, so a feed that failed cannot be stranded by an identical payload
   // (NetWorthPage's `shown` precedent).
   const shown = useRef<SpendingSnapshot | null>(cached ?? null)
-  const [trend, setTrend] = useState<{ categoryId: number; slot: number }[]>(() =>
+  const [trend, setTrend] = useState<{ categoryId: number }[]>(() =>
     cached ? defaultTrend(cached.matrix) : [],
   )
   // ?trend=<slug> — the palette's category entries pick that category's trend (spec §9).
@@ -117,7 +117,7 @@ export default function SpendingPage() {
       // the matrix lands (useArrivalValue's "not yet" contract).
       if (!matrix) return false
       const category = matrix.categories.find((c) => c.slug === slug)
-      if (category) setTrend([{ categoryId: category.id, slot: 0 }])
+      if (category) setTrend([{ categoryId: category.id }])
       return true
     },
     [matrix],
@@ -259,30 +259,31 @@ export default function SpendingPage() {
   }, [load])
 
   const monthLabels = useMemo(() => matrix?.months.map(formatMonth) ?? [], [matrix])
+  // The month in progress is drawn as such on the bars and the heatmap (2026-09-23 spec §C5):
+  // judged against the product's today, hatched or faded by Appearance › Chart patterns.
+  const today = todayIso()
+  const patterns = useChartDecals()
+  // Their '*' on that month, said in words under each card (the 2026-09-23 code review, 13).
+  const partialShown = matrix !== null && hasPartialMonth(matrix.months, today)
 
-  // All-time totals decide the top-7 fold AND the heatmap row order (biggest at top).
-  const categoryTotals = useMemo(() => {
-    if (!matrix) return []
-    return matrix.series
-      .map((s) => ({
-        id: s.category_id,
-        total: s.values.reduce((acc, v) => acc + (v === null ? 0 : Number(v)), 0),
-      }))
-      .sort((a, b) => b.total - a.total)
-  }, [matrix])
+  // The all-time ranking decides the fold — every category colour on this page — AND the
+  // heatmap row order (biggest at top). ONE ranking, shared with the Overview money flow
+  // (charts/entities.ts, 2026-09-23 spec §C2), so a category is the same colour everywhere.
+  const ranked = useMemo(() => (matrix ? rankCategories(matrix) : []), [matrix])
+  const fold = useMemo(() => (matrix ? foldCategories(ranked) : EMPTY_FOLD), [matrix, ranked])
 
   const nameById = useMemo(
     () => new Map((matrix?.categories ?? []).map((c) => [c.id, c.name])),
     [matrix],
   )
 
-  // Shared by the bars fold, the drill-in pie, and the heatmap->bars highlight
-  // mapping: index in this array IS the palette slot AND the bar seriesIndex.
-  const topIds = useMemo(() => categoryTotals.slice(0, TOP_N).map((t) => t.id), [categoryTotals])
+  // Shared by the bars, the drill-in pie, and the heatmap->bars highlight mapping: index in
+  // this array IS the bar seriesIndex (the fold's own order — its colours ride in `fold`).
+  const topIds = fold.ids
 
   // Heatmap row order (biggest all-time at top); row index -> category id, needed by
   // the heatmap option and by the hover mapping onto bar segments.
-  const heatmapOrder = useMemo(() => categoryTotals.map((t) => t.id), [categoryTotals])
+  const heatmapOrder = useMemo(() => ranked.map((t) => t.id), [ranked])
 
   // Resolved target for EChart's animated zoom path — memoized so the wrapper's
   // fingerprint compare runs only when the window can actually have moved.
@@ -295,8 +296,10 @@ export default function SpendingPage() {
     () =>
       matrix === null
         ? null
-        : spendingBarsOption({ matrix, topIds, nameById, monthLabels, range, selected: legendSelected }),
-    [matrix, topIds, nameById, monthLabels, range, legendSelected],
+        : spendingBarsOption({
+            matrix, fold, nameById, monthLabels, range, selected: legendSelected, todayIso: today, patterns,
+          }),
+    [matrix, fold, nameById, monthLabels, range, legendSelected, today, patterns],
   )
 
   const detailIndex = useMemo(
@@ -320,8 +323,8 @@ export default function SpendingPage() {
   const showVsBudget = hasVsBudget(movers)
 
   const flowPeriod = useMemo(
-    () => spendingFlowPeriod(matrix, yearly, topIds, focusIndex, flowMode),
-    [matrix, yearly, topIds, focusIndex, flowMode],
+    () => spendingFlowPeriod(matrix, yearly, fold, focusIndex, flowMode),
+    [matrix, yearly, fold, focusIndex, flowMode],
   )
   const flowOption = useMemo(
     () => (flowPeriod === null ? null : spendingSankeyOption(flowPeriod)),
@@ -383,8 +386,10 @@ export default function SpendingPage() {
     () =>
       matrix === null
         ? null
-        : heatmapOption({ matrix, order: heatRows.visible, nameById, monthLabels, mode: heatmapMode }),
-    [matrix, heatRows, nameById, monthLabels, heatmapMode],
+        : heatmapOption({
+            matrix, order: heatRows.visible, nameById, monthLabels, mode: heatmapMode, todayIso: today, patterns,
+          }),
+    [matrix, heatRows, nameById, monthLabels, heatmapMode, today, patterns],
   )
 
   const savingsOption = useMemo(
@@ -396,8 +401,8 @@ export default function SpendingPage() {
     () =>
       matrix === null
         ? null
-        : categoryTrendOption({ matrix, trend, nameById, monthLabels, range, selected: legendSelected }),
-    [matrix, trend, nameById, monthLabels, range, legendSelected],
+        : categoryTrendOption({ matrix, trend, fold, nameById, monthLabels, range, selected: legendSelected }),
+    [matrix, trend, fold, nameById, monthLabels, range, legendSelected],
   )
 
   // Every category's shape at once — the same all-time order the heatmap rows use.
@@ -405,8 +410,8 @@ export default function SpendingPage() {
     () =>
       matrix === null
         ? null
-        : categorySmallMultiplesOption({ matrix, order: heatmapOrder, nameById, monthLabels }),
-    [matrix, heatmapOrder, nameById, monthLabels],
+        : categorySmallMultiplesOption({ matrix, order: heatmapOrder, fold, nameById, monthLabels }),
+    [matrix, heatmapOrder, fold, nameById, monthLabels],
   )
 
   const toggleTrend = (categoryId: number) => {
@@ -414,11 +419,11 @@ export default function SpendingPage() {
       const existing = current.find((t) => t.categoryId === categoryId)
       if (existing) return current.filter((t) => t.categoryId !== categoryId)
       if (current.length >= MAX_TREND) return current
-      const used = new Set(current.map((t) => t.slot))
-      const slot = [0, 1, 2].find((s) => !used.has(s)) ?? 0
-      return [...current, { categoryId, slot }]
+      return [...current, { categoryId }]
     })
   }
+  // The picked lines' colours — the chips' borders read the SAME map the chart does.
+  const trendColors = useMemo(() => pickColors(trend.map((t) => t.categoryId), fold), [trend, fold])
 
   // KPI row: the VIEWED month (the drilled one while the pie is open, the latest month
   // otherwise — focusIndex, the movers' and the flow card's own rule) + the trailing-12
@@ -548,13 +553,13 @@ export default function SpendingPage() {
 
         <div className="card-grid">
           <ChartCard
-            title={`Monthly entries vs take-home — top ${TOP_N} categories + other`}
+            title={`Monthly entries vs take-home — top ${topIds.length} categories + other`}
             hint="All categories are stacked here, including living, tax and transfers. Select a month for its separate totals and source entries. Sustainable spend is based on your investable assets and withdrawal-rate setting."
             ariaLabel="Stacked bar chart of all monthly category entries under the net-pay line"
             option={barsOption}
             empty="No spending recorded yet — enter a month to begin."
             exportName="spending"
-            csv={matrix === null ? undefined : () => spendingCsv(matrix, topIds, nameById)}
+            csv={matrix === null ? undefined : () => spendingCsv(matrix, topIds, nameById, { todayIso: today })}
             height={340}
             zoomable
             group="spending"
@@ -566,11 +571,11 @@ export default function SpendingPage() {
               const index = selected.kind === 'period' && matrix ? matrix.months.indexOf(selected.period) : -1
               return <><SelectionDetail selection={selected} chartTitle="Monthly category entries" />{matrix && index >= 0 && <ChartCard
                 title={`${selected.label} breakdown`} hint="Positive categories make up this donut. Refunds are included in the totals above."
-                ariaLabel={`Donut chart of ${selected.label} categories`} option={monthPieOption(matrix, topIds, index, { compact: true })}
+                ariaLabel={`Donut chart of ${selected.label} categories`} option={monthPieOption(matrix, fold, index, { compact: true })}
                 empty="No positive category amounts to draw." exportName={`spending-breakdown-${matrix.months[index]}`}
-                csv={() => monthPieCsv(matrix, topIds, index)} height={240}
+                csv={() => monthPieCsv(matrix, fold, index)} height={240}
                 // W7: names beside the chart instead of leader labels that truncate in the dock.
-                aside={<BreakdownLegend rows={monthPieLegend(matrix, topIds, index)} label={`${selected.label} breakdown legend`} />} />}</>
+                aside={<BreakdownLegend rows={monthPieLegend(matrix, fold, index)} label={`${selected.label} breakdown legend`} />} />}</>
             }}
             instanceRef={barsChartRef}
             onLegendChange={onLegendChange}
@@ -587,18 +592,21 @@ export default function SpendingPage() {
               ) : undefined
             }
             footer={
-              activeDetail && matrix ? (
-                <p className="drill-hint">
-                  Total {formatCurrency(matrix.totals[detailIndex])} · Net pay{' '}
-                  {formatCurrency(matrix.net_pay[detailIndex])} · Cash savings{' '}
-                  {matrix.savings_rate[detailIndex] === null
-                    ? '—'
-                    : formatPct(matrix.savings_rate[detailIndex], { signed: false })}{' '}
-                  · Selected month. Choose another bar to compare.
-                </p>
-              ) : (
-                <p className="drill-hint">Select a month to pin its totals and breakdown beside the chart.</p>
-              )
+              <>
+                {partialShown && <p className="drill-hint">{PARTIAL_FOOTNOTE}</p>}
+                {activeDetail && matrix ? (
+                  <p className="drill-hint">
+                    Total {formatCurrency(matrix.totals[detailIndex])} · Net pay{' '}
+                    {formatCurrency(matrix.net_pay[detailIndex])} · Cash savings{' '}
+                    {matrix.savings_rate[detailIndex] === null
+                      ? '—'
+                      : formatPct(matrix.savings_rate[detailIndex], { signed: false })}{' '}
+                    · Selected month. Choose another bar to compare.
+                  </p>
+                ) : (
+                  <p className="drill-hint">Select a month to pin its totals and breakdown beside the chart.</p>
+                )}
+              </>
             }
           />
 
@@ -642,15 +650,19 @@ export default function SpendingPage() {
           {flowPeriod && (
             <ChartCard
               title={`Where ${flowPeriod.label} went`}
-              hint="Net pay fanned out across the period's categories, wearing the stacked chart's colors; green Saved is what was left. A deficit period adds a red Drawdown source covering the overspend."
+              hint="Net pay fanned out across the period's categories, wearing the stacked chart's colors; green Saved is what was left. A deficit period adds a hatched red Drawdown source covering the overspend. Year covers only the months with both take-home and spending entered, so its Saved matches the Overview's cash saved: transfers stay out, and a category whose refunds outweighed its spending flows in as Refunds & credits."
               ariaLabel={`Sankey flow of where ${flowPeriod.label} went, from net pay into categories and savings`}
+              // A year short of twelve matched months says which months it is (2026-09-23 spec
+              // §C1): its Saved is the Overview's cash saved over those same months.
+              lede={flowPeriod.window && !flowPeriod.window.fullYear ? 'Months with take-home and spending entered' : undefined}
               option={flowOption}
               empty={
-                flowPeriod.netPay === null
+                flowPeriod.empty ??
+                (flowPeriod.netPay === null
                   ? `Enter net pay for ${flowPeriod.label} to see the flow.`
-                  : `No flow to draw for ${flowPeriod.label}.`
+                  : `No flow to draw for ${flowPeriod.label}.`)
               }
-              exportName={`spending-flow-${flowPeriod.label.replace(/\s+/g, '-').toLowerCase()}`}
+              exportName={`spending-flow-${flowPeriod.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
               csv={() => spendingSankeyCsv(flowPeriod)}
               height={320}
               controls={
@@ -667,10 +679,15 @@ export default function SpendingPage() {
                 />
               }
               footer={
-                <p className="drill-hint">
-                  Hover a node to trace its flows; drill a month on the top chart and this
-                  card follows it.
-                </p>
+                <>
+                  {/* What the year's window leaves out, named like the Overview money flow's. */}
+                  {flowPeriod.window?.spendingLeftOut && <p className="drill-hint">{flowPeriod.window.spendingLeftOut}</p>}
+                  {flowPeriod.window?.takeHomeLeftOut && <p className="drill-hint">{flowPeriod.window.takeHomeLeftOut}</p>}
+                  <p className="drill-hint">
+                    Hover a node to trace its flows; drill a month on the top chart and this
+                    card follows it.
+                  </p>
+                </>
               }
             />
           )}
@@ -679,11 +696,18 @@ export default function SpendingPage() {
         </LocalSectionPanel>
         <LocalSectionPanel state={views} section="budgets" className="card-grid">
           {/* onBudgetsChanged = the page's refetch: a saved budget re-draws the meters, the
-              chart reference lines and the movers column together, from one matrix. */}
-          {matrix && focusIndex >= 0 && (
-            <BudgetPanel matrix={matrix} monthIndex={focusIndex} onBudgetsChanged={load} />
+              chart reference lines and the movers column together, from one matrix. The card
+              reads the URL's month when there is one and otherwise opens where the budgets are
+              (2026-09-23 spec §B5); the page's focus month is only its last resort. */}
+          {matrix && (
+            <BudgetPanel
+              matrix={matrix}
+              monthIndex={activeDetail ? detailIndex : null}
+              defaultIndex={focusIndex}
+              onViewMonth={setDetailMonth}
+              onBudgetsChanged={load}
+            />
           )}
-          {focusIndex < 0 && <p className="empty-note">Select an entered month in the ribbon to review its budgets.</p>}
         </LocalSectionPanel>
         <LocalSectionPanel state={views} section="trends" className="card-grid">
 
@@ -736,7 +760,7 @@ export default function SpendingPage() {
                   ? () =>
                       categoryTrendCsv(
                         matrix,
-                        heatmapOrder.map((categoryId, slot) => ({ categoryId, slot })),
+                        heatmapOrder.map((categoryId) => ({ categoryId })),
                         nameById,
                       )
                   : () => categoryTrendCsv(matrix, trend, nameById)
@@ -768,20 +792,19 @@ export default function SpendingPage() {
               trendView === 'all' ? undefined : (
               <div className="chip-row">
                 {matrix?.categories.map((category) => {
-                  const active = trend.find((t) => t.categoryId === category.id)
-                  // Slot hue goes on the BORDER, never the text (text stays --text via
+                  const color = trendColors.get(category.id)
+                  const active = color !== undefined
+                  // The line's hue goes on the BORDER, never the text (text stays --text via
                   // .chip.active) — series color marks identity beside text, not in it.
-                  // The DOM swatch reads the CSS slot, not PALETTE: index.css repoints
+                  // The DOM swatch reads the CSS variable, not the hex: index.css repoints
                   // --chart-N per theme, so the chip border tracks a light/dark switch that a
-                  // baked dark hex would ignore. Slots are 0-based, the tokens are 1-based.
+                  // baked dark hex would ignore (charts/entities.ts entityCssVar).
                   return (
                     <button
                       key={category.id}
                       type="button"
                       className={active ? 'chip active' : 'chip'}
-                      style={
-                        active ? { borderColor: `var(--chart-${active.slot + 1})` } : undefined
-                      }
+                      style={active ? { borderColor: entityCssVar(color) } : undefined}
                       aria-pressed={!!active}
                       onClick={() => toggleTrend(category.id)}
                     >
@@ -804,7 +827,7 @@ export default function SpendingPage() {
             option={heatmapOpt}
             empty="No months entered yet."
             exportName="spending-heatmap"
-            csv={matrix === null ? undefined : () => heatmapCsv(matrix, heatmapOrder, nameById)}
+            csv={matrix === null ? undefined : () => heatmapCsv(matrix, heatmapOrder, nameById, { todayIso: today })}
             height={Math.max(332, heatRows.visible.length * 24 + 142)}
             selectionAdapter={params => {
               if (!matrix || !Array.isArray(params.value)) return null
@@ -841,13 +864,18 @@ export default function SpendingPage() {
               ) : undefined
             }
             footer={
-              nonLiving.length === 0 ? undefined : (
-                <p className="drill-hint">
-                  Not living spend:{' '}
-                  {nonLiving.map((category) => `${category.name} (${category.kind})`).join(' · ')} —
-                  these rows are drawn here, but the savings figures and the year's living
-                  total leave them out.
-                </p>
+              nonLiving.length === 0 && !partialShown ? undefined : (
+                <>
+                  {partialShown && <p className="drill-hint">{PARTIAL_FOOTNOTE}</p>}
+                  {nonLiving.length > 0 && (
+                    <p className="drill-hint">
+                      Not living spend:{' '}
+                      {nonLiving.map((category) => `${category.name} (${category.kind})`).join(' · ')} —
+                      these rows are drawn here, but the savings figures and the year's living
+                      total leave them out.
+                    </p>
+                  )}
+                </>
               )
             }
           />

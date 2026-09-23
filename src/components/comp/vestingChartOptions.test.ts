@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
+import { ESTIMATE_DECAL } from '../../charts/partial'
 import { INK, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
 import type { RsuGrantOut, VestOut } from '../../types/api'
 import {
+  ESTIMATE_HATCH,
   OTHER_GRANT_LABEL,
   vestingChartOption,
   vestingCsv,
@@ -350,5 +352,13 @@ describe('F6', () => {
     })! as unknown as { legend: { selected: unknown }; series: { animationDelay: () => number }[] }
     expect(option.legend.selected).toEqual({ 'FY26 refresh': false })
     expect(option.series[1].animationDelay()).toBe(12)
+  })
+})
+
+// The 2026-09-23 code review (7): one estimate hatch in the product. The vesting chart's quoted
+// tranches and a month in progress (charts/partial.ts) wear the same texture, by identity.
+describe('the estimate hatch', () => {
+  it("is the grammar's own", () => {
+    expect(ESTIMATE_HATCH).toBe(ESTIMATE_DECAL)
   })
 })
