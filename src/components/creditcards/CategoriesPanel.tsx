@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { flushSync } from 'react-dom'
 import { ApiError, errorDetail } from '../../api/client'
 import {
@@ -10,8 +10,11 @@ import {
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
+import { ORDER_RESTORED, movedToast, orderSaveFailed, undoFailureText } from '../reorder/orderCopy'
 import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
+import { useLatest } from '../reorder/useLatest'
 import { useReorder } from '../reorder/useReorder'
+import { useRequestCount } from '../reorder/useRequestCount'
 import { useToast } from '../ToastProvider'
 import type { CategoryOut, CreditCardOut, RewardCategoryOut } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
@@ -56,12 +59,6 @@ function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
 
-/** A server sentence used inside one of ours: its closing stop goes, ours closes it (the
- *  reorder toasts' rule, lane R3's `clause`). */
-function clause(text: string): string {
-  return text.replace(/[.\s]+$/, '')
-}
-
 /**
  * Matrix rows: name, annual-spend weight (manual override; blank = auto from the mapped
  * spending category's spend over its ENTERED trailing-12 months), mapping, pin.
@@ -89,19 +86,13 @@ export default function CategoriesPanel({
   const [error, setError] = useState<string | null>(null)
   // Requests in flight — counted, never flagged (lane R3 review): a toast's Undo clicked while
   // a later drop's PUT is out settles on its own, and whichever answers first must not wake
-  // the grips while the other is still out. Every request calls begin() and settles in its
-  // `.finally`.
-  const [inFlight, setInFlight] = useState(0)
-  const busy = inFlight > 0
-  const begin = () => setInFlight((count) => count + 1)
-  const settle = () => setInFlight((count) => count - 1)
-  // The page's onChanged as of the LATEST render (useReorder's `latest` idiom): a save or an
-  // Undo answers long after the render that sent it — a toast stands for 6 s — and must reload
-  // through the page as it is now, never as it was at the drop.
-  const onChangedRef = useRef(onChanged)
-  useLayoutEffect(() => {
-    onChangedRef.current = onChanged
-  })
+  // the grips while the other is still out. Every request runs through `track`, its whole
+  // chain inside.
+  const { busy, track } = useRequestCount()
+  // The page's onChanged as of the LATEST render: a save or an Undo answers long after the
+  // render that sent it — a toast stands for 6 s — and must reload through the page as it is
+  // now, never as it was at the drop.
+  const onChangedRef = useLatest(onChanged)
   const reload = () => onChangedRef.current()
   // Drag to reorder (2026-09-23 drag-to-reorder spec §7). Two layers sit over the page's
   // `categories`, and only a reorder sets either:
@@ -167,7 +158,6 @@ export default function CategoriesPanel({
         form.spending_category_id === '' ? null : Number(form.spending_category_id),
       pinned_card_id: form.pinned_card_id === '' ? null : Number(form.pinned_card_id),
     }
-    begin()
     setError(null)
     const request =
       editingId !== null
@@ -176,64 +166,65 @@ export default function CategoriesPanel({
           // spec §3.3). A number worked out here from the props could lag a reorder whose
           // reload has not landed yet.
           createRewardCategory(body)
-    request
-      .then(() => {
-        document.getElementById('reward-category-name')?.focus()
-        setForm(EMPTY_CATEGORY)
-        setEditingId(null)
-        reload()
-      })
-      .catch((err: unknown) => setError(message(err, 'Save failed')))
-      .finally(settle)
+    void track(() =>
+      request
+        .then(() => {
+          document.getElementById('reward-category-name')?.focus()
+          setForm(EMPTY_CATEGORY)
+          setEditingId(null)
+          reload()
+        })
+        .catch((err: unknown) => setError(message(err, 'Save failed'))),
+    )
   }
 
   // ONLY is_active on the wire: the row's weight, mapping and pin are untouched columns
   // here, and sending them back would let a stale render overwrite a concurrent edit.
   const toggleActive = (category: RewardCategoryOut) => {
-    begin()
     setError(null)
-    updateRewardCategory(category.id, { is_active: !category.is_active })
-      .then(() => reload())
-      .catch((err: unknown) => setError(message(err, 'Update failed')))
-      .finally(settle)
+    void track(() =>
+      updateRewardCategory(category.id, { is_active: !category.is_active })
+        .then(() => reload())
+        .catch((err: unknown) => setError(message(err, 'Update failed'))),
+    )
   }
 
   const remove = (category: RewardCategoryOut) => {
-    begin()
     setError(null)
-    deleteRewardCategory(category.id)
-      .then(() => {
-        if (category.id === editingId) {
-          setEditingId(null)
-          setForm(EMPTY_CATEGORY)
-        }
-        reload()
-        toast.success(`Deleted ${category.name} and its multipliers`, {
-          action: {
-            label: 'Undo',
-            onAction: () => {
-              // The row only — its cells cascaded away and are not restorable here. Counted
-              // like any request of the panel, so no drop races the row coming back.
-              begin()
-              createRewardCategory({
-                name: category.name,
-                sort_order: category.sort_order,
-                annual_spend: category.annual_spend,
-                spending_category_id: category.spending_category_id,
-                pinned_card_id: category.pinned_card_id,
-              })
-                .then(() => {
-                  reload()
-                  toast.info(`Restored ${category.name} — multipliers were not restored`)
-                })
-                .catch(() => toast.error(`Could not restore ${category.name}`))
-                .finally(settle)
+    void track(() =>
+      deleteRewardCategory(category.id)
+        .then(() => {
+          if (category.id === editingId) {
+            setEditingId(null)
+            setForm(EMPTY_CATEGORY)
+          }
+          reload()
+          toast.success(`Deleted ${category.name} and its multipliers`, {
+            action: {
+              label: 'Undo',
+              onAction: () => {
+                // The row only — its cells cascaded away and are not restorable here. Counted
+                // like any request of the panel, so no drop races the row coming back.
+                void track(() =>
+                  createRewardCategory({
+                    name: category.name,
+                    sort_order: category.sort_order,
+                    annual_spend: category.annual_spend,
+                    spending_category_id: category.spending_category_id,
+                    pinned_card_id: category.pinned_card_id,
+                  })
+                    .then(() => {
+                      reload()
+                      toast.info(`Restored ${category.name} — multipliers were not restored`)
+                    })
+                    .catch(() => toast.error(`Could not restore ${category.name}`)),
+                )
+              },
             },
-          },
+          })
         })
-      })
-      .catch((err: unknown) => setError(message(err, 'Delete failed')))
-      .finally(settle)
+        .catch((err: unknown) => setError(message(err, 'Delete failed'))),
+    )
   }
 
   // A failed save puts the rows back (spec §7, as §4.1). Moving them can blur the grip a
@@ -257,28 +248,24 @@ export default function CategoriesPanel({
   // as the saved order — it replaces the drop's, so the rows on screen are the restored ones
   // even when the page's reload hands down nothing new (lane R3's browser find: an Undo's
   // reload can match what the page already holds). A list that changed since answers 409, and
-  // the page's reload shows what is there now. Two-argument `then` (lane R3 review): only the
-  // request's own failure takes the failure branch — a throw in the success branch is a bug
-  // for the console, never "Couldn't restore the order".
+  // the page's reload shows what is there now; any refusal is the server's own sentence (§8.1).
+  // Two-argument `then` (lane R3 review): only the request's own failure takes the failure
+  // branch — a throw in the success branch is a bug for the console, never "Couldn't undo the
+  // move".
   const restoreOrder = (ids: number[]) => {
-    begin()
-    reorderRewardCategories(ids)
-      .then(
+    void track(() =>
+      reorderRewardCategories(ids).then(
         (restored) => {
           setSavedOrder(restored)
           reload()
-          toast.info('Order restored')
+          toast.info(ORDER_RESTORED)
         },
         (err: unknown) => {
-          if (err instanceof ApiError && err.status === 409) {
-            toast.error(errorDetail(err))
-            reload()
-            return
-          }
-          toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
+          toast.error(undoFailureText(err))
+          if (err instanceof ApiError && err.status === 409) reload()
         },
-      )
-      .finally(settle)
+      ),
+    )
   }
 
   // One drop, one PUT (spec §7): every reward category, hidden ones included, in its new
@@ -299,15 +286,14 @@ export default function CategoriesPanel({
         return row === undefined ? [] : [row]
       }),
     )
-    begin()
-    reorderRewardCategories(next)
-      .then(
+    void track(() =>
+      reorderRewardCategories(next).then(
         (saved) => {
           setPendingOrder(null)
           setSavedOrder(saved)
           reload()
           reorder.markSaved(moved)
-          toast.success(`Moved ${category.name}`, {
+          toast.success(movedToast(category.name), {
             action: { label: 'Undo', onAction: () => restoreOrder(previous) },
           })
         },
@@ -320,12 +306,10 @@ export default function CategoriesPanel({
             return
           }
           // The toast layer, never the form's banner: the table is not the form (spec §4.1).
-          toast.error(
-            `Couldn't save the new order — ${clause(errorDetail(err))}. The list is back to how it was.`,
-          )
+          toast.error(orderSaveFailed(errorDetail(err)))
         },
-      )
-      .finally(settle)
+      ),
+    )
   }
 
   const reorder = useReorder({
@@ -339,16 +323,16 @@ export default function CategoriesPanel({
   })
 
   const seed = () => {
-    begin()
     setError(null)
-    SEED_CATEGORIES.reduce(
-      (chain, name, index) =>
-        chain.then(() => createRewardCategory({ name, sort_order: index }).then(() => undefined)),
-      Promise.resolve<undefined>(undefined),
+    void track(() =>
+      SEED_CATEGORIES.reduce(
+        (chain, name, index) =>
+          chain.then(() => createRewardCategory({ name, sort_order: index }).then(() => undefined)),
+        Promise.resolve<undefined>(undefined),
+      )
+        .then(() => reload())
+        .catch((err: unknown) => setError(message(err, 'Seeding failed'))),
     )
-      .then(() => reload())
-      .catch((err: unknown) => setError(message(err, 'Seeding failed')))
-      .finally(settle)
   }
 
   // The page's weight rule, applied to the column so it never disagrees with the matrix:
