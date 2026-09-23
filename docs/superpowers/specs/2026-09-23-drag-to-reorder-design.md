@@ -517,8 +517,10 @@ their own.
 
 - **The form** loses the Sort order box. Create sends no `sort_order`.
 - **The table is grouped.**
-  - It shows one heading row per non-empty group, in `GROUP_ORDER`, labelled with `GROUP_LABELS`:
-    `<tr class="accounts-group-row"><th scope="colgroup" colspan=…>`.
+  - It shows one `<tbody>` per non-empty group, in `GROUP_ORDER`, each opening with a heading row
+    labelled with `GROUP_LABELS`: `<tr class="accounts-group-row"><th scope="rowgroup" colspan=…>`.
+    (Corrected 2026-09-23 at lane R2's review: `scope="colgroup"` without a `<colgroup>` is invalid,
+    and screen readers read it as a header over every column.)
   - Inside a group, rows are in API order, with components nested under their parent by `nestComponents`
     **applied per group** (a component whose parent sits in another group stays top-level in its own
     group).
