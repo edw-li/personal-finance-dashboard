@@ -351,6 +351,50 @@ export function fitMonthAxes(
   return { option: { ...o, xAxis: single ? next[0] : next }, key: keys.join('|') }
 }
 
+// ── Partial periods (2026-09-23 spec §C5) ──────────────────────────────────────────────────
+// The spec's objective rule (§0): a month whose last day is after today is in progress. The
+// treatment reuses the chart-patterns switch (useChartDecals): hatched when patterns are on —
+// echarts textures every series then, so the partial item gets the estimate hatch instead of
+// its series' — faded otherwise; a dashed outline both ways. Averages already leave it out.
+
+/** The estimate hatch (the vesting chart's own values): 45° surface-coloured lines over the
+ *  fill — a token hex, so the light recolor and the conformance colour rule both hold. */
+export const ESTIMATE_DECAL = {
+  symbol: 'rect' as const,
+  symbolSize: 1,
+  dashArrayX: [1, 0],
+  dashArrayY: [2, 4],
+  rotation: -Math.PI / 4,
+  color: SURFACE,
+}
+
+/** The partial look on one bar, cell or point in `color` (its outline's). */
+export function partialItemStyle(color: string, patterns: boolean) {
+  const outline = { borderColor: color, borderWidth: 1, borderType: 'dashed' as const }
+  return patterns ? { ...outline, decal: ESTIMATE_DECAL } : { ...outline, opacity: 0.45 }
+}
+
+/** The last day of an ISO month ('2026-09-01' → '2026-09-30'), by string math — never a
+ *  Date parse (format.ts's UTC-shift rule); the y/m/d constructor is local and safe. */
+function lastDayOf(month: string): string {
+  const year = Number(month.slice(0, 4))
+  const monthNumber = Number(month.slice(5, 7))
+  const days = new Date(year, monthNumber, 0).getDate()
+  return `${month.slice(0, 7)}-${String(days).padStart(2, '0')}`
+}
+
+/** In progress: the month's last day is after `todayIso` (spec §0, §C5). */
+export function isPartialMonth(month: string, todayIso: string): boolean {
+  return lastDayOf(month) > todayIso.slice(0, 10)
+}
+
+/** What a partial month's tooltip head adds: "month to date (in progress)" for the month under
+ *  way, "future month (in progress)" for a draft ahead of it; null for a finished month. */
+export function partialNote(month: string, todayIso: string): string | null {
+  if (!isPartialMonth(month, todayIso)) return null
+  return month.slice(0, 7) === todayIso.slice(0, 7) ? 'month to date (in progress)' : 'future month (in progress)'
+}
+
 /** Every bar: the surface hairline that separates stack segments (and insets a lone bar so
  *  it reads as the same family), the 22px cap, INK on hover, and series focus (§9). */
 export const BAR_MARKS = {

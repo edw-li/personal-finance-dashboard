@@ -45,6 +45,9 @@ export interface AxisTooltipOptions {
   footer?: (dataIndex: number, params: AxisTooltipParam[]) => string[]
   /** Printed once when `groups` is set and no group row is finite (an absent month). */
   absentText?: string
+  /** A note on the hovered index's head — "Sep 2026 — month to date (in progress)"
+   *  (2026-09-23 spec §C5); null for an ordinary month. Escaped here. */
+  headNote?: (dataIndex: number) => string | null
   /** Bars pass 'shadow'; lines keep echarts' default rule (the key is omitted). */
   pointer?: 'line' | 'shadow'
 }
@@ -138,6 +141,7 @@ export function axisTooltip(options: AxisTooltipOptions = {}) {
     rowSuffix,
     footer,
     absentText,
+    headNote,
     pointer = 'line',
   } = options
   const groupSet = new Set(groups)
@@ -180,7 +184,10 @@ export function axisTooltip(options: AxisTooltipOptions = {}) {
     const sw = (p: AxisTooltipParam) =>
       swatch(p.color, { shape: p.seriesType === 'line' && !groupSet.has(nameOf(p)) ? 'line' : 'square' })
 
-    const parts = [`<div class="chart-tip-head">${escapeHtml(head)}</div>`]
+    const note = headNote !== undefined && typeof index === 'number' ? headNote(index) : null
+    const parts = [
+      `<div class="chart-tip-head">${escapeHtml(note ? `${head} — ${note}` : head)}</div>`,
+    ]
     for (const { p, v } of groupRows) parts.push(row(label(p), cell(v, true), sw(p)))
     if (groupRows.length > 0 && totalLabel !== false) {
       parts.push(row(escapeHtml(totalLabel), formatUnit(unit, total), BLANK_SWATCH, ' chart-tip-total'))

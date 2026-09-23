@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { INK, MUTED, SURFACE } from './theme'
 import {
   BAR_MARKS, GRID_VARIANTS, LINE, MONEY_GRID, STACK_WASH, WASH, capLabel, cents, compactMoney,
-  dateAxis, fitMonthAxes, grid, isGridVariant, moneyAxis, monthAxis, monthLabelMode, monthTick,
-  niceStep, offScaleMarkPoint, pctAxis, percentLabel, robustMax, roundTo, stagger,
+  ESTIMATE_DECAL, dateAxis, fitMonthAxes, grid, isGridVariant, isPartialMonth, moneyAxis, monthAxis,
+  monthLabelMode, monthTick, niceStep, offScaleMarkPoint, partialItemStyle, partialNote, pctAxis,
+  percentLabel, robustMax, roundTo, stagger,
 } from './grammar'
 
 describe('grids', () => {
@@ -292,5 +293,38 @@ describe('month labels', () => {
     const twice = fitMonthAxes(once.option, 606)
     expect(twice.key).toBe(once.key)
     expect(labelsOf((twice.option as unknown as { xAxis: Axis }).xAxis)).toEqual(labelsOf((once.option as unknown as { xAxis: Axis }).xAxis))
+  })
+})
+
+// 2026-09-23 spec §C5 (and §0's objective rule): a month whose last day is after today is in
+// progress — drawn as such, marked on its label, and named in its tooltip.
+describe('partial periods', () => {
+  it('a month is in progress while its last day is still ahead of today', () => {
+    expect(isPartialMonth('2026-09-01', '2026-09-23')).toBe(true)
+    expect(isPartialMonth('2026-09-01', '2026-09-01')).toBe(true)
+    // On its last day the month is done by the rule's letter — nothing is left to enter.
+    expect(isPartialMonth('2026-09-01', '2026-09-30')).toBe(false)
+    expect(isPartialMonth('2026-08-01', '2026-09-23')).toBe(false)
+    // A future month (a draft entered early) is not done either.
+    expect(isPartialMonth('2026-10-01', '2026-09-23')).toBe(true)
+    // Year and leap boundaries: February 2028 ends on the 29th, December on the 31st.
+    expect(isPartialMonth('2028-02-01', '2028-02-28')).toBe(true)
+    expect(isPartialMonth('2028-02-01', '2028-02-29')).toBe(false)
+    expect(isPartialMonth('2026-12-01', '2026-12-31')).toBe(false)
+    expect(isPartialMonth('2026-12-01', '2026-12-30')).toBe(true)
+  })
+
+  it('names the reading for its tooltip', () => {
+    expect(partialNote('2026-09-01', '2026-09-23')).toBe('month to date (in progress)')
+    expect(partialNote('2026-10-01', '2026-09-23')).toBe('future month (in progress)')
+    expect(partialNote('2026-08-01', '2026-09-23')).toBeNull()
+    expect(partialNote('2026-09-01', '2026-09-30')).toBeNull()
+  })
+
+  it('hatches when chart patterns are on, fades otherwise, and outlines dashed both ways', () => {
+    expect(partialItemStyle('#3987e5', false)).toEqual({ borderColor: '#3987e5', borderWidth: 1, borderType: 'dashed', opacity: 0.45 })
+    expect(partialItemStyle('#3987e5', true)).toEqual({ borderColor: '#3987e5', borderWidth: 1, borderType: 'dashed', decal: ESTIMATE_DECAL })
+    // The hatch is the estimate texture: surface-coloured 45° lines, a token hex.
+    expect(ESTIMATE_DECAL).toMatchObject({ dashArrayX: [1, 0], dashArrayY: [2, 4], color: SURFACE })
   })
 })
