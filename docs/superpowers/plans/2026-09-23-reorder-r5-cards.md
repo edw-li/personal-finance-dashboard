@@ -3765,18 +3765,138 @@ git commit -m "docs(plan): lane R5 — results, gates and the browser check"
 
 ## Results (filled in by the implementer)
 
-- Task 0 preflight: base commits …; `reorderCreditCards` / `reorderRewardCategories` …; baseline
-  CreditCardsPage 47 / creditLineChartOptions 8 / guideContent 13 …
-- Lane tests (Task 10 Step 1): CreditCardsPage … / 75, creditLineChartOptions … / 12, guideContent
-  … / 13
-- Full vitest: … files / … tests (exit …); flakes re-run alone: …
-- tsc -b / eslint . / npm run build: …
-- Scope check: …
-- Browser check (`scratchpad/reorder-r5/out/report.json`): … checks, … problems; per pass
-  (dark/light × 1600/1280): …; auto-scroll `s0 → s1`: …; colours before/after: …; focus through
-  the forced 500: …
-- Screenshot notes (incl. the lifted row over the capped box's sticky header): …
-- For the controller / R0 / R1 / V: …
+- **Task 0 preflight:** `feat/reorder-cards` cut from `feat/reorder-base` @da1a3e44 (R0, R1, R4 and
+  main with B2). `reorderCreditCards` (`creditCards.ts:36`) and `reorderRewardCategories` (`:105`)
+  are present; `CreditCardIn.sort_order?: number | null` (`api.ts:2208`); the base still had
+  `draggable={!busy}` (`CategoriesPanel.tsx:400`). Baseline: 15 files / 240 tests —
+  CreditCardsPage 47, creditLineChartOptions 8, guideContent 13, focusCss 8, conformance 57.
+  - Mid-lane, at the controller's request, `feat/reorder-base` @d5efe2d9 (R0 round 4:
+    leading-edge slot rule, range-end auto-scroll stop, one hairline per lifted unit) was merged in
+    cleanly (484ba60e). Every lane test re-ran green (273 across the lane's files and
+    `src/components/reorder`).
+- **Commits:** d1ab202e, 8f7dd367 (colours, A1) · dbb3040d (categories grip, A3) · 6dc8fd45
+  (categories Undo/failure) · ba892c9a (categories: R3 review lessons) · 07ea3458 (categories
+  buttons, append) · ff56b2a7, 03b804c7, 71687597 (roster Tasks 6–8) · 0583ba3a (roster: R3 review
+  lessons) · 41c35618 (Guide, A2) · dbb8e8ae (the page's load order, from the Edge check).
+- **Lane tests (Task 10 Step 1, before the last fix):** 20 files / 387 tests.
+  - CreditCardsPage 88: the plan's 75, plus 1 A1 page test and 12 R3-lesson tests. It is 89 with
+    the load-order test.
+  - creditLineChartOptions 15: the plan's 12 plus 3 for A1.
+  - guideContent 13, focusCss 8, conformance 57, `src/components/reorder` 99.
+- **Full vitest** (`--maxWorkers=2`, run once, last): 246 files / 3449 tests, exit 0, 300 s. No
+  flake needed a re-run (PaycheckPage 84, OverviewPage 82 and CategoriesCard 13 all passed in the
+  full run).
+- **tsc -b / eslint . / npm run build** (on the final tree): 0 / 0 (26 warnings) / 0 (built in
+  9.1 s). The only warning in a touched file is `CategoriesPanel.tsx`'s pre-existing
+  `export const SEED_CATEGORIES` (react-refresh).
+- **Scope check** (`git diff --stat feat/reorder-base...HEAD`): 9 files — the plan's 8 plus
+  `src/focusCss.test.ts` (A3).
+  - `categories.css`: deletions only (24 lines).
+  - `CreditCardsPage.tsx`: the `lineCards` map (`id` plus two comment lines); A1's `rankIds` line
+    and its `cards` dependency; and the load's sequence guard (deviation 3 below).
+  - `grep -rn draggable src/components/creditcards/` prints nothing.
+- **Browser check** (`scratchpad/reorder-r5/drag.mjs`, `out/report.json`): `R5 CARDS CHECK OK —
+  309 checks`, 0 problems. It made 44 writes (reorder PUTs only) and blocked none; the 12
+  known-benign entries are step k's forced 500/409s. Every step a–k passed in every pass (dark and
+  light × 1600 and 1280).
+  - **Pointer:** the lifted row follows the pointer exactly (offset = dy). Roster: 145.1 px at
+    1600, 169.1 px at 1280. Categories: 128.9 / 142.1. Exactly 3 peers made room,
+    `html.reorder-active` was set, and the pinned actions cell rode the lifted surface.
+  - **Auto-scroll** `s0 → s1`: 407 → 0 (1600) and 510 → 0 (1280); the last category landed first.
+    Keyboard End scrolled the box to its foot (407/407, 510/510); Escape sent no request.
+  - **Colours before and after the reorder** (identical, while the legend moved Venture X to
+    fourth):
+    - dark: Venture X #3987e5, Savor #d95926, Robinhood Gold #199e70, Active Cash #c98500,
+      Autograph #d55181, Apple Card #008300, Total #e6e9ef;
+    - light: #2f6fdc / #c94f1e / #15895f / #996500 / #c2436f / #1f7a1f / #141a24.
+  - **A1 across scopes** (b2 before, e after): Edward's scope draws the same six colours. Grace's
+    and Joint's scopes each draw the Apple Card alone, in the household's green (#008300 dark,
+    #1f7a1f light).
+  - **Focus through the forced 500:** kept on the moved card's grip (Robinhood Gold), with the
+    toast verbatim and the rows back. Both 409s show R1's sentences and reload the list.
+  - The first run failed from step f onward. See deviation 3.
+- **Screenshot notes** (both themes, 1280 and 1600):
+  - Resting tables: unchanged apart from a narrow, muted grip column, and the Categories grips sit
+    inside the capped box.
+  - Mid-drag (c, f, h): the lifted row is raised on `--surface-2` with its hairlines, the actions
+    cell included. The rows it passed made room, and the row buttons are dimmed.
+  - i (auto-scroll): in the held frame the box has reached its top, and the lifted row sits clamped
+    just under the sticky header, with no overlap. While the box scrolls, the row follows the
+    pointer into the top zone and can pass over the header (R0's `z-index: 2` against the header's
+    1; Notes item 2) — V to judge once for both scrollers.
+  - b/e/b2: the legend follows the list and every line keeps its hue; Grace's lone Apple Card is
+    the household green.
+  - j: the keyboard-lifted row stands at the foot of the scrolled box, and the grip's focus ring is
+    drawn inside the box (A3's inset rule).
+  - Pre-existing, not this lane's: `.roster-table .row-actions` and `.categories-table .row-actions`
+    are `display: flex`. The cell is therefore not a table cell and ends above a taller row, so its
+    hairline sits 4–23 px above the row's. This measured the same with and without
+    `.reorder-table` (e.g. 23.4 px on a two-line roster row at 1280;
+    `scratchpad/reorder-r5/compare.mjs`).
+  - The one resting-look change the border model makes: the pinned header cell now draws its −1 px
+    hairline in the header row as well.
+- **Deviations from the plan:**
+  1. **A1–A3**, as amended by the controller:
+     - `creditLineChartOption(…, { rankIds })`, and `colourSlots` ranks among `rankIds ∪` the drawn
+       ids (a drawn id missing from the source never gets `slotColor(-1)`).
+     - `cards-reorder` goes in `more`, right after `cards-archive-delete`: the card already shows 8
+       visible tasks, the fence's maximum.
+     - The focusCss literal is swapped.
+  2. **Lane R3's lessons** (coordinator messages, mid-lane):
+     - (a) The Undo's answer becomes the saved layer. The plan's code already did this; it is now
+       pinned per panel by "drop → Undo → drag again" with the page skipping an identical reload.
+       Mutation-checked: without `setSavedOrder(restored)` that test shows the dropped order,
+       while the plan's own Undo test still passes.
+     - (b) No layer outlives a reload. Every reorder PUT drops the page's snapshot (`api()` →
+       `invalidateForMutation`), and GETs answer fresh arrays, so the reload always hands new
+       props. Pinned per panel by an "another tab put the order back" test. The fake GETs now
+       answer fresh rows: a reused array made React bail out of `setState` and hid the retirement.
+     - (c) Pinned as in (a).
+     - The three code-review lessons:
+       - `onChangedRef`, so every async `onChanged` call site uses the latest one, delete-Undo
+         included;
+       - an in-flight counter (`begin`/`settle`); the delete-Undo's re-create is counted too;
+       - two-argument `.then` on the reorder save and Undo chains. The delete-Undo chains keep
+         their `catch`: a credit or limit event that fails to come back is a failed restore.
+       - Four tests per panel: a direct-render rerender test; A answered, B pending, A's Undo —
+         the grips stay parked until both settle; and a synchronous throw in a success branch
+         surfaces as an unhandled rejection, never a failure toast (collected with a test-scoped
+         `process` listener, which vitest 3.2 yields to).
+  3. **`CreditCardsPage.load` gained a sequence guard**, outside the call-site fence.
+     - The first Edge run failed from step f: the drop's reload, whose `/net-worth/accounts`
+       answered last, landed after the Undo's and overwrote it. The roster showed the dropped
+       order over a server holding the restored one, and step g's drag then saved it. That is
+       R3's symptom by another road: out-of-order page loads.
+     - No panel layer can defend against stale props that land last.
+     - Fixed with PortfolioPage's `seqRef` pattern (a superseded load's answer and error are
+       dropped). The failing test came first and reproduced Edge's `['2','1','3']`; the re-run
+       is clean.
+  4. **Browser script:**
+     - `mouseDrag` aims the leading edge (R0 round 4's slot rule) rather than the centre;
+     - step b2 and the scope half of step e are A1;
+     - step k also screenshots the forced 500.
+  5. **Extra pins:** R0's dev contract check stays silent (a `console.error` spy in both grip
+     tests), and an A1 page test (an archived Venture X holds rank 0; Sam's lone RH Gold keeps
+     slot 2).
+- **For the controller / R0 / R1 / V:**
+  - V: the Guide probes' task and rail-row counts move by one (`cards-reorder`).
+  - V/R0: the lifted row passing over a capped box's sticky header mid-scroll (Notes item 2), and
+    the pinned header cell's hairline now showing under `.reorder-table`.
+  - The flex `.row-actions` cells' offset hairline is pre-existing (panel CSS, all tables with
+    that class).
+  - `CardDetail`'s one-card sparkline still draws PALETTE[0]: it has no ids and is outside the
+    fence. Under A1's "one colour per money entity", handing it `{ id }` and `rankIds` would make
+    the drill-in line match the page chart.
+  - Lane vites share `node_modules/.vite` with the main checkout through the junction. This one
+    re-optimized dependencies at start ("vite config has changed"), which can disturb 5173's dep
+    cache.
+  - A4: the save/Undo shape now lives in both panels (two layers, `clause`, `dropPendingOrder`,
+    `restoreOrder`, `saveOrder`, the counter, `onChangedRef`). The shared hook is the later
+    decision.
+  - Other pages with an unguarded multi-request `load` and panels that Undo through it would
+    race the same way as deviation 3.
+  - `finance_reorder_r5`: both orders were put back. The card `sort_order`s are now renumbered
+    0–6 (the same order); no rows were created.
 
 ---
 
