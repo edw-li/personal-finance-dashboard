@@ -1880,7 +1880,7 @@ describe('OverviewPage — shell frame and owner scope', () => {
     await screen.findByText('Net worth — Aug 2026')
     // No chart yet — the card is its skeleton, found by its title.
     const card = screen.getByText('Portfolio performance').closest('section') as HTMLElement
-    expect(card.querySelector('.chart-lede')?.textContent).toBe(' ')
+    expect(card.querySelector('.chart-lede')?.textContent).toBe('\u00a0')
   })
 
   // Code review 5: the card's weekly axis takes as many month labels as the card is wide for.
