@@ -73,6 +73,14 @@ describe('listY / unitExtent / visibleBounds', () => {
     scroller.getBoundingClientRect = () => rect(120, 420)
     expect(visibleBounds(scroller)).toEqual({ top: 120, bottom: 540 })
   })
+
+  it("an element's band stops at the viewport: an auto-scroll zone the pointer cannot reach is no zone", () => {
+    const scroller = document.createElement('div')
+    scroller.getBoundingClientRect = () => rect(600, 420) // hangs past the bottom of the 768px viewport
+    expect(visibleBounds(scroller)).toEqual({ top: 600, bottom: window.innerHeight })
+    scroller.getBoundingClientRect = () => rect(-100, 420) // its top scrolled off above the viewport
+    expect(visibleBounds(scroller)).toEqual({ top: 0, bottom: 320 })
+  })
 })
 
 describe('ensureVisible', () => {

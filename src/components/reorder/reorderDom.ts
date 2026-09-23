@@ -40,11 +40,13 @@ export function unitExtent(elements: readonly HTMLElement[], scroller: Scroller)
   return top === Number.POSITIVE_INFINITY ? { top: 0, height: 0 } : { top, height: bottom - top }
 }
 
-/** The client-y band the reader can currently see of the scroller (the viewport for the page). */
+/** The client-y band the reader can currently see of the scroller (the viewport for the page). An
+ *  element's box is clipped to the viewport: a 420px Settings scroller hanging past the bottom of the
+ *  window keeps its auto-scroll zone where the pointer can reach it. */
 export function visibleBounds(scroller: Scroller): { top: number; bottom: number } {
   if (scroller === null) return { top: 0, bottom: window.innerHeight }
   const box = scroller.getBoundingClientRect()
-  return { top: box.top, bottom: box.bottom }
+  return { top: Math.max(box.top, 0), bottom: Math.min(box.bottom, window.innerHeight) }
 }
 
 export function scrollByY(scroller: Scroller, dy: number): void {
