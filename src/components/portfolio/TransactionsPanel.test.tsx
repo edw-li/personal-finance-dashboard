@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecurityOut, TransactionOut } from '../../types/api'
@@ -8,8 +9,10 @@ vi.mock('../../api/portfolio', () => ({
   createTransaction: vi.fn().mockResolvedValue({}),
   updateTransaction: vi.fn().mockResolvedValue({}),
   deleteTransaction: vi.fn().mockResolvedValue(undefined),
+  // The replay-order PUT (lane R1). Every reorder test answers it or leaves it pending.
+  reorderTransactions: vi.fn(),
 }))
-import { createTransaction, updateTransaction } from '../../api/portfolio'
+import { createTransaction, reorderTransactions, updateTransaction } from '../../api/portfolio'
 
 afterEach(cleanup)
 // Call counts are per-test: the "not called" assertion below would otherwise see the
@@ -486,5 +489,193 @@ describe('TransactionsPanel entry session', () => {
     expect((screen.getByLabelText(/date/i) as HTMLInputElement).value).toBe('')
     expect(screen.getByRole('button', { name: /add transaction/i })).toBeTruthy()
     expect(screen.queryByText(/kept/i)).toBeNull()
+  })
+})
+
+// ── Drag to reorder (2026-09-23 drag-to-reorder spec §5) ──────────────────────────────────────
+// The ledger's LIST ORDER is the cost-basis replay order, so a drag re-times a trade. Three rows
+// over two holdings: NVDA · Schwab ESPP holds a buy and a sell, VOO · RH Joint Taxable one buy.
+
+const LEDGER_SECURITIES: SecurityOut[] = [
+  securities[0],
+  {
+    ...securities[0],
+    id: 2,
+    ticker: 'VOO',
+    name: 'Vanguard S&P 500 ETF',
+    industry: 'Index',
+    holding_type: 'etf',
+  },
+]
+
+const nvdaBuy: TransactionOut = {
+  id: 21, security_id: 1, account: 'Schwab ESPP', type: 'buy', txn_date: null,
+  shares: '10.000000', price: '100.0000', fees: null, split_factor: null,
+  sort_index: 10, source: 'import', notes: null,
+}
+const vooBuy: TransactionOut = {
+  ...nvdaBuy, id: 22, security_id: 2, account: 'RH Joint Taxable',
+  shares: '5.000000', price: '400.0000', sort_index: 20,
+}
+const nvdaSell: TransactionOut = {
+  ...nvdaBuy, id: 23, type: 'sell', shares: '4.000000', price: '150.0000', sort_index: 30,
+  source: 'ui',
+}
+const LEDGER = [nvdaBuy, vooBuy, nvdaSell]
+
+// The grips' names (spec §2.4 "Reorder {name}"): ticker, type, account.
+const NVDA_BUY = 'NVDA buy, Schwab ESPP'
+const VOO_BUY = 'VOO buy, RH Joint Taxable'
+const NVDA_SELL = 'NVDA sell, Schwab ESPP'
+
+type PanelProps = ComponentProps<typeof TransactionsPanel>
+
+/** The ledger inside a ToastProvider; `rerender` hands down fresh props the way the page's
+ *  reload does. */
+function renderLedger(props: Partial<PanelProps> = {}) {
+  const onChanged = vi.fn()
+  const view = (next: Partial<PanelProps>) => (
+    <ToastProvider>
+      <TransactionsPanel
+        securities={LEDGER_SECURITIES}
+        transactions={LEDGER}
+        onChanged={onChanged}
+        {...props}
+        {...next}
+      />
+    </ToastProvider>
+  )
+  const utils = render(view({}))
+  return { onChanged, rerender: (next: Partial<PanelProps>) => utils.rerender(view(next)) }
+}
+
+const grip = (name: string) => screen.getByRole('button', { name: `Reorder ${name}` })
+/** The ledger's row ids, top to bottom, as rendered. */
+const order = () =>
+  [...document.querySelectorAll('tbody tr')].map((row) => row.getAttribute('data-reorder-id'))
+/** The reorder live region — ToastProvider's assertive region is not visually hidden. */
+const live = () =>
+  document.querySelector('.visually-hidden[aria-live="assertive"]')?.textContent ?? ''
+
+/** Every reorder test starts from a PUT that never answers (a test that needs an answer sets
+ *  one) and from a jsdom that can "scroll": the keyboard path keeps the lifted row in view with
+ *  window.scrollBy, which jsdom only logs as unimplemented. */
+function reorderHooks(): void {
+  beforeEach(() => {
+    vi.mocked(reorderTransactions).mockReset()
+    vi.mocked(reorderTransactions).mockReturnValue(new Promise<never>(() => {}))
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+}
+
+describe('TransactionsPanel reorder — the grip column (spec §5)', () => {
+  reorderHooks()
+
+  it('puts a grip first in every row, named for the trade, on a reorderable table', () => {
+    renderLedger()
+    const table = screen.getByRole('table')
+    expect(table.className).toBe('port-table reorder-table')
+    const headGrip = table.querySelector('thead tr')?.firstElementChild
+    expect(headGrip?.className).toBe('reorder-grip-cell')
+    expect(headGrip?.getAttribute('aria-hidden')).toBe('true')
+    for (const row of table.querySelectorAll('tbody tr')) {
+      expect(row.firstElementChild?.className).toBe('reorder-grip-cell')
+    }
+    expect(
+      [...table.querySelectorAll('tbody .reorder-grip')].map((button) =>
+        button.getAttribute('aria-label'),
+      ),
+    ).toEqual([`Reorder ${NVDA_BUY}`, `Reorder ${VOO_BUY}`, `Reorder ${NVDA_SELL}`])
+    // One description and one live region for the list, both OUTSIDE the table — a <span> is
+    // not a valid child of one (lane R0 consumer rule 6).
+    const instructions = document.getElementById(
+      grip(NVDA_BUY).getAttribute('aria-describedby') ?? '',
+    )
+    expect(instructions?.textContent).toBe(
+      'Press Space or Enter to pick up. Use the arrow keys to move, Home or End to jump, Space or Enter to drop, Escape to cancel.',
+    )
+    expect(table.contains(instructions)).toBe(false)
+    const regions = document.querySelectorAll('.visually-hidden[aria-live="assertive"]')
+    expect(regions).toHaveLength(1)
+    expect(table.contains(regions[0])).toBe(false)
+  })
+
+  it('says the list is the replay order, and how to change it (spec §8.1)', () => {
+    renderLedger()
+    expect(screen.getByText(/The list is the order trades are replayed/).textContent).toContain(
+      "The list is the order trades are replayed to work out cost basis and gains — with no dates on the rows, it is the ledger's timeline. Drag a row to move a trade earlier or later.",
+    )
+  })
+
+  it('offers no grip on an empty ledger and a disabled one on a single row (spec §9)', () => {
+    const { rerender } = renderLedger({ transactions: [] })
+    expect(screen.queryByRole('button', { name: /^Reorder / })).toBeNull()
+    expect(document.querySelector('.visually-hidden[aria-live="assertive"]')).toBeNull()
+    rerender({ transactions: [nvdaBuy] })
+    expect((grip(NVDA_BUY) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('shows a drop at once and speaks each step', () => {
+    renderLedger()
+    grip(NVDA_BUY).focus()
+    fireEvent.keyDown(grip(NVDA_BUY), { key: ' ' })
+    expect(live()).toBe(`Picked up ${NVDA_BUY}. Position 1 of 3.`)
+    fireEvent.keyDown(grip(NVDA_BUY), { key: 'ArrowDown' })
+    expect(live()).toBe(`${NVDA_BUY}, position 2 of 3.`)
+    fireEvent.keyDown(grip(NVDA_BUY), { key: ' ' })
+    expect(order()).toEqual(['22', '21', '23'])
+    expect(live()).toBe(`Dropped ${NVDA_BUY} at position 2 of 3.`)
+    expect(document.activeElement).toBe(grip(NVDA_BUY))
+  })
+
+  it('cancels a lift when the rows under it change — a scope switch — and saves nothing', () => {
+    const { rerender } = renderLedger()
+    grip(NVDA_BUY).focus()
+    fireEvent.keyDown(grip(NVDA_BUY), { key: ' ' })
+    fireEvent.keyDown(grip(NVDA_BUY), { key: 'ArrowDown' })
+    // The page hands down another scope's rows under the live lift.
+    rerender({ transactions: [nvdaBuy, nvdaSell] })
+    expect(grip(NVDA_BUY).getAttribute('aria-pressed')).toBeNull()
+    expect(order()).toEqual(['21', '23'])
+    // Lane R0's data-change cancel: the rows already re-rendered, so there is nothing to ease
+    // home, and "back at position …" would name a list that no longer exists.
+    expect(live()).toBe('Cancelled — the list changed.')
+    expect(reorderTransactions).not.toHaveBeenCalled()
+  })
+
+  it('shuts the row buttons while a row is lifted', () => {
+    renderLedger()
+    const rowButtons = () =>
+      [
+        ...screen.getAllByRole('button', { name: 'Edit' }),
+        ...screen.getAllByRole('button', { name: /^(Duplicate|Delete) this / }),
+      ] as HTMLButtonElement[]
+    grip(VOO_BUY).focus()
+    fireEvent.keyDown(grip(VOO_BUY), { key: ' ' })
+    expect(rowButtons().every((button) => button.disabled)).toBe(true)
+    fireEvent.keyDown(grip(VOO_BUY), { key: 'Escape' })
+    expect(rowButtons().every((button) => !button.disabled)).toBe(true)
+    expect(reorderTransactions).not.toHaveBeenCalled()
+  })
+
+  it('keeps the grips focusable but inert while any request of the panel is in flight', () => {
+    // A create that never settles: busy stays up for the rest of the test.
+    vi.mocked(createTransaction).mockReturnValueOnce(new Promise<never>(() => {}))
+    renderLedger()
+    change(screen.getByLabelText(/security/i), '2')
+    change(screen.getByLabelText('Account'), 'RH Joint Taxable')
+    change(screen.getByLabelText(/shares/i), '1')
+    change(screen.getByLabelText(/price/i), '400')
+    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
+    const handle = grip(VOO_BUY) as HTMLButtonElement
+    expect(handle.getAttribute('aria-disabled')).toBe('true')
+    expect(handle.disabled).toBe(false)
+    handle.focus()
+    fireEvent.keyDown(handle, { key: ' ' })
+    expect(live()).toBe('')
+    expect(handle.getAttribute('aria-pressed')).toBeNull()
   })
 })

@@ -7,6 +7,9 @@ import {
 } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
+import DragHandle from '../reorder/DragHandle'
+import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
+import { useReorder } from '../reorder/useReorder'
 import { useToast } from '../ToastProvider'
 import type { SecurityOut, TransactionOut, TransactionType } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
@@ -120,6 +123,13 @@ function newAccountNote(
   return `New account '${label}' will be created and assigned to ${primaryName ?? 'the primary member'} — re-tag it in Settings → Accounts`
 }
 
+/** A ledger row's name for its grip and the live region (2026-09-23 drag-to-reorder spec §2.4):
+ *  ticker, type and account — "NVDA buy, Schwab ESPP". Two lots of one holding share a name; the
+ *  position the live region speaks after it tells them apart. */
+function rowName(txn: TransactionOut, ticker: string): string {
+  return `${ticker} ${txn.type}, ${txn.account}`
+}
+
 export default function TransactionsPanel({
   securities,
   transactions,
@@ -149,6 +159,44 @@ export default function TransactionsPanel({
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
   const toast = useToast()
   const accountNote = newAccountNote(form.account, accounts, primaryName)
+  const tickerOf = (txn: TransactionOut) => tickers.get(txn.security_id) ?? '?'
+
+  // Drag to reorder (2026-09-23 drag-to-reorder spec §5). The LIST ORDER is the cost-basis
+  // replay order — the rows carry no dates, so their order is the ledger's timeline and a drag
+  // re-times a trade. pendingOrder is the dropped order, shown the moment the grip lets go and
+  // retired when fresh rows arrive from the page (CategoriesPanel's adjust-during-render
+  // pattern — no effect, so react-hooks/set-state-in-effect stays clean).
+  const [pendingOrder, setPendingOrder] = useState<TransactionOut[] | null>(null)
+  const [lastTransactions, setLastTransactions] = useState(transactions)
+  if (lastTransactions !== transactions) {
+    setLastTransactions(transactions)
+    setPendingOrder(null)
+  }
+  const rows = pendingOrder ?? transactions
+  const rowById = new Map(rows.map((txn) => [txn.id, txn]))
+
+  // Synchronously: the hook calls onCommit inside flushSync, so the new DOM order and the
+  // cleared drag transforms land in one frame (lane R0 consumer rule 3).
+  const showOrder = (next: number[]) => {
+    setPendingOrder(
+      next.flatMap((id) => {
+        const txn = rowById.get(id)
+        return txn === undefined ? [] : [txn]
+      }),
+    )
+  }
+
+  const reorder = useReorder({
+    items: rows.map((txn) => ({ id: txn.id })),
+    labelOf: (id) => {
+      const txn = rowById.get(id)
+      return txn === undefined ? 'this transaction' : rowName(txn, tickerOf(txn))
+    },
+    // Any request of the panel in flight leaves the grips focusable but inert (lane R0 consumer
+    // rule 4), so a drop can never race a save.
+    disabled: busy,
+    onCommit: showOrder,
+  })
 
   // 'type' is excluded: it is a union field with its own dedicated handler below.
   const set = (field: Exclude<keyof FormState, 'type'>) => (value: string) =>
@@ -292,7 +340,9 @@ export default function TransactionsPanel({
       <p className="hint">
         Rows marked <span className="badge">sheet</span> are owned by the spreadsheet
         importer: a re-import reverts edits to them and resurrects deletions. Rows added
-        here are never touched by imports.
+        here are never touched by imports. The list is the order trades are replayed to work
+        out cost basis and gains — with no dates on the rows, it is the ledger's timeline.
+        Drag a row to move a trade earlier or later.
       </p>
       <FeedBanner error={error} />
       {kept && (
@@ -448,65 +498,77 @@ export default function TransactionsPanel({
           )}
         </div>
       </form>
-      {transactions.length === 0 ? (
+      {rows.length === 0 ? (
         <p className="empty-note">No transactions yet.</p>
       ) : (
-        <HoldingsScroll><table className="port-table">
-          <thead>
-            <tr>
-              <th>Ticker</th><th>Account</th><th>Type</th><th>Date</th>
-              <th className="num">Shares</th><th className="num">Price</th>
-              <th className="num">Fees</th><th>Source</th><th>Notes</th><th />
-            </tr>
-          </thead>
-          <tbody>
-            {transactions.map((t) => (
-              <tr key={t.id}>
-                <td>{tickers.get(t.security_id) ?? '?'}</td>
-                <td>{t.account}</td>
-                <td>{t.type === 'split' ? `split ×${t.split_factor ?? '?'}` : t.type}</td>
-                <td>{t.txn_date ? formatDate(t.txn_date) : '—'}</td>
-                <td className="num">{t.type === 'split' ? '—' : formatShares(t.shares)}</td>
-                <td className="num">{t.type === 'split' ? '—' : formatCurrency(t.price)}</td>
-                <td className="num">{formatCurrency(t.fees)}</td>
-                <td>
-                  <span className="badge">{t.source === 'import' ? 'sheet' : 'manual'}</span>
-                </td>
-                <td className="notes-cell">{t.notes ?? ''}</td>
-                {/* disabled={busy} on all three: submit()'s .then closes over editingId and
-                    the form as they were when it fired, so a row action taken mid-flight is
-                    undone by the reset that lands after it — a seeded edit silently wiped,
-                    or worse, a PATCH aimed at whatever editingId the closure still holds.
-                    Shutting the row for the duration of a save is the cheap fix. */}
-                <td className="row-actions">
-                  <button type="button" disabled={busy} onClick={() => startEdit(t)}>Edit</button>
-                  {/* aria-label: "Duplicate"/"Delete" alone never say WHAT they act on, and
-                      the type is the row's shortest distinguishing word. Delete needs the
-                      naming MORE since the delete went instant (2026-08-25 polish §8): the
-                      confirm() sentence that used to name the row before anything happened
-                      is gone, so the button is the last chance to say it. Edit keeps its
-                      bare name — it opens a form showing the row, and changes nothing. */}
-                  <button
-                    type="button"
-                    disabled={busy}
-                    aria-label={`Duplicate this ${t.type}`}
-                    onClick={() => duplicate(t)}
-                  >
-                    Duplicate
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    aria-label={`Delete this ${t.type}`}
-                    onClick={() => remove(t)}
-                  >
-                    Delete
-                  </button>
-                </td>
+        <>
+          {/* Once per list and outside the table — a <span> is not a valid child of one (lane R0
+              consumer rule 6). Every grip points its aria-describedby at the instructions. */}
+          <ReorderInstructions id={reorder.instructionsId} />
+          <ReorderLiveRegion text={reorder.announcement} />
+          <HoldingsScroll><table className="port-table reorder-table">
+            <thead>
+              <tr>
+                <th className="reorder-grip-cell" aria-hidden="true" />
+                <th>Ticker</th><th>Account</th><th>Type</th><th>Date</th>
+                <th className="num">Shares</th><th className="num">Price</th>
+                <th className="num">Fees</th><th>Source</th><th>Notes</th><th />
               </tr>
-            ))}
-          </tbody>
-        </table></HoldingsScroll>
+            </thead>
+            <tbody>
+              {rows.map((t) => (
+                <tr key={t.id} {...reorder.itemProps(t.id)}>
+                  <td className="reorder-grip-cell">
+                    <DragHandle name={rowName(t, tickerOf(t))} {...reorder.handleProps(t.id)} />
+                  </td>
+                  <td>{tickerOf(t)}</td>
+                  <td>{t.account}</td>
+                  <td>{t.type === 'split' ? `split ×${t.split_factor ?? '?'}` : t.type}</td>
+                  <td>{t.txn_date ? formatDate(t.txn_date) : '—'}</td>
+                  <td className="num">{t.type === 'split' ? '—' : formatShares(t.shares)}</td>
+                  <td className="num">{t.type === 'split' ? '—' : formatCurrency(t.price)}</td>
+                  <td className="num">{formatCurrency(t.fees)}</td>
+                  <td>
+                    <span className="badge">{t.source === 'import' ? 'sheet' : 'manual'}</span>
+                  </td>
+                  <td className="notes-cell">{t.notes ?? ''}</td>
+                  {/* disabled={busy} on all three: submit()'s .then closes over editingId and
+                      the form as they were when it fired, so a row action taken mid-flight is
+                      undone by the reset that lands after it — a seeded edit silently wiped,
+                      or worse, a PATCH aimed at whatever editingId the closure still holds.
+                      Shutting the row for the duration of a save is the cheap fix. Shut while a
+                      row is lifted too (lane R0 consumer rule 5): a click mid-drag would act on
+                      a row that is about to move. */}
+                  <td className="row-actions">
+                    <button type="button" disabled={busy || reorder.active} onClick={() => startEdit(t)}>Edit</button>
+                    {/* aria-label: "Duplicate"/"Delete" alone never say WHAT they act on, and
+                        the type is the row's shortest distinguishing word. Delete needs the
+                        naming MORE since the delete went instant (2026-08-25 polish §8): the
+                        confirm() sentence that used to name the row before anything happened
+                        is gone, so the button is the last chance to say it. Edit keeps its
+                        bare name — it opens a form showing the row, and changes nothing. */}
+                    <button
+                      type="button"
+                      disabled={busy || reorder.active}
+                      aria-label={`Duplicate this ${t.type}`}
+                      onClick={() => duplicate(t)}
+                    >
+                      Duplicate
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || reorder.active}
+                      aria-label={`Delete this ${t.type}`}
+                      onClick={() => remove(t)}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table></HoldingsScroll>
+        </>
       )}
     </section>
   )
