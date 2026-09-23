@@ -40,6 +40,9 @@ const ROSTER = [
   // C3 — Spending (spendingSmallMultiples was the one droppable of the night — the plan
   // let C3 ship without the Compare/All mode. It landed, so it is pinned like the rest.)
   'spendingBars',
+  // …and over a window holding one import-artefact month (2026-09-23 spec §C3): the capped
+  // axis and its edge marker.
+  'spendingBarsOffScale',
   'spendingMonthPie',
   'spendingHeatmapRow',
   'spendingHeatmapVsAverage',
@@ -47,6 +50,8 @@ const ROSTER = [
   // …and the same builder without the server's total rate (an older backend): one muted
   // line on the noLegend grid, a shape the two-line fixture never reaches.
   'spendingSavingsCash',
+  // …and a month below −100% on both lines: the fixed floor and the off-scale markers (§C3).
+  'spendingSavingsClamped',
   'spendingTrends',
   'spendingSankey',
   'spendingSmallMultiples',

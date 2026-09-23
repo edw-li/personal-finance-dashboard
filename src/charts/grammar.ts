@@ -184,6 +184,8 @@ export function offScaleMarkPoint(
       position: direction === 'up' ? ('bottom' as const) : ('top' as const),
     },
     data: marks.map((mark) => ({
+      // echarts' MarkPointDataItemOption requires a name; the month it marks is the honest one.
+      name: mark.x,
       coord: [mark.x, edge] as [string, number],
       value: mark.value,
       label: {

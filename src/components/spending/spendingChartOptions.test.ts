@@ -248,6 +248,42 @@ describe('spendingBarsOption', () => {
   it('returns null with no months', () => {
     expect(spendingBarsOption(barsInput(matrixFixture({ months: [], totals: [], net_pay: [], four_pct_rule: [], total_budget: [], savings_rate: [] })))).toBeNull()
   })
+
+  // 2026-09-23 spec §C3: Aug 2023's $25,937.48 net pay set the axis to $30K and squashed three
+  // years of $2–10K months into its bottom fifth.
+  it('caps the money axis above one outlier month and marks it at the edge with its true value', () => {
+    const months = Array.from({ length: 24 }, (_, i) => `${2024 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}-01`)
+    const labels = months.map((m) => `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`)
+    const matrix = matrixFixture({
+      months,
+      series: [
+        { category_id: 1, values: months.map(() => '2000.00'), budgets: months.map(() => null) },
+        { category_id: 2, values: months.map(() => '600.00'), budgets: months.map(() => null) },
+        { category_id: 3, values: months.map(() => '150.00'), budgets: months.map(() => null) },
+      ],
+      totals: months.map(() => '2750.00'),
+      net_pay: months.map((_, i) => (i === 3 ? '25937.48' : '6000.00')),
+      savings_rate: months.map(() => null),
+      four_pct_rule: months.map(() => '2000.00'),
+      total_budget: months.map(() => null),
+    })
+    const option = read(spendingBarsOption({ ...barsInput(matrix), monthLabels: labels })) as unknown as {
+      yAxis: { max?: number; interval?: number; axisLabel: { formatter: unknown } }
+      series: { id?: string; data?: unknown[]; markPoint?: { data: unknown[] } }[]
+    }
+    expect(option.yAxis).toMatchObject({ max: 7000, interval: 1000 })
+    expect(option.yAxis.axisLabel.formatter).toBe(compactMoney)
+    const netPay = option.series.find((s) => s.id === 'net-pay')!
+    // The series keeps the TRUE figure (the tooltip and the table read it) …
+    expect(netPay.data?.[3]).toBe(25937.48)
+    // … and the edge marker says it.
+    expect(netPay.markPoint?.data).toEqual([
+      { name: 'Apr 2024', coord: ['Apr 2024', 7000], value: 25937.48, label: { formatter: '$25.9K ↑' } },
+    ])
+    // A window that does not hold the outlier is never capped: echarts' own extent applies.
+    const recent = read(spendingBarsOption({ ...barsInput(matrix), monthLabels: labels, range: { preset: 'all', window: { startValue: 12, endValue: 23 } } })) as unknown as { yAxis: { max?: number } }
+    expect(recent.yAxis.max).toBeUndefined()
+  })
 })
 
 describe('monthPieOption', () => {
@@ -387,12 +423,12 @@ describe('savingsRateOption', () => {
     ) as unknown as {
       grid: unknown
       legend: { type: string } | undefined
-      yAxis: { min: (e: { min: number }) => number; max: (e: { max: number }) => number; axisLabel: { formatter: unknown } }
-      series: { name: string; color: string; markLine: unknown; data: unknown[]; emphasis: unknown }[]
+      yAxis: { min: number; max: number; interval: number; axisLabel: { formatter: unknown } }
+      series: { name: string; color: string; markLine: unknown; markPoint?: { data: unknown[] }; data: unknown[]; emphasis: unknown }[]
       tooltip: { formatter: (p: unknown) => string }
     }
 
-  it('draws the total rate over a muted cash line, the legend spelling both out', () => {
+  it('draws the total rate over the cash line in a data colour, the legend spelling both out', () => {
     const option = savings()
     expect(option.grid).toEqual(GRID_VARIANTS.default) // the legend row needs the top gutter
     expect(option.legend?.type).toBe('plain')
@@ -401,7 +437,9 @@ describe('savingsRateOption', () => {
     expect(TOTAL_RATE_SERIES).toBe('Total (incl. payroll)')
     expect(CASH_RATE_SERIES).toBe('Cash')
     expect(option.series[0]).toMatchObject({ color: PALETTE[0], emphasis: { focus: 'series' } })
-    expect(option.series[1].color).toBe(MUTED)
+    // The cash rate is the Spending page's headline figure: a data colour, never the muted
+    // annotation grey the references wear (2026-09-23 spec §C3).
+    expect(option.series[1].color).toBe(PALETTE[1])
     expect(option.series[0].data).toEqual([0.607142857, null])
     expect(option.series[1].data).toEqual([0.541666667, null])
     // The zero baseline is drawn ONCE, by the leading series.
@@ -411,14 +449,37 @@ describe('savingsRateOption', () => {
     })
     expect(option.series[1].markLine).toBeUndefined()
     expect(option.yAxis.axisLabel.formatter).toBe(percentLabel)
-    expect(option.yAxis.min({ min: -1.8 })).toBe(-2)
-    expect(option.yAxis.max({ max: 0.6 })).toBe(0.6)
+    // The floor is FIXED at −100% and the max a nice step above the data — never the data max
+    // itself, whose forced label used to print over 0%.
+    expect(option.yAxis).toMatchObject({ min: -1, max: 1, interval: 0.5 })
     const rows = tooltipRows(
       option.tooltip.formatter([
         { seriesName: TOTAL_RATE_SERIES, seriesType: 'line', axisValueLabel: 'Jun 2026', value: 0.35, color: PALETTE[0] },
       ]),
     )
     expect(rows.rows).toEqual([{ kind: 'row', label: TOTAL_RATE_SERIES, value: '35.0%' }])
+  })
+
+  it('clamps a month below −100% to the floor and marks it with its true value', () => {
+    // Sep 2023's −1,073% (net pay $318.76 against $3,739.62 of spending) — the audit's case.
+    const option = savings({ savings_rate: ['-10.73', '0.54'], total_savings_rate: ['-10.73', '0.6'] })
+    expect(option.yAxis).toMatchObject({ min: -1, max: 1, interval: 0.5 })
+    // The data stays TRUE, so the tooltip prints −1,073%.
+    expect(option.series[0].data).toEqual([-10.73, 0.6])
+    expect(option.series[0].markPoint?.data).toEqual([
+      { name: 'Jun 2026', coord: ['Jun 2026', -1], value: -10.73, label: { formatter: '-1073% ↓' } },
+    ])
+    // Same month, same value on the cash line: the same label prints once over the other.
+    expect(option.series[1].markPoint?.data).toEqual([
+      { name: 'Jun 2026', coord: ['Jun 2026', -1], value: -10.73, label: { formatter: '-1073% ↓' } },
+    ])
+  })
+
+  it('lifts the second label when two clipped lines disagree at the same month', () => {
+    const option = savings({ savings_rate: ['-12', '0.54'], total_savings_rate: ['-10.73', '0.6'] })
+    expect(option.series[1].markPoint?.data).toEqual([
+      { name: 'Jun 2026', coord: ['Jun 2026', -1], value: -12, label: { formatter: '-1200% ↓', offset: [0, -13] } },
+    ])
   })
 
   it('falls back to the lone cash line on a backend older than the savings service', () => {

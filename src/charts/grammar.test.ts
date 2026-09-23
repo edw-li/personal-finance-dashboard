@@ -173,12 +173,12 @@ describe('robust axes', () => {
       symbolRotate: 0,
       itemStyle: { color: '#e6e9ef' },
       label: { show: true, color: '#8b93a3', fontSize: 11, position: 'bottom' },
-      data: [{ coord: ['Aug 2023', 12000], value: 25937.48, label: { formatter: '$25.9K ↑' } }],
+      data: [{ name: 'Aug 2023', coord: ['Aug 2023', 12000], value: 25937.48, label: { formatter: '$25.9K ↑' } }],
     })
     const down = offScaleMarkPoint([{ x: 'Sep 2023', value: -10.7312, lift: 13 }], { edge: -1, direction: 'down', color: '#3987e5', unit: 'percent' })
     expect(down?.symbolRotate).toBe(180)
     expect(down?.label.position).toBe('top')
-    expect(down?.data).toEqual([{ coord: ['Sep 2023', -1], value: -10.7312, label: { formatter: '-1073% ↓', offset: [0, -13] } }])
+    expect(down?.data).toEqual([{ name: 'Sep 2023', coord: ['Sep 2023', -1], value: -10.7312, label: { formatter: '-1073% ↓', offset: [0, -13] } }])
     expect(offScaleMarkPoint([], { edge: 1, direction: 'up', color: '#3987e5', unit: 'money' })).toBeUndefined()
   })
 })

@@ -18,7 +18,18 @@
 import type { EChartsOption } from '../../charts/echarts'
 import { ENTITY, foldColor, pickColors } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
-import { BAR_MARKS, LINE, compactMoney, grid, moneyAxis, monthAxis, pctAxis, stagger } from '../../charts/grammar'
+import {
+  BAR_MARKS,
+  LINE,
+  compactMoney,
+  grid,
+  moneyAxis,
+  monthAxis,
+  offScaleMarkPoint,
+  pctAxis,
+  robustMax,
+  stagger,
+} from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { zeroLine } from '../../charts/markLine'
 import { budgetReference, referenceLine } from '../../charts/reference'
@@ -74,6 +85,14 @@ export function spendingCsv(
  *  at the safe withdrawal rate (Settings), and "4%" was a number the setting can change. */
 export const SUSTAINABLE_SPEND = 'Sustainable spend'
 
+/** A server string → a display number; absent stays absent (format.ts's rule). */
+const toNumber = (value: string | null | undefined): number | null =>
+  value === null || value === undefined ? null : Number(value)
+
+/** How far a second off-scale label at the same month is lifted off the first (≈ one 11px
+ *  label line and a hair), so two clipped series never print over each other. */
+const OFF_SCALE_LIFT = 13
+
 export interface SpendingBarsInput {
   matrix: SpendingMatrix
   /** The page's fold: `ids` order IS the bar seriesIndex; `colors` carries each hue. */
@@ -114,6 +133,40 @@ export function spendingBarsOption({
   const { startValue, endValue } = resolvedWindow(matrix.months, range)
   const budgetedInView = matrix.total_budget.slice(startValue, endValue + 1).filter((v) => v !== null).length
   const hasBudget = budgetedInView >= 2
+  // Robust axis (2026-09-23 spec §C3), judged over the DISPLAYED window: one import-artefact
+  // month (Aug 2023's $25,937.48 of net pay) must not set the scale for three years of $2–10K
+  // bars. The drawn stack top is what a bar reaches; the lines and references ride along.
+  const netPay = matrix.net_pay.map(toNumber)
+  const stackTop = matrix.months.map(
+    (_, i) =>
+      topIds.reduce((acc, id) => acc + Math.max(toNumber(valuesById.get(id)?.[i]) ?? 0, 0), 0) +
+      Math.max(otherPerMonth[i] ?? 0, 0),
+  )
+  const inView = <T,>(values: readonly T[]) => values.slice(startValue, endValue + 1)
+  const robust = robustMax([
+    ...inView(stackTop),
+    ...inView(netPay),
+    ...inView(matrix.four_pct_rule.map(toNumber)),
+    ...(hasBudget ? inView(matrix.total_budget.map(toNumber)) : []),
+  ])
+  // Clipped values keep their TRUE figure in the series (the tooltip and the table read it)
+  // and gain an edge marker; a bar and the net-pay line clipped in one month stack labels.
+  const clippedBars: { x: string; value: number }[] = []
+  const clippedPay: { x: string; value: number; lift?: number }[] = []
+  if (robust !== null) {
+    for (let i = startValue; i <= endValue && i < matrix.months.length; i += 1) {
+      const barClipped = stackTop[i] > robust.max
+      if (barClipped) clippedBars.push({ x: monthLabels[i], value: stackTop[i] })
+      const pay = netPay[i]
+      if (pay !== null && pay > robust.max) {
+        clippedPay.push({ x: monthLabels[i], value: pay, ...(barClipped ? { lift: OFF_SCALE_LIFT } : {}) })
+      }
+    }
+  }
+  const barMarks =
+    robust === null ? undefined : offScaleMarkPoint(clippedBars, { edge: robust.max, direction: 'up', color: MUTED, unit: 'money' })
+  const payMarks =
+    robust === null ? undefined : offScaleMarkPoint(clippedPay, { edge: robust.max, direction: 'up', color: INK, unit: 'money' })
   const series = [
     // Stable ids: the drill-in pie morphs from/to these (universalTransition keys on id).
     ...topIds.map((id, slot) => ({
@@ -137,6 +190,8 @@ export function spendingBarsOption({
       color: ENTITY.other,
       universalTransition: true,
       data: otherPerMonth,
+      // The stack's top segment carries the clipped-bar markers (spec §C3).
+      ...(barMarks === undefined ? {} : { markPoint: barMarks }),
     },
     {
       ...LINE,
@@ -145,7 +200,8 @@ export function spendingBarsOption({
       color: INK,
       z: 10,
       connectNulls: false,
-      data: matrix.net_pay.map((v) => (v === null ? null : Number(v))),
+      data: netPay,
+      ...(payMarks === undefined ? {} : { markPoint: payMarks }),
     },
     referenceLine(
       SUSTAINABLE_SPEND,
@@ -171,7 +227,7 @@ export function spendingBarsOption({
       pointer: 'shadow',
     }),
     xAxis: monthAxis(monthLabels, { gap: true }),
-    yAxis: moneyAxis(),
+    yAxis: moneyAxis({ robust }),
     series,
   }
 }
@@ -375,17 +431,55 @@ export const CASH_RATE_SERIES = 'Cash'
 
 export interface SavingsRateInput { matrix: SpendingMatrix; monthLabels: string[]; range: RangeState }
 
-/** Rates over months with net pay; nulls break the line (connectNulls false). Clamped
- *  savings-rate extents (A7): ceiling +100%, floor expanding to the data. TWO lines when the
- *  server sends the total rate, one when it does not — the fallback is exactly the chart
- *  this card drew before the savings service, so an older backend degrades to the truth it
- *  can still tell rather than to a blank. */
+/** Rates over months with net pay; nulls break the line (connectNulls false). Robust extents
+ *  (2026-09-23 spec §C3), judged over the displayed window: the floor is FIXED at −100% — a
+ *  month below it (Sep 2023's −1,073%, net pay $318.76 against $3,739.62 of spending) is
+ *  drawn off the bottom edge with a marker carrying its true value, never allowed to squash
+ *  three years into a band — and the top is a nice step above the data. TWO lines when the
+ *  server sends the total rate, one when it does not — the fallback is exactly the chart this
+ *  card drew before the savings service, so an older backend degrades to the truth it can
+ *  still tell rather than to a blank. */
 export function savingsRateOption({ matrix, monthLabels, range }: SavingsRateInput): EChartsOption | null {
   if (matrix.months.length === 0) return null
   const total = matrix.total_savings_rate
-  const numbers = (values: (string | null)[]) => values.map((v) => (v === null ? null : Number(v)))
+  const numbers = (values: (string | null)[]) => values.map(toNumber)
+  const totalRates = total === undefined ? null : numbers(total)
+  const cashRates = numbers(matrix.savings_rate)
+  const { startValue, endValue } = resolvedWindow(matrix.months, range)
+  const inView = (values: (number | null)[]) => values.slice(startValue, endValue + 1)
+  const yAxis = pctAxis({ floor: -1, ceiling: 1, values: [...inView(totalRates ?? []), ...inView(cashRates)] })
+  // Each line's clipped months, at the floor (↓) or the ceiling (↑). The cash line's label is
+  // lifted where the total line was clipped at the same edge with a DIFFERENT figure; an
+  // identical figure prints the same text in the same place, which reads as one label.
+  const marksFor = (rates: (number | null)[], color: string, under: (number | null)[] | null) => {
+    const low: { x: string; value: number; lift?: number }[] = []
+    const high: { x: string; value: number; lift?: number }[] = []
+    for (let i = startValue; i <= endValue && i < rates.length; i += 1) {
+      const value = rates[i]
+      if (value === null) continue
+      const other = under?.[i] ?? null
+      if (value < yAxis.min) {
+        const lift = other !== null && other < yAxis.min && percentOf(other) !== percentOf(value)
+        low.push({ x: monthLabels[i], value, ...(lift ? { lift: OFF_SCALE_LIFT } : {}) })
+      } else if (value > yAxis.max) {
+        const lift = other !== null && other > yAxis.max && percentOf(other) !== percentOf(value)
+        high.push({ x: monthLabels[i], value, ...(lift ? { lift: OFF_SCALE_LIFT } : {}) })
+      }
+    }
+    const down = offScaleMarkPoint(low, { edge: yAxis.min, direction: 'down', color, unit: 'percent' })
+    const up = offScaleMarkPoint(high, { edge: yAxis.max, direction: 'up', color, unit: 'percent' })
+    if (down === undefined || up === undefined) return down ?? up
+    // Both edges on one line (a rate above 100% needs refunds that outweigh spending): the
+    // ceiling's items restate their own rotation and label side.
+    return {
+      ...down,
+      data: [...down.data, ...up.data.map((item) => ({ ...item, symbolRotate: 0, label: { ...item.label, position: 'bottom' as const } }))],
+    }
+  }
+  const totalMarks = totalRates === null ? undefined : marksFor(totalRates, PALETTE[0], null)
+  const cashMarks = marksFor(cashRates, PALETTE[1], totalRates)
   const series = [
-    ...(total === undefined
+    ...(totalRates === null
       ? []
       : [
           {
@@ -394,30 +488,37 @@ export function savingsRateOption({ matrix, monthLabels, range }: SavingsRateInp
             color: PALETTE[0],
             connectNulls: false,
             markLine: zeroLine(),
-            data: numbers(total),
+            ...(totalMarks === undefined ? {} : { markPoint: totalMarks }),
+            data: totalRates,
           },
         ]),
     {
       ...LINE,
       name: CASH_RATE_SERIES,
-      color: MUTED,
+      // The Spending page's headline figure: a data colour, not the muted annotation grey the
+      // references wear (spec §C3). The first two palette slots validate as a pair everywhere.
+      color: PALETTE[1],
       connectNulls: false,
       // The baseline belongs to whichever series leads — drawn twice it doubles its own ink.
-      ...(total === undefined ? { markLine: zeroLine() } : {}),
-      data: numbers(matrix.savings_rate),
+      ...(totalRates === null ? { markLine: zeroLine() } : {}),
+      ...(cashMarks === undefined ? {} : { markPoint: cashMarks }),
+      data: cashRates,
     },
   ]
   return {
     dataZoom: rangeZoom(matrix.months, range),
-    grid: grid(total === undefined ? 'noLegend' : 'default'),
-    ...(total === undefined ? {} : { legend: legendFor(series.length) }),
+    grid: grid(totalRates === null ? 'noLegend' : 'default'),
+    ...(totalRates === null ? {} : { legend: legendFor(series.length) }),
     // True value in the tooltip even when a line is clamped out of frame.
     tooltip: axisTooltip({ unit: 'percent' }),
     xAxis: monthAxis(monthLabels),
-    yAxis: pctAxis(),
+    yAxis,
     series,
   }
 }
+
+/** Two rates that print the same whole percent are one label (the off-scale markers' text). */
+const percentOf = (rate: number) => Math.round(rate * 100)
 
 /** Rates and their source amounts, retaining the raw category sum separately from
  *  cash outflow. Verbatim server strings; blanks for absent, never '0.00'. */
