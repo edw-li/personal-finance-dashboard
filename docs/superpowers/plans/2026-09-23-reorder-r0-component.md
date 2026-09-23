@@ -2492,7 +2492,9 @@ git commit -m "docs(plan): lane R0 — results and gates"
   - That call is wrapped in try/catch, and a consumer error goes to `console.error` without breaking
     the teardown.
   - Settle-backs (a cancel, an unmoved drop) owe nothing. The timer never commits a second time.
-  - Lane tests: 90.
+  - A test pins R4's shape: a parent owns the order and mounts the list conditionally; the list
+    unmounts mid-settle; the parent re-renders in the new order.
+  - Lane tests: 91.
 - Notes for R2–R5 (what the contract section does not say):
   - **Pointer tests** need three things: `installPointerEvents()` in `beforeAll`, `afterEach(cleanup)`,
     and mocked row boxes (the `layoutRows` helper in `useReorder.test.tsx`). Without layout every
@@ -2515,9 +2517,13 @@ git commit -m "docs(plan): lane R0 — results and gates"
     dispatched the drop (a React event handler, or the pointer settle's timer). Catch your own save
     errors.
   - **`onCommit` can arrive during your list's unmount** — a pointer drop still settling when the list
-    goes away (a popover closed right after the drop). It runs without flushSync, so the optimistic
-    `setState` is moot, but the save must still start. Keep the save's success path tolerant of an
-    unmounted list.
+    goes away (a popover closed right after the drop). It runs without flushSync. Always set the
+    optimistic order and start the save, and never skip either:
+    - when the order lives in the unmounting list (R2, R3), its `setState` is moot but harmless;
+    - when a PARENT owns the order (R4's Customize: the page's layout state), that `setState` is
+      exactly what keeps the drop. The parent re-renders in the new order.
+
+    Keep the save's success path tolerant of an unmounted list.
 
 ## Self-review (spec coverage)
 

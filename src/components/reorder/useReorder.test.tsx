@@ -773,6 +773,45 @@ describe('useReorder — pointer', () => {
     expect(onCommit).toHaveBeenCalledTimes(1)
   })
 
+  it('a parent that owns the order keeps a drop its list unmounted during', () => {
+    const committed = vi.fn()
+    // R4's shape: the page owns the order; its list mounts only while a popover is open.
+    function Parent() {
+      const [items, setItems] = useState(flat('A', 'B', 'C', 'D'))
+      const [open, setOpen] = useState(true)
+      return (
+        <>
+          <p data-testid="parent-order">{items.map((item) => item.id).join(',')}</p>
+          <button type="button" onClick={() => setOpen(false)}>
+            Done
+          </button>
+          {open && (
+            <List
+              items={items}
+              onCommit={(next, moved) => {
+                setItems(next.map((id) => ({ id })))
+                committed(next, moved)
+              }}
+            />
+          )}
+        </>
+      )
+    }
+    render(<Parent />)
+    layoutRows()
+    fireEvent.pointerDown(grip('Alpha'), { pointerId: 1, button: 0, clientY: 220 })
+    fireEvent.pointerMove(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    fireEvent.pointerUp(grip('Alpha'), { pointerId: 1, clientY: 305 })
+    fireEvent.click(screen.getByRole('button', { name: 'Done' })) // closed mid-settle
+    expect(screen.queryByRole('button', { name: 'Reorder Alpha' })).toBeNull()
+    expect(screen.getByTestId('parent-order').textContent).toBe('B,C,A,D')
+    act(() => {
+      vi.advanceTimersByTime(MOTION_MS.fast)
+    })
+    expect(committed).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('parent-order').textContent).toBe('B,C,A,D')
+  })
+
   it('a list unmounting mid settle-back commits nothing — a cancel or an unmoved drop owes no order', () => {
     const onCommit = vi.fn()
     const cancelled = render(<Stateful initial={flat('A', 'B', 'C')} onCommit={onCommit} />)
