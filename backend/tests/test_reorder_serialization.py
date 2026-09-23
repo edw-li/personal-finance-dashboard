@@ -11,7 +11,8 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette.responses import Response
 
@@ -32,6 +33,7 @@ from app.models import (
 from app.schemas.credit_cards import CreditCardIn
 from app.schemas.ordering import OrderIn
 from app.services.changelog import ChangeBatch, undo_batch
+from app.services.ordering import order_lock
 from tests.ordering_helpers import first_position, lock_position, race, recorded_sql
 from tests.workbook_builder import build_workbook
 
@@ -253,3 +255,50 @@ async def test_an_import_takes_the_three_list_locks_before_it_reads_them(db):
     assert not report.has_errors
     for table in ("position_transactions", "accounts", "spending_categories"):
         assert lock_position(statements, table) < first_position(statements, f"FROM {table}")
+
+
+# ── an Activity-card Undo serializes with the reorders it could blend with ─────────────
+
+
+@pytest.mark.parametrize("table", ["accounts", "spending_categories"])
+async def test_an_undo_of_a_reorder_waits_for_its_lists_order_lock(auth_client, db, engine, table):
+    """An Undo rewrites a list's numbers too, so a reorder in another tab must not
+    interleave with it. While another session holds the list's order lock the Undo waits —
+    here, out to a short lock_timeout, having written nothing — and once the lock is
+    released it goes through."""
+    model = {"accounts": Account, "spending_categories": SpendingCategory}[table]
+    path, swapped = await seed_two(db, table)
+    resp = await auth_client.put(path, json={"ids": swapped})
+    assert resp.status_code == 200, resp.text
+    batch_id = UUID(resp.headers["x-change-batch"])
+    moved = await orders(db, model, model.sort_order)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as holder:
+        await holder.execute(order_lock(model))  # a reorder or an append in flight elsewhere
+        async with sessions() as undoing:
+            await undoing.execute(text("SET LOCAL lock_timeout = '200ms'"))
+            with pytest.raises(DBAPIError, match="lock timeout"):
+                await undo_batch(undoing, batch_id, actor="tab 2")
+        assert await orders(db, model, model.sort_order) == moved  # nothing undone meanwhile
+    async with sessions() as undoing:  # the holder's transaction is over: the lock is free
+        await undo_batch(undoing, batch_id, actor="tab 2")
+    assert await orders(db, model, model.sort_order) == [(swapped[1], 0), (swapped[0], 1)]
+
+
+async def test_an_undo_outside_the_ordered_lists_takes_no_order_lock(auth_client, db, engine):
+    category = SpendingCategory(name="Food", slug="food", sort_order=0)
+    db.add(category)
+    await db.commit()
+    resp = await auth_client.put(
+        f"{API}/spending/categories/{category.id}/budget",
+        json={"amount": "400.00", "effective_month": "2026-09-01"},
+    )
+    assert resp.status_code == 200, resp.text
+    [batch_id] = set((await db.execute(select(ChangeLog.batch_id))).scalars())
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as holder:
+        for model in (Account, SpendingCategory):
+            await holder.execute(order_lock(model))
+        async with sessions() as undoing:
+            await undoing.execute(text("SET LOCAL lock_timeout = '200ms'"))
+            await undo_batch(undoing, batch_id, actor="tab 2")  # a budget row moves no order
