@@ -213,6 +213,10 @@ reorder.liftedId         // K | null
    pointer leaves the zone, and once the unit's range end is already inside the band the reader can
    see (the scroller's box clipped to the window), less the edge margin. So a held row never scrolls
    out of view past its own group. (Amended 2026-09-23 after lanes R2/R0 review.)
+   - The band starts below the scroller's sticky header (a `thead` whose cells stick, measured on the
+     cells), so the zone, the stop and the keyboard's keep-in-view all count from where the rows
+     show: the range's first row — and the Accounts group heading above it — never rests under the
+     header. (Amended 2026-09-23 by lane R7, after lane V's finding 2.)
 6. **Drop.**
    - On `pointerup` the unit eases from under the pointer into its gap over `--t-fast`. Only then
      does `onCommit` fire, inside `flushSync`, so the DOM reorder lands on rows that already stand
@@ -270,8 +274,14 @@ reorder.liftedId         // K | null
 
 - **Reduced motion** (`useReducedMotion()`):
   - Peers do not shift and nothing animates.
-  - An accent **drop line** marks the target slot, drawn as an inset box-shadow on the target peer's
-    edge cells (`data-reorder-drop="before" | "after"`).
+  - An accent **drop line** marks the target slot. The target peer's edge row carries
+    `data-reorder-drop="before" | "after"`; the line itself is ONE overlay the hook keeps on `<body>`
+    (`.reorder-drop-line`, `position: fixed`, 2 px, centred on that edge, as wide as the row shows),
+    one layer above its list, so the row in hand — which follows the pointer across its target —
+    never covers it. It is hidden while the edge is outside the scroller's visible band, re-placed on
+    every paint and scroll, and removed when the drag lets go. (Amended 2026-09-23 by lane R7, after
+    lane V's finding 1: the first design's inset box-shadow in the target's cells hid under the row in
+    hand for about half of each slot's travel.)
   - The lifted unit still follows the pointer: direct manipulation, not animation.
   - A keyboard lift under reduced motion moves only the drop line.
 - **Saved flash:** `markSaved(id)` sets `data-reorder-saved` on the unit's rows for `MOTION_MS.flash`
