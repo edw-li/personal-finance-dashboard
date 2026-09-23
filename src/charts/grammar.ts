@@ -56,25 +56,141 @@ export const compactMoney = (value: number): string => formatCurrencyCompact(val
 export const percentLabel = (value: number): string =>
   formatPct(value, { signed: false, decimals: 0 })
 
+/** echarts' own round-nice step (numberUtil.nice with round = true): 1, 2, 3, 5 or 10 × 10^k.
+ *  An extent built from it lands on the grid echarts draws, so no odd extra label appears. */
+export function niceStep(value: number): number {
+  if (!(value > 0)) return 1
+  const exp10 = 10 ** Math.floor(Math.log10(value))
+  const f = value / exp10
+  const nf = f < 1.5 ? 1 : f < 2.5 ? 2 : f < 4 ? 3 : f < 7 ? 5 : 10
+  // Rounded to the step's own precision: 3 × 0.1 must be 0.3, not 0.30000000000000004.
+  return Number((nf * exp10).toPrecision(12))
+}
+
+export interface RobustMax {
+  max: number
+  interval: number
+}
+
+/** The robust money-axis ceiling (2026-09-23 spec §C3): nice(p95 × 1.15) — applied ONLY when
+ *  the data's max exceeds 1.5 × p95, so normal data is never clipped. p95 is nearest-rank over
+ *  the positive values (a handful of points cannot call one of them an outlier). The max sits
+ *  on its own interval, which the axis is given too: a max between echarts' ticks would print
+ *  as one more crowded label (the savings chart's old "81%" over "0%"). */
+export function robustMax(values: readonly (number | null | undefined)[]): RobustMax | null {
+  const sorted = values
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0)
+    .sort((a, b) => a - b)
+  if (sorted.length === 0) return null
+  const p95 = sorted[Math.max(0, Math.ceil(0.95 * sorted.length) - 1)]
+  if (!(sorted[sorted.length - 1] > 1.5 * p95)) return null
+  const target = p95 * 1.15
+  const interval = niceStep(target / 5)
+  return { max: Number((Math.ceil(target / interval - 1e-9) * interval).toPrecision(12)), interval }
+}
+
 /** Money value axis. `zero: false` (scale: true) is legal only on an UNWASHED line — a fill
  *  floating on a non-zero floor misrepresents (the price chart is the one case); `log` only
- *  on unwashed forms for the same reason (a log axis has no zero to anchor a wash on). */
-export function moneyAxis({ zero = true, log = false }: { zero?: boolean; log?: boolean } = {}) {
+ *  on unwashed forms for the same reason (a log axis has no zero to anchor a wash on).
+ *  `robust` (robustMax) caps the axis above an outlier; the builder marks what it clips. */
+export function moneyAxis({
+  zero = true,
+  log = false,
+  robust = null,
+}: { zero?: boolean; log?: boolean; robust?: RobustMax | null } = {}) {
   return {
     type: log ? ('log' as const) : ('value' as const),
     ...(zero || log ? {} : { scale: true }),
-    axisLabel: { formatter: compactMoney },
+    ...(robust === null ? {} : { max: robust.max, interval: robust.interval }),
+    axisLabel: { formatter: compactMoney, hideOverlap: true },
   }
 }
 
-/** Percent value axis with the savings-rate extents: the ceiling stays where rates stop
- *  being possible, the floor expands to the data in whole −100% steps (2026-08-31 A7). */
-export function pctAxis({ floor = -1, ceiling = 1 }: { floor?: number; ceiling?: number } = {}) {
+// Rate steps for a percent axis whose floor is fixed: each divides 1, so ticks counted from
+// −100% always land on 0% and on the top.
+const RATE_STEPS = [0.1, 0.2, 0.25, 0.5, 1]
+
+/** Percent value axis. With `values` (the savings rate, 2026-09-23 spec §C3): the floor is FIXED
+ *  at `floor` — a month below it is clipped and marked, never allowed to stretch the axis (Sep
+ *  2023's −1,073% used to set it to −1100%) — and the max is a nice step above the data (never
+ *  the data max itself, whose forced label collided with 0%), capped at `ceiling`, the step the
+ *  first that keeps the frame at six intervals or fewer. Without values: the function extents
+ *  the share charts use (the floor expands in whole −100% steps, 2026-08-31 A7). */
+export function pctAxis(options: {
+  floor?: number
+  ceiling?: number
+  values: readonly (number | null | undefined)[]
+}): {
+  type: 'value'
+  min: number
+  max: number
+  interval: number
+  axisLabel: { formatter: typeof percentLabel; hideOverlap: boolean }
+}
+export function pctAxis(options?: { floor?: number; ceiling?: number }): {
+  type: 'value'
+  min: (extent: { min: number }) => number
+  max: (extent: { max: number }) => number
+  axisLabel: { formatter: typeof percentLabel; hideOverlap: boolean }
+}
+export function pctAxis({
+  floor = -1,
+  ceiling = 1,
+  values,
+}: { floor?: number; ceiling?: number; values?: readonly (number | null | undefined)[] } = {}) {
+  const axisLabel = { formatter: percentLabel, hideOverlap: true }
+  if (values === undefined) {
+    return {
+      type: 'value' as const,
+      min: (extent: { min: number }) => Math.min(floor, Math.floor(extent.min)),
+      max: (extent: { max: number }) => Math.min(Math.max(extent.max, 0.1), ceiling),
+      axisLabel,
+    }
+  }
+  const finite = values.filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+  const top = Math.min(Math.max(0, ...finite), ceiling)
+  const topFor = (step: number) => Math.min(ceiling, Math.max(step, Math.ceil(top / step - 1e-9) * step))
+  const interval = RATE_STEPS.find((step) => (topFor(step) - floor) / step <= 6 + 1e-9) ?? 1
+  return { type: 'value' as const, min: floor, max: Number(topFor(interval).toPrecision(12)), interval, axisLabel }
+}
+
+/** Clipped values drawn AT the edge (spec §C3): a small triangle pointing off the plot, labelled
+ *  with the true value ("$25.9K ↑", "-1073% ↓") — the tooltip keeps the true value too, because
+ *  the series data is never altered. `lift` stacks the label of a second clipped series at the
+ *  same month so two labels never print over each other. Undefined when nothing is clipped. */
+export function offScaleMarkPoint(
+  marks: readonly { x: string; value: number; lift?: number }[],
+  {
+    edge,
+    direction,
+    color,
+    unit,
+  }: { edge: number; direction: 'up' | 'down'; color: string; unit: 'money' | 'percent' },
+) {
+  if (marks.length === 0) return undefined
+  const format = unit === 'money' ? compactMoney : percentLabel
+  const arrow = direction === 'up' ? '↑' : '↓'
   return {
-    type: 'value' as const,
-    min: (extent: { min: number }) => Math.min(floor, Math.floor(extent.min)),
-    max: (extent: { max: number }) => Math.min(Math.max(extent.max, 0.1), ceiling),
-    axisLabel: { formatter: percentLabel },
+    silent: true as const,
+    symbol: 'triangle' as const,
+    symbolSize: 8,
+    symbolRotate: direction === 'up' ? 0 : 180,
+    itemStyle: { color },
+    label: {
+      show: true as const,
+      color: MUTED,
+      fontSize: 11,
+      // Inside the plot: above the edge sits the legend, below the floor the month axis.
+      position: direction === 'up' ? ('bottom' as const) : ('top' as const),
+    },
+    data: marks.map((mark) => ({
+      coord: [mark.x, edge] as [string, number],
+      value: mark.value,
+      label: {
+        formatter: `${format(mark.value)} ${arrow}`,
+        ...(mark.lift ? { offset: [0, direction === 'up' ? mark.lift : -mark.lift] as [number, number] } : {}),
+      },
+    })),
   }
 }
 

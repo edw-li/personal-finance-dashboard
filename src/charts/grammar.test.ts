@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { INK, MUTED, SURFACE } from './theme'
 import {
   BAR_MARKS, GRID_VARIANTS, LINE, MONEY_GRID, STACK_WASH, WASH, capLabel, cents, compactMoney,
-  dateAxis, grid, isGridVariant, moneyAxis, monthAxis, pctAxis, percentLabel, roundTo, stagger,
+  dateAxis, grid, isGridVariant, moneyAxis, monthAxis, niceStep, offScaleMarkPoint, pctAxis,
+  percentLabel, robustMax, roundTo, stagger,
 } from './grammar'
 
 describe('grids', () => {
@@ -33,9 +34,11 @@ describe('grids', () => {
 
 describe('axes', () => {
   it('moneyAxis: zero-anchored by default, scale:true only when asked, log when asked', () => {
-    expect(moneyAxis()).toEqual({ type: 'value', axisLabel: { formatter: compactMoney } })
-    expect(moneyAxis({ zero: false })).toEqual({ type: 'value', scale: true, axisLabel: { formatter: compactMoney } })
-    expect(moneyAxis({ log: true })).toEqual({ type: 'log', axisLabel: { formatter: compactMoney } })
+    // hideOverlap on every value axis (2026-09-23 spec §C3): a label that would print over its
+    // neighbour is dropped rather than drawn as a smear.
+    expect(moneyAxis()).toEqual({ type: 'value', axisLabel: { formatter: compactMoney, hideOverlap: true } })
+    expect(moneyAxis({ zero: false })).toEqual({ type: 'value', scale: true, axisLabel: { formatter: compactMoney, hideOverlap: true } })
+    expect(moneyAxis({ log: true })).toEqual({ type: 'log', axisLabel: { formatter: compactMoney, hideOverlap: true } })
     // The formatter is the grammar's function BY IDENTITY — what conformance checks.
     expect(moneyAxis().axisLabel.formatter).toBe(compactMoney)
     expect(compactMoney(1500)).toBe('$1.5K')
@@ -95,5 +98,87 @@ describe('rounding and stagger', () => {
     expect(typeof s.animationDelay).toBe('function')
     expect(s.animationDelay()).toBe(36)
     expect(JSON.stringify({ a: 1, ...stagger(2) })).toBe('{"a":1}')
+  })
+})
+
+// 2026-09-23 spec §C3: one early month no longer sets the scale.
+describe('robust axes', () => {
+  it('niceStep is echarts’ own round-nice step: 1, 2, 3, 5 or 10 × 10^k', () => {
+    expect(niceStep(2027)).toBe(2000)
+    expect(niceStep(2800)).toBe(3000)
+    expect(niceStep(1400)).toBe(1000)
+    expect(niceStep(5200)).toBe(5000)
+    expect(niceStep(7500)).toBe(10000)
+    expect(niceStep(0.362)).toBe(0.3)
+    expect(niceStep(0)).toBe(1)
+  })
+
+  it('never clips normal data', () => {
+    const months = Array.from({ length: 36 }, (_, i) => 3000 + ((i * 677) % 6000))
+    expect(robustMax(months)).toBeNull()
+    // A handful of points cannot call one of them an outlier.
+    expect(robustMax([100, 100, 100, 5000])).toBeNull()
+    expect(robustMax([])).toBeNull()
+    expect(robustMax([null, undefined, -5, 0])).toBeNull()
+  })
+
+  it('clips the audit’s Aug-2023 net pay: nice(p95 × 1.15), on a step echarts would draw', () => {
+    // 37 ordinary months of $2–9.9K stacks and pay, plus the one $25,937.48 import artefact.
+    const ordinary = Array.from({ length: 74 }, (_, i) => 2000 + ((i * 1013) % 7900))
+    const robust = robustMax([...ordinary, 25937.48])
+    expect(robust).not.toBeNull()
+    const sorted = [...ordinary, 25937.48].sort((a, b) => a - b)
+    const p95 = sorted[Math.ceil(0.95 * sorted.length) - 1]
+    expect(robust!.max).toBeGreaterThanOrEqual(p95 * 1.15)
+    expect(robust!.max).toBeLessThan(25937.48)
+    // The max sits ON the interval grid, so echarts prints no odd extra top label.
+    expect(Number.isInteger(Math.round((robust!.max / robust!.interval) * 1e9) / 1e9)).toBe(true)
+    expect(robust).toEqual({ max: 12000, interval: 2000 })
+  })
+
+  it('moneyAxis carries a robust extent when one is handed over, and nothing otherwise', () => {
+    expect(moneyAxis({ robust: { max: 12000, interval: 2000 } })).toEqual({
+      type: 'value', max: 12000, interval: 2000, axisLabel: { formatter: compactMoney, hideOverlap: true },
+    })
+    expect(moneyAxis({ robust: null })).toEqual(moneyAxis())
+  })
+
+  it('pctAxis with values clamps the floor at −100% and puts the max one nice step above the data', () => {
+    // The audit's savings rates: −1,073% (Sep 2023) and an 81% best month.
+    const clamped = pctAxis({ values: [-10.73, 0.81, 0.35, null] })
+    expect(clamped).toEqual({ type: 'value', min: -1, max: 1, interval: 0.5, axisLabel: { formatter: percentLabel, hideOverlap: true } })
+    // A modest best month: a finer step, still landing on the floor's grid.
+    expect(pctAxis({ values: [0.35, -0.2] })).toMatchObject({ min: -1, max: 0.5, interval: 0.25 })
+    // Every month negative: one step above zero keeps the baseline on screen (−100%…+20% in
+    // six steps of 20).
+    expect(pctAxis({ values: [-0.5, -0.3] })).toMatchObject({ min: -1, max: 0.2, interval: 0.2 })
+    // Rates above the ceiling are clipped, never stretch it.
+    expect(pctAxis({ values: [1.3, 0.2] })).toMatchObject({ max: 1 })
+    // No data at all: the same plain −100%…+20% frame.
+    expect(pctAxis({ values: [] })).toMatchObject({ min: -1, max: 0.2, interval: 0.2 })
+  })
+
+  it('pctAxis without values keeps the function extents (the share charts) and gains hideOverlap', () => {
+    const axis = pctAxis({ floor: 0, ceiling: 1 }) as { min: (e: { min: number }) => number; axisLabel: unknown }
+    expect(axis.min({ min: 0.5 })).toBe(0)
+    expect(axis.axisLabel).toEqual({ formatter: percentLabel, hideOverlap: true })
+  })
+
+  it('offScaleMarkPoint pins clipped values to the edge with their true value and an arrow', () => {
+    const up = offScaleMarkPoint([{ x: 'Aug 2023', value: 25937.48 }], { edge: 12000, direction: 'up', color: '#e6e9ef', unit: 'money' })
+    expect(up).toEqual({
+      silent: true,
+      symbol: 'triangle',
+      symbolSize: 8,
+      symbolRotate: 0,
+      itemStyle: { color: '#e6e9ef' },
+      label: { show: true, color: '#8b93a3', fontSize: 11, position: 'bottom' },
+      data: [{ coord: ['Aug 2023', 12000], value: 25937.48, label: { formatter: '$25.9K ↑' } }],
+    })
+    const down = offScaleMarkPoint([{ x: 'Sep 2023', value: -10.7312, lift: 13 }], { edge: -1, direction: 'down', color: '#3987e5', unit: 'percent' })
+    expect(down?.symbolRotate).toBe(180)
+    expect(down?.label.position).toBe('top')
+    expect(down?.data).toEqual([{ coord: ['Sep 2023', -1], value: -10.7312, label: { formatter: '-1073% ↓', offset: [0, -13] } }])
+    expect(offScaleMarkPoint([], { edge: 1, direction: 'up', color: '#3987e5', unit: 'money' })).toBeUndefined()
   })
 })
