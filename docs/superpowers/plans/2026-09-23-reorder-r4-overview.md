@@ -132,6 +132,9 @@ The pieces R0 provides that this plan leans on:
 - The divider: `.overview-customize-divider` with the text `Hidden`, present only when the group
   hides something.
 - A hidden view: `.overview-customize-row.is-off`, with an unchecked box and no grip.
+  - Since the code-quality review round, the hidden rows sit inside a `div[role=group]` that the
+    divider names through `aria-labelledby`, so its accessible name is **Hidden**.
+  - Each box carries `data-view="<id>"`.
 
 ## Decisions this plan takes where the spec is silent (recorded for review)
 
@@ -1811,15 +1814,16 @@ git commit -m "docs(plan): lane R4 — results, gates and browser check"
     button).
   - Task 3: exactly one failure (the inert boxes, `expected false to be true`).
   - Task 4: the three CSS pins failed for the three predicted reasons.
-- Component tests (`OverviewCustomize.test.tsx`): **16 / 16** — the plan's 15, plus one pin (see
-  Corrections 1).
-- Page tests (`OverviewPage.test.tsx`): 81 / 81 — the 80 existing tests (two of them rewritten per
-  Task 2) plus the new "Escape while a tile is lifted…" test.
+- Component tests (`OverviewCustomize.test.tsx`): **17 / 17** — the plan's 15, one pin (see
+  Corrections 1) and the review round's Hidden-group test.
+- Page tests (`OverviewPage.test.tsx`): **82 / 82** — the 80 existing tests (two of them rewritten
+  per Task 2), the new "Escape while a tile is lifted…" test and the review round's adoption test.
 - Guide line (Task 5): applied (approved). `src/guide` + `GuidePage.test.tsx` +
   `paletteRegistry.guide.test.ts`: 8 files / 55 tests pass. The longest step is 148 characters.
 - Lane set (Task 6 step 1): 13 files / 221 tests pass.
-- Full vitest: **245 files / 3380 tests, exit 0.**
-  - Neither known load flake fired.
+- Full vitest, after the code-quality review round: **245 files / 3382 tests, exit 0.** The first
+  round's run was 245 / 3380, also exit 0.
+  - Neither known load flake fired, in either run.
   - The only stderr was jsdom "Not implemented" noise from two unrelated existing suites
     (`exportImage.test.ts` canvas, `LotAnatomyCard.test.tsx` navigation).
 - tsc / eslint . / build:
@@ -1876,6 +1880,55 @@ git commit -m "docs(plan): lane R4 — results, gates and browser check"
        blur cancels.
      - The path that can is a server pref adoption landing mid-lift (`subscribe('overview_layout', …)`
        in `OverviewPage.tsx`).
+- Code-quality review round (coordinator, 2026-09-23: approved with eight items, all folded in):
+  1. + 2. `7d029a84`: the comment above the lock now says the boxes are disabled and the hook would
+     drop the lift ("Cancelled — the list changed."), and `inert` became `locked` (it sets
+     `disabled`, not the HTML `inert` attribute).
+  3. Also `7d029a84`, the implementer's call: **`data-view`**.
+     - The boxes are never submitted, so `value` carried no meaning of its own; `data-view` says it
+       is a lookup key.
+     - Mutation-checked: the old `input[value=…]` selector against the new markup fails the caret
+       test (focus lands on `<body>`).
+  4. `b2c849c5` + `3f70bbcd` (wording):
+     - `--customize-pad` and `--customize-gap` join `--customize-grip`;
+     - the row's padding, its negative margin, its gap and the hidden-row inset all derive from them,
+       and a pin asserts the inset holds no literal length;
+     - the comment now says one row height is for the eye, and that `shiftsFor` copes with unequal
+       heights.
+     - The two updated pins failed first, then passed.
+  5. `ca16f5b5`: both page tests restore their `scrollBy` spy with `onTestFinished`.
+  6. `8a890490`: the lock test reads "…until the lift ends". The pointer test asserts that
+     Portfolio's box stays disabled through the 120 ms settle and is free again after the commit.
+  7. `b65cfe5e`: the hidden rows sit in `<div role="group" aria-labelledby={dividerId}>`, and the
+     divider takes its id from `useId`.
+     - Test first: "gathers the hidden views in a group the divider names…" failed ("Unable to find …
+       group … Hidden"), then passed.
+     - The divider stays readable text (Decision 9). A browse-mode reader therefore meets "Hidden" as
+       text and then as the group's name; tabbing announces the group name once.
+  8. `3c869a0c`: a page test drives `syncFromServer()`, the store's session sync, while Net worth is
+     lifted.
+     - `OverviewPage.test.tsx` now mocks `../api/prefs` the house way (the `useScope` and
+       `AppearanceCard` idiom), beside its other API mocks. That header hunk (around lines 85 and 128)
+       is outside the customize-test lines: a merge note.
+     - Result: the live region says "Cancelled — the list changed.", the grip is no longer pressed,
+       the popover stays open, the page shows the adopted tiles (Estimated tax · Net worth ·
+       Portfolio) and drops Money flow, and the stored layout is the adopted one.
+  - Gates after the round:
+    - component + page + guide + CSS set: 12 files / 160 tests;
+    - `tsc -b` exit 0;
+    - `eslint` on the four touched source files exit 0;
+    - one full `npx vitest run`: 245 files / 3382 tests, exit 0, with stderr only from the two
+      unrelated suites above;
+    - after the comment-only `3f70bbcd`, the three suites that read stylesheet text passed again
+      (23 / 23).
+  - Browser re-check (not requested; run because the DOM and the CSS changed):
+    **`R4 CUSTOMIZE CHECK OK — 116 checks, 20 screenshots`**.
+    - The driver gained one check per pass: the hidden boxes sit in a group Edge names "Hidden".
+    - Rows are still 28 px everywhere, and the boxes still stand at 805 px (1280) and 1125 px
+      (1600). The screenshots look as before.
+    - The only writes were `overview_layout` PATCHes, and the console was clean in all 8 contexts.
+    - The layout was reset to the defaults, and both servers were stopped (vite's child via
+      `taskkill` again).
 - Notes for the controller / lane V:
   - `src/pages/OverviewPage.tsx` is untouched.
   - The DOM this lane publishes is as listed under "DOM this lane publishes".
