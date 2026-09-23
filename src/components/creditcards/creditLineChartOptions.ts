@@ -20,8 +20,8 @@ import { addMonths } from '../../utils/months'
 
 export interface LimitHistoryCard {
   /** The card's id — its colour key, so a card keeps its hue wherever the user drags it
-   *  (2026-09-23 drag-to-reorder spec §7). Optional for a caller that draws one card's own
-   *  history (CardDetail) or a fixture: without ids, a card's slot is its array position. */
+   *  (2026-09-23 drag-to-reorder spec §7). Optional for a caller with no ids (the charts
+   *  fixture): without ids, a card's slot is its array position. */
   id?: number
   name: string
   events: { effective_date: string; limit_amount: string }[]
@@ -93,7 +93,7 @@ function totalLine(perCard: (number | null)[][], months: string[]): (number | nu
  *  amended); without it the cards drawn rank among themselves. A drawn id the source leaves out
  *  (an archived card's own drill-in) still ranks, among the rest. When any card comes without an
  *  id (a fixture), every card keeps its array position. */
-export function colourSlots(
+function colorSlots(
   cards: readonly LimitHistoryCard[],
   rankIds?: readonly number[],
 ): number[] {
@@ -107,7 +107,7 @@ export function colourSlots(
 }
 
 /** Per-card step lines + optional INK Total, in the list's order. A card's colour is its
- *  colourSlots rank, so it survives a reorder and a person scope; a 9th+ rank wears
+ *  colorSlots rank, so it survives a reorder and a person scope; a 9th+ rank wears
  *  OTHER_SERIES_COLOR (never cycle past 8 — theme law). */
 export function creditLineChartOption(
   cards: LimitHistoryCard[],
@@ -124,7 +124,7 @@ export function creditLineChartOption(
   },
 ): EChartsOption {
   const perCard = cards.map((card) => resolvedLimits(card, months))
-  const slots = colourSlots(cards, rankIds)
+  const slots = colorSlots(cards, rankIds)
   const series = [
     ...cards.map((card, i) => ({
       ...LINE,
