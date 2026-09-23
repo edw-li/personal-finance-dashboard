@@ -1344,6 +1344,32 @@ describe('useReorder — reduced motion (spec §2.5)', () => {
     expect(onCommit).toHaveBeenCalledTimes(1)
   })
 
+  it('works under StrictMode: ONE line per drag, placed, and gone at the drop — keyboard and pointer', () => {
+    reduceMotion()
+    const onCommit = vi.fn()
+    render(
+      <StrictMode>
+        <Stateful initial={flat('A', 'B', 'C', 'D')} onCommit={onCommit} />
+      </StrictMode>,
+    )
+    layoutRows()
+    fireEvent.keyDown(grip('Alpha'), { key: ' ' })
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    expect(linePlacement()).toEqual(['319px', '0px', '300px']) // exactly one, after C
+    fireEvent.keyDown(grip('Alpha'), { key: ' ' })
+    expect(onCommit).toHaveBeenLastCalledWith(['B', 'C', 'A', 'D'], 'A')
+    expect(lines()).toEqual([])
+    layoutRows() // B, C, A, D from 200
+    fireEvent.pointerDown(grip('Delta'), { pointerId: 1, button: 0, clientY: 340 })
+    fireEvent.pointerMove(grip('Delta'), { pointerId: 1, clientY: 255 }) // position 2: before C
+    expect(linePlacement()).toEqual(['239px', '0px', '300px'])
+    fireEvent.pointerUp(grip('Delta'), { pointerId: 1, clientY: 255 })
+    expect(onCommit).toHaveBeenCalledTimes(2)
+    expect(onCommit).toHaveBeenLastCalledWith(['B', 'D', 'C', 'A'], 'D')
+    expect(lines()).toEqual([])
+  })
+
   it('with motion allowed no line is ever created — the peers make room instead', () => {
     vi.useFakeTimers()
     const observer = new MutationObserver(() => {})

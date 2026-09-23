@@ -195,6 +195,25 @@ describe('stickyHeaderOf / headerBottom / stickyInset', () => {
     expect(stickyInset(null, [])).toBe(0)
   })
 
+  it('a two-row sticky header ends at its LOWER row', () => {
+    document.body.innerHTML =
+      '<div id="box" style="overflow-y: auto"><table><thead>' +
+      '<tr><th id="upper" style="position: sticky; top: 0">Group</th></tr>' +
+      '<tr><th id="lower" style="position: sticky; top: 30px">Name</th></tr>' +
+      '</thead><tbody><tr id="row"><td>x</td></tr></tbody></table></div>'
+    const box = document.getElementById('box') as HTMLElement
+    box.getBoundingClientRect = () => rect(120, 420)
+    const upper = document.getElementById('upper') as HTMLElement
+    const lower = document.getElementById('lower') as HTMLElement
+    upper.getBoundingClientRect = () => rect(120, 30)
+    lower.getBoundingClientRect = () => rect(150, 26)
+    const header = stickyHeaderOf(document.getElementById('row'), box)
+    expect(header).toEqual([upper, lower])
+    expect(headerBottom(header)).toBe(176)
+    expect(stickyInset(box, header)).toBe(56)
+    expect(visibleBounds(box, header)).toEqual({ top: 176, bottom: 540 })
+  })
+
   it("reads the row's OWN table header — not the first thead in its box", () => {
     document.body.innerHTML =
       '<div id="box" style="overflow-y: auto">' +
