@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ClosingEffect } from './closingEffect'
-import { closingSentence, perYear, tieWords, verdictReason } from './verdictCopy'
+import { optimize } from './rewardsMath'
+import { closingSentence, perYear, tieReason, tieWords, verdictNote, verdictReason } from './verdictCopy'
 
 const CARDS = new Map([
   [3, 'Robinhood Gold'],
@@ -62,6 +63,56 @@ describe('tieWords', () => {
 
   it('is null with nothing tied', () => {
     expect(tieWords([], cardName, categoryName)).toBeNull()
+  })
+
+  // Code review M8: a group naming no partner card (never produced by cardTies, but the type
+  // allows it) must not throw — there is simply nobody to name.
+  it('names nobody, rather than throwing, when a group has no partner cards', () => {
+    expect(tieWords([{ withCardIds: [], categoryIds: [40] }], cardName, categoryName)).toBeNull()
+    expect(
+      tieWords(
+        [
+          { withCardIds: [], categoryIds: [40] },
+          { withCardIds: [3], categoryIds: [41] },
+        ],
+        cardName,
+        categoryName,
+      ),
+    ).toBe('ties Robinhood Gold on Groceries')
+  })
+})
+
+// Code review I1: "name the tie only for a $0 marginal" and "a pin costs rewards" each live in
+// ONE place, read by the page, the drill-in, the footer and the chart tooltip.
+describe('tieReason / verdictNote', () => {
+  const savor = { id: 2, name: 'SavorOne', annualFee: 0, pointValueCents: 1, isActive: true, countedCredits: 0, ownerId: null }
+  const rh = { ...savor, id: 3, name: 'RH Gold' }
+  const result = optimize(
+    [savor, rh],
+    [{ id: 40, name: 'Dining', weight: 6000, pinnedCardId: null, isActive: true }],
+    [
+      { cardId: 2, categoryId: 40, multiplier: 3, monthlyCap: null },
+      { cardId: 3, categoryId: 40, multiplier: 3, monthlyCap: null },
+    ],
+  )
+  const names = (id: number) => (id === 2 ? 'SavorOne' : 'RH Gold')
+  const dining = () => 'Dining'
+
+  it('names the tie for a card whose marginal prints $0.00', () => {
+    const value = result.cardValues.find((v) => v.cardId === 2)!
+    expect(tieReason(value, result, names, dining)).toBe('ties RH Gold on Dining')
+  })
+
+  it('names no tie once the marginal is a real figure, even where the card is co-best', () => {
+    const value = { ...result.cardValues.find((v) => v.cardId === 2)!, marginal: 12.5 }
+    expect(tieReason(value, result, names, dining)).toBeNull()
+  })
+
+  it('verdictNote: a costly pin first, else the tie, else nothing', () => {
+    expect(verdictNote({ marginal: -4.8 }, null)).toBe('a pin costs $4.80/yr — unpin it')
+    expect(verdictNote({ marginal: -4.8 }, 'ties RH Gold on Dining')).toBe('a pin costs $4.80/yr — unpin it')
+    expect(verdictNote({ marginal: 0 }, 'ties RH Gold on Dining')).toBe('ties RH Gold on Dining')
+    expect(verdictNote({ marginal: 0 }, null)).toBeNull()
   })
 })
 

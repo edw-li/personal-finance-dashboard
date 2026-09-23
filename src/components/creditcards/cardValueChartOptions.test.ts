@@ -7,7 +7,7 @@ import { cardValueChartOption, cardValueCsv } from './cardValueChartOptions'
 const ROWS = [
   { name: 'BILT', marginal: 918, credits: 0, fee: 0, net: 918 },
   { name: '<b>VX</b>', marginal: 602, credits: 300, fee: 395, net: 507 },
-  { name: 'RH Gold', marginal: 0, credits: 0, fee: 0, net: 0, note: 'ties Savor on Dining' },
+  { name: 'RH Gold', marginal: 0, credits: 0, fee: 0, net: 0, ties: 'ties Savor on Dining' },
   { name: 'Costco', marginal: 35.87, credits: 0, fee: 130, net: -94.13 },
 ]
 
@@ -76,6 +76,16 @@ describe('cardValueChartOption', () => {
       '$0.00 marginal + $0.00 credits − $0.00 fee, per year · Free to keep — no extra rewards (ties Savor on Dining)',
     )
     expect(format.formatter({ dataIndex: 9 })).toBe('')
+  })
+
+  // Code review M7: a no-fee card whose pin costs rewards reads "free to keep" — its tooltip
+  // has to name the pin, the one thing about it worth fixing (verdictNote, shared with the footer).
+  it('the tooltip names a costly pin on a free card', () => {
+    const pinned = cardValueChartOption([{ name: 'Pinned', marginal: -4.8, credits: 0, fee: 0, net: -4.8 }])
+    const format = pinned.tooltip as { formatter: (p: unknown) => string }
+    expect(tooltipRows(format.formatter({ dataIndex: 0 })).sub).toBe(
+      '-$4.80 marginal + $0.00 credits − $0.00 fee, per year · Free to keep — no extra rewards (a pin costs $4.80/yr — unpin it)',
+    )
   })
 
   it('grammar: horizontal grid, compact money X axis, bar marks, the zero baseline', () => {

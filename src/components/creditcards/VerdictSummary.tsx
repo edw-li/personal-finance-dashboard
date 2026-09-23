@@ -1,6 +1,5 @@
-import { formatCurrency } from '../../utils/format'
 import { VERDICT_LABEL, type CardVerdictKind } from './rewardsMath'
-import { perYear } from './verdictCopy'
+import { perYear, verdictNote } from './verdictCopy'
 import './verdicts.css'
 
 /** One card's line in the Rewards footer. */
@@ -11,28 +10,34 @@ export interface VerdictEntry {
   net: number
   /** The card's marginal rewards — below zero only when a pin sends spend to it. */
   marginal: number
-  /** `tieWords` for a $0-marginal card that only ties another card's rate; else null. */
+  /** `tieReason`'s answer: the tie behind a $0 marginal, else null. */
   ties: string | null
 }
 
 // Worst first: the one group that asks for action leads.
 const ORDER: CardVerdictKind[] = ['costs', 'free', 'earns']
 
-// "Free to keep" says what keeping holds on to — the spec's available credit AND credit
-// history — and makes no "closing saves nothing" claim a pinned card would contradict.
-const TAIL: Record<CardVerdictKind, string> = {
-  costs: ' — the fee is more than the card adds.',
-  free: ' — keeping them open holds on to your available credit and your credit history.',
-  earns: '.',
+/** The group's closing words, agreeing with how many cards it names. "Free to keep" says what
+ *  keeping holds on to — the spec's available credit AND credit history — and makes no
+ *  "closing saves nothing" claim a pinned card would contradict. */
+function tail(kind: CardVerdictKind, count: number): string {
+  const one = count === 1
+  switch (kind) {
+    case 'costs':
+      return one ? ' — the fee is more than the card adds.' : ' — each fee is more than its card adds.'
+    case 'free':
+      return ` — keeping ${one ? 'it' : 'them'} open holds on to your available credit and your credit history.`
+    case 'earns':
+      return '.'
+  }
 }
-
-const HALF_CENT = 0.005
 
 /**
  * The Rewards view's verdict footer (2026-09-23 spec §B6), replacing "Droppable on these
- * numbers": three groups, each only when it has a card. A free card that ties another says so,
- * because a one-at-a-time marginal prices BOTH tied cards at $0 — dropping one is free, dropping
- * both is not. The tag's tone is backed by its words (never colour alone).
+ * numbers": three groups, each only when it has a card. Beside each name, `verdictNote`'s why —
+ * a pin that costs rewards, or the tie behind a $0 marginal (a one-at-a-time marginal prices
+ * BOTH tied cards at $0: dropping one is free, dropping both is not). The tag's tone is backed
+ * by its words (never colour alone).
  */
 export default function VerdictSummary({
   entries,
@@ -42,16 +47,9 @@ export default function VerdictSummary({
   unweightedCount: number
 }) {
   const describe = (entry: VerdictEntry) => {
-    if (entry.kind === 'free') {
-      // A no-fee card whose pin costs rewards: the fix is the pin, not the card.
-      if (entry.marginal <= -HALF_CENT)
-        return `${entry.name} (a pin costs ${formatCurrency(-entry.marginal)}/yr — unpin it)`
-      return entry.ties === null ? entry.name : `${entry.name} (${entry.ties})`
-    }
-    // A fee card that only ties another card names the partner too: of two fee cards that tie
-    // each other, closing ONE saves its fee — closing both loses the spend.
-    const ties = entry.kind === 'costs' && entry.ties !== null ? `; ${entry.ties}` : ''
-    return `${entry.name} (${perYear(entry.net)}${ties})`
+    const note = verdictNote(entry, entry.ties)
+    if (entry.kind === 'free') return note === null ? entry.name : `${entry.name} (${note})`
+    return `${entry.name} (${perYear(entry.net)}${note === null ? '' : `; ${note}`})`
   }
   return (
     <div className="card-verdicts">
@@ -63,7 +61,7 @@ export default function VerdictSummary({
             <li key={kind}>
               <span className={`verdict-tag verdict-tag-${kind}`}>{VERDICT_LABEL[kind]}</span>{' '}
               {group.map(describe).join(', ')}
-              {TAIL[kind]}
+              {tail(kind, group.length)}
             </li>
           )
         })}

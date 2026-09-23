@@ -279,8 +279,21 @@ export const VERDICT_TONE: Record<CardVerdictKind, Tone> = {
 }
 
 /** Half a cent: a figure that rounds to $0.00 on screen must not carry a verdict the screen
- *  cannot show (float dust from three independent sums lands on either side of zero). */
-const HALF_CENT = 0.005
+ *  cannot show (float dust from three independent sums lands on either side of zero). The ONE
+ *  copy — the verdict, its words, the footer and the chart all read it through the helpers
+ *  below, so they cannot disagree about a card on the edge. */
+export const HALF_CENT = 0.005
+
+/** Whether a dollar figure prints as $0.00. */
+export function roundsToZero(amount: number): boolean {
+  return Math.abs(amount) < HALF_CENT
+}
+
+/** What a pin costs the card in rewards a year — its marginal below $0.00, which only a pin
+ *  sending spend to a lower-rate card can cause — or null when nothing is lost. */
+export function pinCost(value: { marginal: number }): number | null {
+  return value.marginal < 0 && !roundsToZero(value.marginal) ? -value.marginal : null
+}
 
 /**
  * The three keep/close answers, from a card's own figures (net = marginal + counted credits
@@ -290,8 +303,9 @@ const HALF_CENT = 0.005
  * negative marginal there comes from a pin sending spend to it, and unpinning is the fix.
  */
 export function verdictKind(value: { annualFee: number; net: number }): CardVerdictKind {
-  if (value.net >= HALF_CENT) return 'earns'
-  if (value.annualFee >= HALF_CENT && value.net <= -HALF_CENT) return 'costs'
+  if (value.net > 0 && !roundsToZero(value.net)) return 'earns'
+  const charges = value.annualFee > 0 && !roundsToZero(value.annualFee)
+  if (charges && value.net < 0 && !roundsToZero(value.net)) return 'costs'
   return 'free'
 }
 

@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { RewardCategoryOut, SpendingMatrix } from '../../types/api'
 import {
+  HALF_CENT,
   VERDICT_LABEL,
   VERDICT_TONE,
   autoWeightSharers,
   cardTies,
   effectiveRate,
+  pinCost,
+  roundsToZero,
   enteredMonthCounts,
   householdAdvantage,
   optimize,
@@ -246,6 +249,32 @@ describe('verdictKind — three honest answers', () => {
       earns: 'Earns its keep',
     })
     expect(VERDICT_TONE).toEqual({ costs: 'negative', free: 'neutral', earns: 'positive' })
+  })
+})
+
+// Code review of spec §B6: ONE threshold and ONE pin rule for every verdict surface — six
+// copies of "half a cent" had already drifted apart (`<=` in one place, `<` in another).
+describe('the shared money edges', () => {
+  it('HALF_CENT is half a cent, and roundsToZero is "prints as $0.00" on both sides of zero', () => {
+    expect(HALF_CENT).toBe(0.005)
+    expect(roundsToZero(0)).toBe(true)
+    expect(roundsToZero(0.004)).toBe(true)
+    expect(roundsToZero(-0.004)).toBe(true)
+    expect(roundsToZero(0.005)).toBe(false)
+    expect(roundsToZero(-0.005)).toBe(false)
+  })
+
+  it('pinCost is what a pin costs a card in rewards — only a marginal that prints below $0.00', () => {
+    expect(pinCost({ marginal: -4.8 })).toBeCloseTo(4.8)
+    expect(pinCost({ marginal: -0.005 })).toBeCloseTo(0.005)
+    expect(pinCost({ marginal: -0.004 })).toBeNull()
+    expect(pinCost({ marginal: 0 })).toBeNull()
+    expect(pinCost({ marginal: 31.2 })).toBeNull()
+  })
+
+  it('verdictKind reads the same edges', () => {
+    expect(verdictKind({ annualFee: 0.004, net: -0.5 })).toBe('free') // a fee that prints $0.00
+    expect(verdictKind({ annualFee: 0.005, net: -0.005 })).toBe('costs')
   })
 })
 

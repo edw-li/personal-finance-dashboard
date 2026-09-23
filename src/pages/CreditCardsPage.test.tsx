@@ -171,6 +171,11 @@ function renderPage(entry = '/credit-cards') {
   )
 }
 
+/** The drill-in's verdict: a labelled region (the tile, the reason and the closing line). */
+const verdictRegion = () => screen.getByRole('region', { name: 'Verdict' })
+/** Its "what closing would change" sentence. */
+const closingLine = () => within(verdictRegion()).getByText(/^Closing it/)
+
 /** The Categories & weights row for one category name (not the matrix's own table). */
 function categoriesRow(name: string): HTMLElement {
   const row = Array.from(document.querySelectorAll('.categories-table tbody tr')).find((tr) =>
@@ -324,7 +329,7 @@ describe('CreditCardsPage', () => {
     cleanup()
     renderPage('/credit-cards?card=card-a')
     await screen.findByText('Worth keeping? (est.)')
-    expect(screen.getByTestId('card-verdict').textContent).toContain(
+    expect(verdictRegion().textContent).toContain(
       'its $95.00 fee buys no extra rewards — it ties Card B on Groceries',
     )
   })
@@ -385,7 +390,7 @@ describe('CreditCardsPage', () => {
     // VX marginal: Groceries falls back to Savor 3% → 265.20−234 = 31.20; Dining
     // unchanged. Net = 31.20 + 300 − 395 = −63.80 → it costs money.
     expect(screen.getByText(/\$31\.20 marginal/)).toBeTruthy()
-    const verdict = screen.getByTestId('card-verdict')
+    const verdict = verdictRegion()
     expect(verdict.textContent).toContain('Costs you money')
     expect(verdict.textContent).toContain(
       'its $395.00 fee is more than the $31.20 of rewards and $300.00 of credits it brings',
@@ -393,7 +398,7 @@ describe('CreditCardsPage', () => {
     expect(screen.queryByText(/droppable/)).toBeNull()
     // What closing would change: the whole lineup's line, VX's $30,000 out of $40,000. The
     // summary has no snapshot month, so no utilization is claimed.
-    const closing = screen.getByTestId('card-closing')
+    const closing = closingLine()
     expect(closing.textContent).toContain('total credit line $40,000.00 → $10,000.00')
     expect(closing.textContent).not.toContain('utilization')
   })
@@ -401,11 +406,11 @@ describe('CreditCardsPage', () => {
   it('a free card says it costs nothing, names the card it ties, and what closing gives up', async () => {
     renderPage('/credit-cards?card=savorone')
     await screen.findByText('Worth keeping? (est.)')
-    const verdict = screen.getByTestId('card-verdict')
+    const verdict = verdictRegion()
     expect(verdict.textContent).toContain('Free to keep — no extra rewards')
     expect(verdict.textContent).toContain('ties RH Gold on Dining')
     expect(verdict.textContent).toContain('no annual fee')
-    expect(screen.getByTestId('card-closing').textContent).toContain(
+    expect(closingLine().textContent).toContain(
       'total credit line $40,000.00 → $30,000.00',
     )
     // The tile's second line IS the verdict, in its tone: neutral, not the red of a card to drop.
@@ -435,7 +440,7 @@ describe('CreditCardsPage', () => {
     await screen.findByText('Worth keeping? (est.)')
     // $1,600 owed over $40,000 = 4.0%; the same $1,600 over the $10,000 left = 16.0%.
     await waitFor(() =>
-      expect(screen.getByTestId('card-closing').textContent).toContain(
+      expect(closingLine().textContent).toContain(
         'household utilization 4.0% → 16.0% with the same balances (as of Aug 2026)',
       ),
     )

@@ -28,7 +28,6 @@ import {
   limitMonths,
 } from '../components/creditcards/creditLineChartOptions'
 import {
-  cardTies,
   enteredMonthCounts,
   householdAdvantage,
   optimize,
@@ -40,7 +39,7 @@ import {
   toMathRates,
   verdictKind,
 } from '../components/creditcards/rewardsMath'
-import { tieWords } from '../components/creditcards/verdictCopy'
+import { tieReason } from '../components/creditcards/verdictCopy'
 import VerdictSummary from '../components/creditcards/VerdictSummary'
 import type {
   AccountOut,
@@ -214,9 +213,9 @@ export default function CreditCardsPage() {
   // them) — the Categories panel labels its column from the same function.
   const weights = useMemo(() => resolveWeights(categories ?? [], suggested), [categories, suggested])
   // How many matrix rows actually carry dollars. Zero is a SETUP state, not a verdict:
-  // every marginal is $0 by construction, so the $ tiles, the keep/drop bars and the
-  // "droppable" sentence would all be reporting the absence of weights as if it were the
-  // absence of value (production, 2026-09-03: six cards, five "droppable", no weights).
+  // every marginal is $0 by construction, so the $ tiles, the keep/drop bars and the verdict
+  // footer would all be reporting the absence of weights as if it were the absence of value
+  // (production, 2026-09-03: six cards, five called "droppable", no weights).
   const weightedCount = useMemo(
     () => activeCategories.filter((c) => (weights.get(c.id) ?? null) !== null).length,
     [activeCategories, weights],
@@ -289,25 +288,18 @@ export default function CreditCardsPage() {
       (categories ?? []).find((c) => c.id === id)?.name ?? `#${id}`
     return [...result.cardValues]
       .sort((a, b) => b.net - a.net)
-      .map((v) => {
-        // A $0 marginal that comes from a tie says so: the one-at-a-time test prices BOTH tied
-        // cards at $0, so "free to keep" has to name the card that catches the same spend.
-        const ties =
-          Math.abs(v.marginal) < 0.005
-            ? tieWords(cardTies(v.cardId, result), cardName, categoryName, 2)
-            : null
-        return {
-          cardId: v.cardId,
-          name: cardName(v.cardId),
-          marginal: v.marginal,
-          credits: v.countedCredits,
-          fee: v.annualFee,
-          net: v.net,
-          kind: verdictKind(v),
-          ties,
-          ...(ties === null ? {} : { note: ties }),
-        }
-      })
+      .map((v) => ({
+        cardId: v.cardId,
+        name: cardName(v.cardId),
+        marginal: v.marginal,
+        credits: v.countedCredits,
+        fee: v.annualFee,
+        net: v.net,
+        kind: verdictKind(v),
+        // The tie behind a $0 marginal (tieReason, the drill-in's rule too), shortened for a
+        // footer line and a tooltip.
+        ties: tieReason(v, result, cardName, categoryName, 2),
+      }))
   }, [result, cards, categories])
   const valueOption = useMemo(
     () => (valueRows.length ? cardValueChartOption(valueRows) : null),

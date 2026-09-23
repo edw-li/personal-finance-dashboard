@@ -24,14 +24,8 @@ import { formatCurrency, formatDate, formatMonth, formatPct } from '../../utils/
 import { currentMonthIso } from '../../utils/months'
 import { closingEffect, type BalanceSnapshot } from './closingEffect'
 import { creditLineChartOption, creditLineCsv, limitMonths } from './creditLineChartOptions'
-import {
-  VERDICT_LABEL,
-  VERDICT_TONE,
-  cardTies,
-  verdictKind,
-  type OptimizerResult,
-} from './rewardsMath'
-import { closingSentence, tieWords, verdictReason } from './verdictCopy'
+import { VERDICT_LABEL, VERDICT_TONE, verdictKind, type OptimizerResult } from './rewardsMath'
+import { closingSentence, tieReason, verdictReason } from './verdictCopy'
 import { FeedBanner } from '../shell/Feed'
 import './carddetail.css'
 import './verdicts.css'
@@ -278,14 +272,11 @@ export default function CardDetail({
       : null
 
   // The verdict (2026-09-23 spec §B6), its reason and — for a card someone might close — what
-  // closing would change. The tie is only the reason for a $0 marginal.
+  // closing would change. The tie is only the reason for a $0 marginal (tieReason's rule).
   const kind = value === undefined ? null : verdictKind(value)
   const cardName = (id: number) => lineup.find((c) => c.id === id)?.name ?? `#${id}`
   const categoryName = (id: number) => nameByCategory.get(id) ?? `#${id}`
-  const ties =
-    value !== undefined && Math.abs(value.marginal) < 0.005
-      ? tieWords(cardTies(card.id, result), cardName, categoryName)
-      : null
+  const ties = value === undefined ? null : tieReason(value, result, cardName, categoryName)
   const openedDates = lineup.flatMap((c) => (c.opened_on === null ? [] : [c.opened_on]))
   const oldest =
     card.opened_on !== null &&
@@ -329,7 +320,9 @@ export default function CardDetail({
             <InfoHint text="Marginal rewards (optimal lineup with this card minus without it) plus counted credits, minus the annual fee. Estimates from your category weights." />
           </h2>
           {value ? (
-            <div className="card-verdict" data-testid="card-verdict">
+            // A named region, so the verdict is a landmark to assistive tech (and to the tests,
+            // which find it by role and name — never by a test id).
+            <section className="card-verdict" aria-label="Verdict">
               {/* The tile's second line IS the verdict, in its tone — the old sign rule painted a
                   $0 no-fee card red and called it droppable. */}
               <StatTile
@@ -349,13 +342,13 @@ export default function CardDetail({
                 <>
                   <p className="card-verdict-reason">{verdictReason(value, ties)}</p>
                   {kind !== 'earns' && (
-                    <p className="drill-hint" data-testid="card-closing">
+                    <p className="drill-hint">
                       {closingSentence(kind, value, effect, { opened_on: card.opened_on, oldest })}
                     </p>
                   )}
                 </>
               )}
-            </div>
+            </section>
           ) : (
             <p className="empty-note">Archived cards sit outside the optimizer.</p>
           )}

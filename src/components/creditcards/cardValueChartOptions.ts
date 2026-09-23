@@ -15,7 +15,8 @@ import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, POSITIVE } from '../../charts/them
 import { itemTooltip } from '../../charts/tooltip'
 import type { ExportTable } from '../../utils/download'
 import { formatCurrency } from '../../utils/format'
-import { VERDICT_LABEL, verdictKind, type CardVerdictKind } from './rewardsMath'
+import { VERDICT_LABEL, roundsToZero, verdictKind, type CardVerdictKind } from './rewardsMath'
+import { verdictNote } from './verdictCopy'
 
 export interface CardValueDatum {
   name: string
@@ -23,8 +24,8 @@ export interface CardValueDatum {
   credits: number
   fee: number
   net: number
-  /** Why the verdict reads as it does, for the tooltip — e.g. "ties Robinhood Gold on Dining". */
-  note?: string
+  /** `tieReason`'s answer — the tie behind a $0 marginal — for the tooltip's why. */
+  ties?: string | null
 }
 
 const VERDICT_COLOR: Record<CardVerdictKind, string> = {
@@ -38,8 +39,8 @@ const STUB_PX = 3
 
 const kindOf = (row: CardValueDatum) => verdictKind({ annualFee: row.fee, net: row.net })
 
-// The same half-cent rule the verdict uses: a row that prints "$0.00" is a $0 row.
-const isZero = (row: CardValueDatum) => Math.abs(row.net) < 0.005
+// The verdict's own rule: a row that prints "$0.00" is a $0 row.
+const isZero = (row: CardValueDatum) => roundsToZero(row.net)
 
 /** Horizontal net-value bars, one per card, coloured by verdict. Callers pass rows sorted
  *  net-descending; height = max(140, rows×34 + 70). */
@@ -51,13 +52,15 @@ export function cardValueChartOption(rows: CardValueDatum[]): EChartsOption {
       body: (p) => {
         const row = rows[p.dataIndex ?? -1]
         if (row === undefined) return null
+        // The footer's own why (verdictNote): a costly pin, else the tie behind a $0 marginal.
+        const note = verdictNote(row, row.ties ?? null)
         return {
           value: row.net,
           label: row.name,
           sub:
             `${formatCurrency(row.marginal)} marginal + ${formatCurrency(row.credits)} credits` +
             ` − ${formatCurrency(row.fee)} fee, per year · ${VERDICT_LABEL[kindOf(row)]}` +
-            (row.note === undefined ? '' : ` (${row.note})`),
+            (note === null ? '' : ` (${note})`),
         }
       },
     }),
