@@ -3,8 +3,10 @@
 Reads only. `GET /overview/money-flow` (2026-08-25 spec §5) loads one year's tax inputs +
 brackets exactly the way the taxes router does — its `_engine_feed`, IMPORTED, one loader
 per concept (app_settings.py's cross-router-borrow precedent) —
-sums the calendar year's spending/cashflow, and hands everything to the pure
-services.money_flow.compose_money_flow. GETs never reject stored data: an unknown or
+loads the calendar year's spending cells and take-home rows month by month, splits them
+into the MATCHED window (2026-09-23 spec §C1: the spending fan and Saved cover only the
+months with both feeds, so Saved is the YTD card's cash saved), and hands everything to the
+pure services.money_flow.compose_money_flow. GETs never reject stored data: an unknown or
 empty year answers 200 with renderable=False and a reason sentence, never a 404.
 """
 
@@ -22,13 +24,21 @@ from app.database import get_db
 from app.models import MonthlyCashflow, MonthlySpending, Person, SpendingCategory, TaxInput
 from app.schemas.overview import (
     MoneyFlowCategoryOut,
+    MoneyFlowCategoryTotalOut,
     MoneyFlowOut,
     MoneyFlowPersonSalaryOut,
     MoneyFlowSourcesOut,
     MoneyFlowTaxesOut,
 )
 from app.services import clock
-from app.services.money_flow import SALARY_KEYS, MoneyFlow, compose_money_flow
+from app.services.money_flow import (
+    SALARY_KEYS,
+    FlowMonth,
+    FlowSpendingRow,
+    MoneyFlow,
+    compose_money_flow,
+    matched_window,
+)
 from app.services.people import load_people
 
 router = APIRouter(prefix="/overview", tags=["overview"], dependencies=[Depends(get_current_user)])
@@ -117,6 +127,24 @@ def _money_flow_out(flow: MoneyFlow) -> MoneyFlowOut:
         other_spend=None if flow.other_spend is None else _money(flow.other_spend),
         total_spend=_money(flow.total_spend),
         saved=_money(flow.saved),
+        take_home_matched=_money(flow.take_home_matched),
+        refunds=_money(flow.refunds),
+        matched_months=flow.matched_months,
+        take_home_pending_months=flow.take_home_pending_months,
+        take_home_unmatched=_money(flow.take_home_unmatched),
+        take_home_unmatched_months=flow.take_home_unmatched_months,
+        spending_unmatched_months=flow.spending_unmatched_months,
+        spending_unmatched_total=_money(flow.spending_unmatched_total),
+        category_totals=[
+            MoneyFlowCategoryTotalOut(
+                category_id=entry.category_id,
+                name=entry.name,
+                kind=entry.kind,
+                amount=_money(entry.amount),
+            )
+            for entry in flow.category_totals
+        ],
+        tracking_start=flow.tracking_start,
     )
 
 
@@ -136,33 +164,53 @@ async def money_flow(year: YearQuery = None, db: AsyncSession = Depends(get_db))
     # Calendar-year window as [Jan 1, next Jan 1): months are first-of-month dates, so
     # the half-open bound can never leak a neighbouring December in.
     start, end = date(year, 1, 1), date(year + 1, 1, 1)
-    category_rows = (
+    # Month by month, cell by cell (2026-09-23 spec §C1): which months carry BOTH feeds is
+    # the whole question the right-hand side answers, so the year's sums are no longer enough.
+    spend_rows = (
         await db.execute(
-            select(SpendingCategory.name, func.sum(MonthlySpending.amount))
+            select(
+                MonthlySpending.month,
+                MonthlySpending.category_id,
+                SpendingCategory.name,
+                SpendingCategory.kind,
+                MonthlySpending.amount,
+            )
             .join(SpendingCategory, SpendingCategory.id == MonthlySpending.category_id)
             .where(MonthlySpending.month >= start, MonthlySpending.month < end)
-            .group_by(SpendingCategory.name)
         )
     ).all()
-    category_sums = {name: Decimal(total) for name, total in category_rows}
-    spending_months = (
-        await db.execute(
-            select(func.count(func.distinct(MonthlySpending.month))).where(
-                MonthlySpending.month >= start, MonthlySpending.month < end
-            )
-        )
-    ).scalar_one()
     # monthly_cashflow.month is the PK, so one row per month: len() IS the coverage.
-    pay_rows = list(
-        (
+    pay_by_month: dict[date, Decimal] = {
+        month: net_pay
+        for month, net_pay in (
             await db.execute(
-                select(MonthlyCashflow.net_pay).where(
+                select(MonthlyCashflow.month, MonthlyCashflow.net_pay).where(
                     MonthlyCashflow.month >= start, MonthlyCashflow.month < end
                 )
             )
-        ).scalars()
+        ).all()
+    }
+    # Where the take-home feed begins in the WHOLE book: an estimated month before it
+    # predates tracking, and the card says so instead of calling it "not entered".
+    tracking_start = (await db.execute(select(func.min(MonthlyCashflow.month)))).scalar_one()
+    cells: dict[date, list[FlowSpendingRow]] = {}
+    for month, category_id, name, kind, amount in spend_rows:
+        cells.setdefault(month, []).append(
+            FlowSpendingRow(category_id=category_id, name=name, kind=kind, amount=Decimal(amount))
+        )
+    window = matched_window(
+        year,
+        [
+            FlowMonth(
+                month=month,
+                net_pay=pay_by_month.get(month),
+                spending=tuple(cells[month]) if month in cells else None,
+            )
+            for month in sorted(set(cells) | set(pay_by_month))
+        ],
+        tracking_start,
     )
-    net_pay_sum = sum(pay_rows, Decimal("0.00"))
+    net_pay_sum = sum(pay_by_month.values(), Decimal("0.00"))
     # "Years having any tax inputs" (spec §5) — the same membership rule the taxes trend
     # feed applies (a bare tax_years row or a brackets-only year is not a data year).
     available_years = sorted((await db.execute(select(TaxInput.year).distinct())).scalars().all())
@@ -171,14 +219,17 @@ async def money_flow(year: YearQuery = None, db: AsyncSession = Depends(get_db))
         year=year,
         inputs=feed.inputs,
         brackets=feed.tables,
-        category_sums=category_sums,
+        # The window's own totals by name — consistent with `window`, which is what the
+        # service reads for the right-hand side whenever one is handed over.
+        category_sums={entry.name: entry.amount for entry in window.category_totals},
         net_pay_sum=net_pay_sum,
-        net_pay_months=len(pay_rows),
-        spending_months=spending_months,
+        net_pay_months=len(pay_by_month),
+        spending_months=len(cells),
         available_years=available_years,
         filing_status=feed.filing_status,
         earners=feed.earners,
         brackets_missing_for_status=feed.brackets_missing_for_status,
         salary_by_person=_salary_by_person(feed, people),
+        window=window,
     )
     return _money_flow_out(flow)
