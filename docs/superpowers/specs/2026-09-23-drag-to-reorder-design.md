@@ -199,12 +199,20 @@ reorder.liftedId         // K | null
    - It is marked `data-reorder="lifted"`: raised surface and shadow, `position: relative; z-index: 2`.
    - `html.reorder-active` sets `cursor: grabbing` and `user-select: none` for the drag's duration.
    - Row buttons are disabled mid-drag.
-4. **The target slot.** The target is the number of *other* peers whose original midpoint lies above the
-   lifted unit's current centre. Peers between the start and the target shift by the lifted unit's
+4. **The target slot.** The target is the number of *other* peers the lifted unit has passed, judged by
+   its **leading edge** against each peer's original midpoint:
+   - a peer below counts once the unit's bottom edge reaches its midpoint;
+   - a peer above stops counting once the unit's top edge rises strictly above its midpoint.
+
+   So a unit clamped at either end of its range lands at that end, and a tall unit (a parent carrying
+   components) can pass a short peer. (Amended 2026-09-23 after lane R2's real-browser check; the
+   earlier centre-vs-midpoint rule could never move a 172 px unit past a 43 px last peer.) Peers between the start and the target shift by the lifted unit's
    height (`data-reorder="shifting"`, `transition: transform var(--t-fast) var(--ease-out)`).
 5. **Auto-scroll.** Within 40 px of the container's visible top or bottom edge (or the viewport's, for
-   the page), the container scrolls at `18 × (1 − d/40)²` px per frame. It stops at the ends and when
-   the pointer leaves the zone.
+   the page), the container scrolls at `18 × (1 − d/40)²` px per frame. It stops at the ends, when the
+   pointer leaves the zone, and once the unit's range end is already inside the band the reader can
+   see (the scroller's box clipped to the window), less the edge margin. So a held row never scrolls
+   out of view past its own group. (Amended 2026-09-23 after lanes R2/R0 review.)
 6. **Drop.**
    - On `pointerup` the unit eases from under the pointer into its gap over `--t-fast`. Only then
      does `onCommit` fire, inside `flushSync`, so the DOM reorder lands on rows that already stand
@@ -509,8 +517,10 @@ their own.
 
 - **The form** loses the Sort order box. Create sends no `sort_order`.
 - **The table is grouped.**
-  - It shows one heading row per non-empty group, in `GROUP_ORDER`, labelled with `GROUP_LABELS`:
-    `<tr class="accounts-group-row"><th scope="colgroup" colspan=…>`.
+  - It shows one `<tbody>` per non-empty group, in `GROUP_ORDER`, each opening with a heading row
+    labelled with `GROUP_LABELS`: `<tr class="accounts-group-row"><th scope="rowgroup" colspan=…>`.
+    (Corrected 2026-09-23 at lane R2's review: `scope="colgroup"` without a `<colgroup>` is invalid,
+    and screen readers read it as a header over every column.)
   - Inside a group, rows are in API order, with components nested under their parent by `nestComponents`
     **applied per group** (a component whose parent sits in another group stays top-level in its own
     group).
@@ -710,8 +720,14 @@ normalizes every stored value, so the batch can hold more rows than moved.
   - An empty list shows no grips.
 - **Retired and inactive rows** keep their positions and are draggable. The PUT always sends every row
   the endpoint requires.
-- **Two tabs:** a list changed elsewhere gets a 409 → toast → reload. Nothing is half-applied, because
-  each save is one transaction.
+- **Two tabs:** a list whose rows were **added or removed** elsewhere gets a 409 → toast → reload.
+  A **pure reorder** made in another tab is not detected: the saves are serialized per list, and
+  the later one wins whole (single-user app; no version token). Nothing is half-applied, because
+  each save is one transaction. (Clarified 2026-09-23 after lane R3's browser check.)
+- **An Undo must never leave a stale optimistic layer.** A reload that returns rows identical to
+  the screen may not re-render (the snapshot cache skips equal data). So an Undo's own server
+  answer becomes the displayed order, and a layer is tagged with what it belongs to (e.g. the
+  owner scope). Otherwise the next drag could save an order the reader no longer sees.
 - **A second drop before the first save returns** can't happen: grips are disabled while the list's save
   is in flight. The optimistic rows carry the new order, so the next drag diffs against it (the
   `CategoriesPanel` lesson, `:213-216`).
