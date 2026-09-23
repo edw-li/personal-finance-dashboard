@@ -134,6 +134,34 @@ describe('useSpendingEvidence — one request per view', () => {
     expect(getSnapshot(`spending:evidence:${SERVER_DEFAULT}`)).toBeUndefined()
   })
 
+  it('an unmount while waiting on the default request never asks for the month itself', async () => {
+    const { rerender, unmount } = render()
+    rerender({ month: '2026-07-01', revision: MATRIX_A }) // parked on the default request
+    unmount()
+    await answer(0) // August: a live view would now ask for July
+    await act(async () => { await new Promise((settled) => setTimeout(settled, 0)) })
+    expect(urls()).toEqual([DEFAULT_URL])
+  })
+
+  it('an unmount while waiting never retries a failed default request either', async () => {
+    const { rerender, unmount } = render()
+    rerender({ month: SERVER_DEFAULT, revision: MATRIX_A })
+    unmount()
+    await answer(0, { body: { detail: 'boom' }, status: 500 })
+    await act(async () => { await new Promise((settled) => setTimeout(settled, 0)) })
+    expect(urls()).toEqual([DEFAULT_URL])
+  })
+
+  it('a re-key while waiting asks only for the month now wanted', async () => {
+    const { rerender } = render()
+    rerender({ month: '2026-07-01', revision: MATRIX_A })
+    rerender({ month: '2026-06-01', revision: MATRIX_A }) // July abandoned before the answer
+    await answer(0) // August: neither month matches
+    await waitFor(() => expect(urls()).toContain(monthUrl('2026-06-01')))
+    await act(async () => { await new Promise((settled) => setTimeout(settled, 0)) })
+    expect(urls()).toEqual([DEFAULT_URL, monthUrl('2026-06-01')])
+  })
+
   it('StrictMode’s double effect still makes one request', () => {
     const wrapper = ({ children }: { children: ReactNode }) => createElement(StrictMode, null, children)
     renderHook(() => useSpendingEvidence(undefined, undefined), { wrapper })

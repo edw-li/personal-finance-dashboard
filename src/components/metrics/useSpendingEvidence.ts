@@ -50,9 +50,11 @@ export default function useSpendingEvidence(month?: string, revision?: unknown) 
       }
     } else if (reusable) {
       const explicit = () => fetchSpendingEvidence(wanted)
+      // A view that unmounted or moved to another month while waiting asks for nothing: its
+      // answer would be dropped anyway (review of spec §P3).
       answer = shared.promise.then(
-        (data) => (data.month !== null && evidenceMonth(data.month) === wanted ? data : explicit()),
-        explicit, // a failed default request falls back to the month's own request
+        (data) => (cancelled || (data.month !== null && evidenceMonth(data.month) === wanted) ? data : explicit()),
+        (err: unknown) => (cancelled ? Promise.reject(err) : explicit()), // a failed default falls back
       )
     } else {
       answer = fetchSpendingEvidence(wanted)
