@@ -9,13 +9,16 @@
 // exactly one card, the chip names it and writes the hash, a rail row swaps the detail, the rail
 // lists every task with no fold and scrolls, and a deep link selects a numbered rail row; the
 // palette answers "add a card" with a Guide group; screenshots of each chapter at 1440×900 and
-// 1920×1080 plus the master–detail, checklist and glossary shots.
+// 1920×1080 plus the master–detail, checklist and glossary shots. Since 2026-09-23 (the drag-to-
+// reorder batch's lane V) the walk must also click one rail row per task and drive every card, both
+// counted from src/guide/content/*.tsx rather than typed here, so a new task moves both sides.
 // Env: SMOKE_OUT, TOKEN_FILE, APP_BASE, EDGE_PATH, PLAYWRIGHT_CORE, ONLY_THEME, MAX_LINKS.
 Object.defineProperty(process, 'version', { value: 'v20.19.0' })
 Object.defineProperty(process.versions, 'node', { value: '20.19.0' })
 import { createRequire } from 'node:module'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 const { chromium } = require(
   process.env.PLAYWRIGHT_CORE ??
@@ -39,6 +42,18 @@ const PANEL = '.guide-page .local-section-panel:not([hidden])'
 // being `<a href>`s — they are added below from each chip's aria-controls, because the reader can
 // still reach them and a deep link to a card must still land. Everything else only grew.
 const MIN_LINKS = 74
+// What the guide holds, counted from its source rather than typed here (2026-09-23, drag-to-reorder
+// lane V): every task carries exactly one `where:` and every card exactly one `purpose:`
+// (src/guide/types.ts), so the walk must click one rail row per `where:` and drive one card per
+// `purpose:`. 195 tasks in 28 cards on 2026-09-15; 196 once lane R5's `cards-reorder` landed. A
+// harvest that silently stops walking can no longer pass as a smaller number.
+const CONTENT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../src/guide/content')
+const contentCount = (pattern) =>
+  readdirSync(CONTENT_DIR)
+    .filter((name) => name.endsWith('.tsx'))
+    .reduce((sum, name) => sum + (readFileSync(path.join(CONTENT_DIR, name), 'utf8').match(pattern) ?? []).length, 0)
+const CONTENT_TASKS = contentCount(/^\s*where:/gm)
+const CONTENT_CARDS = contentCount(/^\s*purpose:/gm)
 const report = { generatedAt: new Date().toISOString(), base: BASE, themes: THEMES, checks: [], destinations: {}, links: [], consoleErrors: [], writesBlocked: [], problems: [] }
 const problem = (m) => report.problems.push(m)
 const check = (theme, name, ok, observed) => { report.checks.push({ theme, name, ok, observed }); if (!ok) problem(`${theme}: ${name} — ${JSON.stringify(observed)}`) }
@@ -144,6 +159,8 @@ try {
       }
     }
     check(theme, `the guide renders at least ${MIN_LINKS} distinct destinations`, links.size >= MIN_LINKS, { destinations: links.size, ...seen })
+    check(theme, 'the walk clicks one rail row per task in the guide content', seen.rows === CONTENT_TASKS, { rows: seen.rows, tasks: CONTENT_TASKS })
+    check(theme, 'the walk drives every card in the guide content', seen.cards === CONTENT_CARDS, { cards: seen.cards, contentCards: CONTENT_CARDS })
     report.destinations = { ...(report.destinations ?? {}), [theme]: { ...seen, hrefs: Array.from(links).sort() } }
 
     // 3. Walk every link once.
