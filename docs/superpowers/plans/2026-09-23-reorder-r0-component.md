@@ -2393,10 +2393,124 @@ git commit -m "docs(plan): lane R0 — results and gates"
 
 ## Results (filled in by the implementer)
 
-- Lane tests: …
-- Full vitest: … files / … tests
-- tsc / eslint / build: …
-- Notes for R2–R5 (anything the contract section should say that it does not): …
+- Lane tests: `npx vitest run src/components/reorder` — 5 files / 87 tests pass (reorderMath 23,
+  reorderDom 15, reorderStatus 3, useReorder 33, reorderCss 13).
+- Full vitest, after the code-quality round: 238 files / 3213 tests, exit 0. The last commit after it
+  (the harness fix in code-quality item 13) touched only `useReorder.test.tsx`, which the lane gate
+  re-ran green. The first full run, before correction 6, was 238 / 3183 green.
+- tsc / eslint / build:
+  - `tsc -b` exit 0; also a full check against a fresh buildinfo (tsc -b's cache lives in the shared
+    node_modules junction), exit 0.
+  - `eslint .` exit 0 — 0 errors, 26 pre-existing `react-refresh/only-export-components` warnings in
+    17 files outside the lane, none in `src/components/reorder` or `src/testing/pointer.ts`.
+  - `npm run build` exit 0.
+- Scope: `git diff --stat feat/reorder-base...HEAD` — `src/components/reorder/**` (12 files),
+  `src/testing/pointer.ts` and this section only.
+- Corrections to this plan:
+  1. **RTL cleanup.** vitest runs without globals (vite.config.ts `test:`), so Testing Library never
+     registers its afterEach cleanup. As written, every test after a file's first found the previous
+     test's grips ("Found multiple elements"). `reorderStatus.test.tsx` gains `afterEach(cleanup)`;
+     `useReorder.test.tsx` calls `cleanup()` first in its afterEach, so a list unmounts (clearing its
+     drag's timers) under the clock that armed them.
+  2. **The Escape test's `popover` spy** was a bare document capture listener, which the lift's Enter
+     and the ArrowUp rightly reach (called 2 times). It now acts on Escape only, like
+     usePopoverDismiss. The test also pins spec §2.3's `preventDefault()` (fireEvent returns false).
+  3. **`reduceMotion`** moved from the Task 5 commit to Task 6, where its first caller lands
+     (noUnusedLocals failed tsc at Task 5). The final file is as planned.
+  4. **Added a pointer test:** a window blur, a resize and a lost pointer capture each abandon a live
+     drag. Spec §2.6 names window blur and the plan had no test for it. Mutation-checked: removing
+     each listener fails it.
+  5. **`visibleBounds` clips an element scroller's band to the viewport** (+1 reorderDom test). Spec
+     §2.3.5 says the container's *visible* edge, and the function's own doc says "the band the reader
+     can currently see". Unclipped, a 420 px Settings scroller hanging past the window bottom had an
+     auto-scroll zone the pointer could not reach.
+  6. **Escape during a pending press** (§2.3.7 "pending or live"; lane review follow-up).
+     - A pointer press now attaches its window listeners at pointerdown. `lift()` attaches them only
+       when none are attached, so the keyboard path still attaches once.
+     - An Escape in the first 4 px therefore abandons the press, so a later move lifts nothing. It is
+       also `preventDefault`ed and `stopPropagation`ed, so a popover around the list stays open.
+     - A plain click now calls `stopDrag` too. Otherwise every click on a grip would leak its window
+       listeners (mutation-checked).
+- Kept as planned: a pointer drop eases the unit into its gap, then commits after `MOTION_MS.fast`.
+  Spec §2.3 has since been amended to match (feat/reorder-base 4fe2c74).
+- Review round 1 (one commit each):
+  1. **CSS outranks panels.css.**
+     - `table.reorder-table` (0,1,1) beats the tables' own `border-collapse: collapse`.
+     - `.reorder-table .reorder-grip-cell` beats the house cell padding.
+     - Every table row state is scoped to `.reorder-table`. That includes the saved flash, for
+       consistency, although nothing in panels.css contests `animation`.
+     - The pinned `td.row-actions` / `td.col-identity` keep their edge hairline under lifted and both
+       drop lines.
+     - The css test's `declarationsFor` now finds a selector anywhere in a selector list, and finds
+       two adjacent blocks for one selector. settingsCss.test.ts's original consumes each block's
+       closing brace, so it misses the second of two adjacent blocks.
+  2. **A data change, or `disabled` turning true, under a lifted unit says "Cancelled — the list
+     changed."** (`announce.cancelChanged`). This includes a pointer drop still settling into its gap.
+     The DOM resets at once. Once nothing is lifted (a settle-back under way) the standing sentence
+     stays.
+  3. **Tighter pins.** The saved flash is still present at `MOTION_MS.flash − 1` and gone at
+     `MOTION_MS.flash`. Every settle-back path holds the inline settle transition and `data-reorder`
+     until `MOTION_MS.fast`, then both clear. Mutation-checked: dropping the transition, clearing at
+     once, or ending the flash 1 ms early each fails.
+  4. **Keyboard keep-in-view keeps the landing slot on screen** when an element scroller hangs past
+     the window. It uses a pure `viewportDelta` plus `keepOnScreen`, and has a hook wiring test.
+     - The landing slot's client position is *computed* from the lift's list coordinates (the inverse
+       of `listY`), not measured with `getBoundingClientRect`.
+     - The keyboard-lifted unit animates its transform over `--t-fast`, so a rect read right after
+       the move reports where it came from. That would leave the page one step behind, and after
+       Home/End it would not scroll at all.
+- Code-quality review round (one commit per item; 3 and 5 share one):
+  1. `scrollParentOf` needs more than 1 px of overhang. An `overflow-x`-only box computes
+     `overflow-y: auto`, and a rounding pixel must not steal the page's auto-scroll.
+  2. A pinned cell's saved flash runs `reorder-saved-pinned`: mixed over, and ending on, its own
+     `--surface`. Nothing scrolled beneath it shows through.
+  3. The lifted box's shadow is `rgb(var(--shadow))`, the theme token.
+  4. Pinned two browser behaviours:
+     - fake-rAF auto-scroll, with the unit riding a page scroll, clamped;
+     - pointerup's implicit `lostpointercapture` in the drop, unmoved-drop and reduced-motion tests.
+  5. The hover rule skips a pressed grip, so its accent shows mid-drag.
+  6. The settle holds at `MOTION_MS.fast − 1` and ends at `MOTION_MS.fast`, both for easing home and
+     for the pointer drop (no `onCommit` before).
+  7. The unmount teardown is a layout effect. A sibling's layout effect in the unmounting commit
+     already sees `html.reorder-active` gone.
+  8. `commit` clears the rows in a `finally`. A throwing `onCommit` leaves nothing stranded, and its
+     error propagates.
+  9. Focus goes back to the moved grip whenever it held focus, pointer drops included, and is never
+     taken from elsewhere.
+  10. A held Space/Enter (`event.repeat`) neither lifts nor drops. It is swallowed whole
+      (`preventDefault`, then return), so the `<button>` never clicks: no click per repeated Enter,
+      none on Space's keyup. The test pins both repeats as `defaultPrevented`.
+  11. Test hygiene: `onTestFinished` removes the popover listeners, `vi.restoreAllMocks()` runs, and
+      only `reorder-active` is cleared.
+  12. `stopDrag` is now `releaseDrag`, and the header has a phase/transition table.
+  13. Development-only `contractProblems`: a split range, or carried rows that don't follow their
+      carrier in order, go to `console.error` once per change of the rows (a ref guard makes that
+      hold under StrictMode too). Its first catch was this lane's own harness: after a component
+      move, `Stateful` kept the carrier's stale `carries`, so the parent's next drag would have put
+      the components back. The harness now re-derives `carries`, and the carried-rows test pins the
+      parent move.
+  14. A StrictMode smoke test: lift, move, drop, exactly one `onCommit`.
+- Notes for R2–R5 (what the contract section does not say):
+  - **Pointer tests** need three things: `installPointerEvents()` in `beforeAll`, `afterEach(cleanup)`,
+    and mocked row boxes (the `layoutRows` helper in `useReorder.test.tsx`). Without layout every
+    midpoint is 0, so any 4 px move lands the unit last. Keyboard drags need no layout.
+  - **Pointer drops commit late.** `onCommit` arrives `MOTION_MS.fast` (120 ms) after pointerup, so
+    advance fake timers before asserting it. Keyboard and reduced-motion drops commit synchronously.
+    `active` stays true through that settle.
+  - **Each range must be one contiguous block** in display order. Headers between ranges are fine; a
+    foreign row between two peers of one range makes the preview disagree with the commit.
+  - **`itemProps(id)` carries a `ref`:** a row that needs its own ref must merge the two.
+  - **Changes under a live drag cancel it at once:** any change to order, membership, range or
+    carries, and `disabled` turning true. A lifted unit announces "Cancelled — the list changed."
+  - **Every row state in a table needs `.reorder-table` on the `<table>`.** Only the `:not(tr)` box
+    forms apply without it.
+  - **Re-derive `carries` from the order you render.** After a component move, the carrier's
+    `carries` lists its components in their new order. Stale `carries` would make the parent's next
+    drag put them back. In development the hook reports it (`useReorder: … carries …` on
+    `console.error`), as it does a split range.
+  - **`onCommit` may throw.** The rows are still cleared, and the error propagates to whoever
+    dispatched the drop (a React event handler, or the pointer settle's timer). Catch your own save
+    errors.
 
 ## Self-review (spec coverage)
 
