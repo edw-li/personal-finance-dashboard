@@ -366,19 +366,25 @@ describe('OverviewPage.css — the Customize rows (2026-09-23 spec §6)', () => 
   const css = readFileSync(path.resolve(__dirname, '../../pages/OverviewPage.css'), 'utf8')
 
   it('gives every row one height and one gap, grip or not, and room for the lifted surface', () => {
-    // useReorder measures the rows once at lift and keeps those gaps while it makes room.
+    // One height so the list reads as one even column — for the eye: the drag measures each row
+    // at lift, and shiftsFor copes with unequal heights.
     const row = declarationsFor(css, '.overview-customize-row')
-    expect(row).toContain('min-height: 1.75rem;')
-    expect(row).toContain('margin: .3rem -.35rem;')
-    expect(row).toContain('padding: 0 .35rem;')
+    expect(row).toContain('--customize-pad: .35rem;')
+    expect(row).toContain('--customize-gap: .35rem;')
     expect(row).toContain('--customize-grip: 1.25rem;')
+    expect(row).toContain('min-height: 1.75rem;')
+    // Side room for the lifted row's surface, handed back by the negative margin.
+    expect(row).toContain('padding: 0 var(--customize-pad);')
+    expect(row).toContain('margin: .3rem calc(-1 * var(--customize-pad));')
+    expect(row).toContain('gap: var(--customize-gap);')
   })
 
   it("stands a hidden row's box under the boxes above it and draws the divider quietly", () => {
     expect(declarationsFor(css, '.overview-customize-row > .reorder-grip')).toContain('flex: 0 0 var(--customize-grip);')
-    expect(declarationsFor(css, '.overview-customize-row.is-off')).toContain(
-      'padding-left: calc(.35rem + var(--customize-grip) + .35rem);',
-    )
+    // The inset is the row's own three measures, never restated as a literal length.
+    const inset = declarationsFor(css, '.overview-customize-row.is-off')
+    expect(inset).toContain('padding-left: calc(var(--customize-pad) + var(--customize-grip) + var(--customize-gap));')
+    expect(inset).not.toMatch(/\d*\.?\d+rem/)
     expect(declarationsFor(css, '.overview-customize-divider')).toContain('color: var(--muted);')
     expect(declarationsFor(css, '.overview-customize-divider::after')).toContain('border-top: 1px solid var(--border);')
   })
