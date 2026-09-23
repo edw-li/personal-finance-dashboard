@@ -5,6 +5,8 @@ import random
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from app.schemas.month_review import FeedCoverage, MonthReviewOut, ReviewedFeeds
 from app.services.metrics import category_amounts, category_comparison
 from app.services.month_review import ReviewBook, month_shift
@@ -77,7 +79,6 @@ def test_the_indexed_comparison_equals_the_scan_on_random_books():
             for focus in [*months, month_shift(months[-1], 1)]:
                 expected = old_category_comparison(book, category_id, focus)
                 assert category_comparison(book, category_id, focus, amounts) == expected
-                assert category_comparison(book, category_id, focus) == expected
 
 
 def test_the_first_entry_wins_like_the_scan_did():
@@ -96,5 +97,14 @@ def test_the_first_entry_wins_like_the_scan_did():
         },
         {},
     )
-    assert category_amounts(book) == {month: {3: Decimal("10.00")}}
-    assert category_comparison(book, 3, date(2026, 8, 1)) == (Decimal("10.00"), 1)
+    amounts = category_amounts(book)
+    assert amounts == {month: {3: Decimal("10.00")}}
+    assert category_comparison(book, 3, date(2026, 8, 1), amounts) == (Decimal("10.00"), 1)
+
+
+def test_the_index_is_required():
+    """No per-call default: indexing all 39 months for ONE comparison is the trap the index
+    removed. Callers build category_amounts(book) once and pass it (review of §P4)."""
+    book, months = random_book(1)
+    with pytest.raises(TypeError):
+        category_comparison(book, 3, months[-1])  # type: ignore[call-arg]

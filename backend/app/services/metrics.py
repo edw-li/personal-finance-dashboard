@@ -102,11 +102,11 @@ def category_comparison(
     book: ReviewBook,
     category_id: int,
     focus: date,
-    amounts: Mapping[date, Mapping[int, Decimal]] | None = None,
+    amounts: Mapping[date, Mapping[int, Decimal]],
 ) -> tuple[Decimal | None, int]:
-    """The same prior-calendar eligibility policy, retaining missing category cells. A caller
-    comparing many cells of one book passes `category_amounts(book)` once."""
-    amounts = category_amounts(book) if amounts is None else amounts
+    """The same prior-calendar eligibility policy, retaining missing category cells.
+    `amounts` is `category_amounts(book)`, built once by the caller: required, because
+    indexing all months for a single comparison would bring the per-call cost back."""
     values = []
     for offset in range(-12, 0):
         month = month_shift(focus, offset)
