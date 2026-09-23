@@ -957,3 +957,52 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
     expect(onChanged).toHaveBeenCalledTimes(reloads)
   })
 })
+
+describe('TransactionsPanel reorder — a save that fails (spec §5, §8.1, §8.3)', () => {
+  reorderHooks()
+
+  it.each([
+    {
+      status: 500,
+      detail: 'Internal Server Error',
+      reason: 'the server had a problem (HTTP 500)',
+    },
+    // A sentence of the server's with its own stop: ours closes it, once.
+    { status: 422, detail: 'ids lists 23 more than once.', reason: 'ids lists 23 more than once' },
+  ])('puts the rows back, keeps the grip focused and says why ($status)', async ({ status, detail, reason }) => {
+    vi.mocked(reorderTransactions).mockRejectedValueOnce(new ApiError(detail, status))
+    const { onChanged } = renderLedger()
+    keyboardMove(NVDA_SELL, 'ArrowUp')
+    expect(
+      await screen.findByText(
+        `Couldn't save the new order — ${reason}. The list is back to how it was.`,
+      ),
+    ).toBeTruthy()
+    expect(order()).toEqual(['21', '22', '23'])
+    expect(document.activeElement).toBe(grip(NVDA_SELL))
+    expect(onChanged).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+  })
+
+  it("shows a stale list's server sentence, puts the rows back and has the page reload (409)", async () => {
+    vi.mocked(reorderTransactions).mockRejectedValueOnce(new ApiError(STALE, 409))
+    const { onChanged } = renderLedger()
+    keyboardMove(NVDA_BUY, 'ArrowDown')
+    expect(await screen.findByText(STALE)).toBeTruthy()
+    expect(order()).toEqual(['21', '22', '23'])
+    expect(onChanged).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(/Couldn't save the new order/)).toBeNull()
+  })
+
+  it('falls back to the newest order the server confirmed, not to older page rows', async () => {
+    answerWith()
+    renderLedger()
+    keyboardMove(NVDA_BUY, 'ArrowDown') // saved: 22, 21, 23 — the page has not reloaded yet
+    await screen.findByText(QUIET_NVDA)
+    await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
+    vi.mocked(reorderTransactions).mockRejectedValueOnce(new ApiError('Internal Server Error', 500))
+    keyboardMove(NVDA_SELL, 'ArrowUp')
+    await screen.findByText(/^Couldn't save the new order/)
+    expect(order()).toEqual(['22', '21', '23'])
+  })
+})

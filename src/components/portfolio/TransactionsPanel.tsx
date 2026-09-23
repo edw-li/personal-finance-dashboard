@@ -299,7 +299,22 @@ export default function TransactionsPanel({
           action: { label: 'Undo', onAction: () => restoreOrder(previous, scope) },
         })
       })
-      .catch(() => setPendingOrder(null))
+      .catch((err: unknown) => {
+        // A failed save puts the rows back (spec §5, as §4.1) — to the newest order the server
+        // confirmed. Reverting an upward move re-inserts the dropped row, and a moved node loses
+        // focus; React DOM's commit re-focuses whatever held focus before its DOM moves, so the
+        // keyboard reader's grip keeps it without a hand-back here.
+        setPendingOrder(null)
+        if (err instanceof ApiError && err.status === 409) {
+          // The server's sentence says what happened; the reload shows the rows it means.
+          toast.error(errorDetail(err))
+          onChanged()
+          return
+        }
+        toast.error(
+          `Couldn't save the new order — ${clause(errorDetail(err))}. The list is back to how it was.`,
+        )
+      })
       .finally(() => setBusy(false))
   }
 
