@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE } from '../../charts/theme'
+import { CATEGORY_HUES } from '../../charts/entities'
+import type { CategoryFold } from '../../charts/entities'
+import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, POSITIVE } from '../../charts/theme'
 import type { SpendingMatrix, SpendingYearly } from '../../types/api'
 import {
   buildYearSlices,
@@ -58,18 +60,19 @@ const YEARLY: SpendingYearly = {
   ],
 }
 
-// The stacked chart's fold under test: slots follow topIds order, the rest is Other.
-const TOP = [1, 2]
+// The stacked chart's fold under test (charts/entities.ts): Rent and Groceries on the first two
+// category hues, everything else Other.
+const TOP: CategoryFold = { ids: [1, 2], colors: new Map([[1, CATEGORY_HUES[0]], [2, CATEGORY_HUES[1]]]) }
 
 describe('buildYearSlices', () => {
-  it('folds the rollup exactly like the stacked chart: topIds slots, positive-only, gray Other', () => {
+  it('folds the rollup exactly like the stacked chart: fold colours, positive-only, gray Other', () => {
     const slices = buildYearSlices(matrix().categories, YEARLY.years[0], TOP)
     expect(slices).toEqual([
-      { name: 'Rent', value: 4000, slot: 0 },
-      { name: 'Groceries <b>& more</b>', value: 1180, slot: 1 },
+      { name: 'Rent', value: 4000, color: CATEGORY_HUES[0] },
+      { name: 'Groceries <b>& more</b>', value: 1180, color: CATEGORY_HUES[1] },
       // Fun (150) folds into Other; the -25 refund cell is EXCLUDED (positive-only,
       // buildMonthSlices' documented rule mirrored).
-      { name: 'Other', value: 150, slot: null },
+      { name: 'Other', value: 150, color: OTHER_SERIES_COLOR },
     ])
   })
 })
@@ -83,8 +86,8 @@ describe('spendingFlowPeriod', () => {
       // Fun is 0.00 in July AND its Other fold sums to 0, so no Other slice either:
       // zero-spend categories are omitted, never drawn at zero width (spec §3).
       slices: [
-        { name: 'Rent', value: 2000, slot: 0 },
-        { name: 'Groceries <b>& more</b>', value: 580, slot: 1 },
+        { name: 'Rent', value: 2000, color: CATEGORY_HUES[0] },
+        { name: 'Groceries <b>& more</b>', value: 580, color: CATEGORY_HUES[1] },
       ],
     })
   })
@@ -141,7 +144,7 @@ function tooltipOf(option: EChartsOption): (params: unknown) => string {
 const july = () => spendingFlowPeriod(matrix(), YEARLY, TOP, 1, 'month')!
 
 describe('spendingSankeyOption — surplus periods', () => {
-  it('fans net pay into slotted category nodes and a green Saved tail', () => {
+  it('fans net pay into category nodes in their fold colours and a green Saved tail', () => {
     const option = spendingSankeyOption(july())
     expect(option).not.toBeNull()
     const series = sankeyOf(option!)
@@ -157,8 +160,8 @@ describe('spendingSankeyOption — surplus periods', () => {
     ])
     expect(series.data?.map((n) => n.itemStyle?.color)).toEqual([
       MUTED, // income restated, not a destination
-      PALETTE[0], // the stacked chart's slot for Rent — same entity, same hue
-      PALETTE[1],
+      CATEGORY_HUES[0], // the stacked chart's colour for Rent — same entity, same hue
+      CATEGORY_HUES[1],
       POSITIVE, // Saved: the one deliberate status-color exception (spec §3)
     ])
     expect(series.links).toEqual([
@@ -275,9 +278,9 @@ describe('spendingSankeyOption — deficit and degenerate periods', () => {
       label: 'Jul 2026',
       netPay: '6000.00',
       slices: [
-        { name: 'Net pay', value: 2000, slot: 0 },
-        { name: 'Saved', value: 1500, slot: 1 },
-        { name: 'Drawdown', value: 500, slot: 2 },
+        { name: 'Net pay', value: 2000, color: CATEGORY_HUES[0] },
+        { name: 'Saved', value: 1500, color: CATEGORY_HUES[1] },
+        { name: 'Drawdown', value: 500, color: CATEGORY_HUES[2] },
       ],
     })
     expect(option).not.toBeNull()

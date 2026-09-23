@@ -2,13 +2,15 @@
 // React, no fetching (historyChartOptions posture). Number() here is display-only math
 // on the server's Decimal strings and is never handed back to the API.
 //
-// Palette law: slices arrive PRE-SLOTTED through the page's own topIds order
-// (buildMonthSlices / buildYearSlices), so a category wears the exact hue its stacked-bar
-// segment wears — same entity, same color everywhere, gray "Other" fold included.
+// Palette law: slices arrive PRE-COLOURED through the page's own fold (buildMonthSlices /
+// buildYearSlices over charts/entities.ts' categoryFold), so a category wears the exact hue its
+// stacked-bar segment wears — same entity, same colour everywhere (2026-09-23 spec §C2), gray
+// "Other" fold included.
 import type { EChartsOption } from '../../charts/echarts'
+import { ENTITY, foldColor } from '../../charts/entities'
+import type { CategoryFold } from '../../charts/entities'
 import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter, sankeyCsv } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
-import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE } from '../../charts/theme'
 import type { CategoryOut, SpendingMatrix, SpendingYearly, YearRollup } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatMonth } from '../../utils/format'
@@ -24,31 +26,31 @@ export interface SpendingFlowPeriod {
 }
 
 /**
- * The yearly fold, mirroring buildMonthSlices' rules over the rollup shape: same topIds
- * order = same palette slot per category, positive-only values (a link cannot be
- * negative, exactly the pie's constraint), remainder folded into gray "Other".
+ * The yearly fold, mirroring buildMonthSlices' rules over the rollup shape: same fold order
+ * and colour per category, positive-only values (a link cannot be negative, exactly the
+ * pie's constraint), remainder folded into gray "Other".
  */
 export function buildYearSlices(
   categories: CategoryOut[],
   rollup: YearRollup,
-  topIds: number[],
+  fold: CategoryFold,
 ): MonthSlice[] {
   const nameById = new Map(categories.map((c) => [c.id, c.name]))
   const totalById = new Map(rollup.by_category.map((c) => [c.category_id, c.total]))
   const slices: MonthSlice[] = []
-  topIds.forEach((id, slot) => {
+  for (const id of fold.ids) {
     const value = Number(totalById.get(id) ?? 0)
     if (Number.isFinite(value) && value > 0) {
-      slices.push({ name: nameById.get(id) ?? String(id), value, slot })
+      slices.push({ name: nameById.get(id) ?? String(id), value, color: foldColor(fold, id) })
     }
-  })
-  const topSet = new Set(topIds)
+  }
+  const topSet = new Set(fold.ids)
   const other = rollup.by_category.reduce((acc, cell) => {
     if (topSet.has(cell.category_id)) return acc
     const value = Number(cell.total)
     return Number.isFinite(value) && value > 0 ? acc + value : acc
   }, 0)
-  if (other > 0) slices.push({ name: 'Other', value: other, slot: null })
+  if (other > 0) slices.push({ name: 'Other', value: other, color: ENTITY.other })
   return slices
 }
 
@@ -61,7 +63,7 @@ export function buildYearSlices(
 export function spendingFlowPeriod(
   matrix: SpendingMatrix | null,
   yearly: SpendingYearly | null,
-  topIds: number[],
+  fold: CategoryFold,
   monthIndex: number,
   mode: 'month' | 'year',
 ): SpendingFlowPeriod | null {
@@ -71,7 +73,7 @@ export function spendingFlowPeriod(
     return {
       label: formatMonth(month),
       netPay: matrix.net_pay[monthIndex],
-      slices: buildMonthSlices(matrix, topIds, monthIndex),
+      slices: buildMonthSlices(matrix, fold, monthIndex),
     }
   }
   const year = Number(month.slice(0, 4))
@@ -80,7 +82,7 @@ export function spendingFlowPeriod(
   return {
     label: String(rollup.year),
     netPay: rollup.net_pay_total,
-    slices: buildYearSlices(matrix.categories, rollup, topIds),
+    slices: buildYearSlices(matrix.categories, rollup, fold),
   }
 }
 
@@ -135,18 +137,18 @@ export function spendingSankeyOption(period: SpendingFlowPeriod): EChartsOption 
   const nodes: SankeyNode[] = []
   // MUTED-family neutral: the node restates income, it is not a destination (spec §3).
   if (netPay >= A_CENT) {
-    nodes.push({ name: NET_PAY, value: netPay, itemStyle: { color: MUTED } })
+    nodes.push({ name: NET_PAY, value: netPay, itemStyle: { color: ENTITY.structural } })
   }
   if (deficit) {
-    nodes.push({ name: DRAWDOWN, value: shortfall, itemStyle: { color: NEGATIVE } })
+    nodes.push({ name: DRAWDOWN, value: shortfall, itemStyle: { color: ENTITY.deficit } })
   }
   for (const slice of slices) {
     nodes.push({
       name: slice.name,
       value: slice.value,
-      // The stacked chart's exact assignment, reused: slot i = PALETTE[i]; the folded
-      // remainder wears the gray Other color.
-      itemStyle: { color: slice.slot === null ? OTHER_SERIES_COLOR : PALETTE[slice.slot] },
+      // The stacked chart's exact colour, carried on the slice (the fold's hue, or the
+      // gray Other for the folded remainder).
+      itemStyle: { color: slice.color },
     })
   }
 
@@ -172,7 +174,7 @@ export function spendingSankeyOption(period: SpendingFlowPeriod): EChartsOption 
     // color rule, one node per chart: "the kept money is green" is the cross-chart
     // convention (§3/§4). An exactly-zero Saved is OMITTED, not drawn at zero width.
     if (saved >= A_CENT) {
-      nodes.push({ name: SAVED, value: saved, itemStyle: { color: POSITIVE } })
+      nodes.push({ name: SAVED, value: saved, itemStyle: { color: ENTITY.saved } })
       links.push({ source: NET_PAY, target: SAVED, value: saved })
     }
   }

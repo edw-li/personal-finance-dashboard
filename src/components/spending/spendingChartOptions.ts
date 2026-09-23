@@ -1,6 +1,6 @@
 // EVERY /spending chart option, and the export table that twins each one — no React, no
 // fetching, no theme decisions of its own (the *ChartOptions law). Each builder is a pure
-// function of the page's already-derived inputs (matrix, topIds, nameById, monthLabels,
+// function of the page's already-derived inputs (matrix, fold, nameById, monthLabels,
 // range, legend picks, the heatmap's row order and mode) and composes only the grammar in
 // src/charts (grid/axes, LINE/BAR_MARKS, legendFor, referenceLine, the visualMap scales,
 // axisTooltip/itemTooltip), so charts/conformance.ts can check it structurally:
@@ -12,14 +12,18 @@
 //   categorySmallMultiplesOption             — every category as its own tiny line
 // The flow sankey keeps its own file (spendingSankeyOptions.ts). SpendingPage now holds
 // state and ChartCard mounts only. Number() is display-only (format.ts's rule).
+// Colour law (2026-09-23 spec §C2): every category wears its colour from charts/entities.ts'
+// fold — the page's all-time ranking decided once — on the bars, the pie and its legend, the
+// trends and the small multiples alike; outside the fold a category is the Other gray.
 import type { EChartsOption } from '../../charts/echarts'
-import { slotColor } from '../../charts/entities'
+import { ENTITY, foldColor, pickColors } from '../../charts/entities'
+import type { CategoryFold } from '../../charts/entities'
 import { BAR_MARKS, LINE, compactMoney, grid, moneyAxis, monthAxis, pctAxis, stagger } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { zeroLine } from '../../charts/markLine'
 import { budgetReference, referenceLine } from '../../charts/reference'
 import { divergingVisualMap, rowNormalize, sequentialVisualMap, vsAverage } from '../../charts/scales'
-import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
+import { INK, MUTED, PALETTE, SURFACE } from '../../charts/theme'
 import { rangeZoom, resolvedWindow } from '../../charts/timeZoom'
 import type { RangeState } from '../../charts/timeZoom'
 import { axisTooltip, itemTooltip } from '../../charts/tooltip'
@@ -72,8 +76,8 @@ export const SUSTAINABLE_SPEND = 'Sustainable spend'
 
 export interface SpendingBarsInput {
   matrix: SpendingMatrix
-  /** All-time-total order — index IS the palette slot AND the bar seriesIndex. */
-  topIds: number[]
+  /** The page's fold: `ids` order IS the bar seriesIndex; `colors` carries each hue. */
+  fold: CategoryFold
   nameById: Map<number, string>
   monthLabels: string[]
   range: RangeState
@@ -87,9 +91,10 @@ export interface SpendingBarsInput {
  * by positional seriesIndex, so nothing may be inserted ahead of the budget step.
  */
 export function spendingBarsOption({
-  matrix, topIds, nameById, monthLabels, range, selected,
+  matrix, fold, nameById, monthLabels, range, selected,
 }: SpendingBarsInput): EChartsOption | null {
   if (matrix.months.length === 0) return null
+  const topIds = fold.ids
   const topSet = new Set(topIds)
   const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
   // A6: absent ≠ zero. Nulls flow THROUGH to the series so an unentered month gaps the bar;
@@ -118,7 +123,7 @@ export function spendingBarsOption({
       stack: 'spend',
       ...BAR_MARKS,
       ...stagger(slot),
-      color: PALETTE[slot],
+      color: foldColor(fold, id),
       universalTransition: true,
       data: (valuesById.get(id) ?? []).map((v) => (v === null ? null : Number(v))),
     })),
@@ -129,7 +134,7 @@ export function spendingBarsOption({
       stack: 'spend',
       ...BAR_MARKS,
       ...stagger(topIds.length),
-      color: OTHER_SERIES_COLOR,
+      color: ENTITY.other,
       universalTransition: true,
       data: otherPerMonth,
     },
@@ -171,7 +176,7 @@ export function spendingBarsOption({
   }
 }
 
-/** One month's breakdown as the bars' drill-in: the SAME top-N fold and slots as the stack,
+/** One month's breakdown as the bars' drill-in: the SAME fold and colours as the stack,
  *  morphing from the bar segments by id. Null when the month has nothing positive to draw. */
 export interface MonthPieOptions {
   /** The dock variant (W7): no leader labels — they truncated to "Hous…" at 440px. The names
@@ -181,12 +186,12 @@ export interface MonthPieOptions {
 
 export function monthPieOption(
   matrix: Pick<SpendingMatrix, 'categories' | 'series'>,
-  topIds: number[],
+  fold: CategoryFold,
   monthIndex: number,
   { compact = false }: MonthPieOptions = {},
 ): EChartsOption | null {
   if (monthIndex < 0) return null
-  const slices = buildMonthSlices(matrix, topIds, monthIndex)
+  const slices = buildMonthSlices(matrix, fold, monthIndex)
   if (slices.length === 0) return null
   return {
     tooltip: itemTooltip<{ name?: string; value?: unknown; percent?: number }>({
@@ -206,12 +211,8 @@ export function monthPieOption(
         emphasis: { itemStyle: { borderColor: INK } },
         // Morph the month's bar segments into slices and back out on exit; a plain swap
         // under reduced motion (EChart forces animation off).
-        universalTransition: { enabled: true, seriesKey: [...topIds.map((id) => `cat-${id}`), 'other'] },
-        data: slices.map((s) => ({
-          name: s.name,
-          value: s.value,
-          itemStyle: { color: s.slot === null ? OTHER_SERIES_COLOR : PALETTE[s.slot] },
-        })),
+        universalTransition: { enabled: true, seriesKey: [...fold.ids.map((id) => `cat-${id}`), 'other'] },
+        data: slices.map((s) => ({ name: s.name, value: s.value, itemStyle: { color: s.color } })),
       },
     ],
   }
@@ -220,26 +221,26 @@ export function monthPieOption(
 /** The drilled month as a table (F12): the drawn slices, Other included. */
 export function monthPieCsv(
   matrix: Pick<SpendingMatrix, 'categories' | 'series'>,
-  topIds: number[],
+  fold: CategoryFold,
   monthIndex: number,
 ): ExportTable {
   return {
     headers: ['Category', 'Amount'],
-    rows: buildMonthSlices(matrix, topIds, monthIndex).map((s) => [s.name, s.value.toFixed(2)]),
+    rows: buildMonthSlices(matrix, fold, monthIndex).map((s) => [s.name, s.value.toFixed(2)]),
   }
 }
 
 /** The legend list beside the dock donut: the drawn slices, each one's share of the month and
- *  the palette slot it wears (null = the folded Other). The same fold as the pie, so the list and
+ *  the colour it wears (the fold's, or the Other gray). The same fold as the pie, so the list and
  *  the slices agree by construction. Display-only floats (format.ts's rule). */
 export function monthPieLegend(
   matrix: Pick<SpendingMatrix, 'categories' | 'series'>,
-  topIds: number[],
+  fold: CategoryFold,
   monthIndex: number,
-): { name: string; value: number; share: number; slot: number | null }[] {
-  const slices = buildMonthSlices(matrix, topIds, monthIndex)
+): { name: string; value: number; share: number; color: string }[] {
+  const slices = buildMonthSlices(matrix, fold, monthIndex)
   const total = slices.reduce((acc, slice) => acc + slice.value, 0)
-  return slices.map((slice) => ({ name: slice.name, value: slice.value, share: total === 0 ? 0 : slice.value / total, slot: slice.slot }))
+  return slices.map((slice) => ({ name: slice.name, value: slice.value, share: total === 0 ? 0 : slice.value / total, color: slice.color }))
 }
 
 export type HeatmapMode = 'absolute' | 'row' | 'vsAverage'
@@ -438,22 +439,26 @@ export function savingsRateCsv(
   }
 }
 
-export interface TrendPick { categoryId: number; slot: number }
+export interface TrendPick { categoryId: number }
 export interface CategoryTrendInput {
   matrix: SpendingMatrix
   trend: TrendPick[]
+  /** The page's fold: a pick wears its category's colour, never its pick order's. */
+  fold: CategoryFold
   nameById: Map<number, string>
   monthLabels: string[]
   range: RangeState
   selected: Record<string, boolean>
 }
 
-/** Up to three categories' histories on their pick slots, each with its budget as a dashed
- *  step named "{category} budget" so the axis tooltip disambiguates when several show. */
+/** Up to three categories' histories in their own colours (pickColors: the fold's hue, the
+ *  Other gray for a pick outside it, a free hue for a second outsider), each with its budget as
+ *  a dashed step named "{category} budget" so the axis tooltip disambiguates. */
 export function categoryTrendOption({
-  matrix, trend, nameById, monthLabels, range, selected,
+  matrix, trend, fold, nameById, monthLabels, range, selected,
 }: CategoryTrendInput): EChartsOption | null {
   if (matrix.months.length === 0 || trend.length === 0) return null
+  const colors = pickColors(trend.map((pick) => pick.categoryId), fold)
   const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
   const budgetsById = new Map(matrix.series.map((s) => [s.category_id, s.budgets]))
   const name = (id: number) => nameById.get(id) ?? String(id)
@@ -462,10 +467,10 @@ export function categoryTrendOption({
     return b === undefined || !b.some((v) => v !== null) ? [] : [budgetReference(`${name(categoryId)} budget`, b)]
   })
   const series = [
-    ...trend.map(({ categoryId, slot }) => ({
+    ...trend.map(({ categoryId }) => ({
       ...LINE,
       name: name(categoryId),
-      color: slotColor(slot),
+      color: colors.get(categoryId) ?? ENTITY.other,
       connectNulls: false,
       data: (valuesById.get(categoryId) ?? []).map((v) => (v === null ? null : Number(v))),
     })),
@@ -500,6 +505,8 @@ export const SM_CELL_HEIGHT = 110
 export interface SmallMultiplesInput {
   matrix: SpendingMatrix
   order: number[]
+  /** Each cell wears its category's fold colour — the Other gray outside the fold. */
+  fold: CategoryFold
   nameById: Map<number, string>
   monthLabels: string[]
 }
@@ -512,7 +519,7 @@ export const smallMultiplesHeight = (count: number) =>
 /** Every category as a tiny line, three per row, ONE option (§20: one mount, not nineteen).
  *  Cells share the month axis but scale their own money axis — the reading is shape, not size. */
 export function categorySmallMultiplesOption({
-  matrix, order, nameById, monthLabels,
+  matrix, order, fold, nameById, monthLabels,
 }: SmallMultiplesInput): EChartsOption | null {
   if (matrix.months.length === 0 || order.length === 0) return null
   const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
@@ -549,8 +556,9 @@ export function categorySmallMultiplesOption({
       name: name(id),
       xAxisIndex: i,
       yAxisIndex: i,
-      // One entity per cell: the hue carries no identity here, so every cell wears slot 0.
-      color: PALETTE[0],
+      // The category's own colour (spec §C2: one colour per entity in every chart — a cell
+      // in another category's hue would say it WAS that category).
+      color: foldColor(fold, id),
       connectNulls: false,
       data: (valuesById.get(id) ?? []).map((v) => (v === null ? null : Number(v))),
     })),

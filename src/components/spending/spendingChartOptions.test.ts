@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { tooltipRows } from '../../testing/tooltipRows'
 import { isGrammarTooltip } from '../../charts/tooltip'
+import { CATEGORY_HUES, ENTITY } from '../../charts/entities'
+import type { CategoryFold } from '../../charts/entities'
 import { GRID_VARIANTS, compactMoney, percentLabel } from '../../charts/grammar'
 import { DIVERGING, INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
 import type { SpendingMatrix } from '../../types/api'
@@ -111,8 +113,10 @@ export function matrixFixture(over: Partial<SpendingMatrix> = {}): SpendingMatri
 
 const NAMES = new Map([[1, 'Rent'], [2, 'Groceries <b>& more</b>'], [3, 'Fun']])
 const LABELS = ['Jun 2026', 'Jul 2026']
+/** The page's fold (charts/entities.ts): Rent and Groceries on the first two category hues. */
+const FOLD: CategoryFold = { ids: [1, 2], colors: new Map([[1, CATEGORY_HUES[0]], [2, CATEGORY_HUES[1]]]) }
 const barsInput = (matrix = matrixFixture(), selected = {}) => ({
-  matrix, topIds: [1, 2], nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' as const }, selected,
+  matrix, fold: FOLD, nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' as const }, selected,
 })
 
 interface SeriesLike {
@@ -146,7 +150,8 @@ describe('spendingBarsOption', () => {
     expect(option.series.map((s) => s.id)).toEqual(['cat-1', 'cat-2', 'other', 'net-pay', 'sustainable-spend', 'budget-Total budget'])
     expect(option.series.map((s) => s.name)).toEqual(['Rent', 'Groceries <b>& more</b>', 'Other', 'Net pay', SUSTAINABLE_SPEND, 'Total budget'])
     expect(SUSTAINABLE_SPEND).toBe('Sustainable spend')
-    expect(option.series[0]).toMatchObject({ type: 'bar', stack: 'spend', barMaxWidth: 22, color: PALETTE[0], universalTransition: true })
+    expect(option.series[0]).toMatchObject({ type: 'bar', stack: 'spend', barMaxWidth: 22, color: CATEGORY_HUES[0], universalTransition: true })
+    expect(option.series[1].color).toBe(CATEGORY_HUES[1])
     expect(option.series[0].itemStyle).toEqual({ borderColor: SURFACE, borderWidth: 1 })
     expect(option.series[0].emphasis).toEqual({ focus: 'series', itemStyle: { borderColor: INK } })
     expect(option.series[2].color).toBe(OTHER_SERIES_COLOR)
@@ -164,6 +169,17 @@ describe('spendingBarsOption', () => {
     expect(rent.data).toEqual([2000, 2000])
     expect(groceries.data).toEqual([600, null])
     expect(other.data).toEqual([150, null])
+  })
+
+  it('colours each category by the fold, never by its stack position (2026-09-23 spec §C2)', () => {
+    // The tax category leads the fold on the tax hue; Rent keeps its own hue one place up.
+    const fold: CategoryFold = { ids: [3, 1], colors: new Map([[3, ENTITY.tax], [1, CATEGORY_HUES[0]]]) }
+    const option = read(spendingBarsOption({ ...barsInput(), fold }))
+    expect(option.series.slice(0, 3).map((s) => [s.id, s.color])).toEqual([
+      ['cat-3', ENTITY.tax],
+      ['cat-1', CATEGORY_HUES[0]],
+      ['other', OTHER_SERIES_COLOR],
+    ])
   })
 
   it('omits the budget step when no month has a total budget', () => {
@@ -235,15 +251,15 @@ describe('spendingBarsOption', () => {
 })
 
 describe('monthPieOption', () => {
-  it('slices the month on the bars’ own slots, morphing from their ids, with a value-first item tooltip', () => {
-    const option = monthPieOption(matrixFixture(), [1, 2], 0) as unknown as {
+  it('slices the month in the bars’ own colours, morphing from their ids, with a value-first item tooltip', () => {
+    const option = monthPieOption(matrixFixture(), FOLD, 0) as unknown as {
       tooltip: { trigger: string; formatter: (p: unknown) => string }
       series: { id: string; type: string; universalTransition: unknown; data: { name: string; value: number; itemStyle: { color: string } }[] }[]
     }
     expect(option.series[0]).toMatchObject({ id: 'month-pie', type: 'pie', universalTransition: { enabled: true, seriesKey: ['cat-1', 'cat-2', 'other'] } })
     expect(option.series[0].data).toEqual([
-      { name: 'Rent', value: 2000, itemStyle: { color: PALETTE[0] } },
-      { name: 'Groceries <b>& more</b>', value: 600, itemStyle: { color: PALETTE[1] } },
+      { name: 'Rent', value: 2000, itemStyle: { color: CATEGORY_HUES[0] } },
+      { name: 'Groceries <b>& more</b>', value: 600, itemStyle: { color: CATEGORY_HUES[1] } },
       { name: 'Other', value: 150, itemStyle: { color: OTHER_SERIES_COLOR } },
     ])
     expect(option.tooltip.trigger).toBe('item')
@@ -254,16 +270,16 @@ describe('monthPieOption', () => {
     expect(parsed.sub).toBe('21.8% of the month')
   })
   it('is null for a month with nothing drawable or out of range', () => {
-    expect(monthPieOption(matrixFixture(), [1, 2], -1)).toBeNull()
-    expect(monthPieOption(matrixFixture({ series: [{ category_id: 1, values: ['0.00', '0.00'], budgets: [null, null] }] }), [1], 0)).toBeNull()
+    expect(monthPieOption(matrixFixture(), FOLD, -1)).toBeNull()
+    expect(monthPieOption(matrixFixture({ series: [{ category_id: 1, values: ['0.00', '0.00'], budgets: [null, null] }] }), FOLD, 0)).toBeNull()
   })
   it('drops the leader labels in the compact (dock) variant and keeps them by default (W7)', () => {
     type Pie = { series: { label?: { show?: boolean; formatter?: string } }[] }
-    expect((monthPieOption(matrixFixture(), [1, 2], 0) as unknown as Pie).series[0].label).toMatchObject({ formatter: '{b}  {d}%' })
-    expect((monthPieOption(matrixFixture(), [1, 2], 0, { compact: true }) as unknown as Pie).series[0].label).toEqual({ show: false })
+    expect((monthPieOption(matrixFixture(), FOLD, 0) as unknown as Pie).series[0].label).toMatchObject({ formatter: '{b}  {d}%' })
+    expect((monthPieOption(matrixFixture(), FOLD, 0, { compact: true }) as unknown as Pie).series[0].label).toEqual({ show: false })
   })
   it('exports the slices as a table', () => {
-    expect(monthPieCsv(matrixFixture(), [1, 2], 0)).toEqual({
+    expect(monthPieCsv(matrixFixture(), FOLD, 0)).toEqual({
       headers: ['Category', 'Amount'],
       rows: [['Rent', '2000.00'], ['Groceries <b>& more</b>', '600.00'], ['Other', '150.00']],
     })
@@ -271,13 +287,13 @@ describe('monthPieOption', () => {
 })
 
 describe('monthPieLegend', () => {
-  it('lists the drawn slices with their share of the month and their palette slot', () => {
-    expect(monthPieLegend(matrixFixture(), [1, 2], 0)).toEqual([
-      { name: 'Rent', value: 2000, share: 2000 / 2750, slot: 0 },
-      { name: 'Groceries <b>& more</b>', value: 600, share: 600 / 2750, slot: 1 },
-      { name: 'Other', value: 150, share: 150 / 2750, slot: null },
+  it('lists the drawn slices with their share of the month and their fold colour', () => {
+    expect(monthPieLegend(matrixFixture(), FOLD, 0)).toEqual([
+      { name: 'Rent', value: 2000, share: 2000 / 2750, color: CATEGORY_HUES[0] },
+      { name: 'Groceries <b>& more</b>', value: 600, share: 600 / 2750, color: CATEGORY_HUES[1] },
+      { name: 'Other', value: 150, share: 150 / 2750, color: OTHER_SERIES_COLOR },
     ])
-    expect(monthPieLegend(matrixFixture(), [1, 2], -1)).toEqual([])
+    expect(monthPieLegend(matrixFixture(), FOLD, -1)).toEqual([])
   })
 })
 
@@ -426,11 +442,12 @@ describe('savingsRateOption', () => {
 })
 
 describe('categoryTrendOption', () => {
-  const TREND = [{ categoryId: 2, slot: 1 }, { categoryId: 1, slot: 0 }]
-  it('one line per pick on its slot, budget steps as muted references after the data rows', () => {
-    const option = read(categoryTrendOption({ matrix: matrixFixture(), trend: TREND, nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' }, selected: { Rent: false } }))
+  const TREND = [{ categoryId: 2 }, { categoryId: 1 }]
+  it('one line per pick in its fold colour, budget steps as muted references after the data rows', () => {
+    const option = read(categoryTrendOption({ matrix: matrixFixture(), trend: TREND, fold: FOLD, nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' }, selected: { Rent: false } }))
     expect(option.series.map((s) => s.name)).toEqual(['Groceries <b>& more</b>', 'Rent', 'Groceries <b>& more</b> budget'])
-    expect(option.series.map((s) => s.color)).toEqual([PALETTE[1], PALETTE[0], MUTED])
+    // Same entity, same hue as on the bars (spec §C2) — whatever order the picks were made in.
+    expect(option.series.map((s) => s.color)).toEqual([CATEGORY_HUES[1], CATEGORY_HUES[0], MUTED])
     expect(option.series[2]).toMatchObject({ id: 'budget-Groceries <b>& more</b> budget', step: 'end', lineStyle: { type: 'dashed' } })
     expect(option.series[0].data).toEqual([600, null])
     expect(option.grid).toEqual(GRID_VARIANTS.default)
@@ -441,8 +458,12 @@ describe('categoryTrendOption', () => {
     ]))
     expect(rows.rows.map((r) => [r.kind, r.label])).toEqual([['row', 'Groceries &lt;b&gt;&amp; more&lt;/b&gt;'], ['ref', 'Groceries &lt;b&gt;&amp; more&lt;/b&gt; budget']])
   })
+  it('a pick outside the fold wears the Other grey — and never shares a line colour with another pick', () => {
+    const option = read(categoryTrendOption({ matrix: matrixFixture(), trend: [{ categoryId: 3 }, { categoryId: 1 }], fold: FOLD, nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' }, selected: {} }))
+    expect(option.series.map((s) => [s.name, s.color])).toEqual([['Fun', OTHER_SERIES_COLOR], ['Rent', CATEGORY_HUES[0]]])
+  })
   it('is null with no picks; exports the picked categories', () => {
-    expect(categoryTrendOption({ matrix: matrixFixture(), trend: [], nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' }, selected: {} })).toBeNull()
+    expect(categoryTrendOption({ matrix: matrixFixture(), trend: [], fold: FOLD, nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' }, selected: {} })).toBeNull()
     expect(categoryTrendCsv(matrixFixture(), TREND, NAMES)).toEqual({
       headers: ['Month', 'Groceries <b>& more</b>', 'Rent'],
       rows: [['2026-06-01', '600.00', '2000.00'], ['2026-07-01', '', '2000.00']],
@@ -452,7 +473,7 @@ describe('categoryTrendOption', () => {
 
 describe('categorySmallMultiplesOption', () => {
   it('one cell per category in three columns: shared month axis, own money axis, one grammar line each', () => {
-    const option = categorySmallMultiplesOption({ matrix: matrixFixture(), order: [1, 2, 3], nameById: NAMES, monthLabels: LABELS }) as unknown as {
+    const option = categorySmallMultiplesOption({ matrix: matrixFixture(), order: [1, 2, 3], fold: FOLD, nameById: NAMES, monthLabels: LABELS }) as unknown as {
       grid: unknown[]; xAxis: { gridIndex: number }[]; yAxis: { gridIndex: number; axisLabel: { formatter: unknown } }[]
       title: { text: string }[]; series: { xAxisIndex: number; yAxisIndex: number; name: string; color: string; data: unknown[] }[]
       tooltip: { formatter: (p: unknown) => string }
@@ -462,10 +483,12 @@ describe('categorySmallMultiplesOption', () => {
     expect(option.yAxis.every((a) => a.axisLabel.formatter === compactMoney)).toBe(true)
     expect(option.title.map((t) => t.text)).toEqual(['Rent', 'Groceries <b>& more</b>', 'Fun'])
     expect(option.series.map((s) => [s.name, s.xAxisIndex, s.yAxisIndex])).toEqual([['Rent', 0, 0], ['Groceries <b>& more</b>', 1, 1], ['Fun', 2, 2]])
-    expect(option.series.every((s) => s.color === PALETTE[0])).toBe(true) // one entity per cell: no identity hue needed
+    // Each cell wears its category's own colour (spec §C2: one colour per entity, in every
+    // chart); Fun is outside the fold, so it wears the Other grey.
+    expect(option.series.map((s) => s.color)).toEqual([CATEGORY_HUES[0], CATEGORY_HUES[1], OTHER_SERIES_COLOR])
     expect(option.series[1].data).toEqual([600, null])
   })
   it('is null with nothing to draw', () => {
-    expect(categorySmallMultiplesOption({ matrix: matrixFixture({ months: [] }), order: [1], nameById: NAMES, monthLabels: [] })).toBeNull()
+    expect(categorySmallMultiplesOption({ matrix: matrixFixture({ months: [] }), order: [1], fold: FOLD, nameById: NAMES, monthLabels: [] })).toBeNull()
   })
 })
