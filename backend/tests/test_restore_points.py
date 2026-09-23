@@ -378,9 +378,10 @@ async def test_a_restore_point_restores_by_name(auth_client, db):
 
 
 async def test_restoring_the_oldest_of_three_restore_points_still_works(auth_client, db):
-    """The apply writes a NEW point first, which rotates the oldest of three out of the
-    directory — the very file being restored. Its bytes are read before the restore starts,
-    so the undo a bad day needs most still works (spec §B3)."""
+    """The apply writes a NEW point first, and the rotation that follows would take the oldest
+    of three — the very file being restored. The source is protected until the apply commits
+    and trimmed after, so the undo a bad day needs most still works and three are kept (spec
+    §B3; review Important 1)."""
     db.add(Account(name="A", slug="a", group="cash", sort_order=1))
     await db.commit()
     names = []
@@ -394,6 +395,30 @@ async def test_restoring_the_oldest_of_three_restore_points_still_works(auth_cli
     kept = sorted(path.name for path in restore_points_dir().iterdir())
     assert names[0] not in kept and len(kept) == 3
     assert kept[:2] == names[1:] and kept[2] == resp.json()["restore_point"]
+
+
+async def test_only_a_restore_point_source_asks_for_protection(auth_client, db, monkeypatch):
+    """A stored snapshot is never in the restore-point rotation, so restoring one asks for no
+    protection; a restore point does (2026-09-23 lane B1 re-review nit)."""
+    import app.api.import_ as import_module
+    from app.services.snapshot_store import write_snapshot
+
+    db.add(Account(name="A", slug="a", group="cash", sort_order=1))
+    await db.commit()
+    snapshot = (await write_snapshot(db, actor=None, trigger="manual")).name
+    point = (await write_restore_point(db, actor=None)).name
+    asked = []
+    real_apply = import_module.apply_restore
+
+    async def recording_apply(*args, **kwargs):
+        asked.append(kwargs.get("protect_point"))
+        return await real_apply(*args, **kwargs)
+
+    monkeypatch.setattr(import_module, "apply_restore", recording_apply)
+    for name in (snapshot, point):
+        resp = await auth_client.post(f"{STORED}/{name}?dry_run=false")
+        assert resp.status_code == 200, resp.text
+    assert asked == [None, point]
 
 
 async def test_a_failed_restore_from_the_oldest_point_keeps_that_point(
