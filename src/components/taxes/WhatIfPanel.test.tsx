@@ -8,6 +8,7 @@ import type {
   HoldingOut,
   HoldingsResponse,
   LimitsOut,
+  TaxInputsOut,
   TaxSummaryOut,
   WhatIfOut,
 } from '../../types/api'
@@ -571,50 +572,170 @@ describe('WhatIfPanel', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  // --- input overrides (D1, design 2026-08-31) ---------------------------------------------
+  // --- input overrides (D1, design 2026-08-31; rows reworked 2026-09-23 spec §B7) -----------
 
   const DEFS = [
     { key: 'annual_salary', label: 'Annual Salary' },
     { key: 'itemized_deduction', label: 'Itemized Deduction' },
   ]
+  // The stored year the prefill reads: a two-column salary, summed as the household figure an
+  // override replaces.
+  const INPUTS: TaxInputsOut = {
+    year: 2024,
+    filing_status: 'married_joint',
+    people: [{ id: 1, name: 'Me' }, { id: 2, name: 'Partner' }],
+    sections: [
+      {
+        section: 'income',
+        items: [
+          { key: 'annual_salary', label: 'Annual Salary', sort_order: 1, is_derived: false, unit: 'money', suggestion_source: null, formula: null, is_per_person: true, person_id: 1, value: '150000.00', suggested: null },
+          { key: 'annual_salary', label: 'Annual Salary', sort_order: 1, is_derived: false, unit: 'money', suggestion_source: null, formula: null, is_per_person: true, person_id: 2, value: '62930.00', suggested: null },
+          { key: 'itemized_deduction', label: 'Itemized Deduction', sort_order: 2, is_derived: false, unit: 'money', suggestion_source: null, formula: null, is_per_person: false, person_id: null, value: null, suggested: null },
+        ],
+      },
+    ],
+  }
   const addOverride = () => screen.getByRole('button', { name: 'Add override' }) as HTMLButtonElement
+  const keyPicker = (index = 0) => screen.getAllByLabelText('Override')[index] as HTMLSelectElement
+  const clearBox = (index = 0) =>
+    screen.getAllByRole('checkbox', { name: 'Clear this input' })[index] as HTMLInputElement
+  // A debounce and then some: long enough for a request the panel should NOT have made.
+  const settleRuns = () => act(async () => new Promise((resolve) => setTimeout(resolve, 500)))
+  const typeOverride = (label: string, text: string) => {
+    fireEvent.focus(field(label))
+    fireEvent.change(field(label), { target: { value: text } })
+    fireEvent.blur(field(label))
+  }
 
-  it('adds an override row on the first unused key as a null entry, and posts canonical values on commit', async () => {
-    mount('/taxes', { definitions: DEFS })
+  // Audit W2: one click on "Add override" wrote `annual_salary:null`, modelled salary = $0
+  // (Δ tax −$62,403) and offered "Apply 1 override" — a stored salary one confirm from deletion.
+  it('Add override starts an empty row: no key, nothing in the URL, no request', async () => {
+    mount('/taxes', { definitions: DEFS, inputs: INPUTS })
     await openPanel()
+    await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1)) // the baseline
     fireEvent.click(addOverride())
-    expect(url()).toBe('/taxes?whatif=annual_salary%3Anull')
-    await waitFor(() => expect(lastBody()).toEqual({ year: 2024, sales: [], espp_sales: [], overrides: { annual_salary: null } }))
-    const select = screen.getByLabelText('Override') as HTMLSelectElement
-    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual([
+    expect(url()).toBe('/taxes')
+    expect(keyPicker().value).toBe('')
+    expect(within(keyPicker()).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Choose an input…',
       'Annual Salary (annual_salary)',
       'Itemized Deduction (itemized_deduction)',
     ])
-    fireEvent.focus(field('Override 1 value'))
-    fireEvent.change(field('Override 1 value'), { target: { value: '$210,000' } })
-    fireEvent.blur(field('Override 1 value'))
-    expect(url()).toBe('/taxes?whatif=annual_salary%3A210000')
-    await waitFor(() => expect(lastBody()?.overrides).toEqual({ annual_salary: '210000' }))
+    // The picker is where the next keystroke belongs.
+    expect(document.activeElement).toBe(keyPicker())
+    expect(field('Override 1 value').disabled).toBe(true)
+    expect(clearBox().disabled).toBe(true)
+    await settleRuns()
+    expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: /^Apply \d+ override/ })).toBeNull()
   })
 
-  it('refuses a duplicated key and a garbled value in the box’s words, spending no request', async () => {
-    mount('/taxes?whatif=annual_salary%3Anull&whatif=itemized_deduction%3Anull', { definitions: DEFS })
-    await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
-    fireEvent.change(screen.getAllByLabelText('Override')[1], { target: { value: 'annual_salary' } })
-    expect(screen.getByRole('alert').textContent).toContain('Annual Salary is overridden twice — one row per key')
-    fireEvent.focus(field('Override 1 value'))
-    fireEvent.change(field('Override 1 value'), { target: { value: '12..3' } })
-    fireEvent.blur(field('Override 1 value'))
-    expect(screen.getByRole('alert').textContent).toContain('Annual Salary: enter a number, or leave the value blank to clear it')
+  it('choosing a key pre-fills the stored value and still models nothing', async () => {
+    mount('/taxes', { definitions: DEFS, inputs: INPUTS })
+    await openPanel()
+    fireEvent.click(addOverride())
+    fireEvent.change(keyPicker(), { target: { value: 'annual_salary' } })
+    expect(keyPicker().value).toBe('annual_salary')
+    expect(field('Override 1 value').value).toBe('$212,930.00') // both columns, summed
+    expect(url()).toBe('/taxes')
+    expect(screen.getByText(/Not in the scenario yet/)).toBeTruthy()
+    await settleRuns()
     expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps Add override shut once every key is taken, and with no definitions at all', async () => {
+  it('a value that differs from the stored one joins the scenario; the stored value or a blank takes it back out', async () => {
+    mount('/taxes', { definitions: DEFS, inputs: INPUTS })
+    await openPanel()
+    fireEvent.click(addOverride())
+    fireEvent.change(keyPicker(), { target: { value: 'annual_salary' } })
+    typeOverride('Override 1 value', '$250,000')
+    expect(url()).toBe('/taxes?whatif=annual_salary%3A250000')
+    await waitFor(() => expect(lastBody()?.overrides).toEqual({ annual_salary: '250000' }))
+    expect(screen.queryByText(/Not in the scenario yet/)).toBeNull()
+
+    // The stored figure again is "no change": out of the scenario, the row stays where it was.
+    typeOverride('Override 1 value', '212930')
+    expect(url()).toBe('/taxes')
+    expect(keyPicker().value).toBe('annual_salary')
+    // …and a blank box is never "clear": it too leaves the scenario, modelling nothing.
+    typeOverride('Override 1 value', '250000')
+    expect(url()).toBe('/taxes?whatif=annual_salary%3A250000')
+    typeOverride('Override 1 value', '')
+    expect(url()).toBe('/taxes')
+    expect(screen.getByText(/Not in the scenario yet/)).toBeTruthy()
+  })
+
+  it('clearing an input is the explicit checkbox; unticking it returns the row to the stored value', async () => {
+    mount('/taxes', { definitions: DEFS, inputs: INPUTS })
+    await openPanel()
+    fireEvent.click(addOverride())
+    fireEvent.change(keyPicker(), { target: { value: 'annual_salary' } })
+    fireEvent.click(clearBox())
+    expect(url()).toBe('/taxes?whatif=annual_salary%3Anull')
+    await waitFor(() => expect(lastBody()?.overrides).toEqual({ annual_salary: null }))
+    expect(clearBox().checked).toBe(true)
+    expect(field('Override 1 value').disabled).toBe(true)
+    fireEvent.click(clearBox())
+    expect(url()).toBe('/taxes')
+    expect(field('Override 1 value').value).toBe('$212,930.00')
+  })
+
+  it('a legacy ?whatif=key:null link arrives as an explicit clear row, meaning unchanged', async () => {
+    mount('/taxes?whatif=annual_salary%3Anull', { definitions: DEFS, inputs: INPUTS })
+    await waitFor(() => expect(lastBody()?.overrides).toEqual({ annual_salary: null }))
+    expect(keyPicker().value).toBe('annual_salary')
+    expect(clearBox().checked).toBe(true)
+    expect(url()).toBe('/taxes?whatif=annual_salary%3Anull')
+  })
+
+  it('Apply waits until every override row is complete, and says why', async () => {
+    const apply = () =>
+      screen.getByRole('button', { name: 'Apply 1 override to 2024' }) as HTMLButtonElement
+    mount('/taxes?whatif=annual_salary%3A250000', { definitions: DEFS, inputs: INPUTS })
+    await screen.findByText('Δ total tax')
+    expect(apply().disabled).toBe(false)
+    fireEvent.click(addOverride())
+    expect(apply().disabled).toBe(true)
+    expect(screen.getByText(/Finish or remove the override row that is not in the scenario yet/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove override 2' }))
+    expect(apply().disabled).toBe(false)
+  })
+
+  it('Reset to actual clears every override row, the unfinished ones too', async () => {
+    mount('/taxes?whatif=annual_salary%3A250000', { definitions: DEFS, inputs: INPUTS })
+    await screen.findByText('Δ total tax')
+    fireEvent.click(addOverride())
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to actual' }))
+    expect(url()).toBe('/taxes')
+    expect(screen.queryByLabelText('Override')).toBeNull()
+  })
+
+  it('refuses a duplicated key and a garbled value in the box’s words, spending no request', async () => {
+    mount('/taxes?whatif=annual_salary%3A210000&whatif=itemized_deduction%3A30000', { definitions: DEFS })
+    await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
+    // The other row's key is offered, but not as a second row for it.
+    expect(
+      within(keyPicker(1)).getByRole('option', { name: 'Annual Salary (annual_salary)' }),
+    ).toHaveProperty('disabled', true)
+    fireEvent.change(keyPicker(1), { target: { value: 'annual_salary' } })
+    expect(screen.getByRole('alert').textContent).toContain('Annual Salary is overridden twice — one row per key')
+    typeOverride('Override 1 value', '12..3')
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Annual Salary: enter a number like 210000 — or tick “Clear this input”',
+    )
+    expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps Add override shut while a row waits for its key, once every key has a row, and with no definitions', async () => {
     mount('/taxes', { definitions: DEFS })
     await openPanel()
     fireEvent.click(addOverride())
+    expect(addOverride().disabled).toBe(true) // the empty row first
+    fireEvent.change(keyPicker(), { target: { value: 'annual_salary' } })
+    expect(addOverride().disabled).toBe(false)
     fireEvent.click(addOverride())
-    expect(addOverride().disabled).toBe(true)
+    fireEvent.change(keyPicker(1), { target: { value: 'itemized_deduction' } })
+    expect(addOverride().disabled).toBe(true) // every key has a row
     fireEvent.click(screen.getByRole('button', { name: 'Remove override 2' }))
     expect(addOverride().disabled).toBe(false)
     cleanup()
@@ -630,7 +751,7 @@ describe('WhatIfPanel', () => {
   // accepted one would write an entry the very next decode drops, and the leg would vanish
   // without a word (lane P's BoxKnob, same lesson).
   it('refuses the spellings the URL codec would drop, in every box', async () => {
-    mount('/taxes?whatif=sale%3A7%3A40&whatif=espp%3A3%3A150.00000&whatif=annual_salary%3Anull', {
+    mount('/taxes?whatif=sale%3A7%3A40&whatif=espp%3A3%3A150.00000&whatif=annual_salary%3A210000', {
       definitions: DEFS,
     })
     await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
@@ -732,6 +853,7 @@ describe('WhatIfPanel', () => {
     await screen.findByText('Δ total tax')
     expect(screen.queryByRole('button', { name: /^Apply \d+ override/ })).toBeNull()
     fireEvent.click(addOverride())
+    fireEvent.change(keyPicker(), { target: { value: 'annual_salary' } })
     fireEvent.focus(field('Override 1 value'))
     fireEvent.change(field('Override 1 value'), { target: { value: '210000' } })
     fireEvent.blur(field('Override 1 value'))

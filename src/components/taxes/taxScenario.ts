@@ -222,10 +222,21 @@ function limitValue(limits: LimitsOut | null, key: string): string | null {
  *  override addresses the HOUSEHOLD key map (the endpoint sums before it applies). Exact
  *  string addition — an input we are about to construct, never a displayed figure. */
 function householdValue(inputs: TaxInputsOut | null, key: string): string {
-  let total = '0'
+  return storedHouseholdValue(inputs, key) ?? '0'
+}
+
+/**
+ * What the stored year holds for a key, summed over its person columns — the value an override
+ * row starts from once its key is chosen (2026-09-23 spec §B7), so the row begins at "no change"
+ * rather than at a blank the engine reads as zero. null when no column carries a value: absent
+ * is not zero, and the row then starts empty.
+ */
+export function storedHouseholdValue(inputs: TaxInputsOut | null, key: string): string | null {
+  let total: string | null = null
   for (const section of inputs?.sections ?? [])
     for (const item of section.items)
-      if (item.key === key && item.value !== null) total = addDecimals(total, item.value)
+      if (item.key === key && item.value !== null)
+        total = addDecimals(total ?? '0', item.value)
   return total
 }
 
