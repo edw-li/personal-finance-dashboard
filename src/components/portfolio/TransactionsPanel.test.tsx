@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import type { ComponentProps } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -1004,5 +1006,46 @@ describe('TransactionsPanel reorder — a save that fails (spec §5, §8.1, §8.
     keyboardMove(NVDA_SELL, 'ArrowUp')
     await screen.findByText(/^Couldn't save the new order/)
     expect(order()).toEqual(['22', '21', '23'])
+  })
+})
+
+// ── The reorderable ledger's CSS (spec §0.11, §2.5, §5) ────────────────────────────────────────
+// Lane R0's reorder.css owns every rule the ledger's table needs under drag (plan amendment A1):
+// the separate border model, the narrow grip cell and the pinned actions cell's row states. They
+// are pinned here as a guard on that dependency — green from the start, not TDD.
+describe('portfolio.css and reorder.css — the reorderable ledger', () => {
+  // Comments out, whitespace flattened (motionCss.test.ts's reader): a pin never breaks on a
+  // re-indent or on a comment between rules.
+  const flat = (file: string) =>
+    readFileSync(path.join(__dirname, file), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\s+/g, ' ')
+  const css = flat('portfolio.css')
+  const reorderCss = flat('../reorder/reorder.css')
+
+  it('gives the ledger separate borders whichever stylesheet lands last', () => {
+    expect(reorderCss).toContain('table.reorder-table { border-collapse: separate; border-spacing: 0; }')
+    // …because the ledger's own collapse sits on the one-class `.port-table` (0,1,0), which
+    // `table.reorder-table` (0,1,1) outranks in any production chunk order.
+    expect(css).toMatch(/(^|\}) \.port-table \{[^}]*border-collapse: collapse;/)
+  })
+
+  it('keeps the grip column as narrow as its icon', () => {
+    // (0,2,0) against `.port-table td`'s padding (0,1,1).
+    expect(reorderCss).toMatch(/\.reorder-table \.reorder-grip-cell \{[^}]*padding-right: 0;/)
+  })
+
+  it('lifts the pinned actions cell with its row and draws the drop line across it', () => {
+    // panels.css pins `.port-table td.row-actions` (0,2,1) with its own surface and a left
+    // hairline; each row state outranks it and keeps that hairline.
+    expect(reorderCss).toContain(
+      ".reorder-table tr[data-reorder='lifted'] > td.row-actions { background: var(--surface-2); box-shadow: -1px 0 0 var(--border), inset 0 1px 0 var(--border), inset 0 -1px 0 var(--border); }",
+    )
+    expect(reorderCss).toContain(
+      ".reorder-table tr[data-reorder-drop='before'] > td.row-actions { box-shadow: -1px 0 0 var(--border), inset 0 2px 0 var(--accent); }",
+    )
+    expect(reorderCss).toContain(
+      ".reorder-table tr[data-reorder-drop='after'] > td.row-actions { box-shadow: -1px 0 0 var(--border), inset 0 -2px 0 var(--accent); }",
+    )
   })
 })
