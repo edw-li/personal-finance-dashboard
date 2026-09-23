@@ -1,6 +1,7 @@
 """services.ordering — the reorder endpoints' pure arithmetic (2026-09-23 drag-to-reorder
 spec §3.1). Route behaviour lives in each router's own test file."""
 
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -16,9 +17,11 @@ from app.services.ordering import (
     check_permutation,
     moved_ids,
     next_sort_order,
+    position_changes,
     renumber,
     subset_in_slots,
 )
+from app.services.portfolio_calc import Position
 
 # ── the §8.3 sentences ───────────────────────────────────────────────────────────────
 
@@ -167,3 +170,68 @@ async def test_next_sort_order_appends_after_the_max_and_starts_at_zero(db):
     )
     await db.commit()
     assert (await db.execute(next_sort_order(Account.sort_order))).scalar_one() == 30
+
+
+# ── position_changes ─────────────────────────────────────────────────────────────────
+
+
+def pos(security_id: int, account: str, shares: str, cost: str, gain: str, *warnings: str):
+    return Position(
+        security_id=security_id,
+        account=account,
+        shares=Decimal(shares),
+        cost_basis=Decimal(cost),
+        realized_gl=Decimal(gain),
+        warnings=list(warnings),
+    )
+
+
+def test_position_changes_is_empty_when_every_figure_rounds_the_same():
+    before = {(1, "Fido"): pos(1, "Fido", "6", "300", "120")}
+    # Sub-cent and sub-micro-share noise is not a change: the comparison is quantized.
+    after = {(1, "Fido"): pos(1, "Fido", "6.0000001", "300.004", "119.996")}
+    assert position_changes(before, after, {1: "VOO"}) == []
+
+
+def test_position_changes_reports_quantized_strings_and_the_new_warning():
+    before = {(1, "Fido"): pos(1, "Fido", "6", "300", "120")}
+    after = {(1, "Fido"): pos(1, "Fido", "6", "500", "320", "txn 7: sell with no held shares")}
+    [change] = position_changes(before, after, {1: "VOO"})
+    assert change.model_dump(mode="json") == {
+        "security_id": 1,
+        "ticker": "VOO",
+        "account": "Fido",
+        "shares_before": "6.000000",
+        "shares_after": "6.000000",
+        "cost_basis_before": "300.00",
+        "cost_basis_after": "500.00",
+        "realized_gl_before": "120.00",
+        "realized_gl_after": "320.00",
+        "warnings_added": ["txn 7: sell with no held shares"],
+    }
+
+
+def test_a_new_warning_alone_is_a_change_and_an_old_one_is_not_repeated():
+    old_line = "txn 3: sell exceeds held shares"
+    before = {(1, "Fido"): pos(1, "Fido", "0", "0", "5", old_line)}
+    after = {
+        (1, "Fido"): pos(1, "Fido", "0", "0", "5", old_line, "txn 4: sell with no held shares")
+    }
+    [change] = position_changes(before, after, {1: "VOO"})
+    assert change.warnings_added == ["txn 4: sell with no held shares"]
+
+
+def test_position_changes_are_ordered_by_ticker_then_account_and_never_minus_zero():
+    before = {
+        (2, "RH"): pos(2, "RH", "1", "10", "0"),
+        (1, "Z"): pos(1, "Z", "1", "10", "0"),
+        (1, "A"): pos(1, "A", "1", "10", "0"),
+    }
+    after = {
+        (2, "RH"): pos(2, "RH", "2", "10", "0"),
+        (1, "Z"): pos(1, "Z", "2", "10", "0"),
+        (1, "A"): pos(1, "A", "2", "10", "-0.001"),
+    }
+    changes = position_changes(before, after, {1: "BBB", 2: "AAA"})
+    assert [(c.ticker, c.account) for c in changes] == [("AAA", "RH"), ("BBB", "A"), ("BBB", "Z")]
+    assert changes[1].model_dump(mode="json")["realized_gl_after"] == "0.00"

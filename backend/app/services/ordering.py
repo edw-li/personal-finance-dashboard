@@ -7,10 +7,14 @@ that needs the database is BUILT here and awaited by the router.
 
 from bisect import bisect_left
 from collections.abc import Sequence
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import HTTPException
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import InstrumentedAttribute
+
+from app.schemas.portfolio import PositionChangeOut
+from app.services.portfolio_calc import MONEY_Q, SHARE_Q, Position, PositionKey
 
 # §8.3 — the 409 a stale list earns. The client shows it in toast.error and reloads, so the
 # reader is already looking at the current rows when they read it.
@@ -106,3 +110,45 @@ def next_sort_order(column: InstrumentedAttribute[int]) -> Select[tuple[int]]:
     sort_order takes (spec §3.3). The statement, not the value, so this module stays free
     of I/O: the router awaits it inside its own transaction."""
     return select(func.coalesce(func.max(column), -1) + 1)
+
+
+def _q(value: Decimal, quantum: Decimal) -> Decimal:
+    quantized = value.quantize(quantum, rounding=ROUND_HALF_UP)
+    return abs(quantized) if quantized == 0 else quantized  # never "-0.00" on the wire
+
+
+def position_changes(
+    before: dict[PositionKey, Position],
+    after: dict[PositionKey, Position],
+    tickers: dict[int, str],
+) -> list[PositionChangeOut]:
+    """Every position whose figures differ between two folds of the SAME rows in two
+    orders — shares at 6 dp, cost basis and realized gain at 2 dp — or whose warnings
+    gained a line. A reorder never adds or removes a position (the same rows fold both
+    times), so the two dicts share their keys. Ordered by (ticker, account)."""
+    changes: list[PositionChangeOut] = []
+    for key, now in after.items():
+        was = before[key]
+        shares = (_q(was.shares, SHARE_Q), _q(now.shares, SHARE_Q))
+        cost = (_q(was.cost_basis, MONEY_Q), _q(now.cost_basis, MONEY_Q))
+        gain = (_q(was.realized_gl, MONEY_Q), _q(now.realized_gl, MONEY_Q))
+        warnings_added = [line for line in now.warnings if line not in was.warnings]
+        unchanged = shares[0] == shares[1] and cost[0] == cost[1] and gain[0] == gain[1]
+        if unchanged and not warnings_added:
+            continue
+        changes.append(
+            PositionChangeOut(
+                security_id=now.security_id,
+                ticker=tickers[now.security_id],
+                account=now.account,
+                shares_before=shares[0],
+                shares_after=shares[1],
+                cost_basis_before=cost[0],
+                cost_basis_after=cost[1],
+                realized_gl_before=gain[0],
+                realized_gl_after=gain[1],
+                warnings_added=warnings_added,
+            )
+        )
+    changes.sort(key=lambda change: (change.ticker, change.account))
+    return changes

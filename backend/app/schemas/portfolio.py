@@ -182,6 +182,32 @@ class TransactionOut(BaseModel):
     notes: str | None
 
 
+class PositionChangeOut(BaseModel):
+    """One position whose figures a replay-order change moved (2026-09-23 reorder spec
+    §3.2). Shares are quantized to 6 dp and money to 2 dp BEFORE they reach this model, so
+    the wire strings are exact; `warnings_added` holds only the lines the new order
+    introduced."""
+
+    security_id: int
+    ticker: str
+    account: str
+    shares_before: Decimal
+    shares_after: Decimal
+    cost_basis_before: Decimal
+    cost_basis_after: Decimal
+    realized_gl_before: Decimal
+    realized_gl_after: Decimal
+    warnings_added: list[str]
+
+
+class TransactionOrderOut(BaseModel):
+    """PUT /portfolio/transactions/order: the rows the caller's scope shows, in their new
+    order, and every position whose figures changed, ordered by (ticker, account)."""
+
+    transactions: list[TransactionOut]
+    changed_positions: list[PositionChangeOut]
+
+
 class DividendCreate(BaseModel):
     security_id: int
     account: str | None = Field(default=None, max_length=80)
