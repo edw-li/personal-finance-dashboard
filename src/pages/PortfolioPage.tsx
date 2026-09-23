@@ -111,6 +111,17 @@ interface PortfolioSnapshot {
   history: PortfolioHistory
   realized: RealizedResponse
   refreshStatus: RefreshStatus
+  // The household's own ledgers, fetched only while the page shows a person (review round 1):
+  // the performance chart is household-wide, so its events — and the held-then-or-now filter on
+  // the provider's ex-dividend notices — read these, never the person's. Absent or null on the
+  // household view, where the page's own ledgers ARE the household's.
+  householdLedgers?: HouseholdLedgers | null
+}
+
+interface HouseholdLedgers {
+  holdings: HoldingsResponse
+  transactions: TransactionOut[]
+  dividends: DividendOut[]
 }
 
 const PAGE_SECTIONS = [{"id":"overview","label":"Overview"},{"id":"holdings","label":"Holdings"},{"id":"allocation","label":"Allocation"},{"id":"income","label":"Income"},{"id":"manage","label":"Manage"}] as const
@@ -153,6 +164,9 @@ export default function PortfolioPage() {
   const [realized, setRealized] = useState<RealizedResponse | null>(cached?.realized ?? null)
   const [refreshStatus, setRefreshStatus] = useState<RefreshStatus | null>(
     cached?.refreshStatus ?? null,
+  )
+  const [householdLedgers, setHouseholdLedgers] = useState<HouseholdLedgers | null>(
+    cached?.householdLedgers ?? null,
   )
   // Ticker being deactivated from the failed-refresh row (the old manual-psql ritual for
   // a delisted symbol, one click now); single-flight like the panels' busy flags.
@@ -287,6 +301,7 @@ export default function PortfolioPage() {
     setHistory(snap.history)
     setRealized(snap.realized)
     setRefreshStatus(snap.refreshStatus)
+    setHouseholdLedgers(snap.householdLedgers ?? null)
   }, [])
 
   // The mirror, from a committed render rather than from render itself. Every apply — the
@@ -343,8 +358,14 @@ export default function PortfolioPage() {
       // rule). A null roster offers no completions and warns about nothing.
       fetchPortfolioAccounts().catch(() => null),
       fetchHousehold().catch(() => null),
+      // The household-wide chart's own ledgers, only while the page shows a person.
+      owner === null
+        ? Promise.resolve(null)
+        : Promise.all([fetchHoldings(null), fetchTransactions(null), fetchDividends(null)]).then(
+            ([holdings, transactions, dividends]): HouseholdLedgers => ({ holdings, transactions, dividends }),
+          ),
     ])
-      .then(([h, secs, txns, divs, typ, acct, spark, hist, real, status, divEvents, roster, people]) => {
+      .then(([h, secs, txns, divs, typ, acct, spark, hist, real, status, divEvents, roster, people, household]) => {
         if (seq !== seqRef.current) return
         const snapshot: PortfolioSnapshot = {
           holdings: h,
@@ -362,6 +383,9 @@ export default function PortfolioPage() {
           history: hist,
           realized: real,
           refreshStatus: status,
+          // Only in a person's view: the household view's snapshot keeps its old shape, so its
+          // identical-payload skip below still recognises a warm cache.
+          ...(household === null ? {} : { householdLedgers: household }),
         }
         setSnapshot(portfolioKey(owner), snapshot)
         setError(null)
@@ -444,13 +468,16 @@ export default function PortfolioPage() {
     // Markers come from the ledgers this page ALREADY fetches in the same Promise.all —
     // Overview keeps the short call and never starts fetching them (spec Decision log).
     // Dividends and ex-dividend notices go to the rug; a notice survives only for a security
-    // held then or now, and "now" is this page's own holdings (2026-09-23 spec §C8).
+    // held then or now (2026-09-23 spec §C8). The chart is the HOUSEHOLD's whatever the Whose
+    // chip says, so in a person's view every event and both "held" tests read the household's
+    // ledgers (review round 1); on the household view the page's own already are.
     const tickerById = new Map(securities.map((s) => [s.id, s.ticker]))
-    const heldNow = new Set(holdings.holdings.map((h) => h.security_id))
+    const ledgers = householdLedgers ?? { holdings, transactions, dividends }
+    const heldNow = new Set(ledgers.holdings.holdings.map((h) => h.security_id))
     const events = buildPerformanceEvents(
       history,
-      transactions,
-      dividends,
+      ledgers.transactions,
+      ledgers.dividends,
       tickerById,
       dividendEvents,
       heldNow,
@@ -476,7 +503,7 @@ export default function PortfolioPage() {
         // END, so the indices are unshifted and the window runs out to the ping.
         dataZoom: rangeZoom(history.dates, range),
       }
-  }, [history, holdings, securities, transactions, dividends, dividendEvents, range, legendSelected, owner])
+  }, [history, holdings, securities, transactions, dividends, dividendEvents, householdLedgers, range, legendSelected, owner])
 
   // The card states the honest benchmark's answer over the window the chart is showing — the
   // chip's, or one dragged out with ctrl+wheel (2026-09-23 spec §C8; wealth PF-1).

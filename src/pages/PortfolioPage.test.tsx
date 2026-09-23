@@ -884,6 +884,35 @@ it('draws ex-dividend notices on the rug only for securities the page holds', as
   expect(performance().getAttribute('data-series')).not.toContain('Ex-dividend dates')
 })
 
+// Review round 1: the performance chart is household-wide whatever the Whose chip says, so its
+// events — and the "held then or now" filter on the provider's notices — read the HOUSEHOLD's
+// ledgers, fetched alongside a person's own.
+it("annotates the household chart from the household's ledgers in a person's view", async () => {
+  vi.mocked(fetchHoldings).mockImplementation((scope) =>
+    Promise.resolve(scope === SAM.id ? EMPTY_HOLDINGS : holdingsOut()),
+  )
+  vi.mocked(fetchTransactions).mockImplementation((scope) =>
+    Promise.resolve(scope === SAM.id ? [] : TRANSACTIONS),
+  )
+  vi.mocked(fetchDividends).mockImplementation((scope) =>
+    Promise.resolve(scope === SAM.id ? [] : DIVIDENDS),
+  )
+  // VOO: the household holds it; Sam does not.
+  vi.mocked(fetchDividendEvents).mockResolvedValue([
+    { security_id: 1, ex_date: '2026-08-18', per_share: '1.000000' },
+  ])
+  renderPage('/portfolio?owner=2')
+  const performance = () => screen.getAllByTestId('echart')[0]
+  await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith(SAM.id))
+  expect(fetchHoldings).toHaveBeenCalledWith(null)
+  expect(fetchTransactions).toHaveBeenCalledWith(null)
+  expect(fetchDividends).toHaveBeenCalledWith(null)
+  await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+  // …while Sam's own panels stay Sam's.
+  expect(fetchRealized).toHaveBeenCalledWith(SAM.id)
+  expect(fetchRealized).not.toHaveBeenCalledWith(null)
+})
+
 it('renders the live ping only on the All view', async () => {
   renderPage()
   await screen.findByRole('group', { name: 'Whose' })
@@ -1008,7 +1037,9 @@ describe('PortfolioPage — shell scope', () => {
   it('an owner chip in the scope row rewrites the URL and refetches', async () => {
     renderPage('/portfolio')
     fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
-    await waitFor(() => expect(vi.mocked(fetchHoldings)).toHaveBeenLastCalledWith(SAM.id))
+    // Not "last": a person's view also fetches the household's holdings for the household-wide
+    // performance chart (review round 1).
+    await waitFor(() => expect(vi.mocked(fetchHoldings)).toHaveBeenCalledWith(SAM.id))
     expect(screen.getByTestId('location').textContent).toContain('owner=2')
   })
 
