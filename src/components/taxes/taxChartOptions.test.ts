@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
 import {
+  NEGATIVE,
   OTHER_SERIES_COLOR,
   PALETTE,
   POSITIVE,
@@ -773,7 +774,7 @@ describe('whatIfDeltaBarOption', () => {
     ...over,
   })
 
-  it('draws one bar per jurisdiction delta, diverging around zero, through the grammar tooltip', () => {
+  it('draws one bar per jurisdiction delta, less tax reading left, through the grammar tooltip', () => {
     const option = whatIfDeltaBarOption(
       delta({
         total_tax: '-5488.69',
@@ -792,10 +793,8 @@ describe('whatIfDeltaBarOption', () => {
       'Disability',
       'Capital gains',
     ])
-    const series = (option.series as { data: number[] }[])[0]
-    expect(series.data).toEqual([-3000, -2413.1, -75.59, 0, 0, 0, 0])
-    // Symmetric around zero on the LARGEST move, so the arms mean the same thing.
-    expect(option.visualMap).toMatchObject({ min: -3000, max: 3000 })
+    const series = (option.series as { data: { value: number }[] }[])[0]
+    expect(series.data.map((d) => d.value)).toEqual([-3000, -2413.1, -75.59, 0, 0, 0, 0])
     // The grammar's, by identity — a hand-rolled formatter is a conformance failure.
     expect((option.xAxis as { axisLabel: { formatter: unknown } }).axisLabel.formatter).toBe(
       compactMoney,
@@ -805,7 +804,64 @@ describe('whatIfDeltaBarOption', () => {
 
   it('treats an absent NIIT as no movement rather than a gap in the ladder', () => {
     const option = whatIfDeltaBarOption(delta({ federal_tax: '-100.00', niit_tax: null }))!
-    expect((option.series as { data: number[] }[])[0].data[2]).toBe(0)
+    expect((option.series as { data: { value: number }[] }[])[0].data[2].value).toBe(0)
+  })
+
+  it('colours each bar by its sign and prints the signed amount at its outer end (2026-09-23 §C6)', () => {
+    // The real "Max 401(k)" + "Sell all NVDA" answer on the 2026 book (finance_realdata).
+    const option = whatIfDeltaBarOption(
+      delta({
+        federal_tax: '-608.20',
+        state_tax: '19186.18',
+        niit_tax: '7935.81',
+        capital_gains_tax: '31325.57',
+      }),
+    )!
+    const [series] = option.series as {
+      data: { value: number; itemStyle: { color: string }; label: { position: string } }[]
+      label: { show: boolean; formatter: (p: { dataIndex: number }) => string }
+    }[]
+    // More tax is the warm/negative tone, less tax the positive one, no movement neutral.
+    expect(series.data.map((d) => d.itemStyle.color)).toEqual([
+      POSITIVE,
+      NEGATIVE,
+      NEGATIVE,
+      OTHER_SERIES_COLOR,
+      OTHER_SERIES_COLOR,
+      OTHER_SERIES_COLOR,
+      NEGATIVE,
+    ])
+    // The label sits beyond each bar's OUTER end: left of less tax, right of more.
+    expect(series.data.map((d) => d.label.position)).toEqual([
+      'left', 'right', 'right', 'right', 'right', 'right', 'right',
+    ])
+    expect(series.label.show).toBe(true)
+    expect([0, 1, 2, 3, 6].map((dataIndex) => series.label.formatter({ dataIndex }))).toEqual([
+      '-$608',
+      '+$19.2K',
+      '+$7.9K',
+      '$0',
+      '+$31.3K',
+    ])
+  })
+
+  it('draws no colour scale and no legend, and leaves room past both ends for the labels', () => {
+    const option = whatIfDeltaBarOption(delta({ federal_tax: '-100.00' }))! as Record<string, unknown>
+    // The old visualMap mapped the CATEGORY index (a horizontal bar's last dimension) and so
+    // painted every bar the neutral midpoint; its gradient legend sat on the x-axis ticks.
+    expect(option.visualMap).toBeUndefined()
+    expect(option.legend).toBeUndefined()
+    expect(option.grid).toEqual(GRID_VARIANTS.horizontal)
+    expect((option.xAxis as { boundaryGap: unknown }).boundaryGap).toEqual(['12%', '12%'])
+  })
+
+  it('keeps both sign tones at 3:1 or better on the card in both themes', () => {
+    for (const hex of [POSITIVE, NEGATIVE]) {
+      expect(contrastRatio(hex, DARK.surface), `${hex} on dark`).toBeGreaterThanOrEqual(3)
+      const twin = lightFromDark.get(hex.toLowerCase())
+      expect(twin, `${hex} has a light twin`).toBeDefined()
+      expect(contrastRatio(twin!, LIGHT.surface), `${twin} on light`).toBeGreaterThanOrEqual(3)
+    }
   })
 
   it('returns null when every delta is zero', () => {

@@ -17,9 +17,9 @@ import {
   stagger,
 } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
-import { divergingVisualMap } from '../../charts/scales'
 import {
   INK,
+  NEGATIVE,
   OTHER_SERIES_COLOR,
   POSITIVE,
   SEQUENTIAL_BLUE,
@@ -34,7 +34,7 @@ import {
 } from '../../charts/waterfall'
 import type { TaxSummaryOut, WhatIfDelta } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { formatCurrency, formatPct } from '../../utils/format'
+import { formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
 import type { LadderSegment } from './marginal'
 
 // The seven tax lines in the order the engine reports them — one order shared by the
@@ -435,9 +435,19 @@ const DELTA_LINES: readonly [string, (delta: WhatIfDelta) => string | null | und
   ['Capital gains', (d) => d.capital_gains_tax],
 ]
 
+/** "+$19.2K" / "-$608" — on a Δ bar the sign is the whole point (the movers chart's grammar). */
+const signedCompact = (value: number): string =>
+  value > 0 ? `+${formatCurrencyCompact(value)}` : formatCurrencyCompact(value)
+
 /**
  * The what-if's Δ by jurisdiction (2026-09-03 planning-sandboxes spec §10): one horizontal
- * bar per tax line, scenario minus baseline, diverging around zero — less tax reads left.
+ * bar per tax line, scenario minus baseline — less tax reads left. Each bar wears its SIGN
+ * (more tax NEGATIVE, less tax POSITIVE, no movement the neutral grey) and its signed amount
+ * at its outer end (2026-09-23 spec §C6). It used to take its colour from a diverging
+ * visualMap, which on a horizontal bar maps the LAST dimension — the category index, not the
+ * value — so every bar painted the neutral midpoint at ≈1.2:1 against the card, and the
+ * scale's unlabelled legend sat on the x-axis ticks. The axis carries the sign and the labels
+ * carry the amounts, so there is no legend at all.
  * Null when nothing moved at all, which is the card's empty sentence rather than seven bars
  * of zero pretending to be an answer.
  *
@@ -450,8 +460,6 @@ export function whatIfDeltaBarOption(delta: WhatIfDelta): EChartsOption | null {
     return raw === null || raw === undefined ? 0 : Number(raw)
   })
   if (values.every((v) => v === 0)) return null
-  // Symmetric on the LARGEST move, so a bar's length means the same thing on either arm.
-  const span = Math.max(...values.map(Math.abs))
   return {
     grid: grid('horizontal'),
     // Item trigger: an axis tooltip would announce the whole ladder for one hover, and each
@@ -460,11 +468,23 @@ export function whatIfDeltaBarOption(delta: WhatIfDelta): EChartsOption | null {
       body: (p) =>
         typeof p.value === 'number' ? { value: p.value, label: `${String(p.name)} Δ` } : null,
     }),
-    xAxis: moneyAxis(),
+    // The movers chart's 12 % of headroom, on BOTH ends: the longest bar can sit on either
+    // arm, and its signed label must not clip at the grid edge.
+    xAxis: { ...moneyAxis(), boundaryGap: ['12%', '12%'] as [string, string] },
     // inverse, so Federal reads on TOP the way the compare rows below order them.
     yAxis: { type: 'category', data: DELTA_LINES.map(([label]) => label), inverse: true },
-    // The colour IS the sign here, so it comes from the scale rather than a per-bar hex.
-    visualMap: divergingVisualMap({ span, formatter: formatCurrency }),
-    series: [{ type: 'bar' as const, ...BAR_MARKS, data: values }],
+    series: [
+      {
+        type: 'bar' as const,
+        ...BAR_MARKS,
+        label: capLabel((p) => signedCompact(values[p.dataIndex] ?? 0)),
+        data: values.map((value) => ({
+          value,
+          itemStyle: { color: value > 0 ? NEGATIVE : value < 0 ? POSITIVE : OTHER_SERIES_COLOR },
+          // Beyond the bar's OUTER end: right of more tax, left of less.
+          label: { position: value < 0 ? ('left' as const) : ('right' as const) },
+        })),
+      },
+    ],
   }
 }
