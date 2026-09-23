@@ -407,7 +407,9 @@ shadow it.
   collision.
 - **Serialized writes.** (Amended 2026-09-23 at lane R1's review.) Every reorder route, every append
   path of the same list (the creates, an account's group-change append, the UI transaction create,
-  the importer's creates) takes a per-list transaction-scoped advisory lock first. Concurrent
+  the importer's creates), and the Activity card's Undo of an accounts/categories batch, takes a
+  per-list transaction-scoped advisory lock first (fixed list order; Undo takes it before
+  `lock_review_inputs`). Concurrent
   reorders therefore serialize: the later request wins whole, and its change batch records fresh
   before-images. Without the lock, two overlapping reorders merged row by row into an order neither
   asked for.
