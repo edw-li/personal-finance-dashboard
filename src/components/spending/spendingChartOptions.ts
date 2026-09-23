@@ -26,13 +26,17 @@ import {
   isPartialMonth,
   moneyAxis,
   monthAxis,
+  offScaleGap,
   offScaleMarkPoint,
+  offScaleMarks,
   partialItemStyle,
   partialNote,
   pctAxis,
+  percentLabel,
   robustMax,
   stagger,
 } from '../../charts/grammar'
+import type { OffScalePoint } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { zeroLine } from '../../charts/markLine'
 import { budgetReference, referenceLine } from '../../charts/reference'
@@ -173,23 +177,28 @@ export function spendingBarsOption({
     ...(hasBudget ? inView(matrix.total_budget.map(toNumber)) : []),
   ])
   // Clipped values keep their TRUE figure in the series (the tooltip and the table read it)
-  // and gain an edge marker; a bar and the net-pay line clipped in one month stack labels.
-  const clippedBars: { x: string; value: number }[] = []
-  const clippedPay: { x: string; value: number; lift?: number }[] = []
+  // and gain an edge marker. Labels are selective across the stack and the net-pay line
+  // (offScaleMarks): one per run of neighbouring clipped months, and a net-pay label lifted
+  // where the stack already labels the same run.
+  const clippedBars: OffScalePoint[] = []
+  const clippedPay: OffScalePoint[] = []
   if (robust !== null) {
     for (let i = startValue; i <= endValue && i < matrix.months.length; i += 1) {
-      const barClipped = stackTop[i] > robust.max
-      if (barClipped) clippedBars.push({ x: monthLabels[i], value: stackTop[i] })
+      if (stackTop[i] > robust.max) clippedBars.push({ index: i, x: monthLabels[i], value: stackTop[i] })
       const pay = netPay[i]
-      if (pay !== null && pay > robust.max) {
-        clippedPay.push({ x: monthLabels[i], value: pay, ...(barClipped ? { lift: OFF_SCALE_LIFT } : {}) })
-      }
+      if (pay !== null && pay > robust.max) clippedPay.push({ index: i, x: monthLabels[i], value: pay })
     }
   }
+  const [barEdge, payEdge] = offScaleMarks([clippedBars, clippedPay], {
+    direction: 'up',
+    minGap: offScaleGap(endValue - startValue + 1),
+    lift: OFF_SCALE_LIFT,
+    text: compactMoney,
+  })
   const barMarks =
-    robust === null ? undefined : offScaleMarkPoint(clippedBars, { edge: robust.max, direction: 'up', color: MUTED, unit: 'money' })
+    robust === null ? undefined : offScaleMarkPoint(barEdge, { edge: robust.max, direction: 'up', color: MUTED, unit: 'money' })
   const payMarks =
-    robust === null ? undefined : offScaleMarkPoint(clippedPay, { edge: robust.max, direction: 'up', color: INK, unit: 'money' })
+    robust === null ? undefined : offScaleMarkPoint(payEdge, { edge: robust.max, direction: 'up', color: INK, unit: 'money' })
   // The month-to-date net pay leaves the line (spec §C5): joined to a whole month's pay it would
   // draw a fall that is only the calendar. It stays on the chart as a lone marker under the SAME
   // name, so the legend toggles both and the tooltip lists one Net pay row (the line's gap drops
@@ -507,26 +516,25 @@ export function savingsRateOption({ matrix, monthLabels, range }: SavingsRateInp
   const { startValue, endValue } = resolvedWindow(matrix.months, range)
   const inView = (values: (number | null)[]) => values.slice(startValue, endValue + 1)
   const yAxis = pctAxis({ floor: -1, ceiling: 1, values: [...inView(totalRates ?? []), ...inView(cashRates)] })
-  // Each line's clipped months, at the floor (↓) or the ceiling (↑). The cash line's label is
-  // lifted where the total line was clipped at the same edge with a DIFFERENT figure; an
-  // identical figure prints the same text in the same place, which reads as one label.
-  const marksFor = (rates: (number | null)[], color: string, under: (number | null)[] | null) => {
-    const low: { x: string; value: number; lift?: number }[] = []
-    const high: { x: string; value: number; lift?: number }[] = []
+  // Each line's clipped months, at the floor (↓) or the ceiling (↑), labelled selectively over
+  // BOTH lines (offScaleMarks): one label per run of neighbouring clipped months — its extreme
+  // (production's Sep–Dec 2023 are four in a row) — and the cash label lifted where the total
+  // line already labels the same run. The same text at the same month reads as one label.
+  const lines = totalRates === null ? [cashRates] : [totalRates, cashRates]
+  const clippedWhere = (rates: (number | null)[], beyond: (value: number) => boolean) => {
+    const points: OffScalePoint[] = []
     for (let i = startValue; i <= endValue && i < rates.length; i += 1) {
       const value = rates[i]
-      if (value === null) continue
-      const other = under?.[i] ?? null
-      if (value < yAxis.min) {
-        const lift = other !== null && other < yAxis.min && percentOf(other) !== percentOf(value)
-        low.push({ x: monthLabels[i], value, ...(lift ? { lift: OFF_SCALE_LIFT } : {}) })
-      } else if (value > yAxis.max) {
-        const lift = other !== null && other > yAxis.max && percentOf(other) !== percentOf(value)
-        high.push({ x: monthLabels[i], value, ...(lift ? { lift: OFF_SCALE_LIFT } : {}) })
-      }
+      if (value !== null && beyond(value)) points.push({ index: i, x: monthLabels[i], value })
     }
-    const down = offScaleMarkPoint(low, { edge: yAxis.min, direction: 'down', color, unit: 'percent' })
-    const up = offScaleMarkPoint(high, { edge: yAxis.max, direction: 'up', color, unit: 'percent' })
+    return points
+  }
+  const edges = { minGap: offScaleGap(endValue - startValue + 1), lift: OFF_SCALE_LIFT, text: percentLabel }
+  const lows = offScaleMarks(lines.map((rates) => clippedWhere(rates, (v) => v < yAxis.min)), { direction: 'down', ...edges })
+  const highs = offScaleMarks(lines.map((rates) => clippedWhere(rates, (v) => v > yAxis.max)), { direction: 'up', ...edges })
+  const marksFor = (line: number, color: string) => {
+    const down = offScaleMarkPoint(lows[line], { edge: yAxis.min, direction: 'down', color, unit: 'percent' })
+    const up = offScaleMarkPoint(highs[line], { edge: yAxis.max, direction: 'up', color, unit: 'percent' })
     if (down === undefined || up === undefined) return down ?? up
     // Both edges on one line (a rate above 100% needs refunds that outweigh spending): the
     // ceiling's items restate their own rotation and label side.
@@ -535,8 +543,8 @@ export function savingsRateOption({ matrix, monthLabels, range }: SavingsRateInp
       data: [...down.data, ...up.data.map((item) => ({ ...item, symbolRotate: 0, label: { ...item.label, position: 'bottom' as const } }))],
     }
   }
-  const totalMarks = totalRates === null ? undefined : marksFor(totalRates, PALETTE[0], null)
-  const cashMarks = marksFor(cashRates, PALETTE[1], totalRates)
+  const totalMarks = totalRates === null ? undefined : marksFor(0, PALETTE[0])
+  const cashMarks = marksFor(lines.length - 1, PALETTE[1])
   const series = [
     ...(totalRates === null
       ? []
@@ -575,9 +583,6 @@ export function savingsRateOption({ matrix, monthLabels, range }: SavingsRateInp
     series,
   }
 }
-
-/** Two rates that print the same whole percent are one label (the off-scale markers' text). */
-const percentOf = (rate: number) => Math.round(rate * 100)
 
 /** Rates and their source amounts, retaining the raw category sum separately from
  *  cash outflow. Verbatim server strings; blanks for absent, never '0.00'. */

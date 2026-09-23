@@ -484,6 +484,32 @@ describe('savingsRateOption', () => {
     ])
   })
 
+  // The browser found it: production's Sep–Dec 2023 sit under −100% side by side, and in the
+  // "All" view their four labels printed over each other. One label per run — the extreme.
+  it('labels one mark per run of neighbouring clipped months, the most extreme, and keeps every triangle', () => {
+    const months = Array.from({ length: 36 }, (_, i) => `${2023 + Math.floor((i + 7) / 12)}-${String(((i + 7) % 12) + 1).padStart(2, '0')}-01`)
+    const labels = months.map((m) => `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`)
+    const clipped: Record<number, string> = { 1: '-10.73', 2: '-1.98', 3: '-1.76', 4: '-1.55' }
+    const matrix = matrixFixture({ months, savings_rate: months.map((_, i) => clipped[i] ?? '0.2'), total_savings_rate: undefined })
+    const option = read(savingsRateOption({ matrix, monthLabels: labels, range: { preset: 'all' } })) as unknown as {
+      series: { markPoint?: { data: unknown[] } }[]
+    }
+    expect(labels.slice(0, 2)).toEqual(['Aug 2023', 'Sep 2023'])
+    expect(option.series[0].markPoint?.data).toEqual([
+      { name: 'Sep 2023', coord: ['Sep 2023', -1], value: -10.73, label: { formatter: '-1073% ↓' } },
+      { name: 'Oct 2023', coord: ['Oct 2023', -1], value: -1.98, label: { show: false } },
+      { name: 'Nov 2023', coord: ['Nov 2023', -1], value: -1.76, label: { show: false } },
+      { name: 'Dec 2023', coord: ['Dec 2023', -1], value: -1.55, label: { show: false } },
+    ])
+    // Zoomed in to five months, each month has room for its own label.
+    const zoomed = read(savingsRateOption({ matrix, monthLabels: labels, range: { preset: 'all', window: { startValue: 0, endValue: 4 } } })) as unknown as {
+      series: { markPoint?: { data: { label: unknown }[] } }[]
+    }
+    expect(zoomed.series[0].markPoint?.data.map((item) => item.label)).toEqual([
+      { formatter: '-1073% ↓' }, { formatter: '-198% ↓' }, { formatter: '-176% ↓' }, { formatter: '-155% ↓' },
+    ])
+  })
+
   it('falls back to the lone cash line on a backend older than the savings service', () => {
     const option = savings({ total_savings_rate: undefined })
     expect(option.series.map((s) => s.name)).toEqual([CASH_RATE_SERIES])
