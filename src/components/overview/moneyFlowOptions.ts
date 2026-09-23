@@ -16,6 +16,7 @@
 import type { EChartsOption } from '../../charts/echarts'
 import { ENTITY, SALARY_TINTS, foldCategories, foldColor } from '../../charts/entities'
 import type { CategoryFold } from '../../charts/entities'
+import { fanCents } from '../../charts/grammar'
 import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter, sankeyCsv } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
 import { brandTooltip } from '../../charts/tooltip'
@@ -370,6 +371,15 @@ export function moneyFlowOption(
     links.push({ source: GROSS, target: pendingName, value: cents(pending) })
   }
 
+  // Pay without spending (spec §C1): its take-home ends on a named terminal, never inside
+  // Saved. Its name carries months, so it joins the claim set only when drawn, and it joins
+  // BEFORE the categories are claimed: a category spelled exactly like it must wear the suffix,
+  // not take the name and leave two nodes called the same (the crash class above).
+  const unmatchedMonths = flow.take_home_unmatched_months ?? []
+  const unmatchedName = unmatchedNodeName(unmatchedMonths)
+  const drawsUnmatched = unmatched >= A_CENT && unmatchedMonths.length > 0
+  if (drawsUnmatched) taken.add(unmatchedName)
+
   // The fan's sources beside take-home: money that came back (a net-refund category), and
   // the Drawdown a deficit window needs. Each category is split pro-rata across all three —
   // money is fungible, and naming WHICH categories a refund or a drawdown funded would
@@ -380,29 +390,29 @@ export function moneyFlowOption(
   if (deficit) nodes.push({ name: DRAWDOWN, value: cents(-saved), depth: 2, itemStyle: { color: ENTITY.deficit } })
 
   const slices = fanSlices(flow, fold, taken)
-  const t = Math.max(fromTakeHome, 0)
-  const r = drawsRefunds ? refunds : 0
-  const d = deficit ? -saved : 0
-  const funding = t + r + d
-  for (const slice of slices) {
+  // In whole cents and exact on both sides (grammar fanCents): every source's links sum to its
+  // node and every category's to its own. Take-home goes LAST, so the biggest source absorbs
+  // the rounding and the small ones are apportioned by largest remainder.
+  const [viaRefunds, viaDrawdown, viaTakeHome] = fanCents(
+    [
+      drawsRefunds ? Math.round(refunds * 100) : 0,
+      deficit ? Math.round(-saved * 100) : 0,
+      Math.round(Math.max(fromTakeHome, 0) * 100),
+    ],
+    slices.map((slice) => Math.round(slice.value * 100)),
+  )
+  slices.forEach((slice, j) => {
     nodes.push({ name: slice.name, value: slice.value, depth: 3, itemStyle: { color: slice.color } })
-    const viaRefunds = funding > 0 ? cents((slice.value * r) / funding) : 0
-    const viaDrawdown = funding > 0 ? cents((slice.value * d) / funding) : 0
-    const viaTakeHome = cents(slice.value - viaRefunds - viaDrawdown)
-    if (viaTakeHome >= A_CENT) links.push({ source: TAKE_HOME, target: slice.name, value: viaTakeHome })
-    if (viaRefunds >= A_CENT) links.push({ source: REFUNDS, target: slice.name, value: viaRefunds })
-    if (viaDrawdown >= A_CENT) links.push({ source: DRAWDOWN, target: slice.name, value: viaDrawdown })
-  }
+    // Sub-cent slivers never exist in whole cents; a zero share draws no link.
+    if (viaTakeHome[j] > 0) links.push({ source: TAKE_HOME, target: slice.name, value: viaTakeHome[j] / 100 })
+    if (viaRefunds[j] > 0) links.push({ source: REFUNDS, target: slice.name, value: viaRefunds[j] / 100 })
+    if (viaDrawdown[j] > 0) links.push({ source: DRAWDOWN, target: slice.name, value: viaDrawdown[j] / 100 })
+  })
   if (!deficit && saved >= A_CENT) {
     nodes.push({ name: SAVED, value: saved, depth: 3, itemStyle: { color: ENTITY.saved } })
     links.push({ source: TAKE_HOME, target: SAVED, value: saved })
   }
-  // Pay without spending (spec §C1): its take-home ends here, named — never inside Saved.
-  const unmatchedMonths = flow.take_home_unmatched_months ?? []
-  const unmatchedName = unmatchedNodeName(unmatchedMonths)
-  const drawsUnmatched = unmatched >= A_CENT && unmatchedMonths.length > 0
   if (drawsUnmatched) {
-    taken.add(unmatchedName)
     nodes.push({ name: unmatchedName, value: cents(unmatched), depth: 3, itemStyle: { color: ENTITY.structural } })
     links.push({ source: TAKE_HOME, target: unmatchedName, value: cents(unmatched) })
   }

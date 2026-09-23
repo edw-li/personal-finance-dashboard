@@ -540,6 +540,29 @@ describe('moneyFlowOption — one window on the right', () => {
     expect(sumLinks(series, (l) => l.source === 'Take-home cash')).toBe(15100)
   })
 
+  // Review nit (duplicate-name crash class): the terminal's name is claimed BEFORE the
+  // categories, so a category spelled exactly like it wears the suffix instead of taking the
+  // name and leaving two nodes called the same (echarts drops one, then crashes wiring links).
+  it('claims the terminal name before the categories, so a same-named category wears the suffix', () => {
+    const terminal = 'Take-home, spending not entered (Feb–Mar)'
+    const series = draw(
+      flowOut({
+        take_home_cash: '15100.00',
+        take_home_matched: '5000.00',
+        take_home_unmatched: '10100.00',
+        take_home_unmatched_months: ['2026-02-01', '2026-03-01'],
+        matched_months: ['2026-01-01'],
+        category_totals: [{ category_id: 1, name: terminal, kind: 'living', amount: '2000.00' }],
+        total_spend: '2000.00',
+        saved: '3000.00',
+      }),
+    )
+    const names = (series.data ?? []).map((n) => n.name)
+    expect(new Set(names).size).toBe(names.length)
+    expect(series.data?.find((n) => n.name === terminal)).toMatchObject({ value: 10100, itemStyle: { color: MUTED } })
+    expect(series.data?.find((n) => n.name === `${terminal} (spending)`)?.value).toBe(2000)
+  })
+
   it('draws refunds as an explicit inflow so the fan conserves with Saved netted', () => {
     const series = draw(
       flowOut({
@@ -582,6 +605,39 @@ describe('moneyFlowOption — one window on the right', () => {
       { source: 'Refunds & credits', target: 'Rent', value: 300 },
       { source: 'Drawdown', target: 'Rent', value: 5700 },
     ])
+  })
+
+  // Review nit: slices rounded one by one can leave a source node a cent away from the sum of
+  // its links. Non-divisible figures: 7 cents of refunds and $100.00 of drawdown across three
+  // near-equal categories must still leave every node equal to its links, on both sides.
+  it('splits the sources in whole cents so every node equals the sum of its links, both sides', () => {
+    const series = draw(
+      flowOut({
+        take_home_cash: '199.94',
+        take_home_matched: '199.94',
+        retained_equity: '93183.95',
+        refunds: '0.07',
+        category_totals: [
+          { category_id: 1, name: 'Rent', kind: 'living', amount: '100.00' },
+          { category_id: 2, name: 'Food', kind: 'living', amount: '100.00' },
+          { category_id: 3, name: 'Travel', kind: 'living', amount: '100.01' },
+          { category_id: 9, name: 'Returns', kind: 'living', amount: '-0.07' },
+        ],
+        total_spend: '300.01',
+        saved: '-100.00',
+      }),
+    )
+    const cents = (value: number | undefined) => Math.round((value ?? 0) * 100)
+    const node = (name: string) => cents(series.data?.find((n) => n.name === name)?.value)
+    const out = (name: string) => (series.links ?? []).filter((l) => l.source === name).reduce((acc, l) => acc + cents(l.value), 0)
+    const into = (name: string) => (series.links ?? []).filter((l) => l.target === name).reduce((acc, l) => acc + cents(l.value), 0)
+    expect(out('Refunds & credits')).toBe(node('Refunds & credits'))
+    expect(out('Drawdown')).toBe(node('Drawdown'))
+    for (const category of ['Rent', 'Food', 'Travel']) expect(into(category), category).toBe(node(category))
+    // Take-home also feeds nothing else in a deficit window, so its fan is exactly its value.
+    expect(out('Take-home cash')).toBe(node('Take-home cash'))
+    // Every link is a whole number of cents.
+    for (const link of series.links ?? []) expect(Number.isInteger(Math.round((link.value ?? 0) * 1e6) / 1e4)).toBe(true)
   })
 
   it('folds by the payload’s own ranking when no Spending fold is at hand', () => {
