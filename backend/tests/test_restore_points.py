@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 import io
 import json
+import os
+import threading
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -137,6 +139,40 @@ def test_without_o_nofollow_the_opener_refuses_what_is_symlink_reports(monkeypat
     monkeypatch.setattr(Path, "is_symlink", lambda self: self.name == POINT)
     assert open_stored_file(POINT) is None
     assert list_restore_points(None) == []
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are POSIX-only")
+def test_a_fifo_named_like_a_point_is_refused_without_blocking():
+    """A plain open of a FIFO blocks until some writer appears, so one named like a restore
+    point hung a worker thread for good on the listing, the download or the restore
+    (2026-09-23 lane B1 re-review). The open must return at once and the regular-file check
+    refuse it. A watchdog thread keeps a regression from hanging the suite."""
+    restore_points_dir().mkdir(parents=True)
+    os.mkfifo(restore_points_dir() / POINT)
+    results = {}
+
+    def probe():
+        results["opened"] = open_stored_file(POINT)
+        results["listed"] = list_restore_points(None)
+
+    worker = threading.Thread(target=probe, daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+    assert not worker.is_alive(), "opening a FIFO blocked"
+    assert results == {"opened": None, "listed": []}
+
+
+def test_a_regular_file_opens_in_blocking_mode():
+    """The FIFO guard opens non-blocking where the platform has O_NONBLOCK; a regular file's
+    handle is put back to blocking so it reads like any other file. (Windows has no such flag,
+    and its os.get_blocking only answers for pipes.)"""
+    restore_points_dir().mkdir(parents=True)
+    (restore_points_dir() / POINT).write_bytes(zipped(None))
+    stored = open_stored_file(POINT)
+    with stored.handle:
+        if hasattr(os, "O_NONBLOCK"):
+            assert os.get_blocking(stored.handle.fileno())
+        assert stored.handle.read() == zipped(None)
 
 
 def test_an_opened_stored_file_reads_whole_even_when_rotation_unlinks_it():

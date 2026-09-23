@@ -54,6 +54,11 @@ DOWNLOAD_CHUNK_BYTES = 64 * 1024
 # privilege the app never holds, so that residual window is not one an attacker can reach.
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _BINARY = getattr(os, "O_BINARY", 0)
+# A plain open of a FIFO blocks until some writer appears: one named like a restore point would
+# hang a worker thread for good on a listing, a download or a restore. O_NONBLOCK returns at
+# once and the regular-file check refuses it; a regular file goes back to blocking (Linux —
+# Windows has no FIFOs in a directory, and no flag).
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 
 @dataclass(frozen=True)
@@ -68,21 +73,23 @@ class StoredFile:
 
 def _open_regular(path: Path) -> tuple[BinaryIO, int] | None:
     """(handle, size) for a regular file at `path` that is not a symlink, or None — missing
-    (rotated out since the directory read), a symlink, a directory, anything else. The open
-    IS the check: the type and size come from fstat on the opened descriptor, so nothing can
-    swap the file between a check and the read. Sync — callers ride asyncio.to_thread."""
+    (rotated out since the directory read), a symlink, a FIFO, a directory, anything else. The
+    open IS the check: the type and size come from fstat on the opened descriptor, so nothing
+    can swap the file between a check and the read. Sync — callers ride asyncio.to_thread."""
     try:
         if not _NOFOLLOW and path.is_symlink():
             return None
-        fd = os.open(path, os.O_RDONLY | _NOFOLLOW | _BINARY)
+        fd = os.open(path, os.O_RDONLY | _NOFOLLOW | _NONBLOCK | _BINARY)
     except OSError:
         return None
     try:
         info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            os.close(fd)
+            return None
+        if _NONBLOCK:
+            os.set_blocking(fd, True)
     except OSError:
-        os.close(fd)
-        return None
-    if not stat.S_ISREG(info.st_mode):
         os.close(fd)
         return None
     return os.fdopen(fd, "rb"), info.st_size
