@@ -70,6 +70,34 @@ export function ensureVisible(
   }
 }
 
+/** The window scroll that brings a unit spanning [top, bottom] (client y) inside
+ *  [margin, viewportHeight − margin]: 0 when it already sits there, otherwise the least signed scroll.
+ *  A unit taller than that band shows its top. */
+export function viewportDelta(
+  top: number,
+  bottom: number,
+  viewportHeight: number,
+  margin = AUTO_SCROLL_EDGE,
+): number {
+  const bandTop = margin
+  const bandBottom = viewportHeight - margin
+  if (bottom - top > bandBottom - bandTop || top < bandTop) return top - bandTop
+  if (bottom > bandBottom) return bottom - bandBottom
+  return 0
+}
+
+/** The keyboard path's second keep-in-view (spec §2.4): ensureVisible keeps [top, top + height)
+ *  (list coordinates) in an element scroller's own view, but the scroller itself can hang past the
+ *  window edge (a 420px Settings box low on the page), so the page scrolls too. Computed from list
+ *  coordinates — the inverse of listY — never measured: a keyboard-lifted unit is mid-transition
+ *  when this runs, and a painted rect would still show where it came from. */
+export function keepOnScreen(scroller: Scroller, top: number, height: number): void {
+  if (scroller === null) return
+  const clientTop = top - scroller.scrollTop + scroller.getBoundingClientRect().top
+  const delta = viewportDelta(clientTop, clientTop + height, window.innerHeight)
+  if (delta !== 0) window.scrollBy(0, delta)
+}
+
 /** requestAnimationFrame when the environment has it (jsdom may not), a 16ms timer otherwise. */
 export function nextFrame(callback: () => void): number {
   return typeof window.requestAnimationFrame === 'function'

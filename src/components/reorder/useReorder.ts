@@ -33,6 +33,7 @@ import type { AnnounceContext, Extent, ReorderItem, ReorderKey } from './reorder
 import {
   cancelFrame,
   ensureVisible,
+  keepOnScreen,
   listY,
   nextFrame,
   scrollByY,
@@ -481,8 +482,12 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
     event.preventDefault()
     drag.to = to
     paint(drag, to)
+    // Keep the landing slot in view — in the scroller's own view, then on screen, for a scroller
+    // hanging past the window edge.
     const self = drag.extents[drag.from]
-    ensureVisible(drag.scroller, self.top + shiftsFor(drag.extents, drag.from, to)[drag.from], self.height)
+    const landing = self.top + shiftsFor(drag.extents, drag.from, to)[drag.from]
+    ensureVisible(drag.scroller, landing, self.height)
+    keepOnScreen(drag.scroller, landing, self.height)
     const message = announce.move(context(drag, to))
     setSnap((current) => ({ ...current, announcement: message }))
   }

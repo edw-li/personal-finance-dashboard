@@ -303,6 +303,27 @@ describe('useReorder — keyboard', () => {
     expect(row('B').hasAttribute('data-reorder')).toBe(false)
   })
 
+  it('keeps the landing slot on screen when its scroller hangs past the window', () => {
+    render(
+      <div data-testid="scroller" style={{ overflowY: 'auto' }}>
+        <Stateful initial={flat('A', 'B', 'C', 'D')} />
+      </div>,
+    )
+    const scroller = screen.getByTestId('scroller')
+    Object.defineProperty(scroller, 'scrollHeight', { value: 900, configurable: true })
+    Object.defineProperty(scroller, 'clientHeight', { value: 420, configurable: true })
+    scroller.getBoundingClientRect = () =>
+      ({ top: 600, bottom: 1020, height: 420, left: 0, right: 300, width: 300, x: 0, y: 600, toJSON: () => ({}) }) as DOMRect
+    layoutRows(40, 600) // rows at 600..760 from the scroller's top; jsdom's window is 768 tall
+    fireEvent.keyDown(grip('Alpha'), { key: ' ' })
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    expect(window.scrollBy).not.toHaveBeenCalled() // landing at 680..720: on screen
+    fireEvent.keyDown(grip('Alpha'), { key: 'ArrowDown' })
+    // Landing at 720..760, past 768 − 40: the page scrolls 32 — judged where the unit LANDS.
+    expect(window.scrollBy).toHaveBeenCalledWith(0, 32)
+  })
+
   it('a busy list keeps its grips focusable but inert', () => {
     const onCommit = vi.fn()
     render(<Stateful initial={flat('A', 'B')} onCommit={onCommit} disabled />)

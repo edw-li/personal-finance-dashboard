@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ensureVisible, listY, scrollParentOf, unitExtent, visibleBounds } from './reorderDom'
+import {
+  ensureVisible,
+  keepOnScreen,
+  listY,
+  scrollParentOf,
+  unitExtent,
+  viewportDelta,
+  visibleBounds,
+} from './reorderDom'
 
 function rect(top: number, height: number): DOMRect {
   return {
@@ -93,5 +101,48 @@ describe('ensureVisible', () => {
     expect(scroller.scrollTop).toBe(60)
     ensureVisible(scroller, 200, 40) // already clear of both edge zones
     expect(scroller.scrollTop).toBe(60)
+  })
+})
+
+describe('viewportDelta', () => {
+  it('is 0 while the unit sits inside the viewport, clear of both edge zones', () => {
+    expect(viewportDelta(100, 200, 800)).toBe(0)
+    expect(viewportDelta(40, 760, 800)).toBe(0) // exactly the band [40, 760]
+  })
+
+  it('is the least signed scroll that brings the unit in', () => {
+    expect(viewportDelta(10, 110, 800)).toBe(-30) // up: its top to the band's top
+    expect(viewportDelta(700, 790, 800)).toBe(30) // down: its bottom to the band's bottom
+    expect(viewportDelta(-500, -400, 800)).toBe(-540)
+    expect(viewportDelta(1200, 1240, 800)).toBe(480)
+  })
+
+  it('shows the top of a unit taller than the band', () => {
+    expect(viewportDelta(100, 900, 800)).toBe(60)
+    expect(viewportDelta(-200, 700, 800)).toBe(-240)
+  })
+
+  it('takes its margin', () => {
+    expect(viewportDelta(10, 110, 800, 0)).toBe(0)
+    expect(viewportDelta(10, 110, 800, 20)).toBe(-10)
+  })
+})
+
+describe('keepOnScreen', () => {
+  it("scrolls the page just enough to show a list-coordinate band of a scroller hanging past the window", () => {
+    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    const scroller = document.createElement('div')
+    scroller.getBoundingClientRect = () => rect(600, 420) // bottom 1020: past jsdom's 768px window
+    setBox(scroller, { scrollTop: 80 })
+    keepOnScreen(scroller, 100, 40) // client 620..660: on screen
+    expect(scrollBy).not.toHaveBeenCalled()
+    keepOnScreen(scroller, 200, 40) // client 720..760: past 768 − 40 → down by 32
+    expect(scrollBy).toHaveBeenCalledWith(0, 32)
+  })
+
+  it('leaves the page alone when the page is the scroller — ensureVisible already scrolled it', () => {
+    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    keepOnScreen(null, 5000, 40)
+    expect(scrollBy).not.toHaveBeenCalled()
   })
 })
