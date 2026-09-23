@@ -2393,11 +2393,12 @@ git commit -m "docs(plan): lane R0 — results and gates"
 
 ## Results (filled in by the implementer)
 
-- Lane tests: `npx vitest run src/components/reorder` — 5 files / 87 tests pass (reorderMath 23,
-  reorderDom 15, reorderStatus 3, useReorder 33, reorderCss 13).
-- Full vitest, after the code-quality round: 238 files / 3213 tests, exit 0. The last commit after it
-  (the harness fix in code-quality item 13) touched only `useReorder.test.tsx`, which the lane gate
-  re-ran green. The first full run, before correction 6, was 238 / 3183 green.
+- Lane tests: `npx vitest run src/components/reorder` — 5 files / 98 tests pass (reorderMath 26,
+  reorderDom 16, reorderStatus 3, useReorder 39, reorderCss 14).
+- Full vitest, after the R2 browser-check round, on the branch brought up to feat/reorder-base (R1,
+  R4 and main's B2 in): `npx vitest run --maxWorkers=2` (the box is short of memory) — 246 files /
+  3399 tests, exit 0, no stderr from the lane. Earlier full runs: 238 / 3213 after the code-quality
+  round, 238 / 3183 before correction 6.
 - tsc / eslint / build:
   - `tsc -b` exit 0; also a full check against a fresh buildinfo (tsc -b's cache lives in the shared
     node_modules junction), exit 0.
@@ -2501,10 +2502,46 @@ git commit -m "docs(plan): lane R0 — results and gates"
   - A test pins R4's shape: a parent owns the order and mounts the list conditionally; the list
     unmounts mid-settle; the parent re-renders in the new order.
   - Lane tests: 91.
+- Lane R2's real-browser check on real data (the branch first fast-forwarded to feat/reorder-base;
+  one commit per fix):
+  1. **The leading edge decides the slot, not the centre.** Clamped, "Fidelity Traditional 401(k)"
+     and its three components (a 171.9 px unit) could never carry their centre past the midpoint of
+     the short IRA below them, so no mouse drag moved them. `slotFor(extents, from, liftedTop,
+     liftedBottom)` now uses the sortable-list rule:
+     - a peer below is passed when the unit's bottom edge reaches its midpoint;
+     - a peer above is passed when the unit's top edge rises strictly above its midpoint;
+     - clamped at either end, a unit lands at that end.
+
+     Equal-height results are unchanged (+85 → slot 2, clamps → the ends, D −85 → slot 1). The tie
+     cases were recomputed for the edge rule, and `[(0,172), (172,43)]` at +43 → slot 1 was added.
+     A hook test drags a parent with three components past a short last peer. One existing checkpoint
+     moved: in a three-row list, +70 now reads "position 3 of 3", because the bottom edge (310) is
+     past C's midpoint (300). R4's consumer tests pass unchanged.
+  2. **Auto-scroll stops at the range's end.** `autoScrollWithin(speed, range, view)` stops at the
+     far end of the range, in list coordinates:
+     - down stops once `range.bottom ≤ view.top + view.height − 40`;
+     - up stops once `range.top ≥ view.top + 40`.
+
+     `scrollView(scroller)` gives the view (the page's scrollY/innerHeight, an element's
+     scrollTop/clientHeight), and `ensureVisible` reuses it. It is a plain stop, not a capped last
+     step, so float remainders can't dither; one final step overshoots the margin by at most 18 px,
+     with the range end still in view. A hook test holds the pointer in the bottom zone of a page
+     list: the page scrolls to 172 px (at most one step more), then stays put. Before the fix it ran
+     on to 680 px.
+  3. **A lifted multi-row unit reads as one block.** The lifted `<tr>` carries
+     `--reorder-edge-top` / `--reorder-edge-bottom`.
+     - A lifted row right after another zeroes its top edge (`+`); one right before another zeroes
+       its bottom edge (`:has(+ …)`). A middle row matches both.
+     - Every lifted cell draws `var(--reorder-edge-top), var(--reorder-edge-bottom)`. The pinned
+       cells put their own edge hairline in front of the two.
+     - One pair of variables replaces nine position × cell-kind rules. Pinned in reorderCss.test.ts.
 - Notes for R2–R5 (what the contract section does not say):
   - **Pointer tests** need three things: `installPointerEvents()` in `beforeAll`, `afterEach(cleanup)`,
     and mocked row boxes (the `layoutRows` helper in `useReorder.test.tsx`). Without layout every
     midpoint is 0, so any 4 px move lands the unit last. Keyboard drags need no layout.
+  - **Expected slots follow the leading-edge rule.** Dragging down, a peer is passed when the
+    unit's bottom edge reaches the peer's midpoint; dragging up, when its top edge rises past it.
+    With 40 px rows from y=200, +20 already passes the next row.
   - **Pointer drops commit late.** `onCommit` arrives `MOTION_MS.fast` (120 ms) after pointerup, so
     advance fake timers before asserting it. Keyboard and reduced-motion drops commit synchronously.
     `active` stays true through that settle.
