@@ -399,7 +399,27 @@ shadow it.
   requires the snapshot's `alembic_head` to equal the server's, which is the existing rule for every
   migration. The rollout notes say to take a snapshot right after deploying.
 
-### 3.6 Acceptance (R1)
+### 3.6 The client side of the contract (R1)
+
+R1 also writes the browser's half of the contract, so the UI lanes import it rather than each adding
+their own.
+- **Wire types** in `src/types/api.ts`, added beside each list's existing types (never appended at the
+  end of the file, where parallel lanes would collide): `PositionChange` and `TransactionOrderOut`.
+- **Functions:**
+
+  | Function | File | Returns |
+  |---|---|---|
+  | `reorderAccounts(ids)` | `src/api/netWorth.ts` | `{ data: AccountOut[]; batchId: string \| null }` via `apiWithHeaders` |
+  | `reorderCategories(ids)` | `src/api/spending.ts` | `{ data: CategoryOut[]; batchId: string \| null }` via `apiWithHeaders` |
+  | `reorderTransactions(ids, owner)` | `src/api/portfolio.ts` | `TransactionOrderOut` (the owner query uses the file's existing `ownerQuery` helper) |
+  | `reorderCreditCards(ids)` | `src/api/creditCards.ts` | `CreditCardOut[]` |
+  | `reorderRewardCategories(ids)` | `src/api/creditCards.ts` | `RewardCategoryOut[]` |
+
+- All five use `PUT` with body `{ ids }`. Their paths fall under existing `MUTATION_FAMILIES` prefixes,
+  so the cache invalidation is inherited, not added.
+- Each function gets a unit test for method, path, body and (where relevant) the batch header.
+
+### 3.7 Acceptance (R1)
 
 - **Unit tests** for every helper, including `moved_ids` on single, block and adjacent-swap moves.
 - **Per endpoint:**
@@ -491,8 +511,8 @@ shadow it.
   - a parent's move carries its components in the PUT;
   - a component moves only among siblings;
   - a single-account group has a disabled grip.
-- **`src/api` functions:** `reorderAccounts`, `reorderCategories` return `{ data, batchId }` via
-  `apiWithHeaders`.
+- The cards call R1's `reorderAccounts` / `reorderCategories` (§3.6); they add no `src/api` code of
+  their own.
 
 ---
 
@@ -733,16 +753,15 @@ batch therefore:
 | Lane | Branch | Owns | Starts from |
 |---|---|---|---|
 | **R0** component | `feat/reorder-component` | `src/components/reorder/**`, `src/testing/pointer.ts` | `feat/reorder-base` |
-| **R1** backend | `feat/reorder-backend` | `backend/app/services/ordering.py`, the five routes + schemas, `models/portfolio.py`, `importer/apply.py`, the migration, their tests, `tests/test_changelog_pin.py` | `feat/reorder-base` |
-| **R2** settings | `feat/reorder-settings` | `AccountsCard.tsx`, `CategoriesCard.tsx` (+ tests), `settings.css` (additive), `src/api/netWorth.ts` + `src/api/spending.ts` (reorder functions) | base after R0 + R1 merged |
-| **R3** transactions | `feat/reorder-transactions` | `TransactionsPanel.tsx` (+ test), `portfolio.css` (additive), `src/api/portfolio.ts` (reorder function), one prop line in `PortfolioPage.tsx` | base after R0 + R1 merged |
+| **R1** backend + client contract | `feat/reorder-backend` | `backend/app/services/ordering.py`, the five routes + schemas, `models/portfolio.py`, `importer/apply.py`, the migration, their tests, `tests/test_changelog_pin.py`; **and the client side of the contract**: the five reorder functions in `src/api/{netWorth,spending,portfolio,creditCards}.ts` (+ their tests) and the wire types in `src/types/api.ts` (additive, each beside its list's existing types) | `feat/reorder-base` |
+| **R2** settings | `feat/reorder-settings` | `AccountsCard.tsx`, `CategoriesCard.tsx` (+ tests), `settings.css` (additive) | base after R0 + R1 merged |
+| **R3** transactions | `feat/reorder-transactions` | `TransactionsPanel.tsx` (+ test), `portfolio.css` (additive), one prop line in `PortfolioPage.tsx` | base after R0 + R1 merged |
 | **R4** overview | `feat/reorder-overview` | `OverviewCustomize.tsx`, its CSS, the customize tests in `OverviewPage.test.tsx` | base after R0 merged |
-| **R5** credit cards | `feat/reorder-cards` | `CardsPanel.tsx`, `CategoriesPanel.tsx`, `categories.css`, `creditLineChartOptions.ts` (+ tests), the call site in `CreditCardsPage.tsx`, the reorder tests in `CreditCardsPage.test.tsx`, `src/api/creditCards.ts` | base after R0 + R1 merged **and** main (with B2) merged into base |
+| **R5** credit cards | `feat/reorder-cards` | `CardsPanel.tsx`, `CategoriesPanel.tsx`, `categories.css`, `creditLineChartOptions.ts` (+ tests), the call site in `CreditCardsPage.tsx`, the reorder tests in `CreditCardsPage.test.tsx` | base after R0 + R1 merged **and** main (with B2) merged into base |
 | **V** verify | `feat/reorder-verify` | `tools/probes/reorder-v/**`, the probes README row, the V plan's results | base with R0–R5 merged |
 
 **Shared files:**
-- `src/types/api.ts` takes additive edits only (R1 documents the wire types; the frontend lanes add
-  them).
+- `src/types/api.ts` and `src/api/*.ts` are R1's (§3.6); the UI lanes only import from them.
 - `src/components/panels.css` is not edited: the table border model lives in `reorder.css`.
 
 **Merge order into `feat/reorder-base`:** R1 → R0 → R2 → R3 → R4 → (merge main, once B2 is on it) → R5
