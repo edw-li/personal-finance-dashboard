@@ -102,7 +102,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
-  vi.clearAllMocks()
+  // Reset, not clear: a test that fails before consuming its mockReturnValueOnce answers would
+  // leave them queued for the next test. beforeEach re-seeds every mock in this file.
+  vi.resetAllMocks()
 })
 
 const grip = (name: string) => screen.getByRole('button', { name: `Reorder ${name}` })

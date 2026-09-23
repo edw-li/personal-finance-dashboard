@@ -43,9 +43,7 @@ describe('settings.css', () => {
   // Drag to reorder (2026-09-23 reorder spec §4). jsdom computes no cascade, so the rules that
   // must OUTRANK panels.css are pinned here, selector and all.
   it('the reorderable tables get the separate border model from reorder.css — `table.` outranks .data-table', () => {
-    const table = declarationsFor(reorderCss, 'table.reorder-table')
-    expect(table).toContain('border-collapse: separate;')
-    expect(table).toContain('border-spacing: 0;')
+    expectBorderModel(reorderCss)
   })
 
   it('draws an Accounts group heading as a heading, not as a sticky row-actions cell', () => {
@@ -77,23 +75,55 @@ describe('settings.css', () => {
   })
 
   it("reorder.css lifts the sticky Actions cell with its row and runs the drop line through it, keeping the cell's own hairline", () => {
-    const lifted = declarationsFor(
-      reorderCss,
-      ".reorder-table tr[data-reorder='lifted'] > td.row-actions",
-    )
-    expect(lifted).toContain('background: var(--surface-2);')
-    expect(lifted).toContain('-1px 0 0 var(--border),')
-    const before = declarationsFor(
-      reorderCss,
-      ".reorder-table tr[data-reorder-drop='before'] > td.row-actions",
-    )
-    expect(before).toContain('-1px 0 0 var(--border),')
-    expect(before).toContain('inset 0 2px 0 var(--accent);')
-    const after = declarationsFor(
-      reorderCss,
-      ".reorder-table tr[data-reorder-drop='after'] > td.row-actions",
-    )
-    expect(after).toContain('-1px 0 0 var(--border),')
-    expect(after).toContain('inset 0 -2px 0 var(--accent);')
+    expectActionsCell(reorderCss)
+  })
+
+  it('the reorder.css pins survive a reformat of that sheet — another lane owns it', () => {
+    // Other quotes, one-line multi-value box-shadows, tight combinators, no space after colons:
+    // the same rules, so the same pins must hold.
+    const reformatted = reorderCss
+      .replace(/'/g, '"')
+      .replace(/,\s*\n\s*/g, ', ')
+      .replace(/\s*>\s*/g, '>')
+      .replace(/:\s+/g, ':')
+    expectBorderModel(reformatted)
+    expectActionsCell(reformatted)
   })
 })
+
+/** CSS in a formatting-proof form: comments gone, one quote style, whitespace collapsed, and no
+ *  space around the punctuation a reformat moves — `,` `>` `{` `}` `;`, and after a `:`. A selector
+ *  and a declaration go through the same function, so they compare like for like. */
+function normalize(css: string): string {
+  return stripComments(css)
+    .replace(/"/g, "'")
+    .replace(/\s+/g, ' ')
+    .replace(/\s*([,>{};])\s*/g, '$1')
+    .replace(/:\s+/g, ':')
+    .trim()
+}
+
+/** `declarationsFor` over normalized CSS: for pins on a sheet another lane owns and may reformat. */
+function pinned(css: string, selector: string): string {
+  return declarationsFor(normalize(css), normalize(selector))
+}
+
+// The two dependency pins on reorder.css (lane R0's sheet): the separate border model, and the
+// lifted / drop-line states of the sticky Actions cell keeping the cell's own -1px hairline.
+function expectBorderModel(css: string) {
+  const table = pinned(css, 'table.reorder-table')
+  expect(table).toContain(normalize('border-collapse: separate;'))
+  expect(table).toContain(normalize('border-spacing: 0;'))
+}
+
+function expectActionsCell(css: string) {
+  const lifted = pinned(css, ".reorder-table tr[data-reorder='lifted'] > td.row-actions")
+  expect(lifted).toContain(normalize('background: var(--surface-2);'))
+  expect(lifted).toContain(normalize('-1px 0 0 var(--border),'))
+  const before = pinned(css, ".reorder-table tr[data-reorder-drop='before'] > td.row-actions")
+  expect(before).toContain(normalize('-1px 0 0 var(--border),'))
+  expect(before).toContain(normalize('inset 0 2px 0 var(--accent);'))
+  const after = pinned(css, ".reorder-table tr[data-reorder-drop='after'] > td.row-actions")
+  expect(after).toContain(normalize('-1px 0 0 var(--border),'))
+  expect(after).toContain(normalize('inset 0 -2px 0 var(--accent);'))
+}
