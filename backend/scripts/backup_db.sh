@@ -131,9 +131,21 @@ sanitize() {  # the first 300 bytes of a file as one JSON/SQL-safe line
   head -c 300 "$1" | tr -d "\"'\\\\" | tr '\n' ' '
 }
 
+# The passphrase reaches gpg on file descriptor 3 (a here-string), never in argv: a command
+# line is readable by every user on the box through ps or /proc/<pid>/cmdline for as long as
+# the dump runs (2026-09-23 spec §B4). --pinentry-mode loopback is still what lets gpg 2.1+
+# take a passphrase non-interactively under --batch. Both directions live in these two
+# functions, which tests/test_ops_scripts.py lifts verbatim and round-trips through gpg.
+encrypt_stream() {  # stdin -> "$1", symmetric AES256
+  gpg --symmetric --batch --yes --cipher-algo AES256 \
+    --pinentry-mode loopback --passphrase-fd 3 \
+    -o "$1" 3<<<"$BACKUP_PASSPHRASE"
+}
+
 decrypt_dump() {  # the SQL text of $DUMP_FILE on stdout, whichever flavor was written
   if [ -n "${BACKUP_PASSPHRASE:-}" ]; then
-    gpg --decrypt --batch --quiet --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" "$DUMP_FILE" | gunzip
+    gpg --decrypt --batch --quiet --pinentry-mode loopback --passphrase-fd 3 \
+      "$DUMP_FILE" 3<<<"$BACKUP_PASSPHRASE" | gunzip
   else
     gunzip -c "$DUMP_FILE"
   fi
@@ -149,9 +161,8 @@ fi
 
 echo "[$(date)] Starting backup of database '${DB_NAME}'..."
 
-# Dump, compress, and (when configured) encrypt. --pinentry-mode loopback is required to
-# take the passphrase non-interactively: without it gpg 2.1+ ignores --passphrase under
-# --batch and tries to open a pinentry a cron job does not have.
+# Dump, compress, and (when configured) encrypt through encrypt_stream above — the passphrase
+# on fd 3, never on gpg's command line.
 if [ -n "${BACKUP_PASSPHRASE:-}" ]; then
   PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump \
     -h "$DB_HOST" \
@@ -161,9 +172,7 @@ if [ -n "${BACKUP_PASSPHRASE:-}" ]; then
     --no-owner \
     --no-acl \
     | gzip \
-    | gpg --symmetric --batch --yes --cipher-algo AES256 \
-        --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" \
-        -o "$DUMP_FILE"
+    | encrypt_stream "$DUMP_FILE"
 else
   PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump \
     -h "$DB_HOST" \

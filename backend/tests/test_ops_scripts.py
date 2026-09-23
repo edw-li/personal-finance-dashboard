@@ -3,6 +3,7 @@ these pins keep their CONTRACTS visible to the suite — the marker fields the s
 schema parses, the verify phase's shape, the drill's steps — and syntax-check them with
 Git Bash when it is installed."""
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -98,6 +99,78 @@ def test_backup_cleans_up_the_scratch_database_and_uses_mktemp():
     # A cron run meets SIGTERM on every deploy; without these the scratch database leaks.
     assert "trap 'cleanup_verify; exit 130' INT" in text
     assert "trap 'cleanup_verify; exit 143' TERM" in text
+
+
+def _function(text: str, name: str) -> str:
+    """One top-level function from the script, verbatim: `name() {` to the first column-0 `}`."""
+    match = re.search(rf"^{name}\(\) \{{.*?^\}}", text, re.MULTILINE | re.DOTALL)
+    assert match is not None, name
+    return match.group(0)
+
+
+def test_backup_hands_gpg_the_passphrase_on_a_file_descriptor():
+    """Anything on a command line is readable by every user on the box through ps or
+    /proc/<pid>/cmdline for as long as the dump runs (2026-09-23 spec §B4)."""
+    text = BACKUP.read_text(encoding="utf-8")
+    assert '--passphrase "$BACKUP_PASSPHRASE"' not in text
+    assert text.count("--passphrase-fd 3") == 2
+    assert text.count('3<<<"$BACKUP_PASSPHRASE"') == 2
+    # The dump pipeline encrypts through the same function the round trip below exercises.
+    assert re.search(r'\| gzip \\\n\s+\| encrypt_stream "\$DUMP_FILE"', text)
+    _bash_syntax_ok(BACKUP)
+
+
+def test_backup_round_trips_through_its_own_functions_without_the_passphrase_in_argv(tmp_path):
+    """The script's OWN two functions, lifted verbatim and run through a real gpg: what goes
+    in comes back out, and a shim first on PATH proves the passphrase never rode argv. Runs
+    wherever bash and gpg exist (CI's ubuntu runner, Git Bash here); skips elsewhere."""
+    bash = _find_bash()
+    if bash is None:
+        pytest.skip("no usable bash found")
+    probe = subprocess.run(
+        [bash, "-c", "command -v gpg && command -v gpgconf && command -v gzip"],
+        capture_output=True,
+    )
+    if probe.returncode != 0:
+        pytest.skip("gpg, gpgconf or gzip not available to bash")
+    text = BACKUP.read_text(encoding="utf-8")
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    # A gpg FIRST on PATH that records every argument it is handed, then runs the real one
+    # with the descriptors it inherited — fd 3 included.
+    (shim / "gpg").write_bytes(
+        b'#!/bin/bash\nprintf \'%s\\n\' "$@" >> "$ARGV_LOG"\nexec "$REAL_GPG" "$@"\n'
+    )
+    passphrase = "s3cr3t with spaces & $igns"
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            'export GNUPGHOME="$(mktemp -d)"',
+            "trap 'gpgconf --kill gpg-agent >/dev/null 2>&1 || true; rm -rf \"$GNUPGHOME\"' EXIT",
+            'export REAL_GPG="$(command -v gpg)" ARGV_LOG="$PWD/argv.log"',
+            'chmod +x shim/gpg && export PATH="$PWD/shim:$PATH"',
+            'BACKUP_PASSPHRASE="$1"',
+            'DUMP_FILE="dump.sql.gz.gpg"',
+            _function(text, "encrypt_stream"),
+            _function(text, "decrypt_dump"),
+            "printf 'CREATE TABLE t();\\n' | gzip | encrypt_stream \"$DUMP_FILE\"",
+            "decrypt_dump",
+        ]
+    )
+    result = subprocess.run(
+        [bash, "-c", script, "bash", passphrase],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "CREATE TABLE t();\n"
+    argv = (tmp_path / "argv.log").read_text()
+    # Both calls went through the shim, and neither carried the passphrase.
+    assert argv.count("--passphrase-fd") == 2
+    assert passphrase not in argv
+    assert b"CREATE TABLE" not in (tmp_path / "dump.sql.gz.gpg").read_bytes()
 
 
 def test_restore_drill_exists_and_runs_the_four_steps():
