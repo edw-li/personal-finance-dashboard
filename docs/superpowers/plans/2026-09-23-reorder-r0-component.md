@@ -2484,6 +2484,15 @@ git commit -m "docs(plan): lane R0 — results and gates"
       the components back. The harness now re-derives `carries`, and the carried-rows test pins the
       parent move.
   14. A StrictMode smoke test: lift, move, drop, exactly one `onCommit`.
+- Follow-up from lane R4's spec review: **a drop still settling when its list unmounts is committed,
+  never lost.** R4's groups unmount when the popover closes, which can happen inside the 120 ms
+  settle.
+  - The drag keeps the order it owes (`pendingNext`). The unmount teardown hands it straight to
+    `onCommit`: no flushSync, which a lifecycle cleanup may not call.
+  - That call is wrapped in try/catch, and a consumer error goes to `console.error` without breaking
+    the teardown.
+  - Settle-backs (a cancel, an unmoved drop) owe nothing. The timer never commits a second time.
+  - Lane tests: 90.
 - Notes for R2–R5 (what the contract section does not say):
   - **Pointer tests** need three things: `installPointerEvents()` in `beforeAll`, `afterEach(cleanup)`,
     and mocked row boxes (the `layoutRows` helper in `useReorder.test.tsx`). Without layout every
@@ -2505,6 +2514,10 @@ git commit -m "docs(plan): lane R0 — results and gates"
   - **`onCommit` may throw.** The rows are still cleared, and the error propagates to whoever
     dispatched the drop (a React event handler, or the pointer settle's timer). Catch your own save
     errors.
+  - **`onCommit` can arrive during your list's unmount** — a pointer drop still settling when the list
+    goes away (a popover closed right after the drop). It runs without flushSync, so the optimistic
+    `setState` is moot, but the save must still start. Keep the save's success path tolerant of an
+    unmounted list.
 
 ## Self-review (spec coverage)
 
