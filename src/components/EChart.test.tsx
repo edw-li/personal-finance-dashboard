@@ -338,6 +338,60 @@ describe('zoomWindow fast path', () => {
     expect(chart.dispatchAction).not.toHaveBeenCalled()
   })
 
+  // The 2026-09-23 code review (2): a manual drag echoes back through the page (datazoom → page
+  // state → an option identical apart from its window). Under reduce the fast path stood aside,
+  // so that echo rebuilt the chart with notMerge — recreating the inside zoom under the user's
+  // pointer, and the pan died after its first step (the real-data browser check, 1Y dragged
+  // toward 2023). The echo settles as a no-op in both motion modes now.
+  it('under reduce, a manual drag’s echo leaves the chart alone, so the pan keeps going', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    const { rerender } = render(
+      <EChart
+        ariaLabel="test chart"
+        option={{ series, dataZoom: [{ type: 'inside', startValue: 3 }] } as EChartsOption}
+        zoomWindow={{ startValue: 3, endValue: 9 }}
+        onDataZoom={() => {}}
+      />,
+    )
+    const chart = instances[0]
+    expect(chart.setOption).toHaveBeenCalledTimes(1)
+    // The user drags: the engine sits at 2–8 now, and the page mirrors that window back in.
+    chart.getOption.mockReturnValue({ dataZoom: [{ startValue: 2, endValue: 8 }] })
+    act(() => chart.handlers.datazoom())
+    rerender(
+      <EChart
+        ariaLabel="test chart"
+        option={{ series, dataZoom: [{ type: 'inside', startValue: 2, endValue: 8 }] } as EChartsOption}
+        zoomWindow={{ startValue: 2, endValue: 8 }}
+        onDataZoom={() => {}}
+      />,
+    )
+    expect(chart.setOption).toHaveBeenCalledTimes(1) // never rebuilt under the drag
+    expect(chart.dispatchAction).not.toHaveBeenCalled()
+  })
+
+  it('under reduce, a real window change (a range chip) still snaps by rebuilding', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    const { rerender } = render(
+      <EChart
+        ariaLabel="test chart"
+        option={{ series, dataZoom: [{ type: 'inside', startValue: 3 }] } as EChartsOption}
+        zoomWindow={{ startValue: 3, endValue: 9 }}
+      />,
+    )
+    const chart = instances[0]
+    rerender(
+      <EChart
+        ariaLabel="test chart"
+        option={{ series, dataZoom: [{ type: 'inside', startValue: 5 }] } as EChartsOption}
+        zoomWindow={{ startValue: 5, endValue: 9 }}
+      />,
+    )
+    expect(chart.setOption).toHaveBeenCalledTimes(2)
+    expect((chart.setOption.mock.calls[1] as [Record<string, unknown>])[0].animation).toBe(false)
+    expect(chart.dispatchAction).not.toHaveBeenCalled()
+  })
+
   it('without zoomWindow, a zoom-only change still rebuilds (opt-in contract)', () => {
     const { rerender } = render(
       <EChart

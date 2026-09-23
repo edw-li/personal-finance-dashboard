@@ -284,12 +284,21 @@ export default function EChart({
     })
     // Zoom-only fast path (spec Addendum §A2): same option apart from the window → an
     // animated dataZoom ACTION morphs the series on the live instance; the notMerge
-    // rebuild below is what used to make the chips snap. Skipped under reduced motion
-    // (the rebuild with animation:false snaps, byte-identical to before) and settled
-    // as a no-op when the chart already sits at the target (the ctrl+wheel mirror's
-    // echo: datazoom event → page state → option rebuild → same window).
+    // rebuild below is what used to make the chips snap. Settled as a no-op when the chart
+    // already sits at the target (the drag/ctrl+wheel mirror's echo: datazoom event → page
+    // state → option rebuild → same window). Under reduced motion a real window change skips
+    // it (the rebuild with animation:false snaps, byte-identical to before), but the ECHO
+    // still takes it: a rebuild there recreates the inside zoom under the user's pointer and
+    // ends a drag after its first step (the 2026-09-23 code review, 2). The echo is told by
+    // the window the datazoom mirror last read, so it costs no engine read.
+    const live = liveZoomRef.current
+    const echo =
+      live !== null &&
+      zoomWindow !== undefined &&
+      live.startValue === zoomWindow.startValue &&
+      live.endValue === zoomWindow.endValue
     if (
-      !reducedMotion &&
+      (!reducedMotion || echo) &&
       zoomWindow !== undefined &&
       lastStrippedRef.current !== null &&
       lastStrippedRef.current === stripped
