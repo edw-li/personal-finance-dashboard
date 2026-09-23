@@ -694,6 +694,8 @@ describe('EChart fits month labels to its width', () => {
   const monthOption = () =>
     ({ grid: grid(), xAxis: monthAxis(YEAR, { gap: true }), series: [{ type: 'bar', data: YEAR.map(() => 1) }] }) as unknown as EChartsOption
   type Fitted = { xAxis: { axisLabel: { formatter: (value: string, index: number) => string; interval?: unknown } } }
+  type Patch = { xAxis: { axisLabel: { formatter: (value: string, index: number) => string; interval?: unknown } }[] }
+  const zoomable = () => ({ ...monthOption(), dataZoom: [{ type: 'inside', startValue: 0 }] }) as EChartsOption
   let width = 0
   beforeEach(() => {
     width = 0
@@ -723,9 +725,9 @@ describe('EChart fits month labels to its width', () => {
     resizeNotify.forEach((fire) => fire())
     expect(chart.resize).toHaveBeenCalledTimes(1)
     expect(chart.setOption.mock.calls.length).toBe(painted + 1)
-    const merged = chart.setOption.mock.calls.at(-1) as [Fitted, unknown?]
+    const merged = chart.setOption.mock.calls.at(-1) as [Patch, unknown?]
     expect(merged[1]).toBeUndefined() // a merge, never a notMerge rebuild of the whole chart
-    expect(merged[0].xAxis.axisLabel.formatter('Oct 2025', 0)).toBe('Oct 2025')
+    expect(merged[0].xAxis[0].axisLabel.formatter('Oct 2025', 0)).toBe('Oct 2025')
   })
 
   it('does not touch the option when a resize keeps the same form', () => {
@@ -747,8 +749,92 @@ describe('EChart fits month labels to its width', () => {
     const chart = lastChart()
     // The fake answers getOption with the window 3…9: seven months, 50 px each.
     act(() => chart.handlers.datazoom())
-    const merged = chart.setOption.mock.calls.at(-1) as [Fitted]
-    expect(merged[0].xAxis.axisLabel.formatter('Jan 2026', 0)).toBe("Jan '26")
+    const merged = chart.setOption.mock.calls.at(-1) as [Patch]
+    expect(merged[0].xAxis[0].axisLabel.formatter('Jan 2026', 0)).toBe("Jan '26")
+  })
+
+  // Code-quality review (2026-09-23 spec §C4): the refit reads the engine once per zoom event and
+  // never on a resize frame, merges ONLY the label formatter and interval (so another lane's
+  // merge-updated axisLabel keys survive), and does nothing on a chart with no month axis.
+  it('reads the live window once per zoom event, and never on a resize', () => {
+    width = 446
+    render(<EChart ariaLabel="Monthly entries" option={zoomable()} />)
+    const chart = lastChart()
+    const reads = chart.getOption.mock.calls.length
+    act(() => chart.handlers.datazoom())
+    expect(chart.getOption.mock.calls.length).toBe(reads + 1)
+    width = 900
+    chart.getWidth.mockReturnValue(446)
+    resizeNotify.forEach((fire) => fire())
+    expect(chart.getOption.mock.calls.length).toBe(reads + 1)
+  })
+
+  it('merges only the label formatter and interval of each month axis', () => {
+    width = 446
+    render(<EChart ariaLabel="Recent spending" option={monthOption()} />)
+    const chart = lastChart()
+    width = 900
+    chart.getWidth.mockReturnValue(446)
+    resizeNotify.forEach((fire) => fire())
+    const [payload] = chart.setOption.mock.calls.at(-1) as [Patch]
+    expect(Object.keys(payload)).toEqual(['xAxis'])
+    expect(payload.xAxis).toHaveLength(1)
+    expect(Object.keys(payload.xAxis[0])).toEqual(['axisLabel'])
+    expect(Object.keys(payload.xAxis[0].axisLabel)).toEqual(['formatter', 'interval'])
+  })
+
+  it('does no refit work on a zoomable chart without a month axis', () => {
+    width = 446
+    const years = { grid: grid(), xAxis: monthAxis(['2023', '2024', '2025'], { gap: true }), dataZoom: [{ type: 'inside', startValue: 0 }], series: [{ type: 'bar', data: [1, 2, 3] }] } as unknown as EChartsOption
+    render(<EChart ariaLabel="Yearly" option={years} />)
+    const chart = lastChart()
+    const painted = chart.setOption.mock.calls.length
+    const reads = chart.getOption.mock.calls.length
+    width = 900
+    chart.getWidth.mockReturnValue(446)
+    resizeNotify.forEach((fire) => fire())
+    act(() => chart.handlers.datazoom())
+    expect(chart.setOption.mock.calls.length).toBe(painted)
+    // The one read is the zoom mirror's own (the page's onDataZoom); the refit adds none.
+    expect(chart.getOption.mock.calls.length).toBe(reads + 1)
+  })
+
+  it('merges nothing when a zoom keeps the same label form', () => {
+    width = 1400 // twelve months and seven both read in full
+    render(<EChart ariaLabel="Monthly entries" option={zoomable()} />)
+    const chart = lastChart()
+    const painted = chart.setOption.mock.calls.length
+    act(() => chart.handlers.datazoom())
+    expect(chart.setOption.mock.calls.length).toBe(painted)
+  })
+
+  // Review item 12: the zoom fast path (an animated dataZoom ACTION instead of a rebuild) and
+  // the refit must agree: the engine answers the action with a datazoom event, and the refit
+  // follows the window the action moved to, on that event and on the next resize.
+  it('follows the window the zoom fast path moves to', () => {
+    width = 446
+    const at = (startValue: number) =>
+      ({ ...monthOption(), dataZoom: [{ type: 'inside', startValue }] }) as EChartsOption
+    const { rerender } = render(<EChart ariaLabel="Monthly entries" option={at(0)} zoomWindow={{ startValue: 0, endValue: 11 }} />)
+    const chart = lastChart()
+    chart.getOption.mockReturnValue({ dataZoom: [{ startValue: 0, endValue: 11 }] })
+    const painted = chart.setOption.mock.calls.length
+    rerender(<EChart ariaLabel="Monthly entries" option={at(6)} zoomWindow={{ startValue: 6, endValue: 11 }} />)
+    expect(chart.dispatchAction).toHaveBeenCalledWith({ type: 'dataZoom', startValue: 6, endValue: 11 })
+    expect(chart.setOption.mock.calls.length).toBe(painted) // the fast path never rebuilds
+    // The engine's answer to the action: six months on screen, 58.7 px each, the full form.
+    chart.getOption.mockReturnValue({ dataZoom: [{ startValue: 6, endValue: 11 }] })
+    act(() => chart.handlers.datazoom())
+    const [patch] = chart.setOption.mock.calls.at(-1) as [Patch]
+    expect(patch.xAxis[0].axisLabel.formatter('Apr 2026', 0)).toBe('Apr 2026')
+    // …and a resize afterwards fits that same window, without asking the engine again.
+    const reads = chart.getOption.mock.calls.length
+    width = 300
+    chart.getWidth.mockReturnValue(446)
+    resizeNotify.forEach((fire) => fire())
+    expect(chart.getOption.mock.calls.length).toBe(reads)
+    const [narrow] = chart.setOption.mock.calls.at(-1) as [Patch]
+    expect(narrow.xAxis[0].axisLabel.formatter('Apr 2026', 0)).toBe("Apr '26")
   })
 
   it('leaves a chart it cannot measure exactly as the page built it', () => {

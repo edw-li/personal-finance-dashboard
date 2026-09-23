@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { echarts, registerThemeVersion } from '../charts/echarts'
 import type { EChartsOption } from '../charts/echarts'
-import { fitMonthAxes } from '../charts/grammar'
+import { fitMonthAxes, hasMonthAxes, monthAxesKey, monthAxesPatch } from '../charts/monthLabels'
 import { defaultCursor, pinSeriesMotion, quiesceRipples } from '../charts/motion'
 import { lightFromDark, recolorOption } from '../charts/recolor'
 import type { ZoomWindow } from '../charts/timeZoom'
@@ -110,9 +110,13 @@ export default function EChart({
   const requestedZoomRef = useRef<string | null>(null)
   // Month labels fitted to the measured width (2026-09-23 spec §C4): the last option apply()
   // painted — UNFITTED, so a refit always starts from the builder's own axis — and the label
-  // forms it was fitted to, so a resize or a zoom that changes nothing costs nothing.
+  // forms it was fitted to, so a resize or a zoom that changes nothing costs nothing. Whether it
+  // has a month axis at all (none: no refit work, ever), and the window the engine shows, kept
+  // here so a resize never has to deep-clone the option back out of the engine to learn it.
   const paintedRef = useRef<EChartsOption | null>(null)
   const fitKeyRef = useRef('')
+  const hasMonthAxesRef = useRef(false)
+  const liveZoomRef = useRef<ZoomWindow | null>(null)
 
   // Latest-handler refs, refreshed after each render so the chart's listeners never
   // have to be rebound. Assigning during render trips react-hooks/refs ("Cannot update
@@ -160,25 +164,27 @@ export default function EChart({
         ? { startValue: zoom.startValue, endValue: zoom.endValue }
         : null
     }
-    // Refit the month labels to the host's width and the live window (spec §C4), merging only
-    // the axes — and only when the form actually changes. A zoom from 38 months to 13 earns
-    // the full month; a card squeezed by the dock drops to the short one.
+    // Refit the month labels to the host's width and the live window (spec §C4) — and only when
+    // the form actually changes. A zoom from 38 months to 13 earns the full month; a card
+    // squeezed by the dock drops to the short one. The key is computed first and allocates
+    // nothing; a change merges ONLY each month axis's label formatter and interval (never the
+    // whole axis rebuilt from the last paint, whose stale keys would clobber anything merged
+    // since). A chart with no month axis does no work at all.
     const refit = () => {
       const painted = paintedRef.current
-      if (painted === null) return
-      // Only a chart that zooms has a live window worth reading.
-      const zoom = (painted as { dataZoom?: unknown }).dataZoom === undefined ? null : liveZoom()
-      const fitted = fitMonthAxes(painted, el.clientWidth, zoom)
-      if (fitted.key === fitKeyRef.current) return
-      fitKeyRef.current = fitted.key
-      chart.setOption({ xAxis: (fitted.option as { xAxis?: unknown }).xAxis } as EChartsOption)
+      if (painted === null || !hasMonthAxesRef.current) return
+      const key = monthAxesKey(painted, el.clientWidth, liveZoomRef.current)
+      if (key === fitKeyRef.current) return
+      fitKeyRef.current = key
+      chart.setOption({ xAxis: monthAxesPatch(painted, el.clientWidth, liveZoomRef.current) } as EChartsOption)
     }
     chart.on('datazoom', () => {
       // The event's own payload is percent-based (and batch-shaped from inside zooms);
-      // the RESOLVED category-axis indices live on the option — read them back instead.
+      // the RESOLVED category-axis indices live on the option — read them back, once.
       const window = liveZoom()
       if (window !== null) {
         manualZoomRef.current = window
+        liveZoomRef.current = window
         onDataZoomRef.current?.(window)
       }
       // echarts triggers this after its own update cycle, so a merge here is legal.
@@ -207,6 +213,8 @@ export default function EChart({
       pendingPaintRef.current = null
       paintedRef.current = null
       fitKeyRef.current = ''
+      hasMonthAxesRef.current = false
+      liveZoomRef.current = null
       if (instanceRef) instanceRef.current = null
     }
   }, [instanceRef, resolved, themeVersion])
@@ -337,12 +345,11 @@ export default function EChart({
       const zooms = painted.dataZoom === undefined ? undefined : Array.isArray(painted.dataZoom) ? painted.dataZoom : [painted.dataZoom]
       if (!keepManualZoom) manualZoomRef.current = null
       requestedZoomRef.current = requestedZoom
-      // Month labels fitted to the host's width and the window this paint will show (spec §C4).
-      const fitted = fitMonthAxes(
-        painted,
-        containerRef.current?.clientWidth ?? 0,
-        keepManualZoom ? manualZoomRef.current : null,
-      )
+      // Month labels fitted to the host's width and the window this paint will show (spec §C4):
+      // the kept manual window, or (null) the option's own preset, which fitMonthAxes reads.
+      liveZoomRef.current = keepManualZoom ? manualZoomRef.current : null
+      hasMonthAxesRef.current = hasMonthAxes(painted)
+      const fitted = fitMonthAxes(painted, containerRef.current?.clientWidth ?? 0, liveZoomRef.current)
       chart.setOption(
         {
           ...(fitted.option as EChartsOption),
