@@ -9,6 +9,7 @@ import type {
 } from '../types/api'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import CreditCardsPage from './CreditCardsPage'
+import { INK, PALETTE } from '../charts/theme'
 import { expectInDocumentOrder } from '../testing/domOrder'
 
 vi.mock('../api/creditCards', () => ({
@@ -36,7 +37,7 @@ vi.mock('../api/netWorth', () => ({
 }))
 vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
 // ECharts never renders in jsdom (house law): the stub exposes the slices these tests
-// pin — series names for the two chart cards — via data-* attributes.
+// pin — series names and colours for the two chart cards — via data-* attributes.
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
   return {
@@ -45,7 +46,7 @@ vi.mock('../components/EChart', async () => {
       ariaLabel,
       animateEntrance = true,
     }: {
-      option: { series?: { name?: string }[] }
+      option: { series?: { name?: string; color?: string }[] }
       ariaLabel?: string
       animateEntrance?: boolean
     }) =>
@@ -53,6 +54,8 @@ vi.mock('../components/EChart', async () => {
         'data-testid': 'echart',
         'aria-label': ariaLabel,
         'data-series-names': (option.series ?? []).map((s) => s.name ?? '').join('|'),
+        // The credit-line chart keys each colour to its card (2026-09-23 drag-to-reorder §7).
+        'data-series-colors': (option.series ?? []).map((s) => s.color ?? '').join('|'),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
       }),
@@ -996,5 +999,45 @@ describe('CreditCardsPage — tiles per view', () => {
     const { container } = renderPage()
     expect(container.querySelectorAll('.page-skeleton .skeleton-tile')).toHaveLength(4)
     expect(container.querySelector('.page-skeleton .skeleton-delta')).toBeNull()
+  })
+})
+
+// ── Drag to reorder (2026-09-23 drag-to-reorder spec §7) ──────────────────────────────────────
+
+describe('CreditCardsPage — the credit-line colours follow the card, not its place', () => {
+  it('keys each line to its card id: a card moved up the list keeps its colour', async () => {
+    // SavorOne stands first — as it would after a drag — and still wears slot 1 (id 2), while
+    // Venture X keeps slot 0 (id 1). The series order is the list's.
+    vi.mocked(fetchCreditCards).mockResolvedValue([SAVOR, vx(), RH])
+    renderPage('/credit-cards?section=lines')
+    await screen.findByText('Credit line history')
+    const line = screen
+      .getAllByTestId('echart')
+      .find((el) => (el.getAttribute('data-series-names') ?? '').includes('Total line'))
+    expect(line?.getAttribute('data-series-names')).toBe('SavorOne|Venture X|Total line')
+    expect(line?.getAttribute('data-series-colors')).toBe(`${PALETTE[1]}|${PALETTE[0]}|${INK}`)
+  })
+
+  // Amendment A1 (spec §7 as amended 2026-09-23): the rank counts every card the page loaded,
+  // so a person scope that draws fewer cards repaints none of them.
+  it('keeps a card in one colour across person scopes — archived cards hold their rank too', async () => {
+    const rhWithLine: CreditCardOut = {
+      ...RH,
+      current_limit: '5000.00',
+      limit_events: [{ id: 24, effective_date: '2025-03-01', limit_amount: '5000.00', note: null }],
+    }
+    // Venture X (id 1) is archived: it draws no line, and still takes the first rank.
+    vi.mocked(fetchCreditCards).mockResolvedValue([vx({ is_active: false }), SAVOR, rhWithLine])
+    renderPage('/credit-cards?section=lines')
+    await screen.findByText('Credit line history')
+    const line = () => screen.getByLabelText(/Step chart of credit limits/)
+    await waitFor(() =>
+      expect(line().getAttribute('data-series-names')).toBe('SavorOne|RH Gold|Total line'),
+    )
+    expect(line().getAttribute('data-series-colors')).toBe(`${PALETTE[1]}|${PALETTE[2]}|${INK}`)
+    // Sam's scope draws RH Gold alone — in the colour the household view gave it.
+    fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
+    await waitFor(() => expect(line().getAttribute('data-series-names')).toBe('RH Gold'))
+    expect(line().getAttribute('data-series-colors')).toBe(PALETTE[2])
   })
 })

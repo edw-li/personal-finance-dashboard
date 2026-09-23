@@ -313,7 +313,9 @@ export default function CreditCardsPage() {
     () =>
       activeCards
         .filter((card) => card.limit_events.length > 0)
-        .map((card) => ({ name: card.name, events: card.limit_events })),
+        // The id keys each line's colour, so a reorder never repaints a card (2026-09-23
+        // drag-to-reorder spec §7); the list order still sets the series and legend order.
+        .map((card) => ({ id: card.id, name: card.name, events: card.limit_events })),
     [activeCards],
   )
   const lineMonths = useMemo(() => limitMonths(lineCards, currentMonthIso()), [lineCards])
@@ -323,9 +325,12 @@ export default function CreditCardsPage() {
         ? creditLineChartOption(lineCards, lineMonths, {
             includeTotal: lineCards.length > 1,
             selected: lineLegend,
+            // Ranked among EVERY card the page loaded — archived ones and those outside the
+            // person scope too — so a card wears one colour in every scope (spec §7, amended).
+            rankIds: (cards ?? []).map((card) => card.id),
           })
         : null,
-    [lineCards, lineMonths, lineLegend],
+    [lineCards, lineMonths, lineLegend, cards],
   )
 
   return (
