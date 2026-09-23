@@ -33,6 +33,7 @@ vi.mock('../api/portfolio', async (importOriginal) => ({
   fetchRealized: vi.fn(),
   fetchSecurities: vi.fn(),
   fetchTransactions: vi.fn(),
+  reorderTransactions: vi.fn(),
   updateSecurity: vi.fn(),
 }))
 vi.mock('../api/prices', async (importOriginal) => ({
@@ -84,6 +85,7 @@ import {
   fetchRealized,
   fetchSecurities,
   fetchTransactions,
+  reorderTransactions,
 } from '../api/portfolio'
 import { fetchPriceHistory, fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
 import { formatDate, formatDateTime } from '../utils/format'
@@ -977,6 +979,81 @@ describe('PortfolioPage — shell scope', () => {
         "New account 'Fidelity Roth' will be created and assigned to Me — re-tag it in Settings → Accounts",
       ),
     ).toBeTruthy()
+  })
+
+  // 2026-09-23 drag-to-reorder spec §5: the ledger saves a reorder in the scope it shows — the
+  // server checks the ids against exactly the rows that scope lists.
+  it('hands the transactions ledger the page scope, and a reorder is saved in it', async () => {
+    const second: TransactionOut = {
+      ...TRANSACTIONS[0],
+      id: 12,
+      account: 'Joint Taxable',
+      sort_index: 10,
+    }
+    vi.mocked(fetchTransactions).mockResolvedValue([TRANSACTIONS[0], second])
+    vi.mocked(reorderTransactions).mockResolvedValue({
+      transactions: [second, TRANSACTIONS[0]],
+      changed_positions: [],
+    })
+    // jsdom has no window.scrollBy; the keyboard path keeps the lifted row in view with it.
+    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    try {
+      renderPage('/portfolio?section=manage&owner=2')
+      const handle = await screen.findByRole('button', {
+        name: 'Reorder VOO buy, Fidelity Brokerage',
+      })
+      const fetchesBefore = vi.mocked(fetchTransactions).mock.calls.length
+      handle.focus()
+      fireEvent.keyDown(handle, { key: ' ' })
+      fireEvent.keyDown(handle, { key: 'ArrowDown' })
+      fireEvent.keyDown(handle, { key: ' ' })
+      await waitFor(() => expect(reorderTransactions).toHaveBeenCalledWith([12, 11], SAM.id))
+      // …and the page reloads the ledger under the same scope.
+      await waitFor(() =>
+        expect(vi.mocked(fetchTransactions).mock.calls.length).toBeGreaterThan(fetchesBefore),
+      )
+      expect(fetchTransactions).toHaveBeenLastCalledWith(SAM.id)
+    } finally {
+      scrollBy.mockRestore()
+    }
+  })
+
+  // A scope painted from cache is still revalidating: a drag there could save an order the
+  // landing data replaces, so the ledger's grips wait for the page's own dim to lift.
+  it('keeps the ledger grips inert while the page revalidates a cached paint', async () => {
+    const second: TransactionOut = {
+      ...TRANSACTIONS[0],
+      id: 12,
+      account: 'Joint Taxable',
+      sort_index: 10,
+    }
+    setSnapshot('portfolio:all', {
+      holdings: holdingsOut(),
+      securities: SECURITIES,
+      accounts: ACCOUNTS,
+      primaryName: 'Me',
+      transactions: [TRANSACTIONS[0], second],
+      dividends: DIVIDENDS,
+      dividendEvents: [],
+      byType: allocationOut('type'),
+      byAccount: allocationOut('account'),
+      sparklines: {},
+      history: HISTORY,
+      realized: REALIZED,
+      refreshStatus: STATUS,
+    })
+    vi.mocked(fetchTransactions).mockResolvedValue([TRANSACTIONS[0], second])
+    let land: (value: HoldingsResponse) => void = () => {}
+    vi.mocked(fetchHoldings).mockReturnValue(
+      new Promise<HoldingsResponse>((resolve) => {
+        land = resolve
+      }),
+    )
+    renderPage('/portfolio?section=manage')
+    const handle = screen.getByRole('button', { name: 'Reorder VOO buy, Fidelity Brokerage' })
+    expect(handle.getAttribute('aria-disabled')).toBe('true')
+    land(holdingsOut())
+    await waitFor(() => expect(handle.getAttribute('aria-disabled')).toBeNull())
   })
 })
 

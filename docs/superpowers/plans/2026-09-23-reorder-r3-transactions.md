@@ -292,7 +292,7 @@ export function reorderTransactions(ids: number[], owner: OwnerScope): Promise<T
 
 | File | Change |
 |---|---|
-| `src/components/portfolio/TransactionsPanel.tsx` | `owner` prop; grip column; `.reorder-table`; instructions + live region; hint sentence; `pendingOrder`/`savedOrder`; `saveOrder` / `restoreOrder` / `dropPendingOrder`; toast copy helpers (`rowName`, `clause`, `changeSentence`, `movedMessage`) |
+| `src/components/portfolio/TransactionsPanel.tsx` | `owner` prop; grip column; `.reorder-table`; instructions + live region; hint sentence; `pendingOrder`/`savedOrder`; `saveOrder` / `restoreOrder`; toast copy helpers (`rowName`, `clause`, `changeSentence`, `movedMessage`) |
 | `src/components/portfolio/TransactionsPanel.test.tsx` | mock factory gains `reorderTransactions`; reorder fixtures + helpers; six new `describe` blocks (grip column, saving, toast copy, Undo, failures, CSS pins) |
 | `src/components/portfolio/portfolio.css` | five rules appended (border model, grip cell, pinned actions cell × 3 states) |
 | `src/pages/PortfolioPage.tsx` | `owner={owner}` on `<TransactionsPanel>` (one line) |
@@ -2725,16 +2725,164 @@ git commit -m "docs(plan): lane R3 — results, gates and the browser check"
 
 ## Results (filled in by the implementer)
 
-- Task 0 baseline: TransactionsPanel.test.tsx … tests; PortfolioPage.test.tsx … tests
-- Lane tests after Task 7: TransactionsPanel.test.tsx … tests; PortfolioPage.test.tsx … tests
-- Full vitest: … files / … tests
-- tsc / eslint / build: …
-- Scope check: …
-- Browser check (`scratchpad/reorder-r3/out/report.json`): … checks, … problems; per pass
-  (dark/light × 1600/1280): …; long-drag auto-scroll distance: … px; focus through a failed
-  save: …
-- Task 9 Step 5 needed: yes/no — …
-- Notes for R0 / R2 / V: …
+Implemented 2026-09-23 in `.worktrees/reorder-r3` on `feat/reorder-transactions` (from
+`feat/reorder-base` @ da1a3e44). Commits: b83d308f (Task 1), 457cfcfd (2), 8d5ab353 (3), 3f6f6185
+(4), 3fbac8be (5), 0cf5e102 (6, per A1), 9deef677 (7), 7fc08c48 (the browser check's fix, below),
+then this Results commit.
+
+- **Task 0 baseline:** TransactionsPanel.test.tsx 23 tests; PortfolioPage.test.tsx 37 tests. The
+  base carries R1 (dd62aa6c), R0 (0d805010 + the 11a4cda0 follow-up) and R4.
+- **Lane tests after Task 7:** TransactionsPanel.test.tsx 55; PortfolioPage.test.tsx 38. After the
+  browser check's fix (two new tests): TransactionsPanel.test.tsx **57**, PortfolioPage.test.tsx
+  **38**. Every task was seen red first, with the failures the plan predicted, except Task 6
+  (green at once by A1's design).
+- **Full vitest** (one run, `--maxWorkers=2`, after every code change including the fix):
+  **246 files / 3427 tests, exit 0**. No flake appeared, so there was nothing to re-run.
+- **tsc / eslint / build:** `npx tsc -b` exit 0. `npx eslint .` exit 0 with 0 errors; its 26
+  warnings are all pre-existing `react-refresh/only-export-components` in files this lane does
+  not touch. The lane's files lint clean after every commit, the fix included. `npm run build`
+  (`tsc -b && vite build`) exit 0, 2658 modules, no warnings.
+- **Scope check:** `git diff --stat feat/reorder-base...HEAD` lists exactly
+  TransactionsPanel.tsx, TransactionsPanel.test.tsx, PortfolioPage.test.tsx and
+  PortfolioPage.tsx (its whole diff is `+ owner={owner}`), plus this Results section.
+  `portfolio.css` is untouched (A1).
+- **Browser check.** Real Edge on the lane's own uvicorn :8093 and vite :5193 against
+  `finance_reorder_r3`, verified at `f12026092301 (head)` with no migration run.
+  - **Run 1:** 153 checks, **23 problems**, two findings.
+    1. **Script:** step f's `getByLabel('Security', { exact: true })` never matches. A wrapping
+       `<label>`'s text includes its `<select>`'s option texts. Fixed in the script: locate the
+       control inside the label whose text starts with the name; Account keeps `getByLabel`
+       through its own `aria-label`.
+    2. **App bug**, in dark-1280, light-1600 and light-1280; timing-dependent, since dark-1600
+       passed.
+       - Undo restored the server's order ("c: Undo restores the server order" ok), but the
+         ledger kept showing the dropped order `[27,29,30,31,28,…]`.
+       - Step d then dragged from that stale display, and the PUT saved it: R1 accepts any
+         permutation of the same rows. So a stale display turns into data.
+       - Cause: Undo's page reload supersedes the drop's (`seqRef`) and brings back the rows from
+         before the drop. PortfolioPage skips a snapshot equal to the one on screen, and here the
+         `sort_index` values were already respaced 10, 20, … by an earlier reorder, so the payload
+         is identical. No new `transactions` reach the panel, so `savedOrder` — the drop's answer —
+         never retires.
+       - The later g failures follow from d.
+       - **Fixed in 7fc08c48**, test first. The Undo's own answer becomes the saved layer. Both
+         layers also carry the owner scope they were made in and show only while the page shows
+         it, which closes the sibling case found by analysis: a save or Undo answering after a
+         scope switch would otherwise stand over the other scope's rows, with nothing new from the
+         page to push it off.
+  - **Run 2 (after the fix):** `R3 DRAG CHECK OK` — **171 checks, 0 problems**. Per pass:
+    dark-1600 50/50, dark-1280 33/33 (+1 note), light-1600 50/50, light-1280 33/33 (+1 note),
+    and the end check 1/1. `knownBenign` holds only step g's forced 500/409, 8 entries.
+    - The lifted row follows the pointer: offset = dy to within 1e-4 px.
+    - Exactly |k| rows make room, the page says grabbing, and the pinned actions cell rides on the
+      lifted surface in every pass.
+    - **Long-drag auto-scroll: 594 px** in both themes (612 / 630 in run 1); the row travelled
+      from slot 0 to 17.
+    - **Focus through a failed save:** it stays on the moved row's grip (row 30) in both 1280
+      passes.
+    - **Owner scope (e):** Grace (id 2). The PUT is `…/order?owner=2` with her 27 visible ids in
+      their new order, every hidden row keeps its household slot, and Undo restores the household
+      order.
+    - **Figure change (f):** the toast reads "Moved the VOO sell. VOO at R3 scratch: realized gain
+      $200.00 → $600.00.", and both scratch rows were deleted through the ledger.
+    - **Failures (g):** the 500 toast reads "Couldn't save the new order — the server had a
+      problem (HTTP 500). The list is back to how it was.", and the 409 toast is the server's
+      sentence, followed by the page's reload.
+  - **Run 3** (`ONLY_WIDTH=1600 OUT_DIR=out-toasts`, which adds toast screenshots): OK, 103
+    checks.
+  - **Screenshots** (`scratchpad/reorder-r3/out`, `out-toasts`, run 1's failure evidence in
+    `out-run1`), eyeballed in both themes:
+    - resting: grip column narrow and first, hairlines as before, the hint's replay-order sentence;
+    - mid-drag at 1600 and 1280: the lifted row is raised on `--surface-2` with its actions cell
+      on the same surface and hairline kept, the passed rows have made room, and the row buttons
+      are shut;
+    - auto-scroll: the lifted row rides the bottom edge;
+    - `*-f-toast`: the figure-change toast;
+    - `*-e-toast`: Grace's scope with the quiet toast.
+  - **Database afterwards:** 39 transactions in the starting order (ids 27…65; `sort_index` now
+    respaced 10…390 by R1's route) and no scratch rows. The `R3 scratch` portfolio account (id 9)
+    stays, as planned. Servers stopped; no process of the lane left running.
+- **Task 9 Step 5 needed: no.** At 1280 the ledger's `.holdings-scroll` computes `overflow-y:
+  auto` with scrollHeight = clientHeight = 1753. R0's `scrollHeight − clientHeight > 1` rule
+  passes over it, and the page auto-scrolls.
+- **Deviations from the plan, each recorded in its commit:**
+  1. **Decision 9 is not implemented as written** (Task 5: no `flushSync`, no explicit focus
+     hand-back). React DOM's commit records the focused element before its mutations and
+     re-focuses it afterwards (react-dom 19.2.8, commit path → `priorFocusedElem.focus()`).
+     jsdom also applies the focus-fixup rule to a moved row (checked directly), so the plan's
+     focus assertion is load-bearing and passes on React's own restore. Edge step g confirms it
+     for real.
+  2. **Decisions 2 and 3 are amended by the browser finding.** The Undo is still not optimistic,
+     but its confirmed answer is now shown at once as the saved layer. Both layers are
+     scope-tagged. Two tests were added: "shows the restored order once the server confirms it,
+     though the page hands down nothing new" and "never shows one scope's order under another —
+     a save that answers after a scope switch".
+  3. **Task 6 per A1.** Test 1 also pins that `portfolio.css`'s collapse sits on the one-class
+     `.port-table`, which `table.reorder-table` outranks. That keeps the kept `css` reader used;
+     unused, it fails eslint.
+  4. **Task 1's scope-switch test** also asserts R0's final "Cancelled — the list changed."
+  5. **The full vitest and the build ran after the browser check,** not before it (the memory
+     constraint allows one full run, and it had to cover the fix).
+- **Code-quality review round (2026-09-23).** Every item was test-first and committed on its own:
+  1. **700b05da — the page's current `onChanged`.** All seven async call sites go through a
+     layout-effect-synced ref (useReorder's `latest` idiom): the save and 409 paths of drop and
+     Undo, submit, delete and its toast Undo. Before, an answer that landed after a scope switch
+     called the old render's `reload`, which refetched the OLD scope and superseded the new one.
+     Two tests: a save and an Undo, each answering after a switch — the new `onChanged` is called,
+     the old one never.
+  2. **5f120dea — a request counter.** `inFlight` counts the four request paths in and out in
+     `.finally`; `busy = inFlight > 0`. Test: drop A answered, drop B pending, A's Undo pressed,
+     B resolves — the grips stay `aria-disabled` until the restore settles.
+  3. **b178307e — two-argument `then`.** saveOrder and restoreOrder use
+     `.then(onSaved, onFailed)`. A throw while wording a success (a malformed answer) now escapes
+     as an error instead of printing a failure over the saved order. Two tests catch the escape
+     with their own `unhandledRejection` listener: vitest leaves an unhandled rejection to user
+     code when one is listening.
+  4. **2803bb78 — `reloading`.** The page's existing `reloading` flag (the frame's `.loading-dim`)
+     reaches the panel in one more additive prop line, and the hook gets `disabled: busy ||
+     reloading`. A panel test and a page test, the latter a cached paint whose revalidation keeps
+     the grips inert until the data lands.
+     - Consequence: after every save the grips also stay inert through the page's reload, not
+       just until the PUT answers. Decision 2's two-layer window for a second keyboard drop is
+       therefore mostly closed. The layers still carry the order through that reload and through
+       failures.
+  5. **b2dd66db — fake-timer flash.** The saved flash is checked on a fake clock: set on the
+     answer, still set at `MOTION_MS.flash − 1`, gone at `MOTION_MS.flash`. A hardening, so it was
+     green at once.
+  6. **613a9633 — nits.** The delete toast uses `tickerOf`, and the file map no longer lists
+     `dropPendingOrder`.
+  - **Merge.** 49adcb59 brings in `feat/reorder-base` @ d5efe2d9 (R0 round 4: the leading-edge
+    slot rule, the auto-scroll range-end stop, one hairline inside a lifted unit). It merged
+    cleanly. fa1a2831 re-pins the lifted actions cell against R0's new `--reorder-edge-*`
+    variables: its own `-1px` hairline first, then the row's edges, both present for a unit of
+    one.
+  - **Browser re-run after the merge** (dark, 1280, `OUT_DIR=out-r0round4`): OK, 37 checks, 0
+    problems.
+    - Page auto-scroll 639 px; the row travelled from slot 0 to 18.
+    - The pointer drag landed exactly under the leading-edge rule: offset = dy, 3 rows made room,
+      and the actions cell stayed on the lifted surface.
+    - The keyboard drop kept focus on its grip, and focus survived the forced 500's revert; the
+      409 showed the server's sentence.
+    - The frame shows build fa1a2831. Servers stopped afterwards.
+  - **Gates.**
+    - Lane files: TransactionsPanel.test.tsx **63**, PortfolioPage.test.tsx **39**, all pass.
+    - `npx tsc -b` 0; eslint on the four touched files 0.
+    - ONE full `npx vitest run --maxWorkers=2`: 246 files / 3442 tests, **3441 passed, 1
+      failed** — the known under-load flake `CategoriesCard … retires and restores` (Settings,
+      untouched by this lane). Alone, its file passes 13/13.
+- **Notes for R0 / R2 / V:**
+  - **R2 / R5:** any optimistic or saved layer retired only on fresh props can stick. A parent
+    that skips identical payloads, or a client Undo that re-sends an old order, hands down nothing
+    new. Show the server's answer to the Undo, and scope-tag the layer where a scope exists. R5's
+    client Undo is the same shape as this lane's.
+  - **R0:** `commit`'s explicit refocus after `flushSync` is redundant with React's own restore.
+    It is harmless; no change asked.
+  - **V:**
+    - R1's 409 fires on a change of membership only. A pure reorder made elsewhere (another tab)
+      is not detected, so the last writer wins. That is why a stale display is dangerous.
+    - During auto-scroll the lifted row near the bottom edge sits under the app's viewport-edge
+      fade, so it looks dimmed; cosmetic, not R3's.
+    - `finance_reorder_r3` keeps the `R3 scratch` account.
 
 ---
 

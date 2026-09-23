@@ -1,14 +1,19 @@
-import { useState } from 'react'
-import { ApiError } from '../../api/client'
+import { useLayoutEffect, useRef, useState } from 'react'
+import { ApiError, errorDetail } from '../../api/client'
 import {
   createTransaction,
   deleteTransaction,
+  reorderTransactions,
   updateTransaction,
 } from '../../api/portfolio'
+import type { OwnerScope } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
+import DragHandle from '../reorder/DragHandle'
+import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
+import { useReorder } from '../reorder/useReorder'
 import { useToast } from '../ToastProvider'
-import type { SecurityOut, TransactionOut, TransactionType } from '../../types/api'
+import type { PositionChange, SecurityOut, TransactionOut, TransactionType } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
 import { FeedBanner } from '../shell/Feed'
@@ -120,11 +125,86 @@ function newAccountNote(
   return `New account '${label}' will be created and assigned to ${primaryName ?? 'the primary member'} — re-tag it in Settings → Accounts`
 }
 
+/** A ledger row's name for its grip and the live region (2026-09-23 drag-to-reorder spec §2.4):
+ *  ticker, type and account — "NVDA buy, Schwab ESPP". Two lots of one holding share a name; the
+ *  position the live region speaks after it tells them apart. */
+function rowName(txn: TransactionOut, ticker: string): string {
+  return `${ticker} ${txn.type}, ${txn.account}`
+}
+
+/** A replay order the panel shows ahead of the page's rows, and the owner scope it belongs to —
+ *  it shows only while the page shows that scope. */
+interface OrderLayer {
+  scope: OwnerScope
+  rows: TransactionOut[]
+}
+
+/** A server sentence used inside one of ours: its closing stop goes, ours closes it. */
+function clause(text: string): string {
+  return text.replace(/[.\s]+$/, '')
+}
+
+/** One changed holding, in words (2026-09-23 drag-to-reorder spec §8.1): the FIRST of realized
+ *  gain, cost basis and shares that moved — the server's figures, formatted the house way — or,
+ *  when only a warning was added, that warning. The server quantizes both sides and never sends
+ *  a negative zero, so comparing its strings is comparing its figures; nothing is recomputed. */
+function changeSentence(change: PositionChange): string {
+  const where = `${change.ticker} at ${change.account}`
+  const figures = [
+    {
+      name: 'realized gain',
+      before: change.realized_gl_before,
+      after: change.realized_gl_after,
+      format: formatCurrency,
+    },
+    {
+      name: 'cost basis',
+      before: change.cost_basis_before,
+      after: change.cost_basis_after,
+      format: formatCurrency,
+    },
+    { name: 'shares', before: change.shares_before, after: change.shares_after, format: formatShares },
+  ]
+  const figure = figures.find((candidate) => candidate.before !== candidate.after)
+  if (figure !== undefined) {
+    return `${where}: ${figure.name} ${figure.format(figure.before)} → ${figure.format(figure.after)}.`
+  }
+  if (change.warnings_added.length > 0) {
+    return `${where} now warns: ${clause(change.warnings_added[0])}.`
+  }
+  // The contract lists a holding only when one of the above moved; said plainly if it ever
+  // does not.
+  return `${where} changed.`
+}
+
+/** The success toast (spec §8.1). The list order IS the replay order, so the toast says what
+ *  the move did to the book: nothing, or the moved row's OWN holding (security and account —
+ *  the fold's position key; the first listed holding when its own did not change), plus a count
+ *  of the rest. */
+function movedMessage(
+  txn: TransactionOut,
+  ticker: string,
+  changes: readonly PositionChange[],
+): string {
+  const head = `Moved the ${ticker} ${txn.type}.`
+  if (changes.length === 0) return `${head} No holding's figures changed.`
+  const own =
+    changes.find(
+      (change) => change.security_id === txn.security_id && change.account === txn.account,
+    ) ?? changes[0]
+  const others = changes.length - 1
+  const tail =
+    others === 0 ? '' : ` And ${others} more ${others === 1 ? 'holding' : 'holdings'} changed.`
+  return `${head} ${changeSentence(own)}${tail}`
+}
+
 export default function TransactionsPanel({
   securities,
   transactions,
   accounts = null,
   primaryName = null,
+  owner = null,
+  reloading = false,
   onChanged,
 }: {
   securities: SecurityOut[]
@@ -137,6 +217,15 @@ export default function TransactionsPanel({
   /** Who a NEW account would be assigned to, for that note; null falls back to a
    *  description rather than inventing a name. */
   primaryName?: string | null
+  /** The page's owner scope — the value `fetchTransactions` was given for `transactions`
+   *  (2026-09-23 drag-to-reorder spec §5). A reorder is saved in it: the server checks the ids
+   *  against exactly the rows this scope lists and moves them among their own slots. Null is
+   *  the whole household. */
+  owner?: OwnerScope
+  /** True while the page revalidates what it shows — a scope painted from cache, the reload
+   *  after a change (PortfolioPage's `reloading`, the frame's dim). The grips go inert: a drop
+   *  in that window could save an order the landing rows replace. */
+  reloading?: boolean
   onChanged: () => void
 }) {
   const [form, setForm] = useState<FormState>(EMPTY)
@@ -145,10 +234,149 @@ export default function TransactionsPanel({
   // one piece of state the carry-forward cue and the submit label read.
   const [kept, setKept] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  // Requests in flight — a count, not a flag: they overlap (a later drop's save and an earlier
+  // toast's Undo), and the first to settle must not reopen the grips and the row buttons while
+  // another is still running. `busy` is what every control reads.
+  const [inFlight, setInFlight] = useState(0)
+  const busy = inFlight > 0
+  const requestStarted = () => setInFlight((count) => count + 1)
+  const requestSettled = () => setInFlight((count) => count - 1)
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
   const toast = useToast()
+  // The page's reload AS IT STANDS NOW, for every request's answer: `onChanged` closes over the
+  // page's scope, so a save, delete or Undo that answers after a scope switch must not call the
+  // one from the render that sent it — that refetches the OLD scope, supersedes the new scope's
+  // load and paints the whole page with the old scope under the new chips (useReorder's
+  // `latest` idiom).
+  const onChangedRef = useRef(onChanged)
+  useLayoutEffect(() => {
+    onChangedRef.current = onChanged
+  })
   const accountNote = newAccountNote(form.account, accounts, primaryName)
+  const tickerOf = (txn: TransactionOut) => tickers.get(txn.security_id) ?? '?'
+
+  // Drag to reorder (2026-09-23 drag-to-reorder spec §5). The LIST ORDER is the cost-basis
+  // replay order — the rows carry no dates, so their order is the ledger's timeline and a drag
+  // re-times a trade. Two layers sit over the page's rows, and only this panel's own reorder
+  // requests set either:
+  //   pendingOrder — the dropped order, from the moment the grip lets go until the PUT answers
+  //                  (optimistic), cleared either way when it does;
+  //   savedOrder   — the server's answer to the last drop or Undo, until the page's next fetch
+  //                  replaces `transactions` (retired during render — CategoriesPanel's
+  //                  adjust-during-render pattern, no effect, so react-hooks/set-state-in-effect
+  //                  stays clean).
+  // So a fetch that lands mid-save never flashes the row back to where it came from, and a
+  // failed save falls back to the newest order the server confirmed. The server's answer, not
+  // the page's reload, is what the panel trusts after a request: PortfolioPage hands down no new
+  // `transactions` when a reload matches what it already shows, and an Undo's reload that
+  // supersedes the drop's brings back exactly the rows from before the drop. Each layer keeps
+  // the scope it was made in and shows only while the page shows that scope, so an answer that
+  // lands after a scope switch never paints one scope's rows over another's.
+  const [pendingOrder, setPendingOrder] = useState<OrderLayer | null>(null)
+  const [savedOrder, setSavedOrder] = useState<OrderLayer | null>(null)
+  const [lastTransactions, setLastTransactions] = useState(transactions)
+  if (lastTransactions !== transactions) {
+    setLastTransactions(transactions)
+    setSavedOrder(null)
+  }
+  const inScope = (layer: OrderLayer | null) =>
+    layer !== null && layer.scope === owner ? layer.rows : null
+  const rows = inScope(pendingOrder) ?? inScope(savedOrder) ?? transactions
+  const rowById = new Map(rows.map((txn) => [txn.id, txn]))
+
+  // Undo re-sends the order that stood before the drop (spec §5): the endpoint is not
+  // change-logged, so the client holds the previous order — and the scope it was made in. Not
+  // optimistic: the restored order shows once the server confirms it, as the saved layer, and
+  // the page's reload follows. A list that changed since answers 409 and the reload shows what
+  // is there now.
+  const restoreOrder = (ids: number[], scope: OwnerScope) => {
+    requestStarted()
+    // Two-argument then, as in saveOrder: only the request's own failure is a failed restore.
+    reorderTransactions(ids, scope)
+      .then(
+        (result) => {
+          setSavedOrder({ scope, rows: result.transactions })
+          onChangedRef.current()
+          toast.info('Order restored')
+        },
+        (err: unknown) => {
+          if (err instanceof ApiError && err.status === 409) {
+            toast.error(errorDetail(err))
+            onChangedRef.current()
+            return
+          }
+          toast.error(`Couldn't restore the order — ${clause(errorDetail(err))}.`)
+        },
+      )
+      .finally(requestSettled)
+  }
+
+  // One drop, one PUT (spec §5): the visible ids in their new order, in the page's scope. The
+  // server re-times the whole ledger, folds it before and after, and answers with the rows and
+  // every holding whose figures moved. `reorder` is read only when the PUT answers, long after
+  // the render that declares it below has returned.
+  const saveOrder = (next: number[], moved: number) => {
+    const txn = rowById.get(moved)
+    if (txn === undefined) return // the hook commits only ids it was handed
+    const previous = rows.map((row) => row.id)
+    const scope = owner
+    // Synchronously: the hook calls onCommit inside flushSync, so the new DOM order and the
+    // cleared drag transforms land in one frame (lane R0 consumer rule 3).
+    setPendingOrder({
+      scope,
+      rows: next.flatMap((id) => {
+        const row = rowById.get(id)
+        return row === undefined ? [] : [row]
+      }),
+    })
+    requestStarted()
+    // Two-argument then: only the request's own failure reaches the failure branch. A throw
+    // while wording the success (a malformed answer) escapes as an error instead of printing
+    // "back to how it was" over the order the server just saved.
+    reorderTransactions(next, scope)
+      .then(
+        (result) => {
+          setPendingOrder(null)
+          setSavedOrder({ scope, rows: result.transactions })
+          // Holdings, realized gains and the tiles stand on this order: the page reloads them.
+          onChangedRef.current()
+          reorder.markSaved(moved)
+          toast.success(movedMessage(txn, tickerOf(txn), result.changed_positions), {
+            action: { label: 'Undo', onAction: () => restoreOrder(previous, scope) },
+          })
+        },
+        (err: unknown) => {
+          // A failed save puts the rows back (spec §5, as §4.1) — to the newest order the server
+          // confirmed. Reverting an upward move re-inserts the dropped row, and a moved node loses
+          // focus; React DOM's commit re-focuses whatever held focus before its DOM moves, so the
+          // keyboard reader's grip keeps it without a hand-back here.
+          setPendingOrder(null)
+          if (err instanceof ApiError && err.status === 409) {
+            // The server's sentence says what happened; the reload shows the rows it means.
+            toast.error(errorDetail(err))
+            onChangedRef.current()
+            return
+          }
+          toast.error(
+            `Couldn't save the new order — ${clause(errorDetail(err))}. The list is back to how it was.`,
+          )
+        },
+      )
+      .finally(requestSettled)
+  }
+
+  const reorder = useReorder({
+    items: rows.map((txn) => ({ id: txn.id })),
+    labelOf: (id) => {
+      const txn = rowById.get(id)
+      return txn === undefined ? 'this transaction' : rowName(txn, tickerOf(txn))
+    },
+    // Any request of the panel in flight — a save, a delete, a reorder — leaves the grips
+    // focusable but inert (lane R0 consumer rule 4), so a second drop cannot race the first; so
+    // does the page revalidating the rows, so a drop never saves an order about to be replaced.
+    disabled: busy || reloading,
+    onCommit: saveOrder,
+  })
 
   // 'type' is excluded: it is a union field with its own dedicated handler below.
   const set = (field: Exclude<keyof FormState, 'type'>) => (value: string) =>
@@ -190,7 +418,7 @@ export default function TransactionsPanel({
       setError(form.type === 'split' ? 'Split factor is required' : 'Shares and price are required')
       return
     }
-    setBusy(true)
+    requestStarted()
     setError(null)
     const payload = toPayload(form)
     const request =
@@ -226,23 +454,23 @@ export default function TransactionsPanel({
           setEditingId(null)
           setKept(false)
         }
-        onChanged()
+        onChangedRef.current()
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Save failed')
       })
-      .finally(() => setBusy(false))
+      .finally(requestSettled)
   }
 
   const remove = (txn: TransactionOut) => {
-    const ticker = tickers.get(txn.security_id) ?? '?'
+    const ticker = tickerOf(txn)
     // Instant + Undo (2026-08-25 polish §8): the confirm interrupt is gone and the
     // recovery affordance replaces it — Undo re-POSTs the captured row (new id, by
     // design). Only this low-risk flow converts; cascade deletes elsewhere keep confirm.
     // busy for the duration (RsuGrantsPanel's posture): without the confirm dialog to
     // absorb it, a double-click would fire a second DELETE on the same id and drop a 404
     // into the error banner beside the success toast.
-    setBusy(true)
+    requestStarted()
     deleteTransaction(txn.id)
       .then(() => {
         // The edited row is gone — a stale editingId would PATCH a 404 on the next save
@@ -253,7 +481,7 @@ export default function TransactionsPanel({
         }
         // The ledger just changed under the cue — whatever entry session it narrated is over.
         setKept(false)
-        onChanged()
+        onChangedRef.current()
         toast.success(`Deleted the ${ticker} ${txn.type}`, {
           action: {
             label: 'Undo',
@@ -271,7 +499,7 @@ export default function TransactionsPanel({
                 split_factor: txn.split_factor,
                 notes: txn.notes,
               })
-                .then(() => onChanged())
+                .then(() => onChangedRef.current())
                 .catch(() => toast.error(`Could not restore the ${ticker} ${txn.type}`))
             },
           },
@@ -280,7 +508,7 @@ export default function TransactionsPanel({
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Delete failed')
       })
-      .finally(() => setBusy(false))
+      .finally(requestSettled)
   }
 
   return (
@@ -292,7 +520,9 @@ export default function TransactionsPanel({
       <p className="hint">
         Rows marked <span className="badge">sheet</span> are owned by the spreadsheet
         importer: a re-import reverts edits to them and resurrects deletions. Rows added
-        here are never touched by imports.
+        here are never touched by imports. The list is the order trades are replayed to work
+        out cost basis and gains — with no dates on the rows, it is the ledger's timeline.
+        Drag a row to move a trade earlier or later.
       </p>
       <FeedBanner error={error} />
       {kept && (
@@ -448,65 +678,77 @@ export default function TransactionsPanel({
           )}
         </div>
       </form>
-      {transactions.length === 0 ? (
+      {rows.length === 0 ? (
         <p className="empty-note">No transactions yet.</p>
       ) : (
-        <HoldingsScroll><table className="port-table">
-          <thead>
-            <tr>
-              <th>Ticker</th><th>Account</th><th>Type</th><th>Date</th>
-              <th className="num">Shares</th><th className="num">Price</th>
-              <th className="num">Fees</th><th>Source</th><th>Notes</th><th />
-            </tr>
-          </thead>
-          <tbody>
-            {transactions.map((t) => (
-              <tr key={t.id}>
-                <td>{tickers.get(t.security_id) ?? '?'}</td>
-                <td>{t.account}</td>
-                <td>{t.type === 'split' ? `split ×${t.split_factor ?? '?'}` : t.type}</td>
-                <td>{t.txn_date ? formatDate(t.txn_date) : '—'}</td>
-                <td className="num">{t.type === 'split' ? '—' : formatShares(t.shares)}</td>
-                <td className="num">{t.type === 'split' ? '—' : formatCurrency(t.price)}</td>
-                <td className="num">{formatCurrency(t.fees)}</td>
-                <td>
-                  <span className="badge">{t.source === 'import' ? 'sheet' : 'manual'}</span>
-                </td>
-                <td className="notes-cell">{t.notes ?? ''}</td>
-                {/* disabled={busy} on all three: submit()'s .then closes over editingId and
-                    the form as they were when it fired, so a row action taken mid-flight is
-                    undone by the reset that lands after it — a seeded edit silently wiped,
-                    or worse, a PATCH aimed at whatever editingId the closure still holds.
-                    Shutting the row for the duration of a save is the cheap fix. */}
-                <td className="row-actions">
-                  <button type="button" disabled={busy} onClick={() => startEdit(t)}>Edit</button>
-                  {/* aria-label: "Duplicate"/"Delete" alone never say WHAT they act on, and
-                      the type is the row's shortest distinguishing word. Delete needs the
-                      naming MORE since the delete went instant (2026-08-25 polish §8): the
-                      confirm() sentence that used to name the row before anything happened
-                      is gone, so the button is the last chance to say it. Edit keeps its
-                      bare name — it opens a form showing the row, and changes nothing. */}
-                  <button
-                    type="button"
-                    disabled={busy}
-                    aria-label={`Duplicate this ${t.type}`}
-                    onClick={() => duplicate(t)}
-                  >
-                    Duplicate
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    aria-label={`Delete this ${t.type}`}
-                    onClick={() => remove(t)}
-                  >
-                    Delete
-                  </button>
-                </td>
+        <>
+          {/* Once per list and outside the table — a <span> is not a valid child of one (lane R0
+              consumer rule 6). Every grip points its aria-describedby at the instructions. */}
+          <ReorderInstructions id={reorder.instructionsId} />
+          <ReorderLiveRegion text={reorder.announcement} />
+          <HoldingsScroll><table className="port-table reorder-table">
+            <thead>
+              <tr>
+                <th className="reorder-grip-cell" aria-hidden="true" />
+                <th>Ticker</th><th>Account</th><th>Type</th><th>Date</th>
+                <th className="num">Shares</th><th className="num">Price</th>
+                <th className="num">Fees</th><th>Source</th><th>Notes</th><th />
               </tr>
-            ))}
-          </tbody>
-        </table></HoldingsScroll>
+            </thead>
+            <tbody>
+              {rows.map((t) => (
+                <tr key={t.id} {...reorder.itemProps(t.id)}>
+                  <td className="reorder-grip-cell">
+                    <DragHandle name={rowName(t, tickerOf(t))} {...reorder.handleProps(t.id)} />
+                  </td>
+                  <td>{tickerOf(t)}</td>
+                  <td>{t.account}</td>
+                  <td>{t.type === 'split' ? `split ×${t.split_factor ?? '?'}` : t.type}</td>
+                  <td>{t.txn_date ? formatDate(t.txn_date) : '—'}</td>
+                  <td className="num">{t.type === 'split' ? '—' : formatShares(t.shares)}</td>
+                  <td className="num">{t.type === 'split' ? '—' : formatCurrency(t.price)}</td>
+                  <td className="num">{formatCurrency(t.fees)}</td>
+                  <td>
+                    <span className="badge">{t.source === 'import' ? 'sheet' : 'manual'}</span>
+                  </td>
+                  <td className="notes-cell">{t.notes ?? ''}</td>
+                  {/* disabled={busy} on all three: submit()'s .then closes over editingId and
+                      the form as they were when it fired, so a row action taken mid-flight is
+                      undone by the reset that lands after it — a seeded edit silently wiped,
+                      or worse, a PATCH aimed at whatever editingId the closure still holds.
+                      Shutting the row for the duration of a save is the cheap fix. Shut while a
+                      row is lifted too (lane R0 consumer rule 5): a click mid-drag would act on
+                      a row that is about to move. */}
+                  <td className="row-actions">
+                    <button type="button" disabled={busy || reorder.active} onClick={() => startEdit(t)}>Edit</button>
+                    {/* aria-label: "Duplicate"/"Delete" alone never say WHAT they act on, and
+                        the type is the row's shortest distinguishing word. Delete needs the
+                        naming MORE since the delete went instant (2026-08-25 polish §8): the
+                        confirm() sentence that used to name the row before anything happened
+                        is gone, so the button is the last chance to say it. Edit keeps its
+                        bare name — it opens a form showing the row, and changes nothing. */}
+                    <button
+                      type="button"
+                      disabled={busy || reorder.active}
+                      aria-label={`Duplicate this ${t.type}`}
+                      onClick={() => duplicate(t)}
+                    >
+                      Duplicate
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || reorder.active}
+                      aria-label={`Delete this ${t.type}`}
+                      onClick={() => remove(t)}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table></HoldingsScroll>
+        </>
       )}
     </section>
   )
