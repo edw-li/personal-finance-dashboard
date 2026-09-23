@@ -558,6 +558,7 @@ describe('categoryTrendOption', () => {
     const fold: CategoryFold = { ids: [1], colors: new Map([[1, CATEGORY_HUES[0]]]) }
     const option = read(categoryTrendOption({ matrix: matrixFixture(), trend: [{ categoryId: 2 }, { categoryId: 3 }], fold, nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' }, selected: {} })) as unknown as {
       series: { name: string; color: string; symbol?: string; symbolSize?: number; showSymbol?: boolean; lineStyle?: { type?: string } }[]
+      legend: { data?: (string | { name: string; icon?: string })[] }
     }
     const [groceries, fun] = option.series
     expect([groceries.color, fun.color]).toEqual([OTHER_SERIES_COLOR, OTHER_SERIES_COLOR])
@@ -565,6 +566,10 @@ describe('categoryTrendOption', () => {
     expect(fun).toMatchObject({ symbol: 'triangle', symbolSize: 7, showSymbol: true })
     // Solid strokes: dashed is the budget reference's grammar.
     expect([groceries.lineStyle?.type, fun.lineStyle?.type]).toEqual([undefined, undefined])
+    // The key must tell them apart as well: the theme draws every legend key as a roundRect
+    // (charts/theme.ts), which cannot show a marker, so the marked pick's key names its own icon.
+    // Budget references keep the theme's key.
+    expect(option.legend.data).toEqual(['Groceries <b>& more</b>', { name: 'Fun', icon: 'triangle' }, 'Groceries <b>& more</b> budget'])
   })
   it('is null with no picks; exports the picked categories', () => {
     expect(categoryTrendOption({ matrix: matrixFixture(), trend: [], fold: FOLD, nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' }, selected: {} })).toBeNull()

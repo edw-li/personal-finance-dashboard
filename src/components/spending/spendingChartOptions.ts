@@ -681,8 +681,8 @@ export function categoryTrendOption({
         ...LINE,
         name: name(categoryId),
         color: style?.color ?? ENTITY.other,
-        // An outsider's marker rides every point, echarts thinning them where they crowd; the
-        // legend draws it too, so the key tells the two grey lines apart as well.
+        // An outsider's marker rides every point, echarts thinning them where they crowd. The
+        // legend key names it too (legendData below), so the key tells the grey lines apart.
         ...(style?.marker ? { symbol: style.marker, symbolSize: 7, showSymbol: true, showAllSymbol: 'auto' as const } : {}),
         connectNulls: false,
         data: (valuesById.get(categoryId) ?? []).map((v) => (v === null ? null : Number(v))),
@@ -690,10 +690,20 @@ export function categoryTrendOption({
     }),
     ...budgets,
   ]
+  // The theme draws every legend key as a roundRect (charts/theme.ts), which cannot show a
+  // marker, so two grey outsiders would get identical keys. A marked pick's key names its own
+  // icon; every other entry keeps the theme's key (charts/legend.ts: builders add `data`).
+  const legendData = [
+    ...trend.map(({ categoryId }) => {
+      const marker = styles.get(categoryId)?.marker
+      return marker ? { name: name(categoryId), icon: marker } : name(categoryId)
+    }),
+    ...budgets.map((budget) => budget.name),
+  ]
   return {
     dataZoom: rangeZoom(matrix.months, range),
     grid: grid(),
-    legend: legendFor(series.length, selected),
+    legend: { ...legendFor(legendData.length, selected), data: legendData },
     tooltip: axisTooltip({ unit: 'money', references: budgets.map((b) => b.name) }),
     xAxis: monthAxis(monthLabels),
     yAxis: moneyAxis(),
