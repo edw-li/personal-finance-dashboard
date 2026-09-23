@@ -117,6 +117,14 @@ function renderPanel(monthIndex: number) {
   )
 }
 
+// The seed button is DISABLED until the suggestions GET answers; a click before that lands on
+// a disabled button and seeds nothing (a race that shows on a loaded runner). Wait for it live.
+async function seedWhenReady(): Promise<HTMLButtonElement> {
+  const button = (await screen.findByRole('button', { name: 'Start from my averages' })) as HTMLButtonElement
+  await waitFor(() => expect(button.disabled).toBe(false))
+  return button
+}
+
 function foodRow(): HTMLElement {
   return screen.getByText('Food').closest('.budget-row') as HTMLElement
 }
@@ -255,7 +263,7 @@ it('offers Start from my averages in the empty state, seeds the FOCUSED month, r
 it('a seed that changed nothing offers no Undo', async () => {
   vi.mocked(seedBudgets).mockResolvedValue({ ...seeded, written: [], batch_id: null })
   render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Start from my averages' }))
+  fireEvent.click(await seedWhenReady())
   await waitFor(() =>
     expect(toast.success).toHaveBeenCalledWith(
       'Seeded 0 budgets from averages, from Jan 2026',
@@ -322,7 +330,7 @@ it('re-seeding asks first, counting the budgets it rewrites, and only POSTs on C
 it('a failed seed lands in the banner and refetches nothing', async () => {
   vi.mocked(seedBudgets).mockRejectedValue(new Error('down'))
   render(<BudgetPanel matrix={blank} monthIndex={0} onBudgetsChanged={onBudgetsChanged} />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Start from my averages' }))
+  fireEvent.click(await seedWhenReady())
   expect((await screen.findByRole('alert')).textContent).toMatch(/Failed to seed the budgets/)
   expect(onBudgetsChanged).not.toHaveBeenCalled()
 })
