@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { EChartsOption } from '../charts/echarts'
@@ -16,6 +16,7 @@ import ChartSurface from './ChartSurface'
 import { useDetailPanel } from './details/DetailPanelProvider'
 import SelectionDetail from './details/SelectionDetail'
 import { usePageFrame } from './shell/PageFrame'
+import { inputSince } from './shell/holdPosition'
 import { useLocalSectionVisible } from './shell/localSectionContext'
 import './panels.css'
 
@@ -70,6 +71,8 @@ export interface ChartCardProps {
   instanceRef?: { current: EChartsInstance | null }
   onLegendChange?: (selected: Record<string, boolean>) => void
   onDataZoom?: (window: { startValue: number; endValue: number }) => void
+  /** The chart's measured width, for an option whose labels depend on it (code review 5). */
+  onWidth?: (width: number) => void
   zoomWindow?: ZoomWindow
   /** Domain adapters read source data and attach real identifiers/source links. */
   selectionAdapter?: (params: EChartEventParams) => ChartSelection | null
@@ -86,7 +89,7 @@ export interface ChartCardProps {
 export default function ChartCard({
   title, hint, ariaLabel, option, empty, exportName, csv, caption, height = 320, controls, actions, footer, lede, aside,
   zoomable = false, group, busy = false, error = null, span = 12,
-  onClick, onHover, onHoverEnd, instanceRef, onLegendChange, onDataZoom, zoomWindow,
+  onClick, onHover, onHoverEnd, instanceRef, onLegendChange, onDataZoom, onWidth, zoomWindow,
   selectionAdapter, rowSelection, selection, onSelectionChange, renderSelection, selectionScopeKey = '', independentRangeLabel, allowExpand = true,
 }: ChartCardProps) {
   const { fromCache } = usePageFrame()
@@ -120,6 +123,32 @@ export default function ChartCard({
   // object handed to EChart is stable — a fresh one would re-init the chart every render.
   const ownRef = useRef<EChartsInstance | null>(null)
   const chartRef = instanceRef ?? ownRef
+  // The card itself: what a drill asks the detail panel to hold in place while the dock opens
+  // and the page narrows around it (2026-09-23 spec §C10).
+  const cardRef = useRef<HTMLElement>(null)
+  // Since when the card has been in view with a drawn chart (review round 1); null while it is not.
+  // The hold is for a selection the READER changes under a chart already in front of them — a
+  // click, Show details, a month-ribbon pick: an input after this moment. On arrival — a new page,
+  // Back, a section coming into view, a ?month= the URL carried landing after the data — the page's
+  // own scroll restore has to win: holding the chart there put Back to /spending?month=… at 583
+  // instead of the 520 it left, and "Open spending" at 65 instead of the page's top.
+  const settledAtRef = useRef<number | null>(null)
+  const drawn = option !== null
+  // Expanded, the card sits in the modal dialog's top layer, where no page scroll can move it: a
+  // hold there only ran the page behind it away (code review: 1200 → 739). Synced in a LAYOUT
+  // effect so the passive cleanup that closes the dock on Expand already reads it.
+  const expandedRef = useRef(expanded)
+  useLayoutEffect(() => {
+    expandedRef.current = expanded
+  }, [expanded])
+  // Asked by the detail panel at the moment the dock moves the page (its open, its last close).
+  const anchorIfInView = useCallback((): HTMLElement | null => {
+    const card = cardRef.current
+    const settledAt = settledAtRef.current
+    if (card === null || expandedRef.current || settledAt === null || !inputSince(settledAt)) return null
+    const { top, bottom } = card.getBoundingClientRect()
+    return bottom > 0 && top < window.innerHeight ? card : null
+  }, [])
   const showTable = tableOpen && csv !== undefined && option !== null
   const table = showTable && csv ? csv() : null
   const dismissSelection = useCallback(() => {
@@ -133,7 +162,7 @@ export default function ChartCard({
   const inspect = (next: ChartSelection) => {
     setPinned({ scope: selectionScopeKey, value: next })
     onSelectionChange?.(next)
-    if (!expanded && activeView) openPanel?.({ id: panelId, title: next.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey })
+    if (!expanded && activeView) openPanel?.({ id: panelId, title: next.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: anchorIfInView })
   }
   const selectionContent = useMemo(() => selected === null ? null : renderSelection
     ? renderSelection(selected)
@@ -141,8 +170,14 @@ export default function ChartCard({
   [selected, renderSelection, title, clearSelection])
   useEffect(() => {
     if (!selected || expanded || !activeView) return
-    openPanel?.({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey })
-  }, [selected, expanded, activeView, openPanel, panelId, title, panelContent, selectionScopeKey])
+    openPanel?.({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: anchorIfInView })
+  }, [selected, expanded, activeView, openPanel, panelId, title, panelContent, selectionScopeKey, anchorIfInView])
+  // AFTER the open effect on purpose: a commit that opens the panel still reads what the commit
+  // before it left, so the open that arrives with the page, with the chart's first drawing or
+  // with its section never holds. Stamped once per settling, not per render.
+  useEffect(() => {
+    settledAtRef.current = activeView && drawn ? performance.now() : null
+  }, [activeView, drawn])
   useEffect(() => {
     if (previousScope.current !== selectionScopeKey) {
       previousScope.current = selectionScopeKey
@@ -198,6 +233,7 @@ export default function ChartCard({
           instanceRef={chartRef}
           onLegendChange={onLegendChange}
           onDataZoom={handleZoom}
+          onWidth={onWidth}
           zoomWindow={zoomWindow}
         />
       </div>
@@ -208,7 +244,7 @@ export default function ChartCard({
     <>
     {selected && panel && !expanded && createPortal(selectionContent, detailHost)}
     <ChartSurface title={title} expanded={expanded} onClose={() => setExpanded(false)} span={span}>
-    <section className={`card chart-card span-${span}${aside !== undefined ? ' chart-card-has-aside' : ''}`}>
+    <section ref={cardRef} className={`card chart-card span-${span}${aside !== undefined ? ' chart-card-has-aside' : ''}`}>
       <div className="chart-card-header">
         <h2 className="eyebrow">
           {title}
@@ -250,7 +286,7 @@ export default function ChartCard({
       {selected && <div className="chart-selection-summary">
         {/* Live region on the TEXT only (audit D3): each pin announces "Pinned: …", never the buttons. */}
         <span role="status">Pinned: {selected.label}</span>
-        {panel && !expanded && <button type="button" className="button" onClick={() => panel.open({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey })}>Show details</button>}
+        {panel && !expanded && <button type="button" className="button" onClick={() => panel.open({ id: panelId, title: selected.label, subtitle: title, content: panelContent, contextKey: selectionScopeKey, anchor: anchorIfInView })}>Show details</button>}
         <button type="button" className="button" onClick={clearSelection}>Clear selection</button>
       </div>}
       {selected && (!panel || expanded) && <div className="chart-inline-selection">{selectionContent}</div>}

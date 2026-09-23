@@ -30,6 +30,13 @@ CONTEXT_CHAR_CAP = 50_000
 MONTHS_WINDOW = 24
 MONTHS_WINDOW_TIGHT = 12
 UP_NEXT_DAYS = 60
+# How the model reads the `living` rows the overview and calendar sections carry (2026-09-23
+# spec §B2): the pages' own estimate, one row per month, never a figure of the model's own.
+LIVING_NOTE = (
+    "Estimated day-to-day living spending per month: basis 'budget' = the living budgets in "
+    "force; 'average' = the Spending page's previous-12-months living average. A month absent "
+    "from the list has no estimate, which is not zero."
+)
 # The seven Decimal knobs `projection()` takes. `years` is an int and is handled beside
 # them; the vocabulary itself is the page's (src/components/projection/projectionScenario.ts
 # KNOBS) and the router's — this list only says which of them survive a URL.
@@ -202,6 +209,9 @@ async def _overview(db: AsyncSession, search: dict, view: dict) -> dict:
     flow = await money_flow(year=None, db=db)
     return {
         "up_next": [{"date": e.date, "type": e.type, "label": e.label} for e in events.events[:10]],
+        # The Up next line's "≈ living costs" clause pro-rates these by day (lane B1 review, M6).
+        "living": events.living,
+        "living_note": LIVING_NOTE,
         "money_flow": flow,
     }
 
@@ -601,7 +611,8 @@ async def _calendar(db: AsyncSession, search: dict, view: dict) -> dict:
 
     today = clock.product_today()
     events = await get_calendar(start=today, end=today + timedelta(days=UP_NEXT_DAYS), db=db)
-    return {"events": events.events}
+    # The strip's Living costs tile reads these (lane B1 review, M6).
+    return {"events": events.events, "living": events.living, "living_note": LIVING_NOTE}
 
 
 async def _update(db: AsyncSession, search: dict, view: dict) -> dict:

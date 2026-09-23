@@ -1,5 +1,6 @@
 // The Portfolio/Overview performance chart (charts C4): four lines in fixed palette slots,
-// the wash on value only, the Events annotation scatter and the live ping.
+// the wash on value only, the event layers (a buy on the line and both rug kinds on the
+// floor — 2026-09-23 spec §C8) and the live ping.
 import type { ChartFixture } from './_types'
 import { portfolioHistoryOption } from '../../components/portfolio/historyChartOptions'
 
@@ -18,14 +19,26 @@ const fixture: ChartFixture = {
         benchmark: ['96000.00', '97250.00', '99001.13'],
       },
       { date: '2026-08-14', value: 723456.78 },
-      [
-        {
-          value: ['Aug 3, 2026', 710000.5],
-          symbol: 'triangle',
-          symbolRotate: 0,
-          events: [{ text: 'Buy NVDA — 10 sh · Aug 4, 2026' }],
-        },
-      ],
+      {
+        buys: [
+          {
+            value: ['Aug 3, 2026', 710000.5],
+            symbol: 'triangle',
+            symbolRotate: 0,
+            events: [{ text: 'Buy NVDA — 10 sh · Aug 4, 2026' }],
+          },
+        ],
+        sells: [],
+        dividends: [
+          { value: ['Aug 10, 2026', 0], events: [{ text: 'Dividend VOO — $12.00 · Aug 9, 2026' }] },
+        ],
+        exDividends: [
+          {
+            value: ['Jul 27, 2026', 0],
+            events: [{ text: 'Ex-dividend VOO — $1.71/sh · Jul 28, 2026' }],
+          },
+        ],
+      },
     ),
 }
 export default fixture

@@ -58,22 +58,34 @@ vi.mock('../components/EChart', async () => {
       option,
       ariaLabel,
       animateEntrance = true,
+      onWidth,
     }: {
-      option: { series?: { name?: string }[] }
+      option: { series?: { name?: string }[]; xAxis?: { axisLabel?: { customValues?: unknown[] } } }
       ariaLabel?: string
       animateEntrance?: boolean
+      onWidth?: (width: number) => void
     }) =>
       createElement('div', {
         'data-testid': 'echart',
         'aria-label': ariaLabel,
         'data-series': (option.series ?? []).map((s) => s.name ?? '').join('|'),
+        // The weekly axis's label set, counted; a right-click stands in for an 800px measurement.
+        'data-xlabels': String(option.xAxis?.axisLabel?.customValues?.length ?? ''),
+        onContextMenu: () => onWidth?.(800),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
       }),
   }
 })
 
+// The real builder, watched: a zoom or a range chip must not rebuild the chart's events.
+vi.mock('../components/portfolio/performanceEvents', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../components/portfolio/performanceEvents')>()
+  return { ...actual, buildPerformanceEvents: vi.fn(actual.buildPerformanceEvents) }
+})
+
 import { fetchHousehold } from '../api/household'
+import { buildPerformanceEvents } from '../components/portfolio/performanceEvents'
 import { fetchAllocationData, fetchClassifications, fetchEmployerExposure } from '../api/allocation'
 import {
   fetchAllocation,
@@ -89,6 +101,7 @@ import {
 } from '../api/portfolio'
 import { fetchPriceHistory, fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
 import { formatDate, formatDateTime } from '../utils/format'
+import { addDays } from '../utils/months'
 
 // The roster behind the two ledgers' Account boxes (2026-09-09 audit item 27).
 const ACCOUNTS: PortfolioAccountOut[] = [
@@ -812,6 +825,255 @@ it('renders the panels real empty notes for an owner who holds nothing', async (
 // from the OWNER-FILTERED holdings — plotting a person's total at the end of the household
 // series drew a fake cliff. The ping (and its dashed connector, which rides the Live
 // series' markLine) renders only on the All view.
+// ── The performance lede (2026-09-23 spec §C8, review round 1) ────────────────────────────
+// The chart had the honest benchmark and hid its answer; the card now states it, over the
+// window the chart is showing. Fifteen months whose legs start level at 4,000.00. From Sep 1,
+// 2025 the starting-balance leg grows ×1.08 (4,100 → 4,428), so the portfolio's $100 lead
+// that day would have become $108 in VOO; it ends $50 BEHIND the same deposits instead:
+// −50 − 108 = $158 behind the same money over 1Y, $50 behind the same deposits over All.
+const LONG_HISTORY: PortfolioHistory = {
+  dates: ['2025-06-02', '2025-09-01', '2026-08-24'],
+  market_value: ['4000.00', '4300.00', '4500.00'],
+  cost_basis: ['4000.00', '4100.00', '4114.00'],
+  sp500: ['4000.00', '4100.00', '4428.00'],
+  benchmark: ['4000.00', '4200.00', '4550.00'],
+}
+it('states the gap to the same money in VOO above the chart, following the range chip', async () => {
+  vi.mocked(fetchHistory).mockResolvedValue(LONG_HISTORY)
+  renderPage()
+  const card = () => screen.getByText('Performance').closest('section') as HTMLElement
+  // The scope row opens on 1Y, so the sentence says which window it measured.
+  await waitFor(() =>
+    expect(card().querySelector('.chart-lede')?.textContent).toBe(
+      'Over 1Y: behind the same money in VOO by $158',
+    ),
+  )
+  // The figure wears the strip's bold ink; the words stay muted.
+  expect(card().querySelector('.chart-lede b')?.textContent).toBe('$158')
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Time range' })).getByRole('button', { name: 'All' }),
+  )
+  await waitFor(() =>
+    expect(card().querySelector('.chart-lede')?.textContent).toBe(
+      'Behind the same deposits in VOO by $50',
+    ),
+  )
+})
+
+it('says since when the history is shorter than the range chip', async () => {
+  // HISTORY is two weeks from Aug 17, 2026, legs level at the start: the 1Y chip cannot claim a year.
+  vi.mocked(fetchHistory).mockResolvedValue({
+    ...HISTORY,
+    sp500: ['4400.00', '4550.00'],
+    benchmark: ['4400.00', '4530.00'],
+  })
+  renderPage()
+  const card = () => screen.getByText('Performance').closest('section') as HTMLElement
+  await waitFor(() =>
+    expect(card().querySelector('.chart-lede')?.textContent).toBe(
+      'Since Aug 17, 2026: behind the same money in VOO by $30',
+    ),
+  )
+})
+
+// Code review 4: the events depend on the ledgers and the dates, never on the window — a range
+// chip, a ctrl+wheel zoom or a pan used to rebuild every one of them.
+it('keeps the chart events across range changes: they are built from the ledgers, not the window', async () => {
+  renderPage()
+  const card = () => screen.getByText('Performance').closest('section') as HTMLElement
+  await waitFor(() => expect(card().querySelector('.chart-lede')?.textContent).toMatch(/^Since/))
+  const built = vi.mocked(buildPerformanceEvents).mock.calls.length
+  expect(built).toBeGreaterThan(0)
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Time range' })).getByRole('button', { name: 'All' }),
+  )
+  await waitFor(() => expect(card().querySelector('.chart-lede')?.textContent).toMatch(/^Behind|^Ahead|^Level/))
+  expect(vi.mocked(buildPerformanceEvents).mock.calls.length).toBe(built)
+})
+
+// Code review 5: the weekly axis takes as many month labels as the chart is wide enough for.
+it("labels the weekly axis for the chart's measured width", async () => {
+  // Forty-four Mondays from Nov 3, 2025: ten month starts, Nov through Aug.
+  const mondays = Array.from({ length: 44 }, (_, i) => addDays('2025-11-03', 7 * i))
+  const flat = mondays.map(() => '1.00')
+  vi.mocked(fetchHistory).mockResolvedValue({ dates: mondays, market_value: flat, cost_basis: flat, sp500: flat, benchmark: flat })
+  renderPage()
+  const chart = () => screen.getAllByTestId('echart')[0]
+  // At no known width: every month start.
+  await waitFor(() => expect(chart().getAttribute('data-xlabels')).toBe('10'))
+  fireEvent.contextMenu(chart()) // the chart measures 800px: a plot for nine labels
+  // Every other month now, Jan-aligned: Nov, Jan, Mar, May, Jul.
+  await waitFor(() => expect(chart().getAttribute('data-xlabels')).toBe('5'))
+})
+
+// ── Performance events on a rug (2026-09-23 spec §C8) ─────────────────────────────────────
+// The provider's ex-dividend notices cover every security the book ever named; the chart
+// keeps only those for a security held then or now — "now" is this page's own holdings.
+it('draws ex-dividend notices on the rug only for securities the page holds', async () => {
+  vi.mocked(fetchDividendEvents).mockResolvedValue([
+    { security_id: 1, ex_date: '2026-08-18', per_share: '1.000000' }, // VOO — held
+    { security_id: 99, ex_date: '2026-08-19', per_share: '2.000000' }, // never held
+  ])
+  renderPage()
+  const performance = () => screen.getAllByTestId('echart')[0]
+  await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+  cleanup()
+  // The page paints a revisit from its snapshot cache and revalidates underneath: without the
+  // clear, the first render's notices would paint first and race the assertion below.
+  clearSnapshots()
+  vi.mocked(fetchDividendEvents).mockResolvedValue([
+    { security_id: 99, ex_date: '2026-08-19', per_share: '2.000000' },
+  ])
+  renderPage()
+  await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Live'))
+  expect(performance().getAttribute('data-series')).not.toContain('Ex-dividend dates')
+})
+
+// Review round 1: the performance chart is household-wide whatever the Whose chip says, so its
+// events — and the "held then or now" filter on the provider's notices — read the HOUSEHOLD's
+// ledgers, fetched alongside a person's own.
+it("annotates the household chart from the household's ledgers in a person's view", async () => {
+  vi.mocked(fetchHoldings).mockImplementation((scope) =>
+    Promise.resolve(scope === SAM.id ? EMPTY_HOLDINGS : holdingsOut()),
+  )
+  vi.mocked(fetchTransactions).mockImplementation((scope) =>
+    Promise.resolve(scope === SAM.id ? [] : TRANSACTIONS),
+  )
+  vi.mocked(fetchDividends).mockImplementation((scope) =>
+    Promise.resolve(scope === SAM.id ? [] : DIVIDENDS),
+  )
+  // VOO: the household holds it; Sam does not.
+  vi.mocked(fetchDividendEvents).mockResolvedValue([
+    { security_id: 1, ex_date: '2026-08-18', per_share: '1.000000' },
+  ])
+  renderPage('/portfolio?owner=2')
+  const performance = () => screen.getAllByTestId('echart')[0]
+  await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith(SAM.id))
+  // Asked for once the person's own data is on screen.
+  await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+  expect(fetchHoldings).toHaveBeenCalledWith(null)
+  expect(fetchTransactions).toHaveBeenCalledWith(null)
+  expect(fetchDividends).toHaveBeenCalledWith(null)
+  // …while Sam's own panels stay Sam's.
+  expect(fetchRealized).toHaveBeenCalledWith(SAM.id)
+  expect(fetchRealized).not.toHaveBeenCalledWith(null)
+})
+
+// Review round 1 re-review: the household's ledgers decorate one chart, so they must never cost
+// the person's view its page — not by failing, not by being slow — and they are fetched only while
+// the chart's view is showing.
+describe("the household's ledgers never hold a person's view", () => {
+  const exdivOnVoo = () =>
+    vi.mocked(fetchDividendEvents).mockResolvedValue([
+      { security_id: 1, ex_date: '2026-08-18', per_share: '1.000000' },
+    ])
+  const performance = () => screen.getAllByTestId('echart')[0]
+
+  it("renders the person's tiles and chart when the household's request fails, on the person's events", async () => {
+    // Sam holds VOO himself; the household's holdings request fails.
+    vi.mocked(fetchHoldings).mockImplementation((scope) =>
+      scope === null ? Promise.reject(new ApiError('Portfolio service down', 500)) : Promise.resolve(holdingsOut()),
+    )
+    exdivOnVoo()
+    renderPage('/portfolio?owner=2')
+    await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith(null))
+    expect(await screen.findByText('Portfolio value')).toBeTruthy()
+    await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it("paints the person's view without waiting for the household's ledgers", async () => {
+    vi.mocked(fetchHoldings).mockImplementation((scope) =>
+      scope === null ? new Promise(() => {}) : Promise.resolve(holdingsOut()),
+    )
+    renderPage('/portfolio?owner=2')
+    expect(await screen.findByText('Portfolio value')).toBeTruthy()
+    await waitFor(() => expect(performance().getAttribute('data-series')).toContain('Portfolio value'))
+  })
+
+  // Code review 3: fetched once per need — after the person's own data on a cold view, not again
+  // on a switch between people (the household is the same household), again after a save.
+  const householdCalls = () => vi.mocked(fetchHoldings).mock.calls.filter(([scope]) => scope === null)
+
+  it("fetches them once on a cold person view, after the person's own data", async () => {
+    exdivOnVoo()
+    renderPage('/portfolio?owner=2')
+    await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+    expect(householdCalls()).toHaveLength(1)
+    const order = (scope: unknown) =>
+      vi.mocked(fetchHoldings).mock.invocationCallOrder[vi.mocked(fetchHoldings).mock.calls.findIndex(([s]) => s === scope)]
+    expect(order(null)).toBeGreaterThan(order(SAM.id))
+  })
+
+  it('does not fetch them again on a switch between people', async () => {
+    renderPage('/portfolio?owner=2')
+    await waitFor(() => expect(householdCalls()).toHaveLength(1))
+    fireEvent.click(chip('Joint'))
+    await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith('joint'))
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('owner=joint'))
+    expect(householdCalls()).toHaveLength(1)
+  })
+
+  it("drops them when the household view saves, so its fresher snapshot wins until they are fetched again", async () => {
+    // Nobody holds VOO at first; the household view's refresh then finds it held.
+    let household = EMPTY_HOLDINGS
+    vi.mocked(fetchHoldings).mockImplementation((scope) => Promise.resolve(scope === null ? household : EMPTY_HOLDINGS))
+    vi.mocked(fetchTransactions).mockResolvedValue([])
+    vi.mocked(fetchDividends).mockResolvedValue([])
+    exdivOnVoo()
+    vi.mocked(refreshPrices).mockResolvedValue({ updated: ['VOO'], failed: {}, skipped_manual: [], duration_ms: 10, dividends_ingested: 0 })
+    renderPage('/portfolio')
+    await screen.findByRole('group', { name: 'Whose' })
+    fireEvent.click(chip('Sam'))
+    await waitFor(() => expect(householdCalls()).toHaveLength(2)) // the All view's own + Sam's chart
+    expect(performance().getAttribute('data-series')).not.toContain('Ex-dividend dates')
+    fireEvent.click(chip('All'))
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('owner=all'))
+    household = holdingsOut()
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh prices' }))
+    await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+    // Back in Sam's view the refetch never lands: the fresher household snapshot has to show.
+    vi.mocked(fetchHoldings).mockImplementation((scope) => (scope === null ? new Promise(() => {}) : Promise.resolve(EMPTY_HOLDINGS)))
+    fireEvent.click(chip('Sam'))
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('owner=2'))
+    await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+  })
+
+  it("reuses the household's cached snapshot at once, and fetches only while the chart's view shows", async () => {
+    // The household view was visited: its ledgers are warm. Sam holds nothing; the household VOO.
+    setSnapshot('portfolio:all', {
+      holdings: holdingsOut(),
+      securities: SECURITIES,
+      accounts: ACCOUNTS,
+      primaryName: 'Me',
+      transactions: TRANSACTIONS,
+      dividends: DIVIDENDS,
+      dividendEvents: [],
+      byType: allocationOut('type'),
+      byAccount: allocationOut('account'),
+      sparklines: {},
+      history: HISTORY,
+      realized: REALIZED,
+      refreshStatus: STATUS,
+    })
+    vi.mocked(fetchHoldings).mockImplementation((scope) =>
+      scope === null ? new Promise(() => {}) : Promise.resolve(EMPTY_HOLDINGS),
+    )
+    vi.mocked(fetchTransactions).mockImplementation((scope) =>
+      Promise.resolve(scope === SAM.id ? [] : TRANSACTIONS),
+    )
+    exdivOnVoo()
+    // Holdings is showing: the household chart is not, so its ledgers are not fetched.
+    renderPage('/portfolio?owner=2&section=holdings')
+    expect(await screen.findByText(NO_HOLDINGS_NOTE)).toBeTruthy()
+    expect(fetchHoldings).not.toHaveBeenCalledWith(null)
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
+    await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith(null))
+    // The fetch never lands, yet the warm household ledgers already annotate the chart.
+    await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+  })
+})
+
 it('renders the live ping only on the All view', async () => {
   renderPage()
   await screen.findByRole('group', { name: 'Whose' })
@@ -821,7 +1083,7 @@ it('renders the live ping only on the All view', async () => {
   // before the history window, so no Events series muddies the name list.)
   await waitFor(() =>
     expect(performance().getAttribute('data-series')).toBe(
-      'Portfolio value|Cost basis|S&P 500 baseline|VOO (your contributions)|Live',
+      'Portfolio value|Cost basis|Same deposits in VOO|S&P 500 — starting balance only|Live',
     ),
   )
 
@@ -829,7 +1091,7 @@ it('renders the live ping only on the All view', async () => {
   // The scoped holdings still carry a quote — the OWNER is what retires the ping.
   await waitFor(() =>
     expect(performance().getAttribute('data-series')).toBe(
-      'Portfolio value|Cost basis|S&P 500 baseline|VOO (your contributions)',
+      'Portfolio value|Cost basis|Same deposits in VOO|S&P 500 — starting balance only',
     ),
   )
 
@@ -936,7 +1198,9 @@ describe('PortfolioPage — shell scope', () => {
   it('an owner chip in the scope row rewrites the URL and refetches', async () => {
     renderPage('/portfolio')
     fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
-    await waitFor(() => expect(vi.mocked(fetchHoldings)).toHaveBeenLastCalledWith(SAM.id))
+    // Not "last": a person's view also fetches the household's holdings for the household-wide
+    // performance chart (review round 1).
+    await waitFor(() => expect(vi.mocked(fetchHoldings)).toHaveBeenCalledWith(SAM.id))
     expect(screen.getByTestId('location').textContent).toContain('owner=2')
   })
 

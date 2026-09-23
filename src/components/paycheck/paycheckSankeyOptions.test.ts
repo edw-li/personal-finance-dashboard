@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { MUTED, PALETTE, POSITIVE } from '../../charts/theme'
+import { ENTITY } from '../../charts/entities'
+import { MUTED, POSITIVE } from '../../charts/theme'
+import { NORMAL_VISION_FLOOR, separation } from '../../testing/perceptual'
 import type { PaycheckBreakdownOut, PaycheckProfileOut } from '../../types/api'
 import { paycheckSankeyCsv, paycheckSankeyOption } from './paycheckSankeyOptions'
 
@@ -119,24 +121,63 @@ describe('paycheckSankeyOption', () => {
     ])
   })
 
-  it('keeps intermediates gray, terminals on their FIXED waterfall slots, net pay green', () => {
+  it('keeps intermediates and take-home gray, terminals on their FIXED registry colours', () => {
     const colorOf = (option: EChartsOption, name: string) =>
       sankeyOf(option).data?.find((n) => n.name === name)?.itemStyle?.color
     const option = paycheckSankeyOption(breakdown())!
     expect(colorOf(option, 'Gross')).toBe(MUTED)
     expect(colorOf(option, 'Taxable')).toBe(MUTED)
     expect(colorOf(option, 'Post-tax')).toBe(MUTED)
-    expect(colorOf(option, 'Traditional 401(k)')).toBe(PALETTE[0])
-    expect(colorOf(option, 'Dental & vision')).toBe(PALETTE[1])
-    expect(colorOf(option, 'HSA')).toBe(PALETTE[2])
-    expect(colorOf(option, 'Withholding')).toBe(PALETTE[3])
-    // Roth (slot 4) is omitted this check — After-tax keeps ITS slot 5: slots are fixed
-    // per ENTITY, so an omitted zero branch never reshuffles its neighbours' hues.
-    expect(colorOf(option, 'After-tax 401(k)')).toBe(PALETTE[5])
-    expect(colorOf(option, 'ESPP')).toBe(PALETTE[6])
-    expect(colorOf(option, 'Net pay')).toBe(POSITIVE)
+    // 2026-09-23 spec §C2: pre-tax savings wears the kept green, withholding the one tax hue,
+    // ESPP its registry hue and take-home the structural grey — no two greens, no two
+    // entities on one colour.
+    expect(colorOf(option, 'Traditional 401(k)')).toBe(ENTITY.preTaxSavings)
+    expect(colorOf(option, 'Dental & vision')).toBe(ENTITY.dentalVision)
+    expect(colorOf(option, 'HSA')).toBe(ENTITY.hsa)
+    expect(colorOf(option, 'Withholding')).toBe(ENTITY.tax)
+    // Roth is omitted this check — After-tax keeps ITS registry hue: hues are fixed per LINE,
+    // so an omitted zero branch never reshuffles its neighbours' hues.
+    expect(colorOf(option, 'After-tax 401(k)')).toBe(ENTITY.afterTax401k)
+    expect(colorOf(option, 'ESPP')).toBe(ENTITY.espp)
+    expect(colorOf(option, 'Net pay')).toBe(ENTITY.structural)
+    // POSITIVE is Saved's (cash kept) — take-home is not kept yet, so it never wears it here.
+    expect(sankeyOf(option).data?.some((n) => n.itemStyle?.color === POSITIVE)).toBe(false)
     const withRoth = paycheckSankeyOption(breakdown({ roth_401k: '150.00' }))!
-    expect(colorOf(withRoth, 'Roth 401(k)')).toBe(PALETTE[4])
+    expect(colorOf(withRoth, 'Roth 401(k)')).toBe(ENTITY.roth401k)
+    // Within the chart, only the structural grey repeats (Gross, Taxable, Post-tax, Net pay).
+    const hues = (sankeyOf(withRoth).data ?? []).map((n) => n.itemStyle?.color).filter((c) => c !== MUTED)
+    expect(new Set(hues).size).toBe(hues.length)
+  })
+
+  // The 2026-09-23 code review (11): the four deduction lines reuse registry slots, picked by
+  // measurement. With layoutIterations 0 a column stacks its nodes in data order, so these are
+  // the pairs a reader sees touching — Traditional 401(k) over Dental & vision over HSA, Roth over
+  // After-tax over ESPP — plus the two a zero line leaves touching. Each clears the normal-vision
+  // floor and the validator's CVD target (OKLab ΔE × 100, protan/deutan) in both themes; the old
+  // Dental-on-orange sat under the 401(k) green at CVD 3.
+  it('stacks no two lines a colour-blind reader would take for one (normal/CVD, both themes)', () => {
+    const CVD_TARGET = 8
+    const touching: [string, string, string][] = [
+      ['Traditional 401(k) / Dental & vision', ENTITY.preTaxSavings, ENTITY.dentalVision],
+      ['Dental & vision / HSA', ENTITY.dentalVision, ENTITY.hsa],
+      ['Roth 401(k) / After-tax 401(k)', ENTITY.roth401k, ENTITY.afterTax401k],
+      ['After-tax 401(k) / ESPP', ENTITY.afterTax401k, ENTITY.espp],
+      ['Traditional 401(k) / HSA (no dental)', ENTITY.preTaxSavings, ENTITY.hsa],
+      ['Roth 401(k) / ESPP (no after-tax)', ENTITY.roth401k, ENTITY.espp],
+    ]
+    for (const [pair, a, b] of touching) {
+      const { dark, light } = separation(a, b)
+      expect(Math.min(dark.normal, light.normal), pair).toBeGreaterThanOrEqual(NORMAL_VISION_FLOOR)
+      expect(Math.min(dark.cvd, light.cvd), pair).toBeGreaterThanOrEqual(CVD_TARGET)
+    }
+    // The column order those pairs assume: data order, top to bottom.
+    const names = (sankeyOf(paycheckSankeyOption(breakdown({ roth_401k: '150.00' }))!).data ?? []).map((n) => n.name)
+    expect(names.filter((name) => ['Taxable', 'Traditional 401(k)', 'Dental & vision', 'HSA'].includes(name as string))).toEqual([
+      'Taxable', 'Traditional 401(k)', 'Dental & vision', 'HSA',
+    ])
+    expect(names.filter((name) => ['Roth 401(k)', 'After-tax 401(k)', 'ESPP', 'Net pay'].includes(name as string))).toEqual([
+      'Roth 401(k)', 'After-tax 401(k)', 'ESPP', 'Net pay',
+    ])
   })
 
   it('tooltips echo the TABLE figures, never link sums (rounding honesty, spec §4)', () => {

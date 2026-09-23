@@ -1,5 +1,6 @@
 import type { ChartFixture } from './_types'
 import { spendingBarsOption } from '../../components/spending/spendingChartOptions'
+import { categoryFold } from '../entities'
 import type { SpendingMatrix } from '../../types/api'
 
 export const MATRIX: SpendingMatrix = {
@@ -29,6 +30,8 @@ export const MATRIX: SpendingMatrix = {
 }
 export const NAMES = new Map(MATRIX.categories.map((c) => [c.id, c.name]))
 export const LABELS = ['Jun 2026', 'Jul 2026', 'Aug 2026']
+/** The page's own fold over this matrix (charts/entities.ts) — the colours every spending chart wears. */
+export const FOLD = categoryFold(MATRIX)
 
 const fixture: ChartFixture = {
   name: 'spendingBars',
@@ -36,7 +39,7 @@ const fixture: ChartFixture = {
   ariaLabel: 'Stacked bar chart of monthly spending by category under the net-pay line',
   build: () =>
     spendingBarsOption({
-      matrix: MATRIX, topIds: [1, 2], nameById: NAMES, monthLabels: LABELS,
+      matrix: MATRIX, fold: FOLD, nameById: NAMES, monthLabels: LABELS,
       range: { preset: 'all' }, selected: {},
     }),
 }

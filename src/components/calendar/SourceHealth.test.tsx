@@ -21,8 +21,9 @@ describe('SourceHealth', () => {
       'Paydays partial — Sam: paid on another cadence — paydays omitted',
       'Cards off — no cards entered',
     ])
+    // RSU vests wear RSU's registry hue (charts/entities.ts).
     expect(items[0].querySelector('.cal-legend-dot')?.getAttribute('style')).toContain(
-      'var(--chart-1)',
+      'var(--chart-2)',
     )
     expect(screen.getByRole('list', { name: 'Sources' })).toBeTruthy()
   })

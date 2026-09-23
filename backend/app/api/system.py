@@ -5,10 +5,14 @@ live flag, database facts read with raw SQL, and the backup marker backup_db.sh
 upserts. Every stored shape degrades to None rather than a 500."""
 
 import asyncio
+from collections.abc import Iterator
+from typing import Any, BinaryIO
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.types import Receive, Scope, Send
 
 from app.api.deps import get_current_user
 from app.api.prices import compose_refresh_status
@@ -28,7 +32,14 @@ from app.schemas.system import (
 from app.services.price_service import REFRESH_RUNS_KEY
 from app.services.scheduler import is_scheduler_running
 from app.services.snapshot import alembic_head
-from app.services.snapshot_store import list_snapshots, write_snapshot
+from app.services.snapshot_store import (
+    DOWNLOAD_CHUNK_BYTES,
+    StoredFile,
+    list_restore_points,
+    list_snapshots,
+    open_stored_file,
+    write_snapshot,
+)
 
 router = APIRouter(prefix="/system", tags=["system"], dependencies=[Depends(get_current_user)])
 
@@ -37,6 +48,9 @@ BACKUP_RUNS_KEY = "backup_runs"
 # Keep-10 agrees in THREE places: this reader, price_service.REFRESH_RUNS_KEEP, and the
 # jsonpath literal '$[0 to 9]' inside backup_db.sh's upsert — bump all three together.
 RUNS_LIMIT = 10
+# A whole-database ZIP must never sit in a browser or proxy cache (2026-09-23 lane B1 review,
+# M3). export.py's live export sends the same header.
+NO_STORE = "no-store"
 
 
 async def _read_backup_status(db: AsyncSession) -> BackupStatusOut | None:
@@ -107,6 +121,70 @@ async def stored_snapshots(db: AsyncSession = Depends(get_db)) -> list[SnapshotE
     §8). `restorable` = the file's schema head equals this server's."""
     head = await alembic_head(db)
     return await asyncio.to_thread(list_snapshots, head)
+
+
+@router.get("/restore-points", response_model=list[SnapshotEntryOut])
+async def restore_points(db: AsyncSession = Depends(get_db)) -> list[SnapshotEntryOut]:
+    """The points saved before every restore and import (2026-09-23 spec §B3), newest
+    first: /snapshots' own entry shape with kind="restore_point". `restorable` = the file's
+    schema head equals this server's."""
+    head = await alembic_head(db)
+    return await asyncio.to_thread(list_restore_points, head)
+
+
+def _chunks(handle: BinaryIO) -> Iterator[bytes]:
+    """The opened file, in DOWNLOAD_CHUNK_BYTES blocks, closed when the stream ends. A sync
+    generator: Starlette iterates it in its threadpool, so no read blocks the event loop."""
+    with handle:
+        while block := handle.read(DOWNLOAD_CHUNK_BYTES):
+            yield block
+
+
+class StoredFileResponse(StreamingResponse):
+    """A stored file streamed from the handle the gate opened — and that handle closed however
+    the response ends: finished, failed, or abandoned by the client. uvicorn 0.52 speaks ASGI
+    2.3, where Starlette CANCELS the stream on a disconnect and never closes the generator
+    reading the file, so the handle stayed open until cyclic GC. On Windows that failed the
+    next rotation of the point (the restore or import 500s with its new point on disk and no
+    run row); on Linux it pins a rotated-out file's disk space (2026-09-23 lane B1 re-review)."""
+
+    def __init__(self, stored: StoredFile, **kwargs: Any) -> None:
+        super().__init__(_chunks(stored.handle), **kwargs)
+        self._handle = stored.handle
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Safe with a read in flight: Starlette reads through anyio.to_thread.run_sync,
+            # which waits for its worker thread when cancelled, so no read is running here.
+            self._handle.close()
+
+
+# `:path` so a traversal-shaped name ("..%2Fx.zip") reaches THIS handler and 404s in the same
+# words as any other foreign name (import_.py's reason), not as Starlette's bare "Not Found".
+@router.get(
+    "/snapshots/{name:path}/download",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"application/zip": {}}}},
+)
+async def download_stored(name: str) -> StoredFileResponse:
+    """A stored snapshot OR a restore point, byte for byte (2026-09-23 spec §B3): the
+    shell-free way to take either off the box. `open_stored_file` is the one gate both this
+    and restore-from-stored pass through; the bytes stream from the handle it opened, so a
+    rotation that deletes the name mid-request cannot turn the 200 into a 500 (review M2)."""
+    stored = await asyncio.to_thread(open_stored_file, name)
+    if stored is None:
+        raise HTTPException(status_code=404, detail=f"No stored snapshot named {name!r}")
+    return StoredFileResponse(
+        stored,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{stored.name}"',
+            "Content-Length": str(stored.size),
+            "Cache-Control": NO_STORE,
+        },
+    )
 
 
 @router.post("/snapshots", response_model=SnapshotEntryOut, status_code=201)

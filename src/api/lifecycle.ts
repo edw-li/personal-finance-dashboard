@@ -18,6 +18,12 @@ export function fetchSnapshots(): Promise<SnapshotEntry[]> {
   return api<SnapshotEntry[]>('/system/snapshots')
 }
 
+// GET /system/restore-points — the points saved before every restore and import, newest
+// first (2026-09-23 spec §B3). The snapshots' own entry shape, kind 'restore_point'.
+export function fetchRestorePoints(): Promise<SnapshotEntry[]> {
+  return api<SnapshotEntry[]>('/system/restore-points')
+}
+
 // POST /system/snapshots — "Snapshot now"; rate-limited server-side (10/minute).
 export function createSnapshot(): Promise<SnapshotEntry> {
   return api<SnapshotEntry>('/system/snapshots', { method: 'POST' })

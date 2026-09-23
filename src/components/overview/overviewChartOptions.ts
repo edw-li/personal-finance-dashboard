@@ -8,10 +8,21 @@
 // only the comparison average — a presentation figure that never leaves the page — is a
 // number.
 import type { EChartsOption } from '../../charts/echarts'
-import { BAR_MARKS, LINE, WASH, grid, moneyAxis, monthAxis } from '../../charts/grammar'
+import {
+  BAR_MARKS,
+  LINE,
+  WASH,
+  grid,
+  isPartialMonth,
+  moneyAxis,
+  monthAxis,
+  partialItemStyle,
+  partialNote,
+} from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
+import { periodColumn } from '../../charts/partial'
 import { referenceLine } from '../../charts/reference'
-import { OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
+import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
 import type { CoverageOut, NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
@@ -53,9 +64,14 @@ type SpendingDisplay = Pick<SpendingMatrix, 'months' | 'totals'> & Partial<Pick<
 /** Nothing to exclude — one shared empty set, so the default costs no allocation. */
 const NO_MONTHS: ReadonlySet<string> = new Set<string>()
 
+// Total spending is an aggregate, not an entity (2026-09-23 spec §C2): it wears the structural
+// neutral that no category and no income entity uses. PALETTE[1], which it wore before, is Food
+// & Dining's and RSU's colour on this same page.
+const TOTAL_SPEND = MUTED
+
 // Border only, no fill: the ESPP anatomy's "hollow means this is not what it looks like"
 // idiom (esppChartOptions.ts), here for a month nobody has entered.
-const HOLLOW_BAR = { color: 'transparent', borderColor: PALETTE[1], borderWidth: 1.5 } as const
+const HOLLOW_BAR = { color: 'transparent', borderColor: TOTAL_SPEND, borderWidth: 1.5 } as const
 
 /** The months whose total is an ABSENCE rather than a figure (audit item 14).
  *
@@ -94,10 +110,19 @@ export function notEnteredMonths(
   return months
 }
 
+export interface RecentSpendOptions {
+  /** The product's today (utils/months todayIso): a month whose last day is after it is in
+   *  progress and drawn as such (2026-09-23 spec §C5). Absent, no month is. */
+  todayIso?: string | null
+  /** Appearance › Chart patterns (useChartDecals): the month in progress is hatched, not faded. */
+  patterns?: boolean
+}
+
 export function recentSpendOption(
   matrix: SpendingDisplay,
   months = RECENT_SPEND_MONTHS,
   notEntered: ReadonlySet<string> = NO_MONTHS,
+  { todayIso = null, patterns = false }: RecentSpendOptions = {},
 ): EChartsOption | null {
   if (matrix.months.length === 0) return null
   const start = Math.max(0, matrix.months.length - months)
@@ -106,13 +131,24 @@ export function recentSpendOption(
   // Drawn hollow and labelled in the tooltip rather than dropped: the month happened, and
   // an axis that skipped it would hide the gap this is meant to make visible.
   const blank = new Set(shown.flatMap((month, i) => (notEntered.has(month) ? [i] : [])))
+  // 2026-09-23 spec §C5: the month still under way (the grammar's objective rule — its last
+  // day is after today) is a figure that will grow, so its bar says so: faded or hatched, a
+  // dashed outline, a marked label and a tooltip head that names it. A month that is also
+  // not entered stays hollow (its bar is a baseline tick either way); the label and the head
+  // still carry the mark.
+  const partial = new Set(
+    todayIso === null ? [] : shown.flatMap((month, i) => (isPartialMonth(month, todayIso) ? [i] : [])),
+  )
   // A not-entered month's total IS 0.00, so its hollow bar is a baseline tick and the only
   // place a CUE can live is the label. The month's name recedes to the "Other" neutral —
   // dimmer than the axis's own muted in both palettes, and a token, so recolor.ts maps it.
   // Per-datum objects rather than an `axisLabel.color` CALLBACK: recolor.ts walks plain
   // objects but passes functions through by identity (its header rule), so a callback
   // would bake dark-theme hexes into the light theme.
-  const axis = monthAxis(shown.map(formatMonth), { gap: true })
+  const axis = monthAxis(shown.map(formatMonth), {
+    gap: true,
+    marked: new Set([...partial].map((i) => formatMonth(shown[i]))),
+  })
   const labels = axis.data.map((label, i) =>
     blank.has(i) ? { value: label, textStyle: { color: OTHER_SERIES_COLOR } } : label,
   )
@@ -127,7 +163,10 @@ export function recentSpendOption(
   // A single-month book has nothing before the latest to average: no line, no legend entry
   // for a comparison that does not exist yet (the tile suppresses its delta for the same
   // reason).
-  const average = mean === null ? [] : [referenceLine(AVERAGE_SERIES, totals.map(() => mean))]
+  // The reference grammar's dashes, drawn in INK rather than its muted grey: the bars wear the
+  // neutral grey (TOTAL_SPEND), and a grey line would share their legend key and vanish where
+  // it crosses a bar (the 2026-09-23 review's decision). The fixtures declare the dash.
+  const average = mean === null ? [] : [{ ...referenceLine(AVERAGE_SERIES, totals.map(() => mean)), color: INK }]
   return {
     grid: grid(),
     legend: legendFor(1 + average.length),
@@ -144,27 +183,42 @@ export function recentSpendOption(
         blank.has(param.dataIndex)
           ? '(not entered)'
           : null,
+      headNote: (i) => (todayIso !== null && partial.has(i) ? partialNote(shown[i], todayIso) : null),
     }),
     series: [
       {
         type: 'bar',
         name: SPEND_SERIES,
         ...BAR_MARKS,
-        color: PALETTE[1],
-        data: totals.map((value, i) => (blank.has(i) ? { value, itemStyle: HOLLOW_BAR } : value)),
+        color: TOTAL_SPEND,
+        data: totals.map((value, i) =>
+          blank.has(i)
+            ? { value, itemStyle: HOLLOW_BAR }
+            : partial.has(i)
+              ? { value, itemStyle: partialItemStyle(TOTAL_SPEND, patterns) }
+              : value,
+        ),
       },
       ...average,
     ],
   }
 }
 
-/** The shown months as a table (F12) — the same trailing window the bars draw. */
+/** The shown months as a table (F12) — the same trailing window the bars draw. With a today,
+ *  a month in progress among them adds a trailing Period column that names it (the 2026-09-23
+ *  code review, 13: the bars' '*' in words, for the table twin and the CSV). */
 export function recentSpendCsv(
   matrix: SpendingDisplay,
   months = RECENT_SPEND_MONTHS,
+  { todayIso = null }: Pick<RecentSpendOptions, 'todayIso'> = {},
 ): ExportTable {
   const start = Math.max(0, matrix.months.length - months)
-  return { headers: ['Month', matrix.living_total ? 'Living spending (USD)' : 'Spend', ...(matrix.review_state ? ['Review status'] : [])], rows: matrix.months.slice(start).map((m, i) => [m, (matrix.living_total ?? matrix.totals)[start + i], ...(matrix.review_state ? [matrix.review_state[start + i]] : [])]) }
+  const shown = matrix.months.slice(start)
+  const period = periodColumn(shown, todayIso)
+  return {
+    headers: ['Month', matrix.living_total ? 'Living spending (USD)' : 'Spend', ...(matrix.review_state ? ['Review status'] : []), ...(period ? ['Period'] : [])],
+    rows: shown.map((m, i) => [m, (matrix.living_total ?? matrix.totals)[start + i], ...(matrix.review_state ? [matrix.review_state[start + i]] : []), ...(period ? [period[i]] : [])]),
+  }
 }
 
 export interface SpendStats {

@@ -9,7 +9,8 @@ import type { EChartsOption } from '../../charts/echarts'
 import { BAR_MARKS, grid, moneyAxis, monthAxis, roundTo, stagger } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { annotationRules, todayRule } from '../../charts/markLine'
-import { OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
+import { ESTIMATE_DECAL } from '../../charts/partial'
+import { OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
 import type { RsuGrantOut, VestOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
@@ -19,16 +20,10 @@ import { formatDate } from '../../utils/format'
 export const OTHER_GRANT_LABEL = 'Other'
 
 /** Tone-on-tone hatching for bars valued at today's quote rather than a stored close (F6):
- *  45° lines in the card surface over the grant's own colour — a token hex, so the light
- *  recolor and the conformance colour rule both hold. */
-export const ESTIMATE_HATCH = {
-  symbol: 'rect' as const,
-  symbolSize: 1,
-  dashArrayX: [1, 0],
-  dashArrayY: [2, 4],
-  rotation: -Math.PI / 4,
-  color: SURFACE,
-}
+ *  45° lines in the card surface over the grant's own colour. It IS the grammar's estimate
+ *  hatch (charts/partial.ts, the 2026-09-23 code review 7): one texture for "an estimate" in
+ *  the product, the month in progress's included. */
+export const ESTIMATE_HATCH = ESTIMATE_DECAL
 
 // The palette's fixed order IS the CVD-safety mechanism (charts/theme.ts): eight slots, never
 // a ninth and never a wrap back to the first. A tenth grant is a legend problem, not a licence

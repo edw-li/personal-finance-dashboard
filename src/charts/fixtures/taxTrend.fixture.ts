@@ -7,6 +7,10 @@ const fixture: ChartFixture = {
   kind: 'cartesian',
   ariaLabel:
     'Stacked bar chart of tax by jurisdiction per year, with the effective rate on each cap',
-  build: () => trendOption([taxSummary2024(), { ...taxSummary2024(), year: 2025 }]),
+  // "Today" inside 2025, so the second year takes the estimate treatment (2026-09-23 spec §C7):
+  // the grammar's partial look — each segment's own colour at an alpha ('#rrggbbaa') for the
+  // fill, a dashed outline in that colour — must pass the colour rule like every other hex.
+  build: () =>
+    trendOption([taxSummary2024(), { ...taxSummary2024(), year: 2025 }], { today: '2025-06-01' }),
 }
 export default fixture

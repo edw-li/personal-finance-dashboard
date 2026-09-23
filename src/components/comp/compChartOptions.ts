@@ -7,9 +7,10 @@
 // here and never hands a float back to the API (src/utils/format.ts's rule, and the same
 // posture as src/components/taxes/taxChartOptions.ts).
 import type { EChartsOption } from '../../charts/echarts'
+import { ENTITY } from '../../charts/entities'
 import { BAR_MARKS, grid, moneyAxis, monthAxis, roundTo, stagger } from '../../charts/grammar'
 import { FOCUS, legendFor } from '../../charts/legend'
-import { INK, PALETTE } from '../../charts/theme'
+import { INK } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
 import type { CompEventOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
@@ -18,8 +19,10 @@ import type { ExportTable } from '../../utils/download'
 // wear identity hues rather than a sequential ramp (the ramp in taxChartOptions encodes
 // the fixed jurisdiction order; there is no order to encode here). Two slots, well inside
 // the <=3-hue law, and the line takes INK — the same three roles as SpendingPage's stacked
-// months under its net-pay line.
-export const TC_COLORS = [PALETTE[0], PALETTE[1]] as const
+// months under its net-pay line. Base IS salary and the equity segment IS the RSU entity, so
+// both come from the registry (2026-09-23 spec §C2) — the calendar's paydays and vests and
+// the money flow's nodes wear the same two hues.
+export const TC_COLORS = [ENTITY.salary, ENTITY.rsu] as const
 
 // Series names, in series order: the two stack segments then the line over them.
 //

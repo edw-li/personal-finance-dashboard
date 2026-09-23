@@ -10,14 +10,16 @@ import BackupsCard from './BackupsCard'
 vi.mock('../../api/lifecycle', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/lifecycle')>()),
   fetchSnapshots: vi.fn(),
+  fetchRestorePoints: vi.fn(),
   createSnapshot: vi.fn(),
 }))
 vi.mock('../../api/system', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/system')>()),
   downloadSnapshot: vi.fn(),
+  downloadStoredSnapshot: vi.fn(),
 }))
-import { createSnapshot, fetchSnapshots } from '../../api/lifecycle'
-import { downloadSnapshot } from '../../api/system'
+import { createSnapshot, fetchRestorePoints, fetchSnapshots } from '../../api/lifecycle'
+import { downloadSnapshot, downloadStoredSnapshot } from '../../api/system'
 
 const NEWEST: SnapshotEntry = {
   name: 'finance-export-20260903-233000.zip',
@@ -32,6 +34,16 @@ const FOREIGN: SnapshotEntry = {
   size_bytes: 1_048_576,
   alembic_head: 'b8e4d17c2a90',
   restorable: false,
+}
+
+// A restore point (2026-09-23 spec §B3), the kind this card could not list before.
+const POINT: SnapshotEntry = {
+  name: 'pre-restore-20260904-161500-123456.zip',
+  at: '2026-09-04T16:15:00.123456+00:00',
+  size_bytes: 1_572_864,
+  alembic_head: 'c3a7e19d5b42',
+  restorable: true,
+  kind: 'restore_point',
 }
 
 function mount() {
@@ -59,6 +71,8 @@ beforeEach(() => {
     at: '2026-09-04T09:15:00+00:00',
   })
   vi.mocked(downloadSnapshot).mockResolvedValue(undefined)
+  vi.mocked(fetchRestorePoints).mockResolvedValue([])
+  vi.mocked(downloadStoredSnapshot).mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -77,8 +91,9 @@ describe('BackupsCard', () => {
     // full-suite run (2026-09-03 verification).
     const rows = await screen.findAllByRole('listitem')
     expect(rows).toHaveLength(2)
-    expect(rows[0].textContent).toContain('finance-export-20260903-233000.zip')
-    expect(rows[0].textContent).toContain(`${formatDateTime(NEWEST.at)} · 2.0 MB`)
+    // The local wall clock leads; the UTC file name is the secondary line (spec §B3).
+    expect(rows[0].querySelector('.backups-when')?.textContent).toBe(formatDateTime(NEWEST.at))
+    expect(rows[0].textContent).toContain('finance-export-20260903-233000.zip · 2.0 MB')
     const restore = screen.getByRole('link', { name: 'Restore…' })
     expect(restore.getAttribute('href')).toBe(
       '/settings?restore=finance-export-20260903-233000.zip#restore',
@@ -86,6 +101,122 @@ describe('BackupsCard', () => {
     // The foreign-schema file is listed (it is on the volume) but offered no restore.
     expect(rows[1].textContent).toContain('different schema — not restorable here')
     expect(screen.getAllByRole('link', { name: 'Restore…' })).toHaveLength(1)
+  })
+
+  it('lists restore points under their own heading, each downloadable and restorable', async () => {
+    vi.mocked(fetchRestorePoints).mockResolvedValue([POINT])
+    mount()
+    expect(
+      await within(card()).findByRole('heading', {
+        name: 'Restore points (saved before a restore or import)',
+      }),
+    ).toBeTruthy()
+    const row = (await screen.findByText(POINT.name)).closest('li') as HTMLElement
+    expect(row.querySelector('.backups-when')?.textContent).toBe(formatDateTime(POINT.at))
+    expect(within(row).getByRole('link', { name: 'Restore…' }).getAttribute('href')).toBe(
+      `/settings?restore=${POINT.name}#restore`,
+    )
+    fireEvent.click(
+      within(row).getByRole('button', {
+        name: `Download the restore point from ${formatDateTime(POINT.at)}`,
+      }),
+    )
+    await waitFor(() => expect(downloadStoredSnapshot).toHaveBeenCalledWith(POINT.name))
+  })
+
+  it('reads the volume again when the page says a restore point was written', async () => {
+    const view = mount()
+    await screen.findByText(
+      'No restore points yet — one is saved automatically before every restore or import.',
+    )
+    // An import or a restore elsewhere on the page just wrote one.
+    vi.mocked(fetchRestorePoints).mockResolvedValue([POINT])
+    view.rerender(
+      <MemoryRouter>
+        <ToastProvider>
+          <BackupsCard revision={1} />
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText(POINT.name)).toBeTruthy()
+    expect(fetchRestorePoints).toHaveBeenCalledTimes(2)
+    expect(fetchSnapshots).toHaveBeenCalledTimes(2)
+  })
+
+  it('says when no restore point exists yet, and what makes one', async () => {
+    mount()
+    expect(
+      await screen.findByText(
+        'No restore points yet — one is saved automatically before every restore or import.',
+      ),
+    ).toBeTruthy()
+    expect(screen.getByText(/Every restore and import first saves a restore point/)).toBeTruthy()
+  })
+
+  it('downloads a stored snapshot by name, busy on its own row only, failures in words', async () => {
+    let release: () => void = () => {}
+    vi.mocked(downloadStoredSnapshot).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    )
+    mount()
+    const name = `Download the snapshot from ${formatDateTime(NEWEST.at)}`
+    fireEvent.click(await screen.findByRole('button', { name }))
+    expect(downloadStoredSnapshot).toHaveBeenCalledWith(NEWEST.name)
+    expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name }).textContent).toBe('Preparing…')
+    // Only that row is busy: the card's own writes stay available.
+    expect((screen.getByRole('button', { name: 'Snapshot now' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    )
+    await act(async () => {
+      release()
+    })
+    expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(false)
+    vi.mocked(downloadStoredSnapshot).mockRejectedValue(
+      new ApiError("No stored snapshot named 'finance-export-20260903-233000.zip'", 404),
+    )
+    fireEvent.click(screen.getByRole('button', { name }))
+    expect((await banner()).textContent).toContain('No stored snapshot named')
+  })
+
+  it('tracks each row’s download on its own — a second one neither frees nor is freed by the first', async () => {
+    // 2026-09-23 lane B1 review, M7: one shared slot let the second click re-enable the first
+    // row mid-download, and the first to finish cleared the second one's busy state.
+    vi.mocked(fetchRestorePoints).mockResolvedValue([POINT])
+    const releases = new Map<string, () => void>()
+    vi.mocked(downloadStoredSnapshot).mockImplementation(
+      (name: string) =>
+        new Promise<void>((resolve) => {
+          releases.set(name, resolve)
+        }),
+    )
+    mount()
+    const snapshotButton = async () =>
+      (await screen.findByRole('button', {
+        name: `Download the snapshot from ${formatDateTime(NEWEST.at)}`,
+      })) as HTMLButtonElement
+    const pointButton = async () =>
+      (await screen.findByRole('button', {
+        name: `Download the restore point from ${formatDateTime(POINT.at)}`,
+      })) as HTMLButtonElement
+    fireEvent.click(await snapshotButton())
+    fireEvent.click(await pointButton())
+    expect((await snapshotButton()).disabled).toBe(true)
+    expect((await pointButton()).disabled).toBe(true)
+    await act(async () => {
+      releases.get(POINT.name)?.()
+    })
+    // The restore point finished; the snapshot is still downloading and still says so.
+    expect((await pointButton()).disabled).toBe(false)
+    expect((await snapshotButton()).disabled).toBe(true)
+    expect((await snapshotButton()).textContent).toBe('Preparing…')
+    await act(async () => {
+      releases.get(NEWEST.name)?.()
+    })
+    expect((await snapshotButton()).disabled).toBe(false)
   })
 
   it('Snapshot now prepends the new entry and toasts its name', async () => {

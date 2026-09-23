@@ -24,12 +24,15 @@ import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
 import DividendsPanel from '../components/portfolio/DividendsPanel'
+import { performanceLede } from '../components/portfolio/benchmarkLede'
+import PerformanceLede from '../components/portfolio/PerformanceLede'
 import {
-  buildEventMarkers,
   liveFromHoldings,
   portfolioHistoryCsv,
   portfolioHistoryOption,
+  weeklyLabelCapacity,
 } from '../components/portfolio/historyChartOptions'
+import { buildPerformanceEvents } from '../components/portfolio/performanceEvents'
 import HeatTreemapCard from '../components/portfolio/HeatTreemapCard'
 import HoldingDetailPanel from '../components/portfolio/HoldingDetailPanel'
 import HoldingsTable from '../components/portfolio/HoldingsTable'
@@ -110,6 +113,13 @@ interface PortfolioSnapshot {
   history: PortfolioHistory
   realized: RealizedResponse
   refreshStatus: RefreshStatus
+}
+
+/** The household's own ledgers, for the household-wide performance chart in a person's view. */
+interface HouseholdLedgers {
+  holdings: HoldingsResponse
+  transactions: TransactionOut[]
+  dividends: DividendOut[]
 }
 
 const PAGE_SECTIONS = [{"id":"overview","label":"Overview"},{"id":"holdings","label":"Holdings"},{"id":"allocation","label":"Allocation"},{"id":"income","label":"Income"},{"id":"manage","label":"Manage"}] as const
@@ -376,9 +386,25 @@ export default function PortfolioPage() {
       })
   }, [owner, applySnapshotState])
 
+  // The household's own ledgers for the household-wide performance chart in a person's view (the
+  // effect further down), with the ledger revision they were fetched at. The revision moves only
+  // with the page's own writes — a panel save, a price refresh (it can ingest dividends), a
+  // deactivation — the only times the household's ledgers can have moved (code review 3).
+  const [household, setHousehold] = useState<{ ledgers: HouseholdLedgers; revision: number } | null>(null)
+  const [ledgerRevision, setLedgerRevision] = useState(0)
+  const ledgersMoved = () => {
+    setLedgerRevision((revision) => revision + 1)
+    // The household view's own save refreshes its snapshot (portfolio:all), which is then
+    // fresher than any ledgers fetched earlier for a person's chart: those must not shadow it.
+    // This render's `owner`, not the latest, on purpose: every caller runs this render's load()
+    // next, and that refreshes THIS owner's snapshot — also when a refresh lands after a switch.
+    if (owner === null) setHousehold(null)
+  }
+
   // Panel mutations refetch WITHOUT unmounting the panels (a spinner swap would throw
   // away the form the user is typing in) — the body dims instead.
   const reload = () => {
+    ledgersMoved()
     setReloading(true)
     load().finally(() => setReloading(false))
   }
@@ -395,7 +421,13 @@ export default function PortfolioPage() {
     setError(null)
     // The page keeps the failure in its OWN banner, exactly as before; the hook's `error` is
     // for callers that have nowhere else to put it.
-    refresh({ after: load, onError: setError })
+    refresh({
+      after: () => {
+        ledgersMoved()
+        return load()
+      },
+      onError: setError,
+    })
   }
 
   const totals = holdings?.totals
@@ -427,35 +459,99 @@ export default function PortfolioPage() {
     if (security === undefined || deactivating !== null) return
     setDeactivating(ticker)
     updateSecurity(security.id, { is_active: false })
-      .then(() => load())
+      .then(() => {
+        ledgersMoved()
+        return load()
+      })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : `Failed to deactivate ${ticker}`)
       })
       .finally(() => setDeactivating(null))
   }
 
+  // The household's own ledgers for the household-wide performance chart in a person's view
+  // (review round 1). Fetched on their OWN, never inside load(): they decorate one chart, so they
+  // can neither fail the person's page (load() swallows its other decorations the same way) nor
+  // hold it — household holdings alone took 1.4 s. Fetched only in a person's view, while the
+  // chart's view (Overview) is showing, once the page's own data is on screen (a cold view asks
+  // after its own requests, not beside them), and only when the ledgers in hand predate the last
+  // write — a switch between people keeps them: it is the same household. Until they land, the
+  // household view's cached snapshot stands in when there is one; failing or pending with none,
+  // the chart keeps the person's own ledgers.
+  const showingChart = views.section === 'overview'
+  const personView = owner !== null
+  const pageReady = applied !== null
+  const householdFresh = household !== null && household.revision === ledgerRevision
+  useEffect(() => {
+    if (!personView || !showingChart || !pageReady || householdFresh) return
+    let current = true
+    const revision = ledgerRevision
+    Promise.all([fetchHoldings(null), fetchTransactions(null), fetchDividends(null)])
+      .then(([holdings, transactions, dividends]) => {
+        if (current) setHousehold({ ledgers: { holdings, transactions, dividends }, revision })
+      })
+      .catch(() => null)
+    return () => {
+      current = false
+    }
+  }, [personView, showingChart, pageReady, householdFresh, ledgerRevision])
+  const cachedHousehold = owner === null ? undefined : getSnapshot<PortfolioSnapshot>(portfolioKey(null))
+  const householdLedgers = useMemo((): HouseholdLedgers | null => {
+    if (owner === null) return null
+    if (household !== null) return household.ledgers
+    return cachedHousehold === undefined
+      ? null
+      : { holdings: cachedHousehold.holdings, transactions: cachedHousehold.transactions, dividends: cachedHousehold.dividends }
+  }, [owner, household, cachedHousehold])
+
   // The page's only memoized values (OverviewPage's rule): EChart keys its setOption
   // effect on [option], so a fresh object per render would redraw the chart on every tab
   // click. The zoom is spread on here rather than inside the builder, which stays pure and
   // shared with OverviewPage (whose copy is a fixed snapshot, no chips).
+  // Markers come from the ledgers this page ALREADY fetches in the same Promise.all —
+  // Overview keeps the short call and never starts fetching them (spec Decision log).
+  // Dividends and ex-dividend notices go to the rug; a notice survives only for a security
+  // held then or now (2026-09-23 spec §C8). The chart is the HOUSEHOLD's whatever the Whose
+  // chip says, so in a person's view every event and both "held" tests read the household's
+  // ledgers (review round 1); on the household view the page's own already are. Their own memo,
+  // keyed on the ledgers and the dates alone: a range chip, a zoom or a pan changes the window,
+  // never the events (code review 4).
+  const performanceEvents = useMemo(() => {
+    if (!history || !holdings) return null
+    const tickerById = new Map(securities.map((s) => [s.id, s.ticker]))
+    const ledgers = householdLedgers ?? { holdings, transactions, dividends }
+    const heldNow = new Set(ledgers.holdings.holdings.map((h) => h.security_id))
+    return buildPerformanceEvents(
+      history,
+      ledgers.transactions,
+      ledgers.dividends,
+      tickerById,
+      dividendEvents,
+      heldNow,
+    )
+  }, [history, holdings, securities, transactions, dividends, dividendEvents, householdLedgers])
+
+  // How many month labels the chart's plot fits (code review 5), from the chart's own measured
+  // width — a whole number, so the page re-renders only when it moves, not on every frame of the
+  // dock's margin transition.
+  const [axisLabels, setAxisLabels] = useState<number | undefined>(undefined)
+  const onChartWidth = useCallback((width: number) => setAxisLabels(weeklyLabelCapacity(width)), [])
+
   const performanceOption = useMemo(() => {
     if (!history || !holdings) return null
-    // Markers come from the ledgers this page ALREADY fetches in the same Promise.all —
-    // Overview keeps the two-arg call and never starts fetching them (spec Decision log).
-    const tickerById = new Map(securities.map((s) => [s.id, s.ticker]))
-    const events = buildEventMarkers(history, transactions, dividends, tickerById, dividendEvents)
     // A3 (2026-08-31 tier-1): the ping is derived from the OWNER-FILTERED holdings, but
     // /portfolio/history is household-wide by design — plotting a person's total at the
     // end of the household series drew a fake cliff. Only the All view bridges to "now";
     // null also suppresses the dashed connector and the "Live" legend entry (both live
     // inside the builder's livePt branch).
     // The picks ride INTO the builder (F9): legendFor() owns the legend's shape, so a page
-    // that spread its own `legend` over the result would drop the scroll/pager rules.
+    // that spread its own `legend` over the result would drop the scroll/pager rules. So does the
+    // range: the weekly axis picks its label stride from the window on screen (review round 1).
     const base = portfolioHistoryOption(
       history,
       owner === null ? liveFromHoldings(holdings) : null,
-      events,
-      { selected: legendSelected },
+      performanceEvents,
+      { selected: legendSelected, range, labels: axisLabels },
     )
     return base === null
       ? null
@@ -465,7 +561,14 @@ export default function PortfolioPage() {
         // END, so the indices are unshifted and the window runs out to the ping.
         dataZoom: rangeZoom(history.dates, range),
       }
-  }, [history, holdings, securities, transactions, dividends, dividendEvents, range, legendSelected, owner])
+  }, [history, holdings, performanceEvents, range, legendSelected, owner, axisLabels])
+
+  // The card states the honest benchmark's answer over the window the chart is showing — the
+  // chip's, or one dragged out with ctrl+wheel (2026-09-23 spec §C8; wealth PF-1).
+  const performanceLedeLine = useMemo(
+    () => (history === null ? null : performanceLede(history, range)),
+    [history, range],
+  )
 
   // Resolved target for EChart's animated zoom path — memoized so the wrapper's
   // fingerprint compare runs only when the window can actually have moved. Reads the
@@ -668,9 +771,10 @@ export default function PortfolioPage() {
             <LocalSectionPanel state={views} section="overview">
               <ChartCard
                 title="Performance"
-                hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance; VOO (your contributions) invests every inferred contribution instead. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Event markers annotate dated buys and sells, logged dividends, and older ex-dividend dates (per-share only — dollar amounts that old are unknowable from undated imports)."
+                hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. Same deposits in VOO invests every inferred contribution in VOO as it lands — the fair comparison. The line above the chart compares like with like: on All, the portfolio against the same deposits in VOO; over a shorter range, against the same money in VOO — the portfolio's value when the range opens, grown at VOO's rate, plus every deposit since. S&P 500 — starting balance only invests just the first week's balance; it stays off until you pick it in the legend. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Dated buys and sells ride the line; the ticks along the bottom mark weeks with logged dividends and older ex-dividend dates of securities held then or now (per-share only — dollar amounts that old are unknowable from undated imports)."
                 ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
                 option={performanceOption}
+                lede={performanceLedeLine === null ? undefined : <PerformanceLede line={performanceLedeLine} />}
                 empty="No performance history yet — import your workbook in Settings to load it."
                 exportName="portfolio-performance"
                 csv={history === null ? undefined : () => portfolioHistoryCsv(history)}
@@ -678,6 +782,7 @@ export default function PortfolioPage() {
                 zoomable
                 onLegendChange={onLegendChange}
                 onDataZoom={onZoomWindow}
+                onWidth={onChartWidth}
                 zoomWindow={zoomWindow}
                 footer={
                   <>
@@ -694,13 +799,14 @@ export default function PortfolioPage() {
                         because the history is household-wide.
                       </p>
                     )}
-                    {/* Two benchmark legs, one distinction: the baseline invests only the
-                      STARTING balance; the contribution-matched line adds every inferred
-                      flow. Said here so neither gap reads as outperformance. */}
+                    {/* Two benchmark legs, one distinction: the contribution-matched line adds
+                      every inferred flow; the other invests only the STARTING balance. Said
+                      here so neither gap reads as outperformance (2026-09-23 spec §C8). */}
                     <p className="hint">
-                      S&amp;P 500 baseline tracks the starting balance invested in VOO — later
-                      contributions are not added to it. VOO (your contributions) adds each
-                      inferred contribution as it lands.
+                      Same deposits in VOO adds each inferred contribution to VOO as it lands —
+                      the fair comparison. S&amp;P 500 — starting balance only invests just the
+                      first week&rsquo;s balance; later contributions are not added to it, which
+                      is why it is off until you pick it in the legend.
                     </p>
                   </>
                 }

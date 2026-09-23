@@ -12,16 +12,25 @@ export type RangePreset = 'all' | '1y' | 'ytd'
  * showing dead space at the end.
  */
 export function rangeStartIndex(dates: string[], preset: RangePreset): number {
-  if (preset === 'all' || dates.length === 0) return 0
-  const last = dates[dates.length - 1]
-  const cutoff =
-    preset === 'ytd'
-      ? `${last.slice(0, 4)}-01-01`
-      : // Same month/day, prior year. A Feb-29 anchor yields the non-date '…-02-29' in a
-        // common year — harmless, because '>=' on ISO strings still cuts at March 1.
-        `${Number(last.slice(0, 4)) - 1}${last.slice(4)}`
+  const cutoff = rangeCutoff(dates, preset)
+  if (cutoff === null) return 0
   const index = dates.findIndex((d) => d >= cutoff)
   return index === -1 ? 0 : index
+}
+
+/**
+ * The earliest date a preset's window reaches back to, anchored like rangeStartIndex; null for
+ * 'all' (or no dates). A series whose first point is AFTER it is shorter than the range — the
+ * portfolio lede then says "Since <first date>" rather than "Over 1Y" (2026-09-23 spec §C8).
+ */
+export function rangeCutoff(dates: string[], preset: RangePreset): string | null {
+  if (preset === 'all' || dates.length === 0) return null
+  const last = dates[dates.length - 1]
+  return preset === 'ytd'
+    ? `${last.slice(0, 4)}-01-01`
+    : // Same month/day, prior year. A Feb-29 anchor yields the non-date '…-02-29' in a
+      // common year — harmless, because '>=' on ISO strings still cuts at March 1.
+      `${Number(last.slice(0, 4)) - 1}${last.slice(4)}`
 }
 
 export interface InsideZoomOption {

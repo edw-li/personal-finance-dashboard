@@ -7,8 +7,13 @@ named sources, pre-tax savings) are hand-checkable because they never touch the 
 and the main fixture is deliberately CG-free so even its engine figures are stable.
 """
 
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
+import pytest
+from pydantic import ValidationError
+
+from app.schemas.overview import MoneyFlowCategoryTotalOut
 from app.services.money_flow import (
     NEGATIVE_RESIDUAL_REASON,
     NEGATIVE_TAXES_REASON,
@@ -18,7 +23,12 @@ from app.services.money_flow import (
     NO_NET_PAY_WARNING,
     NO_SPENDING_WARNING,
     SPENDING_COVERAGE_WARNING,
+    FlowMonth,
+    FlowSpendingRow,
+    MatchedWindow,
+    MoneyFlowCategoryTotal,
     compose_money_flow,
+    matched_window,
 )
 from app.services.tax_service import compute_breakdown
 
@@ -79,18 +89,48 @@ CATEGORY_SUMS = {
 }
 
 
+NET_PAY_SUM = D("120000.00")
+
+
+def complete_year(category_sums=None, net_pay_sum=NET_PAY_SUM, year=2026):
+    """The pure tests' complete-year shorthand, as the MatchedWindow the router would build for
+    a year whose every month has both feeds (the 2026-09-23 code review, 3: the service's own
+    window-less branch is gone). `category_sums` is SIGNED spend by name, all living, ids in
+    insertion order; the fan is funded by all of take-home, and cash saved is what the savings
+    module makes of it — take-home minus every category, refunds netted."""
+    category_sums = CATEGORY_SUMS if category_sums is None else category_sums
+    return MatchedWindow(
+        matched_months=[date(year, n, 1) for n in range(1, 13)],
+        take_home_matched=net_pay_sum,
+        take_home_unmatched=D("0.00"),
+        take_home_unmatched_months=[],
+        spending_unmatched_months=[],
+        spending_unmatched_total=D("0.00"),
+        take_home_pending_months=[],
+        category_totals=[
+            MoneyFlowCategoryTotal(index, name, "living", amount)
+            for index, (name, amount) in enumerate(category_sums.items(), start=1)
+        ],
+        cash_savings=net_pay_sum - sum(category_sums.values(), D("0.00")),
+        tracking_start=None,
+    )
+
+
 def compose(**over):
+    # `category_sums` (default CATEGORY_SUMS) feeds the complete-year window unless a test
+    # hands its own `window`.
+    category_sums = over.pop("category_sums", None)
     kwargs = dict(
         year=2026,
         inputs=INPUTS,
         brackets=BRACKETS,
-        category_sums=CATEGORY_SUMS,
-        net_pay_sum=D("120000.00"),
+        net_pay_sum=NET_PAY_SUM,
         net_pay_months=12,
         spending_months=12,
         available_years=[2024, 2025, 2026],
     )
     kwargs.update(over)
+    kwargs.setdefault("window", complete_year(category_sums, kwargs["net_pay_sum"], kwargs["year"]))
     return compose_money_flow(**kwargs)
 
 
@@ -139,7 +179,12 @@ def test_conservation_is_exact_by_construction():
         flow.taxes.total + flow.pre_tax_savings + flow.take_home_cash + flow.retained_equity
         == flow.gross_income
     )
-    assert flow.saved == flow.take_home_cash - flow.total_spend
+    # The right-hand fan (2026-09-23 spec §C1): matched take-home plus refunds funds the drawn
+    # (gross positive) spending plus Saved. This used to read `saved == take_home_cash -
+    # total_spend`, which is exactly the mixed-window/gross definition §C1 replaces: Saved now
+    # nets refunds like the YTD card's cash saved (the fixture's -25.00 refund category).
+    assert flow.take_home_matched + flow.refunds - flow.total_spend == flow.saved
+    assert flow.refunds == D("25.00")
 
 
 def test_conservation_holds_on_a_cg_carrying_year_too():
@@ -191,7 +236,9 @@ def test_category_fold_top7_plus_other_positive_only():
     # be negative, so the fold restates spending GROSS (buildYearSlices' documented rule).
     assert flow.other_spend == D("1400.00")
     assert flow.total_spend == D("44000.00")
-    assert flow.saved == D("76000.00")
+    # Saved nets the refund (spec §C1: the YTD card's definition, living + tax netted): it was
+    # 76000.00 — take-home minus the GROSS fold — before the window landed.
+    assert flow.saved == D("76025.00")
 
 
 def test_fold_with_seven_or_fewer_categories_has_no_other():
@@ -203,7 +250,8 @@ def test_fold_with_seven_or_fewer_categories_has_no_other():
 
 def test_saved_goes_negative_as_a_drawdown_figure_not_a_refusal():
     flow = compose(net_pay_sum=D("40000.00"))
-    assert flow.saved == D("-4000.00")
+    # 40000 - (44000 gross - 25 refunded): the refund nets (spec §C1); it was -4000.00.
+    assert flow.saved == D("-3975.00")
     # Nothing STRUCTURAL broke: a deficit year is drawable (the builder adds a red
     # Drawdown source, the spending sankey's semantics), so no refusal here.
     assert flow.renderable is True
@@ -374,7 +422,7 @@ def test_filing_status_and_earners_reach_the_engine():
         year=2026,
         inputs=inputs,
         brackets=brackets,
-        category_sums={},
+        window=complete_year({}, D("0")),
         net_pay_sum=D("0"),
         net_pay_months=0,
         spending_months=0,
@@ -384,7 +432,7 @@ def test_filing_status_and_earners_reach_the_engine():
         year=2026,
         inputs=inputs,
         brackets=brackets,
-        category_sums={},
+        window=complete_year({}, D("0")),
         net_pay_sum=D("0"),
         net_pay_months=0,
         spending_months=0,
@@ -405,7 +453,7 @@ def test_missing_status_brackets_refuse_to_render():
         year=2026,
         inputs=INPUTS,
         brackets={},
-        category_sums={"Groceries": D("1000")},
+        window=complete_year({"Groceries": D("1000")}, D("50000")),
         net_pay_sum=D("50000"),
         net_pay_months=12,
         spending_months=12,
@@ -535,3 +583,266 @@ def test_a_negative_residual_names_the_pending_estimate_that_helped_cause_it():
     assert flow.take_home_pending == D("200000.00")
     assert "take-home not yet entered" in flow.reason
     assert "200000.00" in flow.reason
+
+
+# --- the matched window (2026-09-23 spec §C1) ---
+#
+# The right-hand side of the flow covers only the months that have BOTH take-home and spending
+# entered — the savings module's own `MonthSavings.matched` rule, which is what the Overview YTD
+# card's cash-saved figure is summed over. These cases hand the pure window builder month rows.
+
+
+def spend(category_id, name, amount, kind="living"):
+    return FlowSpendingRow(category_id=category_id, name=name, kind=kind, amount=D(amount))
+
+
+def flow_month(number, pay, *rows, year=2026, spending=True):
+    return FlowMonth(
+        month=date(year, number, 1),
+        net_pay=None if pay is None else D(pay),
+        spending=tuple(rows) if spending else None,
+    )
+
+
+def test_window_matches_only_months_with_both_feeds_and_saved_is_the_ytd_figure():
+    # Production's 2026 shape: pay Jan-Aug, spending Jan-Sep (Sep rent-only), nothing after.
+    months = [
+        flow_month(n, "6500.00", spend(1, "Housing", "2000.00"), spend(2, "Taxes", "100.00", "tax"))
+        for n in range(1, 9)
+    ]
+    months.append(flow_month(9, None, spend(1, "Housing", "2072.23")))
+    window = matched_window(2026, months, tracking_start=date(2023, 8, 1))
+    assert window.matched_months == [date(2026, n, 1) for n in range(1, 9)]
+    assert window.take_home_matched == D("52000.00")
+    # 8 x (6500 - 2000 - 100): the savings module's own rollup, not a re-derivation.
+    assert window.cash_savings == D("35200.00")
+    assert window.spending_unmatched_months == [date(2026, 9, 1)]
+    assert window.spending_unmatched_total == D("2072.23")
+    assert window.take_home_unmatched == D("0.00")
+    assert window.take_home_unmatched_months == []
+    assert window.take_home_pending_months == [date(2026, n, 1) for n in range(9, 13)]
+    assert window.tracking_start == date(2023, 8, 1)
+    totals = {t.name: (t.category_id, t.kind, t.amount) for t in window.category_totals}
+    assert totals == {
+        "Housing": (1, "living", D("16000.00")),
+        "Taxes": (2, "tax", D("800.00")),
+    }
+
+
+def test_window_excludes_transfers_and_nets_refunds_exactly_like_cash_savings():
+    months = [
+        flow_month(
+            1,
+            "5000.00",
+            spend(1, "Rent", "2000.00"),
+            spend(3, "Brokerage", "1500.00", "transfer"),
+            spend(4, "Refunds", "-40.00"),
+        ),
+        flow_month(2, "5000.00", spend(1, "Rent", "2000.00")),
+    ]
+    window = matched_window(2026, months, tracking_start=date(2026, 1, 1))
+    # 10000 - 4000 - (-40): the transfer stayed yours, the refund came back.
+    assert window.cash_savings == D("6040.00")
+    names = [t.name for t in window.category_totals]
+    assert "Brokerage" not in names
+    assert {t.name: t.amount for t in window.category_totals}["Refunds"] == D("-40.00")
+    assert (
+        window.take_home_matched - sum(t.amount for t in window.category_totals)
+        == window.cash_savings
+    )
+
+
+def test_window_routes_pay_without_spending_to_the_unmatched_terminal():
+    months = [
+        flow_month(1, "5000.00", spend(1, "Rent", "2000.00")),
+        flow_month(2, "5000.00", spending=False),
+        flow_month(3, "5100.00", spending=False),
+    ]
+    window = matched_window(2026, months, tracking_start=date(2026, 1, 1))
+    assert window.matched_months == [date(2026, 1, 1)]
+    assert window.take_home_matched == D("5000.00")
+    assert window.take_home_unmatched == D("10100.00")
+    assert window.take_home_unmatched_months == [date(2026, 2, 1), date(2026, 3, 1)]
+
+
+def test_window_counts_an_all_zero_spending_month_with_pay_as_matched():
+    # savings.MonthSavings.matched: rows present (even all $0.00) beside a pay row is a real
+    # month of spending nothing — the YTD figure counts it, so the window must too.
+    window = matched_window(
+        2026, [flow_month(1, "5000.00", spend(1, "Rent", "0.00"))], tracking_start=None
+    )
+    assert window.matched_months == [date(2026, 1, 1)]
+    assert window.cash_savings == D("5000.00")
+    assert window.category_totals == []  # an exact-zero total draws nothing and is not listed
+
+
+def test_window_with_nothing_matched_has_zero_saved_and_every_month_pending():
+    window = matched_window(
+        2026, [flow_month(3, None, spend(1, "Rent", "10.00"))], tracking_start=None
+    )
+    assert window.matched_months == []
+    assert window.cash_savings == D("0.00")
+    assert str(window.cash_savings) == "0.00"  # the wire's two places, even for an empty sum
+    assert window.take_home_pending_months == [date(2026, n, 1) for n in range(1, 13)]
+    assert window.spending_unmatched_total == D("10.00")
+
+
+def test_window_ignores_rows_outside_the_year():
+    months = [
+        flow_month(12, "9999.00", spend(1, "Rent", "999.00"), year=2025),
+        flow_month(1, "5000.00", spend(1, "Rent", "2000.00")),
+    ]
+    window = matched_window(2026, months, tracking_start=date(2025, 12, 1))
+    assert window.matched_months == [date(2026, 1, 1)]
+    assert window.take_home_matched == D("5000.00")
+    assert window.cash_savings == D("3000.00")
+
+
+# --- composing with the window (2026-09-23 spec §C1) ---
+
+
+def window_of(**over):
+    base = dict(
+        matched_months=[date(2026, n, 1) for n in range(1, 9)],
+        take_home_matched=D("52000.00"),
+        take_home_unmatched=D("0.00"),
+        take_home_unmatched_months=[],
+        spending_unmatched_months=[date(2026, 9, 1)],
+        spending_unmatched_total=D("2072.23"),
+        take_home_pending_months=[date(2026, n, 1) for n in range(9, 13)],
+        category_totals=[
+            MoneyFlowCategoryTotal(1, "Housing", "living", D("16000.00")),
+            MoneyFlowCategoryTotal(2, "Taxes", "tax", D("800.00")),
+        ],
+        cash_savings=D("35200.00"),
+        tracking_start=date(2023, 8, 1),
+    )
+    base.update(over)
+    return MatchedWindow(**base)
+
+
+def test_a_partial_year_saves_over_the_matched_months_only():
+    flow = compose(
+        net_pay_sum=D("52000.00"), net_pay_months=8, spending_months=9, window=window_of()
+    )
+    # Saved IS the window's cash saved — the YTD card's figure, verbatim.
+    assert flow.saved == D("35200.00")
+    # Take-home cash still means every entered month; the fan's funding is the matched part.
+    assert flow.take_home_cash == D("52000.00")
+    assert flow.take_home_matched == D("52000.00")
+    assert [(c.name, c.amount) for c in flow.categories] == [
+        ("Housing", D("16000.00")),
+        ("Taxes", D("800.00")),
+    ]
+    assert flow.other_spend is None
+    assert flow.total_spend == D("16800.00")
+    assert flow.take_home_matched + flow.refunds - flow.total_spend == flow.saved
+    assert flow.matched_months == [date(2026, n, 1) for n in range(1, 9)]
+    assert flow.spending_unmatched_months == [date(2026, 9, 1)]
+    assert flow.spending_unmatched_total == D("2072.23")
+    assert flow.take_home_pending_months == [date(2026, n, 1) for n in range(9, 13)]
+    assert flow.tracking_start == date(2023, 8, 1)
+    assert [(t.category_id, t.kind) for t in flow.category_totals] == [(1, "living"), (2, "tax")]
+    # The middle column is untouched by the window, and still conserves against gross.
+    assert (
+        flow.taxes.total
+        + flow.pre_tax_savings
+        + flow.take_home_cash
+        + flow.take_home_pending
+        + flow.retained_equity
+        == flow.gross_income
+    )
+    assert flow.renderable is True
+
+
+def test_refunds_are_an_explicit_inflow_so_the_fan_conserves():
+    window = window_of(
+        category_totals=[
+            MoneyFlowCategoryTotal(1, "Housing", "living", D("16000.00")),
+            MoneyFlowCategoryTotal(9, "Returns", "living", D("-300.00")),
+        ],
+        cash_savings=D("36300.00"),
+    )
+    flow = compose(net_pay_sum=D("52000.00"), net_pay_months=8, window=window)
+    assert flow.refunds == D("300.00")
+    assert flow.total_spend == D("16000.00")  # the drawn (positive) fold only
+    assert flow.saved == D("36300.00")
+    assert flow.take_home_matched + flow.refunds - flow.total_spend == flow.saved
+    # The refund category stays in the totals the card folds, signed.
+    assert [t.amount for t in flow.category_totals] == [D("16000.00"), D("-300.00")]
+
+
+def test_pay_without_spending_is_named_and_conserves_the_take_home_node():
+    window = window_of(
+        matched_months=[date(2026, 1, 1)],
+        take_home_matched=D("5000.00"),
+        take_home_unmatched=D("10100.00"),
+        take_home_unmatched_months=[date(2026, 2, 1), date(2026, 3, 1)],
+        spending_unmatched_months=[],
+        spending_unmatched_total=D("0.00"),
+        take_home_pending_months=[date(2026, n, 1) for n in range(4, 13)],
+        category_totals=[MoneyFlowCategoryTotal(1, "Rent", "living", D("2000.00"))],
+        cash_savings=D("3000.00"),
+    )
+    flow = compose(net_pay_sum=D("15100.00"), net_pay_months=3, spending_months=1, window=window)
+    assert flow.take_home_matched + flow.take_home_unmatched == flow.take_home_cash
+    assert flow.take_home_unmatched_months == [date(2026, 2, 1), date(2026, 3, 1)]
+    assert flow.saved == D("3000.00")
+
+
+def test_a_window_with_nothing_matched_saves_nothing_rather_than_everything():
+    window = window_of(
+        matched_months=[],
+        take_home_matched=D("0.00"),
+        take_home_unmatched=D("240000.00"),
+        take_home_unmatched_months=[date(2026, n, 1) for n in range(1, 13)],
+        spending_unmatched_months=[],
+        spending_unmatched_total=D("0.00"),
+        take_home_pending_months=[],
+        category_totals=[],
+        cash_savings=D("0.00"),
+    )
+    flow = compose(net_pay_sum=D("240000.00"), net_pay_months=12, spending_months=0, window=window)
+    assert flow.saved == D("0.00")
+    assert flow.total_spend == D("0.00")
+    assert flow.categories == [] and flow.other_spend is None
+    assert flow.take_home_unmatched == D("240000.00")
+
+
+def test_the_complete_year_shorthand_is_a_window_like_any_other():
+    # The 2026-09-23 code review (3): there is no window-less branch left in the service. The
+    # shorthand every test above composes with is a real MatchedWindow (complete_year): every
+    # month matched, the fan funded by all of take-home, every total naming its category.
+    flow = compose()
+    assert flow.take_home_matched == flow.take_home_cash
+    assert flow.take_home_unmatched == D("0.00")
+    assert flow.matched_months == [date(2026, n, 1) for n in range(1, 13)]
+    assert flow.take_home_pending_months == []
+    assert flow.tracking_start is None
+    assert [t.name for t in flow.category_totals] == list(CATEGORY_SUMS)
+    assert [t.category_id for t in flow.category_totals] == list(range(1, len(CATEGORY_SUMS) + 1))
+
+
+def test_the_window_is_required_and_the_name_keyed_sums_are_gone():
+    # The router always handed one; the service no longer pretends it might not.
+    base = dict(
+        year=2026,
+        inputs=INPUTS,
+        brackets=BRACKETS,
+        net_pay_sum=D("0"),
+        net_pay_months=0,
+        spending_months=0,
+        available_years=[2026],
+    )
+    with pytest.raises(TypeError):
+        compose_money_flow(**base)
+    with pytest.raises(TypeError):
+        compose_money_flow(**base, category_sums={}, window=complete_year({}, D("0")))
+
+
+def test_a_category_total_on_the_wire_always_names_its_category():
+    # The id-less total existed only for the window-less shorthand; the card folds by id.
+    total = MoneyFlowCategoryTotalOut(category_id=7, name="Rent", kind="living", amount=D("1.00"))
+    assert total.category_id == 7
+    with pytest.raises(ValidationError):
+        MoneyFlowCategoryTotalOut(category_id=None, name="Rent", kind="living", amount=D("1.00"))

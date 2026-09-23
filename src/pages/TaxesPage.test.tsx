@@ -1542,6 +1542,59 @@ describe('?comp= composition drill (2026-08-25 spec §2d)', () => {
     expect(screen.getByRole('button', { name: '2024' }).getAttribute('aria-pressed')).toBe('true')
   })
 
+  it('names a drilled year still in progress as an estimate (2026-09-23 spec §C7)', async () => {
+    // Only the clock is faked: the feeds' promises and the findBy polling keep real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2024, 5, 15)) // mid-June 2024: 2024 has not ended, 2023 has
+    try {
+      const taxed2023 = summaryFor(2023)
+      taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
+      const taxed2024 = summaryFor(2024)
+      taxed2024.federal = { ...taxed2024.federal, tax: '2000.00' }
+      vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, taxed2024] })
+      renderPage('/taxes?comp=2024')
+      expect(await screen.findByText('Tax breakdown — 2024 (est.)')).toBeTruthy()
+      cleanup()
+      renderPage('/taxes?comp=2023')
+      expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Review round 1: the hint's estimate sentence and the table's mark exist only while a charted
+  // year is still in progress — never as boilerplate on a book of finished years.
+  it('says a year is an estimate — in the hint and the table — only while one is charted', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2024, 5, 15)) // mid-June 2024
+    const hint = () => {
+      fireEvent.click(screen.getByRole('button', { name: /^About Tax composition per year/ }))
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      fireEvent.keyDown(window, { key: 'Escape' })
+      return text
+    }
+    const card = () => screen.getByText('Tax composition by year').closest('section') as HTMLElement
+    try {
+      vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [summaryFor(2023), summaryFor(2024)] })
+      renderPage()
+      await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
+      expect(hint()).toContain('The current year is still in progress')
+      fireEvent.click(within(card()).getByRole('button', { name: /table/i }))
+      const table = within(card()).getByRole('table')
+      expect(within(table).getByRole('columnheader', { name: 'Status' })).toBeTruthy()
+      expect(within(table).getByText('Estimate (in progress)')).toBeTruthy()
+      cleanup()
+      vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [summaryFor(2022), summaryFor(2023)] })
+      renderPage()
+      await waitFor(() => expect(trendCategories()).toBe('2022,2023'))
+      expect(hint()).not.toContain('in progress')
+      fireEvent.click(within(card()).getByRole('button', { name: /table/i }))
+      expect(within(card()).queryByText('Estimate (in progress)')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('ignores a garbled or unknown year — the trend renders as usual', async () => {
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
       years: [summaryFor(2023), summaryFor(2024)],

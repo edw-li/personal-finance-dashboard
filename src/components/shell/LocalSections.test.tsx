@@ -1,10 +1,17 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
 import { LocalSectionNav, LocalSectionPanel, useLocalSections } from './LocalSections'
+import { framePartProps, framePartSelector } from './pageFrameParts'
+// The hold loop is holdPosition's own unit (holdPosition.test.ts); here only WHEN a landing asks.
+const release = vi.hoisted(() => vi.fn())
+vi.mock('./holdPosition', () => ({ holdPosition: vi.fn(() => release) }))
+import { holdPosition } from './holdPosition'
 
 const SECTIONS = [{ id: 'summary', label: 'Summary' }, { id: 'inputs', label: 'Inputs' }] as const
 const mounted = vi.fn()
@@ -127,6 +134,258 @@ describe('LocalSectionNav indicator, trailing slot and history (2026-09-13 polis
   })
 })
 
+describe("keeping the reader's place (2026-09-23 spec §C10)", () => {
+  // The scope row is sticky precisely so a chip can be changed while reading lower cards; a
+  // chip, the month ribbon or a chart drill writes only search params, and used to land the
+  // reader at the top (600 → 0 measured on Spending, Net worth and Portfolio).
+  function ScrollHarness() {
+    const state = useLocalSections(SECTIONS, 'summary')
+    const location = useLocation()
+    const navigate = useNavigate()
+    return <>
+      <LocalSectionNav state={state} label="Page views" />
+      <span data-testid="key">{location.key}</span>
+      <button type="button" onClick={() => { const params = new URLSearchParams(location.search); params.set('range', 'ytd'); navigate({ search: params.toString() }) }}>Pick YTD</button>
+      <button type="button" onClick={() => navigate(-1)}>Browser back</button>
+      <button type="button" onClick={() => navigate(1)}>Browser forward</button>
+    </>
+  }
+  // The restore runs in a requestAnimationFrame after the commit.
+  const frame = () => act(() => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()) }))
+  const at = (y: number) => Object.defineProperty(window, 'scrollY', { value: y, configurable: true, writable: true })
+  let scrollTo: ReturnType<typeof vi.fn>
+  beforeEach(() => { scrollTo = vi.fn(); vi.stubGlobal('scrollTo', scrollTo); sessionStorage.clear(); at(0) })
+  afterEach(() => { vi.unstubAllGlobals(); at(0); sessionStorage.clear() })
+
+  it('a search-param write on the same section leaves the scroll alone', async () => {
+    render(<MemoryRouter initialEntries={['/spending']}><ScrollHarness /></MemoryRouter>)
+    at(600)
+    fireEvent.click(screen.getByRole('button', { name: 'Pick YTD' }))
+    await frame()
+    await frame()
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it("a section change restores that section's remembered depth — the top on a first visit", async () => {
+    render(<MemoryRouter initialEntries={['/taxes']}><ScrollHarness /></MemoryRouter>)
+    at(600)
+    fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
+    await frame()
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: 'instant' })
+    at(250)
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }))
+    await frame()
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 600, behavior: 'instant' })
+  })
+
+  it('Back restores the depth recorded for the entry it returns to; with none recorded, the place holds', async () => {
+    render(<MemoryRouter initialEntries={['/spending']}><ScrollHarness /></MemoryRouter>)
+    // Layout records every entry's depth under scroll:<key> as the reader scrolls.
+    sessionStorage.setItem(`scroll:${screen.getByTestId('key').textContent}`, '600')
+    at(600)
+    fireEvent.click(screen.getByRole('button', { name: 'Pick YTD' }))
+    await frame()
+    at(900)
+    fireEvent.click(screen.getByRole('button', { name: 'Browser back' }))
+    await waitFor(() => expect(scrollTo).toHaveBeenLastCalledWith({ top: 600, behavior: 'instant' }))
+    scrollTo.mockClear()
+    // Forward onto the YTD entry, which was never scrolled in: same section, nothing recorded —
+    // the reader stays where they are rather than being thrown to the top.
+    fireEvent.click(screen.getByRole('button', { name: 'Browser forward' }))
+    await frame()
+    await frame()
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+})
+
+// 2026-09-23 spec §C11: a deep link lands while the page is still making its entrance, and
+// scrollIntoView measures the target's TRANSFORMED box — so on /guide#routine-monthly the card
+// landed 87px down (clear of the top scrim), then rose 22px with the entrance and came to rest
+// under the scrim. Held from the landing, it stays where the landing put it.
+describe('holding a deep link where it lands (2026-09-23 spec §C11)', () => {
+  function TargetHarness() {
+    const state = useLocalSections(SECTIONS, 'summary', {
+      resolveLegacy: ({ hash }) => (hash === '#deep' ? { section: 'inputs', targetId: 'deep' } : null),
+    })
+    // PageFrame's shape: the sticky scope row, then the body the target lives in.
+    return <div>
+      <div {...framePartProps('scope')}><LocalSectionNav state={state} label="Page views" /></div>
+      <div {...framePartProps('body')}>
+        <LocalSectionPanel state={state} section="summary"><p>Summary content</p></LocalSectionPanel>
+        <LocalSectionPanel state={state} section="inputs"><section id="deep">Deep card</section></LocalSectionPanel>
+      </div>
+    </div>
+  }
+  let scrollIntoView: ReturnType<typeof vi.fn>
+  let scrollTo: ReturnType<typeof vi.fn>
+  // Where the landing left things: the row's top (0 = stuck) and the target's top, on screen.
+  const landing = ({ scrollY, rowTop, targetTop }: { scrollY: number; rowTop: number; targetTop: number }) => {
+    Object.defineProperty(window, 'scrollY', { value: scrollY, configurable: true, writable: true })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const top = this.matches(framePartSelector('scope')) ? rowTop : this.id === 'deep' ? targetTop : 0
+      return { top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+    })
+  }
+  beforeEach(() => {
+    vi.mocked(holdPosition).mockClear()
+    release.mockClear()
+    // jsdom implements no scrollIntoView (SettingsPage.test carries the same note).
+    scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true })
+    scrollTo = vi.fn()
+    vi.stubGlobal('scrollTo', scrollTo)
+  })
+  afterEach(() => {
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    Object.defineProperty(window, 'scrollY', { value: 0, configurable: true, writable: true })
+  })
+
+  it('holds the target from the moment it lands, and lets go when the page goes away', async () => {
+    const { unmount } = render(<MemoryRouter initialEntries={['/guide#deep']}><TargetHarness /></MemoryRouter>)
+    await waitFor(() => expect(holdPosition).toHaveBeenCalledWith(screen.getByText('Deep card')))
+    // Measured AFTER the landing: a hold taken before it would pin the card to its old place.
+    expect(scrollIntoView.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(holdPosition).mock.invocationCallOrder[0])
+    expect(release).not.toHaveBeenCalled()
+    unmount()
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  // Code review 8: an arrival hook consumes its ?param with a REPLACE right after the landing. That
+  // is not a navigation — the reader is still on the deep link — so the hold stays, and the target
+  // is not landed a second time. A real navigation (PUSH, POP, another section) lets go.
+  it("keeps holding through an arrival hook's REPLACE, and lets go on a real navigation", async () => {
+    function ArrivalHarness() {
+      const location = useLocation()
+      const navigate = useNavigate()
+      return <>
+        <TargetHarness />
+        <button type="button" onClick={() => navigate({ search: '', hash: location.hash }, { replace: true })}>Consume arrival</button>
+        <button type="button" onClick={() => navigate('/guide?section=summary')}>Go elsewhere</button>
+      </>
+    }
+    const frame = () => act(() => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()) }))
+    render(<MemoryRouter initialEntries={['/guide?from=palette#deep']}><ArrivalHarness /></MemoryRouter>)
+    await waitFor(() => expect(holdPosition).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Consume arrival' }))
+    await frame()
+    await frame()
+    expect(holdPosition).toHaveBeenCalledTimes(1) // not landed twice
+    expect(release).not.toHaveBeenCalled() // still held
+    fireEvent.click(screen.getByRole('button', { name: 'Go elsewhere' }))
+    await frame()
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  // Code re-review 1: the Guide's CardSelector picks a card with a REPLACE of its own — the same
+  // section, the card's hash — and this landing is what scrolls the card under the sticky block
+  // and focuses it. Only a REPLACE that keeps the landed target is the reader still on the link.
+  describe("the Guide's card chips: a same-section REPLACE to a card", () => {
+    function ChipHarness() {
+      const state = useLocalSections(SECTIONS, 'summary', {
+        resolveLegacy: ({ hash }) => (hash.length > 1 ? { section: 'inputs', targetId: hash.slice(1) } : null),
+      })
+      const location = useLocation()
+      const navigate = useNavigate()
+      // CardSelector's go(), in shape.
+      const go = (id: string) =>
+        navigate({ pathname: location.pathname, search: location.search, hash: `#${id}` }, { replace: true, preventScrollReset: true })
+      return <>
+        <LocalSectionPanel state={state} section="summary"><p>Summary content</p></LocalSectionPanel>
+        <LocalSectionPanel state={state} section="inputs">
+          <section id="card-a">Card A</section>
+          <section id="card-b">Card B</section>
+          <section id="card-c">Card C</section>
+        </LocalSectionPanel>
+        <button type="button" onClick={() => go('card-b')}>Chip B</button>
+        <button type="button" onClick={() => go('card-c')}>Chip C</button>
+      </>
+    }
+    const frame = () => act(() => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()) }))
+    const landings = () => ({
+      scrolled: scrollIntoView.mock.contexts.map((element) => (element as HTMLElement).id),
+      held: vi.mocked(holdPosition).mock.calls.map(([element]) => element?.id),
+      focused: document.activeElement?.id,
+    })
+
+    it('a chip after a deep link lands the chosen card, and takes over the hold', async () => {
+      render(<MemoryRouter initialEntries={['/guide?section=inputs#card-a']}><ChipHarness /></MemoryRouter>)
+      await frame()
+      expect(landings()).toEqual({ scrolled: ['card-a'], held: ['card-a'], focused: 'card-a' })
+      fireEvent.click(screen.getByRole('button', { name: 'Chip B' }))
+      await frame()
+      expect(landings()).toEqual({ scrolled: ['card-a', 'card-b'], held: ['card-a', 'card-b'], focused: 'card-b' })
+      expect(release).toHaveBeenCalledTimes(1) // card A's hold, let go for card B's
+    })
+
+    it('a second chip lands its card too', async () => {
+      render(<MemoryRouter initialEntries={['/guide?section=inputs']}><ChipHarness /></MemoryRouter>)
+      await frame()
+      fireEvent.click(screen.getByRole('button', { name: 'Chip B' }))
+      await frame()
+      fireEvent.click(screen.getByRole('button', { name: 'Chip C' }))
+      await frame()
+      expect(landings()).toEqual({ scrolled: ['card-b', 'card-c'], held: ['card-b', 'card-c'], focused: 'card-c' })
+    })
+
+    // The same address asked for again, as a hash link to the current hash would be: the chosen
+    // chip, clicked again, brings its card back (what every landing did before code review 8).
+    it('the chip already chosen, clicked again, brings its card back', async () => {
+      render(<MemoryRouter initialEntries={['/guide?section=inputs']}><ChipHarness /></MemoryRouter>)
+      await frame()
+      fireEvent.click(screen.getByRole('button', { name: 'Chip B' }))
+      await frame()
+      fireEvent.click(screen.getByRole('button', { name: 'Chip B' }))
+      await frame()
+      expect(landings()).toEqual({ scrolled: ['card-b', 'card-b'], held: ['card-b', 'card-b'], focused: 'card-b' })
+    })
+  })
+
+  it('a page without a deep link holds nothing', async () => {
+    render(<MemoryRouter initialEntries={['/guide']}><TargetHarness /></MemoryRouter>)
+    await act(() => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()) }))
+    expect(holdPosition).not.toHaveBeenCalled()
+  })
+
+  // The first card of a page cannot reach the snap line: the landing stops before the scope row
+  // sticks (/guide#routine-monthly: 44px down, the row still 28px from the top), and there the
+  // arrived scrim lies on the body's first 32px — across the very card the link named.
+  it('a target in the opening screen lands at the top of the page, where no scrim has arrived', async () => {
+    landing({ scrollY: 44, rowTop: 28, targetTop: 87 })
+    render(<MemoryRouter initialEntries={['/guide#deep']}><TargetHarness /></MemoryRouter>)
+    await waitFor(() => expect(holdPosition).toHaveBeenCalled())
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' })
+    // The hold measures the FINAL landing, so it comes after the move to the top.
+    expect(scrollTo.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(holdPosition).mock.invocationCallOrder[0])
+  })
+
+  it('a target the landing brought under a stuck row stays where it landed', async () => {
+    // Only just deep enough for the row to stick: still in the opening screen's upper half, so
+    // the stuck row is the one thing that says the landing reached the snap line.
+    landing({ scrollY: 88, rowTop: 0, targetTop: 87 })
+    render(<MemoryRouter initialEntries={['/guide#deep']}><TargetHarness /></MemoryRouter>)
+    await waitFor(() => expect(holdPosition).toHaveBeenCalled())
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('a target far down a short page stays where it landed — the top would hide it', async () => {
+    // Max scroll reached before the row could stick; from the top the card would be off screen.
+    landing({ scrollY: 60, rowTop: 12, targetTop: 700 })
+    render(<MemoryRouter initialEntries={['/guide#deep']}><TargetHarness /></MemoryRouter>)
+    await waitFor(() => expect(holdPosition).toHaveBeenCalled())
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('under reduced motion there are no scrims, so the landing stands', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    landing({ scrollY: 44, rowTop: 28, targetTop: 87 })
+    render(<MemoryRouter initialEntries={['/guide#deep']}><TargetHarness /></MemoryRouter>)
+    await waitFor(() => expect(holdPosition).toHaveBeenCalled())
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+})
+
 describe('LocalSectionPanel fade (2026-09-13 polish §2.4)', () => {
   // jsdom has no Element.animate; the component guards on its presence, so the tests install one.
   const animate = vi.fn()
@@ -153,4 +412,13 @@ describe('LocalSectionPanel fade (2026-09-13 polish §2.4)', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Inputs' }))
     expect(animate).not.toHaveBeenCalled()
   })
+})
+
+// 2026-09-23 spec §C11: a local-section deep link lands its target under the sticky row by the
+// row's MEASURED height (--sticky-inset, the house rule settings and the guide already use) — a
+// hard-coded 7rem left it under the row on a taller strip and under the top scrim on every page.
+it('lands a local-section deep link under the sticky row, by its measured height', () => {
+  const css = readFileSync(path.join(__dirname, 'localSections.css'), 'utf8')
+  expect(css).toContain('.local-section-panel [id] { scroll-margin-top: calc(var(--sticky-inset, 0px) + 0.75rem); }')
+  expect(css).not.toContain('scroll-margin-top: 7rem')
 })

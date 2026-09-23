@@ -62,6 +62,24 @@ describe('axisTooltip row order', () => {
     expect(tooltipRows(html).head).toBe('&lt;i&gt;Jun&lt;/i&gt;')
   })
 
+  it('prints a reported total when the builder has one, and its own sum otherwise (2026-09-23 §C7)', () => {
+    // The tax trend's case: each addend arrives rounded to the cent on its own, so their sum can
+    // sit a cent off the total the server reports — and the server's figure is the one to print.
+    const { formatter } = axisTooltip({
+      groups: ['A', 'B'],
+      totalOf: (index) => (index === 0 ? 3.01 : null),
+    })
+    const total = (dataIndex: number) =>
+      tooltipRows(
+        formatter([
+          P({ seriesName: 'A', axisValueLabel: 'x', dataIndex, value: 1 }),
+          P({ seriesName: 'B', dataIndex, value: 2 }),
+        ]),
+      ).rows.at(-1)
+    expect(total(0)).toEqual({ kind: 'total', label: 'Total', value: '$3.01' })
+    expect(total(1)).toEqual({ kind: 'total', label: 'Total', value: '$3.00' })
+  })
+
   it('formats by unit and can drop the Total row', () => {
     expect(tooltipRows(axisTooltip({ unit: 'percent' }).formatter([P({ seriesName: 'Savings', value: 0.35 })])).rows[0].value).toBe('35.0%')
     expect(tooltipRows(axisTooltip({ unit: 'shares' }).formatter([P({ seriesName: 'Vest', value: 1822 })])).rows[0].value).toBe('1,822')
@@ -129,5 +147,23 @@ describe('itemTooltip', () => {
     const pct = itemTooltip<{ v: string }>({ body: (p) => ({ value: p.v, label: 'Federal' }) })
     expect(tooltipRows(pct.formatter({ v: '56.0%' })).lead).toBe('56.0%')
     expect(isGrammarTooltip(pct.formatter)).toBe(true)
+  })
+})
+
+// 2026-09-23 spec §C5: an in-progress month says so in the tooltip's own head.
+describe('axisTooltip head note', () => {
+  it('appends the note for the hovered index to the head, escaped', () => {
+    const { formatter } = axisTooltip({ headNote: (index) => (index === 1 ? 'month to date (in progress)' : null) })
+    const noted = tooltipRows(formatter([P({ seriesName: 'Spend', axisValueLabel: 'Sep 2026', dataIndex: 1, value: 2072.23 })]))
+    expect(noted.head).toBe('Sep 2026 — month to date (in progress)')
+    const plain = tooltipRows(formatter([P({ seriesName: 'Spend', axisValueLabel: 'Aug 2026', dataIndex: 0, value: 4000 })]))
+    expect(plain.head).toBe('Aug 2026')
+  })
+})
+
+// A partial bar's params colour is its faded fill: the swatch still wears the token's variable.
+describe('swatch of a token at an alpha', () => {
+  it('reads the token part', () => {
+    expect(swatch(`${PALETTE[3]}73`)).toContain('var(--chart-4)')
   })
 })

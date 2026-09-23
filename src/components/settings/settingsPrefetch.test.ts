@@ -20,6 +20,7 @@ vi.mock('../../api/household', () => ({ fetchHousehold: vi.fn(async () => null) 
 vi.mock('../../api/lifecycle', () => ({
   fetchActivity: vi.fn(async () => null),
   fetchHealth: vi.fn(async () => null),
+  fetchRestorePoints: vi.fn(async () => []),
   fetchSnapshots: vi.fn(async () => []),
 }))
 vi.mock('../../api/limits', () => ({ fetchLimits: vi.fn(async () => null) }))
@@ -31,6 +32,7 @@ vi.mock('../../api/spending', () => ({ fetchCategories: vi.fn(async () => []) })
 vi.mock('../../api/system', () => ({ fetchSystemStatus: vi.fn(async () => null) }))
 import { fetchAssistantSettings } from '../../api/assistant'
 import { fetchHousehold } from '../../api/household'
+import { fetchRestorePoints, fetchSnapshots } from '../../api/lifecycle'
 import { fetchLimits } from '../../api/limits'
 import { fetchProfiles } from '../../api/paycheck'
 import { fetchAppSettings } from '../../api/settings'
@@ -101,6 +103,13 @@ describe('prefetchSection — a VISITED writer disqualifies its key', () => {
     prefetchSection('integrations', visited('planning'))
     expect(fetchAppSettings).not.toHaveBeenCalled()
     expect(fetchAssistantSettings).toHaveBeenCalledTimes(1)
+  })
+
+  it('primes the restore points beside the snapshots for Data — the Backups card reads both', () => {
+    prefetchSection('data', NONE)
+    expect(fetchSnapshots).toHaveBeenCalledTimes(1)
+    expect(fetchRestorePoints).toHaveBeenCalledTimes(1)
+    expect(WARM.restorePoints).toBe('restore-points')
   })
 
   it('leaves /system unprimed for Data once Integrations has been open', () => {

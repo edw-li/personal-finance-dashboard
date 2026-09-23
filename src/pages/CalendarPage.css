@@ -423,6 +423,17 @@
   margin-bottom: 1rem;
 }
 
+/* Five tiles since Living costs joined the strip (2026-09-23 spec §B2). The shared five-tile row
+   goes five-across only from 1000px of container, and a 1280 window gives this page ~990px — four
+   tiles and a lone Vesting underneath. These tiles carry short labels and cent figures (the value
+   font scales with its own tile), so they hold five columns from 880px; below that the shared
+   auto-fit takes over. */
+@container page (min-width: 880px) {
+  .cal-strip.kpi-row-5 {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
 /* The strip's footnotes, now the calendar card's last lines under the source-health list. */
 .cal-note {
   margin: 0.5rem 0 0;

@@ -3,7 +3,9 @@ import type { ReactNode } from 'react'
 import { useLocation, useNavigate, useNavigationType } from 'react-router-dom'
 import { EASE_OUT, MOTION_MS } from '../../theme/motion'
 import { prefersReducedMotion } from '../useReducedMotion'
+import { holdPosition } from './holdPosition'
 import { LocalSectionVisibility } from './localSectionContext'
+import { framePartSelector } from './pageFrameParts'
 import './localSections.css'
 
 export interface LocalSection<T extends string> { id: T; label: string; badge?: ReactNode }
@@ -27,6 +29,7 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
   const id = useId()
   const positions = useRef(new Map<string, number>())
   const priorLocation = useRef(location.key)
+  const priorSection = useRef<string | null>(null)
   const params = new URLSearchParams(location.search)
   const explicit = params.get('section')
   const legacy = options.resolveLegacy?.({ pathname: location.pathname, searchParams: params, hash: location.hash })
@@ -52,9 +55,32 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
     navigate({ pathname: location.pathname, search: `?${nextParams.toString()}`, hash: location.hash }, { replace: opts?.replace, preventScrollReset: true })
   }, [sections, section, location.pathname, location.search, location.hash, navigate])
 
+  // The landed deep link's hold, released by a real navigation or the page going away — never by
+  // an effect re-run as such (code review 8) — and the target it holds.
+  const landedHold = useRef<(() => void) | null>(null)
+  const landedTarget = useRef<string | null>(null)
+  useEffect(() => () => landedHold.current?.(), [])
+  const address = `${location.pathname}${location.search}${location.hash}`
+  const priorAddress = useRef(address)
+
   useEffect(() => {
-    const changed = priorLocation.current !== location.key
+    const keyChanged = priorLocation.current !== location.key
+    // null on the first run: the page's arrival is Layout's business, not a section change.
+    const sectionChanged = priorSection.current !== null && priorSection.current !== section
+    // A new entry for the address already shown: the reader asked for it again.
+    const sameAddress = priorAddress.current === address
     priorLocation.current = location.key
+    priorSection.current = section
+    priorAddress.current = address
+    // A REPLACE on the same section is not a navigation away: an arrival hook consuming its
+    // ?param right after a deep link lands leaves the reader on the link, so the landing stays
+    // held (code review 8). A new section, a PUSH or a POP is one, and lets go.
+    const sameSectionReplace = keyChanged && !sectionChanged && navigationType === 'REPLACE'
+    if ((keyChanged || sectionChanged) && !sameSectionReplace) {
+      landedHold.current?.()
+      landedHold.current = null
+      landedTarget.current = null
+    }
     let observer: MutationObserver | undefined
     let timeout: ReturnType<typeof setTimeout> | undefined
     const focusTarget = () => {
@@ -62,6 +88,13 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
       const target = document.getElementById(targetId)
       if (!target || target.closest('[hidden]')) return false
       target.scrollIntoView?.({ block: 'start', behavior: 'instant' })
+      if (landsUnderOpeningScrim(target)) window.scrollTo({ top: 0, behavior: 'instant' })
+      // A deep link lands mid-entrance, and scrollIntoView measures the TRANSFORMED box: a card
+      // landed clear of the top scrim, then rose 22px with the page's entrance and came to rest
+      // under it (2026-09-23 spec §C11). Held from here, it stays where it landed.
+      landedHold.current?.()
+      landedHold.current = holdPosition(target)
+      landedTarget.current = targetId
       if (!target.hasAttribute('tabindex') && !target.matches('input,button,select,textarea,a[href]')) target.setAttribute('tabindex', '-1')
       target.focus({ preventScroll: true })
       observer?.disconnect()
@@ -70,22 +103,54 @@ export function useLocalSections<T extends string>(sections: readonly LocalSecti
     }
     const frame = requestAnimationFrame(() => {
       if (targetId) {
+        // Only the address rewritten around the target already landed — an arrival hook's
+        // consume — has nothing to land. A REPLACE to a NEW target is a pick: the Guide's card
+        // chips land their card this way (code re-review 1). And the same address asked for again
+        // (the chosen chip, clicked again) brings its card back, as a link to the current hash does.
+        if (sameSectionReplace && landedTarget.current === targetId && !sameAddress) return
         if (!focusTarget() && typeof MutationObserver !== 'undefined') {
           observer = new MutationObserver(focusTarget)
           observer.observe(document.body, { childList: true, subtree: true })
           timeout = setTimeout(() => observer?.disconnect(), 5000)
         }
-      } else if (changed) {
+      } else if (sectionChanged || (keyChanged && navigationType === 'POP')) {
+        // Keep the reader's place (2026-09-23 spec §C10, charts F1): only a new SECTION or a
+        // Back/Forward moves the page. A search-param write on the same section — a range or
+        // owner chip, the month ribbon, a chart drill — used to land here too and restore the
+        // section's remembered depth, 0 by default, throwing the reader to the top (600 → 0).
         let saved: string | null = null
-        try { saved = sessionStorage.getItem(`scroll:${location.key}`) } catch { /* Browser memory remains available when storage is blocked. */ }
-        const remembered = navigationType === 'POP' ? Number(saved ?? positions.current.get(section) ?? 0) : positions.current.get(section) ?? 0
-        if (window.scrollY !== remembered) window.scrollTo({ top: Number.isFinite(remembered) ? remembered : 0, behavior: 'instant' })
+        if (navigationType === 'POP') {
+          try { saved = sessionStorage.getItem(`scroll:${location.key}`) } catch { /* Browser memory remains available when storage is blocked. */ }
+        }
+        // A POP onto an entry never scrolled in has no record: the same section keeps its depth
+        // (it IS that page), another section takes that section's own memory.
+        const target = saved !== null ? Number(saved) : sectionChanged ? (positions.current.get(section) ?? 0) : null
+        if (target !== null && window.scrollY !== target) window.scrollTo({ top: Number.isFinite(target) ? target : 0, behavior: 'instant' })
       }
     })
     return () => { cancelAnimationFrame(frame); observer?.disconnect(); if (timeout) clearTimeout(timeout) }
-  }, [location.key, section, targetId, navigationType])
+  }, [location.key, address, section, targetId, navigationType])
 
   return { section, sections, setSection, panelId: (value) => `${id}-section-${value}`, tabId: (value) => `${id}-tab-${value}` }
+}
+
+/**
+ * Whether a deep link's landing left its target under the top scrim in the page's opening screen
+ * (2026-09-23 spec §C11). A card near the top of the body cannot reach the snap line: the landing
+ * stops before PageFrame's scope row sticks, and there the scrim — arrived over the first
+ * --scrim-h of scroll, sitting on the body's top until the row sticks — lies across the very card
+ * the link named (/guide#routine-monthly: 44px down, the fade over its top 32px). The page's top
+ * shows the same card with no scrim at all, so that is where it lands — unless the card sits so
+ * low (a short page scrolled to its end) that the top would hide it. Reduced motion has no scrims.
+ */
+function landsUnderOpeningScrim(target: HTMLElement): boolean {
+  if (window.scrollY <= 0 || prefersReducedMotion()) return false
+  const row = target
+    .closest(framePartSelector('body'))
+    ?.parentElement?.querySelector(`:scope > ${framePartSelector('scope')}`)
+  // A stuck row (top 0) means the landing reached the snap line, below the scrim.
+  if (!row || row.getBoundingClientRect().top <= 0) return false
+  return target.getBoundingClientRect().top + window.scrollY < window.innerHeight / 2
 }
 
 function safeHash(hash: string): string | undefined {

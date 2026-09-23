@@ -92,6 +92,19 @@ function SystemFacts({ status, coverage }: { status: SystemStatus; coverage: Cov
           <span className={backup.className}>{backup.text}</span>
         </dd>
       </div>
+      {/* 2026-09-23 spec §B4: the whole household database leaves the box every night — say
+          it when it leaves in plain text. Only an explicit false: a marker an older script
+          wrote carries no `encrypted` at all and says nothing either way. */}
+      {status.backup?.encrypted === false && (
+        <div className="system-fact system-fact-wide">
+          <dt>Encryption</dt>
+          <dd>
+            <span className="system-warning">
+              Off-box backups are not encrypted — set BACKUP_PASSPHRASE (README 5.3).
+            </span>
+          </dd>
+        </div>
+      )}
       <div className="system-fact system-fact-wide">
         <dt>Recent backups</dt>
         <dd>

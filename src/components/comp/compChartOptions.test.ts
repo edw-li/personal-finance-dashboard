@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { GRID_VARIANTS } from '../../charts/grammar'
+import { ENTITY } from '../../charts/entities'
 import { INK, PALETTE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
 import type { CompEventOut } from '../../types/api'
@@ -222,6 +223,8 @@ describe('tcTrajectoryOption', () => {
     // Two identity categories, so identity hues: the first two validated palette slots
     // (SpendingPage's "index IS the slot" convention). No new hex anywhere on this page.
     expect(TC_COLORS).toEqual([PALETTE[0], PALETTE[1]])
+    // Base IS salary and the equity segment IS the RSU entity (2026-09-23 spec §C2).
+    expect(TC_COLORS).toEqual([ENTITY.salary, ENTITY.rsu])
     expect(base.color).toBe(PALETTE[0])
     expect(equity.color).toBe(PALETTE[1])
     expect(line.color).toBe(INK)
