@@ -904,10 +904,11 @@ it("annotates the household chart from the household's ledgers in a person's vie
   renderPage('/portfolio?owner=2')
   const performance = () => screen.getAllByTestId('echart')[0]
   await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith(SAM.id))
+  // Asked for once the person's own data is on screen.
+  await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
   expect(fetchHoldings).toHaveBeenCalledWith(null)
   expect(fetchTransactions).toHaveBeenCalledWith(null)
   expect(fetchDividends).toHaveBeenCalledWith(null)
-  await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
   // …while Sam's own panels stay Sam's.
   expect(fetchRealized).toHaveBeenCalledWith(SAM.id)
   expect(fetchRealized).not.toHaveBeenCalledWith(null)
@@ -943,6 +944,54 @@ describe("the household's ledgers never hold a person's view", () => {
     renderPage('/portfolio?owner=2')
     expect(await screen.findByText('Portfolio value')).toBeTruthy()
     await waitFor(() => expect(performance().getAttribute('data-series')).toContain('Portfolio value'))
+  })
+
+  // Code review 3: fetched once per need — after the person's own data on a cold view, not again
+  // on a switch between people (the household is the same household), again after a save.
+  const householdCalls = () => vi.mocked(fetchHoldings).mock.calls.filter(([scope]) => scope === null)
+
+  it("fetches them once on a cold person view, after the person's own data", async () => {
+    exdivOnVoo()
+    renderPage('/portfolio?owner=2')
+    await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+    expect(householdCalls()).toHaveLength(1)
+    const order = (scope: unknown) =>
+      vi.mocked(fetchHoldings).mock.invocationCallOrder[vi.mocked(fetchHoldings).mock.calls.findIndex(([s]) => s === scope)]
+    expect(order(null)).toBeGreaterThan(order(SAM.id))
+  })
+
+  it('does not fetch them again on a switch between people', async () => {
+    renderPage('/portfolio?owner=2')
+    await waitFor(() => expect(householdCalls()).toHaveLength(1))
+    fireEvent.click(chip('Joint'))
+    await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith('joint'))
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('owner=joint'))
+    expect(householdCalls()).toHaveLength(1)
+  })
+
+  it("drops them when the household view saves, so its fresher snapshot wins until they are fetched again", async () => {
+    // Nobody holds VOO at first; the household view's refresh then finds it held.
+    let household = EMPTY_HOLDINGS
+    vi.mocked(fetchHoldings).mockImplementation((scope) => Promise.resolve(scope === null ? household : EMPTY_HOLDINGS))
+    vi.mocked(fetchTransactions).mockResolvedValue([])
+    vi.mocked(fetchDividends).mockResolvedValue([])
+    exdivOnVoo()
+    vi.mocked(refreshPrices).mockResolvedValue({ updated: ['VOO'], failed: {}, skipped_manual: [], duration_ms: 10, dividends_ingested: 0 })
+    renderPage('/portfolio')
+    await screen.findByRole('group', { name: 'Whose' })
+    fireEvent.click(chip('Sam'))
+    await waitFor(() => expect(householdCalls()).toHaveLength(2)) // the All view's own + Sam's chart
+    expect(performance().getAttribute('data-series')).not.toContain('Ex-dividend dates')
+    fireEvent.click(chip('All'))
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('owner=all'))
+    household = holdingsOut()
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh prices' }))
+    await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
+    // Back in Sam's view the refetch never lands: the fresher household snapshot has to show.
+    vi.mocked(fetchHoldings).mockImplementation((scope) => (scope === null ? new Promise(() => {}) : Promise.resolve(EMPTY_HOLDINGS)))
+    fireEvent.click(chip('Sam'))
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('owner=2'))
+    await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Ex-dividend dates'))
   })
 
   it("reuses the household's cached snapshot at once, and fetches only while the chart's view shows", async () => {
