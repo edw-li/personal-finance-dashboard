@@ -402,6 +402,35 @@ describe('zoomWindow fast path', () => {
       expect(chart.setOption).toHaveBeenCalledTimes(2)
       expect(chart.setOption.mock.calls[1][1]).toEqual({ notMerge: true })
     })
+
+    // After lane CS's merge (both reviewers): under reduce a drag's echo rides the fast path, and
+    // a drag moves the window — so the weekly axis's label set moves with it. The echo must still
+    // merge that set alone: a notMerge rebuild would recreate the inside zoom under the pointer
+    // and end the pan after its first step.
+    it('under reduce, a drag echo that changes the set merges only customValues — no rebuild, the pan keeps going', () => {
+      vi.stubGlobal('matchMedia', () => ({ matches: true }))
+      const dragged = (customValues: number[], startValue: number, endValue?: number) =>
+        ({
+          series,
+          xAxis: axis(customValues),
+          dataZoom: [{ type: 'inside', startValue, ...(endValue === undefined ? {} : { endValue }) }],
+        }) as EChartsOption
+      const { rerender } = render(
+        <EChart ariaLabel="test chart" option={dragged([3, 6, 9], 3)} zoomWindow={{ startValue: 3, endValue: 9 }} onDataZoom={() => {}} />,
+      )
+      const chart = instances[0]
+      expect(chart.setOption).toHaveBeenCalledTimes(1)
+      // The user drags: the engine sits at 2–8 now, and the page mirrors that window back in,
+      // with the label set that window takes.
+      chart.getOption.mockReturnValue({ dataZoom: [{ startValue: 2, endValue: 8 }] })
+      act(() => chart.handlers.datazoom())
+      rerender(
+        <EChart ariaLabel="test chart" option={dragged([2, 4, 6, 8], 2, 8)} zoomWindow={{ startValue: 2, endValue: 8 }} onDataZoom={() => {}} />,
+      )
+      expect(chart.setOption).toHaveBeenCalledTimes(2)
+      expect(chart.setOption.mock.calls[1]).toEqual([{ xAxis: [{ axisLabel: { customValues: [2, 4, 6, 8] } }] }])
+      expect(chart.dispatchAction).not.toHaveBeenCalled() // the engine is already there
+    })
   })
 
   // The 2026-09-23 code review (2): a manual drag echoes back through the page (datazoom → page
