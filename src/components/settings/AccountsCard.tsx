@@ -16,7 +16,6 @@ import type {
   PersonOut,
   PortfolioAccountOut,
 } from '../../types/api'
-import { rosterGroups, rosterItems } from '../../utils/accounts'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
 import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
@@ -24,6 +23,7 @@ import { useReorder } from '../reorder/useReorder'
 import { useToast } from '../ToastProvider'
 import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
+import { rosterGroups, rosterItems } from './accountsRoster'
 import './settings.css'
 import SettingsGhost from './SettingsGhost'
 import { WARM, warmSource } from './settingsPrefetch'
@@ -342,7 +342,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
 
   // What the table draws: the dropped order while its save is in flight, else the server's —
   // grouped the way the Monthly update walks it, and the hook's items derived from exactly those
-  // rows every render (src/utils/accounts.ts).
+  // rows every render (./accountsRoster.ts).
   const shown = pendingOrder ?? accounts
   const groups = rosterGroups(shown)
   const items = rosterItems(groups)
