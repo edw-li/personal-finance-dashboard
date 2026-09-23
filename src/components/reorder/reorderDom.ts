@@ -9,12 +9,14 @@ import type { Extent } from './reorderMath'
 export type Scroller = HTMLElement | null
 
 /** The nearest ancestor that actually scrolls vertically (the Settings tables' 420px
- *  `.settings-scroll`), or null when the page does. */
+ *  `.settings-scroll`), or null when the page does. More than 1px of overhang: a box with only
+ *  `overflow-x: auto` (.holdings-scroll) computes `overflow-y: auto` too, and display scaling can
+ *  round its content 1px taller than its box — that box must not steal the page's auto-scroll. */
 export function scrollParentOf(element: Element | null | undefined): Scroller {
   let node = element?.parentElement ?? null
   while (node !== null && node !== document.body && node !== document.documentElement) {
     const overflowY = getComputedStyle(node).overflowY
-    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) {
+    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight - node.clientHeight > 1) {
       return node
     }
     node = node.parentElement

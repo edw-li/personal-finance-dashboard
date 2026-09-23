@@ -46,6 +46,18 @@ describe('scrollParentOf', () => {
     expect(scrollParentOf(document.getElementById('row'))).toBeNull()
   })
 
+  it('a 1px overhang is rounding, not a scroller — the page keeps its auto-scroll', () => {
+    // A box with only overflow-x: auto (.holdings-scroll, creditcards/matrix.css) computes
+    // overflow-y: auto too, and Windows display scaling can round its content 1px taller.
+    document.body.innerHTML =
+      '<div id="scroller" style="overflow-y: auto"><table><tbody><tr id="row"><td>x</td></tr></tbody></table></div>'
+    const scroller = document.getElementById('scroller') as HTMLElement
+    setBox(scroller, { scrollHeight: 421, clientHeight: 420 })
+    expect(scrollParentOf(document.getElementById('row'))).toBeNull()
+    setBox(scroller, { scrollHeight: 422, clientHeight: 420 })
+    expect(scrollParentOf(document.getElementById('row'))).toBe(scroller)
+  })
+
   it('an element with no scrolling ancestor answers the page', () => {
     document.body.innerHTML = '<ul><li id="item">x</li></ul>'
     expect(scrollParentOf(document.getElementById('item'))).toBeNull()
