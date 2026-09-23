@@ -581,13 +581,17 @@ def counting_build(monkeypatch, name: str, *, fail_first: str | None = None, han
     A fresh exception per raise: one reused from this closure would keep its traceback, the
     builder's frame and so the flight alive for the whole test."""
     real = getattr(read_cache, name)
-    state = {"calls": 0, "first_task": None, "first_started": asyncio.Event()}
+    state = {"calls": 0, "first_task": None, "first_started": asyncio.Event(), "flights": []}
 
     async def build(session, **kwargs):
         state["calls"] += 1
         first = state["calls"] == 1
         if first:
             state["first_task"] = asyncio.current_task()
+            state["flights"] = [
+                *read_cache._BOOK_BUILDS.values(),
+                *read_cache._SAVINGS_BUILDS.values(),
+            ]
             state["first_started"].set()
             if hang_first:
                 await asyncio.sleep(3600)  # until the test cancels this task
@@ -642,6 +646,11 @@ async def test_when_the_builder_fails_its_waiters_still_get_a_book(db, engine, m
     assert len(books) == 2 and books[0] is books[1]  # the waiters rebuilt once, together
     assert state["calls"] == 2 and len(REVIEW_BOOKS) == 1
     assert not [message for message in reported if "never retrieved" in message]
+    # The waiters were woken by a fresh exception of their own: re-raising the builder's
+    # object in another request would rewrite its traceback while that request logs it.
+    (flight,) = state["flights"]
+    assert isinstance(flight.exception(), read_cache._BuildAbandoned)
+    assert flight.exception() is not failures[0]
 
 
 async def test_a_lone_failed_build_raises_to_its_caller_and_logs_nothing(db, monkeypatch):

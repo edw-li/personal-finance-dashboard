@@ -150,8 +150,11 @@ def _has_pending_changes(db: AsyncSession) -> bool:
 
 
 class _BuildAbandoned(Exception):
-    """What a build's waiters see when the builder was cancelled. Never CancelledError: in a
-    waiter that would read as the waiter's OWN cancellation."""
+    """What a build's waiters see when the builder failed or was cancelled — always a fresh
+    one. Never the builder's own exception: raising that object again in another request
+    rewrites its traceback while the builder's request may be logging it (its 500 would show
+    another request's frames). Never CancelledError: in a waiter that reads as the waiter's
+    OWN cancellation."""
 
 
 async def _memoised[K: Hashable, V](
@@ -186,11 +189,14 @@ async def _memoised[K: Hashable, V](
     try:
         value = await build()
         stable = await _fingerprint(db, statement) == before
-    except BaseException as error:
-        flight.set_exception(error if isinstance(error, Exception) else _BuildAbandoned())
+    except BaseException:
+        flight.set_exception(_BuildAbandoned())  # the builder re-raises its own, untouched
         flight.exception()  # retrieved: no "never retrieved" log when nobody was waiting
         raise
     finally:
+        # A FINISHED build must never stay in the in-flight map: awaiting a finished future
+        # does not yield, so a waiter's `continue` above would spin on it forever. Removed
+        # here on every path — success, failure, cancellation — before the flight settles.
         if builds.get(key) is flight:
             del builds[key]
     if stable:
