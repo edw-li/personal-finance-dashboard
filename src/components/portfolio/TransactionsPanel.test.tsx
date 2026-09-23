@@ -21,7 +21,12 @@ vi.mock('../../api/portfolio', () => ({
   // The replay-order PUT (lane R1). Every reorder test answers it or leaves it pending.
   reorderTransactions: vi.fn(),
 }))
-import { createTransaction, reorderTransactions, updateTransaction } from '../../api/portfolio'
+import {
+  createTransaction,
+  deleteTransaction,
+  reorderTransactions,
+  updateTransaction,
+} from '../../api/portfolio'
 
 afterEach(cleanup)
 // Call counts are per-test: the "not called" assertion below would otherwise see the
@@ -303,6 +308,16 @@ describe('TransactionsPanel entry session', () => {
     fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
   }
 
+  /** The panel counts a save until its whole chain has run, and the cue it sets can reach the
+   *  screen first (the focus the save hands to the next lot flushes a render of its own), so the
+   *  buttons a save shuts open a beat after `onChanged` is seen. A click on a disabled button is
+   *  dropped — wait for this one to be live. */
+  async function enabledButton(name: string | RegExp): Promise<HTMLButtonElement> {
+    const button = () => screen.getByRole('button', { name }) as HTMLButtonElement
+    await waitFor(() => expect(button().disabled).toBe(false))
+    return button()
+  }
+
   it('keeps security/account/type/date after an add, clears the numbers, focuses shares', async () => {
     const onChanged = vi.fn()
     render(<TransactionsPanel securities={securities} transactions={[]} onChanged={onChanged} />)
@@ -432,7 +447,7 @@ describe('TransactionsPanel entry session', () => {
     vi.mocked(createTransaction).mockRejectedValueOnce(new Error('network'))
     change(screen.getByLabelText(/shares/i), '3')
     change(screen.getByLabelText(/price/i), '151')
-    fireEvent.click(screen.getByRole('button', { name: /add another/i }))
+    fireEvent.click(await enabledButton(/add another/i))
     await waitFor(() => expect(screen.getByText('Save failed')).toBeTruthy())
     // Nothing reached the ledger, so nothing is cleared and nothing is re-narrated: the cue
     // still describes the form truthfully (the kept context is the FIRST add's and is still
@@ -483,7 +498,7 @@ describe('TransactionsPanel entry session', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(screen.getByRole('button', { name: /add another/i })).toBeTruthy()
     // Entering edit mode ends the create session: the form now describes ONE stored row.
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.click(await enabledButton('Edit'))
     expect(screen.queryByText(/kept/i)).toBeNull()
     change(screen.getByLabelText(/shares/i), '11')
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
@@ -1077,6 +1092,29 @@ describe('TransactionsPanel reorder — Undo (spec §5)', () => {
     await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
   })
 
+  // CardsPanel's and CategoriesPanel's rule: the delete toast's Undo is a request of the list like
+  // any other, so no drop races the row coming back.
+  it("counts the delete toast's Undo — the grips wait while the row is re-created", async () => {
+    // Set here: reorderHooks' restoreAllMocks takes back the module factory's answer.
+    vi.mocked(deleteTransaction).mockResolvedValue(undefined)
+    let answer: (value: TransactionOut) => void = () => {}
+    vi.mocked(createTransaction).mockReturnValueOnce(
+      new Promise<TransactionOut>((resolve) => {
+        answer = resolve
+      }),
+    )
+    const { onChanged } = renderLedger()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this sell' }))
+    await screen.findByText('Deleted the NVDA sell')
+    await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    // The row is on its way back: no drop may start until it has landed.
+    expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBe('true')
+    await act(async () => answer(nvdaSell))
+    await waitFor(() => expect(grip(VOO_BUY).getAttribute('aria-disabled')).toBeNull())
+    expect(onChanged).toHaveBeenCalledTimes(2)
+  })
+
   it('never calls a restore that succeeded a failure — a throw after it escapes the failure path', async () => {
     const escaped = vi.fn()
     process.on('unhandledRejection', escaped)
@@ -1211,7 +1249,7 @@ describe('TransactionsPanel reorder — a save that fails (spec §5, §8.1, §8.
     }
   })
 
-  it('has the page reload before it reads the answer — a save whose answer has no transactions still reloads', async () => {
+  it('has the page reload before it reads the answer — a save with a malformed answer still reloads', async () => {
     const escaped = vi.fn()
     process.on('unhandledRejection', escaped)
     try {

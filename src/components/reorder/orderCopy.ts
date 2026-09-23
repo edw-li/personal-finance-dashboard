@@ -15,8 +15,15 @@ export function clause(text: string): string {
   return text.replace(/[.\s]+$/, '')
 }
 
+/** A save refused because the list changed elsewhere (a 409, spec §8.3): the server's own sentence,
+ *  verbatim — it says what changed and that nothing was moved — or, when the answer brought none,
+ *  the house's reason for it ("HTTP 409"), never an empty toast. */
+export function staleListText(err: ApiError): string {
+  return err.message !== '' ? err.message : errorDetail(err)
+}
+
 /** A drop the server did not take, said once the rows have snapped back. `reason` is the house's
- *  `errorDetail`; a stale-list 409 never reaches this — each list shows that sentence alone. */
+ *  `errorDetail`; a stale-list 409 never reaches this — each list shows `staleListText` alone. */
 export function orderSaveFailed(reason: string): string {
   return `Couldn't save the new order — ${clause(reason)}. The list is back to how it was.`
 }

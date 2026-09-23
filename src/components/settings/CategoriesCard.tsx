@@ -11,7 +11,13 @@ import {
 import type { CategoryKind, CategoryOut } from '../../types/api'
 import InfoHint from '../InfoHint'
 import DragHandle from '../reorder/DragHandle'
-import { ORDER_RESTORED, movedToast, orderSaveFailed, undoFailureText } from '../reorder/orderCopy'
+import {
+  ORDER_RESTORED,
+  movedToast,
+  orderSaveFailed,
+  staleListText,
+  undoFailureText,
+} from '../reorder/orderCopy'
 import { ReorderInstructions, ReorderLiveRegion } from '../reorder/ReorderStatus'
 import { useReorder } from '../reorder/useReorder'
 import type { UseReorder } from '../reorder/useReorder'
@@ -217,7 +223,7 @@ export default function CategoriesCard() {
           // write committed. Either way the rows drawn next are the server's.
           toast.error(
             err instanceof ApiError && err.status === 409
-              ? err.message
+              ? staleListText(err)
               : orderSaveFailed(errorDetail(err)),
           )
           return load()
