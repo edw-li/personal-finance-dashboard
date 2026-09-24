@@ -44,9 +44,9 @@ export default function ReviewChanges({ accounts, categories, balances, amounts,
    *  against. Null before the month's first load has landed. */
   saved: { balances: Record<number, string>; amounts: Record<number, string> } | null
   month: string; matrix: SpendingMatrix | null; monthExisted: boolean
-  /** The category ids this save will write a spending row for — the page's `sentCategories`
-   *  with `willWriteSpending` folded in (empty when the leg is skipped). A category outside it
-   *  is an untouched "0.00" seed, and a seed is not a figure to check against a median (bug F2). */
+  /** The category ids the month records a spending row for — the page's `sentCategories` with
+   *  `spendingPresent` folded in (empty for a month with no spending at all). A category outside
+   *  it is an untouched "0.00" seed, and a seed is not a figure to check against a median (bug F2). */
   recordedCategories: ReadonlySet<number>
   balanceStory: BalanceStory
 }) {

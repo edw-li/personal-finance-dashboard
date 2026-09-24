@@ -412,8 +412,7 @@ function MonthlyUpdateWizard() {
    * Does this month have a balances snapshot? /coverage answers it, and the month whose seed is
    * ON SCREEN answers for itself when that month exists — the wizard is holding its payload, so
    * a coverage feed that has not caught up (a just-saved month, a failed GET) cannot un-cover it.
-   * Both readers of this question — the step-survival rule and the "Start {month}" button — go
-   * through here, so they can never disagree.
+   * "Record {Nov 1} balances early" asks it about next month (2026-09-23 spec §M3).
    */
   const hasBalances = (m: string) =>
     coveredMonths.has(m) || (monthExisted && seeded !== null && seeded.month === m)
@@ -570,10 +569,11 @@ function MonthlyUpdateWizard() {
       // under the caret on a two-person book. Still absence-tolerant — a failure falls back to
       // the flat walk rather than refusing the month.
       fetchHousehold().catch((): HouseholdOut | null => null),
-      // …and so is /coverage: it decides which step a month switch may keep (the step-survival
-      // rule below) and whether the "Start {month}" button is offered, so a late answer made
-      // both scheduling-dependent. Gating it costs nothing — the GET is deduped with the scope
-      // row's — and a failure still degrades to the empty set.
+      // …and so is /coverage: it says what is due (the strip, the partial banner, the Confirm,
+      // "Next" — 2026-09-23 spec §M1, §M2), whether next month may be recorded early (§M3) and
+      // whether the story's next 1st exists (§M5), so a late answer would move all of them under
+      // the reader. Gating it costs nothing — the GET is deduped with the scope row's — and a
+      // failure still degrades to "nothing known to be due".
       fetchCoverage().catch((): CoverageOut | null => null),
     ])
       .then(([accountList, categoryList, thisMonth, priorMonth, spendMonth, monthReview, householdData, coverageData]) => {
