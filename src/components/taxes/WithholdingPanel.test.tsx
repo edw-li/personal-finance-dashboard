@@ -1111,6 +1111,30 @@ describe('WithholdingPanel — your inputs vs your records (2026-09-23 spec §W4
     expect(tile('Projected balance').textContent).toContain('$18,870.20')
   })
 
+  it('says why an RSU row matched at today’s quote still differs: the month’s reference close (review finding 3)', async () => {
+    const base = reconciled()
+    const rows = base.reconciliation!.rows.map((row) =>
+      row.key === 'rsu'
+        ? { ...row, typed: '171235.24', difference: '0.00', tax_effect: '0.00', flagged: true, apply: null }
+        : row,
+    )
+    vi.mocked(fetchWithholding).mockResolvedValue({
+      ...base,
+      reconciliation: { ...base.reconciliation!, rows },
+    })
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('Your inputs vs your records')
+    const rsu = reconRow('Edward', 'RSU income')
+    expect(
+      within(rsu).getByText(
+        'flag judged at the Sep 1 close ($217.44 a share), beyond ±$4,610 of the unvested vests',
+      ),
+    ).toBeTruthy()
+    // Not "no change in tax" beside a "differs" badge: the figures shown are on today's quote.
+    expect(within(rsu).getByText('no change at today’s quote')).toBeTruthy()
+    expect(within(rsu).queryByText('no change in tax')).toBeNull()
+  })
+
   it('groups the rows by person, each with both sides and what they are built from', async () => {
     vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
     render(<WithholdingPanel year={2026} />)

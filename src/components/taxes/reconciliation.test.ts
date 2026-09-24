@@ -3,6 +3,7 @@ import type { Reconciliation, ReconciliationRow } from '../../types/api'
 import {
   differenceText,
   effectText,
+  flagDetail,
   leadLine,
   matchedFace,
   projectedDetail,
@@ -110,6 +111,40 @@ describe('reconciliation copy (2026-09-23 spec §W4)', () => {
     expect(effectText('18265.36')).toBe('≈ +$18,265 tax')
     expect(effectText('-863.00')).toBe('≈ −$863 tax')
     expect(effectText('0.00')).toBe('no change in tax')
+    // Under half a dollar rounds to nothing: "≈ +$0 tax" would say a thing and its opposite.
+    expect(effectText('0.40')).toBe('no change in tax')
+    expect(effectText('-0.49')).toBe('no change in tax')
+    // A row flagged at the month's reference close can show no change at today's quote.
+    expect(effectText('0.00', true)).toBe('no change at today’s quote')
+  })
+
+  it('says why an RSU row is flagged: the month’s reference close and its band (review finding 3)', () => {
+    const rsu = row({
+      key: 'rsu',
+      source: 'comp',
+      typed: '171235.24',
+      projected: '171235.24',
+      difference: '0.00',
+      tax_effect: '0.00',
+      flagged: true,
+      facts: {
+        ...FACTS,
+        future_vest_income: '48520.44',
+        quote_tolerance: '4609.73',
+        reference_price: '217.4400',
+        reference_date: '2026-09-01',
+      },
+    })
+    expect(flagDetail(rsu)).toBe(
+      'flag judged at the Sep 1 close ($217.44 a share), beyond ±$4,610 of the unvested vests',
+    )
+    // No reference close on file: the flag used the latest quote.
+    expect(flagDetail(row({ ...rsu, facts: { ...rsu.facts, reference_date: null } }))).toBe(
+      'flag judged at the latest quote ($217.44 a share), beyond ±$4,610 of the unvested vests',
+    )
+    // Quiet when there is nothing to explain: not flagged, or not the RSU row.
+    expect(flagDetail({ ...rsu, flagged: false })).toBeNull()
+    expect(flagDetail(row())).toBeNull()
   })
 
   it('leads with the count and the reference-price clause only when an RSU row is flagged', () => {
@@ -139,6 +174,11 @@ describe('reconciliation copy (2026-09-23 spec §W4)', () => {
       tone: 'negative',
     })
     expect(matchedFace('0.00')).toEqual({
+      text: 'Balance if they matched your records: even',
+      tone: 'neutral',
+    })
+    // Under half a dollar is even, never "refund ≈ $0".
+    expect(matchedFace('-0.30')).toEqual({
       text: 'Balance if they matched your records: even',
       tone: 'neutral',
     })

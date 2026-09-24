@@ -44,6 +44,22 @@ const SOURCE_WORDS: Record<ReconciliationRow['source'], string> = {
   espp: 'ESPP',
 }
 
+/**
+ * Why a flagged RSU row is flagged (review finding 3). The flag is stateless (§W3): the
+ * not-yet-vested vests are priced at the close on or before the 1st of the month, and only a
+ * difference beyond ±10 % of that unvested income counts — while the figures shown are on
+ * today's quote. So a row matched at today's quote can still differ at the reference close, and
+ * without this sentence it would read "differs" beside a $0.00 difference. Null when there is
+ * nothing to explain.
+ */
+export function flagDetail(row: ReconciliationRow): string | null {
+  const { reference_price: price, reference_date: day, quote_tolerance: band } = row.facts
+  if (row.key !== 'rsu' || !row.flagged || price === null) return null
+  const where = day === null ? 'the latest quote' : `the ${dayLabel(day)} close`
+  const beyond = band === null ? '' : `, beyond ±${wholeDollars(band)} of the unvested vests`
+  return `flag judged at ${where} (${formatCurrency(price)} a share)${beyond}`
+}
+
 /** "Paycheck projects" — which of the app's own records the figure comes from. */
 export function projectsWord(row: ReconciliationRow): string {
   return `${SOURCE_WORDS[row.source]} projects`
@@ -69,10 +85,13 @@ export function differenceText(value: string): string {
   return `${amount > 0 ? '+' : '−'}${formatCurrency(Math.abs(amount))}`
 }
 
-/** "≈ +$18,265 tax" — what matching this line would do to the year's liability. */
-export function effectText(value: string): string {
+/** "≈ +$18,265 tax" — what matching this line would do to the year's liability. Under half a
+ *  dollar rounds to no change ("≈ +$0 tax" would say a thing and its opposite). `atReference`:
+ *  a row flagged at the month's reference close (the RSU row) whose figures, on today's quote,
+ *  match — it says so rather than "no change" beside a "differs" badge. */
+export function effectText(value: string, atReference = false): string {
   const amount = Number(value)
-  if (amount === 0) return 'no change in tax'
+  if (Math.round(Math.abs(amount)) === 0) return atReference ? 'no change at today’s quote' : 'no change in tax'
   return `≈ ${amount > 0 ? '+' : '−'}${wholeDollars(amount)} tax`
 }
 
@@ -97,7 +116,8 @@ export function matchedFace(value: string | null): { text: string; tone: Tone } 
   if (value === null) return null
   const amount = Number(value)
   const lead = 'Balance if they matched your records:'
-  if (amount === 0) return { text: `${lead} even`, tone: 'neutral' }
+  // Under half a dollar is even — "refund ≈ $0" says nothing a reader can use.
+  if (Math.round(Math.abs(amount)) === 0) return { text: `${lead} even`, tone: 'neutral' }
   return amount > 0
     ? { text: `${lead} owe ≈ ${wholeDollars(amount)}`, tone: 'negative' }
     : { text: `${lead} refund ≈ ${wholeDollars(amount)}`, tone: 'positive' }

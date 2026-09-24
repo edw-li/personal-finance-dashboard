@@ -19,6 +19,7 @@ import {
   dayLabel,
   differenceText,
   effectText,
+  flagDetail,
   leadLine,
   matchedFace,
   projectedDetail,
@@ -259,6 +260,9 @@ function ReconciliationStrip({
                     {group.rows.map((row) => {
                       const typedNote = typedDetail(row)
                       const projectedNote = projectedDetail(row, year)
+                      // Why a flagged RSU row differs (review finding 3): judged at the month's
+                      // reference close, while the figures are on today's quote.
+                      const flagNote = flagDetail(row)
                       const whose = row.person_name ?? 'you'
                       return (
                         <tr
@@ -281,9 +285,10 @@ function ReconciliationStrip({
                             {projectedNote !== null && (
                               <span className="recon-detail">{projectedNote}</span>
                             )}
+                            {flagNote !== null && <span className="recon-detail">{flagNote}</span>}
                           </td>
                           <td className="num">{differenceText(row.difference)}</td>
-                          <td className="num">{effectText(row.tax_effect)}</td>
+                          <td className="num">{effectText(row.tax_effect, flagNote !== null)}</td>
                           <td className="recon-actions">
                             {row.apply !== null && onApply !== undefined && (
                               <button
