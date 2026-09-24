@@ -6,7 +6,8 @@ import { currentYear, daysBetween } from './months'
 // covers ("September: Sep 1 → Oct 1"). Dates are ISO strings, split — never `new Date(iso)`.
 
 const SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const LONG = [
+/** The month names every time surface speaks — ONE list (utils/timeWords.ts reads it too). */
+export const LONG_MONTHS: readonly string[] = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ]
@@ -17,8 +18,9 @@ const LONG = [
  *  `provisional` as final. */
 type Dated = Pick<SnapshotStateOut, 'month'> & Partial<Pick<SnapshotStateOut, 'as_of' | 'provisional'>>
 
-/** 'Oct 1' — with ', 2025' outside the server's current year. */
-function dayLabel(iso: string): string {
+/** 'Oct 1' — with ', 2025' outside the server's current year. The one day label: formatAsOf and
+ *  utils/timeWords.ts's dayName both spell a day through it. */
+export function dayLabel(iso: string): string {
   const [year, month, day] = iso.slice(0, 10).split('-').map(Number)
   const label = `${SHORT[month - 1]} ${day}`
   return year === currentYear() ? label : `${label}, ${year}`
@@ -29,14 +31,31 @@ export function formatAsOf(state: Dated): string {
   return state.as_of == null ? 'date unknown' : dayLabel(state.as_of)
 }
 
+/** "Sep 22 · provisional" / "Oct 1" / "date unknown · provisional" — the day and its standing,
+ *  for a sentence that brings its own preposition ("to Sep 22 · provisional"). */
+export function dayPhrase(state: Dated): string {
+  return `${formatAsOf(state)}${state.provisional ? ' · provisional' : ''}`
+}
+
 /** "as of Oct 1" / "as of Sep 22 · provisional" — "date unknown · provisional" without a date
  *  (only a snapshot still ahead of its month can lack one). */
 export function asOfPhrase(state: Dated): string {
-  const flag = state.provisional ? ' · provisional' : ''
-  return state.as_of == null ? `date unknown${flag}` : `as of ${formatAsOf(state)}${flag}`
+  return state.as_of == null ? dayPhrase(state) : `as of ${dayPhrase(state)}`
 }
 
 const monthIndex = (iso: string) => Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7)) - 1
+
+/** Whether the change from `previous` to `current` is ONE month's story — both final, the monthly
+ *  grain, consecutive months — which changePhrase words "September: Sep 1 → Oct 1" and a story
+ *  note may follow; anything else is a "since …" span. Ask this rather than parsing the phrase. */
+export function isMonthStory(
+  previous: Dated | null | undefined,
+  current: Dated,
+  { period = 'month' }: { period?: 'month' | 'quarter' } = {},
+): boolean {
+  if (previous == null || period === 'quarter' || previous.provisional || current.provisional) return false
+  return monthIndex(current.month) - monthIndex(previous.month) === 1
+}
 
 /** What a change covers (spec §0.4(d)): "September: Sep 1 → Oct 1" (both final, consecutive —
  *  the user's own wording); "since Sep 1 · 21 days" (the current one provisional); "since Sep 22
@@ -56,9 +75,10 @@ export function changePhrase(
   const span = days === null ? '' : ` · ${days} ${days === 1 ? 'day' : 'days'}`
   if (previous.provisional) return `${since}${span} (${dayLabel(previous.month)} balances stayed provisional)`
   if (current.provisional) return `${since}${span}`
-  const gap = monthIndex(current.month) - monthIndex(previous.month)
-  if (gap === 1) return `${LONG[monthIndex(previous.month) % 12]}: ${formatAsOf(previous)} → ${formatAsOf(current)}`
-  return `${since} · ${gap} months`
+  if (isMonthStory(previous, current)) {
+    return `${LONG_MONTHS[monthIndex(previous.month) % 12]}: ${formatAsOf(previous)} → ${formatAsOf(current)}`
+  }
+  return `${since} · ${monthIndex(current.month) - monthIndex(previous.month)} months`
 }
 
 /** Why a point is provisional, in the one sentence every chart shares (2026-09-23 spec §T1, §T7,

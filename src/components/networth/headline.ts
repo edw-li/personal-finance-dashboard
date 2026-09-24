@@ -1,5 +1,5 @@
 import type { FlowsPartOut, NetWorthSummary } from '../../types/api'
-import { changePhrase, formatAsOf, storyNote } from '../../utils/asOf'
+import { changePhrase, formatAsOf, isMonthStory, storyNote } from '../../utils/asOf'
 import { formatCurrency, formatPct } from '../../utils/format'
 import { dayName } from '../../utils/timeWords'
 import { summaryState } from './snapshotStates'
@@ -30,18 +30,17 @@ export function netWorthHeadline(summary: Summary, flowsDue?: readonly FlowsPart
       ? `Net worth — ${dayName(current.month)} balances, date unknown`
       : `Net worth — as of ${formatAsOf(current)}`
   const previous = summary.previous ?? null
-  const phrase = changePhrase(previous, current, { period: summary.period ?? 'month' })
-  // "since …" reads on from the figures; a month's own span stands apart after a dot.
-  const since = phrase !== null && phrase.startsWith('since')
-  const span = phrase === null ? '' : since ? ` ${phrase}` : ` · ${phrase}`
+  const period = { period: summary.period ?? 'month' }
+  const phrase = changePhrase(previous, current, period)
+  // A month's own story stands apart after a dot; "since …" reads on from the figures.
+  const monthStory = isMonthStory(previous, current, period)
+  const span = phrase === null ? '' : monthStory ? ` · ${phrase}` : ` ${phrase}`
   // The month the change covers is the previous snapshot's: Sep 1 → Oct 1 is September's story,
   // incomplete while September's spending is listed as due (§0.4(d) storyNote). Only a month's
   // story carries the note (§T1): a "since …" span — balances typed early, a gap of months, a
   // previous snapshot that stayed provisional — is not one month's story.
   const story =
-    previous === null || phrase === null || since
-      ? ''
-      : storyNote(flowsDue?.find((flows) => flows.month === previous.month))
+    previous !== null && monthStory ? storyNote(flowsDue?.find((flows) => flows.month === previous.month)) : ''
   const delta =
     summary.mom_delta != null && summary.mom_pct != null
       ? `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)})${span}${story}`

@@ -11,7 +11,7 @@ import type {
   NetWorthTimeseries,
   SpendingYearly,
 } from '../../types/api'
-import { asOfPhrase, formatAsOf } from '../../utils/asOf'
+import { dayPhrase, formatAsOf } from '../../utils/asOf'
 import { formatMonth } from '../../utils/format'
 import { dayName } from '../../utils/timeWords'
 import { currentColumn, currentSnapshotMonth, snapshotAt, type Dated } from '../networth/snapshotStates'
@@ -69,8 +69,8 @@ export function windowWords(window: YtdWindow): string {
     : `${short(window.from)}–${short(window.to)}`
 }
 
-/** "(to Sep 22 · provisional)" — the through-date in asOfPhrase's words. */
-const toWords = (state: Dated) => `(to ${asOfPhrase(state).replace(/^as of /, '')})`
+/** "(to Sep 22 · provisional)" — the through-date and its standing (asOf.ts's dayPhrase). */
+const toWords = (state: Dated) => `(to ${dayPhrase(state)})`
 
 /** The net-worth row (2026-09-23 spec §T2): from the Jan 1 balances — the snapshot keyed
  *  {year}-01-01, whatever its state — to the CURRENT snapshot, the server's answer (§0.4(b):
