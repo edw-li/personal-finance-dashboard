@@ -198,6 +198,29 @@ async def test_the_confirm_body_completes_the_month_and_its_undo_takes_it_back(
     assert await september_spending(db) == "partial"
 
 
+async def test_a_confirm_sent_during_the_month_does_not_count_the_same_one_after_it_does(
+    auth_client, db, monkeypatch
+):
+    """Clause (d) counts a confirmation made once the month has ended. The wizard's Confirm body
+    sent on Sep 30 leaves September partial on Oct 3; the identical body sent on Oct 3 — the tick
+    already stored, only the request id new — completes it."""
+    await september_with_rent_saved_sep_7(db)
+    confirm = {"balances": False, "spending": True, "take_home": False}
+    on(monkeypatch, date(2026, 9, 30))
+    early = await auth_client.put(
+        f"{MR}/{SEP}", json=wizard(await revision(auth_client, SEP), reviewed=confirm)
+    )
+    assert early.status_code == 200, early.text
+    on(monkeypatch, date(2026, 10, 3))
+    assert await september_spending(db) == "partial"
+    confirmed = await auth_client.put(
+        f"{MR}/{SEP}", json=wizard(await revision(auth_client, SEP), reviewed=confirm)
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["batch_id"] is not None
+    assert await september_spending(db) == "entered"
+
+
 async def test_a_no_leg_review_save_with_the_spending_tick_completes_it(
     auth_client, db, monkeypatch
 ):
