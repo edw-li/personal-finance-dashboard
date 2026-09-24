@@ -204,3 +204,51 @@ async def test_a_spending_only_put_creates_no_snapshot(auth_client, db, monkeypa
     assert (await db.execute(select(func.count()).select_from(NetWorthSnapshot))).scalar_one() == 0
     tables = set((await db.execute(select(ChangeLog.table_name))).scalars())
     assert "net_worth_snapshots" not in tables
+
+
+async def test_a_batch_closed_legacy_month_recorded_early_stays_closed(
+    auth_client, db, monkeypatch
+):
+    """Review minor 1: a legacy month recorded early can be batch-closed (no blocker before the
+    adoption month). Closed, it is no longer `unreviewed_history` — but it must still never be
+    restamped (the new date would move its certified digest: `needs_review`) nor blocked."""
+    july = date(2026, 7, 1)
+    account_id = await seed(db, month=july, recorded_on=date(2026, 6, 28))
+    category = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    db.add(category)
+    await db.flush()
+    db.add_all(
+        [
+            MonthlySpending(month=july, category_id=category.id, amount=Decimal("2000.00")),
+            MonthlyCashflow(month=july, net_pay=Decimal("6000.00")),
+        ]
+    )
+    await db.commit()
+    await adopt_existing_history(db, date(2026, 9, 12))
+    await db.commit()
+    on(monkeypatch, date(2026, 10, 3))
+    legacy = (await auth_client.get(f"{MR}/months/{july}")).json()
+    assert (legacy["state"], legacy["blockers"]) == ("unreviewed_history", [])
+    closed = await auth_client.post(
+        f"{MR}/batch-close",
+        json={
+            "months": [{"month": str(july), "expected_revision": legacy["input_revision"]}],
+            "reviewed": {"balances": True, "spending": True, "take_home": True},
+        },
+    )
+    assert closed.status_code == 200, closed.text
+    after_close = (await auth_client.get(f"{MR}/months/{july}")).json()
+    assert (after_close["state"], after_close["blockers"]) == ("closed", [])
+    saved = await auth_client.put(
+        f"{MR}/months/{july}",
+        json={
+            "expected_revision": after_close["input_revision"],
+            "balances": balances(account_id, "100.00"),
+            "reviewed": {"balances": True, "spending": True, "take_home": True},
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    standalone = await auth_client.put(f"{NW}/months/{july}", json=balances(account_id, "100.00"))
+    assert standalone.status_code == 200, standalone.text
+    assert await stored(db, july) == date(2026, 6, 28)
+    assert (await auth_client.get(f"{MR}/months/{july}")).json()["state"] == "closed"

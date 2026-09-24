@@ -43,6 +43,12 @@ def month_shift(month: date, offset: int) -> date:
     return date(index // 12, index % 12 + 1, 1)
 
 
+def before_adoption(month: date, adopted_on: date | None) -> bool:
+    """A month before the adoption month — history the review feature adopted (2026-09-23 spec
+    §K3 clause (a), §K4). One definition for the close blocker here and month_status."""
+    return adopted_on is not None and month < adopted_on.replace(day=1)
+
+
 @dataclass(frozen=True)
 class ReviewSnapshot:
     """A month_reviews row as an immutable value (2026-09-23 spec §P4). A CACHED book is shared
@@ -161,10 +167,12 @@ def classify_month(
         blockers.append("Future months remain in progress until their month begins.")
     if not has_balances:
         blockers.append("Enter balances before closing the month.")
-    elif recorded_early is not None and not is_legacy:
+    elif recorded_early is not None and not before_adoption(month, adopted_on):
         # K4 (2026-09-23 spec): opening balances recorded before the month began are provisional
         # and cannot be certified until saved again on or after the 1st (which restamps them).
-        # Legacy history is exempt — never restamped, never blocked — so it stays in the averages.
+        # History from before the adoption month is exempt — never blocked, and never restamped
+        # while legacy or closed — so it stays in the averages, and a batch-closed legacy month
+        # stays closed (review minor 1).
         blockers.append(early_balances_blocker(month, recorded_early, today))
     if not has_spending:
         blockers.append("Enter spending, including an explicit zero when appropriate.")
