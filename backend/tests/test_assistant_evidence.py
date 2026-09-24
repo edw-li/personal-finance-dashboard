@@ -444,11 +444,14 @@ async def test_silent_gap_after_partial_output_stops_without_concatenated_fallba
 
 async def test_transient_retry_keeps_the_same_first_output_allowance(monkeypatch):
     primary_attempts = 0
-    # first < allowance < first + second: the 503 lands inside the allowance, so the rung
-    # retries; the retry's first token lands past it, so the SAME allowance fails the rung over
-    # to the fallback. Both gaps are 0.4-0.5 s (they were 0.04 s — under three clock ticks).
-    first, allowance, second = 0.1, 0.6, 0.9
-    assert first < allowance < first + second
+    # max(first, second) < allowance < first + second. first < allowance: the 503 lands inside
+    # the allowance, so the rung retries. first + second > allowance: under the SAME allowance
+    # the retry's token is late, so the rung fails over. second < allowance: under a FRESH
+    # allowance per attempt (the regression this test exists for) that token would have been
+    # in time — without it the test cannot tell the two apart. Every gap is 0.2-0.4 s, 13-25
+    # ticks of this box's 15.6 ms loop clock (the old ones were 0.04-0.05 s, under three).
+    first, allowance, second = 0.4, 0.8, 0.6
+    assert max(first, second) < allowance < first + second
 
     async def responder(request):
         nonlocal primary_attempts
