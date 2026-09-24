@@ -2354,15 +2354,17 @@ function MonthlyUpdateWizard() {
               {reviewSaveNote(month, { ...reviewSend, balancesExist: monthExisted })}
             </p>
             <div className="wizard-footer">
-              <button className="button" onClick={() => setStep('spending')}>
-                Back
-              </button>
-              {/* T4: the only explanation of a disabled primary sits beside it, not 90px above. */}
+              {/* T4: the only explanation of a disabled primary sits right by it, not 90px above —
+                  on a line of its own over the buttons, and first, so it is read before them
+                  (batch 2 final verification D6: beside them it wrapped against "Save progress"). */}
               {closeBlocker !== null ? (
                 <p id={closeReasonId} className="drill-hint wizard-footer-note" role="status">{closeBlocker}</p>
               ) : !canRequestClose ? (
                 <p id={closeReasonId} className="drill-hint wizard-footer-note">Save progress at any time. To close, complete all three confirmations and enter spending and household take-home, including explicit zeros where appropriate.</p>
               ) : null}
+              <button className="button" onClick={() => setStep('spending')}>
+                Back
+              </button>
               <div className="wizard-footer-actions">
                 {/* accounts.length === 0 doubles as the "load succeeded" sentinel: after a
                     failed load both validity flags are vacuously true, and a meta-only PUT
