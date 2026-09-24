@@ -29,6 +29,10 @@ describe('partial periods', () => {
     expect(isPartialMonth('2028-02-01', '2028-02-29')).toBe(false)
     expect(isPartialMonth('2026-12-01', '2026-12-31')).toBe(false)
     expect(isPartialMonth('2026-12-01', '2026-12-30')).toBe(true)
+    // The old YYYY-MM spelling: budgetMonth's copy of this rule accepted it, and BudgetPanel's
+    // matrix months can still carry it (2026-09-23 spec §K1 made this the one rule).
+    expect(isPartialMonth('2028-02', '2028-02-28')).toBe(true)
+    expect(isPartialMonth('2028-02', '2028-02-29')).toBe(false)
   })
 
   it('names the reading for its tooltip', () => {

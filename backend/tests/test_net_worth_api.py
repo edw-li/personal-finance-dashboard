@@ -2,9 +2,11 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import ANY
 
+import pytest
 from sqlalchemy import func, select
 
 from app.models import Account, AccountBalance, ChangeLog, NetWorthSnapshot, Person
+from app.services import clock
 
 
 async def test_net_worth_requires_auth(client):
@@ -251,6 +253,12 @@ async def test_summary_empty_db(auth_client):
         "groups": [],
         "owner_totals": [],
         "period": "month",
+        # 2026-09-23 spec §K2, additive: nothing viewed, nothing to date or compare.
+        "as_of": None,
+        "recorded_on": None,
+        "provisional": False,
+        "previous": None,
+        "days_since_previous": None,
     }
 
 
@@ -267,6 +275,9 @@ async def test_get_month_missing_and_present(auth_client, db):
         "recorded_on": None,
         "notes": None,
         "balances": [],
+        # 2026-09-23 spec §K2, additive: no snapshot, no date.
+        "as_of": None,
+        "provisional": False,
     }
     assert (await auth_client.get("/api/v1/net-worth/months/2026-05-02")).status_code == 422
 
@@ -1205,3 +1216,128 @@ async def test_summary_quarterly_scopes_by_owner_like_the_monthly_one(auth_clien
     assert body["month"] is None
     assert body["groups"] == []
     assert body["period"] == "quarter"
+
+
+# --- 2026-09-23 spec §K2: dates, provisional, and the current snapshot ---
+
+SEP_23 = date(2026, 9, 23)
+
+
+@pytest.fixture
+def sep_23(monkeypatch):
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+
+
+async def _seed_time_model(db) -> None:
+    """Aug 1 and Sep 1 recorded on their 1st, Oct 1 recorded early (Sep 22), and a Dec 1
+    snapshot two months ahead that only an API client or an import could store. One joint
+    cash account: net worth 100 / 200 / 300 / 900."""
+    account = Account(name="Cash", slug="cash", group="cash", sort_order=1)
+    db.add(account)
+    await db.flush()
+    for month, recorded_on, balance in (
+        (date(2026, 8, 1), date(2026, 8, 1), "100.00"),
+        (date(2026, 9, 1), date(2026, 9, 1), "200.00"),
+        (date(2026, 10, 1), date(2026, 9, 22), "300.00"),
+        (date(2026, 12, 1), None, "900.00"),
+    ):
+        snapshot = NetWorthSnapshot(month=month, recorded_on=recorded_on)
+        db.add(snapshot)
+        await db.flush()
+        db.add(
+            AccountBalance(snapshot_id=snapshot.id, account_id=account.id, balance=Decimal(balance))
+        )
+    await db.commit()
+
+
+async def test_summary_defaults_to_the_current_snapshot_with_its_date(auth_client, db, sep_23):
+    await _seed_time_model(db)
+    body = (await auth_client.get("/api/v1/net-worth/summary")).json()
+    assert body["month"] == "2026-10-01"  # the early October snapshot, never December's
+    assert (body["as_of"], body["recorded_on"], body["provisional"]) == (
+        "2026-09-22",
+        "2026-09-22",
+        True,
+    )
+    assert body["previous"] == {
+        "month": "2026-09-01",
+        "as_of": "2026-09-01",
+        "recorded_on": "2026-09-01",
+        "provisional": False,
+    }
+    assert body["days_since_previous"] == 21
+    assert (body["net_worth"], body["mom_delta"]) == ("300.00", "100.00")  # arithmetic kept
+
+
+async def test_a_snapshot_two_months_ahead_answers_month_but_is_never_the_default(
+    auth_client, db, sep_23
+):
+    await _seed_time_model(db)
+    body = (await auth_client.get("/api/v1/net-worth/summary?month=2026-12-01")).json()
+    assert (body["month"], body["provisional"], body["as_of"]) == ("2026-12-01", True, None)
+    assert body["previous"]["month"] == "2026-10-01"
+    assert body["days_since_previous"] is None  # December's date is unknown
+
+
+async def test_month_param_and_owner_scope_carry_the_fields(auth_client, db, sep_23):
+    await _seed_time_model(db)
+    sep = (await auth_client.get("/api/v1/net-worth/summary?month=2026-09-01")).json()
+    assert (
+        sep["as_of"],
+        sep["provisional"],
+        sep["previous"]["month"],
+        sep["days_since_previous"],
+    ) == ("2026-09-01", False, "2026-08-01", 31)
+    joint = (await auth_client.get("/api/v1/net-worth/summary?owner=joint")).json()
+    assert (
+        joint["month"],
+        joint["as_of"],
+        joint["provisional"],
+        joint["days_since_previous"],
+    ) == ("2026-10-01", "2026-09-22", True, 21)
+
+
+async def test_quarterly_summary_compares_quarter_ends_and_skips_one_too_far_ahead(
+    auth_client, db, sep_23
+):
+    account = Account(name="Cash", slug="cash", group="cash", sort_order=1)
+    db.add(account)
+    await db.flush()
+    for month in (date(2026, 6, 1), date(2026, 9, 1), date(2026, 12, 1)):
+        snapshot = NetWorthSnapshot(month=month, recorded_on=None if month.month == 12 else month)
+        db.add(snapshot)
+        await db.flush()
+        db.add(
+            AccountBalance(snapshot_id=snapshot.id, account_id=account.id, balance=Decimal("1.00"))
+        )
+    await db.commit()
+    body = (await auth_client.get("/api/v1/net-worth/summary?granularity=quarterly")).json()
+    assert (body["month"], body["previous"]["month"], body["days_since_previous"]) == (
+        "2026-09-01",
+        "2026-06-01",
+        92,
+    )
+
+
+async def test_timeseries_lists_stay_aligned_after_the_quarterly_filter(auth_client, db, sep_23):
+    await _seed_time_model(db)
+    monthly = (await auth_client.get("/api/v1/net-worth/timeseries")).json()
+    assert monthly["months"] == ["2026-08-01", "2026-09-01", "2026-10-01", "2026-12-01"]
+    assert monthly["as_of"] == ["2026-08-01", "2026-09-01", "2026-09-22", None]
+    assert monthly["recorded_on"] == ["2026-08-01", "2026-09-01", "2026-09-22", None]
+    assert monthly["provisional"] == [False, False, True, True]
+    quarterly = (await auth_client.get("/api/v1/net-worth/timeseries?granularity=quarterly")).json()
+    assert quarterly["months"] == ["2026-09-01", "2026-12-01"]
+    assert (quarterly["as_of"], quarterly["provisional"]) == (["2026-09-01", None], [False, True])
+
+
+async def test_month_get_carries_as_of_and_provisional(auth_client, db, sep_23):
+    await _seed_time_model(db)
+    october = (await auth_client.get("/api/v1/net-worth/months/2026-10-01")).json()
+    assert (october["as_of"], october["provisional"], october["recorded_on"]) == (
+        "2026-09-22",
+        True,
+        "2026-09-22",
+    )
+    september = (await auth_client.get("/api/v1/net-worth/months/2026-09-01")).json()
+    assert (september["as_of"], september["provisional"]) == ("2026-09-01", False)

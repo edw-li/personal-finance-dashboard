@@ -17,7 +17,7 @@ itself a batch (source='undo') plus an `undo` run whose report links `undid`, wh
 """
 
 import logging
-from datetime import UTC, date, datetime
+from datetime import date
 from uuid import UUID, uuid4
 
 from fastapi import Depends, Request
@@ -28,6 +28,7 @@ from sqlalchemy.orm import aliased
 from app.api.deps import get_current_user
 from app.database import Base, get_db
 from app.models import ChangeLog, LifecycleRun, User
+from app.services import clock
 from app.services.month_review import REVIEW_INPUT_TABLES, lock_review_inputs
 from app.services.ordering import order_locks_for
 from app.services.snapshot import json_cell, json_row, parse_cell
@@ -134,7 +135,10 @@ class ChangeBatch:
         session — the single commit a logged route makes. Returns the batch id, or None
         when nothing was recorded (the client then offers no Undo)."""
         if self._rows:
-            stamp = datetime.now(UTC)
+            # The product day's instant, not merely now (2026-09-23 spec §K1): month_status reads
+            # "saved after the month ended" off this stamp, so under the dev override it must
+            # name the same day every other rule reads.
+            stamp = clock.change_stamp()
             for row in self._rows:
                 row.label = self.label
                 row.at = stamp

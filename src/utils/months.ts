@@ -1,5 +1,6 @@
 // ISO first-of-month strings ('2026-08-01') are the app's month currency. All math is
-// string/int based — Date objects only for "today", avoiding timezone edge cases.
+// string/int based — Date objects only for day arithmetic, never parsed from ISO strings.
+import { productTodayIso } from './productToday'
 
 export function addMonths(iso: string, delta: number): string {
   const [year, month] = iso.split('-').map(Number)
@@ -14,17 +15,30 @@ export function lastNMonths(anchorIso: string, n: number): string[] {
 }
 
 export function currentMonthIso(): string {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+  return `${todayIso().slice(0, 7)}-01`
 }
 
-// Local calendar date as 'YYYY-MM-DD' — the injectable "today" the attention strip's pure
-// math runs on. (MonthlyUpdatePage carries a private copy that predates this export.)
+// The product day, 'YYYY-MM-DD' — the SERVER's once any response has named it
+// (utils/productToday.ts, 2026-09-23 spec §K1), the browser's local day before that. The
+// injectable "today" the attention strip's pure math runs on, and the one every "has the 1st
+// arrived / has the month ended / which year is it" rule reads — never `new Date()`.
 export function todayIso(): string {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-    now.getDate(),
-  ).padStart(2, '0')}`
+  return productTodayIso()
+}
+
+export function currentYear(): number {
+  return Number(todayIso().slice(0, 4))
+}
+
+/** Whole days from `fromIso` to `toIso` (negative when `toIso` is earlier). Date.UTC day numbers,
+ *  never `new Date(isoString)`: a bare-date parse is UTC while a local-midnight subtraction drifts
+ *  an hour across DST, so only UTC days count exactly (2026-09-23 spec §0.4(d)). */
+export function daysBetween(fromIso: string, toIso: string): number {
+  const dayNumber = (iso: string) => {
+    const [year, month, day] = iso.slice(0, 10).split('-').map(Number)
+    return Date.UTC(year, month - 1, day) / 86_400_000
+  }
+  return dayNumber(toIso) - dayNumber(fromIso)
 }
 
 // Day-level ISO math for the calendar grid. The y/m/d Date CONSTRUCTOR is local and

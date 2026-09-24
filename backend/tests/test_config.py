@@ -1,6 +1,7 @@
 import pytest
 
 from app.config import DEV_ADMIN_PASSWORD, DEV_SECRET_KEY, Settings
+from app.services import clock
 
 
 def test_dev_secret_key_rejected_outside_dev():
@@ -57,3 +58,38 @@ def test_lifecycle_config_defaults(monkeypatch):
     # /data and sets DATA_DIR=/data in docker-compose.prod.yml.
     assert s.data_dir == "./data"
     assert s.snapshot_enabled is True
+
+
+# --- the dev-only clock override (2026-09-23 spec §K1) ---
+
+
+def test_a_process_environment_clock_override_is_refused_outside_dev(monkeypatch):
+    monkeypatch.setenv("PRODUCT_TODAY", "2026-10-01")
+    with pytest.raises(ValueError, match="PRODUCT_TODAY"):
+        Settings(
+            _env_file=None, environment="prod", secret_key="x" * 64, admin_password="real-password"
+        )
+
+
+def test_the_override_starts_in_dev_and_a_malformed_one_does_not(monkeypatch):
+    monkeypatch.setenv("PRODUCT_TODAY", "2026-10-01")
+    assert Settings(_env_file=None).environment == "dev"
+    monkeypatch.setenv("PRODUCT_TODAY", "Oct 1")
+    with pytest.raises(ValueError, match="PRODUCT_TODAY"):
+        Settings(_env_file=None)
+
+
+def test_a_product_today_line_in_the_env_file_changes_nothing(monkeypatch, tmp_path):
+    """backend/.env is not the process environment: the validator and the clock both ignore a
+    PRODUCT_TODAY there (spec §K1) — Settings declares no field for it."""
+    monkeypatch.delenv("PRODUCT_TODAY", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "PRODUCT_TODAY=2026-10-01\nENVIRONMENT=prod\n"
+        f"SECRET_KEY={'x' * 64}\nADMIN_PASSWORD=real-password\n"
+    )
+    settings = Settings(_env_file=env_file)
+    assert settings.environment == "prod"  # the file WAS read …
+    assert not hasattr(settings, "product_today")  # … but no field exists for the override
+    assert clock.product_today_override() is None  # and the clock never sees it

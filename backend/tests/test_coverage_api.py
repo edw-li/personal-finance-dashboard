@@ -2,6 +2,13 @@ from datetime import date
 from decimal import Decimal
 
 from app.models import MonthlyCashflow, MonthlySpending, NetWorthSnapshot, SpendingCategory
+from app.services import clock
+
+
+def on(monkeypatch, day: date) -> None:
+    """The missing windows end at the newest OVERDUE month (2026-09-23 spec §K3), so every
+    window here is read on a pinned day."""
+    monkeypatch.setattr(clock, "product_today", lambda: day)
 
 
 async def test_coverage_requires_auth(client):
@@ -24,10 +31,13 @@ async def test_coverage_is_empty_on_an_empty_book(auth_client):
         "adopted_on": None,
         "eligible_spending": [],
         "eligible_savings": [],
+        # 2026-09-23 spec §K3: nothing recorded, nothing due — `time` is null on an empty book.
+        "time": None,
     }
 
 
-async def test_coverage_lists_each_feed_ascending_and_deduplicated(auth_client, db):
+async def test_coverage_lists_each_feed_ascending_and_deduplicated(auth_client, db, monkeypatch):
+    on(monkeypatch, date(2026, 4, 20))  # March's flows are overdue: the window is Jan..Mar
     cat = SpendingCategory(name="Rent", slug="rent", sort_order=1)
     db.add(cat)
     await db.flush()
@@ -73,7 +83,10 @@ async def test_coverage_lists_each_feed_ascending_and_deduplicated(auth_client, 
     ]
 
 
-async def test_coverage_lists_entered_empty_and_missing_spending_months(auth_client, db):
+async def test_coverage_lists_entered_empty_and_missing_spending_months(
+    auth_client, db, monkeypatch
+):
+    on(monkeypatch, date(2026, 10, 20))  # September's flows are overdue: the window is Jul..Sep
     cat = SpendingCategory(name="Rent", slug="rent", sort_order=1)
     db.add(cat)
     await db.flush()
@@ -99,3 +112,80 @@ async def test_coverage_lists_entered_empty_and_missing_spending_months(auth_cli
         "spending": "2026-07-01",
         "net_pay": "2026-07-01",
     }
+
+
+async def test_an_early_next_month_snapshot_and_the_month_in_progress_miss_nothing(
+    auth_client, db, monkeypatch
+):
+    """The copy on Sep 23 (2026-09-23 spec §K3 acceptance): an early Oct snapshot and September
+    under way — `spending_missing` and `net_pay_missing` are empty (they were [Oct], [Sep, Oct])."""
+    on(monkeypatch, date(2026, 9, 23))
+    cat = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    db.add(cat)
+    await db.flush()
+    db.add_all(
+        [
+            NetWorthSnapshot(month=date(2026, 8, 1), recorded_on=date(2026, 8, 1)),
+            NetWorthSnapshot(month=date(2026, 9, 1), recorded_on=date(2026, 9, 1)),
+            NetWorthSnapshot(month=date(2026, 10, 1), recorded_on=date(2026, 9, 22)),
+            MonthlySpending(month=date(2026, 8, 1), category_id=cat.id, amount=Decimal("2000.00")),
+            MonthlySpending(month=date(2026, 9, 1), category_id=cat.id, amount=Decimal("2072.23")),
+            MonthlyCashflow(month=date(2026, 8, 1), net_pay=Decimal("6000.00")),
+        ]
+    )
+    await db.commit()
+    body = (await auth_client.get("/api/v1/coverage")).json()
+    assert (body["spending_missing"], body["net_pay_missing"]) == ([], [])
+    time = body["time"]
+    assert (time["today"], time["current_month"], time["reminder_day"]) == (
+        "2026-09-23",
+        "2026-09-01",
+        1,
+    )
+    assert time["balances"] == {
+        "month": "2026-09-01",
+        "status": "final",
+        "due_on": "2026-09-01",
+        "overdue_from": "2026-09-07",
+        "overdue": False,
+        "snapshot": {
+            "month": "2026-09-01",
+            "as_of": "2026-09-01",
+            "recorded_on": "2026-09-01",
+            "provisional": False,
+        },
+    }
+    assert time["current_snapshot"] == {
+        "month": "2026-10-01",
+        "as_of": "2026-09-22",
+        "recorded_on": "2026-09-22",
+        "provisional": True,
+    }
+    assert time["previous_snapshot"]["month"] == "2026-09-01"
+    assert (time["flows_due"], time["provisional_past"], time["last_complete_month"]) == (
+        [],
+        [],
+        None,
+    )
+
+
+async def test_on_oct_16_september_is_due_and_overdue(auth_client, db, monkeypatch):
+    on(monkeypatch, date(2026, 10, 16))
+    db.add(NetWorthSnapshot(month=date(2026, 9, 1), recorded_on=date(2026, 9, 1)))
+    await db.commit()
+    time = (await auth_client.get("/api/v1/coverage")).json()["time"]
+    assert [
+        (p["month"], p["spending"], p["take_home_entered"], p["overdue"]) for p in time["flows_due"]
+    ] == [("2026-09-01", "missing", False, True)]
+    assert (time["balances"]["status"], time["balances"]["overdue"]) == ("missing", True)
+
+
+async def test_one_request_reads_one_day(auth_client, db, monkeypatch):
+    """Review minor 7: /coverage reads the product clock once — the time status and the review
+    book it stands on never straddle midnight, even when the clock ticks mid-request."""
+    db.add(NetWorthSnapshot(month=date(2026, 9, 1), recorded_on=date(2026, 9, 1)))
+    await db.commit()
+    days = iter([date(2026, 9, 30)] + [date(2026, 10, 1)] * 10)
+    monkeypatch.setattr(clock, "product_today", lambda: next(days))
+    time = (await auth_client.get("/api/v1/coverage")).json()["time"]
+    assert (time["today"], time["current_month"]) == ("2026-09-30", "2026-09-01")

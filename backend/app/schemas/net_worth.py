@@ -90,12 +90,29 @@ class MonthUpsertResult(BaseModel):
     batch_id: UUID | None = None
 
 
+class SnapshotStateOut(BaseModel):
+    """A snapshot's date and standing (2026-09-23 spec §0.4(b)): `month` is its key — the
+    balances on that 1st — `as_of` the day its figures describe (None = date unknown), and
+    `provisional` true while it was recorded before its date or its month is still ahead. The
+    wire twin of services.snapshot_state.SnapshotState; schemas/coverage.py re-exports it (it
+    cannot live there: coverage → month_review → net_worth would import in a circle)."""
+
+    month: date
+    as_of: date | None
+    recorded_on: date | None
+    provisional: bool = False
+
+
 class MonthBalancesOut(BaseModel):
     month: date
     exists: bool
     recorded_on: date | None
     notes: str | None
     balances: list[BalanceEntry]
+    # What the wizard's "Balances as of …" line reads (2026-09-23 spec §K2, M4); None/False for a
+    # month with no snapshot.
+    as_of: date | None = None
+    provisional: bool = False
 
 
 class AccountSeries(BaseModel):
@@ -125,6 +142,12 @@ class TimeseriesOut(BaseModel):
     # Exclusive per-owner net worth, primary person first and Joint last. Sums to
     # `net_worth` month by month by construction — that is what lets the page stack it.
     owner_series: list[OwnerSeries]
+    # Aligned with `months` AFTER the quarterly filter (2026-09-23 spec §K2): the day each
+    # snapshot describes, its stored recorded date and whether it is provisional — how the
+    # charts draw an early snapshot and cut ranges on dates (T7). [] in a replayed cache.
+    as_of: list[date | None] = []
+    recorded_on: list[date | None] = []
+    provisional: list[bool] = []
 
 
 class GroupSummary(BaseModel):
@@ -152,3 +175,12 @@ class SummaryOut(BaseModel):
     # tiles say "vs prior month" or "vs prior quarter" from this, and never from their own
     # idea of what the charts beside them are drawing.
     period: Literal["month", "quarter"] = "month"
+    # The viewed snapshot's date and standing, and the snapshot the delta compares with (the
+    # previous quarter end at quarterly grain) — so the tiles say "as of Sep 22 · provisional"
+    # and "since Sep 1 · 21 days" instead of a bare month (2026-09-23 spec §K2). The deltas keep
+    # their arithmetic.
+    as_of: date | None = None
+    recorded_on: date | None = None
+    provisional: bool = False
+    previous: SnapshotStateOut | None = None
+    days_since_previous: int | None = None

@@ -83,6 +83,12 @@ export interface NetWorthTimeseries {
   notes: (string | null)[]
   /** Per-owner net worth, primary person first and Joint last — the "By owner" stack. */
   owner_series: OwnerSeries[]
+  /** 2026-09-23 spec §K2 — aligned with `months` after the quarterly filter: the day each snapshot
+   *  describes (null = unknown), its stored recorded date, and whether it is provisional.
+   *  OPTIONAL like `NetWorthSummary.period`: fixtures written before keep compiling. */
+  as_of?: (string | null)[]
+  recorded_on?: (string | null)[]
+  provisional?: boolean[]
 }
 
 export interface GroupSummary {
@@ -104,6 +110,13 @@ export interface NetWorthSummary {
    *  OPTIONAL for the reason `MoneyFlowTaxes.niit` documents: the live server always sends
    *  it, and a fixture written before this program keeps compiling. Absent reads as month. */
   period?: 'month' | 'quarter'
+  /** 2026-09-23 spec §K2 — the viewed snapshot's date and standing, and the snapshot its delta
+   *  compares with. Build the labels with utils/asOf.ts. OPTIONAL like `period`. */
+  as_of?: string | null
+  recorded_on?: string | null
+  provisional?: boolean
+  previous?: SnapshotStateOut | null
+  days_since_previous?: number | null
 }
 
 /** Which months each hand-entered feed covers — ascending first-of-month ISO dates
@@ -136,6 +149,61 @@ export interface CoverageOut {
     spending: string | null
     net_pay: string | null
   }
+  /** The monthly update's two parts, due and overdue (2026-09-23 spec §K3); null on an empty
+   *  book. OPTIONAL for the same reason as the fields above. */
+  time?: TimeStatusOut | null
+}
+
+/** A snapshot's date and standing (2026-09-23 spec §0.4(b)): `month` is its key — the balances
+ *  on that 1st; `as_of` the day its figures describe (null = date unknown); `provisional` while it
+ *  was recorded before its date or its month is still ahead. Build labels with utils/asOf.ts. */
+export interface SnapshotStateOut {
+  month: string
+  as_of: string | null
+  recorded_on: string | null
+  provisional: boolean
+}
+
+/** An ended month's spending (spec §K3): saved DURING the month it is partial until saved again
+ *  after it ends or confirmed complete; a take-home save never completes it. */
+export type SpendingState = 'missing' | 'partial' | 'entered'
+
+/** The balances part: the current month's balances, due on its 1st (spec §0.4(c)). */
+export interface BalancesPartOut {
+  month: string
+  status: 'final' | 'provisional' | 'missing'
+  due_on: string
+  overdue_from: string
+  overdue: boolean
+  snapshot: SnapshotStateOut | null
+}
+
+/** An ended month's spending and take-home (spec §0.4(c)). "Due by" = the day before
+ *  `overdue_from`. */
+export interface FlowsPartOut {
+  month: string
+  spending: SpendingState
+  spending_entered: boolean
+  spending_saved_on: string | null
+  take_home_entered: boolean
+  due_on: string
+  overdue_from: string
+  overdue: boolean
+}
+
+/** GET /coverage `time` — what is due and overdue on the server's day (spec §0.4(c)). */
+export interface TimeStatusOut {
+  today: string
+  current_month: string
+  reminder_day: number
+  current_snapshot: SnapshotStateOut | null
+  previous_snapshot: SnapshotStateOut | null
+  balances: BalancesPartOut
+  /** Ended months whose spending is not entered or whose take-home is missing, newest first. */
+  flows_due: FlowsPartOut[]
+  /** Earlier months whose snapshot is still provisional, newest first (legacy months left out). */
+  provisional_past: SnapshotStateOut[]
+  last_complete_month: string | null
 }
 
 export interface MonthBalances {
@@ -144,6 +212,9 @@ export interface MonthBalances {
   recorded_on: string | null
   notes: string | null
   balances: BalanceEntry[]
+  /** 2026-09-23 spec §K2 — what the wizard's "Balances as of …" line reads. OPTIONAL. */
+  as_of?: string | null
+  provisional?: boolean
 }
 
 export interface MonthUpsertResult {
