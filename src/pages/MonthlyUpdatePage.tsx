@@ -797,6 +797,9 @@ function MonthlyUpdateWizard() {
       if (flowsBase === null || flowsBase.month !== month) return
       setAmounts(flowsBase.part.amounts)
       setNetPay(flowsBase.part.netPay)
+      // The $0 consent is part of the spending part (never of its draft): back to the seed whole,
+      // or a leftover tick would keep the part dirty over the figures just put back (review M4).
+      setRecordZero(flowsBase.part.recordZero)
     }
     setRestoredParts((current) => ({ ...current, [part]: false }))
     removeDraft(part, month)

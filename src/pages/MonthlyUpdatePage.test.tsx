@@ -2653,6 +2653,19 @@ describe('drafts per part (2026-09-23 spec §M6)', () => {
     expect(screen.getByText('Restored unsaved August spending & take-home — they are not saved yet.')).toBeTruthy()
   })
 
+  it('discarding restored spending also unticks the $0 consent — the part goes back to its seed whole (review M4)', async () => {
+    sessionStorage.setItem('finance-update-draft:flows:2026-08-01', '{"amounts":{"7":"250.00"}}')
+    renderPage('/update?month=2026-08-01&step=spending')
+    await screen.findByText('Restored unsaved August spending & take-home — they are not saved yet.')
+    const zero = screen.getByLabelText('Confirm remaining categories as $0') as HTMLInputElement
+    fireEvent.click(zero)
+    expect(zero.checked).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Discard restored spending' }))
+    expect(zero.checked).toBe(false)
+    // Clean again: nothing left to save.
+    expect((screen.getByRole('button', { name: 'Save August spending' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('splits a legacy whole-month draft into the two parts on first read and drops its date', async () => {
     sessionStorage.setItem(
       'finance-update-draft:2026-08-01',
