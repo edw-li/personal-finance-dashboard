@@ -47,7 +47,7 @@ from typing import Annotated
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -64,8 +64,6 @@ from app.api.paycheck import MIN_PAY_PERIODS, PAY_PERIODS_MESSAGE, _default_prof
 from app.database import get_db
 from app.limit_keys import LIMIT_401K_ELECTIVE
 from app.models import (
-    Account,
-    AccountBalance,
     PaycheckProfile,
     Person,
     RsuGrant,
@@ -98,7 +96,7 @@ from app.services.montecarlo import (
     simulate,
     survival_count,
 )
-from app.services.net_worth_calc import INVESTABLE_GROUPS, get_swr_pct, read_plan_until_year
+from app.services.net_worth_calc import get_swr_pct, investable_total, read_plan_until_year
 from app.services.paycheck_calc import MONTHS_PER_YEAR, breakdown, half_up2
 from app.services.people import load_people, primary_person
 from app.services.projection import (
@@ -175,7 +173,7 @@ SPEND_MAX_ABS = Decimal(10) ** 9
 # horizon against these two, and so does `_build` (YEARS_MESSAGE), so the sandbox and the
 # assistant cannot drift.
 YEARS_MIN = 1
-YEARS_MAX = 60
+YEARS_MAX = MAX_YEARS  # one reach: the engine's (services/projection.py), review minor 7
 YearsQuery = Annotated[int, Query(ge=YEARS_MIN, le=YEARS_MAX)]
 YEARS_MESSAGE = f"years must be between {YEARS_MIN} and {YEARS_MAX}"
 
@@ -823,24 +821,6 @@ async def _base_snapshot(db: AsyncSession, today: date) -> SnapshotState | None:
     return current
 
 
-async def _investable_total(db: AsyncSession, snapshot_id: int) -> Decimal:
-    """Non-component pre/post-tax + taxable + equity balances of ONE snapshot — the sum
-    net_worth_calc.investable_base runs once it has picked its snapshot, taken here by id so
-    the snapshot is picked exactly once (spec §R5)."""
-    total = (
-        await db.execute(
-            select(func.coalesce(func.sum(AccountBalance.balance), 0))
-            .join(Account, Account.id == AccountBalance.account_id)
-            .where(
-                AccountBalance.snapshot_id == snapshot_id,
-                Account.is_component.is_(False),
-                Account.group.in_(INVESTABLE_GROUPS),
-            )
-        )
-    ).scalar_one()
-    return Decimal(total)
-
-
 @router.get("", response_model=ProjectionOut)
 async def projection(
     annual_return: Annotated[Decimal | None, Query()] = None,
@@ -902,7 +882,8 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
     base = await _base_snapshot(db, today)
     if base is None:
         raise HTTPException(status_code=404, detail=NO_SNAPSHOTS)
-    starting = await _investable_total(db, base.id)
+    # net_worth_calc's one sum, over the snapshot picked above — picked exactly once (§R5).
+    starting = await investable_total(db, base.id)
 
     warnings: list[str] = []
 

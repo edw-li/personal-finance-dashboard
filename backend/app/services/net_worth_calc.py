@@ -119,6 +119,24 @@ def owner_totals_for(
     return totals
 
 
+async def investable_total(db: AsyncSession, snapshot_id: int) -> Decimal:
+    """Non-component pre/post-tax + taxable + equity balances of ONE snapshot — the one owner
+    of "investable" (2026-09-24 review minor 7): investable_base sums the snapshot it picks
+    here, and the projection sums the current snapshot it picks by lane K's rule."""
+    total = (
+        await db.execute(
+            select(func.coalesce(func.sum(AccountBalance.balance), 0))
+            .join(Account, Account.id == AccountBalance.account_id)
+            .where(
+                AccountBalance.snapshot_id == snapshot_id,
+                Account.is_component.is_(False),
+                Account.group.in_(INVESTABLE_GROUPS),
+            )
+        )
+    ).scalar_one()
+    return Decimal(total)
+
+
 async def investable_base(db: AsyncSession, month: date) -> Decimal | None:
     """Non-component pre/post-tax + taxable + equity balances of the latest snapshot
     on or before `month`; None when no snapshot exists yet (4%-line gap, not an error)."""
@@ -132,18 +150,7 @@ async def investable_base(db: AsyncSession, month: date) -> Decimal | None:
     ).scalar_one_or_none()
     if snapshot_id is None:
         return None
-    total = (
-        await db.execute(
-            select(func.coalesce(func.sum(AccountBalance.balance), 0))
-            .join(Account, Account.id == AccountBalance.account_id)
-            .where(
-                AccountBalance.snapshot_id == snapshot_id,
-                Account.is_component.is_(False),
-                Account.group.in_(INVESTABLE_GROUPS),
-            )
-        )
-    ).scalar_one()
-    return Decimal(total)
+    return await investable_total(db, snapshot_id)
 
 
 async def investable_bases(db: AsyncSession, months: list[date]) -> list[Decimal | None]:
