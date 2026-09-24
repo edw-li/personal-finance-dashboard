@@ -26,7 +26,7 @@ import type { PositionChange, SecurityOut, TransactionOut, TransactionType } fro
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
 import { FeedBanner } from '../shell/Feed'
-import HoldingsScroll from './HoldingsScroll'
+import TableScroll from '../TableScroll'
 import './portfolio.css'
 
 interface FormState {
@@ -683,7 +683,7 @@ export default function TransactionsPanel({
               consumer rule 6). Every grip points its aria-describedby at the instructions. */}
           <ReorderInstructions id={reorder.instructionsId} />
           <ReorderLiveRegion text={reorder.announcement} />
-          <HoldingsScroll><table className="port-table reorder-table">
+          <TableScroll className="holdings-scroll" label="Transactions table"><table className="port-table reorder-table">
             <thead>
               <tr>
                 <th className="reorder-grip-cell" aria-hidden="true" />
@@ -744,7 +744,7 @@ export default function TransactionsPanel({
                 </tr>
               ))}
             </tbody>
-          </table></HoldingsScroll>
+          </table></TableScroll>
         </>
       )}
     </section>

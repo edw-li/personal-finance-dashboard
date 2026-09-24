@@ -15,9 +15,12 @@
 
 .holdings-scroll { overflow-x: auto; }
 .port-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-/* 8px side padding, not 10: twelve nowrap columns + the 120px sparkline column must fit
-   the ~1134px a .panel offers inside the page's 1240px cap, and 10px left the table a
-   few px over — the 1Y column clipped into .holdings-scroll's sideways scroll. */
+/* 8px side padding, not 10: every px of it costs the holdings row 24 (twelve nowrap columns, the 1Y
+   one 120px), and that row has to fit its capped box — about the viewport less 331px at default
+   density (the 210px sidebar, the page's and the card's side padding, the card's border, the page's
+   own scrollbar; the page is full-bleed since 2026-08-18, panels.css), and 15px less again once the
+   box scrolls vertically and its own scrollbar takes a share. Past that, the 1Y column is the first
+   to go behind the box's sideways scroll. */
 .port-table th, .port-table td { padding: 6px 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--surface-2); }
 .port-table th.num, .port-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .port-table .th-sort { background: none; border: none; color: inherit; font: inherit; cursor: pointer; padding: 0; }

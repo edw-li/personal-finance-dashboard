@@ -131,5 +131,8 @@ describe('SecuritiesPanel', () => {
     expect(scroller).not.toBeNull()
     expect(scroller.querySelector('table.port-table')).not.toBeNull()
     expect(scroller.querySelector('td.row-actions')).not.toBeNull()
+    // …and that scroller is the capped table box (2026-09-24 table-scroll spec §3.3).
+    expect(scroller.classList.contains('table-scroll')).toBe(true)
+    expect(screen.getByRole('region', { name: 'Securities table' })).toBe(scroller)
   })
 })

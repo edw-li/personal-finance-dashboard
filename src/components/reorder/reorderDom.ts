@@ -8,10 +8,12 @@ import type { Extent } from './reorderMath'
 /** The element that scrolls the list, or null for the page. */
 export type Scroller = HTMLElement | null
 
-/** The nearest ancestor that actually scrolls vertically (the Settings tables' 420px
- *  `.settings-scroll`), or null when the page does. More than 1px of overhang: a box with only
- *  `overflow-x: auto` (.holdings-scroll) computes `overflow-y: auto` too, and display scaling can
- *  round its content 1px taller than its box — that box must not steal the page's auto-scroll. */
+/** The nearest ancestor that actually scrolls vertically — the Settings tables' 420px
+ *  `.settings-scroll`, a capped TableScroll box (the transactions ledger's) — or null when the page
+ *  does. More than 1px of overhang: a box with only `overflow-x: auto` (a bare `.holdings-scroll`,
+ *  AllocationTargetEditor's) computes `overflow-y: auto` too, and display scaling can round its
+ *  content 1px taller than its box — that box must not steal the page's auto-scroll. Nor does a
+ *  TableScroll box whose table fits under its cap: it has nothing to scroll, so the page keeps it. */
 export function scrollParentOf(element: Element | null | undefined): Scroller {
   let node = element?.parentElement ?? null
   while (node !== null && node !== document.body && node !== document.documentElement) {
@@ -160,6 +162,40 @@ export function keepOnScreen(scroller: Scroller, top: number, height: number): v
   const clientTop = top - scroller.scrollTop + scroller.getBoundingClientRect().top
   const delta = viewportDelta(clientTop, clientTop + height, window.innerHeight)
   if (delta !== 0) window.scrollBy(0, delta)
+}
+
+/** One frame of the pointer's auto-scroll (spec §2.3), and the pointer path's twin of keepOnScreen:
+ *  `dy` scrolls the scroller — and, once a box stands at its own end, the PAGE, while that box still
+ *  hangs past the window on the side the drag is heading. The zone's band is clipped to the window
+ *  (visibleBounds), so a spent box still hides what lies beyond the window's edge, where no pointer
+ *  can follow: the capped transactions ledger (TableScroll, 60vh tall from y≈467) hangs 147px below
+ *  a 1280×800 window on arrival, 67px below a 1600×1000 one, and its last 1–3 slots were out of reach
+ *  — the drop landed short, in a replay order that drives cost basis (table-scroll Task 4 review).
+ *  The window's edges are visibleBounds' own, 0 and innerHeight — the top is the window's 0, not the
+ *  foot of PageFrame's stuck scope row, the band's convention too — so the page stops as soon as the
+ *  box's edge is inside the window: the pointer reaches its end from there. Each page scroll
+ *  re-tracks the row in hand through useReorder's window scroll listener.
+ *
+ *  ASSUMED: the box FOLLOWS the page — a window scroll moves it as far. True of all six reorderable
+ *  lists today: each scrolls the page or sits in normal flow. Were one to sit in a fixed, sticky or
+ *  top-layer container whose edge hangs past the window, a window scroll would leave that edge where
+ *  it is, and every frame would hand the page another step — run to its end under a list that never
+ *  moved. Such a list must guard it then: stop handing steps to the page once a window scroll leaves
+ *  the box's rect unmoved, as holdPosition (shell/holdPosition.ts) guards the same hazard
+ *  (table-scroll Task 4 re-review). */
+export function autoScrollBy(scroller: Scroller, dy: number): void {
+  if (scroller === null) {
+    window.scrollBy(0, dy)
+    return
+  }
+  const before = scroller.scrollTop
+  scroller.scrollTop += dy
+  // The box moved, so it had room: by more than half a pixel — display scaling can park a box on a
+  // device pixel a hair short of a fractional end, and that last hair is no room — or, for a
+  // sub-pixel step at the zone's inner edge, by more than half the step.
+  if (Math.abs(scroller.scrollTop - before) > Math.min(0.5, Math.abs(dy) / 2)) return
+  const box = scroller.getBoundingClientRect()
+  if (dy > 0 ? box.bottom > window.innerHeight : box.top < 0) window.scrollBy(0, dy)
 }
 
 /** The reduced-motion drop line's thickness, px (reorder.css draws it; placeDropLine centres it). */
