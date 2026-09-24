@@ -13,8 +13,10 @@ export interface DividendMonth {
   label: string
   /** The month's entries in the order given (the API's pay_date desc, id desc). */
   rows: DividendOut[]
-  /** Σ toCents(amount): integer cents through the shared reader the charts' sums also use
-   *  (utils/cents.ts), so ten $0.10 entries total exactly $1.00. */
+  /** Σ toCents(amount): integer cents through the shared reader (utils/cents.ts) behind the
+   *  Spending and money-flow sums, so ten $0.10 entries total exactly $1.00. The dividend chart
+   *  above sums floats and rounds once per month instead — the two agree to the cent for the
+   *  ledger's two-decimal amounts (Numeric(12, 2)), which the parity test pins. */
   totalCents: number
 }
 
