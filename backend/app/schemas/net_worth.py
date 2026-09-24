@@ -90,6 +90,19 @@ class MonthUpsertResult(BaseModel):
     batch_id: UUID | None = None
 
 
+class SnapshotStateOut(BaseModel):
+    """A snapshot's date and standing (2026-09-23 spec §0.4(b)): `month` is its key — the
+    balances on that 1st — `as_of` the day its figures describe (None = date unknown), and
+    `provisional` true while it was recorded before its date or its month is still ahead. The
+    wire twin of services.snapshot_state.SnapshotState; schemas/coverage.py re-exports it (it
+    cannot live there: coverage → month_review → net_worth would import in a circle)."""
+
+    month: date
+    as_of: date | None
+    recorded_on: date | None
+    provisional: bool = False
+
+
 class MonthBalancesOut(BaseModel):
     month: date
     exists: bool

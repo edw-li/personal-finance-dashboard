@@ -3,6 +3,7 @@ from datetime import date
 from pydantic import BaseModel
 
 from app.schemas.month_review import MonthReviewOut
+from app.schemas.net_worth import SnapshotStateOut  # noqa: F401 — re-exported (spec §0.4(b))
 
 
 class CoverageLatestOut(BaseModel):
