@@ -122,6 +122,12 @@ describe('MonthRibbon 2.0', () => {
     expect(edit.getAttribute('href')).toBe('/update?month=2026-09-01')
   })
 
+  it('view mode with nothing selected: Edit opens the month the page shows by default (2026-09-23 spec §T8)', () => {
+    mount({ editHref: (m) => `/update?month=${m}&step=spending`, defaultMonth: '2026-07-01' })
+    const edit = screen.getByRole('link', { name: 'Edit Jul 2026 in the wizard' })
+    expect(edit.getAttribute('href')).toBe('/update?month=2026-07-01&step=spending')
+  })
+
   it('edit mode has no Edit link — the wizard already is the editor', () => {
     mount({ mode: 'edit', selected: '2026-07-01', editHref: (m) => `/update?month=${m}` })
     expect(screen.queryByRole('link')).toBeNull()

@@ -52,6 +52,7 @@ export default function MonthRibbon({
   onSelect,
   figures,
   editHref,
+  defaultMonth,
 }: {
   /** The ribbon's right edge (first-of-month ISO) — the latest month it will show. */
   anchor: string
@@ -71,6 +72,8 @@ export default function MonthRibbon({
   figures?: Record<string, string>
   /** View pages: where "Edit <month>" goes. */
   editHref?: (monthIso: string) => string
+  /** View pages: the month the page shows with nothing selected — what Edit opens then. */
+  defaultMonth?: string
 }) {
   // ‹ › paging is real state, not a memory keyed by anchor+selection: such a key can be
   // re-matched later (Back re-selecting an old month) and revive a window the selected chip is
@@ -93,9 +96,10 @@ export default function MonthRibbon({
   const canGoEarlier = earliest !== null && months[0] > earliest
   const canGoLater = page > 0
   const todayMonth = today ?? anchor
-  // Viewing the latest month still deserves the affordance — the current month is exactly what
-  // the wizard is for — so an unselected view page edits the anchor.
-  const editTarget = selected ?? anchor
+  // Edit opens the month ON SCREEN (2026-09-23 spec §T8): the selection, else the month the page
+  // shows by default (Spending's last complete month, Net worth's current snapshot), else the
+  // anchor — never simply today's month.
+  const editTarget = selected ?? defaultMonth ?? anchor
 
   return (
     <div className="ribbon" role="group" aria-label="Month coverage">

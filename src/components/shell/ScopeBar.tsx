@@ -20,7 +20,9 @@ import './shell.css'
 
 interface MonthScopeBase {
   /** The ribbon's right edge (a page may anchor ahead of today, e.g. the wizard's next entry
-   *  month); defaults to the current month. */
+   *  month); defaults to the current month — or to the current snapshot's month when that is
+   *  ahead of it (2026-09-23 spec §T8: balances recorded early for next month are a chip you
+   *  can select; anything filed further ahead never stretches the ribbon). */
   anchor?: string
 }
 
@@ -32,8 +34,14 @@ export type MonthScopeProps =
       mode: 'view'
       /** Figures to print in chip labels (Net worth passes that month's total). */
       figures?: Record<string, string>
-      /** Where the ribbon's Edit link goes. */
+      /** Where the ribbon's Edit link goes — with the step the page is about. */
       editHref?: (monthIso: string) => string
+      /** The month the page shows when nothing is selected (2026-09-23 spec §T8): Net worth the
+       *  current snapshot's, Spending the last complete month, Budgets the card's resolved
+       *  month. "Back to …" hides on it, and Edit falls back to it. */
+      defaultMonth?: string | null
+      /** "Back to latest balances", "Back to last complete month"; "Back to latest" when absent. */
+      backLabel?: string
     })
   | (MonthScopeBase & {
       mode: 'edit'
@@ -215,8 +223,8 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate, o
     const all = [...coverage.balances, ...coverage.spending, ...coverage.net_pay].sort()
     return all[0] ?? null
   }, [coverage])
-  // "Latest" is the newest month the balances feed has — exactly what a view page shows when no
-  // month is selected.
+  // "Latest" is the newest month the balances feed has — the fallback for a page that does not
+  // name its own default month (2026-09-23 spec §T8's pages all do).
   const latestCovered = useMemo(() => {
     if (coverage === null) return null
     const sorted = [...coverage.balances].sort()
@@ -244,8 +252,14 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate, o
 
   // The anchor is where the ribbon ENDS (a page may anchor ahead of today); `today` is what
   // wears the ring. Only the anchor is injectable, so the ring always tracks the real clock.
+  // By default it reaches the current snapshot's month when that is ahead (K2's rule: at most
+  // next month's), so early next-month balances are selectable (2026-09-23 spec §T7, §T8).
   const today = currentMonthIso()
-  const anchor = month?.anchor ?? today
+  const currentSnapshotMonth = coverage?.time?.current_snapshot?.month ?? null
+  const anchor =
+    month?.anchor ?? (currentSnapshotMonth !== null && currentSnapshotMonth > today ? currentSnapshotMonth : today)
+  // The month a view page shows with nothing selected: "Back to …" is a no-op on it.
+  const homeMonth = month?.mode === 'view' ? (month.defaultMonth ?? latestCovered) : null
 
   return (
     <div className="scope-bar">
@@ -286,15 +300,16 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate, o
             mode={month.mode}
             figures={month.mode === 'view' ? month.figures : undefined}
             editHref={month.mode === 'view' ? month.editHref : undefined}
+            defaultMonth={month.mode === 'view' ? (month.defaultMonth ?? undefined) : undefined}
             onSelect={(m) => {
               if (month.mode === 'view') setScope({ month: m })
               else if (month.onSelect !== undefined) month.onSelect(m)
               else navigate(`/update?month=${m}`)
             }}
           />
-          {/* Hidden when the selection already IS the latest covered month: there the button is
-              a no-op that churns the URL and implies somewhere else to go. */}
-          {month.mode === 'view' && scope.month !== null && scope.month !== latestCovered && (
+          {/* Hidden when the selection already IS the page's default month: there the button is
+              a no-op that churns the URL and implies somewhere else to go (2026-09-23 spec §T8). */}
+          {month.mode === 'view' && scope.month !== null && scope.month !== homeMonth && (
             <button
               type="button"
               className="chip"
@@ -309,7 +324,7 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate, o
                   ?.focus()
               }}
             >
-              Back to latest
+              {month.backLabel ?? 'Back to latest'}
             </button>
           )}
         </div>
