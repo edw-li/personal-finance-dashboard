@@ -8,6 +8,7 @@ import {
   daysBetween,
   lastNMonths,
   monthGrid,
+  monthSerial,
   todayIso,
 } from './months'
 import { resetServerTodayForTests, setServerToday } from './productToday'
@@ -102,5 +103,15 @@ describe('daysBetween', () => {
     expect(daysBetween('2026-11-01', '2026-11-02')).toBe(1) // the day DST ends
     expect(daysBetween('2025-12-31', '2026-01-01')).toBe(1)
     expect(daysBetween('2026-10-01', '2026-09-22')).toBe(-9)
+  })
+})
+
+describe('monthSerial', () => {
+  // One calendar-month counter for the projection (2026-09-24 review minor 7): the fitted trend's
+  // x, the display's year offsets and the chart's axis length all count months with it.
+  it('counts calendar months, year boundaries included', () => {
+    expect(monthSerial('2026-01-01') - monthSerial('2025-12-01')).toBe(1)
+    expect(monthSerial('2026-08-01') - monthSerial('2025-08-01')).toBe(12)
+    expect(monthSerial('2026-09-23')).toBe(2026 * 12 + 8)
   })
 })

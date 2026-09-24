@@ -10,6 +10,15 @@ export function addMonths(iso: string, delta: number): string {
   return `${y}-${String(m).padStart(2, '0')}-01`
 }
 
+/**
+ * Calendar month serial (year·12 + month−1) from an ISO date — the index addMonths steps by. NOT
+ * an array index: a skipped month must not compress time (the fitted trend's x, the projection's
+ * year offsets and axis length all count true months with it).
+ */
+export function monthSerial(iso: string): number {
+  return Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7)) - 1
+}
+
 export function lastNMonths(anchorIso: string, n: number): string[] {
   return Array.from({ length: n }, (_, i) => addMonths(anchorIso, i - (n - 1)))
 }

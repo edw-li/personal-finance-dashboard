@@ -3,6 +3,7 @@ import type { ChartSelection } from '../../types/metrics'
 import type { ZoomWindow } from '../../charts/timeZoom'
 import { asOfPhrase, formatAsOf } from '../../utils/asOf'
 import { formatMonth, formatPct } from '../../utils/format'
+import { monthSerial } from '../../utils/months'
 import { metricReceipt } from '../../utils/metricReceipt'
 import { BAND_KEYS, BAND_LABELS } from './projectionChartOptions'
 import { encodeProjection, headlineFiMonth, type ProjectionScenario } from './projectionScenario'
@@ -12,10 +13,6 @@ export interface DisplayProjection extends ProjectionOut {
   display_dollars: ProjectionDollars
   target_values: string[] | null
 }
-
-/** Calendar month serial of an ISO date (year·12 + month−1) — the display's own copy: the fitted
- *  trend's module (polyTrend) is imported by the trend panel and its chart builder only (R8's fence). */
-const serial = (iso: string) => Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7)) - 1
 
 /** The starting balance's snapshot as K's `Dated` state (2026-09-23 spec §R5, §0.4(d)). A payload
  *  from before the fields — a replayed snapshot cache — reads final, as of its 1st: exactly what it
@@ -57,7 +54,7 @@ export function displayProjection(data: ProjectionOut, dollars: ProjectionDollar
   const mode = data.inflation == null ? 'today' : dollars
   const values = (rows: string[]) => rows.map((value, i) => {
     if (mode === 'today') return value
-    const years = (serial(data.months[i]) - serial(data.start_month)) / 12
+    const years = (monthSerial(data.months[i]) - monthSerial(data.start_month)) / 12
     const factor = (1 + Number(data.inflation)) ** years
     return (Number(value) * factor).toFixed(2)
   })
@@ -75,9 +72,9 @@ export function milestoneWindow(data: Pick<ProjectionOut, 'months' | 'start_mont
   const last = Math.max(0, data.months.length - 1)
   if (last === 0) return { startValue: 0, endValue: 0 }
   const planEnd = data.drawdown != null && data.plan_until != null
-    ? serial(`${data.plan_until}-12-01`) - serial(data.start_month) : null
+    ? monthSerial(`${data.plan_until}-12-01`) - monthSerial(data.start_month) : null
   if (data.fi_target === null || data.fi_month === null) return { startValue: 0, endValue: last }
-  const reach = Math.max(0, serial(data.fi_month) - serial(data.start_month))
+  const reach = Math.max(0, monthSerial(data.fi_month) - monthSerial(data.start_month))
   // Five years minimum, then two years of context beyond the next reach date.
   const end = Math.max(60, reach + 24, planEnd ?? 0)
   return { startValue: 0, endValue: Math.min(last, end) }

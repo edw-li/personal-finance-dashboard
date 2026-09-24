@@ -22,8 +22,7 @@ import type { NetWorthTimeseries, ProjectionOut } from '../../types/api'
 import { formatAsOf } from '../../utils/asOf'
 import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatMonth } from '../../utils/format'
-import { addMonths } from '../../utils/months'
-import { monthSerial } from './polyTrend'
+import { addMonths, monthSerial } from '../../utils/months'
 import type { PolyTrendFit } from './polyTrend'
 
 // Series names in series order — the projected balance, the same growth with the

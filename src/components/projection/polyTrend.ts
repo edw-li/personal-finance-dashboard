@@ -4,17 +4,11 @@
 // the timeseries' Decimal strings — display-only (format.ts's Number() rule), never
 // handed back to the API. The attention.ts/ytd.ts posture: page-adjacent pure logic,
 // no React, no fetching.
+import { monthSerial } from '../../utils/months'
 
-/**
- * Calendar month serial (year·12 + month−1) from an ISO month string — the fit's x.
- * NOT an array index: a skipped snapshot month must not compress time and skew the
- * curve (Excel fits on true dates; serials are the monthly-data equivalent). Same index
- * formula utils/months.ts::addMonths steps by.
- */
-export function monthSerial(iso: string): number {
-  const [year, month] = iso.split('-').map(Number)
-  return year * 12 + (month - 1)
-}
+// The fit's x is utils/months.ts's monthSerial: true calendar months, so a skipped snapshot month
+// cannot compress time and skew the curve (Excel fits on true dates; serials are the monthly-data
+// equivalent).
 
 export interface PolyTrendFit {
   /** Fitted value at any ISO month: c0 + c1·x + c2·x². */
