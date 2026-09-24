@@ -37,9 +37,11 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from functools import partial
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -107,12 +109,22 @@ from app.services.projection import (
     project,
     project_path,
 )
-from app.services.read_cache import cached_month_savings, cached_review_book
+from app.services.read_cache import (
+    cached_month_savings,
+    cached_projection,
+    cached_review_book,
+)
 from app.services.savings import payroll_monthly
 
 router = APIRouter(
     prefix="/projection", tags=["projection"], dependencies=[Depends(get_current_user)]
 )
+
+# The Monte Carlo runs in a worker thread, ONE at a time (2026-09-23 spec §R9): the pure-Python
+# walk used to hold the single event loop for its whole length. The thread still shares the GIL,
+# so other requests slow down during a cold run — but they interleave instead of queueing behind
+# it, and a second cold run waits for the first rather than splitting the CPU with it.
+MC_LIMITER = anyio.CapacityLimiter(1)
 
 ZERO = Decimal("0.00")
 DEFAULT_ANNUAL_RETURN = Decimal("0.05")
@@ -870,10 +882,16 @@ async def projection(
 
 
 async def projection_json(db: AsyncSession, knobs: ProjectionKnobs) -> bytes:
-    """The serialized answer for `knobs` — by alias, the wire's own spelling."""
+    """The serialized answer for `knobs` — by alias, the wire's own spelling — from the result
+    cache (2026-09-23 spec §R9), keyed by the data fingerprint, the product day and the
+    normalized knobs; a miss builds it."""
     today = clock.product_today()  # the ONLY clock read (module docstring)
-    model = await _build(db, knobs, today)
-    return model.model_dump_json(by_alias=True).encode()
+
+    async def build() -> bytes:
+        model = await _build(db, knobs, today)
+        return model.model_dump_json(by_alias=True).encode()
+
+    return await cached_projection(db, (today, knobs.cache_key()), build)
 
 
 async def run_projection(db: AsyncSession, knobs: ProjectionKnobs) -> ProjectionOut:
@@ -1131,17 +1149,23 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
     fi_month_p90: date | None = None
     mc: MonteCarloResult | None = None
     if volatility > 0:
-        mc = simulate(
-            starting,
-            monthly_contribution,
-            real_return,
-            volatility,
-            real_growth,
-            month_count,
-            fi_target,
-            resets=plan.resets,
-            withdrawal=plan.withdrawal,
-            lumps=vests.lumps,
+        # Off the event loop (spec §R9). The walk is pure and seeded, so the thread's bands are
+        # the inline run's, bit for bit (test_montecarlo pins it).
+        mc = await anyio.to_thread.run_sync(
+            partial(
+                simulate,
+                starting,
+                monthly_contribution,
+                real_return,
+                volatility,
+                real_growth,
+                month_count,
+                fi_target,
+                resets=plan.resets,
+                withdrawal=plan.withdrawal,
+                lumps=vests.lumps,
+            ),
+            limiter=MC_LIMITER,
         )
         bands = mc.bands
         if fi_target is not None:

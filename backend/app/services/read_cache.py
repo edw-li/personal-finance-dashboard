@@ -41,10 +41,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import (
     Account,
     AccountBalance,
+    AppSetting,
+    CategoryBudget,
+    ContributionLimit,
+    LatestPrice,
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
     PaycheckProfile,
+    Person,
+    RsuGrant,
+    Security,
     SpendingCategory,
 )
 from app.models.month_review import MonthReview, MonthReviewAdoption
@@ -122,6 +129,8 @@ def clear_read_caches() -> None:
     MONTH_SAVINGS.clear()
     _BOOK_BUILDS.clear()
     _SAVINGS_BUILDS.clear()
+    PROJECTIONS.clear()
+    _PROJECTION_BUILDS.clear()
 
 
 def _fingerprint_statement(tables: Iterable[str]) -> TextClause:
@@ -251,3 +260,60 @@ async def cached_month_savings(db: AsyncSession) -> list[MonthSavings]:
         db, MONTH_SAVINGS, _SAVINGS_BUILDS, before, before, _MONTH_SAVINGS_FINGERPRINT, build
     )
     return list(savings)
+
+
+# --- the projection's result cache (2026-09-23 spec §R9) ---
+
+# Every table GET /projection reads — the review book's and the savings' tables, plus the
+# people and their limits, the settings (SWR, ticker, plan-until year), the budgets and the
+# grants with their quote. Pinned by the SQL-capture test in test_projection_cache.py, so a
+# new read cannot slip past the fingerprint and serve a stale success rate.
+PROJECTION_TABLES: tuple[str, ...] = tuple(
+    model.__tablename__
+    for model in (
+        Account,
+        NetWorthSnapshot,
+        AccountBalance,
+        SpendingCategory,
+        MonthlySpending,
+        MonthlyCashflow,
+        PaycheckProfile,
+        MonthReview,
+        MonthReviewAdoption,
+        Person,
+        ContributionLimit,
+        AppSetting,
+        CategoryBudget,
+        RsuGrant,
+        Security,
+        LatestPrice,
+    )
+)
+PROJECTION_CACHE_SIZE = 16
+# The SERIALIZED JSON bytes, never ProjectionOut models: seven series of up to 721 Decimals per
+# entry would sit in memory on a 1 GB box, and bytes cannot be mutated by one caller under
+# another — the route returns them as they are, a direct caller validates its own model.
+PROJECTIONS: LRU[Hashable, bytes] = LRU(PROJECTION_CACHE_SIZE)
+_PROJECTION_BUILDS: dict[Hashable, asyncio.Future[bytes]] = {}
+_PROJECTION_FINGERPRINT = _fingerprint_statement(PROJECTION_TABLES)
+
+
+async def cached_projection(
+    db: AsyncSession, key: Hashable, build: Callable[[], Awaitable[bytes]]
+) -> bytes:
+    """The projection's bytes for `key` (the product day and the normalized knobs), built
+    once per data version of PROJECTION_TABLES: stable-store, single-flight and the pending-
+    changes bypass are `_memoised`'s. A build that raises (a 422, the empty book's 404) is
+    never stored — its waiters look again."""
+    if _has_pending_changes(db):
+        return await build()
+    before = await _fingerprint(db, _PROJECTION_FINGERPRINT)
+    return await _memoised(
+        db,
+        PROJECTIONS,
+        _PROJECTION_BUILDS,
+        (before, key),
+        before,
+        _PROJECTION_FINGERPRINT,
+        build,
+    )
