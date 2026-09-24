@@ -361,16 +361,26 @@ function projectionMonths(
   return [...history.months, ...Array.from({ length: count }, (_, i) => addMonths(last, i + 1))]
 }
 
+/** The house hollow (the ESPP page's sold lots, the Overview's unentered month — "not what it
+ *  looks like"): the dots' colour as an outline over no fill. Here: a provisional snapshot, whose
+ *  balances were recorded before their date (2026-09-23 spec §R8). */
+const HOLLOW_DOT = { color: 'transparent', borderColor: PALETTE[0], borderWidth: 1.5 } as const
+
+/** The snapshot-state lists the net-worth timeseries carries beside `months` (2026-09-23 spec
+ *  §K2 — lane K computes them; they are empty for a replayed cache). Optional here, so the
+ *  chart reads them wherever they are and draws every dot filled where they are not. */
+type SnapshotFlags = { provisional?: boolean[]; recorded_on?: (string | null)[] }
+
 /**
- * The sheet's "Net Worth over Time (Projected)": actual snapshots as blue dots, the
- * second-degree polynomial best-fit as a solid orange curve drawn over history AND the
- * future (so fit-vs-dots stays visible, like Excel's trendline), extended to the SAME
+ * The sheet's "Net Worth over Time (Projected)": actual snapshots as blue dots — a provisional
+ * one hollow — the second-degree polynomial best-fit as a solid orange curve drawn over history
+ * AND the future (so fit-vs-dots stays visible, like Excel's trendline), extended to the SAME
  * final month as the investable chart — one horizon per page. No wash (the curve is a
  * fit, not an accumulation). A refused fit (null) drops the curve, never the dots — the
  * page's hint says why. Returns null under two points.
  */
 export function netWorthProjectionOption(
-  history: Pick<NetWorthTimeseries, 'months' | 'net_worth'>,
+  history: Pick<NetWorthTimeseries, 'months' | 'net_worth'> & SnapshotFlags,
   fit: PolyTrendFit | null,
   startMonth: string,
   years: number,
@@ -401,7 +411,11 @@ export function netWorthProjectionOption(
         color: PALETTE[0],
         // Above the curve, so the dots stay visible where it passes through them.
         z: 3,
-        data: history.net_worth.map((value) => positive(Number(value))),
+        data: history.net_worth.map((value, i) =>
+          history.provisional?.[i] === true
+            ? { value: positive(Number(value)), itemStyle: { ...HOLLOW_DOT } }
+            : positive(Number(value)),
+        ),
       },
       ...(fit === null
         ? []

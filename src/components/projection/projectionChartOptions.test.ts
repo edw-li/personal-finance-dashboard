@@ -455,6 +455,23 @@ describe('netWorthProjectionOption', () => {
     expect(dots.z).toBeGreaterThan(trend.z)
   })
 
+  it('draws a provisional snapshot HOLLOW — balances recorded before their date (2026-09-23 spec §R8)', () => {
+    // The house hollow (the ESPP page's sold lots, the Overview's unentered month): the series
+    // colour as an outline, no fill. The flag is K's snapshot state, read off the timeseries.
+    const history = { ...HISTORY, provisional: [false, false, true], recorded_on: [null, '2026-07-01', '2026-07-22'] }
+    const dots = readNw(netWorthProjectionOption(history, FIT, '2026-08-01', 1)).series[0]
+    expect(dots.data).toEqual([
+      100000,
+      101000,
+      { value: 102010, itemStyle: { color: 'transparent', borderColor: PALETTE[0], borderWidth: 1.5 } },
+    ])
+  })
+
+  it('draws every snapshot filled when the payload carries no provisional flags — a replayed cache', () => {
+    expect(readNw(netWorthProjectionOption({ ...HISTORY, provisional: [] }, FIT, '2026-08-01', 1)).series[0].data)
+      .toEqual([100000, 101000, 102010])
+  })
+
   it('omits the trend when the fit was refused, keeping the dots', () => {
     const option = readNw(netWorthProjectionOption(HISTORY, null, '2026-08-01', 1))
     expect(option.series.map((s) => s.name)).toEqual([NET_WORTH_PROJECTION_SERIES[0]])
