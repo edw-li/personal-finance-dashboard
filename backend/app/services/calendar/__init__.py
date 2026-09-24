@@ -10,6 +10,7 @@ from datetime import date
 from decimal import Decimal
 
 from app.services.espp_calc import OfferingInfo, StoredPeriod
+from app.services.month_status import MonthStatus
 
 from .fold import fold_same_day
 from .generators import cards, custom, dividends, espp, payroll, ritual, rsu, taxes
@@ -41,7 +42,10 @@ class Sources:
     payday_sources: list[PaydaySource] = field(default_factory=list)
     custom_rows: list[CustomRow] = field(default_factory=list)
     due_day: int = 1
-    entered_months: set[date] = field(default_factory=set)  # first-of-month snapshot months
+    # The monthly update's state on the router's day (services/month_status.py, 2026-09-23 spec
+    # §T6): the reminder asks it which parts are pending — the rule GET /coverage answers, never a
+    # second derivation. None = an empty book (the reminder then asks for the first balances).
+    month_status: MonthStatus | None = None
     tax_facts: dict[int, TaxFacts] = field(default_factory=dict)
     cards: list[CardFacts] = field(default_factory=list)
 
@@ -65,7 +69,7 @@ def compose(
     events += payroll.payday_events(sources.payday_sources, window)
     events += taxes.tax_deadline_events(window, today, sources.tax_facts)
     events += cards.card_events(sources.cards, window, today)
-    events += ritual.ritual_events(window, today, sources.due_day, sources.entered_months)
+    events += ritual.ritual_events(window, today, sources.due_day, sources.month_status)
     events += custom.custom_events(sources.custom_rows, window)
     composed = apply_overrides(fold_same_day(events), overrides or {})
     composed.sort(key=lambda event: (event.event_date, event.type, event.label))

@@ -40,7 +40,8 @@ def test_compose_runs_every_family_folds_overlays_and_sorts():
                 3, date(2026, 9, 15), "Zoo membership", None, amount=Decimal("120"), direction="out"
             )
         ],
-        entered_months={date(2026, 7, 1), date(2026, 8, 1), date(2026, 9, 1)},
+        # No month status (2026-09-23 spec §T6): the reminder asks an empty book for its first
+        # balances on Sep 1 and Oct 1 — neither lands in this two-day window.
     )
     events = compose(
         Window(date(2026, 9, 15), date(2026, 9, 16)),
@@ -68,5 +69,11 @@ def test_compose_runs_every_family_folds_overlays_and_sorts():
 
 def test_compose_with_empty_sources_yields_only_the_always_on_families():
     events = compose(Window(date(2026, 9, 1), date(2026, 9, 30)), today=TODAY, sources=Sources())
-    # Tax Q3 + the ritual reminders for August (Sep 1) — nothing else exists.
+    # Tax Q3 + the monthly reminder on Sep 1, asking an empty book for its first balances
+    # (2026-09-23 spec §T6) — nothing else exists.
     assert sorted({e.type for e in events}) == ["tax_deadline", "update_due"]
+    reminder = next(e for e in events if e.type == "update_due")
+    assert (reminder.label, reminder.key) == (
+        "Monthly update — Sep 1 balances",
+        "ritual:2026-08:2026-09-01",
+    )
