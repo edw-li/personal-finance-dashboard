@@ -911,6 +911,37 @@ describe('SpendingPage — the ribbon names the page\u2019s default month (2026-
     const edit = await screen.findByRole('link', { name: 'Edit Jul 2026 in the wizard' })
     expect(edit.getAttribute('href')).toBe('/update?month=2026-07-01&step=spending')
   })
+
+  // Spec review I1: the card reported the month ON SCREEN, so with any month picked the default
+  // equalled the pick and "Back to latest" never appeared. The default is where the card opens.
+  it('on the Budgets view with a month picked, offers the way back to the card’s own month', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(
+      matrixFixture({
+        default_month: '2026-06-01',
+        series: [
+          { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, '2100.00'] },
+          { category_id: 2, values: ['600.00', '580.00'], budgets: [null, '550.00'] },
+          { category_id: 3, values: ['150.00', '0.00'], budgets: [null, null] },
+        ],
+        total_budget: [null, '2650.00'],
+      }),
+    )
+    renderPage('/spending?section=budgets&month=2026-06')
+    // The pick wins on screen, and Edit opens it…
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jun 2026/ })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Edit Jun 2026 in the wizard' })).toBeTruthy()
+    // …while the way back goes to where the card opens with nothing picked: July.
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to latest' }))
+    await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('month='))
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jul 2026/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back to latest' })).toBeNull()
+    // Picking the card's own month leaves nowhere to go back to.
+    cleanup()
+    renderPage('/spending?section=budgets&month=2026-07')
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jul 2026/ })).toBeTruthy()
+    await screen.findByRole('link', { name: 'Edit Jul 2026 in the wizard' })
+    expect(screen.queryByRole('button', { name: 'Back to latest' })).toBeNull()
+  })
 })
 
 describe('SpendingPage — the honest rollup (spec §1/§2)', () => {

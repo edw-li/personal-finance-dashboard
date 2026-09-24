@@ -586,16 +586,20 @@ describe('the month the card reads (spec §B5)', () => {
   // — is PARTLY ENTERED. The card must not read it as a complete month ("0 of 13 over").
   describe('a month whose spending is not complete (2026-09-23 spec §T12)', () => {
     const partial = [flowsPart('2026-09-01', { spending: 'partial', overdue_from: '2026-10-16' })]
-    const renderWith = (flowsDue: FlowsPartOut[], onShownMonth?: (month: string | null) => void) =>
+    const renderWith = (
+      flowsDue: FlowsPartOut[],
+      onDefaultMonth?: (month: string | null) => void,
+      monthIndex: number | null = null,
+    ) =>
       render(
         <BudgetPanel
           matrix={SEP_BOOK}
-          monthIndex={null}
+          monthIndex={monthIndex}
           defaultIndex={1}
           onViewMonth={onViewMonth}
           onBudgetsChanged={onBudgetsChanged}
           flowsDue={flowsDue}
-          onShownMonth={onShownMonth}
+          onDefaultMonth={onDefaultMonth}
         />,
       )
 
@@ -619,6 +623,21 @@ describe('the month the card reads (spec §B5)', () => {
       ).toBeDefined()
     })
 
+    // Once the month is overdue the card says the date has passed, like the ribbon and Needs
+    // attention ("was due Oct 15"), rather than still promising one ahead (spec review M10).
+    it('says "was due" once the month is overdue', () => {
+      pinToday('2026-10-17')
+      renderWith([flowsPart('2026-09-01', { spending: 'partial', overdue_from: '2026-10-16', overdue: true })])
+      expect(
+        screen.getByText('0 of 2 budgeted categories over so far in Sep 2026 — its spending is partly entered (was due Oct 15)'),
+      ).toBeDefined()
+      cleanup()
+      renderWith([flowsPart('2026-09-01', { overdue_from: '2026-10-16', overdue: true })])
+      expect(
+        screen.getByText('Sep 2026 spending is not entered yet (was due Oct 15) — the meters read only what is on file.'),
+      ).toBeDefined()
+    })
+
     it('reads an entered month exactly as before', () => {
       pinToday('2026-10-05')
       renderWith([])
@@ -626,11 +645,18 @@ describe('the month the card reads (spec §B5)', () => {
       expect(screen.getByText('0 of 2 budgeted categories over in Sep 2026')).toBeDefined()
     })
 
-    it('tells the page which month it resolved, so the scope row can name it (T8)', () => {
+    // The scope row's default month is where the card OPENS with nothing picked (T8) — never the
+    // month a ribbon pick put on screen, or "Back to latest" could never appear (spec review I1).
+    it('tells the page the month it opens on with nothing picked — even while a pick is on screen', () => {
       pinToday('2026-10-05')
-      const onShownMonth = vi.fn()
-      renderWith([], onShownMonth)
-      expect(onShownMonth).toHaveBeenLastCalledWith('2026-09-01')
+      const onDefaultMonth = vi.fn()
+      renderWith([], onDefaultMonth)
+      expect(onDefaultMonth).toHaveBeenLastCalledWith('2026-09-01')
+      cleanup()
+      const whilePicked = vi.fn()
+      renderWith([], whilePicked, 0)
+      expect(screen.getByRole('heading', { level: 2, name: /^Budgets — Jul 2026/ })).toBeDefined()
+      expect(whilePicked).toHaveBeenLastCalledWith('2026-09-01')
     })
   })
 })

@@ -87,7 +87,7 @@ export default function BudgetPanel({
   onViewMonth,
   onBudgetsChanged,
   flowsDue,
-  onShownMonth,
+  onDefaultMonth,
 }: {
   matrix: SpendingMatrix
   /** The month the URL names (a ribbon pick or a deep link), as an index — it always wins.
@@ -101,9 +101,10 @@ export default function BudgetPanel({
   /** `GET /coverage` `time.flows_due` (2026-09-23 spec §T12): an ended month listed with its
    *  spending partly entered or missing reads so — never as a complete month under budget. */
   flowsDue?: readonly FlowsPartOut[]
-  /** Hears the month the card resolved (null when it has none): the page's scope row names it
-   *  as the Budgets view's default month (2026-09-23 spec §T8). */
-  onShownMonth?: (month: string | null) => void
+  /** Hears the month the card OPENS on with nothing picked (null when it has none) — the Budgets
+   *  view's default month for the scope row's Back and Edit (2026-09-23 spec §T8). Never the
+   *  picked month: with a pick on screen, Back must still know where "latest" is. */
+  onDefaultMonth?: (month: string | null) => void
 }) {
   const toast = useToast()
   const [editors, setEditors] = useState<Record<number, EditorState>>({})
@@ -164,20 +165,24 @@ export default function BudgetPanel({
   // The URL's month, else the pinned month, else where the budgets are (today's month when one
   // is in force there, else the latest month with one), else the page's own focus month.
   const pinnedIndex = pinned === null ? -1 : matrix.months.indexOf(pinned)
-  const monthIndexShown =
-    monthIndex ??
-    (pinnedIndex >= 0
+  // Where the card opens with nothing picked: the pin after a write (it lives only while nothing
+  // is picked — a pick drops it, and so does Back), else where the budgets are, else the page's
+  // focus month.
+  const openingIndex =
+    monthIndex === null && pinnedIndex >= 0
       ? pinnedIndex
-      : (budgetsOpeningIndex(activeBook, currentMonthIso()) ?? defaultIndex))
+      : (budgetsOpeningIndex(activeBook, currentMonthIso()) ?? defaultIndex)
+  const monthIndexShown = monthIndex ?? openingIndex
+  const monthAt = (index: number) => (index >= 0 && index < matrix.months.length ? matrix.months[index] : null)
 
-  const shownMonth =
-    monthIndexShown >= 0 && monthIndexShown < matrix.months.length ? matrix.months[monthIndexShown] : null
-  // The month on screen is the Budgets view's default for the scope row's Back and Edit (§T8) —
-  // it lives here (the pin after a write included), so the card says it rather than the page
-  // re-deriving it.
+  const shownMonth = monthAt(monthIndexShown)
+  // The Budgets view's default month for the scope row's Back and Edit (§T8) is where the card
+  // opens — it lives here, so the card says it rather than the page re-deriving it. Not the month
+  // on screen: a pick would make the default equal the pick, and Back would never appear.
+  const defaultMonth = monthAt(openingIndex)
   useEffect(() => {
-    onShownMonth?.(shownMonth)
-  }, [onShownMonth, shownMonth])
+    onDefaultMonth?.(defaultMonth)
+  }, [onDefaultMonth, defaultMonth])
 
   if (shownMonth === null) {
     return <p className="empty-note">Select an entered month in the ribbon to review its budgets.</p>
@@ -191,6 +196,9 @@ export default function BudgetPanel({
   const flows = inProgress ? undefined : flowsDue?.find((part) => part.month === `${month.slice(0, 7)}-01`)
   const partlyEntered = flows?.spending === 'partial'
   const notEntered = flows?.spending === 'missing'
+  // "due by Oct 15" while the date is ahead, "was due Oct 15" once it has passed (spec §K3's copy,
+  // the ribbon's and Needs attention's words for the same month).
+  const due = flows === undefined ? '' : flows.overdue ? `was due ${dueByName(flows)}` : `due by ${dueByName(flows)}`
   const badge = inProgress ? 'Month to date' : partlyEntered ? 'Partly entered' : notEntered ? 'Not entered yet' : null
   // A5 (2026-08-31 tier-1): default to the FOCUSED month — the month the meters read.
   // The old next-calendar-month default made a first budget save successfully and
@@ -469,10 +477,10 @@ export default function BudgetPanel({
         <>
           <div className="budget-summary-row">
             <p className="drill-hint" role="status">
-              {notEntered && flows !== undefined
-                ? `${formatMonth(month)} spending is not entered yet (due by ${dueByName(flows)}) — the meters read only what is on file.`
+              {notEntered
+                ? `${formatMonth(month)} spending is not entered yet (${due}) — the meters read only what is on file.`
                 : `${overCount} of ${budgeted.length} budgeted categories over ${inProgress || partlyEntered ? 'so far ' : ''}in ${formatMonth(month)}${
-                    partlyEntered && flows !== undefined ? ` — its spending is partly entered (due by ${dueByName(flows)})` : ''
+                    partlyEntered ? ` — its spending is partly entered (${due})` : ''
                   }`}
             </p>
             {canSeed && !confirmReseed && (

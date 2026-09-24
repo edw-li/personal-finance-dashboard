@@ -270,8 +270,8 @@ export default function SpendingPage() {
   const [coverage, setCoverage] = useState<CoverageOut | null>(() => getSnapshot<CoverageOut>(COVERAGE_SNAPSHOT) ?? null)
   const flowsKey = JSON.stringify(coverage?.time?.flows_due ?? [])
   const flowsDue = useMemo(() => JSON.parse(flowsKey) as FlowsPartOut[], [flowsKey])
-  // The month the Budget card resolved (its own rule, a pin after a write included): the scope
-  // row's default month on the Budgets view (2026-09-23 spec §T8).
+  // The month the Budget card opens on with nothing picked (its own rule, a pin after a write
+  // included): the scope row's default month on the Budgets view (2026-09-23 spec §T8).
   const [budgetsMonth, setBudgetsMonth] = useState<string | null>(null)
   // Their '*' on that month, said in words under each card (the 2026-09-23 code review, 13) —
   // in progress, partly entered, or both.
@@ -725,7 +725,7 @@ export default function SpendingPage() {
               // A partly entered or missing month reads as such, never as a complete month under
               // budget (2026-09-23 spec §T12).
               flowsDue={flowsDue}
-              onShownMonth={setBudgetsMonth}
+              onDefaultMonth={setBudgetsMonth}
             />
           )}
         </LocalSectionPanel>
