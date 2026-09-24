@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
@@ -49,11 +49,13 @@ from app.models import (
     User,
 )
 from app.security import hash_password
+from app.services import clock
 from app.services.portfolio_calc import fold_transactions
 from app.tax_keys import DERIVED_KEYS
 from tests.portfolio_factories import acct
 from tests.workbook_builder import (
     build_workbook,
+    default_net_worth_rows,
     default_portfolio_rows,
     default_positions_rows,
     load_readonly,
@@ -2206,3 +2208,114 @@ async def test_importer_sweep_leaves_person_rows_alone(db):
         await db.execute(select(TaxBracket).where(TaxBracket.person_id == me.id))
     ).scalar_one()
     assert survivor.rate == sheet_row.rate + Decimal("0.0100")
+
+
+# --- K5 (2026-09-23 spec): recorded dates on re-import ---
+
+
+def net_worth_row(month: datetime, recorded: datetime | None, checking: float) -> list:
+    """One Net Worth data row in the default sheet's column layout."""
+    return [month, recorded, checking, 0, 50.0, 0, 25.0, 0, checking + 25.0, 0]
+
+
+async def import_net_worth(db, rows) -> SheetReport:
+    report = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets(net_worth=rows)["Net Worth"]), report)
+    await db.commit()
+    return report
+
+
+async def snapshot_on(db, month: date) -> NetWorthSnapshot:
+    return (
+        await db.execute(select(NetWorthSnapshot).where(NetWorthSnapshot.month == month))
+    ).scalar_one()
+
+
+async def test_a_re_import_keeps_a_final_snapshot_s_date_and_warns(db):
+    await import_net_worth(db, default_net_worth_rows())
+    rows = default_net_worth_rows()
+    rows[2][1] = datetime(2024, 1, 9)  # January's column B moved
+    report = await import_net_worth(db, rows)
+    assert (await snapshot_on(db, date(2024, 1, 1))).recorded_on == date(2024, 1, 5)
+    assert (
+        "Net Worth: Jan 2024 is stored as recorded on 2024-01-05; the sheet says 2024-01-09 — "
+        "the stored date is kept." in report.warnings
+    )
+    assert report.entities["net_worth_snapshots"].updates == 0
+
+
+async def test_a_blank_column_b_leaves_a_stored_date_alone(db):
+    await import_net_worth(db, default_net_worth_rows())
+    rows = default_net_worth_rows()
+    rows[2][1] = None
+    report = await import_net_worth(db, rows)
+    assert (await snapshot_on(db, date(2024, 1, 1))).recorded_on == date(2024, 1, 5)
+    assert not any("Jan 2024" in warning for warning in report.warnings)
+
+
+async def test_a_new_row_dated_before_its_month_imports_provisional_and_warns(db):
+    header = default_net_worth_rows()[:2]
+    report = await import_net_worth(
+        db, header + [net_worth_row(datetime(2026, 10, 1), datetime(2026, 9, 22), 100.0)]
+    )
+    assert (await snapshot_on(db, date(2026, 10, 1))).recorded_on == date(2026, 9, 22)
+    assert (
+        "Net Worth: Oct 2026 is dated 2026-09-22, before its month — it imports as provisional "
+        "Oct 1 balances." in report.warnings
+    )
+
+
+async def test_a_re_import_on_or_after_the_1st_that_changes_a_provisional_snapshot_finalizes_it(
+    db, monkeypatch
+):
+    header = default_net_worth_rows()[:2]
+    early = net_worth_row(datetime(2026, 10, 1), datetime(2026, 9, 22), 100.0)
+    await import_net_worth(db, header + [early])
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 10, 3))
+    changed = net_worth_row(datetime(2026, 10, 1), datetime(2026, 9, 22), 150.0)
+    report = await import_net_worth(db, header + [changed])
+    assert (await snapshot_on(db, date(2026, 10, 1))).recorded_on == date(2026, 10, 3)
+    assert report.entities["net_worth_snapshots"].updates == 1
+    assert any("recorded_on 2026-09-22 -> 2026-10-03" in sample for sample in report.samples)
+
+
+async def test_one_that_changes_nothing_leaves_it_provisional(db, monkeypatch):
+    header = default_net_worth_rows()[:2]
+    await import_net_worth(
+        db, header + [net_worth_row(datetime(2026, 10, 1), datetime(2026, 9, 22), 100.0)]
+    )
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 10, 3))
+    report = await import_net_worth(
+        db, header + [net_worth_row(datetime(2026, 10, 1), datetime(2026, 10, 2), 100.0)]
+    )
+    assert (await snapshot_on(db, date(2026, 10, 1))).recorded_on == date(2026, 9, 22)
+    assert report.entities["net_worth_snapshots"].skips == 1
+    assert (
+        "Net Worth: Oct 2026 is stored as recorded on 2026-09-22; the sheet says 2026-10-02 — "
+        "the stored date is kept." in report.warnings
+    )
+
+
+async def test_before_its_1st_a_changing_import_restamps_it_still_provisional(db, monkeypatch):
+    header = default_net_worth_rows()[:2]
+    await import_net_worth(
+        db, header + [net_worth_row(datetime(2026, 10, 1), datetime(2026, 9, 22), 100.0)]
+    )
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 9, 25))
+    await import_net_worth(
+        db, header + [net_worth_row(datetime(2026, 10, 1), datetime(2026, 9, 22), 120.0)]
+    )
+    assert (await snapshot_on(db, date(2026, 10, 1))).recorded_on == date(2026, 9, 25)
+
+
+async def test_a_final_snapshot_with_no_stored_date_keeps_it_blank(db):
+    header = default_net_worth_rows()[:2]
+    await import_net_worth(db, header + [net_worth_row(datetime(2024, 5, 1), None, 100.0)])
+    report = await import_net_worth(
+        db, header + [net_worth_row(datetime(2024, 5, 1), datetime(2024, 5, 3), 100.0)]
+    )
+    assert (await snapshot_on(db, date(2024, 5, 1))).recorded_on is None
+    assert (
+        "Net Worth: May 2024 is stored with no recorded date; the sheet says 2024-05-03 — "
+        "the stored date is kept." in report.warnings
+    )
