@@ -272,8 +272,9 @@ TOKEN_FILE=$SCRATCH/token.txt SMOKE_OUT=scratchpad/table-scroll-v node tools/pro
 
 Prints each page's height per run (and, from the 1440×900 record pass, against the spec's
 before-number) and any `KNOWN (pre-existing)` lines, then
-`TABLE SCROLL SMOKE OK — N checks, M notes, K known (pre-existing), W writes fenced (P prefs)`, or
-exits 1 listing every problem. `ONLY_THEME`, `ONLY_SIZE` (1280|1600|1920, or 1440 for the record
+`TABLE SCROLL SMOKE OK — N checks, M notes, K known (pre-existing), W writes fenced (P prefs)` —
+followed, when there were any, by `R GET(s) asked twice` and `L page load(s) retried`, each
+listed above the line with its cause — or exits 1 listing every problem. `ONLY_THEME`, `ONLY_SIZE` (1280|1600|1920, or 1440 for the record
 pass alone), `ONLY_TARGET` (dividends, transactions, securities, holdings, classifications,
 networth, rewards) and `RECORD=0` narrow a run; the full one takes about 12 minutes.
 
@@ -286,7 +287,16 @@ networth, rewards) and `RECORD=0` narrow a run; the full one takes about 12 minu
   on purpose per theme and size — two dividend PATCHes (the reveal, saved from the keyboard and
   with the mouse) and a transaction DELETE (the reload) — and the fence plays the server's part for
   them in the GETs that follow; otherwise the refetch returns the
-  unchanged book, PortfolioPage keeps the ledger it has, and neither claim is exercised.
+  unchanged book, PortfolioPage keeps the ledger it has, and neither claim is exercised. A page
+  whose box does not render within 15 s is loaded again (three tries), every retry logged in
+  `loadRetries` with what the page showed instead.
+- **The product's day.** The dividend ledger's default month follows the server's day
+  (`X-Product-Today`, the 2026-09-23 time contract), which the smoke reads off the API; a stack
+  without the header falls back to this box's date.
+- **Placement.** The page-still drag and the wheel set the box's foot 8px inside the window, so
+  whatever the page holds below the box is room to move into: a page that ENDS in its box, placed
+  any other way, sits at its maximum scroll, where "the page stays put" cannot fail and the wheel's
+  chaining cannot be seen. With under 20px of room either is a note.
 - **Classic scrollbars.** The launch drops headless Chromium's `--hide-scrollbars`, so boxes carry
   the ~15px scrollbars of the user's headed Edge; every box that scrolls must measure one (a check —
   a run that lost the flag fails rather than passing on overlay scrollbars).
@@ -305,9 +315,13 @@ networth, rewards) and `RECORD=0` narrow a run; the full one takes about 12 minu
   that is not the scope row's, focus landing anywhere but `<body>`): any other failure of the same
   claim fails the run.
 - **Notes** (`ok: null` in `report.json`) are observations, not votes: a table that fits its box at
-  that size (the sideways checks, for Holdings at the wider sizes), a page already at its end below a
-  box (no wheel chaining to measure), whether the Holdings detail opens docked or as an overlay,
-  where the card button lands after Back to matrix, and the page heights.
+  that size (the sideways checks, for Holdings at the wider sizes; the matrix's sideways state per
+  size), a box with no edge mask at rest (nothing for the keyboard focus to drop — the check runs
+  where one is masked), a page that ends at its box (no room to see the wheel chain), whether the
+  Holdings detail opens docked or as an overlay, where the card button lands after Back to
+  matrix, the matrix's remount (the card detail REPLACES the matrix, so Back to matrix returns to
+  the box's top and the page's scroll is not restored — pre-existing, by the page's design), and
+  the page heights.
 - **Artifacts** in `SMOKE_OUT`: each box mid-scroll, the pinned month line, the revealed entries,
   the held arrival drag, the Holdings scrollbar strip with and without the mask and the ring at the
   masked edge, the matrix after Back to matrix, the Net worth PDF with a full-page shot under print media beside

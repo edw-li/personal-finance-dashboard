@@ -27,19 +27,21 @@
 //
 // The plan's draft (Task 9), and what the code reviews added to it: the scrollbar variable and the
 // mask's opaque strip over the scrollbar (judged in pixels); header focus that never moves a scrolled
-// box (Holdings' sort headers, the matrix's card buttons, "Back to matrix"); a sort, a chip and a
-// search that start the list from its first row; a Tab walk that never parks a focus stop under the
-// "more below" fade; the inside/outside focus rings; the drag held at the WINDOW's foot from the
-// arrival state (the box running to its end before the page moves); the print release (computed
-// under print media, and a PDF as the artifact); the dividend table's size observer, the default
-// month, and a saved entry revealed inside the box without moving the page.
+// box (Holdings' sort headers, the matrix's card buttons); the focus "Back to matrix" hands back —
+// the card detail REPLACES the matrix, so the box's scroll does not survive the trip (a note, never
+// claimed); a sort, a chip and a search that start the list from its first row; a Tab walk that
+// never parks a focus stop under the "more below" fade; the inside/outside focus rings; the drag held
+// at the WINDOW's foot from the arrival state (the box running to its end before the page moves);
+// the print release (computed under print media, and a PDF as the artifact); the dividend table's
+// size observer, the default month, and a saved entry revealed inside the box without moving the page.
 // Where the draft's own checks changed, the claim stayed and the driving moved: "only the newest
 // month is open" is "only the newest month on or before today's" — the spec's rule (§4.4), which the
-// newest month is only by chance; the keyboard lift judges its landing slot and the drop line on it,
-// since under this context's reduced motion the lifted row stays home (lane R7); the page-still drag
-// sets the box's foot just inside the window with room below, where the draft's centred box left the
-// page at its maximum scroll (the ledger is the last thing on Manage) and the claim could not fail;
-// and the wheel reaches the box's end by wheel before the one that must chain (see `wheel`).
+// newest month is only by chance, "today" being the server's product day (X-Product-Today, lane K);
+// the keyboard lift judges its landing slot and the drop line on it, since under this context's
+// reduced motion the lifted row stays home (lane R7); the page-still drag and the wheel set the box's
+// foot just inside the window with room below, where the draft's placements left the page at its
+// maximum scroll (a ledger is often the last thing on its page) and the claims could not fail; and
+// the wheel reaches the box's end by wheel before judging the chain (see `wheel`).
 //
 // Env: TOKEN_FILE (required), APP_BASE, API_BASE, SMOKE_OUT, EDGE_PATH, PLAYWRIGHT_CORE,
 // ONLY_THEME (dark|light), ONLY_SIZE (1280|1600|1920, or 1440 for the record pass alone),
@@ -105,7 +107,7 @@ const slug = (text) => text.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')
 const monthLabel = (key) => `${MONTHS[Number(key.slice(5)) - 1]} ${key.slice(0, 4)}`
 const report = {
   at: new Date().toISOString(), base: BASE, api: API, sizes: SIZES, themes: THEMES,
-  checks: [], heights: [], known: [], writesBlocked: [], prefsWrites: [], fenceErrors: [], fenceRetries: [], problems: [],
+  checks: [], heights: [], known: [], writesBlocked: [], prefsWrites: [], fenceErrors: [], fenceRetries: [], loadRetries: [], problems: [],
 }
 const check = (where, name, ok, observed) => {
   report.checks.push({ where, name, ok, observed })
@@ -302,11 +304,15 @@ const frames = () => page.evaluate(() => window.__ts.frames())
 /** The box's band (see pageHelpers). */
 const bandOf = (label) => page.evaluate((l) => window.__ts.band(window.__ts.box(l)), label)
 
+/** Load the target's page until its box shows — three tries, every retry logged (`loadRetries`,
+ *  counted in the final line) with what the page showed instead, so a flaky load is never silent. */
 async function open(target, { prepare = true } = {}) {
   for (let attempt = 1; ; attempt += 1) {
     await page.goto(BASE + target.url, { waitUntil: 'networkidle' })
     const shown = await page.locator(boxSel(target.label)).waitFor({ state: 'visible', timeout: 15000 }).then(() => true, () => false)
     if (shown) break
+    const showing = await page.evaluate(() => (document.querySelector('main')?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 160)).catch(() => null)
+    report.loadRetries.push({ where: state.where, url: target.url, attempt, showing })
     if (attempt === 3) throw new Error(`the ${target.label} box never rendered at ${target.url}`)
   }
   await sleep(1200)
@@ -480,7 +486,9 @@ async function keyboard(where, target) {
     return { focused: document.activeElement === box, visible: box.matches(':focus-visible'), outline: cs.outlineStyle, mask: cs.maskImage }
   }, target.label)
   check(where, 'the focused box shows the focus ring', ring.focused && ring.visible && ring.outline !== 'none', ring)
-  check(where, 'with keyboard focus the box drops its edge mask (a mask would clip the ring)', ring.mask === 'none', { maskAtRest, focused: ring.mask })
+  // Only a box masked at rest can show the mask dropping; one with nothing to drop is a reading.
+  if (maskAtRest !== 'none') check(where, 'with keyboard focus the box drops its edge mask (a mask would clip the ring)', ring.mask === 'none', { maskAtRest, focused: ring.mask })
+  else note(where, 'no edge mask at rest here — nothing for the keyboard focus to drop', { maskAtRest, focused: ring.mask })
   await page.keyboard.press('ArrowDown')
   await sleep(250)
   const down = await page.evaluate((l) => window.__ts.box(l).scrollTop, target.label)
@@ -498,35 +506,36 @@ const overBox = (label) =>
     return { x: r.left + r.width / 2, y: (Math.max(r.top, 0) + Math.min(r.bottom, window.innerHeight)) / 2 }
   }, label)
 
+/** A wheel at the box's end carries on down the page — no trap (spec §2.2). The box's foot goes 8px
+ *  inside the window (the ledger drag's placement), so whatever the page holds below the box is room
+ *  the wheel can move it into: the draft's box-at-the-window-top placement left every page that ENDS
+ *  in its box at its maximum scroll, where chaining could not be measured. The reader's own wheel
+ *  carries the box to its end first: a script's scrollTop can land a sub-pixel past where the wheel
+ *  puts the end (1600×1000: 442 by script, 441 by wheel, on a 1041.875px table), and the next gesture
+ *  then spends itself on that pixel — a smoke artifact, not a trap. */
 async function wheel(where, target) {
-  await page.evaluate(async (l) => {
+  const placed = await page.evaluate(async (l) => {
     const box = window.__ts.box(l)
-    window.scrollTo(0, 0)
-    box.scrollIntoView({ block: 'start' })
     box.scrollTop = Math.max(0, box.scrollHeight - box.clientHeight - 150)
+    window.scrollBy(0, box.getBoundingClientRect().bottom - (window.innerHeight - 8))
     await window.__ts.frames()
+    return { y0: window.scrollY, room: Math.round(document.documentElement.scrollHeight - window.innerHeight - window.scrollY) }
   }, target.label)
-  // The reader's own wheel carries the box to its end. A script's scrollTop can land a sub-pixel past
-  // where the wheel puts the end (1600×1000: 442 by script, 441 by wheel, on a 1041.875px table), and
-  // the next gesture then spends itself on that pixel — a smoke artifact, not a trap.
   const first = await overBox(target.label)
   await page.mouse.move(first.x, first.y)
   await page.mouse.wheel(0, 400)
   await sleep(500)
-  const atEnd = await page.evaluate((l) => {
-    const box = window.__ts.box(l)
-    return {
-      boxAtEnd: !(box.getAttribute('data-scroll-more') ?? '').includes('bottom'), y0: window.scrollY,
-      canScroll: window.scrollY + window.innerHeight < document.documentElement.scrollHeight - 1,
-    }
-  }, target.label)
+  const atEnd = await page.evaluate((l) => ({
+    boxAtEnd: !(window.__ts.box(l).getAttribute('data-scroll-more') ?? '').includes('bottom'), pageY: window.scrollY,
+  }), target.label)
   const second = await overBox(target.label)
   await page.mouse.move(second.x, second.y)
   await page.mouse.wheel(0, 400)
   await sleep(500)
   const y1 = await page.evaluate(() => window.scrollY)
-  if (atEnd.canScroll) check(where, 'a wheel over the box at its end scrolls the page on — no trap', atEnd.boxAtEnd && y1 > atEnd.y0, { ...atEnd, y1 })
-  else note(where, 'the page is already at its end below this box — chaining not measurable here', atEnd)
+  const seen = { room: placed.room, y0: placed.y0, afterTheBoxsEnd: atEnd.pageY, y1, boxAtEnd: atEnd.boxAtEnd }
+  if (placed.room >= 20) check(where, 'a wheel over the box at its end scrolls the page on — no trap', atEnd.boxAtEnd && y1 > placed.y0, seen)
+  else note(where, 'the page ends at this box — no room below it to measure the wheel chaining', seen)
 }
 
 /** index.css draws the house ring OUTSIDE a control (outline-offset 2px) but inset (-2px) inside a
@@ -750,17 +759,36 @@ async function rewardsHeader(where, target) {
   check(where, "Tab across the pinned card buttons never moves the scrolled box", mid > 0 && walk.length > 0 && walk.every((w) => w.scrollTop === Math.round(mid)), { scrollTop: mid, walk })
 }
 
+/** A card's detail and back. Both clicks are the MOUSE at the control's own pixels (locator.click()
+ *  scrolls first). CreditCardsPage renders the detail INSTEAD of the matrix (`activeCard ? <CardDetail/>
+ *  : …`), so the matrix unmounts while a card is open and Back to matrix mounts a new box at its top:
+ *  the box's scroll cannot survive the trip, by the page's design, before this batch — a note, with a
+ *  mark on the old box element to show the new one is new. */
 async function matrixBack(where, target) {
-  await boxTo(target.label, 'middle')
+  const before = await boxTo(target.label, 'middle')
   const card = await page.evaluate((l) => {
-    const button = window.__ts.box(l).querySelector('.matrix-card-btn')
+    const box = window.__ts.box(l)
+    box.__smokeMark = true
+    const button = box.querySelector('.matrix-card-btn')
     const r = button.getBoundingClientRect()
-    return { id: button.id, x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    return { id: button.id, x: r.left + r.width / 2, y: r.top + r.height / 2, pageY: Math.round(window.scrollY) }
   }, target.label)
   await page.mouse.click(card.x, card.y)
-  const back = page.getByRole('button', { name: 'Back to the matrix' })
-  await back.waitFor({ state: 'visible', timeout: 5000 })
-  await back.click()
+  await page.getByRole('button', { name: 'Back to the matrix' }).waitFor({ state: 'visible', timeout: 5000 })
+  await frames()
+  // The page's scroll with the detail open, before anything here scrolls it; the button brought into
+  // the window only if the detail left it outside.
+  const open = await page.evaluate(() => {
+    const pageY = Math.round(window.scrollY)
+    const button = document.querySelector('[aria-label="Back to the matrix"]')
+    let r = button.getBoundingClientRect()
+    if (r.top < 0 || r.bottom > window.innerHeight) {
+      button.scrollIntoView({ block: 'center' })
+      r = button.getBoundingClientRect()
+    }
+    return { pageY, x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })
+  await page.mouse.click(open.x, open.y)
   await page.waitForFunction((id) => document.activeElement?.id === id, card.id, { timeout: 3000 }).catch(() => {})
   await frames()
   const s = await page.evaluate((id) => {
@@ -768,17 +796,32 @@ async function matrixBack(where, target) {
     const button = document.getElementById(id)
     const r = (button ?? a).getBoundingClientRect()
     const scope = document.querySelector('.page-frame-scope')?.getBoundingClientRect() ?? null
+    const box = button?.closest('.table-scroll') ?? null
     return {
       active: a === document.body ? 'body' : `${a.tagName.toLowerCase()}#${a.id}`, buttonBack: button !== null,
       top: Math.round(r.top), bottom: Math.round(r.bottom), scopeBottom: scope && Math.round(scope.bottom),
       clearOfScopeRow: scope === null || r.top >= scope.bottom - 1, inWindow: r.top >= 0 && r.bottom <= window.innerHeight,
-      pageY: Math.round(window.scrollY), boxScrollTop: button?.closest('.table-scroll')?.scrollTop ?? null,
+      pageY: Math.round(window.scrollY), boxScrollTop: box?.scrollTop ?? null, newBox: box !== null && box.__smokeMark !== true,
     }
   }, card.id)
   known(where, "Back to matrix hands the focus back to the card's column button", s.active === `button#${card.id}`, { expected: card.id, ...s }, 'matrix-focus-return')
   // Where it lands (or would) against the page's sticky scope row — a reading, not a vote.
   note(where, `where the card button lands after Back to matrix against the sticky scope row${s.active === `button#${card.id}` ? '' : ' (it did not take the focus)'}`, s)
+  note(where, "the card detail replaces the matrix, so Back to matrix returns to the box's top — pre-existing; the page's own scroll resets on open too (it jumps to the detail and is not restored on Back)", {
+    box: { beforeOpen: before.scrollTop, afterBack: s.boxScrollTop, newBoxElement: s.newBox },
+    page: { beforeOpen: card.pageY, withDetailOpen: open.pageY, afterBack: s.pageY },
+  })
   await shot(where, 'back-to-matrix')
+}
+
+/** Whether a table outgrows its box sideways here (and so wears the edge masks) — a reading per size. */
+async function sidewaysNote(where, target, subject) {
+  const s = await page.evaluate((l) => {
+    const box = window.__ts.box(l)
+    return { clientWidth: box.clientWidth, scrollWidth: box.scrollWidth, more: box.getAttribute('data-scroll-more') ?? '' }
+  }, target.label)
+  const overflows = s.scrollWidth > s.clientWidth + 1
+  note(where, `${subject} ${overflows ? 'overflows its box sideways — the edge masks apply' : 'fits its box sideways — no edge masks'}`, s)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -836,7 +879,16 @@ async function ledger() {
     counts.set(k, (counts.get(k) ?? 0) + 1)
   }
   const keys = [...cents.keys()].sort().reverse()
-  return { all, cents, counts, keys, fullest: keys.reduce((a, b) => (counts.get(b) > counts.get(a) ? b : a)) }
+  // The product's day, as the server names it on every response (X-Product-Today, 2026-09-23 spec
+  // §K1) — the day the app's todayIso() answers; a stack that predates the header falls back to this
+  // box's own date, which the browser's clock then shares.
+  const now = new Date()
+  const local = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  const productToday = res.headers()['x-product-today'] ?? null
+  return {
+    all, cents, counts, keys, today: productToday ?? local, todayFrom: productToday === null ? 'this box' : 'X-Product-Today',
+    fullest: keys.reduce((a, b) => (counts.get(b) > counts.get(a) ? b : a)),
+  }
 }
 
 /** Fold every month, then open exactly `labels` — each through its line's own button. */
@@ -852,7 +904,7 @@ const openOnly = (labels) =>
   }, [DIVIDENDS, labels])
 
 async function dividendMonths(where) {
-  const { all, cents, counts, keys, fullest } = await ledger()
+  const { all, cents, counts, keys, fullest, today, todayFrom } = await ledger()
   const lines = await page.$$eval(`${boxSel(DIVIDENDS)} .dividend-month-row`, (rows) =>
     rows.map((r) => ({
       text: r.querySelector('.dividend-month-label').textContent,
@@ -862,12 +914,11 @@ async function dividendMonths(where) {
   )
   check(where, 'one line per recorded month, newest first', JSON.stringify(lines.map((l) => l.text)) === JSON.stringify(keys.map(monthLabel)), { dom: lines.map((l) => l.text), api: keys.map(monthLabel) })
   // Spec §4.4: the newest month on or before today's (a future-dated entry must not fold the current
-  // month away), else the newest. Today is this box's local date — the browser's clock too.
-  const now = new Date()
-  const current = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  // month away), else the newest — "today" being the product's day (see ledger()).
+  const current = today.slice(0, 7)
   const expected = keys.find((k) => k <= current) ?? keys[0]
   const open = lines.filter((l) => l.expanded === 'true').map((l) => l.text)
-  check(where, `only the default month is open — the newest on or before ${monthLabel(current)} (${monthLabel(expected)})`, JSON.stringify(open) === JSON.stringify([monthLabel(expected)]), { open })
+  check(where, `only the default month is open — the newest on or before ${monthLabel(current)} (${monthLabel(expected)})`, JSON.stringify(open) === JSON.stringify([monthLabel(expected)]), { open, today, todayFrom })
   const wrong = lines.filter((l, i) => l.total !== money.format(cents.get(keys[i]) / 100))
   check(where, "every month's total is the cent-exact sum of its entries", wrong.length === 0, wrong.slice(0, 3))
   // Read past any separator the line's accessible name puts before the count (a visually-hidden comma).
@@ -1262,6 +1313,7 @@ async function runTarget(where, target) {
     await holdingsDock(where, target)
   }
   if (target.name === 'classifications' && g.overflows) await classificationResets(where, target)
+  if (target.name === 'rewards') await sidewaysNote(where, target, 'the rewards matrix')
   if (target.name === 'rewards' && g.overflows) {
     await rewardsHeader(where, target)
     await matrixBack(where, target)
@@ -1343,16 +1395,18 @@ for (const h of report.heights) {
 const passed = report.checks.filter((c) => c.ok === true).length
 const notes = report.checks.filter((c) => c.ok === null && !c.known).length
 const retried = report.fenceRetries.length > 0 ? `, ${report.fenceRetries.length} GET(s) asked twice` : ''
+const reloaded = report.loadRetries.length > 0 ? `, ${report.loadRetries.length} page load(s) retried` : ''
 const knownTally = report.known.length > 0 ? `, ${report.known.length} known (pre-existing)` : ''
-const tally = `${passed} checks, ${notes} notes${knownTally}, ${report.writesBlocked.length} writes fenced (${report.prefsWrites.length} prefs)${retried}`
+const tally = `${passed} checks, ${notes} notes${knownTally}, ${report.writesBlocked.length} writes fenced (${report.prefsWrites.length} prefs)${retried}${reloaded}`
 for (const ref of [...new Set(report.known.map((k) => k.ref))]) {
   const hits = report.known.filter((k) => k.ref === ref)
-  const runs = hits.map((k) => k.where.replace(/ S+$/, '')).join(', ')
+  const runs = hits.map((k) => k.where.replace(/ \S+$/, '')).join(', ')
   console.log(`KNOWN (pre-existing): ${KNOWN_DEFECTS[ref].why} — ${hits.length}× (${runs}); evidence: ${KNOWN_DEFECTS[ref].evidence}`)
 }
 // Requests the fence re-asked or could not answer (the page saw those fail): named, so a console
 // error has a cause.
 for (const r of report.fenceRetries) console.log(`  fence asked twice: GET ${r.url} (${r.where}): ${r.error}`)
+for (const r of report.loadRetries) console.log(`  page load retried: ${r.url} (${r.where}, attempt ${r.attempt}) — the page showed: ${r.showing}`)
 for (const e of report.fenceErrors) console.log(`  fence could not answer ${e.method} ${e.url} (${e.where}): ${e.error}`)
 if (report.problems.length > 0) {
   console.log(`TABLE SCROLL SMOKE FAILED — ${report.problems.length} problem(s); ${tally}:`)
