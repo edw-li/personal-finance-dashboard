@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Reconciliation, ReconciliationRow } from '../../types/api'
 import {
+  dayLabel,
   differenceText,
   effectText,
   flagDetail,
@@ -104,6 +105,12 @@ describe('reconciliation copy (2026-09-23 spec §W4)', () => {
     )
   })
 
+  it('names a day without its year only inside the card’s own year', () => {
+    expect(dayLabel('2026-09-16', 2026)).toBe('Sep 16')
+    expect(dayLabel('2027-01-01', 2026)).toBe('Jan 1, 2027')
+    expect(dayLabel('2026-09-16')).toBe('Sep 16')
+  })
+
   it('signs the difference and rounds the tax effect to whole dollars', () => {
     expect(differenceText('4488.33')).toBe('+$4,488.33')
     expect(differenceText('-2000.00')).toBe('−$2,000.00')
@@ -141,6 +148,10 @@ describe('reconciliation copy (2026-09-23 spec §W4)', () => {
     // No reference close on file: the flag used the latest quote.
     expect(flagDetail(row({ ...rsu, facts: { ...rsu.facts, reference_date: null } }))).toBe(
       'flag judged at the latest quote ($217.44 a share), beyond ±$4,610 of the unvested vests',
+    )
+    // A January reference close is last year's: it says so.
+    expect(flagDetail(row({ ...rsu, facts: { ...rsu.facts, reference_date: '2025-12-31' } }), 2026)).toBe(
+      'flag judged at the Dec 31, 2025 close ($217.44 a share), beyond ±$4,610 of the unvested vests',
     )
     // Quiet when there is nothing to explain: not flagged, or not the RSU row.
     expect(flagDetail({ ...rsu, flagged: false })).toBeNull()

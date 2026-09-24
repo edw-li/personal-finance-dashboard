@@ -19,9 +19,11 @@ function wholeDollars(value: string | number): string {
   return WHOLE_DOLLARS.format(Math.abs(Number(value)))
 }
 
-/** "Sep 16" — the card is always the current year, so the year would be noise. */
-export function dayLabel(iso: string): string {
-  return formatDate(iso).replace(/, \d{4}$/, '')
+/** "Sep 16" — inside the card's own year the year is noise; a day in any other year names it
+ *  ("Jan 1, 2027": a job that starts after the tax year, a January's reference close). */
+export function dayLabel(iso: string, year?: number): string {
+  const full = formatDate(iso)
+  return year !== undefined && Number(iso.slice(0, 4)) !== year ? full : full.replace(/, \d{4}$/, '')
 }
 
 /** The typed side: the stored figure, or "not entered" when none of its inputs is stored. */
@@ -52,10 +54,10 @@ const SOURCE_WORDS: Record<ReconciliationRow['source'], string> = {
  * without this sentence it would read "differs" beside a $0.00 difference. Null when there is
  * nothing to explain.
  */
-export function flagDetail(row: ReconciliationRow): string | null {
+export function flagDetail(row: ReconciliationRow, year?: number): string | null {
   const { reference_price: price, reference_date: day, quote_tolerance: band } = row.facts
   if (row.key !== 'rsu' || !row.flagged || price === null) return null
-  const where = day === null ? 'the latest quote' : `the ${dayLabel(day)} close`
+  const where = day === null ? 'the latest quote' : `the ${dayLabel(day, year)} close`
   const beyond = band === null ? '' : `, beyond ±${wholeDollars(band)} of the unvested vests`
   return `flag judged at ${where} (${formatCurrency(price)} a share)${beyond}`
 }

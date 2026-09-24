@@ -262,7 +262,7 @@ function ReconciliationStrip({
                       const projectedNote = projectedDetail(row, year)
                       // Why a flagged RSU row differs (review finding 3): judged at the month's
                       // reference close, while the figures are on today's quote.
-                      const flagNote = flagDetail(row)
+                      const flagNote = flagDetail(row, year)
                       const whose = row.person_name ?? 'you'
                       return (
                         <tr
@@ -789,7 +789,7 @@ export default function WithholdingPanel({
                         // ("Grace's checks on or before …") — they read as one passage.
                         partnerGrid?.name != null ? `${partnerGrid.name}'s` : 'their'
                       } paycheck profile — ${partnerLeg.checks_elapsed} of ${partnerLeg.checks_total} checks${
-                        partnerGrid?.starts_on != null ? ` since ${dayLabel(partnerGrid.starts_on)}` : ''
+                        partnerGrid?.starts_on != null ? ` since ${dayLabel(partnerGrid.starts_on, year)}` : ''
                       } at their all-in withholding %. Their entered W-2 withholding rows are ignored while that profile exists.`}
                     </p>
                     {/* A partial year (§W1): the rule, and the sentence naming the start. */}
