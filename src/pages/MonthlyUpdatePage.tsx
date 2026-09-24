@@ -24,6 +24,8 @@ import { fetchMonthReview, saveMonthReview, REVIEW_LABELS } from '../api/monthRe
 import type { MonthReview, MonthSave, ReviewedFeeds } from '../api/monthReview'
 import ReviewChanges from '../components/monthly/ReviewChanges'
 import HistoricalReview from '../components/monthly/HistoricalReview'
+import WhatsDue from '../components/monthly/WhatsDue'
+import { landingFor, nextDueAfter, type DuePart, type DueStep } from '../components/monthly/dueParts'
 import {
   readDraft,
   removeDraft,
@@ -73,6 +75,7 @@ import { nestComponents } from '../utils/accounts'
 import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
+import { useProductToday } from '../utils/productToday'
 import { classifyPaste, matchLabel } from '../utils/paste'
 import { MOTION_MS } from '../theme/motion'
 import { typicalSpend } from '../utils/spending'
@@ -124,6 +127,15 @@ interface LastSave {
   spending: { result: SpendingUpsertResult; blank: number } | null
   sentBalances: boolean
   sentSpending: boolean
+  /** The part due next once the server has answered (spec §M2) — the receipt links to it. */
+  nextDue: DuePart | null
+}
+
+/** The parts a save of this kind covers — the one "Next due" must not point back at. */
+function stepsSaved(kind: SaveKind): DueStep[] {
+  if (kind === 'balances') return ['balances']
+  if (kind === 'spending' || kind === 'confirm-spending') return ['spending']
+  return ['balances', 'spending']
 }
 
 // The row COUNT leads and the server's three-way split follows: "did all 26 accounts land?"
@@ -270,10 +282,64 @@ function deriveParents(
 }
 
 export default function MonthlyUpdatePage() {
+  const [params] = useSearchParams()
+  // No month in the URL: decide where to land first (2026-09-23 spec §M2), then mount the wizard
+  // on that month — it never loads a month only to switch away from it.
+  return params.get('month') === null ? <UpdateLanding /> : <MonthlyUpdateWizard />
+}
+
+/** `/update` with no month lands on the first due part, balances first — else the current month's
+ *  Balances step (spec §M2). A step already in the URL picks the due part of its kind, so the
+ *  Guide's step links open what is due (lane M plan, decision 8). ONE /coverage read decides; a
+ *  failed read falls back to the current month. */
+function UpdateLanding() {
   const [params, setParams] = useSearchParams()
+  const stepParam = params.get('step')
+  const requested = STEPS.includes(stepParam as Step) ? (stepParam as Step) : null
+  useEffect(() => {
+    let cancelled = false
+    fetchCoverage()
+      .catch((): CoverageOut | null => null)
+      .then((coverage) => {
+        if (cancelled) return
+        const target = landingFor(coverage?.time, currentMonthIso(), requested)
+        setParams(
+          (current) => {
+            // Month first, then step — the shape of every other wizard URL — and any unrelated
+            // parameter a deep link carried rides along after them.
+            const next = new URLSearchParams({ month: target.month, step: target.step })
+            for (const [key, value] of current) if (key !== 'month' && key !== 'step') next.append(key, value)
+            return next
+          },
+          { replace: true },
+        )
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [requested, setParams])
+  return (
+    <div className="page">
+      <PageFrame
+        title="Monthly update"
+        resource={{ status: 'loading' }}
+        skeleton={{ tiles: 0, cards: [{ span: 12, height: 640 }] }}
+      >
+        {null}
+      </PageFrame>
+    </div>
+  )
+}
+
+function MonthlyUpdateWizard() {
+  const [params, setParams] = useSearchParams()
+  // Never null here — MonthlyUpdatePage renders the landing until the URL names a month.
   const month = params.get('month') ?? currentMonthIso()
   const stepParam = params.get('step')
   const step: Step = STEPS.includes(stepParam as Step) ? (stepParam as Step) : 'balances'
+  // Re-render when the server's day moves (a tab left open across midnight): every phase, due and
+  // banner rule here reads the day through utils/months.ts (2026-09-23 spec §K1).
+  useProductToday()
 
   const [accounts, setAccounts] = useState<AccountOut[]>([])
   const [categories, setCategories] = useState<CategoryOut[]>([])
@@ -977,20 +1043,29 @@ export default function MonthlyUpdatePage() {
             : null,
         sentBalances: sendBalances,
         sentSpending: sendSpending,
+        nextDue: null,
       }
       setLastSave(receipt)
-      const batchId = result.batch_id
-      if (batchId !== null) {
-        toast.success(saveMessage(receipt, result.review.state === 'closed'), {
-          action: {
-            label: 'Undo',
-            onAction: () => void undoBatches([batchId], `Undone — ${formatMonth(month)} is back to how it was.`, reloadMonth),
-          },
-        })
-      }
-      // Coverage moved: the scope row re-reads it, and so does the wizard.
+      // Coverage moved: the scope row re-reads it, and so does the wizard — whose answer names the
+      // part due next (spec §M2), which the toast and the receipt then point at. The toast keeps its
+      // Undo for exactly this save's batch; it waits the one GET for the "Next due" words.
       setCoverageNonce((n) => n + 1)
-      void refreshAfterSave(loaded, sendBalances)
+      const closed = result.review.state === 'closed'
+      const batchId = result.batch_id
+      void refreshAfterSave(loaded, sendBalances).then((fresh) => {
+        const nextDue = nextDueAfter(fresh?.time, { month, steps: stepsSaved(kind) })
+        if (nextDue !== null && loadedMonth.current === loaded) {
+          setLastSave((current) => (current === receipt ? { ...receipt, nextDue } : current))
+        }
+        if (batchId !== null) {
+          toast.success(`${saveMessage(receipt, closed)}${nextDue === null ? '' : ` · Next due: ${nextDue.name} →`}`, {
+            action: {
+              label: 'Undo',
+              onAction: () => void undoBatches([batchId], `Undone — ${formatMonth(month)} is back to how it was.`, reloadMonth),
+            },
+          })
+        }
+      })
       // The Confirm IS the spending tick (the same stored flag): the Review's box shows it.
       if (kind === 'confirm-spending') {
         setReviewConfirmations((current) => ({ ...current, spending: confirmationInputs.spending }))
@@ -1465,6 +1540,9 @@ export default function MonthlyUpdatePage() {
               : [{ span: 12, height: 640 }],
         }}
       >
+        {/* What's due, first (2026-09-23 spec §M2): each due part a chip that opens it through the
+            wizard's own month switch, amber once overdue; with nothing due, when the next part is. */}
+        <WhatsDue time={coverage?.time} onOpen={(part) => goTo(part.month, part.step)} />
         <FeedBanner error={error} />
         {reviewConflict && <div className="draft-note"><span>The saved inputs changed during this visit. Reload to compare your draft with the latest saved figures.</span><button className="button" onClick={() => { setLoading(true); setLoadNonce(n => n + 1) }}>Reload latest and compare draft</button></div>}
         {emptyMonth && (
@@ -1514,6 +1592,22 @@ export default function MonthlyUpdatePage() {
             )}
             {(balancesDirty || flowsDirty) && (
               <p role="status">You have new unsaved changes. Save again to include them.</p>
+            )}
+            {lastSave.nextDue !== null && (
+              // The toast's "Next due" as a working link (spec §M2): the toast's one action is Undo.
+              <p>
+                <Link
+                  to={`/update?month=${lastSave.nextDue.month}&step=${lastSave.nextDue.step}`}
+                  onClick={(event) => {
+                    const part = lastSave.nextDue
+                    if (part === null || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+                    event.preventDefault()
+                    goTo(part.month, part.step)
+                  }}
+                >
+                  Next due: {lastSave.nextDue.name} →
+                </Link>
+              </p>
             )}
             <p>
               <Link to="/net-worth">See net worth</Link> · <Link to="/spending">See spending</Link>

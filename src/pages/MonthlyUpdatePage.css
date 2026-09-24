@@ -307,3 +307,39 @@
 .part-note-warn { border-left-color: var(--warn); }
 /* The Balances heading's read-only date line (spec §M4) — the Recorded-on box's successor. */
 .balances-asof { margin: -0.4rem 0 0.9rem; color: var(--muted); font-size: 0.85rem; }
+
+/* ── What's due (2026-09-23 spec §M2) ─────────────────────────────────────────────────── */
+/* One chip per due part at the top of the wizard. Overdue chips wear --warn on the border AND say
+   "overdue" in words — never colour alone. */
+.whats-due {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 1rem;
+}
+.whats-due-label { margin: 0; }
+.whats-due-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.due-chip {
+  display: inline-block;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.82rem;
+  text-decoration: none;
+}
+.due-chip:hover { border-color: var(--accent); }
+.due-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.due-chip-name { font-weight: 600; }
+.due-chip.is-overdue { border-color: var(--warn); }
+.due-chip-tag { color: var(--warn); font-weight: 600; }
+.whats-due-none { margin: 0; color: var(--muted); font-size: 0.85rem; }

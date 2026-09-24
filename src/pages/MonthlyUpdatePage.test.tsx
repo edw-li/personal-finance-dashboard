@@ -3072,3 +3072,92 @@ describe('dated balances (2026-09-23 spec §M4)', () => {
     expect(screen.queryByText(/makes them final/)).toBeNull()
   })
 })
+
+describe("what's due (2026-09-23 spec §M2)", () => {
+  it('lands /update on the first due part — Oct 1 balances on Oct 3 — under the strip', async () => {
+    partialSeptember()
+    renderPage('/update')
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/update?month=2026-10-01&step=balances'),
+    )
+    const strip = await screen.findByRole('navigation', { name: "What's due" })
+    expect(
+      within(strip).getByRole('link', {
+        name: 'Oct 1 balances · recorded early, on Sep 22 — update or confirm',
+      }),
+    ).toBeTruthy()
+    expect(
+      within(strip).getByRole('link', {
+        name: 'September spending & take-home · entered during September — add the rest or confirm',
+      }),
+    ).toBeTruthy()
+    // Landed on the provisional balances, the Confirm banner in view (spec §M2 acceptance).
+    expect(await screen.findByText(/were recorded early, on Sep 22/)).toBeTruthy()
+  })
+
+  it("lands on the current month's Balances step with nothing due, and says what is next", async () => {
+    setServerToday('2026-09-23')
+    vi.mocked(fetchCoverage).mockResolvedValue({
+      balances: ['2026-09-01', '2026-10-01'], spending: [], net_pay: [], time: TIME_SEP_23,
+    })
+    renderPage('/update')
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/update?month=2026-09-01&step=balances'),
+    )
+    expect(
+      await screen.findByText('Nothing due — Oct 1 balances recorded early (Sep 22); update or confirm them on Oct 1'),
+    ).toBeTruthy()
+  })
+
+  it('lands a step link on the due part of its kind', async () => {
+    partialSeptember()
+    renderPage('/update?step=spending')
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/update?month=2026-09-01&step=spending'),
+    )
+  })
+
+  it('falls back to the current month when /coverage fails', async () => {
+    setServerToday('2026-10-03')
+    vi.mocked(fetchCoverage).mockRejectedValue(new ApiError('down', 503))
+    renderPage('/update')
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/update?month=2026-10-01&step=balances'),
+    )
+  })
+
+  it('a chip opens its part through the wizard', async () => {
+    partialSeptember()
+    renderPage('/update?month=2026-10-01')
+    const strip = await screen.findByRole('navigation', { name: "What's due" })
+    fireEvent.click(within(strip).getByRole('link', { name: /^September spending/ }))
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/update?month=2026-09-01&step=spending'),
+    )
+    expect(await screen.findByRole('heading', { level: 1, name: 'Monthly update — Sep 2026' })).toBeTruthy()
+  })
+
+  it('after a part saves, the toast and the receipt name the next due part — and the strip drops the one saved', async () => {
+    partialSeptember()
+    vi.mocked(monthReviewApi.saveMonthReview).mockImplementation(async (month) => ({
+      ...savedMonthResult(month, 'b'),
+      batch_id: 'b-oct',
+    }))
+    renderWizardAt('/update?month=2026-10-01')
+    const confirm = await screen.findByRole('button', { name: 'Confirm Oct 1 balances' })
+    vi.mocked(fetchCoverage).mockResolvedValue({
+      balances: ['2026-09-01', '2026-10-01'],
+      spending: ['2026-09-01'],
+      net_pay: [],
+      time: { ...TIME_OCT_3, balances: { ...TIME_OCT_3.balances, status: 'final' } },
+    })
+    fireEvent.click(confirm)
+    expect(await screen.findByText('Confirmed Oct 1 balances · Next due: September spending & take-home →')).toBeTruthy()
+    const strip = screen.getByRole('navigation', { name: "What's due" })
+    expect(within(strip).queryByRole('link', { name: /^Oct 1 balances/ })).toBeNull()
+    fireEvent.click(screen.getByRole('link', { name: 'Next due: September spending & take-home →' }))
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { level: 1, name: 'Monthly update — Sep 2026' })).toBeTruthy(),
+    )
+  })
+})
