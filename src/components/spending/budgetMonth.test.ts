@@ -5,7 +5,6 @@ import {
   budgetedIndexes,
   budgetsElsewhere,
   budgetsOpeningIndex,
-  isMonthInProgress,
 } from './budgetMonth'
 
 // The Budgets view's month rules (2026-09-23 spec §B5), over the matrix's RESOLVED budget
@@ -127,26 +126,6 @@ describe('budgetsElsewhere — where the budgets are when the viewed month has n
   it('is null when the viewed month has budgets, or when the book has none at all', () => {
     expect(budgetsElsewhere(book([['1.00', '1.00', '1.00', '1.00']]), 2)).toBeNull()
     expect(budgetsElsewhere(book([[null, null, null, null]]), 2)).toBeNull()
-  })
-})
-
-describe('isMonthInProgress — "a month whose last day is after today" (spec §0)', () => {
-  it('the current month before its last day is in progress', () => {
-    expect(isMonthInProgress('2026-09-01', '2026-09-23')).toBe(true)
-  })
-
-  it('on its last day it is not — the objective rule, verbatim', () => {
-    expect(isMonthInProgress('2026-09-01', '2026-09-30')).toBe(false)
-  })
-
-  it('a past month never is; a future month always is', () => {
-    expect(isMonthInProgress('2026-08-01', '2026-09-23')).toBe(false)
-    expect(isMonthInProgress('2026-10-01', '2026-09-23')).toBe(true)
-  })
-
-  it('knows a leap-year February and the old YYYY-MM spelling', () => {
-    expect(isMonthInProgress('2028-02-01', '2028-02-28')).toBe(true)
-    expect(isMonthInProgress('2028-02', '2028-02-29')).toBe(false)
   })
 })
 

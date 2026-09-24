@@ -11,6 +11,7 @@ describe('receipt labels', () => {
       incomplete: 'Incomplete — some months missing',
       unavailable: 'Unavailable',
       mixed: 'Mixed sources',
+      provisional: 'Provisional — recorded before its date',
       partial: 'Partial — some holdings unpriced',
       estimate: 'Estimate',
     })
@@ -41,5 +42,12 @@ describe('receipt labels', () => {
     expect(formatEvidenceValue('0.123456789', 'ratio', 7)).toBe('12.3456789%')
     expect(formatEvidenceValue(3, 'count')).toBe('3')
     expect(formatEvidenceValue(null)).toBe('Unavailable')
+  })
+})
+
+describe('provisional balances (2026-09-23 spec §0.4(e))', () => {
+  it('have their own words — never the sentence-case fallback', () => {
+    expect(COMPLETENESS_LABELS.provisional).toBe('Provisional — recorded before its date')
+    expect(formatCompleteness('provisional')).toBe('Provisional — recorded before its date')
   })
 })

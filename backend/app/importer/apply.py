@@ -47,6 +47,8 @@ from app.models import (
     TaxYear,
 )
 from app.seed import seed_tax_definitions
+from app.services import clock
+from app.services.month_review import day_label
 from app.services.ordering import ORDERED_LISTS, SORT_INDEX_STEP, next_sort_index, order_lock
 from app.services.people import load_people, primary_person
 from app.services.portfolio_accounts import resolve_portfolio_account
@@ -55,7 +57,8 @@ from app.services.tax_service import FOLDED_TO_BASE_CG
 from app.tax_keys import DERIVED_KEYS, PER_PERSON_KEYS, SINGLE
 
 
-def _diff_update(obj, fields: dict, counts, report: SheetReport, sample_key: str) -> None:
+def _diff_update(obj, fields: dict, counts, report: SheetReport, sample_key: str) -> bool:
+    """Set the fields that differ, count and sample the change; True when anything changed."""
     changed: list[str] = []
     for attr, new in fields.items():
         old = getattr(obj, attr)
@@ -67,6 +70,7 @@ def _diff_update(obj, fields: dict, counts, report: SheetReport, sample_key: str
         report.add_sample(f"{sample_key}: " + "; ".join(changed))
     else:
         counts.skips += 1
+    return bool(changed)
 
 
 async def lock_ordered_lists(db: AsyncSession) -> None:
@@ -371,6 +375,20 @@ COMPONENT_PARENT_SLUG_AT_CREATE: dict[str, str] = {
 COMPONENT_SLUGS_AT_CREATE = frozenset(COMPONENT_PARENT_SLUG_AT_CREATE)
 
 
+def _kept_date_warning(month: date, stored: date | None, sheet: date) -> str:
+    """K5 (2026-09-23 spec): an existing snapshot's recorded date is never taken from column B;
+    when the sheet disagrees, the report says which date stays."""
+    held = (
+        "stored with no recorded date"
+        if stored is None
+        else f"stored as recorded on {stored.isoformat()}"
+    )
+    return (
+        f"Net Worth: {month:%b %Y} is {held}; the sheet says {sheet.isoformat()} — "
+        "the stored date is kept."
+    )
+
+
 async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: SheetReport) -> None:
     account_counts = report.counts("accounts")
     snapshot_counts = report.counts("net_worth_snapshots")
@@ -437,6 +455,11 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
                 "if it was renamed"
             )
 
+    # K5 (2026-09-23 spec): an EXISTING snapshot's recorded date is never taken from column B —
+    # it decides provisional vs final, and a closed month's digest fingerprints it. A new
+    # snapshot takes column B as always (NULL when blank); one dated before its month imports
+    # provisional, and the sheet cannot say so, so the report does.
+    today = clock.product_today()
     existing_snapshots = {
         s.month: s for s in (await db.execute(select(NetWorthSnapshot))).scalars()
     }
@@ -447,14 +470,12 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
             row = NetWorthSnapshot(month=snap.month, recorded_on=snap.recorded_on)
             db.add(row)
             snapshot_counts.creates += 1
-        else:
-            _diff_update(
-                row,
-                {"recorded_on": snap.recorded_on},
-                snapshot_counts,
-                report,
-                f"net_worth_snapshots[{snap.month.isoformat()}]",
-            )
+            if snap.recorded_on is not None and snap.recorded_on < snap.month:
+                report.warnings.append(
+                    f"Net Worth: {snap.month:%b %Y} is dated {snap.recorded_on.isoformat()}, "
+                    "before its month — it imports as provisional "
+                    f"{day_label(snap.month)} balances."
+                )
         snapshots_by_month[snap.month] = row
     await db.flush()
 
@@ -462,6 +483,7 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
         (b.snapshot_id, b.account_id): b
         for b in (await db.execute(select(AccountBalance))).scalars()
     }
+    changed_snapshots: set[int] = set()
     for snap in parsed.snapshots:
         snapshot = snapshots_by_month[snap.month]
         for account_name, balance in snap.balances.items():
@@ -475,14 +497,39 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
                     AccountBalance(snapshot_id=snapshot.id, account_id=account.id, balance=balance)
                 )
                 balance_counts.creates += 1
-            else:
-                _diff_update(
-                    row,
-                    {"balance": balance},
-                    balance_counts,
-                    report,
-                    f"account_balances[{snap.month.isoformat()}/{account.slug}]",
-                )
+                changed_snapshots.add(snapshot.id)
+            elif _diff_update(
+                row,
+                {"balance": balance},
+                balance_counts,
+                report,
+                f"account_balances[{snap.month.isoformat()}/{account.slug}]",
+            ):
+                changed_snapshots.add(snapshot.id)
+
+    # K4's rule on an import (spec §K5): an existing PROVISIONAL snapshot (its stored date is
+    # before its month) whose balances this import changed is restamped to the import's product
+    # day — final on or after its 1st, still provisional with the new date before it. The balance
+    # change itself already moves the month's review digest (even a batch-closed legacy month
+    # recorded early turns "changed since review"), so the new date moves nothing further.
+    # Otherwise the stored date stays, and a different column B is reported, never applied.
+    for snap in parsed.snapshots:
+        if snap.month not in existing_snapshots:
+            continue
+        row = snapshots_by_month[snap.month]
+        stored = row.recorded_on
+        if stored is not None and stored < row.month and row.id in changed_snapshots:
+            row.recorded_on = today
+            snapshot_counts.updates += 1
+            standing = "now final" if today >= row.month else "still provisional"
+            report.add_sample(
+                f"net_worth_snapshots[{snap.month.isoformat()}]: recorded_on {stored} -> {today} "
+                f"(balances changed; {standing})"
+            )
+            continue
+        snapshot_counts.skips += 1
+        if snap.recorded_on is not None and snap.recorded_on != stored:
+            report.warnings.append(_kept_date_warning(snap.month, stored, snap.recorded_on))
 
 
 async def apply_portfolio_history(

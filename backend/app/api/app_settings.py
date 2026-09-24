@@ -23,6 +23,11 @@ from app.database import get_db
 from app.models import AppSetting
 from app.schemas.app_settings import AppSettingsOut, AppSettingsUpdate
 from app.services.money import quantize_pct
+
+# The update reminder's day moved to the service that reads it (2026-09-23 spec §K3: a service
+# may not import a router); re-exported here, so api/calendar.py and this router's GET/PUT read
+# it exactly as before.
+from app.services.month_status import MAX_UPDATE_DUE_DAY, read_update_due_day
 from app.services.net_worth_calc import get_swr_pct
 from app.services.scheduler import (
     SCHEDULER_TIMEZONE,
@@ -88,22 +93,6 @@ async def read_espp_discount(db: AsyncSession) -> Decimal:
     if not parsed.is_finite() or parsed < 0 or parsed > MAX_ESPP_DISCOUNT:
         return DEFAULT_ESPP_DISCOUNT
     return parsed
-
-
-DEFAULT_UPDATE_DUE_DAY = 1
-MAX_UPDATE_DUE_DAY = 28  # every month has a 28th — the reminder can never miss a month
-
-
-async def read_update_due_day(db: AsyncSession) -> int:
-    """app_settings['calendar_update_due_day'] envelope {"value": 1..28}; any unexpected
-    shape falls back to the default (get_swr_pct's posture). Imported by api/calendar.py."""
-    setting = await db.get(AppSetting, "calendar_update_due_day")
-    if setting is None or not isinstance(setting.value, dict):
-        return DEFAULT_UPDATE_DUE_DAY
-    raw = setting.value.get("value")
-    if isinstance(raw, bool) or not isinstance(raw, int):
-        return DEFAULT_UPDATE_DUE_DAY
-    return raw if 1 <= raw <= MAX_UPDATE_DUE_DAY else DEFAULT_UPDATE_DUE_DAY
 
 
 def _validated_due_day(value: int) -> int:

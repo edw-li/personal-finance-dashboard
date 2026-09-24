@@ -15,6 +15,7 @@ import { fetchPortfolioAccounts } from '../../api/portfolio'
 import { fetchAppSettings } from '../../api/settings'
 import { fetchCategories } from '../../api/spending'
 import { fetchSystemStatus } from '../../api/system'
+import { currentYear } from '../../utils/months'
 
 // Tab-hover prefetch for the Settings page (2026-09-13 polish spec §9). The API client shares
 // identical GETs only while they are IN FLIGHT (client.ts `pendingReads`), so a hover that
@@ -135,7 +136,7 @@ const LOADERS: Record<SettingsSection, (prime: Prime) => void> = {
     prime(WARM.portfolioAccounts, fetchPortfolioAccounts)
   },
   planning: (prime) => {
-    const year = new Date().getFullYear() // LimitsCard opens on the current year
+    const year = currentYear() // LimitsCard opens on the current (server) year
     prime(WARM.limits(year), () => fetchLimits(year))
     prime(WARM.appSettings, fetchAppSettings)
     prime(WARM.profiles, fetchProfiles)

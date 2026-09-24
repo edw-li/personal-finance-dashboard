@@ -8,7 +8,8 @@ can take `[0]` as the earliest covered month.
 The CLASSIFICATION — which spending months count as entered, empty or missing — lives in
 `services/coverage.py`, because three health checks read the same sentences and neither a
 service nor a check may import a router (2026-09-04 honest-numbers spec §3). This endpoint
-is the wire mapping of that definition together with the explicit month-review states.
+is the wire mapping of that definition together with the explicit month-review states and
+the monthly update's two parts, due and overdue (`time`, 2026-09-23 spec §K3).
 """
 
 from datetime import date
@@ -50,4 +51,5 @@ async def coverage(db: AsyncSession = Depends(get_db)) -> CoverageOut:
         adopted_on=reviews.adopted_on,
         eligible_spending=[m for m, state in reviews.months.items() if state.eligible_spending],
         eligible_savings=[m for m, state in reviews.months.items() if state.eligible_savings],
+        time=found.time,
     )
