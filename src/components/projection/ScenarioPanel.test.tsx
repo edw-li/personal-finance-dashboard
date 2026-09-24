@@ -201,6 +201,21 @@ describe('ScenarioPanel', () => {
     await waitFor(() => expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toContain('Return 6%Unpin'))
   })
 
+  it('tells a lengthened baseline from a scenario that set the same years (batch 2 integration)', async () => {
+    // Both RAN 50 years: the baseline on the 30-year knob, lengthened to reach a Settings
+    // plan-until year of 2075, and the scenario on a 50-year knob. They do not share paths.
+    preview.mockImplementation(async (s) =>
+      s.knobs.years === '50'
+        ? { ...echo, years: 50, base_years: 50, plan_until: 2075, plan_until_source: 'default' }
+        : { ...echo, years: 50, base_years: 30, plan_until: 2075, plan_until_source: 'setting' },
+    )
+    mount('/projection?whatif=years%3A50')
+    const row = (await screen.findByText('Horizon (years)', { selector: 'td' })).closest('tr') as HTMLElement
+    await waitFor(() =>
+      expect(within(row).getAllByRole('cell').map((c) => c.textContent)).toEqual(['Horizon (years)', '30 (runs through 2075)', '50']),
+    )
+  })
+
   it('Reset to baseline empties the URL', async () => {
     mount('/projection?whatif=years%3A40&whatif=retire%3A2%3A2035-06')
     await waitFor(() => expect(preview).toHaveBeenCalled())

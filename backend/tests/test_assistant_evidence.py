@@ -537,7 +537,25 @@ async def test_total_budget_includes_context_loading(monkeypatch):
 
 
 async def test_stop_cancels_provider_and_closes_stream(monkeypatch):
+    """Stop mid-answer (closing the keepalive-wrapped SSE body) closes the provider's stream.
+
+    The 2 s wait is a hang guard for what this test is about: the stream starting and the
+    provider's first reasoning frame. Nothing slower may run inside it, and CTX's /spending
+    context build did: ~100-250 ms on a quiet box, but 0.7-6 s on this 12-thread box under
+    CPU load (16 busy processes; 2026-09-24 integration record), which timed the wait out in
+    about 2 runs of 9 — no connection or DNS lookup happened inside the wait. The build is
+    stubbed (its own tests cover it), and the app_settings read that resolves the key is
+    warmed first: on a cold process it is the run's first ORM query, ~25 ms quiet and ~400 ms
+    under that load. What is left took 51-59 ms median and 214 ms worst in one warm process
+    under the same load, and 50-268 ms in cold runs under a heavier one — the wait is 2 s."""
     quiet = QuietStream(reasoning=True)
+
+    async def no_context(*args, **kwargs):
+        return {}
+
+    async with assistant_chat.SESSION_FACTORY() as db:
+        assert await assistant_models.resolve_api_key(db) == ("nvapi-test", "env")
+    monkeypatch.setattr(assistant_chat, "build_context", no_context)
     monkeypatch.setattr(
         assistant_models,
         "TRANSPORT_OVERRIDE",

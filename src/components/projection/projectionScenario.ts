@@ -229,8 +229,15 @@ const ROW_KEYS = new Set(COMPARE_ROWS.map((r) => r.key))
 export function projectionValue(result: ProjectionOut, key: string): string | null {
   if (!ROW_KEYS.has(key)) return null
   switch (key) {
-    case 'years':
-      return String(result.years)
+    case 'years': {
+      // The KNOB, as the footer and the Horizon box mean it (batch 2 integration, 2026-09-24):
+      // scenarios on one knob share their simulated paths, and a plan-until year that lengthened
+      // the run only appended months. The years it RAN would read years:50 and years:30 +
+      // plan until 2075 alike, so a lengthened run says so beside its knob instead.
+      const knob = result.base_years ?? result.years
+      if (knob === result.years) return String(knob)
+      return result.plan_until != null ? `${knob} (runs through ${result.plan_until})` : `${knob} (runs ${result.years})`
+    }
     case 'fi_date':
       return headlineFiMonth(result)
     case 'money_lasts':

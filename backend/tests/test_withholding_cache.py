@@ -2,15 +2,17 @@
 
 With the reconciliation the GET runs about ten engine passes, and the Overview asks for it on
 every visit — so it is served from memory while nothing it reads has changed. The fingerprint
-covers every table the GET reads (the SQL-capture test pins the list), `price_history` only
-for the employer ticker's bars; the key adds the product day and the year; the cache holds the
-serialized bytes, so the route returns them as they are and a direct caller (the assistant)
-decodes a model of its own.
+covers every table the GET reads (the SQL-capture tests pin the list), and three of them only
+for the rows it reads: `app_settings` for the employer ticker and the ESPP discount,
+`latest_prices` and `price_history` for the employer ticker's quote and bars (the row-level
+capture pins those). The key adds the product day and the year; the cache holds the serialized
+bytes, so the route returns them as they are and a direct caller (the assistant) decodes a
+model of its own.
 """
 
 import re
 from contextlib import contextmanager
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -113,8 +115,9 @@ async def _nvda(db) -> int:
     return (await db.execute(select(Security.id).where(Security.ticker == "NVDA"))).scalar_one()
 
 
-# One write per table the GET reads — each must miss. `price_history` is written on the
-# EMPLOYER's ticker, the only rows the GET reads of it.
+# One write per table the GET reads — each must miss. The three narrowed tables are written on
+# rows the GET reads, the only rows their cells cover: `app_settings` at the ESPP discount,
+# `latest_prices` and `price_history` on the EMPLOYER's ticker (the world's only quote and bars).
 MUTATIONS = {
     "tax_years": lambda db: _run(db, update(TaxYear).values(notes="edited")),
     "tax_inputs": lambda db: _add(db, TaxInput(year=YEAR, key="w2_other", value=Decimal("1"))),
@@ -187,6 +190,118 @@ async def test_another_securitys_price_history_does_not_evict_it(
     await db.commit()
     await get(auth_client)
     assert len(builds) == 1
+
+
+async def _quote_other(db) -> Security:
+    other = await _other_security(db)
+    db.add(
+        LatestPrice(
+            security_id=other.id,
+            price=Decimal("400.0000"),
+            quoted_at=datetime(2026, 7, 1, 20, 15, tzinfo=UTC),
+            source="yfinance",
+        )
+    )
+    await db.commit()
+    return other
+
+
+async def test_a_price_refreshs_bookkeeping_and_other_quotes_do_not_evict_it(
+    auth_client, db, world, frozen_today, builds
+):
+    """Two settings and the employer's one quote are all the GET reads of those tables, so all
+    their fingerprint cells cover: the refresh's own bookkeeping keys and every other holding's
+    quote must not cost the card its memo (batch 2 integration; the projection's cells, 2026-09-24
+    review minor 4)."""
+    other = await _quote_other(db)
+    await get(auth_client)
+    db.add_all(
+        [
+            AppSetting(key="last_refresh", value={"value": "2026-07-01T20:15:00+00:00"}),
+            AppSetting(key="refresh_runs", value={"value": [{"ok": 2}]}),
+        ]
+    )
+    await db.commit()
+    await _run(
+        db,
+        update(LatestPrice).where(LatestPrice.security_id == other.id).values(price=Decimal("401")),
+    )
+    await get(auth_client)
+    assert len(builds) == 1
+
+
+async def _set_setting(db, key: str, value) -> None:
+    setting = await db.get(AppSetting, key)
+    if setting is None:
+        db.add(AppSetting(key=key, value={"value": value}))
+    else:
+        setting.value = {"value": value}
+    await db.commit()
+
+
+# Every row of the two narrowed tables the GET does read — each must still miss.
+READ_ROWS = {
+    "espp_ticker": lambda db: _set_setting(db, "espp_ticker", "VOO"),
+    "espp_discount_pct": lambda db: _set_setting(db, "espp_discount_pct", "0.10"),
+    "employer_quote": lambda db: _employer_quote(db),
+}
+
+
+async def _employer_quote(db) -> None:
+    nvda = await _nvda(db)
+    await _run(
+        db, update(LatestPrice).where(LatestPrice.security_id == nvda).values(price=Decimal("515"))
+    )
+
+
+@pytest.mark.parametrize("row", sorted(READ_ROWS))
+async def test_each_setting_and_the_quote_it_reads_still_miss(
+    auth_client, db, world, frozen_today, builds, row
+):
+    await _quote_other(db)  # a second quoted security, so a ticker change has one to move to
+    await get(auth_client)
+    await READ_ROWS[row](db)
+    await get(auth_client)
+    assert len(builds) == 2, row
+
+
+async def test_a_new_employer_security_its_first_quote_and_first_bar_each_miss(
+    auth_client, db, frozen_today, builds
+):
+    """The narrowed quote and bar cells find the employer's rows through a subquery on the ticker,
+    so a security that appears AFTER the ticker was set must still reach the card, and so must
+    its first quote and its first bar. The `securities` cell sees the first; the
+    `latest_prices` and `price_history` cells, now bound to a security that exists, see the other
+    two. (Integration review, item 2.)"""
+    await seed_tax_definitions(db)
+    await db.commit()
+    await seed_tax_year(db, YEAR, "600000.0000")
+    await seed_profile(db)
+    await seed_grants(db)
+    db.add(AppSetting(key="espp_ticker", value={"value": "NVDA"}))  # no security behind it yet
+    await db.commit()
+    await get(auth_client)
+    security = Security(ticker="NVDA", name="NVIDIA", holding_type="stock")
+    await _add(db, security)
+    await get(auth_client)
+    assert len(builds) == 2
+    await _add(
+        db,
+        LatestPrice(
+            security_id=security.id,
+            price=Decimal("500.0000"),
+            quoted_at=datetime(2026, 7, 1, 20, 15, tzinfo=UTC),
+            source="yfinance",
+        ),
+    )
+    await get(auth_client)
+    assert len(builds) == 3
+    await _add(
+        db,
+        PriceHistory(security_id=security.id, price_date=date(2026, 6, 30), close=Decimal("600")),
+    )
+    await get(auth_client)
+    assert len(builds) == 4
 
 
 async def test_a_new_product_day_misses(auth_client, world, frozen_today, builds, monkeypatch):
@@ -309,6 +424,70 @@ async def test_the_fingerprint_covers_the_joint_return_and_safe_harbor_reads_too
     assert out.safe_harbor is not None and out.safe_harbor.prior_year == YEAR - 1
     assert {row.person_id for row in out.reconciliation.rows} == {me_id, partner_id}
     assert seen == set(read_cache.WITHHOLDING_TABLES)
+
+
+async def test_the_narrowed_cells_cover_every_setting_quote_and_bar_the_get_reads(
+    db, engine, frozen_today
+):
+    """What makes the narrowing provably complete, over the heaviest paths — a joint return with
+    a simulated partner, last year on file (the safe harbor's reads) and a lot sold this year
+    (the discount's read) — with a second security quoted and barred and the refresh's
+    bookkeeping stored beside the employer's rows: every app_settings read is a keyed read of one
+    of the narrowed keys, and the only latest_prices and price_history rows read are the
+    employer's. (The table list is the capture tests' above; this is the rows within the three
+    narrowed tables.)"""
+    await seed_tax_definitions(db)
+    await db.commit()
+    me_id, partner_id = await seed_household(db)
+    await seed_married_year(db, YEAR, me_id, partner_id)
+    await seed_tax_year(db, YEAR - 1, "400000.0000")
+    await seed_profile(db)
+    await seed_partner_profile(db, partner_id)
+    employer = await seed_employer(db)
+    await seed_grants(db)
+    other = await _quote_other(db)
+    db.add_all(
+        [
+            PriceHistory(security_id=other.id, price_date=date(2026, 6, 30), close=Decimal("400")),
+            AppSetting(key="last_refresh", value={"value": "2026-07-01T20:15:00+00:00"}),
+            AppSetting(key="swr_pct", value={"value": "0.04"}),
+            ContributionLimit(year=YEAR, key="limit_401k_elective", value=Decimal("24500")),
+            EsppLot(
+                purchase_date=date(2025, 8, 29),
+                qualifying_date=date(2027, 9, 1),
+                shares=Decimal("10.0000"),
+                subscription_price=Decimal("100.00000"),
+                purchase_fmv=Decimal("120.00000"),
+                purchase_price=Decimal("85.00000"),
+                sold_date=date(2026, 5, 1),
+                sold_price=Decimal("150.00000"),
+            ),
+        ]
+    )
+    await db.commit()
+    db.expunge_all()  # every keyed read must reach the database to be seen
+    keyed: dict[str, set] = {"app_settings": set(), "latest_prices": set(), "price_history": set()}
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        for table in keyed:
+            if re.search(rf'\b(?:FROM|JOIN)\s+"?{table}"?\b', statement):
+                # A read keyed on one row (db.get) or one security's rows, or nothing: an
+                # unkeyed read of any of them is exactly what a narrowed cell could miss.
+                assert re.search(rf"WHERE {table}\.(key|security_id) = \$1", statement), statement
+                keyed[table].add(parameters[0])
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        out = await taxes_api.withholding_estimate(db, YEAR, PINNED_TODAY, reconcile=True)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+    # The heavy paths really ran: the partner's leg, the prior year's harbor, the sold lot.
+    assert out.partner_source == "simulated"
+    assert out.safe_harbor is not None and out.safe_harbor.prior_year == YEAR - 1
+    assert out.reconciliation is not None
+    assert keyed["app_settings"] == set(read_cache.WITHHOLDING_SETTING_KEYS)
+    assert keyed["latest_prices"] == {employer.id}
+    assert keyed["price_history"] == {employer.id}
 
 
 async def test_the_cached_bytes_are_an_uncached_runs_bytes(auth_client, db, world, frozen_today):
