@@ -11,6 +11,7 @@ describe('receipt labels', () => {
       incomplete: 'Incomplete — some months missing',
       unavailable: 'Unavailable',
       mixed: 'Mixed sources',
+      provisional: 'Provisional — recorded before its date',
       partial: 'Partial — some holdings unpriced',
       estimate: 'Estimate',
     })
