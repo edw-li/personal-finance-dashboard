@@ -171,6 +171,7 @@ async def _household(db: AsyncSession, search: dict, view: dict) -> dict:
             "mom_delta": nw.mom_delta,
             "mom_pct": nw.mom_pct,
             "as_of": nw.as_of,
+            "recorded_on": nw.recorded_on,
             "provisional": nw.provisional,
             "previous": nw.previous,
             "days_since_previous": nw.days_since_previous,

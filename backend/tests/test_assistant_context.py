@@ -255,6 +255,8 @@ async def test_the_household_section_carries_the_as_of_fields(db, monkeypatch):
         "2026-09-22",
         True,
     )
+    # The summary's fields as they are (spec review M3): the day the balances were typed too.
+    assert net_worth["recorded_on"] == "2026-09-22"
     assert (net_worth["total"], net_worth["mom_delta"]) == ("20.00", "10.00")
     assert net_worth["previous"] == {
         "month": "2026-09-01",
