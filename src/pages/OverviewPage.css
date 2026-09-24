@@ -142,10 +142,16 @@
   text-decoration: none;
 }
 
+/* The date keeps ONE line and the label beside it takes the squeeze (batch 2 final verification
+   D3): the monthly reminder's longer label broke the date as "Oct 1," over "2026" at 1280 and 1600.
+   The row is a flex line, so nowrap makes the whole date the item's minimum width and `flex: none`
+   stops it shrinking; the label — the anonymous text item after it — wraps instead. */
 .up-next-date {
+  flex: none;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   margin-right: 0.25rem;
+  white-space: nowrap;
 }
 
 /* Up next amounts sit right-aligned in the row (2026-09-03 calendar spec §14). */

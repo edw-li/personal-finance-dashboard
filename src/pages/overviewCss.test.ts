@@ -27,6 +27,16 @@ describe('OverviewPage.css', () => {
     expect(declarationsFor(overview, '.up-next-clause')).toContain('white-space: nowrap;')
   })
 
+  // Batch 2 final verification D3: the monthly reminder's longer label ("Monthly update — Oct 1
+  // balances · September spending & take-home") squeezed the date beside it onto two lines ("Oct 1,"
+  // over "2026") at 1280 and 1600. The date is a flex item of the row: nowrap makes its one line its
+  // minimum width and `flex: none` keeps it from shrinking, so the label after it wraps instead.
+  it('keeps each Up next date on one line, so the label beside it wraps instead', () => {
+    const date = declarationsFor(overview, '.up-next-date')
+    expect(date).toContain('white-space: nowrap;')
+    expect(date).toContain('flex: none;')
+  })
+
   // Lane V measured the agenda column ending 66px below the wealth column at 1440 and 1920
   // (the limit is 24px). jsdom computes no layout, so the rules that close that gap — stretch
   // the columns to the taller one, then let each column's LAST row absorb the slack — can only
