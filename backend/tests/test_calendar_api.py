@@ -753,6 +753,46 @@ async def test_calendar_folds_two_paydays_and_names_an_omitted_cadence(
     }
 
 
+async def test_calendar_names_a_cadence_that_changes_part_way(auth_client, db, monkeypatch):
+    """Each payday follows the profile in force on it (§W1), so a switch to biweekly on Aug 1
+    drops Sam's August paydays while her July ones still show — the footer must not say her
+    paydays are omitted as if none were drawn (review nit)."""
+    freeze_today(monkeypatch)
+    me = Person(name="Me", is_primary=True)
+    sam = Person(name="Sam", is_primary=False)
+    db.add_all([me, sam])
+    await db.flush()
+    db.add_all(
+        [
+            PaycheckProfile(
+                effective_date=date(2026, 1, 1), annual_salary=Decimal("120000"), person_id=me.id
+            ),
+            PaycheckProfile(
+                effective_date=date(2026, 2, 1), annual_salary=Decimal("90000"), person_id=sam.id
+            ),
+            PaycheckProfile(
+                effective_date=date(2026, 8, 1),
+                annual_salary=Decimal("90000"),
+                person_id=sam.id,
+                pay_periods_per_year=26,
+            ),
+        ]
+    )
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-07-01&end=2026-08-31")).json()
+    sams = [
+        e["date"]
+        for e in body["events"]
+        if e["type"] == "payday" and any(i["label"] == "Sam" for i in e["items"])
+    ]
+    assert sams == ["2026-07-15", "2026-07-31"]
+    assert next(s for s in body["sources"] if s["source"] == "payroll") == {
+        "source": "payroll",
+        "status": "partial",
+        "note": "Sam: paid on another cadence for part of the time — those paydays omitted",
+    }
+
+
 async def test_custom_event_money_and_recurrence_round_trip(auth_client):
     created = await auth_client.post(
         f"{CALENDAR}/events",

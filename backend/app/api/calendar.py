@@ -196,6 +196,10 @@ async def _payday_sources(
     names = {person.id: person.name for person in people}
     sources: list[PaydaySource] = []
     omitted: list[str] = []
+    # Paid on another cadence under SOME profiles only: each payday follows the profile in
+    # force on it (§W1), so the semi-monthly stretches still show — the footer says the rest
+    # are left out rather than that all of them are.
+    partly: list[str] = []
     for owner in owners:
         profile = in_force[owner]
         name = UNNAMED_PERSON if owner is None else names.get(owner, UNNAMED_PERSON)
@@ -218,16 +222,23 @@ async def _payday_sources(
                 starts_on=timeline[0].effective_date,
             )
         )
-        if not semi_monthly:
+        cadences = [row.pay_periods_per_year == SEMI_MONTHLY_PERIODS for row in timeline]
+        if not any(cadences):
             omitted.append(name)
+        elif not all(cadences):
+            partly.append(name)
     if not sources:
         return sources, _health("payroll", "off", "no paycheck profile")
+    notes = []
     if omitted:
-        return sources, _health(
-            "payroll",
-            "partial",
-            f"{', '.join(omitted)}: paid on another cadence — paydays omitted",
+        notes.append(f"{', '.join(omitted)}: paid on another cadence — paydays omitted")
+    if partly:
+        notes.append(
+            f"{', '.join(partly)}: paid on another cadence for part of the time — those "
+            "paydays omitted"
         )
+    if notes:
+        return sources, _health("payroll", "partial", "; ".join(notes))
     return sources, _health("payroll", "ok")
 
 
