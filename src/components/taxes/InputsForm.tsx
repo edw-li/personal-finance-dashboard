@@ -333,14 +333,16 @@ export default function InputsForm({
   // keyed on: two renders that would send the same bytes are the same question, so a blur
   // that only canonicalizes "$216,000" into "216000" asks nothing new.
   const bodyJson = JSON.stringify(previewBodyOf(flatCells, values))
-  // The body the SERVER last agreed with: the mount seed, then each save echo. A form that
-  // still serializes to exactly that already agrees with its figures, so previewing it would
-  // spend a request to be told what we were just told. A ref rather than a one-shot flag,
-  // because StrictMode mounts effects twice in dev and a flag would be spent on the first
-  // pass and let the second one ask. Seeded from the SERVER's values, not the boxes': a
-  // restored draft (§W9) is a form the figures have not been asked about yet.
+  // The body the figures ON SCREEN describe: the mount seed's, then each landed preview's and
+  // each save echo's. A form that still serializes to exactly that already agrees with its
+  // figures, so previewing it would spend a request to be told what we were just told — and any
+  // other form asks, including one typed (or discarded, §W9) back to the saved values after a
+  // preview moved the figures away from them. A ref rather than a one-shot flag, because
+  // StrictMode mounts effects twice in dev and a flag would be spent on the first pass and let
+  // the second one ask. Seeded from the SERVER's values, not the boxes': a restored draft (§W9)
+  // is a form the figures have not been asked about yet.
   const [mountBody] = useState(() => JSON.stringify(previewBodyOf(flatCells, valuesOf(flatCells))))
-  const serverBody = useRef(mountBody)
+  const figuresBody = useRef(mountBody)
 
   const changed: Record<string, string | null> = {}
   const invalid: string[] = []
@@ -374,8 +376,11 @@ export default function InputsForm({
     else writeTaxDraft(draftKey, { loaded: baseline, edited: values })
   }, [changedCount, values, baseline, draftKey])
 
-  // The restore banner's exit: the saved values back in every box, the draft forgotten.
+  // The restore banner's exit: the saved values back in every box, the draft forgotten. A
+  // preview still in flight for the restored boxes is retired; the totals are asked about the
+  // saved boxes the way any edit asks.
   const discardRestored = () => {
+    figureSeq.current += 1
     setValues(baseline)
     setRestored(false)
   }
@@ -385,7 +390,7 @@ export default function InputsForm({
   // because a keystroke is not a question, and sequenced because the answers can arrive out
   // of order.
   useEffect(() => {
-    if (serverBody.current === bodyJson) return
+    if (figuresBody.current === bodyJson) return
     const timer = setTimeout(() => {
       const seq = ++figureSeq.current
       // Parsed back from the very text the effect was keyed on: what was compared is what
@@ -395,6 +400,7 @@ export default function InputsForm({
           // Stale, or overtaken by a save echo: the newest answer owns the screen, and an
           // older one describes a form that no longer exists.
           if (seq !== figureSeq.current) return
+          figuresBody.current = bodyJson
           setFigures((current) => {
             const next = { ...current }
             for (const item of preview.derived)
@@ -467,7 +473,7 @@ export default function InputsForm({
         const { flatCells: echoCells, allCells: echoAll } = modelOf(echo)
         const echoValues = valuesOf(echoCells)
         figureSeq.current += 1
-        serverBody.current = JSON.stringify(previewBodyOf(echoCells, echoValues))
+        figuresBody.current = JSON.stringify(previewBodyOf(echoCells, echoValues))
         setFigures(figuresOf(echoAll))
         setValues(echoValues)
         setBaseline(valuesOf(echoCells))

@@ -297,6 +297,40 @@ describe('InputsForm — unsaved work survives (2026-09-23 spec §W9)', () => {
     expect(computed('Gross Paycheck').textContent).toBe('$8,750.00')
   })
 
+  it('Discard restored entries puts the saved totals back too, not the discarded draft’s', async () => {
+    // Review finding (2026-09-24): the restored boxes were previewed ($8,750.00), Discard put the
+    // saved boxes back — and the computed line went on showing the discarded draft's figure,
+    // because the saved body was still "what the server last agreed with".
+    vi.useFakeTimers()
+    seed({ loaded: LOADED, edited: EDITED })
+    vi.mocked(previewTaxInputs).mockImplementation(async (_year, body) =>
+      previewOut(body.values?.annual_salary === '210000' ? '8750.0000' : '8333.3333'),
+    )
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    await settle(300)
+    expect(computed('Gross Paycheck').textContent).toBe('$8,750.00')
+    fireEvent.click(screen.getByRole('button', { name: 'Discard restored entries' }))
+    await settle(300)
+    expect(computed('Gross Paycheck').textContent).toBe('$8,333.33')
+    expect(vi.mocked(previewTaxInputs)).toHaveBeenLastCalledWith(2024, {
+      values: { annual_salary: '200000.0000', hsa_contributions: '4150.0000', qualified_dividends: null },
+    })
+  })
+
+  it('typing a value back to the saved one asks for the saved totals again', async () => {
+    vi.useFakeTimers()
+    vi.mocked(previewTaxInputs).mockImplementation(async (_year, body) =>
+      previewOut(body.values?.annual_salary === '216000' ? '9000.0000' : '8333.3333'),
+    )
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.change(field('Annual Salary'), { target: { value: '216000' } })
+    await settle(300)
+    expect(computed('Gross Paycheck').textContent).toBe('$9,000.00')
+    fireEvent.change(field('Annual Salary'), { target: { value: '200000.0000' } })
+    await settle(300)
+    expect(computed('Gross Paycheck').textContent).toBe('$8,333.33')
+  })
+
   it('Discard restored entries puts the saved values back and forgets the draft', () => {
     seed({ loaded: LOADED, edited: EDITED })
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
