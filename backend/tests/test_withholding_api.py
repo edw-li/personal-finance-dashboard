@@ -17,7 +17,12 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from app.api.taxes import SEVERAL_PARTNERS_NOTE, withholding_estimate
+from app.api.taxes import (
+    SEVERAL_PARTNERS_NOTE,
+    _engine_feed,
+    _overlay_pricer,
+    withholding_estimate,
+)
 from app.models import (
     AppSetting,
     ContributionLimit,
@@ -1950,6 +1955,16 @@ async def test_a_lot_marked_sold_without_a_price_is_left_out_and_named(
         "The ESPP lot bought on Aug 29, 2025 is marked sold on May 1, 2026 without a sale price, "
         "so it is left out of the ESPP row"
     ) in rec["notes"]
+
+
+async def test_the_overlay_pricer_refuses_a_computed_total(db, world, frozen_today):
+    """Every reconciliation overlay is a COMPONENT (code-quality suggestion): one laid on a
+    computed total would be rebuilt away by the engine and price nothing, so it is caught as a
+    programming error rather than read as "no effect"."""
+    price = _overlay_pricer(await _engine_feed(db, YEAR))
+    assert price([("w2_salary_checkpoint", None, Decimal("1000"))]) > Decimal("0")
+    with pytest.raises(AssertionError, match="latest_w2_income"):
+        price([("latest_w2_income", None, Decimal("1000"))])
 
 
 async def test_the_reconciliation_writes_nothing(auth_client, world, frozen_today, forbid_writes):

@@ -2164,6 +2164,10 @@ def _overlay_pricer(
     def price(overlays: Sequence[tuple[str, int | None, Decimal]]) -> Decimal:
         overlaid = dict(base)
         for key, owner, value in overlays:
+            # Components only: the engine rebuilds every computed total from its components, so
+            # an overlay on one would be recomputed away and price nothing — a programming
+            # error, never a "no effect" (code-quality suggestion).
+            assert not is_derived_key(key), key
             overlaid.pop(_stored_slot(overlaid, key, owner, null_row_column), None)
             overlaid[(key, owner)] = value
         rows = [
