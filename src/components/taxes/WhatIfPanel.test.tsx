@@ -407,6 +407,71 @@ describe('WhatIfPanel', () => {
     ).toBeTruthy()
   })
 
+  // The kpi row's labels in order — the tile() helper finds one tile, this reads the row.
+  const kpiLabels = () =>
+    Array.from(document.querySelectorAll('.whatif-result .kpi-row .stat-label-text')).map(
+      (node) => node.textContent,
+    )
+
+  // The Feb 29 2024 lot's shape (2026-09-23 spec §W7): a $59.5K qualified sale read "Δ take-home
+  // −$11,651" — an income concept that never counts the proceeds.
+  const SALE_SUMMARY = {
+    proceeds: '59500.00',
+    gain: '38250.00',
+    tax_due: '11651.00',
+    net_cash: '47849.00',
+    after_tax_gain: '26599.00',
+  }
+
+  it('a sale reads in cash: Proceeds · Tax due · Net cash · After-tax gain, with no Δ take-home (2026-09-23 spec §W7)', async () => {
+    vi.mocked(runWhatIf).mockResolvedValue(resultFixture({ sale_summary: SALE_SUMMARY }))
+    mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+    await screen.findByText('Net cash')
+    expect(kpiLabels()).toEqual(['Proceeds', 'Tax due', 'Net cash', 'After-tax gain'])
+    expect(tile('Proceeds').querySelector('.stat-value')?.textContent).toBe('$59,500.00')
+    expect(tile('Tax due').querySelector('.stat-value')?.textContent).toBe('$11,651.00')
+    // Net cash = proceeds − tax due; the after-tax gain = gain − tax due, positive and green.
+    expect(tile('Net cash').querySelector('.stat-value')?.textContent).toBe('$47,849.00')
+    const gain = tile('After-tax gain')
+    expect(gain.querySelector('.stat-value')?.textContent).toBe('$26,599.00')
+    expect(gain.querySelector('.stat-delta')?.textContent).toContain('$38,250.00 gain before tax')
+    expect(gain.querySelector('.stat-delta')?.className).toContain('stat-delta-positive')
+    expect(screen.queryByText('Δ take-home')).toBeNull()
+    // No overrides: tax due IS the whole Δ, so there is nothing to reconcile below.
+    expect(screen.queryByText(/Tax due counts the sales only/)).toBeNull()
+    // The totals and the rates stay in the compare table.
+    expect(screen.getByText('Take-home').closest('tr')).toBeTruthy()
+  })
+
+  it('with overrides beside the sales, says tax due counts the sales only', async () => {
+    vi.mocked(runWhatIf).mockResolvedValue(resultFixture({ sale_summary: SALE_SUMMARY }))
+    mount('/taxes?whatif=sale%3A7%3A40&whatif=annual_salary%3A210000', { definitions: DEFS, inputs: INPUTS })
+    await screen.findByText('Net cash')
+    expect(
+      screen.getByText('Tax due counts the sales only; the overrides change the total below.'),
+    ).toBeTruthy()
+  })
+
+  it('keeps the three Δ tiles for a scenario with nothing sold', async () => {
+    vi.mocked(runWhatIf).mockResolvedValue(resultFixture({ sale_details: [], sale_summary: null }))
+    mount('/taxes?whatif=annual_salary%3A210000', { definitions: DEFS, inputs: INPUTS })
+    await screen.findByText('Δ total tax')
+    expect(kpiLabels()).toEqual(['Δ total tax', 'Δ take-home', 'Effective rate'])
+    expect(screen.queryByText('Net cash')).toBeNull()
+  })
+
+  it('no longer disclaims FICA on ESPP income: the engine leaves it out of the payroll bases (2026-09-23 spec §W6)', async () => {
+    mount('/taxes')
+    await openPanel()
+    const disclaimer = screen.getByText(/^Sales are classified at average cost/)
+    expect(disclaimer.textContent).toBe(
+      `Sales are classified at average cost, the app's only basis method, and ESPP ordinary income ` +
+        'lands in Other W2 Income. Long/short is your call: imported transactions carry no dates, so ' +
+        'the app cannot verify a holding period. Nothing here is stored.',
+    )
+    expect(disclaimer.textContent).not.toMatch(/FICA|Medicare|Social Security|SDI/)
+  })
+
   it('says nothing moved rather than drawing seven bars of zero', async () => {
     vi.mocked(runWhatIf).mockResolvedValue(
       resultFixture({
