@@ -15,6 +15,7 @@ from app.services.calendar.generators.rsu import SUPPLEMENTAL, vest_events
 from app.services.calendar.generators.taxes import tax_deadline_events
 from app.services.calendar.model import Item, Window
 from app.services.espp_calc import OfferingInfo, StoredPeriod
+from app.services.month_review import month_shift
 from app.services.month_status import MonthStatus, SpendingEvidence
 from app.services.snapshot_state import snapshot_state
 
@@ -320,9 +321,11 @@ def ritual_status(
     written=(),
     saved_on=None,
     reminder_day=1,
+    adopted_on=date(2026, 9, 12),
 ):
     """K3's month status from literals (2026-09-23 spec §T6): `snapshots` are (month,
-    recorded_on) pairs; `written` the months with a row-level spending write on record."""
+    recorded_on) pairs; `written` the months with a row-level spending write on record. The
+    month review was adopted on Sep 12, 2026 unless told otherwise — the real copy's day."""
     return MonthStatus(
         today=today,
         reminder_day=reminder_day,
@@ -333,7 +336,7 @@ def ritual_status(
         spending=frozenset(spending),
         take_home=frozenset(take_home),
         closed=frozenset(),
-        adopted_on=date(2026, 9, 12),
+        adopted_on=adopted_on,
         last_complete_month=None,
         empty_book=not (snapshots or spending or take_home),
         evidence=SpendingEvidence(written=frozenset(written), saved_on=saved_on or {}),
@@ -503,10 +506,13 @@ def test_ritual_on_an_empty_book_asks_for_the_first_balances_only():
     )
 
 
-# Jul 1 and Aug 1 on file, nothing else: on Oct 3 the reminders of August (July's flows),
-# September (its balances, August's flows) and October are all pending and re-dated to today.
+# Jul 1 and Aug 1 on file, nothing else, in a book whose month review was adopted in June: on
+# Oct 3 K lists July's, August's and September's flows and October's balances as pending, so the
+# reminders of August, September and October are all re-dated to today. September's own missing
+# balances are not among them — K's balances part is this month's (Oct 1); a past month's gap is
+# not a to-do (lane T code review, controller decision (a)).
 JUL, AUG = date(2026, 7, 1), date(2026, 8, 1)
-BEHIND = {"snapshots": [(JUL, JUL), (AUG, AUG)]}
+BEHIND = {"snapshots": [(JUL, JUL), (AUG, AUG)], "adopted_on": date(2026, 6, 12)}
 
 
 def test_overdue_ritual_outside_the_window_is_dropped():
@@ -532,8 +538,24 @@ def test_a_window_holding_today_shows_every_pending_reminder_on_it():
     ]
     september = events[1]
     assert (september.label, september.detail) == (
-        "Monthly update — Sep 1 balances · August spending & take-home",
-        "Overdue — Sep 1 balances were due Sep 1; August spending & take-home was due by Sep 15",
+        "Monthly update — August spending & take-home",
+        "Overdue — August spending & take-home was due by Sep 15",
+    )
+
+
+def test_the_reminder_asks_only_what_the_month_status_lists():
+    """Controller decision (a) on the code review: the reminder considers only the months K's
+    month status itself lists as pending — this month's balances part, `provisional_past`,
+    `flows_due` — never a second derivation, and never a month before the adoption. The BEHIND
+    book adopted on Sep 12 instead: July's and August's flows are legacy history, and
+    September's missing balances were never a to-do, so on Oct 3 only October's reminder is left."""
+    today = date(2026, 10, 3)
+    status = ritual_status(today, **{**BEHIND, "adopted_on": date(2026, 9, 12)})
+    [october] = ritual_events(Window(OCT, date(2026, 10, 31)), today, 1, status)
+    assert (october.event_date, october.key, october.label) == (
+        today,
+        "ritual:2026-09:2026-10-01",
+        "Monthly update — Oct 1 balances · September spending & take-home",
     )
 
 
@@ -553,12 +575,21 @@ def test_the_feed_on_jan_5_shows_the_pending_fall_on_today():
     ]
     # The months still ahead keep their own dates.
     assert events[len(on_today)].event_date == date(2027, 2, 1)
+    # Only what K lists (controller decision (a)): October's early balances (provisional_past),
+    # this month's (the balances part) and four months of flows — not November's or December's
+    # missing balances, which Needs attention does not ask for either.
+    assert [e.label for e in events if e.event_date == today] == [
+        "Monthly update — Oct 1, 2026 balances · September 2026 spending & take-home",
+        "Monthly update — October 2026 spending & take-home",
+        "Monthly update — November 2026 spending & take-home",
+        "Monthly update — Jan 1 balances · December 2026 spending & take-home",
+    ]
 
 
 def test_a_legacy_month_recorded_early_is_never_pending():
-    """K4 never restamps a month before the adoption (Sep 12 here), so its early balances stay
-    provisional for good — the reminder does not nag about history, as provisional_past does not
-    (Needs attention); the ribbon still hatches it."""
+    """A special case of the adoption rule (controller decision (a)): K4 never restamps a month
+    before the adoption (Sep 12 here), so its early balances stay provisional for good — K's
+    provisional_past leaves them out, and so does the reminder; the ribbon still hatches it."""
     today = date(2026, 10, 3)
     status = ritual_status(
         today,
@@ -567,6 +598,46 @@ def test_a_legacy_month_recorded_early_is_never_pending():
         take_home={JUL, AUG, SEP},
     )
     assert ritual_events(Window(OCT, date(2026, 10, 31)), today, 1, status) == []
+
+
+# The reviewer's probe shapes (lane T code review, controller decision (a), (c)): the copy's
+# span — a snapshot on every 1st from Sep 2023 to Oct 2026 — with a hole in its legacy history,
+# seen on Oct 3 through the feed's window (30 days back, a year ahead). The month review was
+# adopted on Sep 12, 2026: nothing before September 2026 is ever asked for.
+BOOK = [month_shift(date(2023, 9, 1), n) for n in range(38)]
+OCT_3_FEED = Window(date(2026, 9, 3), date(2027, 10, 3))
+
+
+def test_legacy_months_without_take_home_never_nag():
+    """Take-home recorded only from Jan 2025 (an import without the early net pay): K's
+    flows_due lists sixteen legacy months, and no reminder asks for any of them."""
+    today = date(2026, 10, 3)
+    status = ritual_status(
+        today,
+        snapshots=[(month, month) for month in BOOK],
+        spending=set(BOOK[:-1]),
+        take_home={month for month in BOOK[:-1] if month >= date(2025, 1, 1)},
+    )
+    assert len(status.time().flows_due) == 16  # K lists them; the reminder does not follow
+    events = ritual_events(OCT_3_FEED, today, 1, status)
+    assert [e.key for e in events if e.event_date == today] == []
+    assert min(e.entity_ref for e in events) == "2026-10"  # the Nov 1 reminder, on its own day
+
+
+def test_a_missing_legacy_snapshot_never_nags():
+    """One 1st never recorded (Mar 1, 2024) in an otherwise complete book: a past month's
+    missing balances are not a to-do K lists, and the month is legacy besides — no reminder,
+    today or on any later day."""
+    today = date(2026, 10, 3)
+    status = ritual_status(
+        today,
+        snapshots=[(month, month) for month in BOOK if month != date(2024, 3, 1)],
+        spending=set(BOOK[:-1]),
+        take_home=set(BOOK[:-1]),
+    )
+    events = ritual_events(OCT_3_FEED, today, 1, status)
+    assert [e.key for e in events if e.event_date == today] == []
+    assert "ritual:2024-02:2024-03-01" not in {e.key for e in events}
 
 
 def test_balances_recorded_ahead_of_their_date_are_named_so():

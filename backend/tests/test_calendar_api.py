@@ -290,6 +290,9 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
     # re-dated to today with its key unchanged; Sep 1's is scheduled (2026-09-23 spec §T6). July's
     # own reminder (only June's balances are on file) lies before the window but is re-dated to a
     # today inside it, so it is drawn too — the window follows the event's date (review minor 1).
+    # It asks only for June's spending & take-home, which the month status lists as due: Jul 1's
+    # missing balances are a gap in the history, not a to-do — K asks only for this month's
+    # (controller decision (a)).
     assert [(e["date"], e["label"], e["key"], e["href"]) for e in by_type["update_due"]] == [
         (
             "2026-08-24",
@@ -299,7 +302,7 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
         ),
         (
             "2026-08-24",
-            "Monthly update — Jul 1 balances · June spending & take-home",
+            "Monthly update — June spending & take-home",
             "ritual:2026-06:2026-07-01",
             "/update",
         ),
