@@ -943,12 +943,21 @@ describe('EsppPage — offerings', () => {
       notes: null,
     })
 
+    // The save holds the row's Delete (busy) until its PATCH chain has settled — a render one
+    // step AFTER the call seen above, which the click could beat. A click on a disabled button
+    // is dropped: the declined confirm below would then prove nothing, and the accepted one would
+    // never reach deleteOffering. Wait for Delete to be live first.
+    const deleteButton = () =>
+      screen.getByRole('button', { name: 'Delete offering from Sep 1, 2023' }) as HTMLButtonElement
+    await waitFor(() => expect(deleteButton().disabled).toBe(false))
+
     confirmSpy.mockReturnValue(false)
-    fireEvent.click(screen.getByRole('button', { name: 'Delete offering from Sep 1, 2023' }))
+    fireEvent.click(deleteButton())
+    expect(confirmSpy).toHaveBeenCalledTimes(1) // the click reached the confirm, and was declined
     expect(vi.mocked(deleteOffering)).not.toHaveBeenCalled()
 
     confirmSpy.mockReturnValue(true)
-    fireEvent.click(screen.getByRole('button', { name: 'Delete offering from Sep 1, 2023' }))
+    fireEvent.click(deleteButton())
     await waitFor(() => expect(vi.mocked(deleteOffering)).toHaveBeenCalledWith(1))
   })
 
