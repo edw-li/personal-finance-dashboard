@@ -38,7 +38,8 @@ export type MonthScopeProps =
       editHref?: (monthIso: string) => string
       /** The month the page shows when nothing is selected (2026-09-23 spec §T8): Net worth the
        *  current snapshot's, Spending the last complete month, Budgets the card's resolved
-       *  month. "Back to …" hides on it, and Edit falls back to it. */
+       *  month. "Back to …" hides on it, and Edit falls back to it. null = the page has none;
+       *  undefined = not known yet (the newest covered month stands in). */
       defaultMonth?: string | null
       /** "Back to latest balances", "Back to last complete month"; "Back to latest" when absent. */
       backLabel?: string
@@ -260,8 +261,11 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate, o
   const currentSnapshotMonth = coverage?.time?.current_snapshot?.month ?? null
   const anchor =
     month?.anchor ?? (currentSnapshotMonth !== null && currentSnapshotMonth > today ? currentSnapshotMonth : today)
-  // The month a view page shows with nothing selected: "Back to …" is a no-op on it.
-  const homeMonth = month?.mode === 'view' ? (month.defaultMonth ?? latestCovered) : null
+  // The month a view page shows with nothing selected: "Back to …" is a no-op on it. null is the
+  // page saying it HAS none (every selection then offers the way back); only undefined — not said
+  // yet — falls back to the newest covered month (review minor 12).
+  const homeMonth =
+    month?.mode === 'view' ? (month.defaultMonth !== undefined ? month.defaultMonth : latestCovered) : null
 
   return (
     <div className="scope-bar">

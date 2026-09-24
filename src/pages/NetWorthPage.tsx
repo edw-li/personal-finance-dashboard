@@ -460,7 +460,9 @@ export default function NetWorthPage() {
     selectedIndex >= 0 ? selectedIndex : currentIndex >= 0 ? currentIndex : months.length - 1
   // The month the page shows with nothing picked: the ribbon's Edit target and what "Back to
   // latest balances" returns to (§T8).
-  const defaultMonth = currentIndex >= 0 ? months[currentIndex] : null
+  // undefined until the timeseries lands (the scope row stands in its newest covered month); null
+  // when the book has no current snapshot at all.
+  const defaultMonth = data === null ? undefined : currentIndex >= 0 ? months[currentIndex] : null
   // The viewed snapshot and the one before it, by the dates their balances describe (§T7).
   const viewed = data !== null && months[viewedIndex] !== undefined ? snapshotAt(data, viewedIndex) : null
   const before = data !== null && viewedIndex >= 1 ? snapshotAt(data, viewedIndex - 1) : null

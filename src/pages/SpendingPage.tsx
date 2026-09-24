@@ -270,7 +270,8 @@ export default function SpendingPage() {
   const { onCoverage, flowsDue } = useScopeCoverage()
   // The month the Budget card opens on with nothing picked (its own rule, a pin after a write
   // included): the scope row's default month on the Budgets view (2026-09-23 spec §T8).
-  const [budgetsMonth, setBudgetsMonth] = useState<string | null>(null)
+  // undefined until the card has said (the scope row stands in its newest covered month).
+  const [budgetsMonth, setBudgetsMonth] = useState<string | null | undefined>(undefined)
   // Their '*' on that month, said in words under each card (the 2026-09-23 code review, 13) —
   // in progress, partly entered, or both.
   const footnote = matrix === null ? null : partialFootnote(matrix.months, today, partlyEnteredMonths(flowsDue))
@@ -503,7 +504,7 @@ export default function SpendingPage() {
               editHref: (month) => `/update?month=${month}&step=spending`,
               // The month on screen with nothing picked (2026-09-23 spec §T8): the last complete
               // month, or on Budgets the card's own month — what Edit opens and Back returns to.
-              defaultMonth: views.section === 'budgets' ? budgetsMonth : (matrix?.default_month ?? null),
+              defaultMonth: views.section === 'budgets' ? budgetsMonth : matrix === null ? undefined : (matrix.default_month ?? null),
               backLabel: views.section === 'budgets' ? undefined : 'Back to last complete month',
             }}
           />

@@ -423,6 +423,20 @@ describe('ScopeBar — the view ribbon’s anchor, default month, Back and Edit 
     expect(screen.getByTestId('url').textContent).toBe('/net-worth')
   })
 
+  // Review minor 12: null is the page saying it HAS no default month (a book with nothing current)
+  // — so any selection offers the way back; only undefined (not said yet) falls back to the
+  // newest covered month.
+  it('reads an explicit null default month as "no default" — Back shows on any selection', async () => {
+    withTime(['2026-08-01', '2026-09-01', '2026-10-01'])
+    const none = mount({ month: { mode: 'view', defaultMonth: null } }, '/net-worth?month=2026-10')
+    await screen.findByRole('button', { name: /^Oct 2026/ })
+    expect(await screen.findByRole('button', { name: 'Back to latest' })).toBeTruthy()
+    none.unmount()
+    mount({ month: { mode: 'view' } }, '/net-worth?month=2026-10')
+    await screen.findByRole('button', { name: /^Oct 2026/ })
+    expect(screen.queryByRole('button', { name: 'Back to latest' })).toBeNull()
+  })
+
   it('edits the month on screen: the selection, else the page’s default, at the page’s step', async () => {
     withTime(['2026-08-01', '2026-09-01', '2026-10-01'])
     const editHref = (m: string) => `/update?month=${m}&step=spending`
