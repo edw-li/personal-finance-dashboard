@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { copyInOctober } from '../../testing/timeFixtures'
+import { setServerToday } from '../../utils/productToday'
 import MonthRibbon, { pageContaining, windowFor } from './MonthRibbon'
 
 afterEach(cleanup)
@@ -186,5 +188,65 @@ describe('MonthRibbon 2.0', () => {
     expect(chipVisible(/^Jan 2025/)).toBe(true)
     rerender({ selected: undefined }) // "Back to latest"
     expect(firstChip()).toMatch(/^Oct 2025/)
+  })
+})
+
+
+// 2026-09-23 spec §T8: with the server's time status the chips show what each part of a month
+// is — final or provisional balances, entered / partly entered / not-yet-due spending — and dot
+// the months whose flows are due, amber once overdue; the words say all of it.
+describe('MonthRibbon — the two parts of a month (2026-09-23 spec §T8)', () => {
+  const copy = (today: string) => ({
+    balances: new Set(['2026-07-01', '2026-08-01', '2026-09-01', '2026-10-01']),
+    spending: new Set(['2026-07-01', '2026-08-01', '2026-09-01']),
+    netPay: new Set(['2026-07-01', '2026-08-01']),
+    time: copyInOctober(today),
+  })
+  const chip = (name: RegExp) => screen.getByRole('button', { name })
+
+  it('hatches provisional balances and partly entered spending, and dots the month that is due', () => {
+    setServerToday('2026-10-03')
+    mount({ anchor: '2026-10-01', today: '2026-10-01', coverage: copy('2026-10-03') })
+    const september = chip(/^Sep 2026/)
+    expect(september.getAttribute('aria-label')).toBe(
+      'Sep 2026 — Sep 1 balances · spending entered during September (partial) · take-home missing · due by Oct 15',
+    )
+    expect([...september.classList]).toEqual(
+      expect.arrayContaining(['has-balances', 'spending-partial', 'is-due']),
+    )
+    expect(september.classList.contains('has-spending')).toBe(false)
+    expect(september.classList.contains('balances-provisional')).toBe(false)
+    const october = chip(/^Oct 2026/)
+    expect(october.getAttribute('aria-label')).toBe(
+      'Oct 2026 — Oct 1 balances recorded early (provisional) · spending not due yet (October in progress)',
+    )
+    expect([...october.classList]).toEqual(expect.arrayContaining(['has-balances', 'balances-provisional']))
+    expect(october.classList.contains('is-due')).toBe(false)
+    const august = chip(/^Aug 2026/)
+    expect(august.getAttribute('aria-label')).toBe('Aug 2026 — Aug 1 balances · spending and take-home entered')
+    expect([...august.classList]).toEqual(expect.arrayContaining(['has-balances', 'has-spending']))
+    expect(august.classList.contains('spending-partial')).toBe(false)
+  })
+
+  it('turns the dot amber once the month is overdue', () => {
+    setServerToday('2026-10-16')
+    mount({ anchor: '2026-10-01', today: '2026-10-01', coverage: copy('2026-10-16') })
+    const september = chip(/^Sep 2026/)
+    expect(september.classList.contains('is-overdue')).toBe(true)
+    expect(september.classList.contains('is-due')).toBe(false)
+    expect(september.getAttribute('aria-label')).toMatch(/· overdue \(was due by Oct 15\)$/)
+  })
+
+  it('keeps the figure and the review state ahead of the words', () => {
+    setServerToday('2026-10-03')
+    mount({
+      anchor: '2026-10-01',
+      today: '2026-10-01',
+      coverage: { ...copy('2026-10-03'), reviews: { '2026-09-01': 'in_progress' } },
+      figures: { '2026-09-01': '$806,667.88' },
+    })
+    expect(chip(/^Sep 2026/).getAttribute('aria-label')).toBe(
+      'Sep 2026 — $806,667.88 — In progress · Sep 1 balances · spending entered during September (partial) · take-home missing · due by Oct 15',
+    )
   })
 })

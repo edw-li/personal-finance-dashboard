@@ -204,6 +204,9 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate, o
       coverage === null
         ? null
         : { balances: new Set(coverage.balances), spending: new Set(coverage.spending),
+            // The take-home half and the server's time status: how each part of a month stands
+            // and which months are due (2026-09-23 spec §T8).
+            netPay: new Set(coverage.net_pay), time: coverage.time ?? null,
             reviews: coverage.review_months ? Object.fromEntries(coverage.review_months.map(review => [review.month, review.state])) : undefined },
     [coverage],
   )
