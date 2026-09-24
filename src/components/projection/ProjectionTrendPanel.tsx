@@ -28,9 +28,11 @@ export default function ProjectionTrendPanel({ startMonth }: { startMonth: strin
   }, [retry])
   const fit = useMemo(() => history ? fitPolyTrend(history.months, history.net_worth) : null, [history])
   const option = useMemo(() => history ? netWorthProjectionOption(history, fit, startMonth, years, { selected: legend }) : null, [history, fit, startMonth, years, legend])
-  return <ChartCard title="Net worth over time (projected)"
+  // 2026-09-23 correctness spec §R8: the tab, the fit and its reach stay — the words say what the
+  // curve is (fitted to history, nominal, not a forecast) and that nothing on the plan moves it.
+  return <ChartCard title="Net worth trend — a curve fitted to your recorded history"
     hint="Every snapshot as dots with a quadratic best-fit extended forward. This explores historical momentum rather than modeling a financial plan. Log axis: equal steps are equal multiples."
-    lede="An exploratory fit of past net worth. Its curve does not use your contribution, spending, or retirement assumptions."
+    lede={`A second-degree curve fitted to every recorded net-worth snapshot, in nominal dollars, extended ${years} years. It is not a forecast and uses none of your plan's assumptions.`}
     ariaLabel={fit === null ? 'Net worth history as dots, on a log scale' : `Net worth history with a fitted trend extended ${years} years forward, on a log scale`}
     option={option} error={error} busy={history === null && error === null}
     empty="Not enough monthly snapshots to chart yet." exportName="net-worth-trend"
@@ -40,5 +42,5 @@ export default function ProjectionTrendPanel({ startMonth }: { startMonth: strin
     controls={<Segmented variant="toggle" size="sm" ariaLabel="Trend span" options={SPANS.map((value) => ({ value: String(value), label: `${value}Y` }))}
       value={String(years)} onChange={(value) => setYears(Number(value))} />}
     footer={<p className="drill-hint">{fit === null ? 'The polynomial trendline needs at least three snapshots — showing the history alone.'
-      : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${years} years.`} Months at or below $0 cannot be shown on this log axis.</p>} />
+      : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${years} years.`} Its reach is set by the 1Y–40Y chips; the planning horizon and &quot;plan until&quot; do not change it. Months at or below $0 cannot be shown on this log axis.</p>} />
 }

@@ -181,6 +181,7 @@ function renderPage(entry = '/projection') {
 }
 
 const url = () => screen.getByTestId('location').textContent
+const TREND_TITLE = 'Net worth trend — a curve fitted to your recorded history'
 
 // EXACT labels, never substrings: a hint's aria-label is a label too, and a SliderBox's
 // range carries the knob's words with a " slider" suffix — /volatility/i would name two
@@ -851,7 +852,7 @@ describe('ProjectionPage', () => {
     expect(within(tileFor('FI target')).getByRole('button', { name: 'About this number: FI target' })).toBeTruthy()
     await openTrend()
     expect(
-      screen.getByText('Net worth over time (projected)').querySelector('button.info-hint'),
+      screen.getByText(TREND_TITLE).querySelector('button.info-hint'),
     ).toBeTruthy()
     expect(
       screen.getByText('Projected investable balance').querySelector('button.info-hint'),
@@ -1093,10 +1094,27 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
   it('renders the trend intro as the trend card’s lede', async () => {
     renderPage()
     await openTrend()
-    const intro = await screen.findByText(/An exploratory fit of past net worth/)
+    const intro = await screen.findByText(/A second-degree curve fitted to every recorded net-worth snapshot/)
     expect(intro.closest('.chart-lede')).not.toBeNull()
     expect(intro.closest('.chart-card')).not.toBeNull()
     expect(document.querySelector('.projection-view-intro')).toBeNull()
+  })
+
+  it('says what the Historical trend is — a fitted curve, not a forecast — in its title, lede and footer', async () => {
+    // 2026-09-23 correctness spec §R8: the tab, the fit and its reach stay; only honesty changes.
+    renderPage()
+    await openTrend()
+    expect(await screen.findByText(TREND_TITLE)).toBeTruthy()
+    const lede = screen.getByText(/A second-degree curve fitted to every recorded net-worth snapshot/)
+    expect(lede.textContent).toBe(
+      "A second-degree curve fitted to every recorded net-worth snapshot, in nominal dollars, extended 10 years. It is not a forecast and uses none of your plan's assumptions.",
+    )
+    expect(screen.getByText(/Its reach is set by the 1Y–40Y chips/).textContent).toContain(
+      'Its reach is set by the 1Y–40Y chips; the planning horizon and "plan until" do not change it.',
+    )
+    // The lede follows the span chip.
+    fireEvent.click(within(screen.getByRole('group', { name: /trend span/i })).getByRole('button', { name: '40Y' }))
+    expect(screen.getByText(/extended 40 years\. It is not a forecast/)).toBeTruthy()
   })
 
   it('keeps the assumptions fine print in the compare card, out of the knobs column', async () => {
