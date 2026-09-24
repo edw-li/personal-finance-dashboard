@@ -155,8 +155,9 @@ Measures the box's `table > thead` and `table > tfoot` heights and writes them a
 `--table-foot-h` (px, `0px` when absent) on the box's inline style; re-measured by a ResizeObserver on the
 table (a header that wraps, a density switch, a `tfoot` that appears once data lands). Guarded for jsdom /
 no-ResizeObserver (then measured once on mount). Consumers: the scroll padding (§2.2) and the dividend
-month rows' sticky offset (§4.3). Lives in `src/components/tableScroll.ts` with the `revealInBox` helper
-(§4.5).
+month rows' sticky offset (§4.3). Lives in `src/components/tableScrollDom.ts` with the `revealInBox` helper
+(§4.5) — not `tableScroll.ts`: on this case-insensitive Windows box `import './TableScroll'` would resolve
+to a `tableScroll.ts` before `TableScroll.tsx` (`.ts` is tried first).
 
 ### 2.5 Print
 
@@ -287,7 +288,7 @@ given the month row's MEASURED height as an extra top inset, so a revealed row l
 
 ### 5.1 Files
 
-Touched: `components/TableScroll.tsx` (new), `components/tableScroll.css` (new), `components/tableScroll.ts`
+Touched: `components/TableScroll.tsx` (new), `components/tableScroll.css` (new), `components/tableScrollDom.ts`
 (new), `components/useScrollEdges.ts`, `components/portfolio/{DividendsPanel,TransactionsPanel,
 SecuritiesPanel,HoldingsTable,ClassificationEditor}.tsx`, `components/portfolio/dividendMonths.ts` (new),
 `components/portfolio/dividends.css` (new — the month rows and toolbar; imported by DividendsPanel, so the
@@ -319,7 +320,7 @@ with a private `cacheDir` (a wrapper config in the session scratchpad). No share
 **Unit (vitest; globals off → `afterEach(cleanup)` in every rendering test):**
 - `useScrollEdges`: `'xy'` writes `top`/`bottom` after `left`/`right` with the 1 px tolerance; default
   `'x'` never writes them (existing tests unchanged).
-- `tableScroll.ts`: `useStickyInsets` writes both variables (stubbed ResizeObserver + heights), `0px`
+- `tableScrollDom.ts`: `useStickyInsets` writes both variables (stubbed ResizeObserver + heights), `0px`
   without a `tfoot`; `revealInBox` scrolls up/down/not at all around the pinned insets (mocked rects).
 - `TableScroll`: role, label, `tabIndex=0`, classes merged, ref forwarded, one table child.
 - `dividendMonths.ts`: month basis = `pay_date` month; months descending; row order kept; integer-cent
