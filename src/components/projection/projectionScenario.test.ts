@@ -6,9 +6,11 @@ import {
   COMPARE_ROWS,
   KNOBS,
   SLIDER,
+  SLIDER_KNOBS,
   decodeProjection,
   derivedOf,
   encodeProjection,
+  headlineFiMonth,
   isEmptyProjection,
   labelForProjection,
   projectionValue,
@@ -29,17 +31,30 @@ const echo: ProjectionOut = {
 }
 
 describe('projection scenario codec', () => {
-  it('round-trips knobs (alphabetical) then retirements (by person) and accepts the parity fixture unchanged', () => {
-    const projection = fixture.cases.find((c) => c.page === 'projection')!
-    const scenario = decodeProjection(projection.entries)
-    expect(scenario).toEqual({ knobs: { annual_return: '0.06', monthly_contribution: '5400' }, retirements: { 2: '2035-06' } })
-    expect(encodeProjection(scenario)).toEqual(projection.entries)
-    expect(encodeProjection(decodeProjection(['retire:3:2040-01', 'years:40', 'retire:1:2035-06', 'swr:0.035']))).toEqual([
+  it('round-trips knobs (alphabetical) then retirements (by person) and accepts every parity case unchanged', () => {
+    const cases = fixture.cases.filter((c) => c.page === 'projection')
+    expect(cases.length).toBeGreaterThanOrEqual(2)
+    expect(decodeProjection(cases[0].entries)).toEqual({ knobs: { annual_return: '0.06', monthly_contribution: '5400' }, retirements: { 2: '2035-06' } })
+    // 2026-09-23 spec §R10: the plan-until year and the vests flag ride the same grammar.
+    expect(decodeProjection(cases[1].entries)).toEqual({
+      knobs: { annual_spend: '72000', plan_until: '2075', vests: '0' },
+      retirements: { 1: '2035-07', 2: '2037-01' },
+    })
+    for (const c of cases) expect(encodeProjection(decodeProjection(c.entries))).toEqual(c.entries)
+    expect(encodeProjection(decodeProjection(['retire:3:2040-01', 'vests:0', 'years:40', 'retire:1:2035-06', 'plan_until:2070', 'swr:0.035']))).toEqual([
+      'plan_until:2070',
       'swr:0.035',
+      'vests:0',
       'years:40',
       'retire:1:2035-06',
       'retire:3:2040-01',
     ])
+  })
+
+  it('lists the knobs in the canonical (alphabetical) URL order', () => {
+    expect([...KNOBS]).toEqual([...KNOBS].sort())
+    expect(KNOBS).toContain('plan_until')
+    expect(KNOBS).toContain('vests')
   })
 
   it('applies the router’s fences, drops garbage, keeps the last of a duplicate', () => {
@@ -51,6 +66,15 @@ describe('projection scenario codec', () => {
     ).toEqual({ knobs: { annual_return: '0.06', monthly_contribution: '-100' }, retirements: {} })
     expect(isEmptyProjection({ knobs: {}, retirements: {} })).toBe(true)
     expect(isEmptyProjection({ knobs: {}, retirements: { 2: '2035-06' } })).toBe(false)
+    expect(isEmptyProjection({ knobs: { vests: '0' }, retirements: {} })).toBe(false)
+  })
+
+  it('fences plan_until to a four-digit year inside 2000–2199 and vests to 0/1', () => {
+    for (const bad of ['plan_until:1999', 'plan_until:2200', 'plan_until:20x5', 'plan_until:207', 'plan_until:02075', 'plan_until:2075.0', 'vests:2', 'vests:yes', 'vests:', 'vests:true']) {
+      expect(decodeProjection([bad]).knobs, bad).toEqual({})
+    }
+    expect(decodeProjection(['plan_until:2000', 'vests:1']).knobs).toEqual({ plan_until: '2000', vests: '1' })
+    expect(decodeProjection(['plan_until:2199']).knobs.plan_until).toBe('2199')
   })
 
   // services/money.py's _quantize_bounded refuses |value| >= max_abs, so the endpoint's
@@ -67,10 +91,12 @@ describe('projection scenario codec', () => {
   })
 
   it('copies the scenario into fetchProjection’s params, omitting unset knobs', () => {
-    expect(toParams(decodeProjection(['annual_return:0.06', 'years:40', 'volatility:0', 'retire:2:2035-06']))).toEqual({
+    expect(toParams(decodeProjection(['annual_return:0.06', 'years:40', 'volatility:0', 'plan_until:2075', 'vests:0', 'retire:2:2035-06']))).toEqual({
       annualReturn: '0.06',
       years: '40',
       volatility: '0',
+      planUntil: '2075',
+      vests: '0',
       retirements: [{ personId: 2, month: '2035-06' }],
     })
     expect(toParams({ knobs: {}, retirements: {} })).toEqual({ retirements: [] })
@@ -79,21 +105,26 @@ describe('projection scenario codec', () => {
   it('reads the echo as each knob’s derived value', () => {
     expect(derivedOf(echo)).toEqual({
       annual_return: '0.05', annual_spend: '60000.00', contribution_growth: '0.03', inflation: '0.03',
-      monthly_contribution: '4000.00', swr: '0.04', volatility: '0.15', years: '30',
+      monthly_contribution: '4000.00', plan_until: null, swr: '0.04', vests: null, volatility: '0.15', years: '30',
     })
+    const vests = { included: true, price: '228.8700', price_as_of: '2026-09-22', withholding_rate: '0.3223', next_12_months: '116000.00', by_year: [], stops: null, excluded_reason: null }
+    expect(derivedOf({ ...echo, plan_until: 2055, vests })).toMatchObject({ plan_until: '2055', vests: '1' })
+    expect(derivedOf({ ...echo, vests: { ...vests, included: false } }).vests).toBe('0')
     expect(derivedOf({ ...echo, volatility: null, annual_spend: null }).volatility).toBeNull()
     expect(derivedOf(null).years).toBeNull()
   })
 
   it('labels a pin by its first two knobs, naming a retiring person when the roster is known', () => {
     expect(labelForProjection(decodeProjection(['annual_return:0.06', 'monthly_contribution:5400', 'years:40']))).toBe('Return 6% · Contribution $5,400.00')
+    expect(labelForProjection(decodeProjection(['plan_until:2075', 'vests:0']))).toBe('Plan until 2075 · Vests off')
     expect(labelForProjection(decodeProjection(['retire:2:2035-06']), [{ id: 2, name: 'Grace' }])).toBe('Retire Grace 2035-06')
     // No roster (it failed, or has not arrived): the id is all there is to say.
     expect(labelForProjection(decodeProjection(['retire:2:2035-06']))).toBe('Retire #2 2035-06')
   })
 
   it('keeps every slider track inside the fence its own knob accepts', () => {
-    for (const key of KNOBS) {
+    expect([...SLIDER_KNOBS].sort()).toEqual(KNOBS.filter((key) => key !== 'plan_until' && key !== 'vests'))
+    for (const key of SLIDER_KNOBS) {
       const { min, max } = SLIDER[key]
       for (const edge of [min, max]) {
         expect(decodeProjection([`${key}:${edge}`]).knobs[key], `${key} ${edge}`).toBe(edge)
@@ -101,12 +132,42 @@ describe('projection scenario codec', () => {
     }
   })
 
-  it('maps the compare rows onto the payload', () => {
-    expect(COMPARE_ROWS.map((r) => r.key)).toEqual([
-      'years', 'fi_target', 'fi_ratio', 'fi_month', 'coast_fi_month', 'fi_probability', 'fi_month_p10', 'fi_month_p50', 'fi_month_p90', 'monthly_contribution',
+  it('heads with the median reach, or the constant-return crossing when nothing was simulated', () => {
+    expect(headlineFiMonth(echo)).toBe('2041-06-01')
+    expect(headlineFiMonth({ ...echo, fi_probability: null, fi_month_p50: null })).toBe('2041-03-01')
+    expect(headlineFiMonth({ ...echo, fi_month_p50: null })).toBeNull() // the median never gets there
+  })
+
+  it('maps the compare rows onto the payload in the reader’s words', () => {
+    expect(COMPARE_ROWS.map((r) => [r.key, r.label])).toEqual([
+      ['years', 'Horizon (years)'],
+      ['fi_target', 'FI target'],
+      ['fi_ratio', 'FI ratio'],
+      ['fi_date', 'FI date (most likely)'],
+      ['fi_month_p10', 'FI · 1 in 10 paths by'],
+      ['fi_month_p90', 'FI · 9 in 10 paths by'],
+      ['fi_probability', 'Reach FI within horizon'],
+      ['money_lasts', 'Money lasts through plan-until year'],
+      ['lasts_until', 'Lasts at least until (9 in 10 paths)'],
+      ['coast_fi_month', 'Coast FI date'],
+      ['vests', 'Scheduled vests'],
+      ['monthly_contribution', 'Monthly contribution'],
     ])
     expect(projectionValue(echo, 'fi_target')).toBe('1500000.00')
     expect(projectionValue(echo, 'coast_fi_month')).toBeNull()
     expect(projectionValue(echo, 'years')).toBe('30')
+    expect(projectionValue(echo, 'fi_date')).toBe('2041-06-01')
+    // Absent from an older payload: an em dash, never a crash.
+    expect(projectionValue(echo, 'money_lasts')).toBeNull()
+    expect(projectionValue(echo, 'lasts_until')).toBeNull()
+    expect(projectionValue(echo, 'vests')).toBeNull()
+    const lasts = { plan_until: 2075, probability: '0.924000', verdict: 'on_track' as const, lasts_until_p10: '2079-03-01', horizon_end: '2076-09-01', deterministic_depleted_month: null, reason: null }
+    const vests = { included: false, price: '228.8700', price_as_of: '2026-09-22', withholding_rate: '0.3223', next_12_months: '116000.00', by_year: [], stops: null, excluded_reason: null }
+    const full = { ...echo, money_lasts: lasts, vests }
+    expect(projectionValue(full, 'money_lasts')).toBe('0.924000')
+    expect(projectionValue(full, 'lasts_until')).toBe('2079-03-01')
+    expect(projectionValue(full, 'vests')).toBe('Off')
+    expect(projectionValue({ ...full, vests: { ...vests, included: true } }, 'vests')).toBe('Included')
+    expect(projectionValue(full, 'no_such_row')).toBeNull()
   })
 })

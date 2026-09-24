@@ -49,7 +49,12 @@ const url = () => screen.getByTestId('url').textContent
 beforeEach(() => {
   localStorage.clear()
   preview.mockReset()
-  preview.mockImplementation(async (s) => ({ ...echo, annual_return: s.knobs.annual_return ?? echo.annual_return, fi_month: s.knobs.annual_return ? '2039-01-01' : echo.fi_month }))
+  preview.mockImplementation(async (s) => ({
+    ...echo,
+    annual_return: s.knobs.annual_return ?? echo.annual_return,
+    fi_month: s.knobs.annual_return ? '2039-01-01' : echo.fi_month,
+    fi_month_p50: s.knobs.annual_return ? '2039-03-01' : echo.fi_month_p50,
+  }))
 })
 afterEach(() => {
   cleanup()
@@ -188,8 +193,9 @@ describe('ScenarioPanel', () => {
 
   it('compares baseline and scenario without a Δ column, and pins as columns', async () => {
     mount('/projection?whatif=annual_return%3A0.06')
-    const row = (await screen.findByText('FI date')).closest('tr') as HTMLElement
-    await waitFor(() => expect(within(row).getAllByRole('cell').map((c) => c.textContent)).toEqual(['FI date', 'Mar 2041', 'Jan 2039']))
+    // The headline FI date is the simulation's median reach (2026-09-23 spec §R6).
+    const row = (await screen.findByText('FI date (most likely)')).closest('tr') as HTMLElement
+    await waitFor(() => expect(within(row).getAllByRole('cell').map((c) => c.textContent)).toEqual(['FI date (most likely)', 'Jun 2041', 'Mar 2039']))
     expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['', 'Baseline', 'Scenario'])
     fireEvent.click(screen.getByRole('button', { name: 'Pin this scenario' }))
     await waitFor(() => expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toContain('Return 6%Unpin'))

@@ -10,18 +10,24 @@ import type { ProjectionOut } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
 import { shiftPoint } from '../../utils/percent'
 
-// Alphabetical: the canonical URL order (the parity fixture's).
+// Alphabetical: the canonical URL order (the parity fixture's). `plan_until` (a year) and `vests`
+// (0/1) joined on 2026-09-23 (correctness spec §R7, §R10).
 export const KNOBS = [
   'annual_return',
   'annual_spend',
   'contribution_growth',
   'inflation',
   'monthly_contribution',
+  'plan_until',
   'swr',
+  'vests',
   'volatility',
   'years',
 ] as const
 export type ProjectionKnob = (typeof KNOBS)[number]
+/** The knobs a SliderBox drives; the year box and the vests toggle are their own controls. */
+export type SliderKnob = Exclude<ProjectionKnob, 'plan_until' | 'vests'>
+export const SLIDER_KNOBS = KNOBS.filter((key): key is SliderKnob => key !== 'plan_until' && key !== 'vests')
 
 export interface ProjectionScenario {
   knobs: Partial<Record<ProjectionKnob, string>>
@@ -31,10 +37,18 @@ export interface ProjectionScenario {
 
 export const EMPTY_PROJECTION_SCENARIO: ProjectionScenario = { knobs: {}, retirements: {} }
 
+/** A plan-until year the URL may carry: four digits inside 2000–2199. The client's own fence —
+ *  the server validates the exact range (its start year to its 60-year reach) and 422s the rest. */
+export const PLAN_UNTIL_TOKEN = /^\d{4}$/
+export const PLAN_UNTIL_MIN = 2000
+export const PLAN_UNTIL_MAX = 2199
+
 // The router's own fences (api/projection.py RETURN_MIN/MAX, SWR_MESSAGE, VOLATILITY,
 // INFLATION, GROWTH, YearsQuery) — a link may not carry a value the server would 422.
 function accept(key: ProjectionKnob, value: string): boolean {
   if (key === 'years') return /^\d{1,2}$/.test(value) && Number(value) >= 1 && Number(value) <= 60
+  if (key === 'plan_until') return PLAN_UNTIL_TOKEN.test(value) && Number(value) >= PLAN_UNTIL_MIN && Number(value) <= PLAN_UNTIL_MAX
+  if (key === 'vests') return value === '0' || value === '1'
   if (!isWireDecimal(value)) return false
   const within = (lo: string, hi: string) => compareDecimals(value, lo) >= 0 && compareDecimals(value, hi) <= 0
   // services/money.py's _quantize_bounded refuses |value| >= max_abs, so a magnitude fence
@@ -57,13 +71,13 @@ function accept(key: ProjectionKnob, value: string): boolean {
     case 'monthly_contribution':
       // The server's own magnitude bound (CONTRIBUTION_MAX_ABS = 1e7), exclusive as it is
       // there; negatives are legal — a household drawing down saves a negative amount each
-      // month.
+      // month (the engine clamps the balance at $0 and counts it as run out, spec §R1).
       return under('10000000')
   }
 }
 
 /** The sliders' tracks — UI ranges, wider than typical but inside the fences above. */
-export const SLIDER: Record<ProjectionKnob, { min: string; max: string; step: string; kind: 'percent' | 'money' | 'plain' }> = {
+export const SLIDER: Record<SliderKnob, { min: string; max: string; step: string; kind: 'percent' | 'money' | 'plain' }> = {
   annual_return: { min: '-0.5', max: '0.5', step: '0.001', kind: 'percent' },
   // The track's floor is INSIDE the fence above (spend must be > 0): a slider dragged to
   // its own minimum must produce a value the URL will keep, or the knob would silently
@@ -124,24 +138,36 @@ export function toParams(scenario: ProjectionScenario): ProjectionParams {
   if (k.volatility !== undefined) params.volatility = k.volatility
   if (k.inflation !== undefined) params.inflation = k.inflation
   if (k.contribution_growth !== undefined) params.contributionGrowth = k.contribution_growth
+  if (k.plan_until !== undefined) params.planUntil = k.plan_until
+  if (k.vests !== undefined) params.vests = k.vests
   return params
 }
 
 /** The echo as each knob's DERIVED value — the caption, the placeholder and the reset target. */
 export function derivedOf(baseline: ProjectionOut | null): Record<ProjectionKnob, string | null> {
+  const planUntil = baseline?.plan_until ?? null
+  const vests = baseline?.vests ?? null
   return {
     annual_return: baseline?.annual_return ?? null,
     annual_spend: baseline?.annual_spend ?? null,
     contribution_growth: baseline?.contribution_growth ?? null,
     inflation: baseline?.inflation ?? null,
     monthly_contribution: baseline?.monthly_contribution ?? null,
+    plan_until: planUntil === null ? null : String(planUntil),
     swr: baseline?.swr_pct ?? null,
+    vests: vests === null ? null : vests.included ? '1' : '0',
     volatility: baseline?.volatility ?? null,
     years: baseline === null ? null : String(baseline.years),
   }
 }
 
-const SHORT: Record<ProjectionKnob, string> = {
+/** THE headline FI date (2026-09-23 spec §R6): the simulation's median first-reach month; with
+ *  no simulation (volatility 0, or an older backend) the constant-return crossing stands in. */
+export function headlineFiMonth(data: ProjectionOut): string | null {
+  return data.fi_probability == null ? data.fi_month : data.fi_month_p50
+}
+
+const SHORT: Record<SliderKnob, string> = {
   annual_return: 'Return',
   annual_spend: 'Spend',
   contribution_growth: 'Growth',
@@ -162,6 +188,14 @@ export function labelForProjection(
   for (const key of KNOBS) {
     const value = scenario.knobs[key]
     if (value === undefined) continue
+    if (key === 'plan_until') {
+      parts.push(`Plan until ${value}`)
+      continue
+    }
+    if (key === 'vests') {
+      parts.push(value === '0' ? 'Vests off' : 'Vests on')
+      continue
+    }
     const { kind } = SLIDER[key]
     parts.push(kind === 'percent' ? `${SHORT[key]} ${shiftPoint(value, 2)}%` : kind === 'money' ? `${SHORT[key]} ${formatCurrency(value)}` : `${SHORT[key]} ${value}y`)
   }
@@ -172,16 +206,19 @@ export function labelForProjection(
   return parts.slice(0, 2).join(' · ')
 }
 
+// The reader's words for the reach dates (spec §R6): "1 in 10 paths by", never "p10".
 export const COMPARE_ROWS: CompareRow[] = [
   { key: 'years', label: 'Horizon (years)', kind: 'plain' },
   { key: 'fi_target', label: 'FI target', kind: 'money' },
   { key: 'fi_ratio', label: 'FI ratio', kind: 'percent' },
-  { key: 'fi_month', label: 'FI date', kind: 'month' },
+  { key: 'fi_date', label: 'FI date (most likely)', kind: 'month' },
+  { key: 'fi_month_p10', label: 'FI · 1 in 10 paths by', kind: 'month' },
+  { key: 'fi_month_p90', label: 'FI · 9 in 10 paths by', kind: 'month' },
+  { key: 'fi_probability', label: 'Reach FI within horizon', kind: 'percent' },
+  { key: 'money_lasts', label: 'Money lasts through plan-until year', kind: 'percent' },
+  { key: 'lasts_until', label: 'Lasts at least until (9 in 10 paths)', kind: 'month' },
   { key: 'coast_fi_month', label: 'Coast FI date', kind: 'month' },
-  { key: 'fi_probability', label: 'Reach within horizon', kind: 'percent' },
-  { key: 'fi_month_p10', label: 'p10 date', kind: 'month' },
-  { key: 'fi_month_p50', label: 'p50 date', kind: 'month' },
-  { key: 'fi_month_p90', label: 'p90 date', kind: 'month' },
+  { key: 'vests', label: 'Scheduled vests', kind: 'plain' },
   { key: 'monthly_contribution', label: 'Monthly contribution', kind: 'money' },
 ]
 
@@ -189,6 +226,20 @@ const ROW_KEYS = new Set(COMPARE_ROWS.map((r) => r.key))
 
 export function projectionValue(result: ProjectionOut, key: string): string | null {
   if (!ROW_KEYS.has(key)) return null
-  if (key === 'years') return String(result.years)
-  return (result as unknown as Record<string, string | null | undefined>)[key] ?? null
+  switch (key) {
+    case 'years':
+      return String(result.years)
+    case 'fi_date':
+      return headlineFiMonth(result)
+    case 'money_lasts':
+      return result.money_lasts?.probability ?? null
+    case 'lasts_until':
+      return result.money_lasts?.lasts_until_p10 ?? null
+    case 'vests': {
+      const vests = result.vests ?? null
+      return vests === null ? null : vests.included ? 'Included' : 'Off'
+    }
+    default:
+      return (result as unknown as Record<string, string | null | undefined>)[key] ?? null
+  }
 }

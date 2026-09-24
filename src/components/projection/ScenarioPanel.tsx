@@ -31,7 +31,9 @@ const LABELS: Record<ProjectionKnob, string> = {
   contribution_growth: 'Contribution growth',
   inflation: 'Inflation',
   monthly_contribution: 'Monthly contribution',
+  plan_until: 'Plan until',
   swr: 'Withdrawal rate',
+  vests: 'Include scheduled vests',
   volatility: 'Volatility',
   years: 'Horizon (years)',
 }
@@ -47,8 +49,9 @@ const HINTS: Partial<Record<ProjectionKnob, string>> = {
   contribution_growth: 'Models raises: the contribution escalates at this rate.',
 }
 
-// Render order: the five derived-from-data knobs, then the three assumptions.
-const ORDER: ProjectionKnob[] = ['annual_return', 'monthly_contribution', 'annual_spend', 'swr', 'years', 'volatility', 'inflation', 'contribution_growth']
+// Render order: the derived-from-data knobs (vests beside the contribution they add to, the
+// plan-until year beside the horizon it can lengthen), then the three assumptions.
+const ORDER: ProjectionKnob[] = ['annual_return', 'monthly_contribution', 'vests', 'annual_spend', 'swr', 'years', 'plan_until', 'volatility', 'inflation', 'contribution_growth']
 
 // A knob added to the codec cannot silently vanish from the card.
 if (ORDER.length !== KNOBS.length) throw new Error('ScenarioPanel: ORDER must list every knob')
@@ -155,6 +158,7 @@ export default function ScenarioPanel({
       }
     >
       {ORDER.map((key) => {
+        if (key === 'plan_until' || key === 'vests') return null
         const slider = (
           <SliderBox
             key={key}

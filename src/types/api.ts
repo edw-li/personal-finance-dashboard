@@ -1982,6 +1982,56 @@ export interface DerivedWindowOut {
   months: number
 }
 
+/** One stretch of the plan between retirement months (2026-09-23 spec §R2). `monthly_contribution`
+ *  is in the start month's dollars (the engine escalates it); `take_home_monthly` is the working
+ *  earners' take-home, partly-retired phases only. */
+export interface PhaseOut {
+  from_month: string
+  kind: 'working' | 'partly_retired' | 'retired'
+  working_person_ids: number[]
+  monthly_contribution: string
+  monthly_withdrawal: string | null
+  take_home_monthly: string | null
+}
+
+/** The withdrawal after the last retirement: annual spend each year, in today's dollars. */
+export interface DrawdownOut {
+  start_month: string
+  annual_withdrawal: string
+}
+
+/** Does the money last through the plan-until year (2026-09-23 spec §R3)? From the same simulation
+ *  as the FI dates; every figure null with `reason` when no withdrawal is modelled, and the
+ *  probability block null with volatility 0 (the constant-return month alone speaks then). */
+export interface MoneyLastsOut {
+  plan_until: number
+  probability: string | null
+  verdict: 'on_track' | 'borderline' | 'at_risk' | null
+  lasts_until_p10: string | null
+  horizon_end: string
+  deterministic_depleted_month: string | null
+  reason: string | null
+}
+
+export interface VestYearOut {
+  year: number
+  gross: string
+  after_withholding: string
+}
+
+/** Scheduled RSU vests (2026-09-23 spec §R4) — figures computed even when `included` is false, so
+ *  the toggle can say what they would add; `excluded_reason` when nothing could be priced. */
+export interface VestsOut {
+  included: boolean
+  price: string | null
+  price_as_of: string | null
+  withholding_rate: string
+  next_12_months: string | null
+  by_year: VestYearOut[]
+  stops: string | null
+  excluded_reason: string | null
+}
+
 export interface ProjectionOut {
   starting_balance: string
   /** The snapshot month the starting balance came from. */
@@ -2031,6 +2081,20 @@ export interface ProjectionOut {
    *  absent from an older backend, read as `?? null`. */
   budget_annual_spend?: string | null
   budget_month?: string | null
+  // 2026-09-23 correctness spec §R2–§R5. All optional: the `projection:default` snapshot cache
+  // and pins replay payloads from before them, so readers take each as `?? null` / `?? []`.
+  /** The date the starting balance describes (null = unknown), its recorded date, and whether it
+   *  was recorded before its month began (§R5). */
+  base_as_of?: string | null
+  base_recorded_on?: string | null
+  base_provisional?: boolean
+  phases?: PhaseOut[]
+  drawdown?: DrawdownOut | null
+  /** The year the money has to last through, resolved, and where it came from (§R3). */
+  plan_until?: number | null
+  plan_until_source?: 'knob' | 'setting' | 'default' | null
+  money_lasts?: MoneyLastsOut | null
+  vests?: VestsOut | null
 }
 
 // --- import (mirrors backend/app/importer/report.py) ---
@@ -2074,6 +2138,9 @@ export interface AppSettingsOut {
   /** The plan's ESPP purchase discount as a plain-notation FRACTION ("0.15"), like swr_pct
    *  (2026-09-06 spec §1.5). 0.15 is the §423 ceiling and the server's fallback. */
   espp_discount_pct: string
+  /** "Plan until (year)" — the Projection's lasting default (2026-09-23 spec §R11); null = unset.
+   *  Optional for a server from before it. In the PUT an explicit null CLEARS it. */
+  plan_until_year?: number | null
 }
 
 // PUT is PARTIAL (spec §3.5): the server reads it with exclude_unset, so an ABSENT key leaves
