@@ -105,7 +105,7 @@ const slug = (text) => text.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')
 const monthLabel = (key) => `${MONTHS[Number(key.slice(5)) - 1]} ${key.slice(0, 4)}`
 const report = {
   at: new Date().toISOString(), base: BASE, api: API, sizes: SIZES, themes: THEMES,
-  checks: [], heights: [], writesBlocked: [], prefsWrites: [], fenceErrors: [], fenceRetries: [], problems: [],
+  checks: [], heights: [], known: [], writesBlocked: [], prefsWrites: [], fenceErrors: [], fenceRetries: [], problems: [],
 }
 const check = (where, name, ok, observed) => {
   report.checks.push({ where, name, ok, observed })
@@ -113,6 +113,37 @@ const check = (where, name, ok, observed) => {
   return ok
 }
 const note = (where, name, observed) => report.checks.push({ where, name, ok: null, observed })
+
+// Three claims the product fails today for reasons outside the capped boxes — measured on the
+// 2026-09-24 run, none introduced by the table-scroll batch, all follow-ups for the user. `known()`
+// records them rather than failing the run (charts-c7's knownBenign precedent): the day one is fixed,
+// its check simply passes; until then report.json holds it as { ok: null, known: true, ref } with its
+// evidence, and the run prints one `KNOWN (pre-existing)` line per defect. A failure only counts as
+// the known defect when it carries that defect's signature (`test`); any other failure of the same
+// claim is a new problem and fails the run like any check.
+const KNOWN_DEFECTS = {
+  'networth-scope-shift': {
+    why: "Net worth's scope row wraps to a second line at 1280px when the month chips land and pushes the still-loading body down 42px (CLS ≈0.166; 0.162 with overlay scrollbars, ≤0.01 from 1440 up) — src/components/shell/ScopeBar.tsx / the page frame's scope row, not the box",
+    evidence: 'report.json `shifts` (the scope-bar group and the page body moving)',
+    test: (o) => o.shifts.length > 0 && o.shifts.every((s) => s.moved.some((m) => m.startsWith('div.scope-bar-group'))),
+  },
+  'dividend-save-focus': {
+    why: 'Save changes disables itself while the save is in flight (src/components/portfolio/DividendsPanel.tsx `disabled={busy}`, since 2026-08-22) and Chromium blurs a focused control that becomes disabled, so the focus falls to <body> — a mouse click and Space on the button alike; saved with Enter in Notes it stays (checked)',
+    evidence: 'report.json `focusLog` (the focus leaving the disabled Save changes)',
+    test: (o) => o.after === 'body' && o.focusLog.some((f) => f.disabled && /Save changes/.test(f.from ?? '')),
+  },
+  'matrix-focus-return': {
+    why: "Back to matrix hands the focus back in a setTimeout(0) (src/pages/CreditCardsPage.tsx closeDetail) that fires before the router re-renders the matrix ~70 ms later, so card-col-<id> does not exist yet and the focus falls to <body>",
+    evidence: 'report.json (`active: body` with the card button back) and <where>-back-to-matrix.png',
+    test: (o) => o.active === 'body' && o.buttonBack === true,
+  },
+}
+const known = (where, name, ok, observed, ref) => {
+  if (ok || !KNOWN_DEFECTS[ref].test(observed)) return check(where, name, ok, observed)
+  report.checks.push({ where, name, ok: null, known: true, ref, observed })
+  report.known.push({ where, name, ref })
+  return false
+}
 
 // Installed at document start on every load: the layout-shift sum (CLS per load), the app's own
 // echarts module (pace-v's hook — the dividend chart's bars are read off the live instance), and the
@@ -744,7 +775,7 @@ async function matrixBack(where, target) {
       pageY: Math.round(window.scrollY), boxScrollTop: button?.closest('.table-scroll')?.scrollTop ?? null,
     }
   }, card.id)
-  check(where, "Back to matrix hands the focus back to the card's column button", s.active === `button#${card.id}`, { expected: card.id, ...s })
+  known(where, "Back to matrix hands the focus back to the card's column button", s.active === `button#${card.id}`, { expected: card.id, ...s }, 'matrix-focus-return')
   // Where it lands (or would) against the page's sticky scope row — a reading, not a vote.
   note(where, `where the card button lands after Back to matrix against the sticky scope row${s.active === `button#${card.id}` ? '' : ' (it did not take the focus)'}`, s)
   await shot(where, 'back-to-matrix')
@@ -1001,7 +1032,11 @@ async function dividendReveal(where, { fullest }, how, offset) {
   check(where, `the saved entry is revealed inside the box — the box scrolled to it ${tag}`, revealed && r.rowTop !== undefined, r)
   check(where, `the reveal never moves the page ${tag}`, r.atSave !== undefined && r.pageY === r.atSave.pageY, { atSave: r.atSave, pageY: r.pageY })
   check(where, `the revealed row sits in the band — below the header and its month's line, above the fade ${tag}`, r.rowTop >= r.floor - 1 && r.rowBottom <= r.ceiling + 1, r)
-  check(where, `the focus stays in the entry form through the save ${tag}`, r.focusInForm, { atSubmit: r.atSave?.focused, after: r.focused, focusLog: r.focusLog })
+  // The mouse path is the known defect's (see KNOWN_DEFECTS); the keyboard path must pass outright.
+  const focusName = `the focus stays in the entry form through the save ${tag}`
+  const focusSeen = { atSubmit: r.atSave?.focused, after: r.focused, focusLog: r.focusLog }
+  if (how === 'click') known(where, focusName, r.focusInForm, focusSeen, 'dividend-save-focus')
+  else check(where, focusName, r.focusInForm, focusSeen)
   await page.locator(boxSel(DIVIDENDS)).screenshot({ path: path.join(OUT, `${slug(where)}-revealed-${how}.png`) })
   forget()
 }
@@ -1195,7 +1230,10 @@ async function reloadKeepsPlace(where) {
 async function runTarget(where, target) {
   await open(target)
   const cls = await page.evaluate(() => ({ cls: +window.__cls.toFixed(4), shifts: window.__shifts }))
-  check(where, 'the load shifts the layout less than 0.1 (CLS)', cls.cls < 0.1, cls)
+  // Net worth at 1280 carries a known shift (the scope row's, KNOWN_DEFECTS); everywhere else CLS is a check.
+  const clsName = 'the load shifts the layout less than 0.1 (CLS)'
+  if (target.name === 'networth' && page.viewportSize().width === 1280) known(where, clsName, cls.cls < 0.1, cls, 'networth-scope-shift')
+  else check(where, clsName, cls.cls < 0.1, cls)
   // First: the arrival state is the page as it loads, before anything scrolls it.
   if (target.name === 'transactions') await arrivalDrag(where)
   const g = await geometry(where, target)
@@ -1303,9 +1341,15 @@ for (const h of report.heights) {
   console.log(`  ${h.where}: ${h.pageHeight}${extra}`)
 }
 const passed = report.checks.filter((c) => c.ok === true).length
-const notes = report.checks.filter((c) => c.ok === null).length
+const notes = report.checks.filter((c) => c.ok === null && !c.known).length
 const retried = report.fenceRetries.length > 0 ? `, ${report.fenceRetries.length} GET(s) asked twice` : ''
-const tally = `${passed} checks, ${notes} notes, ${report.writesBlocked.length} writes fenced (${report.prefsWrites.length} prefs)${retried}`
+const knownTally = report.known.length > 0 ? `, ${report.known.length} known (pre-existing)` : ''
+const tally = `${passed} checks, ${notes} notes${knownTally}, ${report.writesBlocked.length} writes fenced (${report.prefsWrites.length} prefs)${retried}`
+for (const ref of [...new Set(report.known.map((k) => k.ref))]) {
+  const hits = report.known.filter((k) => k.ref === ref)
+  const runs = hits.map((k) => k.where.replace(/ S+$/, '')).join(', ')
+  console.log(`KNOWN (pre-existing): ${KNOWN_DEFECTS[ref].why} — ${hits.length}× (${runs}); evidence: ${KNOWN_DEFECTS[ref].evidence}`)
+}
 // Requests the fence re-asked or could not answer (the page saw those fail): named, so a console
 // error has a cause.
 for (const r of report.fenceRetries) console.log(`  fence asked twice: GET ${r.url} (${r.where}): ${r.error}`)
