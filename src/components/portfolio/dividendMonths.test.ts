@@ -20,10 +20,17 @@ const LEDGER = [
   entry(1, '2025-12-01', '100.00'),
 ]
 
+// A fixed "today" for the chart's trailing window (Oct 2024 … Sep 2026) — never new Date() in a
+// test (the injectable-todayIso house law).
+const TODAY = '2026-09-24'
+
 describe('groupDividendsByMonth', () => {
   it("groups by the Recorded date's month, newest month first, keeping each month's row order", () => {
     const months = groupDividendsByMonth(LEDGER)
     expect(months.map((m) => m.key)).toEqual(['2026-09', '2026-06', '2025-12'])
+    // The chart above zero-fills Jul and Aug 2026 as $0 bars; the ledger lists no month it has no
+    // entries for — absent, never a $0 line.
+    expect(months.some((m) => m.key === '2026-07' || m.key === '2026-08')).toBe(false)
     expect(months.map((m) => m.label)).toEqual(['Sep 2026', 'Jun 2026', 'Dec 2025'])
     expect(months[2].rows.map((d) => d.id)).toEqual([3, 2, 1])
   })
@@ -32,6 +39,20 @@ describe('groupDividendsByMonth', () => {
     const months = groupDividendsByMonth([LEDGER[5], LEDGER[0], LEDGER[3]])
     expect(months.map((m) => m.key)).toEqual(['2026-09', '2025-12'])
     expect(months[1].rows.map((d) => d.id)).toEqual([1, 3])
+  })
+
+  it("lists a future-dated entry's month first — the helper never hides or re-dates a stored entry", () => {
+    // The form's date input has no max and the API takes dates to 2100, so a manual entry can lie
+    // past today's month. Appended last, it still sorts first: its own month, the newest. Which
+    // month the panel opens by itself is the panel's call, not this helper's.
+    const ledger = [...LEDGER, entry(7, '2026-11-03', '5.00')]
+    const months = groupDividendsByMonth(ledger)
+    expect(months.map((m) => m.key)).toEqual(['2026-11', '2026-09', '2026-06', '2025-12'])
+    // Compared with a fresh copy, so re-dating the stored row in place could not pass.
+    expect(months[0].rows).toEqual([entry(7, '2026-11-03', '5.00')])
+    expect(months[0].totalCents).toBe(500)
+    // The chart's window ends at today's month: this month is listed without a bar.
+    expect(monthlyIncomeSums(ledger, TODAY)!.some((b) => b.month === '2026-11-01')).toBe(false)
   })
 
   it('totals each month in integer cents — no float drift', () => {
@@ -45,10 +66,13 @@ describe('groupDividendsByMonth', () => {
   })
 
   it("totals every month the chart above draws to the cent of its bar (monthlyIncomeSums' basis)", () => {
-    const bars = monthlyIncomeSums(LEDGER, '2026-09-24')!
+    const bars = monthlyIncomeSums(LEDGER, TODAY)!
     for (const month of groupDividendsByMonth(LEDGER)) {
-      const bar = bars.find((b) => b.month === `${month.key}-01`)!
-      expect(month.totalCents / 100).toBe(bar.amount)
+      // Only months inside the chart's window have a bar: a fixture month outside it fails here,
+      // by name, rather than as a TypeError on the next line.
+      const bar = bars.find((b) => b.month === `${month.key}-01`)
+      expect(bar, month.key).toBeDefined()
+      expect(month.totalCents / 100, month.key).toBe(bar!.amount)
     }
   })
 })

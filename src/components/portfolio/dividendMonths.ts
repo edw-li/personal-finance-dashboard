@@ -7,7 +7,9 @@ import { formatMonth } from '../../utils/format'
 /** One month of the ledger. */
 export interface DividendMonth {
   /** 'YYYY-MM' of the entries' pay_date — the Recorded date column, which is also
-   *  monthlyIncomeSums' basis, so a month's total is its bar in the chart above the ledger. */
+   *  monthlyIncomeSums' basis, so for every month the chart's trailing window draws
+   *  (INCOME_WINDOW_MONTHS, ending at today's month) the month's total is its bar; a
+   *  future-dated entry's month, or one older than the window, is listed without one. */
   key: string
   /** 'Sep 2026'. */
   label: string
