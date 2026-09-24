@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   cloneBrackets,
+  fetchStatusOptions,
   fetchTaxBrackets,
   FILING_STATUSES,
   FILING_STATUS_LABELS,
@@ -17,8 +18,10 @@ import {
 vi.mock('./client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./client')>()),
   api: vi.fn(),
+  // The status PATCH reads its change batch off the response headers (2026-09-23 spec §W8).
+  apiWithHeaders: vi.fn(),
 }))
-import { api } from './client'
+import { api, apiWithHeaders } from './client'
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -41,14 +44,33 @@ describe('filing-status vocabulary', () => {
 })
 
 describe('taxes client', () => {
-  it('PATCHes a year filing status and asks for the row back', async () => {
+  it('PATCHes a year filing status and asks for the row back, with its change batch', async () => {
     // PATCH, not PUT: the year row has exactly one mutable field and no auto-create
     // (app/api/taxes.py update_year) — a status is a statement about a year that exists.
-    await patchTaxYear(2026, { filing_status: 'married_joint' })
-    const [path, options] = vi.mocked(api).mock.calls[0]
+    // Change-logged since 2026-09-23 (spec §W8): the batch rides X-Change-Batch, the put-inputs
+    // pattern, and is what the page's Undo toast hands to the activity log.
+    const row = { year: 2026, notes: null, input_count: 3, bracket_count: 42, filing_status: 'married_joint' as const }
+    vi.mocked(apiWithHeaders).mockResolvedValueOnce({
+      data: row,
+      headers: new Headers({ 'X-Change-Batch': 'batch-7' }),
+    })
+    const out = await patchTaxYear(2026, { filing_status: 'married_joint' })
+    const [path, options] = vi.mocked(apiWithHeaders).mock.calls[0]
     expect(path).toBe('/taxes/years/2026')
     expect(options?.method).toBe('PATCH')
     expect(options?.body).toBe('{"filing_status":"married_joint"}')
+    expect(out).toEqual({ year: row, batchId: 'batch-7' })
+  })
+
+  it('reads no batch as no Undo', async () => {
+    const row = { year: 2026, notes: null, input_count: 3, bracket_count: 42, filing_status: 'single' as const }
+    vi.mocked(apiWithHeaders).mockResolvedValueOnce({ data: row, headers: new Headers() })
+    expect(await patchTaxYear(2026, { filing_status: 'single' })).toEqual({ year: row, batchId: null })
+  })
+
+  it('reads the year’s status options from the server’s own rules', async () => {
+    await fetchStatusOptions(2026)
+    expect(vi.mocked(api).mock.calls[0][0]).toBe('/taxes/years/2026/status-options')
   })
 
   it('always names the status on a brackets GET, single included', async () => {
