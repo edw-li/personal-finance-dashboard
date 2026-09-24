@@ -10,8 +10,8 @@ A soft cap, because contribution dollars can never use the whole 25,000 — at m
 `limit x (1 - discount)` of them ever buy stock, and the TONE is judged there so the verdict
 can never disagree with the tick beside it. And every figure is a STATED ESTIMATE, never a
 ledger (spec §5): the app has no per-paycheck history, so a past payday is priced from the
-profile in force on it and paydays before the person's earliest profile borrow that earliest
-profile — `backfilled_from` says so out loud.
+profile in force on it, and a payday on or before the person's earliest profile credits nothing
+(2026-09-23 spec §W1) — `starts_on` says when the job starts.
 """
 
 from datetime import date
@@ -49,7 +49,7 @@ def _stamp(day: date) -> str:
 def _estimate(
     profiles: list, scenario, today: date, start: date, end: date
 ) -> tuple[Decimal, Decimal, str, date | None]:
-    """One window's (amount, so_far, basis, backfilled_from), payday by payday.
+    """One window's (amount, so_far, basis, starts_on), payday by payday.
 
     The walk itself is `pace_walk.walk` — ONE payday calendar for every pace row, so this
     window and the 401(k) / HSA rows beside it can never disagree about which paydays a year
@@ -60,7 +60,7 @@ def _estimate(
         walked.projected["espp"],
         walked.so_far["espp"],
         walked.basis,
-        walked.backfilled_from,
+        walked.starts_on,
     )
 
 
@@ -83,7 +83,7 @@ def espp_pace_item(
     if not rows or not profiles:
         return None
     halves: list[PaceHalf] = []
-    backfilled_from: date | None = None
+    starts_on: date | None = None
     # The window's own §2.6 figure: what is already behind today.
     so_far = ZERO
     for row in rows:
@@ -107,12 +107,14 @@ def espp_pace_item(
             # of the same months would be the one thing this module must never do.
             so_far += entered
             continue
-        amount, half_so_far, basis, backfill = _estimate(
+        amount, half_so_far, basis, start = _estimate(
             profiles, scenario_from_today, today, row.period_start, row.period_end
         )
         so_far += half_so_far
-        if backfill is not None and (backfilled_from is None or backfill < backfilled_from):
-            backfilled_from = backfill
+        # One start for the whole window: both halves walk the same timeline, so the earliest
+        # profile they cut paydays at is one date (§W1).
+        if start is not None:
+            starts_on = start
         halves.append(
             PaceHalf(
                 label=row.label,
@@ -136,7 +138,8 @@ def espp_pace_item(
         "measure": "window",
         "window_label": f"{_stamp(halves[0].start)} – {_stamp(halves[-1].end)} purchases",
         "halves": halves,
-        "backfilled_from": backfilled_from,
+        "backfilled_from": None,
+        "starts_on": starts_on,
         "projected_full_year": projected,
         # The rate behind `projected_full_year`, stated rather than left for the client to
         # re-derive (the strip's own "server figures only" rule).

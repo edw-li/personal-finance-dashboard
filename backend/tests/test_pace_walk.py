@@ -81,22 +81,86 @@ def test_a_cadence_without_a_payday_calendar_falls_back_to_the_month_basis():
     assert walked.projected["hsa_employee"] == D("2600.00")
 
 
-def test_paydays_before_the_earliest_profile_borrow_it_and_the_walk_says_so():
+# --- one payroll start (2026-09-23 spec §W1): a payday ON OR BEFORE the person's earliest
+# profile's date credits nothing, on both sides of today — the tax card's own rule, so the
+# pace strip and the "Will I owe?" card count the same checks. `backfilled_from` stays on the
+# payload for older readers and is always None; `starts_on` names the start instead.
+
+
+def test_paydays_on_or_before_the_first_profile_credit_nothing():
     late = [FakeProfile(effective_date=date(2026, 3, 1))]
     walked = year(profiles=late)
-    assert walked.backfilled_from == date(2026, 3, 1)
-    # Borrowed or not, the figure is the whole year at that rate — the flag is the caveat,
-    # not a different number.
-    assert walked.projected["elective"] == D("24560.90")
-
-
-def test_a_window_that_borrows_nothing_never_claims_it_did():
-    walked = year(profiles=[FakeProfile(effective_date=date(2020, 1, 1))])
+    # 20 semi-monthly paydays fall after Mar 1 (Mar 13 … Dec 31) at 13 % of 188,930 / 24.
+    assert walked.projected["elective"] == D("20467.42")
+    assert walked.projected["hsa_employee"] == D("2000.00")  # 20 x 100
     assert walked.backfilled_from is None
+    assert walked.starts_on == date(2026, 3, 1)
+
+
+def test_graces_window_counts_the_same_eight_paydays_as_the_tax_card():
+    grace = [
+        FakeProfile(
+            effective_date=date(2026, 9, 1),
+            annual_salary=D("24000.00"),
+            trad_401k_pct=D("0.100000000"),
+            after_tax_401k_pct=D("0"),
+            espp_pct=D("0"),
+            hsa_per_check=D("75.00"),
+        )
+    ]
+    # Sep 15, Sep 30, Oct 15, Oct 30, Nov 13, Nov 30, Dec 15, Dec 31 — real paydays pulled back
+    # over weekends — the tax card's 8 grid checks from Sep 16.
+    walked = walk(grace, grace[0], date(2026, 9, 23), JAN, DEC)
+    assert walked.projected["elective"] == D("800.00")  # 8 x 100
+    assert walked.projected["hsa_employee"] == D("600.00")  # 8 x 75
+    assert walked.so_far["elective"] == D("100.00")  # Sep 15 only
+    assert walked.remaining_checks == 7
+    assert walked.starts_on == date(2026, 9, 1)
+
+
+def test_a_payday_on_the_start_date_credits_nothing():
+    # 2026-04-15 is a payday (a Wednesday): a job effective that day is first paid Apr 30.
+    walked = year(profiles=[FakeProfile(effective_date=date(2026, 4, 15))], today=date(2026, 5, 1))
+    assert walked.so_far["hsa_employee"] == D("100.00")  # Apr 30 only
+
+
+def test_a_future_start_credits_nothing_on_the_scenario_side_either():
+    # The scenario prices from today — but not a job that has not started: only Nov 13,
+    # Nov 30, Dec 15 and Dec 31 pay, and the year's first real payday is still ahead.
+    future = [FakeProfile(effective_date=date(2026, 11, 1))]
+    walked = walk(future, future[0], TODAY, JAN, DEC)
+    assert walked.so_far["elective"] == D("0.00")
+    assert walked.remaining_checks == 4
+    assert walked.first_payday_passed is False
+    assert walked.starts_on == date(2026, 11, 1)
+
+
+def test_a_window_wholly_before_the_first_profile_credits_nothing_and_says_why():
+    grace = [FakeProfile(effective_date=date(2026, 9, 1))]
+    before = walk(grace, grace[0], TODAY, JAN, date(2026, 6, 30))
+    assert set(before.projected.values()) == {D("0.00")}
+    assert before.starts_on == date(2026, 9, 1)
+    assert before.remaining_checks == 0
+
+
+def test_the_month_basis_counts_nothing_before_the_first_profile_either():
+    # A biweekly profile from Mar 20 is walked on the 15ths: Jan, Feb and Mar are before it.
+    late = [FakeProfile(effective_date=date(2026, 3, 20), pay_periods_per_year=26)]
+    walked = year(profiles=late)
+    assert walked.basis == "months"
+    assert walked.projected["hsa_employee"] == D("1950.00")  # 9 months x 100 x 26 / 12
+    assert walked.starts_on == date(2026, 3, 20)
+
+
+def test_a_window_that_starts_after_the_first_profile_reports_no_start():
+    walked = year(profiles=[FakeProfile(effective_date=date(2020, 1, 1))])
+    assert walked.backfilled_from is None and walked.starts_on is None
     # Nor does a window entirely in the future, where every payday is the scenario's.
     ahead = walk(EDWARD, EDWARD[-1], TODAY, date(2026, 10, 1), DEC)
-    assert ahead.backfilled_from is None
+    assert ahead.starts_on is None
     assert ahead.so_far["elective"] == D("0.00")
+    # EDWARD's Jan 1 profile starts the year: no payday falls on or before it.
+    assert year().starts_on is None
 
 
 def test_first_payday_is_the_business_day_on_or_before_january_15():
