@@ -76,6 +76,10 @@ const ROSTER = [
   // …and the fan carrying pinned scenarios (sandbox J, planning-sandboxes spec §11): the
   // reference-line branch of the same builder, which the plain fan fixture never reaches.
   'projectionPinned',
+  // …and with a drawdown modelled (2026-09-23 correctness spec §R7): the Retired wash, the
+  // withdrawal/plan-until/lasts rules, and — on the log axis — paths drawn at the floor.
+  'projectionDrawdown',
+  'projectionDrawdownLog',
   'netWorthProjection',
   'vestingCalendar',
   'tcTrajectory',

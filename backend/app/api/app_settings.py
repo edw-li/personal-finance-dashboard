@@ -9,7 +9,7 @@ day-of-week (APScheduler numbers days 0=Mon — the recorded prod mis-seed). A s
 is HOT-APPLIED to the live job (reschedule_price_refresh) — the old restart ritual is
 gone; boot still reads the stored value, so a no-scheduler process loses nothing."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -22,8 +22,15 @@ from app.api.portfolio import _normalize_ticker
 from app.database import get_db
 from app.models import AppSetting
 from app.schemas.app_settings import AppSettingsOut, AppSettingsUpdate
+from app.services import clock
 from app.services.money import quantize_pct
-from app.services.net_worth_calc import get_swr_pct
+
+# The update reminder's day moved to the service that reads it (2026-09-23 spec §K3: a service
+# may not import a router); re-exported here, so api/calendar.py and this router's GET/PUT read
+# it exactly as before.
+from app.services.month_status import MAX_UPDATE_DUE_DAY, read_update_due_day
+from app.services.net_worth_calc import PLAN_UNTIL_KEY, get_swr_pct, read_plan_until_year
+from app.services.projection import max_plan_until_year
 from app.services.scheduler import (
     SCHEDULER_TIMEZONE,
     read_cron_setting,
@@ -90,20 +97,18 @@ async def read_espp_discount(db: AsyncSession) -> Decimal:
     return parsed
 
 
-DEFAULT_UPDATE_DUE_DAY = 1
-MAX_UPDATE_DUE_DAY = 28  # every month has a 28th — the reminder can never miss a month
-
-
-async def read_update_due_day(db: AsyncSession) -> int:
-    """app_settings['calendar_update_due_day'] envelope {"value": 1..28}; any unexpected
-    shape falls back to the default (get_swr_pct's posture). Imported by api/calendar.py."""
-    setting = await db.get(AppSetting, "calendar_update_due_day")
-    if setting is None or not isinstance(setting.value, dict):
-        return DEFAULT_UPDATE_DUE_DAY
-    raw = setting.value.get("value")
-    if isinstance(raw, bool) or not isinstance(raw, int):
-        return DEFAULT_UPDATE_DUE_DAY
-    return raw if 1 <= raw <= MAX_UPDATE_DUE_DAY else DEFAULT_UPDATE_DUE_DAY
+def _validated_plan_until_year(value: int, today: date) -> int:
+    """A whole year from NEXT year (a lasting default for the current one would pass within
+    months) through the latest year the projection can reach — its December within 60 years
+    of the current month (services/projection.max_plan_until_year, the knob's own bound)."""
+    first = today.year + 1
+    last = max_plan_until_year(today.replace(day=1))
+    if not first <= value <= last:
+        raise HTTPException(
+            status_code=422,
+            detail=f"plan_until_year: must be a year from {first} through {last}",
+        )
+    return value
 
 
 def _validated_due_day(value: int) -> int:
@@ -171,6 +176,7 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> AppSettingsOut:
         espp_discount_pct=await read_espp_discount(db),
         price_refresh_cron=await read_cron_setting(db),
         calendar_update_due_day=await read_update_due_day(db),
+        plan_until_year=await read_plan_until_year(db),
     )
 
 
@@ -204,6 +210,16 @@ async def put_settings(
         updates["calendar_update_due_day"] = {
             "value": _validated_due_day(body.calendar_update_due_day)
         }
+    # spec §R11: a present null CLEARS the plan-until year (the row goes); a year is validated
+    # against the server's own day. Like the withdrawal rate beside it, not change-logged.
+    clears: list[str] = []
+    if "plan_until_year" in provided:
+        if body.plan_until_year is None:
+            clears.append(PLAN_UNTIL_KEY)
+        else:
+            updates[PLAN_UNTIL_KEY] = {
+                "value": _validated_plan_until_year(body.plan_until_year, clock.product_today())
+            }
     # Every raise is behind us — write only now, so a 422 on the third field cannot leave the
     # first two committed. Envelope {"value": ...} is the readers' convention, and a Decimal
     # stores as a plain-notation STRING so the reader re-reads it losslessly.
@@ -213,6 +229,10 @@ async def put_settings(
             db.add(AppSetting(key=key, value=value))
         else:
             setting.value = value
+    for key in clears:
+        setting = await db.get(AppSetting, key)
+        if setting is not None:
+            await db.delete(setting)
     await db.commit()
     # AFTER the commit, and ONLY when the cron was actually written: the stored value is what
     # a crashed reschedule (or a scheduler-less process) falls back to at the next boot.

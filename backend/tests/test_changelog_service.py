@@ -1,5 +1,6 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
@@ -105,3 +106,32 @@ def test_batch_header_is_absent_when_nothing_changed():
     assert batch_header(UUID("0b2f5c1e-1111-4222-8333-444455556666")) == {
         "X-Change-Batch": "0b2f5c1e-1111-4222-8333-444455556666"
     }
+
+
+async def test_a_batch_committed_under_the_dev_override_is_stamped_on_that_day(db, monkeypatch):
+    """K1 (2026-09-23 spec): month_status reads "saved after the month ended" off change_log.at,
+    so under the override the stamp names the overridden day — the V4 write scenarios need it."""
+    monkeypatch.setenv("PRODUCT_TODAY", "2026-10-03")
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    account = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(account)
+    await db.flush()
+    batch = ChangeBatch(db)
+    batch.record_insert(account)
+    batch.label = "Created account Brokerage"
+    await batch.commit()
+    at = (await db.execute(select(ChangeLog.at))).scalar_one()
+    assert at.astimezone(ZoneInfo("America/Los_Angeles")).date() == date(2026, 10, 3)
+
+
+async def test_without_the_override_a_batch_is_stamped_now(db, monkeypatch):
+    monkeypatch.delenv("PRODUCT_TODAY", raising=False)
+    account = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(account)
+    await db.flush()
+    batch = ChangeBatch(db)
+    batch.record_insert(account)
+    before = datetime.now(UTC)
+    await batch.commit()
+    at = (await db.execute(select(ChangeLog.at))).scalar_one()
+    assert before <= at <= datetime.now(UTC)

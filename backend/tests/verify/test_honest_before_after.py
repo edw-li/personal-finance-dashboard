@@ -29,6 +29,7 @@ from app.models import (
     TaxYear,
 )
 from app.seed import seed_tax_definitions
+from app.services import clock
 from app.services.month_review import adopt_existing_history
 
 COVERAGE = "/api/v1/coverage"
@@ -312,7 +313,13 @@ async def test_before_the_program_the_zero_month_and_the_tax_bill_are_counted(ce
     assert Decimal(april) == Decimal("9802.63")  # one number, the tax invisible inside it
 
 
-async def test_after_coverage_tells_the_truth_about_august_and_september(census, auth_client):
+async def test_after_coverage_tells_the_truth_about_august_and_september(
+    census, auth_client, monkeypatch
+):
+    # Coverage is clock-coupled since 2026-09-24 (2026-09-23 spec §K3: the missing windows end
+    # at the newest overdue month). On Oct 20 August and September are both past their flows
+    # deadline — the production shape this file pins.
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 10, 20))
     body = (await auth_client.get(COVERAGE)).json()
     assert body["spending"] == [m.isoformat() for m in sorted(SPENDING_TOTALS)]
     assert body["spending_empty"] == ["2026-09-01"]

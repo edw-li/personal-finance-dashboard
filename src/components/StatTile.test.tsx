@@ -49,6 +49,33 @@ describe('StatTile delta glyph', () => {
     expect(delta()?.className).toContain('stat-delta-neutral')
   })
 
+  it('sets a unit under the value, small, so a long reading still fits a fifth of the row', () => {
+    // The Projection's "Money lasts": the figure big, its unit on a line of its own — read
+    // together they are one sentence (2026-09-23 correctness spec §R7).
+    render(<StatTile label="Money lasts" value="92.4%" unit="of paths through 2075" />)
+    const value = document.querySelector('.stat-value')
+    expect(value?.textContent).toBe('92.4% of paths through 2075')
+    expect(value?.querySelector('.stat-value-unit')?.textContent?.trim()).toBe('of paths through 2075')
+  })
+
+  it('colours a warn tone amber with no glyph — a caution is not a movement', () => {
+    // The Projection's "Money lasts" verdict (2026-09-23 spec §R7): borderline reads amber.
+    render(<StatTile label="Money lasts" value="82.0% of paths through 2075" delta="In 9 of 10 paths…" tone="warn" />)
+    expect(glyphOf()).toBe('')
+    expect(delta()?.className).toContain('stat-delta-warn')
+  })
+
+  it('draws no glyph for direction "none", whatever the tone says', () => {
+    // A verdict is judged, not moved: on track is green without claiming the number rose.
+    render(<StatTile label="Money lasts" value="92.0% of paths through 2075" delta="In 9 of 10 paths…" tone="positive" direction="none" />)
+    expect(glyphOf()).toBe('')
+    expect(delta()?.className).toContain('stat-delta-positive')
+    cleanup()
+    render(<StatTile label="Money lasts" value="41.0% of paths through 2075" delta="In 9 of 10 paths…" tone="negative" direction="none" />)
+    expect(glyphOf()).toBe('')
+    expect(delta()?.className).toContain('stat-delta-negative')
+  })
+
   it('lets an explicit UP direction ride a negative tone', () => {
     // Overview's spending tile: the month rose (▲, honest about the number) and that is BAD
     // (red, plus the caller's word "over"). Tone-derived glyphs would print ▼ on a rise.

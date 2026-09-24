@@ -1,0 +1,129 @@
+import type { Reconciliation, ReconciliationRow } from '../../types/api'
+import { formatCurrency, formatDate } from '../../utils/format'
+import type { Tone } from '../../utils/tone'
+
+// The "Your inputs vs your records" strip's words (2026-09-23 spec §W4). Pure: every figure is
+// the server's — typed, projected, difference, tax effect, the balance if matched — and this
+// file only picks clauses and formats. The one client arithmetic is the display-only sign/abs
+// the headline tile already does (utils/format.ts's Number() rule), plus whole-dollar rounding
+// where the copy says "≈".
+
+/** "$18,265" — the "≈" figures round to whole dollars; the exact cents are in the columns. */
+const WHOLE_DOLLARS = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 0,
+})
+
+function wholeDollars(value: string | number): string {
+  return WHOLE_DOLLARS.format(Math.abs(Number(value)))
+}
+
+/** "Sep 16" — inside the card's own year the year is noise; a day in any other year names it
+ *  ("Jan 1, 2027": a job that starts after the tax year, a January's reference close). */
+export function dayLabel(iso: string, year?: number): string {
+  const full = formatDate(iso)
+  return year !== undefined && Number(iso.slice(0, 4)) !== year ? full : full.replace(/, \d{4}$/, '')
+}
+
+/** The typed side: the stored figure, or "not entered" when none of its inputs is stored. */
+export function typedText(row: ReconciliationRow): string {
+  return row.typed === null ? 'not entered' : formatCurrency(row.typed)
+}
+
+/** What the typed salary is made of ("20 pay periods + $27,000 checkpoint"), else null. A
+ *  negative checkpoint LOWERS the salary, and says so ("24 pay periods − $3,000 checkpoint"). */
+export function typedDetail(row: ReconciliationRow): string | null {
+  const periods =
+    row.facts.typed_pay_periods === null ? null : `${Number(row.facts.typed_pay_periods)} pay periods`
+  const amount = row.facts.typed_checkpoint === null ? 0 : Number(row.facts.typed_checkpoint)
+  const checkpoint = amount === 0 ? null : `${wholeDollars(amount)} checkpoint`
+  if (checkpoint === null) return periods
+  if (periods === null) return amount < 0 ? `−${checkpoint}` : checkpoint
+  return `${periods} ${amount < 0 ? '−' : '+'} ${checkpoint}`
+}
+
+const SOURCE_WORDS: Record<ReconciliationRow['source'], string> = {
+  paycheck: 'Paycheck',
+  comp: 'Comp',
+  espp: 'ESPP',
+}
+
+/**
+ * Why a flagged RSU row is flagged (review finding 3). The flag is stateless (§W3): the
+ * not-yet-vested vests are priced at the close on or before the 1st of the month, and only a
+ * difference beyond ±10 % of that unvested income counts — while the figures shown are on
+ * today's quote. So a row matched at today's quote can still differ at the reference close, and
+ * without this sentence it would read "differs" beside a $0.00 difference. Null when there is
+ * nothing to explain.
+ */
+export function flagDetail(row: ReconciliationRow, year?: number): string | null {
+  const { reference_price: price, reference_date: day, quote_tolerance: band } = row.facts
+  if (row.key !== 'rsu' || !row.flagged || price === null) return null
+  const where = day === null ? 'the latest quote' : `the ${dayLabel(day, year)} close`
+  const beyond = band === null ? '' : `, beyond ±${wholeDollars(band)} of the unvested vests`
+  return `flag judged at ${where} (${formatCurrency(price)} a share)${beyond}`
+}
+
+/** "Paycheck projects" — which of the app's own records the figure comes from. */
+export function projectsWord(row: ReconciliationRow): string {
+  return `${SOURCE_WORDS[row.source]} projects`
+}
+
+/** How the projection was built, in the row's own terms. */
+export function projectedDetail(row: ReconciliationRow, year: number): string | null {
+  const { facts } = row
+  if (row.key === 'rsu') return 'vests at their vest-day close, later ones at today’s quote'
+  if (row.key === 'espp') return `lots sold in ${year}`
+  if (facts.capped_at !== null && row.key === 'trad_401k')
+    return `capped at the ${year} limit (${wholeDollars(facts.capped_at)})`
+  if (facts.capped_at !== null && row.key === 'hsa')
+    return `capped at the ${year} limit less the employer deposit (${wholeDollars(facts.capped_at)})`
+  if (facts.projected_checks === null || facts.projected_from === null) return null
+  return `${facts.projected_checks} checks from ${dayLabel(facts.projected_from)}`
+}
+
+/** "+$4,488.33" / "−$2,000.00" — the server's projected − typed, signed. */
+export function differenceText(value: string): string {
+  const amount = Number(value)
+  if (amount === 0) return formatCurrency(value)
+  return `${amount > 0 ? '+' : '−'}${formatCurrency(Math.abs(amount))}`
+}
+
+/** "≈ +$18,265 tax" — what matching this line would do to the year's liability. Under half a
+ *  dollar rounds to no change ("≈ +$0 tax" would say a thing and its opposite). `atReference`:
+ *  a row flagged at the month's reference close (the RSU row) whose figures, on today's quote,
+ *  match — it says so rather than "no change" beside a "differs" badge. */
+export function effectText(value: string, atReference = false): string {
+  const amount = Number(value)
+  if (Math.round(Math.abs(amount)) === 0) return atReference ? 'no change at today’s quote' : 'no change in tax'
+  return `≈ ${amount > 0 ? '+' : '−'}${wholeDollars(amount)} tax`
+}
+
+/** The strip's lead: how many inputs differ by more than the flag line, and — when the RSU
+ *  row is among them — the price that row was judged at. */
+export function leadLine(rec: Reconciliation): string {
+  const count = rec.flagged_count
+  const line = wholeDollars(rec.flag_above)
+  if (count === 0) return `Every input is within ${line} of tax of your records`
+  const rsu = rec.rows.some((row) => row.key === 'rsu' && row.flagged)
+  const clause = rsu ? ' (this month’s reference price for unvested RSUs)' : ''
+  return `${count} ${count === 1 ? 'input differs' : 'inputs differ'} from your records by more than ${line} of tax${clause}`
+}
+
+/**
+ * "Balance if they matched your records: refund ≈ $5,004". The words and the tone follow the
+ * headline tile's rules — a positive balance is owed (the bad direction), a negative one is a
+ * refund — so the two can never disagree about what a sign means. Null when there is nothing
+ * to compare against.
+ */
+export function matchedFace(value: string | null): { text: string; tone: Tone } | null {
+  if (value === null) return null
+  const amount = Number(value)
+  const lead = 'Balance if they matched your records:'
+  // Under half a dollar is even — "refund ≈ $0" says nothing a reader can use.
+  if (Math.round(Math.abs(amount)) === 0) return { text: `${lead} even`, tone: 'neutral' }
+  return amount > 0
+    ? { text: `${lead} owe ≈ ${wholeDollars(amount)}`, tone: 'negative' }
+    : { text: `${lead} refund ≈ ${wholeDollars(amount)}`, tone: 'positive' }
+}

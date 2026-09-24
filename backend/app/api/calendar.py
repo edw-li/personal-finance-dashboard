@@ -65,7 +65,7 @@ from app.services.calendar import Sources, compose
 from app.services.calendar.generators.cards import CardCreditFacts, CardFacts
 from app.services.calendar.generators.custom import CustomRow
 from app.services.calendar.generators.dividends import ExDividend
-from app.services.calendar.generators.payroll import PaydaySource
+from app.services.calendar.generators.payroll import PaydaySource, PayRate
 from app.services.calendar.generators.rsu import resolve as resolve_vests
 from app.services.calendar.generators.taxes import TaxFacts
 from app.services.calendar.ics import render
@@ -156,15 +156,27 @@ async def _held_ex_dividends(db: AsyncSession) -> list[ExDividend]:
     return held
 
 
+def _net_per_check(profile: PaycheckProfile) -> Decimal | None:
+    """Net pay per check from the same waterfall the Paycheck page shows; a hand-edited
+    cadence breakdown cannot divide by is left unpriced rather than invented."""
+    if profile.pay_periods_per_year < 1:
+        return None
+    return half_up2(breakdown(profile)["net_pay"])
+
+
 async def _payday_sources(
     db: AsyncSession, today: date, people: list[Person]
 ) -> tuple[list[PaydaySource], SourceHealthOut]:
-    """Paydays follow the profile IN FORCE for EACH person (2026-08-27 spec §4.4), not "the
-    newest row": the latest row effective today or earlier, else the earliest future one —
-    paycheck.py's `_default_profile` rule, resolved in ONE ordered pass. `people` is the
-    caller's ONE roster read — the custom-event stamps need the same names."""
+    """Paydays follow EACH person's own timeline (2026-09-23 spec §W1): nothing on or before
+    their first profile's date, and each payday priced by the profile in force on THAT day —
+    so a raise shows from its first check and a September job has no August paydays. The
+    source-level cadence and net are still the profile in force TODAY (the latest row effective
+    today or earlier, else the earliest future one — paycheck.py's `_default_profile` rule,
+    2026-08-27 spec §4.4), which is what the health footer names. One ordered pass. `people` is
+    the caller's ONE roster read — the custom-event stamps need the same names."""
     primary = primary_person(people)
     in_force: dict[int | None, PaycheckProfile] = {}
+    timelines: dict[int | None, list[PaycheckProfile]] = {}
     for profile in (
         await db.execute(select(PaycheckProfile).order_by(PaycheckProfile.effective_date))
     ).scalars():
@@ -175,6 +187,7 @@ async def _payday_sources(
             if profile.person_id is not None
             else (None if primary is None else primary.id)
         )
+        timelines.setdefault(owner, []).append(profile)
         if profile.effective_date <= today or owner not in in_force:
             in_force[owner] = profile
     owners: list[int | None] = [person.id for person in people if person.id in in_force]
@@ -183,24 +196,49 @@ async def _payday_sources(
     names = {person.id: person.name for person in people}
     sources: list[PaydaySource] = []
     omitted: list[str] = []
+    # Paid on another cadence under SOME profiles only: each payday follows the profile in
+    # force on it (§W1), so the semi-monthly stretches still show — the footer says the rest
+    # are left out rather than that all of them are.
+    partly: list[str] = []
     for owner in owners:
         profile = in_force[owner]
         name = UNNAMED_PERSON if owner is None else names.get(owner, UNNAMED_PERSON)
         semi_monthly = profile.pay_periods_per_year == SEMI_MONTHLY_PERIODS
-        # Net pay per check from the same waterfall the Paycheck page shows; a hand-edited
-        # cadence breakdown cannot divide by is left unpriced rather than invented.
-        net = half_up2(breakdown(profile)["net_pay"]) if profile.pay_periods_per_year >= 1 else None
-        sources.append(PaydaySource(name, semi_monthly, net, owner))
-        if not semi_monthly:
+        timeline = timelines[owner]
+        sources.append(
+            PaydaySource(
+                name,
+                semi_monthly,
+                _net_per_check(profile),
+                owner,
+                timeline=tuple(
+                    PayRate(
+                        row.effective_date,
+                        row.pay_periods_per_year == SEMI_MONTHLY_PERIODS,
+                        _net_per_check(row),
+                    )
+                    for row in timeline
+                ),
+                starts_on=timeline[0].effective_date,
+            )
+        )
+        cadences = [row.pay_periods_per_year == SEMI_MONTHLY_PERIODS for row in timeline]
+        if not any(cadences):
             omitted.append(name)
+        elif not all(cadences):
+            partly.append(name)
     if not sources:
         return sources, _health("payroll", "off", "no paycheck profile")
+    notes = []
     if omitted:
-        return sources, _health(
-            "payroll",
-            "partial",
-            f"{', '.join(omitted)}: paid on another cadence — paydays omitted",
+        notes.append(f"{', '.join(omitted)}: paid on another cadence — paydays omitted")
+    if partly:
+        notes.append(
+            f"{', '.join(partly)}: paid on another cadence for part of the time — those "
+            "paydays omitted"
         )
+    if notes:
+        return sources, _health("payroll", "partial", "; ".join(notes))
     return sources, _health("payroll", "ok")
 
 

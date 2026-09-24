@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -7,10 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field
 class RetirementOut(BaseModel):
     """One resolved `retire=<person_id>:<YYYY-MM>` param (2026-08-28 spec §4.3).
 
-    `monthly_drop` is that person's take-home PLUS their payroll-deducted savings, both from
-    the paycheck profile in force AT REQUEST TIME — today's honest approximation, named in
-    the page's hint — so the echo is also what tells the user what a date actually costs the
-    contribution stream (2026-09-03: retiring stops the whole check, not just the net).
+    `monthly_drop` is that person's take-home PLUS their payroll-deducted savings and employer
+    match, all from the paycheck profile in force AT REQUEST TIME: the paycheck that stops.
+    Informational since 2026-09-23 (spec §R2) — the run no longer subtracts it; retirement
+    months split the plan into `phases` instead.
     """
 
     person_id: int
@@ -67,6 +68,80 @@ class DerivedWindowOut(BaseModel):
     months: int
 
 
+class PhaseOut(BaseModel):
+    """One stretch of the plan between retirement months (2026-09-23 spec §R2).
+
+    `working` runs from t0 on the derived (or typed) contribution; `partly_retired` from a
+    retirement until the last one, on the still-working earners' payroll saving + employer
+    match (their pay is assumed to cover spending, so no cash surplus and no withdrawal);
+    `retired` from the last earner's retirement month, withdrawing annual spend / 12.
+    `monthly_contribution` is in t0 (today's) dollars — the engine escalates it from the
+    phase's first month — and `take_home_monthly` is the working earners' combined take-home
+    (partly-retired phases only), the figure the shortfall note compares with spending.
+    """
+
+    from_month: date
+    kind: Literal["working", "partly_retired", "retired"]
+    working_person_ids: list[int]
+    monthly_contribution: Decimal
+    monthly_withdrawal: Decimal | None = None
+    take_home_monthly: Decimal | None = None
+
+
+class DrawdownOut(BaseModel):
+    """The withdrawal after the last retirement (spec §R2): annual spend — the FI-target
+    figure — each year, constant in today's dollars, from `start_month`."""
+
+    start_month: date
+    annual_withdrawal: Decimal
+
+
+class MoneyLastsOut(BaseModel):
+    """Does the money last through the plan-until year (2026-09-23 spec §R3)? From the SAME
+    simulation as the FI dates. `probability` is the share of paths never depleted through
+    December of `plan_until` (a depletion in ANY phase fails — the clamp holds everywhere);
+    `verdict` reads it (≥ 0.90 on_track, ≥ 0.75 borderline, else at_risk); `lasts_until_p10`
+    is the month 9 in 10 paths last at least until (null beyond the axis); both are null
+    with volatility 0, when only the constant-return line's `deterministic_depleted_month`
+    speaks. With no drawdown every figure is null and `reason` says what is missing."""
+
+    plan_until: int
+    probability: Decimal | None = None
+    verdict: Literal["on_track", "borderline", "at_risk"] | None = None
+    lasts_until_p10: date | None = None
+    horizon_end: date
+    deterministic_depleted_month: date | None = None
+    reason: str | None = None
+
+
+class VestYearOut(BaseModel):
+    """One calendar year of the scheduled vests the run can include: gross at the latest
+    quote, and after the calendar's sell-to-cover withholding."""
+
+    year: int
+    gross: Decimal
+    after_withholding: Decimal
+
+
+class VestsOut(BaseModel):
+    """Scheduled RSU vests (2026-09-23 spec §R4), on by default when grants exist. Each kept
+    vest — dated after the starting balance's date, before the primary's (the grant holder's)
+    retirement month, on the axis — is priced at the latest employer quote, less the
+    calendar's ≈ 32.23 % sell-to-cover, flat in today's dollars, and lands as a lump in its
+    month. The figures are computed even when `included` is false (the knob turned them off),
+    so the page can say what they would add; `excluded_reason` says why nothing could be
+    priced (no ticker, no quote)."""
+
+    included: bool
+    price: Decimal | None = None
+    price_as_of: date | None = None
+    withholding_rate: Decimal
+    next_12_months: Decimal | None = None  # after withholding, vests in (today, a year on]
+    by_year: list[VestYearOut] = []
+    stops: date | None = None  # the primary's retirement month, when one is set
+    excluded_reason: str | None = None
+
+
 class ProjectionOut(BaseModel):
     # Echoed knobs — the values the model actually ran with (the ESPP modeler's posture:
     # the echo IS what the page's form seeds from).
@@ -117,3 +192,29 @@ class ProjectionOut(BaseModel):
     # budgets; nullable-with-default so a stored older payload still validates.
     budget_annual_spend: Decimal | None = None
     budget_month: date | None = None
+    # 2026-09-23 spec §R5: the snapshot the starting balance stands on, beside `base_month`
+    # (its key) — the date its balances describe (None = unknown), the stored recorded date,
+    # and whether it is provisional (recorded before its 1st). Defaulted so an older stored
+    # payload still validates.
+    base_as_of: date | None = None
+    base_recorded_on: date | None = None
+    base_provisional: bool = False
+    # 2026-09-23 spec §R2: the phases this run walked, in order (a live server always sends at
+    # least the working phase, unless a retirement sits on t0), and the withdrawal — null
+    # until every earner has a retirement month on the axis and there is an annual spend.
+    phases: list[PhaseOut] = []
+    drawdown: DrawdownOut | None = None
+    # 2026-09-23 spec §R3: the year the money has to last through, resolved — the knob, the
+    # Settings year (§R11) or the latest December on the axis — and where it came from. A
+    # year past the default horizon lengthens it (`years` echoes the effective horizon).
+    plan_until: int | None = None
+    plan_until_source: Literal["knob", "setting", "default"] | None = None
+    # The `years` KNOB the run resolved (2026-09-24 re-review): `years` above is the horizon it RAN,
+    # lengthened to reach the plan-until year, but the simulated paths are drawn on this one's
+    # months — a link or a box that re-sends a lengthened `years` would re-deal every path.
+    base_years: int | None = None
+    # Always present from this server (spec §R3); nullable so an older stored payload still
+    # validates.
+    money_lasts: MoneyLastsOut | None = None
+    # Null when there are no grants to include (spec §R4).
+    vests: VestsOut | None = None

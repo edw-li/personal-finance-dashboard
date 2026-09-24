@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../../api/client'
@@ -7,12 +7,27 @@ import Disclosure from '../Disclosure'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import type {
+  Reconciliation,
+  ReconciliationApply,
+  ReconciliationRow,
   TaxInputsOut,
   WithholdingJurisdiction,
   WithholdingOut,
   WithholdingSafeHarbor,
 } from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
+import {
+  dayLabel,
+  differenceText,
+  effectText,
+  flagDetail,
+  leadLine,
+  matchedFace,
+  projectedDetail,
+  projectsWord,
+  typedDetail,
+  typedText,
+} from './reconciliation'
 import type { TaxSection } from './taxSections'
 import type { Tone } from '../../utils/tone'
 // This component's own sheet, like its siblings: the app-wide vocabulary
@@ -160,26 +175,191 @@ function sentence(fragment: string): string {
   return /[.!?…]$/.test(capitalised) ? capitalised : `${capitalised}.`
 }
 
+// The W1 sentence for a partial year (2026-09-23 spec §W1), shown wherever one is on screen.
+const PROFILE_BY_DATE_NOTE =
+  'Each check is priced by the paycheck profile in force on its date. For a raise or a new job, add a profile with its start date.'
+
+/** The rows of one person, in the server's order (which is already person by person). */
+function byPerson(rows: ReconciliationRow[]): { name: string; rows: ReconciliationRow[] }[] {
+  const groups: { name: string; rows: ReconciliationRow[] }[] = []
+  for (const row of rows) {
+    const name = row.person_name ?? 'You'
+    const last = groups[groups.length - 1]
+    if (last !== undefined && last.name === name) last.rows.push(row)
+    else groups.push({ name, rows: [row] })
+  }
+  return groups
+}
+
+/**
+ * "Your inputs vs your records" (2026-09-23 spec §W4): each typed input beside what Paycheck,
+ * Comp and ESPP project for it, grouped by person, with the tax each difference moves. Every
+ * figure is the server's (the reconciliation, §W3). The headline above stays the balance on
+ * the typed inputs — this strip only says how far those inputs are from the app's own records,
+ * and the one write it offers is the RSU row's existing Apply chip, when the figures differ.
+ */
+function ReconciliationStrip({
+  rec,
+  year,
+  applying,
+  onApply,
+  goTo,
+}: {
+  rec: Reconciliation
+  year: number
+  applying: boolean
+  /** Present only when the page can complete an Apply (it remounts the inputs form). */
+  onApply?: (row: ReconciliationRow) => void
+  goTo?: (section: TaxSection) => void
+}) {
+  const headingId = useId()
+  const matched = rec.rows.length > 0 ? matchedFace(rec.balance_if_matched) : null
+  const groups = byPerson(rec.rows)
+  const named = groups.length > 1 || (groups[0]?.name ?? 'You') !== 'You'
+  return (
+    <section className="recon-strip" aria-labelledby={headingId}>
+      <h3 className="eyebrow" id={headingId}>
+        Your inputs vs your records
+        <InfoHint text="Your typed tax inputs beside what your paycheck profiles, RSU grants and ESPP lots project for the same year, and the tax each difference moves. Nothing is written: the balance above stays the one on your typed inputs — fix a line in Inputs when your records are right." />
+      </h3>
+      {rec.rows.length > 0 && (
+        <>
+          <p className={`recon-lead${rec.flagged_count > 0 ? ' is-flagged' : ''}`}>{leadLine(rec)}</p>
+          {matched !== null && (
+            <p className={`recon-matched${matched.tone === 'neutral' ? '' : ` delta-${matched.tone}`}`}>
+              {matched.text}
+            </p>
+          )}
+          <div className="recon-scroll">
+            <table className="data-table recon-table">
+              <thead>
+                <tr>
+                  <th scope="col">Line</th>
+                  <th scope="col">Your inputs</th>
+                  <th scope="col">Your records</th>
+                  <th scope="col" className="num">
+                    Difference
+                  </th>
+                  <th scope="col" className="num">
+                    Tax effect
+                  </th>
+                  <th scope="col">
+                    <span className="visually-hidden">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map((group) => (
+                  <Fragment key={group.name}>
+                    {named && (
+                      <tr className="recon-person">
+                        <th scope="row" colSpan={6}>
+                          {group.name}
+                        </th>
+                      </tr>
+                    )}
+                    {group.rows.map((row) => {
+                      const typedNote = typedDetail(row)
+                      const projectedNote = projectedDetail(row, year)
+                      // Why a flagged RSU row differs (review finding 3): judged at the month's
+                      // reference close, while the figures are on today's quote.
+                      const flagNote = flagDetail(row, year)
+                      const whose = row.person_name ?? 'you'
+                      return (
+                        <tr
+                          key={`${row.person_id ?? 'you'}:${row.key}`}
+                          className={row.flagged ? 'is-flagged' : undefined}
+                          aria-label={`${row.label} — ${whose}`}
+                        >
+                          <td className="recon-line">
+                            {row.label}
+                            {/* The warn register in words as well as colour. */}
+                            {row.flagged && <span className="badge recon-flag">differs</span>}
+                          </td>
+                          <td>
+                            <span className="recon-figure">{typedText(row)}</span>
+                            {typedNote !== null && <span className="recon-detail">{typedNote}</span>}
+                          </td>
+                          <td>
+                            <span className="recon-source">{projectsWord(row)} </span>
+                            <span className="recon-figure">{formatCurrency(row.projected)}</span>
+                            {projectedNote !== null && (
+                              <span className="recon-detail">{projectedNote}</span>
+                            )}
+                            {flagNote !== null && <span className="recon-detail">{flagNote}</span>}
+                          </td>
+                          <td className="num">{differenceText(row.difference)}</td>
+                          <td className="num">{effectText(row.tax_effect, flagNote !== null)}</td>
+                          <td className="recon-actions">
+                            {row.apply !== null && onApply !== undefined && (
+                              <button
+                                type="button"
+                                className="chip"
+                                disabled={applying}
+                                aria-label="Apply vest income to W-2 inputs"
+                                // The row's own label and person — the server's target,
+                                // never a hard-coded input or "the primary".
+                                title={`Set ${row.label} to ${formatCurrency(row.apply.value)} for ${whose}`}
+                                onClick={() => onApply(row)}
+                              >
+                                {applying ? 'Applying…' : 'Apply'}
+                              </button>
+                            )}
+                            {goTo !== undefined && (
+                              <button
+                                type="button"
+                                className="chip"
+                                aria-label={`Open Inputs — ${row.label}, ${whose}`}
+                                onClick={() => goTo('inputs')}
+                              >
+                                Open Inputs
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      {/* Keyed by position: two notes can say the same sentence (two lots sold the same day
+          without a price), and a text key would clash. The list is the server's, in order. */}
+      {rec.notes.map((note, index) => (
+        <p className="drill-hint recon-note" key={index}>
+          {note}
+        </p>
+      ))}
+    </section>
+  )
+}
+
 export default function WithholdingPanel({
   year,
-  storedVestW2 = null,
   inputsDirty = false,
   onVestApplied,
   goTo,
+  refreshKey = 0,
 }: {
   year: number
-  /** The PRIMARY person's stored w2_stock_rsus_sold (the 4dp echo), null when unset —
-   *  what the Apply chip's already-applied check compares against. */
-  storedVestW2?: string | null
   /** The inputs form below holds unsaved edits: Apply asks before the page remounts it. */
   inputsDirty?: boolean
   /** The page's reload door: adopts the PUT echo, remounts the inputs form on it and
-   *  refreshes the totals. The chip renders ONLY when the page provides this — an Apply
-   *  that could not complete that loop would leave a stale form under a fresh number. */
+   *  refreshes the totals. The RSU row's Apply renders ONLY when the page provides this — an
+   *  Apply that could not complete that loop would leave a stale form under a fresh number. */
   onVestApplied?: (echo: TaxInputsOut) => void
   /** The page's view switch (2026-09-13 polish spec §14): the partner note's "Open Inputs" and
    *  the missing-tables "Open Tax tables" doors. Absent → the sentences alone. */
   goTo?: (section: TaxSection) => void
+  /** Bumped by the page when the year's answer moved under this card — an inputs or tables
+   *  save, a filing-status change or its Undo; each new value reloads the feed, keeping the
+   *  figures on screen until the fresh ones land. The card stays mounted while the other
+   *  views are open, so without this the strip would go on showing a line the user had just
+   *  fixed in Inputs (2026-09-23 spec §W4). */
+  refreshKey?: number
 }) {
   // null = the feed has not answered yet (never a zeroed payload — "not loaded" and "nothing
   // withheld" say very different things under this heading).
@@ -218,7 +398,7 @@ export default function WithholdingPanel({
       .finally(() => {
         if (seq === seqRef.current) setBusy(false)
       })
-  }, [year, reload])
+  }, [year, reload, refreshKey])
 
   const retry = () => {
     setBusy(true)
@@ -259,18 +439,12 @@ export default function WithholdingPanel({
       </p>
     )
 
-  // D4 Apply: income_projected ALONE is the full-year vest base — the backend sums past
-  // vests INTO it (withholding_calc.py: income_projected = income_ytd + future), so the
-  // spec's "ytd + projected" spelling would double-count every past vest (ratified
-  // deviation, plan 2026-08-31-tier1-d). It is also exactly the figure the prose names.
-  const vestFigure = withholding === null ? null : withholding.vest.income_projected
-  // Numeric compare across quanta: the stored echo is 4dp ("48000.0000"), the estimate
-  // 2dp ("48000.00") — string equality would re-offer an Apply that changes nothing.
-  const vestApplied =
-    vestFigure !== null && storedVestW2 !== null && Number(storedVestW2) === Number(vestFigure)
-
-  const applyVestIncome = () => {
-    if (vestFigure === null || onVestApplied === undefined || applying || vestApplied) return
+  // The card's one write (2026-09-23 spec §W4): the reconciliation strip's RSU row, offered by
+  // the server only while the typed figure differs from a complete projection — the row carries
+  // its own figure. With no reconciliation (a refused year, an older payload) there is no Apply
+  // at all: nothing has checked the vest figure against the stored input.
+  const writeVestIncome = (apply: ReconciliationApply) => {
+    if (onVestApplied === undefined || applying) return
     if (
       inputsDirty &&
       !window.confirm(
@@ -280,9 +454,12 @@ export default function WithholdingPanel({
       return
     setApplying(true)
     setApplyError(null)
-    // The `values` shorthand IS the primary-person write: a per-person key with no owner
-    // resolves to the primary column server-side (TaxInputsUpdate's contract).
-    putTaxInputs(year, { values: { w2_stock_rsus_sold: vestFigure } })
+    // The server's own target, person-qualified (code-quality M2): the row names the key, the
+    // column and the figure, so the browser assumes nothing about whose input it is.
+    putTaxInputs(year, {
+      values: {},
+      rows: [{ key: apply.key, person_id: apply.person_id, value: apply.value }],
+    })
       .then((echo) => {
         onVestApplied(echo)
         // This card's own liability just moved with the input it wrote.
@@ -301,6 +478,16 @@ export default function WithholdingPanel({
   // than crash on a null.
   const partnerSimulated = withholding !== null && withholding.partner_source === 'simulated'
   const partnerLeg = withholding === null ? null : withholding.partner_salary
+  // Each simulated leg's counted-check facts (2026-09-23 spec §W1–§W2). The start-date
+  // sentences they carry are shown beside the figures they explain — so they leave the folded
+  // notes below, matched by equality with the server's own warning strings.
+  const grids = withholding?.grids ?? []
+  const primaryGrid = grids.find((grid) => grid.role === 'primary') ?? null
+  const partnerGrid = grids.find((grid) => grid.role === 'partner') ?? null
+  const inlineNotes = new Set(
+    grids.map((grid) => grid.early_checks_note).filter((note): note is string => note !== null),
+  )
+  const reconciliation = withholding?.reconciliation ?? null
 
   // The methodology, folded (2026-09-13 polish spec §11; audit A2): the safe-harbor sentences,
   // the reference-return note, the assumptions paragraph and the server's own asterisks EXPLAIN
@@ -372,6 +559,7 @@ export default function WithholdingPanel({
     // on what it was computed from, each naming a piece that was left out. Text-as-key: a fixed
     // list of distinct sentences rendered straight from the payload.
     for (const warning of withholding.warnings) {
+      if (inlineNotes.has(warning)) continue // shown beside its figure instead (§W4)
       methodNotes.push(
         <p className="hint" key={warning}>
           {sentence(warning)}
@@ -414,7 +602,7 @@ export default function WithholdingPanel({
               <StatTile
                 label="Projected tax"
                 value={formatCurrency(withholding.liability_total)}
-                hint="The tax engine&apos;s total on this year&apos;s stored inputs — keep them current as the year moves."
+                hint="The tax engine’s total on your typed inputs — enter full-year figures, including paychecks and vests still to come."
               />
               <StatTile
                 label="Projected withholding"
@@ -467,6 +655,32 @@ export default function WithholdingPanel({
               withholding.vest.income_ytd,
             )}`}
           </p>
+          {/* The primary's own §W1 sentence, beside the check count it qualifies — and the
+              rule that makes a partial year honest, wherever one shows (§W1). */}
+          {primaryGrid?.early_checks_note != null && (
+            <>
+              <p className="hint withholding-start">{sentence(primaryGrid.early_checks_note)}</p>
+              {primaryGrid.starts_on != null && (
+                <p className="drill-hint">{PROFILE_BY_DATE_NOTE}</p>
+              )}
+            </>
+          )}
+
+          {reconciliation !== null && (
+            <ReconciliationStrip
+              rec={reconciliation}
+              year={year}
+              applying={applying}
+              onApply={
+                onVestApplied === undefined
+                  ? undefined
+                  : (row) => {
+                      if (row.apply !== null) writeVestIncome(row.apply)
+                    }
+              }
+              goTo={goTo}
+            />
+          )}
 
           {/* The combined figures keep a line of their own under a split: they are what the
               calendar prices its estimated payments with, and what the year as a whole
@@ -558,9 +772,26 @@ export default function WithholdingPanel({
               </dl>
               {partnerSimulated ? (
                 partnerLeg !== null && (
-                  <p className="drill-hint">
-                    {`Simulated from their paycheck profile — ${partnerLeg.checks_elapsed} of ${partnerLeg.checks_total} checks at their all-in withholding %. Their entered W-2 withholding rows are ignored while that profile exists.`}
-                  </p>
+                  <>
+                    <p className="drill-hint">
+                      {`Simulated from ${
+                        // A straight apostrophe, like the server's own sentence beneath it
+                        // ("Grace's checks on or before …") — they read as one passage.
+                        partnerGrid?.name != null ? `${partnerGrid.name}'s` : 'their'
+                      } paycheck profile — ${partnerLeg.checks_elapsed} of ${partnerLeg.checks_total} checks${
+                        partnerGrid?.starts_on != null ? ` since ${dayLabel(partnerGrid.starts_on, year)}` : ''
+                      } at their all-in withholding %. Their entered W-2 withholding rows are ignored while that profile exists.`}
+                    </p>
+                    {/* A partial year (§W1): the rule, and the sentence naming the start. */}
+                    {partnerGrid?.starts_on != null && (
+                      <p className="drill-hint">{PROFILE_BY_DATE_NOTE}</p>
+                    )}
+                    {partnerGrid?.early_checks_note != null && (
+                      <p className="hint withholding-start">
+                        {sentence(partnerGrid.early_checks_note)}
+                      </p>
+                    )}
+                  </>
                 )
               ) : (
                 <p className="drill-hint">
@@ -612,32 +843,14 @@ export default function WithholdingPanel({
 
           {/* The two halves of the app that both know about vest income have to agree: this
               card counts the vests, while the engine's total above it knows only what the
-              inputs form BELOW was told — which is where the reader has to go to fix it. */}
-          {Number(withholding.vest.income_projected) > 0 && (
+              inputs form was told — which is where the reader has to go to fix it. Only without
+              a reconciliation (a refused year, an older payload), and a sentence only: the one
+              Apply is the RSU row's, offered while the figures differ (§W4). */}
+          {reconciliation === null && Number(withholding.vest.income_projected) > 0 && (
             <p className="hint">
               {`This year's vests imply ≈${formatCurrency(
                 withholding.vest.income_projected,
               )} of W-2 income at vest prices — make sure your W-2 inputs in the Inputs view include it.`}
-              {/* The chip closes the loop the sentence opens, but ONLY when the page can
-                  complete it (onVestApplied remounts the form under a fresh number). */}
-              {onVestApplied !== undefined && (
-                <button
-                  type="button"
-                  className="chip"
-                  disabled={applying || vestApplied}
-                  aria-label="Apply vest income to W-2 inputs"
-                  title={
-                    vestApplied
-                      ? 'Stored W-2 vest input already equals this figure'
-                      : `Set W2: Stock/RSUs Sold to ${formatCurrency(
-                          withholding.vest.income_projected,
-                        )} for the primary person`
-                  }
-                  onClick={applyVestIncome}
-                >
-                  {applying ? 'Applying…' : 'Apply'}
-                </button>
-              )}
             </p>
           )}
 

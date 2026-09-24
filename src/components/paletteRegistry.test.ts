@@ -13,7 +13,7 @@ import {
 const noop = () => {}
 
 describe('paletteRegistry', () => {
-  const entries = buildEntries({ month: '2026-09-01', run: { refreshPrices: noop, askAssistant: noop } })
+  const entries = buildEntries({ run: { refreshPrices: noop, askAssistant: noop } })
 
   it('reaches a page through a keyword alias', () => {
     const hits = matchEntries('rsu', entries)
@@ -35,15 +35,18 @@ describe('paletteRegistry', () => {
     expect(matchEntries('limits', entries).some((e) => e.to === '/settings#limits')).toBe(true)
   })
 
-  it('keeps the five actions, with the update month spelled out', () => {
-    const actions = entries.filter((e) => e.kind === 'action').map((e) => e.label)
-    expect(actions).toEqual([
+  // The monthly update's entry names no month (2026-09-23 spec §M7): the part that is due is
+  // rarely the calendar month's, so the palette opens /update, which lands on what is due.
+  it("keeps the five actions, the update one leading to what's due", () => {
+    const actions = entries.filter((e) => e.kind === 'action')
+    expect(actions.map((e) => e.label)).toEqual([
       'Refresh prices',
-      'Enter Sep 2026 update',
+      "Monthly update — what's due",
       'Add dividend',
       'Add custom event',
       'Ask assistant',
     ])
+    expect(actions[1].to).toBe('/update')
   })
 
   it('groups matches by kind in the house order and caps each group at six', () => {

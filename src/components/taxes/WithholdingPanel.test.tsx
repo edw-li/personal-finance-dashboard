@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -835,8 +835,9 @@ describe('WithholdingPanel', () => {
   // Derived from fixture() itself: balance_projected 18,870.20 over the 24 − 16 = 8 checks
   // still to come is 2,358.775, which formatCurrency rounds half-away-from-zero to 2,358.78.
   const REMEDY = 'Add $2,358.78 per remaining paycheck (W-4 line 4c) to close the gap.'
+  // The card's one Apply: the RSU row's, inside the reconciliation strip (2026-09-23 spec §W4).
   const applyChip = () =>
-    screen.getByRole('button', { name: 'Apply vest income to W-2 inputs' }) as HTMLButtonElement
+    within(strip()).getByRole('button', { name: 'Apply vest income to W-2 inputs' }) as HTMLButtonElement
   const inputsEcho = { year: 2026, filing_status: 'single' as const, people: [], sections: [] }
 
   it("computes the per-check remedy from the payload's own fields", async () => {
@@ -859,50 +860,44 @@ describe('WithholdingPanel', () => {
     expect(screen.queryByText(/per remaining paycheck/)).toBeNull()
   })
 
-  it("applies the FULL-year vest figure to the primary's W-2 input and reloads", async () => {
+  it('Apply on the RSU row hands the echo to the page and reloads the card', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
     vi.mocked(putTaxInputs).mockResolvedValue(inputsEcho)
     const onApplied = vi.fn()
-    render(
-      <WithholdingPanel year={2026} storedVestW2={null} inputsDirty={false} onVestApplied={onApplied} />,
-    )
-    await screen.findByText('$123,456.78')
+    render(<WithholdingPanel year={2026} inputsDirty={false} onVestApplied={onApplied} />)
+    await screen.findByText('Your inputs vs your records')
     fireEvent.click(applyChip())
 
-    // income_projected ALONE: the backend already sums past vests into it
-    // (withholding_calc income_projected = income_ytd + future) — ytd + projected would
-    // double-count every past vest. The values shorthand IS the primary-person write.
-    await waitFor(() =>
-      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2026, {
-        values: { w2_stock_rsus_sold: '48000.00' },
-      }),
-    )
+    await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
     expect(onApplied).toHaveBeenCalledWith(inputsEcho)
     // The liability this card compares against just moved with the input it wrote.
     await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(2))
   })
 
-  it('disables Apply with a title when the stored value already equals the figure', async () => {
-    // 4dp stored echo vs the estimate's 2dp: the comparison is numeric, not string.
-    render(
-      <WithholdingPanel
-        year={2026}
-        storedVestW2={'48000.0000'}
-        inputsDirty={false}
-        onVestApplied={vi.fn()}
-      />,
+  it('offers no Apply without a reconciliation — the vest sentence stands alone', async () => {
+    // A year the engine refuses (Change… → MFS with no MFS tables) or an older payload: nothing
+    // has checked the vest figure against the stored input or its completeness, so there is
+    // nothing to offer — the one Apply lives on the RSU row, and only while the figures differ
+    // (2026-09-23 spec §W4). The sentence still points at the Inputs view.
+    render(<WithholdingPanel year={2026} inputsDirty={false} onVestApplied={vi.fn()} />)
+    expect(await screen.findByText(/^This year's vests imply ≈\$48,000\.00 of W-2 income/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Apply vest income to W-2 inputs' })).toBeNull()
+    cleanup()
+
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      married({ brackets_missing_for_status: ['federal'], liability_total: null, balance_projected: null }),
     )
-    await screen.findByText('$123,456.78')
-    expect(applyChip().disabled).toBe(true)
-    expect(applyChip().title).toBe('Stored W-2 vest input already equals this figure')
+    render(<WithholdingPanel year={2026} inputsDirty={false} onVestApplied={vi.fn()} />)
+    await screen.findByText(/bracket table for this year’s filing status/)
+    expect(screen.queryByRole('button', { name: 'Apply vest income to W-2 inputs' })).toBeNull()
   })
 
   it('asks before clobbering unsaved input edits below, and respects a no', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
     vi.mocked(putTaxInputs).mockResolvedValue(inputsEcho)
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    render(
-      <WithholdingPanel year={2026} storedVestW2={null} inputsDirty={true} onVestApplied={vi.fn()} />,
-    )
-    await screen.findByText('$123,456.78')
+    render(<WithholdingPanel year={2026} inputsDirty={true} onVestApplied={vi.fn()} />)
+    await screen.findByText('Your inputs vs your records')
     fireEvent.click(applyChip())
     expect(confirmSpy).toHaveBeenCalledTimes(1)
     expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
@@ -914,11 +909,10 @@ describe('WithholdingPanel', () => {
   })
 
   it('lands an Apply failure on its own error line, figures kept', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
     vi.mocked(putTaxInputs).mockRejectedValue(new ApiError('inputs unavailable', 503))
-    render(
-      <WithholdingPanel year={2026} storedVestW2={null} inputsDirty={false} onVestApplied={vi.fn()} />,
-    )
-    await screen.findByText('$123,456.78')
+    render(<WithholdingPanel year={2026} inputsDirty={false} onVestApplied={vi.fn()} />)
+    await screen.findByText('Your inputs vs your records')
     fireEvent.click(applyChip())
 
     expect(await screen.findByText('inputs unavailable')).toBeTruthy()
@@ -931,7 +925,7 @@ describe('WithholdingPanel', () => {
     vi.mocked(fetchWithholding).mockResolvedValue(
       fixture({ warnings: ['partner checks before their first profile’s effective date use that profile'] }),
     )
-    // onVestApplied given, so the Apply chip renders — it is one of the lines that must stay OUT.
+    // onVestApplied given — and still no Apply: without a reconciliation there is none (§W4).
     render(<WithholdingPanel year={2026} onVestApplied={vi.fn()} />)
     await screen.findByText('$123,456.78')
 
@@ -947,10 +941,11 @@ describe('WithholdingPanel', () => {
         screen.getByText('Partner checks before their first profile’s effective date use that profile.'),
       ),
     ).toBe(true)
-    // The status line, the remedy and the vest Apply stay outside it.
+    // The status line, the remedy and the vest sentence stay outside it.
     expect(details.contains(screen.getByText(/withheld so far/))).toBe(false)
     expect(details.contains(screen.getByText(/per remaining paycheck/))).toBe(false)
-    expect(details.contains(screen.getByRole('button', { name: 'Apply vest income to W-2 inputs' }))).toBe(false)
+    expect(details.contains(screen.getByText(/vests imply/))).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Apply vest income to W-2 inputs' })).toBeNull()
   })
 
   it('calls the page’s goTo from the Inputs and Tax tables doors', async () => {
@@ -963,5 +958,366 @@ describe('WithholdingPanel', () => {
     expect(goTo).toHaveBeenCalledWith('tables')
     fireEvent.click(screen.getByRole('button', { name: 'Open Inputs' }))
     expect(goTo).toHaveBeenCalledWith('inputs')
+  })
+})
+
+// --- "Your inputs vs your records" (2026-09-23 spec §W3–§W4) ----------------------------------
+
+const NO_FACTS = {
+  typed_pay_periods: null,
+  typed_checkpoint: null,
+  projected_checks: null,
+  projected_from: null,
+  capped_at: null,
+  future_vest_income: null,
+  quote_tolerance: null,
+  reference_price: null,
+  reference_date: null,
+}
+
+const EDWARD_GRID = {
+  role: 'primary' as const,
+  person_id: 1,
+  name: 'Edward',
+  checks_elapsed: 17,
+  checks_total: 24,
+  first_check: '2026-01-16',
+  starts_on: null,
+  gross_projected: '188930.00',
+  trad_401k_projected: '24560.90',
+  roth_401k_projected: '0.00',
+  hsa_projected: '2400.00',
+  early_checks_note: null,
+}
+
+const GRACE_NOTE =
+  "Grace's checks on or before Sep 1, the first paycheck profile's start, count as $0 — add a profile for an earlier job or salary to include them"
+
+const GRACE_GRID = {
+  role: 'partner' as const,
+  person_id: 2,
+  name: 'Grace',
+  checks_elapsed: 1,
+  checks_total: 8,
+  first_check: '2026-09-16',
+  starts_on: '2026-09-01',
+  gross_projected: '8000.00',
+  trad_401k_projected: '800.00',
+  roth_401k_projected: '0.00',
+  hsa_projected: '600.00',
+  early_checks_note: GRACE_NOTE,
+}
+
+/** The real 2026-09-23 copy's shape: Edward's four rows, Grace's three, five flagged. */
+function reconciled(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
+  return fixture({
+    filing_status: 'married_joint',
+    partner_wages: '10750.00',
+    partner_source: 'simulated',
+    partner_salary: { ytd: '243.75', projected: '1950.00', checks_elapsed: 1, checks_total: 8 },
+    grids: [EDWARD_GRID, GRACE_GRID],
+    warnings: [GRACE_NOTE],
+    reconciliation: {
+      rows: [
+        {
+          key: 'salary', person_id: 1, person_name: 'Edward', label: 'Salary wages', source: 'paycheck',
+          typed: '184441.67', typed_keys: ['pay_periods', 'annual_salary', 'w2_salary_checkpoint'],
+          projected: '188930.00', difference: '4488.33', tax_effect: '1600.09', flagged: true,
+          facts: { ...NO_FACTS, typed_pay_periods: '20', typed_checkpoint: '27000.00', projected_checks: 24, projected_from: '2026-01-16' },
+          apply: null,
+        },
+        {
+          key: 'trad_401k', person_id: 1, person_name: 'Edward', label: 'Traditional 401(k)', source: 'paycheck',
+          typed: '21965.82', typed_keys: ['trad_401k_contributions'], projected: '24500.00',
+          difference: '2534.18', tax_effect: '-843.88', flagged: true,
+          facts: { ...NO_FACTS, projected_checks: 24, projected_from: '2026-01-16', capped_at: '24500.00' },
+          apply: null,
+        },
+        {
+          key: 'hsa', person_id: 1, person_name: 'Edward', label: 'HSA (paycheck)', source: 'paycheck',
+          typed: '2300.00', typed_keys: ['hsa_contributions'], projected: '2400.00',
+          difference: '100.00', tax_effect: '-26.35', flagged: false,
+          facts: { ...NO_FACTS, projected_checks: 24, projected_from: '2026-01-16' },
+          apply: null,
+        },
+        {
+          key: 'rsu', person_id: 1, person_name: 'Edward', label: 'RSU income', source: 'comp',
+          typed: '120000.00', typed_keys: ['w2_stock_rsus_sold'], projected: '171235.24',
+          difference: '51235.24', tax_effect: '18265.36', flagged: true,
+          facts: { ...NO_FACTS, future_vest_income: '48520.44', quote_tolerance: '4609.73', reference_price: '217.4400', reference_date: '2026-09-01' },
+          apply: { key: 'w2_stock_rsus_sold', person_id: 1, value: '171235.24' },
+        },
+        {
+          key: 'salary', person_id: 2, person_name: 'Grace', label: 'Salary wages', source: 'paycheck',
+          typed: '10000.00', typed_keys: ['pay_periods', 'annual_salary', 'w2_salary_checkpoint'],
+          projected: '8000.00', difference: '-2000.00', tax_effect: '-863.00', flagged: true,
+          facts: { ...NO_FACTS, typed_pay_periods: '10', projected_checks: 8, projected_from: '2026-09-16' },
+          apply: null,
+        },
+        {
+          key: 'trad_401k', person_id: 2, person_name: 'Grace', label: 'Traditional 401(k)', source: 'paycheck',
+          typed: null, typed_keys: ['trad_401k_contributions'], projected: '800.00',
+          difference: '800.00', tax_effect: '-266.40', flagged: true,
+          facts: { ...NO_FACTS, projected_checks: 8, projected_from: '2026-09-16' },
+          apply: null,
+        },
+        {
+          key: 'hsa', person_id: 2, person_name: 'Grace', label: 'HSA (paycheck)', source: 'paycheck',
+          typed: null, typed_keys: ['hsa_contributions'], projected: '600.00',
+          difference: '600.00', tax_effect: '-195.30', flagged: false,
+          facts: { ...NO_FACTS, projected_checks: 8, projected_from: '2026-09-16' },
+          apply: null,
+        },
+      ],
+      flagged_count: 5,
+      liability_if_matched: '104408.99',
+      balance_if_matched: '-5004.21',
+      flag_above: '250.00',
+      notes: [
+        "Never reconciled: dental and vision, the employer's HSA deposit, bonuses, dividends and interest, and brokerage gains — check those against your W-2 and 1099s by hand.",
+      ],
+    },
+    ...overrides,
+  })
+}
+
+const strip = () => {
+  const node = screen.getByText('Your inputs vs your records').closest('.recon-strip')
+  if (node === null) throw new Error('no reconciliation strip')
+  return node as HTMLElement
+}
+
+const reconRow = (person: string, label: string) =>
+  within(strip()).getByRole('row', { name: new RegExp(`^${label.replace(/[()]/g, '\\$&')} — ${person}`) })
+
+describe('WithholdingPanel — your inputs vs your records (2026-09-23 spec §W4)', () => {
+  it('leads with how many inputs differ and what matching them would leave', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('Your inputs vs your records')
+    expect(
+      within(strip()).getByText(
+        '5 inputs differ from your records by more than $250 of tax (this month’s reference price for unvested RSUs)',
+      ),
+    ).toBeTruthy()
+    const matched = within(strip()).getByText('Balance if they matched your records: refund ≈ $5,004')
+    expect(matched.className).toContain('delta-positive')
+    // The headline is unchanged: the balance on the typed inputs.
+    expect(tile('Projected balance').textContent).toContain('$18,870.20')
+  })
+
+  it('says why an RSU row matched at today’s quote still differs: the month’s reference close (review finding 3)', async () => {
+    const base = reconciled()
+    const rows = base.reconciliation!.rows.map((row) =>
+      row.key === 'rsu'
+        ? { ...row, typed: '171235.24', difference: '0.00', tax_effect: '0.00', flagged: true, apply: null }
+        : row,
+    )
+    vi.mocked(fetchWithholding).mockResolvedValue({
+      ...base,
+      reconciliation: { ...base.reconciliation!, rows },
+    })
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('Your inputs vs your records')
+    const rsu = reconRow('Edward', 'RSU income')
+    expect(
+      within(rsu).getByText(
+        'flag judged at the Sep 1 close ($217.44 a share), beyond ±$4,610 of the unvested vests',
+      ),
+    ).toBeTruthy()
+    // Not "no change in tax" beside a "differs" badge: the figures shown are on today's quote.
+    expect(within(rsu).getByText('no change at today’s quote')).toBeTruthy()
+    expect(within(rsu).queryByText('no change in tax')).toBeNull()
+  })
+
+  it('groups the rows by person, each with both sides and what they are built from', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('Your inputs vs your records')
+    expect(within(strip()).getByRole('rowheader', { name: 'Edward' })).toBeTruthy()
+    expect(within(strip()).getByRole('rowheader', { name: 'Grace' })).toBeTruthy()
+
+    const salary = reconRow('Edward', 'Salary wages')
+    expect(salary.textContent).toContain('$184,441.67')
+    expect(salary.textContent).toContain('20 pay periods + $27,000 checkpoint')
+    expect(salary.textContent).toContain('Paycheck projects')
+    expect(salary.textContent).toContain('$188,930.00')
+    expect(salary.textContent).toContain('24 checks from Jan 16')
+    expect(salary.textContent).toContain('+$4,488.33')
+    expect(salary.textContent).toContain('≈ +$1,600 tax')
+
+    expect(reconRow('Edward', 'Traditional 401(k)').textContent).toContain(
+      'capped at the 2026 limit ($24,500)',
+    )
+    const rsu = reconRow('Edward', 'RSU income')
+    expect(rsu.textContent).toContain('Comp projects')
+    expect(rsu.textContent).toContain('vests at their vest-day close, later ones at today’s quote')
+    expect(rsu.textContent).toContain('≈ +$18,265 tax')
+
+    const graceSalary = reconRow('Grace', 'Salary wages')
+    expect(graceSalary.textContent).toContain('8 checks from Sep 16')
+    expect(graceSalary.textContent).toContain('−$2,000.00')
+    expect(reconRow('Grace', 'Traditional 401(k)').textContent).toContain('not entered')
+  })
+
+  it('puts a flagged row in the warn register, in words as well as colour', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('Your inputs vs your records')
+    const flagged = reconRow('Edward', 'Salary wages')
+    expect(flagged.className).toContain('is-flagged')
+    expect(within(flagged).getByText('differs')).toBeTruthy()
+    const quiet = reconRow('Edward', 'HSA (paycheck)')
+    expect(quiet.className).not.toContain('is-flagged')
+    expect(within(quiet).queryByText('differs')).toBeNull()
+  })
+
+  it('offers Apply only on a differing RSU row, and it writes the row’s own apply target', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
+    vi.mocked(putTaxInputs).mockResolvedValue({ year: 2026, filing_status: 'married_joint', people: [], sections: [] })
+    const onApplied = vi.fn()
+    render(<WithholdingPanel year={2026} onVestApplied={onApplied} />)
+    await screen.findByText('Your inputs vs your records')
+    const chips = within(strip()).getAllByRole('button', { name: /^Apply/ })
+    expect(chips).toHaveLength(1)
+    // The title names the row and whose it is — never a hard-coded input or "the primary".
+    expect(chips[0].title).toBe('Set RSU income to $171,235.24 for Edward')
+    // The vest sentence moved INTO the row: it is not repeated under the card.
+    expect(screen.queryByText(/vests imply/)).toBeNull()
+    fireEvent.click(chips[0])
+    // The server's own (key, person, value), person-qualified — never a primary shorthand the
+    // browser assumes (code-quality M2).
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2026, {
+        values: {},
+        rows: [{ key: 'w2_stock_rsus_sold', person_id: 1, value: '171235.24' }],
+      }),
+    )
+    expect(onApplied).toHaveBeenCalledTimes(1)
+  })
+
+  it('titles the Apply for "you" when the row names nobody (a roster-less book)', async () => {
+    const payload = reconciled()
+    const rows = payload.reconciliation!.rows.map((row) =>
+      row.key === 'rsu' ? { ...row, person_id: null, person_name: null } : row,
+    )
+    vi.mocked(fetchWithholding).mockResolvedValue({
+      ...payload,
+      reconciliation: { ...payload.reconciliation!, rows },
+    })
+    render(<WithholdingPanel year={2026} onVestApplied={vi.fn()} />)
+    await screen.findByText('Your inputs vs your records')
+    const chip = within(strip()).getByRole('button', { name: 'Apply vest income to W-2 inputs' })
+    expect(chip.title).toBe('Set RSU income to $171,235.24 for you')
+  })
+
+  it('has no Apply once the RSU row matches', async () => {
+    const payload = reconciled()
+    const rows = payload.reconciliation!.rows.map((row) =>
+      row.key === 'rsu'
+        ? { ...row, typed: '171235.24', difference: '0.00', tax_effect: '0.00', flagged: false, apply: null }
+        : row,
+    )
+    vi.mocked(fetchWithholding).mockResolvedValue({
+      ...payload,
+      reconciliation: { ...payload.reconciliation!, rows, flagged_count: 4 },
+    })
+    render(<WithholdingPanel year={2026} onVestApplied={vi.fn()} />)
+    await screen.findByText('Your inputs vs your records')
+    expect(within(strip()).queryByRole('button', { name: /^Apply/ })).toBeNull()
+    expect(within(strip()).getByText('4 inputs differ from your records by more than $250 of tax')).toBeTruthy()
+  })
+
+  it('opens Inputs from each row', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
+    const goTo = vi.fn()
+    render(<WithholdingPanel year={2026} goTo={goTo} />)
+    await screen.findByText('Your inputs vs your records')
+    fireEvent.click(
+      within(reconRow('Grace', 'HSA (paycheck)')).getByRole('button', {
+        name: 'Open Inputs — HSA (paycheck), Grace',
+      }),
+    )
+    expect(goTo).toHaveBeenCalledWith('inputs')
+  })
+
+  it('keys its notes by position, so two identical notes both render without a key clash (code-quality nit)', async () => {
+    // Two hand-edited lots sold the same day without a price say the same sentence twice.
+    const note =
+      'The ESPP lot bought on Aug 29, 2025 is marked sold on May 1, 2026 without a sale price, so it is left out of the ESPP row'
+    const base = reconciled()
+    vi.mocked(fetchWithholding).mockResolvedValue({
+      ...base,
+      reconciliation: { ...base.reconciliation!, notes: [note, note] },
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      render(<WithholdingPanel year={2026} />)
+      await screen.findByText('Your inputs vs your records')
+      expect(within(strip()).getAllByText(note)).toHaveLength(2)
+      expect(errors.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(false)
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  it('says what is never reconciled', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('Your inputs vs your records')
+    expect(within(strip()).getByText(/^Never reconciled: dental and vision/)).toBeTruthy()
+  })
+
+  it('tells the partner story from their own start, with the start-date sentence beside it', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
+    render(<WithholdingPanel year={2026} />)
+    const block = (await screen.findByText('Partner — simulated')).closest('.withholding-partner') as HTMLElement
+    expect(
+      within(block).getByText(
+        /^Simulated from Grace's paycheck profile — 1 of 8 checks since Sep 1 at their all-in withholding %\./,
+      ),
+    ).toBeTruthy()
+    expect(
+      within(block).getByText(
+        'Each check is priced by the paycheck profile in force on its date. For a raise or a new job, add a profile with its start date.',
+      ),
+    ).toBeTruthy()
+    // The §W1 sentence sits beside the figure it explains — and only there.
+    expect(within(block).getByText(`${GRACE_NOTE}.`)).toBeTruthy()
+    const details = screen.getByText(/^How this is estimated/).closest('details') as HTMLDetailsElement
+    expect(details.textContent).not.toContain("first paycheck profile's start")
+    // Safe harbor + the wedding-year reference note (the fixture's prior return was filed
+    // single) + assumptions — the inline start-date note left the count.
+    expect(screen.getByText('How this is estimated (3 notes)')).toBeTruthy()
+  })
+
+  it('puts the primary’s own start-date sentence under the checks line', async () => {
+    const note =
+      "Edward's checks on or before Mar 1, the first paycheck profile's start, count as $0 — add a profile for an earlier job or salary to include them"
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      reconciled({
+        grids: [{ ...EDWARD_GRID, starts_on: '2026-03-01', early_checks_note: note }, GRACE_GRID],
+        warnings: [note, GRACE_NOTE],
+      }),
+    )
+    render(<WithholdingPanel year={2026} />)
+    const line = await screen.findByText(`${note}.`)
+    expect(line.closest('.withholding-partner')).toBeNull()
+    // §W1's rule sentence goes wherever a partial year shows — the primary's too (review nit).
+    const rules = screen.getAllByText(
+      'Each check is priced by the paycheck profile in force on its date. For a raise or a new job, add a profile with its start date.',
+    )
+    expect(rules.some((rule) => rule.closest('.withholding-partner') === null)).toBe(true)
+    // Both start-date sentences are inline; the three method notes are all that is folded.
+    expect(screen.getByText('How this is estimated (3 notes)')).toBeTruthy()
+  })
+
+  it('tells the Projected-tax tile what the typed inputs have to be', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('Your inputs vs your records')
+    expect(
+      within(tile('Projected tax')).getByRole('button', { name: 'About The tax engine’s total…' }),
+    ).toBeTruthy()
   })
 })

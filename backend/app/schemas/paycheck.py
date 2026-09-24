@@ -182,7 +182,12 @@ class PaceItemOut(BaseModel):
     soft_ratio: Decimal | None
     window_label: str | None
     halves: list[PaceHalfOut] | None
+    # Always null since 2026-09-23 spec §W1 (nothing borrows a profile any more); kept so an
+    # older reader of the wire still parses.
     backfilled_from: date | None
+    # The person's first profile's date when paydays on or before it were left out of the
+    # window (§W1) — the strip's "Nothing counts before Sep 1" note. Additive, defaulted.
+    starts_on: date | None = None
     projected_full_year: Decimal | None
     projected_excess: Decimal | None
     # The ESPP percentage the projection used, so the note line can print "At your current

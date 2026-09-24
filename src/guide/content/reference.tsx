@@ -393,6 +393,17 @@ export const REFERENCE_CARDS: GuideCard[] = [
           Annual spend divided by the withdrawal rate; the investable balance against that target; the
           yearly share of the portfolio you plan to draw.
         </dd>
+        <dt>FI date · 1 in 10, half, 9 in 10 paths</dt>
+        <dd>
+          The month half of Projection&apos;s simulated paths first reach the FI target, with the months
+          the earliest tenth and nine tenths of paths get there.
+        </dd>
+        <dt>Money lasts · plan until</dt>
+        <dd>
+          The share of simulated paths whose balance lasts through December of the plan-until year once
+          withdrawals start after the last retirement; &ldquo;in 9 of 10 paths&rdquo; names the year the
+          unluckiest tenth run out.
+        </dd>
         <dt>Today&apos;s dollars · future dollars</dt>
         <dd>A display choice on Projection. Dates, probabilities and targets do not move with it.</dd>
         <dt>Weekly performance point</dt>

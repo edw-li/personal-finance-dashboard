@@ -33,14 +33,16 @@ export function formatEvidenceValue(value: string | number | null, unit?: string
   return `${value} ${unit}`
 }
 
-/** Reader-facing words for the completeness enum (2026-09-13 spec §5): the server's five values
- *  (`backend/app/schemas/metrics.py`) plus the two the frontend sets itself (partial, estimate). */
+/** Reader-facing words for the completeness enum (2026-09-13 spec §5): the server's six values
+ *  (`backend/app/schemas/metrics.py`; `provisional` since the 2026-09-23 spec §0.4(e)) plus the
+ *  two the frontend sets itself (partial, estimate). */
 export const COMPLETENESS_LABELS: Record<string, string> = {
   complete: 'Complete',
   unreviewed_history: 'Includes months not yet reviewed',
   incomplete: 'Incomplete — some months missing',
   unavailable: 'Unavailable',
   mixed: 'Mixed sources',
+  provisional: 'Provisional — recorded before its date',
   partial: 'Partial — some holdings unpriced',
   estimate: 'Estimate',
 }

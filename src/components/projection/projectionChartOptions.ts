@@ -13,15 +13,16 @@ import {
   ruleAt,
 } from '../../charts/markLine'
 import { referenceLine } from '../../charts/reference'
+import { withAlpha } from '../../charts/partial'
 import { MUTED, PALETTE } from '../../charts/theme'
 import { timeZoom } from '../../charts/timeZoom'
 import type { ZoomWindow } from '../../charts/timeZoom'
 import { axisTooltip, swatch } from '../../charts/tooltip'
 import type { NetWorthTimeseries, ProjectionOut } from '../../types/api'
+import { formatAsOf } from '../../utils/asOf'
 import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatMonth } from '../../utils/format'
-import { addMonths } from '../../utils/months'
-import { monthSerial } from './polyTrend'
+import { addMonths, monthSerial } from '../../utils/months'
 import type { PolyTrendFit } from './polyTrend'
 
 // Series names in series order — the projected balance, the same growth with the
@@ -29,18 +30,32 @@ import type { PolyTrendFit } from './polyTrend'
 export const PROJECTION_SERIES = ['Projected', 'Growth only', 'FI target'] as const
 
 // The two band labels the legend admits. The outer band is drawn as TWO washes (below p25
-// and above p75) that carry the SAME name (F3), so one legend entry toggles both halves.
-export const BAND_SERIES = ['10–90% band', '25–75% band'] as const
+// and above p75) that carry the SAME name (F3), so one legend entry toggles both halves. Named
+// for what they hold (2026-09-23 spec §R6) — the old "10–90% band" read like the reach dates'
+// p10/p90, which mean the opposite edge.
+export const BAND_SERIES = ['Middle 80% of paths', 'Middle 50% of paths'] as const
 
 /** The fan's 50th percentile drawn as a hairline — where the median path actually runs,
  *  against the deterministic Projected line above it. */
 export const MEDIAN_SERIES = 'Median path'
 
+/** The payload's band keys — data, never words: a reader sees BAND_LABELS (2026-09-23 spec §R6,
+ *  where "p10" meant the pessimistic balance and the optimistic reach date on one chart). */
+export const BAND_KEYS = ['p10', 'p25', 'p50', 'p75', 'p90'] as const
+export type BandKey = (typeof BAND_KEYS)[number]
+export const BAND_LABELS: Record<BandKey, string> = {
+  p10: '10th percentile balance',
+  p25: '25th percentile balance',
+  p50: 'Median balance',
+  p75: '75th percentile balance',
+  p90: '90th percentile balance',
+}
+
 const monthBucket = (iso: string) => `${iso.slice(0, 7)}-01`
 
-/** A log axis cannot place zero or below — such points become GAPS (NaN keeps the arrays
- *  plain number[]; echarts treats NaN as empty), never a clamped lie. Both builders on this
- *  page ride a log axis, so the rule has one owner. */
+/** The Historical trend's rule: a log axis cannot place zero or below, so such points become
+ *  GAPS (NaN keeps the arrays plain number[]; echarts treats NaN as empty). The planning chart
+ *  draws a depleted path at its floor instead (logFloor). */
 const positive = (value: number) => (value > 0 ? value : Number.NaN)
 
 /** The annotation shape — narrow on purpose, so the test can read it without echarts'
@@ -93,11 +108,35 @@ export interface ProjectionOptionInput
     Partial<
       Pick<
         ProjectionOut,
-        'retirements' | 'fi_month' | 'coast_fi_month' | 'fi_month_p10' | 'fi_month_p50' | 'fi_month_p90'
+        | 'retirements'
+        | 'fi_month'
+        | 'coast_fi_month'
+        | 'fi_month_p10'
+        | 'fi_month_p50'
+        | 'fi_month_p90'
+        | 'drawdown'
+        | 'plan_until'
+        | 'money_lasts'
       >
     > {
   target_values?: string[] | null
 }
+
+/** Under `log` a balance at or below zero has nowhere to stand. A path that ran out is drawn AT
+ *  the axis floor — two decades under the starting balance — instead of dropping out of the
+ *  chart, and the axis starts there (2026-09-23 spec §R7). */
+export function logFloor(start: number): number {
+  return start > 0 ? 10 ** (Math.floor(Math.log10(start)) - 2) : 1
+}
+
+// The reach marks in the reader's words (spec §R6): never "p10/p50/p90". Short on the chart —
+// a long axis puts the three close together — with "Half" set below the line; the hover says
+// the whole sentence.
+const REACH_MARKS = [
+  ['1 in 10', '1 in 10 paths', 'fi_month_p10', 'top'],
+  ['Half', 'Half of paths', 'fi_month_p50', 'bottom'],
+  ['9 in 10', '9 in 10 paths', 'fi_month_p90', 'top'],
+] as const
 
 /** A pinned scenario's deterministic line, drawn as a reference series (chart grammar §10):
  *  dashed MUTED, end-labelled with the pin's name. The fan stays the live scenario's. */
@@ -123,52 +162,65 @@ export function projectionOption(
   const bands = data.bands ?? null
   const labels = data.months.map(formatMonth)
   const lastLabel = labels[labels.length - 1]
-  const onScale = (values: number[]) => (log ? values.map(positive) : values)
+  // Log: everything under the floor is drawn AT it (a depleted path, a pin that ran out), and
+  // the axis starts there only when something sits on it. NaN (a pin's missing month) stays a gap.
+  const floor = log ? logFloor(Number(data.projected[0])) : 0
+  let floored = false
+  const onScale = (values: number[]) =>
+    log
+      ? values.map((value) => {
+          if (Number.isNaN(value) || value >= floor) return value
+          floored = true
+          return floor
+        })
+      : values
 
-  // Rules and washes ride the ONE series every payload has. FI/Coast FI arrive through the
-  // same fall-forward anchor as the retirements; an unplaceable month (stale horizon) is
-  // dropped, never clamped.
-  const fiLabel = anchorMonthLabel(data.months, data.fi_month ?? null)
+  // Rules and washes ride the ONE series every payload has, through the same fall-forward
+  // anchor as the retirements; an unplaceable month (stale horizon) is dropped, never clamped.
+  // The deterministic FI crossing stays as the constant-return annotation (spec §R6); the
+  // withdrawals, the plan-until year and the month 9 in 10 paths last until are ruled while a
+  // drawdown is modelled (spec §R7).
+  const drawdownFrom = data.drawdown?.start_month ?? null
+  const planUntil = drawdownFrom === null ? null : (data.money_lasts?.plan_until ?? data.plan_until ?? null)
+  const lastsUntil = drawdownFrom === null ? null : (data.money_lasts?.lasts_until_p10 ?? null)
   const rules = annotationRules([
     ...retirementEntries(data.months, data.retirements ?? []),
-    arrivalRule(data.months, data.fi_month ?? null, 'FI'),
+    arrivalRule(data.months, drawdownFrom, 'Withdrawals start'),
+    arrivalRule(data.months, data.fi_month ?? null, 'FI at a constant return'),
     arrivalRule(data.months, data.coast_fi_month ?? null, 'Coast FI'),
+    arrivalRule(data.months, planUntil === null ? null : `${planUntil}-12-01`, `Plan until ${planUntil}`),
+    arrivalRule(data.months, lastsUntil, '9 in 10 paths last to here'),
   ])
-  const area = fiLabel === undefined ? undefined : afterArea(fiLabel, lastLabel, 'After FI')
-  // The percentile arrivals sit ON the target line, so no target means nothing to mark.
+  // The retired months wear the wash (replacing "After FI", which showed contributions still
+  // compounding after FI): from the last retirement on, the plan withdraws.
+  const retiredLabel = anchorMonthLabel(data.months, drawdownFrom)
+  const area = retiredLabel === undefined ? undefined : afterArea(retiredLabel, lastLabel, 'Retired')
+  // The reach arrivals sit ON the target line, so no target means nothing to mark.
   const marks =
     target === null
       ? []
-      : (
-          [
-            ['p10', data.fi_month_p10],
-            ['p50', data.fi_month_p50],
-            ['p90', data.fi_month_p90],
-          ] as const
-        ).flatMap(([name, iso]) => {
-          const label = anchorMonthLabel(data.months, iso ?? null)
-          return label === undefined ? [] : [{ name, label, value: Number(targetValues?.[labels.indexOf(label)] ?? target) }]
+      : REACH_MARKS.flatMap(([name, words, key, position]) => {
+          const label = anchorMonthLabel(data.months, data[key] ?? null)
+          return label === undefined
+            ? []
+            : [{ name, label, value: Number(targetValues?.[labels.indexOf(label)] ?? target), detail: `${words} reach FI by ${label}`, position }]
         })
 
   const bandSeries =
     bands === null
       ? []
       : (() => {
-          const p10 = bands.p10.map(Number)
-          const p25 = bands.p25.map(Number)
-          const p75 = bands.p75.map(Number)
-          const p90 = bands.p90.map(Number)
-          // Stacked washes: an invisible ABSOLUTE base at p10, then DIFFS on top of it —
-          // p25−p10 (outer), p75−p25 (inner), p90−p75 (outer). echarts sums the stack, so
-          // the three washes land on p25 / p75 / p90 and each one fills the gap below
-          // itself. Two opacities read as "50% of paths" vs "80%".
+          // Every edge goes through the log floor FIRST, so each wash keeps a floor to stand on
+          // (a depleted path's $0 is drawn at the floor) and the diffs never go negative.
+          const low10 = onScale(bands.p10.map(Number))
+          const low25 = onScale(bands.p25.map(Number))
+          const high75 = onScale(bands.p75.map(Number))
+          const high90 = onScale(bands.p90.map(Number))
+          // Stacked washes: an invisible ABSOLUTE base at the 10th percentile, then DIFFS on top
+          // of it — 25th−10th (outer), 75th−25th (inner), 90th−75th (outer). echarts sums the
+          // stack, so the three washes land on the 25th / 75th / 90th and each one fills the gap
+          // below itself. Two opacities read as the middle 50 % of paths vs the middle 80 %.
           const diff = (hi: number[], lo: number[]) => hi.map((v, i) => v - lo[i])
-          // A stacked wash is drawn from its floor up, and under `log` a floor at or below
-          // zero has nowhere to stand — so a month whose p10 is non-positive drops out of
-          // the fan ENTIRELY (all four members), rather than leaving three washes hanging
-          // off an absent base.
-          const unplaceable = p10.map((v) => log && v <= 0)
-          const gap = (values: number[]) => values.map((v, i) => (unplaceable[i] ? Number.NaN : v))
           // All the projection's own blue: uncertainty about one entity wears that entity's
           // hue (theme law — never a new hue). Tooltip-silent — the footer below
           // reconstructs the real ranges from the percentile arrays instead.
@@ -183,7 +235,7 @@ export function projectionOption(
             tooltip: { show: false },
             silent: true,
             areaStyle: { opacity },
-            data: gap(values),
+            data: values,
           })
           return [
             {
@@ -196,12 +248,12 @@ export function projectionOption(
               emphasis: { disabled: true },
               tooltip: { show: false },
               silent: true,
-              data: gap(p10),
+              data: low10,
             },
-            wash(BAND_SERIES[0], diff(p25, p10), 0.1),
-            wash(BAND_SERIES[1], diff(p75, p25), 0.18),
+            wash(BAND_SERIES[0], diff(low25, low10), 0.1),
+            wash(BAND_SERIES[1], diff(high75, low25), 0.18),
             // The SAME name as the lower outer wash (F3): one legend entry toggles both halves.
-            wash(BAND_SERIES[0], diff(p90, p75), 0.1),
+            wash(BAND_SERIES[0], diff(high90, high75), 0.1),
             {
               ...LINE,
               name: MEDIAN_SERIES,
@@ -216,12 +268,16 @@ export function projectionOption(
   // hover must answer "what's the band here", not just name the lines).
   const bandLines = (index: number): string[] => {
     if (bands === null) return []
-    const at = (key: string) => Number(bands[key]?.[index])
+    const at = (values: string[] | undefined) => Number(values?.[index])
     const range = (label: string, low: number, high: number) =>
       Number.isFinite(low) && Number.isFinite(high)
         ? [`${swatch(PALETTE[0], { wash: true })}${label}: ${formatCurrency(low)} – ${formatCurrency(high)}`]
         : []
-    return [...range(BAND_SERIES[0], at('p10'), at('p90')), ...range(BAND_SERIES[1], at('p25'), at('p75'))]
+    // The real balances, never the floored drawing: a path that ran out reads $0.00 here.
+    return [
+      ...range(BAND_SERIES[0], at(bands.p10), at(bands.p90)),
+      ...range(BAND_SERIES[1], at(bands.p25), at(bands.p75)),
+    ]
   }
 
   // Pinned scenarios (planning-sandboxes spec §11): each one's deterministic line as a
@@ -285,7 +341,7 @@ export function projectionOption(
       footer: bandLines,
     }),
     xAxis: monthAxis(labels),
-    yAxis: moneyAxis({ log }),
+    yAxis: { ...moneyAxis({ log }), ...(log && floored ? { min: floor } : {}) },
     series,
   }
 }
@@ -306,16 +362,39 @@ function projectionMonths(
   return [...history.months, ...Array.from({ length: count }, (_, i) => addMonths(last, i + 1))]
 }
 
+/** The house hollow (the ESPP page's sold lots, the Overview's unentered month — "not what it
+ *  looks like"): the dots' colour as an outline over no fill. Here: a provisional snapshot, whose
+ *  balances were recorded before their date (2026-09-23 spec §R8). The fill is the dots' token at
+ *  alpha 0 rather than 'transparent' — invisible all the same, but the tooltip swatch reads a
+ *  token at an alpha as its token (charts/tooltip.ts), so the hovered row stays blue, not muted. */
+const HOLLOW_DOT = { color: withAlpha(PALETTE[0], 0), borderColor: PALETTE[0], borderWidth: 1.5 } as const
+
+/** The snapshot-state lists the net-worth timeseries carries beside `months` (2026-09-23 spec
+ *  §K2 — lane K computes them; empty for a replayed cache, when every dot draws filled). */
+type SnapshotFlags = Partial<Pick<NetWorthTimeseries, 'provisional' | 'recorded_on'>>
+
+/** Why a dot is hollow, in T1's words (2026-09-23 spec §R8): "Oct 1 balances recorded early, on
+ *  Sep 22 — provisional", or, for a snapshot provisional only because its month is still ahead,
+ *  "Nov 1 balances — provisional until Nov 1". The same sentence lane T's
+ *  networth/snapshotStates.ts `provisionalNote` builds for the Overview — restated here over K's
+ *  formatAsOf because lane R merges before lane T (fold the two together once both are in). */
+function provisionalNote(month: string, recordedOn: string | null | undefined): string {
+  const day = (iso: string) => formatAsOf({ month: iso, as_of: iso })
+  return recordedOn != null && recordedOn < month
+    ? `${day(month)} balances recorded early, on ${day(recordedOn)} — provisional`
+    : `${day(month)} balances — provisional until ${day(month)}`
+}
+
 /**
- * The sheet's "Net Worth over Time (Projected)": actual snapshots as blue dots, the
- * second-degree polynomial best-fit as a solid orange curve drawn over history AND the
- * future (so fit-vs-dots stays visible, like Excel's trendline), extended to the SAME
+ * The sheet's "Net Worth over Time (Projected)": actual snapshots as blue dots — a provisional
+ * one hollow — the second-degree polynomial best-fit as a solid orange curve drawn over history
+ * AND the future (so fit-vs-dots stays visible, like Excel's trendline), extended to the SAME
  * final month as the investable chart — one horizon per page. No wash (the curve is a
  * fit, not an accumulation). A refused fit (null) drops the curve, never the dots — the
  * page's hint says why. Returns null under two points.
  */
 export function netWorthProjectionOption(
-  history: Pick<NetWorthTimeseries, 'months' | 'net_worth'>,
+  history: Pick<NetWorthTimeseries, 'months' | 'net_worth'> & SnapshotFlags,
   fit: PolyTrendFit | null,
   startMonth: string,
   years: number,
@@ -332,7 +411,12 @@ export function netWorthProjectionOption(
     dataZoom: timeZoom(months, 'all'),
     grid: grid('fan'),
     legend: { ...legendFor(legendData.length, selected), data: legendData },
-    tooltip: axisTooltip({ unit: 'money' }),
+    // A provisional snapshot's month says why its dot is hollow, beside the month (T1's head note).
+    tooltip: axisTooltip({
+      unit: 'money',
+      headNote: (index) =>
+        history.provisional?.[index] === true ? provisionalNote(history.months[index], history.recorded_on?.[index]) : null,
+    }),
     xAxis: monthAxis(months.map(formatMonth)),
     // Log scale (user-requested departure from the zero-anchored rule — a log axis HAS no
     // zero): equal steps are equal multiples, so decades of growth can't squash the early
@@ -346,7 +430,11 @@ export function netWorthProjectionOption(
         color: PALETTE[0],
         // Above the curve, so the dots stay visible where it passes through them.
         z: 3,
-        data: history.net_worth.map((value) => positive(Number(value))),
+        data: history.net_worth.map((value, i) =>
+          history.provisional?.[i] === true
+            ? { value: positive(Number(value)), itemStyle: { ...HOLLOW_DOT } }
+            : positive(Number(value)),
+        ),
       },
       ...(fit === null
         ? []
@@ -381,8 +469,9 @@ export function netWorthProjectionCsv(
   }
 }
 
-/** The projection as a table (2026-08-25 spec §2a): month rows × projected/coast, plus
- * p10/p50/p90 when the Monte Carlo fan is on — verbatim server strings. */
+/** The projection as a table (2026-08-25 spec §2a): month rows × projected/coast, plus the
+ * fan's percentile balances when the Monte Carlo is on — verbatim server strings, headed in
+ * the reader's words (BAND_LABELS), never "p10". */
 export function projectionCsv(
   data: Pick<ProjectionOut, 'months' | 'projected' | 'coast' | 'bands'> & {
     target_values?: string[] | null
@@ -392,13 +481,13 @@ export function projectionCsv(
   references: ProjectionReference[] = [],
 ): ExportTable {
   const bands = data.bands ?? null
-  const percentiles = data.display_dollars ? ['p10', 'p25', 'p50', 'p75', 'p90'] : ['p10', 'p50', 'p90']
+  const percentiles: readonly BandKey[] = data.display_dollars ? BAND_KEYS : [BAND_KEYS[0], BAND_KEYS[2], BAND_KEYS[4]]
   const hasTarget = data.target_values !== undefined
   const unit = data.display_dollars === 'future' ? 'USD · future dollars'
     : `USD · ${data.start_month?.slice(0, 7) ?? 'today'} dollars`
   const name = (label: string) => data.display_dollars ? `${label} (${unit})` : label
   return {
-    headers: ['Month', name('Projected'), name('Growth only'), ...(hasTarget ? [name('FI target')] : []), ...(bands ? percentiles.map(name) : []), ...references.map((ref) => name(ref.name))],
+    headers: ['Month', name('Projected'), name('Growth only'), ...(hasTarget ? [name('FI target')] : []), ...(bands ? percentiles.map((key) => name(BAND_LABELS[key])) : []), ...references.map((ref) => name(ref.name))],
     rows: data.months.map((month, i) => [
       month,
       data.projected[i],

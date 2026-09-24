@@ -736,6 +736,35 @@ that makes them vanish has introduced a bug, not removed one.
 
 **Do not "fix" any of these** — the same rule as the five above.
 
+**Four more deliberate changes (2026-09-23, "Will I owe?"):**
+
+- **ESPP §423 qualifying cap.** A qualifying disposition's ordinary income is capped at the
+  plan discount on the *offering-date* value — shares × subscription price × discount — as
+  IRC §423(c) reads. The old formula took the stored subscription price for the
+  already-discounted price and divided it back up by (1 − discount), but the app stores the
+  undiscounted offering-date price there — so the cap falls to 85 % of the old figure (at a
+  15 % discount); ordinary income moves only where the cap binds.
+- **ESPP ordinary income is not a payroll wage.** It stays W-2 income for federal and state
+  income tax but leaves the Medicare, Social Security and SDI bases (IRC §3121(a)(22)); the
+  What-if's "real ESPP ordinary income is FICA-exempt" disclaimer went with the bug it
+  apologised for.
+- **Gross income counts ESPP gains.** `gross_income` — and so take-home and the effective
+  rate — includes the ESPP short- and long-term gain components. No stored year carries an
+  ESPP component on the 2026-09-23 data, so none of these three moved a stored figure.
+- **Nothing is paid before a person's first paycheck profile.** A grid check dated on or
+  before the earliest profile's effective date counts as $0 and is not counted, and the
+  Paycheck pace strip and the calendar's paydays follow the same rule. Grace's projected
+  withholding goes $5,850.00 → $1,950.00 (8 checks from Sep 16) and her Paycheck pace figures
+  shrink the same way; a household whose first profile starts on or before Jan 1 is
+  byte-identical. The calendar's Jan 15 and Apr 15 amounts for LAST year follow the rule too: a
+  first profile dated after last year's checks withholds nothing for that year, so its
+  shortfall or balance is the whole bill (on the 2026-09-23 data no one is affected — Edward's
+  first profile is Jan 1, 2026, and Grace's 2026 is already her 8 checks).
+
+**Do not "fix" these either.** The "Will I owe?" card's *Your inputs vs your records* strip
+flags a typed input that differs from Paycheck, RSU grants or ESPP lots by more than $250 of
+tax; it never writes one — the tax inputs stay typed by hand.
+
 **On the cron**: a legacy numeric day-of-week (`10 13 * * 1-5`) is misread by the scheduler
 (APScheduler counts `0` as Monday, so the whole range slips a day) *and* makes the settings
 form's first Save fail with a 422 until it is rewritten with names. A shipped repair
@@ -859,7 +888,8 @@ Three pages carry a sandbox — Paycheck's **Try it**, Taxes' **What if**, Proje
 A sandbox's live scenario lives in the page URL as a repeated `whatif=` query parameter, one entry
 per knob or leg in the server's own wire vocabulary: `whatif=trad_401k_pct:0.15`,
 `whatif=sale:7:40:62.50:S` (security 7, 40 shares, $62.50, short-term), `whatif=espp:3`,
-`whatif=qualified_dividends:null`, `whatif=annual_return:0.06`, `whatif=retire:2:2035-06`. The
+`whatif=qualified_dividends:null`, `whatif=annual_return:0.06`, `whatif=retire:2:2035-06`,
+`whatif=plan_until:2075`, `whatif=vests:0`. The
 URL is the state: copy it and the recipient sees the same scenario; a drag is written
 replace-style, so the back button leaves the page rather than replaying slider positions.
 Unknown entries are dropped on arrival and the URL rewritten without them; the older
@@ -877,6 +907,29 @@ confirmation: Paycheck pre-fills the profile form (you click its own Add profile
 input overrides through the inputs editor's PUT, Projection has no Apply. Up to three scenarios
 per page can be pinned in the browser (`localStorage`, knobs only — pins re-run against live data
 on every visit and are never part of a link).
+
+**Projection — moved by design (2026-09-23 correctness batch; do not "fix" these).** The starting
+balance is the current snapshot's — the one the Overview shows, so next month's balances recorded
+early count, named on the tile "as of Sep 22 · provisional". Scheduled RSU vests are included by
+default — each vest after the starting balance's date, at today's employer quote less the calendar's
+≈ 32.23 % sell-to-cover, stopping at the primary's retirement (`vests:0` leaves them out) — so the
+FI date moves earlier. A link or pin saved before this that raised `monthly_contribution` to stand
+in for vests now counts them twice: lower it, or add `vests:0`. A retirement month now splits the
+plan into phases: while one of you works, that person's payroll saving and employer match continue
+and their pay is assumed to cover spending (a note says when it does not); from the last retirement
+on, the projection withdraws your annual spend each year in today's dollars (taxes on withdrawals
+and Social Security are not modelled). The old "the balance simply stops moving" behaviour is gone,
+and a balance that has been at or above $0 never goes below it in any phase — a negative typed
+contribution bottoms out at $0 and counts as running out — while a negative starting balance is
+debt, paid down as before, and money going out while it is still below $0 counts as running out too.
+The headline FI date is the simulation's median reach, with the months 1 in 10 and 9 in 10 paths get
+there; "Money lasts" is the share of the same 500 paths that last through a plan-until year (a knob,
+or a lasting default under Settings › Plan assumptions; a later year lengthens the horizon, adding
+months to every simulated path without re-dealing it). The Historical trend is a curve fitted to
+recorded net worth, not a forecast. `GET /projection` answers from a result cache — the serialized
+response per data fingerprint (the sixteen tables it reads, narrowed to the settings and the
+employer quote it uses), product day and knobs — and runs its Monte Carlo in a worker thread, one at
+a time.
 
 ## Development — running the tests
 

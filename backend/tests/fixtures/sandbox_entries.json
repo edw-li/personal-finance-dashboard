@@ -26,6 +26,11 @@
       "url": "/projection?whatif=annual_return%3A0.06&whatif=monthly_contribution%3A5400&whatif=retire%3A2%3A2035-06"
     },
     {
+      "page": "projection",
+      "entries": ["annual_spend:72000", "plan_until:2075", "vests:0", "retire:1:2035-07", "retire:2:2037-01"],
+      "url": "/projection?whatif=annual_spend%3A72000&whatif=plan_until%3A2075&whatif=vests%3A0&whatif=retire%3A1%3A2035-07&whatif=retire%3A2%3A2037-01"
+    },
+    {
       "page": "taxes",
       "entries": [],
       "url": "/taxes"

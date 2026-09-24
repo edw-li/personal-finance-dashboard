@@ -289,3 +289,71 @@
 .wizard-footer { align-items: center; }
 .wizard-footer-note { flex: 1; margin: 0; text-align: right; }
 .wizard-footer-actions { display: flex; gap: .6rem; }
+
+/* ── The two parts (2026-09-23 spec §M1–§M4) ─────────────────────────────────────────── */
+/* A part's note — the .draft-note register (panel fill, a left rule): the accent for a fact about
+   the month ("October is in progress"), --warn for a to-do ("saved during September — add the rest
+   or confirm", "recorded early — save them again on or after Oct 1"). Words carry the meaning; the
+   rule's colour only groups them. */
+.part-note {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 0.85rem;
+}
+.part-note-warn { border-left-color: var(--warn); }
+/* The Balances heading's read-only date line (spec §M4) — the Recorded-on box's successor. */
+.balances-asof { margin: -0.4rem 0 0.9rem; color: var(--muted); font-size: 0.85rem; }
+
+/* ── What's due (2026-09-23 spec §M2) ─────────────────────────────────────────────────── */
+/* One chip per due part at the top of the wizard. Overdue chips wear --warn on the border AND say
+   "overdue" in words — never colour alone. */
+.whats-due {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 1rem;
+}
+.whats-due-label { margin: 0; }
+.whats-due-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.due-chip {
+  display: inline-block;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.82rem;
+  text-decoration: none;
+}
+.due-chip:hover { border-color: var(--accent); }
+.due-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.due-chip-name { font-weight: 600; }
+.due-chip.is-overdue { border-color: var(--warn); }
+/* The part on screen (aria-current="page", review M18): an inner ring, so an overdue chip keeps
+   its --warn border. */
+.due-chip[aria-current='page'] { box-shadow: inset 0 0 0 1px var(--accent); }
+.due-chip-tag { color: var(--warn); font-weight: 600; }
+.whats-due-none { margin: 0; color: var(--muted); font-size: 0.85rem; }
+
+/* The month's story tile (2026-09-23 spec §M5): its delta carries the glyph inside the sentence
+   ("September's change: ▲ $X (Sep 1 → Oct 1)"), so the tile renders neutral and the row names the
+   sign. Specific enough to beat .stat-delta-neutral (panels.css). */
+.review-kpis[data-story-tone='positive'] > .stat-tile:first-child .stat-delta { color: var(--positive); }
+.review-kpis[data-story-tone='negative'] > .stat-tile:first-child .stat-delta { color: var(--negative); }
+
+/* A part step's head row (2026-09-23 spec §M6): its eyebrow and, once the part is saved, the
+   Month-actions kebab holding that part's delete — the Review head's grammar. */
+.step-head { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; margin-bottom: .9rem; }
+.step-head .eyebrow { margin: 0; }

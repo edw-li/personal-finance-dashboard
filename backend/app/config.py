@@ -1,7 +1,11 @@
+import os
+from datetime import date
 from pathlib import Path
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.services.clock import PRODUCT_TODAY_ENV
 
 DEV_SECRET_KEY = "dev-only-change-me-to-a-random-secret"
 DEV_ADMIN_PASSWORD = "changeme123"
@@ -54,6 +58,21 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_safety(self) -> "Settings":
+        # The dev-only clock override (2026-09-23 spec §K1) is read from the PROCESS
+        # environment, exactly as the clock reads it — a PRODUCT_TODAY line in backend/.env
+        # reaches neither (no field is declared for it). Outside dev it must never be honoured
+        # or ignored silently: refuse to start. In dev a malformed day fails here, at boot,
+        # rather than as a 500 on every request.
+        override = os.environ.get(PRODUCT_TODAY_ENV, "").strip()
+        if override:
+            if self.environment != "dev":
+                raise ValueError(
+                    f"{PRODUCT_TODAY_ENV} is a dev-only clock override — unset it outside dev"
+                )
+            try:
+                date.fromisoformat(override)
+            except ValueError:
+                raise ValueError(f"{PRODUCT_TODAY_ENV} must be a date, YYYY-MM-DD") from None
         if self.environment != "dev":
             if self.secret_key == DEV_SECRET_KEY:
                 raise ValueError("SECRET_KEY must be set outside dev")

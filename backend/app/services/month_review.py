@@ -23,7 +23,7 @@ from app.models import (
 )
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.schemas.month_review import FeedCoverage, MonthReviewOut, ReviewedFeeds
-from app.services import clock
+from app.services import clock, day_labels
 from app.services.review_input_v1 import month_input, revision
 
 REVIEW_INPUT_TABLES = (
@@ -41,6 +41,12 @@ REVIEW_INPUT_TABLES = (
 def month_shift(month: date, offset: int) -> date:
     index = month.year * 12 + month.month - 1 + offset
     return date(index // 12, index % 12 + 1, 1)
+
+
+def before_adoption(month: date, adopted_on: date | None) -> bool:
+    """A month before the adoption month — history the review feature adopted (2026-09-23 spec
+    §K3 clause (a), §K4). One definition for the close blocker here and month_status."""
+    return adopted_on is not None and month < adopted_on.replace(day=1)
 
 
 @dataclass(frozen=True)
@@ -85,6 +91,30 @@ class ReviewBook:
         return max(legacy) if legacy else None
 
 
+def day_label(value: date, today: date | None = None) -> str:
+    """'Oct 1' — with ', 2025' when `today` is given and the year differs. The one spelling of a
+    snapshot's day in the server's sentences (the close blocker, the restamp label, the importer's
+    warnings)."""
+    return day_labels.day_label(value, None if today is None else today.year)
+
+
+def early_balances_blocker(month: date, recorded_on: date, today: date) -> str:
+    """K4's sentence (2026-09-23 spec): "Oct 1 balances were recorded early, on Sep 22 — save
+    them again on or after Oct 1 before closing October."
+
+    A reader outside this module: the Monthly update (src/pages/MonthlyUpdatePage.tsx,
+    `serverEarlyBlocker`) finds this blocker in a review's `blockers` by the phrase
+    " balances were recorded early, on " — it shows the sentence, and offers "Confirm {Oct 1}
+    balances", only when the server lists it. Rewording the sentence means changing that match
+    too; tests/test_monthly_update_parts.py pins the phrase."""
+    name = f"{month:%B}" if month.year == today.year else f"{month:%B %Y}"
+    first = day_label(month, today)
+    return (
+        f"{first} balances were recorded early, on {day_label(recorded_on, today)} — "
+        f"save them again on or after {first} before closing {name}."
+    )
+
+
 def classify_month(
     month: date,
     data: dict,
@@ -97,6 +127,12 @@ def classify_month(
 ) -> MonthReviewOut:
     digest = revision(data)
     current_month = today.replace(day=1)
+    snapshot = data["snapshot"]
+    recorded_early = (
+        snapshot["recorded_on"]
+        if snapshot and snapshot["recorded_on"] and snapshot["recorded_on"] < month
+        else None
+    )
     matches_confirmation = bool(review and review.confirmation_revision == digest)
     reviewed = ReviewedFeeds(
         balances=bool(matches_confirmation and review.balances_reviewed),
@@ -138,6 +174,13 @@ def classify_month(
         blockers.append("Future months remain in progress until their month begins.")
     if not has_balances:
         blockers.append("Enter balances before closing the month.")
+    elif recorded_early is not None and not before_adoption(month, adopted_on):
+        # K4 (2026-09-23 spec): opening balances recorded before the month began are provisional
+        # and cannot be certified until saved again on or after the 1st (which restamps them).
+        # History from before the adoption month is exempt — never blocked, and never restamped
+        # while legacy or closed — so it stays in the averages, and a batch-closed legacy month
+        # stays closed (review minor 1).
+        blockers.append(early_balances_blocker(month, recorded_early, today))
     if not has_spending:
         blockers.append("Enter spending, including an explicit zero when appropriate.")
     elif not complete_spending:

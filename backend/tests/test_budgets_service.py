@@ -245,3 +245,20 @@ def test_non_living_kinds_get_figures_but_no_seed():
     )
     transfer = suggest(12, "transfer", [])
     assert (transfer.profile, transfer.seed, transfer.skip_reason) == ("dormant", None, "kind")
+
+
+# --- K6 (2026-09-23 spec): months whose spending is not complete stay out ---
+
+
+def test_a_partial_month_leaves_the_window():
+    """September's rent-only spending (partial) must not drag every mean down a twelfth. Which
+    months are `incomplete` — never one due only for its take-home — is decided by the loader
+    from the month status, and pinned in test_spending_api.py (the budget_window tests)."""
+    entered = [m(2025, 10 + i) for i in range(3)] + [m(2026, i) for i in range(1, 10)]
+    window = seed_window(entered, [], current_month=m(2026, 10), incomplete=[m(2026, 9)])
+    assert window[-1] == m(2026, 8) and m(2026, 9) not in window
+    assert window[0] == m(2025, 10) and len(window) == 11
+
+
+def test_the_window_still_ends_before_the_current_month():
+    assert seed_window([m(2026, 9), m(2026, 10)], [], m(2026, 10), incomplete=[]) == [m(2026, 9)]

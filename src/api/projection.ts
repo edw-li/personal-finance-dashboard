@@ -17,6 +17,10 @@ export interface ProjectionParams {
   volatility?: string
   inflation?: string
   contributionGrowth?: string
+  /** A four-digit year (2026-09-23 spec §R3); blank = the Settings year or the horizon's. */
+  planUntil?: string
+  /** '0' leaves scheduled vests out, '1' spells the default (spec §R4); blank = on. */
+  vests?: string
   retirements?: RetirementParam[]
 }
 
@@ -34,6 +38,9 @@ export function fetchProjection(params: ProjectionParams = {}): Promise<Projecti
   if (params.volatility) query.set('volatility', params.volatility)
   if (params.inflation) query.set('inflation', params.inflation)
   if (params.contributionGrowth) query.set('contribution_growth', params.contributionGrowth)
+  if (params.planUntil) query.set('plan_until', params.planUntil)
+  // "0" is a value (vests off), and a non-empty string survives the blank filter.
+  if (params.vests) query.set('vests', params.vests)
   // APPEND, never set: `retire` is a repeated param server-side, one per retiring person,
   // and a blank month is the absence of a retirement rather than an empty one.
   for (const retirement of params.retirements ?? []) {

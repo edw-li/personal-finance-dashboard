@@ -37,18 +37,32 @@ LIVING_NOTE = (
     "force; 'average' = the Spending page's previous-12-months living average. A month absent "
     "from the list has no estimate, which is not zero."
 )
-# The seven Decimal knobs `projection()` takes. `years` is an int and is handled beside
-# them; the vocabulary itself is the page's (src/components/projection/projectionScenario.ts
-# KNOBS) and the router's — this list only says which of them survive a URL.
+# How the model reads the projection's path figures (2026-09-24 review minor 9): the payload keeps
+# its keys, and "p10" is the optimistic edge of the reach dates but the pessimistic edge of the
+# depletion months — so the section says each the page's way.
+PATHS_NOTE = (
+    "Speak of simulated paths as the page does. fi_month_p10 is the optimistic edge: 1 in 10 "
+    "paths reach FI by then; fi_month_p50 is the headline FI date (half of paths); fi_month_p90 "
+    "is the late edge (9 in 10 paths by then). money_lasts.lasts_until_p10 is the pessimistic "
+    "edge: in 9 of 10 paths the money lasts at least until then. Never say p10, p50 or p90."
+)
+# The knobs a Projection URL can carry — the page's own vocabulary
+# (src/components/projection/projectionScenario.ts KNOBS) and the router's. Seven decode as
+# Decimals; `years` and `plan_until` are integers and `vests` a 0/1 flag, each decoded beside
+# them (2026-09-23 spec §R10).
 PROJECTION_KNOBS = (
     "annual_return",
     "annual_spend",
     "contribution_growth",
     "inflation",
     "monthly_contribution",
+    "plan_until",
     "swr",
+    "vests",
     "volatility",
+    "years",
 )
+_DECIMAL_KNOBS = frozenset(PROJECTION_KNOBS) - {"plan_until", "vests", "years"}
 
 
 def jsonable(value: Any) -> Any:
@@ -394,10 +408,18 @@ async def _portfolio(db: AsyncSession, search: dict, view: dict) -> dict:
     }
 
 
+# The withholding card's two balances, signed the one way the card reads them (code-quality
+# suggestion): the model otherwise meets a bare "-22674.73" and has to guess its direction.
+WITHHOLDING_SIGN_LEGEND = (
+    "withholding.balance_projected and withholding.reconciliation.balance_if_matched: "
+    "positive = owed at filing, negative = refund"
+)
+
+
 async def _taxes(db: AsyncSession, search: dict, view: dict) -> dict:
     from fastapi import HTTPException
 
-    from app.api.taxes import get_brackets, get_inputs, get_summary, get_withholding
+    from app.api.taxes import get_brackets, get_inputs, get_summary, read_withholding
 
     year = _view_year(view) or clock.product_today().year
     try:
@@ -423,16 +445,21 @@ async def _taxes(db: AsyncSession, search: dict, view: dict) -> dict:
     withholding = None
     if year == clock.product_today().year:
         try:
-            withholding = await get_withholding(year=year, db=db)
+            # The GET's own memoised payload, decoded into a model of this context's own
+            # (2026-09-23 spec §W12) — the route itself now returns the cached bytes.
+            withholding = await read_withholding(db, year)
         except HTTPException:
             withholding = None  # settled/ineligible year: the endpoint's own 422 refusal
-    return {
+    section = {
         "year": year,
         "summary": summary,
         "inputs": flat_inputs,
         "brackets": brackets,
         "withholding": withholding,
     }
+    if withholding is not None:
+        section["withholding_sign"] = WITHHOLDING_SIGN_LEGEND
+    return section
 
 
 async def _espp(db: AsyncSession, search: dict, view: dict) -> dict:
@@ -552,7 +579,21 @@ def _projection_scenario(entries: list[str]) -> tuple[dict[str, Any], list[str]]
                     knobs["years"] = int(value)
                     honored[key] = entry
             continue
-        if key not in PROJECTION_KNOBS:
+        if key == "plan_until":
+            # A four-digit year (isdecimal() for the reason `years` gives). Its RANGE is the
+            # router's to judge — a year before the start or past the 60-year reach is the
+            # 422 the page shows too, reported as this section's error.
+            if value.isascii() and value.isdecimal() and len(value) == 4:
+                knobs["plan_until"] = int(value)
+                honored[key] = entry
+            continue
+        if key == "vests":
+            # The page's flag: 0 leaves the scheduled vests out, 1 is the default spelled out.
+            if value in ("0", "1"):
+                knobs["vests"] = value == "1"
+                honored[key] = entry
+            continue
+        if key not in _DECIMAL_KNOBS:
             continue
         try:
             parsed = Decimal(value)
@@ -572,21 +613,28 @@ def _projection_scenario(entries: list[str]) -> tuple[dict[str, Any], list[str]]
 async def _projection(db: AsyncSession, search: dict, view: dict) -> dict:
     from fastapi import HTTPException
 
-    from app.api.projection import projection
+    from app.api.projection import ProjectionKnobs, run_projection
 
     scenario, honored = _projection_scenario(_whatif_entries(search, view))
     try:
-        p = await projection(
-            annual_return=scenario.get("annual_return"),
-            monthly_contribution=scenario.get("monthly_contribution"),
-            annual_spend=scenario.get("annual_spend"),
-            swr=scenario.get("swr"),
-            years=scenario["years"],
-            volatility=scenario.get("volatility"),
-            inflation=scenario.get("inflation"),
-            contribution_growth=scenario.get("contribution_growth"),
-            retire=scenario["retire"],
-            db=db,
+        # Every knob named explicitly (the direct-call trap, 2026-09-23 spec §R10): the route
+        # serves bytes, and `run_projection` validates the SAME cached bytes into this
+        # section's own model.
+        p = await run_projection(
+            db,
+            ProjectionKnobs(
+                annual_return=scenario.get("annual_return"),
+                monthly_contribution=scenario.get("monthly_contribution"),
+                annual_spend=scenario.get("annual_spend"),
+                swr=scenario.get("swr"),
+                years=scenario["years"],
+                volatility=scenario.get("volatility"),
+                inflation=scenario.get("inflation"),
+                contribution_growth=scenario.get("contribution_growth"),
+                retire=tuple(scenario["retire"] or ()),
+                plan_until=scenario.get("plan_until"),
+                vests=scenario.get("vests"),
+            ),
         )
     except HTTPException as exc:
         # NO_SNAPSHOTS on a fresh database — or a knob the router refuses, which is the
@@ -596,6 +644,7 @@ async def _projection(db: AsyncSession, search: dict, view: dict) -> dict:
     # So the model knows a scenario is in play and can name it: without this every figure
     # below reads as the household's derived plan rather than the what-if on screen.
     payload["scenario_entries"] = honored
+    payload["paths_note"] = PATHS_NOTE
     # Decimate month-grain series to year-grain: the model reads trends, not 360 points.
     # Every series is sampled at the SAME indices, so index i still names one month across
     # all of them — and the horizon's last month survives (see _decimate).

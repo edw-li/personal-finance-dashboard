@@ -390,6 +390,14 @@ export default function WhatIfPanel({
   const saleDetails = wire?.sale_details ?? []
   const esppSaleDetails = wire?.espp_sale_details ?? []
   const changedInputs = wire?.changed_inputs ?? []
+  // A sale in cash terms (2026-09-23 spec §W7): present only when the scenario sells something.
+  const saleSummary = wire?.sale_summary ?? null
+  // A sale at a loss LOWERS the year's tax (code-quality M6): the tiles say "Tax saved" and
+  // "After-tax loss" with positive figures rather than a negative tax due or a negative gain.
+  const taxSaved = saleSummary !== null && Number(saleSummary.tax_due) < 0
+  const taxWord = taxSaved ? 'Tax saved' : 'Tax due'
+  const afterTaxLoss = saleSummary !== null && Number(saleSummary.after_tax_gain) < 0
+  const lossBeforeTax = saleSummary !== null && Number(saleSummary.gain) < 0
 
   const taxTone = result === null || previewUnusable ? 'neutral' : toneOf(result.delta.total_tax)
   const takeHomeTone =
@@ -454,37 +462,82 @@ export default function WhatIfPanel({
           <div className="whatif-result">
             {/* Every figure is the server's, rendered as it arrived (global rule 9) — the
                 deltas are the endpoint's own subtraction of two quantized summaries. */}
-            <div className="kpi-row">
-              <StatTile
-                label="Δ total tax"
-                value={formatCurrency(result.delta.total_tax)}
-                delta={
-                  taxTone === 'neutral'
-                    ? 'no change'
-                    : `${taxTone === 'positive' ? 'more' : 'less'} tax than ${year} as stored`
-                }
-                tone={inverted(taxTone)}
-                direction={directionOf(taxTone)}
-                hint="Scenario total tax minus baseline — positive means the scenario owes more."
-              />
-              <StatTile
-                label="Δ take-home"
-                value={formatCurrency(result.delta.take_home)}
-                delta={`${formatCurrency(result.baseline.totals.take_home)} → ${formatCurrency(
-                  result.scenario.totals.take_home,
-                )}`}
-                tone={takeHomeTone}
-                hint="Scenario take-home minus baseline."
-              />
-              {/* A rate is a level, not a movement: both sides, no arrow. */}
-              <StatTile
-                label="Effective rate"
-                value={`${formatPct(result.baseline.totals.effective_rate, {
-                  signed: false,
-                })} → ${formatPct(result.scenario.totals.effective_rate, { signed: false })}`}
-                hint="Overall effective rate, baseline → scenario."
-              />
-            </div>
+            {saleSummary !== null ? (
+              // A sale reads in CASH (2026-09-23 spec §W7): "Δ take-home" is an income figure
+              // that never counts the proceeds — a $59.5K qualified lot read "−$11,651". The
+              // totals and the rates stay in the compare table below.
+              <>
+                <div className="kpi-row">
+                  <StatTile
+                    label="Proceeds"
+                    value={formatCurrency(saleSummary.proceeds)}
+                    hint="What the shares in this scenario sell for, before tax."
+                  />
+                  <StatTile
+                    label={taxWord}
+                    value={formatCurrency(Math.abs(Number(saleSummary.tax_due)))}
+                    hint={
+                      taxSaved
+                        ? `The tax the sales take off ${year} as stored — the loss offsets other income.`
+                        : `The tax the sales add to ${year} as stored.`
+                    }
+                  />
+                  <StatTile
+                    label="Net cash"
+                    value={formatCurrency(saleSummary.net_cash)}
+                    hint={`Proceeds ${taxSaved ? 'plus the tax saved' : 'minus tax due'} — the cash the sales leave you.`}
+                  />
+                  <StatTile
+                    label={afterTaxLoss ? 'After-tax loss' : 'After-tax gain'}
+                    value={formatCurrency(Math.abs(Number(saleSummary.after_tax_gain)))}
+                    delta={`${formatCurrency(Math.abs(Number(saleSummary.gain)))} ${
+                      lossBeforeTax ? 'loss' : 'gain'
+                    } before tax`}
+                    tone={toneOf(saleSummary.after_tax_gain)}
+                    hint={`The gain — brokerage gains plus ESPP income — ${
+                      taxSaved ? 'plus the tax saved' : 'minus tax due'
+                    }.`}
+                  />
+                </div>
+                {overrideCount > 0 && (
+                  <p className="drill-hint">
+                    {taxWord} counts the sales only; the overrides change the total below.
+                  </p>
+                )}
+              </>
+            ) : (
+              <div className="kpi-row">
+                <StatTile
+                  label="Δ total tax"
+                  value={formatCurrency(result.delta.total_tax)}
+                  delta={
+                    taxTone === 'neutral'
+                      ? 'no change'
+                      : `${taxTone === 'positive' ? 'more' : 'less'} tax than ${year} as stored`
+                  }
+                  tone={inverted(taxTone)}
+                  direction={directionOf(taxTone)}
+                  hint="Scenario total tax minus baseline — positive means the scenario owes more."
+                />
+                <StatTile
+                  label="Δ take-home"
+                  value={formatCurrency(result.delta.take_home)}
+                  delta={`${formatCurrency(result.baseline.totals.take_home)} → ${formatCurrency(
+                    result.scenario.totals.take_home,
+                  )}`}
+                  tone={takeHomeTone}
+                  hint="Scenario take-home minus baseline."
+                />
+                {/* A rate is a level, not a movement: both sides, no arrow. */}
+                <StatTile
+                  label="Effective rate"
+                  value={`${formatPct(result.baseline.totals.effective_rate, {
+                    signed: false,
+                  })} → ${formatPct(result.scenario.totals.effective_rate, { signed: false })}`}
+                  hint="Overall effective rate, baseline → scenario."
+                />
+              </div>
+            )}
             {/* The three tiles say how much moved; this says WHERE. One bar per tax line,
                 diverging around zero so the arms mean the same thing, and null — the card's
                 own empty sentence — when nothing moved at all. */}
@@ -592,8 +645,11 @@ export default function WhatIfPanel({
                   {changedInputs.map((changed) => (
                     // An em dash, not a colon: the label is the definition table's own text
                     // and often carries a colon already ("LTCG: Brokerage Gain/Loss").
+                    // Each figure in its key's own unit (2026-09-23 spec §W10): "97.53% → 95%",
+                    // "24 → 20" — an absent unit is an older payload's money.
                     <li key={changed.key}>
-                      {changed.label} — {formatCurrency(changed.before)} → {formatCurrency(changed.after)}
+                      {changed.label} — {figureText(changed.unit ?? 'money', changed.before)} →{' '}
+                      {figureText(changed.unit ?? 'money', changed.after)}
                     </li>
                   ))}
                 </ul>
@@ -639,10 +695,8 @@ export default function WhatIfPanel({
     >
       <p className="drill-hint">
         Sales are classified at average cost, the app&apos;s only basis method, and ESPP ordinary income
-        lands in Other W2 Income — which raises the engine&apos;s Medicare/Social Security/SDI wage bases,
-        exactly as the sheet does it. Real ESPP ordinary income is FICA-exempt; this sandbox inherits the
-        sheet&apos;s structure. Long/short is your call: imported transactions carry no dates, so the app
-        cannot verify a holding period. Nothing here is stored.
+        lands in Other W2 Income. Long/short is your call: imported transactions carry no dates, so the
+        app cannot verify a holding period. Nothing here is stored.
       </p>
       <FeedBanner error={feedError} retry={retryFeeds} />
       {/* All three feeds land together (one Promise.all) or none does, so one null is the

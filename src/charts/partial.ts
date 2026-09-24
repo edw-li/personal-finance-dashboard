@@ -55,7 +55,9 @@ function lastDayOf(month: string): string {
   return `${month.slice(0, 7)}-${String(days).padStart(2, '0')}`
 }
 
-/** In progress: the month's last day is after `todayIso` (spec §0, §C5). */
+/** In progress: the month's last day is after `todayIso` (spec §0, §C5). THE partial rule —
+ *  budgetMonth's copy is gone (2026-09-23 spec §K1). Pass todayIso() from utils/months.ts, the
+ *  server's day; `month` may be 'YYYY-MM-01' or the old 'YYYY-MM' spelling. */
 export function isPartialMonth(month: string, todayIso: string): boolean {
   return lastDayOf(month) > todayIso.slice(0, 10)
 }

@@ -42,7 +42,11 @@ class MetricEvidence(BaseModel):
     # keeps its intentionally floored election intact when displayed as a percentage.
     display_precision: int | None = Field(default=None, ge=0, le=9, strict=True)
     window: MetricWindow | None = None
-    completeness: Literal["complete", "unreviewed_history", "incomplete", "unavailable", "mixed"]
+    # "provisional" (2026-09-23 spec §0.4(e)): balances recorded before their date — the receipt
+    # of a change into an early snapshot (T1) or out of one (T10).
+    completeness: Literal[
+        "complete", "unreviewed_history", "incomplete", "unavailable", "mixed", "provisional"
+    ]
     components: list[MetricComponent] = []
     source_link: str
     source_label: str

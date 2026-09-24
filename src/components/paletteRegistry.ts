@@ -1,4 +1,3 @@
-import { formatMonth } from '../utils/format'
 import { fuzzyScore } from '../utils/fuzzy'
 import { NAV_ITEMS } from './navItems'
 
@@ -123,7 +122,7 @@ export interface RegistryRunners {
  *  palette once loaded (see `entityEntries`), and so are the guide's how-tos — CommandPalette
  *  imports `src/guide/palette` dynamically on the first open (2026-09-14 guide spec §6 review
  *  round), so the guide's content module stays out of the shell's bundle. */
-export function buildEntries(opts: { month: string; run: RegistryRunners }): PaletteEntry[] {
+export function buildEntries(opts: { run: RegistryRunners }): PaletteEntry[] {
   const pages: PaletteEntry[] = NAV_ITEMS.map((item) => ({
     kind: 'page',
     id: `nav:${item.to}`,
@@ -147,10 +146,13 @@ export function buildEntries(opts: { month: string; run: RegistryRunners }): Pal
       keywords: ['quotes', 'update prices'],
       run: opts.run.refreshPrices,
     },
+    // The monthly update's two parts fall due on their own schedule (2026-09-23 spec §M7): the
+    // part due is rarely the calendar month's, so the entry names no month — /update lands on the
+    // first due part itself (§M2).
     {
       kind: 'action',
       id: 'action:enter-update',
-      label: `Enter ${formatMonth(opts.month)} update`,
+      label: "Monthly update — what's due",
       keywords: ['wizard', 'balances', 'monthly'],
       to: '/update',
     },

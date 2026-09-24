@@ -183,7 +183,7 @@ export const START_CARDS: GuideCard[] = [
         where: 'Monthly update',
         steps: [
           'Your first month: Balances → Spending → Review → **Save progress**.',
-          'Then the confirmations and **Save and close month**.',
+          'Then the confirmations and **Save and close <Month>**.',
           'The full routine is The monthly update, in Routines.',
         ],
         to: '/update',

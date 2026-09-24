@@ -87,7 +87,17 @@ async def save_month(
         balance_result = (
             None
             if body.balances is None
-            else await write_balances(month, body.balances, db, batch, record_metadata=True)
+            else await write_balances(
+                month,
+                body.balances,
+                db,
+                batch,
+                record_metadata=True,
+                # K4 (2026-09-23 spec): a legacy or closed month is never restamped — the new
+                # date would move its digest off the revision it was adopted or certified at.
+                # `current` is this month's state in the book read before the write.
+                restamp=current.state not in ("unreviewed_history", "closed"),
+            )
         )
         spending_result = (
             None if body.spending is None else await write_spending(month, body.spending, db, batch)
@@ -100,8 +110,20 @@ async def save_month(
             metadata = MonthReview(month=month)
             db.add(metadata)
         same_inputs = metadata.confirmation_revision == digest
+        # The $0 consent belongs to the SPENDING part (2026-09-23 spec §M1: saving one part never
+        # touches the other). It carries over any save that leaves the month's spending rows as
+        # they were — a balances save, a balances Confirm (K4's restamp moves the digest), a
+        # take-home change — and lapses when a save changes them without sending confirm_zero
+        # again (the wizard's box resets on every load). Only a consent that still counted before
+        # this save carries over: its readers honour it at the stored revision only, so an edit
+        # made elsewhere since has already retired it. review v1's digest itself is unchanged.
+        zero_held = bool(
+            metadata.zero_spending_confirmed
+            and metadata.confirmation_revision == current.input_revision
+        )
+        spending_kept = initial.inputs[month]["spending"] == after_inputs.inputs[month]["spending"]
         metadata.zero_spending_confirmed = bool(
-            (same_inputs and metadata.zero_spending_confirmed)
+            (zero_held and spending_kept)
             or (body.spending is not None and body.spending.confirm_zero)
         )
         metadata.confirmation_revision = digest

@@ -11,6 +11,7 @@ from app.services.net_worth_calc import (
     group_totals_for,
     investable_base,
     investable_bases,
+    investable_total,
     load_balance_matrix,
     net_worth_for,
     owner_clause,
@@ -82,6 +83,14 @@ async def test_investable_base_latest_snapshot_on_or_before(db, nw_world):
     # A later spending month with no snapshot falls back to the latest prior one.
     assert await investable_base(db, date(2026, 3, 1)) == Decimal("1650.00")
     assert await investable_base(db, date(2025, 12, 1)) is None
+
+
+async def test_investable_total_sums_one_snapshot_by_id(db, nw_world):
+    # One owner of "investable" (2026-09-24 review minor 7): the projection picks its snapshot by
+    # K's rule and sums it here, investable_base picks the latest on or before a month and does too.
+    _, snaps = nw_world
+    assert await investable_total(db, snaps[0].id) == Decimal("1500.00")
+    assert await investable_total(db, snaps[1].id) == Decimal("1650.00")
 
 
 async def test_get_swr_pct_reads_envelope_with_fallback(db):
