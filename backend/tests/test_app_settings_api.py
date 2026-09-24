@@ -7,6 +7,7 @@ numbers days 0=Mon, so "1-5" silently means Tue-Sat).
 
 import pytest
 
+from app.api.app_settings import read_plan_until_year
 from app.models import AppSetting
 
 SETTINGS = "/api/v1/settings"
@@ -237,3 +238,25 @@ async def test_partial_put_does_not_reschedule_when_the_cron_is_absent(auth_clie
     )
     assert (await auth_client.put(SETTINGS, json={"swr_pct": "0.05"})).status_code == 200
     assert calls == []  # nothing to hot-apply, so the live job is left alone
+
+
+# --- plan_until_year (2026-09-23 spec §R11): the reader the projection uses ---
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [None, {"value": "2075"}, {"value": True}, {"value": 1999}, {"value": 2200}, ["x"], {}],
+)
+async def test_read_plan_until_year_reads_a_missing_or_malformed_row_as_none(db, stored):
+    if stored is not None:
+        db.add(AppSetting(key="plan_until_year", value=stored))
+        await db.commit()
+    assert await read_plan_until_year(db) is None
+
+
+@pytest.mark.parametrize("year", [2020, 2075, 2199])
+async def test_read_plan_until_year_returns_a_stored_year_even_one_that_has_passed(db, year):
+    # A passed year is RETURNED: the projection ignores it with a warning that names it.
+    db.add(AppSetting(key="plan_until_year", value={"value": year}))
+    await db.commit()
+    assert await read_plan_until_year(db) == year

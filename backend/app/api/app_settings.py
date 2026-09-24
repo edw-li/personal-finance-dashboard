@@ -106,6 +106,28 @@ async def read_update_due_day(db: AsyncSession) -> int:
     return raw if 1 <= raw <= MAX_UPDATE_DUE_DAY else DEFAULT_UPDATE_DUE_DAY
 
 
+# "Plan until (year)" (2026-09-23 spec §R11): the Projection's lasting default for the year the
+# money has to last through. The reader's sanity window is the page codec's client fence
+# (projectionScenario.ts): a year outside it can only be a hand-edited row and reads as absent;
+# one inside it that has already passed is RETURNED, so the projection can name it when it
+# ignores it (spec §R3).
+PLAN_UNTIL_KEY = "plan_until_year"
+PLAN_UNTIL_SANE_MIN = 2000
+PLAN_UNTIL_SANE_MAX = 2199
+
+
+async def read_plan_until_year(db: AsyncSession) -> int | None:
+    """app_settings['plan_until_year'] envelope {"value": 2075}; a missing or malformed row is
+    None (get_swr_pct's posture). Imported by api/projection.py."""
+    setting = await db.get(AppSetting, PLAN_UNTIL_KEY)
+    if setting is None or not isinstance(setting.value, dict):
+        return None
+    raw = setting.value.get("value")
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    return raw if PLAN_UNTIL_SANE_MIN <= raw <= PLAN_UNTIL_SANE_MAX else None
+
+
 def _validated_due_day(value: int) -> int:
     if not 1 <= value <= MAX_UPDATE_DUE_DAY:
         raise HTTPException(

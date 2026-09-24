@@ -32,6 +32,7 @@ takes no clock. The route serves JSON BYTES and `run_projection` validates them 
 model for direct callers (the assistant), so every caller gets its own copy.
 """
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -42,6 +43,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.app_settings import read_plan_until_year
 from app.api.deps import get_current_user
 
 # Cross-router borrow, on taxes.py's precedent: the paycheck router owns the "profile in
@@ -70,7 +72,16 @@ from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
 from app.services.net_worth_calc import INVESTABLE_GROUPS, get_swr_pct
 from app.services.paycheck_calc import MONTHS_PER_YEAR, breakdown, half_up2
 from app.services.people import load_people
-from app.services.projection import CENT, first_reaching, project, project_path
+from app.services.projection import (
+    CENT,
+    MAX_YEARS,
+    december_index,
+    first_reaching,
+    latest_december_year,
+    max_plan_until_year,
+    project,
+    project_path,
+)
 from app.services.read_cache import cached_month_savings, cached_review_book
 from app.services.savings import payroll_monthly
 
@@ -501,6 +512,60 @@ def _plan_phases(
     )
 
 
+async def _resolve_plan_until(
+    db: AsyncSession,
+    knob: int | None,
+    start_month: date,
+    years: int,
+    warnings: list[str],
+) -> tuple[int, str, int]:
+    """(year, source, effective years) for the plan-until year (2026-09-23 spec §R3).
+
+    The knob wins and 422s outside [the start year, the latest year the projection can
+    reach]. Without it, the year stored in Settings › Plan assumptions (§R11) — unless it has
+    passed, or (a hand-edited row) lies past the reach, when it is ignored with a warning —
+    and otherwise the latest year whose December is on the axis, which never lengthens it
+    and so keeps every array byte-identical. A year whose December is past the axis
+    lengthens the horizon to the whole years that reach it (never past MAX_YEARS: the bounds
+    above make sure) and says so.
+    """
+    latest = max_plan_until_year(start_month)
+    default = latest_december_year(start_month, years * 12)
+    if knob is not None:
+        if knob < start_month.year:
+            raise HTTPException(
+                status_code=422, detail=f"plan_until must be {start_month.year} or later"
+            )
+        if knob > latest:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"plan_until must be {latest} or earlier — the projection runs at most "
+                    f"{MAX_YEARS} years"
+                ),
+            )
+        year, source = knob, "knob"
+    else:
+        stored = await read_plan_until_year(db)
+        year, source = default, "default"
+        if stored is not None and stored < start_month.year:
+            warnings.append(
+                f"The plan-until year in Settings ({stored}) has passed — using {default}."
+            )
+        elif stored is not None and stored > latest:
+            warnings.append(
+                f"The plan-until year in Settings ({stored}) is past the projection's "
+                f"{MAX_YEARS}-year reach — using {default}."
+            )
+        elif stored is not None:
+            year, source = stored, "setting"
+    needed = math.ceil(december_index(start_month, year) / 12)
+    if needed > years:
+        warnings.append(f"The horizon was lengthened to {needed} years to reach the end of {year}.")
+        years = needed
+    return year, source, years
+
+
 @dataclass(frozen=True)
 class BaseSnapshot:
     """The snapshot the starting balance stands on (2026-09-23 spec §R5): its key, the date
@@ -561,6 +626,7 @@ async def projection(
     inflation: Annotated[Decimal | None, Query()] = None,
     contribution_growth: Annotated[Decimal | None, Query()] = None,
     retire: RetireQuery = None,
+    plan_until: Annotated[int | None, Query()] = None,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """The answer as JSON bytes (`response_model` documents the shape). Direct callers use
@@ -576,6 +642,7 @@ async def projection(
         inflation=inflation,
         contribution_growth=contribution_growth,
         retire=tuple(retire or ()),
+        plan_until=plan_until,
     )
     return Response(content=await projection_json(db, knobs), media_type="application/json")
 
@@ -763,6 +830,11 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
     real_return = (Decimal(1) + annual_return) / (Decimal(1) + inflation) - Decimal(1)
     real_growth = (Decimal(1) + contribution_growth) / (Decimal(1) + inflation) - Decimal(1)
 
+    # The plan-until year is resolved BEFORE the axis: a later year lengthens it, and the
+    # retirement months are validated against the effective one (spec §R3).
+    plan_until, plan_until_source, years = await _resolve_plan_until(
+        db, knobs.plan_until, start_month, years, warnings
+    )
     month_count = years * 12
     months = _months_from(start_month, month_count)
     retirements = _resolve_retirements(household, knobs.retire, months, years)
@@ -890,4 +962,6 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
         budget_month=None if budget_annual_spend is None else start_month,
         phases=plan.phases,
         drawdown=plan.drawdown,
+        plan_until=plan_until,
+        plan_until_source=plan_until_source,
     )

@@ -8,6 +8,7 @@ from app.api.projection import ProjectionKnobs, run_projection
 from app.models import (
     Account,
     AccountBalance,
+    AppSetting,
     CategoryBudget,
     MonthlyCashflow,
     MonthlySpending,
@@ -1306,3 +1307,112 @@ async def test_projection_echoes_the_budgets_annual_spend(auth_client, db):
     assert body["budget_month"] == this_month.isoformat()
     # The DERIVED knob is untouched — the echo is a preset for the card, not a new default.
     assert body["annual_spend"] == "60000.00"
+
+
+# --- "plan until" (2026-09-23 spec §R3, the Settings default §R11) ---
+
+
+def _plan_setting(year) -> AppSetting:
+    return AppSetting(key="plan_until_year", value={"value": year})
+
+
+async def test_plan_until_defaults_to_the_last_december_on_the_axis_without_extending_it(
+    auth_client, db
+):
+    this_month = await _seed_book(db)
+    zeros = "volatility=0&inflation=0&contribution_growth=0"
+    body = (await auth_client.get(f"/api/v1/projection?years=2&{zeros}")).json()
+    assert body["plan_until"] == latest_december_year(this_month, 24)
+    assert body["plan_until_source"] == "default"
+    # No stored year and no knob: the axis and every array are the pre-batch ones.
+    assert body["years"] == 2 and body["projected"] == BACKCOMPAT_PROJECTED_2Y
+    assert not [w for w in body["warnings"] if "plan-until" in w or "lengthened" in w]
+
+
+async def test_a_stored_plan_until_year_is_the_default_and_the_knob_wins(auth_client, db):
+    this_month = await _seed_book(db)
+    db.add(_plan_setting(this_month.year + 20))
+    await db.commit()
+    stored = (await auth_client.get("/api/v1/projection?volatility=0")).json()
+    assert stored["plan_until"] == this_month.year + 20
+    assert stored["plan_until_source"] == "setting"
+    knob = (
+        await auth_client.get(f"/api/v1/projection?volatility=0&plan_until={this_month.year + 5}")
+    ).json()
+    assert knob["plan_until"] == this_month.year + 5 and knob["plan_until_source"] == "knob"
+
+
+async def test_a_passed_stored_year_is_ignored_with_its_warning(auth_client, db):
+    this_month = await _seed_book(db)
+    db.add(_plan_setting(this_month.year - 1))
+    await db.commit()
+    body = (await auth_client.get("/api/v1/projection?volatility=0")).json()
+    default = latest_december_year(this_month, 360)
+    assert body["plan_until"] == default and body["plan_until_source"] == "default"
+    assert (
+        f"The plan-until year in Settings ({this_month.year - 1}) has passed — using {default}."
+    ) in body["warnings"]
+
+
+async def test_a_stored_year_past_the_reach_is_ignored_with_its_warning(auth_client, db):
+    # Only a hand-edited row can hold one (the PUT refuses it): never a 422 on a bare GET.
+    this_month = await _seed_book(db)
+    beyond = max_plan_until_year(this_month) + 1
+    db.add(_plan_setting(beyond))
+    await db.commit()
+    body = (await auth_client.get("/api/v1/projection?volatility=0")).json()
+    default = latest_december_year(this_month, 360)
+    assert body["plan_until"] == default and body["plan_until_source"] == "default"
+    assert (
+        f"The plan-until year in Settings ({beyond}) is past the projection's 60-year reach"
+        f" — using {default}."
+    ) in body["warnings"]
+
+
+async def test_a_later_plan_until_lengthens_the_horizon_to_reach_its_december(auth_client, db):
+    this_month = await _seed_book(db)
+    year = this_month.year + 49
+    body = (await auth_client.get(f"/api/v1/projection?volatility=0&plan_until={year}")).json()
+    to_december = december_index(this_month, year)
+    expected = -(-to_december // 12)  # ceil: months not a multiple of 12 round UP
+    assert body["years"] == expected
+    assert len(body["months"]) == expected * 12 + 1
+    assert date.fromisoformat(body["months"][-1]) >= date(year, 12, 1)
+    assert (f"The horizon was lengthened to {expected} years to reach the end of {year}.") in body[
+        "warnings"
+    ]
+    # A plan-until year already on the axis never shortens it.
+    short = (
+        await auth_client.get(f"/api/v1/projection?volatility=0&plan_until={this_month.year}")
+    ).json()
+    assert short["years"] == 30
+
+
+async def test_plan_until_422s_before_the_start_year_and_past_sixty_years(auth_client, db):
+    this_month = await _seed_book(db)
+    early = await auth_client.get(f"/api/v1/projection?plan_until={this_month.year - 1}")
+    assert early.status_code == 422
+    assert early.json()["detail"] == f"plan_until must be {this_month.year} or later"
+    latest = max_plan_until_year(this_month)
+    late = await auth_client.get(f"/api/v1/projection?plan_until={latest + 1}")
+    assert late.status_code == 422
+    assert late.json()["detail"] == (
+        f"plan_until must be {latest} or earlier — the projection runs at most 60 years"
+    )
+    ok = await auth_client.get(f"/api/v1/projection?plan_until={latest}&volatility=0")
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["years"] <= 60
+
+
+async def test_retirement_months_are_validated_against_the_lengthened_axis(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    far = _month_param(month_add(this_month, 45 * 12))  # past 30 years, inside 50
+    refused = await auth_client.get(f"/api/v1/projection?retire={alex.id}:{far}")
+    assert refused.status_code == 422
+    assert "outside the 30-year horizon" in refused.json()["detail"]
+    ok = await auth_client.get(
+        f"/api/v1/projection?volatility=0&plan_until={this_month.year + 49}&retire={alex.id}:{far}"
+    )
+    assert ok.status_code == 200, ok.text

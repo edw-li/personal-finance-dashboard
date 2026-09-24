@@ -158,3 +158,8 @@ class ProjectionOut(BaseModel):
     # until every earner has a retirement month on the axis and there is an annual spend.
     phases: list[PhaseOut] = []
     drawdown: DrawdownOut | None = None
+    # 2026-09-23 spec §R3: the year the money has to last through, resolved — the knob, the
+    # Settings year (§R11) or the latest December on the axis — and where it came from. A
+    # year past the default horizon lengthens it (`years` echoes the effective horizon).
+    plan_until: int | None = None
+    plan_until_source: Literal["knob", "setting", "default"] | None = None
