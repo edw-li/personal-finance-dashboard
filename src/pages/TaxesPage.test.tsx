@@ -14,6 +14,7 @@ import type {
   WithholdingOut,
 } from '../types/api'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
+import { setServerToday } from '../utils/productToday'
 import TaxesPage from './TaxesPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
 
@@ -559,6 +560,50 @@ describe('TaxesPage — unsaved edits survive (2026-09-23 spec §W9)', () => {
     await waitFor(() => expect(salary().value).toBe('$210,000.00'))
     expect(screen.queryByText(/were discarded: the saved values changed/)).toBeNull()
     expect(sessionStorage.getItem(DRAFT_2024)).toBeNull()
+  })
+})
+
+// The page reads the SERVER's year (2026-09-23 spec §W11): on New Year's Eve evening in Pacific
+// time the browser still says Dec 31 while the product clock — the only year the Will I owe?
+// endpoint answers — has already turned. setup.ts forgets the server day after every test.
+describe('TaxesPage — the server’s year (2026-09-23 spec §W11)', () => {
+  const row = (year: number): TaxYearOut => ({
+    year, notes: null, input_count: 21, bracket_count: 42, filing_status: 'single',
+  })
+  const newYearEve = () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 11, 31, 23, 30)) // the browser: Dec 31, 23:30 local
+    setServerToday('2027-01-01') // the server: Jan 1
+  }
+  afterEach(() => vi.useRealTimers())
+
+  it('mounts Will I owe? for the server’s new year when that tax year exists', async () => {
+    newYearEve()
+    vi.mocked(fetchTaxYears).mockResolvedValue([row(2026), row(2027)])
+    renderPage('/taxes?section=summary')
+    expect(await screen.findByText('Will I owe? — 2027')).toBeTruthy()
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledWith(2027))
+    expect(vi.mocked(fetchWithholding)).not.toHaveBeenCalledWith(2026)
+  })
+
+  it('mounts no card on the browser’s year once the server’s year has turned', async () => {
+    newYearEve()
+    vi.mocked(fetchTaxYears).mockResolvedValue([row(2026)])
+    renderPage('/taxes?section=summary')
+    await readyInputs()
+    // 2026 is no longer the product year: its withholding GET would be refused (422).
+    expect(screen.queryByText(/will i owe/i)).toBeNull()
+    expect(vi.mocked(fetchWithholding)).not.toHaveBeenCalled()
+  })
+
+  it('offers the server’s year as the first year to create on an empty database', async () => {
+    newYearEve()
+    vi.mocked(fetchTaxYears).mockResolvedValue([])
+    renderPage('/taxes?section=summary')
+    await screen.findByText(/no tax years yet/i)
+    fireEvent.click(screen.getByRole('button', { name: 'New tax year…' }))
+    const dialog = screen.getByRole('dialog', { name: 'New tax year' })
+    expect((within(dialog).getByLabelText('New year') as HTMLInputElement).value).toBe('2027')
   })
 })
 

@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
+import { setServerToday } from '../utils/productToday'
 import { fetchSpendingEvidence, REVIEW_LABELS } from '../api/monthReview'
 import type { MonthReview } from '../api/monthReview'
 import { getLocal, resetPrefsStoreForTests, STORAGE_KEYS, syncFromServer } from '../prefs/prefsStore'
@@ -1232,6 +1233,28 @@ describe('OverviewPage attention strip', () => {
     expect(row.getAttribute('href')).toBe(`/update?month=${past}&step=review`)
     expect(within(strip).queryByRole('link', { name: new RegExp(formatMonth(closed)) })).toBeNull()
     expect(strip.querySelectorAll('a')).toHaveLength(1)
+  })
+})
+
+describe('OverviewPage — the server’s year (2026-09-23 spec §W11)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('reads the tax year the server is in, not the browser’s', async () => {
+    // New Year's Eve evening in Pacific time: the browser still says Dec 31 while the product
+    // clock has turned. setup.ts forgets the server day after every test.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(CURRENT_YEAR, 11, 31, 23, 30))
+    setServerToday(`${CURRENT_YEAR + 1}-01-01`)
+    serve({
+      taxes: { years: [taxSummaryOut(CURRENT_YEAR), taxSummaryOut(CURRENT_YEAR + 1)] },
+      taxYears: [CURRENT_YEAR, CURRENT_YEAR + 1].map((year) => ({
+        year, notes: null, input_count: 21, bracket_count: 42, filing_status: 'single' as const,
+      })),
+    })
+    renderPage()
+    expect(await screen.findByText(`Estimated tax — ${CURRENT_YEAR + 1} (est.)`)).toBeTruthy()
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledWith(CURRENT_YEAR + 1))
+    expect(vi.mocked(fetchWithholding)).not.toHaveBeenCalledWith(CURRENT_YEAR)
   })
 })
 

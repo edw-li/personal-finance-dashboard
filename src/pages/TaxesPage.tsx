@@ -36,6 +36,8 @@ import WhatIfPanel from '../components/taxes/WhatIfPanel'
 import type { OverrideDefinition } from '../components/taxes/WhatIfPanel'
 import WithholdingPanel from '../components/taxes/WithholdingPanel'
 import { useToast } from '../components/ToastProvider'
+import { currentYear } from '../utils/months'
+import { useProductToday } from '../utils/productToday'
 import type {
   ChangedInput,
   FilingStatus,
@@ -193,7 +195,7 @@ export default function TaxesPage() {
   const [yearError, setYearError] = useState<string | null>(null)
   const [newYear, setNewYear] = useState(() =>
     cachedYears !== undefined
-      ? String(cachedLatest ? cachedLatest.year + 1 : new Date().getFullYear())
+      ? String(cachedLatest ? cachedLatest.year + 1 : currentYear())
       : '',
   )
   const [creating, setCreating] = useState(false)
@@ -279,10 +281,13 @@ export default function TaxesPage() {
   // Only while the editors are mounted: a failed load unmounts them, and their last
   // reported flag must not outlive them into a spurious confirm.
   const dirty = detail !== null && (inputsDirty || bracketsDirty)
-  // The Will I owe? card answers for this year only (its endpoint refuses any other), so the
-  // card's mount and the status dialog's "withholding joins / leaves the card" line read one
-  // value.
-  const cardYear = new Date().getFullYear()
+  // The Will I owe? card answers for the SERVER's year only (its endpoint refuses any other —
+  // 2026-09-23 spec §W11), so the card's mount and the status dialog's "withholding joins /
+  // leaves the card" line read one value, and on New Year's Eve evening in Pacific time it is the
+  // product clock's new year, not the browser's old one. Subscribed: a tab left open across
+  // midnight re-renders on the first response that names the new day.
+  useProductToday()
+  const cardYear = currentYear()
   const toast = useToast()
   // A toast's Undo runs long after the render that offered it; the unsaved-work question it
   // asks has to be about the editors as they are THEN.
@@ -338,7 +343,7 @@ export default function TaxesPage() {
         }
         setYears(list)
         const latest = latestOf(list)
-        setNewYear(String(latest ? latest.year + 1 : new Date().getFullYear()))
+        setNewYear(String(latest ? latest.year + 1 : currentYear()))
         // The preferred year wins when the list carries it; anything else — absent, garbled,
         // a year that is gone — falls back to the latest and is LEFT in the URL rather than
         // corrected here. This page writes the param from its own doors only: a write from
