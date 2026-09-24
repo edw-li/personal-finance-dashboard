@@ -22,7 +22,7 @@ import AmountInput from '../components/AmountInput'
 import StatTile from '../components/StatTile'
 import { usePopoverDismiss } from '../components/usePopoverDismiss'
 import { fetchMonthReview, saveMonthReview, REVIEW_LABELS } from '../api/monthReview'
-import type { MonthReview, MonthSave, ReviewedFeeds } from '../api/monthReview'
+import type { MonthReview, ReviewedFeeds } from '../api/monthReview'
 import ReviewChanges from '../components/monthly/ReviewChanges'
 import HistoricalReview from '../components/monthly/HistoricalReview'
 import WhatsDue from '../components/monthly/WhatsDue'
@@ -56,6 +56,7 @@ import {
   reviewSaveNote,
   type BalancesMeta,
 } from '../components/monthly/monthlyCopy'
+import { buildMonthSave, type SaveKind } from '../components/monthly/monthSave'
 import { balancesKey, flowsKey, sortedIds, type BalancesPart, type FlowsPart } from '../components/monthly/parts'
 import { monthStory, type NextSnapshot } from '../components/monthly/story'
 import InfoHint from '../components/InfoHint'
@@ -72,7 +73,6 @@ import type {
   MonthBalances,
   MonthUpsertResult,
   SpendingMatrix,
-  SpendingMonthUpsert,
   SpendingUpsertResult,
 } from '../types/api'
 import { nestComponents } from '../utils/accounts'
@@ -117,8 +117,8 @@ interface LoadedMonth {
 // ── What a save sends, and what it wrote ────────────────────────────────────────────
 // The month's two parts save on their own (2026-09-23 spec §M1): each part step's primary saves
 // that part, the Confirm confirms a partly entered month's spending with no part at all, and the
-// Review's "Save progress" / "Save and close" send only the parts that changed.
-type SaveKind = 'balances' | 'spending' | 'confirm-spending' | 'review' | 'close'
+// Review's "Save progress" / "Save and close" send only the parts that changed — the body is
+// components/monthly/monthSave.ts's buildMonthSave.
 
 // The receipt printed after a save (spec §4 of 2026-09-04: "so a SKIP is as visible as a write"):
 // one line per part the save sent — and, for a Review save, the part it left alone as unchanged.
@@ -1009,21 +1009,6 @@ function MonthlyUpdateWizard() {
     if (loading || saving || deleting || repairing || loaded === null || loaded.month !== month
       || savingMonth.current === loaded || review === null || review.month !== month
       || balancesBase?.month !== month || flowsBase?.month !== month) return
-    const whole = kind === 'review' || kind === 'close'
-    // Each part saves only itself (2026-09-23 spec §M1). The Review sends the DIRTY parts: an
-    // untouched part is never re-sent, and pre-filled balances nobody touched are never recorded
-    // by it — a month's first snapshot is only ever the Balances step's own Save.
-    const sendBalances = kind === 'balances' || (whole && balancesDirty)
-    const sendSpending = kind === 'spending' || (whole && flowsDirty)
-    // A balances save with nothing changed on a month that has balances can only be the Confirm of
-    // early balances (spec §M4): the Save is enabled clean for nothing else.
-    const confirmedBalances = kind === 'balances' && !balancesDirty && monthExisted
-    savingMonth.current = loaded
-    // Each part as submitted — the response keeps any typing done while it was in flight.
-    const submitted = { ...currentRaw.current }
-    setSaving(true)
-    setError(null)
-    setLastSave(null)
     // canonicalAmount, not .trim(): a cell committed by blur is already canonical, but a save
     // reached without one (Ctrl+Enter, or a click in jsdom) must not ship "$1,600.00" or
     // "=200+50" to a Decimal column. Computed ONCE, then spent three ways — the wire, the
@@ -1036,38 +1021,39 @@ function MonthlyUpdateWizard() {
       categories.map((c) => [c.id, canonicalAmount(amounts[c.id] ?? '')]),
     )
     const canonNetPay = netPay.trim() === '' ? '' : canonicalAmount(netPay)
-    try {
-      const body: MonthSave = {
-        expected_revision: review.input_revision,
-        // Every PUT rewrites the three stored ticks, so each save carries them as they stand. The
-        // Confirm is a PUT with NO part that ticks spending — the one save K3's clause (d) counts as
-        // "confirmed complete" — and leaves the other two ticks as they are (spec §M1).
-        reviewed: kind === 'confirm-spending' ? { ...reviewed, spending: true } : reviewed,
-        close: kind === 'close',
-      }
-      if (sendBalances) {
-        body.balances = {
-          // Never recorded_on (2026-09-23 spec §M4): the server stamps it — and a provisional
-          // snapshot saved on or after its 1st turns final (§K4), which a sent date would stop.
-          notes: notes.trim() === '' ? null : notes,
-          balances: accounts.filter(a => !isReadOnlyRow(a))
-            .filter(a => a.parent_account_id === null || !typedParents.has(a.parent_account_id))
-            .map(a => ({ account_id: a.id, balance: canonBalances[a.id] })),
-        }
-      }
-      if (sendSpending) {
+    // Each part saves only itself (2026-09-23 spec §M1) — buildMonthSave holds the rule. A month's
+    // first snapshot is only ever the Balances step's own Save: the Review never records untouched
+    // pre-filled balances.
+    const { body, sendBalances, sendSpending } = buildMonthSave({
+      kind,
+      revision: review.input_revision,
+      reviewed,
+      dirty: { balances: balancesDirty, flows: flowsDirty },
+      balances: {
+        notes,
+        rows: accounts
+          .filter((a) => !isReadOnlyRow(a))
+          .filter((a) => a.parent_account_id === null || !typedParents.has(a.parent_account_id))
+          .map((a) => ({ account_id: a.id, balance: canonBalances[a.id] })),
+      },
+      spending: {
         // `sentCategories` is the component-level memo above — one rule for the wire and the review.
-        const spending: SpendingMonthUpsert = {
-          amounts: sentCategories.map((c) => ({ category_id: c.id, amount: canonAmounts[c.id] })),
-        }
-        if (canonNetPay !== '') {
-          spending.net_pay = canonNetPay
-        } else if (hadNetPay) {
-          spending.net_pay = null
-        }
-        if (recordZero) spending.confirm_zero = true
-        body.spending = spending
-      }
+        amounts: sentCategories.map((c) => ({ category_id: c.id, amount: canonAmounts[c.id] })),
+        netPay: canonNetPay,
+        hadNetPay,
+        recordZero,
+      },
+    })
+    // A balances save with nothing changed on a month that has balances can only be the Confirm of
+    // early balances (spec §M4): the Save is enabled clean for nothing else.
+    const confirmedBalances = kind === 'balances' && !balancesDirty && monthExisted
+    savingMonth.current = loaded
+    // Each part as submitted — the response keeps any typing done while it was in flight.
+    const submitted = { ...currentRaw.current }
+    setSaving(true)
+    setError(null)
+    setLastSave(null)
+    try {
       const payload = JSON.stringify({ month, ...body })
       if (saveRequest.current?.payload !== payload) saveRequest.current = { payload, requestId: crypto.randomUUID() }
       const result = await saveMonthReview(month, { ...body, request_id: saveRequest.current.requestId })

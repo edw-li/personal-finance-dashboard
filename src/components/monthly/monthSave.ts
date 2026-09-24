@@ -1,0 +1,69 @@
+import type { MonthSave, ReviewedFeeds } from '../../api/monthReview'
+import type { BalanceEntry, SpendingMonthUpsert } from '../../types/api'
+
+// The body of the month-review PUT the wizard sends (2026-09-23 spec §M1), built in one pure place
+// so the rule "each part saves only itself" is a unit-tested function, not a branch of a handler.
+
+/** What a save is about: a part's own save, the Confirm of a partly entered month's spending, or the
+ *  Review's "Save progress" / "Save and close". */
+export type SaveKind = 'balances' | 'spending' | 'confirm-spending' | 'review' | 'close'
+
+export interface MonthSaveInput {
+  kind: SaveKind
+  /** The month's review revision as last loaded or saved — the PUT's compare-and-save. */
+  revision: string
+  /** The three ticks as they stand on the Review step. */
+  reviewed: ReviewedFeeds
+  /** Each part against what the server holds (parts.ts). */
+  dirty: { balances: boolean; flows: boolean }
+  /** The balances leg as it would go out: the notes as typed, the rows already canonical. */
+  balances: { notes: string; rows: BalanceEntry[] }
+  /** The spending leg as it would go out: the listed rows already canonical, the take-home canonical
+   *  ('' when blank), whether the month had one to clear, and the $0 consent. */
+  spending: {
+    amounts: SpendingMonthUpsert['amounts']
+    netPay: string
+    hadNetPay: boolean
+    recordZero: boolean
+  }
+}
+
+export interface BuiltMonthSave {
+  body: MonthSave
+  sendBalances: boolean
+  sendSpending: boolean
+}
+
+export function buildMonthSave(input: MonthSaveInput): BuiltMonthSave {
+  const whole = input.kind === 'review' || input.kind === 'close'
+  // A part's own save sends that part; the Review sends the DIRTY parts — an untouched part is never
+  // re-sent, and pre-filled balances nobody touched are never recorded by it.
+  const sendBalances = input.kind === 'balances' || (whole && input.dirty.balances)
+  const sendSpending = input.kind === 'spending' || (whole && input.dirty.flows)
+  const body: MonthSave = {
+    expected_revision: input.revision,
+    // Every PUT stores the three ticks it carries, so each save sends them as they stand. The
+    // Confirm adds the spending tick to a PUT with no part — the only save K3's clause (d) counts as
+    // "confirmed complete" (a no-leg Review save with the box ticked is the same PUT).
+    reviewed: input.kind === 'confirm-spending' ? { ...input.reviewed, spending: true } : input.reviewed,
+    close: input.kind === 'close',
+  }
+  if (sendBalances) {
+    // Never recorded_on (spec §M4): the server stamps it, and a provisional snapshot saved on or
+    // after its 1st turns final (§K4) — a sent date would stop that.
+    body.balances = {
+      notes: input.balances.notes.trim() === '' ? null : input.balances.notes,
+      balances: input.balances.rows,
+    }
+  }
+  if (sendSpending) {
+    const spending: SpendingMonthUpsert = { amounts: input.spending.amounts }
+    // Tri-state take-home: a figure is upserted; a blanked box on a month that HAD one is an explicit
+    // null (the server deletes the row); a month that never had one says nothing about it.
+    if (input.spending.netPay !== '') spending.net_pay = input.spending.netPay
+    else if (input.spending.hadNetPay) spending.net_pay = null
+    if (input.spending.recordZero) spending.confirm_zero = true
+    body.spending = spending
+  }
+  return { body, sendBalances, sendSpending }
+}
