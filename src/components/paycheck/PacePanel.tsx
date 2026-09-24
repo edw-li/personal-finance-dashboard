@@ -330,7 +330,7 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
         So far this year, and where the year lands at today&apos;s percentages. Change a percentage
         and the projection moves; so far does not. Hover or focus a bar for the exact figures.
       </p>
-      {start !== null && <p className="hint pace-start">{start}</p>}
+      {start !== null && <p className="drill-hint pace-start">{start}</p>}
       <div className="pace-rows">
         {items.map((item) => (
           <PaceRow item={item} key={item.key} />
