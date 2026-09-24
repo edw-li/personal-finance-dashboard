@@ -7,8 +7,6 @@ import {
   PARTIAL_FOOTNOTE,
   partialItemStyle,
   partialNote,
-  periodColumn,
-  periodHeader,
   withAlpha,
 } from './partial'
 import { SURFACE } from './theme'
@@ -84,20 +82,6 @@ describe('the month in progress in words', () => {
     expect(hasPartialMonth(['2026-08-01'], null)).toBe(false)
   })
 
-  it("gives a month-per-row table a Period column, only when a month is in progress", () => {
-    expect(periodColumn(['2026-07-01', '2026-08-01'], '2026-08-12')).toEqual(['Whole month', 'Month to date (in progress)'])
-    expect(periodColumn(['2026-08-01', '2026-09-01'], '2026-08-12')).toEqual([
-      'Month to date (in progress)',
-      'Future month (in progress)',
-    ])
-    // Nothing in progress, or no today: the table keeps its shape.
-    expect(periodColumn(['2026-07-01', '2026-08-01'], '2026-08-31')).toBeNull()
-    expect(periodColumn(['2026-08-01'], undefined)).toBeNull()
-  })
-
-  it('flags a month-per-column header', () => {
-    expect(periodHeader('2026-08-01', '2026-08-12')).toBe('2026-08-01 (in progress)')
-    expect(periodHeader('2026-07-01', '2026-08-12')).toBe('2026-07-01')
-    expect(periodHeader('2026-08-01', null)).toBe('2026-08-01')
-  })
+  // The Period column and the column header moved to charts/partlyEntered.ts, which covers the
+  // month in progress too (partlyEntered.test.ts; review minor 8).
 })

@@ -68,6 +68,23 @@ describe('the table twin and the footnote', () => {
     expect(periodHeaderFor('2026-08-01', '2026-10-03', PARTLY)).toBe('2026-08-01')
   })
 
+  // charts/partial's periodColumn/periodHeader had no production caller and are gone (review
+  // minor 8): their month-in-progress cases are proved here, on the one implementation, with
+  // nothing partly entered.
+  it('covers the month in progress alone, as the retired periodColumn/periodHeader did', () => {
+    const none = new Map()
+    expect(periodColumnFor(['2026-07-01', '2026-08-01'], '2026-08-12', none)).toEqual(['Whole month', 'Month to date (in progress)'])
+    expect(periodColumnFor(['2026-08-01', '2026-09-01'], '2026-08-12', none)).toEqual([
+      'Month to date (in progress)',
+      'Future month (in progress)',
+    ])
+    expect(periodColumnFor(['2026-07-01', '2026-08-01'], '2026-08-31', none)).toBeNull()
+    expect(periodColumnFor(['2026-08-01'], undefined, none)).toBeNull()
+    expect(periodHeaderFor('2026-08-01', '2026-08-12', none)).toBe('2026-08-01 (in progress)')
+    expect(periodHeaderFor('2026-07-01', '2026-08-12', none)).toBe('2026-07-01')
+    expect(periodHeaderFor('2026-08-01', null, none)).toBe('2026-08-01')
+  })
+
   it('explains the axis mark in words, whichever months carry it', () => {
     expect(partialFootnote(['2026-08-01', '2026-09-01'], '2026-10-03', PARTLY)).toBe('* Spending partly entered')
     expect(partialFootnote(['2026-09-01', '2026-10-01'], '2026-10-03', PARTLY)).toBe(

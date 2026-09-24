@@ -90,17 +90,7 @@ export const PARTIAL_FOOTNOTE = '* Month in progress'
 export const hasPartialMonth = (months: readonly string[], todayIso: string | null | undefined): boolean =>
   partialMonths(months, todayIso).some(Boolean)
 
-/** A month-per-row table's flag: one 'Period' cell per month — "Whole month", "Month to date
- *  (in progress)" or "Future month (in progress)" (the tooltip head's words) — or null when no
- *  month is in progress, so an ordinary table keeps its shape. */
-export function periodColumn(months: readonly string[], todayIso: string | null | undefined): string[] | null {
-  if (typeof todayIso !== 'string' || !hasPartialMonth(months, todayIso)) return null
-  return months.map((month) => {
-    const note = partialNote(month, todayIso)
-    return note === null ? 'Whole month' : note.charAt(0).toUpperCase() + note.slice(1)
-  })
-}
-
-/** A month-per-column table's flag: the header of a month in progress says so. */
-export const periodHeader = (month: string, todayIso: string | null | undefined): string =>
-  typeof todayIso === 'string' && isPartialMonth(month, todayIso) ? `${month} (in progress)` : month
+// A month-per-row table's Period column and a month-per-column table's header live in
+// charts/partlyEntered.ts (periodColumnFor, periodHeaderFor): the month in progress AND a month
+// partly entered after it ended — one implementation for both (2026-09-23 spec §T12; review
+// minor 8).
