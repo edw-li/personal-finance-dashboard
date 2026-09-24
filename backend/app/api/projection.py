@@ -22,9 +22,12 @@ explicit 0. They echo like every other knob; the page renders them as placeholde
 than seeding their boxes, so blank always means "whatever the echo says".
 
 Retirements (2026-08-28 spec §4.3) arrive as repeated `retire=<person_id>:<YYYY-MM>`
-params and are the one input this module resolves against ANOTHER router's rule: the drop
-is the take-home of the paycheck profile `paycheck._default_profile` says is in force
-today. Absent, the response is the pre-retirement one plus an empty `retirements` echo.
+params and are the one input this module resolves against ANOTHER router's rule: the
+paycheck profile `paycheck._default_profile` says is in force today. Since the 2026-09-23
+spec §R2 they split the run into phases (`_plan_phases`): while someone still works, their
+payroll saving and employer match continue and their pay is assumed to cover spending; from
+the last earner's retirement the annual spend is withdrawn. `monthly_drop` is still echoed
+per person. Absent, the response is the working phase alone plus an empty `retirements` echo.
 
 The PRODUCT clock (services/clock.py) is read HERE and only here (paycheck.py's
 posture): it anchors the starting balance and the month axis; services/projection.py
