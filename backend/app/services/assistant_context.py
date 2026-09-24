@@ -394,6 +394,14 @@ async def _portfolio(db: AsyncSession, search: dict, view: dict) -> dict:
     }
 
 
+# The withholding card's two balances, signed the one way the card reads them (code-quality
+# suggestion): the model otherwise meets a bare "-22674.73" and has to guess its direction.
+WITHHOLDING_SIGN_LEGEND = (
+    "withholding.balance_projected and withholding.reconciliation.balance_if_matched: "
+    "positive = owed at filing, negative = refund"
+)
+
+
 async def _taxes(db: AsyncSession, search: dict, view: dict) -> dict:
     from fastapi import HTTPException
 
@@ -428,13 +436,16 @@ async def _taxes(db: AsyncSession, search: dict, view: dict) -> dict:
             withholding = await read_withholding(db, year)
         except HTTPException:
             withholding = None  # settled/ineligible year: the endpoint's own 422 refusal
-    return {
+    section = {
         "year": year,
         "summary": summary,
         "inputs": flat_inputs,
         "brackets": brackets,
         "withholding": withholding,
     }
+    if withholding is not None:
+        section["withholding_sign"] = WITHHOLDING_SIGN_LEGEND
+    return section
 
 
 async def _espp(db: AsyncSession, search: dict, view: dict) -> dict:

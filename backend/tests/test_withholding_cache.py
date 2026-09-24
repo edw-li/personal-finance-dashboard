@@ -332,3 +332,19 @@ async def test_the_assistant_reads_the_same_payload_with_its_reconciliation(
     section = await assistant_context._taxes(db, {}, {})
     assert section["withholding"].reconciliation is not None
     assert section["withholding"] == await taxes_api.read_withholding(db, YEAR)
+    # The two balances' sign, said once (code-quality suggestion): a bare "-22674.73" is a
+    # refund, and the model must not have to guess which way it points.
+    assert section["withholding_sign"] == (
+        "withholding.balance_projected and withholding.reconciliation.balance_if_matched: "
+        "positive = owed at filing, negative = refund"
+    )
+
+
+async def test_the_assistant_says_no_sign_legend_without_a_withholding_card(
+    db, world, frozen_today
+):
+    # A settled year the page is showing: its summary is there, its card is not.
+    await seed_tax_year(db, YEAR - 1, "400000.0000")
+    section = await assistant_context._taxes(db, {}, {"year": YEAR - 1})
+    assert section["withholding"] is None
+    assert "withholding_sign" not in section
