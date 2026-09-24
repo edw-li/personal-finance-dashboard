@@ -16,7 +16,8 @@ all read through the routers that own them. It is a pure read with four soft lin
 degrades where the editors above raise — see its section comment.
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from bisect import bisect_right
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date
@@ -42,8 +43,10 @@ from app.api.paycheck import (
     MIN_PAY_PERIODS,
     PAY_PERIODS_MESSAGE,
     _default_profile,
+    _limits_for,
 )
 from app.database import get_db
+from app.limit_keys import HSA_LIMIT_KEY_BY_COVERAGE, LIMIT_401K_ELECTIVE
 from app.models import (
     EsppLot,
     PaycheckProfile,
@@ -71,14 +74,18 @@ from app.schemas.taxes import (
     IncompleteYearOut,
     PersonBracketsOut,
     PersonWageTaxOut,
+    ReconciliationOut,
     SafeHarborOut,
     SaleDetailOut,
+    SaleSummaryOut,
     TaxInputItemOut,
     TaxInputRowIn,
     TaxInputSectionOut,
     TaxInputsIn,
     TaxInputsOut,
     TaxPersonOut,
+    TaxStatusOptionOut,
+    TaxStatusOptionsOut,
     TaxSummariesOut,
     TaxSummaryOut,
     TaxTotalsOut,
@@ -88,6 +95,7 @@ from app.schemas.taxes import (
     WhatIfDelta,
     WhatIfIn,
     WhatIfOut,
+    WithholdingGridOut,
     WithholdingJurisdictionOut,
     WithholdingJurisdictionsOut,
     WithholdingLegOut,
@@ -97,6 +105,8 @@ from app.schemas.taxes import (
 )
 from app.services import clock, rsu_vesting, withholding_calc
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.day_labels import long_day
+from app.services.limit_check import employer_hsa
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     MONEY_MAX_ABS_14_4,
@@ -108,6 +118,19 @@ from app.services.money import (
 )
 from app.services.people import load_people, primary_person
 from app.services.portfolio_calc import SHARE_Q, fold_transactions, load_portfolio
+from app.services.read_cache import cached_withholding
+from app.services.tax_reconciliation import (
+    ESPP_LONG_KEY,
+    ESPP_SHORT_KEY,
+    RSU_KEY,
+    EsppFacts,
+    PaycheckFacts,
+    PersonFacts,
+    RsuFacts,
+    cap_401k,
+    cap_hsa,
+    reconcile,
+)
 from app.services.tax_service import (
     JURISDICTION_WARN_MISSING,
     SUGGESTION_QUANTUM,
@@ -134,6 +157,8 @@ from app.tax_keys import (
     COUNT,
     DERIVED_COMPONENTS,
     DERIVED_KEYS,
+    FILING_STATUS_LABELS,
+    FILING_STATUSES,
     FORMULA_CAPTIONS,
     JURISDICTIONS,
     MARRIED_JOINT,
@@ -254,6 +279,11 @@ class EngineFeed:
     # database with no roster.
     earner_people: list[tuple[int | None, str | None]] = dataclass_field(default_factory=list)
     brackets_missing_for_status: list[str] = dataclass_field(default_factory=list)
+    # What the feed was ASSEMBLED from (2026-09-23 spec §W3): the year's stored rows and the
+    # full roster, so a caller can overlay a what-if-shaped change on the rows in memory and
+    # re-assemble through `_engine_feed_from_rows` — one engine run, never another query.
+    rows: list = dataclass_field(default_factory=list)
+    roster: list[Person] = dataclass_field(default_factory=list)
 
     @property
     def primary_column(self) -> int | None:
@@ -294,6 +324,14 @@ class EngineFeed:
             status=self.filing_status,
             jurisdictions=", ".join(self.brackets_missing_for_status),
         )
+
+
+def _withholding_people(people: list[Person], filing_status: str) -> list[Person]:
+    """Whose withholding the Will I owe? card counts: the primary's simulated leg, plus the
+    partner leg of everyone else on THIS status' return — `_return_people`, the rule the card's
+    liability is computed over. One helper for the card and for the status dialog (§W8), so the
+    dialog's "joins / leaves the card" can never disagree with the card."""
+    return _return_people(people, filing_status)
 
 
 def _return_people(people: list[Person], filing_status: str) -> list[Person]:
@@ -602,14 +640,32 @@ async def _engine_feed(
 ) -> EngineFeed:
     """One year's feed. `people` is an optional hoist for callers that loop over years —
     the roster is the same for all of them — and defaults to loading it here, so a
-    single-year caller cannot forget it and read a stale one."""
+    single-year caller cannot forget it and read a stale one.
+
+    The DB half of the feed; the assembly is `_engine_feed_from_rows`, pure, so the
+    withholding card's reconciliation can re-assemble the same year over overlaid rows
+    without reading anything again (2026-09-23 spec §W3)."""
     filing_status = await _filing_status(db, year)
     if people is None:
         people = await load_people(db)
-    on_return = _return_people(people, filing_status)
-    columns = [person.id for person in on_return] or [None]
     rows = list((await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars())
     tables, person_tables = await _engine_tables(db, year, filing_status)
+    return _engine_feed_from_rows(year, filing_status, people, rows, tables, person_tables)
+
+
+def _engine_feed_from_rows(
+    year: int,
+    filing_status: str,
+    people: list[Person],
+    rows: Sequence[TaxInput | _InputRow],
+    tables: dict[str, list[Bracket]],
+    person_tables: dict[int, dict[str, list[Bracket]]],
+) -> EngineFeed:
+    """The feed's pure assembly over rows already in hand — stored rows, or the preview's
+    `_InputRow`s laid over them. Everything `_engine_feed` decides beyond the reads is here,
+    so an overlaid feed and the stored one can only differ by the rows."""
+    on_return = _return_people(people, filing_status)
+    columns = [person.id for person in on_return] or [None]
     views = _input_views(year, rows, columns, filing_status)
     assembled = _assemble_earners(views.stored, columns, person_tables)
     names = {person.id: person.name for person in on_return}
@@ -634,6 +690,8 @@ async def _engine_feed(
         person_tables=person_tables,
         earner_people=[(column, names.get(column)) for column in earner_columns],
         brackets_missing_for_status=_missing_for_status(tables, filing_status, year),
+        rows=list(rows),
+        roster=list(people),
     )
 
 
@@ -897,7 +955,11 @@ async def list_years(db: AsyncSession = Depends(get_db)) -> list[TaxYearOut]:
 
 @router.patch("/years/{year}", response_model=TaxYearOut)
 async def update_year(
-    year: YearPath, body: TaxYearUpdate, db: AsyncSession = Depends(get_db)
+    year: YearPath,
+    body: TaxYearUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> TaxYearOut:
     """Set a year's filing status — the one field on a year row the editors can change.
 
@@ -907,13 +969,71 @@ async def update_year(
     reported by the summary's `brackets_missing_for_status` and fixed by the clone helper,
     never guessed at here. Stored inputs are untouched too — the partner's rows simply
     come onto the return.
+
+    CHANGE-LOGGED since 2026-09-23 (spec §W8): the status moves every figure the year
+    computes — whose rows count, the tables, the harbor gates — so it is a deliberate setting
+    with an Undo, like the inputs PUT beside it: the row image goes into the batch, the label
+    names the change, and the batch id rides `X-Change-Batch`. An unchanged status records
+    nothing and so offers no Undo.
     """
     row = await db.get(TaxYear, year)
     if row is None:
         raise HTTPException(status_code=404, detail=f"tax year {year} not found")
+    before = row_image(row)
     row.filing_status = body.filing_status
-    await db.commit()
+    batch.record_update(row, before)
+    batch.label = (
+        f"Changed {year} filing status to "
+        f"{FILING_STATUS_LABELS.get(body.filing_status, body.filing_status)}"
+    )
+    response.headers.update(batch_header(await batch.commit()))
     return await _year_out(db, row)
+
+
+@router.get("/years/{year}/status-options", response_model=TaxStatusOptionsOut)
+async def get_status_options(
+    year: YearPath, db: AsyncSession = Depends(get_db)
+) -> TaxStatusOptionsOut:
+    """What each filing status would mean for this year (2026-09-23 spec §W8): whose rows
+    count on the return and which bracket tables the engine would refuse the year without —
+    read with the same `_return_people` and `_missing_for_status` the engine feed applies,
+    so the Change… dialog states the server's rules rather than a client copy of them. One
+    bracket query for every status."""
+    row = await db.get(TaxYear, year)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"tax year {year} not found")
+    roster = await load_people(db)
+    by_status: dict[str, dict[str, list[Bracket]]] = {}
+    for bracket in (
+        await db.execute(
+            select(TaxBracket).where(TaxBracket.year == year, TaxBracket.person_id.is_(None))
+        )
+    ).scalars():
+        tables = by_status.setdefault(bracket.filing_status, {})
+        tables.setdefault(bracket.jurisdiction, []).append((bracket.rate, bracket.threshold))
+    options: list[TaxStatusOptionOut] = []
+    # The card answers for the product year alone (its GET refuses any other), so only that
+    # year's statuses move anybody's withholding on or off it.
+    card_year = year == _current_tax_year()
+    for status in FILING_STATUSES:
+        missing = _missing_for_status(by_status.get(status, {}), status, year)
+        options.append(
+            TaxStatusOptionOut(
+                status=status,
+                label=FILING_STATUS_LABELS[status],
+                people=[
+                    TaxPersonOut(id=person.id, name=person.name)
+                    for person in _return_people(roster, status)
+                ],
+                tables_missing=missing,
+                computable=not missing,
+                withholding_people=[
+                    TaxPersonOut(id=person.id, name=person.name)
+                    for person in (_withholding_people(roster, status) if card_year else [])
+                ],
+            )
+        )
+    return TaxStatusOptionsOut(year=year, current=row.filing_status, options=options)
 
 
 @router.delete("/years/{year}", status_code=204)
@@ -991,8 +1111,8 @@ def _check_input_unit(key: str, value: Decimal) -> None:
 
     Money keys keep the column bound alone — every figure on a tax sheet is money and the
     engine has no opinion about its size. The two non-money keys DO have one: `pay_periods`
-    counts checks received so far this year (a whole number; 53 is the most a weekly
-    payroll can pay), and a percent key stores the FRACTION the engine multiplies by, so a
+    counts the year's pay periods (a whole number; 53 is the most a weekly payroll can pay),
+    and a percent key stores the FRACTION the engine multiplies by, so a
     stored 98 would have multiplied treasury dividends by ninety-eight. Same `values.{key}`
     vocabulary as the quantizer above, so a rejected input reads the same wherever it
     arrived.
@@ -1458,6 +1578,21 @@ def _money(value: Decimal | None) -> Decimal:
     return quantized + ZERO
 
 
+# The precision each input unit is SHOWN in (2026-09-23 spec §W10): a count is whole, a
+# percent keeps the 4 dp of the fraction the engine multiplies by (0.9753 is 97.53 %), money
+# is cents. `_money` quantized all three to cents, which printed 97.53 % as "$0.98".
+UNIT_QUANTA = {COUNT: Decimal("1"), PERCENT: Decimal("0.0001")}
+
+
+def _in_unit(value: Decimal, unit: str) -> Decimal:
+    """One input value at its unit's precision — `_money`'s plain HALF_UP quantize and signed-
+    zero collapse, never the bounded one (a what-if answers about any stored value)."""
+    quantum = UNIT_QUANTA.get(unit)
+    if quantum is None:
+        return _money(value)
+    return value.quantize(quantum, rounding=ROUND_HALF_UP) + ZERO
+
+
 def _effective_rate(
     value: Decimal | None, jurisdiction: str, warnings: list[str]
 ) -> Decimal | None:
@@ -1672,6 +1807,8 @@ PARTNER_STATE_WITHHOLDING_KEY = "w2_state_withholding"
 # bonus summed in here would be taxed on the wrong wage base and then counted twice.
 BONUS_KEY = "w2_bonuses"
 BONUS_WITHHOLDING_KEY = "w2_bonus_withholding"
+# ESPP ordinary income: W-2 income-tax wages, not Medicare wages (2026-09-23 spec §W6).
+ESPP_ORDINARY_KEY = "w2_espp_sale_component"
 # California's own gate (R&TC 19136 / FTB 5805): a taxpayer whose CURRENT-year California
 # AGI reaches $1,000,000 cannot use the prior-year leg at all and must reach 90% of this
 # year's tax. Federal has no such ceiling — which is exactly why the two harbors are
@@ -1747,12 +1884,316 @@ def _prior_leg(
     return {**prior_leg, "prior_total_tax": tax, "threshold": _money(tax * multiplier)}
 
 
-async def withholding_estimate(db: AsyncSession, year: int, today: date) -> WithholdingOut:
+# The reconciliation's own notes (2026-09-23 spec §W3): what a missing stored limit or a
+# missing ticker leaves unanswered. The service adds the never-reconciled sentence itself.
+LIMIT_401K_MISSING_NOTE = (
+    "No {year} 401(k) elective limit is stored, so the 401(k) projection is not capped — "
+    "enter it in Settings › Planning › Contribution limits"
+)
+LIMIT_HSA_MISSING_NOTE = (
+    "No {year} HSA {tier} limit is stored, so the HSA projection is not capped — enter it in "
+    "Settings › Planning › Contribution limits"
+)
+NO_TICKER_RECONCILE_NOTE = "RSU income is not reconciled: no employer ticker is configured"
+NO_GRANTS_RECONCILE_NOTE = (
+    "RSU income is not reconciled: no RSU grants are recorded — add them on Comp to project "
+    "this year's vests"
+)
+NO_LOTS_RECONCILE_NOTE = (
+    "ESPP income is not reconciled: no ESPP lots are recorded — add them on the ESPP page"
+)
+UNPRICED_LOT_NOTE = (
+    "The ESPP lot bought on {bought} is marked sold on {sold} without a sale price, so it is "
+    "left out of the ESPP row"
+)
+
+
+SEVERAL_PARTNERS_NOTE = (
+    "Paycheck inputs are reconciled for the primary and one partner; this return covers more "
+    "people than that"
+)
+HSA_TIER_WORDS = {"self": "self-only", "family": "family"}
+
+
+def _in_force_today(profiles: list[PaycheckProfile], today: date) -> PaycheckProfile:
+    """The profile in force today, else the earliest (a job that has not started yet) —
+    whose HSA coverage and employer deposit the HSA cap is judged on."""
+    current = [profile for profile in profiles if profile.effective_date <= today]
+    return current[-1] if current else min(profiles, key=lambda profile: profile.effective_date)
+
+
+async def _reconciliation(
+    db: AsyncSession,
+    feed: EngineFeed,
+    today: date,
+    *,
+    estimated: withholding_calc.WithholdingEstimate,
+    primary_profiles: list[PaycheckProfile],
+    partner_ids: list[int],
+    partner_profiles: list[PaycheckProfile],
+    ticker: str | None,
+    has_grants: bool,
+    vests_complete: bool,
+    future_vests: list[withholding_calc.VestTuple],
+    bar_days: list[date],
+    bar_closes: list[Decimal],
+    latest_price: Decimal | None,
+    liability_total: Decimal,
+    withheld_projected: Decimal,
+) -> ReconciliationOut:
+    """Your typed inputs against Paycheck, Comp and ESPP (2026-09-23 spec §W3): the facts are
+    gathered here — the year's stored limits, the sold ESPP lots, each leg's counted-check
+    grid already in `estimated` — and the rows, prices and flags are the pure service's. Up to
+    four small reads (the year's limits, whether any ESPP lot exists, the lots sold this year
+    and — only when there are some — the plan's discount); every overlay is an in-memory engine
+    run over the feed's own rows."""
+    year = feed.year
+    limits = await _limits_for(db, year)
+    elective_limit = limits.get(LIMIT_401K_ELECTIVE)
+    notes: list[str] = []
+
+    def paycheck_facts(
+        profiles: list[PaycheckProfile],
+        *,
+        checks: int,
+        first_check: date | None,
+        gross: Decimal,
+        trad: Decimal,
+        roth: Decimal,
+        hsa: Decimal,
+    ) -> PaycheckFacts:
+        # 402(g) stops the deferrals and the traditional share of the limit is what payroll
+        # takes; the HSA's room is the limit for the coverage in force less the employer's
+        # deposit (the Paycheck pace's own rule). No stored limit → uncapped, and said so.
+        trad_capped, trad_cap = cap_401k(trad, roth, elective_limit)
+        note = LIMIT_401K_MISSING_NOTE.format(year=year)
+        if elective_limit is None and trad + roth > ZERO and note not in notes:
+            notes.append(note)
+        profile = _in_force_today(profiles, today)
+        limit_key = HSA_LIMIT_KEY_BY_COVERAGE.get(profile.hsa_coverage)
+        hsa_limit = None if limit_key is None else limits.get(limit_key)
+        note = LIMIT_HSA_MISSING_NOTE.format(
+            year=year, tier=HSA_TIER_WORDS.get(profile.hsa_coverage, profile.hsa_coverage)
+        )
+        if limit_key is not None and hsa_limit is None and hsa > ZERO and note not in notes:
+            notes.append(note)
+        deposit = employer_hsa(profile, profile.hsa_coverage)
+        hsa_capped, hsa_cap = cap_hsa(hsa, hsa_limit, deposit)
+        return PaycheckFacts(
+            checks=checks,
+            first_check=first_check,
+            gross=gross,
+            trad_401k=trad_capped,
+            hsa=hsa_capped,
+            trad_capped_at=trad_cap,
+            hsa_capped_at=hsa_cap,
+        )
+
+    primary_paycheck = (
+        paycheck_facts(
+            primary_profiles,
+            checks=estimated.checks_total,
+            first_check=estimated.salary_first_check,
+            gross=estimated.salary_gross_projected,
+            trad=estimated.salary_trad_401k_projected,
+            roth=estimated.salary_roth_401k_projected,
+            hsa=estimated.salary_hsa_projected,
+        )
+        if primary_profiles
+        else None
+    )
+    # The partner leg is ONE simulation over every partner's profiles; it belongs to a person
+    # only when the return covers exactly one partner.
+    partner_paycheck = (
+        paycheck_facts(
+            partner_profiles,
+            checks=estimated.partner_checks_total,
+            first_check=estimated.partner_first_check,
+            gross=estimated.partner_gross_projected,
+            trad=estimated.partner_trad_401k_projected,
+            roth=estimated.partner_roth_401k_projected,
+            hsa=estimated.partner_hsa_projected,
+        )
+        if partner_profiles and len(partner_ids) == 1
+        else None
+    )
+    if len(partner_ids) > 1:
+        notes.append(SEVERAL_PARTNERS_NOTE)
+
+    names = {person.id: person.name for person in feed.roster}
+    # Whose profiles exist at all: with several partners on one return their shared leg gives
+    # none of them a grid, and only a person with NO profile is told they have none.
+    profiled = {profile.person_id for profile in partner_profiles}
+    people: list[PersonFacts] = [
+        PersonFacts(
+            person_id=column,
+            name=None if column is None else names.get(column),
+            bucket=feed.person_inputs.get(column, {}),
+            paycheck=primary_paycheck if column == feed.primary_column else partner_paycheck,
+            has_profile=(
+                bool(primary_profiles) if column == feed.primary_column else column in profiled
+            ),
+        )
+        for column in (list(feed.person_inputs) or [None])
+    ]
+
+    # RSU income: the card's own vest figures. With no ticker every vest was left out, and with
+    # no grants there is nothing to project from — either way the projection is "unknown", not
+    # 0: no row, and a note says why (the no-grants one only when an RSU figure is typed —
+    # otherwise there is nothing to reconcile at all).
+    primary_bucket = feed.person_inputs.get(feed.primary_column, {})
+    rsu: RsuFacts | None
+    if not has_grants:
+        rsu = None
+        if primary_bucket.get(RSU_KEY, ZERO) != ZERO:
+            notes.append(NO_GRANTS_RECONCILE_NOTE)
+    elif ticker is None:
+        rsu = None
+        notes.append(NO_TICKER_RECONCILE_NOTE)
+    else:
+        future_income = _money(
+            sum((Decimal(shares) * price for _day, shares, price in future_vests), ZERO)
+        )
+        # The flag's reference (§W3, stateless): the not-yet-vested vests — the SAME set the
+        # card priced — at the newest close on or before the 1st of this month, the latest
+        # quote when no such close is stored. A quote move inside the month cannot reach it.
+        reference_day = today.replace(day=1)
+        index = bisect_right(bar_days, reference_day) - 1
+        reference_price, reference_date = (
+            (bar_closes[index], bar_days[index]) if index >= 0 else (latest_price, None)
+        )
+        reference_future = (
+            None
+            if reference_price is None
+            else sum((Decimal(shares) * reference_price for _d, shares, _p in future_vests), ZERO)
+        )
+        rsu = RsuFacts(
+            projected=_money(estimated.vest_income_projected),
+            future_income=future_income,
+            reference_projected=(
+                None if reference_future is None else estimated.vest_income_ytd + reference_future
+            ),
+            reference_future=reference_future,
+            reference_price=reference_price,
+            reference_date=reference_date,
+            complete=vests_complete,
+        )
+
+    # ESPP sale income: the lots SOLD this year, decomposed exactly as the what-if decomposes
+    # a sale (after §W5's cap), each dated on its own sale day. No lots recorded at all is
+    # "unknown", like no grants: no row, and a note when ESPP income is typed.
+    has_lots = (await db.execute(select(EsppLot.id).limit(1))).first() is not None
+    sold = list(
+        (
+            await db.execute(
+                select(EsppLot)
+                .where(
+                    EsppLot.sold_date >= date(year, 1, 1), EsppLot.sold_date <= date(year, 12, 31)
+                )
+                .order_by(EsppLot.sold_date, EsppLot.id)
+            )
+        ).scalars()
+    )
+    ordinary = long_term = short_term = ZERO
+    if sold:
+        discount = await read_espp_discount(db)
+        for lot in sold:
+            if lot.sold_price is None:
+                # Only the API pairs a sale date with a price (the column is nullable): a
+                # hand-edited lot costs its own contribution, never the whole GET (review
+                # finding 6).
+                notes.append(
+                    UNPRICED_LOT_NOTE.format(
+                        bought=long_day(lot.purchase_date), sold=long_day(lot.sold_date)
+                    )
+                )
+                continue
+            detail = decompose_espp(
+                lot_id=lot.id,
+                purchase_date=lot.purchase_date,
+                qualifying_date=lot.qualifying_date,
+                shares=lot.shares,
+                subscription_price=lot.subscription_price,
+                purchase_fmv=lot.purchase_fmv,
+                purchase_price=lot.purchase_price,
+                sale_price=lot.sold_price,
+                today=lot.sold_date,
+                discount=discount,
+            )
+            ordinary += detail.ordinary_income
+            if detail.term == "long":
+                long_term += detail.capital_gain
+            else:
+                short_term += detail.capital_gain
+    espp: EsppFacts | None = EsppFacts(
+        ordinary=ordinary, long_term=long_term, short_term=short_term, lots=len(sold)
+    )
+    if not has_lots:
+        espp = None
+        typed_espp = [
+            primary_bucket.get(ESPP_ORDINARY_KEY),
+            feed.inputs.get(ESPP_LONG_KEY),
+            feed.inputs.get(ESPP_SHORT_KEY),
+        ]
+        if any(value is not None and value != ZERO for value in typed_espp):
+            notes.append(NO_LOTS_RECONCILE_NOTE)
+
+    return reconcile(
+        people=people,
+        primary_id=feed.primary_column,
+        rsu=rsu,
+        espp=espp,
+        household=feed.inputs,
+        liability=liability_total,
+        withheld_projected=withheld_projected,
+        price=_overlay_pricer(feed),
+        notes=notes,
+    )
+
+
+def _overlay_pricer(
+    feed: EngineFeed,
+) -> Callable[[Sequence[tuple[str, int | None, Decimal]]], Decimal]:
+    """The year's liability at cents with (key, person, value) replacements laid over the
+    feed's stored rows — by the inputs PREVIEW's own adoption rule (`_stored_slot`), so a
+    reconciliation row prices exactly what saving that projection would produce. Pure: the
+    rows, roster and tables are the feed's; every call is one engine run."""
+    null_row_column = feed.roster[0].id if feed.roster else None
+    base = {(row.key, row.person_id): row.value for row in feed.rows}
+
+    def price(overlays: Sequence[tuple[str, int | None, Decimal]]) -> Decimal:
+        overlaid = dict(base)
+        for key, owner, value in overlays:
+            # Components only: the engine rebuilds every computed total from its components, so
+            # an overlay on one would be recomputed away and price nothing — a programming
+            # error, never a "no effect" (code-quality suggestion).
+            assert not is_derived_key(key), key
+            overlaid.pop(_stored_slot(overlaid, key, owner, null_row_column), None)
+            overlaid[(key, owner)] = value
+        rows = [
+            _InputRow(key=key, person_id=person_id, value=value)
+            for (key, person_id), value in overlaid.items()
+        ]
+        overlay_feed = _engine_feed_from_rows(
+            feed.year, feed.filing_status, feed.roster, rows, feed.tables, feed.person_tables
+        )
+        return _money(_breakdown_for(overlay_feed).totals.total_tax)
+
+    return price
+
+
+async def withholding_estimate(
+    db: AsyncSession, year: int, today: date, *, reconcile: bool = False
+) -> WithholdingOut:
     """The withholding tracker's whole computation for ONE year as of `today`, callable from
     OTHER routers as well as this one — the calendar prices its estimated-tax deadlines
     with it rather than re-deriving the safe harbor (2026-09-03 calendar spec §6). Raises
     this router's own 404 when the year has no row; `today` is a PARAMETER, so a caller
     pricing two years reads the clock once.
+
+    `reconcile` adds the typed-inputs-vs-records strip (2026-09-23 spec §W3) — about ten more
+    engine runs and up to four small reads (`_reconciliation` names them), so only the GET asks
+    for it; the calendar's internal reads keep the default and never pay for it.
     """
     await _require_year(db, year)
 
@@ -1776,9 +2217,13 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
     # partner wages in it. Every other non-primary person on a joint return folds into one
     # "partner": the design ships a household of two, and a third person's wages still belong
     # on the withheld side rather than nowhere.
-    people = await load_people(db)
+    # The roster the feed was assembled with — one read for the whole card, and the same
+    # people the liability above was computed over.
+    people = feed.roster
     partner_ids = [
-        person.id for person in _return_people(people, feed.filing_status) if not person.is_primary
+        person.id
+        for person in _withholding_people(people, feed.filing_status)
+        if not person.is_primary
     ]
     # `feed.person_inputs`, not a second query and not a second bucketing: the partner's
     # wage base has to be the figure the engine taxed, and since 2026-09-11 that figure is
@@ -1796,6 +2241,13 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
     # engine taxed.
     primary_wage_base = _wage_base(feed.inputs) - partner_wage_base
     has_partner = bool(partner_ids)
+    # The additional-Medicare gap compares MEDICARE wages (2026-09-23 spec §W6): ESPP ordinary
+    # income is W-2 income but not Medicare wages, so each side's own ESPP component comes out
+    # — the primary's by subtraction, like their wage base. (The spec names the primary; a
+    # partner's is the same rule, and a no-op for a household whose equity is all the
+    # primary's.) The W-2 figures published below keep it: they are W-2 wages.
+    partner_espp = partner_values.get(ESPP_ORDINARY_KEY, ZERO)
+    primary_espp = feed.inputs.get(ESPP_ORDINARY_KEY, ZERO) - partner_espp
     partner_fed = partner_values.get(PARTNER_FED_WITHHOLDING_KEY) if has_partner else None
     partner_state = partner_values.get(PARTNER_STATE_WITHHOLDING_KEY) if has_partner else None
 
@@ -1816,6 +2268,9 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
             )
             continue
         profiles.append(profile)
+
+    names = {person.id: person.name for person in people}
+    partner_name = names.get(partner_ids[0]) if len(partner_ids) == 1 else None
 
     # Whose paycheck is whose (2026-08-27 spec §4.2). Before the person migration every
     # profile was the primary's and this route fed them all to one leg; with per-person
@@ -1906,8 +2361,8 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         medicare=feed.tables.get("medicare", []),
         social_security=feed.primary_payroll_table("social_security"),
         disability=feed.primary_payroll_table("disability"),
-        primary_wages=primary_wage_base,
-        partner_wages=partner_wage_base if has_partner else ZERO,
+        primary_wages=primary_wage_base - primary_espp,
+        partner_wages=(partner_wage_base - partner_espp) if has_partner else ZERO,
         partner_withheld_fed=partner_fed,
         partner_withheld_state=partner_state,
         # Non-empty flips the partner's leg from ENTERED to SIMULATED, and the service
@@ -1917,6 +2372,11 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         # None really is "no row stored on the primary's side" — an entered 0 is a real
         # answer (a bonus nobody withheld on) and must not be replaced by the model.
         bonus_withholding=_primary_share(feed.inputs, partner_values, BONUS_WITHHOLDING_KEY),
+        # Whose checks the §W1 sentences are about ("Grace's checks on or before Sep 1 …"). A
+        # partner is named only when the return covers exactly one: several fold into ONE
+        # simulated leg, and a sentence naming one of them would be about the others too.
+        primary_name=None if primary is None else primary.name,
+        partner_name=partner_name,
     )
     warnings.extend(estimated.warnings)
 
@@ -2113,6 +2573,69 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
             ),
         )
 
+    # Each simulated leg's counted-check facts (2026-09-23 spec §W2), in the order the card
+    # reads them: the primary's (when they have a usable profile), then the partner's.
+    grids: list[WithholdingGridOut] = []
+    if primary_profiles:
+        grids.append(
+            WithholdingGridOut(
+                role="primary",
+                person_id=feed.primary_column,
+                name=None if primary is None else primary.name,
+                checks_elapsed=estimated.checks_elapsed,
+                checks_total=estimated.checks_total,
+                first_check=estimated.salary_first_check,
+                starts_on=estimated.salary_starts_on,
+                gross_projected=_money(estimated.salary_gross_projected),
+                trad_401k_projected=_money(estimated.salary_trad_401k_projected),
+                roth_401k_projected=_money(estimated.salary_roth_401k_projected),
+                hsa_projected=_money(estimated.salary_hsa_projected),
+                early_checks_note=estimated.salary_early_note,
+            )
+        )
+    if estimated.partner_source == withholding_calc.PARTNER_SIMULATED:
+        grids.append(
+            WithholdingGridOut(
+                role="partner",
+                person_id=partner_ids[0] if len(partner_ids) == 1 else None,
+                name=partner_name,
+                checks_elapsed=estimated.partner_checks_elapsed,
+                checks_total=estimated.partner_checks_total,
+                first_check=estimated.partner_first_check,
+                starts_on=estimated.partner_starts_on,
+                gross_projected=_money(estimated.partner_gross_projected),
+                trad_401k_projected=_money(estimated.partner_trad_401k_projected),
+                roth_401k_projected=_money(estimated.partner_roth_401k_projected),
+                hsa_projected=_money(estimated.partner_hsa_projected),
+                early_checks_note=estimated.partner_early_note,
+            )
+        )
+
+    # Null when the engine refused the year: there is no liability to price a difference in.
+    reconciliation = (
+        await _reconciliation(
+            db,
+            feed,
+            today,
+            estimated=estimated,
+            primary_profiles=primary_profiles,
+            partner_ids=partner_ids,
+            partner_profiles=partner_profiles,
+            ticker=ticker,
+            has_grants=bool(grants),
+            # A vest left out for want of a price makes the RSU figure a floor (review finding 4).
+            vests_complete=not unpriced and not missing_quote,
+            future_vests=future_vests,
+            bar_days=bar_days,
+            bar_closes=bar_closes,
+            latest_price=latest_price,
+            liability_total=liability_total,
+            withheld_projected=total_projected,
+        )
+        if reconcile and liability_total is not None
+        else None
+    )
+
     return WithholdingOut(
         year=year,
         filing_status=feed.filing_status,
@@ -2156,26 +2679,75 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         safe_harbor=safe_harbor,
         jurisdictions=jurisdictions,
         warnings=warnings,
+        grids=grids,
+        reconciliation=reconciliation,
     )
 
 
-@router.get("/years/{year}/withholding", response_model=WithholdingOut)
-async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) -> WithholdingOut:
-    """Estimated all-in withholding for the CURRENT year vs the engine's liability.
+async def _withholding_json(db: AsyncSession, year: int) -> bytes:
+    """The GET's payload as serialized JSON, served from the memo while nothing it reads has
+    changed (2026-09-23 spec §W12) — the reconciliation makes a cold build about ten engine
+    runs, and the Overview asks on every visit.
 
     The product clock is the one clock this route reads (comp.py's note: the prod container
     runs UTC, where a PT evening is already tomorrow), and it is read ONCE — the
-    same day decides the year check, which checks have been received, and which vests are
-    behind us. `withholding_calc` never re-reads a vest tuple's date, and neither does
-    `withholding_estimate`, so that single value is what keeps the past/future split and the
-    check grid consistent with each other.
+    same day decides the year check, the memo's key, which checks have been received, and
+    which vests are behind us. `withholding_calc` never re-reads a vest tuple's date, and
+    neither does `withholding_estimate`, so that single value is what keeps the past/future
+    split and the check grid consistent with each other.
     """
     today = clock.product_today()
     if year != today.year:
         # Before `_require_year`: a settled year may well be stored and summarizable, and the
         # reason this card cannot be drawn for it has nothing to do with whether it exists.
         raise HTTPException(status_code=422, detail=NON_CURRENT_YEAR_MESSAGE)
-    return await withholding_estimate(db, year, today)
+
+    async def build() -> bytes:
+        estimate = await withholding_estimate(db, year, today, reconcile=True)
+        return estimate.model_dump_json().encode()
+
+    return await cached_withholding(db, year, build, today=today)
+
+
+@router.get("/years/{year}/withholding", response_model=WithholdingOut)
+async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) -> Response:
+    """Estimated all-in withholding for the CURRENT year vs the engine's liability, with the
+    typed-inputs reconciliation. The memo's bytes are returned as they are (§W12) —
+    `response_model` still documents the shape, and FastAPI passes a Response through."""
+    return Response(content=await _withholding_json(db, year), media_type="application/json")
+
+
+async def read_withholding(db: AsyncSession, year: int) -> WithholdingOut:
+    """The GET's payload for a DIRECT caller (the assistant, §W12): the same memoised bytes,
+    decoded into a model of its own — so no caller can mutate a value another will read."""
+    return WithholdingOut.model_validate_json(await _withholding_json(db, year))
+
+
+def _scenario_breakdown(feed: EngineFeed, scenario_inputs: dict[str, Decimal]) -> TaxBreakdown:
+    """The engine over a what-if scenario's inputs.
+
+    The whole wage delta is the PRIMARY's (their lots, their ESPP — the app models no partner
+    equity), so their bundle is re-materialized from their OWN component bucket with the
+    scenario's per-person deltas folded in, and the partner's wage base is untouched beside it.
+    Per-person keys only: a household delta is not anybody's wages. One helper for the
+    scenario and for the sale summary's legs-only run (§W7), so the two cannot disagree about
+    how a leg is taxed.
+    """
+    stored = feed.inputs
+    primary_after = dict(feed.person_inputs.get(feed.primary_column, {}))
+    for key in PER_PERSON_KEYS:
+        if is_derived_key(key):
+            continue  # rebuilt from the components below, never carried as a delta
+        delta = scenario_inputs.get(key, ZERO) - stored.get(key, ZERO)
+        if delta:
+            primary_after[key] = primary_after.get(key, ZERO) + delta
+    return compute_breakdown(
+        feed.year,
+        scenario_inputs,
+        feed.tables,
+        filing_status=feed.filing_status,
+        earners=shift_earners(feed.earners, primary_after),
+    )
 
 
 @router.post("/what-if", response_model=WhatIfOut)
@@ -2326,27 +2898,35 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
         ),
         feed,
     )
-    # The whole wage delta is the PRIMARY's (their lots, their ESPP — the app models no
-    # partner equity), so their bundle is re-materialized from their OWN component bucket
-    # with the scenario's per-person deltas folded in, and the partner's wage base is
-    # untouched beside it. Per-person keys only: a household delta is not anybody's wages.
-    primary_after = dict(feed.person_inputs.get(feed.primary_column, {}))
-    for key in PER_PERSON_KEYS:
-        if is_derived_key(key):
-            continue  # rebuilt from the components below, never carried as a delta
-        delta = scenario_inputs.get(key, ZERO) - stored.get(key, ZERO)
-        if delta:
-            primary_after[key] = primary_after.get(key, ZERO) + delta
-    scenario = _summary_out(
-        compute_breakdown(
-            year,
-            scenario_inputs,
-            brackets,
-            filing_status=feed.filing_status,
-            earners=shift_earners(feed.earners, primary_after),
-        ),
-        feed,
-    )
+    scenario = _summary_out(_scenario_breakdown(feed, scenario_inputs), feed)
+
+    # The sale in CASH terms (2026-09-23 spec §W7): "Δ take-home" is an income concept that
+    # never counts proceeds, so a $59.5K qualified lot read as −$11,651. Present whenever the
+    # scenario sells something; the tax due counts the SALES only — with no overrides that is
+    # the delta itself, with overrides it takes one more engine run over the legs alone.
+    sale_summary = None
+    if sale_details or espp_details:
+        if overrides:
+            legs_inputs, _legs_warnings = apply_scenario(stored, sale_details, espp_details, {})
+            legs_tax = _money(_scenario_breakdown(feed, legs_inputs).totals.total_tax)
+            tax_due = legs_tax - baseline.totals.total_tax
+        else:
+            tax_due = scenario.totals.total_tax - baseline.totals.total_tax
+        proceeds = _money(
+            sum((d.proceeds for d in sale_details), ZERO)
+            + sum((e.proceeds for e in espp_details), ZERO)
+        )
+        gain = _money(
+            sum((d.gain for d in sale_details), ZERO)
+            + sum((e.ordinary_income + e.capital_gain for e in espp_details), ZERO)
+        )
+        sale_summary = SaleSummaryOut(
+            proceeds=proceeds,
+            gain=gain,
+            tax_due=tax_due,
+            net_cash=_money(proceeds - tax_due),
+            after_tax_gain=_money(gain - tax_due),
+        )
 
     changed: list[ChangedInput] = []
     labels = {key: label for key, label, _s, _o, _d in TAX_INPUT_DEFINITIONS}
@@ -2358,12 +2938,14 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
         before = stored.get(key, ZERO)
         after = scenario_inputs.get(key, ZERO)
         if before != after:
+            unit = unit_for(key)
             changed.append(
                 ChangedInput(
                     key=key,
                     label=labels.get(key, key),
-                    before=_money(before),
-                    after=_money(after),
+                    before=_in_unit(before, unit),
+                    after=_in_unit(after, unit),
+                    unit=unit,
                 )
             )
 
@@ -2395,4 +2977,5 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
         sale_details=[SaleDetailOut(**vars(d)) for d in sale_details],
         espp_sale_details=[EsppSaleDetailOut(**vars(d)) for d in espp_details],
         warnings=scenario_warnings,
+        sale_summary=sale_summary,
     )

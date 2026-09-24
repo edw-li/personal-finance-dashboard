@@ -31,6 +31,7 @@ from app.services.tax_service import (
     ZERO,
     compute_breakdown,
     derive_suggestions,
+    earner_from_inputs,
     materialize_household,
     materialize_person,
     niit_advisory,
@@ -1391,3 +1392,52 @@ def test_niit_advisory_reaches_the_breakdown_warnings():
     # 75.59264 on the NIIT line. That state is what migration f7d3b2a91c40 ends.
     assert breakdown.capital_gains.tax == Decimal("179.13") * Decimal("0.188")
     assert breakdown.niit.tax == Decimal("75.59264")
+
+
+# --- ESPP income (2026-09-23 spec §W6, moved by design) -----------------------------------
+
+
+def test_espp_ordinary_income_is_income_tax_wages_but_not_fica_or_sdi_wages():
+    """A §423 disposition's ordinary income is W-2 box-1 income, not Medicare / Social
+    Security wages (IRC §3121(a)(22)) — and California's SDI follows the FICA base here. So
+    the federal and state AGIs move by it and the three payroll walks do not."""
+    base = compute_breakdown(2024, dict(YEAR_INPUTS[2024]), YEAR_BRACKETS[2024])
+    with_espp = {**YEAR_INPUTS[2024], "w2_espp_sale_component": Decimal("5000")}
+    moved = compute_breakdown(2024, with_espp, YEAR_BRACKETS[2024])
+    assert moved.federal.agi == base.federal.agi + Decimal("5000")
+    assert moved.state.agi == base.state.agi + Decimal("5000")
+    assert moved.medicare.taxable_wages == base.medicare.taxable_wages
+    assert moved.medicare.tax == base.medicare.tax
+    assert moved.social_security.taxable_wages == base.social_security.taxable_wages
+    assert moved.social_security.tax == base.social_security.tax
+    assert moved.disability.taxable_wages == base.disability.taxable_wages
+    assert moved.disability.tax == base.disability.tax
+    # The W-2 line itself still carries it: it IS W-2 income.
+    assert moved.medicare.w2_income == base.medicare.w2_income + Decimal("5000")
+
+
+def test_gross_income_and_take_home_include_the_espp_gain_components():
+    base = compute_breakdown(2024, dict(YEAR_INPUTS[2024]), YEAR_BRACKETS[2024])
+    values = {
+        **YEAR_INPUTS[2024],
+        "ltcg_espp_component": Decimal("3000"),
+        "stcg_espp_component": Decimal("700"),
+    }
+    moved = compute_breakdown(2024, values, YEAR_BRACKETS[2024])
+    assert moved.totals.gross_income == base.totals.gross_income + Decimal("3700")
+    assert moved.totals.take_home == moved.totals.gross_income - moved.totals.total_tax
+
+
+def test_a_per_person_bundle_leaves_its_own_espp_income_out_of_its_fica_base():
+    earner = earner_from_inputs(
+        {
+            "annual_salary": Decimal("120000"),
+            "pay_periods": Decimal("24"),
+            "w2_espp_sale_component": Decimal("2000"),
+            "hsa_contributions": Decimal("1000"),
+        }
+    )
+    assert earner.w2_wages == Decimal("122000.0000")
+    assert earner.espp_ordinary == Decimal("2000")
+    assert earner.fica_wages == Decimal("119000.0000")  # 122000 - 1000 HSA - 2000 ESPP
+    assert earner.sdi_wages == Decimal("120000.0000")  # HSA stays IN for SDI; ESPP does not

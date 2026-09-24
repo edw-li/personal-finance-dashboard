@@ -736,6 +736,35 @@ that makes them vanish has introduced a bug, not removed one.
 
 **Do not "fix" any of these** — the same rule as the five above.
 
+**Four more deliberate changes (2026-09-23, "Will I owe?"):**
+
+- **ESPP §423 qualifying cap.** A qualifying disposition's ordinary income is capped at the
+  plan discount on the *offering-date* value — shares × subscription price × discount — as
+  IRC §423(c) reads. The old formula took the stored subscription price for the
+  already-discounted price and divided it back up by (1 − discount), but the app stores the
+  undiscounted offering-date price there — so the cap falls to 85 % of the old figure (at a
+  15 % discount); ordinary income moves only where the cap binds.
+- **ESPP ordinary income is not a payroll wage.** It stays W-2 income for federal and state
+  income tax but leaves the Medicare, Social Security and SDI bases (IRC §3121(a)(22)); the
+  What-if's "real ESPP ordinary income is FICA-exempt" disclaimer went with the bug it
+  apologised for.
+- **Gross income counts ESPP gains.** `gross_income` — and so take-home and the effective
+  rate — includes the ESPP short- and long-term gain components. No stored year carries an
+  ESPP component on the 2026-09-23 data, so none of these three moved a stored figure.
+- **Nothing is paid before a person's first paycheck profile.** A grid check dated on or
+  before the earliest profile's effective date counts as $0 and is not counted, and the
+  Paycheck pace strip and the calendar's paydays follow the same rule. Grace's projected
+  withholding goes $5,850.00 → $1,950.00 (8 checks from Sep 16) and her Paycheck pace figures
+  shrink the same way; a household whose first profile starts on or before Jan 1 is
+  byte-identical. The calendar's Jan 15 and Apr 15 amounts for LAST year follow the rule too: a
+  first profile dated after last year's checks withholds nothing for that year, so its
+  shortfall or balance is the whole bill (on the 2026-09-23 data no one is affected — Edward's
+  first profile is Jan 1, 2026, and Grace's 2026 is already her 8 checks).
+
+**Do not "fix" these either.** The "Will I owe?" card's *Your inputs vs your records* strip
+flags a typed input that differs from Paycheck, RSU grants or ESPP lots by more than $250 of
+tax; it never writes one — the tax inputs stay typed by hand.
+
 **On the cron**: a legacy numeric day-of-week (`10 13 * * 1-5`) is misread by the scheduler
 (APScheduler counts `0` as Monday, so the whole range slips a day) *and* makes the settings
 form's first Save fail with a 422 until it is rewritten with names. A shipped repair

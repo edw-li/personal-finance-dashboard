@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from app.services.calendar.generators.custom import CustomRow, custom_events
 from app.services.calendar.generators.dividends import ExDividend, ex_dividend_events
 from app.services.calendar.generators.espp import espp_events
-from app.services.calendar.generators.payroll import PaydaySource, payday_events
+from app.services.calendar.generators.payroll import PaydaySource, PayRate, payday_events
 from app.services.calendar.generators.ritual import ritual_events
 from app.services.calendar.generators.rsu import SUPPLEMENTAL, vest_events
 from app.services.calendar.generators.taxes import tax_deadline_events
@@ -106,6 +106,80 @@ def test_payday_without_a_computable_net_is_unpriced():
         [PaydaySource("Me", True, None, 1)], Window(date(2026, 8, 1), date(2026, 8, 31))
     )
     assert event.amount is None and event.items[0].amount is None
+
+
+# --- one payroll start (2026-09-23 spec §W1): a payday on or before a person's first profile
+# is not emitted, and each payday is priced by the profile in force on it.
+
+
+def test_paydays_start_after_the_first_profile():
+    grace = PaydaySource(
+        "Grace",
+        True,
+        Decimal("568.75"),
+        2,
+        timeline=(PayRate(date(2026, 9, 1), True, Decimal("568.75")),),
+        starts_on=date(2026, 9, 1),
+    )
+    events = payday_events([grace], Window(date(2026, 8, 1), date(2026, 9, 30)))
+    # Aug 14 and Aug 31 predate the job; Sep 15 is her first check.
+    assert [(e.event_date, e.amount) for e in events] == [
+        (date(2026, 9, 15), Decimal("568.75")),
+        (date(2026, 9, 30), Decimal("568.75")),
+    ]
+
+
+def test_each_payday_is_priced_by_the_profile_in_force_on_it():
+    me = PaydaySource(
+        "Me",
+        True,
+        Decimal("6000"),
+        1,
+        timeline=(
+            PayRate(date(2026, 1, 1), True, Decimal("5000")),
+            PayRate(date(2026, 8, 17), True, Decimal("6000")),
+        ),
+        starts_on=date(2026, 1, 1),
+    )
+    events = payday_events([me], Window(date(2026, 8, 1), date(2026, 8, 31)))
+    assert [(e.event_date, e.amount) for e in events] == [
+        (date(2026, 8, 14), Decimal("5000.00")),  # before the Aug 17 raise
+        (date(2026, 8, 31), Decimal("6000.00")),
+    ]
+
+
+def test_a_timeline_slice_on_another_cadence_emits_nothing():
+    me = PaydaySource(
+        "Me",
+        True,
+        Decimal("5000"),
+        1,
+        timeline=(
+            PayRate(date(2026, 1, 1), True, Decimal("5000")),
+            PayRate(date(2026, 8, 20), False, Decimal("4000")),
+        ),
+        starts_on=date(2026, 1, 1),
+    )
+    events = payday_events([me], Window(date(2026, 8, 1), date(2026, 8, 31)))
+    assert [e.event_date for e in events] == [date(2026, 8, 14)]
+
+
+def test_a_source_whose_current_profile_is_not_semi_monthly_still_pays_its_semi_monthly_past():
+    # The source-level flag describes TODAY's profile (the health note); the timeline decides
+    # each payday, so the checks of an earlier semi-monthly job still show.
+    me = PaydaySource(
+        "Me",
+        False,
+        Decimal("4000"),
+        1,
+        timeline=(
+            PayRate(date(2026, 1, 1), True, Decimal("5000")),
+            PayRate(date(2026, 8, 20), False, Decimal("4000")),
+        ),
+        starts_on=date(2026, 1, 1),
+    )
+    events = payday_events([me], Window(date(2026, 8, 1), date(2026, 8, 31)))
+    assert [e.event_date for e in events] == [date(2026, 8, 14)]
 
 
 # --- espp --------------------------------------------------------------------------------

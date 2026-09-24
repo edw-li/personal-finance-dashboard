@@ -1491,7 +1491,7 @@ async def test_breakdown_pace_walks_the_year_into_so_far_and_projected(auth_clie
     """Spec §2.6: one payday walk answers "what has gone in" and "where does it land" at
     once — the reason a September HSA row reading 2,400 of 4,400 was never a bug."""
     from app.models import ContributionLimit
-    from app.services.pace_walk import first_payday
+    from app.services.business_days import semi_monthly_paydays
 
     this_year = clock.product_today().year
     db.add(ContributionLimit(year=this_year, key="limit_401k_elective", value=D("24500.00")))
@@ -1525,7 +1525,9 @@ async def test_breakdown_pace_walks_the_year_into_so_far_and_projected(auth_clie
     assert hsa["annualized"] == "4400.00"  # 100 x 24 + the employer's 2,000
     # ONE walk behind both rows: the HSA leg is a tenth of the elective one payday for
     # payday, plus the January deposit once that check has been cut.
-    deposit = D("2000.00") if first_payday(this_year, 24) < clock.product_today() else D("0")
+    # The deposit rides the first payday the walk credits: January's first, for a Jan 1 start.
+    first_payday = semi_monthly_paydays(this_year, 1)[0]
+    deposit = D("2000.00") if first_payday < clock.product_today() else D("0")
     assert D(hsa["so_far"]) == so_far / 10 + deposit
     # And 415(c) walks too — it is the only row that adds three legs together.
     assert rows["limit_415c_total"]["so_far"] is not None
@@ -1533,11 +1535,10 @@ async def test_breakdown_pace_walks_the_year_into_so_far_and_projected(auth_clie
     assert [row["backfilled_from"] for row in rows.values()] == [None] * 3
 
 
-async def test_breakdown_pace_says_when_a_walked_row_borrowed_a_profile(auth_client, db, me):
-    """A new hire has no profile for January, so those paydays are priced from the earliest
-    one there is — and EVERY walked row says so, not just the ESPP one."""
+async def test_breakdown_pace_counts_nothing_before_the_first_profile(auth_client, db, me):
+    """A new hire has no profile for January, so those paydays credit nothing (2026-09-23 spec
+    §W1) — and EVERY walked row says when the job starts, not just the ESPP one."""
     from app.models import ContributionLimit
-    from app.services.pace_walk import first_payday
 
     this_year = clock.product_today().year
     db.add(ContributionLimit(year=this_year, key="limit_401k_elective", value=D("24500.00")))
@@ -1557,8 +1558,10 @@ async def test_breakdown_pace_says_when_a_walked_row_borrowed_a_profile(auth_cli
     )
     assert created.status_code == 201, created.text
     rows = {row["key"]: row for row in (await auth_client.get(BREAKDOWN)).json()["pace"]}
-    # Computed, not pinned: read before this year's first payday there is nothing behind
-    # today to have borrowed for.
-    borrowed = started.isoformat() if first_payday(this_year, 24) < clock.product_today() else None
-    assert rows["limit_401k_elective"]["backfilled_from"] == borrowed
-    assert rows["limit_415c_total"]["backfilled_from"] == borrowed
+    # Whatever today is, the Jan 15 … Feb 27 paydays of this year's window fall on or before
+    # Mar 1: nothing counts before it, and both rows name the start.
+    assert rows["limit_401k_elective"]["starts_on"] == started.isoformat()
+    assert rows["limit_415c_total"]["starts_on"] == started.isoformat()
+    assert rows["limit_401k_elective"]["backfilled_from"] is None
+    # 20 paydays after Mar 1 at 10 % of 240,000 / 24.
+    assert rows["limit_401k_elective"]["annualized"] == "20000.00"

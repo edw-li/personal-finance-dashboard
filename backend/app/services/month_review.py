@@ -23,7 +23,7 @@ from app.models import (
 )
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.schemas.month_review import FeedCoverage, MonthReviewOut, ReviewedFeeds
-from app.services import clock
+from app.services import clock, day_labels
 from app.services.review_input_v1 import month_input, revision
 
 REVIEW_INPUT_TABLES = (
@@ -95,8 +95,7 @@ def day_label(value: date, today: date | None = None) -> str:
     """'Oct 1' — with ', 2025' when `today` is given and the year differs. The one spelling of a
     snapshot's day in the server's sentences (the close blocker, the restamp label, the importer's
     warnings)."""
-    label = f"{value:%b} {value.day}"
-    return label if today is None or value.year == today.year else f"{label}, {value.year}"
+    return day_labels.day_label(value, None if today is None else today.year)
 
 
 def early_balances_blocker(month: date, recorded_on: date, today: date) -> str:
