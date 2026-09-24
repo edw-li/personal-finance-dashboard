@@ -51,8 +51,11 @@ export default function StatTile({
   label: string
   value: string
   delta?: string
-  tone?: 'positive' | 'negative' | 'neutral'
-  direction?: 'up' | 'down'
+  /** `warn` is a caution (amber) with no glyph of its own — the Projection's borderline verdict. */
+  tone?: 'positive' | 'negative' | 'neutral' | 'warn'
+  /** `none`: the delta is a verdict, not a movement — no glyph whatever the tone (the caller's
+   *  words and a badge carry the judgment; 2026-09-23 correctness spec §R7). */
+  direction?: 'up' | 'down' | 'none'
   hint?: string
   hero?: boolean
   evidence?: MetricEvidence
@@ -98,15 +101,17 @@ export default function StatTile({
     return () => cancelAnimationFrame(frame)
   }, [])
   const glyph =
-    direction === 'up'
-      ? '▲'
-      : direction === 'down'
-        ? '▼'
-        : tone === 'positive'
-          ? '▲'
-          : tone === 'negative'
-            ? '▼'
-            : ''
+    direction === 'none'
+      ? ''
+      : direction === 'up'
+        ? '▲'
+        : direction === 'down'
+          ? '▼'
+          : tone === 'positive'
+            ? '▲'
+            : tone === 'negative'
+              ? '▼'
+              : ''
   return (
     <div className={hero ? 'stat-tile stat-tile-hero' : 'stat-tile'}>
       <div className="stat-label">

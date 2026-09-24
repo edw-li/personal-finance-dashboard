@@ -49,6 +49,24 @@ describe('StatTile delta glyph', () => {
     expect(delta()?.className).toContain('stat-delta-neutral')
   })
 
+  it('colours a warn tone amber with no glyph — a caution is not a movement', () => {
+    // The Projection's "Money lasts" verdict (2026-09-23 spec §R7): borderline reads amber.
+    render(<StatTile label="Money lasts" value="82.0% of paths through 2075" delta="In 9 of 10 paths…" tone="warn" />)
+    expect(glyphOf()).toBe('')
+    expect(delta()?.className).toContain('stat-delta-warn')
+  })
+
+  it('draws no glyph for direction "none", whatever the tone says', () => {
+    // A verdict is judged, not moved: on track is green without claiming the number rose.
+    render(<StatTile label="Money lasts" value="92.0% of paths through 2075" delta="In 9 of 10 paths…" tone="positive" direction="none" />)
+    expect(glyphOf()).toBe('')
+    expect(delta()?.className).toContain('stat-delta-positive')
+    cleanup()
+    render(<StatTile label="Money lasts" value="41.0% of paths through 2075" delta="In 9 of 10 paths…" tone="negative" direction="none" />)
+    expect(glyphOf()).toBe('')
+    expect(delta()?.className).toContain('stat-delta-negative')
+  })
+
   it('lets an explicit UP direction ride a negative tone', () => {
     // Overview's spending tile: the month rose (▲, honest about the number) and that is BAD
     // (red, plus the caller's word "over"). Tone-derived glyphs would print ▼ on a rise.
