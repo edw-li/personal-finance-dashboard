@@ -9,6 +9,7 @@ const input = (kind: SaveKind, overrides: Partial<MonthSaveInput> = {}): MonthSa
   revision: 'r'.repeat(64),
   reviewed: { balances: true, spending: false, take_home: false },
   dirty: { balances: false, flows: false },
+  notBegun: false,
   balances: { notes: '', rows: [{ account_id: 1, balance: '1500.00' }] },
   spending: {
     amounts: [{ category_id: 7, amount: '250.00' }],
@@ -67,5 +68,16 @@ describe('buildMonthSave', () => {
     expect([both.sendBalances, both.sendSpending, both.body.close]).toEqual([true, true, true])
     const spendingOnly = buildMonthSave(input('review', { dirty: { balances: false, flows: true } }))
     expect([spendingOnly.sendBalances, spendingOnly.sendSpending]).toEqual([false, true])
+  })
+
+  // Spec review G1 (2026-09-23 spec §M3): a month that has not begun takes no spending. Its inputs
+  // are disabled, but a restored draft or a paste could still leave the part dirty — the Review
+  // must not carry it to the server.
+  it('the Review never sends the spending of a month that has not begun, dirty or not', () => {
+    for (const kind of ['review', 'close'] as const) {
+      const built = buildMonthSave(input(kind, { dirty: { balances: true, flows: true }, notBegun: true }))
+      expect([built.sendBalances, built.sendSpending]).toEqual([true, false])
+      expect('spending' in built.body).toBe(false)
+    }
   })
 })

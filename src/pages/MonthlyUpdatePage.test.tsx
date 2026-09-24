@@ -2968,6 +2968,53 @@ describe('which months can be opened (2026-09-23 spec §M3)', () => {
     expect((screen.getByLabelText('Household take-home') as HTMLInputElement).disabled).toBe(true)
   })
 
+  // Spec review G1: next month's spending stays shut through every door — not only its disabled
+  // boxes, but a draft left from before the parts were split, and a paste landing on the card.
+  it("a restored draft never sends next month's spending from the Review", async () => {
+    setServerToday('2026-10-03')
+    // A whole-month draft typed through the old "Start Nov": both parts under one key.
+    sessionStorage.setItem(
+      'finance-update-draft:2026-11-01',
+      JSON.stringify({ balances: { 1: '1600.00' }, amounts: { 7: '250.00' }, netPay: '6000.00', recordedOn: '2026-10-20', notes: '' }),
+    )
+    renderPage('/update?month=2026-11-01&step=review')
+    fireEvent.click(await screen.findByRole('button', { name: 'Save progress' }))
+    await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
+    expect('spending' in sentBody()).toBe(false)
+    expect(sentBody().balances).toEqual({ notes: null, balances: [{ account_id: 1, balance: '1600.00' }] })
+    // The spending draft waits for November to begin rather than being thrown away.
+    expect(sessionStorage.getItem('finance-update-draft:flows:2026-11-01')).not.toBeNull()
+    expect(screen.queryByText(/Restored unsaved November spending/)).toBeNull()
+  })
+
+  it("a paste on next month's Spending card fills nothing", async () => {
+    setServerToday('2026-10-03')
+    renderPage('/update?month=2026-11-01&step=spending')
+    await screen.findByText('November spending can be entered once November begins.')
+    const food = screen.getByLabelText('Food') as HTMLInputElement
+    const before = food.value
+    // Focus on a card button: a paste with no cell under it fills from the first row.
+    const back = screen.getByRole('button', { name: 'Back' })
+    back.focus()
+    fireEvent.paste(back, { clipboardData: { getData: () => '1\n2\n3' } })
+    expect(food.value).toBe(before)
+    expect(screen.queryByText(/^Pasted /)).toBeNull()
+    expect(sessionStorage.getItem('finance-update-draft:flows:2026-11-01')).toBeNull()
+  })
+
+  it('a paste on a month beyond next month fills no balance', async () => {
+    setServerToday('2026-10-03')
+    renderPage('/update?month=2026-12-01')
+    await screen.findByText('Dec 1 balances can be recorded from Nov 1 (early) or on Dec 1.')
+    const checking = screen.getByLabelText('Checking') as HTMLInputElement
+    const before = checking.value
+    const next = screen.getByRole('button', { name: /^Next: / })
+    next.focus()
+    fireEvent.paste(next, { clipboardData: { getData: () => '1\n2' } })
+    expect(checking.value).toBe(before)
+    expect(screen.queryByText(/^Pasted /)).toBeNull()
+  })
+
   it("allows the current month's spending with the in-progress note", async () => {
     setServerToday('2026-10-03')
     renderPage('/update?month=2026-10-01&step=spending')

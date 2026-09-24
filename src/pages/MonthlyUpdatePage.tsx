@@ -361,6 +361,11 @@ function MonthlyUpdateWizard() {
   // Re-render when the server's day moves (a tab left open across midnight): every phase, due and
   // banner rule here reads the day through utils/months.ts (2026-09-23 spec §K1).
   useProductToday()
+  // Where this month sits against the server's month (spec §M3): balances open early for next
+  // month only; a month beyond it saves nothing; spending opens once its month has begun — and
+  // until then no door leads to it: not its boxes, a paste, a restored draft or the Review.
+  const phase = monthPhase(month)
+  const notBegun = phase === 'next' || phase === 'beyond'
 
   const [accounts, setAccounts] = useState<AccountOut[]>([])
   const [categories, setCategories] = useState<CategoryOut[]>([])
@@ -710,6 +715,7 @@ function MonthlyUpdateWizard() {
           accountIds: visibleAccounts.map((a) => a.id),
           categoryIds: activeCategories.map((c) => c.id),
           derive: (typed, record) => deriveParents(derivationFor(byParent, typed), record),
+          notBegun: ['next', 'beyond'].includes(monthPhase(month)),
         })
         if (restored.drop.balances) removeDraft('balances', month)
         if (restored.drop.flows) removeDraft('flows', month)
@@ -751,13 +757,15 @@ function MonthlyUpdateWizard() {
     else writeDraft('balances', month, now)
   }, [balances, notes, typedParents, balancesBase, month, loading])
 
+  // A month that has not begun keeps no spending draft of its own making — and must not delete the
+  // one waiting from before (spec review G1): its boxes are shut, so this effect has nothing to say.
   useEffect(() => {
-    if (loading || flowsBase === null || flowsBase.month !== month) return
+    if (loading || notBegun || flowsBase === null || flowsBase.month !== month) return
     const now = { amounts, netPay }
     currentRaw.current.flows = JSON.stringify(now)
     if (flowsKey(now) === flowsKey(flowsBase.part)) removeDraft('flows', month)
     else writeDraft('flows', month, now)
-  }, [amounts, netPay, flowsBase, month, loading])
+  }, [amounts, netPay, flowsBase, month, loading, notBegun])
 
   // The flash is a one-shot: the timer callback clears it, so the effect body itself never
   // sets state (a set here would re-run the effect on its own write).
@@ -931,6 +939,7 @@ function MonthlyUpdateWizard() {
     flowsBase.month === month &&
     (flowsKey({ amounts, netPay }) !== flowsKey(flowsBase.part) || recordZero !== flowsBase.part.recordZero)
 
+
   const confirmationInputs = {
     balances: JSON.stringify({ balances, notes, typedParents: sortedIds(typedParents) }),
     spending: JSON.stringify({ amounts, recordZero }),
@@ -1003,6 +1012,7 @@ function MonthlyUpdateWizard() {
       revision: review.input_revision,
       reviewed,
       dirty: { balances: balancesDirty, flows: flowsDirty },
+      notBegun,
       balances: {
         notes,
         rows: accounts
@@ -1267,10 +1277,6 @@ function MonthlyUpdateWizard() {
   // confirmed complete. The banner says so; the Confirm settles it (spec §M1).
   const partial = monthFlows?.spending === 'partial'
 
-  // Where this month sits against the server's month (spec §M3): balances open early for next
-  // month only; a month beyond it saves nothing; spending opens once its month has begun.
-  const phase = monthPhase(month)
-  const notBegun = phase === 'next' || phase === 'beyond'
   // Balances recorded before their 1st, once that 1st has arrived: a save now makes them final
   // (K4), so an unchanged save IS the Confirm (spec §M4). The server never restamps a legacy or a
   // closed month (K4 as landed — the date would move the digest it was adopted or certified at),
@@ -1685,16 +1691,20 @@ function MonthlyUpdateWizard() {
             inert={loading || undefined}
             className="card"
             data-entry-scope=""
-            onPaste={(e) =>
-              handlePaste(
-                e,
-                // Spec §5: a derived row is not a paste target. Filtering here (not inside
-                // handlePaste) keeps the positional walk's slot count honest — "3 of 3", not
-                // "3 of 4 with one silently shifted".
-                orderedBalanceRows.filter((a) => !isReadOnlyRow(a)),
-                (id) => `bal-${id}`,
-                fillBalances,
-              )
+            // A month beyond next month takes no balances yet (spec §M3) — nor a paste of them.
+            onPaste={
+              phase === 'beyond'
+                ? undefined
+                : (e) =>
+                    handlePaste(
+                      e,
+                      // Spec §5: a derived row is not a paste target. Filtering here (not inside
+                      // handlePaste) keeps the positional walk's slot count honest — "3 of 3", not
+                      // "3 of 4 with one silently shifted".
+                      orderedBalanceRows.filter((a) => !isReadOnlyRow(a)),
+                      (id) => `bal-${id}`,
+                      fillBalances,
+                    )
             }
           >
             <div className="step-head">
@@ -1994,10 +2004,14 @@ function MonthlyUpdateWizard() {
             inert={loading || undefined}
             className="card"
             data-entry-scope=""
-            onPaste={(e) =>
-              handlePaste(e, categories, (id) => `amt-${id}`, (fills) =>
-                setAmounts((cur) => ({ ...cur, ...fills })),
-              )
+            // Spending of a month that has not begun takes no paste either (spec review G1).
+            onPaste={
+              notBegun
+                ? undefined
+                : (e) =>
+                    handlePaste(e, categories, (id) => `amt-${id}`, (fills) =>
+                      setAmounts((cur) => ({ ...cur, ...fills })),
+                    )
             }
           >
             <div className="step-head">
@@ -2268,7 +2282,7 @@ function MonthlyUpdateWizard() {
                 the parts that changed (spec §M1), and a user who expected the other part to be
                 written deserves to learn otherwise while they can still act on it. */}
             <p className="drill-hint" role="status">
-              {reviewSaveNote(month, { balances: balancesDirty, spending: flowsDirty, balancesExist: monthExisted })}
+              {reviewSaveNote(month, { balances: balancesDirty, spending: flowsDirty && !notBegun, balancesExist: monthExisted })}
             </p>
             <div className="wizard-footer">
               <button className="button" onClick={() => setStep('spending')}>

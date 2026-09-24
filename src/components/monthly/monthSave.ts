@@ -16,6 +16,9 @@ export interface MonthSaveInput {
   reviewed: ReviewedFeeds
   /** Each part against what the server holds (parts.ts). */
   dirty: { balances: boolean; flows: boolean }
+  /** The month has not begun (next month or later, spec §M3): its spending is never written — its
+   *  boxes are disabled, and a restored draft or a stray paste must not reach the server either. */
+  notBegun: boolean
   /** The balances leg as it would go out: the notes as typed, the rows already canonical. */
   balances: { notes: string; rows: BalanceEntry[] }
   /** The spending leg as it would go out: the listed rows already canonical, the take-home canonical
@@ -37,9 +40,10 @@ export interface BuiltMonthSave {
 export function buildMonthSave(input: MonthSaveInput): BuiltMonthSave {
   const whole = input.kind === 'review' || input.kind === 'close'
   // A part's own save sends that part; the Review sends the DIRTY parts — an untouched part is never
-  // re-sent, and pre-filled balances nobody touched are never recorded by it.
+  // re-sent, and pre-filled balances nobody touched are never recorded by it. Spending of a month
+  // that has not begun never leaves (spec review G1).
   const sendBalances = input.kind === 'balances' || (whole && input.dirty.balances)
-  const sendSpending = input.kind === 'spending' || (whole && input.dirty.flows)
+  const sendSpending = input.kind === 'spending' || (whole && input.dirty.flows && !input.notBegun)
   const body: MonthSave = {
     expected_revision: input.revision,
     // Every PUT stores the three ticks it carries, so each save sends them as they stand. The

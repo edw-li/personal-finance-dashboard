@@ -17,6 +17,10 @@ export interface RestoreInput {
   categoryIds: number[]
   /** The page's derived-parents rule: every parent not in `typed` becomes the sum of its components. */
   derive: (typed: Set<number>, record: Record<number, string>) => Record<number, string>
+  /** The month has not begun (spec §M3): its spending cannot be entered yet, so a spending draft is
+   *  not laid over its disabled boxes — where the Review would send it (spec review G1). It waits in
+   *  storage for the month to begin. */
+  notBegun: boolean
 }
 
 export interface RestoredParts {
@@ -61,11 +65,13 @@ export function restoreParts(input: RestoreInput): RestoredParts {
           netPay: flowsDraft.netPay ?? flowsSeed.netPay,
         }
   const restoreBalances = draftBalances !== null && balancesKey(draftBalances) !== balancesKey(balancesSeed)
-  const restoreFlows = draftFlows !== null && flowsKey(draftFlows) !== flowsKey(flowsSeed)
+  const flowsDiffer = draftFlows !== null && flowsKey(draftFlows) !== flowsKey(flowsSeed)
+  const restoreFlows = flowsDiffer && !input.notBegun
   return {
     balances: restoreBalances && draftBalances !== null ? draftBalances : balancesSeed,
     flows: restoreFlows && draftFlows !== null ? draftFlows : { amounts: flowsSeed.amounts, netPay: flowsSeed.netPay },
     restored: { balances: restoreBalances, flows: restoreFlows },
-    drop: { balances: balancesDraft !== null && !restoreBalances, flows: flowsDraft !== null && !restoreFlows },
+    // A matching draft goes; a differing spending draft of a month not begun stays for later.
+    drop: { balances: balancesDraft !== null && !restoreBalances, flows: flowsDraft !== null && !flowsDiffer },
   }
 }

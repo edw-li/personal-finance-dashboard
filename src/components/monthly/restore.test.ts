@@ -18,6 +18,7 @@ const input = (overrides: Partial<RestoreInput> = {}): RestoreInput => ({
   accountIds: [1, 10, 11, 12],
   categoryIds: [7, 8],
   derive,
+  notBegun: false,
   ...overrides,
 })
 
@@ -55,5 +56,22 @@ describe('restoreParts', () => {
     const out = restoreParts(input({ flowsDraft: { netPay: '6000.00' } }))
     expect(out.restored.flows).toBe(true)
     expect(out.flows).toEqual({ amounts: { 7: '0.00', 8: '2072.23' }, netPay: '6000.00' })
+  })
+
+  // Spec review G1 (2026-09-23 spec §M3): spending typed for a month that has not begun — an old
+  // whole-month "Start Nov" draft, split — is not laid over the disabled boxes, where the Review
+  // would send it. It waits in storage until the month begins; a copy of the seed still goes.
+  it('a spending draft for a month that has not begun is neither restored nor dropped', () => {
+    const waiting = restoreParts(input({ notBegun: true, flowsDraft: { amounts: { 7: '250.00' }, netPay: '6000.00' } }))
+    expect(waiting.restored.flows).toBe(false)
+    expect(waiting.flows).toEqual({ amounts: { 7: '0.00', 8: '2072.23' }, netPay: '' })
+    expect(waiting.drop.flows).toBe(false)
+    const stale = restoreParts(input({ notBegun: true, flowsDraft: { amounts: { 8: '2072.23' } } }))
+    expect(stale.drop.flows).toBe(true)
+  })
+
+  it("a month that has not begun still restores its balances — they may be recorded early", () => {
+    const out = restoreParts(input({ notBegun: true, balancesDraft: { balances: { 1: '1600.00' } } }))
+    expect(out.restored.balances).toBe(true)
   })
 })
