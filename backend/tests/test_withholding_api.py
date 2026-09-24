@@ -1635,6 +1635,20 @@ async def test_the_stored_limits_cap_the_401k_and_the_hsa(auth_client, db, world
     assert rec["notes"] == [NEVER_RECONCILED_NOTE]
 
 
+async def test_the_rsu_apply_target_is_a_put_row_the_inputs_endpoint_takes_as_is(
+    auth_client, db, world, frozen_today
+):
+    """The card writes the row's own (key, person, value) as a person-qualified PUT row
+    (code-quality M2) — so that shape must land on the column the row was read from."""
+    await set_rsu_typed(db, "120000")
+    apply = rows_of(await get_withholding(auth_client))["rsu"]["apply"]
+    assert apply is not None
+    resp = await auth_client.put(f"{YEARS}/{YEAR}/inputs", json={"values": {}, "rows": [apply]})
+    assert resp.status_code == 200, resp.text
+    rsu = rows_of(await get_withholding(auth_client))["rsu"]
+    assert (rsu["typed"], rsu["apply"]) == (apply["value"], None)
+
+
 async def test_two_earners_each_get_their_own_rows_and_the_partners_effect_is_a_save(
     auth_client, db, married_world, frozen_today
 ):
