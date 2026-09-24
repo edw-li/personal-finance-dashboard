@@ -5,6 +5,7 @@ withholding card, the ESPP pace row and the taxes router all read them from here
 """
 
 from datetime import date
+from pathlib import Path
 
 from app.api import month_review as month_review_api
 from app.services import assistant_evidence, day_labels, espp_pace, month_review, withholding_calc
@@ -78,7 +79,7 @@ def test_no_module_keeps_a_copy_of_its_own():
     assert not hasattr(ritual, "_MONTH_NAMES")
     assert not hasattr(ritual, "_month")
     # The month story reads its month's name here, not through the locale's %B.
-    assert "%B" not in open(assistant_evidence.__file__, encoding="utf-8").read()
+    assert "%B" not in Path(assistant_evidence.__file__).read_text(encoding="utf-8")
 
 
 def test_the_month_reviews_long_names_are_the_one_list_too():
@@ -86,7 +87,7 @@ def test_the_month_reviews_long_names_are_the_one_list_too():
     refusal spelled their month through the locale's %B — the merge's leftovers of review minor 7.
     Both read `month_name` now: the same words under any process locale."""
     for module in (month_review, month_review_api):
-        assert "%B" not in open(module.__file__, encoding="utf-8").read(), module.__name__
+        assert "%B" not in Path(module.__file__).read_text(encoding="utf-8"), module.__name__
     blocker = month_review.early_balances_blocker
     assert blocker(date(2026, 10, 1), date(2026, 9, 22), date(2026, 10, 3)).endswith(
         "before closing October."

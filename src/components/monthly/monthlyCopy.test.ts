@@ -156,8 +156,14 @@ describe('sentences', () => {
 // the merge): the wizard's names are the shared helpers — utils/asOf.ts's day label and month
 // list, through utils/timeWords.ts — not a list and a label of its own.
 describe('the wizard spells days and months the one way', () => {
-  it('names a day and a month through utils/timeWords.ts', () => {
-    expect(dayOf).toBe(dayName)
-    expect(monthNameOf).toBe(monthName)
+  it('says every day and month in the shared helpers’ words, in any server year', () => {
+    for (const iso of ['2026-01-01', '2026-09-01', '2026-10-15', '2025-12-01', '2027-02-01']) {
+      expect(dayOf(iso)).toBe(dayName(iso))
+      expect(monthNameOf(iso)).toBe(monthName(iso))
+    }
+    // Another server year: the year moves with it, the same way everywhere.
+    setServerToday('2027-01-05')
+    expect([dayOf('2026-12-01'), monthNameOf('2026-11-01')]).toEqual(['Dec 1, 2026', 'November 2026'])
+    expect([dayOf('2027-01-01'), monthNameOf('2027-01-01')]).toEqual(['Jan 1', 'January'])
   })
 })
