@@ -114,6 +114,34 @@ class MoneyLastsOut(BaseModel):
     reason: str | None = None
 
 
+class VestYearOut(BaseModel):
+    """One calendar year of the scheduled vests the run can include: gross at the latest
+    quote, and after the calendar's sell-to-cover withholding."""
+
+    year: int
+    gross: Decimal
+    after_withholding: Decimal
+
+
+class VestsOut(BaseModel):
+    """Scheduled RSU vests (2026-09-23 spec §R4), on by default when grants exist. Each kept
+    vest — dated after the starting balance's date, before the primary's (the grant holder's)
+    retirement month, on the axis — is priced at the latest employer quote, less the
+    calendar's ≈ 32.23 % sell-to-cover, flat in today's dollars, and lands as a lump in its
+    month. The figures are computed even when `included` is false (the knob turned them off),
+    so the page can say what they would add; `excluded_reason` says why nothing could be
+    priced (no ticker, no quote)."""
+
+    included: bool
+    price: Decimal | None = None
+    price_as_of: date | None = None
+    withholding_rate: Decimal
+    next_12_months: Decimal | None = None  # after withholding, vests in (today, a year on]
+    by_year: list[VestYearOut] = []
+    stops: date | None = None  # the primary's retirement month, when one is set
+    excluded_reason: str | None = None
+
+
 class ProjectionOut(BaseModel):
     # Echoed knobs — the values the model actually ran with (the ESPP modeler's posture:
     # the echo IS what the page's form seeds from).
@@ -184,3 +212,5 @@ class ProjectionOut(BaseModel):
     # Always present from this server (spec §R3); nullable so an older stored payload still
     # validates.
     money_lasts: MoneyLastsOut | None = None
+    # Null when there are no grants to include (spec §R4).
+    vests: VestsOut | None = None

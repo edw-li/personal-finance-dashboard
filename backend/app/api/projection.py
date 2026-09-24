@@ -35,9 +35,10 @@ model for direct callers (the assistant), so every caller gets its own copy.
 import math
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select
@@ -46,6 +47,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.app_settings import read_plan_until_year
 from app.api.deps import get_current_user
 
+# The espp router owns the espp_ticker -> securities -> latest_prices soft link; the vests
+# borrow it (comp.py and taxes.py do too): the employer ticker is one setting.
+from app.api.espp import _espp_quote
+
 # Cross-router borrow, on taxes.py's precedent: the paycheck router owns the "profile in
 # force" rule AND the divide-by-zero fence on a stored cadence. The Paycheck page, the
 # Taxes page and this drop must never disagree about which profile is current, and a
@@ -53,7 +58,14 @@ from app.api.deps import get_current_user
 from app.api.paycheck import MIN_PAY_PERIODS, PAY_PERIODS_MESSAGE, _default_profile, _limits_for
 from app.database import get_db
 from app.limit_keys import LIMIT_401K_ELECTIVE
-from app.models import Account, AccountBalance, NetWorthSnapshot, PaycheckProfile, Person
+from app.models import (
+    Account,
+    AccountBalance,
+    NetWorthSnapshot,
+    PaycheckProfile,
+    Person,
+    RsuGrant,
+)
 from app.schemas.projection import (
     ContributionBreakdownOut,
     DerivedWindowOut,
@@ -63,9 +75,15 @@ from app.schemas.projection import (
     PhaseOut,
     ProjectionOut,
     RetirementOut,
+    VestsOut,
+    VestYearOut,
 )
-from app.services import clock
+from app.services import clock, rsu_vesting
 from app.services.budgets import living_budget_total
+
+# The calendar's sell-to-cover is the one owner of the vest withholding rate (≈ 32.23 %).
+from app.services.calendar.generators.rsu import SUPPLEMENTAL, after_sell_to_cover
+from app.services.calendar.model import money
 from app.services.limit_check import employer_match
 from app.services.metrics import planning_window
 from app.services.money import quantize_money, quantize_pct
@@ -78,7 +96,7 @@ from app.services.montecarlo import (
 )
 from app.services.net_worth_calc import INVESTABLE_GROUPS, get_swr_pct
 from app.services.paycheck_calc import MONTHS_PER_YEAR, breakdown, half_up2
-from app.services.people import load_people
+from app.services.people import load_people, primary_person
 from app.services.projection import (
     CENT,
     MAX_YEARS,
@@ -519,6 +537,123 @@ def _plan_phases(
     )
 
 
+NO_VEST_TICKER = "Set the employer-stock ticker in Settings to include vests"
+
+
+@dataclass(frozen=True)
+class _Vests:
+    echo: VestsOut | None
+    lumps: dict[int, Decimal]  # month index → after-withholding value, when included
+
+
+def _one_year_on(day: date) -> date:
+    try:
+        return day.replace(year=day.year + 1)
+    except ValueError:  # 29 February
+        return day.replace(year=day.year + 1, day=28)
+
+
+def _product_date(instant: datetime | None) -> date | None:
+    """A stored instant as the calendar day the product lives in (clock.PRODUCT_TIMEZONE)."""
+    if instant is None:
+        return None
+    if instant.tzinfo is None:
+        return instant.date()
+    return instant.astimezone(ZoneInfo(clock.PRODUCT_TIMEZONE)).date()
+
+
+async def _scheduled_vests(
+    db: AsyncSession,
+    knob: bool | None,
+    cut: date,
+    today: date,
+    months: list[date],
+    household: _Household,
+    retirements: list[RetirementOut],
+    warnings: list[str],
+) -> _Vests:
+    """Scheduled RSU vests as lumps (2026-09-23 spec §R4) — on unless the knob is False.
+
+    Per grant, `rsu_vesting.schedule` (a grant it refuses is skipped with the Comp page's own
+    warning). A tranche is kept when it is dated after `cut` — the starting balance's date,
+    so a vest already in that balance is never counted twice — before the primary's
+    retirement month (grants carry no owner; the withholding tracker already treats them as
+    the primary's, and unvested shares are forfeited on leaving), and on the axis. Its value
+    is shares × the latest employer quote, after the calendar's sell-to-cover
+    (`after_sell_to_cover`, the one owner of ≈ 32.23 %), flat in today's dollars, at its
+    month index (0 — and anything between the base and t0 — folds onto 1). No ticker or no
+    quote: nothing is included, and `excluded_reason` says why.
+    """
+    grants = list(
+        (
+            await db.execute(select(RsuGrant).order_by(RsuGrant.first_vest_date, RsuGrant.id))
+        ).scalars()
+    )
+    if not grants:
+        return _Vests(echo=None, lumps={})
+    primary = primary_person(household.people)
+    stops = next(
+        (row.month for row in retirements if primary is not None and row.person_id == primary.id),
+        None,
+    )
+    ticker, price, quoted_at = await _espp_quote(db)
+    if ticker is None or price is None:
+        reason = (
+            NO_VEST_TICKER
+            if ticker is None
+            else f"No {ticker} quote yet — scheduled vests are left out"
+        )
+        return _Vests(
+            echo=VestsOut(
+                included=False, withholding_rate=SUPPLEMENTAL, stops=stops, excluded_reason=reason
+            ),
+            lumps={},
+        )
+    start_month = months[0]
+    last_index = len(months) - 1
+    year_on = _one_year_on(today)
+    lumps: dict[int, Decimal] = {}
+    by_year: dict[int, tuple[Decimal, Decimal]] = {}
+    next_12_months = ZERO
+    for grant in grants:
+        try:
+            tranches = rsu_vesting.schedule(grant)
+        except (ValueError, OverflowError) as exc:
+            warnings.append(f"{grant.label}: stored grant cannot be scheduled — {exc}")
+            continue
+        for vest_date, shares in tranches:
+            if vest_date <= cut:
+                continue
+            if stops is not None and vest_date >= stops:
+                continue
+            index = (vest_date.year - start_month.year) * 12 + (vest_date.month - start_month.month)
+            if index > last_index:
+                continue
+            gross = money(price * shares)
+            net = after_sell_to_cover(gross)
+            if net > ZERO:
+                key = max(index, 1)
+                lumps[key] = lumps.get(key, ZERO) + net
+            year_gross, year_net = by_year.get(vest_date.year, (ZERO, ZERO))
+            by_year[vest_date.year] = (year_gross + gross, year_net + net)
+            if today < vest_date <= year_on:
+                next_12_months += net
+    included = knob is not False
+    echo = VestsOut(
+        included=included,
+        price=price,
+        price_as_of=_product_date(quoted_at),
+        withholding_rate=SUPPLEMENTAL,
+        next_12_months=next_12_months,
+        by_year=[
+            VestYearOut(year=year, gross=gross, after_withholding=net)
+            for year, (gross, net) in sorted(by_year.items())
+        ],
+        stops=stops,
+    )
+    return _Vests(echo=echo, lumps=lumps if included else {})
+
+
 # The user's cut-offs (2026-09-23 spec §R3): the share of paths that last through the plan-until
 # year reads on track from 90 %, borderline from 75 %, at risk below.
 ON_TRACK_FROM = Decimal("0.90")
@@ -712,6 +847,7 @@ async def projection(
     contribution_growth: Annotated[Decimal | None, Query()] = None,
     retire: RetireQuery = None,
     plan_until: Annotated[int | None, Query()] = None,
+    vests: Annotated[bool | None, Query()] = None,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """The answer as JSON bytes (`response_model` documents the shape). Direct callers use
@@ -728,6 +864,7 @@ async def projection(
         contribution_growth=contribution_growth,
         retire=tuple(retire or ()),
         plan_until=plan_until,
+        vests=vests,
     )
     return Response(content=await projection_json(db, knobs), media_type="application/json")
 
@@ -931,6 +1068,17 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
     plan = _plan_phases(
         household, retirements, monthly_contribution, annual_spend, months, warnings
     )
+    # Vests are cut at the base's as-of date — after today when the base has none (spec §R4).
+    vests = await _scheduled_vests(
+        db,
+        knobs.vests,
+        base.as_of if base.as_of is not None else today,
+        today,
+        months,
+        household,
+        retirements,
+        warnings,
+    )
     # Every ARRAY below runs on `real_return` (= annual_return under an EXPLICIT
     # inflation=0, which is what reproduces the pre-Monte-Carlo arrays byte for byte);
     # the ECHOED `annual_return` stays the NOMINAL value the user provided or the default
@@ -944,6 +1092,7 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
         real_growth,
         resets=plan.resets,
         withdrawal=plan.withdrawal,
+        lumps=vests.lumps,
     )
     projected = line.points
     # The coast line: the same growth with the contributions turned off — the distance
@@ -992,6 +1141,7 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
             fi_target,
             resets=plan.resets,
             withdrawal=plan.withdrawal,
+            lumps=vests.lumps,
         )
         bands = mc.bands
         if fi_target is not None:
@@ -1053,4 +1203,5 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
         plan_until=plan_until,
         plan_until_source=plan_until_source,
         money_lasts=money_lasts,
+        vests=vests.echo,
     )

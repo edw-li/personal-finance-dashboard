@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 
 import pytest
@@ -10,14 +10,18 @@ from app.models import (
     AccountBalance,
     AppSetting,
     CategoryBudget,
+    LatestPrice,
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
     PaycheckProfile,
     Person,
+    RsuGrant,
+    Security,
     SpendingCategory,
 )
-from app.services import clock
+from app.services import clock, rsu_vesting
+from app.services.calendar.generators.rsu import after_sell_to_cover
 from app.services.month_review import adopt_existing_history
 from app.services.projection import (
     december_index,
@@ -1575,3 +1579,174 @@ async def test_a_negative_contribution_that_empties_the_balance_fails_too(auth_c
     assert lasts["probability"] == "0.000000" and lasts["verdict"] == "at_risk"
     assert date.fromisoformat(lasts["lasts_until_p10"]) < month_add(this_month, 24)
     assert body["projected"][3] == "0.00"  # 100,000 cannot survive -50,000 a month for three
+
+
+# --- scheduled vests, on by default (2026-09-23 spec §R4) ---
+
+Z = "volatility=0&inflation=0&contribution_growth=0&annual_return=0"
+
+
+async def _seed_vests(
+    db,
+    *,
+    ticker: str | None = "NVDA",
+    quote: Decimal | None = Decimal("100.00"),
+    first: date | None = None,
+    cliff: Decimal = Decimal("0.2500"),
+) -> RsuGrant:
+    """1,600 shares: a 25 % cliff (400 sh) on the 16th of NEXT month, then 100 shares a quarter
+    on the third Wednesday — priced at `quote` through the ESPP ticker's latest price."""
+    if ticker is not None:
+        security = Security(ticker=ticker, name=ticker, holding_type="stock")
+        db.add_all([security, AppSetting(key="espp_ticker", value={"value": ticker})])
+        await db.flush()
+        if quote is not None:
+            db.add(
+                LatestPrice(
+                    security_id=security.id,
+                    price=quote,
+                    quoted_at=datetime.combine(clock.product_today(), time(20), tzinfo=UTC),
+                    source="yfinance",
+                )
+            )
+    next_month = month_add(clock.product_today().replace(day=1), 1)
+    grant = RsuGrant(
+        kind="new_hire",
+        label="Offer",
+        focal_year=None,
+        shares=1600,
+        grant_price=Decimal("100"),
+        first_vest_date=first or next_month.replace(day=16),
+        cliff_pct=cliff,
+        vest_quantum=1,
+    )
+    db.add(grant)
+    await db.commit()
+    return grant
+
+
+def _kept(grant, *, after: date, before: date | None = None, last_month: date | None = None):
+    """The router's rule restated over the schedule: dated after the base's date, before the
+    primary's retirement month, on the axis."""
+    return [
+        (day, shares)
+        for day, shares in rsu_vesting.schedule(grant)
+        if day > after
+        and (before is None or day < before)
+        and (last_month is None or day.replace(day=1) <= last_month)
+    ]
+
+
+def _net(shares: int, price: Decimal = Decimal("100")) -> Decimal:
+    return after_sell_to_cover((price * shares).quantize(Decimal("0.01")))
+
+
+async def test_vests_are_on_by_default_and_off_is_byte_identical(auth_client, db):
+    await _seed_book(db)
+    before = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    await _seed_vests(db)
+    on = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    off = (await auth_client.get(f"/api/v1/projection?{Z}&vests=0")).json()
+    assert off["projected"] == before["projected"] and off["coast"] == before["coast"]
+    assert off["vests"]["included"] is False and on["vests"]["included"] is True
+    assert Decimal(on["projected"][-1]) > Decimal(off["projected"][-1])
+    # Vests never enter the growth-only line or the FI target.
+    assert on["coast"] == off["coast"] and on["fi_target"] == off["fi_target"]
+    assert on["vests"]["withholding_rate"] == "0.3223"
+    assert on["vests"]["price"] == "100.0000"
+    assert on["vests"]["price_as_of"] == clock.product_today().isoformat()
+    assert on["vests"]["excluded_reason"] is None
+    # The readout survives "off": it is what the toggle would add.
+    assert off["vests"]["next_12_months"] == on["vests"]["next_12_months"]
+    explicit_on = (await auth_client.get(f"/api/v1/projection?{Z}&vests=1")).json()
+    assert explicit_on["projected"] == on["projected"]
+
+
+async def test_a_vest_lands_in_its_month_after_the_calendars_sell_to_cover(auth_client, db):
+    await _seed_book(db)
+    await _seed_vests(db)
+    body = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    assert _net(400) == Decimal("27108.00")  # 400 sh x $100 after 32.23 %
+    step = Decimal(body["projected"][1]) - Decimal(body["projected"][0])
+    assert step == Decimal("4000.00") + _net(400)
+
+
+async def test_by_year_and_the_next_twelve_months_sum_the_kept_vests(auth_client, db):
+    this_month = await _seed_book(db)
+    grant = await _seed_vests(db)
+    body = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    last_month = date.fromisoformat(body["months"][-1])
+    kept = _kept(grant, after=this_month, last_month=last_month)
+    assert len(kept) == 13  # the whole grant vests inside 30 years
+    by_year: dict[int, list[Decimal]] = {}
+    for day, shares in kept:
+        pair = by_year.setdefault(day.year, [Decimal("0.00"), Decimal("0.00")])
+        pair[0] += (Decimal("100") * shares).quantize(Decimal("0.01"))
+        pair[1] += _net(shares)
+    assert body["vests"]["by_year"] == [
+        {"year": year, "gross": str(gross), "after_withholding": str(net)}
+        for year, (gross, net) in sorted(by_year.items())
+    ]
+    today = clock.product_today()
+    year_on = date(today.year + 1, today.month, min(today.day, 28 if today.month == 2 else 31))
+    expected = sum((_net(s) for d, s in kept if today < d <= year_on), Decimal("0.00"))
+    assert body["vests"]["next_12_months"] == str(expected)
+
+
+async def test_the_primarys_retirement_stops_the_vests(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)
+    await _seed_profile(db, bo)
+    grant = await _seed_vests(db)
+    retires = month_add(this_month, 7)
+    body = (
+        await auth_client.get(f"/api/v1/projection?{Z}&retire={alex.id}:{_month_param(retires)}")
+    ).json()
+    assert body["vests"]["stops"] == retires.isoformat()
+    kept = _kept(grant, after=this_month, before=retires)
+    gross = sum(Decimal(row["gross"]) for row in body["vests"]["by_year"])
+    assert gross == sum((Decimal(100 * shares) for _, shares in kept), Decimal("0"))
+    # Bo does not hold the grants: his retirement stops nothing.
+    bo_only = (
+        await auth_client.get(f"/api/v1/projection?{Z}&retire={bo.id}:{_month_param(retires)}")
+    ).json()
+    assert bo_only["vests"]["stops"] is None
+    assert len(bo_only["vests"]["by_year"]) >= len(body["vests"]["by_year"])
+
+
+async def test_no_ticker_leaves_vests_out_with_the_reason(auth_client, db):
+    await _seed_book(db)
+    before = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    await _seed_vests(db, ticker=None)
+    body = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    assert body["vests"]["included"] is False
+    assert body["vests"]["excluded_reason"] == (
+        "Set the employer-stock ticker in Settings to include vests"
+    )
+    assert body["projected"] == before["projected"]
+
+
+async def test_no_quote_leaves_vests_out_naming_the_ticker(auth_client, db):
+    await _seed_book(db)
+    await _seed_vests(db, quote=None)
+    body = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    assert body["vests"]["included"] is False
+    assert body["vests"]["excluded_reason"] == "No NVDA quote yet — scheduled vests are left out"
+
+
+async def test_a_grant_that_will_not_schedule_is_skipped_with_the_comp_warning(auth_client, db):
+    await _seed_book(db)
+    await _seed_vests(db, cliff=Decimal("0.3000"))  # 0.7 is not a whole number of 6.25 % steps
+    body = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    assert (
+        "Offer: stored grant cannot be scheduled — "
+        "(1 - cliff_pct) must be a whole number of 6.25% steps"
+    ) in body["warnings"]
+    assert body["vests"]["by_year"] == [] and body["vests"]["next_12_months"] == "0.00"
+
+
+async def test_without_grants_there_is_no_vests_echo(auth_client, db):
+    await _seed_book(db)
+    assert (await auth_client.get("/api/v1/projection")).json()["vests"] is None
