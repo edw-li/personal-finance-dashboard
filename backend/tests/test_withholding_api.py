@@ -1733,6 +1733,120 @@ async def test_only_the_lots_sold_this_year_make_the_espp_row(auth_client, db, w
     ]
 
 
+# --- "no records" is unknown, never a $0 projection (review finding 4, 6) ---------------------
+
+NO_GRANTS_NOTE = (
+    "RSU income is not reconciled: no RSU grants are recorded — add them on Comp to project "
+    "this year's vests"
+)
+RSU_PARTIAL_NOTE = (
+    "RSU income is only partly projected — a vest without a price is left out — so its row "
+    "offers no Apply"
+)
+NO_LOTS_NOTE = (
+    "ESPP income is not reconciled: no ESPP lots are recorded — add them on the ESPP page"
+)
+
+
+async def test_no_rsu_grants_means_no_rsu_row_and_a_note_when_rsu_income_is_typed(
+    auth_client, db, definitions, frozen_today
+):
+    """With no grants the app has no record of vests at all: a typed 120,000 against a $0
+    "projection" would flag and offer to Apply $0.00 over a correct figure."""
+    await seed_tax_year(db, YEAR, "600000.0000")
+    await seed_profile(db)
+    await seed_employer(db)
+    rec = (await get_withholding(auth_client))["reconciliation"]
+    assert "rsu" not in rows_of({"reconciliation": rec})
+    assert NO_GRANTS_NOTE not in rec["notes"]  # nothing typed, nothing to say
+
+    await set_rsu_typed(db, "120000")
+    rec = (await get_withholding(auth_client))["reconciliation"]
+    assert "rsu" not in rows_of({"reconciliation": rec})
+    assert NO_GRANTS_NOTE in rec["notes"]
+
+
+async def test_an_rsu_projection_missing_a_price_offers_no_apply_and_says_so(
+    auth_client, db, definitions, frozen_today
+):
+    """No quote: the 70 shares still to come are left out of the projection, so the row's
+    figure is short — it may still flag, but it never offers to write itself."""
+    await seed_tax_year(db, YEAR, "600000.0000")
+    await seed_profile(db)
+    await seed_employer(db, quote=None)
+    await seed_grants(db)
+    await set_rsu_typed(db, "120000")
+    rec = (await get_withholding(auth_client))["reconciliation"]
+    rsu = rows_of({"reconciliation": rec})["rsu"]
+    assert rsu["projected"] == "50000.00"  # the two past vests alone
+    assert rsu["apply"] is None
+    assert RSU_PARTIAL_NOTE in rec["notes"]
+
+
+async def test_a_projection_of_zero_is_never_offered_as_a_write(
+    auth_client, db, definitions, frozen_today
+):
+    """Grants that vest nothing this year project a real $0 — the row may flag a typed
+    figure, but Apply never writes $0.00 over it (Open Inputs is the way)."""
+    await seed_tax_year(db, YEAR, "600000.0000")
+    await seed_profile(db)
+    await seed_employer(db)
+    await seed_grant(db, "Next year's grant", 400, date(2027, 3, 17))
+    await set_rsu_typed(db, "120000")
+    rsu = rows_of(await get_withholding(auth_client))["rsu"]
+    assert (rsu["typed"], rsu["projected"]) == ("120000.00", "0.00")
+    assert rsu["apply"] is None
+
+
+async def test_no_espp_lots_means_no_espp_row_and_a_note_when_espp_income_is_typed(
+    auth_client, db, world, frozen_today
+):
+    db.add(TaxInput(year=YEAR, key="w2_espp_sale_component", value=Decimal("2000")))
+    await db.commit()
+    rec = (await get_withholding(auth_client))["reconciliation"]
+    assert "espp" not in rows_of({"reconciliation": rec})
+    assert NO_LOTS_NOTE in rec["notes"]
+
+
+async def test_a_lot_marked_sold_without_a_price_is_left_out_and_named(
+    auth_client, db, world, frozen_today
+):
+    """Only the API pairs a sale date with a price (sold_price is nullable in the table): a
+    hand-edited lot must cost its own row, never the whole GET."""
+    db.add_all(
+        [
+            EsppLot(
+                purchase_date=date(2025, 8, 29),
+                qualifying_date=date(2027, 9, 1),
+                shares=Decimal("10.0000"),
+                subscription_price=Decimal("100.00000"),
+                purchase_fmv=Decimal("120.00000"),
+                purchase_price=Decimal("85.00000"),
+                sold_date=date(2026, 5, 1),
+                sold_price=None,
+            ),
+            EsppLot(
+                purchase_date=date(2025, 2, 28),
+                qualifying_date=date(2027, 3, 1),
+                shares=Decimal("10.0000"),
+                subscription_price=Decimal("100.00000"),
+                purchase_fmv=Decimal("120.00000"),
+                purchase_price=Decimal("85.00000"),
+                sold_date=date(2026, 6, 1),
+                sold_price=Decimal("150.00000"),
+            ),
+        ]
+    )
+    await db.commit()
+    body = await get_withholding(auth_client)
+    rec = body["reconciliation"]
+    assert rows_of(body)["espp"]["projected"] == "650.00"  # the priced lot alone
+    assert (
+        "The ESPP lot bought on Aug 29, 2025 is marked sold on May 1, 2026 without a sale price, "
+        "so it is left out of the ESPP row"
+    ) in rec["notes"]
+
+
 async def test_the_reconciliation_writes_nothing(auth_client, world, frozen_today, forbid_writes):
     with forbid_writes():
         body = await get_withholding(auth_client)

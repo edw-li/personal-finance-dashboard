@@ -119,6 +119,9 @@ from app.services.people import load_people, primary_person
 from app.services.portfolio_calc import SHARE_Q, fold_transactions, load_portfolio
 from app.services.read_cache import cached_withholding
 from app.services.tax_reconciliation import (
+    ESPP_LONG_KEY,
+    ESPP_SHORT_KEY,
+    RSU_KEY,
     EsppFacts,
     PaycheckFacts,
     PersonFacts,
@@ -1876,6 +1879,24 @@ LIMIT_HSA_MISSING_NOTE = (
     "Settings › Planning › Contribution limits"
 )
 NO_TICKER_RECONCILE_NOTE = "RSU income is not reconciled: no employer ticker is configured"
+NO_GRANTS_RECONCILE_NOTE = (
+    "RSU income is not reconciled: no RSU grants are recorded — add them on Comp to project "
+    "this year's vests"
+)
+NO_LOTS_RECONCILE_NOTE = (
+    "ESPP income is not reconciled: no ESPP lots are recorded — add them on the ESPP page"
+)
+UNPRICED_LOT_NOTE = (
+    "The ESPP lot bought on {bought} is marked sold on {sold} without a sale price, so it is "
+    "left out of the ESPP row"
+)
+
+
+def _long_day(day: date) -> str:
+    """'Aug 29, 2025' — a note about a lot names its own year, which is rarely this one."""
+    return f"{day:%b} {day.day}, {day.year}"
+
+
 SEVERAL_PARTNERS_NOTE = (
     "Paycheck inputs are reconciled for the primary and one partner; this return covers more "
     "people than that"
@@ -1901,6 +1922,7 @@ async def _reconciliation(
     partner_profiles: list[PaycheckProfile],
     ticker: str | None,
     has_grants: bool,
+    vests_complete: bool,
     future_vests: list[withholding_calc.VestTuple],
     bar_days: list[date],
     bar_closes: list[Decimal],
@@ -1996,10 +2018,17 @@ async def _reconciliation(
         for column in (list(feed.person_inputs) or [None])
     ]
 
-    # RSU income: the card's own vest figures. With no ticker every vest was left out, so the
-    # projection is "unknown", not 0 — no row, and a note says why.
+    # RSU income: the card's own vest figures. With no ticker every vest was left out, and with
+    # no grants there is nothing to project from — either way the projection is "unknown", not
+    # 0: no row, and a note says why (the no-grants one only when an RSU figure is typed —
+    # otherwise there is nothing to reconcile at all).
+    primary_bucket = feed.person_inputs.get(feed.primary_column, {})
     rsu: RsuFacts | None
-    if ticker is None and has_grants:
+    if not has_grants:
+        rsu = None
+        if primary_bucket.get(RSU_KEY, ZERO) != ZERO:
+            notes.append(NO_GRANTS_RECONCILE_NOTE)
+    elif ticker is None:
         rsu = None
         notes.append(NO_TICKER_RECONCILE_NOTE)
     else:
@@ -2028,10 +2057,13 @@ async def _reconciliation(
             reference_future=reference_future,
             reference_price=reference_price,
             reference_date=reference_date,
+            complete=vests_complete,
         )
 
     # ESPP sale income: the lots SOLD this year, decomposed exactly as the what-if decomposes
-    # a sale (after §W5's cap), each dated on its own sale day.
+    # a sale (after §W5's cap), each dated on its own sale day. No lots recorded at all is
+    # "unknown", like no grants: no row, and a note when ESPP income is typed.
+    has_lots = (await db.execute(select(EsppLot.id).limit(1))).first() is not None
     sold = list(
         (
             await db.execute(
@@ -2047,6 +2079,16 @@ async def _reconciliation(
     if sold:
         discount = await read_espp_discount(db)
         for lot in sold:
+            if lot.sold_price is None:
+                # Only the API pairs a sale date with a price (the column is nullable): a
+                # hand-edited lot costs its own contribution, never the whole GET (review
+                # finding 6).
+                notes.append(
+                    UNPRICED_LOT_NOTE.format(
+                        bought=_long_day(lot.purchase_date), sold=_long_day(lot.sold_date)
+                    )
+                )
+                continue
             detail = decompose_espp(
                 lot_id=lot.id,
                 purchase_date=lot.purchase_date,
@@ -2064,7 +2106,18 @@ async def _reconciliation(
                 long_term += detail.capital_gain
             else:
                 short_term += detail.capital_gain
-    espp = EsppFacts(ordinary=ordinary, long_term=long_term, short_term=short_term, lots=len(sold))
+    espp: EsppFacts | None = EsppFacts(
+        ordinary=ordinary, long_term=long_term, short_term=short_term, lots=len(sold)
+    )
+    if not has_lots:
+        espp = None
+        typed_espp = [
+            primary_bucket.get(ESPP_ORDINARY_KEY),
+            feed.inputs.get(ESPP_LONG_KEY),
+            feed.inputs.get(ESPP_SHORT_KEY),
+        ]
+        if any(value is not None and value != ZERO for value in typed_espp):
+            notes.append(NO_LOTS_RECONCILE_NOTE)
 
     return reconcile(
         people=people,
@@ -2545,6 +2598,8 @@ async def withholding_estimate(
             partner_profiles=partner_profiles,
             ticker=ticker,
             has_grants=bool(grants),
+            # A vest left out for want of a price makes the RSU figure a floor (review finding 4).
+            vests_complete=not unpriced and not missing_quote,
             future_vests=future_vests,
             bar_days=bar_days,
             bar_closes=bar_closes,

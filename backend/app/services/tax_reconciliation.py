@@ -73,6 +73,12 @@ PRIMARY_NO_PROFILE_NOTE = (
     "{name} has no paycheck profile, so their paycheck inputs are not reconciled — add one on "
     "the Paycheck page to project their salary"
 )
+# A projection with a hole in it (review finding 4): a vest without a price is left out of the
+# card's figure, so the row's number is short — it may still flag, but it never writes itself.
+RSU_PARTIAL_NOTE = (
+    "RSU income is only partly projected — a vest without a price is left out — so its row "
+    "offers no Apply"
+)
 NEVER_RECONCILED_NOTE = (
     "Never reconciled: dental and vision, the employer's HSA deposit, bonuses, dividends and "
     "interest, and brokerage gains — check those against your W-2 and 1099s by hand."
@@ -116,6 +122,9 @@ class RsuFacts:
     reference_future: Decimal | None
     reference_price: Decimal | None
     reference_date: date | None
+    # False when a vest this year was left out for want of a price (a missing close behind a
+    # past vest, no quote for the ones ahead): the figure is then a floor, not a projection.
+    complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -358,7 +367,7 @@ def reconcile(
     people: Sequence[PersonFacts],
     primary_id: int | None,
     rsu: RsuFacts | None,
-    espp: EsppFacts,
+    espp: EsppFacts | None,
     household: Mapping[str, Decimal],
     liability: Decimal,
     withheld_projected: Decimal,
@@ -370,7 +379,9 @@ def reconcile(
 
     `people` is the return's people, primary first; `primary_id` names whose the equity is
     (the app models no partner equity — rsu_grants and ESPP lots have no owner). `liability`
-    and `withheld_projected` are the card's own two figures, at cents.
+    and `withheld_projected` are the card's own two figures, at cents. `rsu` / `espp` None:
+    the app has no record to project from (no grants or no ticker; no lots at all), so there
+    is no row — "unknown" is not a $0 projection (review finding 4).
     """
     built: list[_Row] = []
     out_notes: list[str] = []
@@ -384,9 +395,11 @@ def reconcile(
         if is_primary:
             equity = [
                 None if rsu is None else _rsu_row(person, rsu),
-                _espp_row(person, espp, household),
+                None if espp is None else _espp_row(person, espp, household),
             ]
             built += [row for row in equity if row is not None]
+            if rsu is not None and not rsu.complete and equity[0] is not None:
+                out_notes.append(RSU_PARTIAL_NOTE)
 
     rows: list[ReconciliationRowOut] = []
     for row in built:
@@ -398,7 +411,16 @@ def reconcile(
         else:
             flag_effect = ZERO  # the band absorbs the whole difference
         apply = None
-        if row.out["key"] == "rsu" and row.out["typed"] != row.out["projected"]:
+        # The one write the strip offers: the card's own vest figure — never a short one (a
+        # vest left out for want of a price) and never $0.00 over a typed figure (Open Inputs
+        # is the way to type a zero; review finding 4).
+        if (
+            row.out["key"] == "rsu"
+            and rsu is not None
+            and rsu.complete
+            and row.out["projected"] > ZERO
+            and row.out["typed"] != row.out["projected"]
+        ):
             apply = ReconciliationApplyOut(
                 key=RSU_KEY, person_id=row.out["person_id"], value=row.out["projected"]
             )

@@ -15,6 +15,7 @@ from decimal import Decimal
 from app.services.tax_reconciliation import (
     FLAG_ABOVE,
     NEVER_RECONCILED_NOTE,
+    RSU_PARTIAL_NOTE,
     EsppFacts,
     PaycheckFacts,
     PersonFacts,
@@ -295,11 +296,77 @@ def test_a_difference_worth_more_than_250_of_tax_is_flagged_on_every_row_kind():
 
 
 def test_the_same_inputs_give_the_same_flags_in_any_order():
-    price = Pricer({"w2_salary_checkpoint": D("5000"), "hsa_contributions": D("100")})
-    first = run([edward()], price=price)
-    again = run([edward()], price=price)
-    assert [row.flagged for row in first.rows] == [row.flagged for row in again.rows]
-    assert first == again
+    """Stateless (§W3): no call leaves anything behind for the next — A, then B, then A
+    again answers A's flags exactly, and B answers the same whether it came first or second."""
+    price_a = Pricer({"w2_salary_checkpoint": D("5000"), "hsa_contributions": D("100")})
+    price_b = Pricer({"w2_salary_checkpoint": D("-100"), "hsa_contributions": D("900")})
+    first_a = run([edward()], price=price_a)
+    b_second = run([edward()], price=price_b)
+    again_a = run([edward()], price=price_a)
+    b_again = run([edward()], price=price_b)
+    assert first_a == again_a
+    assert b_second == b_again
+    assert [row.flagged for row in first_a.rows] != [row.flagged for row in b_second.rows]
+
+
+def test_the_250_line_holds_on_the_rsu_and_espp_rows_too():
+    """§W3's "on every row": the same $250 line judges the equity rows (the RSU row here with
+    no reference close, so its flag reads the shown effect)."""
+    bare = RsuFacts(
+        projected=D("154000.00"),
+        future_income=D("0.00"),
+        reference_projected=None,
+        reference_future=None,
+        reference_price=None,
+        reference_date=None,
+    )
+    espp = EsppFacts(ordinary=D("1891.85"), long_term=D("0.00"), short_term=D("0.00"), lots=1)
+    for key, kind in (("w2_stock_rsus_sold", "rsu"), ("w2_espp_sale_component", "espp")):
+        above = run([edward()], rsu=bare, espp=espp, price=Pricer({key: D("260.00")}))
+        below = run([edward()], rsu=bare, espp=espp, price=Pricer({key: D("-240.00")}))
+        assert [row.key for row in above.rows if row.flagged] == [kind], key
+        assert [row.key for row in below.rows if row.flagged] == [], key
+
+
+# --- "no records" is unknown, never a $0 projection (review finding 4) ------------------------
+
+
+def test_a_partial_rsu_projection_offers_no_apply_and_says_so():
+    short = RsuFacts(
+        projected=D("50000.00"),
+        future_income=D("0.00"),
+        reference_projected=D("50000.00"),
+        reference_future=D("0.00"),
+        reference_price=D("600.0000"),
+        reference_date=date(2026, 6, 17),
+        complete=False,
+    )
+    out = run([edward()], rsu=short)
+    row = next(row for row in out.rows if row.key == "rsu")
+    assert (row.typed, row.projected) == (D("120000.00"), D("50000.00"))
+    assert row.apply is None
+    assert RSU_PARTIAL_NOTE in out.notes
+
+
+def test_a_zero_rsu_projection_is_never_offered_as_a_write():
+    nothing = RsuFacts(
+        projected=D("0.00"),
+        future_income=D("0.00"),
+        reference_projected=D("0.00"),
+        reference_future=D("0.00"),
+        reference_price=D("600.0000"),
+        reference_date=date(2026, 6, 17),
+    )
+    row = next(row for row in run([edward()], rsu=nothing).rows if row.key == "rsu")
+    assert (row.typed, row.projected) == (D("120000.00"), D("0.00"))
+    assert row.apply is None
+
+
+def test_no_espp_record_means_no_espp_row_whatever_is_typed():
+    bucket = {**EDWARD_BUCKET, "w2_espp_sale_component": D("2000.0000")}
+    me = person(1, "Edward", bucket=bucket, paycheck=paycheck(gross=D("188930.00")))
+    assert "espp" in [row.key for row in run([me]).rows]
+    assert "espp" not in [row.key for row in run([me], espp=None).rows]
 
 
 # --- the caps --------------------------------------------------------------------------------
