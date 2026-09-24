@@ -171,9 +171,18 @@ export function keepOnScreen(scroller: Scroller, top: number, height: number): v
  *  can follow: the capped transactions ledger (TableScroll, 60vh tall from y≈467) hangs 147px below
  *  a 1280×800 window on arrival, 67px below a 1600×1000 one, and its last 1–3 slots were out of reach
  *  — the drop landed short, in a replay order that drives cost basis (table-scroll Task 4 review).
- *  The window's edges are visibleBounds' own, 0 and innerHeight, so the page stops as soon as the
+ *  The window's edges are visibleBounds' own, 0 and innerHeight — the top is the window's 0, not the
+ *  foot of PageFrame's stuck scope row, the band's convention too — so the page stops as soon as the
  *  box's edge is inside the window: the pointer reaches its end from there. Each page scroll
- *  re-tracks the row in hand through useReorder's window scroll listener. */
+ *  re-tracks the row in hand through useReorder's window scroll listener.
+ *
+ *  ASSUMED: the box FOLLOWS the page — a window scroll moves it as far. True of all six reorderable
+ *  lists today: each scrolls the page or sits in normal flow. Were one to sit in a fixed, sticky or
+ *  top-layer container whose edge hangs past the window, a window scroll would leave that edge where
+ *  it is, and every frame would hand the page another step — run to its end under a list that never
+ *  moved. Such a list must guard it then: stop handing steps to the page once a window scroll leaves
+ *  the box's rect unmoved, as holdPosition (shell/holdPosition.ts) guards the same hazard
+ *  (table-scroll Task 4 re-review). */
 export function autoScrollBy(scroller: Scroller, dy: number): void {
   if (scroller === null) {
     window.scrollBy(0, dy)
