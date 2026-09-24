@@ -2,10 +2,12 @@
 
 With the reconciliation the GET runs about ten engine passes, and the Overview asks for it on
 every visit — so it is served from memory while nothing it reads has changed. The fingerprint
-covers every table the GET reads (the SQL-capture test pins the list), `price_history` only
-for the employer ticker's bars; the key adds the product day and the year; the cache holds the
-serialized bytes, so the route returns them as they are and a direct caller (the assistant)
-decodes a model of its own.
+covers every table the GET reads (the SQL-capture tests pin the list), and three of them only
+for the rows it reads: `app_settings` for the employer ticker and the ESPP discount,
+`latest_prices` and `price_history` for the employer ticker's quote and bars (the row-level
+capture pins those). The key adds the product day and the year; the cache holds the serialized
+bytes, so the route returns them as they are and a direct caller (the assistant) decodes a
+model of its own.
 """
 
 import re
@@ -113,8 +115,9 @@ async def _nvda(db) -> int:
     return (await db.execute(select(Security.id).where(Security.ticker == "NVDA"))).scalar_one()
 
 
-# One write per table the GET reads — each must miss. `price_history` is written on the
-# EMPLOYER's ticker, the only rows the GET reads of it.
+# One write per table the GET reads — each must miss. The three narrowed tables are written on
+# rows the GET reads, the only rows their cells cover: `app_settings` at the ESPP discount,
+# `latest_prices` and `price_history` on the EMPLOYER's ticker (the world's only quote and bars).
 MUTATIONS = {
     "tax_years": lambda db: _run(db, update(TaxYear).values(notes="edited")),
     "tax_inputs": lambda db: _add(db, TaxInput(year=YEAR, key="w2_other", value=Decimal("1"))),
