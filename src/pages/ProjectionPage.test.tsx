@@ -1130,3 +1130,45 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     expect(within(knobs).queryByText(/Retirement months split the plan/)).toBeNull()
   })
 })
+
+
+describe('ProjectionPage — the reader never sees p10, p50 or p90 (2026-09-23 spec §R6)', () => {
+  it('says every percentile in words: tiles, compare table, fan legend, table view and trend', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({
+      money_lasts: {
+        plan_until: 2075, probability: '0.924000', verdict: 'on_track', lasts_until_p10: '2079-03-01',
+        horizon_end: '2026-10-01', deterministic_depleted_month: null, reason: null,
+      },
+      drawdown: { start_month: '2026-09-01', annual_withdrawal: '60000.00' },
+      phases: [
+        { from_month: '2026-08-01', kind: 'working', working_person_ids: [1, 2], monthly_contribution: '4000.00', monthly_withdrawal: null, take_home_monthly: null },
+        { from_month: '2026-09-01', kind: 'retired', working_person_ids: [], monthly_contribution: '0.00', monthly_withdrawal: '5000.00', take_home_monthly: null },
+      ],
+      vests: { included: true, price: '228.8700', price_as_of: '2026-09-22', withholding_rate: '0.3223', next_12_months: '116234.00', by_year: [], stops: null, excluded_reason: null },
+      plan_until: 2075,
+      plan_until_source: 'default',
+    }))
+    renderPage()
+    await loaded()
+    const jargon = /\bp(?:10|50|90)\b/
+    // Per text node, never the page's concatenated textContent: cells run together there
+    // ("…Oct 2055p10 date"), and the word boundary the pattern needs disappears.
+    const texts = () => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+      const out: string[] = []
+      for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) out.push(node.textContent ?? '')
+      return out
+    }
+    const attributes = () =>
+      [...document.querySelectorAll('[aria-label], [title], [placeholder]')].flatMap((el) =>
+        ['aria-label', 'title', 'placeholder'].map((name) => el.getAttribute(name) ?? ''),
+      )
+    const spoken = () => [...texts(), ...attributes()].filter((text) => jargon.test(text))
+    expect(spoken()).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    expect(await screen.findByRole('columnheader', { name: /Median balance/ })).toBeTruthy()
+    expect(spoken()).toEqual([])
+    await openTrend()
+    expect(spoken()).toEqual([])
+  })
+})
