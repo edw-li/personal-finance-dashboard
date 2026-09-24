@@ -1,6 +1,8 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import ANY
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select, update
 
@@ -16,6 +18,7 @@ from app.models import (
     Person,
     SpendingCategory,
 )
+from app.models.month_review import MonthReviewAdoption
 from app.services.budgets import living_budget_total
 
 
@@ -1192,3 +1195,38 @@ async def test_put_month_confirm_zero_writes_every_zero(auth_client, db):
     assert resp.status_code == 200, resp.text
     assert (resp.json()["created"], resp.json()["skipped_blank"]) == (19, 0)
     assert len((await auth_client.get(put)).json()["amounts"]) == 19
+
+
+async def test_budget_suggestions_leave_out_a_month_saved_during_the_month(
+    auth_client, db, monkeypatch
+):
+    """K6 (2026-09-23 spec) on the wire: on Oct 3 September's rent was saved on Sep 7 (partial)
+    — the window ends at August; with no such write on record it would include September."""
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    db.add(rent)
+    await db.flush()
+    months = [date(2025, 10 + i, 1) for i in range(3)] + [date(2026, i, 1) for i in range(1, 10)]
+    for month in months:
+        db.add(MonthlySpending(month=month, category_id=rent.id, amount=Decimal("2000.00")))
+        db.add(MonthlyCashflow(month=month, net_pay=Decimal("6000.00")))
+    db.add(NetWorthSnapshot(month=date(2025, 10, 1), recorded_on=date(2025, 10, 1)))
+    db.add(MonthReviewAdoption(id=1, adopted_on=date(2026, 9, 12)))
+    db.add(
+        ChangeLog(
+            batch_id=uuid4(),
+            source="ui",
+            actor="me@example.com",
+            label="Saved Sep 2026 spending",
+            table_name="monthly_spending",
+            pk={"id": 1},
+            op="update",
+            before={"id": 1},
+            after={"id": 1},
+            month=date(2026, 9, 1),
+            at=datetime(2026, 9, 7, 12, tzinfo=ZoneInfo("America/Los_Angeles")),
+        )
+    )
+    await db.commit()
+    _pin_today(monkeypatch, date(2026, 10, 3))
+    window = (await auth_client.get("/api/v1/spending/budgets/suggestions")).json()["window"]
+    assert window == {"from": "2025-10-01", "to": "2026-08-01", "months": 11}

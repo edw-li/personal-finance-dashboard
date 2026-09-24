@@ -61,11 +61,17 @@ def seed_window(
     without_spending: Sequence[date],
     current_month: date,
     limit: int = SEED_WINDOW_MONTHS,
+    *,
+    incomplete: Sequence[date] = (),
 ) -> list[date]:
     """The months the averages read: the last `limit` months strictly before `current_month`
     that are entered (coverage's ONE definition) and carry spending rows — a take-home-only
-    month has nothing to average, and an empty month is not entered at all."""
-    skip = set(without_spending)
+    month has nothing to average, and an empty month is not entered at all — and whose
+    spending is complete: `incomplete` (the months `time.flows_due` lists with spending missing
+    or partial, 2026-09-23 spec §K6) stays out, so a rent-only month saved during the month
+    cannot drag every mean down a twelfth. A month due only for its take-home keeps its
+    spending in the window."""
+    skip = set(without_spending) | set(incomplete)
     complete = [month for month in sorted(entered) if month < current_month and month not in skip]
     # `complete[-0:]` is the WHOLE list, so a zero limit has to be spelled out.
     return complete[-limit:] if limit > 0 else []
@@ -169,8 +175,19 @@ async def load_suggestions(db: AsyncSession, today: date) -> tuple[list[date], l
     """The window and one Suggestion per ACTIVE category (the card lists only those), in the
     categories' own order. One coverage load (spec §3's ONE definition of entered), one
     categories query, one spending query bounded to the window."""
-    coverage = await load_coverage(db)
-    window = seed_window(coverage.entered, coverage.net_pay_without_spending, today.replace(day=1))
+    coverage = await load_coverage(db, today=today)
+    # K6 (2026-09-23 spec): a month still due for its SPENDING (missing or partial) stays out.
+    incomplete = (
+        []
+        if coverage.time is None
+        else [part.month for part in coverage.time.flows_due if part.spending != "entered"]
+    )
+    window = seed_window(
+        coverage.entered,
+        coverage.net_pay_without_spending,
+        today.replace(day=1),
+        incomplete=incomplete,
+    )
     categories = list(
         (
             await db.execute(
