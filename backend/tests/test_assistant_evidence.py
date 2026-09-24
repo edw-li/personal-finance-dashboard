@@ -477,16 +477,32 @@ async def test_transient_retry_keeps_the_same_first_output_allowance(monkeypatch
 
 
 async def test_total_budget_includes_context_loading(monkeypatch):
+    """The request budget covers the context build: a build that outlives it is cancelled and
+    the stream ends with the time-budget error.
+
+    What runs BEFORE the build must fit well inside the budget: a session and the app_settings
+    read that resolves the key — this file's `wire` fixture's "nvapi-test" (no override row, no
+    .env involved; CI has none). On a cold process that read is the run's first ORM query
+    (~15-30 ms of mapper configuration and compilation), which alone outlasted the old 0.03 s
+    budget: the budget then cancelled the QUERY, the build never began, and `cancelled` stayed
+    unset — failing every time the test ran alone. So the read is warmed first, the budget is
+    half a second (~32 ticks of this box's 15.6 ms loop clock), and `started` makes a box too
+    slow even for that fail as exactly that."""
+    started = asyncio.Event()
     cancelled = asyncio.Event()
 
     async def slow_context(*args, **kwargs):
+        started.set()
         try:
             await asyncio.sleep(30)
-        finally:
-            cancelled.set()
+        except asyncio.CancelledError:
+            cancelled.set()  # cancelled by the budget, not merely finished
+            raise
 
+    async with assistant_chat.SESSION_FACTORY() as db:
+        assert await assistant_models.resolve_api_key(db) == ("nvapi-test", "env")
     monkeypatch.setattr(assistant_chat, "build_context", slow_context)
-    monkeypatch.setattr(assistant_chat, "TOTAL_BUDGET_SECONDS", 0.03)
+    monkeypatch.setattr(assistant_chat, "TOTAL_BUDGET_SECONDS", 0.5)
     events = _all_events(
         await _collect(
             assistant_chat.stream_chat(
@@ -496,6 +512,7 @@ async def test_total_budget_includes_context_loading(monkeypatch):
             )
         )
     )
+    assert started.is_set(), "the budget ran out before the context build began"
     assert events[-1][0] == "error"
     assert "time budget" in events[-1][1]["message"]
     assert cancelled.is_set()
