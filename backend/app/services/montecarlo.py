@@ -137,6 +137,7 @@ def simulate(
         extra_gauss = random.Random(MC_SEED + 1).gauss
         drawn = [exp(extra_gauss(mu_m, sigma_m)) for _ in range(added * SIMULATIONS)]
         extension = [drawn[k::SIMULATIONS] for k in range(SIMULATIONS)]
+        del drawn  # the per-path slices hold every value; the flat copy is ~4 MB at 720 months
 
     paths: list[list[float]] = []
     reach_indices: list[int | None] = []
