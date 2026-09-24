@@ -43,20 +43,6 @@ def monthly_rate(annual_return: Decimal) -> Decimal:
     return (ONE + annual_return) ** (ONE / TWELVE) - ONE
 
 
-def drop_schedule(drops: Sequence[tuple[int, Decimal]]) -> dict[int, Decimal]:
-    """`(month_index, amount)` pairs folded into ONE decrement per month index.
-
-    TRANSIENT (2026-09-23 spec §R1): the router still retires people by dropping their
-    paycheck out of the stream until it moves onto `reset_schedule`'s phase levels; the
-    same change deletes this. Two drops in one month SUM; index 0 folds onto index 1.
-    """
-    schedule: dict[int, Decimal] = {}
-    for index, amount in drops:
-        key = max(index, 1)
-        schedule[key] = schedule.get(key, ZERO) + amount
-    return schedule
-
-
 def reset_schedule(resets: Sequence[tuple[int, Decimal]]) -> dict[int, Decimal]:
     """`(month_index, level)` pairs as ONE contribution level per month index (spec §R1).
 
@@ -100,7 +86,6 @@ def monthly_flows[N: (Decimal, float)](
     withdrawal: tuple[int, Decimal] | None,
     lumps: Mapping[int, Decimal],
     convert: Callable[[Decimal], N],
-    drops: Mapping[int, Decimal] | None = None,
 ) -> list[N]:
     """flows[k] = month k's contribution, plus its lump, minus the withdrawal; flows[0] is t0
     and carries nothing. ONE owner for both engines — the Decimal line passes Decimals, the
@@ -111,7 +96,7 @@ def monthly_flows[N: (Decimal, float)](
     contribution, which is what keeps empty inputs byte-identical. A reset at month k sets
     `level × growth^(k−1)` — the escalator, tracked the same way — and the escalation carries
     on from there. The schedules arrive normalized (`reset_schedule`, `lump_schedule`,
-    `fold_withdrawal`); `drops` is the transient retirement decrement (see `drop_schedule`).
+    `fold_withdrawal`).
     """
     flows = [convert(ZERO)] * (months + 1)
     escalator = convert(ONE)
@@ -119,12 +104,6 @@ def monthly_flows[N: (Decimal, float)](
         level = resets.get(index)
         if level is not None:
             contribution = convert(level) * escalator
-        if drops is not None:
-            drop = drops.get(index)
-            if drop is not None:
-                contribution = contribution - convert(drop)
-                if contribution < 0:
-                    contribution = convert(ZERO)
         flow = contribution
         lump = lumps.get(index)
         if lump is not None:
@@ -156,7 +135,6 @@ def project_path(
     resets: Sequence[tuple[int, Decimal]] = (),
     withdrawal: tuple[int, Decimal] | None = None,
     lumps: Mapping[int, Decimal] | None = None,
-    drops: Sequence[tuple[int, Decimal]] = (),
 ) -> ProjectedPath:
     """months+1 points at cents; t0 is the starting balance itself, and each later point is
     `previous × (1 + monthly rate) + flow`, the flow from `monthly_flows`. The contribution
@@ -177,7 +155,6 @@ def project_path(
         withdrawal=fold_withdrawal(withdrawal),
         lumps=lump_schedule(lumps),
         convert=Decimal,
-        drops=drop_schedule(drops) if drops else None,
     )
     points = [starting_balance.quantize(CENT, rounding=ROUND_HALF_UP)]
     balance = starting_balance
@@ -198,7 +175,6 @@ def project(
     annual_return: Decimal,
     months: int,
     contribution_growth: Decimal = Decimal("0"),
-    drops: Sequence[tuple[int, Decimal]] = (),
     *,
     resets: Sequence[tuple[int, Decimal]] = (),
     withdrawal: tuple[int, Decimal] | None = None,
@@ -214,7 +190,6 @@ def project(
         resets=resets,
         withdrawal=withdrawal,
         lumps=lumps,
-        drops=drops,
     ).points
 
 

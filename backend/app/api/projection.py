@@ -55,7 +55,9 @@ from app.models import Account, AccountBalance, NetWorthSnapshot, PaycheckProfil
 from app.schemas.projection import (
     ContributionBreakdownOut,
     DerivedWindowOut,
+    DrawdownOut,
     PayrollSavingOut,
+    PhaseOut,
     ProjectionOut,
     RetirementOut,
 )
@@ -68,7 +70,7 @@ from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
 from app.services.net_worth_calc import INVESTABLE_GROUPS, get_swr_pct
 from app.services.paycheck_calc import MONTHS_PER_YEAR, breakdown, half_up2
 from app.services.people import load_people
-from app.services.projection import CENT, first_reaching, project
+from app.services.projection import CENT, first_reaching, project, project_path
 from app.services.read_cache import cached_month_savings, cached_review_book
 from app.services.savings import payroll_monthly
 
@@ -364,6 +366,141 @@ def _resolve_retirements(
     return rows
 
 
+def approx_money(amount: Decimal) -> str:
+    """A figure for a sentence, in the page's compact spelling (formatCurrencyCompact in
+    src/utils/format.ts): "$1.1K", "$5.5K", "$1.25M", "$950"."""
+    sign = "-" if amount < 0 else ""
+    value = abs(amount)
+    if value >= 1_000_000:
+        millions = (value / 1_000_000).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return f"{sign}${millions}M"
+    if value >= 1_000:
+        thousands = (value / 1_000).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+        return f"{sign}${thousands}K"
+    return f"{sign}${value.quantize(Decimal('1'), rounding=ROUND_HALF_UP)}"
+
+
+def names_phrase(names: list[str]) -> str:
+    """ "Grace", "Grace and Sam", "Ann, Bo and Cy"."""
+    if len(names) <= 1:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _take_home(profile: PaycheckProfile) -> Decimal:
+    """A profile's monthly take-home, floored at 0 (an over-committed check has none)."""
+    return max(half_up2(breakdown(profile)["monthly_net"]), ZERO)
+
+
+@dataclass(frozen=True)
+class _Plan:
+    """What the retirement months do to the run (2026-09-23 spec §R2): the phases echo, the
+    engine's contribution resets and withdrawal, the drawdown echo, and the earners who have
+    no retirement month yet (§R3's reason for a money-lasts answer that cannot be given)."""
+
+    phases: list[PhaseOut]
+    resets: list[tuple[int, Decimal]]
+    withdrawal: tuple[int, Decimal] | None
+    drawdown: DrawdownOut | None
+    missing: list[str]
+
+
+def _plan_phases(
+    household: _Household,
+    retirements: list[RetirementOut],
+    monthly_contribution: Decimal,
+    annual_spend: Decimal | None,
+    months: list[date],
+    warnings: list[str],
+) -> _Plan:
+    """Retirement months sorted into phases (spec §R2, the user's rules):
+
+    - working (t0 → the first retirement): the derived or typed contribution, as before;
+    - partly retired (a retirement → the last one): the contribution RESETS to the payroll
+      saving + employer match of the earners still working, from their profiles in force
+      today — their pay is assumed to cover spending, so no cash surplus and no withdrawal,
+      and when that take-home is below the spending the warnings say so;
+    - retired (from the last earner's retirement month): contribution 0 and a withdrawal of
+      annual spend / 12, constant in today's dollars (the engine runs in real terms).
+
+    Boundaries are grouped by the month index the ENGINE uses — index 0 folds onto 1, since
+    t0 carries no flow — so people retiring in one month, or at t0 and t0+1, share one reset
+    (the engine refuses two at an index). A drawdown needs every earner to have a month on
+    the axis; otherwise the last phase simply runs to the horizon.
+    """
+    folded = {row.person_id: max(months.index(row.month), 1) for row in retirements}
+    groups: dict[int, list[date]] = {}
+    for row in retirements:
+        groups.setdefault(folded[row.person_id], []).append(row.month)
+    earners = household.earners
+    missing = [earner.name for earner in earners if earner.person_id not in folded]
+    retire_month = {row.person_id: row.month for row in retirements}
+    withdrawal_amount = (
+        None
+        if annual_spend is None
+        else (annual_spend / MONTHS_PER_YEAR).quantize(CENT, rounding=ROUND_HALF_UP)
+    )
+
+    phases: list[PhaseOut] = []
+    if not retirements or min(row.month for row in retirements) > months[0]:
+        phases.append(
+            PhaseOut(
+                from_month=months[0],
+                kind="working",
+                working_person_ids=[earner.person_id for earner in earners],
+                monthly_contribution=monthly_contribution,
+            )
+        )
+    resets: list[tuple[int, Decimal]] = []
+    withdrawal: tuple[int, Decimal] | None = None
+    drawdown: DrawdownOut | None = None
+    for index in sorted(groups):
+        from_month = min(groups[index])
+        working = [e for e in earners if folded.get(e.person_id, len(months)) > index]
+        if not working:
+            resets.append((index, ZERO))
+            if withdrawal_amount is not None:
+                withdrawal = (index, withdrawal_amount)
+                drawdown = DrawdownOut(
+                    start_month=max(retire_month[e.person_id] for e in earners),
+                    annual_withdrawal=annual_spend,
+                )
+            phases.append(
+                PhaseOut(
+                    from_month=from_month,
+                    kind="retired",
+                    working_person_ids=[],
+                    monthly_contribution=ZERO,
+                    monthly_withdrawal=withdrawal_amount,
+                )
+            )
+            # Nobody is left to retire, so there is no later boundary to reach.
+            break
+        level = sum((earner.payroll + earner.employer for earner in working), ZERO)
+        take_home = sum((_take_home(earner.profile) for earner in working), ZERO)
+        resets.append((index, level))
+        phases.append(
+            PhaseOut(
+                from_month=from_month,
+                kind="partly_retired",
+                working_person_ids=[earner.person_id for earner in working],
+                monthly_contribution=level,
+                take_home_monthly=take_home,
+            )
+        )
+        if withdrawal_amount is not None and take_home < withdrawal_amount:
+            note = (
+                f"{names_phrase([earner.name for earner in working])}'s take-home "
+                f"(≈ {approx_money(take_home)}/mo) is below your spending "
+                f"(≈ {approx_money(withdrawal_amount)}/mo); the difference is not withdrawn."
+            )
+            if note not in warnings:
+                warnings.append(note)
+    return _Plan(
+        phases=phases, resets=resets, withdrawal=withdrawal, drawdown=drawdown, missing=missing
+    )
+
+
 @dataclass(frozen=True)
 class BaseSnapshot:
     """The snapshot the starting balance stands on (2026-09-23 spec §R5): its key, the date
@@ -629,23 +766,32 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
     month_count = years * 12
     months = _months_from(start_month, month_count)
     retirements = _resolve_retirements(household, knobs.retire, months, years)
-    # (month_index, amount), sorted — the SAME schedule feeds the deterministic line and
-    # the fan, which is what keeps the bands wrapped around the line they belong to.
-    # `months` is contiguous from t0, so the horizon check above guarantees every month
-    # is on the axis. The drop does NOT go through the real-terms conversion: it is a
-    # TODAY's-dollars take-home, exactly like `monthly_contribution`.
-    drops = [(months.index(row.month), row.monthly_drop) for row in retirements]
+    # The SAME resets and withdrawal feed the deterministic line and the fan, which is what
+    # keeps the bands wrapped around the line they belong to. `months` is contiguous from
+    # t0, so the horizon check above guarantees every retirement is on the axis. Levels and
+    # the withdrawal are TODAY's-dollars figures exactly like `monthly_contribution`, and
+    # they cross the real-terms conversion below untouched: the engine runs in real terms.
+    plan = _plan_phases(
+        household, retirements, monthly_contribution, annual_spend, months, warnings
+    )
     # Every ARRAY below runs on `real_return` (= annual_return under an EXPLICIT
     # inflation=0, which is what reproduces the pre-Monte-Carlo arrays byte for byte);
     # the ECHOED `annual_return` stays the NOMINAL value the user provided or the default
     # — the echo is what seeds the form, and `inflation` echoes separately so the page can
     # reconstruct the real rate.
-    projected = project(
-        starting, monthly_contribution, real_return, month_count, real_growth, drops
+    line = project_path(
+        starting,
+        monthly_contribution,
+        real_return,
+        month_count,
+        real_growth,
+        resets=plan.resets,
+        withdrawal=plan.withdrawal,
     )
+    projected = line.points
     # The coast line: the same growth with the contributions turned off — the distance
-    # between the two lines is what the saving is buying. Nothing to escalate, so the
-    # escalator is 0 here too, and nothing to drop either.
+    # between the two lines is what the saving is buying. No contributions, vests or
+    # withdrawals (spec §R2), so Coast FI keeps its meaning.
     coast = project(starting, ZERO, real_return, month_count, Decimal("0"))
 
     fi_target: Decimal | None = None
@@ -686,7 +832,8 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
             real_growth,
             month_count,
             fi_target,
-            drops,
+            resets=plan.resets,
+            withdrawal=plan.withdrawal,
         )
         bands = mc.bands
         if fi_target is not None:
@@ -741,4 +888,6 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
         derived_window=derived_window,
         budget_annual_spend=budget_annual_spend,
         budget_month=None if budget_annual_spend is None else start_month,
+        phases=plan.phases,
+        drawdown=plan.drawdown,
     )

@@ -33,7 +33,6 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.services.projection import (
-    drop_schedule,
     fold_withdrawal,
     lump_schedule,
     monthly_flows,
@@ -79,7 +78,6 @@ def simulate(
     contribution_growth: Decimal,
     months: int,
     target: Decimal | None,
-    drops: Sequence[tuple[int, Decimal]] = (),
     *,
     resets: Sequence[tuple[int, Decimal]] = (),
     withdrawal: tuple[int, Decimal] | None = None,
@@ -91,8 +89,7 @@ def simulate(
     `resets`, `withdrawal` and `lumps` are the deterministic engine's own inputs, normalized
     by services/projection rather than re-derived here: the fan has to bend exactly where the
     line bends. They cost the walk no randomness — the flows are one list built before the
-    first path — which is what keeps empty inputs byte-identical. (`drops` is the transient
-    retirement decrement; see services/projection.drop_schedule.)
+    first path — which is what keeps empty inputs byte-identical.
     """
     rng = random.Random(MC_SEED)
     start = float(starting_balance)
@@ -108,7 +105,6 @@ def simulate(
         withdrawal=fold_withdrawal(withdrawal),
         lumps=lump_schedule(lumps),
         convert=float,
-        drops=drop_schedule(drops) if drops else None,
     )
     # Bound once: the walk below runs 500 × up to 720 steps, and on the 1 GB box it was the
     # route's whole cost (audit perf B6). Same calls, same order, same numbers.

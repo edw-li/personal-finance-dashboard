@@ -20,7 +20,6 @@ from app.services import clock
 from app.services.month_review import adopt_existing_history
 from app.services.projection import (
     december_index,
-    drop_schedule,
     latest_december_year,
     max_plan_until_year,
     monthly_flows,
@@ -503,22 +502,44 @@ async def test_projection_without_retire_params_echoes_an_empty_list(auth_client
     assert body["retirements"] == []
     assert body["projected"] == BACKCOMPAT_PROJECTED_2Y
     assert body["coast"] == BACKCOMPAT_COAST_2Y
+    # 2026-09-23 spec §R2: one working phase with every earner (nobody here), no drawdown.
+    assert body["phases"] == [
+        {
+            "from_month": body["start_month"],
+            "kind": "working",
+            "working_person_ids": [],
+            "monthly_contribution": "4000.00",
+            "monthly_withdrawal": None,
+            "take_home_monthly": None,
+        }
+    ]
+    assert body["drawdown"] is None
 
 
-async def test_projection_retirement_drops_the_stream_and_echoes_what_it_did(auth_client, db):
+ZEROS = "annual_return=0&inflation=0&contribution_growth=0&volatility=0"
+
+
+def _steps(body: dict):
+    def step(i: int) -> Decimal:
+        return Decimal(body["projected"][i]) - Decimal(body["projected"][i - 1])
+
+    return step
+
+
+async def test_a_single_earner_retiring_goes_straight_to_drawdown(auth_client, db):
+    # 2026-09-23 spec §R2: nominal zeros make the chain exact addition — 4,000 a month saved
+    # until Alex retires at month 12, then annual spend (60,000) / 12 = 5,000 a month out.
     this_month = await _seed_book(db)
     alex = await _seed_person(db, "Alex", primary=True)
     await _seed_profile(db, alex)
     retires = month_add(this_month, 12)
-    # Nominal zeros make the chain exact addition: 4,000/month until month 12, where
-    # Alex's 2,000 take-home leaves the stream.
     body = (
         await auth_client.get(
-            "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0&volatility=0"
-            f"&retire={alex.id}:{_month_param(retires)}"
+            f"/api/v1/projection?{ZEROS}&retire={alex.id}:{_month_param(retires)}"
         )
     ).json()
 
+    # The echo still names the paycheck that stops — informational now.
     assert body["retirements"] == [
         {
             "person_id": alex.id,
@@ -528,17 +549,18 @@ async def test_projection_retirement_drops_the_stream_and_echoes_what_it_did(aut
         }
     ]
     assert body["projected"][11] == "144000.00"  # 100,000 + 11 x 4,000
-    assert body["projected"][12] == "146000.00"  # the first HALVED month
-    assert body["projected"][13] == "148000.00"
-    # The coast line has no contribution to drop — it must not move an inch.
-    assert body["coast"][12] == "100000.00"
+    assert body["projected"][12] == "139000.00"  # the first month of withdrawals
+    assert body["projected"][13] == "134000.00"
+    assert [phase["kind"] for phase in body["phases"]] == ["working", "retired"]
+    assert body["drawdown"] == {"start_month": retires.isoformat(), "annual_withdrawal": "60000.00"}
+    # The coast line never withdraws: growth only, as before.
+    assert body["coast"][12] == "100000.00" and body["coast"][-1] == "100000.00"
 
 
-async def test_projection_retirement_drop_is_not_deflated(auth_client, db):
-    # 3% return against 3% inflation is a real rate of exactly 0, and 3% contribution
-    # growth against it is exactly 0 too, so every month-over-month step is the raw
-    # contribution. The drop is a TODAY's-dollars figure like the contribution itself and
-    # crosses the Fisher conversion UNTOUCHED: the step must fall by exactly 2,000.00.
+async def test_the_withdrawal_is_constant_in_todays_dollars(auth_client, db):
+    # 3% return against 3% inflation is a real rate of exactly 0, and 3% contribution growth
+    # against it is exactly 0 too, so every step is the raw flow. The withdrawal is annual
+    # spend / 12 in TODAY's dollars — it crosses the Fisher conversion untouched.
     this_month = await _seed_book(db)
     alex = await _seed_person(db, "Alex", primary=True)
     await _seed_profile(db, alex)
@@ -549,16 +571,126 @@ async def test_projection_retirement_drop_is_not_deflated(auth_client, db):
             f"&volatility=0&retire={alex.id}:{_month_param(retires)}"
         )
     ).json()
-
-    def step(i: int) -> Decimal:
-        return Decimal(body["projected"][i]) - Decimal(body["projected"][i - 1])
-
+    step = _steps(body)
     assert step(5) == Decimal("4000.00")
-    assert step(6) == Decimal("2000.00")
-    assert step(7) == Decimal("2000.00")
+    assert step(6) == Decimal("-5000.00")
+    assert step(18) == Decimal("-5000.00")
 
 
-async def test_projection_two_retirements_echo_sorted_by_month(auth_client, db):
+async def test_one_of_two_retiring_keeps_the_other_saving_and_withdraws_nothing(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)  # take-home 2,000 a month, no deductions
+    # 48,000 over 24 with 10 % traditional 401(k): 400 a month saved, 3,600 a month take-home.
+    await _seed_profile(db, bo, annual_salary=Decimal("48000.00"), trad_401k_pct=Decimal("0.10"))
+    retires = month_add(this_month, 6)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?{ZEROS}&retire={alex.id}:{_month_param(retires)}"
+        )
+    ).json()
+    assert body["monthly_contribution"] == "4400.00"  # 4,000 cash + Bo's 400
+    step = _steps(body)
+    assert step(5) == Decimal("4400.00")
+    # Bo's saving continues; his pay is assumed to cover the spending — nothing withdrawn.
+    assert step(6) == Decimal("400.00")
+    assert step(300) == Decimal("400.00")
+    assert body["drawdown"] is None
+    assert body["phases"] == [
+        {
+            "from_month": this_month.isoformat(),
+            "kind": "working",
+            "working_person_ids": [alex.id, bo.id],
+            "monthly_contribution": "4400.00",
+            "monthly_withdrawal": None,
+            "take_home_monthly": None,
+        },
+        {
+            "from_month": retires.isoformat(),
+            "kind": "partly_retired",
+            "working_person_ids": [bo.id],
+            "monthly_contribution": "400.00",
+            "monthly_withdrawal": None,
+            "take_home_monthly": "3600.00",
+        },
+    ]
+    assert (
+        "Bo's take-home (≈ $3.6K/mo) is below your spending (≈ $5.0K/mo); "
+        "the difference is not withdrawn."
+    ) in body["warnings"]
+
+
+async def test_both_retiring_withdraws_annual_spend_from_the_later_month(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)
+    await _seed_profile(db, bo, annual_salary=Decimal("48000.00"), trad_401k_pct=Decimal("0.10"))
+    early, late = month_add(this_month, 6), month_add(this_month, 18)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?{ZEROS}"
+            f"&retire={alex.id}:{_month_param(early)}&retire={bo.id}:{_month_param(late)}"
+        )
+    ).json()
+    assert body["projected"][5] == "122000.00"  # 100,000 + 5 x 4,400
+    assert body["projected"][17] == "126800.00"  # + 12 x 400 while Bo works
+    assert body["projected"][18] == "121800.00"  # 5,000 a month out from Bo's month
+    assert body["projected"][42] == "1800.00"
+    assert body["projected"][43] == "0.00"  # clamped: a balance never goes below $0
+    assert body["projected"][-1] == "0.00"
+    assert body["drawdown"] == {"start_month": late.isoformat(), "annual_withdrawal": "60000.00"}
+    assert [phase["kind"] for phase in body["phases"]] == ["working", "partly_retired", "retired"]
+    assert body["phases"][2] == {
+        "from_month": late.isoformat(),
+        "kind": "retired",
+        "working_person_ids": [],
+        "monthly_contribution": "0.00",
+        "monthly_withdrawal": "5000.00",
+        "take_home_monthly": None,
+    }
+
+
+async def test_retiring_in_the_same_month_is_one_boundary_and_the_withdrawal(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)
+    await _seed_profile(db, bo)
+    both = month_add(this_month, 6)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?{ZEROS}"
+            f"&retire={alex.id}:{_month_param(both)}&retire={bo.id}:{_month_param(both)}"
+        )
+    ).json()
+    assert [phase["kind"] for phase in body["phases"]] == ["working", "retired"]
+    assert body["projected"][6] == "115000.00"  # 100,000 + 5 x 4,000 - 5,000
+    assert body["drawdown"]["start_month"] == both.isoformat()
+
+
+async def test_a_typed_contribution_keeps_phase_zero_typed_and_phase_one_profile_derived(
+    auth_client, db
+):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)
+    await _seed_profile(db, bo, annual_salary=Decimal("48000.00"), trad_401k_pct=Decimal("0.10"))
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?{ZEROS}&monthly_contribution=1000"
+            f"&retire={alex.id}:{_month_param(month_add(this_month, 6))}"
+        )
+    ).json()
+    assert body["phases"][0]["monthly_contribution"] == "1000.00"
+    assert body["phases"][1]["monthly_contribution"] == "400.00"
+    step = _steps(body)
+    assert (step(5), step(6)) == (Decimal("1000.00"), Decimal("400.00"))
+
+
+async def test_the_echo_orders_retirements_by_month_whatever_the_param_order(auth_client, db):
     this_month = await _seed_book(db)
     alex = await _seed_person(db, "Alex", primary=True)
     bo = await _seed_person(db, "Bo")
@@ -567,19 +699,33 @@ async def test_projection_two_retirements_echo_sorted_by_month(auth_client, db):
     early, late = month_add(this_month, 6), month_add(this_month, 18)
     body = (
         await auth_client.get(
-            "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0&volatility=0"
+            f"/api/v1/projection?{ZEROS}"
             f"&retire={alex.id}:{_month_param(late)}&retire={bo.id}:{_month_param(early)}"
         )
     ).json()
-
-    # Order-free params, an echo in the order the drops actually HAPPEN.
     assert [row["name"] for row in body["retirements"]] == ["Bo", "Alex"]
     assert [row["monthly_drop"] for row in body["retirements"]] == ["4000.00", "2000.00"]
-    # Bo's 4,000 retires the whole 4,000 stream at month 6; Alex's 2,000 then has nothing
-    # left to take (the floor), so the balance simply stops moving.
-    assert body["projected"][5] == "120000.00"
-    assert body["projected"][6] == "120000.00"
-    assert body["projected"][19] == "120000.00"
+    # Alex keeps working from Bo's month (no deductions: nothing more saved), and the
+    # withdrawal starts at Alex's month.
+    step = _steps(body)
+    assert step(6) == Decimal("0.00")
+    assert step(18) == Decimal("-5000.00")
+    assert body["drawdown"]["start_month"] == late.isoformat()
+
+
+async def test_a_retirement_at_the_start_month_is_already_retired(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?{ZEROS}&retire={alex.id}:{_month_param(this_month)}"
+        )
+    ).json()
+    # No working phase to describe: the first flow month already withdraws.
+    assert [phase["kind"] for phase in body["phases"]] == ["retired"]
+    assert body["phases"][0]["from_month"] == this_month.isoformat()
+    assert body["projected"][1] == "95000.00"
 
 
 async def test_projection_retirement_reaches_the_monte_carlo_fan(auth_client, db):
@@ -591,9 +737,11 @@ async def test_projection_retirement_reaches_the_monte_carlo_fan(auth_client, db
     retired = (
         await auth_client.get(f"{base}&retire={alex.id}:{_month_param(month_add(this_month, 12))}")
     ).json()
-    # The fan has to wrap the line it belongs to: same seed, smaller stream, lower bands.
+    # The fan has to wrap the line it belongs to: same seed, a withdrawal instead of a
+    # contribution from month 12 (2026-09-23 spec §R2) — the line and the median both fall.
     assert Decimal(retired["bands"]["p50"][-1]) < Decimal(full["bands"]["p50"][-1])
     assert Decimal(retired["bands"]["p90"][-1]) < Decimal(full["bands"]["p90"][-1])
+    assert Decimal(retired["projected"][-1]) < Decimal(retired["projected"][12])
     assert retired["bands"]["p50"][:12] == full["bands"]["p50"][:12]
 
 
@@ -684,8 +832,9 @@ async def test_projection_retirement_of_a_negative_net_drops_only_its_deductions
     ).json()
     assert body["monthly_contribution"] == "6600.00"  # 4,000 cash + 2,600 payroll
     assert body["retirements"][0]["monthly_drop"] == "2600.00"
-    # Five full months, then 4,000 a month from the retirement month on: back to cash alone.
-    assert body["projected"][7] == "141000.00"  # 100,000 + 5 x 6,600 + 2 x 4,000
+    # Five full months, then the only earner is retired: 5,000 a month out (2026-09-23 §R2).
+    assert body["projected"][5] == "133000.00"  # 100,000 + 5 x 6,600
+    assert body["projected"][7] == "123000.00"  # two withdrawals later
 
 
 async def test_projection_retirement_uses_the_profile_in_force_not_the_newest(auth_client, db):
@@ -805,12 +954,10 @@ async def test_projection_retirement_drop_includes_payroll_savings(auth_client, 
     ).json()
 
     assert body["retirements"][0]["monthly_drop"] == "2000.00"  # 1,600 take-home + 400 payroll
-
-    def step(i: int) -> Decimal:
-        return Decimal(body["projected"][i]) - Decimal(body["projected"][i - 1])
-
+    step = _steps(body)
     assert step(5) == Decimal("4400.00")
-    assert step(6) == Decimal("2400.00")
+    # The only earner retired: the deductions stop with the paycheck and 5,000 a month goes out.
+    assert step(6) == Decimal("-5000.00")
 
 
 # --- the engine itself (pure Decimal, no DB): the contribution escalator's two pins ---
@@ -835,128 +982,6 @@ def test_project_contribution_growth_two_months_exact():
     #           = 1200.948879293458297412635507 -> HALF_UP -> 1200.95
     points = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 2, Decimal("0.12"))
     assert [str(p) for p in points] == ["1000.00", "1100.00", "1200.95"]
-
-
-# --- the retirement schedule (2026-08-28 spec §4.3) ---
-
-
-def test_drop_schedule_sums_a_month_and_folds_index_zero():
-    # Two retirements in one month cost the household BOTH paychecks at once.
-    assert drop_schedule([(7, Decimal("100")), (7, Decimal("40"))]) == {7: Decimal("140")}
-    # t0 carries no contribution (it IS the starting balance), so "already retired when the
-    # projection starts" and "retires at month 1" are the same chain — folded, not dropped.
-    assert drop_schedule([(0, Decimal("40"))]) == {1: Decimal("40")}
-    assert drop_schedule([]) == {}
-
-
-def test_project_without_drops_is_byte_identical():
-    # The back-compat guarantee is a test, not a hope: the four strings below are the ones
-    # test_project_growth_zero_matches_previous_behavior already pins, and the new
-    # parameter must not move them on either the defaulted or the explicit-empty path.
-    plain = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3)
-    assert [str(p) for p in plain] == ["1000.00", "1104.07", "1208.57", "1313.50"]
-    explicit = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3, Decimal("0"), [])
-    assert explicit == plain
-
-
-def test_project_drop_lands_before_that_month_contribution():
-    # r = 0 collapses the compounding to plain addition, so the whole chain is exact:
-    # 100/month until month 3, where a 40 drop leaves 60/month for the rest.
-    points = project(
-        Decimal("1000.00"),
-        Decimal("100.00"),
-        Decimal("0"),
-        5,
-        Decimal("0"),
-        [(3, Decimal("40.00"))],
-    )
-    assert [str(p) for p in points] == [
-        "1000.00",
-        "1100.00",
-        "1200.00",
-        "1260.00",
-        "1320.00",
-        "1380.00",
-    ]
-
-
-def test_project_drop_at_index_zero_is_the_same_chain_as_index_one():
-    at_zero = project(
-        Decimal("1000.00"),
-        Decimal("100.00"),
-        Decimal("0"),
-        3,
-        Decimal("0"),
-        [(0, Decimal("40.00"))],
-    )
-    at_one = project(
-        Decimal("1000.00"),
-        Decimal("100.00"),
-        Decimal("0"),
-        3,
-        Decimal("0"),
-        [(1, Decimal("40.00"))],
-    )
-    assert [str(p) for p in at_zero] == ["1000.00", "1060.00", "1120.00", "1180.00"]
-    assert at_zero == at_one
-
-
-def test_project_two_drops_in_one_month_sum():
-    points = project(
-        Decimal("1000.00"),
-        Decimal("100.00"),
-        Decimal("0"),
-        3,
-        Decimal("0"),
-        [(2, Decimal("30.00")), (2, Decimal("20.00"))],
-    )
-    assert [str(p) for p in points] == ["1000.00", "1100.00", "1150.00", "1200.00"]
-
-
-def test_project_floors_the_stream_at_zero_and_growth_cannot_revive_it():
-    # A drop bigger than what is left retires the WHOLE stream; 0 x (1+g) is still 0, so a
-    # 12%/yr escalator must never bring a retired paycheck back.
-    points = project(
-        Decimal("1000.00"),
-        Decimal("100.00"),
-        Decimal("0"),
-        4,
-        Decimal("0.12"),
-        [(2, Decimal("500.00"))],
-    )
-    assert [str(p) for p in points] == ["1000.00", "1100.00", "1100.00", "1100.00", "1100.00"]
-
-
-def test_project_growth_escalates_only_the_remainder():
-    # Dropping 40 at the FIRST contribution is arithmetically a 60/month stream from the
-    # start: the escalator has to compound what is LEFT, never the original 100. Equality
-    # over a 36-month chain is a much sharper pin than any single hand-computed point.
-    dropped = project(
-        Decimal("1000.00"),
-        Decimal("100.00"),
-        Decimal("0"),
-        36,
-        Decimal("0.12"),
-        [(1, Decimal("40.00"))],
-    )
-    assert dropped == project(
-        Decimal("1000.00"), Decimal("60.00"), Decimal("0"), 36, Decimal("0.12")
-    )
-    # ...and the first two points are checkable by eye: 1000 + 60, then + 60 x 1.12^(1/12)
-    # = 60.56932757607497844758130414 -> 1120.5693... -> HALF_UP -> 1120.57.
-    assert [str(p) for p in dropped[:3]] == ["1000.00", "1060.00", "1120.57"]
-
-
-def test_project_ignores_a_drop_past_the_horizon():
-    # The API fences the range; the ENGINE stays total rather than raising on one.
-    assert project(
-        Decimal("1000.00"),
-        Decimal("100.00"),
-        Decimal("0"),
-        3,
-        Decimal("0"),
-        [(99, Decimal("40.00"))],
-    ) == project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"))
 
 
 # --- the flow schedule (2026-09-23 spec §R1): contribution resets, a withdrawal and lumps ---
