@@ -80,7 +80,7 @@ describe('netWorthHeadline — the tile names its balances by date (2026-09-23 s
 
   it('drops the delta whole when either half is missing, and says nothing more on an empty book', () => {
     expect(netWorthHeadline({ ...FINAL, mom_pct: null }).delta).toBeUndefined()
-    expect(netWorthHeadline({ ...FINAL, month: null, net_worth: null, mom_delta: null, mom_pct: null })).toEqual({
+    expect(netWorthHeadline({ ...FINAL, month: null, mom_delta: null, mom_pct: null })).toEqual({
       label: 'Net worth',
       badge: undefined,
       delta: undefined,
@@ -110,7 +110,7 @@ describe('the receipt: its date, and the recorded sentence', () => {
     expect(recordedSentence(PROVISIONAL)).toBe(
       ' Recorded Sep 22. Balances recorded before their date stay provisional until saved again on or after it.',
     )
-    expect(recordedSentence({ ...FINAL, month: '2023-09-01', as_of: '2023-09-01', recorded_on: '2023-09-24' })).toBe(
+    expect(recordedSentence({ ...FINAL, month: '2023-09-01', recorded_on: '2023-09-24' })).toBe(
       ' Recorded Sep 24, 2023.',
     )
     expect(recordedSentence(FINAL)).toBe('')

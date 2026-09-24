@@ -11,7 +11,6 @@ const fixture: ChartFixture = {
     netWorthTrendOption({
       months: ['2026-08-01', '2026-09-01', '2026-10-01'],
       net_worth: ['700000.00', '806667.88', '933250.90'],
-      as_of: ['2026-08-01', '2026-09-01', '2026-09-22'],
       recorded_on: ['2026-08-01', '2026-09-01', '2026-09-22'],
       provisional: [false, false, true],
     }),

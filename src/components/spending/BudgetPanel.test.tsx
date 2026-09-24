@@ -586,7 +586,7 @@ describe('the month the card reads (spec §B5)', () => {
   // — is PARTLY ENTERED. The card must not read it as a complete month ("0 of 13 over").
   describe('a month whose spending is not complete (2026-09-23 spec §T12)', () => {
     const partial = [flowsPart('2026-09-01', { spending: 'partial', overdue_from: '2026-10-16' })]
-    const renderWith = (flowsDue: FlowsPartOut[], onShownMonth?: (month: string) => void) =>
+    const renderWith = (flowsDue: FlowsPartOut[], onShownMonth?: (month: string | null) => void) =>
       render(
         <BudgetPanel
           matrix={SEP_BOOK}
