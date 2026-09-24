@@ -386,6 +386,9 @@ function MonthlyUpdateWizard() {
   // the "of {budget}" subtext's source; advice, never a gate (spec §4.1).
   const [monthBudgets, setMonthBudgets] = useState<Record<number, string>>({})
   const [monthExisted, setMonthExisted] = useState(false)
+  // Does the month hold any spending row or a take-home (GET /spending/months `exists`)? The
+  // Spending step offers its part's delete only then (2026-09-23 spec §M6).
+  const [spendingExisted, setSpendingExisted] = useState(false)
   // The month's snapshot as the server dates it (2026-09-23 spec §K2, §M4): read at load and again
   // after each save, it drives the "Balances as of …" line, the early-balances Confirm and banner,
   // and the close gate's provisional check. Server-derived — never part of a draft.
@@ -623,6 +626,7 @@ function MonthlyUpdateWizard() {
           })
         }
         setHadNetPay(spendMonth.net_pay !== null)
+        setSpendingExisted(spendMonth.exists)
         setStoredCategories(new Set(spendMonth.amounts.map((a) => a.category_id)))
         setHadSpending(
           spendMonth.net_pay !== null || spendMonth.amounts.some((a) => Number(a.amount) !== 0),
@@ -1143,6 +1147,9 @@ function MonthlyUpdateWizard() {
         // empty month, and repeating the repair prompt in the same breath would argue with
         // the choice they made one click ago. The next VISIT flags it, receipt gone.
         setEmptyMonth(canonNetPay === '' && !anyAmountEntered && !recordZero)
+        // The server skipped only listed zeros it had no row for; anything else is a row now.
+        const { created, updated, unchanged } = result.spending
+        setSpendingExisted(created + updated + unchanged > 0 || canonNetPay !== '')
       }
     } catch (err) {
       if (loadedMonth.current !== loaded) return
@@ -1154,67 +1161,48 @@ function MonthlyUpdateWizard() {
     }
   }
 
-  // Each leg tolerates ITS OWN 404 — a balances-only month must still fully clear, and
-  // the mirror case too — but any other failure surfaces and stops the sequence (a retry
-  // re-runs both; the leg that already succeeded then 404s and is tolerated).
-  const tolerate404 = async <T,>(call: Promise<T>): Promise<T | null> => {
-    try {
-      return await call
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) return null
-      throw err
-    }
-  }
-
-  const deleteMonth = async () => {
+  // Delete ONE part of the month (2026-09-23 spec §M6): the 1st's balances
+  // (DELETE /net-worth/months/{m}) or the month's spending & take-home (DELETE /spending/months/
+  // {m}) — the other part stays, so the wizard stays on the month and step and re-reads it. A 404
+  // means the part is already gone (another tab): the result is the same, with nothing to undo.
+  const deletePart = async (part: DraftPart) => {
     if (saving) return
     setDeleting(true)
     setError(null)
+    const deleted = month
+    const name = part === 'balances' ? balancesPartName(month) : flowsPartName(month)
     try {
-      const balancesDelete = await tolerate404(deleteMonthBalances(month))
-      const spendingDelete = await tolerate404(deleteSpendingMonth(month))
-      removeDraft('balances', month)
-      removeDraft('flows', month)
-      const deleted = month
-      const deleteBatches = [spendingDelete?.batchId ?? null, balancesDelete?.batchId ?? null]
+      let batchId: string | null = null
+      try {
+        batchId = (part === 'balances' ? await deleteMonthBalances(month) : await deleteSpendingMonth(month)).batchId
+      } catch (err) {
+        if (!(err instanceof ApiError && err.status === 404)) throw err
+      }
+      removeDraft(part, month)
       toast.success(
-        `Deleted ${formatMonth(month)} — balances and spending removed.`,
-        deleteBatches.some((id) => id !== null)
-          ? {
+        `Deleted ${name} — ${part === 'balances' ? 'spending' : 'balances'} untouched.`,
+        batchId === null
+          ? undefined
+          : {
               action: {
                 label: 'Undo',
                 onAction: () =>
-                  void undoBatches(deleteBatches, `Undone — ${formatMonth(deleted)} is back.`, () => {
-                    // Back to the undone month's wizard; the nonce covers the same-month case.
-                    setLoading(true)
-                    setLoadNonce((n) => n + 1)
-                    setParams(() => new URLSearchParams({ month: deleted, step: 'balances' }))
+                  void undoBatches([batchId], `Undone — ${name} are back.`, () => {
+                    // Back to the part's own step on that month; the nonce covers the same month.
+                    reloadMonth()
+                    setParams(() => new URLSearchParams({ month: deleted, step: part === 'balances' ? 'balances' : 'spending' }))
                   }),
               },
-            }
-          : undefined,
+            },
       )
-      setDeleteArm('')
-      setActionsOpen(false)
-      // A remembered half-landed save describes rows that no longer exist — leaving it would
-      // keep the primary reading "Retry spending" for a deleted month, and the receipt would
-      // narrate a month that is gone.
+      closeActions()
+      // The receipt and the restored banner describe rows that no longer exist.
       setLastSave(null)
-      setRestoredParts({ balances: false, flows: false })
-      setLoading(true)
-      // Land on the CURRENT month's wizard; the nonce covers the deleted-month ===
-      // current-month case, where the month param does not change.
-      setLoadNonce((n) => n + 1)
-      // Coverage moved the other way: the deleted month has no feeds left, so its chip has to
-      // empty. loadNonce only re-seeds the FORM — the shared ribbon needs its own word.
-      setCoverageNonce((n) => n + 1)
-      setParams(() => new URLSearchParams({ month: currentMonthIso(), step: 'balances' }))
+      setRestoredParts((current) => ({ ...current, [part]: false }))
+      // The form re-seeds from what is left; the ribbon and the strip re-read coverage.
+      reloadMonth()
     } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? `Delete failed: ${err.message} — retry`
-          : 'Delete failed — retry',
-      )
+      setError(err instanceof ApiError ? `Delete failed: ${err.message} — retry` : 'Delete failed — retry')
     } finally {
       setDeleting(false)
     }
@@ -1537,6 +1525,60 @@ function MonthlyUpdateWizard() {
     return { now, prior }
   }
 
+  // A part step's kebab (2026-09-13 polish spec §11; per part since 2026-09-23 spec §M6): the
+  // part's own delete behind the typed YYYY-MM arm, in a popover so opening it never pushes the
+  // step's footer down. One step renders at a time, so the two share one open/arm state.
+  const partActions = (part: DraftPart) => {
+    const name = part === 'balances' ? balancesPartName(month) : flowsPartName(month)
+    const other = part === 'balances' ? flowsPartName(month) : balancesPartName(month)
+    const what =
+      part === 'balances'
+        ? `every account's figure on ${dayOf(month)}`
+        : 'every category row and the household take-home'
+    return (
+      <div className="month-actions">
+        <button
+          ref={actionsTriggerRef}
+          type="button"
+          className="button month-actions-trigger"
+          aria-label="Month actions"
+          aria-haspopup="dialog"
+          aria-expanded={actionsOpen}
+          onClick={() => setActionsOpen((open) => !open)}
+        >
+          <Ellipsis size={15} aria-hidden="true" />
+        </button>
+        {actionsOpen && (
+          <div ref={actionsSurfaceRef} className="popover-surface month-actions-popover" role="dialog" aria-label="Month actions">
+            <p className="drill-hint">
+              Delete {name}: {what}. {other} stay as they are. Undo is offered for six seconds
+              afterwards, and the Activity card can undo it later.
+            </p>
+            <div className="danger-row">
+              <label htmlFor="delete-arm">Type {month.slice(0, 7)} to confirm</label>
+              <input
+                id="delete-arm"
+                type="text"
+                className="field-input"
+                value={deleteArm}
+                onChange={(e) => setDeleteArm(e.target.value)}
+                placeholder={month.slice(0, 7)}
+              />
+              <button
+                type="button"
+                className="button danger-button"
+                disabled={saving || deleting || deleteArm.trim() !== month.slice(0, 7)}
+                onClick={() => void deletePart(part)}
+              >
+                {deleting ? 'Deleting…' : `Delete ${name}`}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="page">
       <PageFrame
@@ -1692,10 +1734,14 @@ function MonthlyUpdateWizard() {
               )
             }
           >
-            <h2 className="eyebrow">
-              {balancesPartName(month)}
-              <InfoHint text="Every account&apos;s balance on this 1st, pre-filled from the 1st before; components are tracked inside their parent. Saving them never touches the month&apos;s spending or take-home." />
-            </h2>
+            <div className="step-head">
+              <h2 className="eyebrow">
+                {balancesPartName(month)}
+                <InfoHint text="Every account&apos;s balance on this 1st, pre-filled from the 1st before; components are tracked inside their parent. Saving them never touches the month&apos;s spending or take-home." />
+              </h2>
+              {/* Offered only on balances that were saved (a delete of nothing would 404). */}
+              {monthExisted && partActions('balances')}
+            </div>
             {/* The Recorded-on box's successor (2026-09-23 spec §M4): which day the balances
                 describe and when they were recorded — the server stamps it, never the wizard. */}
             <p className="balances-asof">
@@ -1991,10 +2037,13 @@ function MonthlyUpdateWizard() {
               )
             }
           >
-            <h2 className="eyebrow">
-              {flowsPartName(month)}
-              <InfoHint text="The month&apos;s spend per category plus the household&apos;s take-home pay — a blank take-home skips the cashflow row. Saving them never creates or changes the month&apos;s balances." />
-            </h2>
+            <div className="step-head">
+              <h2 className="eyebrow">
+                {flowsPartName(month)}
+                <InfoHint text="The month&apos;s spend per category plus the household&apos;s take-home pay — a blank take-home skips the cashflow row. Saving them never creates or changes the month&apos;s balances." />
+              </h2>
+              {spendingExisted && partActions('flows')}
+            </div>
             {/* When this month's spending can be entered (2026-09-23 spec §M3): once it has begun,
                 and while it runs what is saved is kept as a partial month. */}
             {notBegun && (
@@ -2181,49 +2230,6 @@ function MonthlyUpdateWizard() {
                 <InfoHint text="Review the entered figures, then save progress or close a completed month. Your entries stay in this browser until saved." />
               </h2>
               {review && <p className={`month-review-status month-review-status-${review.state}`}>{REVIEW_LABELS[review.state]}{review.closed_at ? ` · Last closed ${new Date(review.closed_at).toLocaleDateString()}` : ''}</p>}
-              {monthExisted && (
-                <div className="month-actions">
-                  <button
-                    ref={actionsTriggerRef}
-                    type="button"
-                    className="button month-actions-trigger"
-                    aria-label="Month actions"
-                    aria-haspopup="dialog"
-                    aria-expanded={actionsOpen}
-                    onClick={() => setActionsOpen((open) => !open)}
-                  >
-                    <Ellipsis size={15} aria-hidden="true" />
-                  </button>
-                  {actionsOpen && (
-                    <div ref={actionsSurfaceRef} className="popover-surface month-actions-popover" role="dialog" aria-label="Month actions">
-                      <p className="drill-hint">
-                        Delete this month everywhere: its balances snapshot, spending rows and
-                        take-home. Undo is offered for six seconds afterwards, and the Activity card
-                        can undo it later.
-                      </p>
-                      <div className="danger-row">
-                        <label htmlFor="delete-arm">Type {month.slice(0, 7)} to confirm</label>
-                        <input
-                          id="delete-arm"
-                          type="text"
-                          className="field-input"
-                          value={deleteArm}
-                          onChange={(e) => setDeleteArm(e.target.value)}
-                          placeholder={month.slice(0, 7)}
-                        />
-                        <button
-                          type="button"
-                          className="button danger-button"
-                          disabled={saving || deleting || deleteArm.trim() !== month.slice(0, 7)}
-                          onClick={() => void deleteMonth()}
-                        >
-                          {deleting ? 'Deleting…' : 'Delete this month'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
             {/* W5 (2026-09-13 audit): the four figures of the approved receipt (design §4.3) as
                 real tiles — the app's tile vocabulary, not three label/value pairs 375px apart.

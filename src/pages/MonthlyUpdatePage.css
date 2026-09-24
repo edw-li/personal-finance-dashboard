@@ -349,3 +349,8 @@
    sign. Specific enough to beat .stat-delta-neutral (panels.css). */
 .review-kpis[data-story-tone='positive'] > .stat-tile:first-child .stat-delta { color: var(--positive); }
 .review-kpis[data-story-tone='negative'] > .stat-tile:first-child .stat-delta { color: var(--negative); }
+
+/* A part step's head row (2026-09-23 spec §M6): its eyebrow and, once the part is saved, the
+   Month-actions kebab holding that part's delete — the Review head's grammar. */
+.step-head { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; margin-bottom: .9rem; }
+.step-head .eyebrow { margin: 0; }

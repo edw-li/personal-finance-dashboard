@@ -1267,148 +1267,129 @@ function renderWizardAt(entry: string) {
       <ToastProvider>
         <MonthlyUpdatePage />
       </ToastProvider>
+      <LocationProbe />
     </MemoryRouter>,
   )
 }
 
-// A2 (2026-09-13 audit): the delete arm-and-confirm lives behind the Review head's kebab.
+// A2 (2026-09-13 audit), per part since 2026-09-23 (spec §M6): each part step's head carries a
+// kebab whose popover holds THAT part's arm-and-confirm delete.
 async function openMonthActions() {
   fireEvent.click(await screen.findByRole('button', { name: 'Month actions' }))
   return screen.getByRole('dialog', { name: 'Month actions' })
 }
 
-it('offers no delete on a month the server has never seen', async () => {
-  renderWizardAt('/update?month=2026-08-01&step=review')
-  await screen.findByRole('button', { name: 'Save progress' })
-  expect(screen.queryByRole('button', { name: 'Month actions' })).toBeNull()
-})
+// July: balances on file (the default fixture) and, here, a take-home too.
+function savedJuly() {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === '2026-07-01',
+    net_pay: month === '2026-07-01' ? '6000.00' : null,
+    amounts: [],
+    budgets: [],
+  }))
+}
 
-it('arms on the typed month, fires both deletes tolerating a 404, clears the draft', async () => {
-  vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-nw' })
-  // The spending leg 404s (balances-only month) — the delete still fully succeeds.
-  vi.mocked(spendingApi.deleteSpendingMonth).mockRejectedValue(
-    new ApiError('no spending or net pay recorded for this month', 404),
-  )
-  sessionStorage.setItem('finance-update-draft:balances:2026-07-01', '{"balances":{"1":"9.00"}}')
-  sessionStorage.setItem('finance-update-draft:flows:2026-07-01', '{"amounts":{"7":"5.00"}}')
-  renderWizardAt('/update?month=2026-07-01&step=review')
-  await openMonthActions()
-  const button = (await screen.findByRole('button', {
-    name: 'Delete this month',
-  })) as HTMLButtonElement
-  expect(button.disabled).toBe(true)
-  fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), {
-    target: { value: '2026-07' },
-  })
-  expect(button.disabled).toBe(false)
-  fireEvent.click(button)
-  await waitFor(() => expect(netWorthApi.deleteMonthBalances).toHaveBeenCalledWith('2026-07-01'))
-  expect(spendingApi.deleteSpendingMonth).toHaveBeenCalledWith('2026-07-01')
-  await screen.findByText(`Deleted ${formatMonth('2026-07-01')} — balances and spending removed.`)
-  expect(sessionStorage.getItem('finance-update-draft:balances:2026-07-01')).toBeNull()
-  expect(sessionStorage.getItem('finance-update-draft:flows:2026-07-01')).toBeNull()
-  // The deleted month has no feeds left: the ribbon must re-read coverage so its chip
-  // empties, exactly as a save fills one.
-  await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBeGreaterThan(1))
-  // Landed on the CURRENT month's wizard.
-  await waitFor(() =>
-    expect(
-      screen.getByText(`Monthly update — ${formatMonth(currentMonthIso())}`),
-    ).toBeDefined(),
-  )
-})
+const undone = {
+  type: 'batch' as const, batch_id: 'u-1', at: '2026-09-04T09:00:00+00:00', source: 'undo' as const, actor: null,
+  label: 'Undid: Deleted Jul 2026 balances', month: '2026-07-01', rows: 2, undoable: true, undone_by: null,
+}
 
-it('surfaces a non-404 delete failure, stops before the second leg, stays on the month', async () => {
-  vi.mocked(netWorthApi.deleteMonthBalances).mockRejectedValue(new ApiError('db exploded', 500))
-  renderWizardAt('/update?month=2026-07-01&step=review')
-  await openMonthActions()
-  fireEvent.change(await screen.findByLabelText('Type 2026-07 to confirm'), {
-    target: { value: '2026-07' },
+describe('deletes per part (2026-09-23 spec §M6)', () => {
+  it('offers a delete only for a part that was saved, and none on Review', async () => {
+    renderWizardAt('/update?month=2026-08-01&step=balances')
+    await screen.findByLabelText('Checking')
+    expect(screen.queryByRole('button', { name: 'Month actions' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
+    await screen.findByLabelText('Food')
+    expect(screen.queryByRole('button', { name: 'Month actions' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+    await screen.findByRole('button', { name: 'Save progress' })
+    expect(screen.queryByRole('button', { name: 'Month actions' })).toBeNull()
   })
-  fireEvent.click(screen.getByRole('button', { name: 'Delete this month' }))
-  // By TEXT, then by role: the toast provider this wizard renders inside now mounts an
-  // always-present assertive region (role="alert") for failures, so "the alert" is no
-  // longer a unique query — the banner still has to BE one, which is what is asserted.
-  const alert = (await screen.findByText(/db exploded/)).closest('[role="alert"]')
-  expect(alert).not.toBeNull()
-  expect(spendingApi.deleteSpendingMonth).not.toHaveBeenCalled()
-  expect(screen.getByText(`Monthly update — ${formatMonth('2026-07-01')}`)).toBeDefined()
+
+  it('Delete Jul 1 balances: typed guard, only the balances DELETE, its draft cleared, stays on the month', async () => {
+    savedJuly()
+    vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-nw' })
+    sessionStorage.setItem('finance-update-draft:balances:2026-07-01', '{"balances":{"1":"9.00"}}')
+    sessionStorage.setItem('finance-update-draft:flows:2026-07-01', '{"netPay":"6100.00"}')
+    renderWizardAt('/update?month=2026-07-01&step=balances')
+    const dialog = await openMonthActions()
+    expect(dialog.textContent).toContain('July spending & take-home stay as they are.')
+    const button = screen.getByRole('button', { name: 'Delete Jul 1 balances' }) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
+    expect(button.disabled).toBe(false)
+    const before = vi.mocked(fetchCoverage).mock.calls.length
+    fireEvent.click(button)
+    await waitFor(() => expect(netWorthApi.deleteMonthBalances).toHaveBeenCalledWith('2026-07-01'))
+    expect(spendingApi.deleteSpendingMonth).not.toHaveBeenCalled()
+    await screen.findByText('Deleted Jul 1 balances — spending untouched.')
+    expect(sessionStorage.getItem('finance-update-draft:balances:2026-07-01')).toBeNull()
+    // The other part's draft is its own business.
+    expect(sessionStorage.getItem('finance-update-draft:flows:2026-07-01')).not.toBeNull()
+    // Coverage moved: the ribbon (and the strip) re-read it.
+    await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBeGreaterThan(before))
+    expect(screen.getByRole('heading', { level: 1, name: 'Monthly update — Jul 2026' })).toBeTruthy()
+    expect(screen.getByTestId('location').textContent).toBe('/update?month=2026-07-01&step=balances')
+  })
+
+  it('Delete July spending & take-home: only the spending DELETE — the balances stay', async () => {
+    savedJuly()
+    vi.mocked(spendingApi.deleteSpendingMonth).mockResolvedValue({ batchId: 'b-sp' })
+    renderWizardAt('/update?month=2026-07-01&step=spending')
+    const dialog = await openMonthActions()
+    expect(dialog.textContent).toContain('Jul 1 balances stay as they are.')
+    fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete July spending & take-home' }))
+    await waitFor(() => expect(spendingApi.deleteSpendingMonth).toHaveBeenCalledWith('2026-07-01'))
+    expect(netWorthApi.deleteMonthBalances).not.toHaveBeenCalled()
+    await screen.findByText('Deleted July spending & take-home — balances untouched.')
+  })
+
+  it("the toast's Undo reverses that part's batch and returns to its month and step", async () => {
+    savedJuly()
+    vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-nw' })
+    vi.mocked(lifecycleApi.undoBatch).mockResolvedValue(undone)
+    renderWizardAt('/update?month=2026-07-01&step=balances')
+    await openMonthActions()
+    fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Jul 1 balances' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledTimes(1))
+    expect(lifecycleApi.undoBatch).toHaveBeenCalledWith('b-nw')
+    await screen.findByText('Undone — Jul 1 balances are back.')
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/update?month=2026-07-01&step=balances'),
+    )
+  })
+
+  it('a part already gone (404) reads as deleted, with nothing to undo', async () => {
+    savedJuly()
+    vi.mocked(netWorthApi.deleteMonthBalances).mockRejectedValue(new ApiError('no snapshot exists for this month', 404))
+    renderWizardAt('/update?month=2026-07-01&step=balances')
+    await openMonthActions()
+    fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Jul 1 balances' }))
+    await screen.findByText('Deleted Jul 1 balances — spending untouched.')
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+  })
+
+  it('surfaces a failed delete and stays on the month', async () => {
+    savedJuly()
+    vi.mocked(netWorthApi.deleteMonthBalances).mockRejectedValue(new ApiError('db exploded', 500))
+    renderWizardAt('/update?month=2026-07-01&step=balances')
+    await openMonthActions()
+    fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Jul 1 balances' }))
+    // By TEXT, then by role: the toast provider mounts an always-present assertive region too.
+    const alert = (await screen.findByText('Delete failed: db exploded — retry')).closest('[role="alert"]')
+    expect(alert).not.toBeNull()
+    expect(screen.getByRole('heading', { level: 1, name: 'Monthly update — Jul 2026' })).toBeTruthy()
+  })
 })
 
 // --- undo (2026-09-03 data-lifecycle spec §9) ---------------------------------------------
-
-it('the delete toast carries Undo, which undoes the spending batch then the balances batch and returns to the month', async () => {
-  vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-nw' })
-  vi.mocked(spendingApi.deleteSpendingMonth).mockResolvedValue({ batchId: 'b-sp' })
-  vi.mocked(lifecycleApi.undoBatch).mockResolvedValue({
-    type: 'batch', batch_id: 'u-1', at: '2026-09-04T09:00:00+00:00', source: 'undo', actor: null,
-    label: 'Undid: Deleted Jul 2026 spending', month: '2026-07-01', rows: 2, undoable: true, undone_by: null,
-  })
-  renderWizardAt('/update?month=2026-07-01&step=review')
-  await openMonthActions()
-  const button = (await screen.findByRole('button', { name: 'Delete this month' })) as HTMLButtonElement
-  fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
-  fireEvent.click(button)
-  await screen.findByText(`Deleted ${formatMonth('2026-07-01')} — balances and spending removed.`)
-  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
-  await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledTimes(2))
-  expect(vi.mocked(lifecycleApi.undoBatch).mock.calls.map((c) => c[0])).toEqual(['b-sp', 'b-nw'])
-  await screen.findByText('Undone — Jul 2026 is back.')
-  // Back on the undone month's wizard — by the title, not by the loader's calls: every load
-  // fetches the PRIOR month last (the pre-fill), so "last called with" names 2026-06.
-  await waitFor(() =>
-    expect(
-      screen.getByRole('heading', { level: 1, name: `Monthly update — ${formatMonth('2026-07-01')}` }),
-    ).toBeTruthy(),
-  )
-})
-
-it('a 404 leg leaves no batch to undo, so Undo only fires the leg that wrote', async () => {
-  vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-nw' })
-  vi.mocked(spendingApi.deleteSpendingMonth).mockRejectedValue(
-    new ApiError('no spending or net pay recorded for this month', 404),
-  )
-  vi.mocked(lifecycleApi.undoBatch).mockResolvedValue({
-    type: 'batch', batch_id: 'u-1', at: '2026-09-04T09:00:00+00:00', source: 'undo', actor: null,
-    label: 'Undid: Deleted Jul 2026 balances', month: '2026-07-01', rows: 2, undoable: true, undone_by: null,
-  })
-  renderWizardAt('/update?month=2026-07-01&step=review')
-  await openMonthActions()
-  await screen.findByRole('button', { name: 'Delete this month' })
-  fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Delete this month' }))
-  fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
-  await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledTimes(1))
-  expect(lifecycleApi.undoBatch).toHaveBeenCalledWith('b-nw')
-})
-
-// Half an undo is still a change: the spending rows came back, the balances were refused.
-// Leaving the screen alone would keep showing the deleted month's state as if nothing had
-// happened, and the next save would be typed over rows that no longer match the server.
-it('a partial undo still reloads — leg 1 landed even though leg 2 was refused', async () => {
-  vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-nw' })
-  vi.mocked(spendingApi.deleteSpendingMonth).mockResolvedValue({ batchId: 'b-sp' })
-  vi.mocked(lifecycleApi.undoBatch)
-    .mockResolvedValueOnce({
-      type: 'batch', batch_id: 'u-3', at: '2026-09-04T09:00:00+00:00', source: 'undo', actor: null,
-      label: 'Undid: Deleted Jul 2026 spending', month: '2026-07-01', rows: 2, undoable: true, undone_by: null,
-    })
-    .mockRejectedValueOnce(new ApiError('a later change touched these rows', 409))
-  renderWizardAt('/update?month=2026-07-01&step=review')
-  await openMonthActions()
-  await screen.findByRole('button', { name: 'Delete this month' })
-  fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Delete this month' }))
-  fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
-  await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledTimes(2))
-  await screen.findByText('a later change touched these rows')
-  expect(screen.queryByText('Undone — Jul 2026 is back.')).toBeNull()
-  await waitFor(() =>
-    expect(
-      screen.getByRole('heading', { level: 1, name: `Monthly update — ${formatMonth('2026-07-01')}` }),
-    ).toBeTruthy(),
-  )
-})
 
 it('the save toast carries the coordinated batch Undo', async () => {
   vi.mocked(netWorthApi.putMonthBalances).mockResolvedValue({
@@ -2549,14 +2530,14 @@ it('lays the Review step out as four tiles with the cash split and the close gat
 })
 
 it('the kebab opens the month-actions popover and Escape closes it back onto the button', async () => {
-  renderWizardAt('/update?month=2026-07-01&step=review')
+  renderWizardAt('/update?month=2026-07-01&step=balances')
   const trigger = await screen.findByRole('button', { name: 'Month actions' })
   expect(trigger.getAttribute('aria-expanded')).toBe('false')
   expect(trigger.getAttribute('aria-haspopup')).toBe('dialog')
   const dialog = await openMonthActions()
   expect(trigger.getAttribute('aria-expanded')).toBe('true')
   expect(dialog.className).toContain('popover-surface')
-  expect(within(dialog).getByRole('button', { name: 'Delete this month' })).toBeTruthy()
+  expect(within(dialog).getByRole('button', { name: 'Delete Jul 1 balances' })).toBeTruthy()
   // A dialog takes the caret with it (P1 review round): the arm box is the first control.
   expect(document.activeElement).toBe(screen.getByLabelText('Type 2026-07 to confirm'))
   // A typed arm does not survive a close — reopening never shows a live Delete button.
@@ -2566,7 +2547,7 @@ it('the kebab opens the month-actions popover and Escape closes it back onto the
   expect(document.activeElement).toBe(trigger)
   await openMonthActions()
   expect((screen.getByLabelText('Type 2026-07 to confirm') as HTMLInputElement).value).toBe('')
-  expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Delete this month' }).disabled).toBe(true)
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Delete Jul 1 balances' }).disabled).toBe(true)
 })
 
 describe('zero accounts (2026-09-14 guide spec §7.2)', () => {
