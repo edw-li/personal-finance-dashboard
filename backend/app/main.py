@@ -57,9 +57,11 @@ PRODUCT_TODAY_HEADER = "X-Product-Today"
 
 
 class ProductTodayHeader:
-    """Names the server's product day on every /api response — a 401, a 404 and a 422 as much
-    as a 200 — so the browser's todayIso(), currentMonthIso() and currentYear()
-    (src/utils/months.ts) answer the SERVER's day instead of their own clock (spec §K1).
+    """Names the server's product day on every /api response the app answers — a 401, a 404 and
+    a 422 as much as a 200 — so the browser's todayIso(), currentMonthIso() and currentYear()
+    (src/utils/months.ts) answer the SERVER's day instead of their own clock (spec §K1). The one
+    exception is an unhandled exception's 500: Starlette's ServerErrorMiddleware answers it from
+    outside every user middleware, so it carries no day (the client simply keeps the last one).
 
     Plain ASGI rather than BaseHTTPMiddleware: it only adds a header to the start message, so a
     streamed body (the assistant's SSE) passes through untouched."""
@@ -127,7 +129,8 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Added first, so it sits INSIDE the CORS middleware: every /api response the app answers —
-# errors included — carries the day, and CORS below exposes it.
+# handled errors (401, 404, 422, 429) included — carries the day, and CORS below exposes it. An
+# unhandled exception's 500 comes from ServerErrorMiddleware, outside both, without it.
 app.add_middleware(ProductTodayHeader)
 app.add_middleware(
     CORSMiddleware,

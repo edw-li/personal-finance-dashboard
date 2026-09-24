@@ -509,9 +509,10 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
 
     # K4's rule on an import (spec §K5): an existing PROVISIONAL snapshot (its stored date is
     # before its month) whose balances this import changed is restamped to the import's product
-    # day — final on or after its 1st (a provisional month can never have been closed, so no
-    # certified digest moves), still provisional with the new date before it. Otherwise the
-    # stored date stays, and a different column B is reported, never applied.
+    # day — final on or after its 1st, still provisional with the new date before it. The balance
+    # change itself already moves the month's review digest (even a batch-closed legacy month
+    # recorded early turns "changed since review"), so the new date moves nothing further.
+    # Otherwise the stored date stays, and a different column B is reported, never applied.
     for snap in parsed.snapshots:
         if snap.month not in existing_snapshots:
             continue
