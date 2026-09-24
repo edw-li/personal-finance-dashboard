@@ -43,9 +43,10 @@
 // maximum scroll (a ledger is often the last thing on its page) and the claims could not fail; and
 // the wheel reaches the box's end by wheel before judging the chain (see `wheel`).
 //
-// Env: TOKEN_FILE (required), APP_BASE, API_BASE, SMOKE_OUT, EDGE_PATH, PLAYWRIGHT_CORE,
-// ONLY_THEME (dark|light), ONLY_SIZE (1280|1600|1920, or 1440 for the record pass alone),
-// ONLY_TARGET (a TARGETS name), RECORD=0 (skip the 1440×900 record pass).
+// Env: TOKEN_FILE (default <SMOKE_OUT>/token.txt), APP_BASE, API_BASE, SMOKE_OUT, EDGE_PATH,
+// PLAYWRIGHT_CORE, ONLY_THEME (dark|light), ONLY_SIZE (1280|1600|1920, or 1440 for the record pass
+// alone), ONLY_TARGET (a TARGETS name), RECORD=0 (skip the 1440×900 record pass). An ONLY_* value
+// that names nothing is refused (exit 2) — a mistyped filter must not pass on zero checks.
 // The first two lines spoof the node version: this box runs node 18, playwright-core wants 20.
 Object.defineProperty(process, 'version', { value: 'v20.19.0' })
 Object.defineProperty(process.versions, 'node', { value: '20.19.0' })
@@ -59,18 +60,18 @@ const { chromium } = require(
     'C:/Users/edyli/AppData/Local/npm-cache/_npx/e41f203b7505f1fb/node_modules/playwright-core',
 )
 const OUT = process.env.SMOKE_OUT ?? path.join(process.cwd(), 'scratchpad', 'table-scroll-v')
-mkdirSync(OUT, { recursive: true })
-const TOKEN = readFileSync(process.env.TOKEN_FILE ?? path.join(OUT, 'token.txt'), 'utf8').trim()
 const BASE = process.env.APP_BASE ?? 'http://localhost:5261'
 const API = process.env.API_BASE ?? 'http://127.0.0.1:8061'
 const EDGE = process.env.EDGE_PATH ?? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
-const ONLY_SIZE = process.env.ONLY_SIZE
-const SIZES = [
+const { ONLY_THEME, ONLY_SIZE, ONLY_TARGET } = process.env
+const ALL_SIZES = [
   { width: 1280, height: 800 },
   { width: 1600, height: 1000 },
   { width: 1920, height: 1080 },
-].filter((s) => !ONLY_SIZE || String(s.width) === ONLY_SIZE)
-const THEMES = ['dark', 'light'].filter((t) => !process.env.ONLY_THEME || t === process.env.ONLY_THEME)
+]
+const SIZES = ALL_SIZES.filter((s) => !ONLY_SIZE || String(s.width) === ONLY_SIZE)
+const ALL_THEMES = ['dark', 'light']
+const THEMES = ALL_THEMES.filter((t) => !ONLY_THEME || t === ONLY_THEME)
 // The record pass: the spec's before-numbers were measured at 1440×900 (2026-09-24, the default view
 // of each page), so one pass there — one theme, page heights only, plus the arrival drag the Task 4
 // review asked for at this size too.
@@ -82,7 +83,7 @@ const RECORD = process.env.RECORD !== '0' && (!ONLY_SIZE || ONLY_SIZE === '1440'
 // `rings`: controls a keyboard reaches inside the box and the outline-offset their ring must compute —
 // 2px (outside) for the padding-free text buttons, -2px (inset) for the row actions (index.css).
 // `walk`: Tab down the whole box, judging every focus stop against the fade and the header.
-const TARGETS = [
+const ALL_TARGETS = [
   { name: 'dividends', url: '/portfolio?owner=all&section=income', label: 'Dividends by month', foot: false, before: 17586,
     rings: [['.dividend-month-toggle', '2px'], ['.row-actions button', '-2px']] },
   { name: 'transactions', url: '/portfolio?owner=all&section=manage', label: 'Transactions table', foot: false, before: 4101, walk: true,
@@ -97,7 +98,21 @@ const TARGETS = [
     rings: [['.row-toggle', '2px']] },
   { name: 'rewards', url: '/credit-cards?owner=all&section=rewards', label: 'Rewards matrix', foot: true, before: 2004,
     rings: [['.matrix-card-btn', '2px']] },
-].filter((t) => !process.env.ONLY_TARGET || t.name === process.env.ONLY_TARGET)
+]
+const TARGETS = ALL_TARGETS.filter((t) => !ONLY_TARGET || t.name === ONLY_TARGET)
+
+// A mistyped filter narrows the run to nothing and would "pass" on zero checks: refuse it up front,
+// naming what exists (exit 2 — the run never started).
+const refuse = (name, value, valid) => {
+  console.error(`TABLE SCROLL SMOKE REFUSED — ${name}=${value} names nothing; one of: ${valid.join(', ')}`)
+  process.exit(2)
+}
+if (ONLY_THEME && !ALL_THEMES.includes(ONLY_THEME)) refuse('ONLY_THEME', ONLY_THEME, ALL_THEMES)
+if (ONLY_SIZE && !['1440', ...ALL_SIZES.map((s) => String(s.width))].includes(ONLY_SIZE)) refuse('ONLY_SIZE', ONLY_SIZE, [...ALL_SIZES.map((s) => String(s.width)), '1440 (the record pass)'])
+if (ONLY_TARGET && TARGETS.length === 0) refuse('ONLY_TARGET', ONLY_TARGET, ALL_TARGETS.map((t) => t.name))
+
+mkdirSync(OUT, { recursive: true })
+const TOKEN = readFileSync(process.env.TOKEN_FILE ?? path.join(OUT, 'token.txt'), 'utf8').trim()
 const NOISE = /favicon|DevTools|\[vite\]|@vite\/client|React DevTools|React Router Future Flag/i
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
@@ -126,8 +141,10 @@ const note = (where, name, observed) => report.checks.push({ where, name, ok: nu
 const KNOWN_DEFECTS = {
   'networth-scope-shift': {
     why: "Net worth's scope row wraps to a second line at 1280px when the month chips land and pushes the still-loading body down 42px (CLS ≈0.166; 0.162 with overlay scrollbars, ≤0.01 from 1440 up) — src/components/shell/ScopeBar.tsx / the page frame's scope row, not the box",
-    evidence: 'report.json `shifts` (the scope-bar group and the page body moving)',
-    test: (o) => o.shifts.length > 0 && o.shifts.every((s) => s.moved.some((m) => m.startsWith('div.scope-bar-group'))),
+    evidence: 'report.json `shifts` (the scope-bar group and the page body moving) and `scopeRowShift`',
+    // Known only while the scope row's own shifts explain the failure: take them away and the load
+    // must be under the limit, so any other shift that pushes it over still fails the run.
+    test: (o) => o.scopeRowShift > 0 && o.cls - o.scopeRowShift < 0.1,
   },
   'dividend-save-focus': {
     why: 'Save changes disables itself while the save is in flight (src/components/portfolio/DividendsPanel.tsx `disabled={busy}`, since 2026-08-22) and Chromium blurs a focused control that becomes disabled, so the focus falls to <body> — a mouse click and Space on the button alike; saved with Enter in Notes it stays (checked)',
@@ -153,10 +170,14 @@ const known = (where, name, ok, observed, ref) => {
 // header, above the totals row — or, where there is none, above the "more below" fade.
 function pageHelpers() {
   window.__cls = 0
-  // The shifts that count, with what moved — so a CLS failure names its cause.
+  // The shifts that count, with what moved — so a CLS failure names its cause. `__shifts` lists the
+  // ones worth reading (≥ 0.01); `__scopeRowShift` sums EVERY counted shift that moves an element of
+  // the page frame's sticky scope block, however small — the part of the CLS that block explains.
   window.__shifts = []
+  window.__scopeRowShift = 0
+  const elementOf = (node) => (node?.nodeType === 1 ? node : node?.parentElement ?? null)
   const describe = (node) => {
-    const el = node?.nodeType === 1 ? node : node?.parentElement
+    const el = elementOf(node)
     return el ? `${el.tagName.toLowerCase()}.${String(el.className).split(' ').filter(Boolean).slice(0, 2).join('.')}` : null
   }
   try {
@@ -164,6 +185,7 @@ function pageHelpers() {
       for (const entry of list.getEntries()) {
         if (entry.hadRecentInput) continue
         window.__cls += entry.value
+        if (entry.sources.some((s) => elementOf(s.node)?.closest('.page-frame-scope'))) window.__scopeRowShift += entry.value
         if (entry.value >= 0.01) {
           window.__shifts.push({
             at: Math.round(entry.startTime), value: +entry.value.toFixed(3),
@@ -304,16 +326,23 @@ const frames = () => page.evaluate(() => window.__ts.frames())
 /** The box's band (see pageHelpers). */
 const bandOf = (label) => page.evaluate((l) => window.__ts.band(window.__ts.box(l)), label)
 
-/** Load the target's page until its box shows — three tries, every retry logged (`loadRetries`,
- *  counted in the final line) with what the page showed instead, so a flaky load is never silent. */
+/** Load the target's page until its box shows — three tries. A load that failed (a `goto` timeout
+ *  included) or a box that never showed is retried and logged (`loadRetries`, counted in the final
+ *  line) with what went wrong, so a flaky load is never silent; the third failure is thrown. */
 async function open(target, { prepare = true } = {}) {
   for (let attempt = 1; ; attempt += 1) {
-    await page.goto(BASE + target.url, { waitUntil: 'networkidle' })
-    const shown = await page.locator(boxSel(target.label)).waitFor({ state: 'visible', timeout: 15000 }).then(() => true, () => false)
-    if (shown) break
-    const showing = await page.evaluate(() => (document.querySelector('main')?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 160)).catch(() => null)
-    report.loadRetries.push({ where: state.where, url: target.url, attempt, showing })
-    if (attempt === 3) throw new Error(`the ${target.label} box never rendered at ${target.url}`)
+    let failure
+    try {
+      await page.goto(BASE + target.url, { waitUntil: 'networkidle' })
+      const shown = await page.locator(boxSel(target.label)).waitFor({ state: 'visible', timeout: 15000 }).then(() => true, () => false)
+      if (shown) break
+      const showing = await page.evaluate(() => (document.querySelector('main')?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 160)).catch(() => null)
+      failure = `the box did not show within 15 s; the page showed: ${showing}`
+    } catch (error) {
+      failure = `the load failed: ${String(error?.message ?? error).split('\n')[0]}`
+    }
+    if (attempt === 3) throw new Error(`the ${target.label} box never rendered at ${target.url} (3 tries; the last: ${failure})`)
+    report.loadRetries.push({ where: state.where, url: target.url, attempt, failure })
   }
   await sleep(1200)
   if (prepare && target.prepare === 'all-chip') {
@@ -724,10 +753,16 @@ async function classificationResets(where, target) {
     await window.__ts.frames()
     return box.scrollTop
   }, target.label)
+  // A reset is only there to see when the box was scrolled before and the new list still scrolls:
+  // a list that fits its box has no place but its first row, whatever the code did.
+  const reset = (name, from, after) => {
+    const seen = { from, ...after }
+    if (from > 0 && after !== null && after.overflows) check(where, name, after.scrollTop === 0, seen)
+    else note(where, `${name} — not measurable here (the box was not scrolled first, or the new list fits it)`, seen)
+  }
   const mid = await midWithChipsInView()
   await chip('Not reviewed')
-  const afterChip = await boxState()
-  check(where, 'a new filter chip starts the list from its first row', mid > 0 && afterChip !== null && afterChip.scrollTop === 0, { from: mid, ...afterChip })
+  reset('a new filter chip starts the list from its first row', mid, await boxState())
   await chip('All')
   const mid2 = await midWithChipsInView()
   const search = page.locator('.classification-search')
@@ -735,9 +770,7 @@ async function classificationResets(where, target) {
   await page.keyboard.type('e')
   await frames()
   await sleep(250)
-  const afterSearch = await boxState()
-  check(where, 'a search starts the list from its first row', mid2 > 0 && afterSearch !== null && afterSearch.scrollTop === 0, { from: mid2, ...afterSearch })
-  if (afterSearch !== null && !afterSearch.overflows) note(where, 'the searched list fits its box — its first row is its only place', afterSearch)
+  reset('a search starts the list from its first row', mid2, await boxState())
   await search.fill('')
   await sleep(250)
 }
@@ -834,31 +867,36 @@ async function printed(where, target) {
     document.activeElement?.blur()
     window.scrollTo(0, 0)
   })
+  // Print media always comes off again, thrown or not: every check after this one reads the screen.
+  let p
   await page.emulateMedia({ media: 'print' })
+  try {
+    await frames()
+    p = await page.evaluate((l) => {
+      const box = window.__ts.box(l)
+      const cs = getComputedStyle(box)
+      const table = box.querySelector(':scope > table')
+      const pinned = [...table.querySelectorAll(':scope > thead th, :scope > tfoot td, :scope > tfoot th')]
+      const body = table.tBodies[table.tBodies.length - 1].rows
+      const lastRow = body[body.length - 1].getBoundingClientRect()
+      const foot = table.tFoot?.rows[0].getBoundingClientRect() ?? null
+      return {
+        maxHeight: cs.maxHeight, overflowY: cs.overflowY, mask: cs.maskImage, fade: getComputedStyle(box, '::after').display,
+        pinned: pinned.length, notStatic: pinned.filter((c) => getComputedStyle(c).position !== 'static').length,
+        footTop: foot && foot.top, lastRowBottom: lastRow.bottom,
+        boxHeight: box.getBoundingClientRect().height, tableHeight: table.getBoundingClientRect().height,
+      }
+    }, target.label)
+    // The PDF is the artifact of record; the full-page shot under print media is its eyeball-able twin.
+    await page.pdf({ path: path.join(OUT, `${slug(where)}-print.pdf`), printBackground: true })
+    await page.screenshot({ path: path.join(OUT, `${slug(where)}-print-media.png`), fullPage: true })
+  } finally {
+    await page.emulateMedia({ media: 'screen' }).catch(() => {})
+  }
   await frames()
-  const p = await page.evaluate((l) => {
-    const box = window.__ts.box(l)
-    const cs = getComputedStyle(box)
-    const table = box.querySelector(':scope > table')
-    const pinned = [...table.querySelectorAll(':scope > thead th, :scope > tfoot td, :scope > tfoot th')]
-    const body = table.tBodies[table.tBodies.length - 1].rows
-    const lastRow = body[body.length - 1].getBoundingClientRect()
-    const foot = table.tFoot?.rows[0].getBoundingClientRect() ?? null
-    return {
-      maxHeight: cs.maxHeight, overflowY: cs.overflowY, mask: cs.maskImage, fade: getComputedStyle(box, '::after').display,
-      pinned: pinned.length, notStatic: pinned.filter((c) => getComputedStyle(c).position !== 'static').length,
-      footTop: foot && foot.top, lastRowBottom: lastRow.bottom,
-      boxHeight: box.getBoundingClientRect().height, tableHeight: table.getBoundingClientRect().height,
-    }
-  }, target.label)
   check(where, 'on paper the box lets go: no cap, no scroller, no mask, no fade', p.maxHeight === 'none' && p.overflowY === 'visible' && p.mask === 'none' && p.fade === 'none' && p.boxHeight >= p.tableHeight - 1, p)
   check(where, 'on paper every pinned header and totals cell prints static — none overprints the rows', p.pinned > 0 && p.notStatic === 0, p)
   check(where, 'on paper the totals row follows the last account row', p.footTop !== null && Math.abs(p.footTop - p.lastRowBottom) <= 1, p)
-  // The PDF is the artifact of record; the full-page shot under print media is its eyeball-able twin.
-  await page.pdf({ path: path.join(OUT, `${slug(where)}-print.pdf`), printBackground: true })
-  await page.screenshot({ path: path.join(OUT, `${slug(where)}-print-media.png`), fullPage: true })
-  await page.emulateMedia({ media: null })
-  await frames()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -928,25 +966,36 @@ async function dividendMonths(where) {
     return text === expected ? [] : [{ month: monthLabel(keys[i]), text, expected }]
   })
   check(where, 'every line counts its entries', countTexts.length === keys.length && countsWrong.length === 0, countsWrong.slice(0, 4))
-  const bars = await page.evaluate(() => {
+  // The bars, off the live chart through the app's own echarts module (pageHelpers' hook). A card on
+  // the page whose instance cannot be read — the hook failed to load, or no chart ever mounted — is a
+  // failure with its reason, never a quiet skip; only a page with no such card is a note.
+  const chartState = () => page.evaluate(() => {
     const card = [...document.querySelectorAll('.chart-card')].find((c) => /Monthly dividend income/i.test(c.textContent ?? ''))
     const host = card?.querySelector('[_echarts_instance_]')
     const chart = host && window.__echarts ? window.__echarts.getInstanceByDom(host) : null
-    if (!chart) return null
+    const state = { card: card !== undefined, host: host != null, hooked: window.__echarts !== undefined, hookError: window.__hookError ?? null }
+    if (!chart) return { ...state, bars: null }
     const option = chart.getOption()
-    return { cats: option.xAxis[0].data, values: option.series[0].data.map((v) => (v !== null && typeof v === 'object' ? v.value : v)) }
+    return { ...state, bars: { cats: option.xAxis[0].data, values: option.series[0].data.map((v) => (v !== null && typeof v === 'object' ? v.value : v)) } }
   })
-  if (bars === null) note(where, 'the chart instance was not reachable — bar parity not read', null)
+  let chart = await chartState()
+  for (let i = 0; i < 10 && chart.card && chart.bars === null; i += 1) {
+    await sleep(300)
+    chart = await chartState()
+  }
+  const barsName = "each month's total equals its bar in the Monthly dividend income chart"
+  if (!chart.card) note(where, `${barsName} — no such chart on the page here`, chart)
+  else if (chart.bars === null) check(where, barsName, false, { reason: 'the chart is on the page but its instance could not be read', ...chart })
   else {
     const mismatched = []
     let compared = 0
-    bars.cats.forEach((cat, i) => {
+    chart.bars.cats.forEach((cat, i) => {
       const k = keys.find((key) => monthLabel(key) === cat)
       if (k === undefined) return
       compared += 1
-      if (Math.round(Number(bars.values[i]) * 100) !== cents.get(k)) mismatched.push({ cat, bar: bars.values[i], total: cents.get(k) / 100 })
+      if (Math.round(Number(chart.bars.values[i]) * 100) !== cents.get(k)) mismatched.push({ cat, bar: chart.bars.values[i], total: cents.get(k) / 100 })
     })
-    check(where, `each month's total equals its bar in the Monthly dividend income chart (${compared} months)`, compared > 0 && mismatched.length === 0, mismatched.slice(0, 3))
+    check(where, `${barsName} (${compared} months)`, compared > 0 && mismatched.length === 0, mismatched.slice(0, 3))
   }
   const toolbar = page.locator('.dividend-months-bar button')
   await toolbar.click()
@@ -1000,9 +1049,11 @@ async function dividendObserver(where, { keys }) {
     const row = [...box.querySelectorAll('.dividend-month-row')].find((r) => r.querySelector('.dividend-month-label').textContent === text)
     return { opened: row.querySelector('button').getAttribute('aria-expanded'), scrollTop: box.scrollTop, more: box.getAttribute('data-scroll-more') ?? '' }
   }, [DIVIDENDS, oldest])
-  check(where, `opening the oldest month (${oldest}) at the box's end raises "more below" with no scroll — the observer watches the table`,
-    !before.more.includes('bottom') && after.opened === 'true' && after.more.includes('bottom') && after.scrollTop === before.scrollTop,
-    { before: { scrollTop: before.scrollTop, more: before.more }, after })
+  const name = `opening the oldest month (${oldest}) at the box's end raises "more below" with no scroll — the observer watches the table`
+  const seen = { before: { scrollTop: before.scrollTop, maxScroll: before.maxScroll, more: before.more }, after }
+  // "At its end" means something only for a box that scrolls: one whose table fits has no end to be at.
+  if (before.maxScroll > 0) check(where, name, !before.more.includes('bottom') && after.opened === 'true' && after.more.includes('bottom') && after.scrollTop === before.scrollTop, seen)
+  else note(where, `${name} — not measurable here (the box did not scroll with only the newest month open)`, seen)
 }
 
 /** A saved entry is revealed inside the box without moving the page (spec §4.5), driven through the
@@ -1101,6 +1152,15 @@ const LEDGER_ROWS = `${boxSel(LEDGER)} tbody tr[data-reorder-id]`
 const LIVE = '#portfolio-records-transactions [aria-live="assertive"]'
 const ledgerOrder = () => page.$$eval(LEDGER_ROWS, (els) => els.map((e) => e.getAttribute('data-reorder-id')))
 
+/** Every drag ends here, thrown or not: Escape drops a lift (nothing is sent), the release ends the
+ *  press, and the frame trace stops — so a failure mid-drag never leaves the button down for the
+ *  next check. Each step on its own catch: one failing must not skip the others. */
+async function releaseDrag({ pointer = true } = {}) {
+  await page.keyboard.press('Escape').catch(() => {})
+  if (pointer) await page.mouse.up().catch(() => {})
+  await page.evaluate(() => { window.__tracing = false }).catch(() => {})
+}
+
 /** From the arrival state — the page at its top, the box hanging past the window's foot — a pointer
  *  drag held at the WINDOW's foot must reach the ledger's last slot (Task 4 review: the page fallback),
  *  the box running to its end before the page takes the scroll over (the reorder hook's hand-off). */
@@ -1122,48 +1182,55 @@ async function arrivalDrag(where) {
     }
     requestAnimationFrame(tick)
   }, LEDGER)
+  let held
+  let waited = 0
   await page.mouse.move(x, y)
   await page.mouse.down()
-  await page.mouse.move(x, y + 6, { steps: 2 })
-  await page.mouse.move(x, start.innerHeight - 2, { steps: 20 })
-  // Hold until the page and the box have both stood still for 1.5 s.
-  let still = 0
-  let last = ''
-  let waited = 0
-  while (still < 6 && waited < 25000) {
-    await sleep(250)
-    waited += 250
-    const key = await page.evaluate((l) => `${Math.round(window.scrollY)}/${Math.round(window.__ts.box(l).scrollTop)}`, LEDGER)
-    still = key === last ? still + 1 : 0
-    last = key
-  }
-  const held = await page.evaluate(([l, live]) => {
-    window.__tracing = false
-    const edge = document.querySelector('[data-reorder-drop]')
-    const rows = [...window.__ts.box(l).querySelectorAll('tbody tr[data-reorder-id]')]
-    const boxMax = window.__ts.band(window.__ts.box(l)).maxScroll
-    const trace = window.__trace
-    const firstPageMove = trace.findIndex(([pageY]) => pageY > trace[0][0])
-    return {
-      live: document.querySelector(live)?.textContent ?? '', pageY: Math.round(window.scrollY),
-      boxTop: Math.round(window.__ts.box(l).scrollTop), boxMax,
-      edge: edge && { index: rows.indexOf(edge), side: edge.getAttribute('data-reorder-drop') }, rows: rows.length,
-      order: {
-        frames: trace.length, firstPageMove,
-        boxThen: firstPageMove < 0 ? null : trace[firstPageMove][1],
-        boxEndFrame: trace.findIndex(([, boxTop]) => boxTop >= boxMax - 1),
-      },
+  try {
+    await page.mouse.move(x, y + 6, { steps: 2 })
+    await page.mouse.move(x, start.innerHeight - 2, { steps: 20 })
+    // Hold until the page and the box have both stood still for 1.5 s.
+    let still = 0
+    let last = ''
+    while (still < 6 && waited < 25000) {
+      await sleep(250)
+      waited += 250
+      const key = await page.evaluate((l) => `${Math.round(window.scrollY)}/${Math.round(window.__ts.box(l).scrollTop)}`, LEDGER)
+      still = key === last ? still + 1 : 0
+      last = key
     }
-  }, [LEDGER, LIVE])
-  await shot(where, 'arrival-drag-held')
-  await page.keyboard.press('Escape')
-  await page.mouse.up()
+    held = await page.evaluate(([l, live]) => {
+      window.__tracing = false
+      const edge = document.querySelector('[data-reorder-drop]')
+      const rows = [...window.__ts.box(l).querySelectorAll('tbody tr[data-reorder-id]')]
+      const boxMax = window.__ts.band(window.__ts.box(l)).maxScroll
+      const trace = window.__trace
+      const firstPageMove = trace.findIndex(([pageY]) => pageY > trace[0][0])
+      return {
+        live: document.querySelector(live)?.textContent ?? '', pageY: Math.round(window.scrollY),
+        boxTop: Math.round(window.__ts.box(l).scrollTop), boxMax,
+        edge: edge && { index: rows.indexOf(edge), side: edge.getAttribute('data-reorder-drop') }, rows: rows.length,
+        order: {
+          frames: trace.length, firstPageMove,
+          boxThen: firstPageMove < 0 ? null : trace[firstPageMove][1],
+          boxEndFrame: trace.findIndex(([, boxTop]) => boxTop >= boxMax - 1),
+        },
+      }
+    }, [LEDGER, LIVE])
+    await shot(where, 'arrival-drag-held')
+  } finally {
+    await releaseDrag()
+  }
   await sleep(800)
   const slot = /position (\d+) of (\d+)/.exec(held.live)
   check(where, `from the arrival state (page at ${start.pageY}), a drag held at the window's foot reaches the ledger's last slot`,
     start.pageY === 0 && slot !== null && slot[1] === slot[2] && Number(slot[2]) === before.length && held.edge !== null && held.edge.index === held.rows - 1 && held.edge.side === 'after',
     { waited, start: { pageY: start.pageY, boxTop: Math.round(start.band.top), boxBottom: Math.round(start.band.bottom) }, held })
-  check(where, 'the box runs to its end before the page takes the scroll over', held.order.firstPageMove < 0 || held.order.boxThen >= held.boxMax - 1, { pageY: held.pageY, boxMax: held.boxMax, ...held.order })
+  // The hand-off is only there to see when the box hangs past the window on arrival; at 1920×1080 its
+  // foot (1054) is inside the window, the box alone reaches the last slot, and the page never moves.
+  const handOff = { boxBottom: Math.round(start.band.bottom), innerHeight: start.innerHeight, pageY: held.pageY, boxMax: held.boxMax, ...held.order }
+  if (start.band.bottom > start.innerHeight) check(where, 'the box runs to its end before the page takes the scroll over', held.order.firstPageMove >= 0 && held.order.boxThen >= held.boxMax - 1, handOff)
+  else note(where, "the box's foot is inside the window on arrival — the page never needs to take over", handOff)
   check(where, 'Escape drops the arrival drag: same order, nothing sent', JSON.stringify(await ledgerOrder()) === JSON.stringify(before) && report.writesBlocked.length === writesBefore, report.writesBlocked.slice(writesBefore))
 }
 
@@ -1184,18 +1251,21 @@ async function ledgerDrag(where) {
   const grip = await page.locator(`${LEDGER_ROWS} .reorder-grip`).first().boundingBox()
   const x = grip.x + grip.width / 2
   const y = grip.y + grip.height / 2
+  let mid
   await page.mouse.move(x, y)
   await page.mouse.down()
-  await page.mouse.move(x, y + 6, { steps: 2 })
-  await page.mouse.move(x, placed.band.bottom - 12, { steps: 20 })
-  await sleep(1200)
-  const mid = await page.evaluate((l) => ({
-    boxTop: window.__ts.box(l).scrollTop,
-    pageY: window.scrollY,
-    grabbing: document.documentElement.classList.contains('reorder-active'),
-  }), LEDGER)
-  await page.keyboard.press('Escape')
-  await page.mouse.up()
+  try {
+    await page.mouse.move(x, y + 6, { steps: 2 })
+    await page.mouse.move(x, placed.band.bottom - 12, { steps: 20 })
+    await sleep(1200)
+    mid = await page.evaluate((l) => ({
+      boxTop: window.__ts.box(l).scrollTop,
+      pageY: window.scrollY,
+      grabbing: document.documentElement.classList.contains('reorder-active'),
+    }), LEDGER)
+  } finally {
+    await releaseDrag()
+  }
   await sleep(800)
   check(where, 'a drag held at the box foot auto-scrolls the BOX', mid.grabbing && mid.boxTop > 100, mid)
   if (placed.room >= 20) check(where, 'the page stays put while the box scrolls (with room below it to move)', mid.pageY === pageY0, { pageY0, pageY: mid.pageY, room: Math.round(placed.room) })
@@ -1207,30 +1277,35 @@ async function ledgerDrag(where) {
   // keeps in view (useReorder's ensureVisible), so that is what is measured.
   await boxTo(LEDGER, 'top')
   await page.locator(`${LEDGER_ROWS} .reorder-grip`).first().focus()
+  let kb
   await page.keyboard.press('Space')
-  for (let i = 0; i < 15; i += 1) {
-    await page.keyboard.press('ArrowDown')
-    await sleep(60)
-  }
-  await sleep(400)
-  const kb = await page.evaluate((l) => {
-    const box = window.__ts.box(l)
-    const lifted = box.querySelector('tbody tr[data-reorder="lifted"]')
-    const edge = box.querySelector('tbody tr[data-reorder-drop]')
-    if (lifted === null || edge === null) return null
-    const b = window.__ts.band(box)
-    const height = lifted.getBoundingClientRect().height
-    const e = edge.getBoundingClientRect()
-    const side = edge.getAttribute('data-reorder-drop')
-    const slotTop = side === 'after' ? e.bottom - height : e.top
-    const line = document.querySelector('.reorder-drop-line:not([hidden])')?.getBoundingClientRect() ?? null
-    return {
-      side, slotTop, slotBottom: slotTop + height, lineTop: line && line.top, lineBottom: line && line.bottom,
-      bandTop: b.headBottom, bandBottom: b.bottom, boxTop: box.scrollTop,
-      moved: [...box.querySelectorAll('tbody tr[data-reorder-id]')].indexOf(edge),
+  try {
+    for (let i = 0; i < 15; i += 1) {
+      await page.keyboard.press('ArrowDown')
+      await sleep(60)
     }
-  }, LEDGER)
-  await page.keyboard.press('Escape')
+    await sleep(400)
+    kb = await page.evaluate((l) => {
+      const box = window.__ts.box(l)
+      const lifted = box.querySelector('tbody tr[data-reorder="lifted"]')
+      const edge = box.querySelector('tbody tr[data-reorder-drop]')
+      if (lifted === null || edge === null) return null
+      const b = window.__ts.band(box)
+      const height = lifted.getBoundingClientRect().height
+      const e = edge.getBoundingClientRect()
+      const side = edge.getAttribute('data-reorder-drop')
+      const slotTop = side === 'after' ? e.bottom - height : e.top
+      const line = document.querySelector('.reorder-drop-line:not([hidden])')?.getBoundingClientRect() ?? null
+      return {
+        side, slotTop, slotBottom: slotTop + height, lineTop: line && line.top, lineBottom: line && line.bottom,
+        bandTop: b.headBottom, bandBottom: b.bottom, boxTop: box.scrollTop,
+        moved: [...box.querySelectorAll('tbody tr[data-reorder-id]')].indexOf(edge),
+      }
+    }, LEDGER)
+  } finally {
+    // Escape drops the keyboard lift; no button is down to release.
+    await releaseDrag({ pointer: false })
+  }
   await sleep(600)
   check(where, 'a keyboard-lifted row walked past the band keeps its landing slot — and the drop line on it — in view inside the box',
     kb !== null && kb.boxTop > 0 && kb.slotTop >= kb.bandTop - 1 && kb.slotBottom <= kb.bandBottom + 1 &&
@@ -1280,7 +1355,7 @@ async function reloadKeepsPlace(where) {
 
 async function runTarget(where, target) {
   await open(target)
-  const cls = await page.evaluate(() => ({ cls: +window.__cls.toFixed(4), shifts: window.__shifts }))
+  const cls = await page.evaluate(() => ({ cls: +window.__cls.toFixed(4), scopeRowShift: +window.__scopeRowShift.toFixed(4), shifts: window.__shifts }))
   // Net worth at 1280 carries a known shift (the scope row's, KNOWN_DEFECTS); everywhere else CLS is a check.
   const clsName = 'the load shifts the layout less than 0.1 (CLS)'
   if (target.name === 'networth' && page.viewportSize().width === 1280) known(where, clsName, cls.cls < 0.1, cls, 'networth-scope-shift')
@@ -1396,8 +1471,15 @@ const passed = report.checks.filter((c) => c.ok === true).length
 const notes = report.checks.filter((c) => c.ok === null && !c.known).length
 const retried = report.fenceRetries.length > 0 ? `, ${report.fenceRetries.length} GET(s) asked twice` : ''
 const reloaded = report.loadRetries.length > 0 ? `, ${report.loadRetries.length} page load(s) retried` : ''
+const unanswered = report.fenceErrors.length > 0 ? `, ${report.fenceErrors.length} request(s) the fence could not answer` : ''
 const knownTally = report.known.length > 0 ? `, ${report.known.length} known (pre-existing)` : ''
-const tally = `${passed} checks, ${notes} notes${knownTally}, ${report.writesBlocked.length} writes fenced (${report.prefsWrites.length} prefs)${retried}${reloaded}`
+const tally = `${passed} checks, ${notes} notes${knownTally}, ${report.writesBlocked.length} writes fenced (${report.prefsWrites.length} prefs)${retried}${reloaded}${unanswered}`
+// A request the fence could not answer failed in the page — whatever the checks said around it.
+for (const e of report.fenceErrors) report.problems.push(`${e.where}: the fence could not answer ${e.method} ${e.url} — ${e.error}`)
+// A run whose filters and targets left nothing to judge has not passed.
+if (passed === 0) report.problems.push('no check passed — nothing was judged (a filter, or every target failing to open)')
+// Written in the `finally` above too, so a crash still leaves a report; this one carries the verdict.
+writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2))
 for (const ref of [...new Set(report.known.map((k) => k.ref))]) {
   const hits = report.known.filter((k) => k.ref === ref)
   const runs = hits.map((k) => k.where.replace(/ \S+$/, '')).join(', ')
@@ -1406,7 +1488,7 @@ for (const ref of [...new Set(report.known.map((k) => k.ref))]) {
 // Requests the fence re-asked or could not answer (the page saw those fail): named, so a console
 // error has a cause.
 for (const r of report.fenceRetries) console.log(`  fence asked twice: GET ${r.url} (${r.where}): ${r.error}`)
-for (const r of report.loadRetries) console.log(`  page load retried: ${r.url} (${r.where}, attempt ${r.attempt}) — the page showed: ${r.showing}`)
+for (const r of report.loadRetries) console.log(`  page load retried: ${r.url} (${r.where}, after attempt ${r.attempt}) — ${r.failure}`)
 for (const e of report.fenceErrors) console.log(`  fence could not answer ${e.method} ${e.url} (${e.where}): ${e.error}`)
 if (report.problems.length > 0) {
   console.log(`TABLE SCROLL SMOKE FAILED — ${report.problems.length} problem(s); ${tally}:`)

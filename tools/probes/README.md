@@ -262,6 +262,7 @@ cat > "$SCRATCH/vite.private.config.mts" <<'EOF'
 import base from '<worktree>/vite.config.ts'
 export default { ...base, cacheDir: '<scratch>/vite-cache' }
 EOF
+# the pair, each in its own terminal (or run_in_background)
 (cd backend && DATABASE_URL=postgresql+asyncpg://finance:finance@127.0.0.1:5433/<db> SCHEDULER_ENABLED=0 SNAPSHOT_ENABLED=0 $PY -m uvicorn app.main:app --host 127.0.0.1 --port 8061)
 VITE_API_PROXY=http://127.0.0.1:8061 npx vite --config "$SCRATCH/vite.private.config.mts" --port 5261 --strictPort
 curl -s http://127.0.0.1:8061/api/v1/auth/login -H 'content-type: application/json' \
@@ -274,9 +275,13 @@ Prints each page's height per run (and, from the 1440×900 record pass, against 
 before-number) and any `KNOWN (pre-existing)` lines, then
 `TABLE SCROLL SMOKE OK — N checks, M notes, K known (pre-existing), W writes fenced (P prefs)` —
 followed, when there were any, by `R GET(s) asked twice` and `L page load(s) retried`, each
-listed above the line with its cause — or exits 1 listing every problem. `ONLY_THEME`, `ONLY_SIZE` (1280|1600|1920, or 1440 for the record
-pass alone), `ONLY_TARGET` (dividends, transactions, securities, holdings, classifications,
-networth, rewards) and `RECORD=0` narrow a run; the full one takes about 12 minutes.
+listed above the line with its cause — or exits 1 listing every problem (a request the fence could
+not answer is one; so is a run in which no check passed). `ONLY_THEME` (dark|light), `ONLY_SIZE`
+(1280|1600|1920, or 1440 for the record pass alone), `ONLY_TARGET` (dividends, transactions,
+securities, holdings, classifications, networth, rewards) and `RECORD=0` narrow a run; an `ONLY_*`
+value that names nothing is refused up front with the valid names (exit 2), so a typo cannot pass
+on zero checks. The full run takes about 16 minutes. `TOKEN_FILE` defaults to
+`<SMOKE_OUT>/token.txt`.
 
 - **The fence.** The page's GETs are fetched by the fence from `API_BASE` directly — the uvicorn
   behind the vite, never through the vite proxy, which stalled about one proxied request in a dozen
@@ -305,7 +310,8 @@ networth, rewards) and `RECORD=0` narrow a run; the full one takes about 12 minu
   checks read mid-drag.
 - **Known defects** — three claims the product fails today for reasons outside the capped boxes,
   found by this smoke on 2026-09-24 and left as follow-ups: Net worth's scope row wrapping at
-  1280px when the month chips land (CLS ≈0.166 — the CLS check is `known` there alone); the
+  1280px when the month chips land (CLS ≈0.166 — the CLS check is `known` there alone, and only
+  while the scope row's own shifts explain it: less them, the load must be under 0.1); the
   dividend edit's **Save changes**, which disables itself mid-save so the focus falls to
   `<body>` (the Enter-in-Notes save keeps it and is an ordinary check); and **Back to matrix**,
   whose focus hand-back fires in a `setTimeout(0)` before the matrix re-mounts. `known()` records
@@ -314,6 +320,12 @@ networth, rewards) and `RECORD=0` narrow a run; the full one takes about 12 minu
   its check simply passes. Only a failure with that defect's signature counts as known (a shift
   that is not the scope row's, focus landing anywhere but `<body>`): any other failure of the same
   claim fails the run.
+- **Preconditions.** A claim that could not fail where it is measured is a note instead of a pass: a
+  chip or search reset where the box was not scrolled first or the new list fits it, the dividend
+  observer on a box that does not scroll, the arrival hand-off where the box's foot is inside the
+  window (1920×1080: the page never needs to take over), the mask drop on a box with no mask.
+  Print media and every drag are undone in a `finally`, so a failure never leaks into the checks
+  after it.
 - **Notes** (`ok: null` in `report.json`) are observations, not votes: a table that fits its box at
   that size (the sideways checks, for Holdings at the wider sizes; the matrix's sideways state per
   size), a box with no edge mask at rest (nothing for the keyboard focus to drop — the check runs
