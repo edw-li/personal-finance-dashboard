@@ -11,6 +11,7 @@ import type { NetWorthTimeseries, ProjectionOut } from '../types/api'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { PINS_VERSION, pinsKey } from '../sandbox/pins'
 import { readAssistantView } from '../components/assistant/viewState'
+import { setServerToday } from '../utils/productToday'
 import ProjectionPage from './ProjectionPage'
 
 vi.mock('../api/projection', async (importOriginal) => ({
@@ -261,16 +262,29 @@ describe('ProjectionPage', () => {
   })
 
   it('states the FI figures from the echo and names their derivations', async () => {
+    setServerToday('2026-09-23')
     renderPage()
     await loaded()
 
     expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00')
     expect(valueOf(tileFor('FI ratio'))).toBe('6.7%') // fi_ratio, formatPct 1dp
     expect(valueOf(tileFor('Investable balance'))).toBe('$100,000.00')
-    expect(deltaOf(tileFor('Investable balance'))).toBe('as of Aug 2026')
+    // The day the balances describe (2026-09-23 spec §R5): a payload without base_as_of reads
+    // final, as of its 1st.
+    expect(deltaOf(tileFor('Investable balance'))).toBe('as of Aug 1')
     // One headline FI date: the simulation's median reach (2026-09-23 spec §R6).
     expect(valueOf(tileFor('FI date'))).toBe('Oct 2055')
     expect(await screen.findAllByTestId('echart')).toHaveLength(1)
+  })
+
+  it('names a provisional starting balance by the day it was recorded (2026-09-23 spec §R5)', async () => {
+    setServerToday('2026-09-23')
+    vi.mocked(fetchProjection).mockResolvedValue(
+      projectionOut({ base_month: '2026-10-01', base_as_of: '2026-09-22', base_recorded_on: '2026-09-22', base_provisional: true }),
+    )
+    renderPage()
+    await loaded()
+    expect(deltaOf(tileFor('Investable balance'))).toBe('as of Sep 22 · provisional')
   })
 
   it('spells out how a derived contribution was built', async () => {

@@ -1,6 +1,7 @@
 import type { PhaseOut, ProjectionOut } from '../../types/api'
 import type { ChartSelection } from '../../types/metrics'
 import type { ZoomWindow } from '../../charts/timeZoom'
+import { asOfPhrase, formatAsOf } from '../../utils/asOf'
 import { formatMonth, formatPct } from '../../utils/format'
 import { metricReceipt } from '../../utils/metricReceipt'
 import { BAND_KEYS, BAND_LABELS } from './projectionChartOptions'
@@ -15,6 +16,23 @@ export interface DisplayProjection extends ProjectionOut {
 /** Calendar month serial of an ISO date (year·12 + month−1) — the display's own copy: the fitted
  *  trend's module (polyTrend) is imported by the trend panel and its chart builder only (R8's fence). */
 const serial = (iso: string) => Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7)) - 1
+
+/** The starting balance's snapshot as K's `Dated` state (2026-09-23 spec §R5, §0.4(d)). A payload
+ *  from before the fields — a replayed snapshot cache — reads final, as of its 1st: exactly what it
+ *  said before them. */
+function baseState(data: ProjectionOut) {
+  return {
+    month: data.base_month,
+    as_of: data.base_as_of === undefined ? data.base_month : data.base_as_of,
+    provisional: data.base_provisional ?? false,
+  }
+}
+
+/** The Investable balance tile's date: "as of Sep 1", or "as of Sep 22 · provisional" for next
+ *  month's balances recorded early — asOfPhrase, the words every surface names a balance by. */
+export function balanceAsOf(data: ProjectionOut): string {
+  return asOfPhrase(baseState(data))
+}
 
 export function projectionSourceLink(data: ProjectionOut): string {
   const scenario: ProjectionScenario = { knobs: {
@@ -167,8 +185,14 @@ export function projectionReceipts(data: ProjectionOut) {
       components: [{ label: 'Annual living spending', value: data.annual_spend }, { label: 'Withdrawal rate', value: data.swr_pct, unit: 'ratio' }],
       source_link: projectionSourceLink(data), source_label: 'Inspect assumptions',
     }),
-    balance: metricReceipt({ ...base, as_of: data.base_as_of ?? data.base_month, id: 'projection.starting_balance', label: 'Starting investable balance', value: data.starting_balance,
-      definition: 'Pre-tax, post-tax, taxable and equity account groups from the current balance snapshot. Cash and liabilities are excluded.',
+    // Dated by the day the balances describe; provisional when they were recorded early, in T1's
+    // words (2026-09-23 spec §R5, §0.4(e)), so this receipt and the Overview's explain it alike.
+    balance: metricReceipt({ ...base, as_of: baseState(data).as_of, id: 'projection.starting_balance', label: 'Starting investable balance', value: data.starting_balance,
+      completeness: data.base_provisional ? 'provisional' : base.completeness,
+      definition: 'Pre-tax, post-tax, taxable and equity account groups from the current balance snapshot. Cash and liabilities are excluded.'
+        + (data.base_provisional
+          ? `${data.base_recorded_on ? ` Recorded ${formatAsOf({ month: data.base_month, as_of: data.base_recorded_on })}.` : ''} Balances recorded before their date stay provisional until saved again on or after it.`
+          : ''),
       source_link: `/net-worth?month=${data.base_month.slice(0, 7)}`, source_label: 'Open balance snapshot',
     }),
     ratio: metricReceipt({ ...base, id: 'projection.fi_ratio', label: 'FI ratio', value: data.fi_ratio, unit: 'ratio',

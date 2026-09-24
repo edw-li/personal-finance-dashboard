@@ -6,7 +6,7 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartCard from '../components/ChartCard'
 import { projectionCsv, projectionOption } from '../components/projection/projectionChartOptions'
 import { decodeProjection, encodeProjection, isEmptyProjection, labelForProjection, toParams, COMPARE_ROWS, projectionValue, type ProjectionScenario } from '../components/projection/projectionScenario'
-import { displayProjection, fiDateTile, milestoneWindow, moneyLastsTile, projectionReceipts, projectionSelection, type ProjectionDollars } from '../components/projection/projectionDisplay'
+import { balanceAsOf, displayProjection, fiDateTile, milestoneWindow, moneyLastsTile, projectionReceipts, projectionSelection, type ProjectionDollars } from '../components/projection/projectionDisplay'
 import ProjectionTrendPanel from '../components/projection/ProjectionTrendPanel'
 import ScenarioPanel, { ScenarioHints } from '../components/projection/ScenarioPanel'
 import { useAssistantView } from '../components/assistant/viewState'
@@ -121,8 +121,10 @@ export default function ProjectionPage() {
                 evidence={receipts.target} tone="neutral" />
               <StatTile label="FI ratio" value={formatPct(data.fi_ratio, { signed: false })} evidence={receipts.ratio}
                 hint="Investable balance as a share of the FI target." />
-              <StatTile label="Investable balance" value={formatCurrency(data.starting_balance)} delta={`as of ${formatMonth(data.base_month)}`}
-                tone="neutral" evidence={receipts.balance} hint="Pre-tax + post-tax + taxable + equity from the latest snapshot; cash and liabilities excluded." />
+              {/* Named by the day its balances describe (2026-09-23 spec §R5): the current snapshot —
+                  the Overview's — so next month's balances recorded early read "· provisional". */}
+              <StatTile label="Investable balance" value={formatCurrency(data.starting_balance)} delta={balanceAsOf(data)}
+                tone="neutral" evidence={receipts.balance} hint="Pre-tax + post-tax + taxable + equity from the current balances snapshot — the one the Overview shows; cash and liabilities excluded." />
               {/* ONE FI date (2026-09-23 spec §R6): the simulation's median reach with its range in
                   paths; the constant-return crossing lives in the receipt and on the chart. */}
               <StatTile label="FI date" value={fiDate.value} delta={fiDate.delta} tone={fiDate.tone} evidence={receipts.fiDate}

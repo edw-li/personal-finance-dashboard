@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import type { MoneyLastsOut, ProjectionOut } from '../../types/api'
 import { addMonths } from '../../utils/months'
+import { setServerToday } from '../../utils/productToday'
 import {
+  balanceAsOf,
   displayProjection,
   fiDateTile,
   milestoneWindow,
@@ -192,6 +194,41 @@ describe('receipts', () => {
   it('the balance receipt dates itself by the base snapshot', () => {
     expect(projectionReceipts(fixture()).balance.as_of).toBe('2026-08-01')
     expect(projectionReceipts(fixture({ base_as_of: '2026-09-22' })).balance.as_of).toBe('2026-09-22')
+  })
+
+  it('a provisional base makes the balance receipt provisional and says when it was recorded', () => {
+    // 2026-09-23 spec §R5 on §0.4(e): T1's sentence, so the Overview's net-worth receipt and this
+    // one explain an early snapshot in the same words.
+    setServerToday('2026-09-23')
+    const early = projectionReceipts(fixture({
+      base_month: '2026-10-01', base_as_of: '2026-09-22', base_recorded_on: '2026-09-22', base_provisional: true,
+    })).balance
+    expect(early.completeness).toBe('provisional')
+    expect(early.definition).toContain(
+      'Recorded Sep 22. Balances recorded before their date stay provisional until saved again on or after it.',
+    )
+    const final = projectionReceipts(fixture({ base_as_of: '2026-08-01', base_provisional: false })).balance
+    expect(final.completeness).toBe('estimated')
+    expect(final.definition).not.toContain('Recorded')
+  })
+})
+
+describe('the starting balance names its date (2026-09-23 spec §R5)', () => {
+  beforeEach(() => setServerToday('2026-09-23'))
+
+  it('as of the day the balances describe, provisional when they were recorded early', () => {
+    expect(balanceAsOf(fixture({ base_month: '2026-10-01', base_as_of: '2026-09-22', base_provisional: true })))
+      .toBe('as of Sep 22 · provisional')
+    expect(balanceAsOf(fixture({ base_month: '2026-09-01', base_as_of: '2026-09-01', base_provisional: false })))
+      .toBe('as of Sep 1')
+    // Only a snapshot still ahead of its month can lack a date (K2).
+    expect(balanceAsOf(fixture({ base_month: '2026-10-01', base_as_of: null, base_provisional: true })))
+      .toBe('date unknown · provisional')
+  })
+
+  it('reads a payload from before the fields — a replayed snapshot cache — as final, as of its 1st', () => {
+    expect(balanceAsOf(fixture({ base_month: '2026-08-01' }))).toBe('as of Aug 1')
+    expect(balanceAsOf(fixture({ base_month: '2025-12-01' }))).toBe('as of Dec 1, 2025')
   })
 })
 
