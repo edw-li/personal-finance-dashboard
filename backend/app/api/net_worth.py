@@ -25,6 +25,7 @@ from app.schemas.net_worth import (
     TimeseriesOut,
 )
 from app.schemas.ordering import OrderIn
+from app.services import clock
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import mom_pct, require_first_of_month
 from app.services.month_writes import write_balances
@@ -44,6 +45,12 @@ from app.services.ordering import (
     moved_ids,
     next_sort_order,
     order_lock,
+)
+from app.services.snapshot_state import (
+    SnapshotState,
+    current_and_previous,
+    snapshot_state,
+    state_out,
 )
 
 router = APIRouter(
@@ -329,6 +336,13 @@ QUARTER_END_MONTHS = (3, 6, 9, 12)
 OwnerQuery = Annotated[str | None, Query(max_length=32)]
 
 
+def _days_since(previous: SnapshotState | None, viewed: SnapshotState) -> int | None:
+    """(viewed.as_of − previous.as_of) in days when both dates are known (2026-09-23 spec §K2)."""
+    if previous is None or previous.as_of is None or viewed.as_of is None:
+        return None
+    return (viewed.as_of - previous.as_of).days
+
+
 def _owner_filter(owner: str | None) -> ColumnElement[bool] | None:
     """HTTP contract only — owner_clause owns the SEMANTICS. Absent means household, and
     the endpoint's answer is then byte-identical to the pre-ownership one."""
@@ -368,6 +382,8 @@ async def timeseries(
     snapshots, accounts, balances = await load_balance_matrix(db, _owner_filter(owner))
     if granularity == "quarterly":
         snapshots = [s for s in snapshots if s.month.month in QUARTER_END_MONTHS]
+    today = clock.product_today()
+    states = [snapshot_state(s.id, s.month, s.recorded_on, today) for s in snapshots]
     net_worth = [net_worth_for(s.id, accounts, balances) for s in snapshots]
     mom = [
         None if i == 0 else mom_pct(net_worth[i], net_worth[i - 1]) for i in range(len(net_worth))
@@ -403,6 +419,10 @@ async def timeseries(
             )
             for person_id, name in owner_rows
         ],
+        # After the quarterly filter too (spec §K2): one entry per month above.
+        as_of=[state.as_of for state in states],
+        recorded_on=[state.recorded_on for state in states],
+        provisional=[state.provisional for state in states],
     )
 
 
@@ -416,10 +436,12 @@ async def summary(
     granularity: Literal["monthly", "quarterly"] = "monthly",
     db: AsyncSession = Depends(get_db),
 ) -> SummaryOut:
-    """The latest month by default; `month=YYYY-MM-01` views that snapshot (which may be the
-    latest) with ITS month-over-month delta (against the snapshot immediately before it), for
-    the ribbon's click-to-view (2026-09-03 shell spec §7). The charts are unaffected — they
-    span all months.
+    """The CURRENT snapshot by default (2026-09-23 spec §K2: the latest whose month is at most
+    next month's); `month=YYYY-MM-01` views that snapshot (which may be the current one) with
+    ITS month-over-month delta (against the snapshot immediately before it), for the ribbon's
+    click-to-view (2026-09-03 shell spec §7). The charts are unaffected — they span all months.
+    Every answer names the viewed snapshot's as-of date and provisional flag and the snapshot
+    its delta compares with (`previous`, `days_since_previous`).
 
     `granularity=quarterly` reads the same book at the grain /timeseries draws it at
     (2026-09-09 audit item 23): only quarter ends are snapshots here, so the viewed one is
@@ -435,8 +457,18 @@ async def summary(
     quarterly = granularity == "quarterly"
     if quarterly:
         snapshots = [s for s in snapshots if s.month.month in QUARTER_END_MONTHS]
+    today = clock.product_today()
+    states = [snapshot_state(s.id, s.month, s.recorded_on, today) for s in snapshots]
     if month is None:
-        index = len(snapshots) - 1  # -1 on an empty book
+        # The CURRENT snapshot (spec §K2, §0.4(b)) — the rule Projection, card utilization and
+        # the assistant share: an early next-month snapshot is current, one further ahead never
+        # is (it still answers ?month= and the charts still draw it). -1 on an empty book.
+        current, _ = current_and_previous(states, today)
+        index = (
+            -1
+            if current is None
+            else next(i for i, state in enumerate(states) if state.id == current.id)
+        )
     elif quarterly:
         index = max((i for i, snap in enumerate(snapshots) if snap.month <= month), default=-1)
     else:
@@ -455,6 +487,8 @@ async def summary(
         )
     viewed = snapshots[index]
     previous = snapshots[index - 1] if index > 0 else None
+    viewed_state = states[index]
+    previous_state = states[index - 1] if index > 0 else None
     viewed_nw = net_worth_for(viewed.id, accounts, balances)
     viewed_groups = group_totals_for(viewed.id, accounts, balances)
     prev_nw = net_worth_for(previous.id, accounts, balances) if previous else None
@@ -481,6 +515,11 @@ async def summary(
             for person_id, name in owner_rows
         ],
         period="quarter" if quarterly else "month",
+        as_of=viewed_state.as_of,
+        recorded_on=viewed_state.recorded_on,
+        provisional=viewed_state.provisional,
+        previous=None if previous_state is None else state_out(previous_state),
+        days_since_previous=_days_since(previous_state, viewed_state),
     )
 
 
@@ -505,12 +544,15 @@ async def get_month(month: date, db: AsyncSession = Depends(get_db)) -> MonthBal
         .scalars()
         .all()
     )
+    state = snapshot_state(snapshot.id, snapshot.month, snapshot.recorded_on, clock.product_today())
     return MonthBalancesOut(
         month=month,
         exists=True,
         recorded_on=snapshot.recorded_on,
         notes=snapshot.notes,
         balances=[BalanceEntry(account_id=r.account_id, balance=r.balance) for r in rows],
+        as_of=state.as_of,
+        provisional=state.provisional,
     )
 
 
