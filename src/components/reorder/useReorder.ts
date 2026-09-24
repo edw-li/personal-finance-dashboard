@@ -44,6 +44,7 @@ import {
 } from './reorderMath'
 import type { AnnounceContext, Extent, ReorderItem, ReorderKey } from './reorderMath'
 import {
+  autoScrollBy,
   cancelFrame,
   createDropLine,
   ensureVisible,
@@ -51,7 +52,6 @@ import {
   listY,
   nextFrame,
   placeDropLine,
-  scrollByY,
   scrollParentOf,
   sideClipsOf,
   stickyHeaderOf,
@@ -475,6 +475,8 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
       // One band for both questions: the part of the scroller the reader can SEE, clipped to the
       // window. A 420px Settings box can hang past the window's bottom; judged in the whole box, the
       // stop would come while the range's end still sat below the window, out of the pointer's reach.
+      // And once such a box is spent, that end is still out of reach: autoScrollBy scrolls the page
+      // on until the box's edge is inside the window.
       const bounds = visibleBounds(drag.scroller, drag.header)
       const seen = { top: listY(drag.scroller, bounds.top), height: bounds.bottom - bounds.top }
       const speed = autoScrollWithin(
@@ -482,7 +484,7 @@ export function useReorder<K extends ReorderKey>(options: UseReorderOptions<K>):
         range,
         seen,
       )
-      if (speed !== 0) scrollByY(drag.scroller, speed)
+      if (speed !== 0) autoScrollBy(drag.scroller, speed)
       drag.frame = nextFrame(step)
     }
     drag.frame = nextFrame(step)

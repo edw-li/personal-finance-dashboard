@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  autoScrollBy,
   createDropLine,
   DROP_LINE_PX,
   dropLineLayer,
@@ -307,6 +308,73 @@ describe('keepOnScreen', () => {
   it('leaves the page alone when the page is the scroller — ensureVisible already scrolled it', () => {
     const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
     keepOnScreen(null, 5000, 40)
+    expect(scrollBy).not.toHaveBeenCalled()
+  })
+})
+
+describe('autoScrollBy', () => {
+  /** A box at scrollTop `at` that clamps it to [0, `end`], as a browser clamps it. */
+  function clampedBox(end: number, at: number): HTMLElement {
+    const box = document.createElement('div')
+    let offset = at
+    Object.defineProperty(box, 'scrollTop', {
+      get: () => offset,
+      set: (value: number) => {
+        offset = Math.min(Math.max(0, value), end)
+      },
+      configurable: true,
+    })
+    return box
+  }
+
+  it('scrolls the page when the page is the scroller', () => {
+    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    autoScrollBy(null, 12)
+    expect(scrollBy).toHaveBeenCalledWith(0, 12)
+  })
+
+  it('hands the step to the page only once the box stands at its end on the side the window hides', () => {
+    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    const box = clampedBox(380, 370)
+    box.getBoundingClientRect = () => rect(500, 420) // foot at 920: past jsdom's 768px window
+    autoScrollBy(box, 12) // 370 → 380: the box took it
+    expect(box.scrollTop).toBe(380)
+    expect(scrollBy).not.toHaveBeenCalled()
+    autoScrollBy(box, 12) // at its end: the page takes it
+    expect(scrollBy).toHaveBeenCalledWith(0, 12)
+    scrollBy.mockClear()
+    box.getBoundingClientRect = () => rect(300, 420) // foot at 720: the window shows it whole
+    autoScrollBy(box, 12)
+    expect(scrollBy).not.toHaveBeenCalled()
+    autoScrollBy(box, -12) // up: the box has room
+    expect(box.scrollTop).toBe(368)
+    expect(scrollBy).not.toHaveBeenCalled()
+    const top = clampedBox(380, 0)
+    top.getBoundingClientRect = () => rect(-50, 420) // its head above the window
+    autoScrollBy(top, -12)
+    expect(scrollBy).toHaveBeenCalledWith(0, -12)
+    scrollBy.mockClear()
+    top.getBoundingClientRect = () => rect(0, 420) // the window's top edge, as visibleBounds clips
+    autoScrollBy(top, -12)
+    expect(scrollBy).not.toHaveBeenCalled()
+  })
+
+  it('the last hair of a fractional end is no room — while a sub-pixel step a box takes whole is a move', () => {
+    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    // Display scaling parks a box on its device pixel, 379.2, a hair short of its fractional end,
+    // 379.6: the step moves it that last 0.4px — the end, so the page takes the step.
+    const box = clampedBox(379.6, 379.2)
+    box.getBoundingClientRect = () => rect(500, 420)
+    autoScrollBy(box, 12)
+    expect(box.scrollTop).toBeCloseTo(379.6)
+    expect(scrollBy).toHaveBeenCalledWith(0, 12)
+    scrollBy.mockClear()
+    // Near the zone's inner edge the step is sub-pixel: a box with room that takes 0.3 of a 0.3px
+    // step moved, and the page must not creep along with it.
+    const room = clampedBox(380, 100)
+    room.getBoundingClientRect = () => rect(500, 420)
+    autoScrollBy(room, 0.3)
+    expect(room.scrollTop).toBeCloseTo(100.3)
     expect(scrollBy).not.toHaveBeenCalled()
   })
 })
