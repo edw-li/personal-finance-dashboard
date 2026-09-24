@@ -2,9 +2,9 @@
 
 TRUNCATE … RESTART IDENTITY CASCADE of all 44 tables cost ~0.5 s a test on this box (a file
 swap per table). The reset that replaced it keeps TRUNCATE's observable contract for the
-next test — every table empty, every used sequence back at its start, committed — with one
-statement: a DO block that deletes child tables first and setval()s every sequence that
-has been read. TRUNCATE stays behind it as the fallback.
+next test — every table empty, every sequence back at its start, committed — with one
+statement: a DO block that deletes child tables first and setval()s every sequence in the
+schema. TRUNCATE stays behind it as the fallback.
 
 These tests call the helper themselves and, like every test, leave the database clean (the
 db fixture's own teardown resets once more). The session is committed before each reset,
@@ -119,6 +119,20 @@ async def _advance_with_a_rolled_back_insert(db) -> None:
     await db.commit()  # end the read transaction the asserts above opened
 
 
+async def _park_a_sequence_past_its_start(db) -> None:
+    """What a snapshot restore leaves behind (lifecycle/restore.py step 5): every sequence set
+    to max(id) + 1 with is_called false. pg_sequences reports last_value NULL for that state —
+    the same as for a sequence nobody touched — so "reset only what was read" would miss it,
+    and the next test's first finding would be id 2."""
+    await db.execute(text("SELECT setval('assistant_findings_id_seq', 2, false)"))
+    await db.commit()
+    parked = text(
+        "SELECT last_value FROM pg_sequences WHERE sequencename = 'assistant_findings_id_seq'"
+    )
+    assert await db.scalar(parked) is None
+    await db.commit()
+
+
 async def _row_counts(executor) -> dict[str, int]:
     return {
         table.name: await executor.scalar(select(func.count()).select_from(table))
@@ -173,6 +187,7 @@ async def _assert_fresh_ids_start_at_one(db) -> None:
 async def _seed_everything(db) -> None:
     await _seed_fk_web(db)
     await _advance_with_a_rolled_back_insert(db)
+    await _park_a_sequence_past_its_start(db)
     counts = await _row_counts(db)
     assert {name for name, n in counts.items() if n} == SEEDED
     await db.commit()

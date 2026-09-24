@@ -19,7 +19,7 @@ from app.security import hash_password
 from tests.portfolio_factories import reset_accounts
 
 # The test database is disposable and torn down aggressively (drop_all + create_all once per
-# run, then every row deleted and every used sequence restarted after each test — see
+# run, then every row deleted and every sequence restarted after each test — see
 # reset_database), so concurrent suite runs against one database wipe each other's rows and
 # deadlock on the drop_all. FINANCE_TEST_DB lets each runner (CI shard, parallel worktree
 # agent) claim its own database; the name must keep a *_test suffix so the destructive
@@ -61,14 +61,16 @@ async def engine():
 
 def _fast_reset_sql() -> str:
     """One statement (a DO block works through asyncpg's prepared path; a ';'-joined string
-    would not): delete children first, then put every used sequence back at its start — what
+    would not): delete children first, then put every sequence back at its start — what
     TRUNCATE … RESTART IDENTITY did, without TRUNCATE's per-table file swap (~10-13 ms a
     table on the dev box's Docker Postgres, ~0.5 s a test).
 
-    EVERY used sequence, not only the ones a test's committed rows advanced: nextval is not
-    transactional, so an insert that rolled back still moved its sequence, and the next test
-    may expect id 1. `last_value IS NOT NULL` is pg_sequences' "read since the last
-    setval(…, false)", so an untouched sequence costs nothing. setval(seq, start, false)
+    EVERY sequence in the schema, not only the ones a test's committed rows advanced: nextval
+    is not transactional, so an insert that rolled back still moved its sequence; and a
+    snapshot restore parks each sequence at max(id) + 1 with is_called false, which
+    pg_sequences reports as last_value NULL — exactly like an untouched sequence — so a
+    "reset only what was read" filter misses it and the next test's first row is id 2.
+    Resetting all ~40 costs no more (median ~5 ms either way). setval(seq, start, false)
     makes the next nextval return start — RESTART IDENTITY's state, serial or identity."""
     deletes = "\n".join(
         f'    DELETE FROM "{t.name}";' for t in reversed(Base.metadata.sorted_tables)
@@ -77,7 +79,7 @@ def _fast_reset_sql() -> str:
         "DO $reset$\nDECLARE s record;\nBEGIN\n"
         f"{deletes}\n"
         "    FOR s IN SELECT schemaname, sequencename, start_value FROM pg_sequences\n"
-        "             WHERE schemaname = current_schema() AND last_value IS NOT NULL LOOP\n"
+        "             WHERE schemaname = current_schema() LOOP\n"
         "        PERFORM setval(format('%I.%I', s.schemaname, s.sequencename)::regclass,\n"
         "                       s.start_value, false);\n"
         "    END LOOP;\n"
@@ -97,7 +99,7 @@ _TRUNCATE_SQL = _truncate_sql()
 
 
 async def reset_database(engine) -> None:
-    """Empty every table and restart every used sequence, committed — the state each test
+    """Empty every table and restart every sequence, committed — the state each test
     starts from. The fast DELETE path first; on ANY failure (an FK cycle a child-first DELETE
     cannot satisfy, a lock timeout, a schema surprise) the TRUNCATE path in a fresh
     transaction, so a surprise costs speed and never leaves a dirty database. The warning
@@ -206,7 +208,7 @@ def _reset_assistant_module_state():
 @pytest.fixture(autouse=True)
 def _clear_read_caches():
     # The review book and the month savings are memoised per data fingerprint (2026-09-23
-    # spec §P4). The db fixture's reset restarts every used sequence, so two tests can seed
+    # spec §P4). The db fixture's reset restarts every sequence, so two tests can seed
     # byte-identical tables — and a test that pins the clock or patches a loader must never
     # be answered by an entry another test left behind. Imported here, like the assistant
     # module above, so conftest stays import-light.
