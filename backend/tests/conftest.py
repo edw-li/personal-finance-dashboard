@@ -118,16 +118,18 @@ _FAST_RESET_SQL = _fast_reset_sql()
 _TRUNCATE_SQL = _truncate_sql()
 
 
-async def reset_database(engine) -> None:
+async def reset_database(engine) -> bool:
     """Empty every table and restart every sequence, committed — the state each test
     starts from. The fast DELETE path first; on ANY failure (an FK cycle a child-first DELETE
     cannot satisfy, a lock timeout, a schema surprise) the TRUNCATE path in a fresh
-    transaction, so a surprise costs speed and never leaves a dirty database. The warning
-    says so: a fast path that always fails would otherwise put the suite back at ~20 min
-    without a word."""
+    transaction, so a surprise never leaves a dirty database. The warning says so: a fast
+    path that always fails would otherwise put the suite back at ~20 min without a word.
+
+    Returns True when the fast statement did the reset, False when TRUNCATE had to."""
     try:
         async with engine.begin() as conn:
             await conn.exec_driver_sql(_FAST_RESET_SQL)
+        return True
     except Exception as exc:
         warnings.warn(
             f"fast test-database reset failed, fell back to TRUNCATE: {exc}",
@@ -136,6 +138,7 @@ async def reset_database(engine) -> None:
         )
         async with engine.begin() as conn:
             await conn.exec_driver_sql(_TRUNCATE_SQL)
+        return False
 
 
 @pytest.fixture

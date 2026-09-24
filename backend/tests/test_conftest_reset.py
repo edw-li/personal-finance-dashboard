@@ -9,6 +9,8 @@ schema. TRUNCATE stays behind it as the fallback.
 These tests call the helper themselves and, like every test, leave the database clean (the
 db fixture's own teardown resets once more). The session is committed before each reset,
 so no transaction of this test holds a lock the reset — or the TRUNCATE fallback — waits on.
+The first two also assert that the FAST path did the reset: the fallback leaves the same
+state behind, so "the tables are empty" alone cannot tell the two apart.
 """
 
 from datetime import date
@@ -26,6 +28,7 @@ from app.models import (
     ContributionLimit,
     MonthlySpending,
     NetWorthSnapshot,
+    PaycheckProfile,
     Person,
     PortfolioAccount,
     PositionTransaction,
@@ -46,6 +49,7 @@ SEEDED = {
     "accounts",
     "net_worth_snapshots",
     "account_balances",
+    "paycheck_profiles",
     "spending_categories",
     "monthly_spending",
     "securities",
@@ -56,9 +60,14 @@ SEEDED = {
 
 async def _seed_fk_web(db) -> None:
     """Rows across every kind of foreign key a child-first DELETE has to satisfy: RESTRICT
-    (position_transactions -> portfolio_accounts), CASCADE (account_balances, monthly_spending,
-    user_preferences), SET NULL (accounts/portfolio_accounts -> people) and the accounts
-    self-reference (a component under its parent)."""
+    (position_transactions -> portfolio_accounts, paycheck_profiles -> people), CASCADE
+    (account_balances, monthly_spending, user_preferences), SET NULL (accounts/portfolio_accounts
+    -> people) and the accounts self-reference (a component under its parent).
+
+    paycheck_profiles is the one that pins the ORDER: its only foreign key is RESTRICT, so
+    deleting people first fails. position_transactions cannot pin it on its own: a parent-first
+    order deletes securities before portfolio_accounts, and securities' CASCADE removes the row
+    before the RESTRICT check ever runs."""
     user = User(email="reset@example.com", password_hash="unused")
     owner = Person(name="Owner", is_primary=True)
     db.add_all([user, owner])
@@ -87,6 +96,11 @@ async def _seed_fk_web(db) -> None:
             security,
             brokerage,
             UserPreference(user_id=user.id, key="theme", value="dark"),
+            PaycheckProfile(
+                person_id=owner.id,
+                effective_date=date(2026, 1, 1),
+                annual_salary=Decimal("100000"),
+            ),
         ]
     )
     await db.flush()
@@ -196,7 +210,7 @@ async def _seed_everything(db) -> None:
 async def test_reset_empties_every_table_and_restarts_ids(db, engine):
     await _seed_everything(db)
 
-    await reset_database(engine)
+    assert await reset_database(engine), "the fast path failed and TRUNCATE did the reset"
     db.expunge_all()  # a test boundary: the next test's session starts empty
 
     await _assert_reset_state(db)
@@ -207,7 +221,7 @@ async def test_reset_empties_every_table_and_restarts_ids(db, engine):
 async def test_reset_is_visible_to_other_connections(db, engine):
     await _seed_everything(db)
 
-    await reset_database(engine)
+    assert await reset_database(engine), "the fast path failed and TRUNCATE did the reset"
 
     # Committed, not merely done inside one connection's transaction: tests open their own
     # sessions on the shared engine (the assistant's SESSION_FACTORY, the lifecycle CLI).
@@ -230,7 +244,7 @@ async def test_reset_falls_back_to_truncate(db, engine):
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(conftest, "_FAST_RESET_SQL", failing)
         with pytest.warns(UserWarning, match="simulated reset failure"):
-            await reset_database(engine)
+            assert await reset_database(engine) is False
     db.expunge_all()
 
     await _assert_reset_state(db)
