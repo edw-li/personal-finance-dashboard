@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
+import TableScroll from '../TableScroll'
 import type {
   CreditCardOut,
   RewardCategoryOut,
@@ -210,7 +211,7 @@ export default function RewardsMatrix({
 
       <FeedBanner error={error} />
 
-      <div className="matrix-scroll">
+      <TableScroll className="matrix-scroll" label="Rewards matrix">
         <table className="data-table rewards-matrix">
           <thead>
             <tr>
@@ -328,7 +329,7 @@ export default function RewardsMatrix({
             </tr>
           </tfoot>
         </table>
-      </div>
+      </TableScroll>
 
       {editing && (
         <div className="mx-inspector">
