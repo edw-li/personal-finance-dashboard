@@ -61,7 +61,11 @@ from app.models import (
 )
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.services import clock
-from app.services.employer_ticker import ESPP_TICKER_KEY, read_employer_ticker
+from app.services.employer_ticker import (
+    ESPP_TICKER_KEY,
+    read_committed_employer_ticker,
+    read_employer_ticker,
+)
 from app.services.month_review import ReviewBook, load_review_book, load_review_book_snapshot
 from app.services.net_worth_calc import PLAN_UNTIL_KEY
 from app.services.savings import MonthSavings, load_month_savings
@@ -245,14 +249,17 @@ async def _memoised[K: Hashable, V](
     before: Fingerprint,
     statement: TextClause,
     build: Callable[[], Awaitable[V]],
+    still_current: Callable[[], Awaitable[bool]] | None = None,
 ) -> V:
     """The value for `key`: cached, awaited from a build already in flight, or built here.
 
     Waiters take the builder's value even when its stability check failed — under READ
     COMMITTED that is exactly what each would have built itself — but only a stable build
-    is cached (rule 1). A waiter shields the shared build, so its own cancellation cannot
-    cancel it. When a build fails or is abandoned, its waiters look again: the first to wake
-    builds and the rest await that one."""
+    is cached (rule 1). `still_current`, when given, is asked after a stable build and can
+    veto the filing: it checks what the fingerprint cannot, a bind the caller read before it
+    (the employer ticker, `_ticker_unchanged`). A waiter shields the shared build, so its own
+    cancellation cannot cancel it. When a build fails or is abandoned, its waiters look again:
+    the first to wake builds and the rest await that one."""
     while True:
         cached = cache.get(key)
         if cached is not None:
@@ -269,6 +276,8 @@ async def _memoised[K: Hashable, V](
     try:
         value = await build()
         stable = await _fingerprint(db, statement) == before
+        if stable and still_current is not None:
+            stable = await still_current()
     except BaseException:
         flight.set_exception(_BuildAbandoned())  # the builder re-raises its own, untouched
         flight.exception()  # retrieved: no "never retrieved" log when nobody was waiting
@@ -316,6 +325,23 @@ async def cached_review_book(
     )
 
 
+def _ticker_unchanged(db: AsyncSession, ticker: str | None) -> Callable[[], Awaitable[bool]]:
+    """Rule 1 for the employer ticker a cache bound its quote cells with (integration review,
+    item 6). The ticker is read BEFORE the first fingerprint, so a Settings change committed
+    between the two leaves the settings cell on the new ticker and the quote cells on the old
+    one. The fingerprint after the build agrees with that key, so the stability check passes, but
+    the key's two halves disagree about the ticker. Such an entry is filed only if the committed
+    ticker, read once more after the build, is still the bound one — read with
+    `read_committed_employer_ticker`, not `read_employer_ticker`: `db.get` answers from the
+    identity map while anything in the session still holds the row, and could hand back the
+    very value being checked."""
+
+    async def unchanged() -> bool:
+        return await read_committed_employer_ticker(db) == ticker
+
+    return unchanged
+
+
 async def cached_withholding(
     db: AsyncSession,
     year: int,
@@ -330,9 +356,10 @@ async def cached_withholding(
     a model of its own, and nothing shared can be mutated by the next reader. Keyed on the
     fingerprint AND the ticker the `latest_prices` and `price_history` cells were restricted
     with, which is read by `read_employer_ticker`, the reader the build's quote chain
-    (`api/espp._espp_quote`) uses too; a ticker changed between the two fingerprints also
-    changes `app_settings`' cell (its narrowed keys include the ticker's), so such a build is
-    never filed (rule 1). 422s and 404s raise out of `build` and are never cached."""
+    (`api/espp._espp_quote`) uses too. A ticker changed between the two fingerprints also
+    changes `app_settings`' cell (its narrowed keys include the ticker's), and one changed
+    before the first is caught by `_ticker_unchanged`, so neither build is ever filed (rule 1).
+    422s and 404s raise out of `build` and are never cached."""
     if _has_pending_changes(db):
         return await build()
     ticker = await read_employer_ticker(db)
@@ -346,6 +373,7 @@ async def cached_withholding(
         before,
         statement,
         build,
+        _ticker_unchanged(db, ticker),
     )
 
 
@@ -426,7 +454,8 @@ async def cached_projection(
     `read_employer_ticker`, the one reader of the setting, which the build's quote chain and the
     withholding cache call too — read only AFTER the pending-changes check, since its read would
     autoflush them. The key carries it: a ticker changed between the two fingerprints changes
-    the settings cell as well, so such a build is never filed (rule 1)."""
+    the settings cell as well, and one changed before the first is caught by
+    `_ticker_unchanged`, so neither build is ever filed (rule 1)."""
     if _has_pending_changes(db):
         return await build()
     ticker = await read_employer_ticker(db)
@@ -440,4 +469,5 @@ async def cached_projection(
         before,
         statement,
         build,
+        _ticker_unchanged(db, ticker),
     )

@@ -10,11 +10,16 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.espp import _espp_quote
 from app.models import AppSetting
 from app.services import read_cache
-from app.services.employer_ticker import ESPP_TICKER_KEY, read_employer_ticker
+from app.services.employer_ticker import (
+    ESPP_TICKER_KEY,
+    read_committed_employer_ticker,
+    read_employer_ticker,
+)
 from app.services.price_service import backfill_employer_history
 from tests.test_price_service import FakeProvider, bar, rsu_grant, seed_security
 
@@ -45,6 +50,7 @@ async def _store(db, stored):
 async def test_every_reader_resolves_the_same_ticker(auth_client, db, stored, expected):
     await _store(db, stored)
     assert await read_employer_ticker(db) == expected
+    assert await read_committed_employer_ticker(db) == expected
     # The quote chain's first hop: no security row is seeded, so a ticker degrades to no quote.
     assert await _espp_quote(db) == (expected, None, None)
     assert (await auth_client.get("/api/v1/settings")).json()["espp_ticker"] == expected
@@ -57,6 +63,49 @@ async def test_every_reader_resolves_the_same_ticker(auth_client, db, stored, ex
     await read_cache.cached_projection(db, ("knobs",), build)
     assert [key[1] for key in read_cache.WITHHOLDINGS.keys()] == [expected]
     assert [key[1] for key in read_cache.PROJECTIONS.keys()] == [expected]
+
+
+async def _cache(name: str, db) -> read_cache.LRU:
+    """One trivial build through the named cache; the cache it filed into, if it filed."""
+
+    async def build() -> bytes:
+        return b"{}"
+
+    if name == "withholding":
+        await read_cache.cached_withholding(db, 2026, build, today=date(2026, 9, 24))
+        return read_cache.WITHHOLDINGS
+    await read_cache.cached_projection(db, ("knobs",), build)
+    return read_cache.PROJECTIONS
+
+
+@pytest.mark.parametrize("name", ["withholding", "projection"])
+async def test_an_entry_is_never_filed_under_a_ticker_that_has_changed(
+    db, engine, monkeypatch, name
+):
+    """A Settings change committed between the cache's ticker read and its first fingerprint:
+    the quote cells are bound to the old ticker while the settings cell already holds the new
+    one, and the fingerprint taken after the build agrees with it, so the stability check
+    passes. The two halves of that key disagree about the ticker, so the entry is not filed:
+    the cache re-reads the committed ticker after the build (integration review, item 6). The
+    next request reads the new ticker and files as usual."""
+    await _store(db, {"value": "NVDA"})
+    real = read_cache.read_employer_ticker
+    changes = []
+
+    async def read_then_change(session):
+        ticker = await real(session)
+        if not changes:  # once: the Settings save lands right after the cache's read
+            async with async_sessionmaker(engine, expire_on_commit=False)() as other:
+                (await other.get(AppSetting, ESPP_TICKER_KEY)).value = {"value": "AMD"}
+                await other.commit()
+            changes.append("AMD")
+        return ticker
+
+    monkeypatch.setattr(read_cache, "read_employer_ticker", read_then_change)
+    assert len(await _cache(name, db)) == 0
+    assert changes == ["AMD"]
+    entries = await _cache(name, db)
+    assert [key[1] for key in entries.keys()] == ["AMD"]
 
 
 @pytest.mark.parametrize(("stored", "expected"), SHAPES)
