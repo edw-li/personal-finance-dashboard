@@ -20,6 +20,7 @@ from app.services import clock
 from app.services.assistant_context import (
     CONTEXT_CHAR_CAP,
     MONTHS_WINDOW_TIGHT,
+    PROJECTION_KNOBS,
     _decimate,
     _projection_scenario,
     _selected_id,
@@ -455,3 +456,59 @@ async def test_household_context_carries_the_latest_savings_figures(db):
     assert spending["latest_payroll_savings"] == "0.00"
     assert spending["latest_total_savings"] == "4900.00"
     assert spending["latest_total_savings_rate"] == "0.700000"
+
+
+def test_plan_until_and_vests_decode_to_the_routers_own_parameters():
+    """2026-09-23 spec §R10: the page's two new knobs reach the direct call explicitly — a
+    four-digit year and a 0/1 flag — and anything else in their place is dropped, never
+    raised (the router's own 422s answer an out-of-range year)."""
+    scenario, honored = _projection_scenario(
+        ["plan_until:2075", "vests:0", "plan_until:20x5", "vests:yes", "plan_until:²⁰⁷⁵"]
+    )
+    assert scenario["plan_until"] == 2075 and scenario["vests"] is False
+    assert honored == ["plan_until:2075", "vests:0"]
+    assert _projection_scenario(["vests:1"])[0]["vests"] is True
+    assert "plan_until" not in _projection_scenario(["plan_until:207"])[0]
+    assert set(PROJECTION_KNOBS) >= {"plan_until", "vests", "years"}
+
+
+async def test_projection_section_carries_money_lasts_phases_vests_and_the_base(db):
+    await _seed_investable_base(db)
+    section = (
+        await build_context(
+            db, route="/projection", search={}, view={"whatif": ["plan_until:2070", "vests:0"]}
+        )
+    )["projection"]
+    assert section["scenario_entries"] == ["plan_until:2070", "vests:0"]
+    assert section["plan_until"] == 2070 and section["plan_until_source"] == "knob"
+    assert section["money_lasts"]["reason"] == (
+        "Set retirement months to see whether the money lasts."
+    )
+    assert section["phases"][0]["kind"] == "working"
+    assert section["drawdown"] is None and section["vests"] is None  # no grants seeded
+    assert section["base_as_of"] == section["base_month"]
+    assert section["base_provisional"] is False
+
+
+async def test_the_projection_section_says_which_p10_is_which(db):
+    # 2026-09-24 review minor 9: the payload keeps its keys, and "p10" is the OPTIMISTIC edge of
+    # the reach dates but the PESSIMISTIC edge of the depletion months — so the section says how
+    # the page speaks of each, and the model answers in "1 in 10 / 9 in 10".
+    await _seed_investable_base(db)
+    note = (await build_context(db, route="/projection", search={}, view={}))["projection"][
+        "paths_note"
+    ]
+    assert "fi_month_p10" in note and "optimistic" in note and "1 in 10 paths reach FI" in note
+    assert "lasts_until_p10" in note and "pessimistic" in note and "in 9 of 10 paths" in note
+    assert "Never say p10, p50 or p90" in note and len(note) < 500
+
+
+async def test_a_refused_plan_until_is_the_sections_error_not_a_crash(db):
+    await _seed_investable_base(db)
+    section = (
+        await build_context(
+            db, route="/projection", search={}, view={"whatif": ["plan_until:2000"]}
+        )
+    )["projection"]
+    assert section["error"].startswith("plan_until must be")
+    assert section["scenario_entries"] == ["plan_until:2000"]

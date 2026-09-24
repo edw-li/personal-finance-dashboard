@@ -6,7 +6,7 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartCard from '../components/ChartCard'
 import { projectionCsv, projectionOption } from '../components/projection/projectionChartOptions'
 import { decodeProjection, encodeProjection, isEmptyProjection, labelForProjection, toParams, COMPARE_ROWS, projectionValue, type ProjectionScenario } from '../components/projection/projectionScenario'
-import { displayProjection, milestoneWindow, projectionReceipts, projectionSelection, type ProjectionDollars } from '../components/projection/projectionDisplay'
+import { balanceAsOf, displayProjection, fiDateTile, milestoneWindow, moneyLastsTile, projectionReceipts, projectionSelection, type ProjectionDollars } from '../components/projection/projectionDisplay'
 import ProjectionTrendPanel from '../components/projection/ProjectionTrendPanel'
 import ScenarioPanel, { ScenarioHints } from '../components/projection/ScenarioPanel'
 import { useAssistantView } from '../components/assistant/viewState'
@@ -83,6 +83,8 @@ export default function ProjectionPage() {
   const selection = selectedIndex === null ? null : readout(selectedIndex)
   const select = (value: ChartSelection | null) => setSelectedIndex(value?.kind === 'projection' && display ? display.months.indexOf(value.date) : null)
   const receipts = useMemo(() => data ? projectionReceipts(data) : null, [data])
+  const fiDate = data ? fiDateTile(data) : null
+  const lasts = data ? moneyLastsTile(data) : null
   // The chart column sticks UNDER the outcomes band (spec §12), whose height is measured rather
   // than assumed: it is one row of tiles when their labels fit and taller when one wraps, and a
   // constant would park the chart's header under the band at exactly the widths that wrap.
@@ -110,7 +112,7 @@ export default function ProjectionPage() {
     }} skeleton={{ tiles: 5, cards: [{ span: 12, height: 400 }] }}>
       {missing ? <section className="card"><h2 className="eyebrow">Projected investable balance</h2>
         <p className="empty-note">{sandbox.error} — <Link to="/update">enter a monthly update</Link> to start one.</p></section>
-        : data !== null && display !== null && receipts !== null && <>
+        : data !== null && display !== null && receipts !== null && fiDate !== null && lasts !== null && <>
           <LocalSectionPanel state={sections} section="planning">
             <div ref={measureBand} className="kpi-row kpi-row-5 projection-outcomes" aria-label="Planning outcomes">
               <StatTile label="FI target" value={formatCurrency(data.fi_target)}
@@ -119,17 +121,19 @@ export default function ProjectionPage() {
                 evidence={receipts.target} tone="neutral" />
               <StatTile label="FI ratio" value={formatPct(data.fi_ratio, { signed: false })} evidence={receipts.ratio}
                 hint="Investable balance as a share of the FI target." />
-              <StatTile label="Investable balance" value={formatCurrency(data.starting_balance)} delta={`as of ${formatMonth(data.base_month)}`}
-                tone="neutral" evidence={receipts.balance} hint="Pre-tax + post-tax + taxable + equity from the latest snapshot; cash and liabilities excluded." />
-              <StatTile label="Projected FI date" value={data.fi_month === null ? data.fi_target === null ? '—' : 'Not reached' : formatMonth(data.fi_month)} evidence={receipts.reachDate}
-                delta={data.coast_fi_month === null ? 'At your assumed constant return' : `growth alone: ${formatMonth(data.coast_fi_month)}`}
-                tone="neutral" hint="First month the deterministic projection reaches the target. Growth alone repeats it with contributions off." />
-              {/* Short enough for a fifth of the row. The no-break space keeps the figure and its
-                  unit on one line; the (i) needs none — F2's .stat-label-text holds the words and
-                  the icon in one nowrap unit (audit P-11). */}
-              <StatTile label={`Reach FI within ${data.years}\u00A0yrs`} value={formatPct(data.fi_probability, { signed: false })}
-                delta={data.fi_month_p50 === null ? undefined : `Median reach: ${formatMonth(data.fi_month_p50)}`}
-                tone="neutral" evidence={receipts.probability} hint="Share of 500 simulated paths reaching the target within this horizon. It does not measure retirement spending sustainability." />
+              {/* Named by the day its balances describe (2026-09-23 spec §R5): the current snapshot —
+                  the Overview's — so next month's balances recorded early read "· provisional". */}
+              <StatTile label="Investable balance" value={formatCurrency(data.starting_balance)} delta={balanceAsOf(data)}
+                tone="neutral" evidence={receipts.balance} hint="Pre-tax + post-tax + taxable + equity from the current balances snapshot — the one the Overview shows; cash and liabilities excluded." />
+              {/* ONE FI date (2026-09-23 spec §R6): the simulation's median reach with its range in
+                  paths; the constant-return crossing lives in the receipt and on the chart. */}
+              <StatTile label="FI date" value={fiDate.value} delta={fiDate.delta} tone={fiDate.tone} evidence={receipts.fiDate}
+                hint="The month half of the simulated paths reach the FI target, with the months 1 in 10 and 9 in 10 get there." />
+              {/* Money lasts (spec §R3, §R7): a verdict, not a movement — coloured and worded (the
+                  badge), never a glyph. From the same simulation as the FI date. */}
+              <StatTile label="Money lasts" value={lasts.value} unit={lasts.unit} delta={lasts.delta} tone={lasts.tone} direction="none"
+                badge={lasts.badge} evidence={receipts.moneyLasts}
+                hint="The share of simulated paths whose balance lasts through your plan-until year, once withdrawals start after the last retirement." />
             </div>
             <div className="projection-workspace">
               <div className="projection-chart-area">
@@ -157,7 +161,7 @@ export default function ProjectionPage() {
                   // Advisory sentences about what the model ran with — the tax-warnings register:
                   // nothing failed, so never an error banner; the card's own muted header strip.
                   lede={data.warnings.length > 0 ? data.warnings.map((warning) => <p key={warning}>{warning}</p>) : undefined}
-                  footer={<p className="drill-hint">{display.display_dollars === 'future' ? 'Future dollars include the modeled price inflation in each month; the target rises by the same factor.' : `Today's dollars express buying power at ${formatMonth(data.start_month)}.`} Inputs and headline targets stay in that starting dollar basis. Growth only excludes contributions. {log ? 'The log axis omits values at or below zero. ' : ''}The central line uses a constant assumed return; simulated paths vary around it. Identical assumptions reuse the same samples for a stable comparison.{unknownPinInflation ? ' A pinned scenario has no inflation assumption, so its future-dollar line is unavailable. Its starting-dollar results remain in the comparison table.' : ''}</p>} />
+                  footer={<p className="drill-hint">{display.display_dollars === 'future' ? 'Future dollars include the modeled price inflation in each month; the target rises by the same factor.' : `Today's dollars express buying power at ${formatMonth(data.start_month)}.`} Inputs and headline targets stay in that starting dollar basis. Growth only excludes contributions, vests and withdrawals. {log ? 'Paths that ran out are drawn at the axis floor. ' : ''}The central line uses a constant assumed return; simulated paths vary around it. Scenarios with the same Horizon (years) setting share the same 500 simulated paths, so a difference between them is what you changed; a later plan-until year only adds months to each path.{unknownPinInflation ? ' A pinned scenario has no inflation assumption, so its future-dollar line is unavailable. Its starting-dollar results remain in the comparison table.' : ''}</p>} />
               </div>
               <aside id="projection-assumptions" className="projection-assumptions" tabIndex={-1} aria-label="Planning assumptions controls">
                 <ScenarioPanel sandbox={sandbox} baseline={sandbox.baseline} people={roster} compact />
@@ -165,14 +169,14 @@ export default function ProjectionPage() {
             </div>
             <section className="card projection-comparisons" aria-label="Scenario comparisons">
               <h2 className="eyebrow">Compare your scenarios</h2>
-              <p className="hint">Money inputs and FI targets in this table use {formatMonth(data.start_month)} dollars. Each probability uses its own scenario horizon.</p>
+              <p className="hint">Money inputs and FI targets in this table use {formatMonth(data.start_month)} dollars. Each probability uses its own scenario horizon and plan-until year.</p>
               <CompareTable<ProjectionOut> rows={COMPARE_ROWS} baseline={sandbox.baseline} scenario={sandbox.result} valueOf={projectionValue}
                 pins={sandbox.pins.map((pin) => ({ id: pin.id, label: pin.label, result: sandbox.pinResults[pin.id] }))}
                 onUnpin={sandbox.unpin} caption="Headline figures — baseline against the live scenario and any pins" />
               <PinRow sandbox={sandbox} />
               {/* The assumptions' fine print closes the card (spec §12): the knobs column is controls
                   only, and the sentences about entering them sit beside the figures they produce. */}
-              <ScenarioHints people={roster} />
+              <ScenarioHints people={roster} vests={data.vests ?? null} />
             </section>
           </LocalSectionPanel>
           <LocalSectionPanel state={sections} section="trend"><ProjectionTrendPanel startMonth={data.start_month} /></LocalSectionPanel>

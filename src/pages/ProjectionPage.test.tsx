@@ -11,6 +11,7 @@ import type { NetWorthTimeseries, ProjectionOut } from '../types/api'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { PINS_VERSION, pinsKey } from '../sandbox/pins'
 import { readAssistantView } from '../components/assistant/viewState'
+import { setServerToday } from '../utils/productToday'
 import ProjectionPage from './ProjectionPage'
 
 vi.mock('../api/projection', async (importOriginal) => ({
@@ -181,6 +182,7 @@ function renderPage(entry = '/projection') {
 }
 
 const url = () => screen.getByTestId('location').textContent
+const TREND_TITLE = 'Net worth trend — a curve fitted to your recorded history'
 
 // EXACT labels, never substrings: a hint's aria-label is a label too, and a SliderBox's
 // range carries the knob's words with a " slider" suffix — /volatility/i would name two
@@ -237,19 +239,20 @@ describe('ProjectionPage', () => {
     renderPage()
     await loaded()
     const target = valueOf(tileFor('FI target'))
-    const probability = valueOf(tileFor('Reach FI within 30 yrs'))
+    const fiDate = valueOf(tileFor('FI date'))
     const requests = vi.mocked(fetchProjection).mock.calls.length
 
     fireEvent.click(screen.getByRole('button', { name: 'Future dollars' }))
     fireEvent.click(screen.getByRole('button', { name: 'Table' }))
     expect(await screen.findByRole('columnheader', { name: 'Projected (USD · future dollars)' })).toBeTruthy()
     expect(screen.getByRole('columnheader', { name: 'FI target (USD · future dollars)' })).toBeTruthy()
-    for (const band of ['p10', 'p25', 'p50', 'p75', 'p90']) {
+    // The fan's columns speak in words (2026-09-23 spec §R6) — never "p10".
+    for (const band of ['10th percentile balance', '25th percentile balance', 'Median balance', '75th percentile balance', '90th percentile balance']) {
       expect(screen.getByRole('columnheader', { name: `${band} (USD · future dollars)` })).toBeTruthy()
     }
     expect(box('Inflation').placeholder).toBe('3')
     expect(valueOf(tileFor('FI target'))).toBe(target)
-    expect(valueOf(tileFor('Reach FI within 30 yrs'))).toBe(probability)
+    expect(valueOf(tileFor('FI date'))).toBe(fiDate)
     expect(vi.mocked(fetchProjection)).toHaveBeenCalledTimes(requests)
     expect(url()).toBe('/projection')
 
@@ -259,15 +262,29 @@ describe('ProjectionPage', () => {
   })
 
   it('states the FI figures from the echo and names their derivations', async () => {
+    setServerToday('2026-09-23')
     renderPage()
     await loaded()
 
     expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00')
     expect(valueOf(tileFor('FI ratio'))).toBe('6.7%') // fi_ratio, formatPct 1dp
     expect(valueOf(tileFor('Investable balance'))).toBe('$100,000.00')
-    expect(deltaOf(tileFor('Investable balance'))).toBe('as of Aug 2026')
-    expect(valueOf(tileFor('Projected FI date'))).toBe('Oct 2055')
+    // The day the balances describe (2026-09-23 spec §R5): a payload without base_as_of reads
+    // final, as of its 1st.
+    expect(deltaOf(tileFor('Investable balance'))).toBe('as of Aug 1')
+    // One headline FI date: the simulation's median reach (2026-09-23 spec §R6).
+    expect(valueOf(tileFor('FI date'))).toBe('Oct 2055')
     expect(await screen.findAllByTestId('echart')).toHaveLength(1)
+  })
+
+  it('names a provisional starting balance by the day it was recorded (2026-09-23 spec §R5)', async () => {
+    setServerToday('2026-09-23')
+    vi.mocked(fetchProjection).mockResolvedValue(
+      projectionOut({ base_month: '2026-10-01', base_as_of: '2026-09-22', base_recorded_on: '2026-09-22', base_provisional: true }),
+    )
+    renderPage()
+    await loaded()
+    expect(deltaOf(tileFor('Investable balance'))).toBe('as of Sep 22 · provisional')
   })
 
   it('spells out how a derived contribution was built', async () => {
@@ -654,30 +671,74 @@ describe('ProjectionPage', () => {
     expect(fetchProjection).toHaveBeenCalledTimes(1)
   })
 
-  it('dashes the FI probability tile when the fan is switched off', async () => {
+  it('falls back to the constant-return FI date, said so, when the fan is switched off', async () => {
     vi.mocked(fetchProjection).mockResolvedValue(fanOff())
     renderPage()
     await loaded()
 
-    const tile = tileFor('Reach FI within 30 yrs')
+    const tile = tileFor('FI date')
+    expect(valueOf(tile)).toBe('Oct 2055') // fi_month: no paths were simulated
+    expect(deltaOf(tile)).toBe('at a constant return')
+  })
+
+  it('states the FI date as the median reach, with its range in paths', async () => {
+    renderPage()
+
+    await loaded()
+    const tile = tileFor('FI date')
+    expect(valueOf(tile)).toBe('Oct 2055')
+    expect(deltaOf(tile)).toBe('1 in 10 paths by Jan 2050 · 9 in 10 by Mar 2061')
+  })
+
+  it('says fewer than 1 in 10 paths get there when the early edge never reaches', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_month_p10: null, fi_month_p50: null, fi_month_p90: null }))
+    renderPage()
+    await loaded()
+    expect(valueOf(tileFor('FI date'))).toBe('Beyond Oct 2026')
+    expect(deltaOf(tileFor('FI date'))).toBe('Fewer than 1 in 10 paths reach it by Oct 2026')
+  })
+
+  it('asks for retirement months before the money-lasts tile can answer', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({
+      money_lasts: {
+        plan_until: 2055, probability: null, verdict: null, lasts_until_p10: null, horizon_end: '2026-10-01',
+        deterministic_depleted_month: null, reason: 'Set retirement months to see whether the money lasts.',
+      },
+    }))
+    renderPage()
+    await loaded()
+    const tile = tileFor('Money lasts')
     expect(valueOf(tile)).toBe('—')
-    expect(deltaOf(tile)).toBeNull() // no percentile months to name
+    expect(deltaOf(tile)).toBe('Set retirement months to see whether the money lasts.')
   })
 
-  it('states the FI probability with its p10, p50 and p90 months', async () => {
+  it('reads money lasts as a share of paths with its verdict — colour, word and no movement glyph', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({
+      money_lasts: {
+        plan_until: 2075, probability: '0.824000', verdict: 'borderline', lasts_until_p10: '2071-04-01',
+        horizon_end: '2076-09-01', deterministic_depleted_month: null, reason: null,
+      },
+    }))
     renderPage()
-
     await loaded()
-    const tile = tileFor('Reach FI within 30 yrs')
-    expect(valueOf(tile)).toBe('62.0%')
-    expect(deltaOf(tile)).toBe('Median reach: Oct 2055')
+    const tile = tileFor('Money lasts')
+    expect(valueOf(tile)).toBe('82.4% of paths through 2075')
+    expect(deltaOf(tile)).toBe('In 9 of 10 paths the money lasts until at least 2071')
+    expect(tile.querySelector('.stat-delta')?.className).toContain('stat-delta-warn')
+    expect(tile.querySelector('.stat-delta span[aria-hidden="true"]')).toBeNull()
+    expect(within(tile).getByText('Borderline')).toBeTruthy()
   })
 
-  it('leaves p10 out when a stale backend omits it', async () => {
-    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_month_p10: null }))
+  it('reads money lasts at a constant return when volatility is 0', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fanOff({
+      money_lasts: {
+        plan_until: 2075, probability: null, verdict: null, lasts_until_p10: null, horizon_end: '2076-09-01',
+        deterministic_depleted_month: '2061-03-01', reason: null,
+      },
+    }))
     renderPage()
     await loaded()
-    expect(deltaOf(tileFor('Reach FI within 30 yrs'))).toBe('Median reach: Oct 2055')
+    expect(valueOf(tileFor('Money lasts'))).toBe('Runs out Mar 2061 at a constant return')
   })
 
   it('draws the fan under the lines when the payload carries bands', async () => {
@@ -805,7 +866,7 @@ describe('ProjectionPage', () => {
     expect(within(tileFor('FI target')).getByRole('button', { name: 'About this number: FI target' })).toBeTruthy()
     await openTrend()
     expect(
-      screen.getByText('Net worth over time (projected)').querySelector('button.info-hint'),
+      screen.getByText(TREND_TITLE).querySelector('button.info-hint'),
     ).toBeTruthy()
     expect(
       screen.getByText('Projected investable balance').querySelector('button.info-hint'),
@@ -880,7 +941,8 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
     expect(box('Retires — Me').value).toBe('')
     expect(box('Retires — Alex').value).toBe('')
     // Blank is a real answer here, not a derived default: nobody retires.
-    expect(screen.getByText(/Blank means that person works for the whole horizon/)).toBeTruthy()
+    expect(screen.getAllByText('works throughout')).toHaveLength(2)
+    expect(screen.getByText(/Retirement months split the plan into phases/)).toBeTruthy()
   })
 
   it('renders one knob for a single-person household — same grammar, new capability', async () => {
@@ -898,7 +960,7 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
     await loaded()
 
     expect(screen.queryByLabelText(/^Retires/)).toBeNull()
-    expect(screen.queryByText(/Blank means that person works/)).toBeNull()
+    expect(screen.queryByText(/Retirement months split the plan into phases/)).toBeNull()
   })
 
   it('keeps the whole page alive when the household fetch alone fails', async () => {
@@ -984,17 +1046,21 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
-  it('names the approximation the drop actually is', async () => {
+  it('explains the phases and the withdrawal after the last retirement', async () => {
     renderPage()
     await loaded()
 
-    expect(screen.getByText(/CURRENT monthly take-home/)).toBeTruthy()
-    expect(screen.getByText(/Spending stays a household figure/)).toBeTruthy()
+    // 2026-09-23 spec §R2/§R7: the working partner keeps saving and their pay covers spending;
+    // annual spend is withdrawn after the last retirement; taxes and Social Security are not modelled.
+    const paragraph = screen.getByText(/Retirement months split the plan into phases/)
+    expect(paragraph.textContent).toContain('their pay is assumed to cover your spending')
+    expect(paragraph.textContent).toContain("withdraws your annual spend each year in today's dollars")
+    expect(paragraph.textContent).toContain('Taxes on withdrawals and Social Security are not modelled.')
   })
 })
 
 describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
-  it('lays the five outcomes out as one row and glues the FI tile’s (i) to its last word', async () => {
+  it('lays the five outcomes out as one row: FI target, FI ratio, balance, FI date, money lasts', async () => {
     renderPage()
     await loaded()
     const band = document.querySelector('.projection-outcomes') as HTMLElement
@@ -1002,11 +1068,11 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     expect(band.classList.contains('kpi-row')).toBe(true)
     expect(band.classList.contains('kpi-row-5')).toBe(true)
     expect(band.querySelectorAll('.stat-tile')).toHaveLength(5)
-    // One no-break space, between the figure and its unit, so "30" and "yrs" cannot be split
-    // across two lines. Nothing trails the label: F2's .stat-label-text already holds the words
-    // and their (i) in one nowrap unit, so a trailing space would only pad the row (P4 review).
-    const label = within(band).getByText('Reach FI within 30 yrs')
-    expect(label.textContent).toBe('Reach FI within 30\u00A0yrs')
+    // 2026-09-23 spec §R7: the "Reach FI within" tile went — its figure lives in the FI date
+    // receipt and the compare table.
+    expect([...band.querySelectorAll('.stat-label-text')].map((label) => label.textContent)).toEqual([
+      'FI target', 'FI ratio', 'Investable balance', 'FI date', 'Money lasts',
+    ])
   })
 
   it('measures the outcomes band into --projection-band-h so the chart column sticks under it', async () => {
@@ -1034,18 +1100,41 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     await loaded()
     const card = screen.getByLabelText(/Projected investable balance over the next/).closest('.chart-card') as HTMLElement
     const footer = card.querySelector('.chart-card-row-caption') as HTMLElement
-    expect(footer.textContent).toContain('Growth only excludes contributions.')
+    expect(footer.textContent).toContain('Growth only excludes contributions, vests and withdrawals.')
     expect(footer.textContent).toContain('The central line uses a constant assumed return')
+    // True as written (2026-09-24 review I1): the simulated paths are shared by every scenario
+    // on one horizon, a later plan-until year appends months to them, a new horizon re-deals.
+    expect(footer.textContent).toContain(
+      'Scenarios with the same Horizon (years) setting share the same 500 simulated paths, so a difference between them is what you changed; a later plan-until year only adds months to each path.',
+    )
+    expect(footer.textContent).not.toContain('Identical assumptions')
     expect(document.querySelector('.projection-method-note')).toBeNull()
   })
 
   it('renders the trend intro as the trend card’s lede', async () => {
     renderPage()
     await openTrend()
-    const intro = await screen.findByText(/An exploratory fit of past net worth/)
+    const intro = await screen.findByText(/A second-degree curve fitted to every recorded net-worth snapshot/)
     expect(intro.closest('.chart-lede')).not.toBeNull()
     expect(intro.closest('.chart-card')).not.toBeNull()
     expect(document.querySelector('.projection-view-intro')).toBeNull()
+  })
+
+  it('says what the Historical trend is — a fitted curve, not a forecast — in its title, lede and footer', async () => {
+    // 2026-09-23 correctness spec §R8: the tab, the fit and its reach stay; only honesty changes.
+    renderPage()
+    await openTrend()
+    expect(await screen.findByText(TREND_TITLE)).toBeTruthy()
+    const lede = screen.getByText(/A second-degree curve fitted to every recorded net-worth snapshot/)
+    expect(lede.textContent).toBe(
+      "A second-degree curve fitted to every recorded net-worth snapshot, in nominal dollars, extended 10 years. It is not a forecast and uses none of your plan's assumptions.",
+    )
+    expect(screen.getByText(/Its reach is set by the 1Y–40Y chips/).textContent).toContain(
+      'Its reach is set by the 1Y–40Y chips; the planning horizon and "plan until" do not change it.',
+    )
+    // The lede follows the span chip.
+    fireEvent.click(within(screen.getByRole('group', { name: /trend span/i })).getByRole('button', { name: '40Y' }))
+    expect(screen.getByText(/extended 40 years\. It is not a forecast/)).toBeTruthy()
   })
 
   it('keeps the assumptions fine print in the compare card, out of the knobs column', async () => {
@@ -1055,9 +1144,51 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     expect(within(compare).getByText(/same random samples/)).toBeTruthy()
     expect(within(compare).getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/settings')
     // The household has two people in the fixture, so the retirement paragraph is there too.
-    expect(within(compare).getByText(/Blank means that person works for the whole horizon/)).toBeTruthy()
+    expect(within(compare).getByText(/Retirement months split the plan into phases/)).toBeTruthy()
     const knobs = document.getElementById('projection-assumptions') as HTMLElement
     expect(within(knobs).queryByText(/same random samples/)).toBeNull()
-    expect(within(knobs).queryByText(/Blank means that person works/)).toBeNull()
+    expect(within(knobs).queryByText(/Retirement months split the plan/)).toBeNull()
+  })
+})
+
+
+describe('ProjectionPage — the reader never sees p10, p50 or p90 (2026-09-23 spec §R6)', () => {
+  it('says every percentile in words: tiles, compare table, fan legend, table view and trend', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({
+      money_lasts: {
+        plan_until: 2075, probability: '0.924000', verdict: 'on_track', lasts_until_p10: '2079-03-01',
+        horizon_end: '2026-10-01', deterministic_depleted_month: null, reason: null,
+      },
+      drawdown: { start_month: '2026-09-01', annual_withdrawal: '60000.00' },
+      phases: [
+        { from_month: '2026-08-01', kind: 'working', working_person_ids: [1, 2], monthly_contribution: '4000.00', monthly_withdrawal: null, take_home_monthly: null },
+        { from_month: '2026-09-01', kind: 'retired', working_person_ids: [], monthly_contribution: '0.00', monthly_withdrawal: '5000.00', take_home_monthly: null },
+      ],
+      vests: { included: true, price: '228.8700', price_as_of: '2026-09-22', withholding_rate: '0.3223', next_12_months: '116234.00', by_year: [], stops: null, excluded_reason: null },
+      plan_until: 2075,
+      plan_until_source: 'default',
+    }))
+    renderPage()
+    await loaded()
+    const jargon = /\bp(?:10|50|90)\b/
+    // Per text node, never the page's concatenated textContent: cells run together there
+    // ("…Oct 2055p10 date"), and the word boundary the pattern needs disappears.
+    const texts = () => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+      const out: string[] = []
+      for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) out.push(node.textContent ?? '')
+      return out
+    }
+    const attributes = () =>
+      [...document.querySelectorAll('[aria-label], [title], [placeholder]')].flatMap((el) =>
+        ['aria-label', 'title', 'placeholder'].map((name) => el.getAttribute(name) ?? ''),
+      )
+    const spoken = () => [...texts(), ...attributes()].filter((text) => jargon.test(text))
+    expect(spoken()).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    expect(await screen.findByRole('columnheader', { name: /Median balance/ })).toBeTruthy()
+    expect(spoken()).toEqual([])
+    await openTrend()
+    expect(spoken()).toEqual([])
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fitPolyTrend, monthSerial } from './polyTrend'
+import { fitPolyTrend } from './polyTrend'
 
 // A perfect quadratic: value = 1000 + 50x + 2x² at consecutive months (x = months since
 // the first point). The fit must recover the generator (up to float dust) — that is the
@@ -14,13 +14,6 @@ const MONTHS = [
 ]
 const quad = (x: number) => 1000 + 50 * x + 2 * x ** 2
 const VALUES = MONTHS.map((_, i) => quad(i).toFixed(2))
-
-describe('monthSerial', () => {
-  it('counts calendar months, year boundaries included', () => {
-    expect(monthSerial('2026-01-01') - monthSerial('2025-12-01')).toBe(1)
-    expect(monthSerial('2026-08-01') - monthSerial('2025-08-01')).toBe(12)
-  })
-})
 
 describe('fitPolyTrend', () => {
   it('recovers a perfect quadratic series', () => {
