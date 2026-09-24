@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.services.day_labels import long_day, month_day
+from app.services import day_labels
 from app.services.paycheck_calc import breakdown
 from app.services.tax_service import Bracket, walk
 
@@ -120,18 +120,13 @@ NEGATIVE_PAYROLL_WARNING = (
 VestTuple = tuple[date, int, Decimal]
 
 
-def _day(day: date, year: int) -> str:
-    """'Sep 1' — the card's own year goes without saying; any other is named ('Jan 1, 2027':
-    a job that starts after the tax year would otherwise read as this year's Jan 1). The
-    spellings are `day_labels`' — never strftime's locale-bound month names."""
-    return month_day(day) if day.year == year else long_day(day)
-
-
 def _early_note(template: str, whose: str, starts_on: date | None, year: int) -> str | None:
     """The §W1 sentence for one leg, or None when no grid check fell on or before its start."""
     if starts_on is None:
         return None
-    return template.format(whose=whose, start=_day(starts_on, year))
+    # The card's own year goes without saying; any other is named ("Jan 1, 2027": a job that
+    # starts after the tax year would otherwise read as this year's Jan 1).
+    return template.format(whose=whose, start=day_labels.day_label(starts_on, year))
 
 
 @dataclass

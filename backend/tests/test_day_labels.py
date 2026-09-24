@@ -6,8 +6,8 @@ withholding card, the ESPP pace row and the taxes router all read them from here
 
 from datetime import date
 
-from app.services import espp_pace, withholding_calc
-from app.services.day_labels import MONTH_NAMES, long_day, month_day, month_year
+from app.services import day_labels, espp_pace, month_review, withholding_calc
+from app.services.day_labels import MONTH_NAMES, day_label, long_day, month_day, month_year
 
 
 def test_the_twelve_names_are_english_abbreviations_in_calendar_order():
@@ -34,7 +34,24 @@ def test_each_spelling():
     assert long_day(date(2026, 12, 31)) == "Dec 31, 2026"
 
 
+def test_day_label_names_a_year_only_outside_the_reference_one():
+    assert day_label(date(2026, 10, 1)) == "Oct 1"
+    assert day_label(date(2026, 10, 1), 2026) == "Oct 1"
+    assert day_label(date(2025, 10, 1), 2026) == "Oct 1, 2025"
+
+
+def test_month_reviews_day_label_is_a_wrapper_around_the_one_spelling(monkeypatch):
+    # Lane K's name and signature keep working for their callers (lane T adds more) ...
+    assert month_review.day_label(date(2026, 10, 1)) == "Oct 1"
+    assert month_review.day_label(date(2026, 10, 1), date(2026, 1, 5)) == "Oct 1"
+    assert month_review.day_label(date(2025, 10, 1), date(2026, 1, 5)) == "Oct 1, 2025"
+    # ... and hold no spelling of their own (no strftime %b): they ask day_labels.
+    monkeypatch.setattr(day_labels, "day_label", lambda day, reference_year=None: "asked")
+    assert month_review.day_label(date(2025, 10, 1), date(2026, 1, 5)) == "asked"
+
+
 def test_no_module_keeps_a_copy_of_its_own():
-    # The two services that grew their own tables now read this one.
+    # The services that grew their own tables or spellings now read this module.
     assert not hasattr(withholding_calc, "MONTH_NAMES")
     assert not hasattr(espp_pace, "MONTH_NAMES")
+    assert not hasattr(withholding_calc, "_day")
