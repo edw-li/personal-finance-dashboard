@@ -2,7 +2,8 @@
 answering a HealthCheckOut with its severity and, when there is something to do, a fix —
 a link into the app or an action the Data-health card runs (`delete_spending_month` per
 month in `months`, `snapshot_now`). The instant `now` is injected so the AGE rules are
-clock-testable; the calendar-day rules read the product clock (services/clock.py).
+clock-testable; the calendar-day rules stand on the product day of the month status that
+`load_coverage` computes (services/month_status.py, 2026-09-23 spec §T5).
 Thresholds are twins of src/utils/staleness.ts; test_health_checks pins them."""
 
 import asyncio
@@ -21,8 +22,8 @@ from app.models import (
 )
 from app.schemas.lifecycle import HealthCheckOut, HealthFixOut
 from app.schemas.system import BackupStatusOut
-from app.services import clock
 from app.services.coverage import Coverage, load_coverage
+from app.services.month_status import MonthStatus, overdue_through
 from app.services.snapshot import SNAPSHOT_NAME_RE, snapshot_stamp, snapshots_dir
 
 STALE_QUOTE_DAYS = 4  # staleness.ts STALE_AFTER_DAYS
@@ -144,11 +145,22 @@ def check_net_pay_without_spending(coverage: Coverage) -> HealthCheckOut:
 
 
 async def check_coverage_gaps(
-    db: AsyncSession, *, today: date
+    db: AsyncSession, *, status: MonthStatus
 ) -> tuple[HealthCheckOut, HealthCheckOut]:
-    """Balances without spending, and the inverse, over the last twelve COMPLETE months."""
-    current = today.replace(day=1)
+    """Balances without spending, and the inverse, over the last twelve ENDED months — each half
+    only once the part it misses is overdue (2026-09-23 spec §T5). An ended month's spending and
+    take-home are due once it is over and overdue from the next month's reminder date + 15 days
+    (default: the 16th), so until then the just-ended month is a to-do on Needs attention, not a
+    gap here. Its BALANCES were due on its own 1st and are overdue by its last day at the latest
+    (month_status.balances_overdue_from), so the inverse half keeps every ended month.
+
+    `status` is load_coverage's month status: one product day and one reminder day with the
+    rule /coverage answers. The window is a CALENDAR question, so it stands on that product day,
+    never on the UTC instant the age checks use — or the last evening of a month would close
+    that month's window early in Pacific eyes (audit item 31)."""
+    current = status.current_month
     floor = _months_back(current, COVERAGE_WINDOW_MONTHS)
+    flows_through = overdue_through(status.today, status.reminder_day)
 
     def in_window(month: date) -> bool:
         return floor <= month < current
@@ -161,7 +173,7 @@ async def check_coverage_gaps(
         for m in (await db.execute(select(MonthlySpending.month).distinct())).scalars()
         if in_window(m)
     }
-    without_spending = sorted(balances - spending)
+    without_spending = sorted(month for month in balances - spending if month <= flows_through)
     without_balances = sorted(spending - balances)
 
     return (
@@ -353,13 +365,11 @@ def check_snapshot(*, now: datetime, snapshot_enabled: bool) -> HealthCheckOut:
 async def run_checks(
     db: AsyncSession, *, now: datetime, environment: str, snapshot_enabled: bool
 ) -> list[HealthCheckOut]:
-    # ONE coverage read for the three rules that share its definition.
+    # ONE coverage read for every rule that shares its definition — and its month status, the
+    # product day the calendar rules stand on (2026-09-23 spec §T5). `now` is UTC ON PURPOSE
+    # (check_stale_quotes' note) and stays that way for the AGE comparisons.
     coverage = await load_coverage(db)
-    # `now` is UTC ON PURPOSE (check_stale_quotes' note) and stays that way for the
-    # AGE comparisons. The coverage window is a CALENDAR question — which months are
-    # complete — so it reads the product clock instead, or the last evening of a month
-    # would close that month's window early in Pacific eyes (audit item 31).
-    without_spending, without_balances = await check_coverage_gaps(db, today=clock.product_today())
+    without_spending, without_balances = await check_coverage_gaps(db, status=coverage.status)
     return [
         check_zero_filled_spending(coverage),
         check_spending_gap(coverage),

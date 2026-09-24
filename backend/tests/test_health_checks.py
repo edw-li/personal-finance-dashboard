@@ -134,13 +134,23 @@ async def test_zero_filled_spending_takes_the_louder_severity_when_a_book_has_bo
     assert "All-zero spending beside a take-home figure for Aug 2026" in check.detail
 
 
-async def test_coverage_gaps_look_back_twelve_months_and_skip_the_current(db):
+async def _gaps(db, monkeypatch, day: date):
+    """check_coverage_gaps on `day`, fed the month status /coverage computes that day."""
+    monkeypatch.setattr(clock, "product_today", lambda: day)
+    return await check_coverage_gaps(db, status=(await load_coverage(db)).status)
+
+
+async def test_coverage_gaps_wait_for_the_flows_to_be_overdue(db, monkeypatch):
+    """T5 (2026-09-23 spec): a month's spending is not missing before its flows are overdue —
+    the 16th of the next month by default — so the just-ended month is a to-do (Needs
+    attention), not a gap. Its BALANCES are another matter: an ended month's were due on its
+    own 1st and are overdue by its last day at the latest."""
     food, _ = await categories(db)
     account = Account(name="A", slug="a", group="cash", sort_order=1)
     db.add(account)
     await db.flush()
     for month in (date(2026, 8, 1), date(2026, 7, 1), date(2025, 8, 1), date(2026, 9, 1)):
-        snapshot = NetWorthSnapshot(month=month)
+        snapshot = NetWorthSnapshot(month=month, recorded_on=month)
         db.add(snapshot)
         await db.flush()
         db.add(
@@ -149,17 +159,32 @@ async def test_coverage_gaps_look_back_twelve_months_and_skip_the_current(db):
     db.add(MonthlySpending(month=date(2026, 7, 1), category_id=food.id, amount=Decimal("1.00")))
     db.add(MonthlySpending(month=date(2026, 6, 1), category_id=food.id, amount=Decimal("1.00")))
     await db.commit()
-    without_spending, without_balances = await check_coverage_gaps(db, today=NOW.date())
-    # August has balances and no spending; September is the CURRENT month and is skipped;
-    # Aug 2025 is outside the twelve-month window.
+    # Sep 4: August's spending is due, not overdue (from Sep 16) — no gap yet. June has spending
+    # and no balances, and its balances were due long ago.
+    without_spending, without_balances = await _gaps(db, monkeypatch, NOW.date())
+    assert without_spending.severity == "ok"
+    assert without_balances.severity == "warn" and without_balances.months == [date(2026, 6, 1)]
+    assert without_balances.fix is not None
+    assert without_balances.fix.to == "/update?month=2026-06-01&step=balances"
+    # Sep 16: August is overdue. Aug 2025 is outside the twelve-month window; September is the
+    # current month and is skipped.
+    without_spending, _ = await _gaps(db, monkeypatch, date(2026, 9, 16))
     assert without_spending.severity == "warn" and without_spending.months == [date(2026, 8, 1)]
     assert without_spending.fix is not None
     assert (without_spending.fix.kind, without_spending.fix.to) == (
         "link",
         "/update?month=2026-08-01&step=spending",
     )
-    assert without_balances.severity == "warn" and without_balances.months == [date(2026, 6, 1)]
-    assert without_balances.fix.to == "/update?month=2026-06-01&step=balances"
+
+
+async def test_coverage_gaps_follow_the_reminder_day(db, monkeypatch):
+    """The threshold is the reminder date's (spec §0.4(c)): with a day-28 reminder August's
+    flows are overdue only from Oct 13 — three months can be due at once."""
+    db.add(AppSetting(key="calendar_update_due_day", value={"value": 28}))
+    db.add(NetWorthSnapshot(month=date(2026, 8, 1), recorded_on=date(2026, 8, 1)))
+    await db.commit()
+    assert (await _gaps(db, monkeypatch, date(2026, 10, 12)))[0].severity == "ok"
+    assert (await _gaps(db, monkeypatch, date(2026, 10, 13)))[0].months == [date(2026, 8, 1)]
 
 
 async def test_stale_quotes_counts_active_auto_priced_securities_only(db):
