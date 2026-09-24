@@ -1,22 +1,37 @@
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
+from app.api.projection import ProjectionKnobs, money_lasts_verdict, quote_date, run_projection
 from app.models import (
     Account,
     AccountBalance,
+    AppSetting,
     CategoryBudget,
+    LatestPrice,
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
     PaycheckProfile,
     Person,
+    RsuGrant,
+    Security,
     SpendingCategory,
 )
-from app.services import clock
+from app.services import clock, rsu_vesting
+from app.services.calendar.generators.rsu import after_sell_to_cover
 from app.services.month_review import adopt_existing_history
-from app.services.projection import drop_schedule, project
+from app.services.projection import (
+    december_index,
+    latest_december_year,
+    max_plan_until_year,
+    monthly_flows,
+    project,
+    project_path,
+    reset_schedule,
+)
 
 # The projection anchors on the product clock (the router's one clock read), so the seeds
 # are built RELATIVE to the run's own month — nothing here goes stale with the calendar,
@@ -148,6 +163,249 @@ async def test_projection_defaults_derive_from_the_data(auth_client, db):
     # 100k toward 1.5M needs ~67 years) does not.
     assert body["fi_month"] is not None
     assert body["coast_fi_month"] is None
+
+
+async def test_projection_echoes_the_base_snapshot_it_started_from(auth_client, db):
+    # 2026-09-23 spec §R5: the starting balance names its snapshot — the month key, the date the
+    # balances describe, the recorded date and whether they are provisional.
+    this_month = await _seed_book(db)
+    body = (await auth_client.get("/api/v1/projection")).json()
+    assert body["base_month"] == this_month.isoformat()
+    assert body["base_as_of"] == this_month.isoformat()
+    assert body["base_recorded_on"] is None  # _seed_book stores no recorded date
+    assert body["base_provisional"] is False
+
+
+SEP_23 = date(2026, 9, 23)
+
+
+async def _seed_snapshots(db, *rows: tuple[date, date | None, str]) -> Account:
+    """One taxable account, and a snapshot per (month, recorded_on, balance)."""
+    taxable = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(taxable)
+    await db.flush()
+    for month, recorded_on, balance in rows:
+        snap = NetWorthSnapshot(month=month, recorded_on=recorded_on)
+        db.add(snap)
+        await db.flush()
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=taxable.id, balance=Decimal(balance)))
+    await db.commit()
+    return taxable
+
+
+async def test_the_base_is_the_current_snapshot_a_provisional_next_month_one_included(
+    auth_client, db, monkeypatch
+):
+    # 2026-09-23 spec §R5 on K2's rule: Oct 1 recorded on Sep 22 IS the current snapshot — the
+    # starting balance stands on it, dated Sep 22 and provisional, while the axis still starts in
+    # today's month (a base as-of is never after today).
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    await _seed_snapshots(
+        db,
+        (date(2026, 9, 1), date(2026, 9, 1), "100000.00"),
+        (date(2026, 10, 1), date(2026, 9, 22), "120000.00"),
+    )
+    body = (await auth_client.get("/api/v1/projection")).json()
+    assert body["starting_balance"] == "120000.00"
+    assert body["base_month"] == "2026-10-01"
+    assert body["base_as_of"] == "2026-09-22"
+    assert body["base_recorded_on"] == "2026-09-22"
+    assert body["base_provisional"] is True
+    assert body["start_month"] == "2026-09-01"
+    assert body["months"][0] == "2026-09-01"
+    assert body["projected"][0] == "120000.00"
+
+
+async def test_a_lengthening_plan_until_keeps_every_month_the_horizon_had(
+    auth_client, db, monkeypatch
+):
+    # 2026-09-24 review I1: the months a later plan-until year adds come from a second seeded
+    # stream, so the default horizon's paths — and with them the FI dates and the bands — hold
+    # still; only months are appended.
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    await _seed_book(db)
+    base = (await auth_client.get("/api/v1/projection?annual_return=0.07")).json()
+    longer = (await auth_client.get("/api/v1/projection?annual_return=0.07&plan_until=2080")).json()
+    assert base["years"] == 30 and longer["years"] == 55
+    assert base["fi_month_p50"] is not None
+    for key in ("fi_month_p10", "fi_month_p50"):
+        assert longer[key] == base[key], key
+    for band, values in base["bands"].items():
+        assert longer["bands"][band][: len(values)] == values, band
+
+
+def _source_link_query(body: dict) -> str:
+    """The request the page's "Inspect assumptions" link makes (projectionDisplay.ts
+    projectionSourceLink): the echoed knobs — `years` from `base_years`, the horizon KNOB, not the
+    lengthened one — the plan-until year, vests when switched off, and the retirements."""
+    params = [
+        f"annual_return={body['annual_return']}",
+        f"monthly_contribution={body['monthly_contribution']}",
+        f"swr={body['swr_pct']}",
+        f"years={body['base_years']}",
+    ]
+    for key in ("annual_spend", "inflation", "volatility", "contribution_growth"):
+        if body[key] is not None:
+            params.append(f"{key}={body[key]}")
+    if body["plan_until"] is not None:
+        params.append(f"plan_until={body['plan_until']}")
+    vests = body.get("vests")
+    if vests is not None and not vests["included"] and vests["excluded_reason"] is None:
+        params.append("vests=0")
+    params += [f"retire={row['person_id']}:{row['month'][:7]}" for row in body["retirements"]]
+    return "&".join(params)
+
+
+async def test_base_years_echoes_the_horizon_knob_under_a_lengthening_plan_until(
+    auth_client, db, monkeypatch
+):
+    # 2026-09-24 re-review: the simulated paths are drawn on the `years` KNOB's months, so the page
+    # needs the knob back, not just the lengthened horizon it ran — or a link or a box that sends
+    # the lengthened `years` re-deals every path.
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    await _seed_book(db)
+    plain = (await auth_client.get("/api/v1/projection")).json()
+    assert plain["years"] == plain["base_years"] == 30
+    longer = (await auth_client.get("/api/v1/projection?plan_until=2075")).json()
+    assert (longer["years"], longer["base_years"]) == (50, 30)
+    typed = (await auth_client.get("/api/v1/projection?years=40&plan_until=2075")).json()
+    assert (typed["years"], typed["base_years"]) == (50, 40)
+
+
+@pytest.mark.parametrize("plan_until", [2075, 2085])
+async def test_a_lengthened_runs_source_link_answers_with_identical_figures(
+    auth_client, db, monkeypatch, plan_until
+):
+    # The page and the request its "Inspect assumptions" link makes must show the same numbers:
+    # the reviewer's probe had the page at FI Nov 2043 / 67.2 % and its link at Jan 2044 / 65.0 %.
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    retire = f"retire={alex.id}:{_month_param(month_add(this_month, 216))}"
+    page = (
+        await auth_client.get(
+            f"/api/v1/projection?annual_return=0.07&plan_until={plan_until}&{retire}"
+        )
+    ).json()
+    assert page["years"] > page["base_years"]
+    link = (await auth_client.get(f"/api/v1/projection?{_source_link_query(page)}")).json()
+    for key in (
+        "years",
+        "base_years",
+        "months",
+        "projected",
+        "bands",
+        "fi_month",
+        "fi_month_p10",
+        "fi_month_p50",
+        "fi_month_p90",
+        "fi_probability",
+        "money_lasts",
+        "phases",
+        "drawdown",
+    ):
+        assert link[key] == page[key], key
+
+
+async def test_a_snapshot_two_months_ahead_is_never_the_base(auth_client, db, monkeypatch):
+    # Only an API client or an import can store one (K2); it stays in the charts, never "now".
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    await _seed_snapshots(
+        db,
+        (date(2026, 9, 1), date(2026, 9, 1), "100000.00"),
+        (date(2026, 11, 1), None, "999999.00"),
+    )
+    body = (await auth_client.get("/api/v1/projection")).json()
+    assert body["base_month"] == "2026-09-01"
+    assert body["starting_balance"] == "100000.00"
+    assert body["base_as_of"] == "2026-09-01"
+    assert body["base_provisional"] is False
+
+
+async def test_the_vest_cut_is_the_bases_as_of_date(auth_client, db, monkeypatch):
+    # A Sep 16 vest (spec §R4, §R5) is not in Sep 1's balances, so it counts; balances recorded
+    # on Sep 22 already hold its shares, so with that base it is left out.
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    taxable = await _seed_snapshots(db, (date(2026, 9, 1), date(2026, 9, 1), "100000.00"))
+    grant = await _seed_vests(db, first=date(2026, 9, 16))
+    sep_base = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    kept = _kept(grant, after=date(2026, 9, 1))
+    assert kept[0] == (date(2026, 9, 16), 400)
+    year_2026 = next(row for row in sep_base["vests"]["by_year"] if row["year"] == 2026)
+    assert Decimal(year_2026["after_withholding"]) == sum(
+        (_net(s) for d, s in kept if d.year == 2026), Decimal("0.00")
+    )
+
+    oct_snap = NetWorthSnapshot(month=date(2026, 10, 1), recorded_on=date(2026, 9, 22))
+    db.add(oct_snap)
+    await db.flush()
+    db.add(
+        AccountBalance(snapshot_id=oct_snap.id, account_id=taxable.id, balance=Decimal("140000.00"))
+    )
+    await db.commit()
+    oct_base = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    assert oct_base["base_as_of"] == "2026-09-22"
+    later = _kept(grant, after=date(2026, 9, 22))
+    assert all(day > date(2026, 9, 22) for day, _ in later)
+    year_2026 = next(row for row in oct_base["vests"]["by_year"] if row["year"] == 2026)
+    assert Decimal(year_2026["after_withholding"]) == sum(
+        (_net(s) for d, s in later if d.year == 2026), Decimal("0.00")
+    )
+    assert Decimal(year_2026["after_withholding"]) < Decimal(
+        next(row for row in sep_base["vests"]["by_year"] if row["year"] == 2026)[
+            "after_withholding"
+        ]
+    )
+
+
+async def test_a_base_with_no_usable_date_cuts_vests_at_today(auth_client, db, monkeypatch):
+    # Oct 1 stored with no recorded date is provisional with no as-of ("date unknown", K2): the
+    # cut falls back to today — a Sep 28 vest counts (after Sep 23), a Sep 16 one does not.
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    await _seed_snapshots(
+        db,
+        (date(2026, 9, 1), date(2026, 9, 1), "100000.00"),
+        (date(2026, 10, 1), None, "120000.00"),
+    )
+    grant = await _seed_vests(db, first=date(2026, 9, 28))
+    body = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    assert body["base_month"] == "2026-10-01"
+    assert body["base_as_of"] is None
+    assert body["base_provisional"] is True
+    kept = _kept(grant, after=SEP_23)
+    assert kept[0] == (date(2026, 9, 28), 400)
+    year_2026 = next(row for row in body["vests"]["by_year"] if row["year"] == 2026)
+    assert Decimal(year_2026["after_withholding"]) == sum(
+        (_net(s) for d, s in kept if d.year == 2026), Decimal("0.00")
+    )
+
+
+async def test_run_projection_is_the_routes_answer_as_a_model_of_its_own(db):
+    # Direct callers (the assistant) get the SAME answer the route serves, validated into a
+    # model of their own: mutating one can never reach the next caller (spec §R9).
+    await _seed_book(db)
+    first = await run_projection(db, ProjectionKnobs(years=2))
+    second = await run_projection(db, ProjectionKnobs(years=2))
+    assert first == second and first is not second
+    first.warnings.append("mutated")
+    assert "mutated" not in (await run_projection(db, ProjectionKnobs(years=2))).warnings
+
+
+def test_the_cache_key_normalizes_what_cannot_change_the_answer():
+    a = ProjectionKnobs(annual_return=Decimal("0.06"), retire=(" 2:2035-06", "1:2031-01"))
+    b = ProjectionKnobs(annual_return=Decimal("0.060"), retire=("1:2031-01", "2:2035-06"))
+    assert a.cache_key() == b.cache_key()
+    # An absent knob and its default are DIFFERENT answers (the echo spells them differently).
+    assert (
+        ProjectionKnobs(annual_return=None).cache_key()
+        != ProjectionKnobs(annual_return=Decimal("0.05")).cache_key()
+    )
+    assert ProjectionKnobs(vests=False).cache_key() != ProjectionKnobs(vests=None).cache_key()
+    assert ProjectionKnobs(plan_until=2070).cache_key() != ProjectionKnobs().cache_key()
+    # A key that will 422 must still hash (a 422 is never cached, but it is looked up).
+    hash(ProjectionKnobs(swr=Decimal("NaN")).cache_key())
+    hash(ProjectionKnobs(swr=Decimal("sNaN")).cache_key())
 
 
 async def test_projection_zero_return_is_an_exact_chain(auth_client, db):
@@ -454,22 +712,44 @@ async def test_projection_without_retire_params_echoes_an_empty_list(auth_client
     assert body["retirements"] == []
     assert body["projected"] == BACKCOMPAT_PROJECTED_2Y
     assert body["coast"] == BACKCOMPAT_COAST_2Y
+    # 2026-09-23 spec §R2: one working phase with every earner (nobody here), no drawdown.
+    assert body["phases"] == [
+        {
+            "from_month": body["start_month"],
+            "kind": "working",
+            "working_person_ids": [],
+            "monthly_contribution": "4000.00",
+            "monthly_withdrawal": None,
+            "take_home_monthly": None,
+        }
+    ]
+    assert body["drawdown"] is None
 
 
-async def test_projection_retirement_drops_the_stream_and_echoes_what_it_did(auth_client, db):
+ZEROS = "annual_return=0&inflation=0&contribution_growth=0&volatility=0"
+
+
+def _steps(body: dict):
+    def step(i: int) -> Decimal:
+        return Decimal(body["projected"][i]) - Decimal(body["projected"][i - 1])
+
+    return step
+
+
+async def test_a_single_earner_retiring_goes_straight_to_drawdown(auth_client, db):
+    # 2026-09-23 spec §R2: nominal zeros make the chain exact addition — 4,000 a month saved
+    # until Alex retires at month 12, then annual spend (60,000) / 12 = 5,000 a month out.
     this_month = await _seed_book(db)
     alex = await _seed_person(db, "Alex", primary=True)
     await _seed_profile(db, alex)
     retires = month_add(this_month, 12)
-    # Nominal zeros make the chain exact addition: 4,000/month until month 12, where
-    # Alex's 2,000 take-home leaves the stream.
     body = (
         await auth_client.get(
-            "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0&volatility=0"
-            f"&retire={alex.id}:{_month_param(retires)}"
+            f"/api/v1/projection?{ZEROS}&retire={alex.id}:{_month_param(retires)}"
         )
     ).json()
 
+    # The echo still names the paycheck that stops — informational now.
     assert body["retirements"] == [
         {
             "person_id": alex.id,
@@ -479,17 +759,18 @@ async def test_projection_retirement_drops_the_stream_and_echoes_what_it_did(aut
         }
     ]
     assert body["projected"][11] == "144000.00"  # 100,000 + 11 x 4,000
-    assert body["projected"][12] == "146000.00"  # the first HALVED month
-    assert body["projected"][13] == "148000.00"
-    # The coast line has no contribution to drop — it must not move an inch.
-    assert body["coast"][12] == "100000.00"
+    assert body["projected"][12] == "139000.00"  # the first month of withdrawals
+    assert body["projected"][13] == "134000.00"
+    assert [phase["kind"] for phase in body["phases"]] == ["working", "retired"]
+    assert body["drawdown"] == {"start_month": retires.isoformat(), "annual_withdrawal": "60000.00"}
+    # The coast line never withdraws: growth only, as before.
+    assert body["coast"][12] == "100000.00" and body["coast"][-1] == "100000.00"
 
 
-async def test_projection_retirement_drop_is_not_deflated(auth_client, db):
-    # 3% return against 3% inflation is a real rate of exactly 0, and 3% contribution
-    # growth against it is exactly 0 too, so every month-over-month step is the raw
-    # contribution. The drop is a TODAY's-dollars figure like the contribution itself and
-    # crosses the Fisher conversion UNTOUCHED: the step must fall by exactly 2,000.00.
+async def test_the_withdrawal_is_constant_in_todays_dollars(auth_client, db):
+    # 3% return against 3% inflation is a real rate of exactly 0, and 3% contribution growth
+    # against it is exactly 0 too, so every step is the raw flow. The withdrawal is annual
+    # spend / 12 in TODAY's dollars — it crosses the Fisher conversion untouched.
     this_month = await _seed_book(db)
     alex = await _seed_person(db, "Alex", primary=True)
     await _seed_profile(db, alex)
@@ -500,16 +781,135 @@ async def test_projection_retirement_drop_is_not_deflated(auth_client, db):
             f"&volatility=0&retire={alex.id}:{_month_param(retires)}"
         )
     ).json()
-
-    def step(i: int) -> Decimal:
-        return Decimal(body["projected"][i]) - Decimal(body["projected"][i - 1])
-
+    step = _steps(body)
     assert step(5) == Decimal("4000.00")
-    assert step(6) == Decimal("2000.00")
-    assert step(7) == Decimal("2000.00")
+    assert step(6) == Decimal("-5000.00")
+    assert step(18) == Decimal("-5000.00")
 
 
-async def test_projection_two_retirements_echo_sorted_by_month(auth_client, db):
+async def test_one_of_two_retiring_keeps_the_other_saving_and_withdraws_nothing(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)  # take-home 2,000 a month, no deductions
+    # 48,000 over 24 with 10 % traditional 401(k): 400 a month saved, 3,600 a month take-home.
+    await _seed_profile(db, bo, annual_salary=Decimal("48000.00"), trad_401k_pct=Decimal("0.10"))
+    retires = month_add(this_month, 6)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?{ZEROS}&retire={alex.id}:{_month_param(retires)}"
+        )
+    ).json()
+    assert body["monthly_contribution"] == "4400.00"  # 4,000 cash + Bo's 400
+    step = _steps(body)
+    assert step(5) == Decimal("4400.00")
+    # Bo's saving continues; his pay is assumed to cover the spending — nothing withdrawn.
+    assert step(6) == Decimal("400.00")
+    assert step(300) == Decimal("400.00")
+    assert body["drawdown"] is None
+    assert body["phases"] == [
+        {
+            "from_month": this_month.isoformat(),
+            "kind": "working",
+            "working_person_ids": [alex.id, bo.id],
+            "monthly_contribution": "4400.00",
+            "monthly_withdrawal": None,
+            "take_home_monthly": None,
+        },
+        {
+            "from_month": retires.isoformat(),
+            "kind": "partly_retired",
+            "working_person_ids": [bo.id],
+            "monthly_contribution": "400.00",
+            "monthly_withdrawal": None,
+            "take_home_monthly": "3600.00",
+        },
+    ]
+    assert (
+        "Bo's take-home (≈ $3.6K/mo) is below your spending (≈ $5.0K/mo); "
+        "the difference is not withdrawn."
+    ) in body["warnings"]
+
+
+async def test_both_retiring_withdraws_annual_spend_from_the_later_month(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)
+    await _seed_profile(db, bo, annual_salary=Decimal("48000.00"), trad_401k_pct=Decimal("0.10"))
+    early, late = month_add(this_month, 6), month_add(this_month, 18)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?{ZEROS}"
+            f"&retire={alex.id}:{_month_param(early)}&retire={bo.id}:{_month_param(late)}"
+        )
+    ).json()
+    assert body["projected"][5] == "122000.00"  # 100,000 + 5 x 4,400
+    assert body["projected"][17] == "126800.00"  # + 12 x 400 while Bo works
+    assert body["projected"][18] == "121800.00"  # 5,000 a month out from Bo's month
+    assert body["projected"][42] == "1800.00"
+    assert body["projected"][43] == "0.00"  # clamped: a balance never goes below $0
+    assert body["projected"][-1] == "0.00"
+    assert body["drawdown"] == {"start_month": late.isoformat(), "annual_withdrawal": "60000.00"}
+    assert [phase["kind"] for phase in body["phases"]] == ["working", "partly_retired", "retired"]
+    assert body["phases"][2] == {
+        "from_month": late.isoformat(),
+        "kind": "retired",
+        "working_person_ids": [],
+        "monthly_contribution": "0.00",
+        "monthly_withdrawal": "5000.00",
+        "take_home_monthly": None,
+    }
+    # ...and the simulated median falls with the line (spec §R2 acceptance; spec-review M4): the
+    # same retirements under the default fan against the same household still working.
+    fan = "annual_return=0&inflation=0&contribution_growth=0&volatility=0.15"
+    retire = f"&retire={alex.id}:{_month_param(early)}&retire={bo.id}:{_month_param(late)}"
+    working = (await auth_client.get(f"/api/v1/projection?{fan}")).json()["bands"]["p50"]
+    retiring = (await auth_client.get(f"/api/v1/projection?{fan}{retire}")).json()["bands"]["p50"]
+    assert retiring[:6] == working[:6]  # nothing changes before the first retirement (month 6)
+    for index in (18, 30, len(working) - 1):
+        assert Decimal(retiring[index]) < Decimal(working[index]), index
+
+
+async def test_retiring_in_the_same_month_is_one_boundary_and_the_withdrawal(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)
+    await _seed_profile(db, bo)
+    both = month_add(this_month, 6)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?{ZEROS}"
+            f"&retire={alex.id}:{_month_param(both)}&retire={bo.id}:{_month_param(both)}"
+        )
+    ).json()
+    assert [phase["kind"] for phase in body["phases"]] == ["working", "retired"]
+    assert body["projected"][6] == "115000.00"  # 100,000 + 5 x 4,000 - 5,000
+    assert body["drawdown"]["start_month"] == both.isoformat()
+
+
+async def test_a_typed_contribution_keeps_phase_zero_typed_and_phase_one_profile_derived(
+    auth_client, db
+):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)
+    await _seed_profile(db, bo, annual_salary=Decimal("48000.00"), trad_401k_pct=Decimal("0.10"))
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?{ZEROS}&monthly_contribution=1000"
+            f"&retire={alex.id}:{_month_param(month_add(this_month, 6))}"
+        )
+    ).json()
+    assert body["phases"][0]["monthly_contribution"] == "1000.00"
+    assert body["phases"][1]["monthly_contribution"] == "400.00"
+    step = _steps(body)
+    assert (step(5), step(6)) == (Decimal("1000.00"), Decimal("400.00"))
+
+
+async def test_the_echo_orders_retirements_by_month_whatever_the_param_order(auth_client, db):
     this_month = await _seed_book(db)
     alex = await _seed_person(db, "Alex", primary=True)
     bo = await _seed_person(db, "Bo")
@@ -518,19 +918,33 @@ async def test_projection_two_retirements_echo_sorted_by_month(auth_client, db):
     early, late = month_add(this_month, 6), month_add(this_month, 18)
     body = (
         await auth_client.get(
-            "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0&volatility=0"
+            f"/api/v1/projection?{ZEROS}"
             f"&retire={alex.id}:{_month_param(late)}&retire={bo.id}:{_month_param(early)}"
         )
     ).json()
-
-    # Order-free params, an echo in the order the drops actually HAPPEN.
     assert [row["name"] for row in body["retirements"]] == ["Bo", "Alex"]
     assert [row["monthly_drop"] for row in body["retirements"]] == ["4000.00", "2000.00"]
-    # Bo's 4,000 retires the whole 4,000 stream at month 6; Alex's 2,000 then has nothing
-    # left to take (the floor), so the balance simply stops moving.
-    assert body["projected"][5] == "120000.00"
-    assert body["projected"][6] == "120000.00"
-    assert body["projected"][19] == "120000.00"
+    # Alex keeps working from Bo's month (no deductions: nothing more saved), and the
+    # withdrawal starts at Alex's month.
+    step = _steps(body)
+    assert step(6) == Decimal("0.00")
+    assert step(18) == Decimal("-5000.00")
+    assert body["drawdown"]["start_month"] == late.isoformat()
+
+
+async def test_a_retirement_at_the_start_month_is_already_retired(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?{ZEROS}&retire={alex.id}:{_month_param(this_month)}"
+        )
+    ).json()
+    # No working phase to describe: the first flow month already withdraws.
+    assert [phase["kind"] for phase in body["phases"]] == ["retired"]
+    assert body["phases"][0]["from_month"] == this_month.isoformat()
+    assert body["projected"][1] == "95000.00"
 
 
 async def test_projection_retirement_reaches_the_monte_carlo_fan(auth_client, db):
@@ -542,9 +956,11 @@ async def test_projection_retirement_reaches_the_monte_carlo_fan(auth_client, db
     retired = (
         await auth_client.get(f"{base}&retire={alex.id}:{_month_param(month_add(this_month, 12))}")
     ).json()
-    # The fan has to wrap the line it belongs to: same seed, smaller stream, lower bands.
+    # The fan has to wrap the line it belongs to: same seed, a withdrawal instead of a
+    # contribution from month 12 (2026-09-23 spec §R2) — the line and the median both fall.
     assert Decimal(retired["bands"]["p50"][-1]) < Decimal(full["bands"]["p50"][-1])
     assert Decimal(retired["bands"]["p90"][-1]) < Decimal(full["bands"]["p90"][-1])
+    assert Decimal(retired["projected"][-1]) < Decimal(retired["projected"][12])
     assert retired["bands"]["p50"][:12] == full["bands"]["p50"][:12]
 
 
@@ -635,8 +1051,9 @@ async def test_projection_retirement_of_a_negative_net_drops_only_its_deductions
     ).json()
     assert body["monthly_contribution"] == "6600.00"  # 4,000 cash + 2,600 payroll
     assert body["retirements"][0]["monthly_drop"] == "2600.00"
-    # Five full months, then 4,000 a month from the retirement month on: back to cash alone.
-    assert body["projected"][7] == "141000.00"  # 100,000 + 5 x 6,600 + 2 x 4,000
+    # Five full months, then the only earner is retired: 5,000 a month out (2026-09-23 §R2).
+    assert body["projected"][5] == "133000.00"  # 100,000 + 5 x 6,600
+    assert body["projected"][7] == "123000.00"  # two withdrawals later
 
 
 async def test_projection_retirement_uses_the_profile_in_force_not_the_newest(auth_client, db):
@@ -756,12 +1173,10 @@ async def test_projection_retirement_drop_includes_payroll_savings(auth_client, 
     ).json()
 
     assert body["retirements"][0]["monthly_drop"] == "2000.00"  # 1,600 take-home + 400 payroll
-
-    def step(i: int) -> Decimal:
-        return Decimal(body["projected"][i]) - Decimal(body["projected"][i - 1])
-
+    step = _steps(body)
     assert step(5) == Decimal("4400.00")
-    assert step(6) == Decimal("2400.00")
+    # The only earner retired: the deductions stop with the paycheck and 5,000 a month goes out.
+    assert step(6) == Decimal("-5000.00")
 
 
 # --- the engine itself (pure Decimal, no DB): the contribution escalator's two pins ---
@@ -788,126 +1203,257 @@ def test_project_contribution_growth_two_months_exact():
     assert [str(p) for p in points] == ["1000.00", "1100.00", "1200.95"]
 
 
-# --- the retirement schedule (2026-08-28 spec §4.3) ---
+# --- the flow schedule (2026-09-23 spec §R1): contribution resets, a withdrawal and lumps ---
 
 
-def test_drop_schedule_sums_a_month_and_folds_index_zero():
-    # Two retirements in one month cost the household BOTH paychecks at once.
-    assert drop_schedule([(7, Decimal("100")), (7, Decimal("40"))]) == {7: Decimal("140")}
-    # t0 carries no contribution (it IS the starting balance), so "already retired when the
-    # projection starts" and "retires at month 1" are the same chain — folded, not dropped.
-    assert drop_schedule([(0, Decimal("40"))]) == {1: Decimal("40")}
-    assert drop_schedule([]) == {}
-
-
-def test_project_without_drops_is_byte_identical():
-    # The back-compat guarantee is a test, not a hope: the four strings below are the ones
-    # test_project_growth_zero_matches_previous_behavior already pins, and the new
-    # parameter must not move them on either the defaulted or the explicit-empty path.
+def test_project_with_the_new_inputs_empty_is_byte_identical():
+    # The four strings test_project_growth_zero_matches_previous_behavior pins, on every empty
+    # spelling of the three new inputs — resets, a withdrawal and lumps must cost the walk nothing.
     plain = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3)
     assert [str(p) for p in plain] == ["1000.00", "1104.07", "1208.57", "1313.50"]
-    explicit = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3, Decimal("0"), [])
-    assert explicit == plain
+    for kwargs in ({}, {"resets": []}, {"withdrawal": None}, {"lumps": {}}, {"lumps": None}):
+        again = project(
+            Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3, Decimal("0"), **kwargs
+        )
+        assert again == plain, kwargs
+    path = project_path(Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3)
+    assert path.points == plain and path.depletion_index is None
 
 
-def test_project_drop_lands_before_that_month_contribution():
-    # r = 0 collapses the compounding to plain addition, so the whole chain is exact:
-    # 100/month until month 3, where a 40 drop leaves 60/month for the rest.
+def test_reset_schedule_folds_index_zero_and_refuses_a_second_reset_at_one_index():
+    assert reset_schedule([(7, Decimal("100")), (3, Decimal("40"))]) == {
+        7: Decimal("100"),
+        3: Decimal("40"),
+    }
+    assert reset_schedule([(0, Decimal("40"))]) == {1: Decimal("40")}
+    assert reset_schedule([]) == {}
+    # A reset SETS a level: two at one index would be two answers to one question.
+    with pytest.raises(ValueError, match="more than one contribution reset at month index 7"):
+        reset_schedule([(7, Decimal("100")), (7, Decimal("40"))])
+    # Folding happens BEFORE the check: index 0 and index 1 are the same month of flows.
+    with pytest.raises(ValueError, match="month index 1"):
+        reset_schedule([(0, Decimal("1")), (1, Decimal("2"))])
+
+
+def test_a_reset_sets_the_level_in_t0_dollars_and_keeps_escalating():
+    # g = 12 %/yr, tracked by repeated multiplication exactly as the walk escalates: the reset at
+    # month 3 sets 60 × g^2, and month 4 carries that × g.
+    growth = Decimal("1.12") ** (Decimal(1) / Decimal(12))
+    flows = monthly_flows(
+        Decimal("100"),
+        growth,
+        4,
+        resets={3: Decimal("60")},
+        withdrawal=None,
+        lumps={},
+        convert=Decimal,
+    )
+    assert flows[0] == Decimal("0")  # t0 is the starting balance and carries no flow
+    assert flows[1] == Decimal("100")
+    assert flows[2] == Decimal("100") * growth
+    assert flows[3] == Decimal("60") * (Decimal(1) * growth * growth)
+    assert flows[4] == flows[3] * growth
+    # r = 0 isolates the escalator on the line too: every point is the running sum of flows.
     points = project(
         Decimal("1000.00"),
-        Decimal("100.00"),
+        Decimal("100"),
         Decimal("0"),
-        5,
-        Decimal("0"),
-        [(3, Decimal("40.00"))],
+        4,
+        Decimal("0.12"),
+        resets=[(3, Decimal("60"))],
     )
-    assert [str(p) for p in points] == [
-        "1000.00",
-        "1100.00",
-        "1200.00",
-        "1260.00",
-        "1320.00",
-        "1380.00",
-    ]
+    running = Decimal("1000")
+    for index in range(1, 5):
+        running += flows[index]
+        assert points[index] == running.quantize(Decimal("0.01")), index
 
 
-def test_project_drop_at_index_zero_is_the_same_chain_as_index_one():
-    at_zero = project(
-        Decimal("1000.00"),
-        Decimal("100.00"),
-        Decimal("0"),
-        3,
-        Decimal("0"),
-        [(0, Decimal("40.00"))],
-    )
-    at_one = project(
-        Decimal("1000.00"),
-        Decimal("100.00"),
-        Decimal("0"),
-        3,
-        Decimal("0"),
-        [(1, Decimal("40.00"))],
-    )
-    assert [str(p) for p in at_zero] == ["1000.00", "1060.00", "1120.00", "1180.00"]
-    assert at_zero == at_one
-
-
-def test_project_two_drops_in_one_month_sum():
-    points = project(
-        Decimal("1000.00"),
-        Decimal("100.00"),
-        Decimal("0"),
-        3,
-        Decimal("0"),
-        [(2, Decimal("30.00")), (2, Decimal("20.00"))],
-    )
-    assert [str(p) for p in points] == ["1000.00", "1100.00", "1150.00", "1200.00"]
-
-
-def test_project_floors_the_stream_at_zero_and_growth_cannot_revive_it():
-    # A drop bigger than what is left retires the WHOLE stream; 0 x (1+g) is still 0, so a
-    # 12%/yr escalator must never bring a retired paycheck back.
+def test_a_reset_to_zero_stops_the_stream_and_growth_cannot_revive_it():
     points = project(
         Decimal("1000.00"),
         Decimal("100.00"),
         Decimal("0"),
         4,
         Decimal("0.12"),
-        [(2, Decimal("500.00"))],
+        resets=[(2, Decimal("0"))],
     )
     assert [str(p) for p in points] == ["1000.00", "1100.00", "1100.00", "1100.00", "1100.00"]
 
 
-def test_project_growth_escalates_only_the_remainder():
-    # Dropping 40 at the FIRST contribution is arithmetically a 60/month stream from the
-    # start: the escalator has to compound what is LEFT, never the original 100. Equality
-    # over a 36-month chain is a much sharper pin than any single hand-computed point.
-    dropped = project(
+def test_a_withdrawal_runs_from_its_month_clamps_at_zero_and_records_depletion():
+    # 1,000 with nothing saved and 400 a month out from month 2: 1000, 1000, 600, 200, then -200,
+    # which is clamped to 0 — and month 4 is the depletion month, never a later one.
+    path = project_path(
         Decimal("1000.00"),
-        Decimal("100.00"),
         Decimal("0"),
-        36,
-        Decimal("0.12"),
-        [(1, Decimal("40.00"))],
+        Decimal("0"),
+        6,
+        Decimal("0"),
+        withdrawal=(2, Decimal("400.00")),
     )
-    assert dropped == project(
-        Decimal("1000.00"), Decimal("60.00"), Decimal("0"), 36, Decimal("0.12")
-    )
-    # ...and the first two points are checkable by eye: 1000 + 60, then + 60 x 1.12^(1/12)
-    # = 60.56932757607497844758130414 -> 1120.5693... -> HALF_UP -> 1120.57.
-    assert [str(p) for p in dropped[:3]] == ["1000.00", "1060.00", "1120.57"]
+    assert [str(p) for p in path.points] == [
+        "1000.00",
+        "1000.00",
+        "600.00",
+        "200.00",
+        "0.00",
+        "0.00",
+        "0.00",
+    ]
+    assert path.depletion_index == 4
 
 
-def test_project_ignores_a_drop_past_the_horizon():
-    # The API fences the range; the ENGINE stays total rather than raising on one.
-    assert project(
+def test_a_withdrawal_at_index_zero_folds_onto_the_first_month():
+    at_zero = project(
+        Decimal("1000.00"), Decimal("0"), Decimal("0"), 2, withdrawal=(0, Decimal("100"))
+    )
+    at_one = project(
+        Decimal("1000.00"), Decimal("0"), Decimal("0"), 2, withdrawal=(1, Decimal("100"))
+    )
+    assert at_zero == at_one == [Decimal("1000.00"), Decimal("900.00"), Decimal("800.00")]
+
+
+def test_a_negative_typed_contribution_clamps_and_records_depletion_before_any_drawdown():
+    # The legal typed negative (the page's codec accepts it): -600 a month empties 1,000 in
+    # month 2 with no withdrawal anywhere — balances stay at or above $0 in every phase.
+    path = project_path(Decimal("1000.00"), Decimal("-600.00"), Decimal("0"), 3)
+    assert [str(p) for p in path.points] == ["1000.00", "400.00", "0.00", "0.00"]
+    assert path.depletion_index == 2
+
+
+def test_pre_existing_debt_is_paid_down_unclamped_until_the_balance_first_reaches_zero():
+    # 2026-09-24 review minor 1: a negative starting balance is debt, not a path that ran out —
+    # the $0 floor and the depletion month wait until the balance has first been at or above 0.
+    path = project_path(Decimal("-30000.00"), Decimal("10000.00"), Decimal("0"), 6)
+    assert [str(p) for p in path.points] == [
+        "-30000.00",
+        "-20000.00",
+        "-10000.00",
+        "0.00",
+        "10000.00",
+        "20000.00",
+        "30000.00",
+    ]
+    assert path.depletion_index is None
+    # Never paid down: the debt simply stands (as before the clamp existed), nothing "ran out".
+    stuck = project_path(Decimal("-30000.00"), Decimal("0"), Decimal("0"), 3)
+    assert [str(p) for p in stuck.points] == ["-30000.00"] * 4
+    assert stuck.depletion_index is None
+
+
+def test_once_debt_is_paid_down_the_floor_and_depletion_hold_again():
+    # Paid down by month 3 (exactly 0 counts), then a withdrawal from month 5 empties it: that is
+    # the depletion month, clamped at $0 from there on.
+    path = project_path(
+        Decimal("-30000.00"),
+        Decimal("10000.00"),
+        Decimal("0"),
+        6,
+        resets=[(5, Decimal("0"))],
+        withdrawal=(5, Decimal("25000.00")),
+    )
+    assert [str(p) for p in path.points] == [
+        "-30000.00",
+        "-20000.00",
+        "-10000.00",
+        "0.00",
+        "10000.00",
+        "0.00",
+        "0.00",
+    ]
+    assert path.depletion_index == 5
+
+
+def test_withdrawing_while_still_in_debt_is_running_out_and_the_debt_still_shows():
+    # 2026-09-24 re-review: money going out while the balance is below 0 is running out — there is
+    # nothing to draw — so that month is the depletion month; no floor, so the debt still shows.
+    path = project_path(
+        Decimal("-30000.00"),
+        Decimal("10000.00"),
+        Decimal("0"),
+        5,
+        resets=[(3, Decimal("0"))],
+        withdrawal=(3, Decimal("5000.00")),
+    )
+    assert [str(p) for p in path.points] == [
+        "-30000.00",
+        "-20000.00",
+        "-10000.00",
+        "-15000.00",
+        "-20000.00",
+        "-25000.00",
+    ]
+    assert path.depletion_index == 3
+
+
+async def test_retiring_before_the_debt_is_paid_down_is_money_that_does_not_last(
+    auth_client, db, monkeypatch
+):
+    # The re-review's probe: -50,000 invested, 4,000 a month saved, retiring in 6 months. The debt
+    # is still -30,000 when the withdrawals start, so every path runs out in that month (it read
+    # 100 % "on track" while the line fell to -185,000).
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    this_month = await _seed_book(db)
+    brokerage = (
+        await db.execute(
+            select(AccountBalance).where(AccountBalance.balance == Decimal("100000.00"))
+        )
+    ).scalar_one()
+    brokerage.balance = Decimal("-50000.00")
+    await db.commit()
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    retires = month_add(this_month, 6)
+    retire = f"retire={alex.id}:{_month_param(retires)}"
+    zeros = "annual_return=0&inflation=0&contribution_growth=0&volatility=0&years=3"
+    line = (await auth_client.get(f"/api/v1/projection?{zeros}&{retire}")).json()
+    assert line["projected"][5:8] == ["-30000.00", "-35000.00", "-40000.00"]
+    assert line["money_lasts"]["deterministic_depleted_month"] == retires.isoformat()
+    fan = (await auth_client.get(f"/api/v1/projection?years=3&{retire}")).json()
+    assert fan["money_lasts"]["probability"] == "0.000000"
+    assert fan["money_lasts"]["verdict"] == "at_risk"
+    assert fan["money_lasts"]["lasts_until_p10"] == retires.isoformat()
+
+
+async def test_a_negative_investable_balance_is_carried_not_wiped_to_zero(auth_client, db):
+    # The route end to end: -50,000 invested (the brokerage row) with 4,000 a month saved climbs
+    # as it always did; the clamp used to zero it in month 1 and call that "ran out". The
+    # growth-only line keeps the debt too.
+    await _seed_book(db)
+    brokerage = (
+        await db.execute(
+            select(AccountBalance).where(AccountBalance.balance == Decimal("100000.00"))
+        )
+    ).scalar_one()
+    brokerage.balance = Decimal("-50000.00")
+    await db.commit()
+    zeros = "annual_return=0&inflation=0&contribution_growth=0&volatility=0&years=2"
+    body = (await auth_client.get(f"/api/v1/projection?{zeros}")).json()
+    assert body["starting_balance"] == "-50000.00"
+    assert body["projected"][:4] == ["-50000.00", "-46000.00", "-42000.00", "-38000.00"]
+    assert body["coast"][:3] == ["-50000.00", "-50000.00", "-50000.00"]
+
+
+def test_lumps_add_exactly_at_their_month_and_index_zero_folds_and_sums():
+    points = project(
         Decimal("1000.00"),
         Decimal("100.00"),
         Decimal("0"),
         3,
-        Decimal("0"),
-        [(99, Decimal("40.00"))],
-    ) == project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"))
+        lumps={0: Decimal("5"), 1: Decimal("7"), 3: Decimal("250.50")},
+    )
+    assert [str(p) for p in points] == ["1000.00", "1112.00", "1212.00", "1562.50"]
+
+
+def test_the_calendar_helpers_name_the_decembers_on_the_axis():
+    start = date(2026, 9, 1)
+    assert december_index(start, 2026) == 3
+    assert december_index(start, 2055) == 351
+    assert latest_december_year(start, 360) == 2055  # Sep 2056 ends the default axis
+    assert latest_december_year(date(2026, 12, 1), 12) == 2027
+    assert latest_december_year(date(2026, 1, 1), 12) == 2026
+    assert max_plan_until_year(start) == 2085  # Dec 2085 is month 711 of 720
+    assert max_plan_until_year(date(2026, 12, 1)) == 2086  # Dec 2086 is exactly month 720
 
 
 async def test_projection_annual_spend_is_living_spend_over_the_matched_window(auth_client, db):
@@ -1092,3 +1638,457 @@ async def test_projection_echoes_the_budgets_annual_spend(auth_client, db):
     assert body["budget_month"] == this_month.isoformat()
     # The DERIVED knob is untouched — the echo is a preset for the card, not a new default.
     assert body["annual_spend"] == "60000.00"
+
+
+# --- "plan until" (2026-09-23 spec §R3, the Settings default §R11) ---
+
+
+def _plan_setting(year) -> AppSetting:
+    return AppSetting(key="plan_until_year", value={"value": year})
+
+
+async def test_plan_until_defaults_to_the_last_december_on_the_axis_without_extending_it(
+    auth_client, db
+):
+    this_month = await _seed_book(db)
+    zeros = "volatility=0&inflation=0&contribution_growth=0"
+    body = (await auth_client.get(f"/api/v1/projection?years=2&{zeros}")).json()
+    assert body["plan_until"] == latest_december_year(this_month, 24)
+    assert body["plan_until_source"] == "default"
+    # No stored year and no knob: the axis and every array are the pre-batch ones.
+    assert body["years"] == 2 and body["projected"] == BACKCOMPAT_PROJECTED_2Y
+    assert not [w for w in body["warnings"] if "plan-until" in w or "lengthened" in w]
+
+
+async def test_a_stored_plan_until_year_is_the_default_and_the_knob_wins(auth_client, db):
+    this_month = await _seed_book(db)
+    db.add(_plan_setting(this_month.year + 20))
+    await db.commit()
+    stored = (await auth_client.get("/api/v1/projection?volatility=0")).json()
+    assert stored["plan_until"] == this_month.year + 20
+    assert stored["plan_until_source"] == "setting"
+    knob = (
+        await auth_client.get(f"/api/v1/projection?volatility=0&plan_until={this_month.year + 5}")
+    ).json()
+    assert knob["plan_until"] == this_month.year + 5 and knob["plan_until_source"] == "knob"
+
+
+async def test_a_passed_stored_year_is_ignored_with_its_warning(auth_client, db):
+    this_month = await _seed_book(db)
+    db.add(_plan_setting(this_month.year - 1))
+    await db.commit()
+    body = (await auth_client.get("/api/v1/projection?volatility=0")).json()
+    default = latest_december_year(this_month, 360)
+    assert body["plan_until"] == default and body["plan_until_source"] == "default"
+    assert (
+        f"The plan-until year in Settings ({this_month.year - 1}) has passed — using {default}."
+    ) in body["warnings"]
+
+
+async def test_a_stored_year_past_the_reach_is_ignored_with_its_warning(auth_client, db):
+    # Only a hand-edited row can hold one (the PUT refuses it): never a 422 on a bare GET.
+    this_month = await _seed_book(db)
+    beyond = max_plan_until_year(this_month) + 1
+    db.add(_plan_setting(beyond))
+    await db.commit()
+    body = (await auth_client.get("/api/v1/projection?volatility=0")).json()
+    default = latest_december_year(this_month, 360)
+    assert body["plan_until"] == default and body["plan_until_source"] == "default"
+    assert (
+        f"The plan-until year in Settings ({beyond}) is past the projection's 60-year reach"
+        f" — using {default}."
+    ) in body["warnings"]
+
+
+async def test_a_later_plan_until_lengthens_the_horizon_to_reach_its_december(
+    auth_client, db, monkeypatch
+):
+    # Pinned to Sep 23 (spec-review M4): from a September start, December 2075 is 591 months away —
+    # NOT a multiple of 12 — so the ceil is always exercised, whatever month the suite runs in.
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    this_month = await _seed_book(db)
+    year = this_month.year + 49
+    body = (await auth_client.get(f"/api/v1/projection?volatility=0&plan_until={year}")).json()
+    to_december = december_index(this_month, year)
+    assert to_december == 591 and to_december % 12 != 0
+    expected = -(-to_december // 12)  # ceil: months not a multiple of 12 round UP
+    assert expected == 50
+    assert body["years"] == expected
+    assert len(body["months"]) == expected * 12 + 1
+    assert date.fromisoformat(body["months"][-1]) >= date(year, 12, 1)
+    assert (f"The horizon was lengthened to {expected} years to reach the end of {year}.") in body[
+        "warnings"
+    ]
+    # A plan-until year already on the axis never shortens it.
+    short = (
+        await auth_client.get(f"/api/v1/projection?volatility=0&plan_until={this_month.year}")
+    ).json()
+    assert short["years"] == 30
+
+
+async def test_plan_until_422s_before_the_start_year_and_past_sixty_years(auth_client, db):
+    this_month = await _seed_book(db)
+    early = await auth_client.get(f"/api/v1/projection?plan_until={this_month.year - 1}")
+    assert early.status_code == 422
+    assert early.json()["detail"] == f"plan_until must be {this_month.year} or later"
+    latest = max_plan_until_year(this_month)
+    late = await auth_client.get(f"/api/v1/projection?plan_until={latest + 1}")
+    assert late.status_code == 422
+    assert late.json()["detail"] == (
+        f"plan_until must be {latest} or earlier — the projection runs at most 60 years"
+    )
+    ok = await auth_client.get(f"/api/v1/projection?plan_until={latest}&volatility=0")
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["years"] <= 60
+
+
+async def test_retirement_months_are_validated_against_the_lengthened_axis(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    far = _month_param(month_add(this_month, 45 * 12))  # past 30 years, inside 50
+    refused = await auth_client.get(f"/api/v1/projection?retire={alex.id}:{far}")
+    assert refused.status_code == 422
+    assert "outside the 30-year horizon" in refused.json()["detail"]
+    ok = await auth_client.get(
+        f"/api/v1/projection?volatility=0&plan_until={this_month.year + 49}&retire={alex.id}:{far}"
+    )
+    assert ok.status_code == 200, ok.text
+
+
+# --- "money lasts" (2026-09-23 spec §R3) ---
+
+
+def test_the_verdict_boundaries_sit_exactly_on_ninety_and_seventy_five():
+    assert money_lasts_verdict(Decimal("1")) == "on_track"
+    assert money_lasts_verdict(Decimal("0.9")) == "on_track"
+    assert money_lasts_verdict(Decimal("0.898")) == "borderline"
+    assert money_lasts_verdict(Decimal("0.75")) == "borderline"
+    assert money_lasts_verdict(Decimal("0.748")) == "at_risk"
+    assert money_lasts_verdict(Decimal("0")) == "at_risk"
+
+
+async def test_money_lasts_is_null_with_the_reason_until_everyone_has_retired(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)
+    await _seed_profile(db, bo)
+    none = (await auth_client.get("/api/v1/projection")).json()["money_lasts"]
+    assert none["reason"] == "Set retirement months to see whether the money lasts."
+    assert none["probability"] is None and none["verdict"] is None
+    assert none["lasts_until_p10"] is None and none["deterministic_depleted_month"] is None
+    assert none["plan_until"] == latest_december_year(this_month, 360)
+    one = (
+        await auth_client.get(
+            f"/api/v1/projection?retire={alex.id}:{_month_param(month_add(this_month, 12))}"
+        )
+    ).json()["money_lasts"]
+    assert one["reason"] == (
+        "Withdrawals start once everyone with a paycheck has a retirement month — Bo has none."
+    )
+
+
+async def test_the_reason_names_every_earner_without_a_month(auth_client, db):
+    this_month = await _seed_book(db)
+    people = [await _seed_person(db, name, primary=name == "Ann") for name in ("Ann", "Bo", "Cy")]
+    for person in people:
+        await _seed_profile(db, person)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?retire={people[0].id}:{_month_param(month_add(this_month, 12))}"
+        )
+    ).json()
+    assert body["money_lasts"]["reason"] == (
+        "Withdrawals start once everyone with a paycheck has a retirement month — "
+        "Bo and Cy have none."
+    )
+
+
+async def test_money_lasts_needs_an_annual_spend(auth_client, db):
+    this_month = await _seed_book(db, with_history=False)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?retire={alex.id}:{_month_param(month_add(this_month, 12))}"
+        )
+    ).json()
+    assert body["money_lasts"]["reason"] == (
+        "Withdrawals need an annual spend — type one or enter spending history."
+    )
+    assert body["drawdown"] is None
+    assert [phase["kind"] for phase in body["phases"]] == ["working", "retired"]
+    assert body["phases"][1]["monthly_withdrawal"] is None
+
+
+async def test_a_plan_until_before_the_drawdown_names_both(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    retires = month_add(this_month, 30)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?plan_until={this_month.year}"
+            f"&retire={alex.id}:{_month_param(retires)}"
+        )
+    ).json()
+    lasts = body["money_lasts"]
+    assert lasts["reason"] == (
+        f"{this_month.year} is before withdrawals begin ({retires:%b %Y}) — choose a later year."
+    )
+    assert lasts["probability"] is None and lasts["verdict"] is None
+    assert lasts["deterministic_depleted_month"] is None
+
+
+async def test_success_is_counted_through_december_of_the_plan_until_year(auth_client, db):
+    # A near-deterministic run (sigma 1e-6) that runs out in the JANUARY after the plan-until
+    # year: every path survives through December (success), and a year later none does.
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    july = date(this_month.year + (1 if this_month.month >= 6 else 0), 7, 1)
+    k = december_index(this_month, july.year) - 5  # July's index
+    before = Decimal(100000 + (k - 1) * 4000)  # the balance the month before the withdrawals
+    annual_spend = (before * 12 / Decimal("6.5")).quantize(Decimal("0.01"))  # 7th month runs out
+    url = (
+        "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0"
+        f"&volatility=0.000001&annual_spend={annual_spend}&retire={alex.id}:{_month_param(july)}"
+    )
+    through = (await auth_client.get(f"{url}&plan_until={july.year}")).json()["money_lasts"]
+    january = date(july.year + 1, 1, 1)
+    assert through["deterministic_depleted_month"] == january.isoformat()
+    assert through["probability"] == "1.000000" and through["verdict"] == "on_track"
+    assert through["lasts_until_p10"] == january.isoformat()
+    later = (await auth_client.get(f"{url}&plan_until={july.year + 1}")).json()["money_lasts"]
+    assert later["probability"] == "0.000000" and later["verdict"] == "at_risk"
+
+
+async def test_lasts_until_p10_is_null_when_fewer_than_one_in_ten_paths_run_out(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    body = (
+        await auth_client.get(
+            "/api/v1/projection?annual_spend=100"
+            f"&retire={alex.id}:{_month_param(month_add(this_month, 12))}"
+        )
+    ).json()
+    lasts = body["money_lasts"]
+    assert lasts["reason"] is None
+    assert lasts["probability"] == "1.000000" and lasts["verdict"] == "on_track"
+    assert lasts["lasts_until_p10"] is None
+    assert lasts["deterministic_depleted_month"] is None
+    assert lasts["horizon_end"] == body["months"][-1]
+
+
+async def test_volatility_zero_reports_only_the_constant_return_month(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?{ZEROS}&retire={alex.id}:{_month_param(month_add(this_month, 12))}"
+        )
+    ).json()
+    lasts = body["money_lasts"]
+    assert lasts["probability"] is None and lasts["verdict"] is None
+    assert lasts["lasts_until_p10"] is None and lasts["reason"] is None
+    # 144,000 the month before; 5,000 a month out from month 12: below zero in month 40.
+    assert lasts["deterministic_depleted_month"] == month_add(this_month, 40).isoformat()
+
+
+async def test_a_negative_contribution_that_empties_the_balance_fails_too(auth_client, db):
+    # The clamp holds in every phase, and success counts a depletion in ANY phase (§R1, §R3).
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    body = (
+        await auth_client.get(
+            "/api/v1/projection?monthly_contribution=-50000&annual_spend=100"
+            f"&retire={alex.id}:{_month_param(month_add(this_month, 24))}"
+        )
+    ).json()
+    lasts = body["money_lasts"]
+    assert lasts["probability"] == "0.000000" and lasts["verdict"] == "at_risk"
+    assert date.fromisoformat(lasts["lasts_until_p10"]) < month_add(this_month, 24)
+    assert body["projected"][3] == "0.00"  # 100,000 cannot survive -50,000 a month for three
+
+
+# --- scheduled vests, on by default (2026-09-23 spec §R4) ---
+
+Z = "volatility=0&inflation=0&contribution_growth=0&annual_return=0"
+
+
+async def _seed_vests(
+    db,
+    *,
+    ticker: str | None = "NVDA",
+    quote: Decimal | None = Decimal("100.00"),
+    first: date | None = None,
+    cliff: Decimal = Decimal("0.2500"),
+) -> RsuGrant:
+    """1,600 shares: a 25 % cliff (400 sh) on the 16th of NEXT month, then 100 shares a quarter
+    on the third Wednesday — priced at `quote` through the ESPP ticker's latest price."""
+    if ticker is not None:
+        security = Security(ticker=ticker, name=ticker, holding_type="stock")
+        db.add_all([security, AppSetting(key="espp_ticker", value={"value": ticker})])
+        await db.flush()
+        if quote is not None:
+            db.add(
+                LatestPrice(
+                    security_id=security.id,
+                    price=quote,
+                    quoted_at=datetime.combine(clock.product_today(), time(20), tzinfo=UTC),
+                    source="yfinance",
+                )
+            )
+    next_month = month_add(clock.product_today().replace(day=1), 1)
+    grant = RsuGrant(
+        kind="new_hire",
+        label="Offer",
+        focal_year=None,
+        shares=1600,
+        grant_price=Decimal("100"),
+        first_vest_date=first or next_month.replace(day=16),
+        cliff_pct=cliff,
+        vest_quantum=1,
+    )
+    db.add(grant)
+    await db.commit()
+    return grant
+
+
+def _kept(grant, *, after: date, before: date | None = None, last_month: date | None = None):
+    """The router's rule restated over the schedule: dated after the base's date, before the
+    primary's retirement month, on the axis."""
+    return [
+        (day, shares)
+        for day, shares in rsu_vesting.schedule(grant)
+        if day > after
+        and (before is None or day < before)
+        and (last_month is None or day.replace(day=1) <= last_month)
+    ]
+
+
+def _net(shares: int, price: Decimal = Decimal("100")) -> Decimal:
+    return after_sell_to_cover((price * shares).quantize(Decimal("0.01")))
+
+
+async def test_vests_are_on_by_default_and_off_is_byte_identical(auth_client, db):
+    await _seed_book(db)
+    before = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    await _seed_vests(db)
+    on = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    off = (await auth_client.get(f"/api/v1/projection?{Z}&vests=0")).json()
+    assert off["projected"] == before["projected"] and off["coast"] == before["coast"]
+    assert off["vests"]["included"] is False and on["vests"]["included"] is True
+    assert Decimal(on["projected"][-1]) > Decimal(off["projected"][-1])
+    # Vests never enter the growth-only line or the FI target.
+    assert on["coast"] == off["coast"] and on["fi_target"] == off["fi_target"]
+    assert on["vests"]["withholding_rate"] == "0.3223"
+    assert on["vests"]["price"] == "100.0000"
+    assert on["vests"]["price_as_of"] == clock.product_today().isoformat()
+    assert on["vests"]["excluded_reason"] is None
+    # The readout survives "off": it is what the toggle would add.
+    assert off["vests"]["next_12_months"] == on["vests"]["next_12_months"]
+    explicit_on = (await auth_client.get(f"/api/v1/projection?{Z}&vests=1")).json()
+    assert explicit_on["projected"] == on["projected"]
+
+
+async def test_a_vest_lands_in_its_month_after_the_calendars_sell_to_cover(auth_client, db):
+    await _seed_book(db)
+    await _seed_vests(db)
+    body = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    assert _net(400) == Decimal("27108.00")  # 400 sh x $100 after 32.23 %
+    step = Decimal(body["projected"][1]) - Decimal(body["projected"][0])
+    assert step == Decimal("4000.00") + _net(400)
+
+
+async def test_by_year_and_the_next_twelve_months_sum_the_kept_vests(auth_client, db):
+    this_month = await _seed_book(db)
+    grant = await _seed_vests(db)
+    body = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    last_month = date.fromisoformat(body["months"][-1])
+    kept = _kept(grant, after=this_month, last_month=last_month)
+    assert len(kept) == 13  # the whole grant vests inside 30 years
+    by_year: dict[int, list[Decimal]] = {}
+    for day, shares in kept:
+        pair = by_year.setdefault(day.year, [Decimal("0.00"), Decimal("0.00")])
+        pair[0] += (Decimal("100") * shares).quantize(Decimal("0.01"))
+        pair[1] += _net(shares)
+    assert body["vests"]["by_year"] == [
+        {"year": year, "gross": str(gross), "after_withholding": str(net)}
+        for year, (gross, net) in sorted(by_year.items())
+    ]
+    today = clock.product_today()
+    year_on = date(today.year + 1, today.month, min(today.day, 28 if today.month == 2 else 31))
+    expected = sum((_net(s) for d, s in kept if today < d <= year_on), Decimal("0.00"))
+    assert body["vests"]["next_12_months"] == str(expected)
+
+
+async def test_the_primarys_retirement_stops_the_vests(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)
+    await _seed_profile(db, bo)
+    grant = await _seed_vests(db)
+    retires = month_add(this_month, 7)
+    body = (
+        await auth_client.get(f"/api/v1/projection?{Z}&retire={alex.id}:{_month_param(retires)}")
+    ).json()
+    assert body["vests"]["stops"] == retires.isoformat()
+    kept = _kept(grant, after=this_month, before=retires)
+    gross = sum(Decimal(row["gross"]) for row in body["vests"]["by_year"])
+    assert gross == sum((Decimal(100 * shares) for _, shares in kept), Decimal("0"))
+    # Bo does not hold the grants: his retirement stops nothing.
+    bo_only = (
+        await auth_client.get(f"/api/v1/projection?{Z}&retire={bo.id}:{_month_param(retires)}")
+    ).json()
+    assert bo_only["vests"]["stops"] is None
+    assert len(bo_only["vests"]["by_year"]) >= len(body["vests"]["by_year"])
+
+
+async def test_no_ticker_leaves_vests_out_with_the_reason(auth_client, db):
+    await _seed_book(db)
+    before = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    await _seed_vests(db, ticker=None)
+    body = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    assert body["vests"]["included"] is False
+    assert body["vests"]["excluded_reason"] == (
+        "Set the employer-stock ticker in Settings to include vests"
+    )
+    assert body["projected"] == before["projected"]
+
+
+async def test_no_quote_leaves_vests_out_naming_the_ticker(auth_client, db):
+    await _seed_book(db)
+    await _seed_vests(db, quote=None)
+    body = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    assert body["vests"]["included"] is False
+    assert body["vests"]["excluded_reason"] == "No NVDA quote yet — scheduled vests are left out"
+
+
+async def test_a_grant_that_will_not_schedule_is_skipped_with_the_comp_warning(auth_client, db):
+    await _seed_book(db)
+    await _seed_vests(db, cliff=Decimal("0.3000"))  # 0.7 is not a whole number of 6.25 % steps
+    body = (await auth_client.get(f"/api/v1/projection?{Z}")).json()
+    assert (
+        "Offer: stored grant cannot be scheduled — "
+        "(1 - cliff_pct) must be a whole number of 6.25% steps"
+    ) in body["warnings"]
+    assert body["vests"]["by_year"] == [] and body["vests"]["next_12_months"] == "0.00"
+
+
+async def test_without_grants_there_is_no_vests_echo(auth_client, db):
+    await _seed_book(db)
+    assert (await auth_client.get("/api/v1/projection")).json()["vests"] is None
+
+
+def test_a_quote_is_dated_by_its_utc_day_the_apps_quote_convention():
+    # A daily close is stored at midnight UTC (the copy's NVDA quote: 2026-09-22 00:00 UTC); read
+    # in Pacific time it would be dated the day before. Quote staleness is UTC by design too.
+    assert quote_date(datetime(2026, 9, 22, 0, 0, tzinfo=UTC)) == date(2026, 9, 22)
+    assert quote_date(datetime(2026, 9, 21, 20, 10, tzinfo=UTC)) == date(2026, 9, 21)
+    assert quote_date(None) is None

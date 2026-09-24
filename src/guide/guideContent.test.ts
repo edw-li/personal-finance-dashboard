@@ -213,8 +213,6 @@ describe('guide content — completeness, shape and uniqueness (spec §8.3)', ()
   })
 })
 
-// The user's coverage list (spec §5.4). Live since lane V retired the pending list: every
-// content lane has landed, so a missing id is a hole in the guide, not a lane still working.
 // The time model in the reader's words (2026-09-23 spec §T11): the glossary names the balance
 // date and the words the pages now use, and the monthly rhythm is the two-part update.
 describe('guide content — the time model (2026-09-23 spec §T11)', () => {
@@ -245,6 +243,18 @@ describe('guide content — the time model (2026-09-23 spec §T11)', () => {
   })
 })
 
+describe('guide content — the Projection card claims no direction it cannot know', () => {
+  it('names both ways the model’s omissions move the money-lasts share (2026-09-24 review minor 3)', () => {
+    const card = allCards.find(({ card }) => card.id === 'page-projection')?.card
+    const line = card?.watch?.find((text) => text.includes('Social Security'))
+    expect(line).toContain('flatters')
+    expect(line).toContain('understates')
+    expect(line).not.toMatch(/leans hopeful/)
+  })
+})
+
+// The user's coverage list (spec §5.4). Live since lane V retired the pending list: every
+// content lane has landed, so a missing id is a hole in the guide, not a lane still working.
 describe('guide content — required coverage (spec §5.4)', () => {
   const REQUIRED = [
     'accounts-add', 'accounts-owner', 'cards-owner', 'paycheck-person', 'update-balances', 'update-spending', 'update-close',

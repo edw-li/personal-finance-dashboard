@@ -119,6 +119,24 @@ def owner_totals_for(
     return totals
 
 
+async def investable_total(db: AsyncSession, snapshot_id: int) -> Decimal:
+    """Non-component pre/post-tax + taxable + equity balances of ONE snapshot — the one owner
+    of "investable" (2026-09-24 review minor 7): investable_base sums the snapshot it picks
+    here, and the projection sums the current snapshot it picks by lane K's rule."""
+    total = (
+        await db.execute(
+            select(func.coalesce(func.sum(AccountBalance.balance), 0))
+            .join(Account, Account.id == AccountBalance.account_id)
+            .where(
+                AccountBalance.snapshot_id == snapshot_id,
+                Account.is_component.is_(False),
+                Account.group.in_(INVESTABLE_GROUPS),
+            )
+        )
+    ).scalar_one()
+    return Decimal(total)
+
+
 async def investable_base(db: AsyncSession, month: date) -> Decimal | None:
     """Non-component pre/post-tax + taxable + equity balances of the latest snapshot
     on or before `month`; None when no snapshot exists yet (4%-line gap, not an error)."""
@@ -132,18 +150,7 @@ async def investable_base(db: AsyncSession, month: date) -> Decimal | None:
     ).scalar_one_or_none()
     if snapshot_id is None:
         return None
-    total = (
-        await db.execute(
-            select(func.coalesce(func.sum(AccountBalance.balance), 0))
-            .join(Account, Account.id == AccountBalance.account_id)
-            .where(
-                AccountBalance.snapshot_id == snapshot_id,
-                Account.is_component.is_(False),
-                Account.group.in_(INVESTABLE_GROUPS),
-            )
-        )
-    ).scalar_one()
-    return Decimal(total)
+    return await investable_total(db, snapshot_id)
 
 
 async def investable_bases(db: AsyncSession, months: list[date]) -> list[Decimal | None]:
@@ -215,3 +222,26 @@ async def get_swr_pct(db: AsyncSession) -> Decimal:
     if not parsed.is_finite() or parsed < 0 or parsed > 1:
         return DEFAULT_SWR_PCT
     return parsed
+
+
+# "Plan until (year)" (2026-09-23 spec §R11): the Projection's lasting default for the year the
+# money has to last through. The reader's sanity window is the page codec's client fence
+# (projectionScenario.ts): a year outside it can only be a hand-edited row and reads as absent;
+# one inside it that has already passed is RETURNED, so the projection can name it when it
+# ignores it (spec §R3).
+PLAN_UNTIL_KEY = "plan_until_year"
+PLAN_UNTIL_SANE_MIN = 2000
+PLAN_UNTIL_SANE_MAX = 2199
+
+
+async def read_plan_until_year(db: AsyncSession) -> int | None:
+    """app_settings['plan_until_year'] envelope {"value": 2075}; a missing or malformed row is
+    None (get_swr_pct's posture). Read by the projection and the settings GET
+    (api/app_settings.py re-exports it)."""
+    setting = await db.get(AppSetting, PLAN_UNTIL_KEY)
+    if setting is None or not isinstance(setting.value, dict):
+        return None
+    raw = setting.value.get("value")
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    return raw if PLAN_UNTIL_SANE_MIN <= raw <= PLAN_UNTIL_SANE_MAX else None

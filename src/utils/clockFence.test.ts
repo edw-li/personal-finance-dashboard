@@ -31,10 +31,10 @@ const EXCEPTIONS: Record<string, number> = {
  *  or deletes the entry — in the same change; the exact-count test fails until it does. */
 const ALLOWLIST: Record<string, number> = {
   // TaxesPage.tsx and OverviewPage.tsx: struck off by lane W (W11) — both read currentYear().
-  'pages/MonthlyUpdatePage.tsx': 2, // M1 — the wizard's private todayIso and its new Date()
+  // MonthlyUpdatePage.tsx: struck off by lane M (M1) — its private todayIso and new Date() are gone.
 }
 /** The allowlist when lane K landed (2026-09-24). It may only shrink: no file joins it and no
- *  count rises. It is empty once W and M have landed (that assertion arrives with M). */
+ *  count rises — and with W and M both in, it is empty (the test below holds it there). */
 const ALLOWLIST_AT_LANDING: Record<string, number> = {
   'pages/TaxesPage.tsx': 3,
   'pages/OverviewPage.tsx': 1,
@@ -123,6 +123,10 @@ describe('the clock fence (2026-09-23 spec §K1)', () => {
       expect(count, file).toBeGreaterThan(0) // a fixed file is deleted, not kept at 0
       expect(count, file).toBeLessThanOrEqual(ALLOWLIST_AT_LANDING[file] ?? 0)
     }
+  })
+
+  it('the allowlist is empty — lanes W and M fixed every read it held (spec §K1)', () => {
+    expect(ALLOWLIST).toEqual({})
   })
 
   it('the owners and exceptions are real files (a rename must move them)', () => {

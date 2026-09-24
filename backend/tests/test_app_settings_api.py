@@ -5,9 +5,12 @@ Yahoo (plan-4 forward note), and numeric day-of-week is the 0=Mon prod mis-seed 
 numbers days 0=Mon, so "1-5" silently means Tue-Sat).
 """
 
+from datetime import date
+
 import pytest
 
 from app.models import AppSetting
+from app.services.net_worth_calc import read_plan_until_year
 
 SETTINGS = "/api/v1/settings"
 
@@ -30,6 +33,7 @@ async def test_get_returns_effective_defaults_on_an_empty_table(auth_client):
         "espp_discount_pct": "0.15",
         "price_refresh_cron": "10 13 * * mon-fri",
         "calendar_update_due_day": 1,
+        "plan_until_year": None,
     }
 
 
@@ -68,6 +72,7 @@ async def test_put_round_trips_and_stores_the_envelope(auth_client, db):
         "espp_discount_pct": "0.15",
         "price_refresh_cron": "10 13 * * mon-fri",
         "calendar_update_due_day": 1,
+        "plan_until_year": None,
     }
     assert (await auth_client.get(SETTINGS)).json() == r.json()
     stored = await db.get(AppSetting, "swr_pct")
@@ -90,6 +95,7 @@ async def test_put_updates_rows_that_already_exist(auth_client, db):
         "espp_discount_pct": "0.15",
         "price_refresh_cron": "10 13 * * mon-fri",
         "calendar_update_due_day": 1,
+        "plan_until_year": None,
     }
     assert (await db.get(AppSetting, "swr_pct")).value == {"value": "0.045000"}
     assert (await db.get(AppSetting, "espp_ticker")).value == {"value": "NVDA"}
@@ -237,3 +243,76 @@ async def test_partial_put_does_not_reschedule_when_the_cron_is_absent(auth_clie
     )
     assert (await auth_client.put(SETTINGS, json={"swr_pct": "0.05"})).status_code == 200
     assert calls == []  # nothing to hot-apply, so the live job is left alone
+
+
+# --- plan_until_year (2026-09-23 spec §R11): the reader the projection uses ---
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [None, {"value": "2075"}, {"value": True}, {"value": 1999}, {"value": 2200}, ["x"], {}],
+)
+async def test_read_plan_until_year_reads_a_missing_or_malformed_row_as_none(db, stored):
+    if stored is not None:
+        db.add(AppSetting(key="plan_until_year", value=stored))
+        await db.commit()
+    assert await read_plan_until_year(db) is None
+
+
+@pytest.mark.parametrize("year", [2020, 2075, 2199])
+async def test_read_plan_until_year_returns_a_stored_year_even_one_that_has_passed(db, year):
+    # A passed year is RETURNED: the projection ignores it with a warning that names it.
+    db.add(AppSetting(key="plan_until_year", value={"value": year}))
+    await db.commit()
+    assert await read_plan_until_year(db) == year
+
+
+# --- plan_until_year through GET/PUT /settings (2026-09-23 spec §R11) ---
+
+
+@pytest.fixture
+def product_day(monkeypatch):
+    from app.services import clock
+
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 9, 23))
+
+
+async def test_plan_until_year_round_trips_and_stores_the_envelope(auth_client, db, product_day):
+    assert (await auth_client.get(SETTINGS)).json()["plan_until_year"] is None
+    saved = await auth_client.put(SETTINGS, json={"plan_until_year": 2075})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["plan_until_year"] == 2075
+    assert (await auth_client.get(SETTINGS)).json()["plan_until_year"] == 2075
+    assert (await db.get(AppSetting, "plan_until_year")).value == {"value": 2075}
+
+
+async def test_plan_until_year_null_clears_it(auth_client, db, product_day):
+    await auth_client.put(SETTINGS, json={"plan_until_year": 2075})
+    cleared = await auth_client.put(SETTINGS, json={"plan_until_year": None})
+    assert cleared.status_code == 200 and cleared.json()["plan_until_year"] is None
+    db.expire_all()
+    assert await db.get(AppSetting, "plan_until_year") is None
+    # Clearing an unset year is a no-op, not an error.
+    assert (await auth_client.put(SETTINGS, json={"plan_until_year": None})).status_code == 200
+
+
+@pytest.mark.parametrize(("year", "status"), [(2026, 422), (2027, 200), (2085, 200), (2086, 422)])
+async def test_plan_until_year_runs_from_next_year_through_the_projections_reach(
+    auth_client, product_day, year, status
+):
+    r = await auth_client.put(SETTINGS, json={"plan_until_year": year})
+    assert r.status_code == status, r.text
+    if status == 422:
+        assert r.json()["detail"] == "plan_until_year: must be a year from 2027 through 2085"
+
+
+async def test_a_malformed_plan_until_row_reads_as_unset(auth_client, db):
+    db.add(AppSetting(key="plan_until_year", value={"value": "soon"}))
+    await db.commit()
+    assert (await auth_client.get(SETTINGS)).json()["plan_until_year"] is None
+
+
+async def test_a_put_without_plan_until_year_leaves_it_alone(auth_client, product_day):
+    await auth_client.put(SETTINGS, json={"plan_until_year": 2070})
+    body = (await auth_client.put(SETTINGS, json={"swr_pct": "0.035"})).json()
+    assert body["plan_until_year"] == 2070
