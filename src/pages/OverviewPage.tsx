@@ -386,9 +386,10 @@ export default function OverviewPage() {
   // Plain consts like their siblings (the memo rule below covers CHART options only) —
   // the strip's and the YTD card's rules are cheap math over the snapshot.
   // Review rows lead (they are this household's own ritual), then the feed checks; both are
-  // phrased as actions and rendered by the same strip (2026-09-13 polish spec §14).
+  // phrased as actions and rendered by the same strip (2026-09-13 polish spec §14). A month the
+  // flows line already asks for is left to it (2026-09-23 spec §T3).
   const attention = [
-    ...reviewAttentionItems(data.coverage?.review_months, todayIso()),
+    ...reviewAttentionItems(data.coverage?.review_months, todayIso(), data.coverage?.time?.flows_due),
     ...attentionItems({
       months: data.ts?.months, holdings: data.holdings, lots: data.lots,
       taxYears: data.taxYears, system: data.system, coverage: data.coverage,
@@ -877,7 +878,9 @@ export default function OverviewPage() {
             {attention.length > 0 && (
               <nav className="attention-strip" aria-label="Needs attention">
                 {attention.map((item) => (
-                  <NavLink key={item.key} className="attention-item" to={item.to}>
+                  // A part of the monthly update that is due but not late is a to-do: neutral,
+                  // the same link (2026-09-23 spec §T3); everything else keeps the amber accent.
+                  <NavLink key={item.key} className={`attention-item${item.tone === 'todo' ? ' is-todo' : ''}`} to={item.to}>
                     {item.text} →
                   </NavLink>
                 ))}

@@ -4,24 +4,30 @@
 import type {
   CoverageOut,
   EsppLotsResponse,
+  FlowsPartOut,
   HoldingsResponse,
   SystemStatus,
   TaxYearOut,
+  TimeStatusOut,
 } from '../../types/api'
 import { insideBalancesWindow } from './freshness'
 import type { MonthReview } from '../../api/monthReview'
 import { formatDate, formatMonth } from '../../utils/format'
-import { addMonths } from '../../utils/months'
+import { dayName, dueByName, monthName } from '../../utils/timeWords'
 import { backupAge, isStaleQuote } from '../../utils/staleness'
 
 export interface AttentionItem {
   key: string
   text: string
   to: string
+  /** 'todo' — a part of the monthly update that is due and not late: neutral, the same link
+   *  (2026-09-23 spec §T3). 'warn' (the default when absent) — late, or something wrong. */
+  tone?: 'todo' | 'warn'
 }
 
 export interface AttentionInputs {
-  /** Net-worth coverage (the wizard writes it) — the canonical "which months exist". */
+  /** Net-worth coverage (the wizard writes it) — the canonical "which months exist". Kept for
+   *  the empty-book guard; what is DUE is `coverage.time`'s to say. */
   months?: string[]
   holdings?: HoldingsResponse
   lots?: EsppLotsResponse
@@ -32,63 +38,111 @@ export interface AttentionInputs {
   coverage?: CoverageOut
 }
 
-// The ritual runs in the month's first days (recorded_on evidence), so the nudge waits a
-// week before calling the current month late; a missing PREVIOUS month is overdue on any
-// day of the calendar.
-export const UPDATE_NUDGE_DAY = 7
 const ESPP_WINDOW_DAYS = 30
 
 function plural(count: number, one: string, many: string): string {
   return count === 1 ? one : many
 }
 
-export function attentionItems(data: AttentionInputs, todayIso: string): AttentionItem[] {
-  const items: AttentionItem[] = []
-  const currentMonth = `${todayIso.slice(0, 7)}-01`
-  const dayOfMonth = Number(todayIso.slice(8, 10))
+const wizardStep = (month: string, step: 'balances' | 'spending') => `/update?month=${month}&step=${step}`
+const older = (count: number) => (count > 0 ? ` (+${count} earlier ${plural(count, 'month', 'months')})` : '')
 
-  // Monthly update — only once a first month exists. The empty book is the Overview's own
-  // "Start here" card (2026-09-14 guide spec §7.1); a nudge on top of it would double-message.
-  if (data.months && data.months.length > 0) {
-    const prevMonth = addMonths(currentMonth, -1)
-    const haveCurrent = data.months.includes(currentMonth)
-    const havePrev = data.months.includes(prevMonth)
-    if (!havePrev && !haveCurrent) {
-      items.push({
-        key: 'update-overdue',
-        text:
-          `Monthly updates for ${formatMonth(prevMonth)} and ${formatMonth(currentMonth)} ` +
-          "haven't been entered",
-        to: '/update',
-      })
-    } else if (!haveCurrent && dayOfMonth >= UPDATE_NUDGE_DAY) {
-      items.push({
-        key: 'update-due',
-        text: `${formatMonth(currentMonth)}'s monthly update hasn't been entered yet`,
-        to: '/update',
-      })
+/** The flows line's words for the newest month listed in `flows_due` (spec §T3, K3's copy). */
+function flowsText(flows: FlowsPartOut): string {
+  const name = monthName(flows.month)
+  if (flows.overdue) {
+    if (flows.spending === 'partial') {
+      return flows.take_home_entered
+        ? `${name} spending is still partial — was due ${dueByName(flows)}`
+        : `${name} spending is still partial and its take-home is missing — was due ${dueByName(flows)}`
     }
-    // A hole with the current month present is history repair, not a ritual reminder.
+    if (flows.spending === 'missing') {
+      return flows.take_home_entered ? `${name} spending is overdue` : `${name} spending & take-home are overdue`
+    }
+    return `${name} take-home is overdue`
   }
+  if (flows.spending === 'partial') {
+    return flows.take_home_entered
+      ? `Finish ${name} spending — entered during ${name}; add what has posted since`
+      : `Finish ${name} spending and enter take-home`
+  }
+  if (flows.spending === 'missing') {
+    return flows.take_home_entered ? `Enter ${name} spending` : `Enter ${name} spending & take-home`
+  }
+  return `Enter ${name} take-home`
+}
 
-  // Coverage honesty (spec §3). Two conditions the balances nudge above cannot see: a month
-  // inside the window that spending never got, and a month somebody saved with nothing in
-  // it. Both are the same repair — open that month's spending step — so both link straight
-  // there. ONE line per class, naming the newest month (the one still in living memory) and
-  // counting the rest, so a long backlog never turns the strip into a list.
-  const wizardStep = (month: string) => `/update?month=${month}&step=spending`
-  const older = (count: number) =>
-    count > 0 ? ` (+${count} earlier ${plural(count, 'month', 'months')})` : ''
-
-  const missing = [...(data.coverage?.spending_missing ?? [])].sort()
-  if (missing.length > 0) {
-    const newest = missing[missing.length - 1]
+/**
+ * The monthly update as its two INDEPENDENT parts (2026-09-23 spec §T3, from `GET /coverage`
+ * `time`): the current month's balances, due on its 1st; each ended month's spending and
+ * take-home, due once it is over and entered whenever its charges have posted. A part that is
+ * due is a to-do (neutral); only a late one warns — balances from the 7th, the flows from the
+ * 16th by default — and nothing is asked for before it is due: not the month in progress, not an
+ * early next-month snapshot. ONE line per part, naming the newest month and counting the rest.
+ */
+function timeItems(time: TimeStatusOut): AttentionItem[] {
+  const items: AttentionItem[] = []
+  const balances = time.balances
+  if (balances.status !== 'final') {
+    const first = dayName(balances.month)
+    const recorded = balances.snapshot?.recorded_on ?? null
+    const text =
+      balances.status === 'missing'
+        ? balances.overdue
+          ? `${first} balances are overdue — due ${dayName(balances.due_on)}`
+          : `Record ${first} balances`
+        : balances.overdue
+          ? `${first} balances are still provisional${recorded === null ? '' : ` (recorded ${dayName(recorded)})`}`
+          : `Update ${first} balances — recorded early${recorded === null ? '' : `, on ${dayName(recorded)}`}`
     items.push({
-      key: 'spending-missing',
-      text: `${formatMonth(newest)} spending was never entered${older(missing.length - 1)}`,
-      to: wizardStep(newest),
+      key: 'update-balances',
+      text,
+      to: wizardStep(balances.month, 'balances'),
+      tone: balances.overdue ? 'warn' : 'todo',
     })
   }
+  const flows = time.flows_due
+  if (flows.length > 0) {
+    const newest = flows[0] // newest first, as the wire sends it
+    items.push({
+      key: 'update-flows',
+      text: `${flowsText(newest)}${older(flows.length - 1)}`,
+      to: wizardStep(newest.month, 'spending'),
+      tone: flows.some((part) => part.overdue) ? 'warn' : 'todo',
+    })
+  }
+  // A month whose early snapshot was never saved again on or after its 1st (legacy months are
+  // left out server-side): its change stays "since Sep 22" until it is confirmed or updated.
+  const past = time.provisional_past
+  if (past.length > 0) {
+    const newest = past[0]
+    const recorded = newest.recorded_on === null ? '' : ` (recorded ${dayName(newest.recorded_on)})`
+    items.push({
+      key: 'update-provisional',
+      text:
+        `${dayName(newest.month)} balances are still provisional${recorded} — confirm or update them` +
+        (past.length > 1 ? ` (+${past.length - 1} earlier)` : ''),
+      to: wizardStep(newest.month, 'balances'),
+      tone: 'warn',
+    })
+  }
+  return items
+}
+
+export function attentionItems(data: AttentionInputs, todayIso: string): AttentionItem[] {
+  const items: AttentionItem[] = []
+
+  // The monthly update (2026-09-23 spec §T3) — `time` is null on an empty book, which is the
+  // Overview's own "Start here" card (2026-09-14 guide spec §7.1); a nudge on top of it would
+  // double-message. The old day-7 "update not entered", "updates for M−1 and M" and "never
+  // entered" lines are gone: they fired for the month in progress and for an early next-month
+  // snapshot every month of the user's routine.
+  const time = data.coverage?.time
+  if (time != null && (data.months === undefined || data.months.length > 0)) items.push(...timeItems(time))
+
+  // Coverage honesty (honest-numbers spec §3): a month somebody saved with nothing in it — its
+  // repair is that month's spending step. ONE line naming the newest month and counting the
+  // rest, so a long backlog never turns the strip into a list.
 
   // Windowed here, not on the wire: the server lists every zero-filled month on file, and
   // one saved outside the balances window was never part of the book to begin with.
@@ -101,7 +155,7 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
     items.push({
       key: 'spending-empty',
       text: `${formatMonth(newest)} was saved with no spending${older(empty.length - 1)}`,
-      to: wizardStep(newest),
+      to: wizardStep(newest, 'spending'),
     })
   }
 
@@ -227,25 +281,23 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
 }
 
 /**
- * The month-review rows of the Needs attention card (2026-09-13 polish spec §14). Past months
- * only — the current month is in progress by definition (design §3.2) and used to sit in the
- * card every day of every month as a state, not a task. Each row is phrased as the action it
- * asks for and links to that month's Review step; newest first, at most two, so a backlog
- * never turns the card into a list. The current month joins only once UPDATE_NUDGE_DAY has
- * passed — the same patience the balances nudge above shows.
+ * The month-review rows of the Needs attention card (2026-09-13 polish spec §14). PAST months
+ * only, on every day (2026-09-23 spec §T3): the current month is in progress by definition
+ * (design §3.2), and the old day-7 rule put it in the card every month of the routine. A month
+ * listed in `time.flows_due` is left to the flows line, which already asks for exactly what it
+ * lacks — "ready to close" appears once its spending is entered and its take-home is in. Each
+ * row is phrased as the action it asks for and links to that month's Review step; newest first,
+ * at most two, so a backlog never turns the card into a list.
  */
 export function reviewAttentionItems(
   reviews: Pick<MonthReview, 'month' | 'state'>[] | undefined,
   todayIso: string,
+  flowsDue: readonly Pick<FlowsPartOut, 'month'>[] = [],
 ): AttentionItem[] {
   const currentMonth = `${todayIso.slice(0, 7)}-01`
-  const dayOfMonth = Number(todayIso.slice(8, 10))
+  const due = new Set(flowsDue.map((flows) => flows.month))
   return (reviews ?? [])
-    .filter(
-      (review) =>
-        review.month < currentMonth ||
-        (review.month === currentMonth && dayOfMonth >= UPDATE_NUDGE_DAY),
-    )
+    .filter((review) => review.month < currentMonth && !due.has(review.month))
     .flatMap((review) => {
       const name = formatMonth(review.month)
       const text =

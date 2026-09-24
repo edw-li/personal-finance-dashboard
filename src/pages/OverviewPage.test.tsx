@@ -145,6 +145,7 @@ vi.mock('../components/EChart', async () => {
   }
 })
 import { fetchCalendar } from '../api/calendar'
+import { balancesPart, flowsPart, timeStatus } from '../testing/timeFixtures'
 import { CATEGORY_HUES } from '../charts/entities'
 import { POSITIVE } from '../charts/theme'
 import { fetchCoverage } from '../api/coverage'
@@ -1146,11 +1147,12 @@ describe('OverviewPage attention strip', () => {
   it('keeps actionable data checks separate from the dated calendar agenda', async () => {
     const current = currentMonthIso()
     serve({
-      // Coverage stops TWO months back: previous and current both missing, which is the
-      // one monthly case that fires on any day of the month — pinnable on a real clock.
-      // (The day-7 nudge and the rest of the calendar logic are pinned in
-      // attention.test.ts, where today is injected.)
-      ts: timeseriesOut({ months: [addMonths(current, -4), addMonths(current, -3)] }),
+      // The server says this month's balances are missing and late (2026-09-23 spec §T3) — its
+      // answer is data, so the line is pinnable on a real clock; the rules behind it are
+      // pinned in attention.test.ts, where the day is injected.
+      coverage: coverageOut({
+        time: timeStatus(todayIso(), { balances: balancesPart(current, null, true) }),
+      }),
       lots: lotsOut([lotOut(5)]),
       taxYears: [
         { year: CURRENT_YEAR, notes: null, input_count: 0, bracket_count: 42, filing_status: 'single' },
@@ -1160,10 +1162,10 @@ describe('OverviewPage attention strip', () => {
     renderPage()
 
     const strip = await screen.findByRole('navigation', { name: 'Needs attention' })
-    const update = screen.getByRole('link', {
-      name: /Monthly updates for .* haven't been entered/,
-    })
-    expect(update.getAttribute('href')).toBe('/update')
+    const update = screen.getByRole('link', { name: /balances are overdue — due / })
+    expect(update.getAttribute('href')).toBe(`/update?month=${current}&step=balances`)
+    // Late is a warning: the amber accent, not the to-do's neutral one.
+    expect(update.className).not.toContain('is-todo')
     expect(screen.queryByRole('link', { name: /An ESPP lot qualifies in 5 days/ })).toBeNull()
     expect(screen.getByRole('heading', { name: /Up next/ })).toBeTruthy()
     expect(
@@ -1179,17 +1181,20 @@ describe('OverviewPage attention strip', () => {
     expect(strip.querySelectorAll('a')).toHaveLength(3)
   })
 
-  it('turns the coverage gaps into wizard links for those months', async () => {
-    serve({ coverage: LAGGING })
+  it('turns what is due into wizard links for those months, a to-do until it is late', async () => {
+    serve({
+      coverage: {
+        ...LAGGING,
+        time: timeStatus(todayIso(), { flows_due: [flowsPart(AUG, { spending: 'partial' })] }),
+      },
+    })
     renderPage()
 
     await screen.findByRole('navigation', { name: 'Needs attention' })
     // The strip appends its own arrow glyph, so the accessible name is matched, not equalled.
-    expect(
-      screen
-        .getByRole('link', { name: new RegExp(`^${formatMonth(AUG)} spending was never entered`) })
-        .getAttribute('href'),
-    ).toBe(`/update?month=${AUG}&step=spending`)
+    const flows = screen.getByRole('link', { name: /^Finish August spending and enter take-home/ })
+    expect(flows.getAttribute('href')).toBe(`/update?month=${AUG}&step=spending`)
+    expect(flows.className).toContain('is-todo')
     expect(
       screen
         .getByRole('link', { name: new RegExp(`^${formatMonth(SEP)} was saved with no spending`) })
