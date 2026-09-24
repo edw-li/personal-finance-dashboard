@@ -91,19 +91,21 @@ class ReviewBook:
         return max(legacy) if legacy else None
 
 
-def _day(value: date, today: date) -> str:
-    """'Oct 1' — with ', 2025' outside today's year."""
+def day_label(value: date, today: date | None = None) -> str:
+    """'Oct 1' — with ', 2025' when `today` is given and the year differs. The one spelling of a
+    snapshot's day in the server's sentences (the close blocker, the restamp label, the importer's
+    warnings)."""
     label = f"{value:%b} {value.day}"
-    return label if value.year == today.year else f"{label}, {value.year}"
+    return label if today is None or value.year == today.year else f"{label}, {value.year}"
 
 
 def early_balances_blocker(month: date, recorded_on: date, today: date) -> str:
     """K4's sentence (2026-09-23 spec): "Oct 1 balances were recorded early, on Sep 22 — save
     them again on or after Oct 1 before closing October." """
     name = f"{month:%B}" if month.year == today.year else f"{month:%B %Y}"
-    first = _day(month, today)
+    first = day_label(month, today)
     return (
-        f"{first} balances were recorded early, on {_day(recorded_on, today)} — "
+        f"{first} balances were recorded early, on {day_label(recorded_on, today)} — "
         f"save them again on or after {first} before closing {name}."
     )
 

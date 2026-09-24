@@ -25,6 +25,7 @@ from app.services import clock
 from app.services.changelog import ChangeBatch, row_image
 from app.services.derived_accounts import derived_parent_balances
 from app.services.money import MONEY_MAX_ABS_12_2, quantize_money, require_first_of_month
+from app.services.month_review import day_label
 from app.services.spending_guard import EMPTY_MONTH_REFUSAL, records_something
 
 
@@ -169,7 +170,7 @@ async def write_balances(
             batch.record_insert(row, month=month)
     # Meta-only edits (recorded_on, notes) are deliberately not logged (spec section 9) — except
     # K4's restamp above, which Undo must be able to reverse.
-    recorded = "" if restamped_on is None else f", recorded {restamped_on:%b} {restamped_on.day}"
+    recorded = "" if restamped_on is None else f", recorded {day_label(restamped_on)}"
     batch.label = (
         f"Entered {month:%b %Y} balances — {created} accounts"
         if snapshot_created
