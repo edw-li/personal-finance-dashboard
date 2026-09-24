@@ -44,6 +44,31 @@ export function pinSeriesMotion(
   return { ...option, series: Array.isArray(series) ? series.map(pin) : pin(series) } as EChartsOption
 }
 
+const isSankey = (one: unknown): boolean =>
+  one !== null && typeof one === 'object' && (one as { type?: unknown }).type === 'sankey'
+
+/** Whether the option draws a sankey — EChart's test for "this paint creates the sankey's view". */
+export function hasSankey(option: EChartsOption | null): boolean {
+  const series = (option as { series?: unknown } | null)?.series
+  return Array.isArray(series) ? series.some(isSankey) : isSankey(series)
+}
+
+/** Paints every sankey series with `animation: false` — for the paint that CREATES a sankey's view
+ *  when that paint is still (a cached revisit's animateEntrance={false}, the re-init a theme swap
+ *  forces). echarts 6.1.0's SankeyView wipes its first render in behind a clip rect sized to the
+ *  nodes and removes the clip in the wipe's done callback; with a 0ms entrance, initProps runs that
+ *  callback synchronously INSIDE createGridClipShape, before setClipPath attaches the rect, so the
+ *  clip stays for the instance's life — the right-hand labels cut off at the last column, and the
+ *  clip keeping its first width while the chart resizes wider (2026-09-24 report). The view adds
+ *  no clip at all when animation is off. Only that one paint: every later one keeps the update
+ *  animation. Proven against the real engine in motion.ssr.test.ts. */
+export function unclipSankeyEntrance(option: EChartsOption): EChartsOption {
+  const series = (option as { series?: unknown }).series
+  if (series === undefined) return option
+  const still = (one: unknown): unknown => (isSankey(one) ? { ...(one as object), animation: false } : one)
+  return { ...option, series: Array.isArray(series) ? series.map(still) : still(series) } as EChartsOption
+}
+
 /** ECharts gives every series a 'pointer' cursor whether or not a click does anything, so a
  *  chart with no `onClick` promises a drill-in it lacks. An explicit cursor is left alone. */
 export function defaultCursor(option: EChartsOption): EChartsOption {

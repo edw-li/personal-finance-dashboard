@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { SVGRenderer } from 'echarts/renderers'
 import { echarts } from './echarts'
 import type { EChartsOption } from './echarts'
-import { pinSeriesMotion } from './motion'
+import { pinSeriesMotion, unclipSankeyEntrance } from './motion'
 import { SANKEY_MARKS } from './sankey'
 
 echarts.use([SVGRenderer])
@@ -86,5 +86,39 @@ describe('the cached-paint rule against the real engine', () => {
     expect(perSeries(still, 'animation')).toEqual({
       line: false, pie: false, treemap: false, sankey: false,
     })
+  })
+})
+
+// The cut-off sankey (2026-09-24 report: the right side cut off after navigating away and back,
+// more of it the wider the window). SankeyView's FIRST render wipes the series in behind a clip
+// rect sized to its nodes, and removes the clip in the wipe's done callback. With a 0ms entrance
+// initProps runs that callback synchronously INSIDE createGridClipShape, before setClipPath has
+// attached the rect, so the clip stays for the instance's life: the right-hand labels end at the
+// nodes, and the clip keeps its first width while the chart resizes wider. A cached paint (the
+// revisit's animateEntrance={false}, a theme swap's re-init) is exactly that 0ms first render.
+describe('the sankey entrance clip against the real engine', () => {
+  const FLOW = {
+    series: [{
+      ...SANKEY_MARKS,
+      data: [{ name: 'Net pay' }, { name: 'Housing' }, { name: 'Savings' }],
+      links: [{ source: 'Net pay', target: 'Housing', value: 3 }, { source: 'Net pay', target: 'Savings', value: 1 }],
+    }],
+  } as unknown as EChartsOption
+  const clipsAfterFirstRender = (option: EChartsOption): number => {
+    const chart = echarts.init(null, 'finance', { ssr: true, renderer: 'svg', width: 400, height: 300 })
+    chart.setOption(option, { notMerge: true })
+    const shown = (chart.getZr() as unknown as { storage: { getDisplayList(update: boolean): { __clipPaths?: unknown[] }[] } })
+      .storage.getDisplayList(true)
+    const clipped = shown.filter((el) => (el.__clipPaths?.length ?? 0) > 0).length
+    chart.dispose()
+    return clipped
+  }
+
+  it('a 0ms first render leaves the entrance clip on for good — the engine trap', () => {
+    expect(clipsAfterFirstRender(pinSeriesMotion(FLOW, { animationDuration: 0 }))).toBeGreaterThan(0)
+  })
+
+  it('unclipSankeyEntrance paints that first render with no clip at all', () => {
+    expect(clipsAfterFirstRender(unclipSankeyEntrance(pinSeriesMotion(FLOW, { animationDuration: 0 })))).toBe(0)
   })
 })
