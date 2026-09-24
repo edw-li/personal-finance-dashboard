@@ -69,6 +69,11 @@ class TimeStatusOut(BaseModel):
     # Months before the current one whose snapshot is still provisional (recorded early, never
     # saved again), newest first; legacy months left out.
     provisional_past: list[SnapshotStateOut] = []
+    # EVERY snapshot month whose balances are provisional — snapshot_state's flag: recorded before
+    # their 1st, or the month still ahead — legacy months included, ascending. What the month
+    # ribbon hatches (2026-09-23 spec §T8; lane T review M9): provisional_past leaves legacy months
+    # out for Needs attention, the chip must not, and the browser keeps no copy of the rule.
+    provisional_months: list[date] = []
     last_complete_month: date | None  # the review book's default_month (unchanged rule)
 
 

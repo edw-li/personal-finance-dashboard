@@ -116,3 +116,31 @@ describe('chipState — what a month holds, in two halves and in words (2026-09-
     expect(chipState('2026-05-01', legacy, '2026-09-01').words).toBe('nothing entered')
   })
 })
+
+// Spec review M9: a legacy month recorded early is provisional by snapshot_state's rule, but
+// provisional_past leaves legacy months out (Needs attention does not nag about history). The chip
+// reads the server's full list, so it hatches that month the way the Net worth chart draws it.
+describe('the balances half follows the server’s provisional list (spec review M9)', () => {
+  const history = (time: TimeStatusOut): RibbonFeeds => ({
+    balances: new Set(['2024-03-01', '2024-04-01']),
+    spending: new Set(['2024-03-01', '2024-04-01']),
+    netPay: new Set(['2024-03-01', '2024-04-01']),
+    time,
+  })
+
+  it('hatches a legacy month recorded early, which provisional_past leaves out', () => {
+    const time = timeStatus('2026-09-23', { provisional_months: ['2024-03-01'] })
+    expect(time.provisional_past).toEqual([])
+    expect(chipState('2024-03-01', history(time), '2026-09-01')).toMatchObject({
+      balances: 'partial',
+      words: 'Mar 1, 2024 balances recorded early (provisional) · spending and take-home entered',
+    })
+    expect(chipState('2024-04-01', history(time), '2026-09-01').balances).toBe('full')
+  })
+
+  it('reads a month the list does not name as final — even one the day would call ahead', () => {
+    const time = timeStatus('2026-09-23', { provisional_months: [] })
+    const ahead = { ...history(time), balances: new Set(['2026-12-01']) }
+    expect(chipState('2026-12-01', ahead, '2026-09-01').balances).toBe('full')
+  })
+})

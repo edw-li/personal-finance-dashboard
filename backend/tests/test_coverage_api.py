@@ -167,6 +167,8 @@ async def test_an_early_next_month_snapshot_and_the_month_in_progress_miss_nothi
         [],
         None,
     )
+    # Every provisional snapshot month, for the ribbon's balances half (T8, spec review M9).
+    assert time["provisional_months"] == ["2026-10-01"]
 
 
 async def test_on_oct_16_september_is_due_and_overdue(auth_client, db, monkeypatch):

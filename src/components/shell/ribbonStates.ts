@@ -45,7 +45,8 @@ function legacyState(month: string, feeds: RibbonFeeds): ChipState {
   return { balances: hasBalances ? 'full' : 'empty', flows: hasSpending ? 'full' : 'empty', due: null, words }
 }
 
-/** Every snapshot state `time` names, by month. A balances month not named there is final —
+/** Every snapshot state `time` names, by month — the fallback for a payload without
+ *  `provisional_months` (an older backend): a balances month not named there is final —
  *  `provisional_past` lists the earlier provisional ones — unless its month is still ahead. */
 function knownStates(time: TimeStatusOut): Map<string, SnapshotStateOut> {
   const states = [time.current_snapshot, time.previous_snapshot, time.balances.snapshot, ...time.provisional_past]
@@ -60,7 +61,12 @@ export function chipState(month: string, feeds: RibbonFeeds, currentMonth: strin
   let balances: Half = 'empty'
   let balancesWords = `${first} balances not recorded`
   if (feeds.balances.has(month)) {
-    const provisional = knownStates(time).get(month)?.provisional ?? month > currentMonth
+    // The server's flag for every snapshot (§T8; review M9) — a legacy month recorded early
+    // included, which provisional_past leaves out — never a rule of the browser's own.
+    const provisional =
+      time.provisional_months !== undefined
+        ? time.provisional_months.includes(month)
+        : (knownStates(time).get(month)?.provisional ?? month > currentMonth)
     balances = provisional ? 'partial' : 'full'
     balancesWords = provisional ? `${first} balances recorded early (provisional)` : `${first} balances`
   }

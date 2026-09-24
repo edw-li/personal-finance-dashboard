@@ -45,11 +45,13 @@ export function balancesPart(month: string, snapshot: SnapshotStateOut | null, o
   }
 }
 
-/** The time status on `today`: the current month's balances final, nothing due. */
+/** The time status on `today`: the current month's balances final, nothing due. Its
+ *  `provisional_months` defaults to every provisional state the fixture names — what the server
+ *  lists for a book with no legacy early month and nothing filed further ahead. */
 export function timeStatus(today: string, over: Partial<TimeStatusOut> = {}): TimeStatusOut {
   const current = `${today.slice(0, 7)}-01`
   const snapshot = snapshotStateOut(current)
-  return {
+  const status: TimeStatusOut = {
     today,
     current_month: current,
     reminder_day: 1,
@@ -61,6 +63,9 @@ export function timeStatus(today: string, over: Partial<TimeStatusOut> = {}): Ti
     last_complete_month: null,
     ...over,
   }
+  const named = [status.current_snapshot, status.previous_snapshot, status.balances.snapshot, ...status.provisional_past]
+  const provisional = [...new Set(named.flatMap((state) => (state?.provisional ? [state.month] : [])))].sort()
+  return { ...status, provisional_months: over.provisional_months ?? provisional }
 }
 
 // The real-data copy on the spec's §V4 days: Sep 1 balances on the 1st, Oct 1's typed early
