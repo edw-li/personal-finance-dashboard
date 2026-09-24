@@ -3078,16 +3078,19 @@ describe('dated balances (2026-09-23 spec §M4)', () => {
     expect(await screen.findByText('Balances as of Sep 25 · provisional for Oct 1 — recorded early, on Sep 25')).toBeTruthy()
   })
 
-  it('a legacy month recorded early is never offered the Confirm (K4 never restamps it)', async () => {
-    partialSeptember()
-    vi.mocked(monthReviewApi.fetchMonthReview).mockImplementation(async (month) => ({
-      ...reviewFixture(month), state: 'unreviewed_history',
-    }))
-    renderPage('/update?month=2026-10-01')
-    await screen.findByText('Balances as of Sep 22 · provisional for Oct 1 — recorded early, on Sep 22')
-    expect(screen.queryByRole('button', { name: 'Confirm Oct 1 balances' })).toBeNull()
-    expect(screen.queryByText(/makes them final/)).toBeNull()
-  })
+  it.each(['unreviewed_history', 'closed'] as const)(
+    'a %s month recorded early is never offered the Confirm (K4 never restamps it)',
+    async (state) => {
+      partialSeptember()
+      vi.mocked(monthReviewApi.fetchMonthReview).mockImplementation(async (month) => ({
+        ...reviewFixture(month), state,
+      }))
+      renderPage('/update?month=2026-10-01')
+      await screen.findByText('Balances as of Sep 22 · provisional for Oct 1 — recorded early, on Sep 22')
+      expect(screen.queryByRole('button', { name: 'Confirm Oct 1 balances' })).toBeNull()
+      expect(screen.queryByText(/makes them final/)).toBeNull()
+    },
+  )
 })
 
 describe("what's due (2026-09-23 spec §M2)", () => {

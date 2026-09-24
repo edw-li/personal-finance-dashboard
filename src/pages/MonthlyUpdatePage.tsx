@@ -1321,11 +1321,13 @@ function MonthlyUpdateWizard() {
   const phase = monthPhase(month)
   const notBegun = phase === 'next' || phase === 'beyond'
   // Balances recorded before their 1st, once that 1st has arrived: a save now makes them final
-  // (K4), so an unchanged save IS the Confirm (spec §M4). A legacy month is never restamped (K4),
-  // so it is never offered one.
+  // (K4), so an unchanged save IS the Confirm (spec §M4). The server never restamps a legacy or a
+  // closed month (K4 as landed — the date would move the digest it was adopted or certified at),
+  // so neither is offered one.
   const confirmable =
     recordedEarly(month, balancesMeta) &&
     review?.state !== 'unreviewed_history' &&
+    review?.state !== 'closed' &&
     (phase === 'past' || phase === 'current')
 
   // The Balances step's two actions (spec §M1). Its Save is on while the part differs from what
