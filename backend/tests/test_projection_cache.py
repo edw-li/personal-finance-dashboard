@@ -246,6 +246,27 @@ async def test_the_fingerprint_covers_exactly_the_tables_the_build_reads(db, eng
     assert seen == set(read_cache.PROJECTION_TABLES)
 
 
+async def test_one_build_reads_one_day(db, monkeypatch):
+    # 2026-09-24 review minor 5: the review book the planning window stands on is the route's day
+    # — never a second clock read, which can land past midnight while the axis says the day before.
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 9, 30))
+    await seed_everything(db)
+    days = iter([date(2026, 9, 30)] + [date(2026, 10, 1)] * 50)
+    monkeypatch.setattr(clock, "product_today", lambda: next(days))
+    books = []
+    real = projection_api.cached_review_book
+
+    async def recording(*args, **kwargs):
+        book = await real(*args, **kwargs)
+        books.append(book.today)
+        return book
+
+    monkeypatch.setattr(projection_api, "cached_review_book", recording)
+    body = await run_projection(db, ProjectionKnobs(years=5))
+    assert body.start_month == date(2026, 9, 1)
+    assert books == [date(2026, 9, 30)]
+
+
 async def test_422s_and_404s_are_never_cached(auth_client, db):
     assert (await auth_client.get(URL)).status_code == 404
     assert len(read_cache.PROJECTIONS) == 0

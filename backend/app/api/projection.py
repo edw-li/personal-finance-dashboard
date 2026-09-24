@@ -924,7 +924,8 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
     # AND take-home. Before this, the spend mean and the savings mean averaged DIFFERENT
     # months — and the spend mean counted a zero-filled month as a month of no spending.
     savings_rows = await cached_month_savings(db)
-    review_book = await cached_review_book(db)
+    # The route's own day, not a second clock read that can land past midnight (review minor 5).
+    review_book = await cached_review_book(db, today=today)
     window, planning_receipt = planning_window(savings_rows, review_book)
     has_cashflow = any(row.net_pay is not None for row in savings_rows)
     has_spending = any(row.has_spending_rows for row in savings_rows)
