@@ -163,19 +163,6 @@ beforeEach(() => {
     month: month ?? null, net_worth: '1500.00', mom_delta: null, mom_pct: null, groups: [], owner_totals: [],
     as_of: month ?? null, provisional: false, previous: null, days_since_previous: null,
   }))
-  vi.mocked(netWorthApi.fetchTimeseries).mockResolvedValue({
-    months: ['2026-07-01'],
-    accounts: [account],
-    series: [{ account_id: 1, values: ['1500.00'] }],
-    group_totals: {
-      cash: ['1500.00'], pre_tax: ['0.00'], post_tax: ['0.00'], taxable: ['0.00'],
-      equity: ['0.00'], other: ['0.00'], liability: ['0.00'],
-    },
-    net_worth: ['1500.00'],
-    mom_pct: [null],
-    notes: [null],
-    owner_series: [],
-  })
   vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category])
   // One prior month of history for Food — the spending step's "Typical" column reads it
   // (a single sample IS its own median).
@@ -2865,12 +2852,51 @@ describe('two parts, each saving only itself (2026-09-23 spec §M1)', () => {
     fireEvent.keyDown(checking, { key: 's', ctrlKey: true })
     await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
     expect('spending' in sentBody(0)).toBe(false)
+    expect(sentBody(0).balances).toEqual({ notes: null, balances: [{ account_id: 1, balance: '1600.00' }] })
     fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
     const food = await screen.findByLabelText('Food')
     fireEvent.change(food, { target: { value: '250.00' } })
     fireEvent.keyDown(food, { key: 's', ctrlKey: true })
     await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(2))
     expect('balances' in sentBody(1)).toBe(false)
+    expect(sentBody(1).spending).toEqual({ amounts: [{ category_id: 7, amount: '250.00' }] })
+  })
+
+  it('a second Ctrl+S while the first save is in flight sends nothing more (review M22)', async () => {
+    const pending = pendingMonthSave()
+    vi.mocked(monthReviewApi.saveMonthReview).mockImplementationOnce(() => pending.promise)
+    renderWizard()
+    const checking = await screen.findByLabelText('Checking')
+    fireEvent.change(checking, { target: { value: '1600.00' } })
+    fireEvent.keyDown(checking, { key: 's', ctrlKey: true })
+    fireEvent.keyDown(checking, { key: 's', ctrlKey: true })
+    await act(async () => { pending.resolve(savedMonthResult('2026-08-01')) })
+    await screen.findByRole('heading', { name: 'Aug 1 balances saved' })
+    expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1)
+  })
+
+  it("a save after an Undo quotes the reloaded month's revision, not the undone save's (review M21)", async () => {
+    vi.mocked(monthReviewApi.saveMonthReview).mockImplementation(async (month) => ({
+      ...savedMonthResult(month, 'b'), batch_id: 'b-first',
+    }))
+    vi.mocked(lifecycleApi.undoBatch).mockResolvedValue({ ...undone, label: 'Undid: Saved Aug 2026 month', month: '2026-08-01' })
+    renderWizardAt('/update?month=2026-08-01')
+    fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Aug 1 balances' }))
+    const said = await screen.findByText(/^Saved Aug 1 balances/)
+    // After the Undo the server's month is at another revision; the reload reads it.
+    vi.mocked(monthReviewApi.fetchMonthReview).mockImplementation(async (month) => ({
+      ...reviewFixture(month), input_revision: 'c'.repeat(64),
+    }))
+    fireEvent.click(within(said.closest('.toast') as HTMLElement).getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Undone — Aug 2026 is back to how it was.')
+    fireEvent.change(await landedBalanceCell(), { target: { value: '1700.00' } })
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Save Aug 1 balances' }) as HTMLButtonElement).disabled).toBe(false),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Save Aug 1 balances' }))
+    await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(2))
+    expect(sentBody(1).expected_revision).toBe('c'.repeat(64))
   })
 
   it('keeps the step through a month switch, even to a month with no balances', async () => {
@@ -2942,12 +2968,24 @@ describe('confirm a partly entered month (2026-09-23 spec §M1)', () => {
     await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
     expect(sentBody()).toMatchObject({ reviewed: { balances: false, spending: true, take_home: false }, close: false })
     expect(['balances', 'spending'].some((key) => key in sentBody())).toBe(false)
+    // Like every save, with a request id — the server logs it, and a retry replays it (review M19).
+    expect(sentBody().request_id).toMatch(/^[0-9a-f-]{36}$/)
     await waitFor(() => expect(screen.queryByText(PARTIAL_BANNER)).toBeNull())
     expect(screen.queryByRole('button', { name: 'Confirm September spending is complete' })).toBeNull()
     expect(screen.getByRole('heading', { name: 'September spending confirmed complete' })).toBeTruthy()
     // The Review's spending box is the same stored flag — it shows ticked now.
     fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
     expect(((await screen.findByLabelText(/^I checked September spending, tax and transfers\.$/)) as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('the Confirm carries the other two ticks as they stand on the Review (review M19)', async () => {
+    partialSeptember()
+    renderWizardAt('/update?month=2026-09-01&step=review')
+    fireEvent.click(await screen.findByLabelText('I checked every Sep 1 account balance.'))
+    fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm September spending is complete' }))
+    await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
+    expect(sentBody().reviewed).toEqual({ balances: true, spending: true, take_home: false })
   })
 
   it('offers no Confirm while the spending part is dirty — the save completes it instead', async () => {
