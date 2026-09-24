@@ -131,13 +131,17 @@ async def reset_database(engine) -> bool:
             await conn.exec_driver_sql(_FAST_RESET_SQL)
         return True
     except Exception as exc:
+        # Clean up FIRST: under `-W error` the warning raises, and it must not be able to skip
+        # the TRUNCATE and leave this test's rows to the next one.
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql(_TRUNCATE_SQL)
+        # The driver's error, not str(exc): SQLAlchemy's message repeats the whole DO block.
         warnings.warn(
-            f"fast test-database reset failed, fell back to TRUNCATE: {exc}",
+            f"fast test-database reset failed, fell back to TRUNCATE: "
+            f"{getattr(exc, 'orig', exc)!r}",
             UserWarning,
             stacklevel=2,
         )
-        async with engine.begin() as conn:
-            await conn.exec_driver_sql(_TRUNCATE_SQL)
         return False
 
 
