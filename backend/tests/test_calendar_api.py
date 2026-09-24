@@ -570,9 +570,10 @@ async def test_calendar_uses_each_persons_IN_FORCE_profile_not_the_newest_row(
     ]
 
 
-async def test_calendar_falls_back_to_a_future_only_profile(auth_client, db, monkeypatch):
-    # paycheck.py's own rule, mirrored: a brand-new user whose only profile starts next
-    # month gets the checks that are COMING rather than an empty calendar.
+async def test_a_future_only_profile_pays_nothing_before_it_starts(auth_client, db, monkeypatch):
+    # A brand-new user whose only profile starts Dec 1 has no August paydays — nothing is paid
+    # on or before a person's first profile (2026-09-23 spec §W1, which retired the old
+    # "fall back to the coming profile" rule here) — and gets the checks that ARE coming.
     freeze_today(monkeypatch)
     me = Person(name="Me", is_primary=True)
     db.add(me)
@@ -587,9 +588,60 @@ async def test_calendar_falls_back_to_a_future_only_profile(auth_client, db, mon
     await db.commit()
 
     resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-08-31")
-    assert [e["date"] for e in resp.json()["events"] if e["type"] == "payday"] == [
-        "2026-08-14",
-        "2026-08-31",
+    assert [e["date"] for e in resp.json()["events"] if e["type"] == "payday"] == []
+    december = await auth_client.get(f"{CALENDAR}?start=2026-12-01&end=2026-12-31")
+    assert [e["date"] for e in december.json()["events"] if e["type"] == "payday"] == [
+        "2026-12-15",
+        "2026-12-31",
+    ]
+
+
+async def test_paydays_start_after_each_persons_first_profile_and_follow_the_profile_in_force(
+    auth_client, db, monkeypatch
+):
+    freeze_today(monkeypatch)  # 2026-08-24
+    edward = Person(name="Edward", is_primary=True)
+    grace = Person(name="Grace", is_primary=False)
+    db.add_all([edward, grace])
+    await db.flush()
+    db.add_all(
+        [
+            # No deductions (model defaults), so net = gross = salary / 24.
+            PaycheckProfile(
+                person_id=edward.id,
+                effective_date=date(2026, 1, 1),
+                annual_salary=Decimal("120000"),
+            ),
+            PaycheckProfile(
+                person_id=edward.id,
+                effective_date=date(2026, 8, 17),
+                annual_salary=Decimal("144000"),
+            ),
+            PaycheckProfile(
+                person_id=grace.id,
+                effective_date=date(2026, 9, 1),
+                annual_salary=Decimal("24000"),
+            ),
+        ]
+    )
+    await db.commit()
+
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-07-01&end=2026-09-30")).json()
+    paydays = [e for e in body["events"] if e["type"] == "payday"]
+    items = [(e["date"], i["label"], i["amount"]) for e in paydays for i in e["items"]]
+    # Grace's first check is Sep 15: nothing on or before her Sep 1 start.
+    assert [(day, amount) for day, label, amount in items if label == "Grace"] == [
+        ("2026-09-15", "1000.00"),
+        ("2026-09-30", "1000.00"),
+    ]
+    # Edward's July checks are the Jan 1 profile's; from Aug 31 the Aug 17 raise pays.
+    assert [(day, amount) for day, label, amount in items if label == "Edward"] == [
+        ("2026-07-15", "5000.00"),
+        ("2026-07-31", "5000.00"),
+        ("2026-08-14", "5000.00"),
+        ("2026-08-31", "6000.00"),
+        ("2026-09-15", "6000.00"),
+        ("2026-09-30", "6000.00"),
     ]
 
 
@@ -756,6 +808,46 @@ async def test_calendar_folds_two_paydays_and_names_an_omitted_cadence(
         "source": "payroll",
         "status": "partial",
         "note": "Sam: paid on another cadence — paydays omitted",
+    }
+
+
+async def test_calendar_names_a_cadence_that_changes_part_way(auth_client, db, monkeypatch):
+    """Each payday follows the profile in force on it (§W1), so a switch to biweekly on Aug 1
+    drops Sam's August paydays while her July ones still show — the footer must not say her
+    paydays are omitted as if none were drawn (review nit)."""
+    freeze_today(monkeypatch)
+    me = Person(name="Me", is_primary=True)
+    sam = Person(name="Sam", is_primary=False)
+    db.add_all([me, sam])
+    await db.flush()
+    db.add_all(
+        [
+            PaycheckProfile(
+                effective_date=date(2026, 1, 1), annual_salary=Decimal("120000"), person_id=me.id
+            ),
+            PaycheckProfile(
+                effective_date=date(2026, 2, 1), annual_salary=Decimal("90000"), person_id=sam.id
+            ),
+            PaycheckProfile(
+                effective_date=date(2026, 8, 1),
+                annual_salary=Decimal("90000"),
+                person_id=sam.id,
+                pay_periods_per_year=26,
+            ),
+        ]
+    )
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-07-01&end=2026-08-31")).json()
+    sams = [
+        e["date"]
+        for e in body["events"]
+        if e["type"] == "payday" and any(i["label"] == "Sam" for i in e["items"])
+    ]
+    assert sams == ["2026-07-15", "2026-07-31"]
+    assert next(s for s in body["sources"] if s["source"] == "payroll") == {
+        "source": "payroll",
+        "status": "partial",
+        "note": "Sam: paid on another cadence for part of the time — those paydays omitted",
     }
 
 
@@ -1166,6 +1258,39 @@ async def test_a_january_q4_payment_that_has_passed_keeps_its_bare_date(
     q4 = next(e for e in body["events"] if e["key"] == "tax:2025-q4:2026-01-15")
     assert (q4["amount"], q4["basis"]) == (None, "scheduled")
     assert q4["detail"] == "Q4 2025 estimated payment"
+
+
+async def test_a_first_profile_dated_after_last_years_checks_withholds_nothing_for_that_year(
+    auth_client, db, monkeypatch
+):
+    """§W1 reaches the calendar's prior-year amounts too (spec-review minor 3). A first profile
+    dated Jan 1 2026 pays none of 2025's grid checks (the last one is Dec 31), so 2025's Apr 15
+    balance is its WHOLE bill — the same as a household with no profile at all — where the
+    same profile dated Jan 1 2025 would have withheld through the year."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: FEBRUARY)
+    await seed_priceable_year(db, 2025)
+    await db.commit()
+
+    def filing_chip(body: dict) -> dict:
+        return next(e for e in body["events"] if e["key"] == "tax:2026-q1:2026-04-15")
+
+    bare = filing_chip((await auth_client.get(APRIL)).json())
+    profile = PaycheckProfile(
+        person_id=(await seed_primary(db)).id,
+        effective_date=date(2026, 1, 1),
+        annual_salary=Decimal("240000"),
+        withholding_pct=Decimal("0.05"),
+    )
+    db.add(profile)
+    await db.commit()
+    late = filing_chip((await auth_client.get(APRIL)).json())
+    assert (late["detail"], late["amount"]) == (bare["detail"], bare["amount"])
+    assert money(late["amount"]) > 0
+
+    profile.effective_date = date(2025, 1, 1)
+    await db.commit()
+    early = filing_chip((await auth_client.get(APRIL)).json())
+    assert money(early["amount"]) < money(late["amount"])
 
 
 async def test_apr_15_carries_the_prior_years_balance_beside_this_years_share(

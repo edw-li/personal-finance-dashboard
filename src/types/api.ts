@@ -797,6 +797,24 @@ export interface TaxYearOut {
   bracket_count: number
 }
 
+/** What filing a year under one status would mean (2026-09-23 spec §W8) — the server's rules. */
+export interface TaxStatusOption {
+  status: FilingStatus
+  label: string
+  people: TaxPersonOut[]
+  tables_missing: string[]
+  computable: boolean
+  /** Whose withholding the Will I owe? card would count under this status — the card's own
+   *  rule; empty off the card's year. Optional on older payloads (none then moves). */
+  withholding_people?: TaxPersonOut[]
+}
+
+export interface TaxStatusOptions {
+  year: number
+  current: FilingStatus
+  options: TaxStatusOption[]
+}
+
 // PATCH /taxes/years/{year} — the year row's one mutable field. Flipping it changes which
 // bracket tables the engine walks, whether the per-person inputs split into two columns,
 // and therefore every figure on the page: the caller reloads the year afterwards.
@@ -1110,8 +1128,13 @@ export interface WhatIfDelta {
 export interface ChangedInput {
   key: string
   label: string
-  before: string // "0.00" when the key had no stored row (2dp, _money-rendered)
+  // In the key's own unit and precision (2026-09-23 spec §W10): money at cents, a count whole,
+  // a percent as the 4dp FRACTION the engine multiplies by ("0.9753"). "0.00" / "0" when the
+  // key had no stored row. Render through `inputUnits.figureText(unit, value)`.
+  before: string
   after: string
+  /** Optional on the wire's older payloads; absent reads as money. */
+  unit?: TaxInputUnit
 }
 
 export interface SaleDetailOut {
@@ -1139,6 +1162,20 @@ export interface EsppSaleDetailOut {
   warnings: string[]
 }
 
+/**
+ * A scenario's sales in CASH terms (2026-09-23 spec §W7) — present only when it sells
+ * something. `tax_due` is the tax the SALES add (the overrides left out: it equals
+ * `delta.total_tax` exactly when the scenario has none); `net_cash` = proceeds − tax due,
+ * `after_tax_gain` = gain − tax due.
+ */
+export interface SaleSummary {
+  proceeds: string
+  gain: string
+  tax_due: string
+  net_cash: string
+  after_tax_gain: string
+}
+
 export interface WhatIfOut {
   year: number
   baseline: TaxSummaryOut
@@ -1148,6 +1185,8 @@ export interface WhatIfOut {
   sale_details: SaleDetailOut[]
   espp_sale_details: EsppSaleDetailOut[]
   warnings: string[]
+  /** Null for an overrides-only scenario; optional on older payloads (§W7). */
+  sale_summary?: SaleSummary | null
 }
 
 // --- taxes: the "Will I owe?" tracker ---
@@ -1163,6 +1202,80 @@ export interface WhatIfOut {
 export interface WithholdingLegOut {
   ytd: string
   projected: string
+}
+
+/**
+ * One simulated leg's check grid, summed over its COUNTED checks (2026-09-23 spec §W1–§W2): a
+ * grid check on or before the person's first paycheck profile pays nothing and is not counted.
+ * `starts_on` is that first profile's date when it left checks out; `early_checks_note` is the
+ * exact sentence `warnings` carries for it, shown beside the figure and kept out of the folded
+ * notes by equality.
+ */
+export interface WithholdingGrid {
+  role: 'primary' | 'partner'
+  person_id: number | null
+  name: string | null
+  checks_elapsed: number
+  checks_total: number
+  first_check: string | null
+  starts_on: string | null
+  gross_projected: string
+  trad_401k_projected: string
+  roth_401k_projected: string
+  hsa_projected: string
+  early_checks_note: string | null
+}
+
+/** The one write the strip offers: the RSU row's chip, only when the figures differ. */
+export interface ReconciliationApply {
+  key: string
+  person_id: number | null
+  value: string
+}
+
+/** What a row's two figures were built from — null on the rows each does not describe. */
+export interface ReconciliationFacts {
+  typed_pay_periods: string | null
+  typed_checkpoint: string | null
+  projected_checks: number | null
+  projected_from: string | null // the first counted check
+  capped_at: string | null // 401(k) / HSA: the cap that stopped the projection
+  future_vest_income: string | null // RSU: the not-yet-vested part at today's quote
+  quote_tolerance: string | null // RSU: the income band that never flags
+  reference_price: string | null // RSU: the flag's price (close on or before the 1st)
+  reference_date: string | null // RSU: that close's date (null: the latest quote)
+}
+
+/**
+ * One typed input against what the app's own records project (2026-09-23 spec §W3). `typed`
+ * null = "not entered"; `tax_effect` is the liability with this projection laid over the
+ * stored rows minus the typed liability (positive = more tax); `flagged` is |effect| > 250 —
+ * for RSU, judged at the month's reference close inside a ±10 % band.
+ */
+export interface ReconciliationRow {
+  key: 'salary' | 'trad_401k' | 'hsa' | 'rsu' | 'espp'
+  person_id: number | null
+  person_name: string | null
+  label: string
+  source: 'paycheck' | 'comp' | 'espp'
+  typed: string | null
+  typed_keys: string[]
+  projected: string
+  difference: string
+  tax_effect: string
+  flagged: boolean
+  facts: ReconciliationFacts
+  apply: ReconciliationApply | null
+}
+
+/** Your typed inputs against your records (§W3). Compute-only; the headline stays typed. */
+export interface Reconciliation {
+  rows: ReconciliationRow[]
+  flagged_count: number
+  liability_if_matched: string | null
+  balance_if_matched: string | null // liability if matched − projected withholding
+  flag_above: string
+  notes: string[]
 }
 
 /** The partner's SIMULATED salary leg — the primary's leg shape plus its own check grid. */
@@ -1244,6 +1357,10 @@ export interface WithholdingOut {
     payroll: WithholdingJurisdiction // medicare + social security + SDI, informational
   } | null
   warnings: string[]
+  /** Each simulated leg's counted-check facts (2026-09-23 spec §W2); optional on older payloads. */
+  grids?: WithholdingGrid[]
+  /** Null when the engine refused the year; optional on older payloads (§W3, contract §0.4(f)). */
+  reconciliation?: Reconciliation | null
 }
 
 /** The statutory harbor: the LESSER of the two legs, and which of them exist. */
@@ -2465,7 +2582,10 @@ export interface PaceItem {
   soft_ratio?: string | null // 4dp — the tone and the printed percentage follow THIS one
   window_label?: string | null
   halves?: PaceHalf[] | null
+  /** Always null since 2026-09-23 spec §W1 — nothing borrows a profile any more. */
   backfilled_from?: string | null
+  /** The first profile's date when paydays on or before it were left out (§W1). */
+  starts_on?: string | null
   projected_full_year?: string | null
   projected_excess?: string | null
   /** ESPP only: the percentage the projection used, a 9dp fraction ("0.120000000"). */

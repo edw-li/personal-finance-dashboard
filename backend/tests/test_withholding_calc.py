@@ -178,9 +178,21 @@ def test_grid_follows_the_current_profiles_cadence_not_the_old_one():
     assert result.salary_gross_projected == D("283000.00")  # 11 x 8000 + 13 x 15000
 
 
-def test_first_profile_covers_earlier_checks_with_a_warning():
-    # Profile effective Mar 1 but the grid opens Jan 16: those checks fall back to it.
-    # today == the final check date, so every check counts as elapsed (boundary inclusive).
+# --- one payroll start (2026-09-23 spec §W1): a grid check ON OR BEFORE a person's first
+# profile's effective date pays nothing and is not counted — the grid's check on the 1st pays
+# the half-month BEFORE it, so a job that starts on the 1st is first paid on the 16th. The 2026
+# grid (ceil(365 x i / 24)) opens Jan 16, Jan 31, Feb 15, Mar 2, Mar 18, …
+
+EARLY_MAR1 = (
+    "your checks on or before Mar 1, the first paycheck profile's start, count as $0 — add a "
+    "profile for an earlier job or salary to include them"
+)
+
+
+def test_checks_on_or_before_the_first_profile_count_as_zero_and_are_not_counted():
+    # A profile effective Mar 1 prices nothing before it: the first counted check is Mar 2,
+    # and 21 of the grid's 24 checks count. today == the final check date, so every counted
+    # check is elapsed (boundary inclusive).
     result = estimate(
         year=2026,
         today=date(2026, 12, 31),
@@ -191,14 +203,55 @@ def test_first_profile_covers_earlier_checks_with_a_warning():
         social_security=SS,
         disability=SDI,
     )
-    assert result.checks_elapsed == 24
-    assert result.salary_ytd == D("67320.00")  # all 24 checks at 2805
-    assert any("effective date" in w for w in result.warnings)
+    assert (result.checks_elapsed, result.checks_total) == (21, 21)
+    assert result.salary_ytd == D("58905.00")  # 21 x 2805, not 24 x 2805
+    assert result.salary_gross_projected == D("210000.00")  # 21 x 10000
+    assert result.salary_first_check == date(2026, 3, 2)
+    assert result.salary_starts_on == date(2026, 3, 1)
+    assert result.warnings == [EARLY_MAR1]
+    assert result.salary_early_note == EARLY_MAR1
 
 
-def test_profile_effective_later_this_year_still_projects_a_full_year():
-    # today precedes every check AND every profile: `current` is empty and falls back to the
-    # earliest profile, so the year projects in full while YTD stays 0.
+def test_a_first_profile_after_the_tax_year_names_its_own_year():
+    # A job that starts next Jan 1 pays nothing this year — and "on or before Jan 1" alone
+    # would read as this year's Jan 1 (review nit).
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2027, 1, 1), D("240000"))],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    assert (result.checks_elapsed, result.checks_total) == (0, 0)
+    assert result.salary_early_note == (
+        "your checks on or before Jan 1, 2027, the first paycheck profile's start, count as $0 "
+        "— add a profile for an earlier job or salary to include them"
+    )
+
+
+def test_a_check_dated_on_the_start_day_pays_the_half_month_before_it():
+    # Jan 16 is a grid check: a job starting Jan 16 is first paid on Jan 31.
+    result = estimate(
+        year=2026,
+        today=date(2026, 12, 31),
+        profiles=[Profile(date(2026, 1, 16), D("240000"))],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    assert result.checks_total == 23
+    assert result.salary_first_check == date(2026, 1, 31)
+    assert result.salary_starts_on == date(2026, 1, 16)
+
+
+def test_a_future_start_profile_has_no_elapsed_checks():
+    # today precedes every check AND the profile: nothing has been paid, and the projection
+    # counts only the 21 checks after the start (never a borrowed full year).
     result = estimate(
         year=2026,
         today=date(2026, 1, 5),
@@ -209,12 +262,50 @@ def test_profile_effective_later_this_year_still_projects_a_full_year():
         social_security=SS,
         disability=SDI,
     )
-    assert result.checks_elapsed == 0
-    assert result.checks_total == 24
+    assert (result.checks_elapsed, result.checks_total) == (0, 21)
     assert result.salary_ytd == D("0.00")
     assert result.salary_gross_ytd == D("0.00")
-    assert result.salary_projected == D("67320.00")
+    assert result.salary_projected == D("58905.00")
     assert result.vest_fica_ytd == D("0.00")
+
+
+def test_the_published_grid_facts_are_sums_over_the_counted_checks():
+    # W2: each counted check is gross 10000, traditional 5 % = 500, Roth 0, HSA 100 — over the
+    # 21 checks after a Mar 1 start.
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2026, 3, 1), D("240000"))],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    assert result.salary_gross_projected == D("210000.00")
+    assert result.salary_trad_401k_projected == D("10500.00")
+    assert result.salary_roth_401k_projected == D("0.00")
+    assert result.salary_hsa_projected == D("2100.00")
+
+
+def test_a_mid_year_raise_is_still_priced_by_date_and_starts_nothing():
+    # A first profile before Jan 16 excludes nothing; the Jul 1 raise prices the checks from
+    # Jul 2 on (a switch keeps "on or after") — the switch pin above, restated under W1.
+    result = estimate(
+        year=2026,
+        today=date(2026, 12, 31),
+        profiles=[Profile(date(2025, 1, 1), D("240000")), Profile(date(2026, 7, 1), D("360000"))],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    assert result.salary_projected == D("85845.00")
+    assert result.salary_first_check == date(2026, 1, 16)
+    assert result.salary_starts_on is None
+    assert result.salary_early_note is None
+    assert result.warnings == []
 
 
 def test_vests_without_any_profile_still_compute_against_a_zero_gross():
@@ -398,7 +489,10 @@ def test_single_earner_defaults_leave_the_estimate_byte_identical():
 
 # --- the SIMULATED partner leg (2026-08-27 spec §4.2) ---
 
-PARTNER_EARLY = "partner checks before their first profile's effective date use that profile"
+PARTNER_EARLY = (
+    "your partner's checks on or before Mar 1, the first paycheck profile's start, count as $0 "
+    "— add a profile for an earlier job or salary to include them"
+)
 PARTNER_TRACKER_IGNORED = (
     "partner withholding simulated from their paycheck profile — the entered "
     "w2_fed_withholding / w2_state_withholding rows are ignored"
@@ -468,9 +562,9 @@ def test_a_partner_profile_ignores_their_entered_tracker_rows_with_a_note():
     assert result.warnings == [PARTNER_TRACKER_IGNORED]
 
 
-def test_a_partner_profile_effective_mid_year_warns_about_their_early_checks():
-    # The primary's own EARLY_CHECKS posture, worded for the other person: the whole year
-    # is still priced off that profile, and the sentence names the approximation.
+def test_a_partner_profile_effective_mid_year_zeroes_their_earlier_checks():
+    # The primary's own W1 rule, worded for the other person: the checks before the partner's
+    # first profile pay nothing and are not counted (2026-09-23 spec §W1).
     result = run(
         medicare=MEDICARE_MFJ,
         primary_wages=D("240000"),
@@ -478,7 +572,34 @@ def test_a_partner_profile_effective_mid_year_warns_about_their_early_checks():
         partner_profiles=[partner_profile(date(2026, 3, 1))],
     )
     assert result.warnings == [PARTNER_EARLY]
-    assert result.partner_salary_projected == D("30000.00")
+    assert result.partner_early_note == PARTNER_EARLY
+    # Mar 2 … Jun 17 have landed by Jul 1: 8 of the 21 counted checks.
+    assert (result.partner_checks_elapsed, result.partner_checks_total) == (8, 21)
+    assert result.partner_salary_ytd == D("10000.00")  # 8 x 1250
+    assert result.partner_salary_projected == D("26250.00")  # 21 x 1250
+    assert result.partner_gross_projected == D("131250.00")  # 21 x 6250
+    assert result.partner_first_check == date(2026, 3, 2)
+    assert result.partner_starts_on == date(2026, 3, 1)
+
+
+def test_the_early_check_sentences_name_the_people_when_the_router_does():
+    result = run(
+        profiles=[Profile(date(2026, 3, 1), D("240000"))],
+        partner_profiles=[partner_profile(date(2026, 9, 1))],
+        partner_wages=D("150000"),
+        primary_name="Edward",
+        partner_name="Grace",
+    )
+    assert result.warnings == [
+        "Edward's checks on or before Mar 1, the first paycheck profile's start, count as $0 "
+        "— add a profile for an earlier job or salary to include them",
+        "Grace's checks on or before Sep 1, the first paycheck profile's start, count as $0 "
+        "— add a profile for an earlier job or salary to include them",
+    ]
+    assert result.salary_early_note == result.warnings[0]
+    assert result.partner_early_note == result.warnings[1]
+    # Grace from Sep 1: 8 checks from Sep 16, none of them landed by Jul 1.
+    assert (result.partner_checks_elapsed, result.partner_checks_total) == (0, 8)
 
 
 def test_no_partner_profile_leaves_the_entered_fallback_exactly_as_it_was():

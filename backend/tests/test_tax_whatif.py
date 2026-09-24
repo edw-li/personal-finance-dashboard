@@ -15,7 +15,6 @@ from decimal import Decimal
 
 from app.services.tax_whatif import (
     DATELESS_TERM_WARNING,
-    QUALIFIED_FMV_WARNING,
     ZERO,
     EsppSaleDetail,
     SaleDetail,
@@ -43,13 +42,15 @@ def espp(
     purchase_fmv: str = "120",
     purchase_price: str = "85",
     discount: str = "0.15",
+    qualifying_date: date | None = None,
 ) -> EsppSaleDetail:
     """One lot's decomposition. Defaults are the spec's worked example, the 15 % plan."""
     return decompose_espp(
         lot_id=7,
         purchase_date=purchase_date,
-        # Two years past the purchase, the way a stored lot encodes the 2y/1y rule.
-        qualifying_date=purchase_date.replace(year=purchase_date.year + 2),
+        # Two years past the purchase, the way a stored lot encodes the 2y/1y rule — unless the
+        # test names the stored lot's own date (a Feb 29 purchase has no "same day" two years on).
+        qualifying_date=qualifying_date or purchase_date.replace(year=purchase_date.year + 2),
         shares=D(shares),
         subscription_price=D(subscription_price),
         purchase_fmv=D(purchase_fmv),
@@ -185,20 +186,23 @@ def test_decompose_disqualified_capital_loss():
 
 
 def test_decompose_qualified_clamped_by_discount():
-    """cap = shares x subscription x 15/85 = 176.470588... -> 176.47 at cents."""
+    """IRC §423(c): the lesser of the gain and the discount on the OFFERING-date FMV. The
+    stored subscription price IS that FMV (the app stores the undiscounted offering-start
+    close), so the cap is 10 x 100 x 15 % = 150.00 — not the 176.47 a "subscription is
+    already discounted" reading gave (2026-09-23 spec §W5)."""
     detail = espp(sale_price="150", today=QUALIFYING)
     assert detail.disposition == "qualified"
-    assert str(detail.ordinary_income) == "176.47"  # total gain 650.00 exceeds the cap
-    assert str(detail.capital_gain) == "473.53"  # 650.00 - 176.47
+    assert str(detail.ordinary_income) == "150.00"  # total gain 650.00 exceeds the cap
+    assert str(detail.capital_gain) == "500.00"  # 650.00 - 150.00
     assert detail.term == "long"
-    assert detail.warnings == [QUALIFIED_FMV_WARNING.format(lot_id=7)]
-    assert detail.warnings == ["lot 7: grant-date FMV approximated from the subscription price"]
+    # Nothing is approximated any more: the offering-date FMV is stored.
+    assert detail.warnings == []
 
 
 def test_decompose_qualified_clamped_by_gain():
     """The other end of the min(): a small gain is ordinary in full, nothing capital."""
     detail = espp(sale_price="90", today=QUALIFYING)
-    assert str(detail.ordinary_income) == "50.00"  # (90 - 85) x 10, below the 176.47 cap
+    assert str(detail.ordinary_income) == "50.00"  # (90 - 85) x 10, below the 150.00 cap
     assert str(detail.capital_gain) == "0.00"
     assert detail.term == "long"
 
@@ -292,8 +296,28 @@ def test_apply_scenario_overrides_win_and_null_zeroes():
 
 
 def test_qualified_ordinary_cap_follows_the_plan_discount():
-    from app.services.tax_whatif import qualified_discount_ratio
+    # A 10 % plan caps the ordinary income at 10 % of the offering-date FMV: 10 x 100 x 10 %.
+    detail = espp(sale_price="150", today=QUALIFYING, discount="0.10")
+    assert str(detail.ordinary_income) == "100.00"
+    assert str(detail.capital_gain) == "550.00"
 
-    # subscription = (1 - d) x the lookback FMV, so d of the grant FMV is sub x d/(1 - d).
-    assert qualified_discount_ratio(Decimal("0.15")) == Decimal(15) / Decimal(85)
-    assert qualified_discount_ratio(Decimal("0.10")) == Decimal(10) / Decimal(90)
+
+def test_the_feb_29_2024_lot_matches_the_espp_pages_discount_component():
+    """The audit's lot: 260 sh at an offering-date close of 48.509, paid 41.23265. Any sale
+    whose gain covers the cap yields 260 x 48.509 x 15 % = 1,891.85 of ordinary income — the
+    ESPP page's own discount component — and a loss yields none."""
+    lot = {
+        "today": date(2026, 9, 23),
+        "purchase_date": date(2024, 2, 29),
+        "qualifying_date": date(2025, 9, 1),  # the stored lot's, 2 years past its offering
+        "shares": "260",
+        "subscription_price": "48.509",
+        "purchase_fmv": "79.112",
+        "purchase_price": "41.23265",
+    }
+    sold = espp(sale_price="228.87", **lot)
+    assert sold.disposition == "qualified"
+    assert str(sold.ordinary_income) == "1891.85"
+    assert str(sold.capital_gain) == "46893.86"  # 48,785.71 of gain less the ordinary slice
+    loss = espp(sale_price="40", **lot)
+    assert str(loss.ordinary_income) == "0.00"

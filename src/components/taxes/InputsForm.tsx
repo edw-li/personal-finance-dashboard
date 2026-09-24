@@ -16,6 +16,14 @@ import type {
 import { isAmount } from '../../utils/amount'
 import { classifyPaste, matchLabel } from '../../utils/paste'
 import { UNIT_KINDS, figureText, isEntry, isWholeCount, toBox, toWire } from './inputUnits'
+import {
+  clearTaxDraft,
+  inputsDraftKey,
+  isStringRecord,
+  resumeDraft,
+  sameRecord,
+  writeTaxDraft,
+} from './taxDrafts'
 import { FeedBanner } from '../shell/Feed'
 import { MOTION_MS } from '../../theme/motion'
 import './taxes.css'
@@ -38,6 +46,9 @@ function sectionLabel(name: string): string {
 
 /** A computed line with no component entered: absent is not zero, so it shows neither. */
 const NO_FIGURE = '—'
+
+/** The one chip whose offer comes from outside the year (the paycheck profile, §W4). */
+const SALARY_KEY = 'annual_salary'
 
 /**
  * How long after the last keystroke the computed totals are re-asked for. The answer to a
@@ -283,17 +294,49 @@ export default function InputsForm({
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const { columns, split, sections, flatCells, allCells } = modelOf(inputs)
+  const draftKey = inputsDraftKey(inputs.year)
+
+  // What the last sitting left unsaved (2026-09-23 spec §W9), read ONCE per mount: restored
+  // while the server still returns the values it was typed over, dropped (and said so) once
+  // they have changed. A pure read — the write effect below forgets a draft that is not put
+  // back, because the boxes then match the server.
+  const [resume] = useState(() =>
+    resumeDraft(draftKey, valuesOf(flatCells), isStringRecord, sameRecord),
+  )
+  const [restored, setRestored] = useState(resume.kind === 'restored')
+  const [dropped, setDropped] = useState(resume.kind === 'dropped')
 
   // `values` is what the user sees, `baseline` what the server last confirmed — the PUT
   // body is their diff, so an untouched cell is never sent (sending one blank would DELETE
   // a stored input the user never looked at). Both seed from a useState INITIALIZER, so a
   // prop replacement (the page refetching the same year) cannot overwrite typed work —
-  // only a save echo, or a remount on a real year/status switch, re-adopts a baseline.
-  const [values, setValues] = useState<Record<string, string>>(() => valuesOf(flatCells))
+  // only a save echo, or a remount on a real year/status switch, re-adopts a baseline. A
+  // restored draft seeds `values` alone: it is unsaved work, and the diff says so.
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    resume.kind === 'restored' ? resume.edited : valuesOf(flatCells),
+  )
   const [baseline, setBaseline] = useState<Record<string, string>>(() => valuesOf(flatCells))
   // The computed totals on screen, seeded from the payload and replaced only by the server:
   // a preview answer while typing, the echo when a save lands.
   const [figures, setFigures] = useState<Record<string, string | null>>(() => figuresOf(allCells))
+  // A newer payload for this same form — the page painted from its cache, then its fetch
+  // landed — re-judges a RESTORED draft on the draft's own terms (§W9; review finding 5): the
+  // draft was checked against the values that were on screen, and if the server now returns
+  // others, a restore would quietly revert them on the next Save. So they win, and the note
+  // says so. Any other prop replacement is ignored, as it always was (typed work is kept).
+  // Adjusted during render (the house rule for a prop the state follows — no effect setState).
+  const [seenInputs, setSeenInputs] = useState(inputs)
+  if (inputs !== seenInputs) {
+    setSeenInputs(inputs)
+    const fresh = valuesOf(flatCells)
+    if (restored && !sameRecord(fresh, baseline)) {
+      setValues(fresh)
+      setBaseline(fresh)
+      setFigures(figuresOf(allCells))
+      setRestored(false)
+      setDropped(true)
+    }
+  }
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // What the last paste did, narrated for everyone (spec §4.1) — one line, replaced by the
@@ -308,12 +351,16 @@ export default function InputsForm({
   // keyed on: two renders that would send the same bytes are the same question, so a blur
   // that only canonicalizes "$216,000" into "216000" asks nothing new.
   const bodyJson = JSON.stringify(previewBodyOf(flatCells, values))
-  // The body the SERVER last agreed with: the mount seed, then each save echo. A form that
-  // still serializes to exactly that already agrees with its figures, so previewing it would
-  // spend a request to be told what we were just told. A ref rather than a one-shot flag,
-  // because StrictMode mounts effects twice in dev and a flag would be spent on the first
-  // pass and let the second one ask.
-  const serverBody = useRef(bodyJson)
+  // The body the figures ON SCREEN describe: the mount seed's, then each landed preview's and
+  // each save echo's. A form that still serializes to exactly that already agrees with its
+  // figures, so previewing it would spend a request to be told what we were just told — and any
+  // other form asks, including one typed (or discarded, §W9) back to the saved values after a
+  // preview moved the figures away from them. A ref rather than a one-shot flag, because
+  // StrictMode mounts effects twice in dev and a flag would be spent on the first pass and let
+  // the second one ask. Seeded from the SERVER's values, not the boxes': a restored draft (§W9)
+  // is a form the figures have not been asked about yet.
+  const [mountBody] = useState(() => JSON.stringify(previewBodyOf(flatCells, valuesOf(flatCells))))
+  const figuresBody = useRef(mountBody)
 
   const changed: Record<string, string | null> = {}
   const invalid: string[] = []
@@ -339,12 +386,37 @@ export default function InputsForm({
     onDirtyChange?.(changedCount > 0)
   }, [changedCount, onDirtyChange])
 
+  // The draft mirrors "what would be lost" continuously (§W9): written on every edit with the
+  // baseline it was typed over, and forgotten the moment the boxes match the server again —
+  // after a save, a discard, or typing a value back. No setState here.
+  useEffect(() => {
+    if (changedCount === 0) clearTaxDraft(draftKey)
+    else writeTaxDraft(draftKey, { loaded: baseline, edited: values })
+  }, [changedCount, values, baseline, draftKey])
+
+  // A USER edit — a keystroke, an Apply chip, a paste: new work, so a note about a draft that
+  // was discarded has said what it had to say (code-quality nit). The form's own writes (a save
+  // echo, a discard, a re-judged payload) call setValues directly.
+  const edit = (change: (current: Record<string, string>) => Record<string, string>) => {
+    setDropped(false)
+    setValues(change)
+  }
+
+  // The restore banner's exit: the saved values back in every box, the draft forgotten. A
+  // preview still in flight for the restored boxes is retired; the totals are asked about the
+  // saved boxes the way any edit asks.
+  const discardRestored = () => {
+    figureSeq.current += 1
+    setValues(baseline)
+    setRestored(false)
+  }
+
   // Live totals (spec §1.7): a computed line follows its components as they are typed, and
   // the browser owns no formula — so every edit ASKS what the totals would be. Debounced
   // because a keystroke is not a question, and sequenced because the answers can arrive out
   // of order.
   useEffect(() => {
-    if (serverBody.current === bodyJson) return
+    if (figuresBody.current === bodyJson) return
     const timer = setTimeout(() => {
       const seq = ++figureSeq.current
       // Parsed back from the very text the effect was keyed on: what was compared is what
@@ -354,6 +426,7 @@ export default function InputsForm({
           // Stale, or overtaken by a save echo: the newest answer owns the screen, and an
           // older one describes a form that no longer exists.
           if (seq !== figureSeq.current) return
+          figuresBody.current = bodyJson
           setFigures((current) => {
             const next = { ...current }
             for (const item of preview.derived)
@@ -426,13 +499,16 @@ export default function InputsForm({
         const { flatCells: echoCells, allCells: echoAll } = modelOf(echo)
         const echoValues = valuesOf(echoCells)
         figureSeq.current += 1
-        serverBody.current = JSON.stringify(previewBodyOf(echoCells, echoValues))
+        figuresBody.current = JSON.stringify(previewBodyOf(echoCells, echoValues))
         setFigures(figuresOf(echoAll))
         setValues(echoValues)
         setBaseline(valuesOf(echoCells))
         // The note described a pending fill that the echo just replaced — it would be
         // narrating values that are no longer on screen.
         setPasteNote(null)
+        // Saved: nothing restored is unsaved any more, and a dropped draft is history.
+        setRestored(false)
+        setDropped(false)
         onSaved(echo)
       })
       .catch((err: unknown) => {
@@ -543,7 +619,7 @@ export default function InputsForm({
       }
       overflow = plan.skipped
     }
-    if (Object.keys(fills).length > 0) setValues((current) => ({ ...current, ...fills }))
+    if (Object.keys(fills).length > 0) edit((current) => ({ ...current, ...fills }))
     setFlashIds(flashed)
     const parts = [`Pasted ${Object.keys(fills).length} of ${reachable} values`]
     if (unmatched.length > 0) {
@@ -569,7 +645,8 @@ export default function InputsForm({
       </h2>
       <p className="drill-hint">
         Stored values feed the engine; computed lines follow their components. Clearing a
-        field unsets that input.
+        field unsets that input. Enter the whole year’s figures, including paychecks and vests
+        still to come.
       </p>
       {/* Married-JOINT alone: an MFS return is one person's by design (the CA caveat in the
           year card is exactly about what that does not model), so its single column is the
@@ -579,6 +656,23 @@ export default function InputsForm({
           One column: add the second person in Settings → Household to split the per-person
           lines (salary, W-2, 401k, HSA, pre-tax deductions) into two. Until then these values
           are stored against the primary person.
+        </p>
+      )}
+      {/* Advisory, never an error: nothing failed — work was preserved (the wizard's draft
+          note). Only while it is still unsaved work: typed back to the saved values, there is
+          nothing restored left to discard. */}
+      {restored && changedCount > 0 && (
+        <div className="tax-draft-note" role="status">
+          <span>Restored unsaved tax inputs for {inputs.year} — they are not saved yet.</span>
+          <button type="button" className="button" onClick={discardRestored}>
+            Discard restored entries
+          </button>
+        </div>
+      )}
+      {dropped && (
+        <p className="tax-draft-note" role="status">
+          Unsaved tax inputs for {inputs.year} were discarded: the saved values changed since you
+          typed them.
         </p>
       )}
       <FeedBanner error={error} />
@@ -625,8 +719,17 @@ export default function InputsForm({
                   suggestionCell.suggested === null
                     ? null
                     : toBox(suggestionCell.unit, suggestionCell.suggested)
+                // The salary chip is the paycheck profile's offer, and it is offered only when
+                // the STORED salary differs from it (2026-09-23 spec §W4): a stored figure that
+                // already matches the records has nothing to be corrected to, whatever is being
+                // typed over it. Numeric, because the two arrive at different quanta.
+                const storedMatches =
+                  row.key === SALARY_KEY &&
+                  suggestionCell.suggested !== null &&
+                  suggestionCell.value !== null &&
+                  Number(suggestionCell.value) === Number(suggestionCell.suggested)
                 const suggestion =
-                  suggestionCell.suggested === null || applies === shown
+                  suggestionCell.suggested === null || applies === shown || storedMatches
                     ? null
                     : figureText(suggestionCell.unit, suggestionCell.suggested)
                 // "last year's $15,750" for a carry-forward, "suggested …" for a formula.
@@ -698,7 +801,7 @@ export default function InputsForm({
                           kind={UNIT_KINDS[cell.unit]}
                           value={value}
                           onValueChange={(next) =>
-                            setValues((current) => ({ ...current, [cell.id]: next }))
+                            edit((current) => ({ ...current, [cell.id]: next }))
                           }
                         />
                       )
@@ -725,7 +828,7 @@ export default function InputsForm({
                             aria-label={`Apply suggestion for ${row.label}`}
                             title={`Apply ${suggestion}`}
                             onClick={() =>
-                              setValues((current) => ({
+                              edit((current) => ({
                                 ...current,
                                 [suggestionCell.id]: applies ?? '',
                               }))

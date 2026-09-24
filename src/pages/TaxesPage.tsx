@@ -2,6 +2,7 @@ import { LocalSectionNav, LocalSectionPanel, useLocalSections } from '../compone
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ApiError, describeError } from '../api/client'
+import { undoBatch } from '../api/lifecycle'
 import {
   cloneBrackets,
   deleteTaxYear,
@@ -10,21 +11,22 @@ import {
   fetchTaxSummary,
   fetchTaxYears,
   FILING_STATUS_LABELS,
-  FILING_STATUSES,
   patchTaxYear,
   putTaxInputs,
 } from '../api/taxes'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { useAssistantView } from '../components/assistant/viewState'
-import InfoHint from '../components/InfoHint'
 import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import Segmented from '../components/shell/Segmented'
 import BracketsEditor from '../components/taxes/BracketsEditor'
 import CompositionPanel from '../components/taxes/CompositionPanel'
+import FilingStatusMenu from '../components/taxes/FilingStatusMenu'
 import InputsForm from '../components/taxes/InputsForm'
+import { figureText } from '../components/taxes/inputUnits'
 import MarginalPanel from '../components/taxes/MarginalPanel'
 import SummaryPanel from '../components/taxes/SummaryPanel'
+import { clearTaxDraft, clearYearDrafts, inputsDraftKey } from '../components/taxes/taxDrafts'
 import type { TaxSection } from '../components/taxes/taxSections'
 import TaxYearMenu from '../components/taxes/TaxYearMenu'
 import WhatIfPanel from '../components/taxes/WhatIfPanel'
@@ -33,6 +35,9 @@ import WhatIfPanel from '../components/taxes/WhatIfPanel'
 // `import type` is erased before the mock ever sees it.
 import type { OverrideDefinition } from '../components/taxes/WhatIfPanel'
 import WithholdingPanel from '../components/taxes/WithholdingPanel'
+import { useToast } from '../components/ToastProvider'
+import { currentYear } from '../utils/months'
+import { useProductToday } from '../utils/productToday'
 import type {
   ChangedInput,
   FilingStatus,
@@ -41,7 +46,6 @@ import type {
   TaxSummaryOut,
   TaxYearOut,
 } from '../types/api'
-import { formatCurrency } from '../utils/format'
 import '../components/panels.css'
 import './TaxesPage.css'
 
@@ -107,20 +111,6 @@ function overrideDefinitions(inputs: TaxInputsOut): OverrideDefinition[] {
       definitions.push({ key: item.key, label: item.label })
     }
   return definitions
-}
-
-// D4: the PRIMARY person's stored w2_stock_rsus_sold — the payload orders columns primary
-// first, and a roster-less year spells the primary as person_id null.
-function vestW2Stored(inputs: TaxInputsOut): string | null {
-  const primary = inputs.people[0]?.id ?? null
-  for (const section of inputs.sections)
-    for (const item of section.items)
-      if (
-        item.key === 'w2_stock_rsus_sold' &&
-        (item.person_id === primary || item.person_id === null)
-      )
-        return item.value
-  return null
 }
 
 function latestOf(years: TaxYearOut[]): TaxYearOut | undefined {
@@ -191,7 +181,7 @@ export default function TaxesPage() {
   const [yearError, setYearError] = useState<string | null>(null)
   const [newYear, setNewYear] = useState(() =>
     cachedYears !== undefined
-      ? String(cachedLatest ? cachedLatest.year + 1 : new Date().getFullYear())
+      ? String(cachedLatest ? cachedLatest.year + 1 : currentYear())
       : '',
   )
   const [creating, setCreating] = useState(false)
@@ -213,6 +203,11 @@ export default function TaxesPage() {
   // external echo must REMOUNT it — this rides its key. The chip confirmed any discard
   // before PUTting, so the remount never eats work silently.
   const [inputsEpoch, setInputsEpoch] = useState(0)
+  // The Will I owe? card reads the year's inputs, tables and status on the server, and stays
+  // mounted while the other views are open: every write that moves them bumps this, and the
+  // card reloads its feed (2026-09-23 spec §W4 — the strip must show a fix made in Inputs). Bumped
+  // in the same batch as the card's own post-Apply reload, so an Apply spends one request.
+  const [withholdingRefresh, setWithholdingRefresh] = useState(0)
   // Year chips can be clicked faster than three requests come back — a slow earlier year
   // must never overwrite a later one (PortfolioPage's guard).
   const seqRef = useRef(0)
@@ -272,6 +267,37 @@ export default function TaxesPage() {
   // Only while the editors are mounted: a failed load unmounts them, and their last
   // reported flag must not outlive them into a spurious confirm.
   const dirty = detail !== null && (inputsDirty || bracketsDirty)
+  // The Will I owe? card answers for the SERVER's year only (its endpoint refuses any other —
+  // 2026-09-23 spec §W11), so the card's mount and the status dialog's "withholding joins /
+  // leaves the card" line read one value, and on New Year's Eve evening in Pacific time it is the
+  // product clock's new year, not the browser's old one. Subscribed: a tab left open across
+  // midnight re-renders on the first response that names the new day.
+  useProductToday()
+  const cardYear = currentYear()
+  const toast = useToast()
+  // A toast's Undo runs long after the render that offered it; the unsaved-work question it
+  // asks has to be about the editors as they are THEN.
+  const dirtyRef = useRef(dirty)
+  useEffect(() => {
+    dirtyRef.current = dirty
+  }, [dirty])
+
+  // A reload or a closed tab would take typed work with it (2026-09-23 spec §W9): while either
+  // editor holds some, the browser asks its own "Leave site?" first. The drafts are the net
+  // under a navigation it cannot ask about (an in-app route change, a login redirect); this is
+  // the question where one can be asked. Registered only while dirty, so a clean page never
+  // makes the browser hesitate.
+  useEffect(() => {
+    if (!dirty) return
+    const hold = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      // The legacy half: engines that predate preventDefault() on this event ask only when
+      // returnValue is set (code-quality suggestion).
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', hold)
+    return () => window.removeEventListener('beforeunload', hold)
+  }, [dirty])
 
   // The assistant answers against the year on screen (2026-09-01 spec §6).
   useAssistantView({ year: selectedYear, filingStatus })
@@ -306,7 +332,7 @@ export default function TaxesPage() {
         }
         setYears(list)
         const latest = latestOf(list)
-        setNewYear(String(latest ? latest.year + 1 : new Date().getFullYear()))
+        setNewYear(String(latest ? latest.year + 1 : currentYear()))
         // The preferred year wins when the list carries it; anything else — absent, garbled,
         // a year that is gone — falls back to the latest and is LEFT in the URL rather than
         // corrected here. This page writes the param from its own doors only: a write from
@@ -422,9 +448,14 @@ export default function TaxesPage() {
   }
 
   // The house confirm (TransactionsPanel's delete): a reload replaces both editors'
-  // payloads, so unsaved work is gone the moment one starts.
-  const confirmDiscard = () =>
-    !dirty || window.confirm(`Discard unsaved changes for ${selectedYear}?`)
+  // payloads, so unsaved work is gone the moment one starts. Accepted, it is gone on purpose —
+  // so the year's drafts go too, rather than resurrecting on the next visit (§W9).
+  const confirmDiscard = () => {
+    if (!dirty) return true
+    if (!window.confirm(`Discard unsaved changes for ${selectedYear}?`)) return false
+    if (selectedYear !== null) clearYearDrafts(selectedYear)
+    return true
+  }
 
   const selectYear = (year: number) => {
     // Re-clicking the selected chip must not refetch (MonthlyUpdatePage's same-month
@@ -434,21 +465,51 @@ export default function TaxesPage() {
     loadYear(year)
   }
 
+  // The status change's Undo (2026-09-23 spec §W8): the activity log restores the row, and
+  // the list reload carries the restored status into `filingStatus` — which is a key of the
+  // load effect, so the year reloads under it without touching the URL from a stale closure.
+  // A reload replaces both editors, so typed work is asked about first, like every door — but
+  // only when that year is the one on screen (nothing else reloads), and an accepted answer
+  // forgets its drafts as `confirmDiscard` does (§W9). Single-flight with the dialog's confirm.
+  const undoFilingStatus = (year: number, restored: FilingStatus, batchId: string) => {
+    if (currentYearRef.current === year && dirtyRef.current) {
+      if (!window.confirm(`Discard unsaved changes for ${year}?`)) return
+      clearYearDrafts(year)
+    }
+    setStatusSaving(true)
+    undoBatch(batchId)
+      .then(() => {
+        toast.success(`Undone — ${year} is filed ${FILING_STATUS_LABELS[restored]} again.`)
+        setTrendRefresh((n) => n + 1)
+        setWithholdingRefresh((n) => n + 1)
+        return reconcileYears().catch((err: unknown) => {
+          setError(describeError(err, 'the tax years'))
+        })
+      })
+      .catch((err: unknown) => {
+        toast.error(err instanceof ApiError ? err.message : 'Undo failed')
+      })
+      .finally(() => setStatusSaving(false))
+  }
+
   // The FIFTH reload door (chips, Retry, create, delete, status). Everything the engine
   // reads moves with the status — bracket tables are stored per (jurisdiction, status), the
   // per-person inputs split into two columns, and the summary is computed against the
   // status-selected tables — so it goes through the SAME discard gate and the same
   // loadYear(), whose fresh `{year}` object (together with the row this replaces) is what
-  // re-runs the load effect for the year already on screen.
+  // re-runs the load effect for the year already on screen. Reached only through the
+  // Change… dialog's confirm (2026-09-23 spec §W8), and change-logged: the Undo rides the
+  // standard toast.
   const changeFilingStatus = (next: FilingStatus) => {
     if (selectedYear === null || next === filingStatus || statusSaving) return
     if (!confirmDiscard()) return
     const year = selectedYear
+    const previous = filingStatus
     setStatusSaving(true)
     setError(null)
     setYearError(null)
     patchTaxYear(year, { filing_status: next })
-      .then((row) => {
+      .then(({ year: row, batchId }) => {
         // The echo is authoritative, and replacing the row HERE means the selector follows
         // even if no list reload ever happens.
         setYears((current) => current.map((y) => (y.year === row.year ? row : y)))
@@ -457,6 +518,20 @@ export default function TaxesPage() {
         // moves the year's column in the all-years trend — a status change is a save as far
         // as CompositionPanel's feed is concerned (2026-08-31 review round).
         setTrendRefresh((n) => n + 1)
+        setWithholdingRefresh((n) => n + 1)
+        // The change log's own words. No batch, no Undo (the wizard's contract).
+        const done = `Changed ${year} filing status to ${FILING_STATUS_LABELS[row.filing_status]}`
+        toast.success(
+          done,
+          batchId === null
+            ? undefined
+            : {
+                action: {
+                  label: 'Undo',
+                  onAction: () => undoFilingStatus(year, previous, batchId),
+                },
+              },
+        )
       })
       .catch((err: unknown) => {
         // A 422 (an unknown status) or a 404 (the year went away) lands here verbatim. The
@@ -502,6 +577,7 @@ export default function TaxesPage() {
       current !== null && current.inputs.year === echo.year ? { ...current, inputs: echo } : current,
     )
     if (isStaleEcho(echo.year)) return
+    setWithholdingRefresh((n) => n + 1)
     refreshSummary(echo.year)
     // The chips carry input/bracket counts, and this save just moved one of them.
     refreshYearCounts()
@@ -510,6 +586,10 @@ export default function TaxesPage() {
   // The withholding card wrote the year's inputs from outside the form: the same landing
   // chain a save takes, plus the remount the form's protect-typed-work rule makes necessary.
   const onVestApplied = (echo: TaxInputsOut) => {
+    // Its confirm named the discard of any unsaved edits, and it was accepted: the draft goes
+    // with them, or the remount would call the Apply's own write "the saved values changed
+    // since you typed them" (§W9).
+    clearTaxDraft(inputsDraftKey(echo.year))
     setInputsEpoch((n) => n + 1)
     onInputsSaved(echo) // adopts the echo, refreshes the totals and the chip counts
   }
@@ -549,7 +629,11 @@ export default function TaxesPage() {
     // the engine's own derived rows, and listing those would promise writes nobody asked for.
     const lines = changed
       .filter((row) => keys.includes(row.key))
-      .map((row) => `${row.label}: ${formatCurrency(row.before)} → ${formatCurrency(row.after)}`)
+      // Each figure in its key's own unit (2026-09-23 spec §W10): "97.53% → 95%", "24 → 20".
+      .map((row) => {
+        const unit = row.unit ?? 'money'
+        return `${row.label}: ${figureText(unit, row.before)} → ${figureText(unit, row.after)}`
+      })
     const sentence = `This writes ${keys.length} input${keys.length === 1 ? '' : 's'} to ${year}'s stored return and reloads the Inputs view${
       inputsDirty ? ', discarding its unsaved edits' : ''
       }. Continue?`
@@ -577,6 +661,8 @@ export default function TaxesPage() {
         : current,
     )
     if (isStaleEcho(echo.year)) return
+    // Only the year's OWN status' tables are the ones the engine walks.
+    if (echo.filing_status === filingStatus) setWithholdingRefresh((n) => n + 1)
     refreshSummary(echo.year)
     refreshYearCounts()
   }
@@ -679,8 +765,10 @@ export default function TaxesPage() {
     deleteTaxYear(year)
       .then(() => {
         // Gone on the server whoever is looking at the page by now, so the chip goes
-        // unguarded — the create path's optimistic list edit, inverted.
+        // unguarded — the create path's optimistic list edit, inverted. Its drafts describe
+        // a year that no longer exists (§W9).
         setYears((current) => current.filter((y) => y.year !== year))
+        clearYearDrafts(year)
         if (seq !== seqRef.current) return
         // No year is selected any more — the ref that says which year the page belongs to
         // was nulled at click time, above — so the URL must stop naming one too.
@@ -763,26 +851,17 @@ export default function TaxesPage() {
             onChange={(value) => selectYear(Number(value))}
           />
         </div>
-        {/* The status of the SELECTED year, beside the year it belongs to — not another year
-            to pick. Shut while the year is loading or the PATCH is in flight, as before. */}
+        {/* The status of the SELECTED year, beside the year it belongs to — plain text with a
+            Change… door (2026-09-23 spec §W8), never a toggle that PATCHes on one click. The
+            dialog confirms only while the year is not loading or already being PATCHed. */}
         {selectedYear !== null && (
-          <div className="scope-bar-group">
-            <span className="eyebrow" aria-hidden="true">
-              Filing status
-            </span>
-            <Segmented
-              variant="toggle"
-              ariaLabel="Filing status"
-              options={FILING_STATUSES.map((status) => ({
-                value: status,
-                label: FILING_STATUS_LABELS[status],
-                disabled: statusSaving || busy,
-              }))}
-              value={filingStatus}
-              onChange={changeFilingStatus}
-            />
-            <InfoHint text="Which bracket tables the engine walks for this year, and whether the per-person inputs in the Inputs view split into two columns. Every year starts as Single." />
-          </div>
+          <FilingStatusMenu
+            key={selectedYear}
+            year={selectedYear}
+            status={filingStatus}
+            disabled={statusSaving || busy}
+            onChange={changeFilingStatus}
+          />
         )}
       </div>
     )
@@ -883,14 +962,14 @@ export default function TaxesPage() {
             <>
               <LocalSectionPanel state={views} section="summary">
                 <SummaryPanel summary={d.summary} filingStatus={filingStatus} goTo={goTo} />
-                {d.summary.year === new Date().getFullYear() && (
+                {d.summary.year === cardYear && (
                   <WithholdingPanel
                     key={`withholding-${d.summary.year}`}
                     year={d.summary.year}
-                    storedVestW2={vestW2Stored(d.inputs)}
                     inputsDirty={inputsDirty}
                     onVestApplied={onVestApplied}
                     goTo={goTo}
+                    refreshKey={withholdingRefresh}
                   />
                 )}
                 <MarginalPanel summary={d.summary} brackets={d.brackets} />
