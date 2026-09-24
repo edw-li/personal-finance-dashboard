@@ -34,7 +34,8 @@ const ALLOWLIST: Record<string, number> = {
   'pages/OverviewPage.tsx': 1, // W11 — the tax year read
 }
 /** The allowlist when lane K landed (2026-09-24). It may only shrink: no file joins it and no
- *  count rises. It is empty once W and M have landed (that assertion arrives with M). */
+ *  count rises. M's entry is gone; W's two go with W, and once both lanes are in, an
+ *  "ALLOWLIST is empty" assertion replaces this list (added at their integration). */
 const ALLOWLIST_AT_LANDING: Record<string, number> = {
   'pages/TaxesPage.tsx': 3,
   'pages/OverviewPage.tsx': 1,

@@ -34,7 +34,7 @@ export const ROUTINE_CARDS: GuideCard[] = [
         ],
         to: '/update',
         watch: [
-          'A part turns amber once overdue — balances from the 7th, the ended month’s spending and take-home from the 16th.',
+          'A part turns amber once overdue — by default, balances from the 7th and the ended month’s spending and take-home from the 16th; both move with the reminder day.',
           'With nothing due, the strip says when the next balances fall due.',
         ],
         keywords: ['what is due', 'due', 'overdue', 'reminder'],
@@ -285,7 +285,9 @@ export const ROUTINE_CARDS: GuideCard[] = [
         id: 'season-status',
         title: 'Set the filing status',
         where: 'Taxes → Filing status',
-        steps: ['In the scope row, **Filing status** — the status this year is filed as.'],
+        steps: [
+          'In the scope row, **Filing status** names the status this year is filed as; press its Change… button, pick another and confirm with **Change to <status>**.',
+        ],
         to: '/taxes',
         watch: ['Every year starts Single.'],
       },
