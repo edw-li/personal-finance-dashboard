@@ -740,8 +740,10 @@ that makes them vanish has introduced a bug, not removed one.
 
 - **ESPP §423 qualifying cap.** A qualifying disposition's ordinary income is capped at the
   plan discount on the *offering-date* value — shares × subscription price × discount — as
-  IRC §423(c) reads. The old cap priced the discount on the purchase-date value, so the cap
-  falls to 85 % of the old figure; ordinary income moves only where the cap binds.
+  IRC §423(c) reads. The old formula took the stored subscription price for the
+  already-discounted price and divided it back up by (1 − discount), but the app stores the
+  undiscounted offering-date price there — so the cap falls to 85 % of the old figure (at a
+  15 % discount); ordinary income moves only where the cap binds.
 - **ESPP ordinary income is not a payroll wage.** It stays W-2 income for federal and state
   income tax but leaves the Medicare, Social Security and SDI bases (IRC §3121(a)(22)); the
   What-if's "real ESPP ordinary income is FICA-exempt" disclaimer went with the bug it
