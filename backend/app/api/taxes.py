@@ -1947,8 +1947,10 @@ async def _reconciliation(
 ) -> ReconciliationOut:
     """Your typed inputs against Paycheck, Comp and ESPP (2026-09-23 spec §W3): the facts are
     gathered here — the year's stored limits, the sold ESPP lots, each leg's counted-check
-    grid already in `estimated` — and the rows, prices and flags are the pure service's. Two
-    small reads; every overlay is an in-memory engine run over the feed's own rows."""
+    grid already in `estimated` — and the rows, prices and flags are the pure service's. Up to
+    four small reads (the year's limits, whether any ESPP lot exists, the lots sold this year
+    and — only when there are some — the plan's discount); every overlay is an in-memory engine
+    run over the feed's own rows."""
     year = feed.year
     limits = await _limits_for(db, year)
     elective_limit = limits.get(LIMIT_401K_ELECTIVE)
@@ -2184,8 +2186,8 @@ async def withholding_estimate(
     pricing two years reads the clock once.
 
     `reconcile` adds the typed-inputs-vs-records strip (2026-09-23 spec §W3) — about ten more
-    engine runs and two small reads, so only the GET asks for it; the calendar's internal
-    reads keep the default and never pay for it.
+    engine runs and up to four small reads (`_reconciliation` names them), so only the GET asks
+    for it; the calendar's internal reads keep the default and never pay for it.
     """
     await _require_year(db, year)
 
