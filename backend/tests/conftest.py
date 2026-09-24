@@ -97,8 +97,19 @@ def _fast_reset_sql() -> str:
     snapshot restore parks each sequence at max(id) + 1 with is_called false, which
     pg_sequences reports as last_value NULL — exactly like an untouched sequence — so a
     "reset only what was read" filter misses it and the next test's first row is id 2.
-    Resetting all ~40 costs no more (median ~5 ms either way). setval(seq, start, false)
+    Resetting every one costs no more (median ~5 ms either way). setval(seq, start, false)
     makes the next nextval return start — RESTART IDENTITY's state, serial or identity.
+
+    Two ways it behaves unlike TRUNCATE, beyond speed:
+    - DELETE takes no table lock that conflicts with a reader or with an uncommitted insert,
+      so a test that leaks an open transaction no longer hangs its own teardown (TRUNCATE's
+      ACCESS EXCLUSIVE lock waited for it). The leaked transaction's uncommitted rows are
+      invisible to the DELETE and are not removed. Only rows it has locked (updated, deleted,
+      SELECT … FOR UPDATE) make the reset wait, and then for _RESET_LOCK_TIMEOUT at most.
+    - Freed tuple slots get reused, so rows can sit out of insertion order even in a table
+      no test updated, and a query without ORDER BY returns them that way (a freshly
+      truncated table filled in insertion order). A new flake of that shape points at a
+      missing ORDER BY, not at the reset.
 
     synchronous_commit is off for this one transaction: its COMMIT returns without waiting
     for the WAL flush. Under -n 4 (four workers flushing at once) that wait made the rare
