@@ -324,8 +324,10 @@ function ReconciliationStrip({
           </div>
         </>
       )}
-      {rec.notes.map((note) => (
-        <p className="drill-hint recon-note" key={note}>
+      {/* Keyed by position: two notes can say the same sentence (two lots sold the same day
+          without a price), and a text key would clash. The list is the server's, in order. */}
+      {rec.notes.map((note, index) => (
+        <p className="drill-hint recon-note" key={index}>
           {note}
         </p>
       ))}

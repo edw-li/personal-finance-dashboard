@@ -1224,6 +1224,26 @@ describe('WithholdingPanel — your inputs vs your records (2026-09-23 spec §W4
     expect(goTo).toHaveBeenCalledWith('inputs')
   })
 
+  it('keys its notes by position, so two identical notes both render without a key clash (code-quality nit)', async () => {
+    // Two hand-edited lots sold the same day without a price say the same sentence twice.
+    const note =
+      'The ESPP lot bought on Aug 29, 2025 is marked sold on May 1, 2026 without a sale price, so it is left out of the ESPP row'
+    const base = reconciled()
+    vi.mocked(fetchWithholding).mockResolvedValue({
+      ...base,
+      reconciliation: { ...base.reconciliation!, notes: [note, note] },
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      render(<WithholdingPanel year={2026} />)
+      await screen.findByText('Your inputs vs your records')
+      expect(within(strip()).getAllByText(note)).toHaveLength(2)
+      expect(errors.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(false)
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
   it('says what is never reconciled', async () => {
     vi.mocked(fetchWithholding).mockResolvedValue(reconciled())
     render(<WithholdingPanel year={2026} />)
