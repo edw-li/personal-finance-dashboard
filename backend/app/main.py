@@ -6,6 +6,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.api import (
     activity,
@@ -41,16 +43,55 @@ from app.api import (
 from app.api import health as health_api
 from app.config import settings
 from app.rate_limit import limiter
+from app.services import clock
 
 # uvicorn configures only its own loggers — application records (scheduler boots, price
 # refresh results) otherwise fall through to logging.lastResort at WARNING and all INFO
 # is silently dropped (Task 7 review I1). basicConfig is a no-op if a root handler
 # already exists, so this never fights an outer logging config.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+logger = logging.getLogger(__name__)
+
+# One "today" for the browser too (2026-09-23 spec §K1, §0.4(a)).
+PRODUCT_TODAY_HEADER = "X-Product-Today"
+
+
+class ProductTodayHeader:
+    """Names the server's product day on every /api response — a 401, a 404 and a 422 as much
+    as a 200 — so the browser's todayIso(), currentMonthIso() and currentYear()
+    (src/utils/months.ts) answer the SERVER's day instead of their own clock (spec §K1).
+
+    Plain ASGI rather than BaseHTTPMiddleware: it only adds a header to the start message, so a
+    streamed body (the assistant's SSE) passes through untouched."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not scope["path"].startswith("/api/"):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_today(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message).append(
+                    PRODUCT_TODAY_HEADER, clock.product_today().isoformat()
+                )
+            await send(message)
+
+        await self.app(scope, receive, send_with_today)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    override = clock.product_today_override()
+    if override is not None:
+        # One WARNING line naming the override (spec §K1): a dev server answering a day that is
+        # not today says so where its operator is looking.
+        logger.warning(
+            "PRODUCT_TODAY override: the product day is %s, not the real day (dev only)",
+            override.isoformat(),
+        )
     scheduler = None
     if settings.scheduler_enabled:
         from app.services.scheduler import start_scheduler
@@ -60,7 +101,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             # A background nicety must never veto the API (Task 7 review I2): serve
             # without refreshes and say so — ERROR is visible even unconfigured.
-            logging.getLogger(__name__).exception("scheduler failed to start — API continues")
+            logger.exception("scheduler failed to start — API continues")
     try:
         yield
     finally:
@@ -80,12 +121,18 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# Added first, so it sits INSIDE the CORS middleware: every /api response the app answers —
+# errors included — carries the day, and CORS below exposes it.
+app.add_middleware(ProductTodayHeader)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Same-origin in prod (nginx) and dev (the Vite proxy); a cross-origin dev page must still be
+    # able to read the day (spec §K1).
+    expose_headers=[PRODUCT_TODAY_HEADER],
 )
 
 app.include_router(auth.router, prefix="/api/v1")
