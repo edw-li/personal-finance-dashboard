@@ -877,6 +877,42 @@ describe('SpendingPage — the ribbon\u2019s edit link', () => {
   })
 })
 
+// 2026-09-23 spec §T8: with nothing picked the page shows its last complete month, so Edit opens
+// THAT month and "Back to last complete month" appears only away from it; on the Budgets view the
+// default is the month the Budget card resolved.
+describe('SpendingPage — the ribbon names the page\u2019s default month (2026-09-23 spec §T8)', () => {
+  it('edits the last complete month when nothing is picked, and offers the way back to it', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ default_month: '2026-06-01' }))
+    renderPage('/spending')
+    const edit = await screen.findByRole('link', { name: 'Edit Jun 2026 in the wizard' })
+    expect(edit.getAttribute('href')).toBe('/update?month=2026-06-01&step=spending')
+    expect(screen.queryByRole('button', { name: 'Back to last complete month' })).toBeNull()
+    cleanup()
+    renderPage('/spending?month=2026-07')
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to last complete month' }))
+    await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('month='))
+  })
+
+  it('on the Budgets view, compares with the month the Budget card resolved', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(
+      matrixFixture({
+        default_month: '2026-06-01',
+        series: [
+          { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, '2100.00'] },
+          { category_id: 2, values: ['600.00', '580.00'], budgets: [null, '550.00'] },
+          { category_id: 3, values: ['150.00', '0.00'], budgets: [null, null] },
+        ],
+        total_budget: [null, '2650.00'],
+      }),
+    )
+    renderPage('/spending?section=budgets')
+    // The card opens where the budgets are — July — and Edit follows the card, not June.
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jul 2026/ })).toBeTruthy()
+    const edit = await screen.findByRole('link', { name: 'Edit Jul 2026 in the wizard' })
+    expect(edit.getAttribute('href')).toBe('/update?month=2026-07-01&step=spending')
+  })
+})
+
 describe('SpendingPage — the honest rollup (spec §1/§2)', () => {
   // Three kinds on one page: rent is living, the April tax bill is not spend at all, and a
   // brokerage transfer is money that stayed the household's.
