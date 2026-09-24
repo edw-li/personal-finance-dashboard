@@ -50,7 +50,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.app_settings import read_plan_until_year
 from app.api.deps import get_current_user
 
 # The espp router owns the espp_ticker -> securities -> latest_prices soft link; the vests
@@ -99,7 +98,7 @@ from app.services.montecarlo import (
     simulate,
     survival_count,
 )
-from app.services.net_worth_calc import INVESTABLE_GROUPS, get_swr_pct
+from app.services.net_worth_calc import INVESTABLE_GROUPS, get_swr_pct, read_plan_until_year
 from app.services.paycheck_calc import MONTHS_PER_YEAR, breakdown, half_up2
 from app.services.people import load_people, primary_person
 from app.services.projection import (

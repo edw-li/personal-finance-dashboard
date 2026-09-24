@@ -29,7 +29,7 @@ from app.services.money import quantize_pct
 # may not import a router); re-exported here, so api/calendar.py and this router's GET/PUT read
 # it exactly as before.
 from app.services.month_status import MAX_UPDATE_DUE_DAY, read_update_due_day
-from app.services.net_worth_calc import get_swr_pct
+from app.services.net_worth_calc import PLAN_UNTIL_KEY, get_swr_pct, read_plan_until_year
 from app.services.projection import max_plan_until_year
 from app.services.scheduler import (
     SCHEDULER_TIMEZONE,
@@ -95,28 +95,6 @@ async def read_espp_discount(db: AsyncSession) -> Decimal:
     if not parsed.is_finite() or parsed < 0 or parsed > MAX_ESPP_DISCOUNT:
         return DEFAULT_ESPP_DISCOUNT
     return parsed
-
-
-# "Plan until (year)" (2026-09-23 spec §R11): the Projection's lasting default for the year the
-# money has to last through. The reader's sanity window is the page codec's client fence
-# (projectionScenario.ts): a year outside it can only be a hand-edited row and reads as absent;
-# one inside it that has already passed is RETURNED, so the projection can name it when it
-# ignores it (spec §R3).
-PLAN_UNTIL_KEY = "plan_until_year"
-PLAN_UNTIL_SANE_MIN = 2000
-PLAN_UNTIL_SANE_MAX = 2199
-
-
-async def read_plan_until_year(db: AsyncSession) -> int | None:
-    """app_settings['plan_until_year'] envelope {"value": 2075}; a missing or malformed row is
-    None (get_swr_pct's posture). Imported by api/projection.py."""
-    setting = await db.get(AppSetting, PLAN_UNTIL_KEY)
-    if setting is None or not isinstance(setting.value, dict):
-        return None
-    raw = setting.value.get("value")
-    if isinstance(raw, bool) or not isinstance(raw, int):
-        return None
-    return raw if PLAN_UNTIL_SANE_MIN <= raw <= PLAN_UNTIL_SANE_MAX else None
 
 
 def _validated_plan_until_year(value: int, today: date) -> int:

@@ -9,8 +9,8 @@ from datetime import date
 
 import pytest
 
-from app.api.app_settings import read_plan_until_year
 from app.models import AppSetting
+from app.services.net_worth_calc import read_plan_until_year
 
 SETTINGS = "/api/v1/settings"
 
