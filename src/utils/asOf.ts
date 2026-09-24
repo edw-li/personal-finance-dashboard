@@ -11,7 +11,11 @@ const LONG = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ]
 
-type Dated = Pick<SnapshotStateOut, 'month' | 'as_of' | 'provisional'>
+/** A snapshot's key and standing — a SnapshotStateOut, or the same fields off a summary or a
+ *  timeseries point. Optional because those wire types carry them optionally (fixtures written
+ *  before 2026-09-24 keep compiling): an absent `as_of` reads as unknown, an absent
+ *  `provisional` as final. */
+type Dated = Pick<SnapshotStateOut, 'month'> & Partial<Pick<SnapshotStateOut, 'as_of' | 'provisional'>>
 
 /** 'Oct 1' — with ', 2025' outside the server's current year. */
 function dayLabel(iso: string): string {
@@ -22,14 +26,14 @@ function dayLabel(iso: string): string {
 
 /** "Oct 1" (", 2025" outside the server's year) or "date unknown". */
 export function formatAsOf(state: Dated): string {
-  return state.as_of === null ? 'date unknown' : dayLabel(state.as_of)
+  return state.as_of == null ? 'date unknown' : dayLabel(state.as_of)
 }
 
 /** "as of Oct 1" / "as of Sep 22 · provisional" — "date unknown · provisional" without a date
  *  (only a snapshot still ahead of its month can lack one). */
 export function asOfPhrase(state: Dated): string {
   const flag = state.provisional ? ' · provisional' : ''
-  return state.as_of === null ? `date unknown${flag}` : `as of ${formatAsOf(state)}${flag}`
+  return state.as_of == null ? `date unknown${flag}` : `as of ${formatAsOf(state)}${flag}`
 }
 
 const monthIndex = (iso: string) => Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7)) - 1
@@ -40,15 +44,15 @@ const monthIndex = (iso: string) => Number(iso.slice(0, 4)) * 12 + Number(iso.sl
  *  Aug 1 · 2 months" (both final, a gap); "since Jul 1" (quarterly). Null with nothing to
  *  compare; an unknown date drops the count. */
 export function changePhrase(
-  previous: Dated | null,
+  previous: Dated | null | undefined,
   current: Dated,
   { period = 'month' }: { period?: 'month' | 'quarter' } = {},
 ): string | null {
-  if (previous === null) return null
+  if (previous == null) return null
   const since = `since ${formatAsOf(previous)}`
   if (period === 'quarter') return since
   const days =
-    previous.as_of !== null && current.as_of !== null ? daysBetween(previous.as_of, current.as_of) : null
+    previous.as_of != null && current.as_of != null ? daysBetween(previous.as_of, current.as_of) : null
   const span = days === null ? '' : ` · ${days} ${days === 1 ? 'day' : 'days'}`
   if (previous.provisional) return `${since}${span} (${dayLabel(previous.month)} balances stayed provisional)`
   if (current.provisional) return `${since}${span}`

@@ -12,16 +12,11 @@ from zoneinfo import ZoneInfo
 import pytest
 from sqlalchemy import event, select
 
-from app.models import (
-    ChangeLog,
-    MonthlyCashflow,
-    MonthlySpending,
-    NetWorthSnapshot,
-    SpendingCategory,
-)
+from app.models import ChangeLog, MonthlySpending, NetWorthSnapshot, SpendingCategory
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.services import clock, month_status
 from app.services.coverage import load_coverage
+from app.services.month_review import load_review_book
 
 PT = ZoneInfo("America/Los_Angeles")
 JUL, AUG, SEP, OCT = date(2026, 7, 1), date(2026, 8, 1), date(2026, 9, 1), date(2026, 10, 1)
@@ -156,14 +151,43 @@ async def test_rent_saved_sep_5_reads_partial_on_oct_1(db, september, monkeypatc
     assert await state(db) == "partial"
 
 
-async def test_take_home_alone_saved_oct_1_leaves_it_partial(db, september, monkeypatch):
+async def put_september(auth_client, **body) -> dict:
+    """One month-review PUT for September through the real route, with a fresh request_id — as
+    the wizard sends on every save (it is what makes the metadata row change, and so log)."""
+    current = (await auth_client.get(f"/api/v1/month-review/months/{SEP}")).json()
+    response = await auth_client.put(
+        f"/api/v1/month-review/months/{SEP}",
+        json={"expected_revision": current["input_revision"], "request_id": str(uuid4()), **body},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+TICKED = {"balances": False, "spending": True, "take_home": False}
+
+
+async def test_take_home_saved_oct_1_with_the_box_ticked_stays_partial_until_confirmed(
+    auth_client, db, september, monkeypatch
+):
+    """Spec decision 16, K3 table row 2 and M1: a take-home save never completes spending — not
+    even when its body carries reviewed.spending=true, a tick the wizard still holds. That save
+    logs month_reviews beside monthly_cashflow in one batch; only the Confirm, a PUT with no legs
+    (a batch that writes nothing else for the month), completes it."""
     log(db, at=pt(2026, 9, 5), month=SEP)
-    log(db, at=pt(2026, 10, 1), month=SEP, table="monthly_cashflow")
-    db.add(MonthlyCashflow(month=SEP, net_pay=Decimal("6000.00")))
     await db.commit()
     on(monkeypatch, date(2026, 10, 1))
+    await put_september(
+        auth_client,
+        spending={
+            "amounts": [{"category_id": september.id, "amount": "2072.23"}],  # unchanged
+            "net_pay": "6000.00",
+        },
+        reviewed=TICKED,
+    )
     status = (await load_coverage(db)).status
     assert (status.spending_state(SEP), status.take_home_entered(SEP)) == ("partial", True)
+    await put_september(auth_client, reviewed=TICKED)  # the Confirm: no legs
+    assert await state(db) == "entered"
 
 
 async def test_a_spending_save_on_oct_3_enters_it(db, september, monkeypatch):
@@ -217,17 +241,14 @@ async def test_a_no_change_confirm_on_oct_2_enters_it(auth_client, db, september
     assert [(p["month"], p["spending"]) for p in time["flows_due"]] == [("2026-09-01", "entered")]
 
 
-async def test_a_spending_tick_saved_sep_30_is_still_partial(db, september, monkeypatch):
+async def test_a_spending_tick_saved_sep_30_is_still_partial(
+    auth_client, db, september, monkeypatch
+):
+    """The same no-leg PUT as the Confirm, but on Sep 30 — while September is still running."""
     log(db, at=pt(2026, 9, 5), month=SEP)
-    log(
-        db,
-        at=pt(2026, 9, 30),
-        month=SEP,
-        table="month_reviews",
-        op="update",
-        after={"month": "2026-09-01", "spending_reviewed": True},
-    )
     await db.commit()
+    on(monkeypatch, date(2026, 9, 30))
+    await put_september(auth_client, reviewed=TICKED)
     on(monkeypatch, date(2026, 10, 5))
     assert await state(db) == "partial"
 
@@ -308,3 +329,54 @@ async def test_an_undone_confirm_leaves_it_partial(auth_client, db, september, m
     undone = await auth_client.post(f"/api/v1/activity/batches/{confirmed.json()['batch_id']}/undo")
     assert undone.status_code == 200, undone.text
     assert await state(db) == "partial"
+
+
+async def test_a_redone_save_counts_again(auth_client, db, september, monkeypatch):
+    """Undo of an Undo (review minor 2): the Oct 3 save's effect stands again, so its batch counts
+    again — follow undone_by until it is stable; an even number of undos means in force."""
+    log(db, at=pt(2026, 9, 5), month=SEP)
+    await db.commit()
+    on(monkeypatch, date(2026, 10, 3))
+    saved = await put_september(
+        auth_client, spending={"amounts": [{"category_id": september.id, "amount": "2150.00"}]}
+    )
+    assert await state(db) == "entered"
+    undo = await auth_client.post(f"/api/v1/activity/batches/{saved['batch_id']}/undo")
+    assert undo.status_code == 200, undo.text
+    assert await state(db) == "partial"
+    redo = await auth_client.post(f"/api/v1/activity/batches/{undo.json()['batch_id']}/undo")
+    assert redo.status_code == 200, redo.text
+    assert (await db.execute(select(MonthlySpending.amount))).scalar_one() == Decimal("2150.00")
+    assert await state(db) == "entered"
+    again = await auth_client.post(f"/api/v1/activity/batches/{redo.json()['batch_id']}/undo")
+    assert again.status_code == 200, again.text
+    assert await state(db) == "partial"  # three undos: undone again
+
+
+async def test_all_zero_rows_count_as_spending_only_with_a_matching_confirmation(db, monkeypatch):
+    """Review minor 4: K3's "spending" is a non-zero amount OR a confirmed zero — through
+    load_coverage, not a hand-built set. The same all-$0 rows read missing without the review's
+    confirmation and entered with one (no log rows: clause (b))."""
+    db.add(MonthReviewAdoption(id=1, adopted_on=date(2026, 9, 12)))
+    db.add(NetWorthSnapshot(month=SEP, recorded_on=SEP))
+    await rent(db, SEP, amount="0.00")
+    await db.commit()
+    on(monkeypatch, date(2026, 10, 5))
+    assert await state(db) == "missing"
+    book = await load_review_book(db, extra_months=[SEP])
+    db.add(
+        MonthReview(
+            month=SEP,
+            zero_spending_confirmed=True,
+            confirmation_revision=book.months[SEP].input_revision,
+        )
+    )
+    await db.commit()
+    assert await state(db) == "entered"
+    # A stale confirmation no longer counts: a second $0 row moves the month's digest.
+    food = SpendingCategory(name="Food", slug="food", sort_order=2)
+    db.add(food)
+    await db.flush()
+    db.add(MonthlySpending(month=SEP, category_id=food.id, amount=Decimal("0.00")))
+    await db.commit()
+    assert await state(db) == "missing"

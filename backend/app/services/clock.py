@@ -13,8 +13,9 @@ So: every "the user's calendar day" read in the API and the services goes throug
 name) — one patchable symbol, `app.services.clock.product_today`, for the tests.
 
 Deliberately NOT here: instants written to storage (`datetime.now(UTC)` for created_at,
-quoted_at, done_at, token stamps) and the stale-quote comparison in health_checks, which
-is UTC on purpose so it matches the frontend's own UTC staleness math.
+quoted_at, done_at, token stamps) — the change log's `at` is the one exception, see
+`change_stamp` — and the stale-quote comparison in health_checks, which is UTC on purpose so it
+matches the frontend's own UTC staleness math.
 
 **The dev override (2026-09-23 spec §K1).** `PRODUCT_TODAY=2026-10-01 uvicorn …` makes
 `product_today()` answer that day, so the real-data copy can be run "as of Oct 1" — and the
@@ -22,9 +23,11 @@ browser follows it, because every /api response names the day (`X-Product-Today`
 is read from the PROCESS environment only (`os.environ`; a line in backend/.env reaches neither
 this module nor the settings validator — Settings declares no field for it), and only while the
 process environment's ENVIRONMENT is unset or `dev`; config.Settings refuses to start a non-dev
-process that carries it. `product_now()` stays real: instants are never moved. The change log
-is the one writer that follows the product day (`change_stamp`), because month_status reads
-"saved after the month ended" off it.
+process that carries it. `product_now()` stays real. Everything DATED from `product_today()`
+follows the override like any rule — a new snapshot's recorded date, a restamp, a price
+refresh's weekly value row — which is why it is dev-only, the scheduler does not start under it
+and startup warns (main.py). Of the instants, only the change log's stamp moves with it
+(`change_stamp`), because month_status reads "saved after the month ended" off it.
 
 This module imports nothing from the app — it sits below everything, so any service or
 router can read the clock without an import cycle.

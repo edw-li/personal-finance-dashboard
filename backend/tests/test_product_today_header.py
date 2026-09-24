@@ -6,6 +6,7 @@ from datetime import date
 
 import pytest
 
+from app.config import settings
 from app.main import PRODUCT_TODAY_HEADER, app, lifespan
 from app.services import clock
 
@@ -68,3 +69,43 @@ async def test_startup_warns_once_naming_the_override(monkeypatch, caplog):
         if record.levelno == logging.WARNING and "PRODUCT_TODAY" in record.getMessage()
     ]
     assert len(lines) == 1 and "2026-10-01" in lines[0]
+
+
+class _FakeScheduler:
+    def shutdown(self, wait: bool = True) -> None:
+        pass
+
+
+async def _started_under(monkeypatch, *, override: str | None) -> list[bool]:
+    """Run the app's lifespan with the scheduler enabled; report whether it was started."""
+    if override is None:
+        monkeypatch.delenv("PRODUCT_TODAY", raising=False)
+    else:
+        monkeypatch.setenv("PRODUCT_TODAY", override)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.setattr(settings, "scheduler_enabled", True)
+    started: list[bool] = []
+
+    async def fake_start() -> _FakeScheduler:
+        started.append(True)
+        return _FakeScheduler()
+
+    monkeypatch.setattr("app.services.scheduler.start_scheduler", fake_start)
+    async with lifespan(app):
+        pass
+    return started
+
+
+async def test_the_scheduler_never_starts_under_the_override(monkeypatch, caplog):
+    """Review minor 11: a scheduled price refresh would date its weekly value row on the fake day
+    in whatever database the process is attached to — so under the override the scheduler stays
+    off, and the one startup warning says what a manual refresh would still write."""
+    assert await _started_under(monkeypatch, override=None) == [True]  # the spy sees a start
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        assert await _started_under(monkeypatch, override="2026-10-01") == []
+    (line,) = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "PRODUCT_TODAY" in record.getMessage()
+    ]
+    assert "2026-10-01" in line and "Refresh prices" in line and "scheduler" in line

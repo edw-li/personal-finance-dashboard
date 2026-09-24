@@ -93,9 +93,10 @@ async def save_month(
                 db,
                 batch,
                 record_metadata=True,
-                # K4 (2026-09-23 spec): a legacy month is never restamped — `current` is this
-                # month's state in the book read before the write.
-                restamp=current.state != "unreviewed_history",
+                # K4 (2026-09-23 spec): a legacy or closed month is never restamped — the new
+                # date would move its digest off the revision it was adopted or certified at.
+                # `current` is this month's state in the book read before the write.
+                restamp=current.state not in ("unreviewed_history", "closed"),
             )
         )
         spending_result = (
