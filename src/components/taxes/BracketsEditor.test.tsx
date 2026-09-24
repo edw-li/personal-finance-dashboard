@@ -490,6 +490,28 @@ describe('BracketsEditor — unsaved tables survive (2026-09-23 spec §W9)', () 
     expect(sessionStorage.getItem(SINGLE)).toBeNull()
   })
 
+  it('re-judges a restored draft when a newer payload lands for the same tab (review finding 5)', () => {
+    seed(SINGLE, { loaded: LOADED, edited: EDITED })
+    const { rerender } = render(
+      <BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />,
+    )
+    expect(rate('Federal', 2).value).toBe('35%')
+    rerender(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
+    expect(rate('Federal', 2).value).toBe('35%') // same tables in a new object: kept
+
+    const moved = bracketsFixture()
+    moved.jurisdictions.state = [{ bracket_index: 1, rate: '0.0900', threshold: '0.00' }]
+    rerender(<BracketsEditor brackets={moved} yearStatus="single" onSaved={vi.fn()} />)
+    expect(rate('Federal', 2).value).toBe('37%')
+    expect(rate('State', 1).value).toBe('9%')
+    expect(
+      screen.getByText(
+        'Unsaved tax tables for 2024 (Single) were discarded: the saved values changed since you typed them.',
+      ),
+    ).toBeTruthy()
+    expect(sessionStorage.getItem(SINGLE)).toBeNull()
+  })
+
   it('restores another status’ draft when its tab is opened', async () => {
     // The MFJ tab's server tables are six empty ones (the file's fetch mock), and this draft
     // was typed over exactly those.

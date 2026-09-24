@@ -265,6 +265,30 @@ describe('InputsForm — unsaved work survives (2026-09-23 spec §W9)', () => {
     expect(sessionStorage.getItem(KEY)).toBeNull()
   })
 
+  it('re-judges a restored draft when a newer payload lands for the same form (review finding 5)', () => {
+    // The page paints from its cache, then its fetch lands: the draft was restored against the
+    // cached values, and the server has since saved another salary.
+    seed({ loaded: LOADED, edited: EDITED })
+    const { rerender } = render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    expect(screen.getByText(RESTORED)).toBeTruthy()
+    // The same values in a new object: nothing to re-judge.
+    rerender(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    expect(screen.getByText(RESTORED)).toBeTruthy()
+    expect(field('Annual Salary').value).toBe('$210,000.00')
+
+    const moved = inputsFixture()
+    moved.sections[0].items[0].value = '205000.0000'
+    rerender(<InputsForm inputs={moved} onSaved={vi.fn()} />)
+    expect(field('Annual Salary').value).toBe('$205,000.00')
+    expect(
+      screen.getByText(
+        'Unsaved tax inputs for 2024 were discarded: the saved values changed since you typed them.',
+      ),
+    ).toBeTruthy()
+    expect(screen.queryByText(RESTORED)).toBeNull()
+    expect(sessionStorage.getItem(KEY)).toBeNull()
+  })
+
   it('drops a draft equal to its own loaded values without a word', () => {
     seed({ loaded: LOADED, edited: LOADED })
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)

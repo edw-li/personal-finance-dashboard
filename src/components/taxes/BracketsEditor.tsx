@@ -302,6 +302,25 @@ export default function BracketsEditor({
   // tab: cleared when another status is opened, and per-table when that table is saved (a
   // reviewed table has nothing left to be told about).
   const [reviewFlags, setReviewFlags] = useState<BracketCloneReviewFlags | null>(null)
+  // A newer payload for the tab on screen re-judges a RESTORED draft (§W9; review finding 5),
+  // exactly as InputsForm does: the tables the draft was checked against are replaced by what
+  // the server now returns, and a restore over different ones would revert them on Save. Any
+  // other prop replacement is ignored, as it always was. Adjusted during render.
+  const [seenBrackets, setSeenBrackets] = useState(brackets)
+  if (brackets !== seenBrackets) {
+    setSeenBrackets(brackets)
+    if (
+      draftNote?.kind === 'restored' &&
+      draftNote.status === activeStatus &&
+      brackets.filing_status === activeStatus &&
+      serialize(tablesOf(brackets)) !== serialize(tablesOf(payload))
+    ) {
+      setPayload(brackets)
+      setTables(tablesOf(brackets))
+      setErrors({})
+      setDraftNote({ status: activeStatus, kind: 'dropped' })
+    }
+  }
 
   // JURISDICTIONS is a readonly tuple, so its .includes() takes the literal union — the
   // house cast (MonthlyUpdatePage's `STEPS.includes(stepParam as Step)`). An importer can

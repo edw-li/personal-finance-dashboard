@@ -319,6 +319,24 @@ export default function InputsForm({
   // The computed totals on screen, seeded from the payload and replaced only by the server:
   // a preview answer while typing, the echo when a save lands.
   const [figures, setFigures] = useState<Record<string, string | null>>(() => figuresOf(allCells))
+  // A newer payload for this same form — the page painted from its cache, then its fetch
+  // landed — re-judges a RESTORED draft on the draft's own terms (§W9; review finding 5): the
+  // draft was checked against the values that were on screen, and if the server now returns
+  // others, a restore would quietly revert them on the next Save. So they win, and the note
+  // says so. Any other prop replacement is ignored, as it always was (typed work is kept).
+  // Adjusted during render (the house rule for a prop the state follows — no effect setState).
+  const [seenInputs, setSeenInputs] = useState(inputs)
+  if (inputs !== seenInputs) {
+    setSeenInputs(inputs)
+    const fresh = valuesOf(flatCells)
+    if (restored && !sameRecord(fresh, baseline)) {
+      setValues(fresh)
+      setBaseline(fresh)
+      setFigures(figuresOf(allCells))
+      setRestored(false)
+      setDropped(true)
+    }
+  }
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // What the last paste did, narrated for everyone (spec §4.1) — one line, replaced by the
