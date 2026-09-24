@@ -19,7 +19,7 @@ import { timeZoom } from '../../charts/timeZoom'
 import type { ZoomWindow } from '../../charts/timeZoom'
 import { axisTooltip, swatch } from '../../charts/tooltip'
 import type { NetWorthTimeseries, ProjectionOut } from '../../types/api'
-import { formatAsOf } from '../../utils/asOf'
+import { provisionalNote } from '../../utils/asOf'
 import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatMonth } from '../../utils/format'
 import { addMonths, monthSerial } from '../../utils/months'
@@ -373,18 +373,6 @@ const HOLLOW_DOT = { color: withAlpha(PALETTE[0], 0), borderColor: PALETTE[0], b
  *  §K2 — lane K computes them; empty for a replayed cache, when every dot draws filled). */
 type SnapshotFlags = Partial<Pick<NetWorthTimeseries, 'provisional' | 'recorded_on'>>
 
-/** Why a dot is hollow, in T1's words (2026-09-23 spec §R8): "Oct 1 balances recorded early, on
- *  Sep 22 — provisional", or, for a snapshot provisional only because its month is still ahead,
- *  "Nov 1 balances — provisional until Nov 1". The same sentence lane T's
- *  networth/snapshotStates.ts `provisionalNote` builds for the Overview — restated here over K's
- *  formatAsOf because lane R merges before lane T (fold the two together once both are in). */
-function provisionalNote(month: string, recordedOn: string | null | undefined): string {
-  const day = (iso: string) => formatAsOf({ month: iso, as_of: iso })
-  return recordedOn != null && recordedOn < month
-    ? `${day(month)} balances recorded early, on ${day(recordedOn)} — provisional`
-    : `${day(month)} balances — provisional until ${day(month)}`
-}
-
 /**
  * The sheet's "Net Worth over Time (Projected)": actual snapshots as blue dots — a provisional
  * one hollow — the second-degree polynomial best-fit as a solid orange curve drawn over history
@@ -411,7 +399,8 @@ export function netWorthProjectionOption(
     dataZoom: timeZoom(months, 'all'),
     grid: grid('fan'),
     legend: { ...legendFor(legendData.length, selected), data: legendData },
-    // A provisional snapshot's month says why its dot is hollow, beside the month (T1's head note).
+    // A provisional snapshot's month says why its dot is hollow, beside the month — T1's sentence,
+    // the one utils/asOf.ts provisionalNote every net-worth chart shares (folded in at merge).
     tooltip: axisTooltip({
       unit: 'money',
       headNote: (index) =>
