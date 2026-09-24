@@ -114,6 +114,48 @@ describe('EventDetails', () => {
     expect(screen.getByRole('button', { name: 'Hide' })).toBeTruthy()
   })
 
+  // The monthly reminder's items are the parts still pending (2026-09-23 spec §T6), not money:
+  // a column of dashes beside them said nothing (spec review M4). A dash still marks ONE unknown
+  // figure among known ones.
+  it('lists a reminder’s parts without an amount column', () => {
+    mount(calendarEvent({
+      date: '2026-10-03',
+      type: 'update_due',
+      label: 'Monthly update — Oct 1 balances · September spending & take-home',
+      short_label: 'Monthly update',
+      detail: 'Due since Oct 1',
+      items: [
+        { label: 'Oct 1 balances', amount: null, person_id: null, detail: 'recorded early, on Sep 22 — update them' },
+        { label: 'September spending & take-home', amount: null, person_id: null, detail: 'take-home not entered' },
+      ],
+    }))
+    const items = screen.getAllByRole('listitem').map((li) => li.textContent)
+    expect(items).toEqual([
+      'Oct 1 balances · recorded early, on Sep 22 — update them',
+      'September spending & take-home · take-home not entered',
+    ])
+    expect(document.querySelector('.cal-event-items .num')).toBeNull()
+  })
+
+  it('keeps the dash for an unknown figure beside known ones', () => {
+    mount(
+      calendarEvent({
+        date: '2026-09-16',
+        type: 'rsu_vest',
+        label: 'RSU vest — 2 grants',
+        amount: null,
+        direction: 'in',
+        basis: 'estimated',
+        items: [
+          { label: '2025 offer', amount: '12500.00', person_id: null, detail: '25 sh' },
+          { label: '2026 refresh', amount: null, person_id: null, detail: '10 sh' },
+        ],
+      }),
+    )
+    const items = screen.getAllByRole('listitem').map((li) => li.textContent)
+    expect(items).toEqual(['2025 offer$12,500.00 · 25 sh', '2026 refresh— · 10 sh'])
+  })
+
   it('a custom event offers Edit/Delete and says how it repeats; no override buttons', () => {
     const handlers = mount(
       calendarEvent({

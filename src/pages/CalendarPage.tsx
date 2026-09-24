@@ -697,7 +697,9 @@ export default function CalendarPage() {
                                   {amount !== null && (
                                     <span className="cal-list-amount num"> {amount}</span>
                                   )}
-                                  {event.items.length > 0 && (
+                                  {/* The parts' figures; a fold with none (the monthly
+                                      reminder's pending parts, spec §T6) is its label alone. */}
+                                  {event.items.some((i) => i.amount !== null) && (
                                     <span className="cal-list-detail">
                                       {' — '}
                                       {event.items

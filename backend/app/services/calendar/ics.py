@@ -77,8 +77,13 @@ def _description(event: Event, public_url: str | None) -> str:
     lines = [f"Amount: {amount} ({event.direction}, {event.basis})" if amount else "Amount unknown"]
     if event.done:
         lines.append("Done")
+    # Items that carry no money at all — the monthly reminder's pending parts (2026-09-23 spec
+    # §T6) — list without an amount: "- Oct 1 balances: —" says nothing. A dash still marks one
+    # unknown figure among known ones.
+    priced = any(item.amount is not None for item in event.items)
     lines.extend(
-        f"- {item.label}: {_money(item.amount)}" + (f" ({item.detail})" if item.detail else "")
+        (f"- {item.label}: {_money(item.amount)}" if priced else f"- {item.label}")
+        + (f" ({item.detail})" if item.detail else "")
         for item in event.items
     )
     if event.detail:

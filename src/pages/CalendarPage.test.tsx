@@ -277,6 +277,26 @@ describe('CalendarPage — month, views, grid', () => {
     await screen.findByRole('grid')
   })
 
+  // A reminder's parts carry no money (2026-09-23 spec §T6; spec review M4): its row is its label
+  // — which already names both parts — never "Oct 1 balances —, September spending & take-home —".
+  it('?view=list lists a reminder by its label, with no dashes for money it never had', async () => {
+    const reminder = calendarEvent({
+      date: DAY_15,
+      type: 'update_due',
+      label: 'Monthly update — Oct 1 balances · September spending & take-home',
+      short_label: 'Monthly update',
+      items: [
+        { label: 'Oct 1 balances', amount: null, person_id: null, detail: 'not recorded yet' },
+        { label: 'September spending & take-home', amount: null, person_id: null, detail: 'not entered' },
+      ],
+    })
+    renderPage([reminder, ...fixtureEvents()], '/calendar?view=list')
+    const row = await screen.findByRole('button', { name: /^Monthly update — Oct 1 balances/ })
+    expect(row.textContent).toBe('Monthly update — Oct 1 balances · September spending & take-home')
+    // A fold with money still lists its parts with their figures.
+    expect((document.querySelector('.cal-list') as HTMLElement).textContent).toContain('2025 offer $41,200.00')
+  })
+
   it('the strip totals the visible month', async () => {
     renderPage()
     await screen.findByRole('grid')

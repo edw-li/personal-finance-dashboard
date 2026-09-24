@@ -143,6 +143,35 @@ def test_status_follows_basis_and_alarms_only_deadline_types_never_done():
     assert done_description in lines
 
 
+def test_a_reminders_parts_carry_no_amount_column():
+    """The monthly reminder's items are the parts still pending (2026-09-23 spec §T6), not money:
+    "- Oct 1 balances: —" said nothing (spec review M4). A dash still marks one unknown figure
+    among known ones."""
+    reminder = make_event(
+        date(2026, 10, 3),
+        "update_due",
+        "2026-09",
+        "Monthly update — Oct 1 balances · September spending & take-home",
+        "Monthly update",
+        detail="Due since Oct 1",
+        href="/update",
+        key_date=date(2026, 10, 1),
+        items=(
+            Item("Oct 1 balances", None, None, "recorded early, on Sep 22 — update them"),
+            Item("September spending & take-home", None, None, "take-home not entered"),
+        ),
+    )
+    lines = unfold(render([reminder])).split("\r\n")
+    description = next(line for line in lines if line.startswith("DESCRIPTION:"))
+    assert "\\n- Oct 1 balances (recorded early\\, on Sep 22 — update them)\\n" in description
+    assert "\\n- September spending & take-home (take-home not entered)\\n" in description
+    assert ": —" not in description
+    folded = replace(
+        payday(), items=(Item("Me", Decimal("4000.00"), 1, None), Item("Sam", None, 2, None))
+    )
+    assert "- Sam: —" in unfold(render([folded]))
+
+
 def test_hidden_events_are_omitted_entirely():
     text = render([replace(payday(), hidden=True), q3()])
     assert "payroll:payday" not in text and text.count("BEGIN:VEVENT") == 1
