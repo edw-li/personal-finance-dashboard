@@ -114,10 +114,11 @@ async def test_a_save_before_the_1st_restamps_but_stays_provisional(auth_client,
 async def test_an_explicit_recorded_on_still_wins(auth_client, db, monkeypatch):
     account_id = await seed(db)
     on(monkeypatch, date(2026, 10, 3))
-    await auth_client.put(
+    response = await auth_client.put(
         f"{NW}/months/{OCT}",
         json={"recorded_on": "2026-09-30", **balances(account_id, "100.00")},
     )
+    assert response.status_code == 200, response.text
     assert await stored(db) == date(2026, 9, 30)
 
 
@@ -125,14 +126,18 @@ async def test_a_final_snapshot_s_date_never_moves(auth_client, db, monkeypatch)
     march = date(2026, 3, 1)
     account_id = await seed(db, month=march, recorded_on=march)
     on(monkeypatch, date(2026, 10, 3))
-    await auth_client.put(f"{NW}/months/{march}", json=balances(account_id, "999.00"))
+    response = await auth_client.put(f"{NW}/months/{march}", json=balances(account_id, "999.00"))
+    assert response.status_code == 200, response.text
+    assert response.json()["updated"] == 1  # the save happened; only the date stayed
     assert await stored(db, march) == march
 
 
 async def test_a_null_date_is_not_overwritten(auth_client, db, monkeypatch):
     account_id = await seed(db, recorded_on=None)
     on(monkeypatch, date(2026, 10, 3))
-    await auth_client.put(f"{NW}/months/{OCT}", json=balances(account_id, "150.00"))
+    response = await auth_client.put(f"{NW}/months/{OCT}", json=balances(account_id, "150.00"))
+    assert response.status_code == 200, response.text
+    assert response.json()["updated"] == 1
     assert await stored(db) is None
 
 

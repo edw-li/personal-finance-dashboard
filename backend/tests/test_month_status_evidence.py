@@ -16,6 +16,7 @@ from app.models import ChangeLog, MonthlySpending, NetWorthSnapshot, SpendingCat
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.services import clock, month_status
 from app.services.coverage import load_coverage
+from app.services.month_review import load_review_book
 
 PT = ZoneInfo("America/Los_Angeles")
 JUL, AUG, SEP, OCT = date(2026, 7, 1), date(2026, 8, 1), date(2026, 9, 1), date(2026, 10, 1)
@@ -350,3 +351,32 @@ async def test_a_redone_save_counts_again(auth_client, db, september, monkeypatc
     again = await auth_client.post(f"/api/v1/activity/batches/{redo.json()['batch_id']}/undo")
     assert again.status_code == 200, again.text
     assert await state(db) == "partial"  # three undos: undone again
+
+
+async def test_all_zero_rows_count_as_spending_only_with_a_matching_confirmation(db, monkeypatch):
+    """Review minor 4: K3's "spending" is a non-zero amount OR a confirmed zero — through
+    load_coverage, not a hand-built set. The same all-$0 rows read missing without the review's
+    confirmation and entered with one (no log rows: clause (b))."""
+    db.add(MonthReviewAdoption(id=1, adopted_on=date(2026, 9, 12)))
+    db.add(NetWorthSnapshot(month=SEP, recorded_on=SEP))
+    await rent(db, SEP, amount="0.00")
+    await db.commit()
+    on(monkeypatch, date(2026, 10, 5))
+    assert await state(db) == "missing"
+    book = await load_review_book(db, extra_months=[SEP])
+    db.add(
+        MonthReview(
+            month=SEP,
+            zero_spending_confirmed=True,
+            confirmation_revision=book.months[SEP].input_revision,
+        )
+    )
+    await db.commit()
+    assert await state(db) == "entered"
+    # A stale confirmation no longer counts: a second $0 row moves the month's digest.
+    food = SpendingCategory(name="Food", slug="food", sort_order=2)
+    db.add(food)
+    await db.flush()
+    db.add(MonthlySpending(month=SEP, category_id=food.id, amount=Decimal("0.00")))
+    await db.commit()
+    assert await state(db) == "missing"
