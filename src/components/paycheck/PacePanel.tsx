@@ -39,13 +39,10 @@ const AT_THE_CAP = 'at the cap'
 function paceNote(item: PaceItem): string | null {
   const halves = item.halves ?? null
   const parts = (halves ?? []).map((half) => `${half.label} ${half.source}`)
-  if (item.backfilled_from != null) {
-    parts.push(`before ${formatDate(item.backfilled_from)} assumes your earliest profile`)
-  }
+  // No "assumes your earliest profile" clause any more (2026-09-23 spec §W1): a payday before
+  // the first profile credits nothing rather than borrowing it, and the strip says so ONCE,
+  // above the rows (`startNote`).
   if (parts.length === 0) return null
-  // A WALKED row has no halves and only ever has this one clause to make: the paydays before
-  // the person's earliest profile were priced from it, and the figure above says so out loud
-  // rather than passing as observed (spec §2.6, the ESPP row's rule for every row).
   if (halves === null || halves.length === 0) return `${parts.join(' · ')}.`
   // One clause for the whole window: the basis is the profile's cadence, and saying it twice
   // would read as two different approximations.
@@ -302,11 +299,27 @@ function PaceRow({ item }: { item: PaceItem }) {
  * against a cap nobody entered would be a fabricated number. It gets the call to action
  * instead (spec §6).
  */
+/**
+ * The start-date note (2026-09-23 spec §W1): every walked row is cut at the same first-profile
+ * date, so it is said once for the strip — "Nothing counts before Sep 1, when the first paycheck
+ * profile starts." — with the rule that makes a partial year honest beside it.
+ */
+function startNote(items: PaceItem[]): string | null {
+  const startsOn = items.find((item) => item.starts_on != null)?.starts_on ?? null
+  if (startsOn === null) return null
+  const day = formatDate(startsOn).replace(/, \d{4}$/, '')
+  return (
+    `Nothing counts before ${day}, when the first paycheck profile starts. ` +
+    'Each check is priced by the paycheck profile in force on its date. For a raise or a new job, add a profile with its start date.'
+  )
+}
+
 export default function PacePanel({ items }: { items: PaceItem[] }) {
   // Nothing to say rather than an empty card: the two 401(k) rows are unconditional
   // server-side, so an empty list only happens when there is no profile at all — and the
   // page is already saying that above.
   if (items.length === 0) return null
+  const start = startNote(items)
   return (
     <section className="card" role="region" aria-label="Contribution pace">
       <h2 className="eyebrow">
@@ -317,6 +330,7 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
         So far this year, and where the year lands at today&apos;s percentages. Change a percentage
         and the projection moves; so far does not. Hover or focus a bar for the exact figures.
       </p>
+      {start !== null && <p className="hint pace-start">{start}</p>}
       <div className="pace-rows">
         {items.map((item) => (
           <PaceRow item={item} key={item.key} />

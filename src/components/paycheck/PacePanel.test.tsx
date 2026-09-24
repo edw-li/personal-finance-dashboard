@@ -187,19 +187,18 @@ it('says where each half of the window came from, and what a full purchase year 
   ).toBeTruthy()
 })
 
-it('names the backfill and the per-month approximation, and stops projecting at a zero rate', () => {
+it('names the per-month approximation, and stops projecting at a zero rate', () => {
   renderPanel([
     {
       ...ESPP,
       halves: [{ ...ESPP.halves![0], source: 'entered', basis: null }, { ...ESPP.halves![1], basis: 'months' }],
-      backfilled_from: '2026-01-01',
       projected_full_year: '18000.00',
       projected_excess: '0.00',
     },
   ])
   expect(
     screen.getByText(
-      'Feb 2026 entered · Aug 2026 estimated · before Jan 1, 2026 assumes your earliest profile · estimated by month. At your current 12%, a full purchase year is $18,000.00.',
+      'Feb 2026 entered · Aug 2026 estimated · estimated by month. At your current 12%, a full purchase year is $18,000.00.',
     ),
   ).toBeTruthy()
   cleanup()
@@ -335,14 +334,22 @@ it('says "at the cap" when the judged ratio is exactly the cap', () => {
 })
 
 
-it('says which paydays borrowed a profile on a walked row too, not just the ESPP one', () => {
-  // A new hire's January paydays are priced from a profile that did not exist yet, and the
-  // row that carries the figure carries the caveat — halves or no halves.
-  renderPanel([{ ...OK, so_far: '8000.00', backfilled_from: '2026-03-01' }])
-  expect(screen.getByText('before Mar 1, 2026 assumes your earliest profile.')).toBeTruthy()
+it('says once that nothing counts before the first profile starts (2026-09-23 spec §W1)', () => {
+  // A new hire's paydays before their first profile credit nothing, and every walked row was
+  // cut at the same date — so the strip says it once, not once per row.
+  renderPanel([
+    { ...OK, so_far: '100.00', starts_on: '2026-09-01' },
+    { ...OK, key: 'limit_415c_total', label: '415(c) total additions', starts_on: '2026-09-01' },
+  ])
+  expect(
+    screen.getAllByText(
+      'Nothing counts before Sep 1, when the first paycheck profile starts. Each check is priced by the paycheck profile in force on its date. For a raise or a new job, add a profile with its start date.',
+    ),
+  ).toHaveLength(1)
+  expect(screen.queryByText(/assumes your earliest profile/)).toBeNull()
   cleanup()
   renderPanel([OK])
-  expect(screen.queryByText(/assumes your earliest profile/)).toBeNull()
+  expect(screen.queryByText(/Nothing counts before/)).toBeNull()
 })
 
 it('labels both figures on a row that has no cap entered yet', () => {
