@@ -162,11 +162,18 @@ async def _household(db: AsyncSession, search: dict, view: dict) -> dict:
     return {
         "today": clock.product_today().isoformat(),
         "people": [{"id": p.id, "name": p.name, "is_primary": p.is_primary} for p in people],
+        # The CURRENT snapshot (the summary's default, 2026-09-23 spec §K2) with the day its
+        # balances describe, whether they are provisional and what the change compares with —
+        # so a change "since Sep 1 · 21 days" is never read as a month's (§T10).
         "net_worth": {
             "month": nw.month,
             "total": nw.net_worth,
             "mom_delta": nw.mom_delta,
             "mom_pct": nw.mom_pct,
+            "as_of": nw.as_of,
+            "provisional": nw.provisional,
+            "previous": nw.previous,
+            "days_since_previous": nw.days_since_previous,
         },
         "portfolio": {
             "market_value": port.totals.market_value,
@@ -309,8 +316,11 @@ def _net_worth_builder(window: int):
         # unmatched month falls back to the latest instead of taking the section down.
         month = _view_month(search, view)
         viewed = month if month in ts.months else None
-        index = ts.months.index(viewed) if viewed is not None else len(ts.months) - 1
         nw = await net_worth_summary(owner=owner, month=viewed, granularity=granularity, db=db)
+        # With no month viewed the summary answers the CURRENT snapshot (2026-09-23 spec §K2) —
+        # the one every page shows — so the section's month and account balances stand on it
+        # too; the timeseries' last month can be balances filed two months ahead (§T10).
+        index = ts.months.index(nw.month) if nw.month in ts.months else len(ts.months) - 1
         value_by_account = {s.account_id: s.values[index] for s in ts.series} if index >= 0 else {}
         return {
             "owner_scope": owner or "household",
