@@ -1554,7 +1554,7 @@ it('counts the blank categories in the receipt', async () => {
   await screen.findByText(/progress saved/i)
   expect(
     screen.getByText(
-      'Spending: 1 row (1 added, 0 changed, 0 unchanged) · 1 category left blank.',
+      'Spending: 1 row (1 added, 0 changed, 0 unchanged) · 1 category left blank. Household take-home saved.',
     ),
   ).toBeTruthy()
 })
@@ -1576,7 +1576,7 @@ it('the receipt counts a blank the SERVER skipped too', async () => {
   await screen.findByText(/progress saved/i)
   expect(
     screen.getByText(
-      'Spending: 1 row (1 added, 0 changed, 0 unchanged) · 2 categories left blank.',
+      'Spending: 1 row (1 added, 0 changed, 0 unchanged) · 2 categories left blank. Household take-home saved.',
     ),
   ).toBeTruthy()
 })
@@ -2740,6 +2740,22 @@ describe('two parts, each saving only itself (2026-09-23 spec §M1)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save progress' }))
     await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
     expect('balances' in sentBody()).toBe(false)
+    // Not "unchanged": there is nothing recorded to be unchanged (review M6).
+    expect(await screen.findByText('Balances: not recorded — not sent.')).toBeTruthy()
+    expect(screen.queryByText('Balances: unchanged — not sent.')).toBeNull()
+  })
+
+  it('a take-home save says so in the receipt — and only when the take-home changed (review M5)', async () => {
+    renderWizard()
+    fireEvent.click(await screen.findByRole('button', { name: /^2\s*spending$/i }))
+    fireEvent.change(await screen.findByLabelText('Household take-home'), { target: { value: '6000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save August spending' }))
+    expect(await screen.findByText(/^Spending: .* Household take-home saved\.$/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Food'), { target: { value: '250.00' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save August spending' }))
+    await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(2))
+    await screen.findByRole('heading', { name: 'August spending saved' })
+    expect(screen.queryByText(/Household take-home saved/)).toBeNull()
   })
 
   it('a Review save with nothing changed sends no part — the ticks only', async () => {

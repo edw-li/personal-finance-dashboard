@@ -130,9 +130,13 @@ interface LastSave {
   /** A balances save of early balances with nothing changed — the "Confirm {Oct 1} balances". */
   confirmedBalances: boolean
   balances: MonthUpsertResult | null
-  spending: { result: SpendingUpsertResult; blank: number } | null
+  /** `takeHome`: the save wrote a take-home that differs from the part's baseline (review M5). */
+  spending: { result: SpendingUpsertResult; blank: number; takeHome: boolean } | null
   sentBalances: boolean
   sentSpending: boolean
+  /** The month had balances to leave alone — else a Review save's untouched balances are "not
+   *  recorded", never "unchanged" (review M6). */
+  balancesRecorded: boolean
   /** The part due next once the server has answered (spec §M2) — the receipt links to it. */
   nextDue: DuePart | null
 }
@@ -171,7 +175,9 @@ function spendingSentence(leg: NonNullable<LastSave['spending']>): string {
     // A DELETION the user asked for by blanking a box: the counts never mention the cashflow
     // row that just went away, so the receipt says it — from the server's own flag, not from
     // what we hoped we sent.
-    (leg.result.net_pay_cleared ? ' Household take-home cleared.' : '')
+    (leg.result.net_pay_cleared ? ' Household take-home cleared.' : '') +
+    // …and a take-home written or changed, which the category counts never mention either.
+    (leg.takeHome ? ' Household take-home saved.' : '')
   )
 }
 
@@ -1064,10 +1070,17 @@ function MonthlyUpdateWizard() {
         balances: sendBalances ? result.balances : null,
         spending:
           sendSpending && result.spending
-            ? { result: result.spending, blank: categories.length - sentCategories.length + result.spending.skipped_blank }
+            ? {
+                result: result.spending,
+                blank: categories.length - sentCategories.length + result.spending.skipped_blank,
+                takeHome:
+                  canonNetPay !== '' &&
+                  flowsKey({ amounts: {}, netPay: canonNetPay }) !== flowsKey({ amounts: {}, netPay: flowsBase.part.netPay }),
+              }
             : null,
         sentBalances: sendBalances,
         sentSpending: sendSpending,
+        balancesRecorded: sendBalances || monthExisted,
         nextDue: null,
       }
       setLastSave(receipt)
@@ -1660,7 +1673,7 @@ function MonthlyUpdateWizard() {
             <h2 className="eyebrow">{receiptTitle(lastSave, review?.state === 'closed')}</h2>
             {lastSave.balances !== null && <p>{balancesSentence(lastSave.balances)}</p>}
             {(lastSave.kind === 'review' || lastSave.kind === 'close') && !lastSave.sentBalances && (
-              <p>Balances: unchanged — not sent.</p>
+              <p>{lastSave.balancesRecorded ? 'Balances: unchanged — not sent.' : 'Balances: not recorded — not sent.'}</p>
             )}
             {lastSave.spending !== null && <p>{spendingSentence(lastSave.spending)}</p>}
             {(lastSave.kind === 'review' || lastSave.kind === 'close') && !lastSave.sentSpending && (
