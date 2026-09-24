@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_CEILING, Decimal
 
-from app.services.business_days import previous_business_day, semi_monthly_paydays
+from app.services.business_days import semi_monthly_paydays
 from app.services.paycheck_calc import MONTHS_PER_YEAR, half_up2
 
 ZERO = Decimal("0")
@@ -82,19 +82,6 @@ class Walked:
     # before it and so credited nothing (2026-09-23 spec §W1) — "Nothing counts before Sep 1".
     # None when the whole window is on a profile that was already in force.
     starts_on: date | None = None
-
-
-def first_payday(year: int, pay_periods: int) -> date:
-    """The day the year's first money lands for anyone employed in January — the check the
-    employer's January HSA deposit rides (the walk's `first_payday_passed` reads the first
-    payday it actually CREDITS, which is this one unless the job starts later).
-
-    Semi-monthly payroll pays the 15th, pulled BACK over weekends and holidays
-    (`semi_monthly_paydays`' own convention). Any other cadence has no payday calendar in
-    this app, so it credits the month on the 15th, which is the day the month basis probes.
-    """
-    mid = date(year, 1, 15)
-    return previous_business_day(mid) if pay_periods == SEMI_MONTHLY else mid
 
 
 def months(start: date, end: date):

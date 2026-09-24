@@ -1491,7 +1491,7 @@ async def test_breakdown_pace_walks_the_year_into_so_far_and_projected(auth_clie
     """Spec §2.6: one payday walk answers "what has gone in" and "where does it land" at
     once — the reason a September HSA row reading 2,400 of 4,400 was never a bug."""
     from app.models import ContributionLimit
-    from app.services.pace_walk import first_payday
+    from app.services.business_days import semi_monthly_paydays
 
     this_year = clock.product_today().year
     db.add(ContributionLimit(year=this_year, key="limit_401k_elective", value=D("24500.00")))
@@ -1525,7 +1525,9 @@ async def test_breakdown_pace_walks_the_year_into_so_far_and_projected(auth_clie
     assert hsa["annualized"] == "4400.00"  # 100 x 24 + the employer's 2,000
     # ONE walk behind both rows: the HSA leg is a tenth of the elective one payday for
     # payday, plus the January deposit once that check has been cut.
-    deposit = D("2000.00") if first_payday(this_year, 24) < clock.product_today() else D("0")
+    # The deposit rides the first payday the walk credits: January's first, for a Jan 1 start.
+    first_payday = semi_monthly_paydays(this_year, 1)[0]
+    deposit = D("2000.00") if first_payday < clock.product_today() else D("0")
     assert D(hsa["so_far"]) == so_far / 10 + deposit
     # And 415(c) walks too — it is the only row that adds three legs together.
     assert rows["limit_415c_total"]["so_far"] is not None

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from app.services.pace_walk import first_payday, walk
+from app.services.pace_walk import walk
 
 D = Decimal
 TODAY = date(2026, 9, 7)
@@ -161,17 +161,6 @@ def test_a_window_that_starts_after_the_first_profile_reports_no_start():
     assert ahead.so_far["elective"] == D("0.00")
     # EDWARD's Jan 1 profile starts the year: no payday falls on or before it.
     assert year().starts_on is None
-
-
-def test_first_payday_is_the_business_day_on_or_before_january_15():
-    # Semi-monthly payroll pays BACKWARD over a weekend or holiday; 2026-01-15 is a Thursday.
-    assert first_payday(2026, 24) == date(2026, 1, 15)
-    # 2027-01-15 is a Friday; 2021-01-15 was a Friday too, so the step-back shows on 2022,
-    # whose January 15 fell on a Saturday.
-    assert first_payday(2022, 24) == date(2022, 1, 14)
-    # Any other cadence has no payday calendar at all: the 15th is the probe date the month
-    # basis uses, so it is the day the first month's money is credited to.
-    assert first_payday(2022, 26) == date(2022, 1, 15)
 
 
 def test_the_walk_says_whether_the_years_first_payday_has_gone_by():
