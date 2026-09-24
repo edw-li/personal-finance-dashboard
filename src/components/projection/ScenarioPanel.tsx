@@ -417,7 +417,7 @@ export function ScenarioHints({ people, vests = null }: { people: PersonOut[]; v
         </p>
       )}
       <p className="drill-hint">
-        Enter 5 for 5%. Simulations reuse the same random samples so changes reflect your
+        Enter 5 for 5%. Scenarios on the same horizon reuse the same random samples, so changes reflect your
         assumptions. Money inputs use today&apos;s dollars at the projection start date. The
         withdrawal rate&apos;s stored value lives in{' '}
         <Link to="/settings">Settings</Link>.

@@ -216,6 +216,24 @@ async def test_the_base_is_the_current_snapshot_a_provisional_next_month_one_inc
     assert body["projected"][0] == "120000.00"
 
 
+async def test_a_lengthening_plan_until_keeps_every_month_the_horizon_had(
+    auth_client, db, monkeypatch
+):
+    # 2026-09-24 review I1: the months a later plan-until year adds come from a second seeded
+    # stream, so the default horizon's paths — and with them the FI dates and the bands — hold
+    # still; only months are appended.
+    monkeypatch.setattr(clock, "product_today", lambda: SEP_23)
+    await _seed_book(db)
+    base = (await auth_client.get("/api/v1/projection?annual_return=0.07")).json()
+    longer = (await auth_client.get("/api/v1/projection?annual_return=0.07&plan_until=2080")).json()
+    assert base["years"] == 30 and longer["years"] == 55
+    assert base["fi_month_p50"] is not None
+    for key in ("fi_month_p10", "fi_month_p50"):
+        assert longer[key] == base[key], key
+    for band, values in base["bands"].items():
+        assert longer["bands"][band][: len(values)] == values, band
+
+
 async def test_a_snapshot_two_months_ahead_is_never_the_base(auth_client, db, monkeypatch):
     # Only an API client or an import can store one (K2); it stays in the charts, never "now".
     monkeypatch.setattr(clock, "product_today", lambda: SEP_23)

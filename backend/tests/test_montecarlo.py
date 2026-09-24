@@ -1,4 +1,7 @@
+import math
 import random
+from collections import Counter
+from datetime import date
 from decimal import Decimal
 from functools import partial
 
@@ -11,7 +14,7 @@ from app.services.montecarlo import (
     simulate,
     survival_count,
 )
-from app.services.projection import project
+from app.services.projection import december_index, project
 
 # Pure math over a seeded RNG — no DB, no clock, no HTTP. Every assertion here is either
 # structural (ordering, alignment) or a tolerance; the one hand-computed number is the
@@ -161,6 +164,10 @@ def test_simulate_without_the_new_inputs_is_byte_identical():
         {"lumps": {}},
         {"lumps": None},
         {"resets": [(999, Decimal("5"))]},
+        # Nothing lengthened (2026-09-24 review I1): every month is drawn as it always was.
+        {"base_months": None},
+        {"base_months": 60},
+        {"base_months": 999},
     ):
         assert simulate(*args, 60, Decimal("500000"), **kwargs).bands == result.bands, kwargs
 
@@ -266,6 +273,102 @@ def test_resets_lower_every_band_from_their_month():
     for key in BAND_KEYS:
         assert reset.bands[key][:12] == full.bands[key][:12]
         assert reset.bands[key][-1] < full.bands[key][-1]
+
+
+# --- a later plan-until year only ADDS months (2026-09-24 review I1) ---
+# The months past the `years` horizon come from a second seeded stream drawn month by month, so a
+# longer run appends to every path instead of re-dealing it. Inputs are the review's b2-like case:
+# the copy's balance and spend from Sep 2026, both earners retiring Jul 2035.
+
+B2_ARGS = (
+    Decimal("839559.73"),
+    Decimal("9000.00"),
+    (Decimal(1) + Decimal("0.05")) / (Decimal(1) + Decimal("0.03")) - 1,
+    Decimal("0.15"),
+    Decimal("0"),
+)
+B2_SPEND = Decimal("65668.01")
+B2_TARGET = (B2_SPEND / Decimal("0.04")).quantize(Decimal("0.01"))
+B2_RETIRE = (2035 - 2026) * 12 + (7 - 9)
+B2_FLOWS = {
+    "resets": [(B2_RETIRE, Decimal("0"))],
+    "withdrawal": (B2_RETIRE, (B2_SPEND / 12).quantize(Decimal("0.01"))),
+}
+B2_START = date(2026, 9, 1)
+B2_BASE = 30 * 12
+
+
+def _months_for(plan_until: int) -> int:
+    """The router's horizon for a plan-until year on a 30-year `years` (_resolve_plan_until)."""
+    return max(30, math.ceil(december_index(B2_START, plan_until) / 12)) * 12
+
+
+def _b2(plan_until: int):
+    return simulate(*B2_ARGS, _months_for(plan_until), B2_TARGET, base_months=B2_BASE, **B2_FLOWS)
+
+
+def test_success_through_a_year_is_the_same_whether_the_run_ends_there_or_later():
+    short, long = _b2(2070), _b2(2085)
+    months = _months_for(2070)
+    assert _months_for(2085) > months > B2_BASE
+    through = december_index(B2_START, 2070)
+    assert survival_count(short.depletion_indices, through) == survival_count(
+        long.depletion_indices, through
+    )
+    # Path by path, not just in total: every month the shorter run has, the longer run shares.
+    for key in BAND_KEYS:
+        assert long.bands[key][: months + 1] == short.bands[key], key
+
+    def within(index):
+        return None if index is None or index > months else index
+
+    assert [within(i) for i in long.depletion_indices] == short.depletion_indices
+    assert [within(i) for i in long.reach_indices] == short.reach_indices
+
+
+def test_success_never_rises_as_the_plan_until_year_moves_later():
+    # The review's sweep: with every path re-dealt whenever the horizon grew, the share of paths
+    # lasting through a LATER year rose 8 times between 2055 and 2085.
+    previous = SIMULATIONS
+    for year in range(2055, 2086):
+        survived = survival_count(_b2(year).depletion_indices, december_index(B2_START, year))
+        assert survived <= previous, year
+        previous = survived
+
+
+def test_the_fi_dates_hold_still_while_the_horizon_lengthens():
+    base = simulate(*B2_ARGS, B2_BASE, B2_TARGET, base_months=B2_BASE, **B2_FLOWS)
+    assert reach_percentile(base.reach_indices, 50) is not None
+    for year in (2060, 2075, 2085):
+        mc = _b2(year)
+        for pct in (10, 50):
+            assert reach_percentile(mc.reach_indices, pct) == reach_percentile(
+                base.reach_indices, pct
+            ), (year, pct)
+
+
+def test_the_months_a_later_year_adds_come_from_a_second_stream(monkeypatch):
+    calls: Counter[int] = Counter()
+    real = random.Random.gauss
+
+    def counting(self, mu, sigma):
+        calls[id(self)] += 1
+        return real(self, mu, sigma)
+
+    monkeypatch.setattr(random.Random, "gauss", counting)
+    simulate(
+        Decimal("1000"),
+        Decimal("0"),
+        Decimal("0.05"),
+        Decimal("0.15"),
+        Decimal("0"),
+        48,
+        None,
+        base_months=36,
+    )
+    # Two streams: the seeded one draws every path's first 36 months as it always has; the second
+    # draws the 12 added months, all 500 paths per month.
+    assert sorted(calls.values()) == [SIMULATIONS * 12, SIMULATIONS * 36]
 
 
 def test_survival_counts_the_paths_never_depleted_through_an_index():

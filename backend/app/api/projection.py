@@ -1132,7 +1132,9 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
     mc: MonteCarloResult | None = None
     if volatility > 0:
         # Off the event loop (spec §R9). The walk is pure and seeded, so the thread's bands are
-        # the inline run's, bit for bit (test_montecarlo pins it).
+        # the inline run's, bit for bit (test_montecarlo pins it). `base_months` is the `years`
+        # knob's horizon: the months a later plan-until year adds come from a second stream, so
+        # lengthening the run never re-deals a path (2026-09-24 review I1).
         mc = await anyio.to_thread.run_sync(
             partial(
                 simulate,
@@ -1146,6 +1148,7 @@ async def _build(db: AsyncSession, knobs: ProjectionKnobs, today: date) -> Proje
                 resets=plan.resets,
                 withdrawal=plan.withdrawal,
                 lumps=vests.lumps,
+                base_months=knobs.years * 12,
             ),
             limiter=MC_LIMITER,
         )

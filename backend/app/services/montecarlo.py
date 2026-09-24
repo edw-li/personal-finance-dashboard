@@ -20,6 +20,14 @@ depleted path KEEPS DRAWING its Gaussian every month, so every path sees the sam
 numbers in every scenario (common random numbers: a change of spend or retirement never
 reshuffles later paths, and success stays monotone in them).
 
+TWO STREAMS (2026-09-24 review I1). The `years` horizon's months (`base_months`) are drawn path
+by path from the seeded stream, exactly as they always were. The months a later plan-until year
+ADDS come from a second seeded stream drawn month by month — every path's first added month,
+then every path's second — so lengthening the run only APPENDS: no path's earlier months move,
+the share lasting through a December is the same however far past it the run goes (and so never
+rises as the plan-until year moves later), and the headline FI date holds still. One stream
+drawn path by path would re-deal every path whenever the horizon grew.
+
 SEEDED, deliberately: identical knobs must redraw identical bands — the bands answer
 "what does this sigma imply", not "give me fresh noise" — and the tests pin exact values.
 The router runs this in a worker thread (api/projection.py MC_LIMITER): it is pure, owns
@@ -82,6 +90,7 @@ def simulate(
     resets: Sequence[tuple[int, Decimal]] = (),
     withdrawal: tuple[int, Decimal] | None = None,
     lumps: Mapping[int, Decimal] | None = None,
+    base_months: int | None = None,
 ) -> MonteCarloResult:
     """`annual_return`/`contribution_growth` arrive ALREADY converted to real terms by
     the router when inflation is in play — this module knows nothing about inflation.
@@ -90,7 +99,12 @@ def simulate(
     by services/projection rather than re-derived here: the fan has to bend exactly where the
     line bends. They cost the walk no randomness — the flows are one list built before the
     first path — which is what keeps empty inputs byte-identical.
+
+    `base_months` is the router's `years` horizon: its months come from the seeded stream path
+    by path, the months past it from the second stream month by month (module docstring). None,
+    or anything at or past `months`, draws every month from the first — the run as it always was.
     """
+    base = months if base_months is None else min(base_months, months)
     rng = random.Random(MC_SEED)
     start = float(starting_balance)
     mu_m = math.log(1 + float(annual_return)) / 12
@@ -110,17 +124,28 @@ def simulate(
     # route's whole cost (audit perf B6). Same calls, same order, same numbers.
     gauss = rng.gauss
     exp = math.exp
+    # The added months' growth factors, month-major from their own stream (module docstring),
+    # then dealt out per path: path k's are draws k, k + 500, k + 1000, ... in month order.
+    added = months - base
+    extension: list[list[float]] = []
+    if added:
+        extra_gauss = random.Random(MC_SEED + 1).gauss
+        drawn = [exp(extra_gauss(mu_m, sigma_m)) for _ in range(added * SIMULATIONS)]
+        extension = [drawn[k::SIMULATIONS] for k in range(SIMULATIONS)]
 
     paths: list[list[float]] = []
     reach_indices: list[int | None] = []
     depletion_indices: list[int | None] = []
-    for _ in range(SIMULATIONS):
+    for k in range(SIMULATIONS):
         balance = start
         path = [balance]
         append = path.append
         reached: int | None = 0 if target_f is not None and balance >= target_f else None
         depleted: int | None = None
-        for month_index in range(1, months + 1):
+        # The `years` months: drawn inline, exactly as the one-stream walk always drew them.
+        # The step is written out again for the added months below rather than shared: one loop
+        # choosing its stream per month measured ~5 % slower, a per-path factor list 8-19 %.
+        for month_index in range(1, base + 1):
             balance = balance * exp(gauss(mu_m, sigma_m)) + flows[month_index]
             if balance < 0.0:
                 balance = 0.0
@@ -129,6 +154,16 @@ def simulate(
             append(balance)
             if reached is None and target_f is not None and balance >= target_f:
                 reached = month_index
+        if added:
+            for month_index, factor in zip(range(base + 1, months + 1), extension[k], strict=True):
+                balance = balance * factor + flows[month_index]
+                if balance < 0.0:
+                    balance = 0.0
+                    if depleted is None:
+                        depleted = month_index
+                append(balance)
+                if reached is None and target_f is not None and balance >= target_f:
+                    reached = month_index
         paths.append(path)
         reach_indices.append(reached)
         depletion_indices.append(depleted)

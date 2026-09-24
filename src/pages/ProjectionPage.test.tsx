@@ -1102,6 +1102,12 @@ describe('ProjectionPage — surface polish (2026-09-13 spec §12)', () => {
     const footer = card.querySelector('.chart-card-row-caption') as HTMLElement
     expect(footer.textContent).toContain('Growth only excludes contributions, vests and withdrawals.')
     expect(footer.textContent).toContain('The central line uses a constant assumed return')
+    // True as written (2026-09-24 review I1): the simulated paths are shared by every scenario
+    // on one horizon, a later plan-until year appends months to them, a new horizon re-deals.
+    expect(footer.textContent).toContain(
+      'Scenarios on the same horizon share the same 500 simulated paths, so a difference between them is what you changed; a later plan-until year only adds months to each path.',
+    )
+    expect(footer.textContent).not.toContain('Identical assumptions')
     expect(document.querySelector('.projection-method-note')).toBeNull()
   })
 

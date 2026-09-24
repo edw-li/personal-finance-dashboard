@@ -241,7 +241,8 @@ describe('ScenarioPanel', () => {
 
   it('states that the seed is fixed and points the withdrawal rate at Settings', () => {
     mount()
-    expect(screen.getByText(/same random samples/)).toBeTruthy()
+    // Only on one horizon: a different `years` re-deals the paths (2026-09-24 review I1).
+    expect(screen.getByText(/Scenarios on the same horizon reuse the same random samples/)).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/settings')
   })
 
