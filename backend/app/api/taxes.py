@@ -105,6 +105,7 @@ from app.schemas.taxes import (
 )
 from app.services import clock, rsu_vesting, withholding_calc
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.day_labels import long_day
 from app.services.limit_check import employer_hsa
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
@@ -1907,11 +1908,6 @@ UNPRICED_LOT_NOTE = (
 )
 
 
-def _long_day(day: date) -> str:
-    """'Aug 29, 2025' — a note about a lot names its own year, which is rarely this one."""
-    return f"{day:%b} {day.day}, {day.year}"
-
-
 SEVERAL_PARTNERS_NOTE = (
     "Paycheck inputs are reconciled for the primary and one partner; this return covers more "
     "people than that"
@@ -2102,7 +2098,7 @@ async def _reconciliation(
                 # finding 6).
                 notes.append(
                     UNPRICED_LOT_NOTE.format(
-                        bought=_long_day(lot.purchase_date), sold=_long_day(lot.sold_date)
+                        bought=long_day(lot.purchase_date), sold=long_day(lot.sold_date)
                     )
                 )
                 continue

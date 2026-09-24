@@ -18,32 +18,18 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.limit_keys import LIMIT_ESPP_423, LIMIT_LABELS
+from app.services.day_labels import month_year
 from app.services.limit_check import OVER_ABOVE, RATIO_QUANTUM, WARN_AT, PaceHalf, PaceItem
 from app.services.pace_walk import walk
 from app.services.paycheck_calc import half_up2
 
 ZERO = Decimal("0")
 ONE = Decimal("1")
-MONTH_NAMES = (
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-)
 
 
 def _stamp(day: date) -> str:
-    """'Sep 2025' — spelled here rather than through strftime, whose month names follow the
-    process locale and would make the label untestable on another machine."""
-    return f"{MONTH_NAMES[day.month - 1]} {day.year}"
+    """'Sep 2025' — `day_labels`' spelling, never strftime's locale-bound month names."""
+    return month_year(day)
 
 
 def _estimate(

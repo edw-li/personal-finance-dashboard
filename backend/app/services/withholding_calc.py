@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
+from app.services.day_labels import long_day, month_day
 from app.services.paycheck_calc import breakdown
 from app.services.tax_service import Bracket, walk
 
@@ -90,9 +91,6 @@ PARTNER_EARLY_CHECKS_WARNING = (
     "{whose} checks on or before {start}, the first paycheck profile's start, count as $0 — "
     "add a profile for an earlier job or salary to include them"
 )
-# Spelled here rather than through strftime, whose month names follow the process locale
-# (espp_pace's reason): these land in wire strings a test pins.
-MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 PARTNER_TRACKER_IGNORED_NOTE = (
     "partner withholding simulated from their paycheck profile — the entered "
     "w2_fed_withholding / w2_state_withholding rows are ignored"
@@ -124,9 +122,9 @@ VestTuple = tuple[date, int, Decimal]
 
 def _day(day: date, year: int) -> str:
     """'Sep 1' — the card's own year goes without saying; any other is named ('Jan 1, 2027':
-    a job that starts after the tax year would otherwise read as this year's Jan 1)."""
-    label = f"{MONTH_NAMES[day.month - 1]} {day.day}"
-    return label if day.year == year else f"{label}, {day.year}"
+    a job that starts after the tax year would otherwise read as this year's Jan 1). The
+    spellings are `day_labels`' — never strftime's locale-bound month names."""
+    return month_day(day) if day.year == year else long_day(day)
 
 
 def _early_note(template: str, whose: str, starts_on: date | None, year: int) -> str | None:
