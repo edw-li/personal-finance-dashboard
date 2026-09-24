@@ -371,6 +371,30 @@ lands exactly below it.
 - **Edit** still seeds the form above the table without scrolling or focusing (unchanged).
 - Empty ledger: unchanged ("No dividends recorded." — no toolbar, no box).
 
+### 4.6 Follow-up after the merge (2026-09-24, the user's eyeball): the glide and steady columns
+
+The user found the fold instantaneous ("a bit jarring") and saw the column headings shift on every
+open/fold. Both fixed as a quick follow-up (no separate spec/plan round, by the user's call):
+
+- **Steady columns.** The automatic table layout sized each column from the rows on screen, so a fold
+  moved the headings by up to 55px at 1440 (measured in Edge over all 30 open/fold states). The ledger is
+  now `table-layout: fixed`, each column a share of the width taken from its widest production content
+  plus a manual entry's longer date note and badge, with `min-width: 58rem` (the widths summed) below which
+  the box scrolls sideways as before; free text past a column ends in an ellipsis. The box also keeps its
+  scrollbar's lane (`scrollbar-gutter: stable`): folded to its month lines the ledger fits, and the
+  scrollbar leaving rescaled every column by its 15px. Result: header widths identical across all states
+  at 1280/1440/1600/1920.
+- **The glide.** A month line's toggle opens its rows out of nothing and folds them back (`--t-enter`,
+  `--ease-out`): each entry cell's content sits in a `.dividend-cell` block whose height glides 0 ↔ auto
+  (`interpolate-size`, `@starting-style`), with the cell's vertical padding and hairline, and the row fades.
+  DividendsPanel keeps a folding month's rows mounted (inert) until its transitions end (`getAnimations`,
+  finite ones only — the page's scroll-driven reveals never finish), and caps a glide at its first 24 rows
+  (`GLIDE_ROWS`, enough to fill the tallest box); the rest mount when an opening glide ends and unmount as a
+  fold starts, below the box's view. Expand all / Collapse all and months opened by a save do not glide:
+  gliding the whole 378-row ledger cost a 1.5 s first frame in Edge, the 72-entry month uncapped ~200 ms
+  (capped: ~60 ms). Reduced motion or no `interpolate-size`: the fold is instant, as before. The save's
+  reveal waits for any glide under way before it measures.
+
 ## 5. Working beside the correctness batch
 
 ### 5.1 Files

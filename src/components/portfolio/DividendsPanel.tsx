@@ -1,6 +1,6 @@
 import { ChevronRight } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { FocusEvent as ReactFocusEvent } from 'react'
+import type { FocusEvent as ReactFocusEvent, ReactNode } from 'react'
 import { ApiError } from '../../api/client'
 import { createDividend, deleteDividend, updateDividend } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
@@ -83,6 +83,43 @@ function newAccountNote(
  *  the reveal lapses rather than jolting the box then. Exported for the tests (Feed's precedent). */
 export const REVEAL_WINDOW_MS = 10_000
 
+/** A toggled month's rows while they glide (dividends.css): 'enter' from the toggle that opens the month
+ *  until the glide ends, 'leave' from the toggle that folds it until its rows have folded away — the one
+ *  time a closed month still renders rows. */
+type MonthGlide = 'enter' | 'leave'
+
+/** How many of a gliding month's rows glide: enough to fill the tallest box (720px) at 30px a row, so
+ *  the rest are always below the box's view. They mount once an opening glide ends and unmount as a
+ *  fold starts, out of sight. Measured in Edge on production's 72-entry month: gliding every row cost
+ *  a ~200ms first frame and 100ms frames after it; the whole ledger at once (Expand all), 1.5s — so
+ *  the bulk buttons do not glide at all. Exported for the tests, as REVEAL_WINDOW_MS is. */
+export const GLIDE_ROWS = 24
+
+/** Whether the browser can say when a glide ends, which is when a folding month's rows unmount. jsdom
+ *  cannot, so there — and anywhere else without it — a toggle folds at once, as it always did. Whether
+ *  anything actually moves is the stylesheet's call: under reduced motion, or without interpolate-size,
+ *  no transition starts and the wait for one ends at once. */
+const canGlide = () => typeof document.body.getAnimations === 'function'
+
+/** The animations at or under `el` that will end — the glides a wait can hold for. A scroll-driven one
+ *  (the page's scrims and card reveals run on scroll timelines) or an endless one never finishes, and a
+ *  wait on it would hold a folded month's rows, or a save's reveal, for ever. */
+const endingAnimations = (el: Element) =>
+  el.getAnimations({ subtree: true }).filter((animation) => {
+    const end = animation.effect?.getComputedTiming().endTime
+    return typeof end === 'number' && Number.isFinite(end)
+  })
+
+/** An entry row's cell. Its content sits in a block the month's glide can size: a table row takes no
+ *  height of its own, but a block inside each of its cells can (dividends.css). */
+function Cell({ className, children }: { className?: string; children?: ReactNode }) {
+  return (
+    <td className={className}>
+      <div className="dividend-cell">{children}</div>
+    </td>
+  )
+}
+
 export default function DividendsPanel({
   securities,
   dividends,
@@ -138,14 +175,40 @@ export default function DividendsPanel({
     setOpen(new Set([firstOpen]))
   }
   const allOpen = months.every((month) => open.has(month.key))
-  const toggleMonth = (key: string) =>
-    setOpen((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
+  // The months gliding open or shut. Only a month line's own toggle glides; Expand all and Collapse all
+  // change at once (GLIDE_ROWS says why), stopping any glide under way, and a month that opens any other
+  // way (the first paint, a save's month) simply renders open.
+  const [glides, setGlides] = useState<ReadonlyMap<string, MonthGlide>>(() => new Map())
+  const setOpenMonths = (next: ReadonlySet<string>, glide: boolean) => {
+    if (!glide) setGlides((prev) => (prev.size === 0 ? prev : new Map()))
+    else if (canGlide()) {
+      const moved = months.filter((month) => open.has(month.key) !== next.has(month.key))
+      if (moved.length > 0) {
+        setGlides((prev) => {
+          const started = new Map(prev)
+          for (const month of moved) started.set(month.key, next.has(month.key) ? 'enter' : 'leave')
+          return started
+        })
+      }
+    }
+    setOpen(next)
+  }
+  const toggleMonth = (key: string) => {
+    const next = new Set(open)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    setOpenMonths(next, true)
+  }
+  const openMonth = (key: string) => {
+    setOpen((prev) => (prev.has(key) ? prev : new Set(prev).add(key)))
+    // A month caught folding away turns round and opens again — the save's reveal is looking for its row.
+    setGlides((prev) => {
+      if (prev.get(key) !== 'leave') return prev
+      const rest = new Map(prev)
+      rest.delete(key)
+      return rest
     })
-  const openMonth = (key: string) => setOpen((prev) => (prev.has(key) ? prev : new Set(prev).add(key)))
+  }
   // The capped box (TableScroll's element), which the uncover and the reveal below scroll.
   const boxRef = useRef<HTMLDivElement>(null)
   // Passed month lines stack at one offset — the browser pins a table's sticky cells against the whole
@@ -220,10 +283,42 @@ export default function DividendsPanel({
     const box = boxRef.current
     const row = box?.querySelector<HTMLElement>(`tr[data-dividend-id="${pending.id}"]`)
     if (!box || !row) return
-    // The month line pins under the column header, so the row lands below both.
-    const monthLine = row.closest('tbody')?.querySelector<HTMLElement>('.dividend-month-row')
-    revealInBox(box, row, monthLine?.getBoundingClientRect().height ?? 0)
+    const reveal = () => {
+      if (!row.isConnected) return
+      // The month line pins under the column header, so the row lands below both.
+      const monthLine = row.closest('tbody')?.querySelector<HTMLElement>('.dividend-month-row')
+      revealInBox(box, row, monthLine?.getBoundingClientRect().height ?? 0)
+    }
+    // A month still gliding (toggled just before the save) is still moving the rows the reveal
+    // measures, so it waits for the ledger to come to rest.
+    const moving = canGlide() ? endingAnimations(box) : []
+    if (moving.length === 0) reveal()
+    else void Promise.allSettled(moving.map((animation) => animation.finished)).then(reveal)
   }, [dividends])
+  // A glide is over when every transition in its month's group is: the rows' heights and fades, the
+  // chevron's turn. Then an opened month's rows drop the clip they glide under and a folded month's
+  // rows unmount. Reversing a month mid-glide records the other glide, which re-runs this effect: the
+  // first wait is dropped (its cancelled transitions settle it too) and the new glide is waited on.
+  useEffect(() => {
+    if (glides.size === 0) return
+    let current = true
+    for (const [key, glide] of glides) {
+      const group = boxRef.current?.querySelector<HTMLElement>(`tbody[data-month="${key}"]`)
+      const running = group ? endingAnimations(group) : []
+      void Promise.allSettled(running.map((animation) => animation.finished)).then(() => {
+        if (!current) return
+        setGlides((prev) => {
+          if (prev.get(key) !== glide) return prev
+          const next = new Map(prev)
+          next.delete(key)
+          return next
+        })
+      })
+    }
+    return () => {
+      current = false
+    }
+  }, [glides])
 
   const startEdit = (dividend: DividendOut) => {
     // A new edit moves the reader on: an earlier save's reveal is moot (see pendingReveal).
@@ -501,13 +596,13 @@ export default function DividendsPanel({
               <button
                 type="button"
                 className="button"
-                onClick={() => setOpen(allOpen ? new Set() : new Set(months.map((month) => month.key)))}
+                onClick={() => setOpenMonths(allOpen ? new Set() : new Set(months.map((month) => month.key)), false)}
               >
                 {allOpen ? 'Collapse all' : 'Expand all'}
               </button>
             )}
           </div>
-          <TableScroll label="Dividends by month" ref={boxRef}>
+          <TableScroll className="dividend-scroll" label="Dividends by month" ref={boxRef}>
             <table className="port-table dividend-table">
               <thead>
                 <tr>
@@ -518,11 +613,12 @@ export default function DividendsPanel({
               </thead>
               {months.map((month) => {
                 const isOpen = open.has(month.key)
+                const glide = glides.get(month.key)
                 const totalId = `dividend-month-total-${month.key}`
                 return (
                   // One row group per month inside ONE table: the column grid stays shared, so the
                   // amounts line up down the whole ledger.
-                  <tbody key={month.key}>
+                  <tbody key={month.key} data-month={month.key}>
                     {/* The whole line toggles for the mouse; the button is the keyboard's and the
                         screen reader's control — its click bubbles here, so one toggle per press. */}
                     <tr
@@ -552,27 +648,38 @@ export default function DividendsPanel({
                       <td className="num" id={totalId}>{formatCurrency(month.totalCents / 100)}</td>
                       <td colSpan={4} />
                     </tr>
-                    {isOpen &&
-                      month.rows.map((d) => (
-                        <tr key={d.id} data-dividend-id={d.id}>
-                          <td>{tickers.get(d.security_id) ?? '?'}</td>
-                          <td>{d.account ?? '—'}</td>
-                          <td>{formatDate(d.pay_date)}<span className="sub">{d.source === 'auto' ? ' · ex-date' : ' · entered pay date'}</span></td>
-                          <td className="num">{formatCurrency(d.amount)}</td>
-                          <td><span className="badge">{d.source === 'auto' ? 'auto' : 'manual'}</span></td>
-                          <td className="num">
+                    {(isOpen || glide === 'leave') &&
+                      (glide === undefined ? month.rows : month.rows.slice(0, GLIDE_ROWS)).map((d) => (
+                        // inert while folding: the rows are on their way out, so for the length of the
+                        // glide neither a Tab nor a screen reader finds them.
+                        <tr
+                          key={d.id}
+                          data-dividend-id={d.id}
+                          className={
+                            glide === 'enter' ? 'dividend-entry is-entering'
+                              : glide === 'leave' ? 'dividend-entry is-leaving'
+                                : 'dividend-entry'
+                          }
+                          inert={glide === 'leave'}
+                        >
+                          <Cell>{tickers.get(d.security_id) ?? '?'}</Cell>
+                          <Cell>{d.account ?? '—'}</Cell>
+                          <Cell>{formatDate(d.pay_date)}<span className="sub">{d.source === 'auto' ? ' · ex-date' : ' · entered pay date'}</span></Cell>
+                          <Cell className="num">{formatCurrency(d.amount)}</Cell>
+                          <Cell><span className="badge">{d.source === 'auto' ? 'auto' : 'manual'}</span></Cell>
+                          <Cell className="num">
                             {d.per_share === null ? '—' : formatCurrency(d.per_share)}
                             {d.shares_held !== null && (
                               <span className="sub"> × {formatShares(d.shares_held)}</span>
                             )}
-                          </td>
-                          <td className="notes-cell">{d.notes ?? ''}</td>
+                          </Cell>
+                          <Cell className="notes-cell">{d.notes ?? ''}</Cell>
                           {/* disabled={busy} on both: submit()'s .then closes over editingId and the
                               form as they were when it fired, so a row action taken mid-flight is
                               undone by the reset that lands after it — a seeded edit silently wiped,
                               or worse, a PATCH aimed at whatever editingId the closure still holds.
                               Shutting the row for the duration of a save is the cheap fix. */}
-                          <td className="row-actions">
+                          <Cell className="row-actions">
                             {/* aria-label: a row button named just "Edit"/"Delete" tells a
                                 screen-reader user nothing about what it acts on. Delete needs it
                                 MORE since the delete went instant (2026-08-25 polish §8): the
@@ -594,7 +701,7 @@ export default function DividendsPanel({
                             >
                               Delete
                             </button>
-                          </td>
+                          </Cell>
                         </tr>
                       ))}
                   </tbody>
