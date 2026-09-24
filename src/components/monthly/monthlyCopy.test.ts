@@ -6,7 +6,6 @@ import {
   beyondBanner,
   confirmBanner,
   dayOf,
-  earlyBalancesBlocker,
   earlyBanner,
   flowsPartName,
   inProgressSentence,
@@ -122,15 +121,6 @@ describe('sentences', () => {
       "September's spending was saved during September. Add anything that has posted since and save, or confirm it's complete.",
     )
     expect(noBalancesBlocker('2026-11-01')).toBe('Record Nov 1 balances before closing November.')
-  })
-
-  it("K4's close blocker is the server's sentence (services/month_review.early_balances_blocker)", () => {
-    expect(earlyBalancesBlocker('2026-10-01', '2026-09-22')).toBe(
-      'Oct 1 balances were recorded early, on Sep 22 — save them again on or after Oct 1 before closing October.',
-    )
-    expect(earlyBalancesBlocker('2025-10-01', '2025-09-22')).toBe(
-      'Oct 1, 2025 balances were recorded early, on Sep 22, 2025 — save them again on or after Oct 1, 2025 before closing October 2025.',
-    )
   })
 
   it("Review's pre-save note names what the save writes", () => {

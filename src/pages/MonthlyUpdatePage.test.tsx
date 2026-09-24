@@ -2808,8 +2808,17 @@ describe('two parts, each saving only itself (2026-09-23 spec §M1)', () => {
 
 // The real copy's Oct 3 (2026-09-23 spec §V4): Oct 1 recorded early on Sep 22, September's rent
 // saved during September — partial, no take-home.
+// K4's close blocker as the server words it for the fixtures' early Oct 1 (recorded Sep 22).
+const OCT_EARLY = 'Oct 1 balances were recorded early, on Sep 22 — save them again on or after Oct 1 before closing October.'
+
 function partialSeptember() {
   setServerToday('2026-10-03')
+  // The server's review of October lists K4's blocker while its balances are early — the wizard
+  // offers the Confirm, and shows the blocker, only on the server's word (review M3).
+  vi.mocked(monthReviewApi.fetchMonthReview).mockImplementation(async (month) => ({
+    ...reviewFixture(month),
+    blockers: month === '2026-10-01' ? [OCT_EARLY] : [],
+  }))
   vi.mocked(fetchCoverage).mockResolvedValue({
     balances: ['2026-08-01', '2026-09-01', '2026-10-01'],
     spending: ['2026-09-01'],
@@ -3148,12 +3157,26 @@ describe('dated balances (2026-09-23 spec §M4)', () => {
     expect(await screen.findByText('Balances as of Sep 25 · provisional for Oct 1 — recorded early, on Sep 25')).toBeTruthy()
   })
 
+  it("a month the server exempts (from before the review's adoption) shows neither K4's blocker nor the Confirm", async () => {
+    partialSeptember()
+    // needs_review: an adopted-history month edited since — restamped by a save, but never blocked.
+    vi.mocked(monthReviewApi.fetchMonthReview).mockImplementation(async (month) => ({
+      ...reviewFixture(month), state: 'needs_review', blockers: [],
+    }))
+    renderPage('/update?month=2026-10-01')
+    await screen.findByText('Balances as of Sep 22 · provisional for Oct 1 — recorded early, on Sep 22')
+    expect(screen.queryByRole('button', { name: 'Confirm Oct 1 balances' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+    await screen.findByText('Nothing has changed — saving records your confirmations only.')
+    expect(screen.queryByText(/were recorded early/)).toBeNull()
+  })
+
   it.each(['unreviewed_history', 'closed'] as const)(
     'a %s month recorded early is never offered the Confirm (K4 never restamps it)',
     async (state) => {
       partialSeptember()
       vi.mocked(monthReviewApi.fetchMonthReview).mockImplementation(async (month) => ({
-        ...reviewFixture(month), state,
+        ...reviewFixture(month), state, blockers: state === 'closed' && month === '2026-10-01' ? [OCT_EARLY] : [],
       }))
       renderPage('/update?month=2026-10-01')
       await screen.findByText('Balances as of Sep 22 · provisional for Oct 1 — recorded early, on Sep 22')
@@ -3392,6 +3415,12 @@ describe('close gates (2026-09-23 spec §M1, §M5)', () => {
     vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
       month: '2026-09-01', exists: true, net_pay: '6000.00', amounts: [{ category_id: 8, amount: '2072.23' }], budgets: [],
     })
+    vi.mocked(monthReviewApi.fetchMonthReview).mockImplementation(async (month) => ({
+      ...reviewFixture(month),
+      blockers: month === '2026-09-01'
+        ? ['Sep 1 balances were recorded early, on Aug 28 — save them again on or after Sep 1 before closing September.']
+        : [],
+    }))
     renderPage('/update?month=2026-09-01&step=review')
     for (const label of [
       'I checked every Sep 1 account balance.',

@@ -110,10 +110,6 @@ export const partialBanner = (month: string) =>
 export const noBalancesBlocker = (month: string) =>
   `Record ${dayOf(month)} balances before closing ${monthNameOf(month)}.`
 
-/** K4's close blocker — word for word the server's (services/month_review.early_balances_blocker). */
-export const earlyBalancesBlocker = (month: string, recordedOn: string) =>
-  `${dayOf(month)} balances were recorded early, on ${dayOf(recordedOn)} — save them again on or after ${dayOf(month)} before closing ${monthNameOf(month)}.`
-
 /** The receipt's line for a part still unsaved once a save has landed (review M2): the part by its
  *  name, and the step whose Save writes it — the other part, or typing done while the save ran. */
 export const unsavedPartNote = (part: 'balances' | 'flows', month: string) =>

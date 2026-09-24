@@ -42,7 +42,6 @@ import {
   beyondBanner,
   confirmBanner,
   dayOf,
-  earlyBalancesBlocker,
   earlyBanner,
   flowsPartName,
   inProgressSentence,
@@ -1297,13 +1296,17 @@ function MonthlyUpdateWizard() {
   // confirmed complete. The banner says so; the Confirm settles it (spec §M1).
   const partial = monthFlows?.spending === 'partial'
 
+  // K4's close blocker in the SERVER's words — listed only for a month the server refuses to close
+  // for its early balances. History from before the review's adoption is exempt (spec §K4), and only
+  // the server knows where that line falls, so the wizard reads the blocker rather than guessing.
+  const serverEarlyBlocker = review?.blockers.find((line) => line.includes(' balances were recorded early, on ')) ?? null
   // Balances recorded before their 1st, once that 1st has arrived: a save now makes them final
-  // (K4), so an unchanged save IS the Confirm (spec §M4). The server never restamps a legacy or a
-  // closed month (K4 as landed — the date would move the digest it was adopted or certified at),
-  // so neither is offered one.
+  // (K4), so an unchanged save IS the Confirm (spec §M4). Offered only where the server says the
+  // early date blocks the close — never for exempt history — and never for a closed month, which
+  // the server never restamps (the date would move the digest it was certified at).
   const confirmable =
     recordedEarly(month, balancesMeta) &&
-    review?.state !== 'unreviewed_history' &&
+    serverEarlyBlocker !== null &&
     review?.state !== 'closed' &&
     (phase === 'past' || phase === 'current')
 
@@ -1317,13 +1320,12 @@ function MonthlyUpdateWizard() {
   // Why "Save and close" stays off, when the server would refuse it too (spec §M1, §M5, §K4) —
   // said beside the button, in the order a user fixes them. Balances edited on screen are sent
   // with the close, so neither balances rule applies to them: the server records them first.
-  const earlyAtClose = recordedEarly(month, balancesMeta) && review?.state !== 'unreviewed_history'
   const closeBlocker = !balancesValid
     ? 'Fix balance entries first.'
     : !monthExisted && !balancesDirty
       ? noBalancesBlocker(month)
-      : earlyAtClose && !balancesDirty && balancesMeta.recorded_on !== null
-        ? earlyBalancesBlocker(month, balancesMeta.recorded_on)
+      : !balancesDirty && serverEarlyBlocker !== null
+        ? serverEarlyBlocker
         : null
   // The month's story on Review (spec §M5): this 1st → the next 1st, from saved figures.
   const story = monthStory(month, next)
