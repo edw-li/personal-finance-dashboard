@@ -10,11 +10,13 @@ import { useEffect, type RefObject } from 'react'
  *
  * `axes` (2026-09-24 table-scroll spec §2.3): the default 'x' reads the sideways edges only, exactly
  * as it always has; 'xy' also names "top" and "bottom", after them, for a box capped in height
- * (TableScroll). Opt-in, because an `overflow-x: auto` box computes `overflow-y: auto` and display
- * scaling can round its content a pixel taller than the box — every existing caller's attribute
- * stays byte-identical. In 'xy' the ResizeObserver also watches the box's table: once the box is
- * capped its own size stops changing, so rows landing (or a dividend month opening) would otherwise
- * leave "bottom" stale until the next scroll.
+ * (TableScroll). Opt-in, so every existing caller's attribute stays byte-identical: CategoriesCard's
+ * `.settings-scroll` is already capped in height and would start carrying real top/bottom tokens,
+ * and an `overflow-x: auto` box computes `overflow-y: auto` and can round its content a pixel taller
+ * than the box. In 'xy' the ResizeObserver also watches the box's direct-child table — looked up
+ * once each time the effect runs, which TableScroll's contract (one table living as long as the
+ * box) makes safe: once the box is capped its own size stops changing, so rows landing (or a
+ * dividend month opening) would otherwise leave "bottom" stale until the next scroll.
  *
  * A ref is not a reactive value — it is filled during the commit, silently — so an effect that
  * finds `ref.current` null and returns has nothing to wake it when the element finally arrives.

@@ -102,6 +102,10 @@ describe('useScrollEdges, vertical', () => {
     el.dispatchEvent(new Event('scroll'))
     expect(el.getAttribute('data-scroll-more')).toBe('top bottom')
     // 599.5 + 400 is within a pixel of 1000: a box whose content rounds fractionally is at its foot.
+    // …and 598.5 + 400 is a full 1.5px short of it: still "more below" — the tolerance is one pixel, not more.
+    el.scrollTop = 598.5
+    el.dispatchEvent(new Event('scroll'))
+    expect(el.getAttribute('data-scroll-more')).toBe('top bottom')
     el.scrollTop = 599.5
     el.dispatchEvent(new Event('scroll'))
     expect(el.getAttribute('data-scroll-more')).toBe('top')
@@ -138,10 +142,32 @@ describe('useScrollEdges, vertical', () => {
     try {
       const { getByTestId } = render(createElement(BothWays, { axes: 'xy' }))
       const el = getByTestId('scroller')
-      expect(observed).toEqual([el, el.querySelector('table')])
+      expect(observed).toHaveLength(2)
+      expect(observed[0]).toBe(el)
+      expect(observed[1]).toBe(el.querySelector('table'))
       tall(el, 1000, 400)
       fire()
       expect(el.getAttribute('data-scroll-more')).toBe('bottom')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("observes only the box in the default 'x' — the table is watched in 'xy' alone", () => {
+    const observed: Element[] = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe(target: Element) {
+          observed.push(target)
+        }
+        disconnect() {}
+      },
+    )
+    try {
+      const { getByTestId } = render(createElement(BothWays, {}))
+      expect(observed).toHaveLength(1)
+      expect(observed[0]).toBe(getByTestId('scroller'))
     } finally {
       vi.unstubAllGlobals()
     }
