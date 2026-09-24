@@ -1,7 +1,7 @@
 // Pure year-to-date math for the overview card — no React, no fetching (attention.ts's
 // posture; `todayIso` injectable for tests). The spending figures are the SERVER's own
 // yearly rollup, verbatim; only the two aggregates no endpoint computes — the net-worth
-// delta over snapshots and the year's dividend sum — are display-only client floats
+// delta from the Jan 1 balances and the year's dividend sum — are display-only client floats
 // (spendStats' sanctioned class). Every figure also carries the WINDOW it was computed
 // over (2026-09-04 honest-numbers spec §3): a savings rate over seven matched months
 // beside a net-worth delta over nine is two different years under one heading.
@@ -11,7 +11,10 @@ import type {
   NetWorthTimeseries,
   SpendingYearly,
 } from '../../types/api'
+import { asOfPhrase, formatAsOf } from '../../utils/asOf'
 import { formatMonth } from '../../utils/format'
+import { dayName } from '../../utils/timeWords'
+import { currentSnapshotIndex, snapshotAt, type Dated } from '../networth/snapshotStates'
 
 /** A span of months the card names out loud. The edges say where it starts and ends;
  *  `months` is how many months actually carried data — on the saved window that is the
@@ -24,13 +27,17 @@ export interface YtdWindow {
 
 export interface YtdStats {
   year: number
-  /** Latest in-year net worth minus the anchor's; null without two points to span. */
+  /** The current snapshot's net worth minus the Jan 1 balances' (2026-09-23 spec §T2); 0 while
+   *  the Jan 1 balances ARE the current snapshot; null without a snapshot in the year. */
   netWorthDelta: number | null
   netWorthPct: number | null
-  /** ISO month the delta is measured FROM — the card says "since {anchor}" out loud. */
-  anchorMonth: string | null
-  /** ISO month the delta is measured TO — "(through Sep)". */
-  throughMonth: string | null
+  /** 'delta' — a change to show; 'zero' — "$0 so far", the change starts from the Jan 1 balances;
+   *  'none' — no snapshot keyed in the year yet. */
+  netWorthState: 'delta' | 'zero' | 'none'
+  /** The words under the figure: "since Jan 1 (to Sep 22 · provisional)", "since Mar 1 — no Jan
+   *  1 balances (to Aug 1)", "the change starts from your Jan 1 balances", "Jan 1 balances not
+   *  recorded yet". */
+  netWorthWords: string
   /** LIVING spend for the year (the server's string), falling back to the plain total on a
    *  backend older than the category kinds. */
   spend: string | null
@@ -62,42 +69,59 @@ export function windowWords(window: YtdWindow): string {
     : `${short(window.from)}–${short(window.to)}`
 }
 
+/** "(to Sep 22 · provisional)" — the through-date in asOfPhrase's words. */
+const toWords = (state: Dated) => `(to ${asOfPhrase(state).replace(/^as of /, '')})`
+
+/** The net-worth row (2026-09-23 spec §T2): from the Jan 1 balances — the snapshot keyed
+ *  {year}-01-01, whatever its state — to the CURRENT snapshot (K2's: the latest up to next
+ *  month), which may be keyed next year: an early Jan 1 snapshot typed on Dec 28 describes Dec 28
+ *  of THIS year. December no longer counts as the new year. Without Jan 1 balances the base is the
+ *  year's first snapshot, said out loud. */
+function netWorthYtd(
+  ts: Pick<NetWorthTimeseries, 'months' | 'net_worth'> & Partial<Pick<NetWorthTimeseries, 'as_of' | 'provisional'>>,
+  year: number,
+  todayIso: string,
+): Pick<YtdStats, 'netWorthDelta' | 'netWorthPct' | 'netWorthState' | 'netWorthWords'> {
+  const jan = `${year}-01-01`
+  const janIdx = ts.months.indexOf(jan)
+  const baseIdx = janIdx >= 0 ? janIdx : ts.months.findIndex((month) => month.startsWith(`${year}-`))
+  const currentIdx = currentSnapshotIndex(ts.months, todayIso)
+  // No snapshot keyed in the year yet — or only balances filed further ahead than the current
+  // snapshot reaches (only an API client or an import can store those).
+  if (baseIdx < 0 || currentIdx < baseIdx) {
+    return { netWorthDelta: null, netWorthPct: null, netWorthState: 'none', netWorthWords: 'Jan 1 balances not recorded yet' }
+  }
+  const base = snapshotAt(ts, baseIdx)
+  if (currentIdx === baseIdx) {
+    return {
+      netWorthDelta: 0,
+      netWorthPct: null,
+      netWorthState: 'zero',
+      netWorthWords: `the change starts from your ${dayName(base.month)} balances`,
+    }
+  }
+  const from = Number(ts.net_worth[baseIdx])
+  const to = Number(ts.net_worth[currentIdx])
+  const since = `since ${formatAsOf(base)}${base.provisional ? ' (provisional)' : ''}`
+  const noJan = janIdx >= 0 ? '' : ' — no Jan 1 balances'
+  return {
+    netWorthDelta: to - from,
+    netWorthPct: from === 0 ? null : (to - from) / Math.abs(from),
+    netWorthState: 'delta',
+    netWorthWords: `${since}${noJan} ${toWords(snapshotAt(ts, currentIdx))}`,
+  }
+}
+
 export function ytdStats(
-  ts: Pick<NetWorthTimeseries, 'months' | 'net_worth'>,
+  ts: Pick<NetWorthTimeseries, 'months' | 'net_worth'> & Partial<Pick<NetWorthTimeseries, 'as_of' | 'provisional'>>,
   yearly: SpendingYearly,
   dividends: DividendOut[],
   coverage: CoverageOut,
   todayIso: string,
 ): YtdStats {
+  // The server's year: the page passes utils/months todayIso(), the product day (spec §K1).
   const year = Number(todayIso.slice(0, 4))
-  const jan = `${year}-01-01`
   const prefix = `${year}-`
-
-  // Anchor = the LAST snapshot before January 1 (the classic YTD base — usually the
-  // prior December, honestly some earlier month across a gap). A series that starts
-  // mid-year anchors on its own first in-year month instead.
-  let anchorIdx = -1
-  let latestIdx = -1
-  let firstInYearIdx = -1
-  ts.months.forEach((month, i) => {
-    if (month < jan) anchorIdx = i
-    if (month.startsWith(prefix)) {
-      latestIdx = i
-      if (firstInYearIdx === -1) firstInYearIdx = i
-    }
-  })
-
-  let netWorthDelta: number | null = null
-  let netWorthPct: number | null = null
-  let anchorMonth: string | null = null
-  const baseIdx = anchorIdx >= 0 ? anchorIdx : firstInYearIdx
-  if (latestIdx >= 0 && baseIdx >= 0 && baseIdx !== latestIdx) {
-    const from = Number(ts.net_worth[baseIdx])
-    const to = Number(ts.net_worth[latestIdx])
-    netWorthDelta = to - from
-    netWorthPct = from === 0 ? null : (to - from) / Math.abs(from)
-    anchorMonth = ts.months[baseIdx]
-  }
 
   const row = yearly.years.find((y) => y.year === year)
   const dividendSum = dividends.reduce(
@@ -129,10 +153,7 @@ export function ytdStats(
 
   return {
     year,
-    netWorthDelta,
-    netWorthPct,
-    anchorMonth,
-    throughMonth: latestIdx >= 0 ? ts.months[latestIdx] : null,
+    ...netWorthYtd(ts, year, todayIso),
     // living_total is the honest spend; `total` is what a pre-kinds backend sends, and it
     // is what this card printed until today — so the fallback changes nothing for it.
     spend: row?.living_total === undefined ? row?.total ?? null : hasMatch ? row.living_total : null,

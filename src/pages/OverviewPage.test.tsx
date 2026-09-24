@@ -1006,7 +1006,11 @@ describe('OverviewPage data status card', () => {
 
 describe('OverviewPage year to date', () => {
   it('leads with the total rate, names every window, and reads living spend', async () => {
+    // The server's day and a Jan 1 snapshot in the fixtures' own year: the net-worth words
+    // hold on any real date (2026-09-23 spec §T2).
+    setServerToday(`${CURRENT_YEAR}-09-20`)
     serve({
+      ts: timeseriesOut({ months: [`${CURRENT_YEAR}-01-01`, AUG, SEP] }),
       yearly: {
         years: [
           {
@@ -1050,9 +1054,10 @@ describe('OverviewPage year to date', () => {
     // The headline rate is the TOTAL one; cash rides beside it.
     expect(screen.getByText('68.6% total')).toBeTruthy()
     expect(screen.getByText(/\$70,000\.00 · cash 64\.4% \(\$58,000\.00\)/)).toBeTruthy()
-    // Every figure names its window (spec §3).
+    // Every figure names its window (spec §3) — net worth from the Jan 1 balances to the
+    // current ones, both ends named (2026-09-23 spec §T2).
     expect(screen.getAllByText('Jan–Jul')).toHaveLength(3)
-    expect(screen.getByText(/since .* \(through Sep\)/)).toBeTruthy()
+    expect(screen.getByText('since Jan 1 (to Sep 1)')).toBeTruthy()
     // The dividend sum is this year's payments only.
     expect(screen.getByText('$120.50')).toBeTruthy()
     expect(screen.queryByText('$999.00')).toBeNull()
@@ -1115,14 +1120,18 @@ describe('OverviewPage year to date', () => {
   })
 
   it('reads "Dividends" with the ex-date note as a sub-label, and keeps the net-worth amount whole', async () => {
-    serve({ yearly: { years: [{ year: CURRENT_YEAR, by_category: [], total: '1.00', net_pay_total: '2.00', savings_rate: '0.5' }] } })
+    setServerToday(`${CURRENT_YEAR}-09-20`)
+    serve({
+      ts: timeseriesOut({ months: [`${CURRENT_YEAR}-01-01`, AUG, SEP] }),
+      yearly: { years: [{ year: CURRENT_YEAR, by_category: [], total: '1.00', net_pay_total: '2.00', savings_rate: '0.5' }] },
+    })
     renderPage()
     await screen.findByText(`Year to date — ${CURRENT_YEAR}`)
     const dividends = screen.getByText('Dividends').closest('dt') as HTMLElement
     expect(dividends.querySelector('.ytd-sub')?.textContent).toContain('ex-date for automatic records')
     const netWorth = screen.getByText('Net worth', { selector: 'dt' }).closest('.ytd-fact') as HTMLElement
     expect(netWorth.querySelector('dd .ytd-value')?.textContent).toContain('$34,567.00')
-    expect(netWorth.querySelector('dd .ytd-sub')?.textContent).toMatch(/^since .*\(through .*\)$/)
+    expect(netWorth.querySelector('dd .ytd-sub')?.textContent).toBe('since Jan 1 (to Sep 1)')
   })
 
   it('reserves the year-to-date slot with a ghost while its feeds are pending', async () => {

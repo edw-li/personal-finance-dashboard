@@ -536,14 +536,19 @@ export default function OverviewPage() {
               <section className="card ytd-card span-12">
                 <h2 className="eyebrow">
                   Year to date — {ytd.year}
-                  <InfoHint text="The year so far, each figure over the window it was measured on: net-worth change since the last pre-January snapshot, living spend (tax payments and transfers are counted apart), net pay, savings with payroll deductions counted in, and dividend entries (automatic records use ex-date)." />
+                  <InfoHint text="The year so far, each figure over the window it was measured on: net-worth change from your Jan 1 balances to your latest ones, living spend (tax payments and transfers are counted apart), net pay, savings with payroll deductions counted in, and dividend entries (automatic records use ex-date)." />
                 </h2>
                 <dl className="ytd-facts">
                   <div className="ytd-fact">
                     <dt>Net worth</dt>
                     <dd>
-                      {ytd.netWorthDelta === null ? (
+                      {/* From the Jan 1 balances to the current ones (2026-09-23 spec §T2): a
+                          dash before any exist this year, "$0 so far" while they ARE the
+                          current ones, else the change — the words under it name both ends. */}
+                      {ytd.netWorthState === 'none' || ytd.netWorthDelta === null ? (
                         '—'
+                      ) : ytd.netWorthState === 'zero' ? (
+                        <span className="ytd-value">$0 so far</span>
                       ) : (
                         // Glyph + colour + the signed number — three channels, none alone
                         // (StatTile's delta grammar). Up is good here, so glyph and tone agree.
@@ -560,13 +565,7 @@ export default function OverviewPage() {
                           {ytd.netWorthPct !== null && ` (${formatPct(ytd.netWorthPct)})`}
                         </span>
                       )}
-                      {ytd.anchorMonth && (
-                        <span className="ytd-sub">
-                          since {formatMonth(ytd.anchorMonth)}
-                          {ytd.throughMonth !== null &&
-                            ` (through ${formatMonth(ytd.throughMonth).slice(0, 3)})`}
-                        </span>
-                      )}
+                      <span className="ytd-sub">{ytd.netWorthWords}</span>
                     </dd>
                   </div>
                   <div className="ytd-fact">
