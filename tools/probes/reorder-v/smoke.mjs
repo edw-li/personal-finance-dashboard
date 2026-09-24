@@ -730,14 +730,19 @@ const standAt = (selector, fraction = 0.45) =>
     },
     [selector, fraction],
   )
-/** A capped box centred in the window and scrolled to its top. */
+/** A capped box scrolled to its top and brought toward the window's centre (scrollIntoView, block
+ *  'center') — as far as the page can scroll. The ledger's box is the last thing on Manage, so the
+ *  page stops at its max there, the box's foot ~69px above the window's (its top at y≈250.7 in a
+ *  1280×800 window, not the ≈176 centring would give under the root's 32px scroll-padding). */
 const boxTop = (box) =>
   page.evaluate((sel) => {
     const el = document.querySelector(sel)
     el.scrollIntoView({ block: 'center' })
     el.scrollTop = 0
   }, box)
-/** A capped box centred in the window, a row of it `offset` px below its top edge. */
+/** A capped box brought toward the window's centre as boxTop brings it (the ledger's short of it, the
+ *  page at its max), a row of it `offset` px below its top edge — or as near as the box's scroll
+ *  range allows (a first row stays put; a last one leaves the box at its end). */
 const boxTo = (box, selector, offset) =>
   page.evaluate(
     ([b, sel, off]) => {
@@ -1225,17 +1230,23 @@ async function reducedMotion({ rows, id, k, popover = false }) {
 /** The ledger at 1280×800 is taller than its capped box (2026-09-24 table-scroll spec §2.6): a
  *  pointer parked in the bottom 40px zone of the box's visible band scrolls the BOX under the lifted
  *  row, and the page stays put (spec §2.3.5, §10). Lane R3's long drag, re-aimed when the ledger
- *  got its cap — before it, the same drag scrolled the page. boxTo brings the box up the window as
- *  far as the page scrolls, at its top (the first row clamps it at 0), so it has its whole height
- *  to scroll and its foot inside the window: the band's bottom zone is the box's own, never the
- *  page's. */
+ *  got its cap — before it, the same drag scrolled the page. boxTo puts the box at its top (the
+ *  first row clamps it at 0), so it has its whole height to scroll, but leaves the page at its max
+ *  (boxTop's note), where no downward page scroll could register. So the page is moved back until
+ *  the box's foot stands 8px inside the window, and the room left below it is recorded: the
+ *  page-stays-put check needs room to fail. */
 async function longDrag(rows, id) {
   await clearToasts()
   await ready(rows)
   const before = await order(rows)
   const from = before.indexOf(String(id))
   await boxTo(LEDGER_BOX, rowSel(rows, id), 80)
+  const roomBelow = await page.evaluate((sel) => {
+    window.scrollBy(0, document.querySelector(sel).getBoundingClientRect().bottom - window.innerHeight + 8)
+    return Math.round((document.documentElement.scrollHeight - window.innerHeight - window.scrollY) * 10) / 10
+  }, LEDGER_BOX)
   await page.waitForTimeout(250)
+  // Measured after the page move: the row's grip and the band stand where the drag starts.
   const pageBefore = await page.evaluate(() => window.scrollY)
   const boxBefore = await scrollTopOf(LEDGER_BOX)
   const band = await visibleBand(LEDGER_BOX)
@@ -1262,19 +1273,23 @@ async function longDrag(rows, id) {
     boxScrolled,
     band: [Math.round(band.top), Math.round(band.bottom)],
   })
-  check('the page stays put while the box scrolls', pageScrolled === 0, { pageScrolled })
+  check('the page stays put while the box scrolls — with room below it to move', roomBelow >= 20 && pageScrolled === 0, {
+    pageScrolled,
+    roomBelow,
+  })
   check('the row travels with the scroll', to - from >= 8, { from, to })
   check('nothing else moved', same(after, moveTo(before, from, to)), after)
   return after
 }
 /** Samples a capped box and the page every 200ms from the moment the pointer is held, until neither
- *  scroll has moved for three samples in a row — 400ms, where a held auto-scroll steps up to 18px a
- *  frame — or `timeout` passes. It records the ORDER the two scrolls came in, too: the first sample
- *  with the box at its end, the first with the page moved off `pageFrom` (where it stood before the
- *  press), and whether any sample caught the page moved while the box still had room. A hook that
- *  scrolled both together would spend the ledger's 147px of page in ~150ms while the box needs
- *  ~1.3s, so the first samples would catch it. `trace` holds every sample: [ms, box scrollTop, page
- *  scrollY]. */
+ *  scroll has moved across three consecutive samples — 600ms, where a held auto-scroll steps up to
+ *  18px a frame; the margin is for a loaded box — or `timeout` passes. It records the ORDER the two
+ *  scrolls came in, too: the first sample with the box at its end, the first with the page moved off
+ *  `pageFrom` (where it stood before the press), and whether any sample caught the page moved while
+ *  the box still had room. A hook that scrolled both together would spend the page's share — the
+ *  box's overhang, a few frames' worth — long before the box's end, which takes over a second at the
+ *  ledger's length, so the first samples would catch it. `trace` holds every sample: [ms, box
+ *  scrollTop, page scrollY]. */
 async function holdUntilStill(box, pageFrom, timeout = 12000) {
   const read = () =>
     page.evaluate((sel) => {
@@ -1314,28 +1329,31 @@ async function holdUntilStill(box, pageFrom, timeout = 12000) {
     const now = await read()
     log(now)
     quiet = now.boxTop === prev.boxTop && now.pageY === prev.pageY ? quiet + 1 : 0
-    if (quiet >= 2 || Date.now() - start > timeout) {
-      return { ...now, still: quiet >= 2, ms: Date.now() - start, ...seen, trace }
+    if (quiet >= 3 || Date.now() - start > timeout) {
+      return { ...now, still: quiet >= 3, ms: Date.now() - start, ...seen, trace }
     }
     prev = now
   }
 }
-/** Arrival on Manage (2026-09-24 table-scroll spec §2.6; its Task 4 review): the page at scroll 0,
- *  the ledger's capped box at its own top and hanging past the window's foot — 147px at 1280×800,
- *  67px at 1600×1000 — so its last slots lie below any pointer. A pointer drag held at the WINDOW's
- *  bottom edge scrolls the box to its end, and only then hands the scroll to the page (the order
- *  sampled by holdUntilStill), until the box's foot is inside the window (reorderDom.ts
- *  autoScrollBy); the row in hand stands in the LAST slot —
- *  read mid-drag off lane R0's rows (liftState: every row below it made room, and its offset is aim's
- *  travel to that slot) and the live region. Before the hand-off the drop landed short (3 slots at
- *  1280, 1 at 1600). Then Escape, never a drop: nothing is sent, and the steps below start from the
- *  server order. */
-async function arrivalDrag(rows, id) {
+/** Arrival on Manage (2026-09-24 table-scroll spec §2.6; its Task 4 review), on a fresh visit: the
+ *  page at scroll 0 and the ledger's capped box at its own top — the product's claim, checked. The
+ *  scenario: the box hangs past the window's foot (147px at 1280×800, 67px at 1600×1000 in this
+ *  book), so its last slots lie below any pointer. A pointer drag held at the WINDOW's bottom edge
+ *  scrolls the box to its end, and only then hands the scroll to the page (reorderDom.ts
+ *  autoScrollBy; the order sampled by holdUntilStill), until the box's foot is inside the window —
+ *  and the row in hand stands in the LAST slot, read mid-drag off lane R0's rows (liftState: every
+ *  row below it made room, and its offset is aim's travel to that slot) and the live region. Before
+ *  the hand-off the drop landed short (3 slots at 1280, 1 at 1600). Where the box does not hang (a
+ *  smaller book, or less above the ledger) or has nothing to scroll, no hand-off arises: that is
+ *  noted, and the drag must still reach the last slot — with the page where it stood, when the box
+ *  scrolls. Then Escape, never a drop: nothing is sent. */
+async function arrivalDrag(rows) {
   await clearToasts()
   await ready(rows)
   const writes = writesNow()
   const before = await order(rows)
-  const from = before.indexOf(String(id))
+  const id = before[0] // the first row: in view at the box's top on arrival
+  const from = 0
   const last = before.length - 1
   const travel = aim(await boxes(rows), from, last - from)
   const start = await page.evaluate((sel) => {
@@ -1343,14 +1361,19 @@ async function arrivalDrag(rows, id) {
     return {
       pageY: window.scrollY,
       boxTop: el.scrollTop,
+      boxRoom: el.scrollHeight - el.clientHeight,
       hangsBelowWindow: Math.round((el.getBoundingClientRect().bottom - window.innerHeight) * 10) / 10,
     }
   }, LEDGER_BOX)
-  check(
-    "arrival: the page at its top, the ledger box at its own, its foot hanging past the window's",
-    start.pageY === 0 && start.boxTop === 0 && start.hangsBelowWindow > 0,
-    start,
-  )
+  check('arrival: the page at its top and the ledger box at its own', start.pageY === 0 && start.boxTop === 0, start)
+  const boxScrolls = start.boxRoom > 1
+  const handOff = boxScrolls && start.hangsBelowWindow > 0
+  if (!handOff) {
+    note(
+      `arrival: no hand-off arises at this width — ${boxScrolls ? "the box's foot is inside the window" : 'the ledger fits under its cap, so the page is its scroller'}; the drag must still reach the last slot`,
+      start,
+    )
+  }
   const g = await page.locator(gripSel(rows, id)).boundingBox()
   if (g === null) throw new Error(`no grip on screen for row ${id}`)
   const x = g.x + g.width / 2
@@ -1365,40 +1388,55 @@ async function arrivalDrag(rows, id) {
   const said = await live(LEDGER_PANEL)
   await snap('ledger-arrival-held')
   await page.keyboard.press('Escape')
-  await page.waitForTimeout(250)
-  const after = await liftState(rows)
-  const residue = await page.$$eval(
-    rows,
-    (els) => els.filter((el) => el.hasAttribute('data-reorder') || el.style.transform !== '').length,
+  // The hook eases the rows home (MOTION_MS.fast) before it clears them: polled, never a fixed wait.
+  const clear = { lifted: null, residue: 0, cursor: false }
+  const cancelled = await waitFor(
+    async () => ({
+      lifted: await liftState(rows),
+      residue: await page.$$eval(
+        rows,
+        (els) => els.filter((el) => el.hasAttribute('data-reorder') || el.style.transform !== '').length,
+      ),
+      cursor: await grabbing(),
+    }),
+    clear,
+    2000,
   )
-  const cursor = await grabbing()
   await page.mouse.up()
   await page.waitForTimeout(MOTION + 300)
   check('arrival: a row lifts and the page says grabbing', mid !== null && mid.grabbing, mid)
-  // The page stops once the box's foot is inside the window — one frame's step (18px at most) past it.
   const { trace, ...end } = held
-  const overshoot = Math.round((end.innerHeight - end.boxBottom) * 10) / 10
-  check(
-    "arrival: held at the window's bottom edge, the hold ends with the box at its end and the page scrolled on, the box's foot inside the window",
-    end.still && end.boxTop >= end.boxMax - 1 && end.pageY > 0 && overshoot >= 0 && overshoot <= 18.5,
-    { ...end, pageScrolled: end.pageY - start.pageY, overshoot, pointerY: edge },
-  )
-  // The order, not just the end state: the page is the box's successor, never its partner.
-  check(
-    'arrival: the box reaches its end BEFORE the page moves — no 200ms sample from the hold on caught the page off its start while the box still had room',
-    end.boxEndSample !== null &&
-      end.pageMovedSample !== null &&
-      !end.pageMovedBeforeBoxEnd &&
-      end.boxEndSample <= end.pageMovedSample,
-    {
-      boxEndSample: end.boxEndSample,
-      boxEndMs: end.boxEndMs,
-      pageMovedSample: end.pageMovedSample,
-      pageMovedMs: end.pageMovedMs,
-      pageMovedBeforeBoxEnd: end.pageMovedBeforeBoxEnd,
-      trace,
-    },
-  )
+  if (handOff) {
+    // The page stops once the box's foot is inside the window — one frame's step (18px at most) past it.
+    const overshoot = Math.round((end.innerHeight - end.boxBottom) * 10) / 10
+    check(
+      "arrival: held at the window's bottom edge, the hold ends with the box at its end and the page scrolled on, the box's foot inside the window",
+      end.still && end.boxTop >= end.boxMax - 1 && end.pageY > start.pageY && overshoot >= 0 && overshoot <= 18.5,
+      { ...end, pageScrolled: end.pageY - start.pageY, overshoot, pointerY: edge },
+    )
+    // The order, not just the end state: the page is the box's successor, never its partner.
+    check(
+      'arrival: the box reaches its end BEFORE the page moves — no 200ms sample from the hold on caught the page off its start while the box still had room',
+      end.boxEndSample !== null &&
+        end.pageMovedSample !== null &&
+        !end.pageMovedBeforeBoxEnd &&
+        end.boxEndSample <= end.pageMovedSample,
+      {
+        boxEndSample: end.boxEndSample,
+        boxEndMs: end.boxEndMs,
+        pageMovedSample: end.pageMovedSample,
+        pageMovedMs: end.pageMovedMs,
+        pageMovedBeforeBoxEnd: end.pageMovedBeforeBoxEnd,
+        trace,
+      },
+    )
+  } else if (boxScrolls) {
+    check(
+      "arrival (no hand-off): held at the window's bottom edge, the hold ends with the box at its end and the page where it stood",
+      end.still && end.boxTop >= end.boxMax - 1 && end.pageY === start.pageY,
+      { ...end, pointerY: edge, trace },
+    )
+  }
   check(
     'arrival: the row in hand stands in the LAST slot — every row below it made room, it rides at the travel to that slot, and the live region says so',
     mid !== null &&
@@ -1407,11 +1445,11 @@ async function arrivalDrag(rows, id) {
       said.endsWith(`, position ${last + 1} of ${last + 1}.`),
     { from, last, displaced: mid?.displaced ?? null, offset: mid?.offset ?? null, travel, said },
   )
-  check('arrival: Escape cancels it — nothing lifted, no transform left, no grabbing cursor', after === null && residue === 0 && !cursor, {
-    after,
-    residue,
-    cursor,
-  })
+  check(
+    'arrival: Escape cancels it — nothing lifted, no transform left, no grabbing cursor (polled, 2s at most)',
+    same(cancelled, clear),
+    cancelled,
+  )
   check('arrival: …with no request, and the order unchanged', writesNow() === writes && same(await order(rows), before), {
     writes: writesNow() - writes,
   })
@@ -2197,11 +2235,6 @@ async function portfolioWalk() {
   step('open')
   await visit(HOUSEHOLD_LEDGER, TXN_ROWS)
 
-  // First, while the page is as it arrived: the capped box's last slot is reachable from the window's
-  // foot (table-scroll spec §2.6). An Escape ends it, so the order is still the server's below.
-  step('ledger-arrival')
-  await arrivalDrag(TXN_ROWS, L0[0])
-
   step('ledger-rest')
   const rest = await page.evaluate(
     ([t, panel]) => {
@@ -2377,6 +2410,12 @@ async function portfolioWalk() {
   await boxTo(LEDGER_BOX, rowSel(TXN_ROWS, L0[2]), 80)
   await page.waitForTimeout(250)
   await reducedMotion({ rows: TXN_ROWS, id: L0[2], k: 2 })
+
+  // Last, on a fresh arrival (page and box at their tops): the capped box's last slot is reachable
+  // from the window's foot (table-scroll spec §2.6). Run last so a throw here costs this step alone.
+  step('ledger-arrival')
+  await visit(HOUSEHOLD_LEDGER, TXN_ROWS)
+  await arrivalDrag(TXN_ROWS)
 }
 
 // ── Overview › Customize (lane R4) ───────────────────────────────────────────────────────────
