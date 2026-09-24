@@ -114,10 +114,11 @@ without a plan-until year (no server sends that), the row reads `30 (runs 50)`.
   once: `db.get(LatestPrice, <the employer's security id>)`. `load_portfolio`, the tax router's one full
   `latest_prices` reader, belongs to `what_if`, not to this path.
 - **Dynamic capture.** A new row-level capture,
-  `test_the_narrowed_cells_cover_every_setting_and_quote_the_get_reads`, runs the heaviest path: a joint return
-  with a simulated partner, last year on file and a lot sold this year, with a second quoted security and the
-  refresh's bookkeeping keys present. It asserts that every read of either table is a keyed point read, and that the
-  sets equal `WITHHOLDING_SETTING_KEYS` and `{the employer's id}`. W's table-level captures are unchanged.
+  `test_the_narrowed_cells_cover_every_setting_quote_and_bar_the_get_reads` (named for settings and quotes until
+  review item 1 added bars), runs the heaviest path: a joint return with a simulated partner, last year on file and
+  a lot sold this year, with a second security quoted and barred and the refresh's bookkeeping keys present. It
+  asserts that every read of the three narrowed tables is keyed, and that the sets equal `WITHHOLDING_SETTING_KEYS`,
+  `{the employer's id}` and `{the employer's id}`. W's table-level captures are unchanged.
 
 **The change.**
 - `WITHHOLDING_SETTING_KEYS = ("espp_ticker", "espp_discount_pct")`.
@@ -141,19 +142,65 @@ holdings' quotes, refreshes on days the employer's quote doesn't move, and house
 dividends changed) still clears both memos. The GET reads `securities` only by the employer ticker, so that cell
 could be narrowed the same way, but it was outside this task's scope.
 
-## Gates (fresh, on this branch)
+## Review follow-ups (the integration review's MERGE verdict, 2026-09-24)
+
+Each item has its own commit.
+
+1. **`price_history` in the row-level capture** (db5f23b6). The capture now covers the third narrowed table, with
+   another security's bar present. Every `price_history` read is keyed on one security, and the only one read is
+   the employer's.
+2. **A new employer security and its first quote** (8c2fae04). `test_a_new_employer_security_its_first_quote_and_first_bar_each_miss`
+   sets the ticker with no security behind it, then adds the security, its first quote and its first bar, and each
+   step rebuilds (2, 3, 4 builds). The step I added is the bar. The behaviour already held, so I checked the test's
+   teeth with a mutation: a quote/bar clause that never matches fails it at the quote step (2 builds, not 3). The
+   file was restored byte-identical.
+3. **Stale wording** (7cd621d3). `test_withholding_cache.py`'s module docstring and the MUTATIONS comment now say
+   that three tables are narrowed to the rows the GET reads.
+4. **The tautology** (31f39b2e). I deleted `test_projection_cache.py::test_the_bound_ticker_is_the_one_the_build_prices`,
+   which compared `read_employer_ticker` with itself (`_espp_quote`'s first hop is that reader), and the two
+   imports only it used. `test_employer_ticker.py` already holds this cache's bound ticker and `_espp_quote` to the
+   expected ticker on the same nine shapes.
+5. **`ESPP_TICKER_KEY`** (1bc18f76). The constant lives in `employer_ticker.py`. The reader,
+   `WITHHOLDING_SETTING_KEYS`, `PROJECTION_SETTING_KEYS` and the Settings PUT's write all spell the key through it.
+   The Settings PUT's `"espp_ticker" in provided` check is the request field name, so it stays literal, and
+   `seed.py`'s default-settings dict also keeps its literal beside the other three keys. The compiled fingerprint
+   statements are byte-identical, checked with a dump comparison. The fence now also matches a direct read spelled
+   with the constant, and a self-check pins both spellings.
+6. **The ticker re-check** (2e8f8f47). Both ticker-bound caches read the ticker before their first fingerprint. A
+   Settings save that commits between the two leaves the settings cell on the new ticker and the quote cells on the
+   old one. The fingerprint after the build agrees with that key, so the stability check used to pass and the entry
+   was filed. Now `_memoised` takes an optional `still_current` veto, asked after a stable build.
+   `_ticker_unchanged` re-reads the committed ticker and files the entry only if it is still the bound one.
+   - **Why the re-read is a query.** The re-read uses `read_committed_employer_ticker`, a new query-based reader in
+     `employer_ticker.py` that shares the rule's private `_ticker_of`. It does not use `read_employer_ticker`,
+     because `db.get` answers from the identity map without a query while anything in the session holds the row's
+     object (sessions never expire on commit), so a second `read_employer_ticker` could return the value being
+     checked.
+   - **Red first, and what it taught me.** My first red test relied on the session holding a stale ticker. It came
+     out differently: the identity map holds clean objects weakly, so once nothing referenced the row, `db.get`
+     queried again. The committed test injects the realistic race instead: a save committed right after the cache's
+     own ticker read. Both caches filed the mis-keyed entry before the fix (1 entry) and file nothing after it (0).
+     The next read files under the new ticker.
+   - **Harm, stated plainly.** Only another request racing the same save could reach such an entry. The fix makes
+     the invariant clean: a filed entry's key, bind and build all agree on the committed ticker. The cost is one small
+     query per cache miss.
+
+**Merge.** `git merge main` brought in 6b1f0c59 (the table-scroll batch: `src/`, `tools/`, `docs/`, no
+`package.json`). The merge commit is 8f9b3779; it had no conflicts and no file overlap with this branch.
+
+## Gates (fresh, on the merged branch 8f9b3779)
 
 | Gate | Result |
 |---|---|
-| Backend `-n 2` | **2,715 passed, 4 skipped**, 195 s. The 2 warnings are one pre-existing `SyntaxWarning` (a non-raw `\d` docstring at `test_restore_points.py:531`), reported once per worker, in a file this lane did not touch. |
+| Backend `-n 2` | **2,711 passed, 4 skipped**, 183 s. Net −4 from the pre-review 2,715: +1 (item 2), −9 (item 4's nine-shape test), +2 (item 5), +2 (item 6). No warnings this run: the `SyntaxWarning` at `test_restore_points.py:531` (a pre-existing non-raw `\d` docstring in a file this lane did not touch) is emitted only when the bytecode is recompiled. It showed in the pre-review run as 2 warnings, one per worker. |
 | ruff check / format | pass / 356 files already formatted |
-| vitest | **285 files / 4,218 tests** |
+| vitest | **291 files / 4,301 tests**. Main's table-scroll batch added the difference from the pre-review 285 / 4,218. |
 | `tsc -b` | exit 0 |
 | eslint | 0 errors, 26 warnings (the baseline) |
 | `vite build` | exit 0 |
 
-The test databases (`finance_test_int`, `_gw0`, `_gw1`, and the verification databases `_va`, `_vb`, `_vc`) were
-dropped. The servers on 8049 and 5249 were stopped and both ports are free.
+The test databases (`finance_test_int`, `_gw0`, `_gw1`, and task 1's verification databases `_va`, `_vb`, `_vc`)
+were dropped. The servers on 8049 and 5249 were stopped and both ports are free.
 
 One targeted vitest run while the task-1 burners were loading the box reported "1 failed" test file with every test
 passing. It passed 18/18 on the rerun and in the full gate, which points to a worker timing out under that load
@@ -161,10 +208,12 @@ rather than a test failure.
 
 ## For the controller and lane T
 
-- **Merge with T.** I compared T's worktree read-only (no git commands there) with main @84e83138. T's copies of
-  every file this branch touches are identical to main's, except `backend/tests/test_assistant_evidence.py`. There,
-  T adds imports and new tests after the Stop test. A trial `git merge-file` of main, this branch and T's copy has 0
-  conflicts and keeps both changes.
+- **Merge with T.** I compared T's worktree read-only (no git commands there) with main @84e83138, and re-checked it
+  after the review follow-ups. T's copies of every file this branch touches are identical to main's, except
+  `backend/tests/test_assistant_evidence.py`. There, T adds imports and new tests after the Stop test. A trial
+  `git merge-file` of main, this branch and T's copy has 0 conflicts and keeps both changes.
+- **`_memoised` has a new optional argument.** `still_current` (a veto asked after a stable build) is used by the
+  two ticker-bound caches. The review-book and savings caches don't pass it and behave exactly as before.
 - **Removed names.** `read_cache._employer_ticker` and `app_settings._read_espp_ticker` no longer exist; use
   `services.employer_ticker.read_employer_ticker`. In T's worktree and the table-scroll worktree, the only files
   that mention either name are this branch's own files, unchanged from main, so neither adds a caller. The
