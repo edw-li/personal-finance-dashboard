@@ -169,6 +169,14 @@ SINGLE = "single"
 MARRIED_JOINT = "married_joint"
 MARRIED_SEPARATE = "married_separate"
 FILING_STATUSES = (SINGLE, MARRIED_JOINT, MARRIED_SEPARATE)
+# The human names, served by the server where a sentence names a status (the change log's
+# label, the status options — 2026-09-23 spec §W8) and mirrored by the page's own selector
+# labels (src/api/taxes.ts FILING_STATUS_LABELS).
+FILING_STATUS_LABELS: dict[str, str] = {
+    SINGLE: "Single",
+    MARRIED_JOINT: "Married filing jointly",
+    MARRIED_SEPARATE: "Married filing separately",
+}
 
 # The input keys that belong to a PERSON rather than the household (audit §3.2's list of
 # 17, plus the two tracker keys above). Every OTHER key is household-level and stores

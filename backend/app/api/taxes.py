@@ -80,6 +80,8 @@ from app.schemas.taxes import (
     TaxInputsIn,
     TaxInputsOut,
     TaxPersonOut,
+    TaxStatusOptionOut,
+    TaxStatusOptionsOut,
     TaxSummariesOut,
     TaxSummaryOut,
     TaxTotalsOut,
@@ -136,6 +138,8 @@ from app.tax_keys import (
     COUNT,
     DERIVED_COMPONENTS,
     DERIVED_KEYS,
+    FILING_STATUS_LABELS,
+    FILING_STATUSES,
     FORMULA_CAPTIONS,
     JURISDICTIONS,
     MARRIED_JOINT,
@@ -899,7 +903,11 @@ async def list_years(db: AsyncSession = Depends(get_db)) -> list[TaxYearOut]:
 
 @router.patch("/years/{year}", response_model=TaxYearOut)
 async def update_year(
-    year: YearPath, body: TaxYearUpdate, db: AsyncSession = Depends(get_db)
+    year: YearPath,
+    body: TaxYearUpdate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> TaxYearOut:
     """Set a year's filing status — the one field on a year row the editors can change.
 
@@ -909,13 +917,64 @@ async def update_year(
     reported by the summary's `brackets_missing_for_status` and fixed by the clone helper,
     never guessed at here. Stored inputs are untouched too — the partner's rows simply
     come onto the return.
+
+    CHANGE-LOGGED since 2026-09-23 (spec §W8): the status moves every figure the year
+    computes — whose rows count, the tables, the harbor gates — so it is a deliberate setting
+    with an Undo, like the inputs PUT beside it: the row image goes into the batch, the label
+    names the change, and the batch id rides `X-Change-Batch`. An unchanged status records
+    nothing and so offers no Undo.
     """
     row = await db.get(TaxYear, year)
     if row is None:
         raise HTTPException(status_code=404, detail=f"tax year {year} not found")
+    before = row_image(row)
     row.filing_status = body.filing_status
-    await db.commit()
+    batch.record_update(row, before)
+    batch.label = (
+        f"Changed {year} filing status to "
+        f"{FILING_STATUS_LABELS.get(body.filing_status, body.filing_status)}"
+    )
+    response.headers.update(batch_header(await batch.commit()))
     return await _year_out(db, row)
+
+
+@router.get("/years/{year}/status-options", response_model=TaxStatusOptionsOut)
+async def get_status_options(
+    year: YearPath, db: AsyncSession = Depends(get_db)
+) -> TaxStatusOptionsOut:
+    """What each filing status would mean for this year (2026-09-23 spec §W8): whose rows
+    count on the return and which bracket tables the engine would refuse the year without —
+    read with the same `_return_people` and `_missing_for_status` the engine feed applies,
+    so the Change… dialog states the server's rules rather than a client copy of them. One
+    bracket query for every status."""
+    row = await db.get(TaxYear, year)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"tax year {year} not found")
+    roster = await load_people(db)
+    by_status: dict[str, dict[str, list[Bracket]]] = {}
+    for bracket in (
+        await db.execute(
+            select(TaxBracket).where(TaxBracket.year == year, TaxBracket.person_id.is_(None))
+        )
+    ).scalars():
+        tables = by_status.setdefault(bracket.filing_status, {})
+        tables.setdefault(bracket.jurisdiction, []).append((bracket.rate, bracket.threshold))
+    options: list[TaxStatusOptionOut] = []
+    for status in FILING_STATUSES:
+        missing = _missing_for_status(by_status.get(status, {}), status, year)
+        options.append(
+            TaxStatusOptionOut(
+                status=status,
+                label=FILING_STATUS_LABELS[status],
+                people=[
+                    TaxPersonOut(id=person.id, name=person.name)
+                    for person in _return_people(roster, status)
+                ],
+                tables_missing=missing,
+                computable=not missing,
+            )
+        )
+    return TaxStatusOptionsOut(year=year, current=row.filing_status, options=options)
 
 
 @router.delete("/years/{year}", status_code=204)

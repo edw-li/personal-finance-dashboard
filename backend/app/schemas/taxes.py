@@ -47,6 +47,25 @@ class TaxPersonOut(BaseModel):
     name: str
 
 
+class TaxStatusOptionOut(BaseModel):
+    """What filing the year under one status would mean (2026-09-23 spec §W8) — the server's
+    own rules, so the Change… dialog never re-derives them: whose rows count on the return
+    (`_return_people`) and which bracket tables the engine would refuse the year without
+    (`_missing_for_status`)."""
+
+    status: FilingStatus
+    label: str
+    people: list[TaxPersonOut]
+    tables_missing: list[str]
+    computable: bool
+
+
+class TaxStatusOptionsOut(BaseModel):
+    year: int
+    current: FilingStatus
+    options: list[TaxStatusOptionOut]
+
+
 class TaxInputItemOut(BaseModel):
     key: str
     label: str

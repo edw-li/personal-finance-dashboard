@@ -35,15 +35,15 @@ LOGGED: dict[str, set[str]] = {
         "delete_month",
     },
     # The Data-health card repairs a year's itemized total through this route (2026-09-09
-    # taxes spec 4h), and a repair that rewrites money has to be undoable.
-    "taxes.py": {"put_inputs"},
+    # taxes spec 4h), and a repair that rewrites money has to be undoable. The filing status
+    # joined on 2026-09-23 (spec §W8): it moves every figure the year computes, so it is a
+    # deliberate setting with an Undo, not a toggle.
+    "taxes.py": {"put_inputs", "update_year"},
 }
 # module -> {function: reason}. An exempt route still commits directly; the reason says
 # why that is the right answer for now, not that nobody looked.
 EXEMPT: dict[str, dict[str, str]] = {
     "taxes.py": {
-        "update_year": "sets one enum on a year row — no money moves, and the status is "
-        "visible on the page it is set from",
         "delete_year": "removes a whole year vertical through an ON DELETE CASCADE, which "
         "a row-image undo cannot replay — a snapshot restore is the exit",
         "put_brackets": "replaces a jurisdiction's rate table wholesale; the tables are "

@@ -11,6 +11,7 @@ test_tax_service.py).
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from uuid import UUID
 
 import pytest
 from sqlalchemy import func, select, text
@@ -1711,6 +1712,75 @@ async def test_patch_year_rejects_unknown_status_and_missing_year(auth_client, d
     missing = await auth_client.patch(f"{YEARS}/2027", json={"filing_status": "married_joint"})
     assert missing.status_code == 404
     assert "2027" in missing.json()["detail"]
+
+
+async def test_a_status_change_is_change_logged_and_undoable(auth_client, db, definitions):
+    """2026-09-23 spec §W8: the status is a deliberate, undoable setting — the PATCH records the
+    year row's update in a change batch, names it, and hands the batch back for the Undo."""
+    await put_inputs(auth_client, 2026, {"annual_salary": "150000"})
+    resp = await auth_client.patch(f"{YEARS}/2026", json={"filing_status": "married_joint"})
+    assert resp.status_code == 200
+    batch = resp.headers["X-Change-Batch"]
+    logged = (
+        (await db.execute(select(ChangeLog).where(ChangeLog.batch_id == UUID(batch))))
+        .scalars()
+        .all()
+    )
+    assert [(row.table_name, row.op) for row in logged] == [("tax_years", "update")]
+    assert logged[0].label == "Changed 2026 filing status to Married filing jointly"
+    assert logged[0].before["filing_status"] == "single"
+    assert logged[0].after["filing_status"] == "married_joint"
+
+    undone = await auth_client.post(f"/api/v1/activity/batches/{batch}/undo")
+    assert undone.status_code == 200, undone.text
+    assert (await auth_client.get(YEARS)).json()[0]["filing_status"] == "single"
+
+
+async def test_an_unchanged_status_logs_nothing_and_offers_no_undo(auth_client, db, definitions):
+    await put_inputs(auth_client, 2026, {})
+    resp = await auth_client.patch(f"{YEARS}/2026", json={"filing_status": "single"})
+    assert resp.status_code == 200
+    assert "X-Change-Batch" not in resp.headers
+    count = (
+        await db.execute(
+            select(func.count()).select_from(ChangeLog).where(ChangeLog.table_name == "tax_years")
+        )
+    ).scalar_one()
+    assert count == 0
+
+
+async def test_status_options_are_the_servers_rules(auth_client, household, definitions):
+    """What each status would mean for the year, from the rules the engine itself applies —
+    `_return_people` and `_missing_for_status` — so the dialog never re-derives them."""
+    me, partner = household
+    await put_inputs(auth_client, 2026, {})
+    await put_brackets(auth_client, 2026, brackets_payload(2024)["jurisdictions"])  # single only
+    resp = await auth_client.get(f"{YEARS}/2026/status-options")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert (body["year"], body["current"]) == (2026, "single")
+    assert [option["status"] for option in body["options"]] == [
+        "single",
+        "married_joint",
+        "married_separate",
+    ]
+    options = {option["status"]: option for option in body["options"]}
+    assert options["single"] == {
+        "status": "single",
+        "label": "Single",
+        "people": [{"id": me.id, "name": "Me"}],
+        "tables_missing": [],
+        "computable": True,
+    }
+    assert options["married_joint"]["label"] == "Married filing jointly"
+    assert options["married_joint"]["people"] == [
+        {"id": me.id, "name": "Me"},
+        {"id": partner.id, "name": "Partner"},
+    ]
+    assert options["married_separate"]["people"] == [{"id": me.id, "name": "Me"}]
+    assert options["married_separate"]["tables_missing"] == list(JURISDICTIONS)
+    assert options["married_separate"]["computable"] is False
+    assert (await auth_client.get(f"{YEARS}/2031/status-options")).status_code == 404
 
 
 async def test_single_summary_shape_is_unchanged(auth_client, definitions):
