@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.app_settings import read_espp_discount
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import AppSetting, EsppLot, EsppOffering, EsppPeriod, LatestPrice, Security
+from app.models import EsppLot, EsppOffering, EsppPeriod, LatestPrice, Security
 from app.schemas.espp import (
     HeldTotalsOut,
     LotIn,
@@ -46,6 +46,7 @@ from app.schemas.espp import (
     SoldTotalsOut,
 )
 from app.services import clock
+from app.services.employer_ticker import read_employer_ticker
 from app.services.espp_calc import (
     OfferingInfo,
     StoredPeriod,
@@ -142,17 +143,12 @@ def _validated_pct(value: Decimal, field: str) -> Decimal:
 async def _espp_quote(db: AsyncSession) -> tuple[str | None, Decimal | None, datetime | None]:
     """app_settings['espp_ticker'] -> securities -> latest_prices, degrading at every hop.
 
-    The envelope (`{"value": ...}`) is convention only (Plan 1 note), so an unexpected
-    shape reads as "no ticker" rather than raising — same posture as
-    net_worth_calc.get_swr_pct, minus the default: there is no sane fallback ticker.
+    The first hop is services/employer_ticker.read_employer_ticker, the one reader of the
+    setting: an unexpected envelope shape reads as "no ticker" rather than raising, and a
+    stored "nvda" resolves as NVDA.
     """
-    setting = await db.get(AppSetting, "espp_ticker")
-    if setting is None or not isinstance(setting.value, dict):
-        return None, None, None
-    raw = setting.value.get("value")
-    # Normalized like portfolio.py's _normalize_ticker, so a hand-typed "nvda" still hits.
-    ticker = raw.strip().upper() if isinstance(raw, str) else ""
-    if not ticker:
+    ticker = await read_employer_ticker(db)
+    if ticker is None:
         return None, None, None
     security = (
         (await db.execute(select(Security).where(Security.ticker == ticker))).scalars().first()

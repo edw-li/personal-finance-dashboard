@@ -61,6 +61,7 @@ from app.models import (
 )
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.services import clock
+from app.services.employer_ticker import read_employer_ticker
 from app.services.month_review import ReviewBook, load_review_book, load_review_book_snapshot
 from app.services.net_worth_calc import PLAN_UNTIL_KEY
 from app.services.savings import MonthSavings, load_month_savings
@@ -196,7 +197,7 @@ _MONTH_SAVINGS_FINGERPRINT = _fingerprint_statement(MONTH_SAVINGS_TABLES)
 def _withholding_fingerprint_statement() -> TextClause:
     """`_fingerprint_statement` over the withholding tables, with the `price_history` cell
     restricted to the employer ticker's security — the `:ticker` bind, read first by
-    `_employer_ticker` and bound per request. A NULL ticker matches no security: no bars.
+    `read_employer_ticker` and bound per request. A NULL ticker matches no security: no bars.
     (`price_history` is the list's last table, so its cell stays last: the same statement.)"""
     return _fingerprint_statement(
         WITHHOLDING_TABLES,
@@ -307,19 +308,6 @@ async def cached_review_book(
     )
 
 
-async def _employer_ticker(db: AsyncSession) -> str | None:
-    """The employer ticker exactly as the GET resolves it — `api/espp._espp_quote`'s first hop,
-    normalization included (blank/absent/malformed → none, "nvda" → "NVDA"). Mirrored rather
-    than imported because a service may not import a router; `api/app_settings` keeps the
-    other copy and the two are one rule."""
-    setting = await db.get(AppSetting, "espp_ticker")
-    if setting is None or not isinstance(setting.value, dict):
-        return None
-    raw = setting.value.get("value")
-    ticker = raw.strip().upper() if isinstance(raw, str) else ""
-    return ticker or None
-
-
 async def cached_withholding(
     db: AsyncSession,
     year: int,
@@ -332,12 +320,13 @@ async def cached_withholding(
 
     Bytes, not a model (R9's rule): the route returns them as they are, a direct caller decodes
     a model of its own, and nothing shared can be mutated by the next reader. Keyed on the
-    fingerprint AND the ticker the `price_history` cell was restricted with; a ticker changed
-    between the two fingerprints also changes `app_settings`' cell, so such a build is never
-    filed (rule 1). 422s and 404s raise out of `build` and are never cached."""
+    fingerprint AND the ticker the `price_history` cell was restricted with, which is read by
+    `read_employer_ticker`, the reader the build's quote chain (`api/espp._espp_quote`) uses too;
+    a ticker changed between the two fingerprints also changes `app_settings`' cell, so such a
+    build is never filed (rule 1). 422s and 404s raise out of `build` and are never cached."""
     if _has_pending_changes(db):
         return await build()
-    ticker = await _employer_ticker(db)
+    ticker = await read_employer_ticker(db)
     statement = _WITHHOLDING_FINGERPRINT.bindparams(ticker=ticker)
     before = await _fingerprint(db, statement)
     return await _memoised(
@@ -429,13 +418,13 @@ async def cached_projection(
     never stored — its waiters look again.
 
     The quote cell is restricted to the employer ticker as the build resolves it —
-    `_employer_ticker`, the withholding cache's own reader of the same rule — read only AFTER the
-    pending-changes check, since its read would autoflush them. The key carries it: a ticker
-    changed between the two fingerprints changes the settings cell as well, so such a build is
-    never filed (rule 1)."""
+    `read_employer_ticker`, the one reader of the setting, which the build's quote chain and the
+    withholding cache call too — read only AFTER the pending-changes check, since its read would
+    autoflush them. The key carries it: a ticker changed between the two fingerprints changes
+    the settings cell as well, so such a build is never filed (rule 1)."""
     if _has_pending_changes(db):
         return await build()
-    ticker = await _employer_ticker(db)
+    ticker = await read_employer_ticker(db)
     statement = _PROJECTION_FINGERPRINT.bindparams(ticker=ticker)
     before = await _fingerprint(db, statement)
     return await _memoised(

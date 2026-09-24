@@ -23,6 +23,7 @@ from app.database import get_db
 from app.models import AppSetting
 from app.schemas.app_settings import AppSettingsOut, AppSettingsUpdate
 from app.services import clock
+from app.services.employer_ticker import read_employer_ticker
 from app.services.money import quantize_pct
 
 # The update reminder's day moved to the service that reads it (2026-09-23 spec §K3: a service
@@ -47,18 +48,6 @@ MIN_FIRE_GAP = timedelta(minutes=60)
 # enough to catch multi-fire-per-hour shapes like "10,40 13 * * *".
 _PROBE_ANCHOR = datetime(2026, 1, 5, tzinfo=ZoneInfo(SCHEDULER_TIMEZONE))
 _PROBE_FIRES = 8
-
-
-async def _read_espp_ticker(db: AsyncSession) -> str | None:
-    # Mirrors the espp router's first hop, normalization included (blank/absent/malformed
-    # -> unconfigured, "nvda" -> "NVDA"): GET must report the ticker espp would actually
-    # resolve. Promote a shared reader if a third consumer ever appears.
-    setting = await db.get(AppSetting, "espp_ticker")
-    if setting is None or not isinstance(setting.value, dict):
-        return None
-    raw = setting.value.get("value")
-    ticker = raw.strip().upper() if isinstance(raw, str) else ""
-    return ticker or None
 
 
 # The §423 statutory maximum discount, and the plan the app was built against.
@@ -172,7 +161,8 @@ def _validated_cron(value: str) -> str:
 async def get_settings(db: AsyncSession = Depends(get_db)) -> AppSettingsOut:
     return AppSettingsOut(
         swr_pct=await get_swr_pct(db),
-        espp_ticker=await _read_espp_ticker(db),
+        # The one reader the pages resolve it with, so GET reports the ticker they actually use.
+        espp_ticker=await read_employer_ticker(db),
         espp_discount_pct=await read_espp_discount(db),
         price_refresh_cron=await read_cron_setting(db),
         calendar_update_due_day=await read_update_due_day(db),

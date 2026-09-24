@@ -38,7 +38,8 @@ MARRIAGE_DATE_KEY = "marriage_date"
 
 async def _read_marriage_date(db: AsyncSession) -> date | None:
     """Degrade-to-None on anything unreadable — the app_settings readers' posture
-    (_read_espp_ticker): a malformed stored blob means 'unset', never a 500 on a GET."""
+    (employer_ticker.read_employer_ticker): a malformed stored blob means 'unset', never a 500
+    on a GET."""
     setting = await db.get(AppSetting, MARRIAGE_DATE_KEY)
     if setting is None or not isinstance(setting.value, dict):
         return None
