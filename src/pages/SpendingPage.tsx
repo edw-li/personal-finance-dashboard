@@ -322,7 +322,10 @@ export default function SpendingPage() {
   // The page's FOCUSED month: the drilled month when the pie is open, the latest month
   // otherwise. The movers, the flow card and the Budget card all read it, so drilling a
   // month on the top chart moves the whole page's "what happened here" together.
-  const focusIndex = matrix ? (activeDetail ? detailIndex : matrix.default_month !== undefined ? matrix.months.indexOf(matrix.default_month ?? '') : matrix.months.length - 1) : -1
+  // The page's month with nothing picked (its last complete month) — the Budget card's last-resort
+  // opening month too, which must never be a pick (2026-09-23 spec §T8; spec re-check R1).
+  const restingIndex = matrix ? (matrix.default_month !== undefined ? matrix.months.indexOf(matrix.default_month ?? '') : matrix.months.length - 1) : -1
+  const focusIndex = matrix ? (activeDetail ? detailIndex : restingIndex) : -1
   const focusMonth = matrix?.months[focusIndex]
   const evidence = useSpendingEvidence(focusMonth, matrix)
   const movers = useMemo(
@@ -719,7 +722,7 @@ export default function SpendingPage() {
             <BudgetPanel
               matrix={matrix}
               monthIndex={activeDetail ? detailIndex : null}
-              defaultIndex={focusIndex}
+              defaultIndex={restingIndex}
               onViewMonth={setDetailMonth}
               onBudgetsChanged={load}
               // A partly entered or missing month reads as such, never as a complete month under

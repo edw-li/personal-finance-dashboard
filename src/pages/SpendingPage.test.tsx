@@ -942,6 +942,18 @@ describe('SpendingPage — the ribbon names the page\u2019s default month (2026-
     await screen.findByRole('link', { name: 'Edit Jul 2026 in the wizard' })
     expect(screen.queryByRole('button', { name: 'Back to latest' })).toBeNull()
   })
+
+  // Spec re-check R1: in a book with NO budget in any month the card opens on the page's resting
+  // month (the last complete one) — the pick must never stand in for it, or Back never appears.
+  it('on the Budgets view of a book with no budgets, a picked month still offers the way back', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ default_month: '2026-07-01' }))
+    renderPage('/spending?section=budgets&month=2026-06')
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jun 2026/ })).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to latest' }))
+    await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('month='))
+    expect(await screen.findByRole('heading', { name: /^Budgets — Jul 2026/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back to latest' })).toBeNull()
+  })
 })
 
 describe('SpendingPage — the honest rollup (spec §1/§2)', () => {
