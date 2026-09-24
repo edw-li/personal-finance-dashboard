@@ -420,8 +420,10 @@ async def test_future_snapshot_names_balances_filed_more_than_a_month_ahead(db, 
     await db.commit()
     both = check_future_snapshot((await load_coverage(db)).status)
     assert both.count == 2 and both.detail.startswith("Balances filed for Dec 2026 and Jan 2027,")
-    assert "Delete them on each month's Balances step — its actions (⋯), then Delete Dec 1" in (
-        both.detail
+    # Each month's own delete, named (review minor 11).
+    assert both.detail.endswith(
+        "Delete them on each month's Balances step — its actions (⋯), then Delete Dec 1 "
+        "balances and Delete Jan 1, 2027 balances — or file them under the right month."
     )
     assert both.fix is not None and both.fix.to == "/update?month=2026-12-01&step=balances"
 

@@ -291,8 +291,11 @@ def check_future_snapshot(status: MonthStatus) -> HealthCheckOut:
     if not ahead:
         return _ok("future_snapshot", "No balances filed ahead of their month")
     first = ahead[0]
-    # The wizard's own name for the part: "Dec 1 balances" (", 2027" outside today's year).
-    balances = f"{day_label(first, status.today)} balances"
+    # The wizard's own name for each part: "Dec 1 balances" (", 2027" outside today's year) —
+    # each month's delete named, one link (the first's).
+    names = [f"{day_label(month, status.today)} balances" for month in ahead]
+    deletes = [f"Delete {name}" for name in names]
+    buttons = deletes[0] if len(deletes) == 1 else f"{', '.join(deletes[:-1])} and {deletes[-1]}"
     where = "that month's" if len(ahead) == 1 else "each month's"
     return HealthCheckOut(
         id="future_snapshot",
@@ -301,14 +304,14 @@ def check_future_snapshot(status: MonthStatus) -> HealthCheckOut:
         detail=(
             f"Balances filed for {_joined(ahead)}, more than a month ahead — they are not used "
             f"as your current balances. Delete them on {where} Balances step — its actions (⋯), "
-            f"then Delete {balances} — or file them under the right month."
+            f"then {buttons} — or file them under the right month."
         ),
         count=len(ahead),
         months=ahead,
         fix=HealthFixOut(
             kind="link",
             to=f"/update?month={first.isoformat()}&step=balances",
-            label=f"Open {balances}",
+            label=f"Open {names[0]}",
         ),
     )
 
