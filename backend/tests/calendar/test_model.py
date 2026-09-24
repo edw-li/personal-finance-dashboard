@@ -85,7 +85,7 @@ def test_make_event_derives_source_and_key_and_validates():
         date(2026, 9, 3),
         "update_due",
         "2026-08",
-        "Monthly update — enter August 2026",
+        "Monthly update — Sep 1 balances · August spending & take-home",
         "Monthly update",
         key_date=date(2026, 9, 1),
         href="/update",

@@ -27,13 +27,13 @@ describe('rankUpNext', () => {
       payday('2026-09-15'),
       calendarEvent({ date: '2026-08-25', type: 'ex_dividend', label: 'Ex-dividend — NVDA' }),
       calendarEvent({ date: '2026-09-15', type: 'tax_deadline', label: 'Tax deadline — Q3', amount: '1200.00', direction: 'out', basis: 'estimated' }), // 22 days out: not "soon"
-      calendarEvent({ date: '2026-09-01', type: 'update_due', label: 'Monthly update — enter August 2026' }), // 8 days out: soon
+      calendarEvent({ date: '2026-09-01', type: 'update_due', label: 'Monthly update — Sep 1 balances · August spending & take-home' }), // 8 days out: soon
       calendarEvent({ date: '2026-09-16', type: 'rsu_vest', label: 'RSU vest — 4 grants', amount: '41200.00', direction: 'in', basis: 'estimated' }),
       calendarEvent({ date: '2026-09-03', type: 'espp_qualify', label: 'ESPP lot qualifies' }),
     ]
     const picked = rankUpNext(events, TODAY)
     expect(picked.map((e) => e.label)).toEqual([
-      'Monthly update — enter August 2026', // the only deadline due within 14 days
+      'Monthly update — Sep 1 balances · August spending & take-home', // the only deadline due within 14 days
       'Ex-dividend — NVDA',
       'Payday', // Aug 31 — the ONE payday
       'ESPP lot qualifies',

@@ -97,6 +97,24 @@ describe('CalendarFeedCard', () => {
     expect(document.querySelector('.feed-forms')?.querySelectorAll('form')).toHaveLength(2)
   })
 
+  // 2026-09-23 spec §T6: the reminder lists what is due — the day's balances and the previous
+  // month's spending and take-home — and the sentence names the SAVED day, not a typed one.
+  it('says what the monthly reminder lists, on the saved day', async () => {
+    const note = (day: number) =>
+      `The Monthly update reminder lands on day ${day} of each month and lists what is due: that day’s balances and the previous month’s spending and take-home. It shows on the calendar and in the feed (with an alarm three days before). Any day from 1 to 28 — every month has one.`
+    vi.mocked(putAppSettings).mockResolvedValue({ ...SETTINGS, calendar_update_due_day: 5 })
+    mount()
+    expect(await screen.findByText(note(1))).toBeTruthy()
+    const box = screen.getByLabelText('Monthly update reminder day')
+    fireEvent.change(box, { target: { value: '9' } })
+    // Typing is not saving: the sentence still names the stored day.
+    expect(screen.getByText(note(1))).toBeTruthy()
+    fireEvent.change(box, { target: { value: '5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save reminder day' }))
+    expect(await screen.findByText(note(5))).toBeTruthy()
+    expect(screen.queryByText(/enter last month/)).toBeNull()
+  })
+
   it('saves the due day and says so', async () => {
     vi.mocked(putAppSettings).mockResolvedValue({ ...SETTINGS, calendar_update_due_day: 5 })
     mount()

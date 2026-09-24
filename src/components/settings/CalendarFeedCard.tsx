@@ -229,10 +229,14 @@ export default function CalendarFeedCard() {
                     }}
                   />
                 </label>
+                {/* What the reminder lists (2026-09-23 spec §T6) — on the SAVED day: a typed one
+                    is not the day the reminder lands on until it is saved. */}
                 <p className="settings-note">
-                  The &quot;Monthly update — enter last month&quot; reminder lands on this day of
-                  each month, on the calendar and in the feed (with an alarm three days before).
-                  Any day from {MIN_DAY} to {MAX_DAY} — every month has one.
+                  The Monthly update reminder lands on day {settings.calendar_update_due_day} of
+                  each month and lists what is due: that day’s balances and the previous
+                  month’s spending and take-home. It shows on the calendar and in the feed (with
+                  an alarm three days before). Any day from {MIN_DAY} to {MAX_DAY} — every month
+                  has one.
                 </p>
                 <div className="settings-card-actions">
                   <button type="submit" className="button button-primary" disabled={busy}>
