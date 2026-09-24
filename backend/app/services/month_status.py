@@ -20,8 +20,12 @@ does:
   (c) a `ui` spending write for it dated on or after the next month's 1st in product time, from
       a batch never undone (undo batches never count);
   (d) a `ui` month-review write for it dated on or after the next 1st whose after-image has
-      `spending_reviewed = true` ("Confirm {September} spending is complete"), or an import or
-      restore summary line dated on or after the next 1st.
+      `spending_reviewed = true` and whose batch wrote nothing else for that month — the
+      wizard's "Confirm {September} spending is complete", a PUT with no legs — or an import or
+      restore summary line dated on or after the next 1st. A save that carries a still-ticked
+      box writes its spending, take-home or balances rows beside the review row, so it is not a
+      confirmation: a spending change counts under (c) by its own date, a close under (a), and a
+      take-home save counts for nothing.
 Rent saved on Sep 7 leaves September *partial* from Oct 1 until it is saved again after it ends
 or confirmed. A take-home save never completes spending, and an unchanged save logs nothing
 (ChangeBatch.record), which is why the explicit confirm exists. The change log and not the
@@ -40,6 +44,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Literal
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import Date, and_, cast, func, or_, select
@@ -49,7 +54,7 @@ from app.models import AppSetting, ChangeLog
 from app.schemas.coverage import BalancesPartOut, FlowsPartOut, TimeStatusOut
 from app.services import clock
 from app.services.changelog import undone_by
-from app.services.month_review import ReviewBook, month_shift
+from app.services.month_review import ReviewBook, before_adoption, month_shift
 from app.services.snapshot_state import SnapshotState, current_and_previous, state_out
 
 SpendingState = Literal["missing", "partial", "entered"]
@@ -129,13 +134,14 @@ class MonthStatus:
     def current_month(self) -> date:
         return self.today.replace(day=1)
 
-    def is_legacy(self, month: date) -> bool:
-        """Before the adoption month: history the review feature adopted."""
-        return self.adopted_on is not None and month < self.adopted_on.replace(day=1)
+    def before_adoption(self, month: date) -> bool:
+        """Before the adoption month: history the review feature adopted (whatever its review
+        state since — legacy, closed or changed). month_review.before_adoption's definition."""
+        return before_adoption(month, self.adopted_on)
 
     def certified(self, month: date) -> bool:
         """Clause (a): the user already vouched for this month's spending."""
-        return month in self.closed or self.is_legacy(month)
+        return month in self.closed or self.before_adoption(month)
 
     def candidates(self) -> list[date]:
         """The months the change log must be asked about: spending present, not certified. The
@@ -225,7 +231,7 @@ class MonthStatus:
                 for state in reversed(self.snapshots)
                 if state.month < self.current_month
                 and state.provisional
-                and not self.is_legacy(state.month)
+                and not self.before_adoption(state.month)
             ],
             last_complete_month=self.last_complete_month,
         )
@@ -248,8 +254,26 @@ def _midnight(day: date) -> datetime:
     return datetime(day.year, day.month, day.day, tzinfo=ZoneInfo(clock.PRODUCT_TIMEZONE))
 
 
-def _newest(rows, undone: Mapping) -> dict[date, date]:
-    """month -> the product date of its newest row from a batch never undone."""
+async def _undone(db: AsyncSession, batch_ids: Iterable[UUID]) -> set[UUID]:
+    """The batches among `batch_ids` whose effect is undone now: an Undo reversed them and no
+    later Undo reversed that one. Follows changelog.undone_by link by link until it is stable
+    (review minor 2) — an even number of undos (none, or an Undo that was itself undone) leaves a
+    batch in force. One query per link; one in all when nothing was ever undone."""
+    tips = {batch_id: batch_id for batch_id in batch_ids}
+    undos = dict.fromkeys(tips, 0)
+    frontier = set(tips)
+    while frontier:
+        links = await undone_by(db, list(frontier))
+        for origin, tip in tips.items():
+            if tip in links:
+                tips[origin] = links[tip]
+                undos[origin] += 1
+        frontier = set(links.values())
+    return {origin for origin, count in undos.items() if count % 2}
+
+
+def _newest(rows, undone: set[UUID]) -> dict[date, date]:
+    """month -> the product date of its newest row from a batch whose effect stands."""
     newest: dict[date, date] = {}
     for row in rows:
         if row.batch_id not in undone and (row.month not in newest or row.day > newest[row.month]):
@@ -259,8 +283,8 @@ def _newest(rows, undone: Mapping) -> dict[date, date]:
 
 async def load_spending_evidence(db: AsyncSession, candidates: Sequence[date]) -> SpendingEvidence:
     """Clauses (b)-(d) for `candidates`, in ONE indexed query (spec §K3): the candidates' own
-    spending and month-review rows (the `month` index), plus import and restore summary lines
-    from the earliest candidate's next 1st on (the `at` index). Undone batches come from
+    row-level writes (the `month` index), plus import and restore summary lines from the
+    earliest candidate's next 1st on (the `at` index). Undone batches come from
     changelog.undone_by — a second, small query, only when a `ui` row could count."""
     months = sorted(set(candidates))
     if not months:
@@ -278,11 +302,9 @@ async def load_spending_evidence(db: AsyncSession, candidates: Sequence[date]) -
                 ChangeLog.after["spending_reviewed"].as_boolean().label("spending_reviewed"),
             ).where(
                 or_(
-                    and_(
-                        ChangeLog.month.in_(months),
-                        ChangeLog.table_name.in_((SPENDING_TABLE, REVIEW_TABLE)),
-                        ChangeLog.op != "batch",
-                    ),
+                    # Every row-level write for the candidates, whatever its table: clause (d)
+                    # needs to know what ELSE a review row's batch wrote for its month.
+                    and_(ChangeLog.month.in_(months), ChangeLog.op != "batch"),
                     and_(
                         ChangeLog.op == "batch",
                         ChangeLog.source.in_(SUMMARY_SOURCES),
@@ -292,6 +314,13 @@ async def load_spending_evidence(db: AsyncSession, candidates: Sequence[date]) -
             )
         )
     ).all()
+    # (batch, month) pairs that wrote something other than the month's review row: a review row
+    # in one of these rode along with a save, and confirms nothing (clause (d)).
+    other = {
+        (row.batch_id, row.month)
+        for row in rows
+        if row.op != "batch" and row.table_name != REVIEW_TABLE
+    }
     written: set[date] = set()
     saves, confirms, summaries = [], [], []
     for row in rows:
@@ -301,9 +330,14 @@ async def load_spending_evidence(db: AsyncSession, candidates: Sequence[date]) -
             written.add(row.month)
             if row.source == "ui":
                 saves.append(row)
-        elif row.source == "ui" and row.spending_reviewed:
+        elif (
+            row.table_name == REVIEW_TABLE
+            and row.source == "ui"
+            and row.spending_reviewed
+            and (row.batch_id, row.month) not in other
+        ):
             confirms.append(row)
-    undone = await undone_by(db, list({row.batch_id for row in (*saves, *confirms)}))
+    undone = await _undone(db, {row.batch_id for row in (*saves, *confirms)})
     return SpendingEvidence(
         written=frozenset(written),
         saved_on=_newest(saves, undone),

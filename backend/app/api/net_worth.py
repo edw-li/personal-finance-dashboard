@@ -565,10 +565,11 @@ async def put_month(
     batch: ChangeBatch = Depends(change_batch),
 ) -> MonthUpsertResult:
     require_first_of_month(month)
-    # K4 (2026-09-23 spec): never restamp a legacy month — re-saving one recorded early would
-    # move its digest off `legacy_revision` and drop it from the averages. Read BEFORE the write.
+    # K4 (2026-09-23 spec): never restamp a legacy or closed month — re-saving one recorded early
+    # would move its digest off the revision it was adopted or certified at (`needs_review`, out
+    # of the averages). Read BEFORE the write.
     book = await load_review_book(db, extra_months=[month])
-    restamp = book.months[month].state != "unreviewed_history"
+    restamp = book.months[month].state not in ("unreviewed_history", "closed")
     result = await write_balances(month, body, db, batch, restamp=restamp)
     result.batch_id = await batch.commit()
     return result

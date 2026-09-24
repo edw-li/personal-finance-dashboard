@@ -20,8 +20,9 @@ let serverToday: string | null = null
 const listeners = new Set<() => void>()
 
 /** The browser's own calendar day, 'YYYY-MM-DD' from LOCAL getters — the fallback until the
- *  server has named its day, and the one sanctioned browser-clock read for a product rule. */
-export function browserTodayIso(): string {
+ *  server has named its day, and the one sanctioned browser-clock read for a product rule.
+ *  Module-private: everything else asks productTodayIso() (or utils/months.ts). */
+function browserTodayIso(): string {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
     now.getDate(),

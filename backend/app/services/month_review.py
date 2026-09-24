@@ -43,6 +43,12 @@ def month_shift(month: date, offset: int) -> date:
     return date(index // 12, index % 12 + 1, 1)
 
 
+def before_adoption(month: date, adopted_on: date | None) -> bool:
+    """A month before the adoption month — history the review feature adopted (2026-09-23 spec
+    §K3 clause (a), §K4). One definition for the close blocker here and month_status."""
+    return adopted_on is not None and month < adopted_on.replace(day=1)
+
+
 @dataclass(frozen=True)
 class ReviewSnapshot:
     """A month_reviews row as an immutable value (2026-09-23 spec §P4). A CACHED book is shared
@@ -85,19 +91,21 @@ class ReviewBook:
         return max(legacy) if legacy else None
 
 
-def _day(value: date, today: date) -> str:
-    """'Oct 1' — with ', 2025' outside today's year."""
+def day_label(value: date, today: date | None = None) -> str:
+    """'Oct 1' — with ', 2025' when `today` is given and the year differs. The one spelling of a
+    snapshot's day in the server's sentences (the close blocker, the restamp label, the importer's
+    warnings)."""
     label = f"{value:%b} {value.day}"
-    return label if value.year == today.year else f"{label}, {value.year}"
+    return label if today is None or value.year == today.year else f"{label}, {value.year}"
 
 
 def early_balances_blocker(month: date, recorded_on: date, today: date) -> str:
     """K4's sentence (2026-09-23 spec): "Oct 1 balances were recorded early, on Sep 22 — save
     them again on or after Oct 1 before closing October." """
     name = f"{month:%B}" if month.year == today.year else f"{month:%B %Y}"
-    first = _day(month, today)
+    first = day_label(month, today)
     return (
-        f"{first} balances were recorded early, on {_day(recorded_on, today)} — "
+        f"{first} balances were recorded early, on {day_label(recorded_on, today)} — "
         f"save them again on or after {first} before closing {name}."
     )
 
@@ -161,10 +169,12 @@ def classify_month(
         blockers.append("Future months remain in progress until their month begins.")
     if not has_balances:
         blockers.append("Enter balances before closing the month.")
-    elif recorded_early is not None and not is_legacy:
+    elif recorded_early is not None and not before_adoption(month, adopted_on):
         # K4 (2026-09-23 spec): opening balances recorded before the month began are provisional
         # and cannot be certified until saved again on or after the 1st (which restamps them).
-        # Legacy history is exempt — never restamped, never blocked — so it stays in the averages.
+        # History from before the adoption month is exempt — never blocked, and never restamped
+        # while legacy or closed — so it stays in the averages, and a batch-closed legacy month
+        # stays closed (review minor 1).
         blockers.append(early_balances_blocker(month, recorded_early, today))
     if not has_spending:
         blockers.append("Enter spending, including an explicit zero when appropriate.")

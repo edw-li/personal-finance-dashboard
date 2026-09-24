@@ -178,3 +178,14 @@ async def test_on_oct_16_september_is_due_and_overdue(auth_client, db, monkeypat
         (p["month"], p["spending"], p["take_home_entered"], p["overdue"]) for p in time["flows_due"]
     ] == [("2026-09-01", "missing", False, True)]
     assert (time["balances"]["status"], time["balances"]["overdue"]) == ("missing", True)
+
+
+async def test_one_request_reads_one_day(auth_client, db, monkeypatch):
+    """Review minor 7: /coverage reads the product clock once — the time status and the review
+    book it stands on never straddle midnight, even when the clock ticks mid-request."""
+    db.add(NetWorthSnapshot(month=date(2026, 9, 1), recorded_on=date(2026, 9, 1)))
+    await db.commit()
+    days = iter([date(2026, 9, 30)] + [date(2026, 10, 1)] * 10)
+    monkeypatch.setattr(clock, "product_today", lambda: next(days))
+    time = (await auth_client.get("/api/v1/coverage")).json()["time"]
+    assert (time["today"], time["current_month"]) == ("2026-09-30", "2026-09-01")

@@ -114,10 +114,11 @@ async def test_a_save_before_the_1st_restamps_but_stays_provisional(auth_client,
 async def test_an_explicit_recorded_on_still_wins(auth_client, db, monkeypatch):
     account_id = await seed(db)
     on(monkeypatch, date(2026, 10, 3))
-    await auth_client.put(
+    response = await auth_client.put(
         f"{NW}/months/{OCT}",
         json={"recorded_on": "2026-09-30", **balances(account_id, "100.00")},
     )
+    assert response.status_code == 200, response.text
     assert await stored(db) == date(2026, 9, 30)
 
 
@@ -125,14 +126,18 @@ async def test_a_final_snapshot_s_date_never_moves(auth_client, db, monkeypatch)
     march = date(2026, 3, 1)
     account_id = await seed(db, month=march, recorded_on=march)
     on(monkeypatch, date(2026, 10, 3))
-    await auth_client.put(f"{NW}/months/{march}", json=balances(account_id, "999.00"))
+    response = await auth_client.put(f"{NW}/months/{march}", json=balances(account_id, "999.00"))
+    assert response.status_code == 200, response.text
+    assert response.json()["updated"] == 1  # the save happened; only the date stayed
     assert await stored(db, march) == march
 
 
 async def test_a_null_date_is_not_overwritten(auth_client, db, monkeypatch):
     account_id = await seed(db, recorded_on=None)
     on(monkeypatch, date(2026, 10, 3))
-    await auth_client.put(f"{NW}/months/{OCT}", json=balances(account_id, "150.00"))
+    response = await auth_client.put(f"{NW}/months/{OCT}", json=balances(account_id, "150.00"))
+    assert response.status_code == 200, response.text
+    assert response.json()["updated"] == 1
     assert await stored(db) is None
 
 
@@ -204,3 +209,64 @@ async def test_a_spending_only_put_creates_no_snapshot(auth_client, db, monkeypa
     assert (await db.execute(select(func.count()).select_from(NetWorthSnapshot))).scalar_one() == 0
     tables = set((await db.execute(select(ChangeLog.table_name))).scalars())
     assert "net_worth_snapshots" not in tables
+
+
+async def test_a_batch_closed_legacy_month_recorded_early_stays_closed(
+    auth_client, db, monkeypatch
+):
+    """Review minor 1: a legacy month recorded early can be batch-closed (no blocker before the
+    adoption month). Closed, it is no longer `unreviewed_history` — but it must still never be
+    restamped (the new date would move its certified digest: `needs_review`) nor blocked."""
+    july = date(2026, 7, 1)
+    account_id = await seed(db, month=july, recorded_on=date(2026, 6, 28))
+    category = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    db.add(category)
+    await db.flush()
+    db.add_all(
+        [
+            MonthlySpending(month=july, category_id=category.id, amount=Decimal("2000.00")),
+            MonthlyCashflow(month=july, net_pay=Decimal("6000.00")),
+        ]
+    )
+    await db.commit()
+    await adopt_existing_history(db, date(2026, 9, 12))
+    await db.commit()
+    on(monkeypatch, date(2026, 10, 3))
+    legacy = (await auth_client.get(f"{MR}/months/{july}")).json()
+    assert (legacy["state"], legacy["blockers"]) == ("unreviewed_history", [])
+    closed = await auth_client.post(
+        f"{MR}/batch-close",
+        json={
+            "months": [{"month": str(july), "expected_revision": legacy["input_revision"]}],
+            "reviewed": {"balances": True, "spending": True, "take_home": True},
+        },
+    )
+    assert closed.status_code == 200, closed.text
+    after_close = (await auth_client.get(f"{MR}/months/{july}")).json()
+    assert (after_close["state"], after_close["blockers"]) == ("closed", [])
+    saved = await auth_client.put(
+        f"{MR}/months/{july}",
+        json={
+            "expected_revision": after_close["input_revision"],
+            "balances": balances(account_id, "100.00"),
+            "reviewed": {"balances": True, "spending": True, "take_home": True},
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    standalone = await auth_client.put(f"{NW}/months/{july}", json=balances(account_id, "100.00"))
+    assert standalone.status_code == 200, standalone.text
+    assert await stored(db, july) == date(2026, 6, 28)
+    assert (await auth_client.get(f"{MR}/months/{july}")).json()["state"] == "closed"
+
+
+async def test_a_same_day_resave_restamps_nothing_and_says_nothing(auth_client, db, monkeypatch):
+    """Review minor 3: re-saving early balances on the day they were recorded changes no date, so
+    no restamp is logged and the label claims none."""
+    account_id = await seed(db)  # Oct 1 balances, recorded Sep 22
+    on(monkeypatch, SEP_22)
+    response = await auth_client.put(f"{NW}/months/{OCT}", json=balances(account_id, "150.00"))
+    assert response.status_code == 200, response.text
+    labels = set((await db.execute(select(ChangeLog.label))).scalars())
+    assert labels == {"Saved Oct 2026 balances — 1 updated"}
+    assert await snapshot_updates(db) == 0
+    assert await stored(db) == SEP_22

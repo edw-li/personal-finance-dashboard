@@ -48,6 +48,7 @@ from app.models import (
 )
 from app.seed import seed_tax_definitions
 from app.services import clock
+from app.services.month_review import day_label
 from app.services.ordering import ORDERED_LISTS, SORT_INDEX_STEP, next_sort_index, order_lock
 from app.services.people import load_people, primary_person
 from app.services.portfolio_accounts import resolve_portfolio_account
@@ -56,7 +57,8 @@ from app.services.tax_service import FOLDED_TO_BASE_CG
 from app.tax_keys import DERIVED_KEYS, PER_PERSON_KEYS, SINGLE
 
 
-def _diff_update(obj, fields: dict, counts, report: SheetReport, sample_key: str) -> None:
+def _diff_update(obj, fields: dict, counts, report: SheetReport, sample_key: str) -> bool:
+    """Set the fields that differ, count and sample the change; True when anything changed."""
     changed: list[str] = []
     for attr, new in fields.items():
         old = getattr(obj, attr)
@@ -68,6 +70,7 @@ def _diff_update(obj, fields: dict, counts, report: SheetReport, sample_key: str
         report.add_sample(f"{sample_key}: " + "; ".join(changed))
     else:
         counts.skips += 1
+    return bool(changed)
 
 
 async def lock_ordered_lists(db: AsyncSession) -> None:
@@ -372,11 +375,6 @@ COMPONENT_PARENT_SLUG_AT_CREATE: dict[str, str] = {
 COMPONENT_SLUGS_AT_CREATE = frozenset(COMPONENT_PARENT_SLUG_AT_CREATE)
 
 
-def _first_label(month: date) -> str:
-    """'Oct 1' — the balances a snapshot keyed `month` describe."""
-    return f"{month:%b} {month.day}"
-
-
 def _kept_date_warning(month: date, stored: date | None, sheet: date) -> str:
     """K5 (2026-09-23 spec): an existing snapshot's recorded date is never taken from column B;
     when the sheet disagrees, the report says which date stays."""
@@ -475,8 +473,8 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
             if snap.recorded_on is not None and snap.recorded_on < snap.month:
                 report.warnings.append(
                     f"Net Worth: {snap.month:%b %Y} is dated {snap.recorded_on.isoformat()}, "
-                    f"before its month — it imports as provisional {_first_label(snap.month)} "
-                    "balances."
+                    "before its month — it imports as provisional "
+                    f"{day_label(snap.month)} balances."
                 )
         snapshots_by_month[snap.month] = row
     await db.flush()
@@ -500,22 +498,21 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
                 )
                 balance_counts.creates += 1
                 changed_snapshots.add(snapshot.id)
-            else:
-                if row.balance != balance:
-                    changed_snapshots.add(snapshot.id)
-                _diff_update(
-                    row,
-                    {"balance": balance},
-                    balance_counts,
-                    report,
-                    f"account_balances[{snap.month.isoformat()}/{account.slug}]",
-                )
+            elif _diff_update(
+                row,
+                {"balance": balance},
+                balance_counts,
+                report,
+                f"account_balances[{snap.month.isoformat()}/{account.slug}]",
+            ):
+                changed_snapshots.add(snapshot.id)
 
     # K4's rule on an import (spec §K5): an existing PROVISIONAL snapshot (its stored date is
     # before its month) whose balances this import changed is restamped to the import's product
-    # day — final on or after its 1st (a provisional month can never have been closed, so no
-    # certified digest moves), still provisional with the new date before it. Otherwise the
-    # stored date stays, and a different column B is reported, never applied.
+    # day — final on or after its 1st, still provisional with the new date before it. The balance
+    # change itself already moves the month's review digest (even a batch-closed legacy month
+    # recorded early turns "changed since review"), so the new date moves nothing further.
+    # Otherwise the stored date stays, and a different column B is reported, never applied.
     for snap in parsed.snapshots:
         if snap.month not in existing_snapshots:
             continue

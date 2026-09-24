@@ -66,3 +66,15 @@ describe('storyNote', () => {
     expect(storyNote(null)).toBe('')
   })
 })
+
+describe('an absent date (review minor 12)', () => {
+  // NetWorthSummary's new fields are OPTIONAL on the wire type, so an older fixture hands the
+  // builders `as_of: undefined` — read as unknown, never as a crash.
+  it('reads as date unknown, and drops the day count', () => {
+    expect(formatAsOf({ month: '2026-10-01', provisional: false })).toBe('date unknown')
+    expect(asOfPhrase({ month: '2026-10-01' })).toBe('date unknown')
+    expect(changePhrase(final('2026-09-01'), { month: '2026-10-01', provisional: true })).toBe('since Sep 1')
+    expect(changePhrase({ month: '2026-09-01' }, final('2026-10-01'))).toBe('September: date unknown → Oct 1')
+    expect(changePhrase(undefined, final('2026-10-01'))).toBeNull() // an optional summary.previous
+  })
+})
