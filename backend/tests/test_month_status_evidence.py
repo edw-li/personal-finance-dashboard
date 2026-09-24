@@ -328,3 +328,25 @@ async def test_an_undone_confirm_leaves_it_partial(auth_client, db, september, m
     undone = await auth_client.post(f"/api/v1/activity/batches/{confirmed.json()['batch_id']}/undo")
     assert undone.status_code == 200, undone.text
     assert await state(db) == "partial"
+
+
+async def test_a_redone_save_counts_again(auth_client, db, september, monkeypatch):
+    """Undo of an Undo (review minor 2): the Oct 3 save's effect stands again, so its batch counts
+    again — follow undone_by until it is stable; an even number of undos means in force."""
+    log(db, at=pt(2026, 9, 5), month=SEP)
+    await db.commit()
+    on(monkeypatch, date(2026, 10, 3))
+    saved = await put_september(
+        auth_client, spending={"amounts": [{"category_id": september.id, "amount": "2150.00"}]}
+    )
+    assert await state(db) == "entered"
+    undo = await auth_client.post(f"/api/v1/activity/batches/{saved['batch_id']}/undo")
+    assert undo.status_code == 200, undo.text
+    assert await state(db) == "partial"
+    redo = await auth_client.post(f"/api/v1/activity/batches/{undo.json()['batch_id']}/undo")
+    assert redo.status_code == 200, redo.text
+    assert (await db.execute(select(MonthlySpending.amount))).scalar_one() == Decimal("2150.00")
+    assert await state(db) == "entered"
+    again = await auth_client.post(f"/api/v1/activity/batches/{redo.json()['batch_id']}/undo")
+    assert again.status_code == 200, again.text
+    assert await state(db) == "partial"  # three undos: undone again

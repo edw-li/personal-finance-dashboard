@@ -44,6 +44,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Literal
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import Date, and_, cast, func, or_, select
@@ -252,8 +253,26 @@ def _midnight(day: date) -> datetime:
     return datetime(day.year, day.month, day.day, tzinfo=ZoneInfo(clock.PRODUCT_TIMEZONE))
 
 
-def _newest(rows, undone: Mapping) -> dict[date, date]:
-    """month -> the product date of its newest row from a batch never undone."""
+async def _undone(db: AsyncSession, batch_ids: Iterable[UUID]) -> set[UUID]:
+    """The batches among `batch_ids` whose effect is undone now: an Undo reversed them and no
+    later Undo reversed that one. Follows changelog.undone_by link by link until it is stable
+    (review minor 2) — an even number of undos (none, or an Undo that was itself undone) leaves a
+    batch in force. One query per link; one in all when nothing was ever undone."""
+    tips = {batch_id: batch_id for batch_id in batch_ids}
+    undos = dict.fromkeys(tips, 0)
+    frontier = set(tips)
+    while frontier:
+        links = await undone_by(db, list(frontier))
+        for origin, tip in tips.items():
+            if tip in links:
+                tips[origin] = links[tip]
+                undos[origin] += 1
+        frontier = set(links.values())
+    return {origin for origin, count in undos.items() if count % 2}
+
+
+def _newest(rows, undone: set[UUID]) -> dict[date, date]:
+    """month -> the product date of its newest row from a batch whose effect stands."""
     newest: dict[date, date] = {}
     for row in rows:
         if row.batch_id not in undone and (row.month not in newest or row.day > newest[row.month]):
@@ -317,7 +336,7 @@ async def load_spending_evidence(db: AsyncSession, candidates: Sequence[date]) -
             and (row.batch_id, row.month) not in other
         ):
             confirms.append(row)
-    undone = await undone_by(db, list({row.batch_id for row in (*saves, *confirms)}))
+    undone = await _undone(db, {row.batch_id for row in (*saves, *confirms)})
     return SpendingEvidence(
         written=frozenset(written),
         saved_on=_newest(saves, undone),
