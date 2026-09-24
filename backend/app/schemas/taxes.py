@@ -478,6 +478,67 @@ class WithholdingGridOut(BaseModel):
     early_checks_note: str | None = None
 
 
+class ReconciliationApplyOut(BaseModel):
+    """The one write the strip offers (2026-09-23 spec §W3): the RSU row's existing chip, shown
+    only when the figures differ — an explicit user action, never applied server-side."""
+
+    key: str
+    person_id: int | None
+    value: Decimal
+
+
+class ReconciliationFactsOut(BaseModel):
+    """What a row's two figures were built from, for the strip's detail text. Every field is
+    null on the rows it does not describe."""
+
+    typed_pay_periods: Decimal | None = None
+    typed_checkpoint: Decimal | None = None
+    projected_checks: int | None = None
+    projected_from: date | None = None  # the first counted check (§W1)
+    capped_at: Decimal | None = None  # trad_401k / hsa: the cap that stopped the projection
+    future_vest_income: Decimal | None = None  # rsu: the not-yet-vested part, today's quote
+    quote_tolerance: Decimal | None = None  # rsu: the income band that never flags
+    reference_price: Decimal | None = None  # rsu: the flag's price (close on or before the 1st)
+    reference_date: date | None = None  # rsu: that close's date (null: the latest quote)
+
+
+class ReconciliationRowOut(BaseModel):
+    """One typed input against what the app's own records project for it (§W3). `typed` null
+    means none of its inputs is entered ("not entered"); `difference` is projected − (typed or
+    0); `tax_effect` is the liability with this row's projection laid over the stored rows
+    minus the typed liability (positive = more tax); `flagged` is |effect| > 250.00 — for the
+    RSU row, the effect priced at the month's reference close inside a ±10 % band (§W3's
+    stateless hysteresis), while the figures shown stay on today's quote."""
+
+    key: Literal["salary", "trad_401k", "hsa", "rsu", "espp"]
+    person_id: int | None
+    person_name: str | None
+    label: str
+    source: Literal["paycheck", "comp", "espp"]
+    typed: Decimal | None
+    typed_keys: list[str]
+    projected: Decimal
+    difference: Decimal
+    tax_effect: Decimal
+    flagged: bool
+    facts: ReconciliationFactsOut
+    apply: ReconciliationApplyOut | None = None
+
+
+class ReconciliationOut(BaseModel):
+    """Your typed inputs against your records, per person on the return (§W3). Compute-only:
+    nothing is written, and the headline balance stays the one on the typed inputs —
+    `balance_if_matched` (liability with every row matched, minus projected withholding) is
+    what it would be if they agreed."""
+
+    rows: list[ReconciliationRowOut]
+    flagged_count: int
+    liability_if_matched: Decimal | None
+    balance_if_matched: Decimal | None
+    flag_above: Decimal = Decimal("250.00")
+    notes: list[str] = Field(default_factory=list)
+
+
 class SafeHarborOut(BaseModel):
     """The statutory harbor is the LESSER of two legs (2026-08-31 spec C4); either can
     be missing — a first year has no prior return, a refused engine year has no current
@@ -582,3 +643,8 @@ class WithholdingOut(BaseModel):
     # have a usable profile, then the partner's when their leg is simulated. Additive and
     # defaulted, so a replayed older payload still validates.
     grids: list[WithholdingGridOut] = Field(default_factory=list)
+    # Your typed inputs against Paycheck, Comp and ESPP (2026-09-23 spec §W3, contract
+    # §0.4(f)). NULL when the engine refused the year (`liability_total` null) and on the
+    # calendar's internal reads, which never ask for it. The Overview reads `flagged_count`
+    # and `rows[].tax_effect` only.
+    reconciliation: ReconciliationOut | None = None

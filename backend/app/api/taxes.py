@@ -16,7 +16,7 @@ all read through the routers that own them. It is a pure read with four soft lin
 degrades where the editors above raise — see its section comment.
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date
@@ -42,8 +42,10 @@ from app.api.paycheck import (
     MIN_PAY_PERIODS,
     PAY_PERIODS_MESSAGE,
     _default_profile,
+    _limits_for,
 )
 from app.database import get_db
+from app.limit_keys import HSA_LIMIT_KEY_BY_COVERAGE, LIMIT_401K_ELECTIVE
 from app.models import (
     EsppLot,
     PaycheckProfile,
@@ -71,6 +73,7 @@ from app.schemas.taxes import (
     IncompleteYearOut,
     PersonBracketsOut,
     PersonWageTaxOut,
+    ReconciliationOut,
     SafeHarborOut,
     SaleDetailOut,
     SaleSummaryOut,
@@ -101,6 +104,7 @@ from app.schemas.taxes import (
 )
 from app.services import clock, rsu_vesting, withholding_calc
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.limit_check import employer_hsa
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     MONEY_MAX_ABS_14_4,
@@ -112,6 +116,15 @@ from app.services.money import (
 )
 from app.services.people import load_people, primary_person
 from app.services.portfolio_calc import SHARE_Q, fold_transactions, load_portfolio
+from app.services.tax_reconciliation import (
+    EsppFacts,
+    PaycheckFacts,
+    PersonFacts,
+    RsuFacts,
+    cap_401k,
+    cap_hsa,
+    reconcile,
+)
 from app.services.tax_service import (
     JURISDICTION_WARN_MISSING,
     SUGGESTION_QUANTUM,
@@ -1850,12 +1863,241 @@ def _prior_leg(
     return {**prior_leg, "prior_total_tax": tax, "threshold": _money(tax * multiplier)}
 
 
-async def withholding_estimate(db: AsyncSession, year: int, today: date) -> WithholdingOut:
+# The reconciliation's own notes (2026-09-23 spec §W3): what a missing stored limit or a
+# missing ticker leaves unanswered. The service adds the never-reconciled sentence itself.
+LIMIT_401K_MISSING_NOTE = (
+    "No {year} 401(k) elective limit is stored, so the 401(k) projection is not capped — "
+    "enter it in Settings › Planning › Contribution limits"
+)
+LIMIT_HSA_MISSING_NOTE = (
+    "No {year} HSA {tier} limit is stored, so the HSA projection is not capped — enter it in "
+    "Settings › Planning › Contribution limits"
+)
+NO_TICKER_RECONCILE_NOTE = "RSU income is not reconciled: no employer ticker is configured"
+SEVERAL_PARTNERS_NOTE = (
+    "Paycheck inputs are reconciled for the primary and one partner; this return covers more "
+    "people than that"
+)
+HSA_TIER_WORDS = {"self": "self-only", "family": "family"}
+
+
+def _in_force_today(profiles: list[PaycheckProfile], today: date) -> PaycheckProfile:
+    """The profile in force today, else the earliest (a job that has not started yet) —
+    whose HSA coverage and employer deposit the HSA cap is judged on."""
+    current = [profile for profile in profiles if profile.effective_date <= today]
+    return current[-1] if current else min(profiles, key=lambda profile: profile.effective_date)
+
+
+async def _reconciliation(
+    db: AsyncSession,
+    feed: EngineFeed,
+    today: date,
+    *,
+    estimated: withholding_calc.WithholdingEstimate,
+    primary_profiles: list[PaycheckProfile],
+    partner_ids: list[int],
+    partner_profiles: list[PaycheckProfile],
+    ticker: str | None,
+    has_grants: bool,
+    future_vests: list[withholding_calc.VestTuple],
+    liability_total: Decimal,
+    withheld_projected: Decimal,
+) -> ReconciliationOut:
+    """Your typed inputs against Paycheck, Comp and ESPP (2026-09-23 spec §W3): the facts are
+    gathered here — the year's stored limits, the sold ESPP lots, each leg's counted-check
+    grid already in `estimated` — and the rows, prices and flags are the pure service's. Two
+    small reads; every overlay is an in-memory engine run over the feed's own rows."""
+    year = feed.year
+    limits = await _limits_for(db, year)
+    elective_limit = limits.get(LIMIT_401K_ELECTIVE)
+    notes: list[str] = []
+
+    def paycheck_facts(
+        profiles: list[PaycheckProfile],
+        *,
+        checks: int,
+        first_check: date | None,
+        gross: Decimal,
+        trad: Decimal,
+        roth: Decimal,
+        hsa: Decimal,
+    ) -> PaycheckFacts:
+        # 402(g) stops the deferrals and the traditional share of the limit is what payroll
+        # takes; the HSA's room is the limit for the coverage in force less the employer's
+        # deposit (the Paycheck pace's own rule). No stored limit → uncapped, and said so.
+        trad_capped, trad_cap = cap_401k(trad, roth, elective_limit)
+        note = LIMIT_401K_MISSING_NOTE.format(year=year)
+        if elective_limit is None and trad + roth > ZERO and note not in notes:
+            notes.append(note)
+        profile = _in_force_today(profiles, today)
+        limit_key = HSA_LIMIT_KEY_BY_COVERAGE.get(profile.hsa_coverage)
+        hsa_limit = None if limit_key is None else limits.get(limit_key)
+        note = LIMIT_HSA_MISSING_NOTE.format(
+            year=year, tier=HSA_TIER_WORDS.get(profile.hsa_coverage, profile.hsa_coverage)
+        )
+        if limit_key is not None and hsa_limit is None and hsa > ZERO and note not in notes:
+            notes.append(note)
+        deposit = employer_hsa(profile, profile.hsa_coverage)
+        hsa_capped, hsa_cap = cap_hsa(hsa, hsa_limit, deposit)
+        return PaycheckFacts(
+            checks=checks,
+            first_check=first_check,
+            gross=gross,
+            trad_401k=trad_capped,
+            hsa=hsa_capped,
+            trad_capped_at=trad_cap,
+            hsa_capped_at=hsa_cap,
+        )
+
+    primary_paycheck = (
+        paycheck_facts(
+            primary_profiles,
+            checks=estimated.checks_total,
+            first_check=estimated.salary_first_check,
+            gross=estimated.salary_gross_projected,
+            trad=estimated.salary_trad_401k_projected,
+            roth=estimated.salary_roth_401k_projected,
+            hsa=estimated.salary_hsa_projected,
+        )
+        if primary_profiles
+        else None
+    )
+    # The partner leg is ONE simulation over every partner's profiles; it belongs to a person
+    # only when the return covers exactly one partner.
+    partner_paycheck = (
+        paycheck_facts(
+            partner_profiles,
+            checks=estimated.partner_checks_total,
+            first_check=estimated.partner_first_check,
+            gross=estimated.partner_gross_projected,
+            trad=estimated.partner_trad_401k_projected,
+            roth=estimated.partner_roth_401k_projected,
+            hsa=estimated.partner_hsa_projected,
+        )
+        if partner_profiles and len(partner_ids) == 1
+        else None
+    )
+    if len(partner_ids) > 1:
+        notes.append(SEVERAL_PARTNERS_NOTE)
+
+    names = {person.id: person.name for person in feed.roster}
+    people: list[PersonFacts] = [
+        PersonFacts(
+            person_id=column,
+            name=None if column is None else names.get(column),
+            bucket=feed.person_inputs.get(column, {}),
+            paycheck=primary_paycheck if column == feed.primary_column else partner_paycheck,
+        )
+        for column in (list(feed.person_inputs) or [None])
+    ]
+
+    # RSU income: the card's own vest figures. With no ticker every vest was left out, so the
+    # projection is "unknown", not 0 — no row, and a note says why.
+    rsu: RsuFacts | None
+    if ticker is None and has_grants:
+        rsu = None
+        notes.append(NO_TICKER_RECONCILE_NOTE)
+    else:
+        future_income = _money(
+            sum((Decimal(shares) * price for _day, shares, price in future_vests), ZERO)
+        )
+        rsu = RsuFacts(
+            projected=_money(estimated.vest_income_projected),
+            future_income=future_income,
+            reference_projected=None,
+            reference_future=None,
+            reference_price=None,
+            reference_date=None,
+        )
+
+    # ESPP sale income: the lots SOLD this year, decomposed exactly as the what-if decomposes
+    # a sale (after §W5's cap), each dated on its own sale day.
+    sold = list(
+        (
+            await db.execute(
+                select(EsppLot)
+                .where(
+                    EsppLot.sold_date >= date(year, 1, 1), EsppLot.sold_date <= date(year, 12, 31)
+                )
+                .order_by(EsppLot.sold_date, EsppLot.id)
+            )
+        ).scalars()
+    )
+    ordinary = long_term = short_term = ZERO
+    if sold:
+        discount = await read_espp_discount(db)
+        for lot in sold:
+            detail = decompose_espp(
+                lot_id=lot.id,
+                purchase_date=lot.purchase_date,
+                qualifying_date=lot.qualifying_date,
+                shares=lot.shares,
+                subscription_price=lot.subscription_price,
+                purchase_fmv=lot.purchase_fmv,
+                purchase_price=lot.purchase_price,
+                sale_price=lot.sold_price,
+                today=lot.sold_date,
+                discount=discount,
+            )
+            ordinary += detail.ordinary_income
+            if detail.term == "long":
+                long_term += detail.capital_gain
+            else:
+                short_term += detail.capital_gain
+    espp = EsppFacts(ordinary=ordinary, long_term=long_term, short_term=short_term, lots=len(sold))
+
+    return reconcile(
+        people=people,
+        primary_id=feed.primary_column,
+        rsu=rsu,
+        espp=espp,
+        household=feed.inputs,
+        liability=liability_total,
+        withheld_projected=withheld_projected,
+        price=_overlay_pricer(feed),
+        notes=notes,
+    )
+
+
+def _overlay_pricer(
+    feed: EngineFeed,
+) -> Callable[[Sequence[tuple[str, int | None, Decimal]]], Decimal]:
+    """The year's liability at cents with (key, person, value) replacements laid over the
+    feed's stored rows — by the inputs PREVIEW's own adoption rule (`_stored_slot`), so a
+    reconciliation row prices exactly what saving that projection would produce. Pure: the
+    rows, roster and tables are the feed's; every call is one engine run."""
+    null_row_column = feed.roster[0].id if feed.roster else None
+    base = {(row.key, row.person_id): row.value for row in feed.rows}
+
+    def price(overlays: Sequence[tuple[str, int | None, Decimal]]) -> Decimal:
+        overlaid = dict(base)
+        for key, owner, value in overlays:
+            overlaid.pop(_stored_slot(overlaid, key, owner, null_row_column), None)
+            overlaid[(key, owner)] = value
+        rows = [
+            _InputRow(key=key, person_id=person_id, value=value)
+            for (key, person_id), value in overlaid.items()
+        ]
+        overlay_feed = _engine_feed_from_rows(
+            feed.year, feed.filing_status, feed.roster, rows, feed.tables, feed.person_tables
+        )
+        return _money(_breakdown_for(overlay_feed).totals.total_tax)
+
+    return price
+
+
+async def withholding_estimate(
+    db: AsyncSession, year: int, today: date, *, reconcile: bool = False
+) -> WithholdingOut:
     """The withholding tracker's whole computation for ONE year as of `today`, callable from
     OTHER routers as well as this one — the calendar prices its estimated-tax deadlines
     with it rather than re-deriving the safe harbor (2026-09-03 calendar spec §6). Raises
     this router's own 404 when the year has no row; `today` is a PARAMETER, so a caller
     pricing two years reads the clock once.
+
+    `reconcile` adds the typed-inputs-vs-records strip (2026-09-23 spec §W3) — about ten more
+    engine runs and two small reads, so only the GET asks for it; the calendar's internal
+    reads keep the default and never pay for it.
     """
     await _require_year(db, year)
 
@@ -2271,6 +2513,26 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
             )
         )
 
+    # Null when the engine refused the year: there is no liability to price a difference in.
+    reconciliation = (
+        await _reconciliation(
+            db,
+            feed,
+            today,
+            estimated=estimated,
+            primary_profiles=primary_profiles,
+            partner_ids=partner_ids,
+            partner_profiles=partner_profiles,
+            ticker=ticker,
+            has_grants=bool(grants),
+            future_vests=future_vests,
+            liability_total=liability_total,
+            withheld_projected=total_projected,
+        )
+        if reconcile and liability_total is not None
+        else None
+    )
+
     return WithholdingOut(
         year=year,
         filing_status=feed.filing_status,
@@ -2315,6 +2577,7 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         jurisdictions=jurisdictions,
         warnings=warnings,
         grids=grids,
+        reconciliation=reconciliation,
     )
 
 
@@ -2334,7 +2597,7 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
         # Before `_require_year`: a settled year may well be stored and summarizable, and the
         # reason this card cannot be drawn for it has nothing to do with whether it exists.
         raise HTTPException(status_code=422, detail=NON_CURRENT_YEAR_MESSAGE)
-    return await withholding_estimate(db, year, today)
+    return await withholding_estimate(db, year, today, reconcile=True)
 
 
 def _scenario_breakdown(feed: EngineFeed, scenario_inputs: dict[str, Decimal]) -> TaxBreakdown:

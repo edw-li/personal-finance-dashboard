@@ -17,8 +17,11 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
+from app.api.taxes import withholding_estimate
 from app.models import (
     AppSetting,
+    ContributionLimit,
+    EsppLot,
     LatestPrice,
     PaycheckProfile,
     Person,
@@ -30,6 +33,7 @@ from app.models import (
     TaxYear,
 )
 from app.seed import seed_tax_definitions
+from app.services.tax_reconciliation import NEVER_RECONCILED_NOTE
 
 YEARS = "/api/v1/taxes/years"
 
@@ -1144,6 +1148,8 @@ async def test_withholding_reports_missing_brackets_for_the_status(
     assert body["balance_projected"] is None
     assert body["partner_wages"] == "150000.00"
     assert body["additional_medicare_gap"] == "0.00"  # no table, no tier, no gap
+    # No liability, nothing to price a difference in (2026-09-23 spec §W3).
+    assert body["reconciliation"] is None
 
 
 async def test_withholding_on_a_separate_return_has_no_partner_leg(
@@ -1466,3 +1472,267 @@ async def test_withholding_fica_legs_walk_the_primarys_own_tables(
     # 725 medicare + 3100 ss, unchanged, plus 50000 x .013 of SDI over the 110000 of salary
     # gross — where the default table would have charged 20000 x .011 + 30000 x .05.
     assert body["vest"]["fica_ytd"] == "4475.00"
+
+
+# --- the reconciliation (2026-09-23 spec §W3): your typed inputs against your records --------
+
+
+def rows_of(body: dict) -> dict[str, dict]:
+    """Rows keyed by (key) for a one-person return; the married tests key by person too."""
+    return {row["key"]: row for row in body["reconciliation"]["rows"]}
+
+
+async def primary_id(db) -> int:
+    return (await db.execute(select(Person.id).where(Person.is_primary))).scalar_one()
+
+
+async def set_input(db, key: str, value: str, person_id: int | None = None) -> None:
+    """Rewrite one stored input in place (the ORM, not the PUT: these are fixtures)."""
+    row = (
+        await db.execute(
+            select(TaxInput).where(
+                TaxInput.year == YEAR,
+                TaxInput.key == key,
+                TaxInput.person_id.is_(None)
+                if person_id is None
+                else TaxInput.person_id == person_id,
+            )
+        )
+    ).scalar_one()
+    row.value = Decimal(value)
+    await db.commit()
+
+
+LIMIT_401K_NOTE = (
+    "No 2026 401(k) elective limit is stored, so the 401(k) projection is not capped — enter "
+    "it in Settings › Planning › Contribution limits"
+)
+LIMIT_HSA_SELF_NOTE = (
+    "No 2026 HSA self-only limit is stored, so the HSA projection is not capped — enter it in "
+    "Settings › Planning › Contribution limits"
+)
+
+
+async def test_the_reconciliation_lines_each_typed_input_up_with_its_record(
+    auth_client, db, world, frozen_today
+):
+    """The single world: 600k typed against a 240k profile, no 401(k) / HSA / RSU typed at
+    all, no limits stored. Every figure is the card's own — the grid's counted checks, the
+    vest leg — beside the typed one."""
+    body = await get_withholding(auth_client)
+    rec = body["reconciliation"]
+    rows = rows_of(body)
+    assert list(rows) == ["salary", "trad_401k", "hsa", "rsu"]
+    salary = rows["salary"]
+    assert (salary["typed"], salary["projected"], salary["difference"]) == (
+        "600000.00",
+        "240000.00",
+        "-360000.00",
+    )
+    assert salary["typed_keys"] == ["pay_periods", "annual_salary", "w2_salary_checkpoint"]
+    assert salary["facts"]["typed_pay_periods"] == "24"
+    assert salary["facts"]["typed_checkpoint"] is None
+    assert (salary["facts"]["projected_checks"], salary["facts"]["projected_from"]) == (
+        24,
+        "2026-01-16",
+    )
+    assert (rows["trad_401k"]["typed"], rows["trad_401k"]["projected"]) == (None, "12000.00")
+    assert rows["trad_401k"]["facts"]["capped_at"] is None
+    assert (rows["hsa"]["typed"], rows["hsa"]["projected"]) == (None, "2400.00")
+    rsu = rows["rsu"]
+    assert (rsu["source"], rsu["typed"], rsu["projected"]) == ("comp", None, "85000.00")
+    assert rsu["facts"]["future_vest_income"] == "35000.00"  # 70 sh x the 500.00 quote
+    assert rsu["apply"] == {
+        "key": "w2_stock_rsus_sold",
+        "person_id": await primary_id(db),
+        "value": "85000.00",
+    }
+    assert [row["apply"] for row in rec["rows"] if row["key"] != "rsu"] == [None] * 3
+    # Wages 360k above the records move the year's tax by far more than $250.
+    assert Decimal(salary["tax_effect"]) < Decimal("-250")
+    assert salary["flagged"] is True
+    assert rec["flagged_count"] == sum(row["flagged"] for row in rec["rows"])
+    assert rec["flag_above"] == "250.00"
+    assert rec["notes"] == [LIMIT_401K_NOTE, LIMIT_HSA_SELF_NOTE, NEVER_RECONCILED_NOTE]
+    # The headline is untouched: the balance stays the one on the typed inputs.
+    assert body["balance_projected"] == "18870.20"
+
+
+async def test_the_rsu_effect_is_the_what_ifs_delta_for_the_projection(
+    auth_client, world, frozen_today
+):
+    """The one row the what-if can price the same way (its overrides fold onto the primary):
+    the effect is its Δ total tax for w2_stock_rsus_sold = projected, to the cent."""
+    body = await get_withholding(auth_client)
+    rsu = rows_of(body)["rsu"]
+    resp = await auth_client.post(
+        "/api/v1/taxes/what-if",
+        json={"year": YEAR, "overrides": {"w2_stock_rsus_sold": rsu["projected"]}},
+    )
+    assert resp.status_code == 200, resp.text
+    assert rsu["tax_effect"] == resp.json()["delta"]["total_tax"]
+
+
+async def test_liability_if_matched_is_the_liability_after_saving_every_projection(
+    auth_client, db, world, frozen_today
+):
+    await set_input(db, "pay_periods", "6")  # typed wages 150k against the profile's 240k
+    body = await get_withholding(auth_client)
+    rec = body["reconciliation"]
+    rows = rows_of(body)
+    assert rows["salary"]["typed"] == "150000.00"
+    # Save exactly what the rows project — the checkpoint takes the salary difference.
+    resp = await auth_client.put(
+        f"{YEARS}/{YEAR}/inputs",
+        json={
+            "values": {
+                "w2_salary_checkpoint": "90000",
+                "trad_401k_contributions": rows["trad_401k"]["projected"],
+                "hsa_contributions": rows["hsa"]["projected"],
+                "w2_stock_rsus_sold": rows["rsu"]["projected"],
+            }
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    summary = (await auth_client.get(f"{YEARS}/{YEAR}/summary")).json()
+    assert rec["liability_if_matched"] == summary["totals"]["total_tax"]
+    assert Decimal(rec["balance_if_matched"]) == Decimal(rec["liability_if_matched"]) - Decimal(
+        body["total"]["projected"]
+    )
+    # ...and once they match, nothing is left to flag or to apply.
+    after = (await get_withholding(auth_client))["reconciliation"]
+    assert after["flagged_count"] == 0
+    assert all(row["tax_effect"] == "0.00" for row in after["rows"])
+    assert after["liability_if_matched"] == summary["totals"]["total_tax"]
+
+
+async def test_the_stored_limits_cap_the_401k_and_the_hsa(auth_client, db, world, frozen_today):
+    """Payroll stops deferrals at the year's stored limits (§W3): 12,000 of traditional 401(k)
+    meets a 10,000 limit, and 150 a check of HSA meets the self-only 4,400 less the
+    employer's 2,000 deposit."""
+    profile = (await db.execute(select(PaycheckProfile))).scalar_one()
+    profile.hsa_per_check = Decimal("150.00")
+    profile.hsa_employer_annual = Decimal("2000.00")
+    db.add_all(
+        [
+            ContributionLimit(year=YEAR, key="limit_401k_elective", value=Decimal("10000")),
+            ContributionLimit(year=YEAR, key="limit_hsa_self", value=Decimal("4400")),
+        ]
+    )
+    await db.commit()
+    rec = (await get_withholding(auth_client))["reconciliation"]
+    rows = {row["key"]: row for row in rec["rows"]}
+    assert (rows["trad_401k"]["projected"], rows["trad_401k"]["facts"]["capped_at"]) == (
+        "10000.00",
+        "10000.00",
+    )
+    assert (rows["hsa"]["projected"], rows["hsa"]["facts"]["capped_at"]) == ("2400.00", "2400.00")
+    assert rec["notes"] == [NEVER_RECONCILED_NOTE]
+
+
+async def test_two_earners_each_get_their_own_rows_and_the_partners_effect_is_a_save(
+    auth_client, db, married_world, frozen_today
+):
+    """A partner row is priced by the inputs preview's own overlay — the what-if would fold it
+    onto the primary — so its effect is exactly what saving that projection does."""
+    me_id, partner_id = married_world
+    await seed_profile(
+        db,
+        person_id=partner_id,
+        effective_date=date(2026, 3, 1),
+        annual_salary=Decimal("150000.00"),
+        trad_401k_pct=Decimal("0"),
+        withholding_pct=Decimal("0.200000000"),
+        dental_vision_per_check=Decimal("0.00"),
+        hsa_per_check=Decimal("0.00"),
+    )
+    await set_input(db, "pay_periods", "12", person_id=partner_id)  # typed 75k
+    body = await get_withholding(auth_client)
+    rows = body["reconciliation"]["rows"]
+    assert [(row["person_id"], row["key"]) for row in rows] == [
+        (me_id, "salary"),
+        (me_id, "trad_401k"),
+        (me_id, "hsa"),
+        (partner_id, "salary"),
+    ]
+    partner = rows[-1]
+    assert partner["person_name"] == "Partner"
+    # 21 checks from Mar 2 at 6,250 — the start date zeroes Jan 16 … Feb 15 (§W1).
+    assert (partner["typed"], partner["projected"]) == ("75000.00", "131250.00")
+    assert partner["facts"]["projected_from"] == "2026-03-02"
+
+    before = (await auth_client.get(f"{YEARS}/{YEAR}/summary")).json()["totals"]["total_tax"]
+    resp = await auth_client.put(
+        f"{YEARS}/{YEAR}/inputs",
+        json={"rows": [{"key": "w2_salary_checkpoint", "person_id": partner_id, "value": "56250"}]},
+    )
+    assert resp.status_code == 200, resp.text
+    after = (await auth_client.get(f"{YEARS}/{YEAR}/summary")).json()["totals"]["total_tax"]
+    assert Decimal(partner["tax_effect"]) == Decimal(after) - Decimal(before)
+
+
+async def test_a_separate_return_reconciles_the_primary_alone(
+    auth_client, db, definitions, frozen_today
+):
+    me_id, partner_id = await seed_household(db)
+    await seed_married_year(db, YEAR, me_id, partner_id, status="married_separate")
+    await seed_profile(db)
+    await seed_partner_profile(db, partner_id)
+    body = await get_withholding(auth_client)
+    assert {row["person_id"] for row in body["reconciliation"]["rows"]} == {me_id}
+
+
+async def test_a_partner_without_a_profile_gets_a_note_not_rows(
+    auth_client, married_world, frozen_today
+):
+    me_id, _partner_id = married_world
+    rec = (await get_withholding(auth_client))["reconciliation"]
+    assert {row["person_id"] for row in rec["rows"]} == {me_id}
+    assert (
+        "Partner has no paycheck profile, so their inputs are not reconciled — their withholding "
+        "comes from the entered W-2 rows"
+    ) in rec["notes"]
+
+
+async def test_only_the_lots_sold_this_year_make_the_espp_row(auth_client, db, world, frozen_today):
+    """10 sh bought at 85 with a purchase-day FMV of 120, sold at 150 before the qualifying
+    date: 350 of ordinary income and 300 of short-term gain. The unsold lot and last year's
+    sale are not this year's income."""
+
+    def lot(purchase: date, sold: date | None) -> EsppLot:
+        return EsppLot(
+            purchase_date=purchase,
+            qualifying_date=date(2027, 9, 1),
+            shares=Decimal("10.0000"),
+            subscription_price=Decimal("100.00000"),
+            purchase_fmv=Decimal("120.00000"),
+            purchase_price=Decimal("85.00000"),
+            sold_date=sold,
+            sold_price=None if sold is None else Decimal("150.00000"),
+        )
+
+    db.add_all(
+        [
+            lot(date(2025, 8, 29), date(2026, 5, 1)),
+            lot(date(2025, 2, 28), None),
+            lot(date(2024, 8, 30), date(2025, 6, 2)),
+        ]
+    )
+    await db.commit()
+    espp = rows_of(await get_withholding(auth_client))["espp"]
+    assert (espp["source"], espp["typed"], espp["projected"]) == ("espp", None, "650.00")
+    assert espp["typed_keys"] == [
+        "w2_espp_sale_component",
+        "ltcg_espp_component",
+        "stcg_espp_component",
+    ]
+
+
+async def test_the_reconciliation_writes_nothing(auth_client, world, frozen_today, forbid_writes):
+    with forbid_writes():
+        body = await get_withholding(auth_client)
+    assert body["reconciliation"]["rows"]
+
+
+async def test_the_calendars_internal_reads_carry_no_reconciliation(db, world, frozen_today):
+    assert (await withholding_estimate(db, YEAR, PINNED_TODAY)).reconciliation is None
