@@ -22,11 +22,31 @@ export function upNextWindow(todayIso: string): { start: string; end: string } {
   return { start: todayIso, end: addDays(todayIso, UP_NEXT_WINDOW_DAYS - 1) }
 }
 
+/** The monthly reminders as ONE row (lane T code review, controller decision (b)). Each pending
+ *  month is its own reminder, re-dated to today while its update is due, so a backlog would take
+ *  every row: the newest pending month stands for them — "(+3 earlier)" when older ones are
+ *  pending too — and with none pending, the next one ahead. The month is the reminder's
+ *  `entity_ref` (YYYY-MM of the month whose spending it asks for). `reminders` are live ones. */
+function oneReminder(reminders: CalendarEvent[], todayIso: string): CalendarEvent | null {
+  const pending = reminders.filter((e) => e.date <= todayIso)
+  if (pending.length === 0) {
+    return reminders.reduce<CalendarEvent | null>((next, e) => (next === null || e.date < next.date ? e : next), null)
+  }
+  const newest = pending.reduce((a, b) => (b.entity_ref > a.entity_ref ? b : a))
+  return pending.length === 1 ? newest : { ...newest, label: `${newest.label} (+${pending.length - 1} earlier)` }
+}
+
 /** Not hidden, not done, not past; deadlines due within 14 days first, then by date; at most
- *  ONE payday (two a month would crowd out everything else); the strip's five. */
+ *  ONE payday (two a month would crowd out everything else) and ONE monthly reminder (a backlog
+ *  would — oneReminder); the strip's five. */
 export function rankUpNext(events: CalendarEvent[], todayIso: string): CalendarEvent[] {
   const soonEdge = addDays(todayIso, SOON_DAYS)
-  const live = events.filter((e) => !e.hidden && !e.done && e.date >= todayIso)
+  const open = events.filter((e) => !e.hidden && !e.done && e.date >= todayIso)
+  const reminder = oneReminder(open.filter((e) => e.type === 'update_due'), todayIso)
+  // Server order kept: the one reminder takes its own event's place, the others drop out.
+  const live = open.flatMap((e) =>
+    e.type !== 'update_due' ? [e] : reminder !== null && e.key === reminder.key ? [reminder] : [],
+  )
   const soonDeadline = (e: CalendarEvent) => DEADLINE_TYPES.includes(e.type) && e.date <= soonEdge
   const ordered = [...live].sort(
     (a, b) => Number(soonDeadline(b)) - Number(soonDeadline(a)) || a.date.localeCompare(b.date),

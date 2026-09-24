@@ -20,6 +20,80 @@ const sentence = (money: UpNextMoney) => `${money.lead} ${money.clauses.join(' �
 const budgets = (months: string[], amount = '5478.00'): CalendarLiving[] =>
   months.map((month) => ({ month, amount, basis: 'budget', months_in_average: null }))
 
+// Controller decision (b) on lane T's code review: every pending month is its own reminder,
+// re-dated to today while its update is due, so a backlog took one of the five rows each — four of
+// five on 2027-01-05. The strip shows ONE reminder row: the newest pending month, "+N earlier"
+// when older ones are pending too; with none pending, the next one ahead.
+describe('rankUpNext — one monthly-reminder row', () => {
+  const reminder = (date: string, month: string, nominal: string, label: string) =>
+    calendarEvent({ date, type: 'update_due', label, entity_ref: month, key: `ritual:${month}:${nominal}` })
+
+  // The real copy's calendar on 2027-01-05 (lane T's walk): four months pending on today, the
+  // February reminder ahead, and the rest of the month's dates.
+  const JAN_5 = '2027-01-05'
+  const jan5 = [
+    reminder(JAN_5, '2026-09', '2026-10-01', 'Monthly update — Oct 1, 2026 balances · September 2026 spending & take-home'),
+    reminder(JAN_5, '2026-10', '2026-11-01', 'Monthly update — October 2026 spending & take-home'),
+    reminder(JAN_5, '2026-11', '2026-12-01', 'Monthly update — November 2026 spending & take-home'),
+    reminder(JAN_5, '2026-12', '2027-01-01', 'Monthly update — Jan 1 balances · December 2026 spending & take-home'),
+    calendarEvent({ date: '2027-01-09', type: 'card_fee', label: 'Capital One Venture X annual fee', amount: '395.00', direction: 'out' }),
+    calendarEvent({ date: '2027-01-10', type: 'card_anniversary', label: 'Wells Fargo Active Cash anniversary' }),
+    calendarEvent({ date: '2027-01-15', type: 'tax_deadline', label: 'Tax deadline — Q4 2026 estimated payment' }),
+    payday('2027-01-15'),
+    payday('2027-01-29'),
+    reminder('2027-02-01', '2027-01', '2027-02-01', 'Monthly update — Feb 1 balances · January spending & take-home'),
+  ]
+
+  it('shows the newest pending month once, with "+3 earlier", and leaves the other rows to the rest', () => {
+    const picked = rankUpNext(jan5, JAN_5)
+    expect(picked.map((e) => [e.date, e.label])).toEqual([
+      [JAN_5, 'Monthly update — Jan 1 balances · December 2026 spending & take-home (+3 earlier)'],
+      ['2027-01-09', 'Capital One Venture X annual fee'],
+      ['2027-01-15', 'Tax deadline — Q4 2026 estimated payment'],
+      ['2027-01-10', 'Wells Fargo Active Cash anniversary'],
+      ['2027-01-15', 'Payday'],
+    ])
+    // The row is the newest month's own reminder: its key, its link into the wizard.
+    expect([picked[0].key, picked[0].href]).toEqual(['ritual:2026-12:2027-01-01', '/update'])
+    expect(picked.filter((e) => e.type === 'update_due')).toHaveLength(1)
+  })
+
+  it('keeps a lone pending reminder as it is, and never lists the next one beside it', () => {
+    const today = '2026-10-03'
+    const picked = rankUpNext(
+      [
+        reminder(today, '2026-09', '2026-10-01', 'Monthly update — Oct 1 balances · September spending & take-home'),
+        reminder('2026-11-01', '2026-10', '2026-11-01', 'Monthly update — Nov 1 balances · October spending & take-home'),
+        payday('2026-10-15'),
+      ],
+      today,
+    )
+    expect(picked.map((e) => e.label)).toEqual([
+      'Monthly update — Oct 1 balances · September spending & take-home',
+      'Payday',
+    ])
+  })
+
+  it('with nothing pending, shows the next reminder ahead — one, however many the window holds', () => {
+    const picked = rankUpNext(
+      [
+        reminder('2026-12-01', '2026-11', '2026-12-01', 'Monthly update — Dec 1 balances · November spending & take-home'),
+        reminder('2026-11-01', '2026-10', '2026-11-01', 'Monthly update — Nov 1 balances · October spending & take-home'),
+      ],
+      '2026-10-20',
+    )
+    expect(picked.map((e) => e.date)).toEqual(['2026-11-01'])
+  })
+
+  it('counts only the reminders still open — a done or hidden one is not "earlier"', () => {
+    const [oct, nov, dec, jan] = jan5
+    const picked = rankUpNext([{ ...oct, done: true }, { ...nov, hidden: true }, dec, jan], JAN_5)
+    expect(picked.map((e) => e.label)).toEqual([
+      'Monthly update — Jan 1 balances · December 2026 spending & take-home (+1 earlier)',
+    ])
+  })
+})
+
 describe('rankUpNext', () => {
   it('puts deadlines due within 14 days first, then dates ascending, at most one payday, five total', () => {
     const events = [

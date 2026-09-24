@@ -252,6 +252,10 @@ describe('guide content — the setup steps follow the merged pages', () => {
     expect(stepsOf('setup-limits')).toContain('withdrawal rate, Plan until (year), ESPP ticker and discount')
   })
 
+  it('says Up next keeps one monthly-update row (lane T code review, decision (b))', () => {
+    expect(stepsOf('overview-up-next')).toContain('at most one payday and one monthly update')
+  })
+
   it('sets a new year’s filing status with Change…', () => {
     expect(stepsOf('setup-taxes')).toContain('set its filing status with **Change…**')
     expect(stepsOf('setup-taxes')).not.toContain('**Filing status**')

@@ -94,7 +94,8 @@ export const TRACKING_CARDS: GuideCard[] = [
         title: 'See what is coming',
         where: 'Overview → Up next',
         steps: [
-          'Deadlines due within two weeks sort first, then everything by date — five rows, at most one payday.',
+          'Deadlines due within two weeks sort first, then everything by date — five rows, at most one payday and one monthly update.',
+          'Several monthly updates due show as one row: the newest month, with "+N earlier" for the others.',
           'The line beneath sums what the next 45 days move in and out, including rows the list dropped.',
           'Press **Open calendar** for the rest of the window.',
         ],
