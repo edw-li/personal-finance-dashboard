@@ -408,11 +408,29 @@ def test_ritual_turns_overdue_part_by_part():
     def detail(day):
         return ritual_events(FALL, day, 1, ritual_status(day, **COPY))[0].detail
 
-    # Balances turn amber from the 7th, the flows from the 16th (spec §0.4(c)).
+    # Balances turn amber from the 7th, the flows from the 16th (spec §0.4(c)) — each named with
+    # its own deadline: the balances were due on their 1st, the spending by the grace day before
+    # the 16th, as Needs attention, the ribbon and Budgets say it (controller decision, review
+    # minor 2).
     assert detail(date(2026, 10, 6)) == "Due since Oct 1"
     assert detail(date(2026, 10, 7)) == "Overdue — Oct 1 balances were due Oct 1"
     assert detail(date(2026, 10, 16)) == (
-        "Overdue — Oct 1 balances and September spending & take-home were due Oct 1"
+        "Overdue — Oct 1 balances were due Oct 1; September spending & take-home was due by Oct 15"
+    )
+
+
+def test_ritual_overdue_wording_follows_a_non_default_reminder_day():
+    """Reminder day 5 (review minor 10): the balances turn amber from Oct 11 (5 + 6) and still
+    were due on their 1st; September's flows from Oct 20 (5 + 15), due by Oct 19."""
+    status = ritual_status(date(2026, 10, 21), reminder_day=5, **COPY)
+    first = ritual_events(FALL, date(2026, 10, 21), 5, status)[0]
+    assert (first.key, first.detail) == (
+        "ritual:2026-09:2026-10-05",
+        "Overdue — Oct 1 balances were due Oct 1; September spending & take-home was due by Oct 19",
+    )
+    only_balances = ritual_status(date(2026, 10, 12), reminder_day=5, **COPY)
+    assert ritual_events(FALL, date(2026, 10, 12), 5, only_balances)[0].detail == (
+        "Overdue — Oct 1 balances were due Oct 1"
     )
 
 
@@ -485,14 +503,82 @@ def test_ritual_on_an_empty_book_asks_for_the_first_balances_only():
     )
 
 
+# Jul 1 and Aug 1 on file, nothing else: on Oct 3 the reminders of August (July's flows),
+# September (its balances, August's flows) and October are all pending and re-dated to today.
+JUL, AUG = date(2026, 7, 1), date(2026, 8, 1)
+BEHIND = {"snapshots": [(JUL, JUL), (AUG, AUG)]}
+
+
 def test_overdue_ritual_outside_the_window_is_dropped():
-    # Viewing a past month: today is not in the window, so the re-dated reminder has nowhere
-    # to land and is dropped rather than drawn on the wrong day.
+    """Viewing September on Oct 3 (code review I3): every pending reminder is re-dated to today,
+    which the window does not contain — none is drawn on the wrong day."""
+    today = date(2026, 10, 3)
+    events = ritual_events(Window(SEP, date(2026, 9, 30)), today, 1, ritual_status(today, **BEHIND))
+    assert events == []
+
+
+def test_a_window_holding_today_shows_every_pending_reminder_on_it():
+    """The window is judged on the EVENT's date, not the month (controller decision, review
+    minor 1): viewing October on Oct 3 shows September's and August's pending reminders too, on
+    today, under their own unchanged keys — a subscribed calendar keeps showing what is due."""
     today = date(2026, 10, 3)
     events = ritual_events(
-        Window(date(2026, 5, 1), date(2026, 5, 31)), today, 1, ritual_status(today, **COPY)
+        Window(OCT, date(2026, 10, 31)), today, 1, ritual_status(today, **BEHIND)
     )
-    assert events == []
+    assert [(e.event_date, e.key) for e in events] == [
+        (today, "ritual:2026-07:2026-08-01"),
+        (today, "ritual:2026-08:2026-09-01"),
+        (today, "ritual:2026-09:2026-10-01"),
+    ]
+    september = events[1]
+    assert (september.label, september.detail) == (
+        "Monthly update — Sep 1 balances · August spending & take-home",
+        "Overdue — Sep 1 balances were due Sep 1; August spending & take-home was due by Sep 15",
+    )
+
+
+def test_the_feed_on_jan_5_shows_the_pending_fall_on_today():
+    """The copy on 2027-01-05 through the feed's window (30 days back, a year ahead — minor 1):
+    October's early balances and September's partial spending, and November's and December's
+    missing months, all pending — each reminder on today, none dropped for its month."""
+    today = date(2027, 1, 5)
+    feed = Window(date(2026, 12, 6), date(2028, 1, 5))
+    events = ritual_events(feed, today, 1, ritual_status(today, **COPY))
+    on_today = [e.key for e in events if e.event_date == today]
+    assert on_today == [
+        "ritual:2026-09:2026-10-01",
+        "ritual:2026-10:2026-11-01",
+        "ritual:2026-11:2026-12-01",
+        "ritual:2026-12:2027-01-01",
+    ]
+    # The months still ahead keep their own dates.
+    assert events[len(on_today)].event_date == date(2027, 2, 1)
+
+
+def test_a_legacy_month_recorded_early_is_never_pending():
+    """K4 never restamps a month before the adoption (Sep 12 here), so its early balances stay
+    provisional for good — the reminder does not nag about history, as provisional_past does not
+    (Needs attention); the ribbon still hatches it."""
+    today = date(2026, 10, 3)
+    status = ritual_status(
+        today,
+        snapshots=[(JUL, date(2026, 6, 28)), (AUG, AUG), (SEP, SEP), (OCT, OCT)],
+        spending={JUL, AUG, SEP},
+        take_home={JUL, AUG, SEP},
+    )
+    assert ritual_events(Window(OCT, date(2026, 10, 31)), today, 1, status) == []
+
+
+def test_balances_recorded_ahead_of_their_date_are_named_so():
+    """A snapshot provisional only because its month is still ahead — an import or an API client
+    stored it with no earlier recorded date (review minor 10)."""
+    today = date(2026, 10, 3)
+    status = ritual_status(today, snapshots=[(SEP, SEP), (OCT, OCT), (NOV, None)], take_home={SEP})
+    nov = ritual_events(Window(NOV, date(2026, 11, 30)), today, 1, status)[0]
+    assert (nov.key, rows([nov])[0][4][0]) == (
+        "ritual:2026-10:2026-11-01",
+        ("Nov 1 balances", "recorded ahead of their date — update them"),
+    )
 
 
 # --- custom ------------------------------------------------------------------------------

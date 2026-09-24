@@ -11,10 +11,14 @@ update still PENDING for it — the two independent parts of the time model (spe
     a reminder ahead of its date already lists it.
 
 No event when nothing is pending. While pending after its date the event is re-dated to today
-(as before) with "Due since {Oct 1}", then "Overdue — {part} was due {Oct 1}" once that part's
-own threshold has passed (month_status's thresholds: balances from the 7th, the flows from the
-16th by default). The KEY never moves — `ritual:{YYYY-MM of U−1}:{nominal date}` — so ICS UIDs
-and any done/snooze override keep attaching.
+(as before) with "Due since {Oct 1}", then "Overdue — {Oct 1} balances were due {Oct 1}; {September}
+spending & take-home was due by {Oct 15}" as each part's own threshold passes (month_status's
+thresholds: balances from the 7th, the flows from the 16th by default) — the spending named by its
+grace deadline, as Needs attention, the ribbon and Budgets say it. The window is judged on the
+EVENT's date, not its month: a month before the window whose reminder is re-dated to a today
+inside it is still drawn, so a subscribed calendar keeps showing what is pending (controller
+decision on the code review). The KEY never moves — `ritual:{YYYY-MM of U−1}:{nominal date}` —
+so ICS UIDs and any done/snooze override keep attaching.
 
 Why the rewrite: the old reminder ("enter M−1", suppressed once M−1's snapshot existed) could
 never fire — that snapshot is made on M−1's own 1st, a month before its reminder — and it asked
@@ -25,7 +29,7 @@ for its first balances.
 """
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from app.services.month_review import day_label, month_shift
 from app.services.month_status import MonthStatus, balances_overdue_from, flows_overdue_from
@@ -50,12 +54,14 @@ _MONTH_NAMES = (
 
 @dataclass(frozen=True)
 class _Part:
-    """One pending part of U's update: its name, what it still lacks, and its own threshold."""
+    """One pending part of U's update: its name, what it still lacks, its own threshold and its
+    own deadline in words ("due Oct 1" for balances, "due by Oct 15" for the flows)."""
 
     label: str
     detail: str
     overdue_from: date
     plural: bool  # "Oct 1 balances were due" vs "September spending & take-home was due"
+    due: str
 
 
 def _month(value: date, today: date) -> str:
@@ -70,9 +76,13 @@ def _first_month(status: MonthStatus | None) -> date | None:
 
 
 def _balances(month: date, status: MonthStatus | None, due_day: int, today: date) -> _Part | None:
-    """U's balances, due on U's 1st: pending while missing or provisional."""
+    """U's balances, due on U's 1st: pending while missing or provisional — except a month before
+    the adoption, whose early balances K4 never restamps (they stay provisional for good): the
+    reminder does not nag about history, as `provisional_past` does not."""
     snapshot = None if status is None else status.snapshot(month)
     if snapshot is not None and not snapshot.provisional:
+        return None
+    if snapshot is not None and status is not None and status.before_adoption(month):
         return None
     first = _first_month(status)
     if first is not None and month < first:
@@ -85,7 +95,11 @@ def _balances(month: date, status: MonthStatus | None, due_day: int, today: date
         # Provisional only because its month is still ahead — an API client or an import.
         detail = "recorded ahead of their date — update them"
     return _Part(
-        f"{day_label(month, today)} balances", detail, balances_overdue_from(month, due_day), True
+        f"{day_label(month, today)} balances",
+        detail,
+        balances_overdue_from(month, due_day),
+        True,
+        f"due {day_label(month, today)}",
     )
 
 
@@ -109,14 +123,32 @@ def _flows(month: date, status: MonthStatus | None, due_day: int, today: date) -
         if not take_home:
             clauses.append("take-home not entered")
         detail = " · ".join(clauses)
-    return _Part(f"{name} spending & take-home", detail, flows_overdue_from(ended, due_day), False)
+    overdue_from = flows_overdue_from(ended, due_day)
+    # "Due by" = the day before the flows turn overdue (spec §K3's copy table).
+    due_by = day_label(overdue_from - timedelta(days=1), today)
+    return _Part(f"{name} spending & take-home", detail, overdue_from, False, f"due by {due_by}")
+
+
+def _months(window: Window, status: MonthStatus | None) -> list[date]:
+    """Every month whose reminder can land in the window: the window's own, and — back to the
+    book's first snapshot month — the earlier ones, whose pending reminders are re-dated to today
+    (no month after the window can land in it: its date is later, or today is)."""
+    months = window.months()
+    first = _first_month(status)
+    if first is None or first >= months[0]:
+        return months
+    earlier, month = [], first
+    while month < months[0]:
+        earlier.append(month)
+        month = month_shift(month, 1)
+    return earlier + months
 
 
 def ritual_events(
     window: Window, today: date, due_day: int, status: MonthStatus | None
 ) -> list[Event]:
     events: list[Event] = []
-    for month in window.months():
+    for month in _months(window, status):
         nominal = date(month.year, month.month, due_day)
         parts = [
             part
@@ -132,15 +164,16 @@ def ritual_events(
         event_date = today if redated else nominal
         if not window.contains(event_date):
             continue
-        due = day_label(month, today)
         detail = None
         if redated:
             overdue = [part for part in parts if today >= part.overdue_from]
             if overdue:
-                verb = "were" if len(overdue) > 1 or overdue[0].plural else "was"
-                detail = f"Overdue — {' and '.join(p.label for p in overdue)} {verb} due {due}"
+                # Each part with its own deadline (controller decision on the code review): the
+                # balances were due on their 1st, the spending by its grace day.
+                clauses = [f"{p.label} {'were' if p.plural else 'was'} {p.due}" for p in overdue]
+                detail = f"Overdue — {'; '.join(clauses)}"
             else:
-                detail = f"Due since {due}"
+                detail = f"Due since {day_label(month, today)}"
         events.append(
             make_event(
                 event_date,

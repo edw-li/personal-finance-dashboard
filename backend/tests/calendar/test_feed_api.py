@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from app.models import CalendarFeedToken
+from app.models import CalendarFeedToken, NetWorthSnapshot
 
 # Module level, so a venv built from requirements.txt alone SKIPS this file instead of
 # failing collection: `icalendar` is a requirements-DEV pin (the feed smoke parser), and a
@@ -170,6 +170,29 @@ async def test_feed_is_rate_limited_per_ip(client):
     for _ in range(60):
         assert (await client.get(f"{CALENDAR}/feed.ics?token={'z' * 43}")).status_code == 404
     assert (await client.get(f"{CALENDAR}/feed.ics?token={'z' * 43}")).status_code == 429
+
+
+async def test_the_feed_keeps_showing_what_is_still_pending(client, auth_client, db, monkeypatch):
+    """The copy's balances (Sep 1 on its 1st, Oct 1 typed early on Sep 22) on 2027-01-05, through
+    the subscription feed — 30 days back, a year ahead: the October and November reminders lie
+    before the window but are still pending, so they sit on today under their own UIDs rather
+    than dropping out of the phone's calendar (controller decision on the code review, minor 1)."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: date(2027, 1, 5))
+    db.add(NetWorthSnapshot(month=date(2026, 9, 1), recorded_on=date(2026, 9, 1)))
+    db.add(NetWorthSnapshot(month=date(2026, 10, 1), recorded_on=date(2026, 9, 22)))
+    await db.commit()
+    _, plaintext = await make_token(auth_client)
+    del client.headers["Authorization"]
+    feed = await client.get(f"{CALENDAR}/feed.ics?token={plaintext}")
+    assert feed.status_code == 200, feed.text
+    starts = {
+        str(component.get("UID")): component.decoded("DTSTART")
+        for component in icalendar.Calendar.from_ical(feed.content).walk("VEVENT")
+        if str(component.get("UID")).startswith("ritual:")
+    }
+    assert starts["ritual:2026-09:2026-10-01@finance-dashboard"] == date(2027, 1, 5)
+    assert starts["ritual:2026-10:2026-11-01@finance-dashboard"] == date(2027, 1, 5)
+    assert starts["ritual:2027-01:2027-02-01@finance-dashboard"] == date(2027, 2, 1)
 
 
 async def test_feed_parses_with_icalendar_and_revalidates(client, auth_client, monkeypatch):

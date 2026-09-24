@@ -287,12 +287,20 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
         ("2026-09-15", "Q3 estimated payment")
     ]
     # The Aug 1 reminder (Aug 1 balances, July's spending & take-home) was due Aug 1 — pending,
-    # re-dated to today with its key unchanged; Sep 1's is scheduled (2026-09-23 spec §T6).
+    # re-dated to today with its key unchanged; Sep 1's is scheduled (2026-09-23 spec §T6). July's
+    # own reminder (only June's balances are on file) lies before the window but is re-dated to a
+    # today inside it, so it is drawn too — the window follows the event's date (review minor 1).
     assert [(e["date"], e["label"], e["key"], e["href"]) for e in by_type["update_due"]] == [
         (
             "2026-08-24",
             "Monthly update — Aug 1 balances · July spending & take-home",
             "ritual:2026-07:2026-08-01",
+            "/update",
+        ),
+        (
+            "2026-08-24",
+            "Monthly update — Jul 1 balances · June spending & take-home",
+            "ritual:2026-06:2026-07-01",
             "/update",
         ),
         (
@@ -342,7 +350,7 @@ async def test_calendar_reminder_lists_the_pending_parts(auth_client, db, monkey
             "2026-08-24",
             "Monthly update — Aug 1 balances · July spending & take-home",
             "ritual:2026-07:2026-08-01",
-            "Overdue — Aug 1 balances and July spending & take-home were due Aug 1",
+            "Overdue — Aug 1 balances were due Aug 1; July spending & take-home was due by Aug 15",
         ),
         (
             "2026-09-01",
