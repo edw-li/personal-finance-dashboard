@@ -39,6 +39,9 @@ function sectionLabel(name: string): string {
 /** A computed line with no component entered: absent is not zero, so it shows neither. */
 const NO_FIGURE = '—'
 
+/** The one chip whose offer comes from outside the year (the paycheck profile, §W4). */
+const SALARY_KEY = 'annual_salary'
+
 /**
  * How long after the last keystroke the computed totals are re-asked for. The answer to a
  * half-typed number is noise, and a request per character would be noise on the wire; 300 ms
@@ -625,8 +628,17 @@ export default function InputsForm({
                   suggestionCell.suggested === null
                     ? null
                     : toBox(suggestionCell.unit, suggestionCell.suggested)
+                // The salary chip is the paycheck profile's offer, and it is offered only when
+                // the STORED salary differs from it (2026-09-23 spec §W4): a stored figure that
+                // already matches the records has nothing to be corrected to, whatever is being
+                // typed over it. Numeric, because the two arrive at different quanta.
+                const storedMatches =
+                  row.key === SALARY_KEY &&
+                  suggestionCell.suggested !== null &&
+                  suggestionCell.value !== null &&
+                  Number(suggestionCell.value) === Number(suggestionCell.suggested)
                 const suggestion =
-                  suggestionCell.suggested === null || applies === shown
+                  suggestionCell.suggested === null || applies === shown || storedMatches
                     ? null
                     : figureText(suggestionCell.unit, suggestionCell.suggested)
                 // "last year's $15,750" for a carry-forward, "suggested …" for a formula.

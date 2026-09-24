@@ -266,6 +266,29 @@ describe('InputsForm', () => {
     )
   })
 
+  it('offers the profile’s salary only when the STORED salary differs from it (2026-09-23 spec §W4)', () => {
+    // Stored and suggested agree (numerically — the two quanta differ): nothing to offer, and
+    // an unsaved edit in the box does not conjure the chip either — the stored value still
+    // matches the records.
+    const matching = inputsFixture()
+    matching.sections[0].items[0] = {
+      ...matching.sections[0].items[0],
+      value: '210000.0000',
+      suggested: '210000.00',
+    }
+    render(<InputsForm inputs={matching} onSaved={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Apply suggestion for Annual Salary' })).toBeNull()
+    fireEvent.change(field('Annual Salary'), { target: { value: '250000' } })
+    expect(screen.queryByRole('button', { name: 'Apply suggestion for Annual Salary' })).toBeNull()
+    cleanup()
+
+    // Stored differs: the chip is there until the box already shows the suggestion.
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    expect(screen.getByText('suggested $210,000.00')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Apply suggestion for Annual Salary' }))
+    expect(screen.queryByRole('button', { name: 'Apply suggestion for Annual Salary' })).toBeNull()
+  })
+
   it('renders a count as an integer and a percent as a percent', () => {
     render(<InputsForm inputs={unitInputs()} onSaved={vi.fn()} />)
     const count = field('Pay periods (checks received so far this year)')
