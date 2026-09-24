@@ -40,14 +40,25 @@ for _name in (_BASE_TEST_DB_NAME, _TEST_DB_NAME):
             "must match '<name>_test[_suffix]' to guard the destructive test teardown"
         )
 
+# The server the test databases live on. A "localhost" host is dialled as 127.0.0.1: Windows
+# resolves localhost to ::1 first, and the dev Postgres publishes 5433 on 127.0.0.1 only
+# (docker-compose.yml), so every new connection — and every cancel request asyncpg sends
+# when a test cancels a query, which reconnects by host NAME — first sat through ~2 s of
+# refused IPv6 connection attempts (measured 2,050 ms vs 25 ms: ~14 s of a serial run, and
+# again in every -n worker). CI's service container listens on every interface, so the IPv4
+# loopback reaches it too. Any other host is used as configured.
+_SERVER_URL = make_url(settings.database_url)
+if _SERVER_URL.host == "localhost":
+    _SERVER_URL = _SERVER_URL.set(host="127.0.0.1")
+
 # make_url().set() survives query params / odd DSNs, unlike string surgery; guarantees the
 # destructive drop_all below can only ever target the *_test database.
-TEST_DATABASE_URL = make_url(settings.database_url).set(database=_TEST_DB_NAME)
+TEST_DATABASE_URL = _SERVER_URL.set(database=_TEST_DB_NAME)
 
 
 async def _ensure_test_database() -> None:
     """Create the test database if missing — self-heals stale dev volumes and plain-CI Postgres."""
-    admin = create_async_engine(make_url(settings.database_url), isolation_level="AUTOCOMMIT")
+    admin = create_async_engine(_SERVER_URL, isolation_level="AUTOCOMMIT")
     async with admin.connect() as conn:
         exists = await conn.scalar(
             text("SELECT 1 FROM pg_database WHERE datname = :name").bindparams(name=_TEST_DB_NAME)
