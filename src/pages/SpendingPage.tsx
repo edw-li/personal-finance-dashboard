@@ -10,7 +10,8 @@ import type { EChartEventParams, EChartsInstance } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
-import ScopeBar, { COVERAGE_SNAPSHOT } from '../components/shell/ScopeBar'
+import ScopeBar from '../components/shell/ScopeBar'
+import { useScopeCoverage } from '../components/shell/useScopeCoverage'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import useSpendingEvidence from '../components/metrics/useSpendingEvidence'
@@ -49,7 +50,7 @@ import { EMPTY_FOLD, entityCssVar, foldCategories, pickColors, rankCategories } 
 import { partialFootnote, partlyEnteredMonths } from '../charts/partlyEntered'
 import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
-import type { CoverageOut, FlowsPartOut, SpendingMatrix, SpendingYearly } from '../types/api'
+import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { todayIso } from '../utils/months'
 import { hasVsBudget, monthMovers } from '../utils/spending'
@@ -264,12 +265,9 @@ export default function SpendingPage() {
   const today = todayIso()
   const patterns = useChartDecals()
   // A month whose spending is only partly entered keeps the partial look after it has ended
-  // (2026-09-23 spec §T12) — `time.flows_due` from the coverage the scope row fetches and hands up
-  // (onCoverage below; its cached answer seeds the first paint), never a second request. Keyed by
-  // content, so a revalidation that lands the same list redraws no chart.
-  const [coverage, setCoverage] = useState<CoverageOut | null>(() => getSnapshot<CoverageOut>(COVERAGE_SNAPSHOT) ?? null)
-  const flowsKey = JSON.stringify(coverage?.time?.flows_due ?? [])
-  const flowsDue = useMemo(() => JSON.parse(flowsKey) as FlowsPartOut[], [flowsKey])
+  // (2026-09-23 spec §T12) — `time.flows_due` from the coverage the scope row fetches and hands up,
+  // never a second request (useScopeCoverage: an identical answer rebuilds no chart option).
+  const { onCoverage, flowsDue } = useScopeCoverage()
   // The month the Budget card opens on with nothing picked (its own rule, a pin after a write
   // included): the scope row's default month on the Budgets view (2026-09-23 spec §T8).
   const [budgetsMonth, setBudgetsMonth] = useState<string | null>(null)
@@ -498,7 +496,7 @@ export default function SpendingPage() {
             // The window applies to the time charts on Overview and Trends only (L5): Budgets
             // reads the ribbon's month and History declares "Full recorded history".
             range={views.section === 'overview' || views.section === 'trends'}
-            onCoverage={setCoverage}
+            onCoverage={onCoverage}
             month={{
               mode: 'view',
               figures: ribbonFigures,

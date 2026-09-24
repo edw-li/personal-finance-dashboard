@@ -12,7 +12,8 @@ import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
-import ScopeBar, { COVERAGE_SNAPSHOT } from '../components/shell/ScopeBar'
+import ScopeBar from '../components/shell/ScopeBar'
+import { useScopeCoverage } from '../components/shell/useScopeCoverage'
 import Segmented from '../components/shell/Segmented'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
@@ -41,8 +42,6 @@ import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import { GROUP_LABELS, PALETTE } from '../charts/theme'
 import type {
   AccountGroup,
-  CoverageOut,
-  FlowsPartOut,
   HouseholdOut,
   NetWorthSummary,
   NetWorthTimeseries,
@@ -144,14 +143,9 @@ export default function NetWorthPage() {
   // posture). null covers both "not loaded yet" and "failed".
   const [household, setHousehold] = useState<HouseholdOut | null>(null)
   // The scope row's own coverage answer (2026-09-23 spec §T1, §T7): the hero calls a month's
-  // story incomplete while its spending is still listed as due — handed over by the ScopeBar
-  // (onCoverage below; its cached answer seeds the first paint), never a second request. Keyed
-  // by content, so an identical answer re-renders nothing.
-  const [coverage, setCoverage] = useState<CoverageOut | null>(
-    () => getSnapshot<CoverageOut>(COVERAGE_SNAPSHOT) ?? null,
-  )
-  const flowsKey = JSON.stringify(coverage?.time?.flows_due ?? [])
-  const flowsDue = useMemo(() => JSON.parse(flowsKey) as FlowsPartOut[], [flowsKey])
+  // story incomplete while its spending is still listed as due, and the default column follows
+  // the server's current snapshot — handed over by the ScopeBar, never a second request.
+  const { coverage, onCoverage, flowsDue } = useScopeCoverage()
   // Group stacking stays the default (spec §6): "how is it invested" is the question this
   // chart has always answered; "whose is it" and "what share" are the other two readings
   // of the same total.
@@ -662,7 +656,7 @@ export default function NetWorthPage() {
               defaultMonth,
               backLabel: 'Back to latest balances',
             }}
-            onCoverage={setCoverage}
+            onCoverage={onCoverage}
           />
         }
         resource={{
