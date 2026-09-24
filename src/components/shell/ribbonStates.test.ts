@@ -22,19 +22,19 @@ beforeEach(() => setServerToday('2026-09-23'))
 describe('chipState — what a month holds, in two halves and in words (2026-09-23 spec §T8)', () => {
   it('Sep 23: October is recorded early and has not begun; September is running', () => {
     const f = feeds(copyOnSep23())
-    expect(chipState('2026-10-01', f, '2026-09-01')).toEqual({
+    expect(chipState('2026-10-01', f)).toEqual({
       balances: 'partial',
       flows: 'empty',
       due: null,
       words: 'Oct 1 balances recorded early (provisional) · spending not due yet (October has not begun)',
     })
-    expect(chipState('2026-09-01', f, '2026-09-01')).toEqual({
+    expect(chipState('2026-09-01', f)).toEqual({
       balances: 'full',
       flows: 'partial',
       due: null,
       words: 'Sep 1 balances · spending not due yet (September in progress)',
     })
-    expect(chipState('2026-08-01', f, '2026-09-01')).toEqual({
+    expect(chipState('2026-08-01', f)).toEqual({
       balances: 'full',
       flows: 'full',
       due: null,
@@ -44,19 +44,19 @@ describe('chipState — what a month holds, in two halves and in words (2026-09-
 
   it('Oct 3: September partly entered, its take-home missing, due by Oct 15', () => {
     const f = feeds(copyInOctober())
-    expect(chipState('2026-09-01', f, '2026-10-01')).toEqual({
+    expect(chipState('2026-09-01', f)).toEqual({
       balances: 'full',
       flows: 'partial',
       due: 'due',
       words: 'Sep 1 balances · spending entered during September (partial) · take-home missing · due by Oct 15',
     })
-    expect(chipState('2026-10-01', f, '2026-10-01').words).toBe(
+    expect(chipState('2026-10-01', f).words).toBe(
       'Oct 1 balances recorded early (provisional) · spending not due yet (October in progress)',
     )
   })
 
   it('Oct 16: the same month overdue', () => {
-    const state = chipState('2026-09-01', feeds(copyInOctober('2026-10-16')), '2026-10-01')
+    const state = chipState('2026-09-01', feeds(copyInOctober('2026-10-16')))
     expect(state.due).toBe('overdue')
     expect(state.words).toBe(
       'Sep 1 balances · spending entered during September (partial) · take-home missing · overdue (was due by Oct 15)',
@@ -67,7 +67,7 @@ describe('chipState — what a month holds, in two halves and in words (2026-09-
     const missing = feeds(timeStatus('2026-10-03', { flows_due: [flowsPart('2026-09-01')] }), {
       spending: new Set(['2026-07-01', '2026-08-01']),
     })
-    expect(chipState('2026-09-01', missing, '2026-10-01')).toMatchObject({
+    expect(chipState('2026-09-01', missing)).toMatchObject({
       flows: 'empty',
       words: 'Sep 1 balances · spending not entered · take-home missing · due by Oct 15',
     })
@@ -75,7 +75,7 @@ describe('chipState — what a month holds, in two halves and in words (2026-09-
       timeStatus('2026-10-03', { flows_due: [flowsPart('2026-09-01', { take_home_entered: true })] }),
       { netPay: new Set(['2026-07-01', '2026-08-01', '2026-09-01']) },
     )
-    expect(chipState('2026-09-01', takeHomeOnly, '2026-10-01')).toMatchObject({
+    expect(chipState('2026-09-01', takeHomeOnly)).toMatchObject({
       flows: 'partial',
       words: 'Sep 1 balances · spending not entered · take-home entered · due by Oct 15',
     })
@@ -83,11 +83,11 @@ describe('chipState — what a month holds, in two halves and in words (2026-09-
 
   it('names an earlier snapshot that stayed provisional, and balances not recorded at all', () => {
     const nov = feeds(timeStatus('2026-11-05', { provisional_past: [OCT1_EARLY] }))
-    expect(chipState('2026-10-01', nov, '2026-11-01')).toMatchObject({
+    expect(chipState('2026-10-01', nov)).toMatchObject({
       balances: 'partial',
       words: expect.stringMatching(/^Oct 1 balances recorded early \(provisional\) · /),
     })
-    expect(chipState('2026-06-01', nov, '2026-11-01')).toMatchObject({
+    expect(chipState('2026-06-01', nov)).toMatchObject({
       balances: 'empty',
       words: expect.stringMatching(/^Jun 1 balances not recorded · /),
     })
@@ -97,7 +97,7 @@ describe('chipState — what a month holds, in two halves and in words (2026-09-
     const f = feeds(copyInOctober(), {
       spending: new Set(['2026-06-01', '2026-07-01', '2026-08-01', '2026-09-01']),
     })
-    expect(chipState('2026-06-01', f, '2026-10-01')).toMatchObject({
+    expect(chipState('2026-06-01', f)).toMatchObject({
       balances: 'empty',
       flows: 'partial',
       words: 'Jun 1 balances not recorded · spending entered · take-home missing',
@@ -106,14 +106,14 @@ describe('chipState — what a month holds, in two halves and in words (2026-09-
 
   it('keeps the old presence words without a time status (an older backend)', () => {
     const legacy = feeds(null)
-    expect(chipState('2026-08-01', legacy, '2026-09-01')).toEqual({
+    expect(chipState('2026-08-01', legacy)).toEqual({
       balances: 'full',
       flows: 'full',
       due: null,
       words: 'balances and spending entered',
     })
-    expect(chipState('2026-10-01', legacy, '2026-09-01').words).toBe('balances entered, spending missing')
-    expect(chipState('2026-05-01', legacy, '2026-09-01').words).toBe('nothing entered')
+    expect(chipState('2026-10-01', legacy).words).toBe('balances entered, spending missing')
+    expect(chipState('2026-05-01', legacy).words).toBe('nothing entered')
   })
 })
 
@@ -131,16 +131,41 @@ describe('the balances half follows the server’s provisional list (spec review
   it('hatches a legacy month recorded early, which provisional_past leaves out', () => {
     const time = timeStatus('2026-09-23', { provisional_months: ['2024-03-01'] })
     expect(time.provisional_past).toEqual([])
-    expect(chipState('2024-03-01', history(time), '2026-09-01')).toMatchObject({
+    expect(chipState('2024-03-01', history(time))).toMatchObject({
       balances: 'partial',
       words: 'Mar 1, 2024 balances recorded early (provisional) · spending and take-home entered',
     })
-    expect(chipState('2024-04-01', history(time), '2026-09-01').balances).toBe('full')
+    expect(chipState('2024-04-01', history(time)).balances).toBe('full')
   })
 
   it('reads a month the list does not name as final — even one the day would call ahead', () => {
     const time = timeStatus('2026-09-23', { provisional_months: [] })
     const ahead = { ...history(time), balances: new Set(['2026-12-01']) }
-    expect(chipState('2026-12-01', ahead, '2026-09-01').balances).toBe('full')
+    expect(chipState('2026-12-01', ahead).balances).toBe('full')
+  })
+})
+
+// Review minor 4: the chip judges the month in progress by the SERVER's time status — the same
+// payload its words come from — never by the browser's store; and the book's first month is
+// handed over once, not recomputed per chip.
+describe('one source for the month, one computation of the book’s start (review minor 4)', () => {
+  it('reads the month in progress off coverage.time, whatever the store says', () => {
+    const f = feeds(copyOnSep23())
+    setServerToday('2026-10-20')
+    expect(chipState('2026-09-01', f).words).toBe('Sep 1 balances · spending not due yet (September in progress)')
+  })
+
+  it('takes the book’s first balances month from the feeds when handed it', () => {
+    const base: RibbonFeeds = {
+      balances: new Set(['2026-07-01', '2026-08-01', '2026-09-01']),
+      spending: new Set(['2026-07-01', '2026-08-01']),
+      netPay: new Set(['2026-08-01']),
+      time: timeStatus('2026-10-03'),
+    }
+    expect(chipState('2026-07-01', base).flows).toBe('full')
+    expect(chipState('2026-07-01', { ...base, firstBalances: '2026-08-01' })).toMatchObject({
+      flows: 'partial',
+      words: 'Jul 1 balances · spending entered · take-home missing',
+    })
   })
 })

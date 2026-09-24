@@ -25,6 +25,8 @@ export interface RibbonCoverage {
   netPay?: ReadonlySet<string>
   /** coverage.time — what each part's state is and what is due; absent on an older backend. */
   time?: TimeStatusOut | null
+  /** The book's first balances month, computed once per coverage answer (review minor 4). */
+  firstBalances?: string | null
 }
 
 export const RIBBON_PAGE = 12
@@ -115,7 +117,7 @@ export default function MonthRibbon({
         <ChevronLeft size={14} aria-hidden="true" />
       </button>
       {months.map((month, index) => {
-        const chip = coverage === null ? null : chipState(month, coverage, todayMonth)
+        const chip = coverage === null ? null : chipState(month, coverage)
         const yearTurns = index === 0 || month.slice(0, 4) !== months[index - 1].slice(0, 4)
         const figure = figures?.[month]
         const reviewState = coverage?.reviews?.[month]

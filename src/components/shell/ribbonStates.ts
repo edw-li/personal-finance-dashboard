@@ -28,6 +28,16 @@ export interface RibbonFeeds {
   spending: ReadonlySet<string>
   netPay?: ReadonlySet<string>
   time?: TimeStatusOut | null
+  /** The book's first balances month, computed once per coverage answer (review minor 4) —
+   *  derived from `balances` when absent (a test's literal feeds); null with no balances. */
+  firstBalances?: string | null
+}
+
+/** The earliest month of a set of first-of-month ISO dates; null when it is empty. */
+function earliest(months: ReadonlySet<string>): string | null {
+  let first: string | null = null
+  for (const month of months) if (first === null || month < first) first = month
+  return first
 }
 
 /** The presence words the ribbon printed before the time model — an older backend's. */
@@ -53,9 +63,13 @@ function knownStates(time: TimeStatusOut): Map<string, SnapshotStateOut> {
   return new Map(states.flatMap((state) => (state === null ? [] : [[state.month, state]])))
 }
 
-export function chipState(month: string, feeds: RibbonFeeds, currentMonth: string): ChipState {
+/** A chip's state. The month in progress is the SERVER's (`time.current_month`, the payload the
+ *  words come from — review minor 4), never the browser store's; without `time` (an older
+ *  backend) the chip says what it always said. */
+export function chipState(month: string, feeds: RibbonFeeds): ChipState {
   const time = feeds.time
   if (time == null) return legacyState(month, feeds)
+  const currentMonth = time.current_month
 
   const first = dayName(month)
   let balances: Half = 'empty'
@@ -104,8 +118,8 @@ export function chipState(month: string, feeds: RibbonFeeds, currentMonth: strin
 
   // Not listed: from the book's first snapshot month on, both parts are in (flows_due lists every
   // ended month that lacks one). Before it, only presence can speak.
-  const bookStart = [...feeds.balances].sort()[0]
-  if (bookStart !== undefined && month >= bookStart) {
+  const bookStart = feeds.firstBalances !== undefined ? feeds.firstBalances : earliest(feeds.balances)
+  if (bookStart !== null && month >= bookStart) {
     return { balances, flows: 'full', due: null, words: `${balancesWords} · spending and take-home entered` }
   }
   const presence: Half = hasSpending && hasTakeHome ? 'full' : hasSpending || hasTakeHome ? 'partial' : 'empty'
