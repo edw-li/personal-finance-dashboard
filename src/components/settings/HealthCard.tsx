@@ -138,7 +138,7 @@ export default function HealthCard() {
         Data health
         {/* The §199A check went with the stored itemized total (2026-09-11 spec §1.4): a
             computed line cannot go stale, so there is nothing left to name or repair. */}
-        <InfoHint text="Checks the server runs on every visit: zero-filled spending months, balances or spending entered without the other, stale quotes, two identical months, the backup marker and the stored snapshots. Each names its fix; the repair is logged and undoable." />
+        <InfoHint text="Checks the server runs on every visit: zero-filled spending months, balances or spending entered without the other, stale quotes, two identical months, the backup marker, the stored snapshots and balances filed more than a month ahead. Each names its fix; the repair is logged and undoable." />
       </h2>
       <FeedBanner error={error} retry={() => load()} retryLabel="Retry the health checks" />
       {checks === null && error === null && <SettingsGhost height={313} />}

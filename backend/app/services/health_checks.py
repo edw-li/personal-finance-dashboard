@@ -23,6 +23,7 @@ from app.models import (
 from app.schemas.lifecycle import HealthCheckOut, HealthFixOut
 from app.schemas.system import BackupStatusOut
 from app.services.coverage import Coverage, load_coverage
+from app.services.month_review import month_shift
 from app.services.month_status import MonthStatus, overdue_through
 from app.services.snapshot import SNAPSHOT_NAME_RE, snapshot_stamp, snapshots_dir
 
@@ -269,6 +270,42 @@ async def check_identical_snapshot(db: AsyncSession, *, status: MonthStatus) -> 
     )
 
 
+def _joined(months: list[date]) -> str:
+    """'Dec 2026' / 'Dec 2026 and Jan 2027' / 'Dec 2026, Jan 2027 and Feb 2027'."""
+    labels = [_label(month) for month in months]
+    return labels[0] if len(labels) == 1 else f"{', '.join(labels[:-1])} and {labels[-1]}"
+
+
+def check_future_snapshot(status: MonthStatus) -> HealthCheckOut:
+    """Balances filed more than a month ahead (2026-09-23 spec §T5, §0.4(b)). The current
+    snapshot is the latest one up to NEXT month — the routine records next month's balances
+    early, never further — so these are never used as your balances: not on the Overview, not
+    by Projection, not by card utilization. Only an API client or a workbook import can store
+    one, and no other surface would say where it went. The fix opens that month's Balances
+    step, where the balances can be deleted."""
+    bound = month_shift(status.current_month, 1)
+    ahead = [state.month for state in status.snapshots if state.month > bound]
+    if not ahead:
+        return _ok("future_snapshot", "No balances filed ahead of their month")
+    first = ahead[0]
+    return HealthCheckOut(
+        id="future_snapshot",
+        severity="warn",
+        title="Balances filed ahead of their month",
+        detail=(
+            f"Balances filed for {_joined(ahead)}, more than a month ahead — they are not used "
+            "as your current balances. Delete them or file them under the right month."
+        ),
+        count=len(ahead),
+        months=ahead,
+        fix=HealthFixOut(
+            kind="link",
+            to=f"/update?month={first.isoformat()}&step=balances",
+            label=f"Open {_label(first)} balances",
+        ),
+    )
+
+
 async def check_backup(db: AsyncSession, *, now: datetime, environment: str) -> HealthCheckOut:
     if environment != "prod":
         return HealthCheckOut(
@@ -384,4 +421,6 @@ async def run_checks(
         await check_identical_snapshot(db, status=coverage.status),
         await check_backup(db, now=now, environment=environment),
         await asyncio.to_thread(check_snapshot, now=now, snapshot_enabled=snapshot_enabled),
+        # The tenth, APPENDED so the nine keep their order and ids (2026-09-23 spec §T5).
+        check_future_snapshot(coverage.status),
     ]

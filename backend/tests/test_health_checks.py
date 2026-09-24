@@ -21,6 +21,7 @@ from app.services.health_checks import (
     STALE_QUOTE_DAYS,
     check_backup,
     check_coverage_gaps,
+    check_future_snapshot,
     check_identical_snapshot,
     check_net_pay_without_spending,
     check_snapshot,
@@ -355,7 +356,7 @@ def test_snapshot_check_reads_the_stored_files():
     assert check_snapshot(now=NOW, snapshot_enabled=True).severity == "ok"
 
 
-async def test_run_checks_returns_the_nine_in_order(db):
+async def test_run_checks_returns_the_ten_in_order(db):
     checks = await run_checks(db, now=NOW, environment="dev", snapshot_enabled=False)
     assert [c.id for c in checks] == [
         "zero_filled_spending",
@@ -369,6 +370,8 @@ async def test_run_checks_returns_the_nine_in_order(db):
         "identical_snapshot",
         "backup",
         "snapshot",
+        # The tenth, APPENDED so the nine keep their order and ids (2026-09-23 spec §T5).
+        "future_snapshot",
     ]
     assert [c.severity for c in checks] == [
         "ok",
@@ -380,7 +383,79 @@ async def test_run_checks_returns_the_nine_in_order(db):
         "ok",
         "info",
         "ok",
+        "ok",
     ]
+
+
+async def test_future_snapshot_names_balances_filed_more_than_a_month_ahead(db, monkeypatch):
+    """T5 (2026-09-23 spec §0.4(b)): the current snapshot is the latest up to NEXT month, so an
+    early next-month snapshot is the routine's own and anything further ahead is never used as
+    your balances — the check names it and links to that month's Balances step."""
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 9, 23))
+    db.add(NetWorthSnapshot(month=date(2026, 9, 1), recorded_on=date(2026, 9, 1)))
+    db.add(NetWorthSnapshot(month=date(2026, 10, 1), recorded_on=date(2026, 9, 22)))
+    await db.commit()
+    ok = check_future_snapshot((await load_coverage(db)).status)
+    assert (ok.severity, ok.title) == ("ok", "No balances filed ahead of their month")
+    db.add(NetWorthSnapshot(month=date(2026, 12, 1)))
+    await db.commit()
+    check = check_future_snapshot((await load_coverage(db)).status)
+    assert (check.severity, check.months, check.count) == ("warn", [date(2026, 12, 1)], 1)
+    assert check.title == "Balances filed ahead of their month"
+    assert check.detail == (
+        "Balances filed for Dec 2026, more than a month ahead — they are not used as your "
+        "current balances. Delete them or file them under the right month."
+    )
+    assert check.fix is not None
+    assert (check.fix.kind, check.fix.to, check.fix.label) == (
+        "link",
+        "/update?month=2026-12-01&step=balances",
+        "Open Dec 2026 balances",
+    )
+    # Two of them: both named, the link on the first.
+    db.add(NetWorthSnapshot(month=date(2027, 1, 1)))
+    await db.commit()
+    both = check_future_snapshot((await load_coverage(db)).status)
+    assert both.count == 2 and both.detail.startswith("Balances filed for Dec 2026 and Jan 2027,")
+    assert both.fix is not None and both.fix.to == "/update?month=2026-12-01&step=balances"
+
+
+async def test_the_four_time_checks_are_quiet_on_the_real_routine(db, monkeypatch):
+    """The spec's §V4 shape in miniature on Sep 23: Sep 1 balances on the 1st, Oct 1 typed early
+    on Sep 22 (a copy of September's), September's rent saved during September, August
+    complete — no WARN from spending_gap, the coverage gaps, identical_snapshot or
+    future_snapshot."""
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 9, 23))
+    food, _ = await categories(db)
+    account = Account(name="A", slug="a", group="cash", sort_order=1)
+    db.add(account)
+    await db.flush()
+    for month, recorded, balance in (
+        (date(2026, 8, 1), date(2026, 8, 1), "90.00"),
+        (date(2026, 9, 1), date(2026, 9, 1), "100.00"),
+        (date(2026, 10, 1), date(2026, 9, 22), "100.00"),
+    ):
+        snapshot = NetWorthSnapshot(month=month, recorded_on=recorded)
+        db.add(snapshot)
+        await db.flush()
+        db.add(
+            AccountBalance(snapshot_id=snapshot.id, account_id=account.id, balance=Decimal(balance))
+        )
+    db.add(MonthlySpending(month=date(2026, 8, 1), category_id=food.id, amount=Decimal("500.00")))
+    db.add(MonthlyCashflow(month=date(2026, 8, 1), net_pay=Decimal("5000.00")))
+    db.add(MonthlySpending(month=date(2026, 9, 1), category_id=food.id, amount=Decimal("2072.23")))
+    await db.commit()
+    checks = {
+        c.id: c for c in await run_checks(db, now=NOW, environment="dev", snapshot_enabled=False)
+    }
+    for check_id in (
+        "spending_gap",
+        "balances_without_spending",
+        "spending_without_balances",
+        "identical_snapshot",
+        "future_snapshot",
+    ):
+        assert checks[check_id].severity == "ok", check_id
 
 
 async def test_spending_gap_names_months_missing_inside_the_balances_window(db, monkeypatch):
