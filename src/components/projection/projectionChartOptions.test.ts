@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
 import { MARK_LINE_LABEL, MARK_LINE_STYLE } from '../../charts/markLine'
+import { withAlpha } from '../../charts/partial'
 import { MUTED, PALETTE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
 import { addMonths } from '../../utils/months'
@@ -464,8 +465,11 @@ describe('netWorthProjectionOption', () => {
     expect(dots.data).toEqual([
       100000,
       101000,
-      { value: 102010, itemStyle: { color: 'transparent', borderColor: PALETTE[0], borderWidth: 1.5 } },
+      // A zero-alpha TOKEN, not 'transparent': still no fill, but the tooltip swatch reads a token
+      // at an alpha as its token (charts/tooltip.ts), so the hovered row keeps the dots' blue.
+      { value: 102010, itemStyle: { color: withAlpha(PALETTE[0], 0), borderColor: PALETTE[0], borderWidth: 1.5 } },
     ])
+    expect(withAlpha(PALETTE[0], 0)).toMatch(/^#[0-9a-f]{6}00$/i)
   })
 
   it('says in the tooltip head why a dot is hollow — T1\'s sentence (2026-09-23 spec §R8)', () => {

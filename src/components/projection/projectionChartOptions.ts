@@ -13,6 +13,7 @@ import {
   ruleAt,
 } from '../../charts/markLine'
 import { referenceLine } from '../../charts/reference'
+import { withAlpha } from '../../charts/partial'
 import { MUTED, PALETTE } from '../../charts/theme'
 import { timeZoom } from '../../charts/timeZoom'
 import type { ZoomWindow } from '../../charts/timeZoom'
@@ -364,8 +365,10 @@ function projectionMonths(
 
 /** The house hollow (the ESPP page's sold lots, the Overview's unentered month — "not what it
  *  looks like"): the dots' colour as an outline over no fill. Here: a provisional snapshot, whose
- *  balances were recorded before their date (2026-09-23 spec §R8). */
-const HOLLOW_DOT = { color: 'transparent', borderColor: PALETTE[0], borderWidth: 1.5 } as const
+ *  balances were recorded before their date (2026-09-23 spec §R8). The fill is the dots' token at
+ *  alpha 0 rather than 'transparent' — invisible all the same, but the tooltip swatch reads a
+ *  token at an alpha as its token (charts/tooltip.ts), so the hovered row stays blue, not muted. */
+const HOLLOW_DOT = { color: withAlpha(PALETTE[0], 0), borderColor: PALETTE[0], borderWidth: 1.5 } as const
 
 /** The snapshot-state lists the net-worth timeseries carries beside `months` (2026-09-23 spec
  *  §K2 — lane K computes them; empty for a replayed cache, when every dot draws filled). */
