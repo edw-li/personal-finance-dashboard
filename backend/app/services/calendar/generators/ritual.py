@@ -31,25 +31,11 @@ for its first balances.
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from app.services.day_labels import month_name
 from app.services.month_review import day_label, month_shift
 from app.services.month_status import MonthStatus, balances_overdue_from, flows_overdue_from
 
 from ..model import Event, Item, Window, make_event
-
-_MONTH_NAMES = (
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-)  # our own literal — calendar.month_name is locale-dependent
 
 
 @dataclass(frozen=True)
@@ -62,12 +48,6 @@ class _Part:
     overdue_from: date
     plural: bool  # "Oct 1 balances were due" vs "September spending & take-home was due"
     due: str
-
-
-def _month(value: date, today: date) -> str:
-    """'September' — with ' 2025' outside today's year."""
-    name = _MONTH_NAMES[value.month - 1]
-    return name if value.year == today.year else f"{name} {value.year}"
 
 
 def _first_month(status: MonthStatus | None) -> date | None:
@@ -113,7 +93,7 @@ def _flows(month: date, status: MonthStatus | None, due_day: int, today: date) -
     take_home = status.take_home_entered(ended)
     if spending == "entered" and take_home:
         return None
-    name = _month(ended, today)
+    name = month_name(ended, today.year)
     if spending == "missing":
         detail = "spending not entered" if take_home else "not entered"
     else:

@@ -18,6 +18,7 @@ from app.schemas.assistant_findings import EvidenceBundle
 from app.schemas.metrics import MetricComponent, MetricEvidence, MetricWindow
 from app.services import clock
 from app.services.assistant_context import _selected_id, _view_month
+from app.services.day_labels import month_name
 from app.services.metrics import load_spending_metrics
 from app.services.month_review import day_label, month_shift
 from app.services.paycheck_calc import half_up2
@@ -232,7 +233,7 @@ def _month_story(
     until 2026-09-24 the same id meant the change INTO the month."""
     first, after = day_label(month, today), month_shift(month, 1)
     next_first = day_label(after, today)
-    name = f"{month:%B}" if month.year == today.year else f"{month:%B %Y}"
+    name = month_name(month, today.year)
     recorded = (
         ""
         if opening.recorded_on is None
@@ -381,17 +382,17 @@ async def month_review_bundle(
             "to start a completed-month review."
         )
     else:
-        title = f"{selected:%B %Y} review"
+        title = f"{month_name(selected)} {selected.year} review"
         state = found.review.state.replace("_", " ") if found.review else "unavailable"
-        text = f"{selected:%B %Y} · {state}. "
+        text = f"{month_name(selected)} {selected.year} · {state}. "
         text += f"Living spending: [[metric:{core['living_spending'].id}]]. "
         text += "Previous 12-month average: "
         text += f"[[metric:{core['living_spending_comparison_average'].id}]]. "
         text += f"Cash saved: [[metric:{core['cash_saved'].id}]]."
         if topic == "spending_changes":
-            title = f"{selected:%B %Y} spending changes"
+            title = f"{month_name(selected)} {selected.year} spending changes"
             changes = [metric for key, metric in core.items() if key.startswith("category_change_")]
-            text = f"{selected:%B %Y} · {state}. "
+            text = f"{month_name(selected)} {selected.year} · {state}. "
             text += f"Living spending: [[metric:{core['living_spending'].id}]]. "
             text += "Previous 12-month average: "
             text += f"[[metric:{core['living_spending_comparison_average'].id}]]. "
