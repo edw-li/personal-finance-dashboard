@@ -498,10 +498,12 @@ describe('TaxesPage — unsaved edits survive (2026-09-23 spec §W9)', () => {
       fireEvent.change(salary(), { target: { value: '$999,000' } })
       await waitFor(() => expect(registered()).toHaveLength(1))
       // The handler says "stay": the browser's own "Leave site?" prompt, nothing custom.
-      const handler = registered()[0][1] as (event: Event) => void
-      const event = new Event('beforeunload', { cancelable: true })
+      const handler = registered()[0][1] as (event: BeforeUnloadEvent) => void
+      const event = { preventDefault: vi.fn(), returnValue: undefined } as unknown as BeforeUnloadEvent
       handler(event)
-      expect(event.defaultPrevented).toBe(true)
+      expect(event.preventDefault).toHaveBeenCalledTimes(1)
+      // Engines that predate preventDefault() on this event ask only when returnValue is set.
+      expect(event.returnValue).toBe('')
 
       // Saved: nothing would be lost, so nothing holds the browser any more.
       fireEvent.click(screen.getByRole('button', { name: /save inputs/i }))

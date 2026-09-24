@@ -291,6 +291,9 @@ export default function TaxesPage() {
     if (!dirty) return
     const hold = (event: BeforeUnloadEvent) => {
       event.preventDefault()
+      // The legacy half: engines that predate preventDefault() on this event ask only when
+      // returnValue is set (code-quality suggestion).
+      event.returnValue = ''
     }
     window.addEventListener('beforeunload', hold)
     return () => window.removeEventListener('beforeunload', hold)
