@@ -151,4 +151,25 @@ describe('Security classifications card', () => {
       Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
     }
   })
+
+  it('focusUnclassified() brings the capped box back to its first row (2026-09-24 table-scroll spec §3.5)', () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true })
+    try {
+      const handle = createRef<ClassificationEditorHandle>()
+      render(<ClassificationEditor ref={handle} classifications={[fund, stock]} onChanged={vi.fn()} />)
+      fireEvent.click(screen.getByRole('button', { name: /^All/ }))
+      const box = screen.getByRole('region', { name: 'Security classifications table' })
+      box.scrollTop = 240 // the reader had scrolled the box down the All list
+      act(() => handle.current?.focusUnclassified())
+      // Same node after: the filter change re-renders the rows inside the box rather than remounting
+      // it, which is why its scroll survives to be reset (a fresh box would open at its top anyway).
+      expect(screen.getByRole('region', { name: 'Security classifications table' })).toBe(box)
+      // preventScroll keeps the page still, so the box has to bring the first row back itself.
+      expect(box.scrollTop).toBe(0)
+      expect(document.activeElement).toBe(screen.getByLabelText('FUND asset class'))
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    }
+  })
 })

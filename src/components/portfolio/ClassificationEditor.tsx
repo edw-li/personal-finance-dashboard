@@ -7,6 +7,7 @@ import { undoBatch } from '../../api/lifecycle'
 import { formatDate } from '../../utils/format'
 import Segmented from '../shell/Segmented'
 import { useToast } from '../ToastProvider'
+import TableScroll from '../TableScroll'
 import {
   CLASSIFICATION_FILTERS, coverageSentence, defaultClassificationFilter, emptyFilterSentence,
   filterClassificationRows, isUnclassified, isUnreviewed,
@@ -54,12 +55,16 @@ export default function ClassificationEditor({ classifications, onChanged, ref }
     },
   }), [])
   // The focus has to wait for the commit that renders the Unclassified rows — an effect keyed on
-  // the tick IS that commit. DOM focus only; no state is written here (react-hooks v7).
+  // the tick IS that commit. DOM focus and a scroll only; no state is written here (react-hooks v7).
+  // The filtered list's first row is the capped box's first row (2026-09-24 table-scroll spec §3.5):
+  // a box the reader had scrolled down would hold it out of view, and preventScroll moves neither
+  // the box nor the page — so the box goes back to its top first.
   useEffect(() => {
     if (focusTick === 0) return
-    rootRef.current
-      ?.querySelector<HTMLSelectElement>('tbody select[data-field="asset_class"]')
-      ?.focus({ preventScroll: true })
+    const root = rootRef.current
+    const box = root?.querySelector<HTMLElement>('.table-scroll')
+    if (box) box.scrollTop = 0
+    root?.querySelector<HTMLSelectElement>('tbody select[data-field="asset_class"]')?.focus({ preventScroll: true })
   }, [focusTick])
   const rows = filterClassificationRows(classifications, filter, search)
   const counts: Record<ClassificationFilter, number> = {
@@ -84,13 +89,13 @@ export default function ClassificationEditor({ classifications, onChanged, ref }
           {emptyFilterSentence(filter, search)}
           {(filter !== 'all' || search.trim() !== '') && <>{' '}<button type="button" className="button" onClick={showAll}>Show all securities</button></>}
         </p>
-      : <div className="holdings-scroll"><table className="port-table classification-table">
+      : <TableScroll className="holdings-scroll" label="Security classifications table"><table className="port-table classification-table">
           <thead><tr>
             <th scope="col">Security</th><th scope="col">Asset class</th><th scope="col">Geography</th>
             <th scope="col">Industry</th><th scope="col">Note</th><th scope="col">Source</th>
           </tr></thead>
           <tbody>{rows.map((row) => <ClassificationRow key={row.security_id} row={row} onChanged={onChanged} />)}</tbody>
-        </table></div>}
+        </table></TableScroll>}
   </section>
 }
 

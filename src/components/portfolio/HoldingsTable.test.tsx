@@ -164,4 +164,11 @@ describe('HoldingsTable', () => {
     // instant comparison (the bug) flags it and a date comparison does not.
     expect(screen.queryByText(/as of Aug 16, 2026/)).toBeNull()
   })
+
+  it('scrolls inside a capped, named box rather than down the page (2026-09-24 table-scroll spec §3.4)', () => {
+    render(<HoldingsTable holdings={rows} sparklines={{}} />)
+    const box = screen.getByRole('region', { name: 'Holdings table' })
+    expect(box.className).toBe('table-scroll holdings-scroll')
+    expect(box.querySelector(':scope > table.port-table')).toBe(screen.getByRole('table'))
+  })
 })

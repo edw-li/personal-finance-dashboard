@@ -3,6 +3,7 @@ import { AlertTriangle } from 'lucide-react'
 import type { HoldingOut, SparklinesResponse } from '../../types/api'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../../utils/format'
 import { isStaleQuote } from '../../utils/staleness'
+import TableScroll from '../TableScroll'
 import Sparkline from './Sparkline'
 import './portfolio.css'
 
@@ -80,7 +81,7 @@ export default function HoldingsTable({
     return <p className="empty-note">No holdings yet — add transactions in Manage.</p>
   }
   return (
-    <div className="holdings-scroll">
+    <TableScroll className="holdings-scroll" label="Holdings table">
       <table className="port-table">
         <thead>
           <tr>
@@ -185,6 +186,6 @@ export default function HoldingsTable({
           ))}
         </tbody>
       </table>
-    </div>
+    </TableScroll>
   )
 }
