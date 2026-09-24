@@ -34,6 +34,8 @@ const ROSTER = [
   'overviewRecentSpend',
   // …and with the month in progress (2026-09-23 spec §C5): the partial bar and marked label.
   'overviewRecentSpendPartial',
+  // …and with a month partly entered after it ended (2026-09-23 spec §T12): the same look.
+  'overviewRecentSpendPartlyEntered',
   'moneyFlow',
   // …and the same builder on a year whose take-home is only part entered: the muted dashed
   // estimate node, a branch the fully-entered fixture never reaches.

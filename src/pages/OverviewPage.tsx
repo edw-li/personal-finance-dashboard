@@ -12,7 +12,7 @@ import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { categoryFold } from '../charts/entities'
-import { hasPartialMonth, PARTIAL_FOOTNOTE } from '../charts/partial'
+import { partialFootnote, partlyEnteredMonths } from '../charts/partlyEntered'
 import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import { chipAmount, eventKey } from '../components/calendar/calendarView'
@@ -334,15 +334,27 @@ export default function OverviewPage() {
   // today, hatched or faded by Appearance › Chart patterns.
   const spendToday = todayIso()
   const patterns = useChartDecals()
+  // A month whose spending is only partly entered keeps that look after it has ended (2026-09-23
+  // spec §T12) — `time.flows_due` from the coverage the spending group already fetched.
   const bars = useMemo(
     () =>
       data.matrix
-        ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered, { todayIso: spendToday, patterns })
+        ? recentSpendOption(data.matrix, RECENT_SPEND_MONTHS, notEntered, {
+            todayIso: spendToday,
+            patterns,
+            flowsDue: data.coverage?.time?.flows_due,
+          })
         : null,
     [data, notEntered, spendToday, patterns],
   )
-  // The bars' '*' on the month in progress, said in words under the card (code review 13).
-  const spendPartial = data.matrix ? hasPartialMonth(data.matrix.months.slice(-RECENT_SPEND_MONTHS), spendToday) : false
+  // The bars' '*', said in words under the card (code review 13): which kind of partial it marks.
+  const spendFootnote = data.matrix
+    ? partialFootnote(
+        data.matrix.months.slice(-RECENT_SPEND_MONTHS),
+        spendToday,
+        partlyEnteredMonths(data.coverage?.time?.flows_due),
+      )
+    : null
   // The money flow's category colours are the Spending page's own (2026-09-23 spec §C2): the
   // fold comes from the same all-time ranking over the matrix this page already loads.
   const matrix = data.matrix
@@ -692,7 +704,7 @@ export default function OverviewPage() {
                 option={bars}
                 empty="No spending months yet."
                 exportName="recent-spending"
-                csv={data.matrix ? () => recentSpendCsv(data.matrix!, RECENT_SPEND_MONTHS, { todayIso: spendToday }) : undefined}
+                csv={data.matrix ? () => recentSpendCsv(data.matrix!, RECENT_SPEND_MONTHS, { todayIso: spendToday, flowsDue: data.coverage?.time?.flows_due }) : undefined}
                 height={240}
                 busy={spending.busy} error={spending.error}
                 selectionAdapter={params => {
@@ -702,11 +714,11 @@ export default function OverviewPage() {
                   return month ? { kind: 'period', id: `living:${month}`, period: month, label: formatMonth(month), scope: 'Household', values: [{ label: 'Living spending', value: data.matrix.living_total?.[index] ?? null, unit: 'USD' }], source: { href: `/spending?month=${month}`, label: 'Open spending' } } : null
                 }}
                 footer={
-                  spendPartial ? (
-                    // The '*' in words (code review 13, spec §C5): one line with the drill link,
-                    // so the caption row keeps the one line it reserves in every state.
+                  spendFootnote !== null ? (
+                    // The '*' in words (code review 13, spec §C5, §T12): one line with the drill
+                    // link, so the caption row keeps the one line it reserves in every state.
                     <p className="drill-hint chart-footnote-line">
-                      <span>{PARTIAL_FOOTNOTE}</span> ·{' '}
+                      <span>{spendFootnote}</span> ·{' '}
                       <NavLink className="drill-hint" to="/spending">
                         Open spending →
                       </NavLink>

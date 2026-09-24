@@ -5,6 +5,7 @@ import { GRID_VARIANTS, partialItemStyle } from '../../charts/grammar'
 import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
 import type { CoverageOut, TaxSummaryOut } from '../../types/api'
+import { flowsPart, timeStatus } from '../../testing/timeFixtures'
 import { setServerToday } from '../../utils/productToday'
 import {
   netWorthTrendCsv,
@@ -607,5 +608,73 @@ describe('recentSpendOption: the month in progress (2026-09-23 spec §C5)', () =
     })
     expect(axisDataOf(option)[2]).toEqual({ value: 'Sep 2026', textStyle: { color: OTHER_SERIES_COLOR } })
     expect(labelOf(option)('Sep 2026', 2)).toBe('Sep 2026*')
+  })
+})
+
+
+// 2026-09-23 spec §T12 (review I2): September's rent was saved during September, so from Oct 1 it
+// is PARTLY ENTERED until it is saved again after it ends or confirmed — drawn with the in-progress
+// look after it has ended, the due date in its tooltip head; a missing month stays hollow and an
+// entered one solid.
+describe('recentSpendOption: a partly entered month (2026-09-23 spec §T12)', () => {
+  beforeEach(() => setServerToday('2026-10-03'))
+  const feed = { months: monthsFrom('2026-07-01', 3), totals: ['4000.00', '4200.00', '2072.23'] }
+  const today = '2026-10-03'
+  const partly = [flowsPart('2026-09-01', { spending: 'partial', overdue_from: '2026-10-16' })]
+  const labelOf = (option: EChartsOption | null) =>
+    (option as unknown as { xAxis: { axisLabel: { formatter: (value: string, index: number) => string } } }).xAxis
+      .axisLabel.formatter
+  const headOf = (option: EChartsOption | null, label: string, dataIndex: number, value: number) =>
+    tooltipRows(
+      tooltipOf(option).formatter([
+        { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: label, dataIndex, value, color: MUTED },
+      ]),
+    ).head
+
+  it('keeps the partial look on September after it ended, with its due date in the head', () => {
+    const option = recentSpendOption(feed, 12, undefined, { todayIso: today, flowsDue: partly })
+    expect(seriesOf(option)[0].data?.[2]).toEqual({ value: 2072.23, itemStyle: partialItemStyle(MUTED, false) })
+    expect(seriesOf(recentSpendOption(feed, 12, undefined, { todayIso: today, flowsDue: partly, patterns: true }))[0].data?.[2]).toEqual({
+      value: 2072.23,
+      itemStyle: partialItemStyle(MUTED, true),
+    })
+    expect(labelOf(option)('Sep 2026', 2)).toBe('Sep 2026*')
+    expect(headOf(option, 'Sep 2026', 2, 2072.23)).toBe('Sep 2026 — spending partly entered (due by Oct 15)')
+    expect(headOf(option, 'Aug 2026', 1, 4200)).toBe('Aug 2026')
+  })
+
+  it('draws the month solid once its spending is entered — nothing listed, nothing drawn', () => {
+    const option = recentSpendOption(feed, 12, undefined, { todayIso: today, flowsDue: [] })
+    expect(seriesOf(option)[0].data).toEqual([4000, 4200, 2072.23])
+    expect(labelOf(option)('Sep 2026', 2)).toBe('Sep 2026')
+  })
+
+  it('keeps a month whose spending is missing hollow — the server says so, on any backend', () => {
+    const matrix = {
+      months: feed.months,
+      totals: ['4000.00', '4200.00', '0.00'],
+      net_pay: [null, null, '5000.00'],
+      review_state: ['unreviewed_history', 'unreviewed_history', 'in_progress'] as const,
+    }
+    const coverage = coverageOut({
+      time: timeStatus(today, { flows_due: [flowsPart('2026-09-01', { take_home_entered: true })] }),
+    })
+    const blank = notEnteredMonths({ ...matrix, review_state: [...matrix.review_state] }, coverage)
+    expect(blank.has('2026-09-01')).toBe(true)
+    const option = recentSpendOption({ months: feed.months, totals: matrix.totals }, 12, blank, { todayIso: today, flowsDue: coverage.time?.flows_due })
+    expect(seriesOf(option)[0].data?.[2]).toEqual({
+      value: 0,
+      itemStyle: { color: 'transparent', borderColor: MUTED, borderWidth: 1.5 },
+    })
+  })
+
+  it('names it in the table twin', () => {
+    const table = recentSpendCsv(feed, 12, { todayIso: today, flowsDue: partly })
+    expect(table.headers.at(-1)).toBe('Period')
+    expect(table.rows.map((row) => row.at(-1))).toEqual([
+      'Whole month',
+      'Whole month',
+      'Spending partly entered (due by Oct 15)',
+    ])
   })
 })

@@ -2422,6 +2422,27 @@ describe('OverviewPage chart cards (charts C2)', () => {
     await waitFor(() => expect(within(card).getByLabelText(/Bar chart of living spending/)).toBeTruthy())
     expect(within(card).queryByText('* Month in progress')).toBeNull()
   })
+
+  // 2026-09-23 spec §T12: an ENDED month whose spending is only partly entered keeps the mark,
+  // and the words say which kind — the server's day and flows, in the fixtures' own year.
+  it('footnotes a partly entered month after it has ended, and names it in the data table', async () => {
+    const last = SPEND_MONTHS.at(-1) as string
+    const after = addMonths(last, 1)
+    setServerToday(`${after.slice(0, 7)}-03`)
+    serve({
+      coverage: coverageOut({
+        time: timeStatus(`${after.slice(0, 7)}-03`, { flows_due: [flowsPart(last, { spending: 'partial' })] }),
+      }),
+    })
+    renderPage()
+    const card = (await screen.findByRole('heading', { name: /Recent spending/ })).closest('.card') as HTMLElement
+    await waitFor(() => expect(within(card).getByText('* Spending partly entered')).toBeTruthy())
+    expect(within(card).queryByText('* Month in progress')).toBeNull()
+    fireEvent.click(within(card).getByRole('button', { name: 'Table' }))
+    const table = within(card).getByRole('table')
+    const row = within(table).getAllByRole('row').at(-1) as HTMLElement
+    expect(within(row).getByText(/^Spending partly entered \(due by /)).toBeTruthy()
+  })
 })
 
 // 2026-09-23 spec §C2: the money flow folds by the SPENDING PAGE's category set, in the same

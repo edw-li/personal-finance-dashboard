@@ -13,18 +13,16 @@ import {
   LINE,
   WASH,
   grid,
-  isPartialMonth,
   moneyAxis,
   monthAxis,
   partialItemStyle,
-  partialNote,
 } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
-import { periodColumn } from '../../charts/partial'
+import { drawnPartial, partlyEnteredMonths, periodColumnFor, periodNote } from '../../charts/partlyEntered'
 import { referenceLine } from '../../charts/reference'
 import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
-import type { CoverageOut, NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
+import type { CoverageOut, FlowsPartOut, NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatMonth } from '../../utils/format'
 import { provisionalNote } from '../networth/snapshotStates'
@@ -111,14 +109,19 @@ const HOLLOW_BAR = { color: 'transparent', borderColor: TOTAL_SPEND, borderWidth
  *    take-home row plus a zero total is exactly that month, from data already in hand.
  *
  *  A $0.00 month with neither a take-home row nor a coverage list naming it stays a
- *  figure: a household that really spent nothing is not corrected here. */
+ *  figure: a household that really spent nothing is not corrected here.
+ *
+ *  An ended month whose spending `time.flows_due` lists as MISSING is one too (2026-09-23 spec
+ *  §T12), whether or not its window has turned overdue yet: until it is entered it stays hollow,
+ *  never a real $0 month. */
 export function notEnteredMonths(
   matrix: Pick<SpendingMatrix, 'months' | 'totals' | 'net_pay' | 'review_state' | 'eligible_spending'>,
-  coverage: Pick<CoverageOut, 'spending_empty' | 'spending_missing'>,
+  coverage: Pick<CoverageOut, 'spending_empty' | 'spending_missing' | 'time'>,
 ): Set<string> {
   const months = new Set<string>([
     ...(coverage.spending_empty ?? []),
     ...(coverage.spending_missing ?? []),
+    ...(coverage.time?.flows_due ?? []).filter((flows) => flows.spending === 'missing').map((flows) => flows.month),
   ])
   matrix.months.forEach((month, i) => {
     if (matrix.eligible_spending?.[i] === true || matrix.review_state?.[i] === 'closed') {
@@ -137,13 +140,16 @@ export interface RecentSpendOptions {
   todayIso?: string | null
   /** Appearance › Chart patterns (useChartDecals): the month in progress is hatched, not faded. */
   patterns?: boolean
+  /** `GET /coverage` `time.flows_due` (2026-09-23 spec §T12): a month listed with spending
+   *  PARTIAL — saved while it was running — keeps the partial look after it has ended. */
+  flowsDue?: readonly FlowsPartOut[] | null
 }
 
 export function recentSpendOption(
   matrix: SpendingDisplay,
   months = RECENT_SPEND_MONTHS,
   notEntered: ReadonlySet<string> = NO_MONTHS,
-  { todayIso = null, patterns = false }: RecentSpendOptions = {},
+  { todayIso = null, patterns = false, flowsDue = null }: RecentSpendOptions = {},
 ): EChartsOption | null {
   if (matrix.months.length === 0) return null
   const start = Math.max(0, matrix.months.length - months)
@@ -154,12 +160,13 @@ export function recentSpendOption(
   const blank = new Set(shown.flatMap((month, i) => (notEntered.has(month) ? [i] : [])))
   // 2026-09-23 spec §C5: the month still under way (the grammar's objective rule — its last
   // day is after today) is a figure that will grow, so its bar says so: faded or hatched, a
-  // dashed outline, a marked label and a tooltip head that names it. A month that is also
-  // not entered stays hollow (its bar is a baseline tick either way); the label and the head
-  // still carry the mark.
-  const partial = new Set(
-    todayIso === null ? [] : shown.flatMap((month, i) => (isPartialMonth(month, todayIso) ? [i] : [])),
-  )
+  // dashed outline, a marked label and a tooltip head that names it — and so is a month whose
+  // spending is only partly entered, after it has ended (§T12: September's rent alone on Oct
+  // 3 is not a $2K month). A month that is also not entered stays hollow (its bar is a baseline
+  // tick either way); the label and the head still carry the mark.
+  const partly = partlyEnteredMonths(flowsDue)
+  const drawn = drawnPartial(shown, todayIso, partly)
+  const partial = new Set(shown.flatMap((_, i) => (drawn[i] ? [i] : [])))
   // A not-entered month's total IS 0.00, so its hollow bar is a baseline tick and the only
   // place a CUE can live is the label. The month's name recedes to the "Other" neutral —
   // dimmer than the axis's own muted in both palettes, and a token, so recolor.ts maps it.
@@ -204,7 +211,7 @@ export function recentSpendOption(
         blank.has(param.dataIndex)
           ? '(not entered)'
           : null,
-      headNote: (i) => (todayIso !== null && partial.has(i) ? partialNote(shown[i], todayIso) : null),
+      headNote: (i) => (partial.has(i) ? periodNote(shown[i], todayIso, partly) : null),
     }),
     series: [
       {
@@ -227,15 +234,16 @@ export function recentSpendOption(
 
 /** The shown months as a table (F12) — the same trailing window the bars draw. With a today,
  *  a month in progress among them adds a trailing Period column that names it (the 2026-09-23
- *  code review, 13: the bars' '*' in words, for the table twin and the CSV). */
+ *  code review, 13: the bars' '*' in words, for the table twin and the CSV) — and so does a
+ *  partly entered one (§T12). */
 export function recentSpendCsv(
   matrix: SpendingDisplay,
   months = RECENT_SPEND_MONTHS,
-  { todayIso = null }: Pick<RecentSpendOptions, 'todayIso'> = {},
+  { todayIso = null, flowsDue = null }: Pick<RecentSpendOptions, 'todayIso' | 'flowsDue'> = {},
 ): ExportTable {
   const start = Math.max(0, matrix.months.length - months)
   const shown = matrix.months.slice(start)
-  const period = periodColumn(shown, todayIso)
+  const period = periodColumnFor(shown, todayIso, partlyEnteredMonths(flowsDue))
   return {
     headers: ['Month', matrix.living_total ? 'Living spending (USD)' : 'Spend', ...(matrix.review_state ? ['Review status'] : []), ...(period ? ['Period'] : [])],
     rows: shown.map((m, i) => [m, (matrix.living_total ?? matrix.totals)[start + i], ...(matrix.review_state ? [matrix.review_state[start + i]] : []), ...(period ? [period[i]] : [])]),
