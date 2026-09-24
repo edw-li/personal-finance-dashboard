@@ -1,29 +1,18 @@
 import type { MonthBalances } from '../../types/api'
-import { formatAsOf } from '../../utils/asOf'
-import { addMonths, currentMonthIso, currentYear } from '../../utils/months'
+import { addMonths, currentMonthIso } from '../../utils/months'
+import { dayName, monthName } from '../../utils/timeWords'
 
 // The monthly update's words (2026-09-23 spec §M1–§M5). A balance is named by the day it describes
 // ("Oct 1 balances"), spending by the month it covers ("September spending & take-home"); both
 // carry their year only outside the server's current year — the rule utils/asOf.ts applies to
-// every as-of label, reused here through formatAsOf so the two can never disagree.
-
-const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-]
+// every as-of label. The names are the shared ones (utils/timeWords.ts over asOf.ts's day label and
+// month list — lane T review minor 7), so the wizard and every other surface can never disagree.
 
 /** 'Oct 1' — ', 2025' outside the server's year. */
-export function dayOf(iso: string): string {
-  const day = iso.slice(0, 10)
-  return formatAsOf({ month: day, as_of: day, provisional: false })
-}
+export const dayOf = dayName
 
 /** 'September' — ' 2025' outside the server's year. */
-export function monthNameOf(iso: string): string {
-  const name = MONTH_NAMES[Number(iso.slice(5, 7)) - 1]
-  const year = Number(iso.slice(0, 4))
-  return year === currentYear() ? name : `${name} ${year}`
-}
+export const monthNameOf = monthName
 
 /** Month M's balances part is the balances on M's 1st. */
 export const balancesPartName = (month: string) => `${dayOf(month)} balances`

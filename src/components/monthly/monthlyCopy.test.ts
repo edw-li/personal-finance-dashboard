@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { setServerToday } from '../../utils/productToday'
+import { dayName, monthName } from '../../utils/timeWords'
 import {
   balancesLine,
   balancesPartName,
@@ -148,5 +149,15 @@ describe('sentences', () => {
     expect(unsavedPartNote('balances', '2026-10-01')).toBe(
       'Oct 1 balances still have unsaved changes — save them on the Balances step.',
     )
+  })
+})
+
+// One spelling of days and months across the time surfaces (lane T review minor 7, applied at
+// the merge): the wizard's names are the shared helpers — utils/asOf.ts's day label and month
+// list, through utils/timeWords.ts — not a list and a label of its own.
+describe('the wizard spells days and months the one way', () => {
+  it('names a day and a month through utils/timeWords.ts', () => {
+    expect(dayOf).toBe(dayName)
+    expect(monthNameOf).toBe(monthName)
   })
 })

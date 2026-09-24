@@ -411,6 +411,26 @@ async def test_batch_close_is_atomic_and_default_prefers_closed_month(auth_clien
     assert (await auth_client.get(BASE)).json()["default_month"] == str(july)
 
 
+async def test_batch_close_refuses_a_month_outside_history_by_name(auth_client, db):
+    # The refusal names the month through day_labels.month_name (lane T review minor 7, applied
+    # at the merge) — the same words the locale's %B gave, under any locale.
+    await seed(db, (PAST, CURRENT))
+    await adopt_existing_history(db, TODAY)
+    await db.commit()
+    state = await get_state(auth_client, CURRENT)
+    response = await auth_client.post(
+        f"{BASE}/batch-close",
+        json={
+            "reviewed": CONFIRMED,
+            "months": [{"month": str(CURRENT), "expected_revision": state["input_revision"]}],
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == (
+        "September 2026 is not eligible for historical batch review. Review it individually."
+    )
+
+
 async def test_fixed_calendar_windows_evidence_matrix_and_projection_agree(auth_client, db):
     months = [date(2025, 7, 1), date(2025, 8, 1), date(2026, 6, 1), date(2026, 7, 1), PAST, CURRENT]
     _, category_id = await seed(db, months)
