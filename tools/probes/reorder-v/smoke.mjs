@@ -1282,14 +1282,14 @@ async function longDrag(rows, id) {
   return after
 }
 /** Samples a capped box and the page every 200ms from the moment the pointer is held, until neither
- *  scroll has moved across three consecutive samples — 600ms, where a held auto-scroll steps up to
- *  18px a frame; the margin is for a loaded box — or `timeout` passes. It records the ORDER the two
- *  scrolls came in, too: the first sample with the box at its end, the first with the page moved off
- *  `pageFrom` (where it stood before the press), and whether any sample caught the page moved while
- *  the box still had room. A hook that scrolled both together would spend the page's share — the
- *  box's overhang, a few frames' worth — long before the box's end, which takes over a second at the
- *  ledger's length, so the first samples would catch it. `trace` holds every sample: [ms, box
- *  scrollTop, page scrollY]. */
+ *  scroll has moved over three consecutive intervals — four equal samples, 600ms, where a held
+ *  auto-scroll steps up to 18px a frame; the margin is for a loaded box — or `timeout` passes. It
+ *  records the ORDER the two scrolls came in, too: the first sample with the box at its end, the
+ *  first with the page moved off `pageFrom` (where it stood before the press), and whether any
+ *  sample caught the page moved while the box still had room. A hook that scrolled both together
+ *  would spend the page's share — the box's overhang, a few frames' worth — long before the box's
+ *  end, which takes over a second at the ledger's length, so the first samples would catch it.
+ *  `trace` holds every sample: [ms, box scrollTop, page scrollY]. */
 async function holdUntilStill(box, pageFrom, timeout = 12000) {
   const read = () =>
     page.evaluate((sel) => {
@@ -1358,16 +1358,19 @@ async function arrivalDrag(rows) {
   const travel = aim(await boxes(rows), from, last - from)
   const start = await page.evaluate((sel) => {
     const el = document.querySelector(sel)
+    const bottom = el.getBoundingClientRect().bottom
     return {
       pageY: window.scrollY,
       boxTop: el.scrollTop,
       boxRoom: el.scrollHeight - el.clientHeight,
-      hangsBelowWindow: Math.round((el.getBoundingClientRect().bottom - window.innerHeight) * 10) / 10,
+      // Decided on the raw rect, as autoScrollBy compares it; only the recorded overhang is rounded.
+      hangs: bottom > window.innerHeight,
+      hangsBelowWindow: Math.round((bottom - window.innerHeight) * 10) / 10,
     }
   }, LEDGER_BOX)
   check('arrival: the page at its top and the ledger box at its own', start.pageY === 0 && start.boxTop === 0, start)
   const boxScrolls = start.boxRoom > 1
-  const handOff = boxScrolls && start.hangsBelowWindow > 0
+  const handOff = boxScrolls && start.hangs
   if (!handOff) {
     note(
       `arrival: no hand-off arises at this width — ${boxScrolls ? "the box's foot is inside the window" : 'the ledger fits under its cap, so the page is its scroller'}; the drag must still reach the last slot`,
@@ -1435,6 +1438,14 @@ async function arrivalDrag(rows) {
       "arrival (no hand-off): held at the window's bottom edge, the hold ends with the box at its end and the page where it stood",
       end.still && end.boxTop >= end.boxMax - 1 && end.pageY === start.pageY,
       { ...end, pointerY: edge, trace },
+    )
+  } else {
+    // The page is the list's scroller here and may carry it up to its range-end stop — but it must
+    // come to rest: a runaway page scroll would still leave the row clamped in the last slot.
+    check(
+      "arrival (the ledger fits under its cap): held at the window's bottom edge, the hold settles — the page, the list's scroller here, comes to rest",
+      end.still,
+      { ...end, pageScrolled: end.pageY - start.pageY, pointerY: edge, trace },
     )
   }
   check(
