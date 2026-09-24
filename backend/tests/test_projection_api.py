@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
 from app.models import (
@@ -16,7 +17,16 @@ from app.models import (
 )
 from app.services import clock
 from app.services.month_review import adopt_existing_history
-from app.services.projection import drop_schedule, project
+from app.services.projection import (
+    december_index,
+    drop_schedule,
+    latest_december_year,
+    max_plan_until_year,
+    monthly_flows,
+    project,
+    project_path,
+    reset_schedule,
+)
 
 # The projection anchors on the product clock (the router's one clock read), so the seeds
 # are built RELATIVE to the run's own month — nothing here goes stale with the calendar,
@@ -908,6 +918,146 @@ def test_project_ignores_a_drop_past_the_horizon():
         Decimal("0"),
         [(99, Decimal("40.00"))],
     ) == project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"))
+
+
+# --- the flow schedule (2026-09-23 spec §R1): contribution resets, a withdrawal and lumps ---
+
+
+def test_project_with_the_new_inputs_empty_is_byte_identical():
+    # The four strings test_project_growth_zero_matches_previous_behavior pins, on every empty
+    # spelling of the three new inputs — resets, a withdrawal and lumps must cost the walk nothing.
+    plain = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3)
+    assert [str(p) for p in plain] == ["1000.00", "1104.07", "1208.57", "1313.50"]
+    for kwargs in ({}, {"resets": []}, {"withdrawal": None}, {"lumps": {}}, {"lumps": None}):
+        again = project(
+            Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3, Decimal("0"), **kwargs
+        )
+        assert again == plain, kwargs
+    path = project_path(Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3)
+    assert path.points == plain and path.depletion_index is None
+
+
+def test_reset_schedule_folds_index_zero_and_refuses_a_second_reset_at_one_index():
+    assert reset_schedule([(7, Decimal("100")), (3, Decimal("40"))]) == {
+        7: Decimal("100"),
+        3: Decimal("40"),
+    }
+    assert reset_schedule([(0, Decimal("40"))]) == {1: Decimal("40")}
+    assert reset_schedule([]) == {}
+    # A reset SETS a level: two at one index would be two answers to one question.
+    with pytest.raises(ValueError, match="more than one contribution reset at month index 7"):
+        reset_schedule([(7, Decimal("100")), (7, Decimal("40"))])
+    # Folding happens BEFORE the check: index 0 and index 1 are the same month of flows.
+    with pytest.raises(ValueError, match="month index 1"):
+        reset_schedule([(0, Decimal("1")), (1, Decimal("2"))])
+
+
+def test_a_reset_sets_the_level_in_t0_dollars_and_keeps_escalating():
+    # g = 12 %/yr, tracked by repeated multiplication exactly as the walk escalates: the reset at
+    # month 3 sets 60 × g^2, and month 4 carries that × g.
+    growth = Decimal("1.12") ** (Decimal(1) / Decimal(12))
+    flows = monthly_flows(
+        Decimal("100"),
+        growth,
+        4,
+        resets={3: Decimal("60")},
+        withdrawal=None,
+        lumps={},
+        convert=Decimal,
+    )
+    assert flows[0] == Decimal("0")  # t0 is the starting balance and carries no flow
+    assert flows[1] == Decimal("100")
+    assert flows[2] == Decimal("100") * growth
+    assert flows[3] == Decimal("60") * (Decimal(1) * growth * growth)
+    assert flows[4] == flows[3] * growth
+    # r = 0 isolates the escalator on the line too: every point is the running sum of flows.
+    points = project(
+        Decimal("1000.00"),
+        Decimal("100"),
+        Decimal("0"),
+        4,
+        Decimal("0.12"),
+        resets=[(3, Decimal("60"))],
+    )
+    running = Decimal("1000")
+    for index in range(1, 5):
+        running += flows[index]
+        assert points[index] == running.quantize(Decimal("0.01")), index
+
+
+def test_a_reset_to_zero_stops_the_stream_and_growth_cannot_revive_it():
+    points = project(
+        Decimal("1000.00"),
+        Decimal("100.00"),
+        Decimal("0"),
+        4,
+        Decimal("0.12"),
+        resets=[(2, Decimal("0"))],
+    )
+    assert [str(p) for p in points] == ["1000.00", "1100.00", "1100.00", "1100.00", "1100.00"]
+
+
+def test_a_withdrawal_runs_from_its_month_clamps_at_zero_and_records_depletion():
+    # 1,000 with nothing saved and 400 a month out from month 2: 1000, 1000, 600, 200, then -200,
+    # which is clamped to 0 — and month 4 is the depletion month, never a later one.
+    path = project_path(
+        Decimal("1000.00"),
+        Decimal("0"),
+        Decimal("0"),
+        6,
+        Decimal("0"),
+        withdrawal=(2, Decimal("400.00")),
+    )
+    assert [str(p) for p in path.points] == [
+        "1000.00",
+        "1000.00",
+        "600.00",
+        "200.00",
+        "0.00",
+        "0.00",
+        "0.00",
+    ]
+    assert path.depletion_index == 4
+
+
+def test_a_withdrawal_at_index_zero_folds_onto_the_first_month():
+    at_zero = project(
+        Decimal("1000.00"), Decimal("0"), Decimal("0"), 2, withdrawal=(0, Decimal("100"))
+    )
+    at_one = project(
+        Decimal("1000.00"), Decimal("0"), Decimal("0"), 2, withdrawal=(1, Decimal("100"))
+    )
+    assert at_zero == at_one == [Decimal("1000.00"), Decimal("900.00"), Decimal("800.00")]
+
+
+def test_a_negative_typed_contribution_clamps_and_records_depletion_before_any_drawdown():
+    # The legal typed negative (the page's codec accepts it): -600 a month empties 1,000 in
+    # month 2 with no withdrawal anywhere — balances stay at or above $0 in every phase.
+    path = project_path(Decimal("1000.00"), Decimal("-600.00"), Decimal("0"), 3)
+    assert [str(p) for p in path.points] == ["1000.00", "400.00", "0.00", "0.00"]
+    assert path.depletion_index == 2
+
+
+def test_lumps_add_exactly_at_their_month_and_index_zero_folds_and_sums():
+    points = project(
+        Decimal("1000.00"),
+        Decimal("100.00"),
+        Decimal("0"),
+        3,
+        lumps={0: Decimal("5"), 1: Decimal("7"), 3: Decimal("250.50")},
+    )
+    assert [str(p) for p in points] == ["1000.00", "1112.00", "1212.00", "1562.50"]
+
+
+def test_the_calendar_helpers_name_the_decembers_on_the_axis():
+    start = date(2026, 9, 1)
+    assert december_index(start, 2026) == 3
+    assert december_index(start, 2055) == 351
+    assert latest_december_year(start, 360) == 2055  # Sep 2056 ends the default axis
+    assert latest_december_year(date(2026, 12, 1), 12) == 2027
+    assert latest_december_year(date(2026, 1, 1), 12) == 2026
+    assert max_plan_until_year(start) == 2085  # Dec 2085 is month 711 of 720
+    assert max_plan_until_year(date(2026, 12, 1)) == 2086  # Dec 2086 is exactly month 720
 
 
 async def test_projection_annual_spend_is_living_spend_over_the_matched_window(auth_client, db):
