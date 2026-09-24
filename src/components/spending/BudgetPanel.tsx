@@ -24,11 +24,11 @@ import { FeedBanner } from '../shell/Feed'
 import { useToast } from '../ToastProvider'
 import Disclosure from '../Disclosure'
 import BudgetSuggestions from './BudgetSuggestions'
+import { isPartialMonth } from '../../charts/partial'
 import {
   budgetSinceIndex,
   budgetsElsewhere,
   budgetsOpeningIndex,
-  isMonthInProgress,
   type BudgetsElsewhere,
 } from './budgetMonth'
 import { MIN_SEED_MONTHS, seedCounts, skipSummary } from './budgetSeed'
@@ -166,7 +166,7 @@ export default function BudgetPanel({
 
   const month = matrix.months[monthIndexShown]
   // Rent entered on the 1st and nothing else yet must read as partial, not as under budget.
-  const inProgress = isMonthInProgress(month, todayIso())
+  const inProgress = isPartialMonth(month, todayIso())
   // A5 (2026-08-31 tier-1): default to the FOCUSED month — the month the meters read.
   // The old next-calendar-month default made a first budget save successfully and
   // visibly do nothing (the meters were reading a month the budget hadn't reached).

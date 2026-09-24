@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, describeError } from '../../api/client'
 import { cloneLimits, fetchLimits, putLimits } from '../../api/limits'
 import type { LimitsOut } from '../../types/api'
+import { currentYear } from '../../utils/months'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import { useToast } from '../ToastProvider'
@@ -33,9 +34,10 @@ function boxesFor(payload: LimitsOut): Record<string, string> {
  */
 export default function LimitsCard() {
   // Three years is the whole useful window: last year to clone from, this year to edit,
-  // next year to enter in the autumn when the IRS publishes.
-  const currentYear = new Date().getFullYear()
-  const [year, setYear] = useState(currentYear)
+  // next year to enter in the autumn when the IRS publishes. The SERVER's year (2026-09-23
+  // spec §K1): on New Year's Eve in Pacific time the browser's clock may already be in January.
+  const thisYear = currentYear()
+  const [year, setYear] = useState(thisYear)
   const [items, setItems] = useState<LimitsOut['items'] | null>(null)
   const [boxes, setBoxes] = useState<Record<string, string>>({})
   // Two slots, because they have two different answers (2026-09-05 motion spec §9): a load
@@ -142,7 +144,7 @@ export default function LimitsCard() {
             `clone` re-seed from their response with no sequence guard of their own, so a
             chip pressed mid-flight would land the OLD year's echo under the new year's
             heading — the failure the load-error path above refuses to allow. */}
-        {[currentYear - 1, currentYear, currentYear + 1].map((option) => (
+        {[thisYear - 1, thisYear, thisYear + 1].map((option) => (
           <button
             key={option}
             type="button"
