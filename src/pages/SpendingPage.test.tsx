@@ -7,6 +7,8 @@ import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
 import { addMonths, currentMonthIso } from '../utils/months'
+import { setServerToday } from '../utils/productToday'
+import { flowsPart, timeStatus } from '../testing/timeFixtures'
 import { fetchSpendingEvidence, REVIEW_LABELS } from '../api/monthReview'
 vi.mock('../api/monthReview', async importOriginal => ({ ...await importOriginal<typeof import('../api/monthReview')>(), fetchSpendingEvidence: vi.fn() }))
 
@@ -1026,5 +1028,32 @@ describe('SpendingPage — the Budgets view opens where the budgets are', () => 
       expect(screen.getByTestId('location').textContent).toContain('month=2026-07'),
     )
     expect(await screen.findByRole('heading', { name: /Budgets — Jul 2026/ })).toBeTruthy()
+  })
+})
+
+// 2026-09-23 spec §T12: on Aug 3 July has ended with its spending saved during it — partly
+// entered. The page draws it so from the coverage its scope row already fetched (no second
+// /coverage request), and says which kind of partial the axis mark is.
+describe('SpendingPage — a partly entered month (2026-09-23 spec §T12)', () => {
+  beforeEach(() => {
+    setServerToday('2026-08-03')
+    vi.mocked(fetchCoverage).mockResolvedValue({
+      balances: ['2026-06-01', '2026-07-01', '2026-08-01'],
+      spending: ['2026-06-01', '2026-07-01'],
+      net_pay: ['2026-06-01', '2026-07-01'],
+      time: timeStatus('2026-08-03', { flows_due: [flowsPart('2026-07-01', { spending: 'partial', take_home_entered: true })] }),
+    })
+  })
+
+  it('footnotes the month under the bars from the scope row’s one coverage fetch', async () => {
+    renderPage()
+    expect(await screen.findByText('* Spending partly entered')).toBeTruthy()
+    expect(screen.queryByText('* Month in progress')).toBeNull()
+    expect(vi.mocked(fetchCoverage)).toHaveBeenCalledTimes(1)
+  })
+
+  it('footnotes it under the heatmap too', async () => {
+    renderPage('/spending?section=history')
+    expect(await screen.findByText('* Spending partly entered')).toBeTruthy()
   })
 })

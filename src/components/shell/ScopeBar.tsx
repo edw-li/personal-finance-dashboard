@@ -61,6 +61,10 @@ export interface ScopeBarProps {
   /** Any value; when it changes the household and coverage fetches re-run. The wizard bumps it
    *  after a save so the just-saved month's chip fills without leaving the page. */
   revalidate?: unknown
+  /** Hands the page every `/coverage` answer this row lands (2026-09-23 spec §T12): Spending draws
+   *  partly entered months from its `time.flows_due`, and this row's fetch is the page's only
+   *  coverage read — one request, not two. Only called while a month control is shown. */
+  onCoverage?: (coverage: CoverageOut) => void
 }
 
 const RANGE_OPTIONS: { value: RangePreset; label: string }[] = [
@@ -108,7 +112,7 @@ function ownerFromValue(value: string): OwnerScope {
   return Number(value)
 }
 
-export default function ScopeBar({ owner, ownerHint, range, month, revalidate }: ScopeBarProps) {
+export default function ScopeBar({ owner, ownerHint, range, month, revalidate, onCoverage }: ScopeBarProps) {
   const navigate = useNavigate()
   const { scope, setScope } = useScope({
     owner: owner !== undefined && owner !== false,
@@ -149,12 +153,19 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate }:
   }, [wantsOwner, revalidate])
 
   const wantsMonth = month !== undefined
+  // The latest listener, read when an answer lands — the fetch must not re-run because a page
+  // handed a new function identity.
+  const onCoverageRef = useRef(onCoverage)
+  useEffect(() => {
+    onCoverageRef.current = onCoverage
+  }, [onCoverage])
   useEffect(() => {
     if (!wantsMonth) return
     fetchCoverage()
       .then((data) => {
         setSnapshot(COVERAGE_SNAPSHOT, data)
         setCoverage(data)
+        onCoverageRef.current?.(data)
       })
       .catch(() => {
         /* keep whatever the snapshot had: the URL still carries the truth and the page's own

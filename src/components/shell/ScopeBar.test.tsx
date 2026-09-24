@@ -352,3 +352,26 @@ describe('ScopeBar — the row reserves its height while the household loads', (
     await waitFor(() => expect(container.querySelector('.scope-bar-ghost')).toBeNull())
   })
 })
+
+// 2026-09-23 spec §T12: Spending draws partly entered months from `time.flows_due`, and its only
+// coverage read is this row's — the row hands each answer up rather than the page fetching twice.
+describe('ScopeBar — hands the coverage it fetched to the page', () => {
+  it('calls onCoverage with every answer it lands, from its one fetch', async () => {
+    const onCoverage = vi.fn()
+    const { rescope } = mount({ month: { mode: 'view', anchor: '2026-09-01' }, onCoverage })
+    await waitFor(() => expect(onCoverage).toHaveBeenCalledTimes(1))
+    expect(onCoverage.mock.calls[0][0].balances).toEqual(['2026-07-01', '2026-08-01', '2026-09-01'])
+    expect(fetchCoverage).toHaveBeenCalledTimes(1)
+    // A revalidation lands a second answer, and the page hears it.
+    rescope({ month: { mode: 'view', anchor: '2026-09-01' }, onCoverage, revalidate: 1 })
+    await waitFor(() => expect(onCoverage).toHaveBeenCalledTimes(2))
+  })
+
+  it('fetches nothing for it without a month control', async () => {
+    const onCoverage = vi.fn()
+    mount({ range: true, onCoverage })
+    await screen.findByRole('button', { name: '1Y' })
+    expect(fetchCoverage).not.toHaveBeenCalled()
+    expect(onCoverage).not.toHaveBeenCalled()
+  })
+})
