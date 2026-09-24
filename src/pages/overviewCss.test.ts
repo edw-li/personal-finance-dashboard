@@ -37,6 +37,16 @@ describe('OverviewPage.css', () => {
     expect(date).toContain('flex: none;')
   })
 
+  // Batch 2 final verification D4: on 2026-10-16 the overdue wording ("Sep 22 — provisional, for
+  // Oct 1 · overdue — confirm or update them") squeezed its label to "Balances as" over "of" at 1600,
+  // and "Spending through" as well at 1280. The label is a flex item of the row: nowrap and
+  // `flex: none` keep it whole, so the value beside it wraps instead.
+  it('keeps each Data status label on one line, so the value beside it wraps instead', () => {
+    const label = declarationsFor(overview, '.data-status-row dt')
+    expect(label).toContain('white-space: nowrap;')
+    expect(label).toContain('flex: none;')
+  })
+
   // Lane V measured the agenda column ending 66px below the wealth column at 1440 and 1920
   // (the limit is 24px). jsdom computes no layout, so the rules that close that gap — stretch
   // the columns to the taller one, then let each column's LAST row absorb the slack — can only
