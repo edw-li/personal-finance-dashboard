@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import warnings
 from contextlib import contextmanager
 
@@ -40,15 +41,16 @@ for _name in (_BASE_TEST_DB_NAME, _TEST_DB_NAME):
             "must match '<name>_test[_suffix]' to guard the destructive test teardown"
         )
 
-# The server the test databases live on. A "localhost" host is dialled as 127.0.0.1: Windows
-# resolves localhost to ::1 first, and the dev Postgres publishes 5433 on 127.0.0.1 only
-# (docker-compose.yml), so every new connection — and every cancel request asyncpg sends
-# when a test cancels a query, which reconnects by host NAME — first sat through ~2 s of
-# refused IPv6 connection attempts (measured 2,050 ms vs 25 ms: ~14 s of a serial run, and
-# again in every -n worker). CI's service container listens on every interface, so the IPv4
-# loopback reaches it too. Any other host is used as configured.
+# The server the test databases live on. On Windows a "localhost" host is dialled as
+# 127.0.0.1: Windows resolves localhost to ::1 first and a refused IPv6 connection takes ~2 s
+# to fail there, while the dev Postgres publishes 5433 on 127.0.0.1 only (docker-compose.yml).
+# Every new connection, and every cancel request asyncpg sends when a test cancels a query
+# (it reconnects by host NAME), used to pay that: 2,050 ms vs 25 ms measured, ~14 s of a
+# serial run and again in every -n worker. Windows only: elsewhere a refused ::1 fails at
+# once, and the rewrite could break a server listening on ::1 alone or a TLS verify-full
+# certificate issued for "localhost". Any other host is used as configured.
 _SERVER_URL = make_url(settings.database_url)
-if _SERVER_URL.host == "localhost":
+if sys.platform == "win32" and _SERVER_URL.host == "localhost":
     _SERVER_URL = _SERVER_URL.set(host="127.0.0.1")
 
 # make_url().set() survives query params / odd DSNs, unlike string surgery; guarantees the
