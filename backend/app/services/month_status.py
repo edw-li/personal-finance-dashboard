@@ -36,16 +36,20 @@ day of 23-28 still turns them amber inside their own month); flows from the NEXT
 reminder date + 15 days (default: the 16th).
 """
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
-from datetime import date, timedelta
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, timedelta
 from typing import Literal
+from zoneinfo import ZoneInfo
 
+from sqlalchemy import Date, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AppSetting
+from app.models import AppSetting, ChangeLog
 from app.schemas.coverage import BalancesPartOut, FlowsPartOut, TimeStatusOut
-from app.services.month_review import month_shift
+from app.services import clock
+from app.services.changelog import undone_by
+from app.services.month_review import ReviewBook, month_shift
 from app.services.snapshot_state import SnapshotState, current_and_previous, state_out
 
 SpendingState = Literal["missing", "partial", "entered"]
@@ -225,3 +229,112 @@ class MonthStatus:
             ],
             last_complete_month=self.last_complete_month,
         )
+
+
+# --- the database-facing half: the evidence query and the loader ---
+
+SPENDING_TABLE = "monthly_spending"
+REVIEW_TABLE = "month_reviews"
+SUMMARY_SOURCES = ("import", "restore")
+
+
+def _product_day(stamp):
+    """`(at AT TIME ZONE 'America/Los_Angeles')::date` — the day the product clock showed."""
+    return cast(func.timezone(clock.PRODUCT_TIMEZONE, stamp), Date)
+
+
+def _midnight(day: date) -> datetime:
+    """The first instant of `day` in the product zone — a bound the `at` index can serve."""
+    return datetime(day.year, day.month, day.day, tzinfo=ZoneInfo(clock.PRODUCT_TIMEZONE))
+
+
+def _newest(rows, undone: Mapping) -> dict[date, date]:
+    """month -> the product date of its newest row from a batch never undone."""
+    newest: dict[date, date] = {}
+    for row in rows:
+        if row.batch_id not in undone and (row.month not in newest or row.day > newest[row.month]):
+            newest[row.month] = row.day
+    return newest
+
+
+async def load_spending_evidence(db: AsyncSession, candidates: Sequence[date]) -> SpendingEvidence:
+    """Clauses (b)-(d) for `candidates`, in ONE indexed query (spec §K3): the candidates' own
+    spending and month-review rows (the `month` index), plus import and restore summary lines
+    from the earliest candidate's next 1st on (the `at` index). Undone batches come from
+    changelog.undone_by — a second, small query, only when a `ui` row could count."""
+    months = sorted(set(candidates))
+    if not months:
+        return SpendingEvidence()
+    day = _product_day(ChangeLog.at)
+    rows = (
+        await db.execute(
+            select(
+                ChangeLog.batch_id,
+                ChangeLog.source,
+                ChangeLog.table_name,
+                ChangeLog.op,
+                ChangeLog.month,
+                day.label("day"),
+                ChangeLog.after["spending_reviewed"].as_boolean().label("spending_reviewed"),
+            ).where(
+                or_(
+                    and_(
+                        ChangeLog.month.in_(months),
+                        ChangeLog.table_name.in_((SPENDING_TABLE, REVIEW_TABLE)),
+                        ChangeLog.op != "batch",
+                    ),
+                    and_(
+                        ChangeLog.op == "batch",
+                        ChangeLog.source.in_(SUMMARY_SOURCES),
+                        ChangeLog.at >= _midnight(month_shift(months[0], 1)),
+                    ),
+                )
+            )
+        )
+    ).all()
+    written: set[date] = set()
+    saves, confirms, summaries = [], [], []
+    for row in rows:
+        if row.op == "batch":
+            summaries.append(row.day)
+        elif row.table_name == SPENDING_TABLE:
+            written.add(row.month)
+            if row.source == "ui":
+                saves.append(row)
+        elif row.source == "ui" and row.spending_reviewed:
+            confirms.append(row)
+    undone = await undone_by(db, list({row.batch_id for row in (*saves, *confirms)}))
+    return SpendingEvidence(
+        written=frozenset(written),
+        saved_on=_newest(saves, undone),
+        confirmed_on=_newest(confirms, undone),
+        newest_summary=max(summaries, default=None),
+    )
+
+
+async def load_month_status(
+    db: AsyncSession,
+    *,
+    today: date,
+    reviews: ReviewBook,
+    snapshots: Iterable[SnapshotState],
+    spending: Iterable[date],
+    take_home: Iterable[date],
+    empty_book: bool,
+) -> MonthStatus:
+    """The status from rows load_coverage already read, plus the reminder day and the evidence
+    query. Lane T reads it as `(await load_coverage(db)).status` — never a second derivation."""
+    status = MonthStatus(
+        today=today,
+        reminder_day=await read_update_due_day(db),
+        snapshots=tuple(sorted(snapshots, key=lambda state: state.month)),
+        spending=frozenset(spending),
+        take_home=frozenset(take_home),
+        closed=frozenset(
+            month for month, review in reviews.reviews.items() if review.closed_at is not None
+        ),
+        adopted_on=reviews.adopted_on,
+        last_complete_month=reviews.default_month,
+        empty_book=empty_book,
+    )
+    return replace(status, evidence=await load_spending_evidence(db, status.candidates()))
