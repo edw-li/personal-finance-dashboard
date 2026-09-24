@@ -1,5 +1,12 @@
 import { canonicalAmount, isAmount } from '../../utils/amount'
 
+// Glossary. A month has two PARTS: its BALANCES (the snapshot on its 1st) and its FLOWS — the
+// month's spending (every category amount, tax and transfers included) and its household
+// take-home. The code and the draft keys say "flows"; the screen says "spending & take-home"; the
+// month-review PUT's `spending` leg carries both (amounts and net_pay). The review ticks split the
+// flows again: `reviewed.spending` certifies the category amounts only — never the take-home,
+// which `reviewed.take_home` certifies.
+//
 // The two parts of a month (2026-09-23 spec §M1) and the rule that says one has changed: a part is
 // DIRTY when it differs from what was loaded or last saved, and only a dirty part is sent. Amounts
 // compare as the numbers a save would write — '1500', '1500.00', '$1,500' and '=1000+500' are one

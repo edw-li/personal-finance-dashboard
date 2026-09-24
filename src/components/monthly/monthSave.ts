@@ -46,9 +46,11 @@ export function buildMonthSave(input: MonthSaveInput): BuiltMonthSave {
   const sendSpending = input.kind === 'spending' || (whole && input.dirty.flows && !input.notBegun)
   const body: MonthSave = {
     expected_revision: input.revision,
-    // Every PUT stores the three ticks it carries, so each save sends them as they stand. The
-    // Confirm adds the spending tick to a PUT with no part — the only save K3's clause (d) counts as
-    // "confirmed complete" (a no-leg Review save with the box ticked is the same PUT).
+    // A PUT stores the three ticks it carries (the one exception: a save that changes nothing on a
+    // closed month keeps the ticks it was closed with), so each save sends them as they stand. The
+    // Confirm adds the spending tick to a PUT with no part: K3's clause (d) counts only a no-leg PUT
+    // with that tick as "confirmed complete" — a Review save with nothing changed and the box ticked
+    // is the same PUT, and a save carrying a part beside the tick is not.
     reviewed: input.kind === 'confirm-spending' ? { ...input.reviewed, spending: true } : input.reviewed,
     close: input.kind === 'close',
   }

@@ -95,8 +95,8 @@ import '../components/panels.css'
 import './MonthlyUpdatePage.css'
 
 
-// Terse chip labels — each step's card heading carries the full title ("Spending & net
-// pay", "Review & save — Aug 2026"). The chips must NOT repeat a heading verbatim: the
+// Terse chip labels — each step's card heading carries the full title ("Oct 1 balances",
+// "September spending & take-home", "Review & save"). The chips must NOT repeat a heading verbatim: the
 // stepper renders on every step, so a duplicate makes "am I on the review step?" queries
 // ambiguous (two matching nodes) and any assertion written against the chip vacuous.
 const STEP_LABELS: Record<WizardStep, string> = {
@@ -339,9 +339,9 @@ function UpdateLanding() {
           (current) => {
             // Month first, then step — the shape of every other wizard URL — and any unrelated
             // parameter a deep link carried rides along after them.
-            const next = new URLSearchParams({ month: target.month, step: target.step })
-            for (const [key, value] of current) if (key !== 'month' && key !== 'step') next.append(key, value)
-            return next
+            const landed = new URLSearchParams({ month: target.month, step: target.step })
+            for (const [key, value] of current) if (key !== 'month' && key !== 'step') landed.append(key, value)
+            return landed
           },
           { replace: true },
         )
@@ -419,7 +419,7 @@ function MonthlyUpdateWizard() {
   // next 1st (summary + balances). An aid, loaded after the month's first paint and re-read after
   // a balances save — never part of a draft.
   const [savedBalances, setSavedBalances] = useState<Record<number, string>>({})
-  const [next, setNext] = useState<NextSnapshot>({ status: 'loading' })
+  const [nextSnapshot, setNextSnapshot] = useState<NextSnapshot>({ status: 'loading' })
   // /coverage — the shared "which months exist" feed (the scope row reads the same one and the
   // api client dedupes the in-flight GET). It replaces the full monthly timeseries the wizard
   // used to download only to learn which months have balances (2026-09-13 polish spec §9).
@@ -502,12 +502,11 @@ function MonthlyUpdateWizard() {
   const [flowsBase, setFlowsBase] = useState<{ month: string; part: FlowsPart } | null>(null)
   // A draft was restored over each part's seed this load — the banners' flags (spec §M6).
   const [restoredParts, setRestoredParts] = useState({ balances: false, flows: false })
-  // Delete-month arm-and-confirm (2026-08-31 spec §B2): the typed YYYY-MM arms the red
-  // button. loadNonce forces the load effect when the deleted month IS the month on
-  // screen — the [month] dep alone would never re-run.
+  // A part delete's arm-and-confirm (2026-08-31 spec §B2, per part since 2026-09-23 §M6): the
+  // typed YYYY-MM arms the red button.
   const [deleteArm, setDeleteArm] = useState('')
-  // The Review head's kebab (2026-09-13 polish spec §11): the delete arm-and-confirm lives in a
-  // popover, so opening it never pushes the footer down the page.
+  // The kebab on the Balances and Spending steps' heads (2026-09-13 polish spec §11): each part's
+  // delete lives in a popover, so opening it never pushes the step's footer down the page.
   const [actionsOpen, setActionsOpen] = useState(false)
   const actionsTriggerRef = useRef<HTMLButtonElement>(null)
   const actionsSurfaceRef = useRef<HTMLDivElement>(null)
@@ -537,7 +536,7 @@ function MonthlyUpdateWizard() {
 
   // Both keys are always written together, so the step never loses the month (and any
   // unrelated query param a deep link carried survives the copy).
-  const setStep = (next: WizardStep) => {
+  const setStep = (target: WizardStep) => {
     // The note narrates a fill on the step being LEFT, and the flash is a 700 ms beat on
     // cells that are about to unmount — neither may follow the user to the next step.
     setPasteNote(null)
@@ -546,7 +545,7 @@ function MonthlyUpdateWizard() {
     setParams((current) => {
       const copy = new URLSearchParams(current)
       copy.set('month', month)
-      copy.set('step', next)
+      copy.set('step', target)
       return copy
     })
   }
@@ -558,11 +557,12 @@ function MonthlyUpdateWizard() {
   // useCallback with 13 setters in its body is manual memoization React Compiler
   // cannot preserve (react-hooks/preserve-manual-memoization errors, and the whole
   // component drops out of compilation). The loading/saved/error flips for a MONTH
-  // CHANGE live in the ribbon's onSelect handler; the mount fetch is covered by the
+  // CHANGE live in goTo, every way into another month; the mount fetch is covered by the
   // initial state values.
   useEffect(() => {
-    // loadNonce has no data role: the wizard delete bumps it to force this chain when
-    // the deleted month is the month already on screen.
+    // loadNonce has no data role: reloadMonth (a part delete, an Undo, a conflict's Reload) and a
+    // failed load's Retry bump it to run this chain again for the month already on screen — the
+    // [month] dep alone would never re-run.
     void loadNonce
     let cancelled = false
     const loaded = { month, generation: ++loadGeneration.current }
@@ -635,11 +635,11 @@ function MonthlyUpdateWizard() {
         // The next 1st for the story: skipped when /coverage says it has no balances, read
         // otherwise (a failed /coverage asks anyway — a 404 then reads as "missing").
         if (coverageData !== null && !coverageData.balances.includes(addMonths(month, 1))) {
-          setNext({ status: 'missing' })
+          setNextSnapshot({ status: 'missing' })
         } else {
-          setNext({ status: 'loading' })
+          setNextSnapshot({ status: 'loading' })
           void fetchNextSnapshot(month).then((answer) => {
-            if (!cancelled) setNext(answer)
+            if (!cancelled) setNextSnapshot(answer)
           })
         }
         setHadNetPay(spendMonth.net_pay !== null)
@@ -984,7 +984,7 @@ function MonthlyUpdateWizard() {
           setBalancesMeta(metaOf(thisMonth))
           setSavedBalances(byAccount(thisMonth.balances))
         }
-        if (story !== null) setNext(story)
+        if (story !== null) setNextSnapshot(story)
       })
     }
     return fetchCoverage()
@@ -1319,7 +1319,7 @@ function MonthlyUpdateWizard() {
         ? serverEarlyBlocker
         : null
   // The month's story on Review (spec §M5): this 1st → the next 1st, from saved figures.
-  const story = monthStory(month, next)
+  const story = monthStory(month, nextSnapshot)
   // "Next" leads to what is due (spec §M1): on the current month's Balances step, while an ended
   // month's spending & take-home are due, the newest such month — else within the month.
   const dueFlows = month === currentMonthIso() ? (time?.flows_due[0] ?? null) : null
@@ -1869,12 +1869,12 @@ function MonthlyUpdateWizard() {
                                           // (2026-09-23 spec §M3) — its banner says when.
                                           disabled={phase === 'beyond'}
                                           value={value}
-                                          onValueChange={(next) =>
+                                          onValueChange={(typed) =>
                                             // Spec §5: a component's keystroke IS its
                                             // parent's value — ONE write, so the row, the
                                             // subtotals and the live net worth can never
                                             // show three different answers.
-                                            fillBalances({ [account.id]: next })
+                                            fillBalances({ [account.id]: typed })
                                           }
                                         />
                                         {/* A1 (2026-08-31 tier-1): advisory amber, NEVER a gate —
@@ -2104,8 +2104,8 @@ function MonthlyUpdateWizard() {
                           }
                           disabled={notBegun}
                           value={value}
-                          onValueChange={(next) =>
-                            setAmounts((cur) => ({ ...cur, [category.id]: next }))
+                          onValueChange={(typed) =>
+                            setAmounts((cur) => ({ ...cur, [category.id]: typed }))
                           }
                         />
                         {budget !== undefined && (
