@@ -24,12 +24,21 @@ from tests.portfolio_factories import reset_accounts
 # deadlock on the drop_all. FINANCE_TEST_DB lets each runner (CI shard, parallel worktree
 # agent) claim its own database; the name must keep a *_test suffix so the destructive
 # statements below can never target a real database.
-_TEST_DB_NAME = os.environ.get("FINANCE_TEST_DB", "finance_test")
-if not re.fullmatch(r"[a-z0-9_]+_test(_[a-z0-9_]+)?", _TEST_DB_NAME):
-    raise RuntimeError(
-        f"FINANCE_TEST_DB={_TEST_DB_NAME!r} must match '<name>_test[_suffix]' "
-        "to guard the destructive test teardown"
-    )
+#
+# Parallel runs (`pytest -n 4`, pytest-xdist; opt-in — the default stays serial): every
+# worker is its own process with PYTEST_XDIST_WORKER=gw0, gw1, … and claims
+# `<FINANCE_TEST_DB>_<worker>` (finance_test_gw0, finance_test_speed_gw1, …), bootstrapped by
+# its own session `engine` fixture, so workers never share a row or a drop_all. Without -n
+# the variable is unset and the name is FINANCE_TEST_DB exactly.
+_BASE_TEST_DB_NAME = os.environ.get("FINANCE_TEST_DB", "finance_test")
+_XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER")
+_TEST_DB_NAME = f"{_BASE_TEST_DB_NAME}_{_XDIST_WORKER}" if _XDIST_WORKER else _BASE_TEST_DB_NAME
+for _name in (_BASE_TEST_DB_NAME, _TEST_DB_NAME):
+    if not re.fullmatch(r"[a-z0-9_]+_test(_[a-z0-9_]+)?", _name):
+        raise RuntimeError(
+            f"FINANCE_TEST_DB={_BASE_TEST_DB_NAME!r} (worker database {_TEST_DB_NAME!r}) "
+            "must match '<name>_test[_suffix]' to guard the destructive test teardown"
+        )
 
 # make_url().set() survives query params / odd DSNs, unlike string surgery; guarantees the
 # destructive drop_all below can only ever target the *_test database.
