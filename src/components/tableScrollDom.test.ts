@@ -13,7 +13,11 @@ afterEach(() => {
   for (const node of attached.splice(0)) node.remove()
 })
 
-function Box({ foot }: { foot: boolean }) {
+/** A 2px left and a 3px right border, solid: a browser computes a border width only where its style
+ *  draws one, and jsdom hands inline longhands back through getComputedStyle as they are. */
+const SIDE_BORDERS = { borderLeftWidth: '2px', borderLeftStyle: 'solid', borderRightWidth: '3px', borderRightStyle: 'solid' } as const
+
+function Box({ foot, bordered = false }: { foot: boolean; bordered?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
   useStickyInsets(ref)
   return createElement(
@@ -22,7 +26,7 @@ function Box({ foot }: { foot: boolean }) {
     // never READ here — React attaches it after the commit (useScrollEdges.test.ts's note). In a
     // call split over lines the rule reports the props line, so the directive sits on it.
     // eslint-disable-next-line react-hooks/refs
-    { ref, 'data-testid': 'box' },
+    { ref, 'data-testid': 'box', style: bordered ? SIDE_BORDERS : undefined },
     createElement(
       'table',
       null,
@@ -41,6 +45,12 @@ function sectionHeights(heights: Record<string, number>): void {
   })
 }
 
+/** …nor any widths: the box's border-box and client widths come from here, read live. */
+function boxWidths(widths: { offset: number; client: number }): void {
+  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(() => widths.offset)
+  vi.spyOn(Element.prototype, 'clientWidth', 'get').mockImplementation(() => widths.client)
+}
+
 describe('useStickyInsets', () => {
   it("writes the header's and the footer's heights on the box, fractions kept", () => {
     sectionHeights({ THEAD: 30.4, TFOOT: 33 })
@@ -56,7 +66,21 @@ describe('useStickyInsets', () => {
     expect(getByTestId('box').style.getPropertyValue('--table-foot-h')).toBe('0px')
   })
 
-  it('re-measures when the table resizes, and clears both on unmount', () => {
+  it("writes the box's vertical scrollbar width — its border-box less its client area and side borders", () => {
+    sectionHeights({ THEAD: 30 })
+    boxWidths({ offset: 1000, client: 980 }) // 1000 = 2 + 980 + a 15px scrollbar + 3
+    const { getByTestId } = render(createElement(Box, { foot: false, bordered: true }))
+    expect(getByTestId('box').style.getPropertyValue('--table-scrollbar-w')).toBe('15px')
+  })
+
+  it('writes 0px for a box with no vertical scrollbar (the table fits its cap, or overlay scrollbars)', () => {
+    sectionHeights({ THEAD: 30 })
+    boxWidths({ offset: 1000, client: 1000 })
+    const { getByTestId } = render(createElement(Box, { foot: false }))
+    expect(getByTestId('box').style.getPropertyValue('--table-scrollbar-w')).toBe('0px')
+  })
+
+  it('re-measures when the table or the box resizes, and clears all three on unmount', () => {
     const observed: Element[] = []
     let fire: () => void = () => {}
     vi.stubGlobal(
@@ -75,18 +99,27 @@ describe('useStickyInsets', () => {
     )
     const heights: Record<string, number> = { THEAD: 30 }
     sectionHeights(heights)
+    const widths = { offset: 1000, client: 1000 }
+    boxWidths(widths)
     const view = render(createElement(Box, { foot: false }))
     const box = view.getByTestId('box')
     // Identity, not toEqual: toEqual compares DOM nodes structurally, so any lookalike table passes.
-    expect(observed).toHaveLength(1)
+    expect(observed).toHaveLength(2)
     expect(observed[0]).toBe(box.querySelector('table'))
+    expect(observed[1]).toBe(box)
     heights.THEAD = 52 // the header wrapped onto two lines
     fire()
     expect(box.style.getPropertyValue('--table-head-h')).toBe('52px')
+    // The box alone resized: a shorter window lowered the cap under a table wider than the box, so a
+    // scrollbar appeared while the table kept its size (measured in Edge: its observer never fired).
+    widths.client = 985
+    fire()
+    expect(box.style.getPropertyValue('--table-scrollbar-w')).toBe('15px')
     view.unmount()
     fire() // a late resize: disconnected, the observer stays quiet, so nothing is written back
     expect(box.style.getPropertyValue('--table-head-h')).toBe('')
     expect(box.style.getPropertyValue('--table-foot-h')).toBe('')
+    expect(box.style.getPropertyValue('--table-scrollbar-w')).toBe('')
   })
 
   it('picks up a tfoot that arrives with the data (Net worth renders its totals row once data lands)', () => {

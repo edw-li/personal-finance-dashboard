@@ -51,6 +51,19 @@ describe('the capped table box (tableScroll.css)', () => {
     expect(CSS).toContain('.table-scroll:focus-visible { mask-image: none !important; }')
   })
 
+  // A classic scrollbar (15px in the user's headed Edge) sits inside the box's right edge, under
+  // panels.css's 28px right-edge fade, which faded its track and thumb away (Task 5 review). The box
+  // restates both right-edge masks to turn opaque again over the measured strip; (0,3,0) and (0,5,0)
+  // outrank panels.css's (0,2,0) and (0,4,0) whatever order the sheets load in.
+  it("stops the right-edge fade short of the box's own vertical scrollbar", () => {
+    expect(CSS).toContain(
+      '.table-scroll[data-scroll-more~="right"]:not(:has(.row-actions)) { mask-image: linear-gradient(to right, #000 calc(100% - 28px - var(--table-scrollbar-w, 0px)), transparent calc(100% - var(--table-scrollbar-w, 0px)), #000 calc(100% - var(--table-scrollbar-w, 0px))); }',
+    )
+    expect(CSS).toContain(
+      '.table-scroll[data-scroll-more~="left"][data-scroll-more~="right"]:not(:has(.row-actions)):not(:has(.col-identity)) { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px - var(--table-scrollbar-w, 0px)), transparent calc(100% - var(--table-scrollbar-w, 0px)), #000 calc(100% - var(--table-scrollbar-w, 0px))); }',
+    )
+  })
+
   it('draws separate borders, so a stuck header cell carries its own hairline', () => {
     expect(CSS).toContain('.table-scroll > table { border-collapse: separate; border-spacing: 0; }')
   })
@@ -81,7 +94,10 @@ describe('the capped table box (tableScroll.css)', () => {
     expect(CSS).toContain(
       '.table-scroll[data-scroll-more~="bottom"]:not(:has(> table > tfoot))::after { opacity: 1; }',
     )
-    expect(CSS).toContain('@media (forced-colors: active) { .table-scroll::after { display: none; } }')
+    // Forced colours hide the fade, so nothing reserves its height there (the rows' margin, revealInBox).
+    expect(CSS).toContain(
+      '@media (forced-colors: active) { .table-scroll { --table-fade-h: 0px; } .table-scroll::after { display: none; } }',
+    )
   })
 
   // The release lives in the always-loaded index.css (spec §2.5): route chunks load their sheets

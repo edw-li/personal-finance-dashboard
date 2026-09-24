@@ -47,6 +47,24 @@
   scroll-margin-bottom: calc(var(--table-foot-h, 0px) + var(--table-fade-h) + 4px);
 }
 
+/* A classic scrollbar (15px in the user's headed Edge; headless Edge hides them) sits inside the
+   box's border box at its right edge — right under panels.css's 28px right-edge fade, which faded the
+   vertical scrollbar's track and thumb into the card (Task 5 review). So the capped box restates the
+   two masks that fade the right edge: the gradient ends where the scrollbar starts and turns opaque
+   again over it — --table-scrollbar-w, measured by useStickyInsets (0px with no scrollbar, or an
+   overlay one). The left-only mask runs the other way and never reaches the scrollbar. (0,3,0) and
+   (0,5,0) outrank panels.css's (0,2,0) and (0,4,0) whatever order the sheets load in; the
+   focus-visible drop below and index.css's print release are !important, so they still win. */
+.table-scroll[data-scroll-more~="right"]:not(:has(.row-actions)) {
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px - var(--table-scrollbar-w, 0px)),
+    transparent calc(100% - var(--table-scrollbar-w, 0px)), #000 calc(100% - var(--table-scrollbar-w, 0px)));
+}
+
+.table-scroll[data-scroll-more~="left"][data-scroll-more~="right"]:not(:has(.row-actions)):not(:has(.col-identity)) {
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px - var(--table-scrollbar-w, 0px)),
+    transparent calc(100% - var(--table-scrollbar-w, 0px)), #000 calc(100% - var(--table-scrollbar-w, 0px)));
+}
+
 /* The box's own focus ring over its edge mask: a mask clips everything outside the border box, the
    outline included, so the ring vanished whenever a sideways edge was masked (panels.css) — a tab
    stop with no visible focus (WCAG 2.4.7). The fade is only a hint, worth less than the ring while
@@ -130,8 +148,13 @@
   }
 }
 
-/* Forced colours drop author backgrounds; a gradient left alone there reads as a smear. */
+/* Forced colours drop author backgrounds; a gradient left alone there reads as a smear. With no fade,
+   nothing reserves its height either: the rows' bottom margin and revealInBox read 0. */
 @media (forced-colors: active) {
+  .table-scroll {
+    --table-fade-h: 0px;
+  }
+
   .table-scroll::after {
     display: none;
   }

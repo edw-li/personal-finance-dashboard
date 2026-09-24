@@ -36,7 +36,7 @@ describe('TableScroll', () => {
     expect(screen.getByRole('region', { name: 'Rewards matrix' }).className).toBe('table-scroll')
   })
 
-  it('hands its box to a ref, with the pinned-row heights written on it', () => {
+  it('hands its box to a ref, with the pinned-row heights and its scrollbar width written on it', () => {
     const ref = createRef<HTMLDivElement>()
     render(
       <TableScroll label="Dividends by month" ref={ref}>
@@ -47,10 +47,11 @@ describe('TableScroll', () => {
       </TableScroll>,
     )
     expect(ref.current).toBe(screen.getByRole('region', { name: 'Dividends by month' }))
-    // jsdom lays nothing out, so both read 0px: here only their presence matters — the values are
-    // tableScrollDom.test.ts's.
+    // jsdom lays nothing out, so all three read 0px: here only their presence matters — the values
+    // are tableScrollDom.test.ts's.
     expect(ref.current!.style.getPropertyValue('--table-head-h')).toBe('0px')
     expect(ref.current!.style.getPropertyValue('--table-foot-h')).toBe('0px')
+    expect(ref.current!.style.getPropertyValue('--table-scrollbar-w')).toBe('0px')
   })
 
   // The wiring, not the values (useScrollEdges.test.ts holds those): the box asks for 'xy', which is
