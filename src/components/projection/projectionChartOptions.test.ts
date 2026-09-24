@@ -5,6 +5,7 @@ import { MARK_LINE_LABEL, MARK_LINE_STYLE } from '../../charts/markLine'
 import { MUTED, PALETTE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
 import { addMonths } from '../../utils/months'
+import { setServerToday } from '../../utils/productToday'
 import type { PolyTrendFit } from './polyTrend'
 import {
   BAND_SERIES,
@@ -465,6 +466,38 @@ describe('netWorthProjectionOption', () => {
       101000,
       { value: 102010, itemStyle: { color: 'transparent', borderColor: PALETTE[0], borderWidth: 1.5 } },
     ])
+  })
+
+  it('says in the tooltip head why a dot is hollow — T1\'s sentence (2026-09-23 spec §R8)', () => {
+    setServerToday('2026-09-23')
+    const history = {
+      months: ['2026-08-01', '2026-09-01', '2026-10-01'],
+      net_worth: ['800000.00', '806667.88', '933250.90'],
+      provisional: [false, false, true],
+      recorded_on: ['2026-08-01', '2026-09-01', '2026-09-22'],
+    }
+    const option = readNw(netWorthProjectionOption(history, FIT, '2026-09-01', 1))
+    const at = (index: number, label: string) =>
+      tooltipRows(option.tooltip.formatter([
+        { seriesName: NET_WORTH_PROJECTION_SERIES[0], seriesType: 'scatter', axisValueLabel: label, dataIndex: index, value: 1, color: PALETTE[0] },
+      ])).head
+    expect(at(2, 'Oct 2026')).toBe('Oct 2026 — Oct 1 balances recorded early, on Sep 22 — provisional')
+    expect(at(1, 'Sep 2026')).toBe('Sep 2026')
+    expect(at(5, 'Jan 2027')).toBe('Jan 2027') // the fitted continuation has no snapshot
+  })
+
+  it('a snapshot provisional only because its month is still ahead says so', () => {
+    setServerToday('2026-09-23')
+    const history = {
+      months: ['2026-09-01', '2026-10-01'],
+      net_worth: ['806667.88', '933250.90'],
+      provisional: [false, true],
+      recorded_on: ['2026-09-01', null],
+    }
+    const option = readNw(netWorthProjectionOption(history, FIT, '2026-09-01', 1))
+    expect(tooltipRows(option.tooltip.formatter([
+      { seriesName: NET_WORTH_PROJECTION_SERIES[0], seriesType: 'scatter', axisValueLabel: 'Oct 2026', dataIndex: 1, value: 1, color: PALETTE[0] },
+    ])).head).toBe('Oct 2026 — Oct 1 balances — provisional until Oct 1')
   })
 
   it('draws every snapshot filled when the payload carries no provisional flags — a replayed cache', () => {

@@ -18,6 +18,7 @@ import { timeZoom } from '../../charts/timeZoom'
 import type { ZoomWindow } from '../../charts/timeZoom'
 import { axisTooltip, swatch } from '../../charts/tooltip'
 import type { NetWorthTimeseries, ProjectionOut } from '../../types/api'
+import { formatAsOf } from '../../utils/asOf'
 import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
@@ -367,9 +368,20 @@ function projectionMonths(
 const HOLLOW_DOT = { color: 'transparent', borderColor: PALETTE[0], borderWidth: 1.5 } as const
 
 /** The snapshot-state lists the net-worth timeseries carries beside `months` (2026-09-23 spec
- *  §K2 — lane K computes them; they are empty for a replayed cache). Optional here, so the
- *  chart reads them wherever they are and draws every dot filled where they are not. */
-type SnapshotFlags = { provisional?: boolean[]; recorded_on?: (string | null)[] }
+ *  §K2 — lane K computes them; empty for a replayed cache, when every dot draws filled). */
+type SnapshotFlags = Partial<Pick<NetWorthTimeseries, 'provisional' | 'recorded_on'>>
+
+/** Why a dot is hollow, in T1's words (2026-09-23 spec §R8): "Oct 1 balances recorded early, on
+ *  Sep 22 — provisional", or, for a snapshot provisional only because its month is still ahead,
+ *  "Nov 1 balances — provisional until Nov 1". The same sentence lane T's
+ *  networth/snapshotStates.ts `provisionalNote` builds for the Overview — restated here over K's
+ *  formatAsOf because lane R merges before lane T (fold the two together once both are in). */
+function provisionalNote(month: string, recordedOn: string | null | undefined): string {
+  const day = (iso: string) => formatAsOf({ month: iso, as_of: iso })
+  return recordedOn != null && recordedOn < month
+    ? `${day(month)} balances recorded early, on ${day(recordedOn)} — provisional`
+    : `${day(month)} balances — provisional until ${day(month)}`
+}
 
 /**
  * The sheet's "Net Worth over Time (Projected)": actual snapshots as blue dots — a provisional
@@ -397,7 +409,12 @@ export function netWorthProjectionOption(
     dataZoom: timeZoom(months, 'all'),
     grid: grid('fan'),
     legend: { ...legendFor(legendData.length, selected), data: legendData },
-    tooltip: axisTooltip({ unit: 'money' }),
+    // A provisional snapshot's month says why its dot is hollow, beside the month (T1's head note).
+    tooltip: axisTooltip({
+      unit: 'money',
+      headNote: (index) =>
+        history.provisional?.[index] === true ? provisionalNote(history.months[index], history.recorded_on?.[index]) : null,
+    }),
     xAxis: monthAxis(months.map(formatMonth)),
     // Log scale (user-requested departure from the zero-anchored rule — a log axis HAS no
     // zero): equal steps are equal multiples, so decades of growth can't squash the early
