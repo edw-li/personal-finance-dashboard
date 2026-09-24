@@ -756,7 +756,10 @@ that makes them vanish has introduced a bug, not removed one.
   Paycheck pace strip and the calendar's paydays follow the same rule. Grace's projected
   withholding goes $5,850.00 → $1,950.00 (8 checks from Sep 16) and her Paycheck pace figures
   shrink the same way; a household whose first profile starts on or before Jan 1 is
-  byte-identical.
+  byte-identical. The calendar's Jan 15 and Apr 15 amounts for LAST year follow the rule too: a
+  first profile dated after last year's checks withholds nothing for that year, so its
+  shortfall or balance is the whole bill (on the 2026-09-23 data no one is affected — Edward's
+  first profile is Jan 1, 2026, and Grace's 2026 is already her 8 checks).
 
 **Do not "fix" these either.** The "Will I owe?" card's *Your inputs vs your records* strip
 flags a typed input that differs from Paycheck, RSU grants or ESPP lots by more than $250 of

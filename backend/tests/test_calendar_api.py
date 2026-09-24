@@ -1202,6 +1202,39 @@ async def test_a_january_q4_payment_that_has_passed_keeps_its_bare_date(
     assert q4["detail"] == "Q4 2025 estimated payment"
 
 
+async def test_a_first_profile_dated_after_last_years_checks_withholds_nothing_for_that_year(
+    auth_client, db, monkeypatch
+):
+    """§W1 reaches the calendar's prior-year amounts too (spec-review minor 3). A first profile
+    dated Jan 1 2026 pays none of 2025's grid checks (the last one is Dec 31), so 2025's Apr 15
+    balance is its WHOLE bill — the same as a household with no profile at all — where the
+    same profile dated Jan 1 2025 would have withheld through the year."""
+    monkeypatch.setattr("app.services.clock.product_today", lambda: FEBRUARY)
+    await seed_priceable_year(db, 2025)
+    await db.commit()
+
+    def filing_chip(body: dict) -> dict:
+        return next(e for e in body["events"] if e["key"] == "tax:2026-q1:2026-04-15")
+
+    bare = filing_chip((await auth_client.get(APRIL)).json())
+    profile = PaycheckProfile(
+        person_id=(await seed_primary(db)).id,
+        effective_date=date(2026, 1, 1),
+        annual_salary=Decimal("240000"),
+        withholding_pct=Decimal("0.05"),
+    )
+    db.add(profile)
+    await db.commit()
+    late = filing_chip((await auth_client.get(APRIL)).json())
+    assert (late["detail"], late["amount"]) == (bare["detail"], bare["amount"])
+    assert money(late["amount"]) > 0
+
+    profile.effective_date = date(2025, 1, 1)
+    await db.commit()
+    early = filing_chip((await auth_client.get(APRIL)).json())
+    assert money(early["amount"]) < money(late["amount"])
+
+
 async def test_apr_15_carries_the_prior_years_balance_beside_this_years_share(
     auth_client, db, monkeypatch
 ):
