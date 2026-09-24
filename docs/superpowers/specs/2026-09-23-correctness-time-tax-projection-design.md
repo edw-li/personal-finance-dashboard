@@ -1,6 +1,30 @@
 # The app's sense of time, "Will I owe?" and the retirement projection (2026-09-23) — design record
 
-**Status:** **approved for implementation 2026-09-24** (the user, on this record: "looks good,
+**Status:** **implemented 2026-09-24 and merged to LOCAL main @2fd35e1d — not pushed, not deployed.**
+Lanes, each after a spec-compliance review and a code-quality review with fixes re-reviewed: K @20e2f5e9 ·
+W @5f4eb8bb · R @e6e520ad · M @84e83138 · T @ec246a65 (ready-first after K; another session's
+table-scroll batch landed between M and T @6b1f0c59, with this batch's OK). Integration: 42b7a663 (a
+Guide label after W's chip title), ef85fbcf (the Stop-test load flake root-caused, one employer-ticker
+reader, the compare row shows the Horizon setting, the withholding cache narrowed, ticker-bound entries
+refused when the committed ticker changed mid-build), 2d5022ee (a LimitsCard load flake), 2fd35e1d
+(§V4's visual findings D2–D6: calendar popover dimming/legend overlap, one-line Up next dates and Data
+status label, Projection tiles 3 + 2 at 1280, the Review footer). Gates on main: backend 2,747 passed /
+4 skipped · ruff clean · vitest 299 files / 4,470 · tsc · eslint 0 errors (26 warnings, baseline) ·
+vite build. §V4 on `finance_realdata_b2`: every pinned fact holds at 2026-09-23 / 10-03 / 10-16 /
+2027-01-05; all write scenarios pass (twice, on a clone); 376 captures with 0 console, page or blocked-
+write errors; README §V6 text accurate. Timings (before → after, warm): `/projection` 0.96× cold, 12.8 ms
+repeat; withholding 10.8 ms cached, 1.38× uncached; `/net-worth/summary` ≈1.0×; **`/coverage` 12.8 →
+16.8 ms (1.26–1.31×, over the 1.2× target) — accepted**: the three extra statements are the reminder
+day, the change-log evidence and the undone-batch lookup that the partial-spending rule needs (≈ +4 ms).
+Deviations are recorded in each lane's execution record (`docs/superpowers/plans/2026-09-24-{k,w,r,t,m}.md`,
+`-integration.md`, `-polish.md`); notable: the reminder speaks only for the reviewed era (months from the
+month-review adoption on) and shows one row in Up next; spending deadlines read "was due by Oct 15".
+Follow-ups (not in this batch): `flows_due` still lists pre-adoption months that lack take-home (none in
+the real data); the assistant's `up_next` context does not collapse reminders; no-amount events read
+"Amount unknown" with a "Your figure" action; vest lumps are valued after sell-to-cover withholding, not
+the marginal rate.
+
+Previously: **approved for implementation 2026-09-24** (the user, on this record: "looks good,
 proceed."). Written 2026-09-23 against main @b33c202b (batch 1 and the drag-reorder batch have since
 been pushed; the test speed-up is on local main @60b6191f). Real-data copy for §V4 prepared by the
 controller 2026-09-24: `finance_realdata_b2` = `finance_realdata` cloned, migrated f12026091203 →
