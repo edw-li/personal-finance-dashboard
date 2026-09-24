@@ -7,6 +7,7 @@ import {
   deleteMonthBalances,
   fetchAccounts,
   fetchMonthBalances,
+  fetchSummary,
 } from '../api/netWorth'
 import { fetchCoverage } from '../api/coverage'
 import { fetchHousehold } from '../api/household'
@@ -41,12 +42,14 @@ import {
   beyondBanner,
   confirmBanner,
   dayOf,
+  earlyBalancesBlocker,
   earlyBanner,
   flowsPartName,
   inProgressSentence,
   metaOf,
   monthNameOf,
   monthPhase,
+  noBalancesBlocker,
   notBegunSentence,
   partialBanner,
   recordedEarly,
@@ -54,6 +57,7 @@ import {
   type BalancesMeta,
 } from '../components/monthly/monthlyCopy'
 import { balancesKey, flowsKey, sortedIds, type BalancesPart, type FlowsPart } from '../components/monthly/parts'
+import { monthStory, type NextSnapshot } from '../components/monthly/story'
 import InfoHint from '../components/InfoHint'
 import { useToast } from '../components/ToastProvider'
 import { FeedBanner } from '../components/shell/Feed'
@@ -281,6 +285,22 @@ function deriveParents(
   return next
 }
 
+const byAccount = (rows: { account_id: number; balance: string }[]): Record<number, string> =>
+  Object.fromEntries(rows.map((row) => [row.account_id, row.balance]))
+
+/** The next 1st as a month's story needs it (2026-09-23 spec §M5): M+1's summary — its delta is the
+ *  change FROM this month's snapshot — and its per-account balances. A month with no snapshot is
+ *  "missing" (the summary answers 404), never a failure. */
+async function fetchNextSnapshot(month: string): Promise<NextSnapshot> {
+  const nextMonth = addMonths(month, 1)
+  try {
+    const [summary, balances] = await Promise.all([fetchSummary(null, nextMonth), fetchMonthBalances(nextMonth)])
+    return balances.exists ? { status: 'ready', summary, balances: byAccount(balances.balances) } : { status: 'missing' }
+  } catch (err) {
+    return err instanceof ApiError && err.status === 404 ? { status: 'missing' } : { status: 'failed' }
+  }
+}
+
 export default function MonthlyUpdatePage() {
   const [params] = useSearchParams()
   // No month in the URL: decide where to land first (2026-09-23 spec §M2), then mount the wizard
@@ -375,6 +395,11 @@ function MonthlyUpdateWizard() {
     as_of: null,
     provisional: false,
   })
+  // The month's story (spec §M5) reads SAVED figures only: this 1st's balances as stored, and the
+  // next 1st (summary + balances). An aid, loaded after the month's first paint and re-read after
+  // a balances save — never part of a draft.
+  const [savedBalances, setSavedBalances] = useState<Record<number, string>>({})
+  const [next, setNext] = useState<NextSnapshot>({ status: 'loading' })
   // /coverage — the shared "which months exist" feed (the scope row reads the same one and the
   // api client dedupes the in-flight GET). It replaces the full monthly timeseries the wizard
   // used to download only to learn which months have balances (2026-09-13 polish spec §9).
@@ -586,6 +611,17 @@ function MonthlyUpdateWizard() {
         setCategories(categoryList.filter((c) => c.is_active))
         setMonthExisted(thisMonth.exists)
         setBalancesMeta(metaOf(thisMonth))
+        setSavedBalances(byAccount(thisMonth.balances))
+        // The next 1st for the story: skipped when /coverage says it has no balances, read
+        // otherwise (a failed /coverage asks anyway — a 404 then reads as "missing").
+        if (coverageData !== null && !coverageData.balances.includes(addMonths(month, 1))) {
+          setNext({ status: 'missing' })
+        } else {
+          setNext({ status: 'loading' })
+          void fetchNextSnapshot(month).then((answer) => {
+            if (!cancelled) setNext(answer)
+          })
+        }
         setHadNetPay(spendMonth.net_pay !== null)
         setStoredCategories(new Set(spendMonth.amounts.map((a) => a.category_id)))
         setHadSpending(
@@ -944,13 +980,19 @@ function MonthlyUpdateWizard() {
   // on Sep 22" into "recorded Oct 1"). The /coverage read runs beside the scope row's own, and the
   // api client joins the two GETs.
   const refreshAfterSave = async (loaded: LoadedMonth, sentBalances: boolean): Promise<CoverageOut | null> => {
-    const [fresh, thisMonth] = await Promise.all([
+    // New balances also move the month's story (spec §M5): the next 1st's delta compares with them.
+    const [fresh, thisMonth, story] = await Promise.all([
       fetchCoverage().catch((): CoverageOut | null => null),
       sentBalances ? fetchMonthBalances(loaded.month).catch((): MonthBalances | null => null) : null,
+      sentBalances ? fetchNextSnapshot(loaded.month) : null,
     ])
     if (loadedMonth.current === loaded) {
       if (fresh !== null) setCoverage(fresh)
-      if (thisMonth !== null) setBalancesMeta(metaOf(thisMonth))
+      if (thisMonth !== null) {
+        setBalancesMeta(metaOf(thisMonth))
+        setSavedBalances(byAccount(thisMonth.balances))
+      }
+      if (story !== null) setNext(story)
     }
     return fresh
   }
@@ -1292,6 +1334,20 @@ function MonthlyUpdateWizard() {
   // beyond next month.
   const balancesSavable = phase !== 'beyond' && (balancesDirty || !monthExisted || confirmable)
   const balancesAction = confirmable && !balancesDirty ? `Confirm ${balancesPartName(month)}` : `Save ${balancesPartName(month)}`
+
+  // Why "Save and close" stays off, when the server would refuse it too (spec §M1, §M5, §K4) —
+  // said beside the button, in the order a user fixes them. Balances edited on screen are sent
+  // with the close, so neither balances rule applies to them: the server records them first.
+  const earlyAtClose = recordedEarly(month, balancesMeta) && review?.state !== 'unreviewed_history'
+  const closeBlocker = !balancesValid
+    ? 'Fix balance entries first.'
+    : !monthExisted && !balancesDirty
+      ? noBalancesBlocker(month)
+      : earlyAtClose && !balancesDirty && balancesMeta.recorded_on !== null
+        ? earlyBalancesBlocker(month, balancesMeta.recorded_on)
+        : null
+  // The month's story on Review (spec §M5): this 1st → the next 1st, from saved figures.
+  const story = monthStory(month, next)
   // "Next" leads to what is due (spec §M1): on the current month's Balances step, while an ended
   // month's spending & take-home are due, the newest such month — else within the month.
   const dueFlows = month === currentMonthIso() ? (time?.flows_due[0] ?? null) : null
@@ -2170,13 +2226,17 @@ function MonthlyUpdateWizard() {
             {/* W5 (2026-09-13 audit): the four figures of the approved receipt (design §4.3) as
                 real tiles — the app's tile vocabulary, not three label/value pairs 375px apart.
                 Cash outflow carries the tax/transfers split the old floating line printed. */}
-            <div className="kpi-row review-kpis">
+            {/* The first tile tells the month's story (2026-09-23 spec §M5): its 1st's balances as
+                typed, and the change from that 1st to the next one, from saved figures. The glyph
+                sits inside the sentence ("September's change: ▲ $X (…)"), so the tile is neutral
+                and the row's data-story-tone colours its delta (MonthlyUpdatePage.css). */}
+            <div className="kpi-row review-kpis" data-story-tone={story.tone ?? undefined}>
               <StatTile
-                label="Net worth"
+                label={balancesPartName(month)}
                 value={formatCurrency(preview.netWorth)}
-                delta={preview.delta === null ? undefined : `${formatCurrency(preview.delta)} vs prior month`}
-                tone={preview.delta === null ? undefined : preview.delta >= 0 ? 'positive' : 'negative'}
-                hint="Every non-component balance from the Balances step, summed as it stands now."
+                delta={story.text ?? undefined}
+                tone="neutral"
+                hint={`Every non-component ${dayOf(month)} balance from the Balances step, summed as it stands now. The line under it is ${monthNameOf(month)}'s change: the saved ${dayOf(month)} balances to the saved ${dayOf(addMonths(month, 1))} balances.`}
               />
               <StatTile
                 label="Living spending"
@@ -2204,8 +2264,17 @@ function MonthlyUpdateWizard() {
                   ? { balances: balancesBase.part.balances, amounts: flowsBase.part.amounts }
                   : null
               }
-              balanceStory={{ title: 'Largest balance changes · prior month', columns: ['Reference', 'Entered'],
-                from: priorBalances, to: balances, empty: 'No changed balances with a prior-month reference.' }}
+              balanceStory={{
+                title: story.title,
+                columns: [dayOf(month), dayOf(addMonths(month, 1))],
+                from: savedBalances,
+                to: story.to,
+                empty:
+                  story.unavailable ??
+                  (story.to === null
+                    ? `Reading ${balancesPartName(addMonths(month, 1))}…`
+                    : `No balance changed from ${dayOf(month)} to ${dayOf(addMonths(month, 1))}.`),
+              }}
               month={month} matrix={matrix} monthExisted={monthExisted} recordedCategories={recordedCategoryIds} />
             <fieldset className="review-confirmations" disabled={saving}>
               <legend>Confirm this month is complete</legend>
@@ -2235,8 +2304,8 @@ function MonthlyUpdateWizard() {
                 Back
               </button>
               {/* T4: the only explanation of a disabled primary sits beside it, not 90px above. */}
-              {!balancesValid ? (
-                <p className="drill-hint wizard-footer-note" role="status">Fix balance entries first.</p>
+              {closeBlocker !== null ? (
+                <p className="drill-hint wizard-footer-note" role="status">{closeBlocker}</p>
               ) : !canRequestClose ? (
                 <p className="drill-hint wizard-footer-note">Save progress at any time. To close, complete all three confirmations and enter spending and household take-home, including explicit zeros where appropriate.</p>
               ) : null}
@@ -2254,7 +2323,16 @@ function MonthlyUpdateWizard() {
                 >
                   {saving ? 'Saving…' : 'Save progress'}
                 </button>
-                <button className="button button-primary" disabled={saving || loading || review === null || accounts.length === 0 || !balancesValid || !amountsValid || !canRequestClose} onClick={() => void save('close')}>Save and close month</button>
+                <button
+                  className="button button-primary"
+                  disabled={
+                    saving || loading || review === null || accounts.length === 0 || !balancesValid || !amountsValid
+                    || !canRequestClose || closeBlocker !== null
+                  }
+                  onClick={() => void save('close')}
+                >
+                  Save and close {monthNameOf(month)}
+                </button>
               </div>
             </div>
           </div>

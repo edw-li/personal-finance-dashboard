@@ -24,6 +24,7 @@ vi.mock('../api/netWorth', () => ({
   deleteMonthBalances: vi.fn(),
   fetchAccounts: vi.fn(),
   fetchMonthBalances: vi.fn(),
+  fetchSummary: vi.fn(),
   fetchTimeseries: vi.fn(),
   putMonthBalances: vi.fn(),
 }))
@@ -49,7 +50,7 @@ import { clearSnapshots } from '../api/snapshotCache'
 import { formatMonth } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 import { setServerToday } from '../utils/productToday'
-import { TIME_OCT_3, TIME_SEP_23, septemberFlows } from '../testing/timeStatusFixtures'
+import { SEP_1, TIME_OCT_3, TIME_SEP_23, septemberFlows } from '../testing/timeStatusFixtures'
 
 const account = {
   id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
@@ -156,6 +157,12 @@ beforeEach(() => {
   vi.mocked(netWorthApi.putMonthBalances).mockResolvedValue({
     month: '2026-08-01', snapshot_created: true, created: 1, updated: 0, unchanged: 0,
   })
+  // The next 1st's summary for a month's story (2026-09-23 spec §M5). By default it compares with
+  // nothing — the month on screen has no snapshot of its own in these fixtures.
+  vi.mocked(netWorthApi.fetchSummary).mockImplementation(async (_owner, month) => ({
+    month: month ?? null, net_worth: '1500.00', mom_delta: null, mom_pct: null, groups: [], owner_totals: [],
+    as_of: month ?? null, provisional: false, previous: null, days_since_previous: null,
+  }))
   vi.mocked(netWorthApi.fetchTimeseries).mockResolvedValue({
     months: ['2026-07-01'],
     accounts: [account],
@@ -2322,13 +2329,17 @@ it('shows no rate at all without a take-home to divide by', async () => {
 })
 
 it('saves progress without closing, then closes only after feed confirmations', async () => {
+  // August has its balances (a month without them cannot close — spec §M1's own test below).
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month, exists: true, recorded_on: month, notes: null, balances: [{ account_id: 1, balance: '1500.00' }],
+  }))
   renderWizard()
   await screen.findByLabelText('Checking')
   fireEvent.click(screen.getByRole('button', { name: /^next: [a-z]+ spending$/i }))
   await enterSpending()
   fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '9000' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  const close = await screen.findByRole('button', { name: 'Save and close month' }) as HTMLButtonElement
+  const close = await screen.findByRole('button', { name: 'Save and close August' }) as HTMLButtonElement
   expect(close.disabled).toBe(true)
   fireEvent.click(screen.getByRole('button', { name: 'Save progress' }))
   await screen.findByRole('heading', { name: 'Progress saved' })
@@ -2518,15 +2529,21 @@ it('lays the Review step out as four tiles with the cash split and the close gat
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   await screen.findByRole('heading', { name: /^Review & save/ })
   const tile = (label: string) => screen.getByText(label).closest('.stat-tile') as HTMLElement
-  expect(tile('Net worth').querySelector('.stat-value')?.textContent).toBe('$1,500.00')
+  // The first tile tells the month's story (2026-09-23 spec §M5): its 1st's balances, and the
+  // change to the next 1st — which needs Sep 1 balances this fixture does not have.
+  expect(tile('Aug 1 balances').querySelector('.stat-value')?.textContent).toBe('$1,500.00')
+  expect(tile('Aug 1 balances').querySelector('.stat-delta')?.textContent).toBe(
+    "August's change appears once Sep 1 balances are recorded",
+  )
   expect(tile('Living spending').querySelector('.stat-value')?.textContent).toBe('$250.00')
   expect(tile('Cash outflow').querySelector('.stat-value')?.textContent).toBe('$300.00')
   expect(tile('Cash outflow').querySelector('.stat-delta')?.textContent).toBe('tax $50.00 · transfers $100.00')
   expect(tile('Cash saved').querySelector('.stat-value')?.textContent).toBe('70.0%')
   expect(tile('Cash saved').querySelector('.stat-delta')?.textContent).toBe('$700.00 of $1,000.00 take-home')
-  // The gate sentence lives in the footer, next to the disabled primary.
-  const footer = screen.getByRole('button', { name: 'Save and close month' }).closest('.wizard-footer') as HTMLElement
-  expect(footer.textContent).toContain('To close, complete all three confirmations')
+  // The gate sentence lives in the footer, next to the disabled primary — here the first thing to
+  // fix: August has no balances of its own yet.
+  const footer = screen.getByRole('button', { name: 'Save and close August' }).closest('.wizard-footer') as HTMLElement
+  expect(footer.textContent).toContain('Record Aug 1 balances before closing August.')
   // The month is printed by the h1; the eyebrow does not repeat it.
   expect(screen.queryByRole('heading', { name: /Review & save — / })).toBeNull()
 })
@@ -3159,5 +3176,162 @@ describe("what's due (2026-09-23 spec §M2)", () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { level: 1, name: 'Monthly update — Sep 2026' })).toBeTruthy(),
     )
+  })
+})
+
+// September's review on Oct 3 with Oct 1 in one of four shapes (2026-09-23 spec §M5).
+function septemberStory(next: 'final' | 'provisional' | 'missing' | 'older') {
+  partialSeptember()
+  vi.mocked(fetchCoverage).mockResolvedValue({
+    balances: next === 'missing' ? ['2026-08-01', '2026-09-01'] : ['2026-08-01', '2026-09-01', '2026-10-01'],
+    spending: ['2026-09-01'],
+    net_pay: [],
+    time: TIME_OCT_3,
+  })
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: next === 'older' ? month !== '2026-09-01' : true,
+    recorded_on: month,
+    notes: null,
+    as_of: month,
+    provisional: false,
+    balances:
+      next === 'older' && month === '2026-09-01'
+        ? []
+        : [{ account_id: 1, balance: month === '2026-10-01' ? '1650.00' : '1500.00' }],
+  }))
+  vi.mocked(netWorthApi.fetchSummary).mockResolvedValue({
+    month: '2026-10-01',
+    net_worth: '933250.90',
+    mom_delta: '126583.02',
+    mom_pct: '0.157',
+    groups: [],
+    owner_totals: [],
+    as_of: next === 'provisional' ? '2026-09-22' : '2026-10-01',
+    provisional: next === 'provisional',
+    previous:
+      next === 'older'
+        ? { month: '2026-08-01', as_of: '2026-08-01', recorded_on: '2026-08-01', provisional: false }
+        : SEP_1,
+    days_since_previous: 21,
+  })
+}
+
+describe("the month's story (2026-09-23 spec §M5)", () => {
+  it('names the tile by its 1st and tells the change to the next 1st — provisional', async () => {
+    septemberStory('provisional')
+    renderPage('/update?month=2026-09-01&step=review')
+    expect(await screen.findByText("September's change: ▲ $126,583.02 (Sep 1 → Sep 22 · provisional)")).toBeTruthy()
+    const tile = screen.getByText('Sep 1 balances').closest('.stat-tile') as HTMLElement
+    expect(tile.querySelector('.stat-value')?.textContent).toBe('$1,500.00')
+    expect(screen.getByRole('heading', { name: 'Largest balance changes · Sep 1 → Oct 1' })).toBeTruthy()
+    // The saved Sep 1 → Oct 1 move, not the typed figures.
+    expect(screen.getByText('+$150.00')).toBeTruthy()
+    expect(netWorthApi.fetchSummary).toHaveBeenCalledWith(null, '2026-10-01')
+  })
+
+  it('a final next 1st', async () => {
+    septemberStory('final')
+    renderPage('/update?month=2026-09-01&step=review')
+    expect(await screen.findByText("September's change: ▲ $126,583.02 (Sep 1 → Oct 1)")).toBeTruthy()
+  })
+
+  it('no next 1st yet — and nothing is asked of the server for it', async () => {
+    septemberStory('missing')
+    renderPage('/update?month=2026-09-01&step=review')
+    expect((await screen.findAllByText("September's change appears once Oct 1 balances are recorded")).length).toBe(2)
+    expect(netWorthApi.fetchSummary).not.toHaveBeenCalled()
+  })
+
+  it('a next 1st that compares with an older snapshot needs this 1st', async () => {
+    septemberStory('older')
+    renderPage('/update?month=2026-09-01&step=review')
+    expect((await screen.findAllByText("September's change needs Sep 1 balances")).length).toBe(2)
+  })
+
+  it('names the three confirmations for the month', async () => {
+    septemberStory('final')
+    renderPage('/update?month=2026-09-01&step=review')
+    expect(await screen.findByLabelText('I checked every Sep 1 account balance.')).toBeTruthy()
+    expect(screen.getByLabelText('I checked September spending, tax and transfers.')).toBeTruthy()
+    expect(screen.getByLabelText('I checked September household take-home.')).toBeTruthy()
+  })
+
+  it('re-reads the story after a balances save', async () => {
+    septemberStory('final')
+    renderPage('/update?month=2026-09-01&step=review')
+    await screen.findByText("September's change: ▲ $126,583.02 (Sep 1 → Oct 1)")
+    vi.mocked(netWorthApi.fetchSummary).mockResolvedValue({
+      month: '2026-10-01', net_worth: '933250.90', mom_delta: '126000.00', mom_pct: '0.157', groups: [],
+      owner_totals: [], as_of: '2026-10-01', provisional: false, previous: SEP_1, days_since_previous: 30,
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^1\s*balances$/i }))
+    fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '2083.02' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Sep 1 balances' }))
+    fireEvent.click(await screen.findByRole('button', { name: /^3\s*review$/i }))
+    expect(await screen.findByText("September's change: ▲ $126,000.00 (Sep 1 → Oct 1)")).toBeTruthy()
+  })
+})
+
+describe('close gates (2026-09-23 spec §M1, §M5)', () => {
+  it("Save and close waits for early balances to be saved again, with K4's sentence", async () => {
+    septemberStory('final')
+    vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+      month,
+      exists: true,
+      notes: null,
+      balances: [{ account_id: 1, balance: '1500.00' }],
+      recorded_on: month === '2026-09-01' ? '2026-08-28' : month,
+      as_of: month === '2026-09-01' ? '2026-08-28' : month,
+      provisional: month === '2026-09-01',
+    }))
+    vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+      month: '2026-09-01', exists: true, net_pay: '6000.00', amounts: [{ category_id: 8, amount: '2072.23' }], budgets: [],
+    })
+    renderPage('/update?month=2026-09-01&step=review')
+    for (const label of [
+      'I checked every Sep 1 account balance.',
+      'I checked September spending, tax and transfers.',
+      'I checked September household take-home.',
+    ]) {
+      fireEvent.click(await screen.findByLabelText(label))
+    }
+    expect(
+      screen.getByText(
+        'Sep 1 balances were recorded early, on Aug 28 — save them again on or after Sep 1 before closing September.',
+      ),
+    ).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Save and close September' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('a month without balances says to record them before closing', async () => {
+    setServerToday('2026-10-03')
+    vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+      month: '2026-08-01', exists: true, net_pay: '6000.00', amounts: [{ category_id: 7, amount: '300.00' }], budgets: [],
+    })
+    renderPage('/update?month=2026-08-01&step=review')
+    expect(await screen.findByText('Record Aug 1 balances before closing August.')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Save and close August' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('touched balances may close in the same save — they are sent and recorded with it', async () => {
+    setServerToday('2026-10-03')
+    vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+      month: '2026-08-01', exists: true, net_pay: '6000.00', amounts: [{ category_id: 7, amount: '300.00' }], budgets: [],
+    })
+    renderPage('/update?month=2026-08-01')
+    fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+    fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+    for (const label of [
+      'I checked every Aug 1 account balance.',
+      'I checked August spending, tax and transfers.',
+      'I checked August household take-home.',
+    ]) {
+      fireEvent.click(await screen.findByLabelText(label))
+    }
+    expect(screen.queryByText('Record Aug 1 balances before closing August.')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Save and close August' }))
+    await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
+    expect(sentBody()).toMatchObject({ close: true, balances: { balances: [{ account_id: 1, balance: '1600.00' }] } })
   })
 })

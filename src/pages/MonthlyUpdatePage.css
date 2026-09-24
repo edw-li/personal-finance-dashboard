@@ -343,3 +343,9 @@
 .due-chip.is-overdue { border-color: var(--warn); }
 .due-chip-tag { color: var(--warn); font-weight: 600; }
 .whats-due-none { margin: 0; color: var(--muted); font-size: 0.85rem; }
+
+/* The month's story tile (2026-09-23 spec §M5): its delta carries the glyph inside the sentence
+   ("September's change: ▲ $X (Sep 1 → Oct 1)"), so the tile renders neutral and the row names the
+   sign. Specific enough to beat .stat-delta-neutral (panels.css). */
+.review-kpis[data-story-tone='positive'] > .stat-tile:first-child .stat-delta { color: var(--positive); }
+.review-kpis[data-story-tone='negative'] > .stat-tile:first-child .stat-delta { color: var(--negative); }
