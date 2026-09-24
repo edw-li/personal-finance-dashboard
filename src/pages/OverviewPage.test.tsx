@@ -26,6 +26,7 @@ import type {
   TaxSummariesOut,
   TaxSummaryOut,
   TaxYearOut,
+  WithholdingOut,
 } from '../types/api'
 import { calendarEvent } from '../testing/calendarFixtures'
 import { formatCompactCents, proratedLivingCents } from '../components/calendar/cashflow'
@@ -56,6 +57,8 @@ vi.mock('../api/taxes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/taxes')>()),
   fetchAllTaxSummaries: vi.fn(),
   fetchTaxYears: vi.fn(),
+  // The tax-drift line's read (2026-09-23 spec §W4): the current year's withholding GET.
+  fetchWithholding: vi.fn(),
 }))
 vi.mock('../api/espp', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/espp')>()),
@@ -156,7 +159,7 @@ import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
 import { fetchPrefs, patchPrefs } from '../api/prefs'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
-import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
+import { fetchAllTaxSummaries, fetchTaxYears, fetchWithholding } from '../api/taxes'
 
 // --- fixtures ---------------------------------------------------------------------------
 // Money and percents are decimal STRINGS on the wire (pydantic v2) — every fixture below
@@ -448,6 +451,22 @@ interface Payload {
   system: SystemStatus
   coverage: CoverageOut
   flow: MoneyFlowOut
+  /** The current year's withholding GET — only its reconciliation's flag count is read. */
+  withholding: WithholdingOut
+}
+
+/** A withholding payload carrying just what the Overview reads (contract §0.4(f)). */
+function withholdingOut(flagged = 0): WithholdingOut {
+  return {
+    reconciliation: {
+      rows: [],
+      flagged_count: flagged,
+      liability_if_matched: '0.00',
+      balance_if_matched: '0.00',
+      flag_above: '250.00',
+      notes: [],
+    },
+  } as unknown as WithholdingOut
 }
 
 // Arms all eleven clients at once — the page never renders a partial snapshot, so neither
@@ -472,6 +491,8 @@ function serve(over: Partial<Payload> = {}): Payload {
     system: systemOut(),
     coverage: coverageOut(),
     flow: moneyFlowOut(),
+    // Strip-quiet: the current year's inputs match the records.
+    withholding: withholdingOut(0),
     ...over,
   }
   vi.mocked(fetchSummary).mockResolvedValue(payload.summary)
@@ -492,6 +513,7 @@ function serve(over: Partial<Payload> = {}): Payload {
     quote_as_of: null,
   })
   vi.mocked(fetchMoneyFlow).mockResolvedValue(payload.flow)
+  vi.mocked(fetchWithholding).mockResolvedValue(payload.withholding)
   return payload
 }
 
@@ -511,6 +533,7 @@ function failAll(message = 'overview unavailable'): void {
   vi.mocked(fetchCoverage).mockImplementation(boom)
   vi.mocked(fetchCalendar).mockImplementation(boom)
   vi.mocked(fetchMoneyFlow).mockImplementation(boom)
+  vi.mocked(fetchWithholding).mockImplementation(boom)
 }
 
 function LocationProbe() {
@@ -1209,6 +1232,34 @@ describe('OverviewPage attention strip', () => {
     expect(row.getAttribute('href')).toBe(`/update?month=${past}&step=review`)
     expect(within(strip).queryByRole('link', { name: new RegExp(formatMonth(closed)) })).toBeNull()
     expect(strip.querySelectorAll('a')).toHaveLength(1)
+  })
+})
+
+describe('OverviewPage tax drift (2026-09-23 spec §W4)', () => {
+  it('names the tax inputs that differ from your records, and links to the card', async () => {
+    serve({ withholding: withholdingOut(5) })
+    renderPage()
+    const strip = await screen.findByRole('navigation', { name: 'Needs attention' })
+    const line = within(strip).getByRole('link', {
+      name: `5 of ${CURRENT_YEAR}’s tax inputs differ from your records →`,
+    })
+    expect(line.getAttribute('href')).toBe('/taxes?section=summary')
+    expect(vi.mocked(fetchWithholding)).toHaveBeenCalledWith(CURRENT_YEAR)
+  })
+
+  it('stays silent when every input matches', async () => {
+    serve({ withholding: withholdingOut(0) })
+    renderPage()
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('link', { name: /tax inputs differ from your records/ })).toBeNull()
+  })
+
+  it('never asks for the withholding of a tax year that does not exist', async () => {
+    serve({ taxYears: [] })
+    renderPage()
+    // The planning group has landed once the Estimated tax tile names the year.
+    await screen.findByText(new RegExp(`Estimated tax — ${CURRENT_YEAR}`))
+    expect(vi.mocked(fetchWithholding)).not.toHaveBeenCalled()
   })
 })
 
