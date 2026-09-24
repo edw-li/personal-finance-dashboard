@@ -31,6 +31,9 @@ export interface RestoredParts {
   restored: { balances: boolean; flows: boolean }
   /** A stored draft to forget: it matched its seed. */
   drop: { balances: boolean; flows: boolean }
+  /** A spending draft that differs from its seed was kept, unrestored, because the month has not
+   *  begun — it waits in storage for the month to begin. */
+  flowsWaiting: boolean
 }
 
 export function restoreParts(input: RestoreInput): RestoredParts {
@@ -73,5 +76,6 @@ export function restoreParts(input: RestoreInput): RestoredParts {
     restored: { balances: restoreBalances, flows: restoreFlows },
     // A matching draft goes; a differing spending draft of a month not begun stays for later.
     drop: { balances: balancesDraft !== null && !restoreBalances, flows: flowsDraft !== null && !flowsDiffer },
+    flowsWaiting: flowsDiffer && input.notBegun,
   }
 }

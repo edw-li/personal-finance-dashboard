@@ -66,8 +66,10 @@ describe('restoreParts', () => {
     expect(waiting.restored.flows).toBe(false)
     expect(waiting.flows).toEqual({ amounts: { 7: '0.00', 8: '2072.23' }, netPay: '' })
     expect(waiting.drop.flows).toBe(false)
+    expect(waiting.flowsWaiting).toBe(true)
     const stale = restoreParts(input({ notBegun: true, flowsDraft: { amounts: { 8: '2072.23' } } }))
     expect(stale.drop.flows).toBe(true)
+    expect(stale.flowsWaiting).toBe(false)
   })
 
   it("a month that has not begun still restores its balances — they may be recorded early", () => {

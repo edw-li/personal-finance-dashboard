@@ -3186,6 +3186,21 @@ describe('which months can be opened (2026-09-23 spec §M3)', () => {
     expect(screen.queryByText(/Restored unsaved November spending/)).toBeNull()
   })
 
+  it('a spending draft waiting for its month is restored, not deleted, when the month begins on screen', async () => {
+    setServerToday('2026-10-31')
+    sessionStorage.setItem('finance-update-draft:flows:2026-11-01', JSON.stringify({ amounts: { 7: '250.00' }, netPay: '' }))
+    renderPage('/update?month=2026-11-01&step=spending')
+    await screen.findByText('November spending can be entered once November begins.')
+    expect(screen.queryByText(/Restored unsaved November spending/)).toBeNull()
+    // Midnight: the server's day turns to Nov 1 with November on screen (spec §K1's day change).
+    act(() => setServerToday('2026-11-01'))
+    expect(await screen.findByText('Restored unsaved November spending & take-home — they are not saved yet.')).toBeTruthy()
+    expect(JSON.parse(sessionStorage.getItem('finance-update-draft:flows:2026-11-01')!)).toMatchObject({
+      amounts: { 7: '250.00' },
+    })
+    expect((screen.getByLabelText('Food') as HTMLInputElement).value).toBe('$250.00')
+  })
+
   it("a paste on next month's Spending card fills nothing", async () => {
     setServerToday('2026-10-03')
     renderPage('/update?month=2026-11-01&step=spending')

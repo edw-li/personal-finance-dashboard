@@ -506,7 +506,9 @@ function MonthlyUpdateWizard() {
   // reference, the draft reference and the discard seed. Each carries its OWN month so a
   // mid-switch render can never compare (or file) the old month's values under the new key.
   const [balancesBase, setBalancesBase] = useState<{ month: string; part: BalancesPart } | null>(null)
-  const [flowsBase, setFlowsBase] = useState<{ month: string; part: FlowsPart } | null>(null)
+  // `waiting`: this load left a spending draft unrestored because the month had not begun (spec
+  // review G1) — it is restored by a reload once the month begins on screen, never deleted.
+  const [flowsBase, setFlowsBase] = useState<{ month: string; part: FlowsPart; waiting?: boolean } | null>(null)
   // A draft was restored over each part's seed this load — the banners' flags (spec §M6).
   const [restoredParts, setRestoredParts] = useState({ balances: false, flows: false })
   // A part delete's arm-and-confirm (2026-08-31 spec §B2, per part since 2026-09-23 §M6): the
@@ -536,6 +538,13 @@ function MonthlyUpdateWizard() {
   // The sentence beside a disabled "Save and close" describes it (review M16).
   const closeReasonId = useId()
   const [loadNonce, setLoadNonce] = useState(0)
+  // Back to the month as the server now holds it — an Undo's `after`, a delete, a conflict's Reload,
+  // a month begun on screen. The ribbon re-reads too. Stable: an effect below calls it.
+  const reloadMonth = useCallback(() => {
+    setLoading(true)
+    setLoadNonce((n) => n + 1)
+    setCoverageNonce((n) => n + 1)
+  }, [setLoading, setLoadNonce, setCoverageNonce])
   const toast = useToast()
   // What the last paste did, narrated for everyone (spec §4.1) — one line, replaced by the
   // next paste and dropped on any step or month change. The flashed ids are the cells it
@@ -745,7 +754,7 @@ function MonthlyUpdateWizard() {
         setAmounts(restored.flows.amounts)
         setNetPay(restored.flows.netPay)
         setBalancesBase({ month, part: balancesSeed })
-        setFlowsBase({ month, part: flowsSeed })
+        setFlowsBase({ month, part: flowsSeed, waiting: restored.flowsWaiting })
         setRestoredParts(restored.restored)
         // The seed is on screen from this render: the frame's skeleton or the previous month's
         // dimmed card gives way to this month's. Same batch as the setters above.
@@ -779,13 +788,25 @@ function MonthlyUpdateWizard() {
 
   // A month that has not begun keeps no spending draft of its own making — and must not delete the
   // one waiting from before (spec review G1): its boxes are shut, so this effect has nothing to say.
+  // Nor, once the month has begun on screen, may it delete a draft this load left waiting: the
+  // untouched seed would look like "nothing typed". The effect after this one restores it instead.
   useEffect(() => {
-    if (loading || notBegun || flowsBase === null || flowsBase.month !== month) return
+    if (loading || notBegun || flowsBase === null || flowsBase.month !== month || flowsBase.waiting) return
     const now = { amounts, netPay }
     currentRaw.current.flows = JSON.stringify(now)
     if (flowsKey(now) === flowsKey(flowsBase.part)) removeDraft('flows', month)
     else writeDraft('flows', month, now)
   }, [amounts, netPay, flowsBase, month, loading, notBegun])
+
+  // The month on screen has begun — midnight passed, and useProductToday re-rendered with the
+  // server's new day — while a spending draft waited for it (spec review G1): reload the month, as a
+  // fresh visit would, so the draft is restored rather than removed. From a timer: an effect's body
+  // sets no state (react-hooks/set-state-in-effect).
+  useEffect(() => {
+    if (loading || notBegun || flowsBase === null || flowsBase.month !== month || !flowsBase.waiting) return
+    const timer = setTimeout(reloadMonth, 0)
+    return () => clearTimeout(timer)
+  }, [loading, notBegun, flowsBase, month, reloadMonth])
 
   useEffect(() => {
     if (!focusReceipt.current || lastSave === null) return
@@ -978,12 +999,6 @@ function MonthlyUpdateWizard() {
     && spendingPresent && netPay.trim() !== '' && month <= currentMonthIso()
     && (month !== currentMonthIso() || finalCurrentMonth)
 
-  // Back to the month as the server now holds it — an Undo's `after`. The ribbon re-reads too.
-  const reloadMonth = () => {
-    setLoading(true)
-    setLoadNonce((n) => n + 1)
-    setCoverageNonce((n) => n + 1)
-  }
 
   // After a save the wizard re-reads what the server now says (spec §M1, §M4, §M5), in two reads
   // that never wait for each other. /coverage says what is due — the partial banner, the Confirm,
