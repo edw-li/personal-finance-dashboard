@@ -53,3 +53,11 @@ export function entriesLabel(count: number): string {
 export function monthsLabel(count: number): string {
   return `${count} ${count === 1 ? 'month' : 'months'}`
 }
+
+/** The month the ledger opens on by itself (spec §4.4): the newest on or before `todayIso`'s month —
+ *  a future-dated manual entry (the form allows one) must not fold the current month away — else the
+ *  newest; null for an empty ledger. `todayIso` injected, as monthlyIncomeSums takes it. */
+export function defaultOpenMonth(months: readonly DividendMonth[], todayIso: string): string | null {
+  const current = monthKeyOf(todayIso)
+  return (months.find((month) => month.key <= current) ?? months[0])?.key ?? null
+}

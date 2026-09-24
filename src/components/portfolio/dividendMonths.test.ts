@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DividendOut } from '../../types/api'
 import { monthlyIncomeSums } from './dividendChartOptions'
-import { entriesLabel, groupDividendsByMonth, monthKeyOf, monthsLabel } from './dividendMonths'
+import { defaultOpenMonth, entriesLabel, groupDividendsByMonth, monthKeyOf, monthsLabel } from './dividendMonths'
 
 function entry(id: number, pay_date: string, amount: string): DividendOut {
   return {
@@ -87,5 +87,18 @@ describe('the words around the months', () => {
     expect(entriesLabel(40)).toBe('40 entries')
     expect(monthsLabel(1)).toBe('1 month')
     expect(monthsLabel(14)).toBe('14 months')
+  })
+})
+
+describe('defaultOpenMonth', () => {
+  it('opens the newest month on or before today — a future-dated entry does not fold the current month', () => {
+    const months = groupDividendsByMonth([entry(9, '2026-10-15', '1.00'), ...LEDGER])
+    expect(months[0].key).toBe('2026-10') // listed first all the same: the helper never hides an entry
+    expect(defaultOpenMonth(months, '2026-09-24')).toBe('2026-09')
+  })
+
+  it('falls back to the newest month when every month is in the future, and to null for an empty ledger', () => {
+    expect(defaultOpenMonth(groupDividendsByMonth([entry(9, '2026-10-15', '1.00')]), '2026-09-24')).toBe('2026-10')
+    expect(defaultOpenMonth([], '2026-09-24')).toBeNull()
   })
 })
