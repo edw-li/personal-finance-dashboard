@@ -111,3 +111,52 @@ def test_the_scheduler_s_by_name_import_reads_the_override_too(monkeypatch):
     # scheduler.py imports product_today BY NAME; the override lives inside the function.
     _override(monkeypatch, "2026-10-03")
     assert scheduler.product_today() == date(2026, 10, 3)
+
+
+# --- the change log's stamp (2026-09-23 spec §K1) ---
+
+
+def test_change_stamp_is_now_without_the_override(monkeypatch):
+    monkeypatch.delenv(clock.PRODUCT_TODAY_ENV, raising=False)
+    instant = datetime(2026, 9, 24, 19, 45, 12, tzinfo=UTC)
+    _pin(monkeypatch, instant)
+    assert clock.change_stamp() == instant
+    assert clock.change_stamp().utcoffset() is not None
+
+
+def test_change_stamp_is_the_override_day_at_the_real_time_of_day(monkeypatch):
+    _pin(monkeypatch, datetime(2026, 9, 24, 19, 45, 12, tzinfo=UTC))  # 12:45:12 PT, Sep 24
+    _override(monkeypatch, "2026-10-03")
+    stamp = clock.change_stamp()
+    assert stamp.astimezone(PT) == datetime(2026, 10, 3, 12, 45, 12, tzinfo=PT)
+    assert stamp.tzinfo is UTC
+
+
+def test_change_stamp_follows_a_pinned_product_day(monkeypatch):
+    """The house test pattern pins `clock.product_today`; the change log follows it, so a test
+    of "saved after the month ended" needs no second patch."""
+    monkeypatch.delenv(clock.PRODUCT_TODAY_ENV, raising=False)
+    _pin(monkeypatch, datetime(2026, 9, 24, 19, 45, 12, tzinfo=UTC))
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 10, 3))
+    assert clock.change_stamp().astimezone(PT) == datetime(2026, 10, 3, 12, 45, 12, tzinfo=PT)
+
+
+def test_change_stamp_never_moves_a_write_a_day_when_midnight_passes_between_reads(monkeypatch):
+    """Real clock: 23:59:59.999999 PT on Sep 30, and the day read a microsecond later says
+    Oct 1. The stamp must be a real instant, not Oct 1 at 23:59 (a day in the future)."""
+    monkeypatch.delenv(clock.PRODUCT_TODAY_ENV, raising=False)
+    reads = iter(
+        [
+            datetime(2026, 10, 1, 6, 59, 59, 999999, tzinfo=UTC),  # Sep 30 23:59:59.999999 PT
+            datetime(2026, 10, 1, 7, 0, 0, 1, tzinfo=UTC),  # Oct 1 00:00:00.000001 PT
+            datetime(2026, 10, 1, 7, 0, 0, 2, tzinfo=UTC),
+        ]
+    )
+
+    class _Ticking(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(reads).astimezone(tz)
+
+    monkeypatch.setattr("app.services.clock.datetime", _Ticking)
+    assert clock.change_stamp() == datetime(2026, 10, 1, 7, 0, 0, 2, tzinfo=UTC)

@@ -22,14 +22,16 @@ browser follows it, because every /api response names the day (`X-Product-Today`
 is read from the PROCESS environment only (`os.environ`; a line in backend/.env reaches neither
 this module nor the settings validator — Settings declares no field for it), and only while the
 process environment's ENVIRONMENT is unset or `dev`; config.Settings refuses to start a non-dev
-process that carries it. `product_now()` stays real: instants are never moved.
+process that carries it. `product_now()` stays real: instants are never moved. The change log
+is the one writer that follows the product day (`change_stamp`), because month_status reads
+"saved after the month ended" off it.
 
 This module imports nothing from the app — it sits below everything, so any service or
 router can read the clock without an import cycle.
 """
 
 import os
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 # The one zone the product keeps time by. The scheduler fires in it too (`13:10 PT
@@ -62,3 +64,22 @@ def product_today() -> date:
     dev override's day."""
     override = product_today_override()
     return override if override is not None else product_now().date()
+
+
+def change_stamp() -> datetime:
+    """`change_log.at` for a batch (2026-09-23 spec §K1): the real instant, on the product day.
+
+    Normally that is simply now. When the product day is not the real one — the PRODUCT_TODAY
+    override, or a test that pins `clock.product_today` — the stamp is that day at the real
+    Pacific wall-clock time, so month_status' "saved after the month ended" agrees with the day
+    every other rule reads. The one other way the two reads can differ is midnight passing
+    between them; a second read of the real clock settles that, so a real write is never
+    stamped a day off."""
+    now = product_now()
+    day = product_today()
+    if day == now.date():
+        return now.astimezone(UTC)
+    now = product_now()
+    if day == now.date():
+        return now.astimezone(UTC)
+    return datetime.combine(day, now.timetz()).astimezone(UTC)
