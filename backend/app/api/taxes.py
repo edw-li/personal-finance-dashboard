@@ -117,6 +117,7 @@ from app.services.money import (
 )
 from app.services.people import load_people, primary_person
 from app.services.portfolio_calc import SHARE_Q, fold_transactions, load_portfolio
+from app.services.read_cache import cached_withholding
 from app.services.tax_reconciliation import (
     EsppFacts,
     PaycheckFacts,
@@ -2603,23 +2604,43 @@ async def withholding_estimate(
     )
 
 
-@router.get("/years/{year}/withholding", response_model=WithholdingOut)
-async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) -> WithholdingOut:
-    """Estimated all-in withholding for the CURRENT year vs the engine's liability.
+async def _withholding_json(db: AsyncSession, year: int) -> bytes:
+    """The GET's payload as serialized JSON, served from the memo while nothing it reads has
+    changed (2026-09-23 spec §W12) — the reconciliation makes a cold build about ten engine
+    runs, and the Overview asks on every visit.
 
     The product clock is the one clock this route reads (comp.py's note: the prod container
     runs UTC, where a PT evening is already tomorrow), and it is read ONCE — the
-    same day decides the year check, which checks have been received, and which vests are
-    behind us. `withholding_calc` never re-reads a vest tuple's date, and neither does
-    `withholding_estimate`, so that single value is what keeps the past/future split and the
-    check grid consistent with each other.
+    same day decides the year check, the memo's key, which checks have been received, and
+    which vests are behind us. `withholding_calc` never re-reads a vest tuple's date, and
+    neither does `withholding_estimate`, so that single value is what keeps the past/future
+    split and the check grid consistent with each other.
     """
     today = clock.product_today()
     if year != today.year:
         # Before `_require_year`: a settled year may well be stored and summarizable, and the
         # reason this card cannot be drawn for it has nothing to do with whether it exists.
         raise HTTPException(status_code=422, detail=NON_CURRENT_YEAR_MESSAGE)
-    return await withholding_estimate(db, year, today, reconcile=True)
+
+    async def build() -> bytes:
+        estimate = await withholding_estimate(db, year, today, reconcile=True)
+        return estimate.model_dump_json().encode()
+
+    return await cached_withholding(db, year, build, today=today)
+
+
+@router.get("/years/{year}/withholding", response_model=WithholdingOut)
+async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) -> Response:
+    """Estimated all-in withholding for the CURRENT year vs the engine's liability, with the
+    typed-inputs reconciliation. The memo's bytes are returned as they are (§W12) —
+    `response_model` still documents the shape, and FastAPI passes a Response through."""
+    return Response(content=await _withholding_json(db, year), media_type="application/json")
+
+
+async def read_withholding(db: AsyncSession, year: int) -> WithholdingOut:
+    """The GET's payload for a DIRECT caller (the assistant, §W12): the same memoised bytes,
+    decoded into a model of its own — so no caller can mutate a value another will read."""
+    return WithholdingOut.model_validate_json(await _withholding_json(db, year))
 
 
 def _scenario_breakdown(feed: EngineFeed, scenario_inputs: dict[str, Decimal]) -> TaxBreakdown:

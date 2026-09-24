@@ -397,7 +397,7 @@ async def _portfolio(db: AsyncSession, search: dict, view: dict) -> dict:
 async def _taxes(db: AsyncSession, search: dict, view: dict) -> dict:
     from fastapi import HTTPException
 
-    from app.api.taxes import get_brackets, get_inputs, get_summary, get_withholding
+    from app.api.taxes import get_brackets, get_inputs, get_summary, read_withholding
 
     year = _view_year(view) or clock.product_today().year
     try:
@@ -423,7 +423,9 @@ async def _taxes(db: AsyncSession, search: dict, view: dict) -> dict:
     withholding = None
     if year == clock.product_today().year:
         try:
-            withholding = await get_withholding(year=year, db=db)
+            # The GET's own memoised payload, decoded into a model of this context's own
+            # (2026-09-23 spec §W12) — the route itself now returns the cached bytes.
+            withholding = await read_withholding(db, year)
         except HTTPException:
             withholding = None  # settled/ineligible year: the endpoint's own 422 refusal
     return {
