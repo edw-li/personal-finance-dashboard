@@ -20,6 +20,7 @@ import { attentionItems, reviewAttentionItems } from '../components/overview/att
 import DataStatusCard from '../components/overview/DataStatusCard'
 import { netWorthComponents } from '../components/overview/netWorthReceipt'
 import { netWorthHeadline, receiptAsOf, recordedSentence } from '../components/networth/headline'
+import { currentSnapshotMonth } from '../components/networth/snapshotStates'
 import { GhostTile, SkeletonCard } from '../components/PageSkeleton'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
 import {
@@ -382,6 +383,9 @@ export default function OverviewPage() {
   // The hero's words by date (2026-09-23 spec §T1) — the story note rides only while the month
   // the change covers is listed as due in the coverage the spending group already fetched.
   const headline = summary ? netWorthHeadline(summary, data.coverage?.time?.flows_due) : null
+  // The changes card compares the tile's own snapshot — the summary's month, which IS the server's
+  // current snapshot (no month is asked for here) — else coverage's answer (§0.4(b)).
+  const changesCurrent = summary !== undefined ? summary.month : currentSnapshotMonth(data.coverage)
   // Rendered verbatim, never re-derived: these are the server's own totals fields (the
   // `totals.unrealized_gl` lesson).
   const totals = data.holdings?.totals
@@ -800,7 +804,7 @@ export default function OverviewPage() {
                   </NavLink>
                 }
               />
-                <OverviewChanges data={data.ts} />
+                <OverviewChanges data={data.ts} current={changesCurrent} />
               </div>
               <aside className="overview-agenda-column">
                 {emptyBook && (

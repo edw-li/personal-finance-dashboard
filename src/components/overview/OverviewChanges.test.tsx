@@ -35,10 +35,11 @@ function ts(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseries {
   }
 }
 
-const mount = (data: NetWorthTimeseries) =>
+// `current` is the server's current snapshot (the summary's month): the card never decides it.
+const mount = (data: NetWorthTimeseries, current: string | null | undefined = '2026-10-01') =>
   render(
     <MemoryRouter>
-      <OverviewChanges data={data} />
+      <OverviewChanges data={data} current={current} />
     </MemoryRouter>,
   )
 
@@ -73,5 +74,16 @@ describe('OverviewChanges — movements named by date (2026-09-23 spec §T1)', (
     expect(screen.getByText('Largest account movements since Sep 1 · to Sep 22 (provisional)')).toBeTruthy()
     expect(screen.getByText('+$500.00')).toBeTruthy()
     expect(screen.queryByText('+$7,500.00')).toBeNull()
+  })
+
+  it('stands wherever the server says the current snapshot is — it keeps no rule of its own', () => {
+    // The day would make Oct 1 current; the server's answer is what the card follows (review M5).
+    mount(ts(), '2026-09-01')
+    expect(screen.getByText('No recorded balance changes to compare yet.')).toBeTruthy()
+  })
+
+  it('reads the latest two snapshots when there is no answer at all — an older payload', () => {
+    mount(ts(), undefined)
+    expect(screen.getByText('Largest account movements since Sep 1 · to Sep 22 (provisional)')).toBeTruthy()
   })
 })

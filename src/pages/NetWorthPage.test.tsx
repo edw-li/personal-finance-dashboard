@@ -947,6 +947,23 @@ describe('NetWorthPage — the snapshot named by its date (2026-09-23 spec §T7)
     expect(screen.getByText('What moved — July: Jul 1 → Aug 1')).toBeTruthy()
   })
 
+  // Spec review M5: the page keeps no copy of K2's rule — the scope row's coverage names the
+  // current snapshot, and the default column, Edit and Back all follow that answer.
+  it('follows the server’s current snapshot — it keeps no rule of its own', async () => {
+    vi.mocked(fetchCoverage).mockResolvedValue({
+      balances: ['2026-07-01', '2026-08-01'],
+      spending: [],
+      net_pay: [],
+      time: timeStatus('2026-08-20', { current_snapshot: snapshotStateOut('2026-07-01') }),
+    })
+    vi.mocked(fetchSummary).mockResolvedValue(summaryAt('2026-07-01', null))
+    renderPage('/net-worth?section=accounts')
+    // The day alone would have made Aug 1 current; the server's answer is Jul 1.
+    expect(await screen.findByRole('heading', { name: /Accounts — as of Jul 1/ })).toBeTruthy()
+    expect(await screen.findByRole('link', { name: 'Edit Jul 2026 in the wizard' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Back to latest balances' })).toBeNull()
+  })
+
   it('adds the month’s story while its spending is still due, like the Overview (§T1)', async () => {
     setServerToday('2026-10-03')
     vi.mocked(fetchCoverage).mockResolvedValue({

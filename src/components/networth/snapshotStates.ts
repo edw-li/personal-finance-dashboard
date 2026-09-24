@@ -1,22 +1,33 @@
-import type { NetWorthSummary, NetWorthTimeseries, SnapshotStateOut } from '../../types/api'
-import { addMonths } from '../../utils/months'
+import type { CoverageOut, NetWorthSummary, NetWorthTimeseries, SnapshotStateOut } from '../../types/api'
 
 // Snapshot dates on the page side (2026-09-23 spec §K2, §T1, §T2, §T7): the wire's as-of lists
-// turned into the `Dated` states utils/asOf.ts builds its words from, and K2's "current
-// snapshot" rule mirrored for a timeseries a page already holds. The rule is the server's
-// (services/snapshot_state.py: the latest snapshot whose month is at most the month after
-// today's) and never a second one; a payload without the new lists — a replayed cache, an older
-// fixture — reads as final, as of its 1st, which is exactly what it said before them.
+// turned into the `Dated` states utils/asOf.ts builds its words from, and the column of the
+// CURRENT snapshot — which is the server's answer (services/snapshot_state.py, §0.4(b): the
+// summary's month with none asked, or coverage.time.current_snapshot), never a second copy of
+// the rule here. A payload without the new lists — a replayed cache, an older fixture — reads as
+// final, as of its 1st, which is exactly what it said before them.
 
 export type Dated = Pick<SnapshotStateOut, 'month' | 'as_of' | 'provisional'>
 
-/** The current snapshot's index: the latest month at most one month after today's; -1 when
- *  none qualifies. `months` is ascending, as the wire sends it. */
-export function currentSnapshotIndex(months: readonly string[], todayIso: string): number {
-  const bound = addMonths(`${todayIso.slice(0, 7)}-01`, 1)
+/** The server's current snapshot month (§0.4(b)): coverage `time.current_snapshot`; null when
+ *  the server says none is current (an empty book, or only balances filed further ahead);
+ *  undefined when the payload has no `time` at all (an older backend) — no answer. */
+export function currentSnapshotMonth(coverage: Pick<CoverageOut, 'time'> | null | undefined): string | null | undefined {
+  if (coverage?.time === undefined) return undefined
+  return coverage.time?.current_snapshot?.month ?? null
+}
+
+/** The column of the server's current snapshot on a month axis: the last column at or before
+ *  `current` — that month's own on the monthly axis, the quarter end it closes into on the
+ *  quarterly one. -1 when the server says none is current (`null`) or no column reaches back that
+ *  far; with no answer at all (`undefined`, an older payload) the latest column, as before the
+ *  time model. `months` is ascending, as the wire sends it. */
+export function currentColumn(months: readonly string[], current: string | null | undefined): number {
+  if (current === undefined) return months.length - 1
+  if (current === null) return -1
   let index = -1
   months.forEach((month, i) => {
-    if (month <= bound) index = i
+    if (month <= current) index = i
   })
   return index
 }

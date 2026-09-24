@@ -2,8 +2,7 @@ import { Link } from 'react-router-dom'
 import type { NetWorthTimeseries } from '../../types/api'
 import { formatAsOf } from '../../utils/asOf'
 import { formatCurrency } from '../../utils/format'
-import { todayIso } from '../../utils/months'
-import { currentSnapshotIndex, snapshotAt } from '../networth/snapshotStates'
+import { currentColumn, snapshotAt } from '../networth/snapshotStates'
 
 /** The three largest recorded moves between the snapshot at `index` and the one before it. */
 export function recordedBalanceMovers(data: NetWorthTimeseries | undefined, index: number) {
@@ -25,10 +24,17 @@ function movementsSince(data: NetWorthTimeseries, index: number): string {
   return `since ${formatAsOf(snapshotAt(data, index - 1))}${to}`
 }
 
-export default function OverviewChanges({ data }: { data?: NetWorthTimeseries }) {
-  // The CURRENT snapshot — the one the net-worth tile shows (K2's rule: the latest up to next
-  // month) — never balances filed further ahead, which only an API client or an import can store.
-  const index = data === undefined ? -1 : currentSnapshotIndex(data.months, todayIso())
+export default function OverviewChanges({
+  data,
+  current,
+}: {
+  data?: NetWorthTimeseries
+  /** The server's current snapshot month — the one the net-worth tile shows (2026-09-23 spec
+   *  §K2, §0.4(b)): null when none is current, undefined when the server did not say. Never
+   *  balances filed further ahead, which only an API client or an import can store. */
+  current?: string | null
+}) {
+  const index = data === undefined ? -1 : currentColumn(data.months, current)
   const movers = recordedBalanceMovers(data, index)
   return <section className="card overview-changes">
     <h2 className="eyebrow">Changes worth understanding</h2>

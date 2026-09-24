@@ -14,7 +14,7 @@ import type {
 import { asOfPhrase, formatAsOf } from '../../utils/asOf'
 import { formatMonth } from '../../utils/format'
 import { dayName } from '../../utils/timeWords'
-import { currentSnapshotIndex, snapshotAt, type Dated } from '../networth/snapshotStates'
+import { currentColumn, currentSnapshotMonth, snapshotAt, type Dated } from '../networth/snapshotStates'
 
 /** A span of months the card names out loud. The edges say where it starts and ends;
  *  `months` is how many months actually carried data — on the saved window that is the
@@ -73,19 +73,19 @@ export function windowWords(window: YtdWindow): string {
 const toWords = (state: Dated) => `(to ${asOfPhrase(state).replace(/^as of /, '')})`
 
 /** The net-worth row (2026-09-23 spec §T2): from the Jan 1 balances — the snapshot keyed
- *  {year}-01-01, whatever its state — to the CURRENT snapshot (K2's: the latest up to next
- *  month), which may be keyed next year: an early Jan 1 snapshot typed on Dec 28 describes Dec 28
- *  of THIS year. December no longer counts as the new year. Without Jan 1 balances the base is the
- *  year's first snapshot, said out loud. */
+ *  {year}-01-01, whatever its state — to the CURRENT snapshot, the server's answer (§0.4(b):
+ *  coverage.time.current_snapshot), which may be keyed next year: an early Jan 1 snapshot typed on
+ *  Dec 28 describes Dec 28 of THIS year. December no longer counts as the new year. Without Jan 1
+ *  balances the base is the year's first snapshot, said out loud. */
 function netWorthYtd(
   ts: Pick<NetWorthTimeseries, 'months' | 'net_worth'> & Partial<Pick<NetWorthTimeseries, 'as_of' | 'provisional'>>,
   year: number,
-  todayIso: string,
+  current: string | null | undefined,
 ): Pick<YtdStats, 'netWorthDelta' | 'netWorthPct' | 'netWorthState' | 'netWorthWords'> {
   const jan = `${year}-01-01`
   const janIdx = ts.months.indexOf(jan)
   const baseIdx = janIdx >= 0 ? janIdx : ts.months.findIndex((month) => month.startsWith(`${year}-`))
-  const currentIdx = currentSnapshotIndex(ts.months, todayIso)
+  const currentIdx = currentColumn(ts.months, current)
   // No snapshot keyed in the year yet — or only balances filed further ahead than the current
   // snapshot reaches (only an API client or an import can store those).
   if (baseIdx < 0 || currentIdx < baseIdx) {
@@ -153,7 +153,7 @@ export function ytdStats(
 
   return {
     year,
-    ...netWorthYtd(ts, year, todayIso),
+    ...netWorthYtd(ts, year, currentSnapshotMonth(coverage)),
     // living_total is the honest spend; `total` is what a pre-kinds backend sends, and it
     // is what this card printed until today — so the fallback changes nothing for it.
     spend: row?.living_total === undefined ? row?.total ?? null : hasMatch ? row.living_total : null,

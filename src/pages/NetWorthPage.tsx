@@ -34,7 +34,7 @@ import {
 } from '../components/networth/netWorthChartOptions'
 import type { MoversMode, StackMode } from '../components/networth/netWorthChartOptions'
 import { netWorthHeadline, receiptAsOf, recordedSentence } from '../components/networth/headline'
-import { currentSnapshotIndex, rangeDates, snapshotAt } from '../components/networth/snapshotStates'
+import { currentColumn, currentSnapshotMonth, rangeDates, snapshotAt } from '../components/networth/snapshotStates'
 import type { ChartSelection } from '../types/metrics'
 import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
@@ -50,7 +50,6 @@ import type {
 import { nestComponents } from '../utils/accounts'
 import { asOfPhrase, changePhrase, formatAsOf } from '../utils/asOf'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
-import { todayIso } from '../utils/months'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './NetWorthPage.css'
@@ -452,11 +451,17 @@ export default function NetWorthPage() {
       : granularity === 'quarterly'
         ? months.filter((m) => m <= viewedMonth).length - 1
         : months.indexOf(viewedMonth)
-  // Nothing picked (or a pick with no column here): the CURRENT snapshot's column — the latest
-  // at most one month ahead, the server summary's own rule (2026-09-23 spec §K2, §T7) — so
-  // balances filed for December by mistake are never the default beside tiles that read August.
-  // A book holding only such filings has no current snapshot and shows its last column.
-  const currentIndex = currentSnapshotIndex(months, todayIso())
+  // Nothing picked (or a pick with no column here): the CURRENT snapshot's column — the server's
+  // answer, never a rule of this page's own (2026-09-23 spec §0.4(b), §K2, §T7): the scope row's
+  // coverage names it, and before that lands the summary does when no month is asked for (its
+  // default IS the current snapshot). So balances filed for December by mistake are never the
+  // default beside tiles that read August; a book holding only such filings has no current
+  // snapshot and shows its last column.
+  const fromCoverage = currentSnapshotMonth(coverage)
+  const currentIndex = currentColumn(
+    months,
+    fromCoverage !== undefined ? fromCoverage : viewedMonth === null && summary !== null ? summary.month : undefined,
+  )
   const viewedIndex =
     selectedIndex >= 0 ? selectedIndex : currentIndex >= 0 ? currentIndex : months.length - 1
   // The month the page shows with nothing picked: the ribbon's Edit target and what "Back to

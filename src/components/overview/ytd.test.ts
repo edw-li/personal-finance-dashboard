@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { CoverageOut, DividendOut, SpendingYearly } from '../../types/api'
+import { earlySnapshot, snapshotStateOut, timeStatus } from '../../testing/timeFixtures'
+import type { CoverageOut, DividendOut, SnapshotStateOut, SpendingYearly } from '../../types/api'
 import { setServerToday } from '../../utils/productToday'
 import { windowWords, ytdStats } from './ytd'
 
@@ -61,6 +62,12 @@ function coverageOut(over: Partial<CoverageOut> = {}): CoverageOut {
   }
 }
 
+/** The coverage a current backend sends on `today`: its `time` names the current snapshot —
+ *  the server's answer the YTD row measures to (spec review M5: no rule of its own here). */
+function coverageOn(today: string, current: SnapshotStateOut | null): CoverageOut {
+  return coverageOut({ time: timeStatus(today, { current_snapshot: current }) })
+}
+
 function dividend(payDate: string, amount: string, id = 1): DividendOut {
   return {
     id, security_id: 1, account: null, pay_date: payDate, amount,
@@ -91,7 +98,7 @@ describe('ytdStats — net worth from the Jan 1 balances (2026-09-23 spec §T2)'
       ),
       yearly(),
       [],
-      coverageOut(),
+      coverageOn('2026-09-23', earlySnapshot('2026-10-01', '2026-09-22')),
       '2026-09-23',
     )
     expect(stats.year).toBe(2026)
@@ -134,7 +141,7 @@ describe('ytdStats — net worth from the Jan 1 balances (2026-09-23 spec §T2)'
       ts(['2026-01-01', '2026-12-01', '2027-01-01'], [100, 140, 150], { '2027-01-01': '2026-12-28' }),
       yearly(),
       [],
-      coverageOut(),
+      coverageOn('2026-12-29', earlySnapshot('2027-01-01', '2026-12-28')),
       '2026-12-29',
     )
     expect(stats.year).toBe(2026)
@@ -151,7 +158,7 @@ describe('ytdStats — net worth from the Jan 1 balances (2026-09-23 spec §T2)'
       ts(['2026-12-01', '2027-01-01'], [150, 160], { '2027-01-01': '2026-12-28' }),
       yearly(),
       [],
-      coverageOut(),
+      coverageOn('2027-01-05', earlySnapshot('2027-01-01', '2026-12-28')),
       '2027-01-05',
     )
     expect(after.netWorthState).toBe('zero')
@@ -165,11 +172,32 @@ describe('ytdStats — net worth from the Jan 1 balances (2026-09-23 spec §T2)'
       ts(['2026-01-01', '2026-08-01', '2026-12-01'], [100, 130, 999]),
       yearly(),
       [],
-      coverageOut(),
+      coverageOn(TODAY, snapshotStateOut('2026-08-01')),
       TODAY,
     )
     expect(stats.netWorthDelta).toBe(30)
     expect(stats.netWorthWords).toBe('since Jan 1 (to Aug 1)')
+  })
+
+  // Spec review M5: the current snapshot is the server's answer, never re-derived from the day.
+  it('measures to wherever the server says the current snapshot is', () => {
+    const stats = ytdStats(
+      ts(['2026-01-01', '2026-07-01', '2026-08-01'], [100, 120, 130]),
+      yearly(),
+      [],
+      coverageOn(TODAY, snapshotStateOut('2026-07-01')),
+      TODAY,
+    )
+    expect(stats.netWorthDelta).toBe(20)
+    expect(stats.netWorthWords).toBe('since Jan 1 (to Jul 1)')
+    // The server says nothing is current: nothing to measure to.
+    expect(
+      ytdStats(ts(['2026-01-01', '2026-12-01'], [100, 999]), yearly(), [], coverageOn(TODAY, null), TODAY).netWorthState,
+    ).toBe('none')
+    // No answer at all (an older payload): the latest snapshot, as before the time model.
+    expect(
+      ytdStats(ts(['2026-01-01', '2026-08-01'], [100, 130]), yearly(), [], coverageOut(), TODAY).netWorthWords,
+    ).toBe('since Jan 1 (to Aug 1)')
   })
 
   it('names a Jan 1 base that stayed provisional by its own day', () => {

@@ -1,22 +1,30 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { setServerToday } from '../../utils/productToday'
-import { currentSnapshotIndex, rangeDates, snapshotAt, summaryState } from './snapshotStates'
+import { currentColumn, rangeDates, snapshotAt, summaryState } from './snapshotStates'
 
 beforeEach(() => setServerToday('2026-09-23'))
 
-describe('currentSnapshotIndex — K2’s current snapshot over a timeseries', () => {
-  it('is the latest snapshot at most one month ahead of today', () => {
-    expect(currentSnapshotIndex(['2026-08-01', '2026-09-01', '2026-10-01'], '2026-09-23')).toBe(2)
+// The current snapshot is the SERVER's answer (2026-09-23 spec §0.4(b), §K2 — the summary's
+// month with none asked, or coverage.time.current_snapshot); the page only finds its column
+// (spec review M5: no second copy of the rule here).
+describe('currentColumn — the column of the server’s current snapshot', () => {
+  it('is that month’s column, whatever balances are filed further ahead', () => {
+    expect(currentColumn(['2026-08-01', '2026-09-01', '2026-10-01', '2026-12-01'], '2026-10-01')).toBe(2)
   })
 
-  it('never makes balances filed further ahead current', () => {
-    expect(currentSnapshotIndex(['2026-09-01', '2026-10-01', '2026-12-01'], '2026-09-23')).toBe(1)
-    expect(currentSnapshotIndex(['2026-12-01'], '2026-09-23')).toBe(-1)
-    expect(currentSnapshotIndex([], '2026-09-23')).toBe(-1)
+  it('on a quarterly axis, the quarter end the current snapshot closes into', () => {
+    expect(currentColumn(['2026-03-01', '2026-06-01', '2026-09-01'], '2026-10-01')).toBe(2)
+    expect(currentColumn(['2026-03-01', '2026-06-01', '2026-09-01'], '2026-08-01')).toBe(1)
   })
 
-  it('crosses the year the way the server does', () => {
-    expect(currentSnapshotIndex(['2026-12-01', '2027-01-01'], '2026-12-28')).toBe(1)
+  it('has no column when the server says nothing is current', () => {
+    expect(currentColumn(['2026-12-01'], null)).toBe(-1)
+    expect(currentColumn(['2026-09-01'], '2026-08-01')).toBe(-1)
+  })
+
+  it('reads the latest column when there is no answer at all — an older payload, as before', () => {
+    expect(currentColumn(['2026-09-01', '2026-12-01'], undefined)).toBe(1)
+    expect(currentColumn([], undefined)).toBe(-1)
   })
 })
 
