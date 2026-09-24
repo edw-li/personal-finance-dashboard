@@ -1,15 +1,15 @@
 import type { AccountOut, CategoryOut, SpendingMatrix } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
+import { committed } from './parts'
 import { formatCurrency } from '../../utils/format'
 import { typicalSpend } from '../../utils/spending'
 
 interface Change { id: number; label: string; before: number; after: number }
-const amount = (value: string | undefined) => Number(canonicalAmount(value ?? '')) || 0
 const entered = (value: string | undefined) => {
   const canonical = canonicalAmount(value ?? '')
   return canonical !== '' && Number.isFinite(Number(canonical))
 }
-const changed = (before: string | undefined, after: string | undefined) => entered(before) !== entered(after) || amount(before) !== amount(after)
+const changed = (before: string | undefined, after: string | undefined) => entered(before) !== entered(after) || committed(before) !== committed(after)
 const largest = (rows: Change[]) => rows.filter(row => Math.round((row.after - row.before) * 100) !== 0)
   .sort((a, b) => Math.abs(b.after - b.before) - Math.abs(a.after - a.before)).slice(0, 3)
 
@@ -55,12 +55,12 @@ export default function ReviewChanges({ accounts, categories, balances, amounts,
   // The saved snapshots only: the typed figures on the Balances step are this 1st's part, not the
   // change the month produced (spec §M5 — "the story uses saved figures").
   const story = to === null ? [] : largest(balanceRows.filter(a => entered(from[a.id]) && entered(to[a.id]))
-    .map(a => ({ id: a.id, label: a.name, before: amount(from[a.id]), after: amount(to[a.id]) })))
+    .map(a => ({ id: a.id, label: a.name, before: committed(from[a.id]), after: committed(to[a.id]) })))
   const unsavedBalances = saved ? balanceRows.filter(a => changed(saved.balances[a.id], balances[a.id])).length : 0
   const unsavedCategories = saved ? categories.filter(c => changed(saved.amounts[c.id], amounts[c.id])).length : 0
   const unusual = largest(categories.flatMap(c => {
     const typical = matrix ? typicalSpend(matrix, month, c.id) : null
-    return typical === null || !recordedCategories.has(c.id) || !entered(amounts[c.id]) ? [] : [{ id: c.id, label: c.name, before: typical, after: amount(amounts[c.id]) }]
+    return typical === null || !recordedCategories.has(c.id) || !entered(amounts[c.id]) ? [] : [{ id: c.id, label: c.name, before: typical, after: committed(amounts[c.id]) }]
   }))
   const balancesWord = unsavedBalances === 1 ? 'balance' : 'balances'
   const categoriesWord = unsavedCategories === 1 ? 'category' : 'categories'

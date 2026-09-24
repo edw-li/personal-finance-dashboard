@@ -7,7 +7,9 @@ import { balancesPartName, dayOf, flowsPartName, monthNameOf } from './monthlyCo
 // spending or take-home is due (newest first), then earlier balances still provisional. The strip
 // renders them, /update lands on the first, and a save names the next one.
 
-export type WizardStep = 'balances' | 'spending' | 'review'
+/** The wizard's three steps, in order — the step chips and every step URL read this one list. */
+export const WIZARD_STEPS = ['balances', 'spending', 'review'] as const
+export type WizardStep = (typeof WIZARD_STEPS)[number]
 export type DueStep = 'balances' | 'spending'
 
 export interface DuePart {

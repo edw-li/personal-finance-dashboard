@@ -1818,9 +1818,25 @@ it('deletes only the spending rows, offers Undo, and leaves the balances snapsho
   await screen.findByText("Deleted Aug 2026's empty spending rows — balances untouched.")
   // Coverage moved (the spending feed is gone), so the ribbon has to re-read it.
   await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBeGreaterThan(1))
+  const reads = vi.mocked(fetchCoverage).mock.calls.length
   fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
   await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledWith('b-empty'))
   await screen.findByText("Undone — Aug 2026's rows are back.")
+  // The Undo moved coverage back: the month re-seeds AND the ribbon re-reads (review M12).
+  await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length - reads).toBeGreaterThanOrEqual(2))
+})
+
+it("the conflict banner's Reload re-seeds the month and has the ribbon re-read coverage (review M12)", async () => {
+  vi.mocked(monthReviewApi.saveMonthReview).mockRejectedValueOnce(new ApiError('August changed since it was loaded.', 409))
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save Aug 1 balances' }))
+  const reload = await screen.findByRole('button', { name: 'Reload latest and compare draft' })
+  const reads = vi.mocked(fetchCoverage).mock.calls.length
+  const loads = vi.mocked(monthReviewApi.fetchMonthReview).mock.calls.length
+  fireEvent.click(reload)
+  await waitFor(() => expect(vi.mocked(monthReviewApi.fetchMonthReview).mock.calls.length).toBeGreaterThan(loads))
+  await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length - reads).toBeGreaterThanOrEqual(2))
 })
 
 it('surfaces a failed repair instead of pretending the month is clean', async () => {

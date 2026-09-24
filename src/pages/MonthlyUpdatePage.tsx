@@ -25,8 +25,15 @@ import { fetchMonthReview, saveMonthReview, REVIEW_LABELS } from '../api/monthRe
 import type { MonthReview, ReviewedFeeds } from '../api/monthReview'
 import ReviewChanges from '../components/monthly/ReviewChanges'
 import HistoricalReview from '../components/monthly/HistoricalReview'
-import WhatsDue from '../components/monthly/WhatsDue'
-import { landingFor, nextDueAfter, type DuePart, type DueStep } from '../components/monthly/dueParts'
+import WhatsDue, { DuePartLink } from '../components/monthly/WhatsDue'
+import {
+  landingFor,
+  nextDueAfter,
+  WIZARD_STEPS,
+  type DuePart,
+  type DueStep,
+  type WizardStep,
+} from '../components/monthly/dueParts'
 import {
   readDraft,
   removeDraft,
@@ -57,7 +64,7 @@ import {
   type BalancesMeta,
 } from '../components/monthly/monthlyCopy'
 import { buildMonthSave, type SaveKind } from '../components/monthly/monthSave'
-import { balancesKey, flowsKey, sortedIds, type BalancesPart, type FlowsPart } from '../components/monthly/parts'
+import { balancesKey, committed, flowsKey, sortedIds, type BalancesPart, type FlowsPart } from '../components/monthly/parts'
 import { restoreParts } from '../components/monthly/restore'
 import { monthStory, type NextSnapshot } from '../components/monthly/story'
 import InfoHint from '../components/InfoHint'
@@ -87,14 +94,12 @@ import { typicalSpend } from '../utils/spending'
 import '../components/panels.css'
 import './MonthlyUpdatePage.css'
 
-const STEPS = ['balances', 'spending', 'review'] as const
-type Step = (typeof STEPS)[number]
 
 // Terse chip labels — each step's card heading carries the full title ("Spending & net
 // pay", "Review & save — Aug 2026"). The chips must NOT repeat a heading verbatim: the
 // stepper renders on every step, so a duplicate makes "am I on the review step?" queries
 // ambiguous (two matching nodes) and any assertion written against the chip vacuous.
-const STEP_LABELS: Record<Step, string> = {
+const STEP_LABELS: Record<WizardStep, string> = {
   balances: 'Balances',
   spending: 'Spending',
   review: 'Review',
@@ -284,7 +289,7 @@ function deriveParents(
     // adding keeps the parent exact. A float sum drifts a hundredth over a long list, and the
     // server's drift check would then report a mismatch nobody typed.
     const cents = childIds.reduce(
-      (acc, id) => acc + Math.round((Number(canonicalAmount(next[id] ?? '')) || 0) * 100),
+      (acc, id) => acc + Math.round(committed(next[id]) * 100),
       0,
     )
     next[parentId] = (cents / 100).toFixed(2)
@@ -322,7 +327,7 @@ export default function MonthlyUpdatePage() {
 function UpdateLanding() {
   const [params, setParams] = useSearchParams()
   const stepParam = params.get('step')
-  const requested = STEPS.includes(stepParam as Step) ? (stepParam as Step) : null
+  const requested = WIZARD_STEPS.includes(stepParam as WizardStep) ? (stepParam as WizardStep) : null
   useEffect(() => {
     let cancelled = false
     fetchCoverage()
@@ -363,7 +368,7 @@ function MonthlyUpdateWizard() {
   // Never null here — MonthlyUpdatePage renders the landing until the URL names a month.
   const month = params.get('month') ?? currentMonthIso()
   const stepParam = params.get('step')
-  const step: Step = STEPS.includes(stepParam as Step) ? (stepParam as Step) : 'balances'
+  const step: WizardStep = WIZARD_STEPS.includes(stepParam as WizardStep) ? (stepParam as WizardStep) : 'balances'
   // Re-render when the server's day moves (a tab left open across midnight): every phase, due and
   // banner rule here reads the day through utils/months.ts (2026-09-23 spec §K1).
   useProductToday()
@@ -532,7 +537,7 @@ function MonthlyUpdateWizard() {
 
   // Both keys are always written together, so the step never loses the month (and any
   // unrelated query param a deep link carried survives the copy).
-  const setStep = (next: Step) => {
+  const setStep = (next: WizardStep) => {
     // The note narrates a fill on the step being LEFT, and the flash is a 700 ms beat on
     // cells that are about to unmount — neither may follow the user to the next step.
     setPasteNote(null)
@@ -837,7 +842,7 @@ function MonthlyUpdateWizard() {
   // Committed values, like every other live figure on this page — a cell still holding "$250"
   // (no blur yet) is entered.
   const anyAmountEntered = categories.some(
-    (c) => (Number(canonicalAmount(amounts[c.id] ?? '')) || 0) !== 0,
+    (c) => committed(amounts[c.id]) !== 0,
   )
   // Does the month HOLD spending — saved, or on screen to be saved? A month nobody entered must
   // stay un-entered: 19 rows of $0.00 read as a real month of spending nothing in every chart,
@@ -856,7 +861,7 @@ function MonthlyUpdateWizard() {
         (c) =>
           recordZero ||
           storedCategories.has(c.id) ||
-          (Number(canonicalAmount(amounts[c.id] ?? '')) || 0) !== 0,
+          committed(amounts[c.id]) !== 0,
       ),
     [categories, recordZero, storedCategories, amounts],
   )
@@ -872,11 +877,11 @@ function MonthlyUpdateWizard() {
   const preview = useMemo(() => {
     const netWorth = accounts.reduce(
       (acc, a) =>
-        a.is_component ? acc : acc + (Number(canonicalAmount(balances[a.id] ?? '')) || 0),
+        a.is_component ? acc : acc + committed(balances[a.id]),
       0,
     )
     const totalSpend = categories.reduce(
-      (acc, c) => acc + (Number(canonicalAmount(amounts[c.id] ?? '')) || 0),
+      (acc, c) => acc + committed(amounts[c.id]),
       0,
     )
     // The CASH spend — living + tax, transfers excluded (2026-09-04 honest-numbers spec
@@ -886,7 +891,7 @@ function MonthlyUpdateWizard() {
     // this reads the wire rather than guessing.
     const cashSpend = categories.reduce(
       (acc, c) =>
-        c.kind === 'transfer' ? acc : acc + (Number(canonicalAmount(amounts[c.id] ?? '')) || 0),
+        c.kind === 'transfer' ? acc : acc + committed(amounts[c.id]),
       0,
     )
     const pay = netPay.trim() === '' ? null : Number(canonicalAmount(netPay))
@@ -900,8 +905,8 @@ function MonthlyUpdateWizard() {
       netWorth,
       delta: deltaCents === null ? null : deltaCents === 0 ? 0 : deltaCents / 100,
       totalSpend,
-      livingSpend: categories.filter(c => c.kind === 'living').reduce((sum, c) => sum + (Number(canonicalAmount(amounts[c.id] ?? '')) || 0), 0),
-      taxSpend: categories.filter(c => c.kind === 'tax').reduce((sum, c) => sum + (Number(canonicalAmount(amounts[c.id] ?? '')) || 0), 0),
+      livingSpend: categories.filter(c => c.kind === 'living').reduce((sum, c) => sum + committed(amounts[c.id]), 0),
+      taxSpend: categories.filter(c => c.kind === 'tax').reduce((sum, c) => sum + committed(amounts[c.id]), 0),
       transfers: totalSpend - cashSpend,
       cashSpend,
       // The Cash saved tile's second line: what was left of take-home after cash went out.
@@ -912,27 +917,16 @@ function MonthlyUpdateWizard() {
     }
   }, [accounts, balances, categories, amounts, netPay, prevNetWorth])
 
-  // Undo (2026-09-03 data-lifecycle spec §9): the spending batch, then the balances batch —
-  // the reverse of the save's order — each its own request; the first failure stops the
-  // sequence and its sentence is shown. `after` (reload, or return to the month) runs on
-  // success AND after a partial failure, because a half-reversed month is still a changed one.
-  const undoBatches = async (batchIds: (string | null)[], done: string, after: () => void) => {
-    let reversed = 0
+  // Undo (2026-09-03 data-lifecycle spec §9): every save and delete here is ONE change batch —
+  // the month-review PUT writes both parts in one — so one request reverses it. `after` (reload,
+  // or return to the month) runs once the reversal landed; a refused one changed nothing.
+  const undoChange = async (batchId: string, done: string, after: () => void) => {
     try {
-      for (const id of batchIds) {
-        if (id === null) continue
-        await undoBatch(id)
-        reversed += 1
-      }
+      await undoBatch(batchId)
       toast.success(done)
       after()
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Undo failed')
-      // A PARTIAL undo still moved the data (leg 1 reversed, leg 2 was refused — a 409 from
-      // a later change touching the same rows). The boxes and the banner now describe rows
-      // that no longer exist, so `after` runs anyway: only a sequence that reversed NOTHING
-      // may leave the screen as it is.
-      if (reversed > 0) after()
     }
   }
 
@@ -1102,7 +1096,7 @@ function MonthlyUpdateWizard() {
           toast.success(`${saveMessage(receipt, closed)}${nextDue === null ? '' : ` · Next due: ${nextDue.name}`}`, {
             action: {
               label: 'Undo',
-              onAction: () => void undoBatches([batchId], `Undone — ${formatMonth(month)} is back to how it was.`, reloadMonth),
+              onAction: () => void undoChange(batchId, `Undone — ${formatMonth(month)} is back to how it was.`, reloadMonth),
             },
           })
         }
@@ -1182,7 +1176,7 @@ function MonthlyUpdateWizard() {
               action: {
                 label: 'Undo',
                 onAction: () =>
-                  void undoBatches([batchId], `Undone — ${name} are back.`, () => {
+                  void undoChange(batchId, `Undone — ${name} are back.`, () => {
                     // Back to the part's own step on that month; the nonce covers the same month.
                     reloadMonth()
                     setParams(() => new URLSearchParams({ month: deleted, step: part === 'balances' ? 'balances' : 'spending' }))
@@ -1221,11 +1215,7 @@ function MonthlyUpdateWizard() {
           : {
               action: {
                 label: 'Undo',
-                onAction: () =>
-                  void undoBatches([batchId], `Undone — ${formatMonth(repaired)}'s rows are back.`, () => {
-                    setLoading(true)
-                    setLoadNonce((n) => n + 1)
-                  }),
+                onAction: () => void undoChange(batchId, `Undone — ${formatMonth(repaired)}'s rows are back.`, reloadMonth),
               },
             },
       )
@@ -1235,9 +1225,7 @@ function MonthlyUpdateWizard() {
       // the caret: the button just clicked unmounts with the banner it sat in, and remounting
       // the step body runs the first typable cell's autoFocus — so focus lands on a cell
       // rather than falling back to <body>, where the next Tab would restart at the top.
-      setCoverageNonce((n) => n + 1)
-      setLoading(true)
-      setLoadNonce((n) => n + 1)
+      reloadMonth()
     } catch (err) {
       setError(
         err instanceof ApiError ? `Delete failed: ${err.message} — retry` : 'Delete failed — retry',
@@ -1261,7 +1249,7 @@ function MonthlyUpdateWizard() {
   // the fetch state flips here, in the event handler, never in the effect
   // (react-hooks/set-state-in-effect). Same-month: the [month] effect would never re-run, so an
   // unconditional setLoading(true) would blank the wizard forever — only the step moves.
-  const goTo = (m: string, nextStep: Step) => {
+  const goTo = (m: string, nextStep: WizardStep) => {
     if (m === month) {
       if (nextStep !== step) setStep(nextStep)
       return
@@ -1490,9 +1478,6 @@ function MonthlyUpdateWizard() {
       handOver(accounts, typedParents, Object.keys(fills).map(Number)),
     )
 
-  // Committed value of one cell for the live columns — the preview memo's rule.
-  const committed = (raw: string | undefined) => Number(canonicalAmount(raw ?? '')) || 0
-
   // A1: negate a liability cell in place — a STRING flip on the canonical form, never
   // float round-tripping (a re-serialized double could alter digits). Only reachable
   // while the committed value is > 0, so the result is always the negative twin; the
@@ -1579,7 +1564,7 @@ function MonthlyUpdateWizard() {
         title={`Monthly update — ${formatMonth(month)}`}
         subheader={
           <div className="wizard-steps">
-            {STEPS.map((s, i) => (
+            {WIZARD_STEPS.map((s, i) => (
               <button
                 key={s}
                 type="button"
@@ -1638,7 +1623,7 @@ function MonthlyUpdateWizard() {
             wizard's own month switch, amber once overdue; with nothing due, when the next part is. */}
         <WhatsDue time={coverage?.time} onOpen={(part) => goTo(part.month, part.step)} />
         <FeedBanner error={error} />
-        {reviewConflict && <div className="draft-note"><span>The saved inputs changed during this visit. Reload to compare your draft with the latest saved figures.</span><button className="button" onClick={() => { setLoading(true); setLoadNonce(n => n + 1) }}>Reload latest and compare draft</button></div>}
+        {reviewConflict && <div className="draft-note"><span>The saved inputs changed during this visit. Reload to compare your draft with the latest saved figures.</span><button className="button" onClick={reloadMonth}>Reload latest and compare draft</button></div>}
         {emptyMonth && (
           // Spec §4: the repair prompt for a month that was saved with no spending — the
           // wizard is where the fix lives, so the banner carries both routes out of it.
@@ -1691,17 +1676,9 @@ function MonthlyUpdateWizard() {
             {lastSave.nextDue !== null && (
               // The toast's "Next due" as a working link (spec §M2): the toast's one action is Undo.
               <p>
-                <Link
-                  to={`/update?month=${lastSave.nextDue.month}&step=${lastSave.nextDue.step}`}
-                  onClick={(event) => {
-                    const part = lastSave.nextDue
-                    if (part === null || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-                    event.preventDefault()
-                    goTo(part.month, part.step)
-                  }}
-                >
+                <DuePartLink part={lastSave.nextDue} onOpen={(part) => goTo(part.month, part.step)}>
                   Next due: {lastSave.nextDue.name} →
-                </Link>
+                </DuePartLink>
               </p>
             )}
             <p>
@@ -2098,7 +2075,7 @@ function MonthlyUpdateWizard() {
                   const value = amounts[category.id] ?? ''
                   const typical = matrix === null ? null : typicalSpend(matrix, month, category.id)
                   const delta =
-                    typical === null ? null : (Number(canonicalAmount(value)) || 0) - typical
+                    typical === null ? null : committed(value) - typical
                   // CENTS decide both the tone and the text. A two-sample median averages
                   // inexact doubles ((0.10 + 0.20) / 2 is 0.15000000000000002), so a month
                   // that matches typical exactly lands at ±1e-14 — enough to tone a formatted
@@ -2108,7 +2085,7 @@ function MonthlyUpdateWizard() {
                   const deltaCents = delta === null ? null : Math.round(delta * 100)
                   const budget = monthBudgets[category.id]
                   const overBudget =
-                    budget !== undefined && (Number(canonicalAmount(value)) || 0) > Number(budget)
+                    budget !== undefined && committed(value) > Number(budget)
                   return (
                     <tr key={category.id}>
                       <td>

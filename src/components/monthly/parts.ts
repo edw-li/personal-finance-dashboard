@@ -20,6 +20,11 @@ export interface FlowsPart {
   recordZero: boolean
 }
 
+/** A cell's COMMITTED value as a number — what a save would write, read the way every live total
+ *  on the page reads it: a cell still holding "$1,600" or "=200+50" (no blur yet) is entered, and a
+ *  blank, or text that is not an amount, reads as 0. */
+export const committed = (raw: string | undefined) => Number(canonicalAmount(raw ?? '')) || 0
+
 export function sortedIds(ids: Iterable<number>): number[] {
   return [...ids].sort((a, b) => a - b)
 }
