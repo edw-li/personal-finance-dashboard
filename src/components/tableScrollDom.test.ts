@@ -3,10 +3,14 @@ import { createElement, useRef } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { revealInBox, useStickyInsets } from './tableScrollDom'
 
+/** Nodes a test attached to the document by hand: cleanup() only unmounts what render() mounted. */
+const attached: ChildNode[] = []
+
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  for (const node of attached.splice(0)) node.remove()
 })
 
 function Box({ foot }: { foot: boolean }) {
@@ -125,6 +129,26 @@ function scene(rowTop: number, rowHeight = 44, foot = 0) {
   return { box, row }
 }
 
+/** scene(), dressed as tableScroll.css dresses the box: a `.table-scroll` in the document around a
+ *  table with or without a totals row, under a sheet that declares the fade's height. revealInBox
+ *  reads that height off the COMPUTED style, as it must in a browser (the sheet sets it, not the
+ *  element). jsdom 26 does compute a sheet's custom property on the element its rule matches — it
+ *  only skips inheritance, which this read never needs — and vitest loads no .css, so without this
+ *  sheet the fade reads as 0: what every other scene here relies on. */
+function fadeScene(rowTop: number, foot: number) {
+  const { box, row } = scene(rowTop, 44, foot)
+  box.className = 'table-scroll'
+  const table = box.appendChild(document.createElement('table'))
+  table.appendChild(document.createElement('tbody'))
+  if (foot > 0) table.appendChild(document.createElement('tfoot'))
+  const sheet = document.createElement('style')
+  sheet.textContent = '.table-scroll { --table-fade-h: 28px; }'
+  document.head.appendChild(sheet)
+  document.body.appendChild(box)
+  attached.push(sheet, box)
+  return { box, row }
+}
+
 describe('revealInBox', () => {
   it('leaves a row that already shows inside the band alone', () => {
     const { box, row } = scene(200)
@@ -199,5 +223,23 @@ describe('revealInBox', () => {
     const below = bare(480) // down by min(524 − 500, 480 − 100) = 24
     expect(revealInBox(below.box, below.row)).toBe(true)
     expect(below.box.scrollTop).toBe(1024)
+  })
+
+  it("keeps a row clear of the 'more below' fade where no totals row pins the foot", () => {
+    const { box, row } = fadeScene(440, 0) // the band ends at 100 + 400 − 28 = 472; the row at 484
+    // The sheet's height really is what the reveal reads — not a stray 0 that happens to pass.
+    expect(getComputedStyle(box).getPropertyValue('--table-fade-h')).toBe('28px')
+    expect(revealInBox(box, row)).toBe(true)
+    expect(box.scrollTop).toBe(1012)
+    const clear = fadeScene(428, 0) // its bottom on the fade's top edge: already clear, left alone
+    expect(revealInBox(clear.box, clear.row)).toBe(false)
+    expect(clear.box.scrollTop).toBe(1000)
+  })
+
+  it('ignores the fade where a totals row pins the foot — the fade never shows there', () => {
+    const { box, row } = fadeScene(430, 33) // the band ends at 100 + 400 − 33 = 467, not 439
+    expect(getComputedStyle(box).getPropertyValue('--table-fade-h')).toBe('28px')
+    expect(revealInBox(box, row)).toBe(true)
+    expect(box.scrollTop).toBe(1007)
   })
 })

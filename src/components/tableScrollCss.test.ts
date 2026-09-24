@@ -38,6 +38,15 @@ describe('the capped table box (tableScroll.css)', () => {
     )
   })
 
+  // Where no totals row pins the foot, the fade does: a control Tabbed to the foot landed 4px above the
+  // bottom with up to 24px of it under the fade — 4 of 60 Transactions and 6 of 40 Securities stops on
+  // the production copy in Edge (Task 4 review). (0,1,4) and (0,2,4) outrank the two body rules above.
+  it("keeps a Tab clear of the 'more below' fade wherever no totals row marks the foot", () => {
+    expect(CSS).toContain(
+      '.table-scroll:not(:has(> table > tfoot)) > table > tbody *, .table-scroll:not(:has(> table > tfoot)) > table > tbody [id] { scroll-margin-bottom: calc(var(--table-foot-h, 0px) + var(--table-fade-h) + 4px); }',
+    )
+  })
+
   it('drops the edge mask while the box has keyboard focus, so its own ring shows', () => {
     expect(CSS).toContain('.table-scroll:focus-visible { mask-image: none !important; }')
   })
@@ -63,6 +72,12 @@ describe('the capped table box (tableScroll.css)', () => {
 
   it('fades the foot only while rows hide below and no totals row marks the edge', () => {
     expect(CSS).toMatch(/\.table-scroll::after \{[^}]*position: sticky;[^}]*bottom: 0;[^}]*opacity: 0;/)
+    // One height for the fade, declared on the box — the scroll margin above and revealInBox read it.
+    expect(CSS).toMatch(/\.table-scroll \{[^}]*--table-fade-h: 28px;/)
+    expect(CSS).toMatch(
+      /\.table-scroll::after \{[^}]*height: var\(--table-fade-h\);[^}]*margin-top: calc\(-1 \* var\(--table-fade-h\)\);/,
+    )
+    expect(CSS).not.toMatch(/\.table-scroll::after \{[^}]*28px/)
     expect(CSS).toContain(
       '.table-scroll[data-scroll-more~="bottom"]:not(:has(> table > tfoot))::after { opacity: 1; }',
     )

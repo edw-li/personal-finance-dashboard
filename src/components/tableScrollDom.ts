@@ -39,8 +39,10 @@ export function useStickyInsets(ref: RefObject<HTMLElement | null>): void {
 /**
  * Scroll `box` — never the page — just far enough that `row` shows inside the band the box's
  * pinned lines leave (spec §4.5): below the sticky header (`--table-head-h`) plus `extraTop` (a
- * pinned group line, such as a dividend month), and above the pinned footer (`--table-foot-h`). A
- * row already inside the band stays put; a row taller than the band is aligned by its top. Returns
+ * pinned group line, such as a dividend month), and above the pinned footer (`--table-foot-h`) —
+ * or, where the table has no footer, above the "more below" fade (`--table-fade-h`) that pins to
+ * that edge instead: a row revealed flush with the foot would sit under it (Task 4 review). A row
+ * already inside the band stays put; a row taller than the band is aligned by its top. Returns
  * whether it scrolled. Not scrollIntoView: that scrolls every scrollable ancestor too — the page
  * among them — which would carry the entry form, and the caret in it, out of view mid-session.
  */
@@ -48,9 +50,15 @@ export function revealInBox(box: HTMLElement, row: HTMLElement, extraTop = 0): b
   const view = box.getBoundingClientRect()
   const head = parseFloat(box.style.getPropertyValue('--table-head-h')) || 0
   const foot = parseFloat(box.style.getPropertyValue('--table-foot-h')) || 0
+  // The fade shows only where no tfoot is (tableScroll.css's same `> table > tfoot` test). Its height
+  // is the sheet's, not the element's, so it is read off the COMPUTED style: '' → 0 without the sheet.
+  const fade =
+    box.querySelector(':scope > table > tfoot') === null
+      ? parseFloat(getComputedStyle(box).getPropertyValue('--table-fade-h')) || 0
+      : 0
   // clientTop + clientHeight, not the rect's bottom: a sideways scrollbar sits inside the rect.
   const top = view.top + box.clientTop + head + extraTop
-  const bottom = view.top + box.clientTop + box.clientHeight - foot
+  const bottom = view.top + box.clientTop + box.clientHeight - foot - fade
   const r = row.getBoundingClientRect()
   if (r.top < top) {
     box.scrollTop -= top - r.top

@@ -3,10 +3,13 @@
    max-height only bites when the table outgrows it. The cap is the vesting schedule's
    (CompPage.css, 2026-09-13 polish §7): one scroll usually suffices on a tall screen, and a short
    one still gets a box rather than a card that swallows the page. Scroll chaining is the browser's
-   default: at the box's end the wheel carries on down the page, so nothing traps it. */
+   default: at the box's end the wheel carries on down the page, so nothing traps it.
+   --table-fade-h is the "more below" fade's height, declared once: the fade draws it, the body rows'
+   bottom scroll margin keeps clear of it, and revealInBox (tableScrollDom.ts) reads it too. */
 .table-scroll {
   max-height: clamp(420px, 60vh, 720px);
   overflow: auto;
+  --table-fade-h: 28px;
 }
 
 /* The pinned rows' measured heights (--table-head-h / --table-foot-h, tableScrollDom.ts) as a scroll
@@ -32,6 +35,16 @@
 .table-scroll > table > tbody [id] {
   scroll-margin-top: calc(var(--table-head-h, 0px) + 4px);
   scroll-margin-bottom: calc(var(--table-foot-h, 0px) + 4px);
+}
+
+/* Where no totals row pins the foot edge, the "more below" fade does (below), so the bottom margin
+   keeps clear of it too: allowing only for the tfoot, a control Tabbed to the foot landed 4px above
+   the bottom with up to 24px of it under the fade — 4 of 60 Transactions and 6 of 40 Securities
+   focus stops on the production copy in Edge (Task 4 review). Two selectors for weight: (0,1,4)
+   outranks the body rule, (0,2,4) its [id] twin (and so localSections.css's (0,2,0) `[id]` too). */
+.table-scroll:not(:has(> table > tfoot)) > table > tbody *,
+.table-scroll:not(:has(> table > tfoot)) > table > tbody [id] {
+  scroll-margin-bottom: calc(var(--table-foot-h, 0px) + var(--table-fade-h) + 4px);
 }
 
 /* The box's own focus ring over its edge mask: a mask clips everything outside the border box, the
@@ -100,8 +113,8 @@
   bottom: 0;
   z-index: 1;
   display: block;
-  height: 28px;
-  margin-top: -28px;
+  height: var(--table-fade-h);
+  margin-top: calc(-1 * var(--table-fade-h));
   pointer-events: none;
   background: linear-gradient(to bottom, transparent, var(--surface));
   opacity: 0;
