@@ -61,6 +61,11 @@ from app.models import (
 )
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.services import clock
+from app.services.employer_ticker import (
+    ESPP_TICKER_KEY,
+    read_committed_employer_ticker,
+    read_employer_ticker,
+)
 from app.services.month_review import ReviewBook, load_review_book, load_review_book_snapshot
 from app.services.net_worth_calc import PLAN_UNTIL_KEY
 from app.services.savings import MonthSavings, load_month_savings
@@ -90,9 +95,7 @@ MONTH_SAVINGS_TABLES: tuple[str, ...] = tuple(
 
 # Every table the withholding GET reads (2026-09-23 spec §W12) — the engine feed, the profiles
 # and grants, the employer's quote and bars, the year's limits and the sold ESPP lots of the
-# reconciliation. `price_history` is the one it reads only PART of: the employer ticker's bars
-# (`api/comp._employer_bars`), so its fingerprint cell is restricted to those rows — the nightly
-# refresh of every other holding's history must not cost the card its memo.
+# reconciliation. Pinned by the SQL-capture tests in test_withholding_cache.py.
 WITHHOLDING_TABLES: tuple[str, ...] = tuple(
     model.__tablename__
     for model in (
@@ -110,7 +113,14 @@ WITHHOLDING_TABLES: tuple[str, ...] = tuple(
         PriceHistory,
     )
 )
-EMPLOYER_BARS_TABLE = PriceHistory.__tablename__
+# Three of those tables it reads only PART of, so their fingerprint cells cover only those rows
+# (batch 2 integration, 2026-09-24; the projection's cells below have the same shape): two
+# settings — the employer ticker, and the plan's ESPP discount that prices a lot sold this year —
+# and the employer ticker's one quote and its bars (`api/comp._employer_bars`). A price refresh
+# writes its own bookkeeping keys and every holding's quote and bars; none of that can move the
+# card, so none of it costs the card its memo. The employer's own quote and bars still do.
+# Pinned complete by test_withholding_cache's capture of every setting and quote a build reads.
+WITHHOLDING_SETTING_KEYS: tuple[str, ...] = (ESPP_TICKER_KEY, "espp_discount_pct")
 
 type Fingerprint = tuple[str, ...]
 type BookKey = tuple[Fingerprint, date, tuple[date, ...]]
@@ -192,24 +202,27 @@ def _fingerprint_statement(
 _REVIEW_BOOK_FINGERPRINT = _fingerprint_statement(REVIEW_BOOK_TABLES)
 _MONTH_SAVINGS_FINGERPRINT = _fingerprint_statement(MONTH_SAVINGS_TABLES)
 
-
-def _withholding_fingerprint_statement() -> TextClause:
-    """`_fingerprint_statement` over the withholding tables, with the `price_history` cell
-    restricted to the employer ticker's security — the `:ticker` bind, read first by
-    `_employer_ticker` and bound per request. A NULL ticker matches no security: no bars.
-    (`price_history` is the list's last table, so its cell stays last: the same statement.)"""
-    return _fingerprint_statement(
-        WITHHOLDING_TABLES,
-        {
-            EMPLOYER_BARS_TABLE: (
-                f'fp_row.security_id IN (SELECT id FROM "{Security.__tablename__}"'
-                " WHERE ticker = :ticker)"
-            )
-        },
-    )
+# The employer ticker's rows of a table keyed by security: the `:ticker` bind, read by
+# `read_employer_ticker` just before the fingerprint and bound per request. A NULL ticker matches
+# no security, so no rows — as the build, with no ticker, reads none.
+_EMPLOYER_ROWS = (
+    f'fp_row.security_id IN (SELECT id FROM "{Security.__tablename__}" WHERE ticker = :ticker)'
+)
 
 
-_WITHHOLDING_FINGERPRINT = _withholding_fingerprint_statement()
+def _setting_rows(keys: Iterable[str]) -> str:
+    """The app_settings rows a value reads: its keys, as literals (they are code, never input)."""
+    return "fp_row.key IN ({})".format(", ".join(f"'{key}'" for key in keys))
+
+
+_WITHHOLDING_FINGERPRINT = _fingerprint_statement(
+    WITHHOLDING_TABLES,
+    {
+        AppSetting.__tablename__: _setting_rows(WITHHOLDING_SETTING_KEYS),
+        LatestPrice.__tablename__: _EMPLOYER_ROWS,
+        PriceHistory.__tablename__: _EMPLOYER_ROWS,
+    },
+)
 
 
 async def _fingerprint(db: AsyncSession, statement: TextClause) -> Fingerprint:
@@ -236,14 +249,17 @@ async def _memoised[K: Hashable, V](
     before: Fingerprint,
     statement: TextClause,
     build: Callable[[], Awaitable[V]],
+    still_current: Callable[[], Awaitable[bool]] | None = None,
 ) -> V:
     """The value for `key`: cached, awaited from a build already in flight, or built here.
 
     Waiters take the builder's value even when its stability check failed — under READ
     COMMITTED that is exactly what each would have built itself — but only a stable build
-    is cached (rule 1). A waiter shields the shared build, so its own cancellation cannot
-    cancel it. When a build fails or is abandoned, its waiters look again: the first to wake
-    builds and the rest await that one."""
+    is cached (rule 1). `still_current`, when given, is asked after a stable build and can
+    veto the filing: it checks what the fingerprint cannot, a bind the caller read before it
+    (the employer ticker, `_ticker_unchanged`). A waiter shields the shared build, so its own
+    cancellation cannot cancel it. When a build fails or is abandoned, its waiters look again:
+    the first to wake builds and the rest await that one."""
     while True:
         cached = cache.get(key)
         if cached is not None:
@@ -260,6 +276,8 @@ async def _memoised[K: Hashable, V](
     try:
         value = await build()
         stable = await _fingerprint(db, statement) == before
+        if stable and still_current is not None:
+            stable = await still_current()
     except BaseException:
         flight.set_exception(_BuildAbandoned())  # the builder re-raises its own, untouched
         flight.exception()  # retrieved: no "never retrieved" log when nobody was waiting
@@ -307,17 +325,21 @@ async def cached_review_book(
     )
 
 
-async def _employer_ticker(db: AsyncSession) -> str | None:
-    """The employer ticker exactly as the GET resolves it — `api/espp._espp_quote`'s first hop,
-    normalization included (blank/absent/malformed → none, "nvda" → "NVDA"). Mirrored rather
-    than imported because a service may not import a router; `api/app_settings` keeps the
-    other copy and the two are one rule."""
-    setting = await db.get(AppSetting, "espp_ticker")
-    if setting is None or not isinstance(setting.value, dict):
-        return None
-    raw = setting.value.get("value")
-    ticker = raw.strip().upper() if isinstance(raw, str) else ""
-    return ticker or None
+def _ticker_unchanged(db: AsyncSession, ticker: str | None) -> Callable[[], Awaitable[bool]]:
+    """Rule 1 for the employer ticker a cache bound its quote cells with (integration review,
+    item 6). The ticker is read BEFORE the first fingerprint, so a Settings change committed
+    between the two leaves the settings cell on the new ticker and the quote cells on the old
+    one. The fingerprint after the build agrees with that key, so the stability check passes, but
+    the key's two halves disagree about the ticker. Such an entry is filed only if the committed
+    ticker, read once more after the build, is still the bound one — read with
+    `read_committed_employer_ticker`, not `read_employer_ticker`: `db.get` answers from the
+    identity map while anything in the session still holds the row, and could hand back the
+    very value being checked."""
+
+    async def unchanged() -> bool:
+        return await read_committed_employer_ticker(db) == ticker
+
+    return unchanged
 
 
 async def cached_withholding(
@@ -332,12 +354,15 @@ async def cached_withholding(
 
     Bytes, not a model (R9's rule): the route returns them as they are, a direct caller decodes
     a model of its own, and nothing shared can be mutated by the next reader. Keyed on the
-    fingerprint AND the ticker the `price_history` cell was restricted with; a ticker changed
-    between the two fingerprints also changes `app_settings`' cell, so such a build is never
-    filed (rule 1). 422s and 404s raise out of `build` and are never cached."""
+    fingerprint AND the ticker the `latest_prices` and `price_history` cells were restricted
+    with, which is read by `read_employer_ticker`, the reader the build's quote chain
+    (`api/espp._espp_quote`) uses too. A ticker changed between the two fingerprints also
+    changes `app_settings`' cell (its narrowed keys include the ticker's), and one changed
+    before the first is caught by `_ticker_unchanged`, so neither build is ever filed (rule 1).
+    422s and 404s raise out of `build` and are never cached."""
     if _has_pending_changes(db):
         return await build()
-    ticker = await _employer_ticker(db)
+    ticker = await read_employer_ticker(db)
     statement = _WITHHOLDING_FINGERPRINT.bindparams(ticker=ticker)
     before = await _fingerprint(db, statement)
     return await _memoised(
@@ -348,6 +373,7 @@ async def cached_withholding(
         before,
         statement,
         build,
+        _ticker_unchanged(db, ticker),
     )
 
 
@@ -401,15 +427,11 @@ PROJECTION_TABLES: tuple[str, ...] = tuple(
 # own bookkeeping keys and every holding's quote; none of that can move a projection, so none of
 # it costs the cache its entries. Pinned complete by test_projection_cache's capture of every
 # setting and quote a build reads.
-PROJECTION_SETTING_KEYS: tuple[str, ...] = ("swr_pct", "espp_ticker", PLAN_UNTIL_KEY)
+PROJECTION_SETTING_KEYS: tuple[str, ...] = ("swr_pct", ESPP_TICKER_KEY, PLAN_UNTIL_KEY)
 _PROJECTION_NARROWED = {
-    AppSetting.__tablename__: "fp_row.key IN ({})".format(
-        ", ".join(f"'{key}'" for key in PROJECTION_SETTING_KEYS)
-    ),
+    AppSetting.__tablename__: _setting_rows(PROJECTION_SETTING_KEYS),
     # A NULL ticker matches no security: no quote, as the build (no ticker, no vests) reads none.
-    LatestPrice.__tablename__: (
-        f'fp_row.security_id IN (SELECT id FROM "{Security.__tablename__}" WHERE ticker = :ticker)'
-    ),
+    LatestPrice.__tablename__: _EMPLOYER_ROWS,
 }
 PROJECTION_CACHE_SIZE = 16
 # The SERIALIZED JSON bytes, never ProjectionOut models: seven series of up to 721 Decimals per
@@ -429,13 +451,14 @@ async def cached_projection(
     never stored — its waiters look again.
 
     The quote cell is restricted to the employer ticker as the build resolves it —
-    `_employer_ticker`, the withholding cache's own reader of the same rule — read only AFTER the
-    pending-changes check, since its read would autoflush them. The key carries it: a ticker
-    changed between the two fingerprints changes the settings cell as well, so such a build is
-    never filed (rule 1)."""
+    `read_employer_ticker`, the one reader of the setting, which the build's quote chain and the
+    withholding cache call too — read only AFTER the pending-changes check, since its read would
+    autoflush them. The key carries it: a ticker changed between the two fingerprints changes
+    the settings cell as well, and one changed before the first is caught by
+    `_ticker_unchanged`, so neither build is ever filed (rule 1)."""
     if _has_pending_changes(db):
         return await build()
-    ticker = await _employer_ticker(db)
+    ticker = await read_employer_ticker(db)
     statement = _PROJECTION_FINGERPRINT.bindparams(ticker=ticker)
     before = await _fingerprint(db, statement)
     return await _memoised(
@@ -446,4 +469,5 @@ async def cached_projection(
         before,
         statement,
         build,
+        _ticker_unchanged(db, ticker),
     )

@@ -173,4 +173,18 @@ describe('projection scenario codec', () => {
     expect(projectionValue({ ...full, vests: { ...vests, included: true } }, 'vests')).toBe('Included')
     expect(projectionValue(full, 'no_such_row')).toBeNull()
   })
+
+  // The footer's rule is that scenarios with the same Horizon (years) setting share their simulated
+  // paths, so the row must show that setting (batch 2 integration, 2026-09-24). years:50, and
+  // years:30 lengthened by a plan-until year of 2075, both RAN 50 years but on different paths.
+  it('shows the Horizon knob in its row, and says how far a lengthened run went', () => {
+    expect(projectionValue({ ...echo, years: 50, base_years: 50, plan_until: 2075 }, 'years')).toBe('50')
+    expect(projectionValue({ ...echo, years: 50, base_years: 30, plan_until: 2075 }, 'years')).toBe('30 (runs through 2075)')
+    // A plan-until year inside the knob's own axis lengthens nothing.
+    expect(projectionValue({ ...echo, years: 30, base_years: 30, plan_until: 2055 }, 'years')).toBe('30')
+    // An older payload has no knob echo, so the horizon it ran is all there is.
+    expect(projectionValue(echo, 'years')).toBe('30')
+    // Lengthened with no plan-until year to name (no server sends that): the years it ran.
+    expect(projectionValue({ ...echo, years: 50, base_years: 30 }, 'years')).toBe('30 (runs 50)')
+  })
 })

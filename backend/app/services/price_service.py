@@ -30,6 +30,7 @@ from app.models import (
     Security,
 )
 from app.services import clock
+from app.services.employer_ticker import read_employer_ticker
 from app.services.price_provider import DailyBar, PriceProvider
 
 if TYPE_CHECKING:
@@ -244,12 +245,10 @@ async def backfill_employer_history(db: AsyncSession, provider: PriceProvider) -
     deliberately NOT touched — this is history repair, not a quote refresh. Returns the
     number of bars written (0 on every skip). Caller commits.
     """
-    setting = await db.get(AppSetting, "espp_ticker")
-    if setting is None or not isinstance(setting.value, dict):
-        return 0
-    raw = setting.value.get("value")
-    ticker = raw.strip().upper() if isinstance(raw, str) else ""
-    if not ticker:
+    # The one reader of the setting: the vest calendar and the ESPP chart price off this ticker's
+    # bars, so the backfill must deepen the history of exactly the ticker they resolve.
+    ticker = await read_employer_ticker(db)
+    if ticker is None:
         return 0
     security = (
         (await db.execute(select(Security).where(Security.ticker == ticker))).scalars().first()

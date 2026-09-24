@@ -1978,7 +1978,9 @@ async def test_the_reconciliation_writes_nothing(
     likeliest silent regression is the projection overwriting the typed RSU figure, so an RSU
     figure is typed (an Apply is on offer), and it must still read 120000 afterwards."""
     await set_rsu_typed(db, "120000")
-    tables = read_cache._WITHHOLDING_FINGERPRINT.bindparams(ticker="NVDA")
+    # EVERY row of those tables, not the cache's narrowed cells: the cache only needs the rows
+    # the GET reads, but a write the GET made anywhere in them must still show.
+    tables = read_cache._fingerprint_statement(read_cache.WITHHOLDING_TABLES)
 
     async def counts() -> tuple[int, int]:
         change_log = (await db.execute(select(func.count()).select_from(ChangeLog))).scalar_one()
