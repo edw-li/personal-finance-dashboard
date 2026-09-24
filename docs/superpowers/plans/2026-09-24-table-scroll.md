@@ -1285,6 +1285,11 @@ git commit -m "feat(tables): Net worth's accounts table and the rewards matrix s
 
 ### Task 7: `dividendMonths.ts` — the ledger as months
 
+> **Amended in execution (2026-09-24):** 6ff2b6af sums cents through the shared `toCents` (utils/cents.ts);
+> 96553fa2 and the follow-up review commit reword the doc comments (the dividend chart sums floats and rounds
+> once per month; the parity holds only for months inside its trailing window) and pin a future-dated month
+> sorting first. The committed files are authoritative.
+
 **Files:**
 - Create: `src/components/portfolio/dividendMonths.ts`
 - Test: `src/components/portfolio/dividendMonths.test.ts`
@@ -1441,10 +1446,51 @@ git commit -m "feat(dividends): the ledger as months — grouped by the Recorded
 
 ### Task 8: The dividend ledger by month, in its capped box
 
+> **Amended before execution (2026-09-24, from the Task 3/5/7 reviews):** the box carries no
+> `dividend-scroll` class; entry rows get a `scroll-margin-top` (never box `scroll-padding`); a focus or
+> click on a covered (stacked) month line first scrolls its group into place (`uncoverMonth`); and the
+> month that opens by itself is the newest on or before TODAY's (`defaultOpenMonth`, a new pure helper in
+> `dividendMonths.ts` with its tests — Step 0 below), so a future-dated manual entry cannot fold the
+> current month away.
+
 **Files:**
 - Modify: `src/components/portfolio/DividendsPanel.tsx`
+- Modify: `src/components/portfolio/dividendMonths.ts`, `src/components/portfolio/dividendMonths.test.ts` (Step 0)
 - Create: `src/components/portfolio/dividends.css`
 - Test: `src/components/portfolio/DividendsPanel.test.tsx`
+
+- [ ] **Step 0: `defaultOpenMonth` (test first)**
+
+Append to `dividendMonths.test.ts` (and add `defaultOpenMonth` to its import from `./dividendMonths`):
+
+```ts
+describe('defaultOpenMonth', () => {
+  it('opens the newest month on or before today — a future-dated entry does not fold the current month', () => {
+    const months = groupDividendsByMonth([entry(9, '2026-10-15', '1.00'), ...LEDGER])
+    expect(months[0].key).toBe('2026-10') // listed first all the same: the helper never hides an entry
+    expect(defaultOpenMonth(months, '2026-09-24')).toBe('2026-09')
+  })
+
+  it('falls back to the newest month when every month is in the future, and to null for an empty ledger', () => {
+    expect(defaultOpenMonth(groupDividendsByMonth([entry(9, '2026-10-15', '1.00')]), '2026-09-24')).toBe('2026-10')
+    expect(defaultOpenMonth([], '2026-09-24')).toBeNull()
+  })
+})
+```
+
+Run it (FAIL: `defaultOpenMonth` is not exported), then append to `dividendMonths.ts`:
+
+```ts
+/** The month the ledger opens on by itself (spec §4.4): the newest on or before `todayIso`'s month —
+ *  a future-dated manual entry (the form allows one) must not fold the current month away — else the
+ *  newest; null for an empty ledger. `todayIso` injected, as monthlyIncomeSums takes it. */
+export function defaultOpenMonth(months: readonly DividendMonth[], todayIso: string): string | null {
+  const current = monthKeyOf(todayIso)
+  return (months.find((month) => month.key <= current) ?? months[0])?.key ?? null
+}
+```
+
+Run `npx vitest run src/components/portfolio/dividendMonths.test.ts` (all pass).
 
 - [ ] **Step 1: Adjust the two existing tests that reach a now-folded month**
 
@@ -1514,6 +1560,14 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     ])
     expect(shownIds()).toEqual([11, 12])
     expect(screen.getByText('3 months · 4 entries')).toBeTruthy()
+  })
+
+  it('opens the current month by itself even when a future-dated entry is listed above it', () => {
+    // 2099: after any real clock this suite runs on — no need to pin the date.
+    renderPanel([dividend({ id: 20, pay_date: '2099-01-10', amount: '1.00' }), ...LEDGER])
+    expect(monthButton('Jan 2099 1 entry').getAttribute('aria-expanded')).toBe('false')
+    expect(monthButton('Jun 2026 2 entries').getAttribute('aria-expanded')).toBe('true')
+    expect(shownIds()).toEqual([11, 12])
   })
 
   it("totals each month's entries to the cent on its line, under the Amount column", () => {
@@ -1687,7 +1741,7 @@ import { revealInBox } from '../tableScrollDom'
 add after `import { incomeStats, monthlyIncomeCsv, monthlyIncomeOption } from './dividendChartOptions'`:
 
 ```ts
-import { entriesLabel, groupDividendsByMonth, monthKeyOf, monthsLabel } from './dividendMonths'
+import { defaultOpenMonth, entriesLabel, groupDividendsByMonth, monthKeyOf, monthsLabel } from './dividendMonths'
 ```
 
 and after `import './portfolio.css'`:
@@ -1702,17 +1756,19 @@ import './dividends.css'
   // The ledger as months (2026-09-24 table-scroll spec §4): 378 entries on production made this card
   // ~19 screens tall; grouped, it is one line a month inside a capped box.
   const months = useMemo(() => groupDividendsByMonth(dividends), [dividends])
-  // The newest month open, the rest folded — seeded the first time rows exist: a cold load renders
-  // with none and seeds when the payload lands, a warm snapshot seeds at mount. Adjusted during
-  // render (React's derived-state idiom, PortfolioPage's owner switch), never in an effect. Not
-  // persisted: every visit opens on the newest month.
+  // One month open, the rest folded — the newest on or before today's (defaultOpenMonth: a
+  // future-dated manual entry must not fold the current month away) — seeded the first time rows
+  // exist: a cold load renders with none and seeds when the payload lands, a warm snapshot seeds at
+  // mount. Adjusted during render (React's derived-state idiom, PortfolioPage's owner switch), never
+  // in an effect. Not persisted: every visit opens on the current month.
+  const firstOpen = defaultOpenMonth(months, todayIso())
   const [open, setOpen] = useState<ReadonlySet<string>>(
-    () => new Set(months.length > 0 ? [months[0].key] : []),
+    () => new Set(firstOpen === null ? [] : [firstOpen]),
   )
-  const [seeded, setSeeded] = useState(months.length > 0)
-  if (!seeded && months.length > 0) {
+  const [seeded, setSeeded] = useState(firstOpen !== null)
+  if (!seeded && firstOpen !== null) {
     setSeeded(true)
-    setOpen(new Set([months[0].key]))
+    setOpen(new Set([firstOpen]))
   }
   const allOpen = months.every((month) => open.has(month.key))
   const toggleMonth = (key: string) =>

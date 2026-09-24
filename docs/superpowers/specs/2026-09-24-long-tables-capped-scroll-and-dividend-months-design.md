@@ -293,7 +293,9 @@ lands exactly below it.
 
 ### 4.4 Open state
 
-- `open: Set<monthKey>` in component state. **Default: the newest month open, all others folded** —
+- `open: Set<monthKey>` in component state. **Default: one month open, all others folded — the newest on or
+  before the current month** (a future-dated manual entry — the form allows one — is listed first but must not
+  fold the current month away; with only future months, the newest) —
   seeded the first time rows exist (a cold load that starts empty seeds when the payload lands; a warm
   snapshot seeds at mount). React's adjust-during-render idiom (a `seeded` flag), no effect.
 - Click/Enter/Space on a month toggles it; Expand all opens every month; Collapse all closes every month.
