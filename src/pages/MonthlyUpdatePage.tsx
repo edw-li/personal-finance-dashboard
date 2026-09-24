@@ -1901,7 +1901,9 @@ export default function MonthlyUpdatePage() {
               />
             </div>
             <ReviewChanges accounts={accounts} categories={categories} balances={balances} amounts={amounts}
-              priorBalances={priorBalances} baseline={baseline?.month === month ? baseline.data : null}
+              saved={baseline?.month === month ? (JSON.parse(baseline.data) as WizardDraft) : null}
+              balanceStory={{ title: 'Largest balance changes · prior month', columns: ['Reference', 'Entered'],
+                from: priorBalances, to: balances, empty: 'No changed balances with a prior-month reference.' }}
               month={month} matrix={matrix} monthExisted={monthExisted} recordedCategories={recordedCategoryIds} />
             <fieldset className="review-confirmations" disabled={saving}>
               <legend>Confirm this month is complete</legend>
