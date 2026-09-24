@@ -1459,6 +1459,21 @@ def _money(value: Decimal | None) -> Decimal:
     return quantized + ZERO
 
 
+# The precision each input unit is SHOWN in (2026-09-23 spec §W10): a count is whole, a
+# percent keeps the 4 dp of the fraction the engine multiplies by (0.9753 is 97.53 %), money
+# is cents. `_money` quantized all three to cents, which printed 97.53 % as "$0.98".
+UNIT_QUANTA = {COUNT: Decimal("1"), PERCENT: Decimal("0.0001")}
+
+
+def _in_unit(value: Decimal, unit: str) -> Decimal:
+    """One input value at its unit's precision — `_money`'s plain HALF_UP quantize and signed-
+    zero collapse, never the bounded one (a what-if answers about any stored value)."""
+    quantum = UNIT_QUANTA.get(unit)
+    if quantum is None:
+        return _money(value)
+    return value.quantize(quantum, rounding=ROUND_HALF_UP) + ZERO
+
+
 def _effective_rate(
     value: Decimal | None, jurisdiction: str, warnings: list[str]
 ) -> Decimal | None:
@@ -2415,12 +2430,14 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
         before = stored.get(key, ZERO)
         after = scenario_inputs.get(key, ZERO)
         if before != after:
+            unit = unit_for(key)
             changed.append(
                 ChangedInput(
                     key=key,
                     label=labels.get(key, key),
-                    before=_money(before),
-                    after=_money(after),
+                    before=_in_unit(before, unit),
+                    after=_in_unit(after, unit),
+                    unit=unit,
                 )
             )
 

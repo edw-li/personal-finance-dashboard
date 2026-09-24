@@ -337,8 +337,13 @@ class WhatIfDelta(BaseModel):
 class ChangedInput(BaseModel):
     key: str
     label: str
+    # In the key's own unit and precision (2026-09-23 spec §W10): money at cents, a count
+    # whole, a percent as the 4 dp FRACTION the engine multiplies by (0.9753) — the client
+    # renders each through its unit's box rule ("97.53% → 95%", "18 → 20").
     before: Decimal  # 0 when the key was absent
     after: Decimal
+    # Defaulted, so the assistant's compact result and older payloads keep validating.
+    unit: InputUnit = "money"
 
 
 class SaleDetailOut(BaseModel):

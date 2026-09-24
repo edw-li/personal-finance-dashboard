@@ -1288,6 +1288,7 @@ async def test_what_if_long_sale_moves_ltcg_and_delta(auth_client, db, definitio
             "label": "LTCG: Brokerage Gain/Loss",
             "before": "0.00",
             "after": "500.00",
+            "unit": "money",
         },
     ]
     assert body["warnings"] == ["NVDA: acquisition dates unknown — treated as long-term"]
@@ -1342,12 +1343,14 @@ async def test_what_if_espp_disqualified_hits_w2_not_fica(auth_client, db, defin
             "label": "LTCG: ESPP Sale Component",
             "before": "0.00",
             "after": "300.00",
+            "unit": "money",
         },
         {
             "key": "w2_espp_sale_component",
             "label": "W2: ESPP Sale Component",
             "before": "0.00",
             "after": "350.00",
+            "unit": "money",
         },
     ]
     # FICA does NOT move with the W-2 line: the 350 is not Medicare wages.
@@ -1509,8 +1512,30 @@ async def test_what_if_unknown_override_key_422(auth_client, definitions):
             "label": "Qualified Dividends",
             "before": "179.13",
             "after": "2500.00",
+            "unit": "money",
         }
     ]
+
+
+async def test_changed_inputs_carry_their_unit_and_its_precision(auth_client, definitions):
+    """2026-09-23 spec §W10: a moved input says which box it lives in and is quantized in it —
+    a percent to 4 dp (the fraction the engine multiplies by), a count whole, money at
+    cents — so the list and the Apply confirm can print 97.53 % → 95 % and 18 → 20."""
+    await seeded_2024(auth_client)
+    body = await what_if(
+        auth_client, overrides={"unq_div_state_exempt_pct": "0.95", "pay_periods": "20"}
+    )
+    rows = {row["key"]: row for row in body["changed_inputs"]}
+    assert rows["unq_div_state_exempt_pct"] == {
+        "key": "unq_div_state_exempt_pct",
+        "label": "Treasury-fund dividends — state-exempt share (%)",
+        "before": "0.9753",
+        "after": "0.9500",
+        "unit": "percent",
+    }
+    assert rows["pay_periods"]["before"] == "18"
+    assert rows["pay_periods"]["after"] == "20"
+    assert rows["pay_periods"]["unit"] == "count"
 
 
 async def test_what_if_year_404(auth_client, definitions):
