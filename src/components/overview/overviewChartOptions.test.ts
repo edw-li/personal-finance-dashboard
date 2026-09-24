@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { CATEGORY_HUES, ENTITY } from '../../charts/entities'
 import { GRID_VARIANTS, partialItemStyle } from '../../charts/grammar'
 import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
 import type { CoverageOut, TaxSummaryOut } from '../../types/api'
+import { setServerToday } from '../../utils/productToday'
 import {
   netWorthTrendCsv,
   netWorthTrendOption,
@@ -177,6 +178,44 @@ describe('netWorthTrendOption', () => {
   it('returns null under two months — one point is not a trend', () => {
     expect(netWorthTrendOption({ months: [], net_worth: [] })).toBeNull()
     expect(netWorthTrendOption({ months: ['2026-01-01'], net_worth: ['1000.00'] })).toBeNull()
+  })
+})
+
+// 2026-09-23 spec §T1: Oct 1 balances typed on Sep 22 are provisional — the trend draws that point
+// with the partial look and its tooltip head says why, so a 21-day change never reads as a month.
+describe('netWorthTrendOption: a provisional point (2026-09-23 spec §T1)', () => {
+  beforeEach(() => setServerToday('2026-09-23'))
+  const copy = {
+    months: ['2026-08-01', '2026-09-01', '2026-10-01'],
+    net_worth: ['700000.00', '806667.88', '933250.90'],
+    as_of: ['2026-08-01', '2026-09-01', '2026-09-22'],
+    recorded_on: ['2026-08-01', '2026-09-01', '2026-09-22'],
+    provisional: [false, false, true],
+  }
+  const headAt = (option: EChartsOption | null, label: string, dataIndex: number) =>
+    tooltipRows(
+      tooltipOf(option).formatter([
+        { seriesName: 'Net worth', seriesType: 'line', axisValueLabel: label, dataIndex, value: 1, color: PALETTE[0] },
+      ]),
+    ).head
+
+  it('draws the early snapshot with the partial look and says why in the tooltip head', () => {
+    const option = netWorthTrendOption(copy)
+    expect(seriesOf(option)[0].data).toEqual([
+      700000,
+      806667.88,
+      { value: 933250.9, symbol: 'circle', symbolSize: 8, itemStyle: partialItemStyle(PALETTE[0], false) },
+    ])
+    expect(headAt(option, 'Oct 2026', 2)).toBe('Oct 2026 — Oct 1 balances recorded early, on Sep 22 — provisional')
+    expect(headAt(option, 'Sep 2026', 1)).toBe('Sep 2026')
+  })
+
+  it('draws every point plainly once the balances are final, and without the lists', () => {
+    const final = { ...copy, as_of: copy.months, recorded_on: copy.months, provisional: [false, false, false] }
+    expect(seriesOf(netWorthTrendOption(final))[0].data).toEqual([700000, 806667.88, 933250.9])
+    expect(seriesOf(netWorthTrendOption({ months: copy.months, net_worth: copy.net_worth }))[0].data).toEqual([
+      700000, 806667.88, 933250.9,
+    ])
   })
 })
 

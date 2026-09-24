@@ -29,6 +29,8 @@ const ROSTER = [
   // the account's group and folds a grey remainder past the cap.
   'netWorthMoversAccounts',
   'overviewNetWorthTrend',
+  // …and with Oct 1 balances typed early (2026-09-23 spec §T1): the provisional point.
+  'overviewNetWorthTrendProvisional',
   'overviewRecentSpend',
   // …and with the month in progress (2026-09-23 spec §C5): the partial bar and marked label.
   'overviewRecentSpendPartial',

@@ -19,6 +19,7 @@ import { chipAmount, eventKey } from '../components/calendar/calendarView'
 import { attentionItems, reviewAttentionItems } from '../components/overview/attention'
 import DataStatusCard from '../components/overview/DataStatusCard'
 import { netWorthComponents } from '../components/overview/netWorthReceipt'
+import { netWorthHeadline, receiptAsOf, recordedSentence } from '../components/networth/headline'
 import { GhostTile, SkeletonCard } from '../components/PageSkeleton'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
 import {
@@ -366,6 +367,9 @@ export default function OverviewPage() {
     upNext === null ? null : upNextMoney(upNext.events, upNext.living, todayIso())
 
   const summary = data?.summary
+  // The hero's words by date (2026-09-23 spec §T1) — the story note rides only while the month
+  // the change covers is listed as due in the coverage the spending group already fetched.
+  const headline = summary ? netWorthHeadline(summary, data.coverage?.time?.flows_due) : null
   // Rendered verbatim, never re-derived: these are the server's own totals fields (the
   // `totals.unrealized_gl` lesson).
   const totals = data.holdings?.totals
@@ -461,7 +465,11 @@ export default function OverviewPage() {
     net_worth: wealth.busy && data.summary === undefined ? <GhostTile delta={false} /> : (
               <StatTile
                 hero
-                label={summary?.month ? `Net worth — ${formatMonth(summary.month)}` : 'Net worth'}
+                // Named by the day the balances describe, with what the change spans (2026-09-23
+                // spec §T1): "as of Sep 22" + Provisional + "since Sep 1 · 21 days", or
+                // "· September: Sep 1 → Oct 1" between two final 1sts. Never "MoM".
+                label={headline?.label ?? 'Net worth'}
+                badge={emptyScopeNote === null ? headline?.badge : undefined}
                 value={emptyScopeNote !== null ? '—' : formatCurrency(summary?.net_worth)}
                 // A FRESH-paint flourish only: a cached paint is a number the user has already
                 // seen, and re-counting it would fake newness. Money rides the wire as a decimal
@@ -473,18 +481,14 @@ export default function OverviewPage() {
                     : undefined
                 }
                 // Both halves or neither: a bare amount with no rate reads as a total. The
-                // empty scope takes the slot instead — a $0.00 MoM change is arithmetic
-                // over two numbers that were never there.
-                delta={
-                  emptyScopeNote !== null
-                    ? emptyScopeNote
-                    : summary?.mom_delta != null && summary.mom_pct != null
-                      ? `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)}) MoM`
-                      : undefined
-                }
+                // empty scope takes the slot instead — a $0.00 change is arithmetic over two
+                // numbers that were never there.
+                delta={emptyScopeNote !== null ? emptyScopeNote : headline?.delta}
                 tone={emptyScopeNote !== null ? 'neutral' : toneOf(summary?.mom_delta)}
-                hint="Assets minus liabilities from the latest monthly snapshot, with its change from the month before."
-                evidence={summary ? metricReceipt({ id: 'net_worth', label: 'Net worth', value: summary.net_worth, definition: 'Sum of non-component account balances, including signed liabilities, at the recorded monthly snapshot.', scope: owner ?? 'Household', as_of: summary.month, source_link: `/net-worth${owner === null ? '' : `?owner=${owner}`}`, components: netWorthComponents(summary.groups) }) : undefined}
+                hint="Assets minus liabilities from your latest balances, dated by when they describe, with the change since the balances before them."
+                // The receipt stands on the as-of date, and says why a provisional snapshot is one
+                // (2026-09-23 spec §T1, §0.4(e)).
+                evidence={summary ? metricReceipt({ id: 'net_worth', label: 'Net worth', value: summary.net_worth, definition: `Sum of non-component account balances, including signed liabilities, in your latest balances.${recordedSentence(summary)}`, scope: owner ?? 'Household', as_of: receiptAsOf(summary), ...(summary.provisional ? { completeness: 'provisional' } : {}), source_link: `/net-worth${owner === null ? '' : `?owner=${owner}`}`, components: netWorthComponents(summary.groups) }) : undefined}
               />
     ),
     portfolio: investments.busy && data.holdings === undefined ? <GhostTile delta={false} /> : (

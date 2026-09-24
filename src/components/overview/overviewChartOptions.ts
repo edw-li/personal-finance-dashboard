@@ -27,6 +27,7 @@ import { axisTooltip } from '../../charts/tooltip'
 import type { CoverageOut, NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatMonth } from '../../utils/format'
+import { provisionalNote } from '../networth/snapshotStates'
 
 // A full trend chart, dressed exactly like its two card siblings below it. It began life
 // as an axis-free "spark" (Sparkline.tsx's license), but at 220px in a full-width card
@@ -34,17 +35,37 @@ import { formatMonth } from '../../utils/format'
 // (2026-08-25 user report; audit I-9): the sparkline license is for a 30px table-row
 // strip, not a card that owns the page's first fold.
 export function netWorthTrendOption(
-  ts: Pick<NetWorthTimeseries, 'months' | 'net_worth'>,
+  ts: Pick<NetWorthTimeseries, 'months' | 'net_worth'> &
+    Partial<Pick<NetWorthTimeseries, 'recorded_on' | 'provisional'>>,
 ): EChartsOption | null {
   if (ts.months.length < 2) return null
+  // A provisional snapshot — balances typed before their 1st (2026-09-23 spec §T1) — is a point
+  // that will move once they are saved again: the partial look (always the faded form: a hatch
+  // says nothing on an 8px dot) and a tooltip head that says why. Absent lists: all final.
+  const provisional = ts.provisional ?? []
   return {
     grid: grid('noLegend'),
     xAxis: monthAxis(ts.months.map(formatMonth)),
     // A washed area over a VISIBLE axis needs the honest zero baseline — no scale:true.
     yAxis: moneyAxis(),
     // Default axis pointer kept: a line chart ships its crosshair by default (dataviz law).
-    tooltip: axisTooltip({ unit: 'money' }),
-    series: [{ ...LINE, name: 'Net worth', ...WASH, color: PALETTE[0], data: ts.net_worth.map(Number) }],
+    tooltip: axisTooltip({
+      unit: 'money',
+      headNote: (i) => (provisional[i] ? provisionalNote(ts.months[i], ts.recorded_on?.[i]) : null),
+    }),
+    series: [
+      {
+        ...LINE,
+        name: 'Net worth',
+        ...WASH,
+        color: PALETTE[0],
+        data: ts.net_worth.map((value, i) =>
+          provisional[i]
+            ? { value: Number(value), symbol: 'circle', symbolSize: 8, itemStyle: partialItemStyle(PALETTE[0], false) }
+            : Number(value),
+        ),
+      },
+    ],
   }
 }
 
