@@ -878,6 +878,22 @@ input overrides through the inputs editor's PUT, Projection has no Apply. Up to 
 per page can be pinned in the browser (`localStorage`, knobs only — pins re-run against live data
 on every visit and are never part of a link).
 
+## Development — running the tests
+
+**Backend** — from `backend/`, with the dev Postgres from `backend/docker-compose.yml` running
+(127.0.0.1:5433). The test database is created on first use and its schema rebuilt once per run.
+
+- `pytest -q` — the whole suite, serially: ~2,330 tests in about 2½ minutes on the dev box
+  (137-144 s, 2026-09-23). This is the default, and what CI runs.
+- `pytest -q -n 4` — the same suite on four pytest-xdist workers: about 1 minute (58-60 s). For a
+  lone full run; when other suites already share the box, stay serial.
+- `FINANCE_TEST_DB=<name>_test_<suffix> pytest …` — one database per concurrent runner (a worktree
+  lane, a second terminal): two runs on one database wipe each other's rows and can hang. Under
+  `-n`, worker N uses `<FINANCE_TEST_DB>_gw<N>` (`finance_test_gw0` … `_gw3`), created on first use
+  and reused by later runs — drop those with the base database when a lane is done.
+
+**Frontend** — from the repo root: `npm test` (vitest, ~3,900 tests, about 2½ minutes).
+
 ## Troubleshooting
 
 **Local development on Windows: every wizard load or month switch takes ~2 s** — the local

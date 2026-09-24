@@ -98,7 +98,7 @@ def _fast_reset_sql() -> str:
   `backend/app`, so DELETE fires only FK checks. You check: does `Base.metadata.sorted_tables` warn
   about an FK cycle? Record the answer.
 
-- [ ] **Step 1: failing tests** in `backend/tests/test_conftest_reset.py` (they call the helper
+- [x] **Step 1: failing tests** in `backend/tests/test_conftest_reset.py` (they call the helper
   explicitly and must leave the database clean, like every test):
   - `test_reset_empties_every_table_and_restarts_ids` — insert rows across an FK chain (e.g. a User,
     then rows in two tables that reference each other's parents — pick real models), advance a
@@ -109,13 +109,13 @@ def _fast_reset_sql() -> str:
     `async_sessionmaker(engine)()` session sees the tables empty.
   - `test_reset_falls_back_to_truncate` — make the fast statement fail (monkeypatch the constant or
     the helper's fast path to raise) → the tables are still emptied and ids restart.
-- [ ] **Step 2:** implement `reset_database` + wire the `db` fixture teardown to it; run the new
+- [x] **Step 2:** implement `reset_database` + wire the `db` fixture teardown to it; run the new
   tests, then a broad slice (e.g. `tests/test_read_cache.py tests/test_reorder_serialization.py
   tests/test_month_review_api.py tests/test_auth.py`) green.
-- [ ] **Step 3: measure** the teardown the way it was measured before (create_all once, then time
+- [x] **Step 3: measure** the teardown the way it was measured before (create_all once, then time
   20× `async with engine.begin(): exec_driver_sql(<stmt>)` on a DB with a few rows inserted each
   time): old TRUNCATE vs new DO block. Target ≤ 20 ms median. Record both.
-- [ ] **Step 4: commit** — `test(conftest): reset the test database by deleting rows and restarting
+- [x] **Step 4: commit** — `test(conftest): reset the test database by deleting rows and restarting
   used sequences in one statement, not a 44-table TRUNCATE (<old> → <new> ms per test)`.
 
 ### Task 2 — bcrypt at its minimum cost, in tests only
@@ -133,29 +133,29 @@ def _fast_reset_sql() -> str:
   (~200 ms once).
 - Checked by the controller: no test relies on cost 12 (`test_seed.py` asserts only the `$2b$`
   prefix; `test_auth.py:36` is a comment about response timing).
-- [ ] implement, run `tests/test_security.py tests/test_seed.py tests/test_auth.py` green, measure
+- [x] implement, run `tests/test_security.py tests/test_seed.py tests/test_auth.py` green, measure
   one `auth_client` test's setup before/after, commit — `test(conftest): bcrypt at its minimum cost
   while tests run (hash + login ~410 ms → ~<n> ms per logged-in test); production keeps the default`.
 
 ### Task 3 — Opt-in parallel runs (pytest-xdist), one database per worker
 
 **Files:** `backend/requirements-dev.txt`, `backend/tests/conftest.py`.
-- [ ] `pip index versions pytest-xdist` (or the release notes) → pin the newest release that
+- [x] `pip index versions pytest-xdist` (or the release notes) → pin the newest release that
   supports pytest 9.1.1 in `requirements-dev.txt`; install it into the shared venv:
   `/c/Users/edyli/personal-finance-dashboard/backend/.venv/Scripts/python.exe -m pip install
   pytest-xdist==<ver>`. **If pip cannot reach the index from this box, skip Task 3, say so in the
   record, and go on** (don't vendor wheels, don't change pip config).
-- [ ] conftest: `worker = os.environ.get("PYTEST_XDIST_WORKER")` → database `f"{base}_{worker}"`
+- [x] conftest: `worker = os.environ.get("PYTEST_XDIST_WORKER")` → database `f"{base}_{worker}"`
   when set (e.g. `finance_test_speed_gw0`), else `base` exactly as today. Keep the guard regex and
   make sure it still accepts both forms. Each worker bootstraps its own database
   (`_ensure_test_database`) and runs drop_all/create_all once (the session `engine` fixture).
-- [ ] Default stays SERIAL: no `-n` in `addopts` (lanes often run several suites at once on this box,
+- [x] Default stays SERIAL: no `-n` in `addopts` (lanes often run several suites at once on this box,
   and CI's `pytest -v` in `.github/workflows/ci.yml` stays as it is).
-- [ ] Look for anything not parallel-safe: fixed ports, files written outside `tmp_path`, tests that
+- [x] Look for anything not parallel-safe: fixed ports, files written outside `tmp_path`, tests that
   shell out with the configured database (`test_ops_scripts.py`, `test_lifecycle_cli.py`), state
   shared across processes. Fix only real conflicts.
-- [ ] Run `-n 4` three times: all green, identical pass counts to serial. Record wall times.
-- [ ] Commit — `test(conftest): opt-in parallel runs — pytest-xdist with one database per worker
+- [x] Run `-n 4` three times: all green, identical pass counts to serial. Record wall times.
+- [x] Commit — `test(conftest): opt-in parallel runs — pytest-xdist with one database per worker
   (<serial> → <parallel> for a lone full run)`.
 
 ### Task 4 — Flaky tests: root cause first, then deterministic, never weaker
@@ -210,20 +210,20 @@ ProjectionPage retirement marks). Don't rewrite passing tests speculatively.
 
 ### Task 5 — Docs and the final measurements
 
-- [ ] README: a short `## Development — running the tests` section just before `## Troubleshooting`:
+- [x] README: a short `## Development — running the tests` section just before `## Troubleshooting`:
   backend `cd backend && pytest -q` (serial, measured minutes), `pytest -q -n 4` for a lone full run
   (measured), `FINANCE_TEST_DB=<name>_test_<suffix>` per concurrent runner and the `_gw<N>`
   databases that `-n` creates, frontend `npm test`. Short, measured numbers only.
-- [ ] conftest comments: update the "torn down aggressively (drop_all + TRUNCATE between tests)"
+- [x] conftest comments: update the "torn down aggressively (drop_all + TRUNCATE between tests)"
   note to the new reset.
-- [ ] Final gates (servers stopped; nothing heavy beside it; note the load):
+- [x] Final gates (servers stopped; nothing heavy beside it; note the load):
   - full serial backend suite ×2 on `finance_test_speed` — pass/skip counts = baseline (2,327 / 4)
     + your new tests; wall times;
   - `-n 4` ×3 (if Task 3 landed);
   - `ruff check .` and `ruff format --check .` in `backend/`;
   - full `npx vitest run` ×2, at least one while a backend suite runs beside it; `npx tsc -b`;
     `npx eslint` on the touched frontend test files (0 errors).
-- [ ] Execution record (below): before/after table, flake root causes, anything you chose not to do
+- [x] Execution record (below): before/after table, flake root causes, anything you chose not to do
   and why; drop `finance_test_speed*` (and `_gw*`) databases you created; commit
   `docs(plan): test speed-up — execution record`.
 
@@ -235,4 +235,239 @@ speed; any other database.
 
 ## Execution record
 
-(implementer fills this in)
+Executed 2026-09-23 on branch `chore/test-speed` (from main @b33c202b). Docker Desktop was not
+running at the start; it was started and the stopped `finance-dashboard-db-1` container brought up
+(`docker start`, nothing else touched). Timings were taken on a quiet box (CPU ~15 %, no dev servers,
+no other python/node) unless marked "under load". Test infrastructure and test files only:
+`git diff b33c202b..HEAD` touches no file in `backend/app/**` and no non-test file in `src/**`.
+
+### Commits
+
+| Commit | What |
+|---|---|
+| ff5cdbc7 | Task 1 — `reset_database`: one DO block (child-first DELETEs + setval), TRUNCATE kept as the fallback; `test_conftest_reset.py` |
+| ecb3457b | Task 2 — bcrypt capped at rounds=4 for the session; `test_security.py` pins cost 12 with the real gensalt and cost 4 under the cap |
+| 93a91f59 | Task 1 fix — reset EVERY sequence, not only those pg_sequences reports as read (a snapshot restore parks them at max(id)+1 with is_called false) |
+| 0a73fe18 | Task 3 — opt-in pytest-xdist 3.8.0, one database per worker |
+| 777de768 | Task 4 items 1 + 3 — the silence windows (0.5 / 0.6 s) |
+| 38d392da | Task 4 item 2 — the time-budget test |
+| e7c6c6e2 | Task 4 item 6 — EsppPage offerings |
+| 057faa45 | Task 4 item 7 — SettingsPage tab-hover warm |
+| 13bad831 | Task 4, found under load — RestoreCard focus |
+| a6fdb044 | Task 4, found under load — PortfolioPage household ledgers |
+| 2dc61c57 | Extra — the test engines dial 127.0.0.1 for a `localhost` DATABASE_URL (~2 s per new connection on Windows) |
+| (this) | Task 5 — README section + this record |
+
+### Before / after
+
+| Measure | Before | After |
+|---|---|---|
+| `db` teardown statement, 20 resets each after a few inserts (scratch harness, statements run in separate blocks) | TRUNCATE median 433–489 ms (min 402, max 1,224–1,997) | DO block median 5.0–6.7 ms (min 4.6, max 8.6) |
+| `db` teardown as pytest reports it (`test_auth.py`) | 0.41–0.51 s typical, up to 1.98 s | 0.00–0.03 s |
+| bcrypt hash + verify (micro-benchmark) | 190 + 191 ms (cost 12) | 0.8 + 0.8 ms (cost 4) |
+| `auth_client` test setup (seeded_user hash + login) | 0.39–0.41 s | 0.01 s |
+| First test's setup (bootstrap connection + engine connection + drop_all/create_all) | 5.05–6.42 s | 0.95–1.06 s |
+| Full serial suite | 1,334.77 s, 2,327 passed / 4 skipped (the plan's baseline) | **137.39 s and 143.60 s (147 s wall)**, 2,332 passed / 4 skipped |
+| Full suite, `-n 4` | — | **58.12 / 59.90 / 59.62 s (60 / 63 / 62 s wall)**, 2,332 passed / 4 skipped each |
+| `test_auth.py` alone | 23.84 s | 3.42–4.48 s (incl. the one-time setup) |
+
+Intermediate points: after Tasks 1–2 alone, serial 155.75 s and `-n 4` 71.23 s. The `localhost`
+commit took off the rest: a temporary counting plugin over a full serial run found 5 pooled
+connections costing 10.3 s, one asyncpg cancel request 2.0 s, plus the uncounted bootstrap
+connection (~2 s). The +5 tests over the baseline are the three in `test_conftest_reset.py` and the
+two in `test_security.py`. Frontend baseline before any change: 3,899 passed in 153.45 s.
+
+### Task 1 — what was checked and found
+
+- **FK cycle?** `Base.metadata.sorted_tables` emits no warning: 44 tables, 32 FKs. The only
+  cycle-like edge is the self-reference `accounts.parent_account_id` (ON DELETE SET NULL), which a
+  single `DELETE FROM accounts` satisfies (covered by the new test's parent/component rows).
+- **Why ~5 ms and not the ~17 ms first measured:** alternating TRUNCATE and the DO block in one
+  harness measured the DO block at ~17 ms, because each TRUNCATE swaps relfilenodes and invalidates
+  the relcache, so the next DELETEs rebuild their relation and trigger entries. The suite only ever
+  runs one of the two, so the numbers above come from separate blocks. Parts, each timed as its own
+  transaction (so each includes the ~1.8 ms that a bare `SELECT 1` transaction costs): the 44
+  DELETEs ~4.3 ms, the sequence loop ~3.8 ms, together ~5 ms.
+  `SET LOCAL synchronous_commit = off` would save a further ~1.2 ms per test (~3 s a run); not
+  adopted, as marginal.
+- **A bug in the plan's SQL, caught by the new test on the first full serial run** (fixed in
+  93a91f59): `WHERE last_value IS NOT NULL` skips any sequence in the `setval(…, n, false)` state,
+  because pg_sequences reports last_value NULL whenever is_called is false. `lifecycle/restore.py`
+  step 5 leaves every exported table's sequence exactly there (max(id)+1, false). After
+  `test_assistant_evidence`'s snapshot round trip, `assistant_findings_id_seq` and
+  `allocation_target_sets_id_seq` sat at (2, false), and the next test's first row would have been
+  id 2, depending on test order (and xdist changes the order). The block now setval()s every
+  sequence in the schema. That costs the same (median 5.1 vs 4.9 ms; a read-then-reset variant:
+  5.4 ms). The test now parks a sequence exactly as a restore does before each reset.
+- Mutation checks: each reset test was run against a broken reset (sequences not restarted, a table
+  skipped, a no-op fallback, the old `last_value` filter). Every one was caught.
+
+### Task 3 — parallel-safety audit
+
+pytest-xdist 3.8.0 is the newest release. It resolves against pytest 9.1.1 and adds only execnet
+2.1.2. It is pinned in `requirements-dev.txt` and installed in the shared venv, where it stays inert
+without `-n`; CI's `pip install -r requirements-dev.txt` will install it too, with no effect on its
+serial `pytest -v`. Nothing needed fixing:
+- no test binds a port;
+- every file a test writes lives under `tmp_path` or the per-test `data_dir`, and xdist gives each
+  worker its own basetemp;
+- `test_ops_scripts.py` shells out to bash on `tmp_path` copies and never touches a database;
+- `test_lifecycle_cli.py` points the CLI's `SessionLocal` at the worker's engine;
+- limiter, read caches and assistant module state are per process.
+
+The backend `-n 4` suite also ran green **33 of 33 times under heavy load** during Task 4 (beside
+looping full vitest runs), in 80–170 s. One more run hung: it shared its databases with another
+suite (see the orchestration incident below).
+
+### Task 4 — flake root causes, evidence, fixes
+
+Two findings shaped the backend items. First, **on this box Python 3.12 reads `time.monotonic`
+(the asyncio clock) from GetTickCount64, which has 15.625 ms resolution**. Second, asyncio's
+`_run_once` treats any timer due within one clock resolution as ready. Measured: a nominal
+`asyncio.wait_for(…, 0.03)` took 31–48 ms of real time on an idle loop but **0.8–11.9 ms (median
+6.8)** on a busy one, and a streaming conversation always keeps the loop busy. So the tests' 30–40 ms
+windows were one to three clock ticks, and could close within a few real milliseconds.
+
+The reproduction method was fault injection plus real load. A temporary pytest plugin blocked the
+event loop 50 or 150 ms inside every mock provider request, which is what a descheduled process looks
+like to these tests. The real load was a looping full `npx vitest run` beside a looping backend
+`-n 4` suite, sometimes with a third serial job.
+
+1. **`test_silent_gap_after_partial_output_stops_without_concatenated_fallback`**
+   - Race: `MODEL_SILENCE_SECONDS` is also each rung's first-output allowance, armed before the
+     request. When `partial` arrived after that allowance, the rung read as silent and failed over.
+   - Evidence: a 50 ms stall reproduces the reported failure exactly (`attempts ==
+     ['moonshotai/kimi-k3', 'deepseek-ai/deepseek-v4-pro-0813']`).
+   - Fix: a shared `SILENCE = 0.5` s (~32 ticks).
+2. **`test_total_budget_includes_context_loading`**
+   - Hypothesis confirmed with a `started` event and connection tracing. The budget expired inside
+     `resolve_api_key`'s app_settings read, before `build_context`. On a cold process that read is
+     the run's first ORM query (16–31 ms of mapper configuration and compilation), so the test failed
+     5/5 alone and 10/10 in replays.
+   - The cancelled query also sent asyncpg's cancel request to `localhost`, which is why each failure
+     took ~2.05 s; that led to the 2dc61c57 finding.
+   - Key: reaching `build_context` does **not** depend on this box's `NVIDIA_API_KEY`. The file's
+     `wire` fixture sets `settings.nvidia_api_key = "nvapi-test"`, the test DB has no override row,
+     and the worktree has no `.env`. The fixed test now asserts `("nvapi-test", "env")` explicitly.
+   - Fix: warm that read first, a 0.5 s budget, `assert started.is_set()` with an honest message,
+     and `cancelled` set only on `CancelledError` (the old `finally` also fired on normal completion).
+3. **`test_silence_bound_covers_headers_and_reasoning_and_skips_same_rung[False/True]`**
+   - Race: the fallback's first frame had to land within 0.04 s. Under a 50 ms stall there is no
+     "fallback" token.
+   - Fix: `SILENCE`.
+   **`test_transient_retry_keeps_the_same_first_output_allowance`**
+   - Race: the 503 after 0.09 s had a 0.04 s margin to the 0.13 s allowance. Under a 50 ms stall
+     `primary_attempts == 1`.
+   - Fix: first 0.1 < allowance 0.6 < first + second 1.0 (gaps 0.5 / 0.4 s), asserted in the test.
+     The first version of this guard (`first + 0.3 < allowance < first + second - 0.3` with second
+     0.8) held only through float rounding (`0.1 + 0.8 - 0.3 == 0.6000000000000001`). It was replaced
+     before commit.
+
+   Backend results:
+   - Original file under real load: **failed 7 of 20 runs** (silent-gap ×3, budget ×4).
+   - Fixed file under the same load: **30/30 green** (20/20 in the paired comparison, then 10/10 on
+     the final file).
+   - Fixed budget test alone and cold: 13/13.
+   - All four timing tests pass under 0, 50 and 150 ms stalls.
+   - Cost: those tests now take ~0.5–0.6 s each (about +2.5 s a run).
+
+Frontend. All four listed tests plus the two found under load share one mechanism. A test awaits a
+DOM change produced by a render **outside act()** (a promise resolving while `waitFor` or `findBy*`
+polls), then asserts on something that render's passive effect does (a fetch, a focus move, a busy
+flag cleared). React commits the DOM in one scheduler task and runs passive effects in a later one.
+If RTL's post-waitFor drain (a `setTimeout`) runs first, the synchronous assertion sees the old
+state.
+
+Proof method: a temporary copy of each test file with React's scheduler delayed 20 ms. The scheduler
+captures `setImmediate` when it loads; a `vi.hoisted` block in the copy replaced it. With the delay:
+- the original test fails every time with the reported signature;
+- the fixed test passes at 0, 20, 50 and 100 ms.
+
+4. **CategoriesCard › retires and restores without touching the other columns**
+   - **Already fixed on main** by 15332f45 (09:52 today: wait for `Restore Pets` to be enabled). The
+     plan's two failures predate it.
+   - Passes under the 20 ms delay and **20/20 under load**. Unchanged.
+5. **TransactionsPanel › a successful edit still resets the whole form**
+   - **Already fixed on main** by 310e0277 (11:42 today: `await enabledButton('Edit')`).
+   - Passes under the delay and **20/20 under load**. Unchanged.
+6. **EsppPage › edits an offering through PATCH and deletes one after a confirm**
+   - Race: `busy` clears in the PATCH chain's `.finally`, a render after `updateOffering` was called
+     (synchronously, in the click). Both Delete clicks could hit `disabled={busy}`, so the
+     declined-confirm half passed vacuously and `waitFor(deleteOffering)` timed out.
+   - Evidence: with the delay it fails in 1,466 ms; the plan saw 1,316 ms.
+   - Fix: wait for Delete to be enabled, and assert the confirm was asked (`confirmSpy` called once).
+     The file's other two confirm tests have no write in flight and were left alone.
+7. **SettingsPage › warms a task's data on tab hover or focus**
+   - Race: `#accounts` commits a task before the Household cards' mount effects call
+     `fetchHousehold`.
+   - Evidence: with the delay it fails in ~130 ms at `expect(fetchHousehold).toHaveBeenCalledTimes(1)`;
+     the plan saw 68 ms.
+   - Fix: `await waitFor` that count, and only then assert profiles and limits were not fetched (read
+     earlier, they held vacuously).
+8. **RestoreCard › leaves focus on the report after a restore is applied** (not listed; failed under
+   real load in this batch)
+   - Race: focus moves in a `useEffect` keyed on the report, so `findByText('Restored.')` can resolve
+     first.
+   - Fix: the same assertion inside `waitFor`.
+9. **PortfolioPage › fetches them once on a cold person view** (not listed; failed twice under real
+   load: census round 5 of 10, and once alone beside the load)
+   - Race: by design the household fetch is a `useEffect` of the render that already drew the
+     ex-dividend markers from the person's own ledgers.
+   - Fix: `await waitFor(() => expect(householdCalls()).toHaveLength(1))`, the sibling test's
+     pattern. Call order unchanged.
+
+Frontend verification under load: the six files (281 tests) passed **20/20 rounds**. There were 23
+full vitest runs under load in three phases:
+- the first, before any frontend fix, failed 5 of 7, but only the last of those logs survived
+  (RestoreCard);
+- the second, with fixes landing midway, failed 1 of 11 (PortfolioPage, round 5, before its fix);
+- the third, with every fix in, was 5 of 5 green.
+
+The final gate's run beside a backend suite was green too.
+
+No production defect was found. Every race is the test reading state one scheduler step early, or a
+timing window too narrow for this box's clock.
+
+### Chosen not to do (and why)
+
+- **SettingsPage's two loading-state ghost tests** also fail under the 20 ms delay. This is an
+  artifact of the injection: they resolve their deferred inside `await act(async …)`, and React's
+  async act yields through a real `setImmediate` (the `timers` module), so in a real run the
+  scheduler's earlier task runs first. The injection breaks that FIFO ordering. They never failed
+  under real load. Unchanged.
+- **Global scheduler-delay sweep** (all 267 files): 47 failures in 9 files, dominated by fake-timer
+  suites (InputsForm 31, prefsStore 8), where the injected `setTimeout` is itself faked. That is
+  noise, not evidence. Nothing changed from it.
+- **Other small windows** in `test_assistant_chat_api.py` (`sleep(0.12)` vs keepalive 0.03 at ~461;
+  `WAIT_STATUS_SECONDS` 0.05 vs `sleep(0.2)` at ~1058) and short sleeps in `test_read_cache.py` sit
+  on the same 15.6 ms clock. None failed in any run here (33 backend `-n 4` runs under load, plus
+  serial runs). Not rewritten speculatively; candidates if they ever flake.
+- **The dev server's own database URL.** The main checkout's `backend/.env` sets no `DATABASE_URL`,
+  so uvicorn uses the config default `localhost:5433` and pays the same ~2 s per new pooled
+  connection. The README's Troubleshooting entry already says to use 127.0.0.1; untouched (not test
+  infrastructure).
+
+### Incident in my own orchestration (no code impact)
+
+While switching load loops I deleted a stop file the previous loop still polled. Its backend `-n 4`
+suite then ran concurrently with the next loop's suite on the same `finance_test_speed2_gw*`
+databases, exactly the case the conftest header warns about. One worker hung idle for ~37 minutes
+until I killed that process tree. The other loop's runs all passed. It was not a suite defect, and
+the README's new section now says two runs on one database "can hang".
+
+### Final gates (tree = 2dc61c57 + this record's docs)
+
+- Backend serial ×2 on `finance_test_speed`: **2,332 passed / 4 skipped in 137.39 s** and **2,332
+  passed / 4 skipped in 143.60 s (147 s wall)**. Quiet box.
+- Backend `-n 4` ×3: **2,332 / 4 each, 58.12 s (60 s wall), 59.90 s (63 s wall), 59.62 s (62 s
+  wall)**.
+- `ruff check .` → all checks passed; `ruff format --check .` → 339 files already formatted.
+- `npx vitest run` ×2:
+  - quiet: **267 files, 3,899 passed, 148.25 s (152 s wall)**;
+  - beside a full serial backend suite on `finance_test_speed2`: **3,899 passed, 157.61 s (161 s
+    wall)**. That backend suite also passed, 2,332 / 4 in 213.52 s.
+- `npx tsc -b` → exit 0. `npx eslint` on the four touched frontend test files → 0 problems.
+- Databases created by this batch and dropped at the end: `finance_test_speed`,
+  `finance_test_speed_gw0`–`gw3`, `finance_test_speed2`, `finance_test_speed2_gw0`–`gw3`. No other
+  database was touched. The temporary diagnostics (plugins, injected copies, configs) never entered
+  the tree.
