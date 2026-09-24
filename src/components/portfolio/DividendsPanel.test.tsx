@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DividendOut, SecurityOut } from '../../types/api'
-import DividendsPanel from './DividendsPanel'
+import DividendsPanel, { REVEAL_WINDOW_MS } from './DividendsPanel'
 import ToastProvider from '../ToastProvider'
 
 vi.mock('../../api/portfolio', () => ({
@@ -441,11 +441,32 @@ const MARCH = dividend({ id: 13, pay_date: '2026-03-10', amount: '5.00' })
 const DECEMBER = dividend({ id: 14, pay_date: '2025-12-15', amount: '100.00' })
 const LEDGER = [JUNE_A, JUNE_B, MARCH, DECEMBER]
 
-const monthButton = (name: string) => screen.getByRole('button', { name })
+// A month toggle by its name as it is heard, "Jun 2026, 2 entries". The comma is a visually-hidden span,
+// and both jsdom and Edge compute the name with a space BEFORE it ("Jun 2026 , 2 entries" — Edge's
+// accessibility tree, 2026-09-24): the span is out of flow, so the name computation pads it like a
+// block. Speech reads the two alike, so the space is folded away here; a lost comma still fails.
+const monthButton = (name: string) =>
+  screen.getByRole('button', { name: (accessible) => accessible.replace(/\s+,/g, ',') === name })
 const shownIds = () =>
   [...document.querySelectorAll('tr[data-dividend-id]')].map((row) => Number(row.getAttribute('data-dividend-id')))
 const rectAt = (top: number, height: number) =>
   ({ top, bottom: top + height, height, left: 0, right: 800, width: 800, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
+
+// jsdom lays nothing out, so the focus tests draw the ledger by hand: a 400px box at y=100 under a 30px
+// header — the band where a line pins starts at 130 — scrolled deep into the ledger. March's group
+// spans `group`; its line's cell pins at the band once the group has begun above it, and December's
+// line (the next) has its cell at `nextLineTop` — at the band, it is stuck over March's.
+function drawMarch(group: { top: number; height: number }, nextLineTop: number) {
+  const box = screen.getByRole('region', { name: 'Dividends by month' })
+  box.style.setProperty('--table-head-h', '30px')
+  box.getBoundingClientRect = () => rectAt(100, 400)
+  const march = monthButton('Mar 2026, 1 entry')
+  march.closest('tbody')!.getBoundingClientRect = () => rectAt(group.top, group.height)
+  march.closest('th')!.getBoundingClientRect = () => rectAt(Math.max(group.top, 130), 33)
+  monthButton('Dec 2025, 1 entry').closest('th')!.getBoundingClientRect = () => rectAt(nextLineTop, 33)
+  box.scrollTop = 900
+  return { box, march }
+}
 
 describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
   it('lists one line per recorded month, newest first, with only the newest open', () => {
@@ -455,9 +476,9 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
       b.getAttribute('aria-expanded'),
     ])
     expect(lines).toEqual([
-      ['Jun 2026 2 entries', 'true'],
-      ['Mar 2026 1 entry', 'false'],
-      ['Dec 2025 1 entry', 'false'],
+      ['Jun 2026, 2 entries', 'true'],
+      ['Mar 2026, 1 entry', 'false'],
+      ['Dec 2025, 1 entry', 'false'],
     ])
     expect(shownIds()).toEqual([11, 12])
     expect(screen.getByText('3 months · 4 entries')).toBeTruthy()
@@ -466,8 +487,8 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
   it('opens the current month by itself even when a future-dated entry is listed above it', () => {
     // 2099: after any real clock this suite runs on — no need to pin the date.
     renderPanel([dividend({ id: 20, pay_date: '2099-01-10', amount: '1.00' }), ...LEDGER])
-    expect(monthButton('Jan 2099 1 entry').getAttribute('aria-expanded')).toBe('false')
-    expect(monthButton('Jun 2026 2 entries').getAttribute('aria-expanded')).toBe('true')
+    expect(monthButton('Jan 2099, 1 entry').getAttribute('aria-expanded')).toBe('false')
+    expect(monthButton('Jun 2026, 2 entries').getAttribute('aria-expanded')).toBe('true')
     expect(shownIds()).toEqual([11, 12])
   })
 
@@ -480,14 +501,24 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     expect(totals).toEqual(['$0.30', '$5.00', '$100.00'])
   })
 
+  it('names each line for a screen reader — "Jun 2026, 2 entries" — and describes it by its total', () => {
+    renderPanel(LEDGER)
+    // The name: a comma the eye never sees keeps "2026" and "2" apart (monthButton matches it whole).
+    expect(monthButton('Jun 2026, 2 entries')).toBeTruthy()
+    const described = [...document.querySelectorAll('.dividend-month-toggle')].map(
+      (toggle) => document.getElementById(toggle.getAttribute('aria-describedby')!)!.textContent,
+    )
+    expect(described).toEqual(['$0.30', '$5.00', '$100.00'])
+  })
+
   it('opens and closes a month from its button or anywhere on its line — one toggle per press', () => {
     renderPanel(LEDGER)
-    fireEvent.click(monthButton('Mar 2026 1 entry'))
-    expect(monthButton('Mar 2026 1 entry').getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(monthButton('Mar 2026, 1 entry'))
+    expect(monthButton('Mar 2026, 1 entry').getAttribute('aria-expanded')).toBe('true')
     expect(shownIds()).toEqual([11, 12, 13])
     // The line's total cell is part of the target too.
-    fireEvent.click(monthButton('Jun 2026 2 entries').closest('tr')!.querySelector('td.num')!)
-    expect(monthButton('Jun 2026 2 entries').getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(monthButton('Jun 2026, 2 entries').closest('tr')!.querySelector('td.num')!)
+    expect(monthButton('Jun 2026, 2 entries').getAttribute('aria-expanded')).toBe('false')
     expect(shownIds()).toEqual([13])
   })
 
@@ -511,18 +542,18 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     view.rerender(
       <DividendsPanel securities={securities} dividends={LEDGER} annualIncome="432.10" onChanged={() => {}} />,
     )
-    expect(monthButton('Jun 2026 2 entries').getAttribute('aria-expanded')).toBe('true')
+    expect(monthButton('Jun 2026, 2 entries').getAttribute('aria-expanded')).toBe('true')
     expect(shownIds()).toEqual([11, 12])
   })
 
   it('keeps the months the reader opened when the ledger refreshes', () => {
     const view = renderPanel(LEDGER)
-    fireEvent.click(monthButton('Dec 2025 1 entry'))
+    fireEvent.click(monthButton('Dec 2025, 1 entry'))
     view.rerender(
       <DividendsPanel securities={securities} dividends={[JUNE_A, MARCH, DECEMBER]} annualIncome="432.10" onChanged={() => {}} />,
     )
-    expect(monthButton('Jun 2026 1 entry').getAttribute('aria-expanded')).toBe('true')
-    expect(monthButton('Dec 2025 1 entry').getAttribute('aria-expanded')).toBe('true')
+    expect(monthButton('Jun 2026, 1 entry').getAttribute('aria-expanded')).toBe('true')
+    expect(monthButton('Dec 2025, 1 entry').getAttribute('aria-expanded')).toBe('true')
     expect(shownIds()).toEqual([11, 14])
   })
 
@@ -533,19 +564,15 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     expect(box.querySelector(':scope > table')).toBe(screen.getByRole('table'))
   })
 
-  it("scrolls the box to a month's start when its covered line takes focus or a click (spec §4.3)", () => {
+  it("scrolls the box to a month's start when a Tab lands on its covered line, or a click on the line (spec §4.3)", () => {
     renderPanel(LEDGER)
-    const box = screen.getByRole('region', { name: 'Dividends by month' })
-    // jsdom lays nothing out: a 400px box at y=100 under a 30px header, scrolled deep into the ledger,
-    // and March's group, whose line is stacked under a later month's — it began 70px above the band.
-    box.style.setProperty('--table-head-h', '30px')
-    box.getBoundingClientRect = () => rectAt(100, 400)
-    const march = monthButton('Mar 2026 1 entry')
-    march.closest('tbody')!.getBoundingClientRect = () => rectAt(60, 44)
-    box.scrollTop = 900
-    // Focus arrives FROM another element, as Tab and Shift+Tab bring it: jsdom hands the focus event
-    // the element it left as its relatedTarget.
+    // March folded, its group begun 70px above the band and ended there: December's line is stuck
+    // over March's.
+    const { box, march } = drawMarch({ top: 60, height: 44 }, 130)
+    // A Tab moves focus here FROM another element: jsdom hands the focus event the element it left as
+    // its relatedTarget.
     act(() => screen.getByRole('button', { name: 'Expand all' }).focus())
+    fireEvent.keyDown(document, { key: 'Tab' })
     act(() => march.focus())
     expect(box.scrollTop).toBe(830) // the band starts at 100 + 30 = 130; the group began at 60
     // …and a click on the line does the same before it toggles.
@@ -557,31 +584,58 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
 
   it('leaves the box alone when a month line already shows at its own place', () => {
     renderPanel(LEDGER)
-    const box = screen.getByRole('region', { name: 'Dividends by month' })
-    box.style.setProperty('--table-head-h', '30px')
-    box.getBoundingClientRect = () => rectAt(100, 400)
-    const march = monthButton('Mar 2026 1 entry')
-    march.closest('tbody')!.getBoundingClientRect = () => rectAt(250, 44)
-    box.scrollTop = 900
-    // From another element, so the geometry is what decides (a focus with no relatedTarget never
-    // uncovers — the next test).
+    // March's group begins below the band: its line sits at its own place, December's after it.
+    const { box, march } = drawMarch({ top: 250, height: 44 }, 294)
     act(() => screen.getByRole('button', { name: 'Expand all' }).focus())
+    fireEvent.keyDown(document, { key: 'Tab' })
+    act(() => march.focus())
+    expect(box.scrollTop).toBe(900)
+  })
+
+  it('leaves the box alone when a Tab lands on the line on top of the stack — in plain view, nothing covers it', () => {
+    renderPanel(LEDGER)
+    // March open, its group begun above the band and running on below it: its line is pinned and on
+    // top, December's still further down.
+    const { box, march } = drawMarch({ top: 60, height: 340 }, 400)
+    act(() => screen.getByRole('button', { name: 'Expand all' }).focus())
+    fireEvent.keyDown(document, { key: 'Tab' })
+    act(() => march.focus())
+    expect(box.scrollTop).toBe(900)
+  })
+
+  it('leaves the box alone when an overlay hands focus back to a covered line (the review repro: Ctrl+K, Esc)', () => {
+    renderPanel(LEDGER)
+    const { box, march } = drawMarch({ top: 60, height: 44 }, 130)
+    // The palette's input held focus; Esc closed it, and it hands focus back to the line — from an
+    // element, but not by a Tab.
+    act(() => screen.getByRole('button', { name: 'Expand all' }).focus())
+    fireEvent.keyDown(document, { key: 'Escape' })
+    act(() => march.focus())
+    expect(box.scrollTop).toBe(900)
+  })
+
+  it('leaves the box alone when focus comes back after a pointer press, the last KEY a Tab all the same', () => {
+    renderPanel(LEDGER)
+    const { box, march } = drawMarch({ top: 60, height: 44 }, 130)
+    // A Tab, then a press on a chart or a panel: focus handed back to the line afterwards (a detail
+    // panel closing) is not the keyboard's walk.
+    act(() => screen.getByRole('button', { name: 'Expand all' }).focus())
+    fireEvent.keyDown(document, { key: 'Tab' })
+    fireEvent.pointerDown(document.body)
     act(() => march.focus())
     expect(box.scrollTop).toBe(900)
   })
 
   it('leaves the box where the reader scrolled it when a window switch hands focus back to a line (Edge, 2026-09-24)', () => {
     renderPanel(LEDGER)
-    const box = screen.getByRole('region', { name: 'Dividends by month' })
-    box.style.setProperty('--table-head-h', '30px')
-    box.getBoundingClientRect = () => rectAt(100, 400)
-    const march = monthButton('Mar 2026 1 entry')
-    march.closest('tbody')!.getBoundingClientRect = () => rectAt(60, 44)
-    // The line took focus (the reader clicked it) and they scrolled on through the ledger…
+    const { box, march } = drawMarch({ top: 60, height: 44 }, 130)
+    // The reader Tabbed onto the line (it uncovered) and scrolled on through the ledger…
+    act(() => screen.getByRole('button', { name: 'Expand all' }).focus())
+    fireEvent.keyDown(document, { key: 'Tab' })
     act(() => march.focus())
     box.scrollTop = 900
-    // …then another window took focus and gave it back. The browser re-fires focus on the line with
-    // no relatedTarget; jsdom's blur() then focus() is that event.
+    // …then another window took focus and gave it back, no key pressed between. The browser re-fires
+    // focus on the line with no relatedTarget; jsdom's blur() then focus() is that event.
     act(() => march.blur())
     act(() => march.focus())
     expect(box.scrollTop).toBe(900)
@@ -595,7 +649,7 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '4.10' } })
     fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
-    expect(monthButton('Dec 2025 1 entry').getAttribute('aria-expanded')).toBe('true')
+    expect(monthButton('Dec 2025, 1 entry').getAttribute('aria-expanded')).toBe('true')
     expect(document.activeElement).toBe(screen.getByLabelText('Amount'))
   })
 
@@ -607,7 +661,7 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2026-03-31' } })
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
-    expect(monthButton('Mar 2026 1 entry').getAttribute('aria-expanded')).toBe('true')
+    expect(monthButton('Mar 2026, 1 entry').getAttribute('aria-expanded')).toBe('true')
   })
 
   it('brings a saved entry into view in the BOX once the refreshed ledger renders — not before, and once', async () => {
@@ -622,6 +676,11 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     // Its month is open, but the refetch has not landed: nothing to bring into view yet.
     expect(revealInBox).not.toHaveBeenCalled()
+    // jsdom lays nothing out: the saved row's month line measures 33px and another month's 21px — the
+    // row must land below its OWN month's pinned line. (Both lines are the same nodes after the
+    // refetch: each month's row group is keyed by its month.)
+    monthButton('Dec 2025, 1 entry').closest('tr')!.getBoundingClientRect = () => rectAt(0, 33)
+    monthButton('Jun 2026, 2 entries').closest('tr')!.getBoundingClientRect = () => rectAt(0, 21)
     view.rerender(
       <DividendsPanel securities={securities} dividends={[JUNE_A, JUNE_B, MARCH, saved, DECEMBER]} annualIncome="432.10" onChanged={onChanged} />,
     )
@@ -629,6 +688,7 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
     expect(revealInBox).toHaveBeenCalledTimes(1)
     expect(vi.mocked(revealInBox).mock.calls[0][0]).toBe(box)
     expect(vi.mocked(revealInBox).mock.calls[0][1]).toBe(box.querySelector('tr[data-dividend-id="15"]'))
+    expect(vi.mocked(revealInBox).mock.calls[0][2]).toBe(33)
     // A later refresh does not scroll the box again.
     view.rerender(
       <DividendsPanel securities={securities} dividends={[...LEDGER]} annualIncome="432.10" onChanged={onChanged} />,
@@ -706,5 +766,30 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
       <DividendsPanel securities={securities} dividends={[JUNE_A, JUNE_B, MARCH, saved, DECEMBER]} annualIncome="432.10" onChanged={onChanged} />,
     )
     expect(revealInBox).not.toHaveBeenCalled()
+  })
+
+  // The refetch came back identical, so PortfolioPage kept the ledger it had and the reveal stayed
+  // armed; the next ledger the page applies — a price refresh, a scope switch — lands past the window,
+  // where scrolling the box to the old row would only be a jolt.
+  it('lets a pending reveal lapse when the next ledger lands after REVEAL_WINDOW_MS', async () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(1_000)
+    try {
+      const saved = dividend({ id: 15, pay_date: '2025-12-20', amount: '4.10' })
+      vi.mocked(createDividend).mockResolvedValueOnce(saved)
+      const onChanged = vi.fn()
+      const view = renderPanel(LEDGER, '432.10', onChanged)
+      fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
+      fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2025-12-20' } })
+      fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '4.10' } })
+      fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
+      await waitFor(() => expect(onChanged).toHaveBeenCalled())
+      now.mockReturnValue(1_000 + REVEAL_WINDOW_MS + 1)
+      view.rerender(
+        <DividendsPanel securities={securities} dividends={[JUNE_A, JUNE_B, MARCH, saved, DECEMBER]} annualIncome="432.10" onChanged={onChanged} />,
+      )
+      expect(revealInBox).not.toHaveBeenCalled()
+    } finally {
+      now.mockRestore()
+    }
   })
 })

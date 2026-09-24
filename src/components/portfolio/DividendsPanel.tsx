@@ -1,5 +1,6 @@
 import { ChevronRight } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { FocusEvent as ReactFocusEvent } from 'react'
 import { ApiError } from '../../api/client'
 import { createDividend, deleteDividend, updateDividend } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
@@ -77,6 +78,11 @@ function newAccountNote(
   return `New account '${label}' will be created and assigned to ${primaryName ?? 'the primary member'} — re-tag it in Settings → Accounts`
 }
 
+/** How long a saved entry's reveal waits for the refetched ledger (Task 8 review): a refetch that
+ *  answers in time scrolls the box to the row; a ledger that lands later is some other change, and
+ *  the reveal lapses rather than jolting the box then. Exported for the tests (Feed's precedent). */
+export const REVEAL_WINDOW_MS = 10_000
+
 export default function DividendsPanel({
   securities,
   dividends,
@@ -140,13 +146,15 @@ export default function DividendsPanel({
       return next
     })
   const openMonth = (key: string) => setOpen((prev) => (prev.has(key) ? prev : new Set(prev).add(key)))
+  // The capped box (TableScroll's element), which the uncover and the reveal below scroll.
+  const boxRef = useRef<HTMLDivElement>(null)
   // Passed month lines stack at one offset — the browser pins a table's sticky cells against the whole
   // table, not their row group (measured in Edge, 2026-09-24) — so the newest one passed covers the
-  // rest (spec §4.3). A focus or click that lands on a line whose month began above the band first
-  // scrolls the BOX until that month's group starts just under the column header: Shift+Tab back up
-  // the ledger would otherwise rest on a toggle hidden under a later month's line, which the browser
-  // will not scroll to because it counts as in view (WCAG 2.4.11), and collapsing the month you are
-  // inside keeps your place instead of dropping you among the months below.
+  // rest (spec §4.3). A click on a line, or a Tab onto a covered one (onLineFocus), first scrolls the
+  // BOX until that month's group starts just under the column header: Shift+Tab back up the ledger
+  // would otherwise rest on a toggle hidden under a later month's line, which the browser will not
+  // scroll to because it counts as in view (WCAG 2.4.11), and collapsing the month you are inside
+  // keeps your place instead of dropping you among the months below.
   const uncoverMonth = (group: HTMLElement | null) => {
     const box = boxRef.current
     if (box === null || group === null) return
@@ -155,20 +163,60 @@ export default function DividendsPanel({
     const top = group.getBoundingClientRect().top
     if (top < bandTop - 1) box.scrollTop -= bandTop - top
   }
-  // A saved entry to bring into view once the refreshed ledger renders (spec §4.5): its id and the
-  // ledger it was saved against. The next ledger the page renders after the save consumes it — the
-  // row found, it is revealed; not found, it is dropped. Commits that still hold the save-time ledger
-  // (the one that opens its month among them) leave it waiting. A delete or a new edit drops it
-  // first (remove, startEdit): the reader has moved on, and the reveal would ride THAT refetch to a
-  // row they have left. If the refetch fails, or comes back identical — PortfolioPage then keeps the
-  // ledger it has, the same array — it waits for the next ledger change. A ref, not state: it is
-  // never drawn.
-  const boxRef = useRef<HTMLDivElement>(null)
-  const pendingReveal = useRef<{ id: number; ledger: DividendOut[] } | null>(null)
+  // Whether a later month's line is pinned over this one. Only the NEXT line needs reading: the lines
+  // stick in order, so if it is not over this one, no later line is. The th cells, not the rows: the
+  // sticky offset moves the cells, while a tr keeps its place in the table's layout.
+  const isCovered = (line: HTMLElement | null) => {
+    const next = line?.closest('tbody')?.nextElementSibling?.querySelector<HTMLElement>('.dividend-month-row > th')
+    if (!line || !next) return false
+    return next.getBoundingClientRect().top < line.getBoundingClientRect().bottom - 1
+  }
+  // Whether the reader's last key was Tab (Shift+Tab included) — the keyboard's own walk, which is what
+  // the focus uncover serves. Any other key, or a pointer press, clears it. On the document and in the
+  // capture phase, so a control that stops a key's propagation cannot hide it from the ledger.
+  const lastKeyTab = useRef(false)
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      lastKeyTab.current = event.key === 'Tab'
+    }
+    const onPointer = () => {
+      lastKeyTab.current = false
+    }
+    document.addEventListener('keydown', onKey, true)
+    document.addEventListener('pointerdown', onPointer, true)
+    return () => {
+      document.removeEventListener('keydown', onKey, true)
+      document.removeEventListener('pointerdown', onPointer, true)
+    }
+  }, [])
+  // A line's toggle took focus. It uncovers only when a Tab brought focus here from another element
+  // AND a later month's line really covers it. Focus that arrives any other way is being HANDED BACK,
+  // not walked to, and moving the box then loses the reader's place: a window or tab switch re-fires
+  // it with no relatedTarget (Edge, 2026-09-24), and an overlay returns it from its own input as it
+  // closes — the command palette's Esc, a detail panel's or the chart Expand dialog's close (the
+  // Task 8 review's repro: a line clicked, the box 900px on through its month, Ctrl+K, Esc, and the
+  // box jumped back to the month's start). A click uncovers through the line's own handler, always.
+  const onLineFocus = (event: ReactFocusEvent<HTMLButtonElement>) => {
+    if (event.relatedTarget === null || !lastKeyTab.current) return
+    if (!isCovered(event.currentTarget.closest('th'))) return
+    uncoverMonth(event.currentTarget.closest('tbody'))
+  }
+  // A saved entry to bring into view once the refreshed ledger renders (spec §4.5): its id, the
+  // ledger it was saved against, and when. The next ledger the page renders after the save consumes
+  // it — the row found, it is revealed; not found, it is dropped. Commits that still hold the
+  // save-time ledger (the one that opens its month among them) leave it waiting. A delete or a new
+  // edit drops it first (remove, startEdit): the reader has moved on, and the reveal would ride THAT
+  // refetch to a row they have left. And it lapses REVEAL_WINDOW_MS after the save: a refetch that
+  // fails, or comes back identical (PortfolioPage then keeps the ledger it has, the same array),
+  // leaves it armed, and the next snapshot the page applies — a price refresh, a scope switch — can
+  // land at any later moment, when scrolling the box to the old row would only be a jolt. A ref,
+  // not state: it is never drawn.
+  const pendingReveal = useRef<{ id: number; ledger: DividendOut[]; at: number } | null>(null)
   useEffect(() => {
     const pending = pendingReveal.current
     if (pending === null || pending.ledger === dividends) return
     pendingReveal.current = null
+    if (performance.now() - pending.at > REVEAL_WINDOW_MS) return
     const box = boxRef.current
     const row = box?.querySelector<HTMLElement>(`tr[data-dividend-id="${pending.id}"]`)
     if (!box || !row) return
@@ -234,11 +282,13 @@ export default function DividendsPanel({
         }
         // The entry's month opens — the month it was saved INTO, which an edit may have moved it to —
         // and once the refetched ledger renders, the box scrolls to it (spec §4.5). The id is the
-        // response's (a create) or the row's own (an edit); the page never moves, so the caret the
-        // create path just parked in the amount box stays in view.
+        // response's: both verbs answer with the saved row (DividendOut). editingId is only the
+        // fallback for a response that carries no id — the tests' mocks resolve {} — so an edit
+        // still finds its row. The page never moves, so the caret the create path just parked in
+        // the amount box stays in view.
         openMonth(monthKeyOf(body.pay_date))
         const id = typeof saved?.id === 'number' ? saved.id : editingId
-        if (id !== null) pendingReveal.current = { id, ledger: dividends }
+        if (id !== null) pendingReveal.current = { id, ledger: dividends, at: performance.now() }
         onChanged()
       })
       .catch((err: unknown) => {
@@ -468,6 +518,7 @@ export default function DividendsPanel({
               </thead>
               {months.map((month) => {
                 const isOpen = open.has(month.key)
+                const totalId = `dividend-month-total-${month.key}`
                 return (
                   // One row group per month inside ONE table: the column grid stays shared, so the
                   // amounts line up down the whole ledger.
@@ -482,28 +533,23 @@ export default function DividendsPanel({
                       }}
                     >
                       <th scope="rowgroup" colSpan={3}>
+                        {/* Named "Sep 2026, 40 entries" — the comma is for the ear alone; without it
+                            the name runs "2026 40" together — and described by the month's total,
+                            which the toggle would otherwise never say. */}
                         <button
                           type="button"
                           className="dividend-month-toggle"
                           aria-expanded={isOpen}
-                          onFocus={(event) => {
-                            // Only a focus that moves here FROM another element uncovers. A window or
-                            // tab switch back re-fires focus on the element that last held it, with
-                            // no relatedTarget — a line clicked, the box scrolled 900px on through its
-                            // month, another tab and back, and the box jumped to the month's start
-                            // (Edge, 2026-09-24). Tab and Shift+Tab always arrive from an element, so
-                            // the keyboard keeps the uncover; a click uncovers through the line's own
-                            // handler above.
-                            if (event.relatedTarget === null) return
-                            uncoverMonth(event.currentTarget.closest('tbody'))
-                          }}
+                          aria-describedby={totalId}
+                          onFocus={onLineFocus}
                         >
                           <ChevronRight size={14} aria-hidden="true" className="dividend-month-chevron" />
-                          <span className="dividend-month-label">{month.label}</span>{' '}
+                          <span className="dividend-month-label">{month.label}</span>
+                          <span className="visually-hidden">,</span>{' '}
                           <span className="dividend-month-count">{entriesLabel(month.rows.length)}</span>
                         </button>
                       </th>
-                      <td className="num">{formatCurrency(month.totalCents / 100)}</td>
+                      <td className="num" id={totalId}>{formatCurrency(month.totalCents / 100)}</td>
                       <td colSpan={4} />
                     </tr>
                     {isOpen &&

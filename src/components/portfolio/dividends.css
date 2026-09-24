@@ -17,20 +17,28 @@
 /* A month line: an opaque band — a sticky cell needs a solid fill or the rows would ghost through —
    pinned just under the column header while its month scrolls (TableScroll measures that header into
    --table-head-h). z 1 like the header cells; later in the DOM, so it paints over the rows passing
-   under it. */
+   under it. Its bottom hairline is an OUTER shadow, the pinned totals row's idiom (tableScroll.css)
+   turned downward: in the light theme the band is only 1.05:1 against the card, so without it a
+   pinned line had no edge where the rows slide under it (Task 8 review). No text selection: the whole
+   line is a toggle, and a double-click would toggle twice and select the label (the Disclosure
+   summary's rule). */
 .dividend-month-row > th,
 .dividend-month-row > td {
   position: sticky;
   top: var(--table-head-h, 0px);
   z-index: 1;
   background: var(--surface-2);
+  box-shadow: 0 1px 0 var(--border);
   cursor: pointer;
+  user-select: none;
 }
 
-/* Opaque on purpose (a translucent wash would let the rows under a pinned line show through). */
+/* The Disclosure summary's hover fill: opaque in both themes (a translucent wash would let the rows
+   under a pinned line show through), and the muted count keeps AA on it — 4.59:1 dark, 4.53:1 light,
+   where the 6% text wash it replaces left 4.40:1 in dark (Task 8 review). */
 .dividend-month-row:hover > th,
 .dividend-month-row:hover > td {
-  background: color-mix(in srgb, var(--text) 6%, var(--surface-2));
+  background: var(--fill);
 }
 
 .dividend-month-row > th {
