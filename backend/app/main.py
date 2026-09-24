@@ -86,14 +86,19 @@ class ProductTodayHeader:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     override = clock.product_today_override()
     if override is not None:
-        # One WARNING line naming the override (spec §K1): a dev server answering a day that is
-        # not today says so where its operator is looking.
+        # One WARNING line naming the override (spec §K1) and what it can still write: every date
+        # the app derives from the product day follows it, so a price refresh dates its weekly
+        # value row on the fake day in whatever database this process is attached to. The
+        # scheduled refresh is therefore not started at all; the manual one is named (review
+        # minor 11).
         logger.warning(
-            "PRODUCT_TODAY override: the product day is %s, not the real day (dev only)",
+            "PRODUCT_TODAY override: the product day is %s, not the real day (dev only). The "
+            "scheduler is not started; a manual 'Refresh prices' would still write this day's "
+            "weekly value row into the attached database.",
             override.isoformat(),
         )
     scheduler = None
-    if settings.scheduler_enabled:
+    if settings.scheduler_enabled and override is None:
         from app.services.scheduler import start_scheduler
 
         try:
