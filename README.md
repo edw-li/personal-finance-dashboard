@@ -881,11 +881,13 @@ on every visit and are never part of a link).
 
 **Projection — moved by design (2026-09-23 correctness batch; do not "fix" these).** The starting
 balance is the current snapshot's — the one the Overview shows, so next month's balances recorded
-early count, named on the tile "as of Sep 22 · provisional". Scheduled RSU
-vests are included by default — each vest after the starting balance's date, at today's employer
-quote less the calendar's ≈ 32.23 % sell-to-cover, stopping at the primary's retirement
-(`vests:0` leaves them out) — so the FI date moves earlier. A retirement month now splits the plan
-into phases: while one of you works, that person's payroll saving and employer match continue and
+early count, named on the tile "as of Sep 22 · provisional". Scheduled RSU vests are included by
+default — each vest after the starting balance's date, at today's employer quote less the
+calendar's ≈ 32.23 % sell-to-cover, stopping at the primary's retirement (`vests:0` leaves them
+out) — so the FI date moves earlier. A link or pin saved before this that raised
+`monthly_contribution` to stand in for vests now counts them twice: lower it, or add `vests:0`. A
+retirement month now splits the plan into phases: while one of you works, that person's payroll
+saving and employer match continue and
 their pay is assumed to cover spending (a note says when it does not); from the last retirement on,
 the projection withdraws your annual spend each year in today's dollars (taxes on withdrawals and
 Social Security are not modelled). The old "the balance simply stops moving" behaviour is gone, and
