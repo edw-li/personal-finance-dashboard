@@ -371,6 +371,22 @@ class EsppSaleDetailOut(BaseModel):
     warnings: list[str]
 
 
+class SaleSummaryOut(BaseModel):
+    """A scenario's sales in cash terms (2026-09-23 spec §W7).
+
+    `proceeds` is every leg's sale value; `gain` the brokerage gains plus ESPP ordinary and
+    capital income; `tax_due` the total tax the SALES add to the stored year — the overrides
+    left out, so it equals `delta.total_tax` exactly when the scenario has none; `net_cash`
+    is proceeds − tax due and `after_tax_gain` gain − tax due.
+    """
+
+    proceeds: Decimal
+    gain: Decimal
+    tax_due: Decimal
+    net_cash: Decimal
+    after_tax_gain: Decimal
+
+
 class WhatIfOut(BaseModel):
     year: int
     baseline: TaxSummaryOut
@@ -380,6 +396,9 @@ class WhatIfOut(BaseModel):
     sale_details: list[SaleDetailOut]
     espp_sale_details: list[EsppSaleDetailOut]
     warnings: list[str]
+    # Present when the scenario sells something (a brokerage or an ESPP leg); null for an
+    # overrides-only scenario. Additive and defaulted (§W7).
+    sale_summary: SaleSummaryOut | None = None
 
 
 # --- the "Will I owe?" tracker (2026-08-21 spec §4). Every figure is computed at read time

@@ -1368,6 +1368,54 @@ async def test_what_if_espp_disqualified_hits_w2_not_fica(auth_client, db, defin
     assert Decimal(body["delta"]["federal_tax"]) > 0
 
 
+async def test_sale_summary_with_legs_only_is_the_delta(auth_client, db, definitions):
+    """2026-09-23 spec §W7: a sale reads in cash — proceeds, the tax the sale adds, what is
+    left, and the gain after tax — instead of a "take-home" that never counts proceeds."""
+    await seeded_2024(auth_client)
+    lot_id = await seed_lot(db)
+    security_id = await seed_holding(db)
+    body = await what_if(
+        auth_client,
+        sales=[{"security_id": security_id, "shares": "40"}],
+        espp_sales=[{"lot_id": lot_id, "sale_price": "150.0000"}],
+    )
+    summary = body["sale_summary"]
+    assert summary["proceeds"] == "4000.00"  # 2,500.00 brokerage + 1,500.00 ESPP
+    assert summary["gain"] == "1150.00"  # 500 brokerage + 350 ordinary + 300 capital
+    # No overrides: the tax due IS the scenario's total-tax delta, to the cent.
+    assert summary["tax_due"] == body["delta"]["total_tax"]
+    assert Decimal(summary["net_cash"]) == Decimal(summary["proceeds"]) - Decimal(
+        summary["tax_due"]
+    )
+    assert Decimal(summary["after_tax_gain"]) == Decimal(summary["gain"]) - Decimal(
+        summary["tax_due"]
+    )
+
+
+async def test_sale_summary_with_an_override_prices_the_legs_alone(auth_client, db, definitions):
+    """With overrides also in the scenario the tax due counts the SALES only (one more
+    engine run), so it matches the legs-only scenario and not the whole delta."""
+    await seeded_2024(auth_client)
+    lot_id = await seed_lot(db)
+    legs = await what_if(auth_client, espp_sales=[{"lot_id": lot_id, "sale_price": "150.0000"}])
+    both = await what_if(
+        auth_client,
+        espp_sales=[{"lot_id": lot_id, "sale_price": "150.0000"}],
+        overrides={"qualified_dividends": "2500"},
+    )
+    assert both["sale_summary"]["tax_due"] == legs["sale_summary"]["tax_due"]
+    assert both["sale_summary"]["tax_due"] != both["delta"]["total_tax"]
+    assert both["sale_summary"]["proceeds"] == legs["sale_summary"]["proceeds"] == "1500.00"
+
+
+async def test_no_sale_summary_without_legs(auth_client, definitions):
+    await seeded_2024(auth_client)
+    body = await what_if(auth_client, overrides={"qualified_dividends": "2500"})
+    assert body["sale_summary"] is None
+    empty = await what_if(auth_client)
+    assert empty["sale_summary"] is None
+
+
 async def test_what_if_oversell_422(auth_client, db, definitions):
     await seeded_2024(auth_client)
     security_id = await seed_holding(db)

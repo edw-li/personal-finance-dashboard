@@ -73,6 +73,7 @@ from app.schemas.taxes import (
     PersonWageTaxOut,
     SafeHarborOut,
     SaleDetailOut,
+    SaleSummaryOut,
     TaxInputItemOut,
     TaxInputRowIn,
     TaxInputSectionOut,
@@ -2250,6 +2251,33 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
     return await withholding_estimate(db, year, today)
 
 
+def _scenario_breakdown(feed: EngineFeed, scenario_inputs: dict[str, Decimal]) -> TaxBreakdown:
+    """The engine over a what-if scenario's inputs.
+
+    The whole wage delta is the PRIMARY's (their lots, their ESPP — the app models no partner
+    equity), so their bundle is re-materialized from their OWN component bucket with the
+    scenario's per-person deltas folded in, and the partner's wage base is untouched beside it.
+    Per-person keys only: a household delta is not anybody's wages. One helper for the
+    scenario and for the sale summary's legs-only run (§W7), so the two cannot disagree about
+    how a leg is taxed.
+    """
+    stored = feed.inputs
+    primary_after = dict(feed.person_inputs.get(feed.primary_column, {}))
+    for key in PER_PERSON_KEYS:
+        if is_derived_key(key):
+            continue  # rebuilt from the components below, never carried as a delta
+        delta = scenario_inputs.get(key, ZERO) - stored.get(key, ZERO)
+        if delta:
+            primary_after[key] = primary_after.get(key, ZERO) + delta
+    return compute_breakdown(
+        feed.year,
+        scenario_inputs,
+        feed.tables,
+        filing_status=feed.filing_status,
+        earners=shift_earners(feed.earners, primary_after),
+    )
+
+
 @router.post("/what-if", response_model=WhatIfOut)
 async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfOut:
     """Baseline vs scenario through the engine — NOTHING is stored. today is read here
@@ -2398,27 +2426,35 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
         ),
         feed,
     )
-    # The whole wage delta is the PRIMARY's (their lots, their ESPP — the app models no
-    # partner equity), so their bundle is re-materialized from their OWN component bucket
-    # with the scenario's per-person deltas folded in, and the partner's wage base is
-    # untouched beside it. Per-person keys only: a household delta is not anybody's wages.
-    primary_after = dict(feed.person_inputs.get(feed.primary_column, {}))
-    for key in PER_PERSON_KEYS:
-        if is_derived_key(key):
-            continue  # rebuilt from the components below, never carried as a delta
-        delta = scenario_inputs.get(key, ZERO) - stored.get(key, ZERO)
-        if delta:
-            primary_after[key] = primary_after.get(key, ZERO) + delta
-    scenario = _summary_out(
-        compute_breakdown(
-            year,
-            scenario_inputs,
-            brackets,
-            filing_status=feed.filing_status,
-            earners=shift_earners(feed.earners, primary_after),
-        ),
-        feed,
-    )
+    scenario = _summary_out(_scenario_breakdown(feed, scenario_inputs), feed)
+
+    # The sale in CASH terms (2026-09-23 spec §W7): "Δ take-home" is an income concept that
+    # never counts proceeds, so a $59.5K qualified lot read as −$11,651. Present whenever the
+    # scenario sells something; the tax due counts the SALES only — with no overrides that is
+    # the delta itself, with overrides it takes one more engine run over the legs alone.
+    sale_summary = None
+    if sale_details or espp_details:
+        if overrides:
+            legs_inputs, _legs_warnings = apply_scenario(stored, sale_details, espp_details, {})
+            legs_tax = _money(_scenario_breakdown(feed, legs_inputs).totals.total_tax)
+            tax_due = legs_tax - baseline.totals.total_tax
+        else:
+            tax_due = scenario.totals.total_tax - baseline.totals.total_tax
+        proceeds = _money(
+            sum((d.proceeds for d in sale_details), ZERO)
+            + sum((e.proceeds for e in espp_details), ZERO)
+        )
+        gain = _money(
+            sum((d.gain for d in sale_details), ZERO)
+            + sum((e.ordinary_income + e.capital_gain for e in espp_details), ZERO)
+        )
+        sale_summary = SaleSummaryOut(
+            proceeds=proceeds,
+            gain=gain,
+            tax_due=tax_due,
+            net_cash=_money(proceeds - tax_due),
+            after_tax_gain=_money(gain - tax_due),
+        )
 
     changed: list[ChangedInput] = []
     labels = {key: label for key, label, _s, _o, _d in TAX_INPUT_DEFINITIONS}
@@ -2469,4 +2505,5 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
         sale_details=[SaleDetailOut(**vars(d)) for d in sale_details],
         espp_sale_details=[EsppSaleDetailOut(**vars(d)) for d in espp_details],
         warnings=scenario_warnings,
+        sale_summary=sale_summary,
     )
