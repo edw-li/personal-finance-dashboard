@@ -505,7 +505,10 @@ export default function SpendingPage() {
               // The month on screen with nothing picked (2026-09-23 spec §T8): the last complete
               // month, or on Budgets the card's own month — what Edit opens and Back returns to.
               defaultMonth: views.section === 'budgets' ? budgetsMonth : matrix === null ? undefined : (matrix.default_month ?? null),
-              backLabel: views.section === 'budgets' ? undefined : 'Back to last complete month',
+              // Named only when there is one: a book with no complete month yet goes "Back to
+              // latest" — the page as it opens (code review minor 2).
+              backLabel:
+                views.section !== 'budgets' && matrix?.default_month != null ? 'Back to last complete month' : undefined,
             }}
           />
         }

@@ -893,6 +893,17 @@ describe('SpendingPage — the ribbon names the page\u2019s default month (2026-
     await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('month='))
   })
 
+  // Code review minor 2: a book with no complete month yet (default_month null) has no month to go
+  // back to — the way back from a pick is "Back to latest", the page as it opens.
+  it('offers "Back to latest" from a pick when there is no last complete month yet', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture({ default_month: null }))
+    renderPage('/spending?month=2026-07')
+    const back = await screen.findByRole('button', { name: 'Back to latest' })
+    expect(screen.queryByRole('button', { name: 'Back to last complete month' })).toBeNull()
+    fireEvent.click(back)
+    await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('month='))
+  })
+
   it('on the Budgets view, compares with the month the Budget card resolved', async () => {
     vi.mocked(fetchMatrix).mockResolvedValue(
       matrixFixture({
