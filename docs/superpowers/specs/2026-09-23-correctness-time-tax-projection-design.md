@@ -1,7 +1,12 @@
 # The app's sense of time, "Will I owe?" and the retirement projection (2026-09-23) — design record
 
-**Status:** design for approval — nothing implemented, nothing committed. Written 2026-09-23 against
-main @b33c202b (batch 1 and the drag-reorder batch are on local main, neither pushed). Source: the
+**Status:** **approved for implementation 2026-09-24** (the user, on this record: "looks good,
+proceed."). Written 2026-09-23 against main @b33c202b (batch 1 and the drag-reorder batch have since
+been pushed; the test speed-up is on local main @60b6191f). Real-data copy for §V4 prepared by the
+controller 2026-09-24: `finance_realdata_b2` = `finance_realdata` cloned, migrated f12026091203 →
+f12026092301 (row counts otherwise identical) and seeded with prod's September change-log history
+(41 rows; script `…/scratchpad/batch2/setup/seed-sept-changelog.sql` in the 06a5d2e6 session
+scratchpad); read-only from here on. Source: the
 2026-09-22 fresh-eyes audit (`scratchpad/audit-2026-09-22/`, gitignored), items **#1** (the app's
 sense of time), **#3** ("Will I owe in April?") and **#4** (the retirement projection), with the
 research maps written today (`scratchpad/batch2-research/{time-model,tax-owe,projection}-map.md`).
