@@ -31,13 +31,16 @@ export function typedText(row: ReconciliationRow): string {
   return row.typed === null ? 'not entered' : formatCurrency(row.typed)
 }
 
-/** What the typed salary is made of ("20 pay periods + $27,000 checkpoint"), else null. */
+/** What the typed salary is made of ("20 pay periods + $27,000 checkpoint"), else null. A
+ *  negative checkpoint LOWERS the salary, and says so ("24 pay periods − $3,000 checkpoint"). */
 export function typedDetail(row: ReconciliationRow): string | null {
-  const parts: string[] = []
-  if (row.facts.typed_pay_periods !== null) parts.push(`${Number(row.facts.typed_pay_periods)} pay periods`)
-  if (row.facts.typed_checkpoint !== null && Number(row.facts.typed_checkpoint) !== 0)
-    parts.push(`${wholeDollars(row.facts.typed_checkpoint)} checkpoint`)
-  return parts.length === 0 ? null : parts.join(' + ')
+  const periods =
+    row.facts.typed_pay_periods === null ? null : `${Number(row.facts.typed_pay_periods)} pay periods`
+  const amount = row.facts.typed_checkpoint === null ? 0 : Number(row.facts.typed_checkpoint)
+  const checkpoint = amount === 0 ? null : `${wholeDollars(amount)} checkpoint`
+  if (checkpoint === null) return periods
+  if (periods === null) return amount < 0 ? `−${checkpoint}` : checkpoint
+  return `${periods} ${amount < 0 ? '−' : '+'} ${checkpoint}`
 }
 
 const SOURCE_WORDS: Record<ReconciliationRow['source'], string> = {

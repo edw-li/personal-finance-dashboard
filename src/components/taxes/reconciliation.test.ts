@@ -72,6 +72,17 @@ describe('reconciliation copy (2026-09-23 spec §W4)', () => {
     expect(typedDetail(row())).toBe('20 pay periods + $27,000 checkpoint')
     expect(typedDetail(row({ facts: { ...FACTS, typed_pay_periods: '10' } }))).toBe('10 pay periods')
     expect(typedDetail(row({ key: 'hsa', facts: FACTS }))).toBeNull()
+    // A negative checkpoint carries its sign (code-quality M1): it LOWERS the typed salary.
+    expect(
+      typedDetail(row({ facts: { ...FACTS, typed_pay_periods: '24', typed_checkpoint: '-3000.00' } })),
+    ).toBe('24 pay periods − $3,000 checkpoint')
+    // A checkpoint alone keeps its own sign too.
+    expect(typedDetail(row({ facts: { ...FACTS, typed_checkpoint: '-3000.00' } }))).toBe(
+      '−$3,000 checkpoint',
+    )
+    expect(typedDetail(row({ facts: { ...FACTS, typed_checkpoint: '5000.00' } }))).toBe(
+      '$5,000 checkpoint',
+    )
   })
 
   it('says which record projects the figure', () => {
