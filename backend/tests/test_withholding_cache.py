@@ -262,6 +262,45 @@ async def test_each_setting_and_the_quote_it_reads_still_miss(
     assert len(builds) == 2, row
 
 
+async def test_a_new_employer_security_its_first_quote_and_first_bar_each_miss(
+    auth_client, db, frozen_today, builds
+):
+    """The narrowed quote and bar cells find the employer's rows through a subquery on the ticker,
+    so a security that appears AFTER the ticker was set must still reach the card, and so must
+    its first quote and its first bar. The `securities` cell sees the first; the
+    `latest_prices` and `price_history` cells, now bound to a security that exists, see the other
+    two. (Integration review, item 2.)"""
+    await seed_tax_definitions(db)
+    await db.commit()
+    await seed_tax_year(db, YEAR, "600000.0000")
+    await seed_profile(db)
+    await seed_grants(db)
+    db.add(AppSetting(key="espp_ticker", value={"value": "NVDA"}))  # no security behind it yet
+    await db.commit()
+    await get(auth_client)
+    security = Security(ticker="NVDA", name="NVIDIA", holding_type="stock")
+    await _add(db, security)
+    await get(auth_client)
+    assert len(builds) == 2
+    await _add(
+        db,
+        LatestPrice(
+            security_id=security.id,
+            price=Decimal("500.0000"),
+            quoted_at=datetime(2026, 7, 1, 20, 15, tzinfo=UTC),
+            source="yfinance",
+        ),
+    )
+    await get(auth_client)
+    assert len(builds) == 3
+    await _add(
+        db,
+        PriceHistory(security_id=security.id, price_date=date(2026, 6, 30), close=Decimal("600")),
+    )
+    await get(auth_client)
+    assert len(builds) == 4
+
+
 async def test_a_new_product_day_misses(auth_client, world, frozen_today, builds, monkeypatch):
     await get(auth_client)
     monkeypatch.setattr("app.services.clock.product_today", lambda: date(2026, 7, 2))
