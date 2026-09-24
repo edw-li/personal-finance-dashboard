@@ -304,8 +304,9 @@ export const START_CARDS: GuideCard[] = [
         <div className="guide-fact">
           <h4>Every month</h4>
           <p>
-            The <Link to="/guide?section=routines#routine-monthly">monthly update</Link> in the first days of
-            the month, then a look at <Link to="/">Overview → Needs attention</Link>.
+            The <Link to="/guide?section=routines#routine-monthly">monthly update</Link> — balances on the
+            1st; last month’s spending once it has posted — then a look at{' '}
+            <Link to="/">Overview → Needs attention</Link>.
           </p>
         </div>
         <div className="guide-fact">

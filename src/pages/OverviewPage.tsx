@@ -821,8 +821,8 @@ export default function OverviewPage() {
                       </li>
                     </ol>
                     <p className="drill-hint">
-                      After that: one <Link to="/guide?section=routines#routine-monthly">monthly update</Link> in the
-                      first days of each month.
+                      After that: one <Link to="/guide?section=routines#routine-monthly">monthly update</Link> each
+                      month — balances on the 1st; last month’s spending once it has posted.
                     </p>
                   </section>
                 )}

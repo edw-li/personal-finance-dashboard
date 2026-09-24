@@ -1404,6 +1404,10 @@ describe('OverviewPage Start here (2026-09-14 guide spec §7.1)', () => {
       '/guide',
       '/guide?section=routines#routine-monthly',
     ])
+    // The rhythm after setup is the two-part monthly update (2026-09-23 spec §T11).
+    expect(card.textContent).toContain(
+      'After that: one monthly update each month — balances on the 1st; last month’s spending once it has posted.',
+    )
   })
 
   it('is absent once a month exists', async () => {

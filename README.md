@@ -42,9 +42,14 @@ grammar answers the same questions everywhere. Design record:
   `range=all|1y|ytd`, `month=YYYY-MM`. A page declares which controls it wants and the bar renders
   only those. Owner and range are remembered across pages in `localStorage` under `finance.scope`;
   month never is, because it means something different on each page that has one.
-- **`MonthRibbon`** — twelve month chips with year dividers, a ring on the current month, and two-tone
-  fills showing what each month actually holds (balances on the left half, spending on the right),
-  fed by `GET /coverage`.
+- **`MonthRibbon`** — twelve month chips with year dividers, a ring on the current month, and two
+  halves showing what each month actually holds — its 1st balances on the left (hatched while
+  provisional), its spending and take-home on the right (hatched while the month runs, while its
+  spending is partly entered or while one of the two is missing) — with a dot on a month whose
+  spending is due (amber once overdue), all fed by `GET /coverage`. It ends at the current
+  snapshot's month, so early next-month balances are a chip; a view page names its default month
+  ("Back to latest balances" on Net worth, "Back to last complete month" on Spending), and **Edit**
+  opens the month on screen at the page's step.
 - **`Segmented`** — the one "pick one of N" control, in four variants (toggle, tabs, steps, chips)
   with the ARIA each implies.
 - **`Feed` / `FeedBanner`** — the same three states one card at a time, for pages that load several
@@ -92,6 +97,34 @@ it. Design record:
   reminder day; see **Calendar feed tokens** under Security notes for the credential's posture.
 - **Overview "Up next"** ranks the same events — deadlines due within 14 days first, at most one
   payday, five rows — and adds one line for what the next 45 days move in and out.
+
+## Time model
+
+Every figure is dated by what it describes, not by when it was typed. Design record:
+[`docs/superpowers/specs/2026-09-23-correctness-time-tax-projection-design.md`](docs/superpowers/specs/2026-09-23-correctness-time-tax-projection-design.md)
+(§0.4, §K, §T).
+
+- **One today.** The server's product day (the `X-Product-Today` header on every response) answers
+  "has the 1st arrived, has the month ended" for every page; `PRODUCT_TODAY=YYYY-MM-DD` pins it in
+  development only, and the scheduler never starts under it.
+- **Balances are dated.** A net-worth snapshot is the balances on its month's 1st — "as of Oct 1".
+  Balances typed before their date are **provisional** ("as of Sep 22 · provisional") until saved
+  again on or after it. The *current* snapshot is the latest one at most a month ahead, so balances
+  filed further out never become the headline (Settings → Data health names them).
+- **A month's story** is its spending and take-home, and the net-worth change from its 1st to the
+  next 1st — "September: Sep 1 → Oct 1".
+- **The monthly update has two parts.** A month's balances are due on its 1st (overdue from the
+  7th); the ended month's spending and take-home are due once it ends (overdue from the 16th of the
+  next month); the overdue days move with the reminder day. One reminder lists whatever is pending,
+  and Needs attention, Data status and Data health flag only what is due.
+- **Partly entered spending.** Spending saved while its month was still running stays *partial*
+  until the month is saved again after it ends or confirmed complete; such a month stays out of
+  budget suggestions and is drawn as partial on Spending and the Overview.
+
+What moved by design on the 2026-09-23 data: year to date starts from the Jan 1 balances
+(+$366,338.18 → +$327,976.91); Projection starts from the same current snapshot as the Overview
+($734,884.53 → $839,559.73 investable; the FI ratio up accordingly); the monthly reminder fires
+again; every month's review state is unchanged.
 
 ---
 
@@ -831,7 +864,8 @@ day's scheduled price refresh is skipped — the **Refresh prices** button recov
 ### 7.7 Parallel-run & retiring the sheet
 
 Run both systems for **at least one full monthly cycle** before trusting the app alone: do
-the month-end ritual in the **/update** wizard *and* in the sheet, then compare the net-worth
+the monthly update (balances on the 1st, the ended month's spending once it has posted) in the
+**/update** wizard *and* in the sheet, then compare the net-worth
 summary, spending totals, holdings market value, and — if a tax year changed — the /taxes
 summary. Judge every difference against 7.5: the After-Tax offset and the five documented tax
 divergences are expected, anything else is not. One clean cycle and the sheet stops being updated — keep it
