@@ -105,6 +105,7 @@ interface SeriesLike {
   areaStyle?: { opacity?: number }
   emphasis?: { focus?: string }
   markLine?: unknown
+  markPoint?: { itemStyle?: unknown; data?: unknown[] } & Record<string, unknown>
   data?: unknown[]
 }
 const read = (option: unknown) =>
@@ -500,6 +501,46 @@ describe('the Net worth charts and a provisional snapshot (2026-09-23 spec §T7)
       selected: {},
     })
     expect(headAt(drill, 'Aug 2026', 2)).toBe('Aug 2026 — Aug 1 balances recorded early, on Jul 24 — provisional')
+  })
+
+  // Spec review M1 (§T7: "charts draw a provisional point with the partial style"): the drill
+  // lines draw their dots on hover only, so the provisional point is a marker on each line — the
+  // value stays ON the line (a real balance, only early), the marker says it will move.
+  it('draws the provisional point on every drill line with the partial look, the line kept whole', () => {
+    const option = read(
+      netWorthDrillOption({
+        ts: { ...DRILL_TS, as_of: early.as_of, recorded_on: early.recorded_on, provisional: early.provisional },
+        drill: [{ accountId: 10, slot: 0 }, { accountId: 11, slot: 2 }],
+        range: { preset: 'all' },
+        selected: {},
+      }),
+    )
+    const [checking, k401] = option.series
+    expect(checking.data).toEqual([100, 110, 120])
+    expect(checking.markPoint).toEqual({
+      silent: true,
+      symbol: 'circle',
+      symbolSize: 8,
+      itemStyle: partialItemStyle(PALETTE[0], false),
+      label: { show: false },
+      data: [{ name: 'Aug 2026', coord: ['Aug 2026', 120] }],
+    })
+    expect(k401.markPoint?.itemStyle).toEqual(partialItemStyle(PALETTE[2], false))
+    expect(k401.markPoint?.data).toEqual([{ name: 'Aug 2026', coord: ['Aug 2026', 220] }])
+  })
+
+  it('marks nothing on final snapshots, nor on an account with no balance that month', () => {
+    const plain = read(netWorthDrillOption({ ts: DRILL_TS, drill: [{ accountId: 10, slot: 0 }], range: { preset: 'all' }, selected: {} }))
+    expect(plain.series[0].markPoint).toBeUndefined()
+    const gap = read(
+      netWorthDrillOption({
+        ts: { ...DRILL_TS, as_of: ['2026-06-01', '2026-06-28', '2026-08-01'], provisional: [false, true, false] },
+        drill: [{ accountId: 11, slot: 1 }],
+        range: { preset: 'all' },
+        selected: {},
+      }),
+    )
+    expect(gap.series[0].markPoint).toBeUndefined() // the 401(k) has no Jul balance to mark
   })
 
   it('cuts the range chips on as-of dates: early Jan 1 balances typed in December stay in the old year', () => {

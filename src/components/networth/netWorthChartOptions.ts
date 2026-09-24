@@ -344,6 +344,34 @@ export interface NetWorthDrillInput {
 
 /** Individual account balances over time — up to eight picks on their own slots. Aligned
  *  with the stack above it (F8: same `endLabel` grid, same month axis, one `group`). */
+/** A provisional snapshot on a drill line (2026-09-23 spec §T7): the lines draw their dots on
+ *  hover only — `showSymbol: false` hides every at-rest symbol, a per-point one included — so the
+ *  point is a silent marker ON the line. The value stays on the line (a real balance, only
+ *  early); the partial look (the faded form: a hatch says nothing on an 8px dot) says it will
+ *  move. Undefined when no provisional month has a value on this line. */
+function provisionalMarker(
+  ts: Pick<NetWorthTimeseries, 'months'> & Partial<Pick<NetWorthTimeseries, 'provisional'>>,
+  values: readonly (number | null)[],
+  color: string,
+) {
+  const data = ts.months.flatMap((month, i) => {
+    const value = values[i]
+    if (!ts.provisional?.[i] || value === null || value === undefined) return []
+    // The category the month axis prints — the marker's x is the same label.
+    const label = formatMonth(month)
+    return [{ name: label, coord: [label, value] as [string, number] }]
+  })
+  if (data.length === 0) return undefined
+  return {
+    silent: true as const,
+    symbol: 'circle' as const,
+    symbolSize: 8,
+    itemStyle: partialItemStyle(color, false),
+    label: { show: false as const },
+    data,
+  }
+}
+
 export function netWorthDrillOption({ ts, drill, range, selected }: NetWorthDrillInput): EChartsOption | null {
   if (drill.length === 0 || ts.months.length === 0) return null
   const byId = new Map(ts.series.map((s) => [s.account_id, s.values]))
@@ -356,17 +384,22 @@ export function netWorthDrillOption({ ts, drill, range, selected }: NetWorthDril
     tooltip: axisTooltip({ unit: 'money', headNote: provisionalHead(ts) }),
     xAxis: monthAxis(ts.months.map(formatMonth)),
     yAxis: moneyAxis(),
-    series: drill.map(({ accountId, slot }, i) => ({
-      ...LINE,
-      name: names[i],
-      // Circles on hover only: the line is the data, the dots are the hover affordance.
-      symbol: 'circle' as const,
-      symbolSize: 8,
-      showSymbol: false,
-      color: slotColor(slot),
-      connectNulls: false,
-      data: (byId.get(accountId) ?? []).map((v) => (v === null ? null : Number(v))),
-    })),
+    series: drill.map(({ accountId, slot }, i) => {
+      const values = (byId.get(accountId) ?? []).map((v) => (v === null ? null : Number(v)))
+      const marker = provisionalMarker(ts, values, slotColor(slot))
+      return {
+        ...LINE,
+        name: names[i],
+        // Circles on hover only: the line is the data, the dots are the hover affordance.
+        symbol: 'circle' as const,
+        symbolSize: 8,
+        showSymbol: false,
+        color: slotColor(slot),
+        connectNulls: false,
+        data: values,
+        ...(marker === undefined ? {} : { markPoint: marker }),
+      }
+    }),
   }
 }
 
