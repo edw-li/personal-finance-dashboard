@@ -33,7 +33,7 @@ it('lists the four clocks as definition rows, ambers the overdue feeds and state
   expect(screen.getByRole('heading', { name: 'Data status' })).toBeTruthy()
   expect(value('Prices as of').textContent).toBe(formatDate(quoted))
   expect(value('Prices as of').className).not.toContain('stale')
-  expect(value('Balances as of').textContent).toBe('Sep 22 — provisional, for Oct 1')
+  expect(value('Balances as of').textContent).toBe('Sep 22 — provisional, for Oct 1 · overdue — confirm or update them')
   expect(value('Balances as of').className).toContain('stale')
   expect(value('Spending through').textContent).toBe('Aug 2026 · Sep partly entered — overdue')
   expect(value('Spending through').className).toContain('stale')

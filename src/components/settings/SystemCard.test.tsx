@@ -243,7 +243,7 @@ it('ambers a feed only once one of its parts is overdue — the Overview card’
   const late = await screen.findByText('Spending through Aug 2026 · Sep partly entered — overdue')
   expect(late.className).toBe('system-stale')
   expect(screen.getByText('Net pay through Aug 2026 · Sep overdue').className).toBe('system-stale')
-  expect(screen.getByText('Balances as of Sep 22 — provisional, for Oct 1').className).toBe('system-stale')
+  expect(screen.getByText('Balances as of Sep 22 — provisional, for Oct 1 · overdue — confirm or update them').className).toBe('system-stale')
 })
 
 it('says a feed never started rather than calling a fresh database late', async () => {

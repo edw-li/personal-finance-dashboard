@@ -116,13 +116,20 @@ function presenceClauses(coverage: CoverageOut): FreshnessClause[] {
 }
 
 /** "Balances as of Sep 22 — provisional, for Oct 1" (+ " · Oct 1 due|overdue" while the current
- *  month has none, + " · Oct 1 still provisional" for an earlier snapshot never confirmed);
- *  amber only when the balances are overdue or an earlier snapshot stayed provisional. */
+ *  month has none, + " · overdue — confirm or update them" once provisional balances are past
+ *  their day, + " · Oct 1 still provisional" for an earlier snapshot never confirmed); amber only
+ *  when the balances are overdue or an earlier snapshot stayed provisional — and never without
+ *  words that say so (code review I2). */
 function balancesClause(time: TimeStatusOut): FreshnessClause {
   const current = time.current_snapshot
   const tails: string[] = []
   if (time.balances.status === 'missing') {
     tails.push(` · ${dayName(time.balances.due_on)} ${time.balances.overdue ? 'overdue' : 'due'}`)
+  } else if (time.balances.status === 'provisional' && time.balances.overdue) {
+    // The month's own balances, typed early and never saved again on or after its 1st: named by
+    // their day only when the line above them describes other balances (a later early snapshot).
+    const which = current?.month === time.balances.month ? '' : ` ${dayName(time.balances.month)}`
+    tails.push(` ·${which} overdue — confirm or update them`)
   }
   const stayed = time.provisional_past[0]
   if (stayed !== undefined && stayed.month !== current?.month) {

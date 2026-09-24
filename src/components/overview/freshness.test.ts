@@ -75,11 +75,19 @@ describe('freshnessClauses — dated, and amber only when a part is overdue (202
   it('Oct 16: every late part turns amber and says so in words', () => {
     const coverage = copy(copyInOctober('2026-10-16'))
     expect(texts(coverage)).toEqual([
-      'Balances as of Sep 22 — provisional, for Oct 1',
+      'Balances as of Sep 22 — provisional, for Oct 1 · overdue — confirm or update them',
       'Spending through Aug 2026 · Sep partly entered — overdue',
       'Net pay through Aug 2026 · Sep overdue',
     ])
     expect(amber(coverage)).toEqual(['balances', 'spending', 'net_pay'])
+  })
+
+  // Code review I2: from the 7th the provisional Oct 1 balances turned amber with no words — the
+  // colour is never the only channel.
+  it('Oct 7: provisional balances past their day say so, and only they are amber', () => {
+    const coverage = copy(copyInOctober('2026-10-07'))
+    expect(texts(coverage)[0]).toBe('Balances as of Sep 22 — provisional, for Oct 1 · overdue — confirm or update them')
+    expect(amber(coverage)).toEqual(['balances'])
   })
 
   it('Oct 10 with Oct 1 confirmed: final balances, only the flows still due', () => {
@@ -240,8 +248,8 @@ describe('freshnessClauses — dt/dd split for the Data status card (2026-09-13 
     const [balances, spending, netPay] = freshnessClauses(copy(copyInOctober('2026-10-16')))
     expect(balances).toMatchObject({
       label: 'Balances as of',
-      detail: 'Sep 22 — provisional, for Oct 1',
-      text: 'Balances as of Sep 22 — provisional, for Oct 1',
+      detail: 'Sep 22 — provisional, for Oct 1 · overdue — confirm or update them',
+      text: 'Balances as of Sep 22 — provisional, for Oct 1 · overdue — confirm or update them',
       lagging: true,
     })
     expect(spending).toMatchObject({
