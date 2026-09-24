@@ -275,12 +275,21 @@ down the whole ledger):
 
 `.dividend-month-row > *` cells are `position: sticky; top: var(--table-head-h, 0px); z-index: 1` with
 their opaque band — so while you scroll inside a long month, its month line stays just under the pinned
-column header. When the next month's row arrives it takes the place (later rows paint over earlier ones at
-the same offset, or push them out — either way the line shown is the month you are in; verified in the
-browser). The dividend box carries `className="dividend-scroll"`, whose rule
-`scroll-padding-top: calc(var(--table-head-h, 0px) + 2.5rem)` (2.5rem ≥ one month row in both
-densities) keeps a Tab-focused Edit/Delete button clear of the two pinned lines; `revealInBox` (§4.5) is
-given the month row's MEASURED height as an extra top inset, so a revealed row lands exactly below it.
+column header. When the next month's row arrives it takes the place: Edge pins a table's sticky cells
+against the whole TABLE, not their row group (measured 2026-09-24 — sticky cells, a sticky row and a
+positioned tbody alike), so passed month lines stack at one offset and the newest passed paints on top —
+the line shown is the month you are in. Two consequences are handled:
+- a focus or a click that lands on a month line whose month began above the band first scrolls the BOX
+  until that month's group starts just under the column header (its own line uncovered). Shift+Tab back
+  up the ledger would otherwise rest on a toggle hidden under a later month's line — the browser does not
+  scroll to it, since it counts as in view (WCAG 2.4.11) — and collapsing the month you are inside keeps
+  your place instead of dropping you among the months below;
+- entry rows carry `scroll-margin-top: calc(var(--table-head-h, 0px) + 2.5rem)` (2.5rem ≥ one month line in
+  both densities) so a Tab-focused Edit/Delete lands clear of both pinned lines — a margin on the rows, not
+  scroll padding on the box, which would count the pinned toggles themselves as out of view and jump the
+  box when one takes focus (the TableScroll review, §2.2).
+`revealInBox` (§4.5) is given the month line's MEASURED height as an extra top inset, so a revealed row
+lands exactly below it.
 
 ### 4.4 Open state
 
@@ -315,7 +324,7 @@ SecuritiesPanel,HoldingsTable,ClassificationEditor}.tsx`, `components/portfolio/
 `components/portfolio/dividends.css` (new — the month rows and toolbar; imported by DividendsPanel, so the
 shared `portfolio.css` stays untouched), `components/portfolio/HoldingsScroll.tsx` (deleted — both of its
 callers import `portfolio.css` themselves), `components/creditcards/RewardsMatrix.tsx`,
-`pages/NetWorthPage.tsx` (one wrapper around the table), `index.css` (one selector list), and their tests.
+`pages/NetWorthPage.tsx` (one wrapper around the table), `index.css` (the inset focus-ring selector list and the print release), and their tests.
 Not touched: anything under Taxes, Projection, Monthly update, Overview, Spending, backend.
 
 ### 5.2 Merge
@@ -357,7 +366,7 @@ with a private `cacheDir` (a wrapper config in the session scratchpad). No share
   render inside a `role="region"` box with their label.
 - CSS pins (`tableScrollCss.test.ts`, the flat-text idiom of `surfaceGrammar.test.ts`): the cap value,
   separate borders, sticky `thead th` (top 0, z 1, `--surface`), corner z 2, sticky `tfoot` cells with the
-  top hairline, the fade's gating selector, reduced-motion/forced-colors/print blocks; `focusCss.test.ts`
+  top hairline, the fade's gating selector, the forced-colors and print blocks, the body-row scroll margin and the focused box's mask drop (the reduced-motion transition is left unpinned); `focusCss.test.ts`
   gains `.table-scroll` in the inset-ring container list; the existing pins stay green unchanged.
 
 **Real browser on the production copy (`finance_scroll`), both themes, 1280×800, 1600×1000, 1920×1080,

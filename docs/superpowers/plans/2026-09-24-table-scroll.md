@@ -40,8 +40,8 @@
 | `src/components/useScrollEdges.ts` | modify | opt-in `'xy'` mode: also names `top` / `bottom`; watches the box's table |
 | `src/components/tableScrollDom.ts` | new | `useStickyInsets` (writes `--table-head-h` / `--table-foot-h`), `revealInBox` (scroll the box, never the page) |
 | `src/components/TableScroll.tsx` | new | THE capped table box: region + label + tabIndex, runs both hooks, forwards a ref |
-| `src/components/tableScroll.css` | new | the cap, separate borders, pinned header/totals, the fade, print release |
-| `src/index.css` | modify | `.table-scroll` joins the inset focus-ring container list |
+| `src/components/tableScroll.css` | new | the cap, separate borders, pinned header/totals, body-row scroll margins, the fade, the focused box's mask drop; print hides the fade |
+| `src/index.css` | modify | `.table-scroll` joins the inset focus-ring container list; the print release for every capped box (`:root :is(…)`, static cells, no mask) |
 | `src/components/portfolio/HoldingsScroll.tsx` | delete | replaced by `TableScroll` |
 | `src/components/portfolio/{TransactionsPanel,SecuritiesPanel,HoldingsTable,ClassificationEditor}.tsx` | modify | wrap in `TableScroll` (+ Classification focus fix) |
 | `src/components/creditcards/RewardsMatrix.tsx` | modify | wrap in `TableScroll` |
@@ -497,6 +497,15 @@ git commit -m "feat(tables): useStickyInsets measures a capped table's pinned he
 ---
 
 ### Task 3: `TableScroll`, its stylesheet, and the inset focus ring
+
+> **Amended in execution (2026-09-24; the committed files are authoritative, the blocks below are the
+> first draft):** a61d90be moved the print release to `index.css` as `@media print { :root :is(…) }`
+> (tableScroll.css loads lazily with route chunks, and cap sheets can load after it at equal
+> specificity); 485287d0 replaced the box's `scroll-padding` with `scroll-margin` on
+> `.table-scroll > table > tbody *` (padding treated the pinned header's own controls as out of view and
+> jumped the box on their focus — 240px per Tab on a sort header), made pinned cells `position: static`
+> and dropped the edge mask on paper, and drops the edge mask while the box has `:focus-visible` (a mask
+> clips the focus ring). A fourth TableScroll test pins the 'xy' wiring.
 
 **Files:**
 - Create: `src/components/TableScroll.tsx`, `src/components/tableScroll.css`
@@ -1488,6 +1497,8 @@ const LEDGER = [JUNE_A, JUNE_B, MARCH, DECEMBER]
 const monthButton = (name: string) => screen.getByRole('button', { name })
 const shownIds = () =>
   [...document.querySelectorAll('tr[data-dividend-id]')].map((row) => Number(row.getAttribute('data-dividend-id')))
+const rectAt = (top: number, height: number) =>
+  ({ top, bottom: top + height, height, left: 0, right: 800, width: 800, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
 
 describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
   it('lists one line per recorded month, newest first, with only the newest open', () => {
@@ -1563,8 +1574,39 @@ describe('DividendsPanel months (2026-09-24 table-scroll spec §4)', () => {
   it('scrolls inside a capped, named box', () => {
     renderPanel(LEDGER)
     const box = screen.getByRole('region', { name: 'Dividends by month' })
-    expect(box.className).toBe('table-scroll dividend-scroll')
+    expect(box.className).toBe('table-scroll')
     expect(box.querySelector(':scope > table')).toBe(screen.getByRole('table'))
+  })
+
+  it("scrolls the box to a month's start when its covered line takes focus or a click (spec §4.3)", () => {
+    renderPanel(LEDGER)
+    const box = screen.getByRole('region', { name: 'Dividends by month' })
+    // jsdom lays nothing out: a 400px box at y=100 under a 30px header, scrolled deep into the ledger,
+    // and March's group, whose line is stacked under a later month's — it began 70px above the band.
+    box.style.setProperty('--table-head-h', '30px')
+    box.getBoundingClientRect = () => rectAt(100, 400)
+    const march = monthButton('Mar 2026 1 entry')
+    march.closest('tbody')!.getBoundingClientRect = () => rectAt(60, 44)
+    box.scrollTop = 900
+    act(() => march.focus())
+    expect(box.scrollTop).toBe(830) // the band starts at 100 + 30 = 130; the group began at 60
+    // …and a click on the line does the same before it toggles.
+    box.scrollTop = 900
+    fireEvent.click(march.closest('tr')!.querySelector('td.num')!)
+    expect(box.scrollTop).toBe(830)
+    expect(march.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('leaves the box alone when a month line already shows at its own place', () => {
+    renderPanel(LEDGER)
+    const box = screen.getByRole('region', { name: 'Dividends by month' })
+    box.style.setProperty('--table-head-h', '30px')
+    box.getBoundingClientRect = () => rectAt(100, 400)
+    const march = monthButton('Mar 2026 1 entry')
+    march.closest('tbody')!.getBoundingClientRect = () => rectAt(250, 44)
+    box.scrollTop = 900
+    act(() => march.focus())
+    expect(box.scrollTop).toBe(900)
   })
 
   it('opens the month an added entry lands in, keeping the caret in the amount box', async () => {
@@ -1681,6 +1723,21 @@ import './dividends.css'
       return next
     })
   const openMonth = (key: string) => setOpen((prev) => (prev.has(key) ? prev : new Set(prev).add(key)))
+  // Passed month lines stack at one offset — the browser pins a table's sticky cells against the whole
+  // table, not their row group (measured in Edge, 2026-09-24) — so the newest one passed covers the
+  // rest (spec §4.3). A focus or click that lands on a line whose month began above the band first
+  // scrolls the BOX until that month's group starts just under the column header: Shift+Tab back up
+  // the ledger would otherwise rest on a toggle hidden under a later month's line, which the browser
+  // will not scroll to because it counts as in view (WCAG 2.4.11), and collapsing the month you are
+  // inside keeps your place instead of dropping you among the months below.
+  const uncoverMonth = (group: HTMLElement | null) => {
+    const box = boxRef.current
+    if (box === null || group === null) return
+    const head = parseFloat(box.style.getPropertyValue('--table-head-h')) || 0
+    const bandTop = box.getBoundingClientRect().top + box.clientTop + head
+    const top = group.getBoundingClientRect().top
+    if (top < bandTop - 1) box.scrollTop -= bandTop - top
+  }
   // A saved entry to bring into view once the refreshed ledger renders (spec §4.5): its id and the
   // ledger it was saved against. The commit that opens its month still holds that ledger and waits;
   // the refetch's commit (a new ledger) consumes it, found or not, so it can never fire on some later
@@ -1745,7 +1802,7 @@ parameter and add the month/reveal lines just before its closing `onChanged()`:
               </button>
             )}
           </div>
-          <TableScroll className="dividend-scroll" label="Dividends by month" ref={boxRef}>
+          <TableScroll label="Dividends by month" ref={boxRef}>
             <table className="port-table dividend-table">
               <thead>
                 <tr>
@@ -1762,9 +1819,20 @@ parameter and add the month/reveal lines just before its closing `onChanged()`:
                   <tbody key={month.key}>
                     {/* The whole line toggles for the mouse; the button is the keyboard's and the
                         screen reader's control — its click bubbles here, so one toggle per press. */}
-                    <tr className="dividend-month-row" onClick={() => toggleMonth(month.key)}>
+                    <tr
+                      className="dividend-month-row"
+                      onClick={(event) => {
+                        uncoverMonth(event.currentTarget.closest('tbody'))
+                        toggleMonth(month.key)
+                      }}
+                    >
                       <th scope="rowgroup" colSpan={3}>
-                        <button type="button" className="dividend-month-toggle" aria-expanded={isOpen}>
+                        <button
+                          type="button"
+                          className="dividend-month-toggle"
+                          aria-expanded={isOpen}
+                          onFocus={(event) => uncoverMonth(event.currentTarget.closest('tbody'))}
+                        >
                           <ChevronRight size={14} aria-hidden="true" className="dividend-month-chevron" />
                           <span className="dividend-month-label">{month.label}</span>{' '}
                           <span className="dividend-month-count">{entriesLabel(month.rows.length)}</span>
@@ -1917,11 +1985,13 @@ Create `src/components/portfolio/dividends.css`:
   padding-left: 1.6rem;
 }
 
-/* A Tab-focused Edit/Delete lands clear of BOTH pinned lines — the column header and its month's
-   line (2.5rem is at least one month line in either density). Two classes, so it outranks
-   tableScroll.css's one-class padding whatever order the sheets load in. */
-.table-scroll.dividend-scroll {
-  scroll-padding-top: calc(var(--table-head-h, 0px) + 2.5rem);
+/* An entry row sits under TWO pinned lines — the column header and its month's line — so a Tab, a
+   keyboard move or a scrollIntoView lands it clear of both (2.5rem is at least one month line in
+   either density). A scroll MARGIN on the entry rows, never scroll padding on the box: padding would
+   count the pinned lines' own toggles as out of view and jump the box whenever one takes focus
+   (TableScroll's review, 485287d0). (0,3,2) outranks tableScroll.css's (0,1,2) tbody margin. */
+.table-scroll > .dividend-table > tbody > tr:not(.dividend-month-row) * {
+  scroll-margin-top: calc(var(--table-head-h, 0px) + 2.5rem);
 }
 ```
 
