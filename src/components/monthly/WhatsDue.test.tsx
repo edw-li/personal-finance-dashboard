@@ -9,10 +9,14 @@ import WhatsDue from './WhatsDue'
 afterEach(cleanup)
 beforeEach(() => setServerToday('2026-10-03'))
 
-function strip(time: TimeStatusOut | null, onOpen = vi.fn()) {
+function strip(
+  time: TimeStatusOut | null,
+  onOpen = vi.fn(),
+  current: { month: string; step: string } = { month: '2026-10-01', step: 'review' },
+) {
   return render(
     <MemoryRouter>
-      <WhatsDue time={time} onOpen={onOpen} />
+      <WhatsDue time={time} onOpen={onOpen} current={current} />
     </MemoryRouter>,
   )
 }
@@ -52,12 +56,21 @@ it('hands a plain click to the wizard instead of navigating', () => {
   expect(onOpen).toHaveBeenCalledTimes(1)
 })
 
-it('says nothing is due, naming the early snapshot', () => {
+it('marks the chip for the part on screen as the current page (review M18)', () => {
+  strip(TIME_OCT_3, vi.fn(), { month: '2026-09-01', step: 'spending' })
+  const [balances, september] = screen.getAllByRole('link')
+  expect(september.getAttribute('aria-current')).toBe('page')
+  expect(balances.getAttribute('aria-current')).toBeNull()
+})
+
+it('says nothing is due, naming the early snapshot — in a labelled region, never an empty navigation', () => {
   setServerToday('2026-09-23')
   strip(TIME_SEP_23)
+  const region = screen.getByRole('region', { name: "What's due" })
   expect(
-    screen.getByText('Nothing due — Oct 1 balances recorded early (Sep 22); update or confirm them on Oct 1'),
+    within(region).getByText('Nothing due — Oct 1 balances recorded early (Sep 22); update or confirm them on Oct 1'),
   ).toBeTruthy()
+  expect(screen.queryByRole('navigation')).toBeNull()
   expect(screen.queryAllByRole('link')).toEqual([])
 })
 

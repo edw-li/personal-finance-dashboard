@@ -169,9 +169,9 @@ export const ROUTINE_CARDS: GuideCard[] = [
       {
         id: 'update-delete-part',
         title: 'Delete a month’s balances or its spending',
-        where: 'Monthly update → Balances · Spending → Month actions',
+        where: 'Monthly update → Balances · Spending',
         steps: [
-          'Open the ⋯ menu beside the step’s heading — **Month actions**.',
+          'Open the ⋯ menu beside the step’s heading — **Actions for <Date> balances** or **Actions for <Month> spending & take-home**.',
           'Type the month as YYYY-MM, then press **Delete <Date> balances** or **Delete <Month> spending & take-home**.',
           'Undo from the toast, or later from **Activity**.',
         ],

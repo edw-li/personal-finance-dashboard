@@ -14,17 +14,21 @@ export function DuePartLink({
   part,
   onOpen,
   className,
+  current = false,
   children,
 }: {
   part: DuePart
   onOpen: (part: DuePart) => void
   className?: string
+  /** The part is the one on screen — announced as the current page, like a nav's own link. */
+  current?: boolean
   children: ReactNode
 }) {
   return (
     <Link
       to={`/update?month=${part.month}&step=${part.step}`}
       className={className}
+      aria-current={current ? 'page' : undefined}
       onClick={(event) => {
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
         event.preventDefault()
@@ -39,31 +43,48 @@ export function DuePartLink({
 export default function WhatsDue({
   time,
   onOpen,
+  current,
 }: {
   time: TimeStatusOut | null | undefined
   onOpen: (part: DuePart) => void
+  /** The month and step on screen: its chip, when one is due, is marked as the current page. */
+  current: { month: string; step: string }
 }) {
   if (!time) return null
   const parts = dueParts(time)
+  const label = (
+    <span className="eyebrow whats-due-label" aria-hidden="true">
+      What's due
+    </span>
+  )
+  // With nothing due there is nothing to navigate to: a labelled region holding the one sentence,
+  // not a navigation landmark with no links in it (review M18).
+  if (parts.length === 0) {
+    return (
+      <section className="whats-due" aria-label="What's due">
+        {label}
+        <p className="whats-due-none">{nothingDueSentence(time)}</p>
+      </section>
+    )
+  }
   return (
     <nav className="whats-due" aria-label="What's due">
-      <span className="eyebrow whats-due-label" aria-hidden="true">
-        What's due
-      </span>
-      {parts.length === 0 ? (
-        <p className="whats-due-none">{nothingDueSentence(time)}</p>
-      ) : (
-        <ul className="whats-due-chips">
-          {parts.map((part) => (
-            <li key={part.key}>
-              <DuePartLink part={part} onOpen={onOpen} className={`due-chip${part.overdue ? ' is-overdue' : ''}`}>
-                <span className="due-chip-name">{part.name}</span> · {part.detail}
-                {part.overdue && <span className="due-chip-tag"> · overdue</span>}
-              </DuePartLink>
-            </li>
-          ))}
-        </ul>
-      )}
+      {label}
+      <ul className="whats-due-chips">
+        {parts.map((part) => (
+          <li key={part.key}>
+            <DuePartLink
+              part={part}
+              onOpen={onOpen}
+              className={`due-chip${part.overdue ? ' is-overdue' : ''}`}
+              current={part.month === current.month && part.step === current.step}
+            >
+              <span className="due-chip-name">{part.name}</span> · {part.detail}
+              {part.overdue && <span className="due-chip-tag"> · overdue</span>}
+            </DuePartLink>
+          </li>
+        ))}
+      </ul>
     </nav>
   )
 }

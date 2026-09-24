@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ClipboardEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { CalendarPlus, Ellipsis } from 'lucide-react'
@@ -457,6 +457,10 @@ function MonthlyUpdateWizard() {
   // What this visit's last save wrote, part by part (the receipt). Cleared on month load, on a
   // delete, and at the start of every save attempt.
   const [lastSave, setLastSave] = useState<LastSave | null>(null)
+  // A save that lands moves focus to its receipt's heading (review M15), so the result is announced
+  // where the user is — once per save: the receipt's later "Next due" update does not move it again.
+  const receiptHeading = useRef<HTMLHeadingElement>(null)
+  const focusReceipt = useRef(false)
   const [review, setReview] = useState<MonthReview | null>(null)
   const [reviewConfirmations, setReviewConfirmations] = useState<Partial<Record<keyof ReviewedFeeds, string>>>({})
   const [finalCurrentMonth, setFinalCurrentMonth] = useState(false)
@@ -526,6 +530,8 @@ function MonthlyUpdateWizard() {
     actionsSurfaceRef.current?.querySelector<HTMLElement>('input, button')?.focus()
   }, [actionsOpen])
   const [deleting, setDeleting] = useState(false)
+  // The sentence beside a disabled "Save and close" describes it (review M16).
+  const closeReasonId = useId()
   const [loadNonce, setLoadNonce] = useState(0)
   const toast = useToast()
   // What the last paste did, narrated for everyone (spec §4.1) — one line, replaced by the
@@ -777,6 +783,12 @@ function MonthlyUpdateWizard() {
     if (flowsKey(now) === flowsKey(flowsBase.part)) removeDraft('flows', month)
     else writeDraft('flows', month, now)
   }, [amounts, netPay, flowsBase, month, loading, notBegun])
+
+  useEffect(() => {
+    if (!focusReceipt.current || lastSave === null) return
+    focusReceipt.current = false
+    receiptHeading.current?.focus()
+  }, [lastSave])
 
   // The flash is a one-shot: the timer callback clears it, so the effect body itself never
   // sets state (a set here would re-run the effect on its own write).
@@ -1079,6 +1091,7 @@ function MonthlyUpdateWizard() {
         balancesRecorded: sendBalances || monthExisted,
         nextDue: null,
       }
+      focusReceipt.current = true
       setLastSave(receipt)
       // Coverage moved: the scope row re-reads it, and so does the wizard — whose answer names the
       // part due next (spec §M2), which the toast and the receipt then point at. The toast keeps its
@@ -1520,7 +1533,7 @@ function MonthlyUpdateWizard() {
           ref={actionsTriggerRef}
           type="button"
           className="button month-actions-trigger"
-          aria-label="Month actions"
+          aria-label={`Actions for ${name}`}
           aria-haspopup="dialog"
           aria-expanded={actionsOpen}
           onClick={() => setActionsOpen((open) => !open)}
@@ -1528,7 +1541,7 @@ function MonthlyUpdateWizard() {
           <Ellipsis size={15} aria-hidden="true" />
         </button>
         {actionsOpen && (
-          <div ref={actionsSurfaceRef} className="popover-surface month-actions-popover" role="dialog" aria-label="Month actions">
+          <div ref={actionsSurfaceRef} className="popover-surface month-actions-popover" role="dialog" aria-label={`Actions for ${name}`}>
             <p className="drill-hint">
               Delete {name}: {what}. {other} stay as they are. Undo is offered for six seconds
               afterwards, and the Activity card can undo it later.
@@ -1621,7 +1634,7 @@ function MonthlyUpdateWizard() {
       >
         {/* What's due, first (2026-09-23 spec §M2): each due part a chip that opens it through the
             wizard's own month switch, amber once overdue; with nothing due, when the next part is. */}
-        <WhatsDue time={coverage?.time} onOpen={(part) => goTo(part.month, part.step)} />
+        <WhatsDue time={coverage?.time} onOpen={(part) => goTo(part.month, part.step)} current={{ month, step }} />
         <FeedBanner error={error} />
         {reviewConflict && <div className="draft-note"><span>The saved inputs changed during this visit. Reload to compare your draft with the latest saved figures.</span><button className="button" onClick={reloadMonth}>Reload latest and compare draft</button></div>}
         {emptyMonth && (
@@ -1660,7 +1673,9 @@ function MonthlyUpdateWizard() {
           // save, the part it left alone — so a skip is as visible as a write. It renders above
           // the step body, on whichever step the save was made.
           <div className="card" style={{ marginBottom: '1rem' }}>
-            <h2 className="eyebrow">{receiptTitle(lastSave, review?.state === 'closed')}</h2>
+            <h2 className="eyebrow" ref={receiptHeading} tabIndex={-1}>
+              {receiptTitle(lastSave, review?.state === 'closed')}
+            </h2>
             {lastSave.balances !== null && <p>{balancesSentence(lastSave.balances)}</p>}
             {(lastSave.kind === 'review' || lastSave.kind === 'close') && !lastSave.sentBalances && (
               <p>{lastSave.balancesRecorded ? 'Balances: unchanged — not sent.' : 'Balances: not recorded — not sent.'}</p>
@@ -2296,9 +2311,9 @@ function MonthlyUpdateWizard() {
               </button>
               {/* T4: the only explanation of a disabled primary sits beside it, not 90px above. */}
               {closeBlocker !== null ? (
-                <p className="drill-hint wizard-footer-note" role="status">{closeBlocker}</p>
+                <p id={closeReasonId} className="drill-hint wizard-footer-note" role="status">{closeBlocker}</p>
               ) : !canRequestClose ? (
-                <p className="drill-hint wizard-footer-note">Save progress at any time. To close, complete all three confirmations and enter spending and household take-home, including explicit zeros where appropriate.</p>
+                <p id={closeReasonId} className="drill-hint wizard-footer-note">Save progress at any time. To close, complete all three confirmations and enter spending and household take-home, including explicit zeros where appropriate.</p>
               ) : null}
               <div className="wizard-footer-actions">
                 {/* accounts.length === 0 doubles as the "load succeeded" sentinel: after a
@@ -2320,6 +2335,7 @@ function MonthlyUpdateWizard() {
                     saving || loading || review === null || accounts.length === 0 || !balancesValid || !amountsValid
                     || !canRequestClose || closeBlocker !== null
                   }
+                  aria-describedby={closeBlocker !== null || !canRequestClose ? closeReasonId : undefined}
                   onClick={() => void save('close')}
                 >
                   Save and close {monthNameOf(month)}

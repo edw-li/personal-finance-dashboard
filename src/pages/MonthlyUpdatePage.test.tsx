@@ -1274,9 +1274,9 @@ function renderWizardAt(entry: string) {
 
 // A2 (2026-09-13 audit), per part since 2026-09-23 (spec §M6): each part step's head carries a
 // kebab whose popover holds THAT part's arm-and-confirm delete.
-async function openMonthActions() {
-  fireEvent.click(await screen.findByRole('button', { name: 'Month actions' }))
-  return screen.getByRole('dialog', { name: 'Month actions' })
+async function openPartActions(part: string) {
+  fireEvent.click(await screen.findByRole('button', { name: `Actions for ${part}` }))
+  return screen.getByRole('dialog', { name: `Actions for ${part}` })
 }
 
 // July: balances on file (the default fixture) and, here, a take-home too.
@@ -1313,7 +1313,7 @@ describe('deletes per part (2026-09-23 spec §M6)', () => {
     renderWizardAt('/update?month=2026-12-01&step=balances')
     await screen.findByText('Dec 1 balances can be recorded from Nov 1 (early) or on Dec 1.')
     expect((screen.getByRole('button', { name: 'Save Dec 1 balances' }) as HTMLButtonElement).disabled).toBe(true)
-    await openMonthActions()
+    await openPartActions('Dec 1 balances')
     fireEvent.change(screen.getByLabelText('Type 2026-12 to confirm'), { target: { value: '2026-12' } })
     const button = screen.getByRole('button', { name: 'Delete Dec 1 balances' }) as HTMLButtonElement
     expect(button.disabled).toBe(false)
@@ -1328,13 +1328,13 @@ describe('deletes per part (2026-09-23 spec §M6)', () => {
   it('offers a delete only for a part that was saved, and none on Review', async () => {
     renderWizardAt('/update?month=2026-08-01&step=balances')
     await screen.findByLabelText('Checking')
-    expect(screen.queryByRole('button', { name: 'Month actions' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Actions for / })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
     await screen.findByLabelText('Food')
-    expect(screen.queryByRole('button', { name: 'Month actions' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Actions for / })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
     await screen.findByRole('button', { name: 'Save progress' })
-    expect(screen.queryByRole('button', { name: 'Month actions' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Actions for / })).toBeNull()
   })
 
   it('Delete Jul 1 balances: typed guard, only the balances DELETE, its draft cleared, stays on the month', async () => {
@@ -1343,7 +1343,7 @@ describe('deletes per part (2026-09-23 spec §M6)', () => {
     sessionStorage.setItem('finance-update-draft:balances:2026-07-01', '{"balances":{"1":"9.00"}}')
     sessionStorage.setItem('finance-update-draft:flows:2026-07-01', '{"netPay":"6100.00"}')
     renderWizardAt('/update?month=2026-07-01&step=balances')
-    const dialog = await openMonthActions()
+    const dialog = await openPartActions('Jul 1 balances')
     expect(dialog.textContent).toContain('July spending & take-home stay as they are.')
     const button = screen.getByRole('button', { name: 'Delete Jul 1 balances' }) as HTMLButtonElement
     expect(button.disabled).toBe(true)
@@ -1367,7 +1367,7 @@ describe('deletes per part (2026-09-23 spec §M6)', () => {
     savedJuly()
     vi.mocked(spendingApi.deleteSpendingMonth).mockResolvedValue({ batchId: 'b-sp' })
     renderWizardAt('/update?month=2026-07-01&step=spending')
-    const dialog = await openMonthActions()
+    const dialog = await openPartActions('July spending & take-home')
     expect(dialog.textContent).toContain('Jul 1 balances stay as they are.')
     fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
     fireEvent.click(screen.getByRole('button', { name: 'Delete July spending & take-home' }))
@@ -1381,7 +1381,7 @@ describe('deletes per part (2026-09-23 spec §M6)', () => {
     vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-nw' })
     vi.mocked(lifecycleApi.undoBatch).mockResolvedValue(undone)
     renderWizardAt('/update?month=2026-07-01&step=balances')
-    await openMonthActions()
+    await openPartActions('Jul 1 balances')
     fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
     fireEvent.click(screen.getByRole('button', { name: 'Delete Jul 1 balances' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
@@ -1397,7 +1397,7 @@ describe('deletes per part (2026-09-23 spec §M6)', () => {
     savedJuly()
     vi.mocked(netWorthApi.deleteMonthBalances).mockRejectedValue(new ApiError('no snapshot exists for this month', 404))
     renderWizardAt('/update?month=2026-07-01&step=balances')
-    await openMonthActions()
+    await openPartActions('Jul 1 balances')
     fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
     fireEvent.click(screen.getByRole('button', { name: 'Delete Jul 1 balances' }))
     await screen.findByText('Deleted Jul 1 balances — spending untouched.')
@@ -1408,7 +1408,7 @@ describe('deletes per part (2026-09-23 spec §M6)', () => {
     savedJuly()
     vi.mocked(netWorthApi.deleteMonthBalances).mockRejectedValue(new ApiError('db exploded', 500))
     renderWizardAt('/update?month=2026-07-01&step=balances')
-    await openMonthActions()
+    await openPartActions('Jul 1 balances')
     fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
     fireEvent.click(screen.getByRole('button', { name: 'Delete Jul 1 balances' }))
     // By TEXT, then by role: the toast provider mounts an always-present assertive region too.
@@ -2505,6 +2505,25 @@ it('preserves entries typed during a save and submits them against the returned 
   expect(screen.queryByText(/still have unsaved changes/)).toBeNull()
 })
 
+it('moves focus to the receipt heading once a save lands, so the result is announced (review M15)', async () => {
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save Aug 1 balances' }))
+  const heading = await screen.findByRole('heading', { name: 'Aug 1 balances saved' })
+  await waitFor(() => expect(document.activeElement).toBe(heading))
+})
+
+it('the disabled Save and close is described by the sentence that says why (review M16)', async () => {
+  setServerToday('2026-10-03')
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', exists: true, net_pay: '6000.00', amounts: [{ category_id: 7, amount: '300.00' }], budgets: [],
+  })
+  renderPage('/update?month=2026-08-01&step=review')
+  const close = await screen.findByRole('button', { name: 'Save and close August' })
+  const reason = () => document.getElementById(close.getAttribute('aria-describedby') ?? '')?.textContent
+  expect(reason()).toBe('Record Aug 1 balances before closing August.')
+})
+
 it("after one part saves, the receipt names the other part's unsaved changes (review M2)", async () => {
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /^2\s*spending$/i }))
@@ -2602,10 +2621,10 @@ it('lays the Review step out as four tiles with the cash split and the close gat
 
 it('the kebab opens the month-actions popover and Escape closes it back onto the button', async () => {
   renderWizardAt('/update?month=2026-07-01&step=balances')
-  const trigger = await screen.findByRole('button', { name: 'Month actions' })
+  const trigger = await screen.findByRole('button', { name: 'Actions for Jul 1 balances' })
   expect(trigger.getAttribute('aria-expanded')).toBe('false')
   expect(trigger.getAttribute('aria-haspopup')).toBe('dialog')
-  const dialog = await openMonthActions()
+  const dialog = await openPartActions('Jul 1 balances')
   expect(trigger.getAttribute('aria-expanded')).toBe('true')
   expect(dialog.className).toContain('popover-surface')
   expect(within(dialog).getByRole('button', { name: 'Delete Jul 1 balances' })).toBeTruthy()
@@ -2614,9 +2633,9 @@ it('the kebab opens the month-actions popover and Escape closes it back onto the
   // A typed arm does not survive a close — reopening never shows a live Delete button.
   fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
   fireEvent.keyDown(dialog, { key: 'Escape' })
-  expect(screen.queryByRole('dialog', { name: 'Month actions' })).toBeNull()
+  expect(screen.queryByRole('dialog', { name: 'Actions for Jul 1 balances' })).toBeNull()
   expect(document.activeElement).toBe(trigger)
-  await openMonthActions()
+  await openPartActions('Jul 1 balances')
   expect((screen.getByLabelText('Type 2026-07 to confirm') as HTMLInputElement).value).toBe('')
   expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Delete Jul 1 balances' }).disabled).toBe(true)
 })
