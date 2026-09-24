@@ -15,7 +15,16 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.config import settings
 from app.lifecycle.restore import SnapshotError, _rewrite_findings, _validate_allocation_metadata
 from app.limit_keys import LIMIT_401K_ELECTIVE
-from app.models import AllocationTargetSet, ContributionLimit, MonthlySpending, Person, User
+from app.models import (
+    Account,
+    AccountBalance,
+    AllocationTargetSet,
+    ContributionLimit,
+    MonthlySpending,
+    NetWorthSnapshot,
+    Person,
+    User,
+)
 from app.models.assistant_finding import AssistantFinding
 from app.schemas.metrics import MetricEvidence
 from app.security import create_access_token
@@ -551,6 +560,77 @@ async def test_stop_cancels_provider_and_closes_stream(monkeypatch):
     await asyncio.wait_for(consume(), 2)
     await source.aclose()
     assert quiet.closed
+
+
+async def _month_story(db, user_id, sep_recorded):
+    """August's story on Sep 12 (2026-09-23 spec §T10): its spending sits beside ITS change —
+    the Aug 1 balances to the Sep 1 balances — not beside the change INTO August. Jul and Aug
+    at $5,000 recorded on their 1sts; Sep 1 at $5,600 recorded on `sep_recorded` (None: no Sep
+    1 balances yet)."""
+    await seed(db, (date(2026, 7, 1), PAST))
+    if sep_recorded is not None:
+        account = (await db.execute(select(Account))).scalar_one()
+        snapshot = NetWorthSnapshot(month=date(2026, 9, 1), recorded_on=sep_recorded)
+        db.add(snapshot)
+        await db.flush()
+        db.add(
+            AccountBalance(snapshot_id=snapshot.id, account_id=account.id, balance=Decimal("5600"))
+        )
+    await adopt_existing_history(db, TODAY)
+    await db.commit()
+    bundle = await month_review_bundle(db, CTX, user_id, month=PAST)
+    return {
+        metric.id.rsplit("_", 3)[0]: metric
+        for metric in bundle.metrics
+        if metric.id.startswith("net_worth")
+    }
+
+
+async def test_month_story_pairs_the_month_with_its_own_net_worth_change(db, seeded_user):
+    metrics = await _month_story(db, seeded_user.id, date(2026, 9, 1))
+    balances, change = metrics["net_worth"], metrics["net_worth_change"]
+    assert (balances.value, balances.as_of, balances.completeness) == (
+        Decimal("5000.00"),
+        PAST,
+        "complete",
+    )
+    assert balances.label == "Net worth — Aug 1 balances"
+    assert "the Aug 1 balances (recorded Aug 1)" in balances.definition
+    assert (change.value, change.completeness, change.as_of) == (
+        Decimal("600.00"),
+        "complete",
+        date(2026, 9, 1),
+    )
+    assert change.label == "August's net-worth change"
+    assert change.definition.startswith("August: balances Aug 1 → Sep 1.")
+    assert change.definition_version == "net-worth-v2"
+    assert change.window is not None
+    assert (change.window.from_month, change.window.to_month, change.window.included) == (
+        PAST,
+        date(2026, 9, 1),
+        [PAST, date(2026, 9, 1)],
+    )
+    assert change.source_link == "/net-worth?month=2026-09-01"
+
+
+async def test_month_story_with_next_balances_recorded_early_is_provisional(db, seeded_user):
+    change = (await _month_story(db, seeded_user.id, date(2026, 8, 28)))["net_worth_change"]
+    assert (change.value, change.completeness, change.as_of) == (
+        Decimal("600.00"),
+        "provisional",
+        date(2026, 8, 28),
+    )
+    assert change.definition.endswith(
+        "The Sep 1 balances were recorded early, on Aug 28, and are provisional."
+    )
+
+
+async def test_month_story_without_next_balances_is_unavailable(db, seeded_user):
+    change = (await _month_story(db, seeded_user.id, None))["net_worth_change"]
+    assert (change.value, change.completeness, change.as_of) == (None, "unavailable", None)
+    assert change.definition == "Sep 1 balances not recorded yet."
+    assert change.window is not None and change.window.included == [PAST]
+    assert change.source_link == "/net-worth?month=2026-08-01"
 
 
 async def test_saved_finding_is_owner_scoped_and_immutable(auth_client, db, seeded_user):
