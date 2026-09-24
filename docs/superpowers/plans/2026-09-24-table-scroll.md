@@ -1446,6 +1446,13 @@ git commit -m "feat(dividends): the ledger as months — grouped by the Recorded
 
 ### Task 8: The dividend ledger by month, in its capped box
 
+> **Amended in execution (2026-09-24; 914d0434, 311a557a, 4bf48703, 9de18819 — the committed files are
+> authoritative; spec §4 records the behaviour):** the month toggle keeps an outside focus ring; a focus-uncover
+> needs a Tab from another element onto a line the next month's line actually covers (a click always uncovers; a
+> window refocus or a focus handed back by code never scrolls); a pending reveal is dropped by a delete or a new
+> edit and lapses after 10 s; hover on `--fill` (AA), a hairline under the pinned line, `user-select: none`; the
+> toggle is named "Sep 2026, 40 entries" (visually-hidden comma) and described by its month total.
+
 > **Amended before execution (2026-09-24, from the Task 3/5/7 reviews):** the box carries no
 > `dividend-scroll` class; entry rows get a `scroll-margin-top` (never box `scroll-padding`); a focus or
 > click on a covered (stacked) month line first scrolls its group into place (`uncoverMonth`); and the
@@ -2594,6 +2601,14 @@ git commit -m "test(probes): table-scroll-v — the seven capped boxes, the divi
 ---
 
 ### Task 10: The reorder smoke's long drag now scrolls the box
+
+> **Amended in execution (2026-09-24; 0ab1a531, bf3992e4, e7f4dea7 — the committed smoke is authoritative):**
+> every ledger placement uses `boxTo(LEDGER_BOX, …)` (window-only `standAt` no longer reaches rows inside the
+> box); the ledger's resting look crops to the box above its "more below" fade and the shared `lines` helper
+> skips rows made entirely of sticky cells; `longDrag` gives the page room below (roomBelow ≥ 20) so "the page
+> stays put" can fail; a new `arrivalDrag` (page at 0, drag held at the window bottom) reaches the last slot and
+> proves the ORDER (the box reaches its end before the page moves), noting a book whose box fits; the cancel
+> check polls. Runs: dark 1280 portfolio 61 OK, dark 1600 portfolio 88 OK, dark 1280 settings+cards 203 OK.
 
 **Files:**
 - Modify: `tools/probes/reorder-v/smoke.mjs` (constants ~line 150; `longDrag` ~1221–1254)
