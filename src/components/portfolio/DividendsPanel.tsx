@@ -1,18 +1,23 @@
-import { useMemo, useState } from 'react'
+import { ChevronRight } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { createDividend, deleteDividend, updateDividend } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
 import ChartCard from '../ChartCard'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
+import TableScroll from '../TableScroll'
+import { revealInBox } from '../tableScrollDom'
 import { useToast } from '../ToastProvider'
 import type { DividendOut, SecurityOut } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
 import { todayIso } from '../../utils/months'
 import { incomeStats, monthlyIncomeCsv, monthlyIncomeOption } from './dividendChartOptions'
+import { defaultOpenMonth, entriesLabel, groupDividendsByMonth, monthKeyOf, monthsLabel } from './dividendMonths'
 import { FeedBanner } from '../shell/Feed'
 import './portfolio.css'
+import './dividends.css'
 
 interface FormState {
   security_id: string
@@ -109,6 +114,64 @@ export default function DividendsPanel({
   // numbers and memoizing them would buy nothing.
   const chart = useMemo(() => monthlyIncomeOption(dividends, todayIso()), [dividends])
   const stats = incomeStats(dividends, todayIso())
+  // The ledger as months (2026-09-24 table-scroll spec §4): 378 entries on production made this card
+  // ~19 screens tall; grouped, it is one line a month inside a capped box.
+  const months = useMemo(() => groupDividendsByMonth(dividends), [dividends])
+  // One month open, the rest folded — the newest on or before today's (defaultOpenMonth: a
+  // future-dated manual entry must not fold the current month away) — seeded the first time rows
+  // exist: a cold load renders with none and seeds when the payload lands, a warm snapshot seeds at
+  // mount. Adjusted during render (React's derived-state idiom, PortfolioPage's owner switch), never
+  // in an effect. Not persisted: every visit opens on the current month.
+  const firstOpen = defaultOpenMonth(months, todayIso())
+  const [open, setOpen] = useState<ReadonlySet<string>>(
+    () => new Set(firstOpen === null ? [] : [firstOpen]),
+  )
+  const [seeded, setSeeded] = useState(firstOpen !== null)
+  if (!seeded && firstOpen !== null) {
+    setSeeded(true)
+    setOpen(new Set([firstOpen]))
+  }
+  const allOpen = months.every((month) => open.has(month.key))
+  const toggleMonth = (key: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  const openMonth = (key: string) => setOpen((prev) => (prev.has(key) ? prev : new Set(prev).add(key)))
+  // Passed month lines stack at one offset — the browser pins a table's sticky cells against the whole
+  // table, not their row group (measured in Edge, 2026-09-24) — so the newest one passed covers the
+  // rest (spec §4.3). A focus or click that lands on a line whose month began above the band first
+  // scrolls the BOX until that month's group starts just under the column header: Shift+Tab back up
+  // the ledger would otherwise rest on a toggle hidden under a later month's line, which the browser
+  // will not scroll to because it counts as in view (WCAG 2.4.11), and collapsing the month you are
+  // inside keeps your place instead of dropping you among the months below.
+  const uncoverMonth = (group: HTMLElement | null) => {
+    const box = boxRef.current
+    if (box === null || group === null) return
+    const head = parseFloat(box.style.getPropertyValue('--table-head-h')) || 0
+    const bandTop = box.getBoundingClientRect().top + box.clientTop + head
+    const top = group.getBoundingClientRect().top
+    if (top < bandTop - 1) box.scrollTop -= bandTop - top
+  }
+  // A saved entry to bring into view once the refreshed ledger renders (spec §4.5): its id and the
+  // ledger it was saved against. The commit that opens its month still holds that ledger and waits;
+  // the refetch's commit (a new ledger) consumes it, found or not, so it can never fire on some later
+  // render. A ref, not state: it is never drawn.
+  const boxRef = useRef<HTMLDivElement>(null)
+  const pendingReveal = useRef<{ id: number; ledger: DividendOut[] } | null>(null)
+  useEffect(() => {
+    const pending = pendingReveal.current
+    if (pending === null || pending.ledger === dividends) return
+    pendingReveal.current = null
+    const box = boxRef.current
+    const row = box?.querySelector<HTMLElement>(`tr[data-dividend-id="${pending.id}"]`)
+    if (!box || !row) return
+    // The month line pins under the column header, so the row lands below both.
+    const monthLine = row.closest('tbody')?.querySelector<HTMLElement>('.dividend-month-row')
+    revealInBox(box, row, monthLine?.getBoundingClientRect().height ?? 0)
+  }, [dividends])
 
   const startEdit = (dividend: DividendOut) => {
     setEditingId(dividend.id)
@@ -133,7 +196,7 @@ export default function DividendsPanel({
         ? updateDividend(editingId, body)
         : createDividend({ ...body, security_id: Number(form.security_id) })
     request
-      .then(() => {
+      .then((saved) => {
         if (editingId === null) {
           // The next payment starts here — BEFORE the reset, and that order is load-bearing
           // (998f05c's invariant, proven on the paycheck/comp/ESPP panels). This form
@@ -163,6 +226,13 @@ export default function DividendsPanel({
           setEditingId(null)
           setKept(false)
         }
+        // The entry's month opens — the month it was saved INTO, which an edit may have moved it to —
+        // and once the refetched ledger renders, the box scrolls to it (spec §4.5). The id is the
+        // response's (a create) or the row's own (an edit); the page never moves, so the caret the
+        // create path just parked in the amount box stays in view.
+        openMonth(monthKeyOf(body.pay_date))
+        const id = typeof saved?.id === 'number' ? saved.id : editingId
+        if (id !== null) pendingReveal.current = { id, ledger: dividends }
         onChanged()
       })
       .catch((err: unknown) => {
@@ -362,61 +432,113 @@ export default function DividendsPanel({
       {dividends.length === 0 ? (
         <p className="empty-note">No dividends recorded.</p>
       ) : (
-        <table className="port-table">
-          <thead>
-            <tr>
-              <th>Ticker</th><th>Account</th><th>Recorded date</th>
-              <th className="num">Amount</th><th>Source</th>
-              <th className="num">Per share</th><th>Notes</th><th />
-            </tr>
-          </thead>
-          <tbody>
-            {dividends.map((d) => (
-              <tr key={d.id}>
-                <td>{tickers.get(d.security_id) ?? '?'}</td>
-                <td>{d.account ?? '—'}</td>
-                <td>{formatDate(d.pay_date)}<span className="sub">{d.source === 'auto' ? ' · ex-date' : ' · entered pay date'}</span></td>
-                <td className="num">{formatCurrency(d.amount)}</td>
-                <td><span className="badge">{d.source === 'auto' ? 'auto' : 'manual'}</span></td>
-                <td className="num">
-                  {d.per_share === null ? '—' : formatCurrency(d.per_share)}
-                  {d.shares_held !== null && (
-                    <span className="sub"> × {formatShares(d.shares_held)}</span>
-                  )}
-                </td>
-                <td className="notes-cell">{d.notes ?? ''}</td>
-                {/* disabled={busy} on both: submit()'s .then closes over editingId and the
-                    form as they were when it fired, so a row action taken mid-flight is
-                    undone by the reset that lands after it — a seeded edit silently wiped,
-                    or worse, a PATCH aimed at whatever editingId the closure still holds.
-                    Shutting the row for the duration of a save is the cheap fix. */}
-                <td className="row-actions">
-                  {/* aria-label: a row button named just "Edit"/"Delete" tells a
-                      screen-reader user nothing about what it acts on. Delete needs it
-                      MORE since the delete went instant (2026-08-25 polish §8): the
-                      confirm() sentence that used to name the row before anything
-                      happened is gone, so the button is the last chance to say it. */}
-                  <button
-                    type="button"
-                    disabled={busy}
-                    aria-label="Edit this dividend"
-                    onClick={() => startEdit(d)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    aria-label="Delete this dividend"
-                    onClick={() => remove(d)}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <>
+          <div className="dividend-months-bar">
+            <p className="hint">
+              {monthsLabel(months.length)} · {entriesLabel(dividends.length)}
+            </p>
+            {/* The find-in-page door: a folded month's rows are not rendered, so Ctrl+F reaches only
+                what is open (spec §4.2). A single month has nothing to fold. */}
+            {months.length > 1 && (
+              <button
+                type="button"
+                className="button"
+                onClick={() => setOpen(allOpen ? new Set() : new Set(months.map((month) => month.key)))}
+              >
+                {allOpen ? 'Collapse all' : 'Expand all'}
+              </button>
+            )}
+          </div>
+          <TableScroll label="Dividends by month" ref={boxRef}>
+            <table className="port-table dividend-table">
+              <thead>
+                <tr>
+                  <th>Ticker</th><th>Account</th><th>Recorded date</th>
+                  <th className="num">Amount</th><th>Source</th>
+                  <th className="num">Per share</th><th>Notes</th><th />
+                </tr>
+              </thead>
+              {months.map((month) => {
+                const isOpen = open.has(month.key)
+                return (
+                  // One row group per month inside ONE table: the column grid stays shared, so the
+                  // amounts line up down the whole ledger.
+                  <tbody key={month.key}>
+                    {/* The whole line toggles for the mouse; the button is the keyboard's and the
+                        screen reader's control — its click bubbles here, so one toggle per press. */}
+                    <tr
+                      className="dividend-month-row"
+                      onClick={(event) => {
+                        uncoverMonth(event.currentTarget.closest('tbody'))
+                        toggleMonth(month.key)
+                      }}
+                    >
+                      <th scope="rowgroup" colSpan={3}>
+                        <button
+                          type="button"
+                          className="dividend-month-toggle"
+                          aria-expanded={isOpen}
+                          onFocus={(event) => uncoverMonth(event.currentTarget.closest('tbody'))}
+                        >
+                          <ChevronRight size={14} aria-hidden="true" className="dividend-month-chevron" />
+                          <span className="dividend-month-label">{month.label}</span>{' '}
+                          <span className="dividend-month-count">{entriesLabel(month.rows.length)}</span>
+                        </button>
+                      </th>
+                      <td className="num">{formatCurrency(month.totalCents / 100)}</td>
+                      <td colSpan={4} />
+                    </tr>
+                    {isOpen &&
+                      month.rows.map((d) => (
+                        <tr key={d.id} data-dividend-id={d.id}>
+                          <td>{tickers.get(d.security_id) ?? '?'}</td>
+                          <td>{d.account ?? '—'}</td>
+                          <td>{formatDate(d.pay_date)}<span className="sub">{d.source === 'auto' ? ' · ex-date' : ' · entered pay date'}</span></td>
+                          <td className="num">{formatCurrency(d.amount)}</td>
+                          <td><span className="badge">{d.source === 'auto' ? 'auto' : 'manual'}</span></td>
+                          <td className="num">
+                            {d.per_share === null ? '—' : formatCurrency(d.per_share)}
+                            {d.shares_held !== null && (
+                              <span className="sub"> × {formatShares(d.shares_held)}</span>
+                            )}
+                          </td>
+                          <td className="notes-cell">{d.notes ?? ''}</td>
+                          {/* disabled={busy} on both: submit()'s .then closes over editingId and the
+                              form as they were when it fired, so a row action taken mid-flight is
+                              undone by the reset that lands after it — a seeded edit silently wiped,
+                              or worse, a PATCH aimed at whatever editingId the closure still holds.
+                              Shutting the row for the duration of a save is the cheap fix. */}
+                          <td className="row-actions">
+                            {/* aria-label: a row button named just "Edit"/"Delete" tells a
+                                screen-reader user nothing about what it acts on. Delete needs it
+                                MORE since the delete went instant (2026-08-25 polish §8): the
+                                confirm() sentence that used to name the row before anything
+                                happened is gone, so the button is the last chance to say it. */}
+                            <button
+                              type="button"
+                              disabled={busy}
+                              aria-label="Edit this dividend"
+                              onClick={() => startEdit(d)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              aria-label="Delete this dividend"
+                              onClick={() => remove(d)}
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                )
+              })}
+            </table>
+          </TableScroll>
+        </>
       )}
     </section>
   )
