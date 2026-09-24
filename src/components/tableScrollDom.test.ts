@@ -64,7 +64,9 @@ describe('useStickyInsets', () => {
         observe(target: Element) {
           observed.push(target)
         }
-        disconnect() {}
+        disconnect() {
+          fire = () => {}
+        }
       },
     )
     const heights: Record<string, number> = { THEAD: 30 }
@@ -78,8 +80,30 @@ describe('useStickyInsets', () => {
     fire()
     expect(box.style.getPropertyValue('--table-head-h')).toBe('52px')
     view.unmount()
+    fire() // a late resize: disconnected, the observer stays quiet, so nothing is written back
     expect(box.style.getPropertyValue('--table-head-h')).toBe('')
     expect(box.style.getPropertyValue('--table-foot-h')).toBe('')
+  })
+
+  it('picks up a tfoot that arrives with the data (Net worth renders its totals row once data lands)', () => {
+    let fire: () => void = () => {}
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          fire = callback
+        }
+        observe() {}
+        disconnect() {}
+      },
+    )
+    sectionHeights({ THEAD: 30, TFOOT: 33 })
+    const view = render(createElement(Box, { foot: false }))
+    const box = view.getByTestId('box')
+    expect(box.style.getPropertyValue('--table-foot-h')).toBe('0px')
+    view.rerender(createElement(Box, { foot: true }))
+    fire() // the table grew by its totals row
+    expect(box.style.getPropertyValue('--table-foot-h')).toBe('33px')
   })
 })
 
@@ -106,6 +130,16 @@ describe('revealInBox', () => {
     const { box, row } = scene(200)
     expect(revealInBox(box, row)).toBe(false)
     expect(box.scrollTop).toBe(1000)
+  })
+
+  it('treats a row flush with either edge of the band as shown (a second reveal is a no-op)', () => {
+    // Where a reveal leaves a row: its top on the band's top (130), or its bottom on the band's
+    // bottom (456 + 44 = 500).
+    for (const rowTop of [130, 456]) {
+      const { box, row } = scene(rowTop)
+      expect(revealInBox(box, row)).toBe(false)
+      expect(box.scrollTop).toBe(1000)
+    }
   })
 
   it('scrolls up so a row under the pinned header lands just below it', () => {
@@ -147,5 +181,23 @@ describe('revealInBox', () => {
     const underHead = framed(131) // a pixel under the header, which starts below the border
     expect(revealInBox(underHead.box, underHead.row)).toBe(true)
     expect(underHead.box.scrollTop).toBe(999)
+  })
+
+  it('reveals against the bare box before its pinned rows are measured', () => {
+    // Unset, both properties parse to NaN, which fails every comparison: without the `|| 0` the
+    // reveal would silently do nothing. Unmeasured, the band is the whole box, 100 to 500; one row
+    // above it and one below, so each limit's fallback is exercised.
+    const bare = (rowTop: number) => {
+      const { box, row } = scene(rowTop)
+      box.style.removeProperty('--table-head-h')
+      box.style.removeProperty('--table-foot-h')
+      return { box, row }
+    }
+    const above = bare(90) // up by 100 − 90 = 10
+    expect(revealInBox(above.box, above.row)).toBe(true)
+    expect(above.box.scrollTop).toBe(990)
+    const below = bare(480) // down by min(524 − 500, 480 − 100) = 24
+    expect(revealInBox(below.box, below.row)).toBe(true)
+    expect(below.box.scrollTop).toBe(1024)
   })
 })

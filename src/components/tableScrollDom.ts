@@ -8,8 +8,11 @@ import { useEffect, type RefObject } from 'react'
  * column header. Re-measured by a ResizeObserver on the TABLE: a header that wraps, a density
  * switch or a tfoot that arrives with the data all change the table's size, while the capped box's
  * own size does not. Read off getBoundingClientRect rather than offsetHeight: a 30.4px header
- * rounded to 30 would let a month line slide 0.4px under it. Without ResizeObserver (jsdom), it
- * measures once.
+ * rounded to 30 would let a month line slide 0.4px under it. A transform is the one change it
+ * cannot see: getBoundingClientRect reports transformed heights, and a ResizeObserver does not
+ * fire on a transform — every entrance above these tables is translate-only today (card-enter,
+ * reveal-in, page-body-in), so a scale() entrance added later would need a re-measure when it
+ * ends. Without ResizeObserver (jsdom), it measures once.
  */
 export function useStickyInsets(ref: RefObject<HTMLElement | null>): void {
   useEffect(() => {
