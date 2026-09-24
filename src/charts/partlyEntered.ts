@@ -45,8 +45,8 @@ export function periodNote(month: string, todayIso: string | null | undefined, p
   return flows === undefined ? null : `spending partly entered (due by ${dueByName(flows)})`
 }
 
-/** A month-per-row table's Period column (charts/partial.periodColumn's shape): null when no
- *  month is drawn partial, so an ordinary table keeps its columns. */
+/** A month-per-row table's Period column — the one for every chart's CSV: null when no month is
+ *  drawn partial, so an ordinary table keeps its columns. */
 export function periodColumnFor(
   months: readonly string[],
   todayIso: string | null | undefined,
