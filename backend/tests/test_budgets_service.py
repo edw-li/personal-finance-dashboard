@@ -250,18 +250,14 @@ def test_non_living_kinds_get_figures_but_no_seed():
 # --- K6 (2026-09-23 spec): months whose spending is not complete stay out ---
 
 
-def test_a_partial_month_leaves_the_window_and_one_missing_only_take_home_stays():
-    """September's rent-only spending (partial) must not drag every mean down a twelfth;
-    August, due only for its take-home, keeps its complete spending."""
+def test_a_partial_month_leaves_the_window():
+    """September's rent-only spending (partial) must not drag every mean down a twelfth. Which
+    months are `incomplete` — never one due only for its take-home — is decided by the loader
+    from the month status, and pinned in test_spending_api.py (the budget_window tests)."""
     entered = [m(2025, 10 + i) for i in range(3)] + [m(2026, i) for i in range(1, 10)]
     window = seed_window(entered, [], current_month=m(2026, 10), incomplete=[m(2026, 9)])
     assert window[-1] == m(2026, 8) and m(2026, 9) not in window
     assert window[0] == m(2025, 10) and len(window) == 11
-    # A month listed only for its missing take-home is NOT in `incomplete`: it stays.
-    assert seed_window([m(2026, 7), m(2026, 8)], [], m(2026, 9), incomplete=[]) == [
-        m(2026, 7),
-        m(2026, 8),
-    ]
 
 
 def test_the_window_still_ends_before_the_current_month():

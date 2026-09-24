@@ -176,12 +176,13 @@ async def load_suggestions(db: AsyncSession, today: date) -> tuple[list[date], l
     categories' own order. One coverage load (spec §3's ONE definition of entered), one
     categories query, one spending query bounded to the window."""
     coverage = await load_coverage(db, today=today)
-    # K6 (2026-09-23 spec): a month still due for its SPENDING (missing or partial) stays out.
-    incomplete = (
-        []
-        if coverage.time is None
-        else [part.month for part in coverage.time.flows_due if part.spending != "entered"]
-    )
+    # K6 (2026-09-23 spec): a month whose SPENDING is not complete (missing or partial) stays
+    # out. Asked of the month status for every entered month — not read off `time.flows_due`,
+    # which starts at the first snapshot, so a partial month before it is covered too (review
+    # minor 8). A month due only for its take-home keeps its complete spending in.
+    incomplete = [
+        month for month in coverage.entered if coverage.status.spending_state(month) != "entered"
+    ]
     window = seed_window(
         coverage.entered,
         coverage.net_pay_without_spending,
