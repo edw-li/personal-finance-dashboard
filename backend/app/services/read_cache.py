@@ -196,22 +196,17 @@ _MONTH_SAVINGS_FINGERPRINT = _fingerprint_statement(MONTH_SAVINGS_TABLES)
 def _withholding_fingerprint_statement() -> TextClause:
     """`_fingerprint_statement` over the withholding tables, with the `price_history` cell
     restricted to the employer ticker's security — the `:ticker` bind, read first by
-    `_employer_ticker` and bound per request. A NULL ticker matches no security: no bars."""
-    whole = [name for name in WITHHOLDING_TABLES if name != EMPLOYER_BARS_TABLE]
-    cells = [
-        "(SELECT count(*)::text || ':' || "
-        "coalesce(sum(hashtextextended(fp_row::text, 0)), 0)::text"
-        f' FROM "{name}" AS fp_row)'
-        for name in whole
-    ]
-    cells.append(
-        "(SELECT count(*)::text || ':' || "
-        "coalesce(sum(hashtextextended(fp_row::text, 0)), 0)::text"
-        f' FROM "{EMPLOYER_BARS_TABLE}" AS fp_row'
-        f' WHERE fp_row.security_id IN (SELECT id FROM "{Security.__tablename__}"'
-        " WHERE ticker = :ticker))"
+    `_employer_ticker` and bound per request. A NULL ticker matches no security: no bars.
+    (`price_history` is the list's last table, so its cell stays last: the same statement.)"""
+    return _fingerprint_statement(
+        WITHHOLDING_TABLES,
+        {
+            EMPLOYER_BARS_TABLE: (
+                f'fp_row.security_id IN (SELECT id FROM "{Security.__tablename__}"'
+                " WHERE ticker = :ticker)"
+            )
+        },
     )
-    return text(f"SELECT {', '.join(cells)}")
 
 
 _WITHHOLDING_FINGERPRINT = _withholding_fingerprint_statement()
