@@ -230,16 +230,16 @@ async def check_stale_quotes(db: AsyncSession, *, now: datetime) -> HealthCheckO
     )
 
 
-async def check_identical_snapshot(db: AsyncSession) -> HealthCheckOut:
-    snapshots = list(
-        (
-            await db.execute(
-                select(NetWorthSnapshot).order_by(NetWorthSnapshot.month.desc()).limit(2)
-            )
-        ).scalars()
-    )
-    if len(snapshots) < 2:
+async def check_identical_snapshot(db: AsyncSession, *, status: MonthStatus) -> HealthCheckOut:
+    """The latest two FINAL snapshots carry exactly the same balances (2026-09-23 spec §T5).
+    An early snapshot — next month's balances typed before its 1st, usually by copying this
+    month's — is provisional until saved again on or after its date, so comparing it would
+    flag the very copy the routine makes. The states are the month status's (snapshot_state's
+    rule), so no second query decides what "final" means."""
+    final = [state for state in status.snapshots if not state.provisional]
+    if len(final) < 2:
         return _ok("identical_snapshot", "Latest balances differ from the month before")
+    snapshots = [final[-1], final[-2]]
     rows = (
         await db.execute(
             select(
@@ -381,7 +381,7 @@ async def run_checks(
         # twice. The nine derived totals are computed now (taxes spec §1.3), so there is no
         # stored total left to go stale and nothing for the card to repair.
         await check_stale_quotes(db, now=now),
-        await check_identical_snapshot(db),
+        await check_identical_snapshot(db, status=coverage.status),
         await check_backup(db, now=now, environment=environment),
         await asyncio.to_thread(check_snapshot, now=now, snapshot_enabled=snapshot_enabled),
     ]

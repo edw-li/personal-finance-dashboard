@@ -264,9 +264,44 @@ async def test_identical_snapshot_is_an_info_with_a_link_to_the_latest_month(db)
             )
         )
     await db.commit()
-    check = await check_identical_snapshot(db)
+    check = await check_identical_snapshot(db, status=(await load_coverage(db)).status)
     assert check.severity == "info" and check.months == [date(2026, 8, 1)]
     assert check.fix.to == "/update?month=2026-08-01"
+
+
+async def test_identical_snapshot_compares_the_latest_two_final_snapshots(db, monkeypatch):
+    """T5 (2026-09-23 spec): Oct 1 balances typed on Sep 22 — usually by copying September's —
+    are provisional. The check compares the latest two FINAL snapshots, so the routine's own
+    early draft never reads as a copied month, and a real copy between two final months still
+    does."""
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 9, 23))
+    account = Account(name="A", slug="a", group="cash", sort_order=1)
+    db.add(account)
+    await db.flush()
+    for month, recorded, balance in (
+        (date(2026, 8, 1), date(2026, 8, 1), "90.00"),
+        (date(2026, 9, 1), date(2026, 9, 1), "100.00"),
+        (date(2026, 10, 1), date(2026, 9, 22), "100.00"),  # the early copy: provisional
+    ):
+        snapshot = NetWorthSnapshot(month=month, recorded_on=recorded)
+        db.add(snapshot)
+        await db.flush()
+        db.add(
+            AccountBalance(snapshot_id=snapshot.id, account_id=account.id, balance=Decimal(balance))
+        )
+    await db.commit()
+    check = await check_identical_snapshot(db, status=(await load_coverage(db)).status)
+    assert check.severity == "ok"
+    # The same copy once final (saved again on Oct 1): now it IS two identical months.
+    monkeypatch.setattr(clock, "product_today", lambda: date(2026, 10, 1))
+    await db.execute(
+        NetWorthSnapshot.__table__.update()
+        .where(NetWorthSnapshot.month == date(2026, 10, 1))
+        .values(recorded_on=date(2026, 10, 1))
+    )
+    await db.commit()
+    check = await check_identical_snapshot(db, status=(await load_coverage(db)).status)
+    assert check.severity == "info" and check.months == [date(2026, 10, 1)]
 
 
 async def test_backup_check_is_info_off_prod_and_grades_the_marker_on_prod(db):
