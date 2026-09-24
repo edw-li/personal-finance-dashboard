@@ -3,6 +3,7 @@ import re
 import warnings
 from contextlib import contextmanager
 
+import bcrypt
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event, text
@@ -138,6 +139,28 @@ async def client(db):
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     app.dependency_overrides.pop(get_db, None)
+
+
+# bcrypt reads its cost from the salt, so capping gensalt makes every hash the tests mint
+# cost 4 (bcrypt's minimum, ~1 ms) instead of the default 12 (~200 ms), and checkpw reads the
+# cost back out of the hash, so a login against one is ~1 ms too: ~410 ms saved per
+# logged-in test (seeded_user hashes, auth_client logs in). hash_password calls
+# bcrypt.gensalt() through the module attribute, which is what this replaces; production
+# code is untouched, and test_security.py pins both halves (cost 4 here, 12 with the real
+# gensalt).
+_REAL_GENSALT = bcrypt.gensalt
+TEST_BCRYPT_ROUNDS = 4
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cheap_bcrypt():
+    def gensalt(rounds: int = 12, prefix: bytes = b"2b") -> bytes:
+        return _REAL_GENSALT(rounds=TEST_BCRYPT_ROUNDS, prefix=prefix)
+
+    # A session fixture cannot use the function-scoped monkeypatch.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(bcrypt, "gensalt", gensalt)
+        yield
 
 
 @pytest.fixture(scope="session", autouse=True)

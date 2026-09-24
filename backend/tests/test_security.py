@@ -1,10 +1,12 @@
 from datetime import UTC, datetime, timedelta
 
+import bcrypt
 import jwt as pyjwt
 import pytest
 
 from app.config import settings
 from app.security import create_access_token, decode_access_token, hash_password, verify_password
+from tests.conftest import _REAL_GENSALT, TEST_BCRYPT_ROUNDS
 
 
 def test_password_hash_roundtrip():
@@ -12,6 +14,27 @@ def test_password_hash_roundtrip():
     assert h != "s3cret!"
     assert verify_password("s3cret!", h)
     assert not verify_password("wrong", h)
+
+
+def test_production_hashes_keep_bcrypts_default_cost(monkeypatch):
+    """conftest caps bcrypt at its minimum cost for the whole run. With the real gensalt
+    back, hash_password is the cost-12 production hash: the speed-up is test-only, and
+    nothing in app/ relies on the cap."""
+    monkeypatch.setattr(bcrypt, "gensalt", _REAL_GENSALT)
+    h = hash_password("x")
+    assert h.startswith("$2b$12$")
+    assert verify_password("x", h)
+
+
+def test_the_suite_hashes_at_bcrypts_minimum_cost():
+    """The other half: the cap really reaches hash_password (it calls bcrypt.gensalt through
+    the module attribute). Were that ever imported by name, the cap would silently stop
+    applying and every logged-in test would pay ~410 ms again."""
+    assert TEST_BCRYPT_ROUNDS == 4
+    h = hash_password("x")
+    assert h.startswith("$2b$04$")
+    assert verify_password("x", h)
+    assert not verify_password("y", h)
 
 
 def test_jwt_roundtrip():
