@@ -6,7 +6,6 @@ import { fetchAccounts } from '../api/netWorth'
 import { fetchSecurities } from '../api/portfolio'
 import { refreshPrices } from '../api/prices'
 import { fetchCategories } from '../api/spending'
-import { currentMonthIso } from '../utils/months'
 import { requestAssistantOpen } from './assistant/viewState'
 import './CommandPalette.css'
 import { onPaletteOpen } from './paletteBus'
@@ -129,7 +128,6 @@ export default function CommandPalette() {
   const entries = useMemo<PaletteEntry[]>(
     () => [
       ...buildEntries({
-        month: currentMonthIso(),
         run: {
           // LAUNCHED, not awaited: a live refresh takes tens of seconds. The toasts are
           // the palette's report — the run started, then how it finished — so the action

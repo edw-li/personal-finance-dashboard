@@ -263,15 +263,15 @@ describe('CommandPalette', () => {
     renderPalette()
     openPalette()
     type('rsu')
-    // Kind headers come in the house order (spec §9): the update wizard answers "rsu"
-    // faintly (through the letters of its own label) and, being an Action, heads the
-    // DISPLAY — the list is a stable map, so it does not reshuffle by score.
+    // Kind headers come in the house order (spec §9). The monthly update's entry used to answer
+    // "rsu" faintly through the letters of "Enter Sep 2026 update" and head the display as an
+    // Action; "Monthly update — what's due" (2026-09-23 spec §M7) has no r-s-u in it, so only
+    // Pages answers now.
     expect(
       Array.from(document.querySelectorAll('.palette-group-title')).map((el) => el.textContent),
-    ).toEqual(['Actions', 'Pages'])
+    ).toEqual(['Pages'])
     expect(within(group('Pages')).getAllByRole('option')[0].textContent).toContain('Comp')
-    // …but Enter does the thing that was TYPED: "rsu" is Comp's own alias and the
-    // best-scoring hit, so the highlight starts on it, two rows down the visible list.
+    // Enter does the thing that was TYPED: "rsu" is Comp's own alias and the best-scoring hit.
     fireEvent.keyDown(combo(), { key: 'Enter' })
     expect(screen.getByTestId('pathname').textContent).toBe('/comp')
     openPalette()
