@@ -23,7 +23,7 @@ from app.models import (
 from app.schemas.lifecycle import HealthCheckOut, HealthFixOut
 from app.schemas.system import BackupStatusOut
 from app.services.coverage import Coverage, load_coverage
-from app.services.month_review import month_shift
+from app.services.month_review import day_label, month_shift
 from app.services.month_status import MonthStatus, overdue_through
 from app.services.snapshot import SNAPSHOT_NAME_RE, snapshot_stamp, snapshots_dir
 
@@ -285,26 +285,31 @@ def check_future_snapshot(status: MonthStatus) -> HealthCheckOut:
     early, never further — so these are never used as your balances: not on the Overview, not
     by Projection, not by card utilization. Only an API client or a workbook import can store
     one, and no other surface would say where it went. The fix opens that month's Balances
-    step, where the balances can be deleted."""
+    step: its saves stay shut that far ahead (§M3), but the part's actions keep "Delete Dec 1
+    balances" (§M6) — the copy names that button, in the wizard's words."""
     bound = month_shift(status.current_month, 1)
     ahead = [state.month for state in status.snapshots if state.month > bound]
     if not ahead:
         return _ok("future_snapshot", "No balances filed ahead of their month")
     first = ahead[0]
+    # The wizard's own name for the part: "Dec 1 balances" (", 2027" outside today's year).
+    balances = f"{day_label(first, status.today)} balances"
+    where = "that month's" if len(ahead) == 1 else "each month's"
     return HealthCheckOut(
         id="future_snapshot",
         severity="warn",
         title="Balances filed ahead of their month",
         detail=(
             f"Balances filed for {_joined(ahead)}, more than a month ahead — they are not used "
-            "as your current balances. Delete them or file them under the right month."
+            f"as your current balances. Delete them on {where} Balances step — its actions (⋯), "
+            f"then Delete {balances} — or file them under the right month."
         ),
         count=len(ahead),
         months=ahead,
         fix=HealthFixOut(
             kind="link",
             to=f"/update?month={first.isoformat()}&step=balances",
-            label=f"Open {_label(first)} balances",
+            label=f"Open {balances}",
         ),
     )
 

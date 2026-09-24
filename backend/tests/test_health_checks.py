@@ -402,21 +402,27 @@ async def test_future_snapshot_names_balances_filed_more_than_a_month_ahead(db, 
     check = check_future_snapshot((await load_coverage(db)).status)
     assert (check.severity, check.months, check.count) == ("warn", [date(2026, 12, 1)], 1)
     assert check.title == "Balances filed ahead of their month"
+    # The copy names the wizard's own delete (lane M, §M6): that month's saves stay shut, but its
+    # Balances step keeps the part's actions and "Delete Dec 1 balances" (watch item, lane review).
     assert check.detail == (
         "Balances filed for Dec 2026, more than a month ahead — they are not used as your "
-        "current balances. Delete them or file them under the right month."
+        "current balances. Delete them on that month's Balances step — its actions (⋯), then "
+        "Delete Dec 1 balances — or file them under the right month."
     )
     assert check.fix is not None
     assert (check.fix.kind, check.fix.to, check.fix.label) == (
         "link",
         "/update?month=2026-12-01&step=balances",
-        "Open Dec 2026 balances",
+        "Open Dec 1 balances",
     )
-    # Two of them: both named, the link on the first.
+    # Two of them: both named, the link and the button named for the first.
     db.add(NetWorthSnapshot(month=date(2027, 1, 1)))
     await db.commit()
     both = check_future_snapshot((await load_coverage(db)).status)
     assert both.count == 2 and both.detail.startswith("Balances filed for Dec 2026 and Jan 2027,")
+    assert "Delete them on each month's Balances step — its actions (⋯), then Delete Dec 1" in (
+        both.detail
+    )
     assert both.fix is not None and both.fix.to == "/update?month=2026-12-01&step=balances"
 
 
