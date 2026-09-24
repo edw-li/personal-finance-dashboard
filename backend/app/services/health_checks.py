@@ -118,18 +118,21 @@ def check_zero_filled_spending(coverage: Coverage) -> HealthCheckOut:
 
 
 def check_spending_gap(coverage: Coverage) -> HealthCheckOut:
-    """Months inside the BALANCES window with no spending rows and no take-home.
+    """Months inside coverage's window with no spending rows and no take-home.
 
-    Distinct from `balances_without_spending`, which reads the trailing twelve COMPLETE
-    months and needs a snapshot in the month itself: this one covers the whole window the
-    balances span, which is what the footer and the attention list quote.
+    The window runs from the first snapshot's month through the newest month whose flows are
+    OVERDUE (2026-09-23 spec §K3) — past the last snapshot when the balances are behind too — so
+    the sentence claims only what holds for every month in it: ended, overdue, nothing entered
+    (never "balances cover this month", which a month without its 1st balances would contradict).
+    Distinct from `balances_without_spending`, which reads the trailing twelve ended months and
+    needs a snapshot in the month itself.
     """
     return _month_gap(
         "spending_gap",
         "Spending months never entered",
         coverage.missing,
         "spending",
-        "balances cover this month but no spending or take-home was ever entered",
+        "ended and overdue, with no spending or take-home ever entered",
     )
 
 

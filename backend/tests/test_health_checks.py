@@ -484,6 +484,30 @@ async def test_spending_gap_names_months_missing_inside_the_balances_window(db, 
     assert check_zero_filled_spending(coverage).months == [date(2026, 9, 1)]
 
 
+async def test_spending_gap_never_claims_balances_past_the_last_snapshot(db, monkeypatch):
+    # K3's windows end at the newest OVERDUE month, not at the last snapshot (2026-09-23 spec
+    # §K3). On Jan 5 2027 with balances only through Oct 1, October and November are both overdue
+    # with nothing entered — but November has no balances, so the old "balances cover this month"
+    # was false (found on the §V4 real-data walk). The sentence says what is true of every month
+    # in the window: it has ended, its update is overdue, and nothing was entered.
+    monkeypatch.setattr(clock, "product_today", lambda: date(2027, 1, 5))
+    food, _rent = await categories(db)
+    db.add_all(
+        [
+            NetWorthSnapshot(month=date(2026, 9, 1)),
+            NetWorthSnapshot(month=date(2026, 10, 1)),
+            MonthlySpending(month=date(2026, 9, 1), category_id=food.id, amount=Decimal("400.00")),
+        ]
+    )
+    await db.commit()
+
+    gap = check_spending_gap(await load_coverage(db))
+    assert gap.months == [date(2026, 10, 1), date(2026, 11, 1)]
+    assert gap.detail == (
+        "Oct 2026, Nov 2026: ended and overdue, with no spending or take-home ever entered."
+    )
+
+
 async def test_spending_gap_is_ok_when_the_window_is_covered(db, monkeypatch):
     # July is the newest overdue month on Aug 20 (spec §K3) — and it is covered.
     monkeypatch.setattr(clock, "product_today", lambda: date(2026, 8, 20))
