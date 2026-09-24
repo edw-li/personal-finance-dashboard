@@ -3,8 +3,8 @@
 `account` is no longer a column: a transaction or dividend points at a portfolio_accounts
 row. Tests that build ORM rows by hand need a label -> row map that is stable WITHIN one
 test (the same label must reuse the same instance, or two rows would collide on the unique
-label) and empty BETWEEN tests (conftest's autouse reset — the db fixture TRUNCATEs, so an
-instance from a previous test is a stale, half-detached trap).
+label) and empty BETWEEN tests (conftest's autouse reset — the db fixture empties every
+table, so an instance from a previous test is a stale, half-detached trap).
 
 The row is not added to the session on its own: SQLAlchemy's save-update cascade inserts it
 with the transaction/dividend that references it. Add it explicitly (`db.add(acct("Solo"))`)
