@@ -49,6 +49,7 @@ import { clearSnapshots } from '../api/snapshotCache'
 import { formatMonth } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 import { setServerToday } from '../utils/productToday'
+import { TIME_OCT_3, septemberFlows } from '../testing/timeStatusFixtures'
 
 const account = {
   id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
@@ -2275,8 +2276,12 @@ describe('MonthlyUpdatePage — shell frame (2026-09-03 spec §5–§7)', () => 
     const before = vi.mocked(fetchCoverage).mock.calls.length
     fireEvent.click(await screen.findByRole('button', { name: /save progress/i }))
     await screen.findByText(/progress saved/i)
-    // Exactly once — a nonce that changed twice would fetch coverage twice per save.
-    await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBe(before + 1))
+    // Once for the ribbon (its revalidate nonce) and once for the wizard's own read of what is
+    // due (2026-09-23 spec §M2) — in the app the api client joins the two overlapping GETs. Any
+    // more would be a nonce that changed twice per save.
+    await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBe(before + 2))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(vi.mocked(fetchCoverage).mock.calls.length).toBe(before + 2)
   })
 })
 
@@ -2331,9 +2336,9 @@ it('saves progress without closing, then closes only after feed confirmations', 
   fireEvent.click(screen.getByRole('button', { name: 'Save progress' }))
   await screen.findByRole('heading', { name: 'Progress saved' })
   expect(vi.mocked(monthReviewApi.saveMonthReview).mock.calls[0][1]).toMatchObject({ close: false, expected_revision: 'a'.repeat(64) })
-  fireEvent.click(screen.getByLabelText('I checked every account balance.'))
-  fireEvent.click(screen.getByLabelText('I checked spending, tax, and transfers for the whole month.'))
-  fireEvent.click(screen.getByLabelText('I checked household take-home for the whole month.'))
+  fireEvent.click(screen.getByLabelText('I checked every Aug 1 account balance.'))
+  fireEvent.click(screen.getByLabelText('I checked August spending, tax and transfers.'))
+  fireEvent.click(screen.getByLabelText('I checked August household take-home.'))
   expect(close.disabled).toBe(false)
   fireEvent.click(close)
   await screen.findByRole('heading', { name: 'Month closed' })
@@ -2346,11 +2351,11 @@ it('clears a spending confirmation when its entries change', async () => {
   fireEvent.click(screen.getByRole('button', { name: /^next: [a-z]+ spending$/i }))
   await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  fireEvent.click(await screen.findByLabelText('I checked spending, tax, and transfers for the whole month.'))
+  fireEvent.click(await screen.findByLabelText('I checked August spending, tax and transfers.'))
   fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
   fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '275' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
-  expect((await screen.findByLabelText('I checked spending, tax, and transfers for the whole month.') as HTMLInputElement).checked).toBe(false)
+  expect((await screen.findByLabelText('I checked August spending, tax and transfers.') as HTMLInputElement).checked).toBe(false)
 })
 
 it('keeps the draft and prevents silent overwrite when the server revision changes', async () => {
@@ -2761,5 +2766,152 @@ describe('two parts, each saving only itself (2026-09-23 spec §M1)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('location').textContent).toBe('/update?month=2026-06-01&step=spending'),
     )
+  })
+})
+
+// The real copy's Oct 3 (2026-09-23 spec §V4): Oct 1 recorded early on Sep 22, September's rent
+// saved during September — partial, no take-home.
+function partialSeptember() {
+  setServerToday('2026-10-03')
+  vi.mocked(fetchCoverage).mockResolvedValue({
+    balances: ['2026-08-01', '2026-09-01', '2026-10-01'],
+    spending: ['2026-09-01'],
+    net_pay: [],
+    time: TIME_OCT_3,
+  })
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: true,
+    recorded_on: month === '2026-10-01' ? '2026-09-22' : month,
+    notes: null,
+    balances: [{ account_id: 1, balance: '1500.00' }],
+    as_of: month === '2026-10-01' ? '2026-09-22' : month,
+    provisional: month === '2026-10-01',
+  }))
+  vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category, rentCategory])
+  vi.mocked(spendingApi.fetchSpendingMonth).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === '2026-09-01',
+    net_pay: null,
+    amounts: month === '2026-09-01' ? [{ category_id: 8, amount: '2072.23' }] : [],
+    budgets: [],
+  }))
+}
+
+// /coverage once September's spending reads entered (only its take-home still due).
+const enteredSeptember = {
+  balances: ['2026-08-01', '2026-09-01', '2026-10-01'],
+  spending: ['2026-09-01'],
+  net_pay: [],
+  time: { ...TIME_OCT_3, flows_due: [septemberFlows({ spending: 'entered', spending_entered: true })] },
+}
+
+const PARTIAL_BANNER =
+  "September's spending was saved during September. Add anything that has posted since and save, or confirm it's complete."
+
+describe('confirm a partly entered month (2026-09-23 spec §M1)', () => {
+  it('shows the banner and the Confirm on an ended, partial, clean month; the Confirm sends no part and ticks spending', async () => {
+    partialSeptember()
+    renderWizardAt('/update?month=2026-09-01&step=spending')
+    expect(await screen.findByText(PARTIAL_BANNER)).toBeTruthy()
+    vi.mocked(fetchCoverage).mockResolvedValue(enteredSeptember)
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm September spending is complete' }))
+    await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
+    expect(sentBody()).toMatchObject({ reviewed: { balances: false, spending: true, take_home: false }, close: false })
+    expect(['balances', 'spending'].some((key) => key in sentBody())).toBe(false)
+    await waitFor(() => expect(screen.queryByText(PARTIAL_BANNER)).toBeNull())
+    expect(screen.queryByRole('button', { name: 'Confirm September spending is complete' })).toBeNull()
+    expect(screen.getByRole('heading', { name: 'September spending confirmed complete' })).toBeTruthy()
+    // The Review's spending box is the same stored flag — it shows ticked now.
+    fireEvent.click(screen.getByRole('button', { name: /^3\s*review$/i }))
+    expect(((await screen.findByLabelText(/^I checked September spending, tax and transfers\.$/)) as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('offers no Confirm while the spending part is dirty — the save completes it instead', async () => {
+    partialSeptember()
+    renderWizardAt('/update?month=2026-09-01&step=spending')
+    fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '40.00' } })
+    expect(screen.queryByRole('button', { name: 'Confirm September spending is complete' })).toBeNull()
+    expect(screen.getByText(PARTIAL_BANNER)).toBeTruthy()
+  })
+
+  it('offers no Confirm or banner once the month is entered', async () => {
+    partialSeptember()
+    vi.mocked(fetchCoverage).mockResolvedValue(enteredSeptember)
+    renderWizardAt('/update?month=2026-09-01&step=spending')
+    await screen.findByLabelText('Food')
+    expect(screen.queryByText(PARTIAL_BANNER)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Confirm September spending is complete' })).toBeNull()
+  })
+
+  it("the Confirm's Undo reverses its batch and the month reads partial again", async () => {
+    partialSeptember()
+    vi.mocked(monthReviewApi.saveMonthReview).mockImplementation(async (month) => ({
+      ...savedMonthResult(month, 'b'),
+      balances: null,
+      batch_id: 'b-confirm',
+    }))
+    vi.mocked(lifecycleApi.undoBatch).mockResolvedValue({
+      type: 'batch', batch_id: 'u', at: '2026-10-03T12:00:00+00:00', source: 'undo', actor: null,
+      label: 'Undid', month: '2026-09-01', rows: 1, undoable: true, undone_by: null,
+    })
+    renderWizardAt('/update?month=2026-09-01&step=spending')
+    await screen.findByText(PARTIAL_BANNER)
+    vi.mocked(fetchCoverage).mockResolvedValue(enteredSeptember)
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm September spending is complete' }))
+    await waitFor(() => expect(screen.queryByText(PARTIAL_BANNER)).toBeNull())
+    vi.mocked(fetchCoverage).mockResolvedValue({ ...enteredSeptember, time: TIME_OCT_3 })
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledWith('b-confirm'))
+    expect(await screen.findByText(PARTIAL_BANNER)).toBeTruthy()
+  })
+
+  it('a Review save with nothing changed and the spending box ticked is the same no-leg PUT as the Confirm (K3 clause (d), tightened)', async () => {
+    partialSeptember()
+    renderWizardAt('/update?month=2026-09-01&step=review')
+    fireEvent.click(await screen.findByLabelText(/^I checked September spending, tax and transfers\.$/))
+    fireEvent.click(screen.getByRole('button', { name: 'Save progress' }))
+    await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
+    expect(sentBody().reviewed).toEqual({ balances: false, spending: true, take_home: false })
+    expect(['balances', 'spending'].some((key) => key in sentBody())).toBe(false)
+  })
+
+  it('a take-home save carries no spending tick unless one was given', async () => {
+    partialSeptember()
+    renderWizardAt('/update?month=2026-09-01&step=spending')
+    fireEvent.change(await screen.findByLabelText('Household take-home'), { target: { value: '6000.00' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save September spending' }))
+    await waitFor(() => expect(monthReviewApi.saveMonthReview).toHaveBeenCalledTimes(1))
+    expect(sentBody().reviewed.spending).toBe(false)
+    expect(sentBody().spending).toEqual({ amounts: [{ category_id: 8, amount: '2072.23' }], net_pay: '6000.00' })
+  })
+})
+
+describe('Next leads to what is due (2026-09-23 spec §M1)', () => {
+  it("on the current month's Balances step, Next opens the due month's spending", async () => {
+    partialSeptember()
+    renderPage('/update?month=2026-10-01&step=balances')
+    fireEvent.click(await screen.findByRole('button', { name: 'Next: September spending & take-home' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/update?month=2026-09-01&step=spending'),
+    )
+  })
+
+  it('with nothing earlier due it moves within the month', async () => {
+    partialSeptember()
+    vi.mocked(fetchCoverage).mockResolvedValue({
+      balances: ['2026-10-01'], spending: [], net_pay: [], time: { ...TIME_OCT_3, flows_due: [] },
+    })
+    renderPage('/update?month=2026-10-01&step=balances')
+    fireEvent.click(await screen.findByRole('button', { name: 'Next: October spending' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/update?month=2026-10-01&step=spending'),
+    )
+  })
+
+  it('elsewhere Next stays in the month', async () => {
+    partialSeptember()
+    renderPage('/update?month=2026-09-01&step=balances')
+    expect(await screen.findByRole('button', { name: 'Next: September spending' })).toBeTruthy()
   })
 })

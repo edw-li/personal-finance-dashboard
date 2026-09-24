@@ -289,3 +289,19 @@
 .wizard-footer { align-items: center; }
 .wizard-footer-note { flex: 1; margin: 0; text-align: right; }
 .wizard-footer-actions { display: flex; gap: .6rem; }
+
+/* ── The two parts (2026-09-23 spec §M1–§M4) ─────────────────────────────────────────── */
+/* A part's note — the .draft-note register (panel fill, a left rule): the accent for a fact about
+   the month ("October is in progress"), --warn for a to-do ("saved during September — add the rest
+   or confirm", "recorded early — save them again on or after Oct 1"). Words carry the meaning; the
+   rule's colour only groups them. */
+.part-note {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 0.85rem;
+}
+.part-note-warn { border-left-color: var(--warn); }

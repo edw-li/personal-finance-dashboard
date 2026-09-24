@@ -33,7 +33,14 @@ import {
   type DraftPart,
   type FlowsDraft,
 } from '../components/monthly/drafts'
-import { balancesPartName, flowsPartName, monthNameOf, reviewSaveNote } from '../components/monthly/monthlyCopy'
+import {
+  balancesPartName,
+  dayOf,
+  flowsPartName,
+  monthNameOf,
+  partialBanner,
+  reviewSaveNote,
+} from '../components/monthly/monthlyCopy'
 import { balancesKey, flowsKey, sortedIds, type BalancesPart, type FlowsPart } from '../components/monthly/parts'
 import InfoHint from '../components/InfoHint'
 import { useToast } from '../components/ToastProvider'
@@ -844,6 +851,15 @@ export default function MonthlyUpdatePage() {
     setCoverageNonce((n) => n + 1)
   }
 
+  // After a save the wizard re-reads /coverage itself, so what it says is due — the partial banner,
+  // the Confirm, "Next" — follows the server's word (a Confirm or a post-month save completes a
+  // month). It runs beside the scope row's own re-read, and the api client joins the two GETs.
+  const refreshCoverage = async (loaded: LoadedMonth): Promise<CoverageOut | null> => {
+    const fresh = await fetchCoverage().catch((): CoverageOut | null => null)
+    if (fresh !== null && loadedMonth.current === loaded) setCoverage(fresh)
+    return fresh
+  }
+
   const save = async (kind: SaveKind) => {
     const loaded = loadedMonth.current
     if (loading || saving || deleting || repairing || loaded === null || loaded.month !== month
@@ -943,8 +959,9 @@ export default function MonthlyUpdatePage() {
           },
         })
       }
-      // Coverage moved: tell the scope row to re-read it.
+      // Coverage moved: the scope row re-reads it, and so does the wizard.
       setCoverageNonce((n) => n + 1)
+      void refreshCoverage(loaded)
       // The Confirm IS the spending tick (the same stored flag): the Review's box shows it.
       if (kind === 'confirm-spending') {
         setReviewConfirmations((current) => ({ ...current, spending: confirmationInputs.spending }))
@@ -1144,11 +1161,26 @@ export default function MonthlyUpdatePage() {
   // entered without them, and nothing copies a snapshot to make room.
   const selectMonth = (m: string) => goTo(m, step)
 
+  // What the server says is due (GET /coverage `time`, 2026-09-23 spec §0.4(c)) — null on an empty
+  // book or while /coverage is unknown, when nothing below claims anything is due.
+  const time = coverage?.time ?? null
+  // This month's entry in flows_due — only an ended month is ever listed there.
+  const monthFlows = time?.flows_due.find((part) => part.month === month) ?? null
+  // K3's *partial*: spending saved while the month ran, not saved again after it ended nor
+  // confirmed complete. The banner says so; the Confirm settles it (spec §M1).
+  const partial = monthFlows?.spending === 'partial'
+
   // The Balances step's two actions (spec §M1). Its Save is on while the part differs from what
   // the server holds — or while the month has no snapshot at all: the pre-fill is a proposal the
   // user may record as it stands.
   const balancesSavable = balancesDirty || !monthExisted
-  const nextFromBalances = { label: `Next: ${monthNameOf(month)} spending`, go: () => setStep('spending') }
+  // "Next" leads to what is due (spec §M1): on the current month's Balances step, while an ended
+  // month's spending & take-home are due, the newest such month — else within the month.
+  const dueFlows = month === currentMonthIso() ? (time?.flows_due[0] ?? null) : null
+  const nextFromBalances =
+    dueFlows !== null
+      ? { label: `Next: ${flowsPartName(dueFlows.month)}`, go: () => goTo(dueFlows.month, 'spending') }
+      : { label: `Next: ${monthNameOf(month)} spending`, go: () => setStep('spending') }
 
   // The ribbon anchors one month PAST the latest covered month once the current month
   // is filled: chips end at the anchor, so otherwise "add next month" is impossible
@@ -1734,6 +1766,13 @@ export default function MonthlyUpdatePage() {
               Spending & take-home
               <InfoHint text="The month&apos;s spend per category plus the household&apos;s take-home pay — a blank take-home skips the cashflow row." />
             </h2>
+            {partial && (
+              // Above the table while the month is partly entered (spec §M1): a to-do, not an
+              // error — the two ways out are the save and the Confirm below.
+              <p className="part-note part-note-warn" role="status">
+                {partialBanner(month)}
+              </p>
+            )}
             <div className="meta-row">
               <label>
                 Household take-home
@@ -1859,6 +1898,19 @@ export default function MonthlyUpdatePage() {
                 Back
               </button>
               <div className="wizard-footer-actions">
+                {partial && !flowsDirty && (
+                  // "Confirm {September} spending is complete" (spec §M1): a month-review PUT with
+                  // NO part that ticks spending — the one save K3 counts as confirmed complete.
+                  // Offered while the part is clean; with edits on screen, saving them after the
+                  // month has ended completes it instead.
+                  <button
+                    className="button"
+                    disabled={saving || loading || review === null}
+                    onClick={() => void save('confirm-spending')}
+                  >
+                    Confirm {monthNameOf(month)} spending is complete
+                  </button>
+                )}
                 <button className="button" onClick={() => setStep('review')}>
                   Next: review
                 </button>
@@ -1973,7 +2025,8 @@ export default function MonthlyUpdatePage() {
               <legend>Confirm this month is complete</legend>
               {(['balances', 'spending', 'take_home'] as const).map(feed => <label key={feed}>
                 <input type="checkbox" checked={reviewed[feed]} onChange={e => setReviewConfirmations(current => ({ ...current, [feed]: e.target.checked ? confirmationInputs[feed] : undefined }))} />
-                {feed === 'balances' ? 'I checked every account balance.' : feed === 'spending' ? 'I checked spending, tax, and transfers for the whole month.' : 'I checked household take-home for the whole month.'}
+                {/* The three confirmations name what they certify (2026-09-23 spec §M5): this 1st's balances, the month's flows. */}
+                {feed === 'balances' ? `I checked every ${dayOf(month)} account balance.` : feed === 'spending' ? `I checked ${monthNameOf(month)} spending, tax and transfers.` : `I checked ${monthNameOf(month)} household take-home.`}
               </label>)}
               {month === currentMonthIso() && <label><input type="checkbox" checked={finalCurrentMonth} onChange={e => setFinalCurrentMonth(e.target.checked)} />These figures are final even though this month is still in progress.</label>}
             </fieldset>
