@@ -14,6 +14,7 @@ import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import CreditCardsPage from './CreditCardsPage'
 import { INK, PALETTE } from '../charts/theme'
 import { expectInDocumentOrder } from '../testing/domOrder'
+import { setServerToday } from '../utils/productToday'
 
 vi.mock('../api/creditCards', () => ({
   fetchCreditCards: vi.fn(),
@@ -561,11 +562,13 @@ describe('CreditCardsPage', () => {
       { ...SAVOR, account_id: 8 },
       RH,
     ])
+    setServerToday('2026-08-20')
     vi.mocked(fetchSummary).mockResolvedValue({
       month: '2026-08-01', net_worth: null, mom_delta: null, mom_pct: null, groups: [], owner_totals: [],
+      as_of: '2026-08-01', recorded_on: '2026-08-01', provisional: false, previous: null, days_since_previous: null,
     })
     vi.mocked(fetchMonthBalances).mockResolvedValue({
-      month: '2026-08-01', exists: true, recorded_on: null, notes: null,
+      month: '2026-08-01', exists: true, recorded_on: '2026-08-01', notes: null,
       balances: [
         { account_id: 7, balance: '-1200.00' },
         { account_id: 8, balance: '-400.00' },
@@ -573,12 +576,49 @@ describe('CreditCardsPage', () => {
     })
     renderPage('/credit-cards?card=venture-x')
     await screen.findByText('Worth keeping? (est.)')
-    // $1,600 owed over $40,000 = 4.0%; the same $1,600 over the $10,000 left = 16.0%.
+    // $1,600 owed over $40,000 = 4.0%; the same $1,600 over the $10,000 left = 16.0% — named by
+    // the day the balances describe (2026-09-23 spec §T9).
     await waitFor(() =>
       expect(closingLine().textContent).toContain(
-        'household utilization 4.0% → 16.0% with the same balances (as of Aug 2026)',
+        'household utilization 4.0% → 16.0% with the same balances (as of Aug 1)',
       ),
     )
+    // The card's own line reads the same snapshot, the current one.
+    expect(document.querySelector('[data-utilization]')?.textContent).toBe(
+      '$1,200.00 of $30,000.00 = 4.0% (as of Aug 1) — balances are stored negative; this reads the current net-worth snapshot.',
+    )
+  })
+
+  it('names Oct 1 balances typed early on Sep 22 as provisional, in both utilization lines', async () => {
+    setServerToday('2026-09-23')
+    vi.mocked(fetchCreditCards).mockResolvedValue([
+      vx({ account_id: 7 }),
+      { ...SAVOR, account_id: 8 },
+      RH,
+    ])
+    vi.mocked(fetchSummary).mockResolvedValue({
+      month: '2026-10-01', net_worth: null, mom_delta: null, mom_pct: null, groups: [], owner_totals: [],
+      as_of: '2026-09-22', recorded_on: '2026-09-22', provisional: true,
+      previous: { month: '2026-09-01', as_of: '2026-09-01', recorded_on: '2026-09-01', provisional: false },
+      days_since_previous: 21,
+    })
+    vi.mocked(fetchMonthBalances).mockResolvedValue({
+      month: '2026-10-01', exists: true, recorded_on: '2026-09-22', notes: null,
+      balances: [
+        { account_id: 7, balance: '-1200.00' },
+        { account_id: 8, balance: '-400.00' },
+      ],
+    })
+    renderPage('/credit-cards?card=venture-x')
+    await screen.findByText('Worth keeping? (est.)')
+    await waitFor(() =>
+      expect(closingLine().textContent).toContain('with the same balances (as of Sep 22 · provisional)'),
+    )
+    expect(document.querySelector('[data-utilization]')?.textContent).toBe(
+      '$1,200.00 of $30,000.00 = 4.0% (as of Sep 22 · provisional) — balances are stored negative; this reads the current net-worth snapshot.',
+    )
+    // The balances asked for are the current snapshot's — the summary's month.
+    expect(fetchMonthBalances).toHaveBeenCalledWith('2026-10-01')
   })
 
   it('saving edited multipliers PUTs only changed cells and re-renders from the echo', async () => {

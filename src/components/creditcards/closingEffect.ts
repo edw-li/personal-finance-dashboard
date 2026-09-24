@@ -13,12 +13,23 @@ export interface ClosingEffect {
   cardLimit: number | null
   /** Household utilization now and after, from one balance snapshot; null unless EVERY card
    *  with a limit has a known balance ("when balances are known"). `after` is null when no
-   *  line would be left. */
-  utilization: { before: number; after: number | null; month: string } | null
+   *  line would be left. Carries the snapshot's date and standing, so the sentence can name the
+   *  balances by the day they describe (2026-09-23 spec §T9). */
+  utilization: {
+    before: number
+    after: number | null
+    month: string
+    as_of: string | null
+    provisional: boolean
+  } | null
 }
 
 export interface BalanceSnapshot {
   month: string
+  /** The day these balances describe (null = unknown) and whether they were typed before it —
+   *  the current net-worth snapshot's, off the summary (2026-09-23 spec §K2, §T9). */
+  as_of: string | null
+  provisional: boolean
   /** Liability balances by account id, stored negative. */
   byAccount: Map<number, number>
 }
@@ -57,6 +68,8 @@ export function closingEffect(
       before: owed / lineBefore,
       after: lineAfter > 0 ? owed / lineAfter : null,
       month: balances.month,
+      as_of: balances.as_of,
+      provisional: balances.provisional,
     }
   }
   return { lineBefore, lineAfter, cardLimit, utilization }

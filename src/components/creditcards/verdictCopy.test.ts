@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { setServerToday } from '../../utils/productToday'
 import type { ClosingEffect } from './closingEffect'
 import { optimize } from './rewardsMath'
 import { closingSentence, perYear, tieReason, tieWords, verdictNote, verdictReason } from './verdictCopy'
@@ -211,16 +212,30 @@ describe('closingSentence', () => {
   })
 
   it('free: saves nothing, names the line it gives up and the history it keeps', () => {
+    // The balances named by the day they describe (2026-09-23 spec §T9), in the server's year.
+    setServerToday('2026-10-05')
     expect(
       closingSentence(
         'free',
         value({}),
-        effect({ utilization: { before: 0.0421, after: 0.045, month: '2026-10-01' } }),
+        effect({ utilization: { before: 0.0421, after: 0.045, month: '2026-10-01', as_of: '2026-10-01', provisional: false } }),
         { opened_on: '2020-01-10', oldest: true },
       ),
     ).toBe(
-      'Closing it saves nothing: total credit line $115,350.00 → $107,750.00; household utilization 4.2% → 4.5% with the same balances (as of Oct 2026). Open since Jan 10, 2020 — the oldest card here — its age counts toward your credit history.',
+      'Closing it saves nothing: total credit line $115,350.00 → $107,750.00; household utilization 4.2% → 4.5% with the same balances (as of Oct 1). Open since Jan 10, 2020 — the oldest card here — its age counts toward your credit history.',
     )
+  })
+
+  it('names balances typed early as provisional, by the day they were typed', () => {
+    setServerToday('2026-09-23')
+    expect(
+      closingSentence(
+        'free',
+        value({}),
+        effect({ utilization: { before: 0.0421, after: 0.045, month: '2026-10-01', as_of: '2026-09-22', provisional: true } }),
+        { opened_on: null, oldest: false },
+      ),
+    ).toContain('household utilization 4.2% → 4.5% with the same balances (as of Sep 22 · provisional).')
   })
 
   it('costs: saves the net, and says when no limit is recorded — with no utilization that cannot move', () => {
@@ -231,7 +246,7 @@ describe('closingSentence', () => {
         effect({
           cardLimit: null,
           lineAfter: 115350,
-          utilization: { before: 0.042, after: 0.042, month: '2026-10-01' },
+          utilization: { before: 0.042, after: 0.042, month: '2026-10-01', as_of: '2026-10-01', provisional: false },
         }),
         { opened_on: null, oldest: false },
       ),
@@ -265,7 +280,7 @@ describe('closingSentence', () => {
       closingSentence(
         'free',
         value({}),
-        effect({ lineBefore: 5000, lineAfter: 0, cardLimit: 5000, utilization: { before: 0.1, after: null, month: '2026-10-01' } }),
+        effect({ lineBefore: 5000, lineAfter: 0, cardLimit: 5000, utilization: { before: 0.1, after: null, month: '2026-10-01', as_of: '2026-10-01', provisional: false } }),
         { opened_on: '2024-02-01', oldest: false },
       ),
     ).toBe(

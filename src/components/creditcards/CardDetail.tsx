@@ -20,8 +20,10 @@ import type {
   RewardRateOut,
 } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
-import { formatCurrency, formatDate, formatMonth, formatPct } from '../../utils/format'
+import { asOfPhrase } from '../../utils/asOf'
+import { formatCurrency, formatDate, formatPct } from '../../utils/format'
 import { currentMonthIso } from '../../utils/months'
+import { summaryState } from '../networth/snapshotStates'
 import { closingEffect, type BalanceSnapshot } from './closingEffect'
 import { creditLineChartOption, creditLineCsv, limitMonths } from './creditLineChartOptions'
 import { VERDICT_LABEL, VERDICT_TONE, verdictKind, type OptimizerResult } from './rewardsMath'
@@ -75,9 +77,10 @@ export default function CardDetail({
   const [localBusy, setLocalBusy] = useState(false)
   const [creditForm, setCreditForm] = useState({ label: '', annual_value: '' })
   const [limitForm, setLimitForm] = useState({ effective_date: '', limit_amount: '', note: '' })
-  // The latest net-worth snapshot's balances, every account — this card's own utilization line
-  // and the household utilization closing it would change (2026-09-23 spec §B6) both read it.
-  // null = nothing linked, not loaded, or the fetch failed.
+  // The CURRENT net-worth snapshot's balances, every account — this card's own utilization line
+  // and the household utilization closing it would change (2026-09-23 spec §B6) both read it,
+  // and both name it by its date and standing (§T9). null = nothing linked, not loaded, or the
+  // fetch failed.
   const [balances, setBalances] = useState<BalanceSnapshot | null>(null)
   const toast = useToast()
   const headingRef = useRef<HTMLHeadingElement>(null)
@@ -94,16 +97,21 @@ export default function CardDetail({
   useEffect(() => {
     if (!needsBalances) return
     let cancelled = false
+    // The summary's default IS the current snapshot (2026-09-23 spec §K2: the latest at most one
+    // month ahead), with the day its balances describe and whether they are provisional.
     fetchSummary()
       .then((summary) => {
-        if (summary.month === null) return null
-        return fetchMonthBalances(summary.month)
+        const state = summaryState(summary)
+        if (state === null) return null
+        return fetchMonthBalances(state.month).then((snapshot) => ({ snapshot, state }))
       })
-      .then((snapshot) => {
-        if (cancelled || !snapshot) return
+      .then((read) => {
+        if (cancelled || !read) return
         setBalances({
-          month: snapshot.month,
-          byAccount: new Map(snapshot.balances.map((b) => [b.account_id, Number(b.balance)])),
+          month: read.snapshot.month,
+          as_of: read.state.as_of,
+          provisional: read.state.provisional,
+          byAccount: new Map(read.snapshot.balances.map((b) => [b.account_id, Number(b.balance)])),
         })
       })
       .catch(() => {
@@ -272,7 +280,9 @@ export default function CardDetail({
   const ownBalance =
     card.account_id === null || balances === null ? undefined : balances.byAccount.get(card.account_id)
   const utilization =
-    balances === null || ownBalance === undefined ? null : { month: balances.month, balance: ownBalance }
+    balances === null || ownBalance === undefined
+      ? null
+      : { month: balances.month, as_of: balances.as_of, provisional: balances.provisional, balance: ownBalance }
   const utilizationPct =
     utilization !== null && card.current_limit !== null && Number(card.current_limit) > 0
       ? Math.abs(utilization.balance) / Number(card.current_limit)
@@ -540,9 +550,8 @@ export default function CardDetail({
             <p className="drill-hint" data-utilization>
               {formatCurrency(Math.abs(utilization.balance))} of{' '}
               {formatCurrency(card.current_limit)} ={' '}
-              {formatPct(utilizationPct, { signed: false })} (as of{' '}
-              {formatMonth(utilization.month)}) — balances are stored negative; this reads the
-              latest net-worth snapshot.
+              {formatPct(utilizationPct, { signed: false })} ({asOfPhrase(utilization)}) —
+              balances are stored negative; this reads the current net-worth snapshot.
             </p>
           )}
             </>
