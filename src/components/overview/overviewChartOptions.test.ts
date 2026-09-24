@@ -211,6 +211,24 @@ describe('netWorthTrendOption: a provisional point (2026-09-23 spec §T1)', () =
     expect(headAt(option, 'Sep 2026', 1)).toBe('Sep 2026')
   })
 
+  // Code review I1: a line series culls per-point symbols once its category axis thins its labels
+  // (echarts' showAllSymbol 'auto' — from about 51 points on the 1280 Overview card). The one
+  // symbol this line draws must never be culled, however long the history.
+  it('never culls the provisional point on a long history', () => {
+    const months = Array.from({ length: 120 }, (_, i) => `${2017 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}-01`)
+    const long = {
+      months,
+      net_worth: months.map((_, i) => (1000 + i).toFixed(2)),
+      recorded_on: months.map((month, i) => (i === months.length - 1 ? '2026-11-22' : month)),
+      provisional: months.map((_, i) => i === months.length - 1),
+    }
+    const [line] = seriesOf(netWorthTrendOption(long)) as { showAllSymbol?: boolean }[]
+    expect(line.showAllSymbol).toBe(true)
+    // A book with no provisional point draws no symbol at all: nothing to keep.
+    const [plain] = seriesOf(netWorthTrendOption({ months, net_worth: long.net_worth })) as { showAllSymbol?: boolean }[]
+    expect(plain.showAllSymbol).toBeUndefined()
+  })
+
   it('draws every point plainly once the balances are final, and without the lists', () => {
     const final = { ...copy, as_of: copy.months, recorded_on: copy.months, provisional: [false, false, false] }
     expect(seriesOf(netWorthTrendOption(final))[0].data).toEqual([700000, 806667.88, 933250.9])

@@ -710,6 +710,8 @@ describe('spendingBarsOption: the month in progress (2026-09-23 spec §C5)', () 
     expect(line.data).toEqual([6000, null])
     expect(marker).toMatchObject({ type: 'line', name: 'Net pay', color: INK, z: 10 })
     expect(marker.data).toEqual([null, { value: 3000, symbol: 'circle', symbolSize: 8, itemStyle: partialItemStyle(INK, false) }])
+    // Its one symbol is the whole series: never culled on a long axis (code review I1).
+    expect(marker).toMatchObject({ showAllSymbol: true })
   })
 
   it('adds no marker when the month under way has no net pay yet', () => {

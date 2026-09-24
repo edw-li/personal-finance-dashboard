@@ -220,6 +220,9 @@ export function spendingBarsOption({
         name: 'Net pay',
         color: INK,
         z: 10,
+        // Its one symbol is the whole series: never culled when the axis thins its labels (echarts'
+        // showAllSymbol 'auto'; code review I1).
+        showAllSymbol: true,
         data: partialPay.map((v) =>
           v === null ? null : { value: v, symbol: 'circle', symbolSize: 8, itemStyle: partialItemStyle(INK, false) },
         ),

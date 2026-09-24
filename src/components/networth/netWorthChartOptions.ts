@@ -164,6 +164,9 @@ export function netWorthStackOption({
     lineStyle: { width: 2.5 },
     color: INK,
     z: 10,
+    // The provisional point is the line's one symbol: never culled when the month axis thins its
+    // labels (echarts' showAllSymbol 'auto' — from about 81 points here; code review I1).
+    ...(provisional.some(Boolean) ? { showAllSymbol: true } : {}),
     endLabel: {
       show: true,
       color: INK,

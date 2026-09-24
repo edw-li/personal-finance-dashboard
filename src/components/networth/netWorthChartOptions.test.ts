@@ -484,6 +484,9 @@ describe('the Net worth charts and a provisional snapshot (2026-09-23 spec §T7)
     ])
     expect(headAt(option, 'Aug 2026', 2)).toBe('Aug 2026 — Aug 1 balances recorded early, on Jul 24 — provisional')
     expect(headAt(option, 'Jul 2026', 1)).toBe('Jul 2026')
+    // Never culled on a long history (code review I1: showAllSymbol 'auto' drops per-point symbols
+    // once the axis thins its labels — from about 81 points on this chart).
+    expect((line as { showAllSymbol?: boolean } | undefined)?.showAllSymbol).toBe(true)
     // The owner and share readings say it on hover too.
     expect(headAt(netWorthStackOption({ ts: early, mode: 'share', ...base }), 'Aug 2026', 2)).toMatch(/— provisional$/)
   })

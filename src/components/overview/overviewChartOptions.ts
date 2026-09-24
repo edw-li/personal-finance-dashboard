@@ -57,6 +57,10 @@ export function netWorthTrendOption(
         name: 'Net worth',
         ...WASH,
         color: PALETTE[0],
+        // The provisional point is this line's one symbol: echarts' default ('auto') culls per-point
+        // symbols once the month axis thins its labels (about 51 points on the 1280 card) — never
+        // this one (code review I1).
+        ...(provisional.some(Boolean) ? { showAllSymbol: true } : {}),
         data: ts.net_worth.map((value, i) =>
           provisional[i]
             ? { value: Number(value), symbol: 'circle', symbolSize: 8, itemStyle: partialItemStyle(PALETTE[0], false) }
