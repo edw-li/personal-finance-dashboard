@@ -151,7 +151,17 @@ async def db(engine):
         yield session
     # Not a per-test rollback: many tests open their own sessions on `engine` and commit
     # for real (read cache, reorder serialization, the assistant, export, the lifecycle CLI).
-    await reset_database(engine)
+    if not await reset_database(engine):
+        # The database IS clean (TRUNCATE saw to it), but a fast path that falls back quietly
+        # would put the suite back at ~20 min without anything failing. What the fast path
+        # could not delete is this test's doing (a stray table referencing a model table, a
+        # lock left held), so the error lands here, on the test that caused it, and fails the
+        # run — serially or under -n alike, since a teardown error is an ordinary report.
+        pytest.fail(
+            "the per-test reset fell back to TRUNCATE after this test — the fast DELETE path "
+            "could not reset what it left behind (the warning above says why)",
+            pytrace=False,
+        )
 
 
 @pytest.fixture
