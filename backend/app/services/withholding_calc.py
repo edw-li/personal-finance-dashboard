@@ -422,6 +422,8 @@ def estimate(
     # The two-earner block (2026-08-26 spec §5.6). Wages are the year's stored W-2 figures
     # PER PERSON — the same numbers the liability is computed on — not the paycheck
     # simulation, because the additional-Medicare split is about what each EMPLOYER saw.
+    # MEDICARE wages, so the router passes them without ESPP ordinary income (2026-09-23
+    # spec §W6: it is W-2 income but not Medicare wages).
     primary_wages: Decimal = ZERO,
     partner_wages: Decimal = ZERO,
     # The ENTERED fallback (P2): None means "no row stored" (which warns); Decimal("0")

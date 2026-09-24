@@ -1673,6 +1673,8 @@ PARTNER_STATE_WITHHOLDING_KEY = "w2_state_withholding"
 # bonus summed in here would be taxed on the wrong wage base and then counted twice.
 BONUS_KEY = "w2_bonuses"
 BONUS_WITHHOLDING_KEY = "w2_bonus_withholding"
+# ESPP ordinary income: W-2 income-tax wages, not Medicare wages (2026-09-23 spec §W6).
+ESPP_ORDINARY_KEY = "w2_espp_sale_component"
 # California's own gate (R&TC 19136 / FTB 5805): a taxpayer whose CURRENT-year California
 # AGI reaches $1,000,000 cannot use the prior-year leg at all and must reach 90% of this
 # year's tax. Federal has no such ceiling — which is exactly why the two harbors are
@@ -1797,6 +1799,13 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
     # engine taxed.
     primary_wage_base = _wage_base(feed.inputs) - partner_wage_base
     has_partner = bool(partner_ids)
+    # The additional-Medicare gap compares MEDICARE wages (2026-09-23 spec §W6): ESPP ordinary
+    # income is W-2 income but not Medicare wages, so each side's own ESPP component comes out
+    # — the primary's by subtraction, like their wage base. (The spec names the primary; a
+    # partner's is the same rule, and a no-op for a household whose equity is all the
+    # primary's.) The W-2 figures published below keep it: they are W-2 wages.
+    partner_espp = partner_values.get(ESPP_ORDINARY_KEY, ZERO)
+    primary_espp = feed.inputs.get(ESPP_ORDINARY_KEY, ZERO) - partner_espp
     partner_fed = partner_values.get(PARTNER_FED_WITHHOLDING_KEY) if has_partner else None
     partner_state = partner_values.get(PARTNER_STATE_WITHHOLDING_KEY) if has_partner else None
 
@@ -1910,8 +1919,8 @@ async def withholding_estimate(db: AsyncSession, year: int, today: date) -> With
         medicare=feed.tables.get("medicare", []),
         social_security=feed.primary_payroll_table("social_security"),
         disability=feed.primary_payroll_table("disability"),
-        primary_wages=primary_wage_base,
-        partner_wages=partner_wage_base if has_partner else ZERO,
+        primary_wages=primary_wage_base - primary_espp,
+        partner_wages=(partner_wage_base - partner_espp) if has_partner else ZERO,
         partner_withheld_fed=partner_fed,
         partner_withheld_state=partner_state,
         # Non-empty flips the partner's leg from ENTERED to SIMULATED, and the service

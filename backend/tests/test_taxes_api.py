@@ -1313,11 +1313,10 @@ async def test_what_if_long_sale_moves_ltcg_and_delta(auth_client, db, definitio
     assert (await auth_client.get(f"{YEARS}/2024/summary")).json() == body["baseline"]
 
 
-async def test_what_if_espp_disqualified_hits_w2_and_fica(auth_client, db, definitions):
-    """A disqualified disposition splits into W-2 ordinary income and a capital leg, and
-    the ordinary half raises the engine's FICA wage bases — sheet-faithful (the sheet's
-    ESPP component rolls into the W-2 total; real-world ESPP ordinary income is FICA-exempt).
-    """
+async def test_what_if_espp_disqualified_hits_w2_not_fica(auth_client, db, definitions):
+    """A disqualified disposition splits into W-2 ordinary income and a capital leg. The
+    ordinary half is W-2 income-tax wages and NOT Medicare / Social Security / SDI wages
+    (IRC §3121(a)(22); 2026-09-23 spec §W6 — the sheet's structure charged FICA on it)."""
     await seeded_2024(auth_client)
     lot_id = await seed_lot(db)
 
@@ -1351,21 +1350,19 @@ async def test_what_if_espp_disqualified_hits_w2_and_fica(auth_client, db, defin
             "after": "350.00",
         },
     ]
-    # FICA moves with the W-2 line: Medicare has no cap, so the 350 meets the 2.35% tier.
-    assert Decimal(body["delta"]["medicare_tax"]) > 0
-    assert Decimal(body["delta"]["medicare_tax"]) == Decimal(
-        body["scenario"]["medicare"]["tax"]
-    ) - Decimal(body["baseline"]["medicare"]["tax"])
-    assert body["scenario"]["medicare"]["taxable_wages"] == "231624.46"  # 231274.46 + 350
+    # FICA does NOT move with the W-2 line: the 350 is not Medicare wages.
+    assert body["delta"]["medicare_tax"] == "0.00"
+    assert body["scenario"]["medicare"]["taxable_wages"] == "231274.46"  # the baseline's
     # The proof that the ENGINE re-derived the total rather than the scenario carrying one:
     # nothing in the body says `other_w2_income`, and the reported W-2 income moved by the
     # leg anyway (2026-09-11 spec §1.4).
     assert body["baseline"]["medicare"]["w2_income"] == "235724.46"
     assert body["scenario"]["medicare"]["w2_income"] == "236074.46"  # + the 350 ordinary leg
     assert not any(row["key"] == "other_w2_income" for row in body["changed_inputs"])
-    # ...and does NOT move where the 2024 wage bases are already capped out.
-    assert body["delta"]["social_security_tax"] == "0.00"  # capped at 168600
-    assert body["delta"]["disability_tax"] == "0.00"  # 0-rate above 195000
+    # ...nor Social Security nor SDI — and income tax does move.
+    assert body["delta"]["social_security_tax"] == "0.00"
+    assert body["delta"]["disability_tax"] == "0.00"
+    assert Decimal(body["delta"]["federal_tax"]) > 0
 
 
 async def test_what_if_oversell_422(auth_client, db, definitions):

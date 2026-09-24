@@ -1073,6 +1073,37 @@ async def test_withholding_names_the_additional_medicare_gap(
     assert body["additional_medicare_gap"] == "900.00"
 
 
+async def test_the_additional_medicare_gap_leaves_espp_ordinary_income_out(
+    auth_client, db, married_world, frozen_today
+):
+    """2026-09-23 spec §W6: the gap compares Medicare WAGES, and ESPP ordinary income is not
+    Medicare wages. With the primary at 180k — under the employer's 200k floor, where an added
+    wage dollar raises what the return owes but not what either employer withholds — storing
+    10k of ESPP income moves the income tax and leaves the gap where it was:
+    (180k + 150k - 250k) x 0.9 % = 720.00, not (190k + 150k - 250k) x 0.9 % = 810.00."""
+    me_id, _partner_id = married_world
+    salary = (
+        await db.execute(
+            select(TaxInput).where(
+                TaxInput.year == YEAR,
+                TaxInput.key == "annual_salary",
+                TaxInput.person_id == me_id,
+            )
+        )
+    ).scalar_one()
+    salary.value = Decimal("180000")
+    await db.commit()
+    before = await get_withholding(auth_client)
+    assert before["additional_medicare_gap"] == "720.00"
+    db.add(
+        TaxInput(year=YEAR, key="w2_espp_sale_component", value=Decimal("10000"), person_id=me_id)
+    )
+    await db.commit()
+    after = await get_withholding(auth_client)
+    assert after["additional_medicare_gap"] == "720.00"
+    assert Decimal(after["liability_total"]) > Decimal(before["liability_total"])
+
+
 async def test_withholding_warns_when_the_partner_withholding_is_not_entered(
     auth_client, db, definitions, frozen_today
 ):
