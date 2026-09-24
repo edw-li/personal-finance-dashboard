@@ -1267,9 +1267,15 @@ async function longDrag(rows, id) {
   check('nothing else moved', same(after, moveTo(before, from, to)), after)
   return after
 }
-/** Samples a capped box and the page every 200ms until neither scroll has moved for three samples in
- *  a row — 400ms, where a held auto-scroll steps up to 18px a frame — or `timeout` passes. */
-async function holdUntilStill(box, timeout = 12000) {
+/** Samples a capped box and the page every 200ms from the moment the pointer is held, until neither
+ *  scroll has moved for three samples in a row — 400ms, where a held auto-scroll steps up to 18px a
+ *  frame — or `timeout` passes. It records the ORDER the two scrolls came in, too: the first sample
+ *  with the box at its end, the first with the page moved off `pageFrom` (where it stood before the
+ *  press), and whether any sample caught the page moved while the box still had room. A hook that
+ *  scrolled both together would spend the ledger's 147px of page in ~150ms while the box needs
+ *  ~1.3s, so the first samples would catch it. `trace` holds every sample: [ms, box scrollTop, page
+ *  scrollY]. */
+async function holdUntilStill(box, pageFrom, timeout = 12000) {
   const read = () =>
     page.evaluate((sel) => {
       const el = document.querySelector(sel)
@@ -1282,21 +1288,44 @@ async function holdUntilStill(box, timeout = 12000) {
       }
     }, box)
   const start = Date.now()
+  const trace = []
+  const seen = {
+    boxEndSample: null,
+    boxEndMs: null,
+    pageMovedSample: null,
+    pageMovedMs: null,
+    pageMovedBeforeBoxEnd: false,
+  }
+  const log = (sample) => {
+    const index = trace.length
+    const ms = Date.now() - start
+    trace.push([ms, Math.round(sample.boxTop), Math.round(sample.pageY)])
+    const atEnd = sample.boxTop >= sample.boxMax - 1
+    const moved = sample.pageY !== pageFrom
+    if (atEnd && seen.boxEndSample === null) Object.assign(seen, { boxEndSample: index, boxEndMs: ms })
+    if (moved && seen.pageMovedSample === null) Object.assign(seen, { pageMovedSample: index, pageMovedMs: ms })
+    if (moved && !atEnd) seen.pageMovedBeforeBoxEnd = true
+  }
   let prev = await read()
+  log(prev)
   let quiet = 0
   for (;;) {
     await page.waitForTimeout(200)
     const now = await read()
+    log(now)
     quiet = now.boxTop === prev.boxTop && now.pageY === prev.pageY ? quiet + 1 : 0
-    if (quiet >= 2 || Date.now() - start > timeout) return { ...now, still: quiet >= 2, ms: Date.now() - start }
+    if (quiet >= 2 || Date.now() - start > timeout) {
+      return { ...now, still: quiet >= 2, ms: Date.now() - start, ...seen, trace }
+    }
     prev = now
   }
 }
 /** Arrival on Manage (2026-09-24 table-scroll spec §2.6; its Task 4 review): the page at scroll 0,
  *  the ledger's capped box at its own top and hanging past the window's foot — 147px at 1280×800,
  *  67px at 1600×1000 — so its last slots lie below any pointer. A pointer drag held at the WINDOW's
- *  bottom edge scrolls the box to its end, then hands the scroll to the page until the box's foot is
- *  inside the window (reorderDom.ts autoScrollBy), and the row in hand stands in the LAST slot —
+ *  bottom edge scrolls the box to its end, and only then hands the scroll to the page (the order
+ *  sampled by holdUntilStill), until the box's foot is inside the window (reorderDom.ts
+ *  autoScrollBy); the row in hand stands in the LAST slot —
  *  read mid-drag off lane R0's rows (liftState: every row below it made room, and its offset is aim's
  *  travel to that slot) and the live region. Before the hand-off the drop landed short (3 slots at
  *  1280, 1 at 1600). Then Escape, never a drop: nothing is sent, and the steps below start from the
@@ -1331,7 +1360,7 @@ async function arrivalDrag(rows, id) {
   await page.mouse.down()
   await page.mouse.move(x, y0 + 6, { steps: 2 })
   await page.mouse.move(x, edge, { steps: 12 })
-  const held = await holdUntilStill(LEDGER_BOX)
+  const held = await holdUntilStill(LEDGER_BOX, start.pageY)
   const mid = await liftState(rows)
   const said = await live(LEDGER_PANEL)
   await snap('ledger-arrival-held')
@@ -1347,11 +1376,28 @@ async function arrivalDrag(rows, id) {
   await page.waitForTimeout(MOTION + 300)
   check('arrival: a row lifts and the page says grabbing', mid !== null && mid.grabbing, mid)
   // The page stops once the box's foot is inside the window — one frame's step (18px at most) past it.
-  const overshoot = Math.round((held.innerHeight - held.boxBottom) * 10) / 10
+  const { trace, ...end } = held
+  const overshoot = Math.round((end.innerHeight - end.boxBottom) * 10) / 10
   check(
-    "arrival: held at the window's bottom edge, the box scrolls to its end, then the page on until the box's foot is inside the window",
-    held.still && held.boxTop >= held.boxMax - 1 && held.pageY > 0 && overshoot >= 0 && overshoot <= 18.5,
-    { ...held, pageScrolled: held.pageY - start.pageY, overshoot, pointerY: edge },
+    "arrival: held at the window's bottom edge, the hold ends with the box at its end and the page scrolled on, the box's foot inside the window",
+    end.still && end.boxTop >= end.boxMax - 1 && end.pageY > 0 && overshoot >= 0 && overshoot <= 18.5,
+    { ...end, pageScrolled: end.pageY - start.pageY, overshoot, pointerY: edge },
+  )
+  // The order, not just the end state: the page is the box's successor, never its partner.
+  check(
+    'arrival: the box reaches its end BEFORE the page moves — no 200ms sample from the hold on caught the page off its start while the box still had room',
+    end.boxEndSample !== null &&
+      end.pageMovedSample !== null &&
+      !end.pageMovedBeforeBoxEnd &&
+      end.boxEndSample <= end.pageMovedSample,
+    {
+      boxEndSample: end.boxEndSample,
+      boxEndMs: end.boxEndMs,
+      pageMovedSample: end.pageMovedSample,
+      pageMovedMs: end.pageMovedMs,
+      pageMovedBeforeBoxEnd: end.pageMovedBeforeBoxEnd,
+      trace,
+    },
   )
   check(
     'arrival: the row in hand stands in the LAST slot — every row below it made room, it rides at the travel to that slot, and the live region says so',
