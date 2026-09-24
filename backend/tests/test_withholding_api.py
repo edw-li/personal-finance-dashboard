@@ -15,7 +15,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.taxes import (
     SEVERAL_PARTNERS_NOTE,
@@ -25,6 +25,7 @@ from app.api.taxes import (
 )
 from app.models import (
     AppSetting,
+    ChangeLog,
     ContributionLimit,
     EsppLot,
     LatestPrice,
@@ -1967,10 +1968,25 @@ async def test_the_overlay_pricer_refuses_a_computed_total(db, world, frozen_tod
         price([("latest_w2_income", None, Decimal("1000"))])
 
 
-async def test_the_reconciliation_writes_nothing(auth_client, world, frozen_today, forbid_writes):
+async def test_the_reconciliation_writes_nothing(
+    auth_client, db, world, frozen_today, forbid_writes
+):
+    """Compute-only (§W3), proven twice: no ORM flush under the guard, AND the rows it could
+    touch are counted before and after — a core statement would slip past a flush guard
+    (code-quality suggestion). An RSU figure is typed, so an Apply is on offer and unwritten."""
+    await set_rsu_typed(db, "120000")
+
+    async def counts() -> tuple[int, int]:
+        change_log = (await db.execute(select(func.count()).select_from(ChangeLog))).scalar_one()
+        inputs = (await db.execute(select(func.count()).select_from(TaxInput))).scalar_one()
+        return change_log, inputs
+
+    before = await counts()
     with forbid_writes():
         body = await get_withholding(auth_client)
     assert body["reconciliation"]["rows"]
+    assert rows_of(body)["rsu"]["apply"] is not None
+    assert await counts() == before
 
 
 async def test_the_calendars_internal_reads_carry_no_reconciliation(db, world, frozen_today):
