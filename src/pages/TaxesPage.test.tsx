@@ -409,7 +409,8 @@ beforeEach(() => {
   // The echo is authoritative: the selector reads the SERVER's status, never the button
   // that was pressed.
   vi.mocked(patchTaxYear).mockImplementation(async (year: number, body: TaxYearUpdate) => ({
-    year, notes: null, input_count: 21, bracket_count: 42, filing_status: body.filing_status,
+    year: { year, notes: null, input_count: 21, bracket_count: 42, filing_status: body.filing_status },
+    batchId: 'batch-status',
   }))
   confirmSpy.mockReturnValue(true)
 })

@@ -448,7 +448,7 @@ export default function TaxesPage() {
     setError(null)
     setYearError(null)
     patchTaxYear(year, { filing_status: next })
-      .then((row) => {
+      .then(({ year: row }) => {
         // The echo is authoritative, and replacing the row HERE means the selector follows
         // even if no list reload ever happens.
         setYears((current) => current.map((y) => (y.year === row.year ? row : y)))
