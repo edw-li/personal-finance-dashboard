@@ -885,8 +885,10 @@ on every visit and are never part of a link).
 
 - `pytest -q` — the whole suite, serially: ~2,330 tests in about 2½ minutes on the dev box
   (137-144 s, 2026-09-23). This is the default, and what CI runs.
-- `pytest -q -n 4` — the same suite on four pytest-xdist workers: about 1 minute (58-60 s). For a
-  lone full run; when other suites already share the box, stay serial.
+- `pytest -q -n 4` — the same suite on four pytest-xdist workers: about 1 minute (58-60 s). `-n`
+  comes from pytest-xdist, so install `requirements-dev.txt` first
+  (`pip install -r requirements-dev.txt`). For a lone full run; when other suites already share
+  the box, stay serial.
 - `FINANCE_TEST_DB=<name>_test_<suffix> pytest …` — one database per concurrent runner (a worktree
   lane, a second terminal): two runs on one database wipe each other's rows and can hang. Under
   `-n`, worker N uses `<FINANCE_TEST_DB>_gw<N>` (`finance_test_gw0` … `_gw3`), created on first use
