@@ -109,8 +109,10 @@ async def load_coverage(
     """Aggregate raw feed presence, apply explicit zero confirmations from reviews, and compute
     the month status (spec §K3), whose `overdue_through` ends the missing windows.
 
-    Callers that already loaded the review book pass it in to avoid repeating those reads."""
-    today = today or clock.product_today()
+    Callers that already loaded the review book pass it in to avoid repeating those reads — and
+    then its day is the day: one request reads the product clock once, so the time status and
+    the book it stands on never straddle midnight (review minor 7)."""
+    today = today or (reviews.today if reviews else clock.product_today())
     snapshots = (
         await db.execute(
             select(
