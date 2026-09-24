@@ -10,12 +10,13 @@ changed_inputs makes that visible); an override OF a computed total is a 422 ups
 
 ESPP decomposition restores the sheet's importer-ignored "ESPP Taxation Calculator":
 disposition from the stored qualifying_date, the disqualified bargain element from the
-purchase-date FMV, the qualified ordinary clamp reconstructing the grant-date FMV from
-the subscription price (subscription = 85% of the lookback FMV — approximate in a
-falling market, and every qualified leg says so). Ordinary income lands in
-other_w2_income, which raises the engine's FICA wage bases — sheet-faithful (its ESPP
-component rolls into the W-2 total); real-world ESPP ordinary income is FICA-exempt and
-the page hint carries that caveat.
+purchase-date FMV, and the qualified ordinary income capped by IRC §423(c) — the lesser of the
+actual gain and the plan discount on the OFFERING-date FMV (2026-09-23 spec §W5). The app
+stores that FMV as the lot's subscription price (the undiscounted offering-start close,
+`api/espp.py`'s purchase price is (1 − d) × min(subscription, purchase FMV)), so the cap is
+exact: shares × subscription × discount. Ordinary income lands in `w2_espp_sale_component`,
+which the engine counts as W-2 income-tax wages and NOT as Medicare / Social Security / SDI
+wages (§W6; IRC §3121(a)(22)).
 """
 
 from dataclasses import dataclass, field
@@ -50,15 +51,7 @@ def is_long_term(purchase: date, sale: date) -> bool:
     return sale > first_anniversary(purchase)
 
 
-def qualified_discount_ratio(discount: Decimal) -> Decimal:
-    """subscription = (1 - d) x the lookback FMV, so d of the grant FMV is sub x d/(1 - d).
-    `discount` is bounded to [0, 0.15] by the setting's writer AND its reader, so the
-    denominator can never reach zero."""
-    return discount / (Decimal("1") - discount)
-
-
 DATELESS_TERM_WARNING = "{ticker}: acquisition dates unknown — treated as long-term"
-QUALIFIED_FMV_WARNING = "lot {lot_id}: grant-date FMV approximated from the subscription price"
 
 # delta kind -> the COMPONENT key it moves. The total each one rolls up into is the
 # engine's business (tax_service.materialize_*), which is why it is not named here.
@@ -147,9 +140,10 @@ def decompose_espp(
     qualified = today >= qualifying_date
     warnings: list[str] = []
     if qualified:
-        cap = (shares * subscription_price * qualified_discount_ratio(discount)).quantize(
-            MONEY_Q, rounding=ROUND_HALF_UP
-        )
+        # §423(c): the discount on the offering-date FMV — which IS the stored subscription
+        # price. `discount` is the plan-wide setting, bounded to [0, 0.15] by its writer and
+        # its reader (§W5: a d/(1 − d) ratio here overstated ordinary income by 1/(1 − d)).
+        cap = (shares * subscription_price * discount).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
         ordinary = min(total_gain, cap)
         if ordinary < 0:
             # A qualified LOSS has no ordinary component. Cents-exponent zero, not the
@@ -158,7 +152,6 @@ def decompose_espp(
             ordinary = ZERO.quantize(MONEY_Q)
         capital = total_gain - ordinary
         term = "long"  # a qualified disposition is >= 1y past purchase by definition
-        warnings.append(QUALIFIED_FMV_WARNING.format(lot_id=lot_id))
     else:
         ordinary = (shares * (purchase_fmv - purchase_price)).quantize(
             MONEY_Q, rounding=ROUND_HALF_UP
