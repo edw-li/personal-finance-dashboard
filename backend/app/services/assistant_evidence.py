@@ -19,7 +19,7 @@ from app.schemas.metrics import MetricComponent, MetricEvidence, MetricWindow
 from app.services import clock
 from app.services.assistant_context import _selected_id, _view_month
 from app.services.metrics import load_spending_metrics
-from app.services.month_review import month_shift
+from app.services.month_review import day_label, month_shift
 from app.services.paycheck_calc import half_up2
 from app.services.snapshot_state import SnapshotState, load_snapshot_states
 
@@ -217,12 +217,6 @@ def captured_month(context: dict) -> date | None:
     )
 
 
-def _story_day(value: date, today: date) -> str:
-    """'Sep 1' — with ', 2025' outside today's year (the month-review blocker's grammar)."""
-    label = f"{value:%b} {value.day}"
-    return label if value.year == today.year else f"{label}, {value.year}"
-
-
 def _month_story(
     month: date,
     opening: SnapshotState,
@@ -236,13 +230,13 @@ def _month_story(
     1} → {Oct 1}" — provisional while the next 1st's balances were recorded early, unavailable
     until they exist; its as-of is the next 1st's. The change's definition version moves to v2:
     until 2026-09-24 the same id meant the change INTO the month."""
-    first, after = _story_day(month, today), month_shift(month, 1)
-    next_first = _story_day(after, today)
+    first, after = day_label(month, today), month_shift(month, 1)
+    next_first = day_label(after, today)
     name = f"{month:%B}" if month.year == today.year else f"{month:%B %Y}"
     recorded = (
         ""
         if opening.recorded_on is None
-        else f" (recorded {_story_day(opening.recorded_on, today)})"
+        else f" (recorded {day_label(opening.recorded_on, today)})"
     )
     balances = MetricEvidence(
         id="net_worth",
@@ -277,7 +271,7 @@ def _month_story(
         )
         if closing.provisional:
             early = (
-                f", on {_story_day(closing.recorded_on, today)}"
+                f", on {day_label(closing.recorded_on, today)}"
                 if closing.recorded_on is not None
                 else ""
             )

@@ -27,7 +27,7 @@ for its first balances.
 from dataclasses import dataclass
 from datetime import date
 
-from app.services.month_review import month_shift
+from app.services.month_review import day_label, month_shift
 from app.services.month_status import MonthStatus, balances_overdue_from, flows_overdue_from
 
 from ..model import Event, Item, Window, make_event
@@ -58,12 +58,6 @@ class _Part:
     plural: bool  # "Oct 1 balances were due" vs "September spending & take-home was due"
 
 
-def _day(value: date, today: date) -> str:
-    """'Oct 1' — with ', 2025' outside today's year (the month-review blocker's grammar)."""
-    label = f"{_MONTH_NAMES[value.month - 1][:3]} {value.day}"
-    return label if value.year == today.year else f"{label}, {value.year}"
-
-
 def _month(value: date, today: date) -> str:
     """'September' — with ' 2025' outside today's year."""
     name = _MONTH_NAMES[value.month - 1]
@@ -86,12 +80,12 @@ def _balances(month: date, status: MonthStatus | None, due_day: int, today: date
     if snapshot is None:
         detail = "not recorded yet"
     elif snapshot.recorded_on is not None and snapshot.recorded_on < month:
-        detail = f"recorded early, on {_day(snapshot.recorded_on, today)} — update them"
+        detail = f"recorded early, on {day_label(snapshot.recorded_on, today)} — update them"
     else:
         # Provisional only because its month is still ahead — an API client or an import.
         detail = "recorded ahead of their date — update them"
     return _Part(
-        f"{_day(month, today)} balances", detail, balances_overdue_from(month, due_day), True
+        f"{day_label(month, today)} balances", detail, balances_overdue_from(month, due_day), True
     )
 
 
@@ -138,7 +132,7 @@ def ritual_events(
         event_date = today if redated else nominal
         if not window.contains(event_date):
             continue
-        due = _day(month, today)
+        due = day_label(month, today)
         detail = None
         if redated:
             overdue = [part for part in parts if today >= part.overdue_from]
