@@ -1,12 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { setServerToday } from '../../utils/productToday'
-import {
-  currentSnapshotIndex,
-  provisionalNote,
-  rangeDates,
-  snapshotAt,
-  summaryState,
-} from './snapshotStates'
+import { currentSnapshotIndex, rangeDates, snapshotAt, summaryState } from './snapshotStates'
 
 beforeEach(() => setServerToday('2026-09-23'))
 
@@ -67,15 +61,5 @@ describe('rangeDates — what the range chips cut on (T7)', () => {
       rangeDates({ months: ['2026-12-01', '2027-01-01', '2027-03-01'], as_of: ['2026-12-01', '2026-12-28', null] }),
     ).toEqual(['2026-12-01', '2026-12-28', '2027-03-01'])
     expect(rangeDates({ months: ['2026-09-01'] })).toEqual(['2026-09-01'])
-  })
-})
-
-describe('provisionalNote — the tooltip on a provisional point (T1, T7)', () => {
-  it('names the balances and the day they were typed', () => {
-    expect(provisionalNote('2026-10-01', '2026-09-22')).toBe('Oct 1 balances recorded early, on Sep 22 — provisional')
-  })
-
-  it('says why when there is no early date (a month still ahead)', () => {
-    expect(provisionalNote('2026-12-01', null)).toBe('Dec 1 balances — provisional until Dec 1')
   })
 })

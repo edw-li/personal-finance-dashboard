@@ -61,6 +61,16 @@ export function changePhrase(
   return `${since} · ${gap} months`
 }
 
+/** Why a point is provisional, in the one sentence every chart shares (2026-09-23 spec §T1, §T7,
+ *  §R8 — the Overview trend, the Net worth charts, the Projection's hollow dot): "Oct 1 balances
+ *  recorded early, on Sep 22 — provisional"; a snapshot provisional only because its month is still
+ *  ahead (no earlier recorded date) reads "Dec 1 balances — provisional until Dec 1". */
+export function provisionalNote(month: string, recordedOn: string | null | undefined): string {
+  return recordedOn != null && recordedOn < month
+    ? `${dayLabel(month)} balances recorded early, on ${dayLabel(recordedOn)} — provisional`
+    : `${dayLabel(month)} balances — provisional until ${dayLabel(month)}`
+}
+
 /** The tail a month's story carries while that month is listed in `time.flows_due` — pass its
  *  entry (undefined when it is not listed): " · spending not entered yet" (missing), " · spending
  *  not complete yet" (partial), else nothing. */

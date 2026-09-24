@@ -1,6 +1,5 @@
 import type { NetWorthSummary, NetWorthTimeseries, SnapshotStateOut } from '../../types/api'
 import { addMonths } from '../../utils/months'
-import { dayName } from '../../utils/timeWords'
 
 // Snapshot dates on the page side (2026-09-23 spec §K2, §T1, §T2, §T7): the wire's as-of lists
 // turned into the `Dated` states utils/asOf.ts builds its words from, and K2's "current
@@ -48,12 +47,4 @@ export function summaryState(
  *  in the old year's YTD. */
 export function rangeDates(ts: Pick<NetWorthTimeseries, 'months'> & Partial<Pick<NetWorthTimeseries, 'as_of'>>): string[] {
   return ts.months.map((month, i) => ts.as_of?.[i] ?? month)
-}
-
-/** The tooltip note on a provisional point (T1, T7): "Oct 1 balances recorded early, on Sep 22 —
- *  provisional"; a snapshot provisional only because its month is still ahead says so. */
-export function provisionalNote(month: string, recordedOn: string | null | undefined): string {
-  return recordedOn != null && recordedOn < month
-    ? `${dayName(month)} balances recorded early, on ${dayName(recordedOn)} — provisional`
-    : `${dayName(month)} balances — provisional until ${dayName(month)}`
 }

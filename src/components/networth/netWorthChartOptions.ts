@@ -15,8 +15,8 @@ import type { ExportTable } from '../../utils/download'
 import { escapeHtml, formatCurrency, formatCurrencyCompact, formatMonth, formatPct } from '../../utils/format'
 import { toneOf } from '../../utils/tone'
 import type { Tone } from '../../utils/tone'
-import { formatAsOf } from '../../utils/asOf'
-import { provisionalNote, rangeDates, snapshotAt } from './snapshotStates'
+import { formatAsOf, provisionalNote } from '../../utils/asOf'
+import { rangeDates, snapshotAt } from './snapshotStates'
 
 /** The tooltip head's note on a provisional snapshot (2026-09-23 spec §T7, the T1 words), null on
  *  a final one. Absent lists: every snapshot final. */

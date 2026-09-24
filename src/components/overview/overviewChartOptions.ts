@@ -25,7 +25,7 @@ import { axisTooltip } from '../../charts/tooltip'
 import type { CoverageOut, FlowsPartOut, NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatMonth } from '../../utils/format'
-import { provisionalNote } from '../networth/snapshotStates'
+import { provisionalNote } from '../../utils/asOf'
 
 // A full trend chart, dressed exactly like its two card siblings below it. It began life
 // as an axis-free "spark" (Sparkline.tsx's license), but at 220px in a full-width card

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { SnapshotStateOut } from '../types/api'
-import { asOfPhrase, changePhrase, formatAsOf, storyNote } from './asOf'
+import { asOfPhrase, changePhrase, formatAsOf, provisionalNote, storyNote } from './asOf'
 import { setServerToday } from './productToday'
 
 const final = (month: string): SnapshotStateOut => ({ month, as_of: month, recorded_on: month, provisional: false })
@@ -64,6 +64,23 @@ describe('storyNote', () => {
     expect(storyNote({ spending: 'entered' })).toBe('')
     expect(storyNote(undefined)).toBe('')
     expect(storyNote(null)).toBe('')
+  })
+})
+
+// Why a point is provisional, in one sentence every chart shares (2026-09-23 spec §T1, §T7, §R8):
+// the Overview trend, the Net worth charts and the Projection's hollow dot.
+describe('provisionalNote', () => {
+  it('names the balances and the day they were typed', () => {
+    expect(provisionalNote('2026-10-01', '2026-09-22')).toBe('Oct 1 balances recorded early, on Sep 22 — provisional')
+  })
+
+  it('says why when there is no early date (a month still ahead)', () => {
+    expect(provisionalNote('2026-12-01', null)).toBe('Dec 1 balances — provisional until Dec 1')
+    expect(provisionalNote('2026-12-01', undefined)).toBe('Dec 1 balances — provisional until Dec 1')
+  })
+
+  it('carries the year outside the server’s year', () => {
+    expect(provisionalNote('2027-01-01', '2026-12-28')).toBe('Jan 1, 2027 balances recorded early, on Dec 28 — provisional')
   })
 })
 
