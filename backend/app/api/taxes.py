@@ -2021,12 +2021,18 @@ async def _reconciliation(
         notes.append(SEVERAL_PARTNERS_NOTE)
 
     names = {person.id: person.name for person in feed.roster}
+    # Whose profiles exist at all: with several partners on one return their shared leg gives
+    # none of them a grid, and only a person with NO profile is told they have none.
+    profiled = {profile.person_id for profile in partner_profiles}
     people: list[PersonFacts] = [
         PersonFacts(
             person_id=column,
             name=None if column is None else names.get(column),
             bucket=feed.person_inputs.get(column, {}),
             paycheck=primary_paycheck if column == feed.primary_column else partner_paycheck,
+            has_profile=(
+                bool(primary_profiles) if column == feed.primary_column else column in profiled
+            ),
         )
         for column in (list(feed.person_inputs) or [None])
     ]

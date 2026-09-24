@@ -101,12 +101,15 @@ class PaycheckFacts:
 @dataclass(frozen=True)
 class PersonFacts:
     """A person on the return: their materialized inputs and, when they have a usable
-    paycheck profile, their grid. `paycheck` None → a note and no paycheck rows."""
+    paycheck profile, their grid. `paycheck` None → no paycheck rows, and the no-profile note
+    only when `has_profile` is False: a profile that feeds a leg SHARED by several partners
+    leaves them without a grid of their own, and "has no paycheck profile" would be false."""
 
     person_id: int | None
     name: str | None
     bucket: Mapping[str, Decimal]
     paycheck: PaycheckFacts | None
+    has_profile: bool = False
 
 
 @dataclass(frozen=True)
@@ -388,8 +391,9 @@ def reconcile(
     for person in people:
         is_primary = person.person_id == primary_id
         if person.paycheck is None:
-            template = PRIMARY_NO_PROFILE_NOTE if is_primary else NO_PROFILE_NOTE
-            out_notes.append(template.format(name=person.name or "This person"))
+            if not person.has_profile:
+                template = PRIMARY_NO_PROFILE_NOTE if is_primary else NO_PROFILE_NOTE
+                out_notes.append(template.format(name=person.name or "This person"))
         else:
             built += [row for row in _paycheck_rows(person, person.paycheck) if row is not None]
         if is_primary:

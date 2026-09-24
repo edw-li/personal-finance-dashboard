@@ -17,7 +17,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from app.api.taxes import withholding_estimate
+from app.api.taxes import SEVERAL_PARTNERS_NOTE, withholding_estimate
 from app.models import (
     AppSetting,
     ContributionLimit,
@@ -1766,6 +1766,30 @@ async def test_a_separate_return_reconciles_the_primary_alone(
     await seed_partner_profile(db, partner_id)
     body = await get_withholding(auth_client)
     assert {row["person_id"] for row in body["reconciliation"]["rows"]} == {me_id}
+
+
+async def test_a_third_person_on_a_joint_return_gets_no_false_no_profile_note(
+    auth_client, db, definitions, frozen_today
+):
+    """Three people on one joint return (code-quality nit): the partners share one simulated
+    leg, so neither gets rows of their own — and the partner WITH a profile must not be told
+    they have none. The several-partners note says why; Kim, who has no profile, is told so."""
+    me_id, partner_id = await seed_household(db)
+    kim = Person(name="Kim", is_primary=False)
+    db.add(kim)
+    await db.commit()
+    await seed_married_year(db, YEAR, me_id, partner_id)
+    db.add(TaxInput(year=YEAR, key="annual_salary", value=Decimal("50000"), person_id=kim.id))
+    await db.commit()
+    await seed_profile(db)
+    await seed_partner_profile(db, partner_id)
+    notes = (await get_withholding(auth_client))["reconciliation"]["notes"]
+    assert SEVERAL_PARTNERS_NOTE in notes
+    assert not any(note.startswith("Partner has no paycheck profile") for note in notes)
+    assert (
+        "Kim has no paycheck profile, so their inputs are not reconciled — their withholding "
+        "comes from the entered W-2 rows"
+    ) in notes
 
 
 async def test_a_partner_without_a_profile_gets_a_note_not_rows(

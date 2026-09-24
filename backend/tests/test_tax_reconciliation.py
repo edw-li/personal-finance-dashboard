@@ -55,8 +55,14 @@ def paycheck(
     )
 
 
-def person(person_id, name, *, bucket=None, paycheck=None):
-    return PersonFacts(person_id=person_id, name=name, bucket=bucket or {}, paycheck=paycheck)
+def person(person_id, name, *, bucket=None, paycheck=None, has_profile=False):
+    return PersonFacts(
+        person_id=person_id,
+        name=name,
+        bucket=bucket or {},
+        paycheck=paycheck,
+        has_profile=has_profile,
+    )
 
 
 class Pricer:
@@ -184,6 +190,18 @@ def test_a_person_without_a_paycheck_profile_gets_a_note_and_no_paycheck_rows():
         "Grace has no paycheck profile, so their inputs are not reconciled — their withholding "
         "comes from the entered W-2 rows"
     ) in out.notes
+
+
+def test_a_profile_that_feeds_a_shared_leg_is_never_called_missing():
+    """Three or more people on one return (code-quality nit): the partners share ONE
+    simulated leg, so none of them carries a grid of their own — but "has no paycheck profile"
+    is false of one who has one (the router's several-partners note says why there are no
+    rows). Only a person with truly no profile is told so."""
+    sam = person(2, "Sam", bucket={"annual_salary": D("90000")}, paycheck=None, has_profile=True)
+    kim = person(3, "Kim", bucket={"annual_salary": D("50000")}, paycheck=None)
+    notes = run([edward(), sam, kim]).notes
+    assert not any(note.startswith("Sam has no paycheck profile") for note in notes)
+    assert any(note.startswith("Kim has no paycheck profile") for note in notes)
 
 
 def test_a_primary_without_a_paycheck_profile_is_told_where_to_add_one():
