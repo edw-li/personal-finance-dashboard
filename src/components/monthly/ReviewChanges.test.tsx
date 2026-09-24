@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, it } from 'vitest'
 import type { AccountOut, CategoryOut, SpendingMatrix } from '../../types/api'
+import { setServerToday } from '../../utils/productToday'
 import ReviewChanges from './ReviewChanges'
 
 afterEach(cleanup)
@@ -73,14 +74,17 @@ it('says why when there is no next 1st to compare with', () => {
   expect(screen.getByText("February's change appears once Mar 1 balances are recorded")).toBeTruthy()
 })
 
-it('names a new month as a snapshot, not as zero changes', () => {
+// Spec review G3: the Review never records carried-forward balances nobody touched (§M1), so a month
+// without a snapshot says its balances are not recorded yet — and still counts its spending changes.
+it('names a month with no snapshot as not recorded, and still counts its spending changes', () => {
+  setServerToday('2025-03-05')
   render(
-    <ReviewChanges accounts={accounts} categories={categories} balances={{}} amounts={{}} saved={null} month="2025-02-01"
+    <ReviewChanges accounts={accounts} categories={categories} balances={{}} amounts={{ 2: '250.00' }}
+      saved={{ balances: {}, amounts: { 2: '0.00' } }} month="2025-02-01"
       matrix={null} monthExisted={false} recordedCategories={new Set()} balanceStory={story(null)} />,
   )
-  expect(screen.getByRole('status').textContent).toBe(
-    'New balance snapshot — review the carried-forward balances before confirming.',
-  )
+  expect(screen.getByRole('status').textContent).toBe('Feb 1 balances not recorded yet · 1 category')
+  expect(screen.queryByText(/New balance snapshot/)).toBeNull()
   expect(screen.getByText(/Spending references use up to three prior entered months/).className).toContain(
     'review-changes-footer',
   )

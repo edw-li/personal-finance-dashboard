@@ -1,5 +1,6 @@
 import type { AccountOut, CategoryOut, SpendingMatrix } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
+import { balancesPartName } from './monthlyCopy'
 import { committed } from './parts'
 import { formatCurrency } from '../../utils/format'
 import { typicalSpend } from '../../utils/spending'
@@ -69,9 +70,12 @@ export default function ReviewChanges({ accounts, categories, balances, amounts,
         note their footer — connective tissue attached to its subject instead of floating. */}
     <div className="review-changes-head">
       <h3 className="eyebrow">Changes since last save</h3>
+      {/* A month with no snapshot has no balances to count: the Review never records the
+          carried-forward ones nobody touched (2026-09-23 spec §M1; spec review G3) — its spending
+          changes are still counted. */}
       <span className="review-changes-count" role="status">{monthExisted
         ? `${unsavedBalances} ${balancesWord} · ${unsavedCategories} ${categoriesWord}`
-        : 'New balance snapshot — review the carried-forward balances before confirming.'}</span>
+        : `${balancesPartName(month)} not recorded yet · ${unsavedCategories} ${categoriesWord}`}</span>
     </div>
     <div className="review-change-grid">
       <ChangeTable title={balanceStory.title} rows={story} empty={balanceStory.empty} columns={balanceStory.columns} />
