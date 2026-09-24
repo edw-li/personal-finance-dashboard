@@ -32,7 +32,7 @@ Per process, at most CACHE_SIZE entries per value; conftest clears both between 
 
 import asyncio
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Hashable, Iterable
+from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping
 from datetime import date
 
 from sqlalchemy import TextClause, text
@@ -57,6 +57,7 @@ from app.models import (
 from app.models.month_review import MonthReview, MonthReviewAdoption
 from app.services import clock
 from app.services.month_review import ReviewBook, load_review_book, load_review_book_snapshot
+from app.services.net_worth_calc import PLAN_UNTIL_KEY
 from app.services.savings import MonthSavings, load_month_savings
 
 CACHE_SIZE = 8
@@ -133,14 +134,21 @@ def clear_read_caches() -> None:
     _PROJECTION_BUILDS.clear()
 
 
-def _fingerprint_statement(tables: Iterable[str]) -> TextClause:
+def _fingerprint_statement(
+    tables: Iterable[str], narrowed: Mapping[str, str] | None = None
+) -> TextClause:
     """One round trip, one snapshot: per table `count:Σhash` over the whole-row text. The sum
     is numeric, so it cannot overflow; being order-independent is right, because every
-    loader's answer depends on the rows, never on the order Postgres returns them in."""
+    loader's answer depends on the rows, never on the order Postgres returns them in.
+
+    `narrowed` restricts a table's cell to the rows a value reads (a WHERE over `fp_row`) — for
+    a value that reads a few rows of a table everything else writes to (the projection's
+    settings and quote, 2026-09-24 review minor 4)."""
+    where = narrowed or {}
     cells = ", ".join(
         "(SELECT count(*)::text || ':' || "
         "coalesce(sum(hashtextextended(fp_row::text, 0)), 0)::text"
-        f' FROM "{name}" AS fp_row)'
+        f' FROM "{name}" AS fp_row{f" WHERE {where[name]}" if name in where else ""})'
         for name in tables
     )
     return text(f"SELECT {cells}")
@@ -289,31 +297,59 @@ PROJECTION_TABLES: tuple[str, ...] = tuple(
         LatestPrice,
     )
 )
+# The rows of two of those tables the projection reads, and so all its fingerprint covers of
+# them (2026-09-24 review minor 4): three settings — the withdrawal rate, the employer ticker and
+# the lasting plan-until year — and the employer ticker's one quote. A price refresh writes its
+# own bookkeeping keys and every holding's quote; none of that can move a projection, so none of
+# it costs the cache its entries. Pinned complete by test_projection_cache's capture of every
+# setting and quote a build reads.
+PROJECTION_SETTING_KEYS: tuple[str, ...] = ("swr_pct", "espp_ticker", PLAN_UNTIL_KEY)
+_PROJECTION_NARROWED = {
+    AppSetting.__tablename__: "fp_row.key IN ({})".format(
+        ", ".join(f"'{key}'" for key in PROJECTION_SETTING_KEYS)
+    ),
+    # A NULL ticker matches no security: no quote, as the build (no ticker, no vests) reads none.
+    LatestPrice.__tablename__: (
+        f'fp_row.security_id IN (SELECT id FROM "{Security.__tablename__}" WHERE ticker = :ticker)'
+    ),
+}
 PROJECTION_CACHE_SIZE = 16
 # The SERIALIZED JSON bytes, never ProjectionOut models: seven series of up to 721 Decimals per
 # entry would sit in memory on a 1 GB box, and bytes cannot be mutated by one caller under
 # another — the route returns them as they are, a direct caller validates its own model.
 PROJECTIONS: LRU[Hashable, bytes] = LRU(PROJECTION_CACHE_SIZE)
 _PROJECTION_BUILDS: dict[Hashable, asyncio.Future[bytes]] = {}
-_PROJECTION_FINGERPRINT = _fingerprint_statement(PROJECTION_TABLES)
+_PROJECTION_FINGERPRINT = _fingerprint_statement(PROJECTION_TABLES, _PROJECTION_NARROWED)
 
 
 async def cached_projection(
-    db: AsyncSession, key: Hashable, build: Callable[[], Awaitable[bytes]]
+    db: AsyncSession,
+    key: Hashable,
+    build: Callable[[], Awaitable[bytes]],
+    *,
+    employer_ticker: Callable[[AsyncSession], Awaitable[str | None]],
 ) -> bytes:
     """The projection's bytes for `key` (the product day and the normalized knobs), built
-    once per data version of PROJECTION_TABLES: stable-store, single-flight and the pending-
+    once per data version of what it reads: stable-store, single-flight and the pending-
     changes bypass are `_memoised`'s. A build that raises (a 422, the empty book's 404) is
-    never stored — its waiters look again."""
+    never stored — its waiters look again.
+
+    `employer_ticker` resolves the ticker the quote cell is restricted to, exactly as the build
+    resolves it (the route passes api/app_settings._read_espp_ticker; a service may not import a
+    router), and only AFTER the pending-changes check — its read would autoflush them. The key
+    carries it: a ticker changed between the two fingerprints changes the settings cell as well,
+    so such a build is never filed (rule 1)."""
     if _has_pending_changes(db):
         return await build()
-    before = await _fingerprint(db, _PROJECTION_FINGERPRINT)
+    ticker = await employer_ticker(db)
+    statement = _PROJECTION_FINGERPRINT.bindparams(ticker=ticker)
+    before = await _fingerprint(db, statement)
     return await _memoised(
         db,
         PROJECTIONS,
         _PROJECTION_BUILDS,
-        (before, key),
+        (before, ticker, key),
         before,
-        _PROJECTION_FINGERPRINT,
+        statement,
         build,
     )

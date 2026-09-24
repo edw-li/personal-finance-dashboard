@@ -17,6 +17,8 @@ from sqlalchemy import event, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api import projection as projection_api
+from app.api.app_settings import _read_espp_ticker
+from app.api.espp import _espp_quote
 from app.api.projection import ProjectionKnobs, projection_json, run_projection
 from app.limit_keys import LIMIT_401K_ELECTIVE
 from app.models import (
@@ -265,6 +267,112 @@ async def test_one_build_reads_one_day(db, monkeypatch):
     body = await run_projection(db, ProjectionKnobs(years=5))
     assert body.start_month == date(2026, 9, 1)
     assert books == [date(2026, 9, 30)]
+
+
+async def test_other_settings_and_other_quotes_keep_the_entry(auth_client, db, builds):
+    # 2026-09-24 review minor 4: the fingerprint's app_settings and latest_prices cells cover only
+    # what the projection reads — its three settings and the employer ticker's quote — so a price
+    # refresh's own bookkeeping and every other holding's new quote leave the entry standing.
+    await seed_everything(db)
+    aapl = Security(ticker="AAPL", name="Apple", holding_type="stock")
+    db.add(aapl)
+    await db.flush()
+    quoted = datetime.combine(clock.product_today(), time(20), tzinfo=UTC)
+    db.add(
+        LatestPrice(
+            security_id=aapl.id, price=Decimal("200.0000"), quoted_at=quoted, source="yfinance"
+        )
+    )
+    await db.commit()
+    assert (await auth_client.get(URL)).status_code == 200
+    db.add_all(
+        [
+            AppSetting(key="last_refresh", value={"value": quoted.isoformat()}),
+            AppSetting(key="refresh_runs", value={"value": [{"ok": 2}]}),
+        ]
+    )
+    await db.commit()
+    await _run(
+        db,
+        update(LatestPrice).where(LatestPrice.security_id == aapl.id).values(price=Decimal("201")),
+    )
+    assert (await auth_client.get(URL)).status_code == 200
+    assert builds["n"] == 1
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("swr_pct", "0.035"), ("espp_ticker", "AAPL"), ("plan_until_year", 2199)],
+)
+async def test_each_setting_the_projection_reads_still_misses(auth_client, db, builds, key, value):
+    await seed_everything(db)
+    assert (await auth_client.get(URL)).status_code == 200
+    setting = await db.get(AppSetting, key)
+    if setting is None:
+        db.add(AppSetting(key=key, value={"value": value}))
+    else:
+        setting.value = {"value": value}
+    await db.commit()
+    assert (await auth_client.get(URL)).status_code == 200
+    assert builds["n"] == 2
+
+
+async def test_the_narrowed_cells_cover_every_setting_and_quote_the_build_reads(db, engine):
+    # What makes the narrowing provably complete: every app_settings read is one of the three keys,
+    # and the only latest_prices row read is the employer ticker's — with a second security quoted.
+    ids = await seed_everything(db)
+    other = Security(ticker="AAPL", name="Apple", holding_type="stock")
+    db.add(other)
+    await db.flush()
+    quoted = datetime.combine(clock.product_today(), time(20), tzinfo=UTC)
+    db.add(
+        LatestPrice(security_id=other.id, price=Decimal("200.0000"), quoted_at=quoted, source="x")
+    )
+    await db.commit()
+    retires = month_add(clock.product_today().replace(day=1), 24)
+    knobs = ProjectionKnobs(years=5, retire=(f"{ids['person']}:{retires:%Y-%m}",))
+    read_cache.clear_read_caches()
+    keyed: dict[str, set] = {"app_settings": set(), "latest_prices": set()}
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        for table in keyed:
+            if re.search(rf'\b(?:FROM|JOIN)\s+"?{table}"?\b', statement):
+                # A keyed point read (db.get) or nothing: an unkeyed read of either table is
+                # exactly what a narrowed cell could miss.
+                assert re.search(rf"WHERE {table}\.(key|security_id) = \$1", statement), statement
+                keyed[table].add(parameters[0])
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        await projection_api._build(db, knobs, clock.product_today())
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+    assert keyed["app_settings"] == set(read_cache.PROJECTION_SETTING_KEYS)
+    assert keyed["latest_prices"] == {ids["security"]}
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        None,
+        {"value": "NVDA"},
+        {"value": "  nvda "},
+        {"value": ""},
+        {"value": "   "},
+        {"value": None},
+        {"value": 7},
+        ["NVDA"],
+        {},
+    ],
+)
+async def test_the_bound_ticker_is_the_one_the_build_prices(db, stored):
+    # The latest_prices cell is restricted with the ticker the route resolves BEFORE the build
+    # (api/app_settings._read_espp_ticker); the build prices vests with _espp_quote's. Pinned
+    # equal on every envelope shape, so the cell can never cover a different security.
+    if stored is not None:
+        db.add(AppSetting(key="espp_ticker", value=stored))
+        await db.commit()
+    assert await _read_espp_ticker(db) == (await _espp_quote(db))[0]
 
 
 async def test_422s_and_404s_are_never_cached(auth_client, db):
