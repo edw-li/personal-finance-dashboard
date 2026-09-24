@@ -51,6 +51,15 @@ describe('the capped table box (tableScroll.css)', () => {
     expect(CSS).toContain('.table-scroll:focus-visible { mask-image: none !important; }')
   })
 
+  // index.css's inset ring (0,3,0) drew the ring ACROSS the label of a text button with no padding of
+  // its own — Net worth's account names, Holdings' tickers and sort headers, the matrix's card names
+  // (Task 6 review, Edge). They sit in padded cells, so their outside ring never overflows the box.
+  it('keeps the outside focus ring on the padding-free text buttons, at (0,3,1) over the inset rule', () => {
+    expect(CSS).toContain(
+      '.table-scroll > table :is(.row-toggle, .th-sort, .matrix-card-btn):focus-visible { outline-offset: 2px; }',
+    )
+  })
+
   // A classic scrollbar (15px in the user's headed Edge) sits inside the box's right edge, under
   // panels.css's 28px right-edge fade, which faded its track and thumb away (Task 5 review). The box
   // restates both right-edge masks to turn opaque again over the measured strip; (0,3,0) and (0,5,0)

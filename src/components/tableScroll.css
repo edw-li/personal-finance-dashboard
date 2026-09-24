@@ -52,9 +52,12 @@
    vertical scrollbar's track and thumb into the card (Task 5 review). So the capped box restates the
    two masks that fade the right edge: the gradient ends where the scrollbar starts and turns opaque
    again over it — --table-scrollbar-w, measured by useStickyInsets (0px with no scrollbar, or an
-   overlay one). The left-only mask runs the other way and never reaches the scrollbar. (0,3,0) and
-   (0,5,0) outrank panels.css's (0,2,0) and (0,4,0) whatever order the sheets load in; the
-   focus-visible drop below and index.css's print release are !important, so they still win. */
+   overlay one). The opaque strip is measured from the box's outer right edge, so it assumes the box
+   draws no right border (true for all seven callers today); a bordered box would need the border
+   taken off the strip's start. The left-only mask runs the other way and never reaches the
+   scrollbar. (0,3,0) and (0,5,0) outrank panels.css's (0,2,0) and (0,4,0) whatever order the sheets
+   load in; the focus-visible drop below and index.css's print release are !important, so they still
+   win. */
 .table-scroll[data-scroll-more~="right"]:not(:has(.row-actions)) {
   mask-image: linear-gradient(to right, #000 calc(100% - 28px - var(--table-scrollbar-w, 0px)),
     transparent calc(100% - var(--table-scrollbar-w, 0px)), #000 calc(100% - var(--table-scrollbar-w, 0px)));
@@ -72,6 +75,14 @@
    sheet. */
 .table-scroll:focus-visible {
   mask-image: none !important;
+}
+
+/* Text buttons with no padding of their own keep their OUTSIDE ring inside the box: index.css's inset
+   ring (outline-offset: -2px, for controls flush with a clipping edge) would draw it across their
+   label, and these sit in padded cells a 2px outside ring never overflows. (0,3,1) outranks the
+   inset rule's (0,3,0) whatever order the sheets load in. */
+.table-scroll > table :is(.row-toggle, .th-sort, .matrix-card-btn):focus-visible {
+  outline-offset: 2px;
 }
 
 /* The reorder tables' border model (reorder.css), for every capped table: a collapsed border belongs
