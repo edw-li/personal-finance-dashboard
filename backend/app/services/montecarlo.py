@@ -15,7 +15,9 @@ sigma_m = sigma / sqrt(12). Each month's flow — the contribution (re-leveled a
 boundary, escalated), a lump, a withdrawal — comes from the ONE schedule the line uses
 (services/projection.monthly_flows), built once per run because it does not depend on the
 path. A month whose result would be below 0 is clamped to 0 and the path's first such month
-recorded (2026-09-23 spec §R1), so balances stay at or above 0 in every phase — and a
+recorded (2026-09-23 spec §R1), so balances stay at or above 0 in every phase once they have
+been there — a negative STARTING balance is debt, carried unclamped until it first reaches 0,
+as the line carries it (services/projection.project_path, 2026-09-24 review minor 1) — and a
 depleted path KEEPS DRAWING its Gaussian every month, so every path sees the same random
 numbers in every scenario (common random numbers: a change of spend or retirement never
 reshuffles later paths, and success stays monotone in them).
@@ -61,7 +63,8 @@ class MonteCarloResult:
     # Per path: first month index whose balance >= target; None = never (or no target).
     reach_indices: list[int | None]
     # Per path: the first month index whose balance would have gone below 0 — clamped to 0
-    # there (spec §R1) — or None when the path never ran out.
+    # there (spec §R1) — or None when the path never ran out. Debt carried from a negative start
+    # is not running out: only a path that has been at or above 0 can deplete.
     depletion_indices: list[int | None]
 
 
@@ -146,8 +149,9 @@ def simulate(
         # The step is written out again for the added months below rather than shared: one loop
         # choosing its stream per month measured ~5 % slower, a per-path factor list 8-19 %.
         for month_index in range(1, base + 1):
-            balance = balance * exp(gauss(mu_m, sigma_m)) + flows[month_index]
-            if balance < 0.0:
+            previous = balance
+            balance = previous * exp(gauss(mu_m, sigma_m)) + flows[month_index]
+            if balance < 0.0 and previous >= 0.0:
                 balance = 0.0
                 if depleted is None:
                     depleted = month_index
@@ -156,8 +160,9 @@ def simulate(
                 reached = month_index
         if added:
             for month_index, factor in zip(range(base + 1, months + 1), extension[k], strict=True):
-                balance = balance * factor + flows[month_index]
-                if balance < 0.0:
+                previous = balance
+                balance = previous * factor + flows[month_index]
+                if balance < 0.0 and previous >= 0.0:
                     balance = 0.0
                     if depleted is None:
                         depleted = month_index

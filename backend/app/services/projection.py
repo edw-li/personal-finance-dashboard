@@ -143,7 +143,10 @@ def project_path(
     only the OUTPUTS land on cents, so no month's dust can compound into the next.
 
     The clamp holds in every phase (spec §R1): a month whose result would be below 0 is 0,
-    and the first such month is `depletion_index`.
+    and the first such month is `depletion_index` — once the balance has been at or above 0.
+    A negative STARTING balance is debt being paid down, not a path that ran out: it is carried
+    unclamped until it first reaches 0 (2026-09-24 review minor 1). A clamped month leaves 0
+    behind, so "the month before was not below 0" is exactly "the floor applies".
     """
     rate = monthly_rate(annual_return)
     growth = (ONE + contribution_growth) ** (ONE / TWELVE)
@@ -160,8 +163,9 @@ def project_path(
     balance = starting_balance
     depleted: int | None = None
     for index in range(1, months + 1):
-        balance = balance * (ONE + rate) + flows[index]
-        if balance < ZERO:
+        previous = balance
+        balance = previous * (ONE + rate) + flows[index]
+        if balance < ZERO and previous >= ZERO:
             balance = ZERO
             if depleted is None:
                 depleted = index

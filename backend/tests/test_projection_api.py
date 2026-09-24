@@ -1238,6 +1238,68 @@ def test_a_negative_typed_contribution_clamps_and_records_depletion_before_any_d
     assert path.depletion_index == 2
 
 
+def test_pre_existing_debt_is_paid_down_unclamped_until_the_balance_first_reaches_zero():
+    # 2026-09-24 review minor 1: a negative starting balance is debt, not a path that ran out —
+    # the $0 floor and the depletion month wait until the balance has first been at or above 0.
+    path = project_path(Decimal("-30000.00"), Decimal("10000.00"), Decimal("0"), 6)
+    assert [str(p) for p in path.points] == [
+        "-30000.00",
+        "-20000.00",
+        "-10000.00",
+        "0.00",
+        "10000.00",
+        "20000.00",
+        "30000.00",
+    ]
+    assert path.depletion_index is None
+    # Never paid down: the debt simply stands (as before the clamp existed), nothing "ran out".
+    stuck = project_path(Decimal("-30000.00"), Decimal("0"), Decimal("0"), 3)
+    assert [str(p) for p in stuck.points] == ["-30000.00"] * 4
+    assert stuck.depletion_index is None
+
+
+def test_once_debt_is_paid_down_the_floor_and_depletion_hold_again():
+    # Paid down by month 3 (exactly 0 counts), then a withdrawal from month 5 empties it: that is
+    # the depletion month, clamped at $0 from there on.
+    path = project_path(
+        Decimal("-30000.00"),
+        Decimal("10000.00"),
+        Decimal("0"),
+        6,
+        resets=[(5, Decimal("0"))],
+        withdrawal=(5, Decimal("25000.00")),
+    )
+    assert [str(p) for p in path.points] == [
+        "-30000.00",
+        "-20000.00",
+        "-10000.00",
+        "0.00",
+        "10000.00",
+        "0.00",
+        "0.00",
+    ]
+    assert path.depletion_index == 5
+
+
+async def test_a_negative_investable_balance_is_carried_not_wiped_to_zero(auth_client, db):
+    # The route end to end: -50,000 invested (the brokerage row) with 4,000 a month saved climbs
+    # as it always did; the clamp used to zero it in month 1 and call that "ran out". The
+    # growth-only line keeps the debt too.
+    await _seed_book(db)
+    brokerage = (
+        await db.execute(
+            select(AccountBalance).where(AccountBalance.balance == Decimal("100000.00"))
+        )
+    ).scalar_one()
+    brokerage.balance = Decimal("-50000.00")
+    await db.commit()
+    zeros = "annual_return=0&inflation=0&contribution_growth=0&volatility=0&years=2"
+    body = (await auth_client.get(f"/api/v1/projection?{zeros}")).json()
+    assert body["starting_balance"] == "-50000.00"
+    assert body["projected"][:4] == ["-50000.00", "-46000.00", "-42000.00", "-38000.00"]
+    assert body["coast"][:3] == ["-50000.00", "-50000.00", "-50000.00"]
+
+
 def test_lumps_add_exactly_at_their_month_and_index_zero_folds_and_sums():
     points = project(
         Decimal("1000.00"),

@@ -257,6 +257,50 @@ def test_a_negative_contribution_depletes_before_any_withdrawal():
     ]
 
 
+def test_the_simulation_carries_pre_existing_debt_like_the_line():
+    # 2026-09-24 review minor 1, the float walk: at sigma 0 every path is the line — debt paid
+    # down unclamped until the balance first reaches 0, then the floor and depletion hold.
+    paid = simulate(
+        Decimal("-30000"), Decimal("10000"), Decimal("0"), Decimal("0"), Decimal("0"), 6, None
+    )
+    assert [str(v) for v in paid.bands["p50"]] == [
+        "-30000.00",
+        "-20000.00",
+        "-10000.00",
+        "0.00",
+        "10000.00",
+        "20000.00",
+        "30000.00",
+    ]
+    assert paid.depletion_indices == [None] * SIMULATIONS
+    drawn = simulate(
+        Decimal("-30000"),
+        Decimal("10000"),
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        6,
+        None,
+        resets=[(5, Decimal("0"))],
+        withdrawal=(5, Decimal("25000")),
+    )
+    assert [str(v) for v in drawn.bands["p50"]][4:] == ["10000.00", "0.00", "0.00"]
+    assert drawn.depletion_indices == [5] * SIMULATIONS
+    # And in the months a later plan-until year adds (the second stream's loop).
+    extended = simulate(
+        Decimal("-30000"),
+        Decimal("10000"),
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        6,
+        None,
+        base_months=2,
+    )
+    assert extended.bands["p50"] == paid.bands["p50"]
+    assert extended.depletion_indices == [None] * SIMULATIONS
+
+
 def test_lumps_raise_every_band_from_their_month_only():
     args = (Decimal("100000"), Decimal("1000"), Decimal("0.05"), Decimal("0.15"), Decimal("0"))
     plain = simulate(*args, 36, None)
