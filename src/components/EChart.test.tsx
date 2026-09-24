@@ -223,6 +223,25 @@ describe('EChart animateEntrance (2026-08-27 spec §1)', () => {
     expect(option.series.map((s) => s.animationDuration)).toEqual([0, 0])
   })
 
+  // The cut-off sankey (charts/motion.ts, unclipSankeyEntrance): a 0ms FIRST render of a sankey leaves
+  // echarts' entrance-wipe clip stuck, so the paint that creates the sankey turns its animation off —
+  // and only that paint, so the next data change still morphs.
+  it('a cached first paint of a sankey paints it with no animation — once, never the other series', () => {
+    const flow = (value: number) => ({
+      series: [
+        { type: 'sankey', data: [{ name: 'a' }, { name: 'b' }], links: [{ source: 'a', target: 'b', value }] },
+        { type: 'line', data: [1] },
+      ],
+    }) as EChartsOption
+    const { rerender } = render(<EChart ariaLabel="test chart" option={flow(1)} animateEntrance={false} />)
+    const chart = lastChart()
+    const series = (call: number) =>
+      (chart.setOption.mock.calls[call] as [{ series: { animation?: boolean }[] }])[0].series.map((s) => s.animation)
+    expect(series(0)).toEqual([false, undefined])
+    rerender(<EChart ariaLabel="test chart" option={flow(2)} animateEntrance={false} />)
+    expect(series(1)).toEqual([undefined, undefined])
+  })
+
   it('animateEntrance defaults on (no forced animation flag)', () => {
     render(<EChart ariaLabel="test chart" option={{ series: [] } as EChartsOption} />)
     const chart = lastChart()

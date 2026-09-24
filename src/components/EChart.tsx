@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import { echarts, registerThemeVersion } from '../charts/echarts'
 import type { EChartsOption } from '../charts/echarts'
 import { fitMonthAxes, hasMonthAxes, monthAxesKey, monthAxesPatch } from '../charts/monthLabels'
-import { defaultCursor, pinSeriesMotion, quiesceRipples } from '../charts/motion'
+import { defaultCursor, hasSankey, pinSeriesMotion, quiesceRipples, unclipSankeyEntrance } from '../charts/motion'
 import { lightFromDark, recolorOption } from '../charts/recolor'
 import type { ZoomWindow } from '../charts/timeZoom'
 import { useChartDecals } from './useChartDecals'
@@ -404,6 +404,10 @@ export default function EChart({
     const still = reducedMotion ? { animation: false } : entrance ? null : { animationDuration: 0 }
     const painted = still === null ? base : pinSeriesMotion(base, still)
     const apply = () => {
+      // A still paint that creates a sankey's view — none on this instance yet (paintedRef is reset
+      // with every init) — paints the sankey unanimated: echarts would otherwise leave its entrance
+      // clip stuck, cutting the flow off on the right (charts/motion.ts, unclipSankeyEntrance).
+      const shown = !entrance && !reducedMotion && !hasSankey(paintedRef.current) ? unclipSankeyEntrance(painted) : painted
       // A page may explicitly own legend/zoom state. Otherwise retain the user's
       // choices across data refreshes and theme rebuilds, including expanded charts.
       const rememberedLegend = legendSelectionRef.current
@@ -417,7 +421,7 @@ export default function EChart({
       // the kept manual window, or (null) the option's own preset, which fitMonthAxes reads.
       liveZoomRef.current = keepManualZoom ? manualZoomRef.current : null
       hasMonthAxesRef.current = hasMonthAxes(painted)
-      const fitted = fitMonthAxes(painted, containerRef.current?.clientWidth ?? 0, liveZoomRef.current)
+      const fitted = fitMonthAxes(shown, containerRef.current?.clientWidth ?? 0, liveZoomRef.current)
       chart.setOption(
         {
           ...(fitted.option as EChartsOption),
