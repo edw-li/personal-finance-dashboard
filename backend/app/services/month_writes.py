@@ -138,8 +138,10 @@ async def write_balances(
         if "recorded_on" in provided:
             snapshot.recorded_on = body.recorded_on  # an explicit date still wins
         elif restamp and snapshot.recorded_on is not None and snapshot.recorded_on < month:
-            restamped_on = clock.product_today()  # K4: provisional → saved again today
-            snapshot.recorded_on = restamped_on
+            today = clock.product_today()  # K4: provisional → saved again today
+            if today != snapshot.recorded_on:  # a same-day re-save moves no date (review minor 3)
+                restamped_on = today
+                snapshot.recorded_on = today
         if "notes" in provided:
             snapshot.notes = body.notes
         if record_metadata or restamped_on is not None:

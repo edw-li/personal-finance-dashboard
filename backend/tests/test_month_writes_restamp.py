@@ -252,3 +252,16 @@ async def test_a_batch_closed_legacy_month_recorded_early_stays_closed(
     assert standalone.status_code == 200, standalone.text
     assert await stored(db, july) == date(2026, 6, 28)
     assert (await auth_client.get(f"{MR}/months/{july}")).json()["state"] == "closed"
+
+
+async def test_a_same_day_resave_restamps_nothing_and_says_nothing(auth_client, db, monkeypatch):
+    """Review minor 3: re-saving early balances on the day they were recorded changes no date, so
+    no restamp is logged and the label claims none."""
+    account_id = await seed(db)  # Oct 1 balances, recorded Sep 22
+    on(monkeypatch, SEP_22)
+    response = await auth_client.put(f"{NW}/months/{OCT}", json=balances(account_id, "150.00"))
+    assert response.status_code == 200, response.text
+    labels = set((await db.execute(select(ChangeLog.label))).scalars())
+    assert labels == {"Saved Oct 2026 balances — 1 updated"}
+    assert await snapshot_updates(db) == 0
+    assert await stored(db) == SEP_22
