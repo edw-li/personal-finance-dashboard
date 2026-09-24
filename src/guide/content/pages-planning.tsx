@@ -126,7 +126,7 @@ export const PLANNING_CARDS: GuideCard[] = [
     ],
     watch: [
       'Nothing on this page is saved — the stored withdrawal rate and plan-until year live under Settings → Planning → Plan assumptions.',
-      'Withdrawals are untaxed and Social Security is not modelled, so the money-lasts share leans hopeful.',
+      'Withdrawals are untaxed, which flatters the money-lasts share, and Social Security is not modelled, which understates it.',
       'Scheduled RSU vests are in by default, at today\u2019s quote after about 32 % sell-to-cover — clear **Include scheduled vests** to leave them out.',
       'A volatility of 0 turns the fan off; it is a legitimate value, not an error.',
     ],
