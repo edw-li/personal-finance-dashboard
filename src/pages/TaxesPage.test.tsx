@@ -1990,6 +1990,47 @@ describe('filing status (2026-08-26 design §6; a deliberate, undoable setting s
     expect(toast.success).toHaveBeenLastCalledWith('Undone — 2024 is filed Single again.')
   })
 
+  it('the Undo asks about unsaved work on the year it reloads, and an accepted answer forgets its drafts', async () => {
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
+    await chooseStatus('Married filing separately')
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    const options = toast.success.mock.calls[0][1] as { action: { onAction: () => void } }
+    await waitFor(() => expect(vi.mocked(fetchTaxBrackets)).toHaveBeenLastCalledWith(2024, 'married_separate'))
+    fireEvent.change(await screen.findByLabelText('Annual Salary'), { target: { value: '$999,000' } })
+    await waitFor(() => expect(sessionStorage.getItem('finance-tax-inputs-draft:2024')).not.toBeNull())
+    confirmSpy.mockClear()
+
+    options.action.onAction()
+    // The Undo reloads 2024 under its old status, which replaces both editors: the same question
+    // every reload door asks — and, accepted, the typing is gone on purpose (review finding 2).
+    expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved changes for 2024?')
+    expect(sessionStorage.getItem('finance-tax-inputs-draft:2024')).toBeNull()
+    await waitFor(() => expect(vi.mocked(undoBatch)).toHaveBeenCalledWith('batch-status'))
+  })
+
+  it('an Undo for a year no longer on screen asks nothing about this year’s edits', async () => {
+    renderPage('/taxes?section=inputs')
+    await readyInputs()
+    await chooseStatus('Married filing separately')
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    const options = toast.success.mock.calls[0][1] as { action: { onAction: () => void } }
+    await waitFor(() => expect(vi.mocked(fetchTaxBrackets)).toHaveBeenLastCalledWith(2024, 'married_separate'))
+
+    fireEvent.click(screen.getByRole('button', { name: '2023' }))
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenLastCalledWith(2023))
+    await waitFor(() => expect(screen.getByText('Tax inputs — 2023')).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('Annual Salary'), { target: { value: '$888,000' } })
+    await waitFor(() => expect(sessionStorage.getItem('finance-tax-inputs-draft:2023')).not.toBeNull())
+    confirmSpy.mockClear()
+
+    options.action.onAction()
+    await waitFor(() => expect(vi.mocked(undoBatch)).toHaveBeenCalledTimes(1))
+    // 2024 is not on screen, so nothing on screen reloads: 2023's typing is not asked about.
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem('finance-tax-inputs-draft:2023')).not.toBeNull()
+  })
+
   it('says a refused Undo in the server’s words', async () => {
     vi.mocked(undoBatch).mockRejectedValue(new ApiError('this change was already undone', 409))
     renderPage('/taxes?section=summary')

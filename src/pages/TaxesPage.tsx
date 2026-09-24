@@ -479,9 +479,15 @@ export default function TaxesPage() {
   // The status change's Undo (2026-09-23 spec §W8): the activity log restores the row, and
   // the list reload carries the restored status into `filingStatus` — which is a key of the
   // load effect, so the year reloads under it without touching the URL from a stale closure.
-  // A reload replaces both editors, so typed work is asked about first, like every door.
+  // A reload replaces both editors, so typed work is asked about first, like every door — but
+  // only when that year is the one on screen (nothing else reloads), and an accepted answer
+  // forgets its drafts as `confirmDiscard` does (§W9). Single-flight with the dialog's confirm.
   const undoFilingStatus = (year: number, restored: FilingStatus, batchId: string) => {
-    if (dirtyRef.current && !window.confirm(`Discard unsaved changes for ${year}?`)) return
+    if (currentYearRef.current === year && dirtyRef.current) {
+      if (!window.confirm(`Discard unsaved changes for ${year}?`)) return
+      clearYearDrafts(year)
+    }
+    setStatusSaving(true)
     undoBatch(batchId)
       .then(() => {
         toast.success(`Undone — ${year} is filed ${FILING_STATUS_LABELS[restored]} again.`)
@@ -494,6 +500,7 @@ export default function TaxesPage() {
       .catch((err: unknown) => {
         toast.error(err instanceof ApiError ? err.message : 'Undo failed')
       })
+      .finally(() => setStatusSaving(false))
   }
 
   // The FIFTH reload door (chips, Retry, create, delete, status). Everything the engine
