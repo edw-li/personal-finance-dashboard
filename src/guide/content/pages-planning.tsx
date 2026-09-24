@@ -361,10 +361,10 @@ export const PLANNING_CARDS: GuideCard[] = [
         title: 'Set the plan assumptions',
         where: 'Settings → Planning → Plan assumptions',
         steps: [
-          'Type **Withdrawal rate (% / year)**, **ESPP ticker** and **ESPP discount (%)**, then press **Save assumptions**.',
+          'Type **Withdrawal rate (% / year)**, **Plan until (year)**, **ESPP ticker** and **ESPP discount (%)**, then press **Save assumptions**.',
         ],
         to: '/settings?section=planning#plan-assumptions',
-        keywords: ['withdrawal rate', 'swr', 'espp ticker', 'plan assumptions'],
+        keywords: ['withdrawal rate', 'swr', 'plan until', 'espp ticker', 'plan assumptions'],
       },
     ],
     more: [

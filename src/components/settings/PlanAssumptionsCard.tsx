@@ -6,6 +6,7 @@ import { fetchProfiles } from '../../api/paycheck'
 import { fetchAppSettings, putAppSettings } from '../../api/settings'
 import type { AppSettingsOut, PaycheckProfileListItem, PersonOut } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
+import { currentMonthIso } from '../../utils/months'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
 import InfoHint from '../InfoHint'
 import { FeedBanner } from '../shell/Feed'
@@ -23,12 +24,25 @@ function boxesFor(s: AppSettingsOut) {
     // trailing zeros; the box round-trips through shiftPoint on save, so no float ever
     // reaches the wire.
     swr: String(Number(shiftPoint(s.swr_pct, 2))),
+    // A whole year or blank; `== null` also covers a payload from before the key existed.
+    planUntil: s.plan_until_year == null ? '' : String(s.plan_until_year),
     ticker: s.espp_ticker ?? '',
     discount: String(Number(shiftPoint(s.espp_discount_pct, 2))),
   }
 }
 
 type Boxes = ReturnType<typeof boxesFor>
+
+/** The server's bounds for a lasting plan-until year (api/app_settings.py,
+ *  `_validated_plan_until_year`): from NEXT year — a default for the current one would lapse
+ *  within months — through the latest year whose December is within 60 years of the current
+ *  month, the projection's reach (services/projection.py `max_plan_until_year`: Dec Y sits
+ *  (Y − y0)·12 + 12 − m0 months on, so the largest Y with that ≤ 720). Read at save time. */
+function planUntilBounds(monthIso: string): { first: number; last: number } {
+  const year = Number(monthIso.slice(0, 4))
+  const month = Number(monthIso.slice(5, 7))
+  return { first: year + 1, last: year + Math.floor((60 * 12 - 12 + month) / 12) }
+}
 
 // The BAND is what decides a tier exists, not the rate: an employer who matches the second
 // $11,000 at nothing has a policy, and it is one worth reading. The Paycheck profile form
@@ -57,7 +71,8 @@ function matchWords(p: PaycheckProfileListItem): string {
 
 /**
  * Plan assumptions (2026-09-06 spec §3.3), replacing the page's inline App settings form: the
- * three knobs the Projection, ESPP and Paycheck pages derive from, saved with a PARTIAL PUT so
+ * knobs the Projection, ESPP and Paycheck pages derive from — since the 2026-09-23 spec §R11 also
+ * the Projection's lasting "Plan until" year beside the withdrawal rate — saved with a PARTIAL PUT so
  * this card never re-sends the cron or the reminder day it does not show, plus a READ-ONLY
  * per-person employer-match summary — the policy lives on the paycheck profile, and two places
  * to edit one number is how they drift.
@@ -66,7 +81,7 @@ export default function PlanAssumptionsCard() {
   const [settings, setSettings] = useState<AppSettingsOut | null>(null)
   const [people, setPeople] = useState<PersonOut[]>([])
   const [profiles, setProfiles] = useState<PaycheckProfileListItem[]>([])
-  const [boxes, setBoxes] = useState<Boxes>({ swr: '', ticker: '', discount: '' })
+  const [boxes, setBoxes] = useState<Boxes>({ swr: '', planUntil: '', ticker: '', discount: '' })
   const [loadError, setLoadError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -128,6 +143,15 @@ export default function PlanAssumptionsCard() {
       setFormError('Must be between 0 and 100.')
       return
     }
+    // Blank clears the stored year (the Projection falls back to its horizon's last December);
+    // otherwise four plain digits inside the server's bounds, said in the same words.
+    const planText = boxes.planUntil.trim()
+    const { first, last } = planUntilBounds(currentMonthIso())
+    const planUntil = planText === '' ? null : Number(planText)
+    if (planUntil !== null && (!/^\d{4}$/.test(planText) || planUntil < first || planUntil > last)) {
+      setFormError(`Must be a year from ${first} through ${last}.`)
+      return
+    }
     const discount = Number(boxes.discount)
     if (!Number.isFinite(discount) || discount < 0 || discount > 15) {
       setFormError('Must be between 0 and 15 — the §423 maximum.')
@@ -140,10 +164,13 @@ export default function PlanAssumptionsCard() {
     setSaving(true)
     setFormError(null)
     setSavedNote(false)
-    // ONLY this card's three fields (spec §3.5). The cron and the reminder day belong to other
-    // cards; sending them — even as nulls — would revert or clear what those cards saved.
+    // ONLY this card's four fields (spec §3.5; plan_until_year since the 2026-09-23 spec §R11).
+    // The cron and the reminder day belong to other cards; sending them — even as nulls —
+    // would revert or clear what those cards saved. A blank plan-until travels as an explicit
+    // null for the ticker's reason: an absent key would mean "keep".
     putAppSettings({
       swr_pct: shiftPoint(boxes.swr, -2),
+      plan_until_year: planUntil,
       espp_ticker: ticker,
       espp_discount_pct: shiftPoint(boxes.discount, -2),
     })
@@ -178,7 +205,7 @@ export default function PlanAssumptionsCard() {
             save()
           }}
         >
-          {/* All three boxes go read-only for the in-flight window, because the PUT response
+          {/* All four boxes go read-only for the in-flight window, because the PUT response
               RE-SEEDS them: text typed while saving would be overwritten by the echo of the
               older values, next to a fresh "Saved". */}
           <label>
@@ -189,6 +216,16 @@ export default function PlanAssumptionsCard() {
               value={boxes.swr}
               disabled={saving}
               onChange={(e) => edit('swr')(e.target.value)}
+            />
+          </label>
+          <label>
+            Plan until (year)
+            <input
+              className="field-input"
+              inputMode="numeric"
+              value={boxes.planUntil}
+              disabled={saving}
+              onChange={(e) => edit('planUntil')(e.target.value)}
             />
           </label>
           <label>
@@ -211,6 +248,8 @@ export default function PlanAssumptionsCard() {
             />
           </label>
           <p className="settings-note">
+            Plan until is the year the Projection checks your money lasts through — blank uses
+            its horizon&apos;s last December, and a year set on the Projection page still wins.
             Blank ticker = ESPP page shows &apos;no ticker configured&apos;. The discount prices
             the ESPP modeler, the paycheck pace tick and the tax what-if; 15 % is the §423
             maximum.

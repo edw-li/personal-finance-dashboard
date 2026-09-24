@@ -6,9 +6,15 @@ import { ApiError } from '../../api/client'
 vi.mock('../../api/settings', () => ({ fetchAppSettings: vi.fn(), putAppSettings: vi.fn() }))
 vi.mock('../../api/paycheck', () => ({ fetchProfiles: vi.fn() }))
 vi.mock('../../api/household', () => ({ fetchHousehold: vi.fn() }))
+// The plan-until bounds are read off the current month at SAVE time (the server's rule).
+vi.mock('../../utils/months', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/months')>()),
+  currentMonthIso: vi.fn(() => '2026-09-01'),
+}))
 import { fetchHousehold } from '../../api/household'
 import { fetchProfiles } from '../../api/paycheck'
 import { fetchAppSettings, putAppSettings } from '../../api/settings'
+import { currentMonthIso } from '../../utils/months'
 import PlanAssumptionsCard from './PlanAssumptionsCard'
 
 const SETTINGS = {
@@ -17,6 +23,7 @@ const SETTINGS = {
   price_refresh_cron: '10 13 * * mon-fri',
   calendar_update_due_day: 1,
   espp_discount_pct: '0.150000',
+  plan_until_year: 2075,
 }
 const PROFILE = {
   id: 1, person_id: 1, effective_date: '2026-01-01', annual_salary: '188930.00',
@@ -43,6 +50,7 @@ beforeEach(() => {
   vi.mocked(putAppSettings).mockResolvedValue(SETTINGS)
   vi.mocked(fetchProfiles).mockResolvedValue([PROFILE])
   vi.mocked(fetchHousehold).mockResolvedValue({ people: [ME], marriage_date: null })
+  vi.mocked(currentMonthIso).mockReturnValue('2026-09-01')
 })
 
 afterEach(() => {
@@ -51,7 +59,7 @@ afterEach(() => {
 })
 
 describe('PlanAssumptionsCard', () => {
-  it('seeds the three boxes from the stored settings, percent-shifted for display', async () => {
+  it('seeds the four boxes from the stored settings, percent-shifted for display', async () => {
     mount()
     expect(await screen.findByRole('region', { name: 'Plan assumptions' })).toBeTruthy()
     expect(document.getElementById('plan-assumptions')).toBeTruthy()
@@ -61,6 +69,22 @@ describe('PlanAssumptionsCard', () => {
     expect(box('Withdrawal rate (% / year)').value).toBe('4.5')
     expect(box('ESPP ticker').value).toBe('NVDA')
     expect(box('ESPP discount (%)').value).toBe('15')
+    // Beside the withdrawal rate (2026-09-23 spec §R11): the year the Projection's money-lasts
+    // answer runs through until a scenario says otherwise.
+    expect(box('Plan until (year)').value).toBe('2075')
+  })
+
+  it('leaves Plan until blank when no year is stored — or the payload predates the key', async () => {
+    vi.mocked(fetchAppSettings).mockResolvedValue({ ...SETTINGS, plan_until_year: null })
+    mount()
+    expect(((await screen.findByLabelText('Plan until (year)')) as HTMLInputElement).value).toBe('')
+    cleanup()
+
+    const older: Partial<typeof SETTINGS> = { ...SETTINGS }
+    delete older.plan_until_year
+    vi.mocked(fetchAppSettings).mockResolvedValue(older as typeof SETTINGS)
+    mount()
+    expect(((await screen.findByLabelText('Plan until (year)')) as HTMLInputElement).value).toBe('')
   })
 
   it('states each person’s in-force match in words, with a link to the Paycheck page', async () => {
@@ -106,11 +130,12 @@ describe('PlanAssumptionsCard', () => {
     ).toBeTruthy()
   })
 
-  it('sends ONLY its own three fields, so the partial PUT leaves the rest standing', async () => {
+  it('sends ONLY its own four fields, so the partial PUT leaves the rest standing', async () => {
     mount()
     await screen.findByLabelText('ESPP ticker')
 
     type(box('Withdrawal rate (% / year)'), '3.75')
+    type(box('Plan until (year)'), '2070')
     // As TYPED: the server owns normalization (it uppercases), and a client that pre-empted it
     // would be a second opinion about the same string.
     type(box('ESPP ticker'), 'msft')
@@ -123,6 +148,7 @@ describe('PlanAssumptionsCard', () => {
     // would clear it.
     expect(vi.mocked(putAppSettings).mock.calls[0][0]).toEqual({
       swr_pct: '0.0375',
+      plan_until_year: 2070,
       espp_ticker: 'msft',
       espp_discount_pct: '0.1',
     })
@@ -139,6 +165,7 @@ describe('PlanAssumptionsCard', () => {
       swr_pct: '0.037500',
       espp_ticker: 'MSFT',
       espp_discount_pct: '0.100000',
+      plan_until_year: 2080,
     })
     mount()
     await screen.findByLabelText('ESPP ticker')
@@ -154,6 +181,7 @@ describe('PlanAssumptionsCard', () => {
     await waitFor(() => expect(box('ESPP ticker').value).toBe('MSFT'))
     expect(box('Withdrawal rate (% / year)').value).toBe('3.75')
     expect(box('ESPP discount (%)').value).toBe('10')
+    expect(box('Plan until (year)').value).toBe('2080')
   })
 
   it('sends espp_ticker: null EXPLICITLY when the ticker box is emptied', async () => {
@@ -171,6 +199,62 @@ describe('PlanAssumptionsCard', () => {
     expect(Object.keys(body)).toContain('espp_ticker')
     expect(body.espp_ticker).toBeNull()
     expect(JSON.parse(JSON.stringify(body)).espp_ticker).toBeNull()
+  })
+
+  it('sends plan_until_year: null EXPLICITLY when the box is emptied — the clear', async () => {
+    mount()
+    await screen.findByLabelText('Plan until (year)')
+
+    type(box('Plan until (year)'), '  ')
+    fireEvent.click(save())
+
+    await waitFor(() => expect(putAppSettings).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(putAppSettings).mock.calls[0][0]
+    // Null says "clear it" on purpose; an absent key would keep the stored 2075.
+    expect(Object.keys(body)).toContain('plan_until_year')
+    expect(body.plan_until_year).toBeNull()
+    expect(JSON.parse(JSON.stringify(body)).plan_until_year).toBeNull()
+  })
+
+  it('takes a plan-until year from next year through the projection’s reach — the server’s bounds', async () => {
+    mount()
+    await screen.findByLabelText('Plan until (year)')
+
+    // Sep 2026: next year is 2027, and the latest December within 60 years is Dec 2085.
+    for (const typed of ['2026', '2086', '2075.5', '20x5', '12075', '-2075']) {
+      type(box('Plan until (year)'), typed)
+      fireEvent.click(save())
+      expect(await screen.findByText('Must be a year from 2027 through 2085.')).toBeTruthy()
+    }
+    expect(putAppSettings).not.toHaveBeenCalled()
+
+    // Both ends are in, and surrounding spaces are not a mistake worth a message.
+    type(box('Plan until (year)'), '2027')
+    fireEvent.click(save())
+    await waitFor(() => expect(putAppSettings).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(putAppSettings).mock.calls[0][0].plan_until_year).toBe(2027)
+    await screen.findByText('Saved.')
+
+    type(box('Plan until (year)'), ' 2085 ')
+    fireEvent.click(save())
+    await waitFor(() => expect(putAppSettings).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(putAppSettings).mock.calls[1][0].plan_until_year).toBe(2085)
+  })
+
+  it('reaches one year further from a December — its December 60 years on is still in reach', async () => {
+    // The server's latest_december_year: from Dec 2026, Dec 2086 is exactly 60 years away.
+    vi.mocked(currentMonthIso).mockReturnValue('2026-12-01')
+    mount()
+    await screen.findByLabelText('Plan until (year)')
+
+    type(box('Plan until (year)'), '2087')
+    fireEvent.click(save())
+    expect(await screen.findByText('Must be a year from 2027 through 2086.')).toBeTruthy()
+
+    type(box('Plan until (year)'), '2086')
+    fireEvent.click(save())
+    await waitFor(() => expect(putAppSettings).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(putAppSettings).mock.calls[0][0].plan_until_year).toBe(2086)
   })
 
   it('refuses exponent text and out-of-range values without spending a request', async () => {
