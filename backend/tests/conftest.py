@@ -78,6 +78,13 @@ async def engine():
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        # Autovacuum's truncation step (giving a table's empty trailing pages back to the OS)
+        # takes ACCESS EXCLUSIVE — the one lock a healthy reset can wait on: a 20 ms lock
+        # timeout under two concurrent -n 4 runs caught it on espp_periods. VACUUM still
+        # removes the dead rows the per-test DELETE leaves; it just stops shrinking the files,
+        # so a reset that waits on a lock now always means a leaked transaction.
+        for table in Base.metadata.sorted_tables:
+            await conn.exec_driver_sql(f'ALTER TABLE "{table.name}" SET (vacuum_truncate = false)')
     # The reset's statements walk the tables create_all just built: sorted_tables is read NOW,
     # not at import, so the reset and the schema can never disagree about which tables exist.
     _FAST_RESET_SQL = _fast_reset_sql()
@@ -87,9 +94,9 @@ async def engine():
 
 
 # How long either reset path waits for a lock before it gives up. Neither statement conflicts
-# with anything a finished test should still hold, so a wait means a leaked transaction is
-# holding row locks (or, for TRUNCATE, any lock at all): without a limit the run would hang
-# at that teardown forever; with one, the reset raises and names the lock.
+# with anything a finished test should still hold (autovacuum's truncation is switched off per
+# table in the `engine` fixture), so a wait means a leaked transaction is holding locks: without
+# a limit the run would hang at that teardown forever; with one, the reset raises and names it.
 _RESET_LOCK_TIMEOUT = "30s"
 
 
@@ -111,8 +118,10 @@ def _fast_reset_sql() -> str:
     - DELETE takes no table lock that conflicts with a reader or with an uncommitted insert,
       so a test that leaks an open transaction no longer hangs its own teardown (TRUNCATE's
       ACCESS EXCLUSIVE lock waited for it). The leaked transaction's uncommitted rows are
-      invisible to the DELETE and are not removed. Only rows it has locked (updated, deleted,
-      SELECT … FOR UPDATE) make the reset wait, and then for _RESET_LOCK_TIMEOUT at most.
+      invisible to the DELETE and are not removed. What does make the reset wait — for
+      _RESET_LOCK_TIMEOUT at most — is a row the leaked transaction locked (updated, deleted,
+      SELECT … FOR UPDATE) or an uncommitted child row whose foreign key pins the parent
+      row the DELETE removes (the FK check waits to see whether that insert commits).
     - Freed tuple slots get reused, so rows can sit out of insertion order even in a table
       no test updated, and a query without ORDER BY returns them that way (a freshly
       truncated table filled in insertion order). A new flake of that shape points at a
@@ -149,17 +158,29 @@ def _truncate_sql() -> str:
 _FAST_RESET_SQL: str | None = None
 _TRUNCATE_SQL: str | None = None
 
+# Why the fast path last failed (the driver's one-line error), for the teardown error's text:
+# pytest prints the warnings summary below the errors, and --disable-warnings hides it.
+_last_fallback_reason: str | None = None
+
+# The test whose teardown could not reset the database on either path (a lock held past both
+# timeouts). Every later `db` setup fails at once, naming it, instead of inheriting its rows
+# and paying 2 x _RESET_LOCK_TIMEOUT per teardown while the leak lasts.
+_dirty_after: str | None = None
+
 
 async def reset_database(engine) -> bool:
     """Empty every table and restart every sequence, committed — the state each test
     starts from. The fast DELETE path first; on ANY failure (an FK cycle a child-first DELETE
     cannot satisfy, a lock held past _RESET_LOCK_TIMEOUT, a schema surprise) the TRUNCATE path
-    in a fresh transaction, so a surprise never leaves a dirty database. The warning says so:
-    a fast path that always fails would otherwise put the suite back at ~20 min without a
+    in a fresh transaction, so a surprise costs speed, not a dirty database. The warning says
+    so: a fast path that always fails would otherwise put the suite back at ~20 min without a
     word. The TRUNCATE path has the same lock timeout, so a lock that blocks both makes the
-    reset RAISE after 2 x 30 s rather than hang the run.
+    reset RAISE after 2 x 30 s rather than hang the run — the one case that does leave the
+    database dirty, which the `db` fixture then reports on every later test.
 
     Returns True when the fast statement did the reset, False when TRUNCATE had to."""
+    global _last_fallback_reason
+    assert _FAST_RESET_SQL is not None, "reset_database needs the session `engine` fixture"
     try:
         async with engine.begin() as conn:
             await conn.exec_driver_sql(_FAST_RESET_SQL)
@@ -171,9 +192,9 @@ async def reset_database(engine) -> bool:
             await conn.exec_driver_sql(f"SET LOCAL lock_timeout = '{_RESET_LOCK_TIMEOUT}'")
             await conn.exec_driver_sql(_TRUNCATE_SQL)
         # The driver's error, not str(exc): SQLAlchemy's message repeats the whole DO block.
+        _last_fallback_reason = repr(getattr(exc, "orig", exc))
         warnings.warn(
-            f"fast test-database reset failed, fell back to TRUNCATE: "
-            f"{getattr(exc, 'orig', exc)!r}",
+            f"fast test-database reset failed, fell back to TRUNCATE: {_last_fallback_reason}",
             UserWarning,
             stacklevel=2,
         )
@@ -181,16 +202,28 @@ async def reset_database(engine) -> bool:
 
 
 @pytest.fixture
-async def db(engine):
+async def db(engine, request):
     # Shared-session contract: `client` drives endpoints through THIS session. After an
     # endpoint raises IntegrityError the session is poisoned — `await db.rollback()` before
     # reusing it — and concurrent requests within one test are not permitted.
+    global _dirty_after
+    if _dirty_after is not None:
+        pytest.fail(
+            f"the test database is still dirty: the reset after {_dirty_after} failed on both "
+            "paths (see that test's teardown error), so this test cannot start clean",
+            pytrace=False,
+        )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         yield session
     # Not a per-test rollback: many tests open their own sessions on `engine` and commit
     # for real (read cache, reorder serialization, the assistant, export, the lifecycle CLI).
-    if not await reset_database(engine):
+    try:
+        fast = await reset_database(engine)
+    except Exception:
+        _dirty_after = request.node.nodeid
+        raise
+    if not fast:
         # The database IS clean (TRUNCATE saw to it), but a fast path that falls back quietly
         # would put the suite back at ~20 min without anything failing. What the fast path
         # could not delete is this test's doing (a stray table referencing a model table, a
@@ -198,7 +231,7 @@ async def db(engine):
         # run — serially or under -n alike, since a teardown error is an ordinary report.
         pytest.fail(
             "the per-test reset fell back to TRUNCATE after this test — the fast DELETE path "
-            "could not reset what it left behind (the warning above says why)",
+            f"could not reset what it left behind: {_last_fallback_reason}",
             pytrace=False,
         )
 
