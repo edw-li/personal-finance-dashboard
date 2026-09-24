@@ -233,8 +233,10 @@ export default function CalendarFeedCard() {
                     is not the day the reminder lands on until it is saved. */}
                 <p className="settings-note">
                   The Monthly update reminder lands on day {settings.calendar_update_due_day} of
-                  each month and lists what is due: that day’s balances and the previous
-                  month’s spending and take-home. It shows on the calendar and in the feed (with
+                  each month and lists what is due:{' '}
+                  {/* The balances are always the month's 1st — "that day's" only when it is. */}
+                  {settings.calendar_update_due_day === 1 ? 'that day’s balances' : 'that month’s 1st balances'}{' '}
+                  and the previous month’s spending and take-home. It shows on the calendar and in the feed (with
                   an alarm three days before). Any day from {MIN_DAY} to {MAX_DAY} — every month
                   has one.
                 </p>
